@@ -178,10 +178,21 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 		Type: oneOffLineMeta, Kind: "review", SessionID: oneOffTestSession, StartedAt: started.Add(2 * time.Minute),
 		Extra: map[string]string{agent.OneOffKeyPaths: `["NOTES.md"`, agent.OneOffKeyTurn: "not-a-number"},
 	}))
+	// The working-tree entry (评审所有改动): a scope of its own kind — every uncommitted file, with
+	// no turn behind it. The flag is what tells the findings pane to read the tree against HEAD
+	// instead of a checkpoint pair, so it has to survive the round trip.
+	writeOneOffFile(t, dir, "review-20260912-211500-dddd.jsonl", mustJSON(t, oneOffMetaLine{
+		Type: oneOffLineMeta, Kind: "review", SessionID: oneOffTestSession, StartedAt: started.Add(3 * time.Minute),
+		Extra: map[string]string{
+			agent.OneOffKeyReviewedMsg: "a-1757680001",
+			agent.OneOffKeyPaths:       `["NOTES.md","src/main.go"]`,
+			agent.OneOffKeyWholeTree:   "1",
+		},
+	}))
 
 	items := (&AgentService{}).ListOneOffs(oneOffTestSession).Items
-	if len(items) != 3 {
-		t.Fatalf("items = %d, want 3", len(items))
+	if len(items) != 4 {
+		t.Fatalf("items = %d, want 4", len(items))
 	}
 	byName := map[string]OneOffVO{}
 	for _, it := range items {
@@ -205,6 +216,19 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 	}
 	if bad := byName["review-20260912-211000-cccc.jsonl"]; len(bad.Paths) != 0 || bad.Turn != 0 {
 		t.Errorf("a malformed scope is dropped, not fatal: %+v", bad)
+	}
+	// The whole-tree flag, both ways round: the run that recorded it is marked, and the
+	// turn-scoped one — which carries a file list just the same — is NOT. A pane that could not
+	// tell them apart would render one scope's findings against the other scope's diff.
+	tree := byName["review-20260912-211500-dddd.jsonl"]
+	if !tree.WholeTree {
+		t.Error("wholeTree = false, want the flag that picks the working-tree diff")
+	}
+	if tree.Turn != 0 {
+		t.Errorf("turn = %d, a working-tree review has no turn", tree.Turn)
+	}
+	if scoped.WholeTree {
+		t.Error("a turn-scoped review must not be marked whole-tree")
 	}
 }
 

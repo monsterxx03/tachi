@@ -58,6 +58,12 @@ type reviewScope struct {
 	// in the prompt for the same reason the panel needs FileDiffVO.RootLabel to open the
 	// right file.
 	Roots []cmds.ScopeRoot
+	// WholeTree says Paths is every uncommitted change in the working tree rather than the
+	// files one turn touched (see ReviewAllChanges). It reaches two places: the reviewer's
+	// prompt, which must not claim the changes came from one turn, and the run's RECORD,
+	// which is what tells the findings pane to read the working tree instead of a checkpoint
+	// pair.
+	WholeTree bool
 }
 
 // commandRun is one command's execution context: everything a handler needs — the session's
@@ -172,6 +178,33 @@ func (s *AgentService) ReviewChanges(sessionID string, turn int, paths []string,
 	if len(scope.Paths) == 0 {
 		return "这一轮没有可评审的改动"
 	}
+	return s.startReview(sessionID, scope, reviewedMsg)
+}
+
+// ReviewAllChanges starts a review of everything UNCOMMITTED in the session's working tree
+// against HEAD — the 评审所有改动 entry, which answers "I have been working for a while, look at
+// all of it" rather than "look at what this one turn did".
+//
+// The subject is the same diff the footer's 完整 diff shows and the findings pane will show,
+// read ONCE, with no path filter (GetTurnDiff's empty list is the whole tree). So the file list
+// the reviewer is handed cannot disagree with what is under review, and the run records it, which
+// is what lets the pane render the same set after a restart.
+//
+// There is no checkpoint pair here, and that is not an omission: those two trees belong to a TURN,
+// while "everything uncommitted" spans turns. This scope reads the working tree's own diff, so
+// committing mid-conversation empties it — the same trade the 完整 diff pane makes, and the reason
+// both are named for the working tree rather than for a turn.
+func (s *AgentService) ReviewAllChanges(sessionID, reviewedMsg string) string {
+	scope, notice := s.wholeTreeScope(sessionID)
+	if notice != "" {
+		return notice
+	}
+	return s.startReview(sessionID, scope, reviewedMsg)
+}
+
+// startReview is the tail both review entries share: who may start one, whether the reviewer
+// would have anything to read, and the run itself.
+func (s *AgentService) startReview(sessionID string, scope reviewScope, reviewedMsg string) string {
 	d := s.desk
 	d.mu.Lock()
 	active := d.activeID
@@ -182,10 +215,66 @@ func (s *AgentService) ReviewChanges(sessionID string, turn int, paths []string,
 	if sessionID != "" && sessionID != active {
 		return "只能评审当前会话的改动"
 	}
-	if notice := s.nothingToReview(sessionID, scope); notice != "" {
-		return notice
+	if !scope.WholeTree {
+		// A turn-scoped scope can name files with no diff left to read (they were committed
+		// since): re-reading the working tree is how that is found out, and refusing early is
+		// the difference between a refusal and a reviewer that reports "nothing changed".
+		//
+		// A whole-tree scope must NOT be asked again: it was built from that very diff a moment
+		// ago, so this would walk every root twice for an answer already in hand.
+		if notice := s.nothingToReview(sessionID, scope); notice != "" {
+			return notice
+		}
 	}
 	return d.startCommand(commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
+}
+
+// wholeTreeScope is ReviewAllChanges' subject: every uncommitted file in the session's roots, or
+// the reason there is none to review.
+func (s *AgentService) wholeTreeScope(sessionID string) (reviewScope, string) {
+	diff := s.GetTurnDiff(sessionID, nil)
+	if len(diff.Files) == 0 {
+		// GetTurnDiff already explains the unreadable cases in the user's own words (no workspace
+		// chosen, not a git repository, every path ignored) — each of those means no baseline to
+		// diff against, so the reviewer would be blind for the same reason. A repository whose
+		// tree is simply CLEAN is the quiet one, and needs the sentence written here.
+		if diff.Note != "" {
+			return reviewScope{}, diff.Note + "；没有可对照的基线，评审看不到改动，因此没有开始评审"
+		}
+		return reviewScope{}, "工作树里没有未提交的改动——评审只看得见未提交的差异，所以没有开始评审"
+	}
+	scope := reviewScope{WholeTree: true}
+	// Grouped by root, in the order GetTurnDiff emits the roots (primary first), each carrying
+	// the label the panel already shows (FileDiffVO.RootLabel — the same strings AtMatch.root
+	// uses, so two roots with the same relative path are told apart the same way everywhere).
+	// The diff names every root that HAS changes, which is why the session's configured roots
+	// are not consulted here: one with a clean tree contributes nothing to the prompt anyway.
+	// The grouping is only KEPT when there is more than one root: a single root's flat list is
+	// already unambiguous, and the prompt is one paragraph shorter for it (the same rule
+	// reviewScopeFor follows).
+	type rootGroup struct {
+		label string
+		root  string
+		paths []string
+	}
+	var groups []rootGroup
+	at := map[string]int{}
+	for _, f := range diff.Files {
+		scope.Paths = append(scope.Paths, f.Path)
+		i, ok := at[f.Root]
+		if !ok {
+			i = len(groups)
+			at[f.Root] = i
+			groups = append(groups, rootGroup{label: f.RootLabel, root: f.Root})
+		}
+		groups[i].paths = append(groups[i].paths, f.Path)
+	}
+	if len(groups) > 1 {
+		for _, g := range groups {
+			scope.Roots = append(scope.Roots, cmds.ScopeRoot{Label: g.label, Root: g.root, Paths: g.paths})
+		}
+	}
+	return scope, ""
 }
 
 // reviewScopeFor is the review's subject, taken from the turn's checkpoints when they have a
@@ -493,11 +582,15 @@ func runReviewCommand(c *commandRun) error {
 		reviewProvider = rp
 	}
 	ropts := cmds.ResolveReviewOptions(cfg)
-	// A scoped run (ReviewChanges) reviews exactly the files the turn touched; the plain
-	// /review command leaves this empty and reviews the whole working tree.
+	// Three kinds of subject reach this handler, and the scope's own fields say which: a
+	// turn-scoped run (ReviewChanges) names the files the turn touched and how to read what it
+	// changed; a working-tree run (ReviewAllChanges) names every uncommitted file and is marked
+	// WholeTree; and the plain /review command leaves everything empty, which is the reviewer's
+	// own repo-wide context gathering.
 	ropts.Scope = c.scope.Paths
 	ropts.DiffCommand = c.scope.DiffCommand
 	ropts.ScopeRoots = c.scope.Roots
+	ropts.WholeTree = c.scope.WholeTree
 	thinking, effort := cmds.ResolveReviewThinking(ropts, a.Config.Resolved.Thinking, a.Config.Resolved.ThinkingEffort)
 	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: thinking, ThinkingEffort: effort}
 
@@ -526,7 +619,8 @@ func runReviewCommand(c *commandRun) error {
 
 		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
 			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath,
-				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope.Paths, Turn: c.scope.Turn})))
+				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope.Paths, Turn: c.scope.Turn,
+					WholeTree: c.scope.WholeTree})))
 		for ev := range stream {
 			c.ech <- ev
 		}

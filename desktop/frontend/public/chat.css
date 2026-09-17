@@ -1390,6 +1390,18 @@ button.work-dir {
   background: var(--wash);
   color: var(--text-dim);
   font-family: inherit;
+/* The one row that has chips but no 🧾 chip to explain them: the latest turn's 「评审所有改动」 entry
+   when the turn itself changed nothing (the working tree's changes came from earlier turns). It
+   says how much there is, because a bare chip under a turn that changed nothing invites the reader
+   to ask "review what?". Muted and shrinkable: it is context for the chip, not a chip. */
+.diff-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+}
   font-size: 11px;
   text-align: left;
   cursor: pointer;

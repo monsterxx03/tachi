@@ -1043,6 +1043,71 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// review-all：「评审所有改动」——最新一轮的第二个评审入口，范围是**工作树 vs HEAD**，
+		// 而不是某一轮的两个快照。
+		//
+		// 为什么单独一个场景：这个入口有两件别处钉不住的事。一是它只在**最新那一轮**上，而且当
+		// 最新一轮自己什么都没改、工作树却还是脏的时候也必须还在（改动来自更早的轮次）——所以剧本
+		// 是"写文件的轮次 + 只读的一问"，driver 两轮都看。二是它起的那次评审读的是另一份 diff
+		// （工作树对 HEAD，不是 checkpoint 对），prompt 与面板标题都得跟着换，否则读者会把整树的
+		// 意见读成"这一轮改的"。
+		{
+			name: "review-all",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe review-all scenario's working directory\n",
+			},
+			gitInit: true,
+			steps: []mockllm.Step{
+				// 第 1 轮：写一个文件（这一轮自己有改动）。
+				{Reply: writeFileStream(0, "NOTES.md", "一行笔记：这一行是整树评审要看的改动。\n", "call_w1")},
+				{Reply: textStream("已经写下 NOTES.md。", 900)},
+				// 第 2 轮：只读的一问 —— 这一轮自己没有改动，工作树里的 NOTES.md 仍未提交。
+				{Reply: textStream("NOTES.md 里是一行笔记。", 900)},
+				// 整树评审：一条意见，然后收尾。
+				{Reply: findingStream("NOTES.md", 1, "warn", "call_f1")},
+				{Reply: textStream("评审完成：1 条意见。", 1100)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮对话加一次整树评审，共五次调用", len(c.requests) == 5, requestCount(c.requests))
+				// 作用域：整树那句必须在，而"本轮改的"那句一个字都不能有。两句话是互斥的，说错了
+				// 评审审的就是另一件事 —— 而 prompt 是评审唯一读得到的东西。
+				_, whole := c.requestSeen("EVERY uncommitted change in the working tree")
+				c.check("评审 fork 的 prompt 说清了范围是整个工作树", whole, "")
+				_, turnScoped := c.requestSeen("what the latest turn touched")
+				c.check("整树评审的 prompt 没有把它说成某一轮改的", !turnScoped, "")
+				_, listed := c.requestSeen("- NOTES.md")
+				c.check("评审 prompt 里列出了未提交的那个文件", listed, "")
+				// 记录：面板要靠这些字段（重启之后）才拿得到同一份 diff，而 whole_tree 是
+				// "读工作树还是读 checkpoint" 的唯一依据。
+				records := c.oneOffFiles()
+				c.check("整树评审留了一份记录", len(records) == 1, fileList(records))
+				if len(records) == 1 {
+					head, err := os.ReadFile(records[0])
+					if err != nil {
+						c.check("记录可读", false, err.Error())
+					} else {
+						var meta struct {
+							Extra map[string]string `json:"extra"`
+						}
+						line := strings.SplitN(string(head), "\n", 2)[0]
+						if err := json.Unmarshal([]byte(line), &meta); err != nil {
+							c.check("记录首行可解析", false, err.Error())
+						} else {
+							c.check("记录写下了 whole_tree（面板据此读工作树）",
+								meta.Extra[agent.OneOffKeyWholeTree] != "", "")
+							c.check("记录写下了发起它的那一轮",
+								meta.Extra[agent.OneOffKeyReviewedMsg] != "", meta.Extra[agent.OneOffKeyReviewedMsg])
+							c.check("记录写下了文件清单",
+								meta.Extra[agent.OneOffKeyPaths] != "", meta.Extra[agent.OneOffKeyPaths])
+							c.check("整树评审没有记 turn（它不属于任何一轮）",
+								meta.Extra[agent.OneOffKeyTurn] == "", meta.Extra[agent.OneOffKeyTurn])
+						}
+					}
+				}
+			},
+		},
+		//
 		// The 报告 pane over a report that did not exist when the pane was opened.
 		//
 		// A run's report PATH is recorded when the run STARTS — it is what the round's prompt

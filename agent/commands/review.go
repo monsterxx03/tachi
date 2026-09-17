@@ -145,6 +145,11 @@ type ReviewOptions struct {
 	// path, so a flat list would leave the reviewer guessing which file is meant (see
 	// AppendReviewScope).
 	ScopeRoots []ScopeRoot
+	// WholeTree says Scope is EVERY uncommitted change in the working tree rather than the
+	// files one turn touched (the desktop's 评审所有改动 entry). It changes no command — both
+	// read `git diff HEAD` — only the sentence that tells the reviewer where the changes came
+	// from; see ReviewScope.WholeTree for why that sentence has to be true.
+	WholeTree bool
 	// Language is config.Language: the language the report and its findings must be
 	// written in. The review prompt is mixed-language (English task lists, Chinese
 	// report instructions), so without this the model answers in whichever language the
@@ -416,6 +421,18 @@ func (o *ReviewOrchestrator) Options() ReviewOptions { return o.opts }
 // not-saved markers).
 func (o *ReviewOrchestrator) Reports() []RoundReport { return o.reports }
 
+// scope is this run's subject as the prompt builder wants it. One place, because the
+// single-round and adversarial paths must describe the SAME scope — two literals is how
+// they drift (a field added to ReviewOptions and wired into one of them only).
+func (o *ReviewOrchestrator) scope() ReviewScope {
+	return ReviewScope{
+		Paths:       o.opts.Scope,
+		DiffCommand: o.opts.DiffCommand,
+		Roots:       o.opts.ScopeRoots,
+		WholeTree:   o.opts.WholeTree,
+	}
+}
+
 // Next advances to the next round and returns its spec; ok=false means the
 // chain is exhausted (only reachable by mis-driving — Complete returns done
 // on the final round).
@@ -437,14 +454,13 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Round:    1,
 			Provider: provider,
 			OutPath:  outPath,
-			Prompt: AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language),
-				ReviewScope{Paths: o.opts.Scope, DiffCommand: o.opts.DiffCommand, Roots: o.opts.ScopeRoots}),
-			Kind: llm.UsageKindReview,
+			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language), o.scope()),
+			Kind:     llm.UsageKindReview,
 		}, true
 	}
 	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports, o.opts.Language)
 	// Every round keeps the scope: the adversarial rounds discuss the same changes.
-	prompt = AppendReviewScope(prompt, ReviewScope{Paths: o.opts.Scope, DiffCommand: o.opts.DiffCommand, Roots: o.opts.ScopeRoots})
+	prompt = AppendReviewScope(prompt, o.scope())
 	return RoundSpec{
 		Round:    round,
 		Role:     role,

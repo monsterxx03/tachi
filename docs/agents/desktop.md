@@ -612,6 +612,20 @@ const type = (el, t) => {
   tool-declared paths, so anything that skips work on an empty path list hides exactly that case (the
   `TurnDiffOverlay` fetch keys on the turn, not on the paths). A file the working tree no longer has where
   the turn left it is marked 「之后又改过」 rather than shown as if the panel were the disk.
+- **`评审所有改动` is the ONE review entry whose subject is not a turn** (`ReviewAllChanges`): every
+  uncommitted file in the working tree, from any turn, read against HEAD. It rides the LATEST turn's footer
+  only (`lastAssistantIndex`), because the tree as it is NOW belongs to the turn just watched — and it must
+  STILL be there on a turn that changed nothing of its own: those changes came from earlier turns, and that
+  footer is the only place in the transcript that can offer them (`CountWorkingTreeChanges`, a cheap
+  `git status --porcelain` gate, decides whether to offer it at all; with no 🧾 chip on the row it also prints
+  how many there are, or the reader has to guess what is being reviewed). Four things travel with the scope
+  and every one of them is a lie if it lapses: the prompt's provenance sentence (`ReviewScope.WholeTree` —
+  "what the latest turn touched" is false about a tree whose changes span turns), the record
+  (`OneOffKeyWholeTree`, which is what the pane reads the run's diff FROM), the diff itself
+  (`GetWorkingTreeChanges` → `TurnDiffVO.Source == "head"`, so the pane heads itself 全部改动 rather than
+  本轮改动 — `GetTurnChanges` deliberately refuses to widen to the whole tree under a turn's heading), and the
+  chip's own state (`reviewDoneLabel` pairs on (msgId, whole), since one footer now carries two entries that
+  would otherwise report each other's runs). `review-all` pins the placement, the gap, the prompt and the pane.
 - **Every path in a diff carries the ROOT it came from.** A session can hold additional workspace
   roots (`Session.AdditionalDirs`), and the paths inside each diff are RELATIVE to it — so a file
   without its root resolves against the primary one, and a same-named file there is what 预览/打开
@@ -962,8 +976,10 @@ const type = (el, t) => {
   emitted, so it can never contradict it. Pinned by `TestAFinishedTurnIsNotReportedAsRunning`.
 
 - **An entry's data source must belong to the surface the entry opens** (`desktop/frontend/src/App.tsx` +
-  `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn* against git HEAD (its own tooltip says
-  真实文件行号), so it opens a surface of its own — `TurnDiffOverlay` (`ViewerOverlay` +
+  `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn's* change set with real line numbers — WHICH
+  baseline answers that (its own two checkpoint trees, or the working tree against HEAD limited to the declared
+  paths) is the backend's choice and is stated on the pane's own head line, so the chip's tooltip names both
+  instead of promising one. It opens a surface of its own — `TurnDiffOverlay` (`ViewerOverlay` +
   `DiffFindingsPane` with `findings=[]`), whose paths are the click's own: fetched on open, dropped on close,
   so they can never become a stale anchor. The side-channel panel cannot do better: after P4 its diff comes
   from the run's recorded scope (`header.paths`) and nowhere else, because a caller-supplied set outlives the

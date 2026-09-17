@@ -275,6 +275,43 @@ function RollingLine({ text, className }: { text: string; className?: string }) 
   )
 }
 
+// ReviewChip is one of a turn's two review entries. They differ only in SCOPE — this turn's
+// checkpoint pair, or the whole working tree against HEAD — while the state machine is identical:
+// 评审x → 评审中… → 已评审 N 条 · 查看, where the last two LOOK at a run (one to watch it work, one
+// to read it) and only the first starts one. Written once and told which by `scope`, because two
+// copies of a four-state chip is how they drift apart.
+function ReviewChip({ label, scope, pending, done, notice, busy, onClick }: {
+  label: string
+  scope: string
+  pending: boolean
+  done?: string
+  notice?: string
+  busy: boolean
+  onClick: () => void
+}) {
+  return (
+    <>
+      <button type="button" className="diff-chip"
+        /* Both 「评审中…」 and 「已评审 · 查看」 LOOK at a run — one to watch it work, one to
+           read it — so both stay clickable. Only STARTING a review waits for the turn to
+           finish. (Disabling on sessionBusy alone is what made the chip unclickable while
+           it was busy running the very review it was reporting on.) */
+        disabled={!pending && !done && busy}
+        title={pending ? '评审进行中（过程在右侧面板）'
+          : done ? '看这次评审的过程、意见与报告（右侧面板）'
+            : busy ? '等这一轮跑完' : scope}
+        onClick={onClick}>
+        {pending ? '评审中…' : (done || label)}
+      </button>
+      {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it shoved the
+          chips around (the sentence is a whole line), and hovering is the honest place for the
+          detail — 「完整 diff」 spells out the same thing. This is per ENTRY, not per turn: one
+          can refuse (nothing of its own to review) while the other has plenty. */}
+      {notice ? <span className="diff-notice" title={notice}>⚠ 没有开始评审</span> : null}
+    </>
+  )
+}
+
 // ProcessStrip is one turn's process, folded into a single row: it stands in for every
 // thinking block, tool card and intermediate message of that turn, which stay behind the
 // "展开时序" toggle. The row is the summary — steps, what the tools touched, and whether
@@ -1106,4 +1143,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }

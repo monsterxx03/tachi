@@ -347,6 +347,12 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // not news) — and a pane whose diff has no findings at all (TurnDiffOverlay) passes
   // `expandAll`, because there the diff is the only content there is. Nothing has to be seeded
   // when the payload arrives, and a re-run's findings cannot fight a stored default — the same
+  // What this diff IS, in the backend's own words (TurnDiffVO.Source): a turn's frozen changes, or
+  // the whole working tree against HEAD. The headings and the 「不在…差异里」 badge have to say
+  // which, because a whole-tree review's findings must not be read as "this turn's" — and deriving
+  // it here, from the answer, keeps the pane from claiming a scope the diff does not have.
+  const wholeTree = diff?.source === 'head'
+
   // shape the picking draft uses.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({})
   // A file's identity is (root, path), never the path alone: a session can carry additional
@@ -442,7 +448,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         jumpTo(e.key === 'ArrowDown' ? 1 : -1)
       }}>
       <div className="diff-panel-head">
-        <span className="diff-panel-title">本轮改动</span>
+        <span className="diff-panel-title">{wholeTree ? '全部改动' : '本轮改动'}</span>
         {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
         <span className="diff-panel-note">
           {diff?.source === 'checkpoint' ? '与这一轮开始时的快照对比' : '与 git HEAD 对照'} · 行号为文件真实行号
@@ -551,9 +557,15 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   )
 }
 
-// TurnDiffOverlay is the turn's own 「完整 diff」: the files THIS turn changed, against git
-// HEAD, at reading size (real file coordinates — the same 「与 git HEAD 对照的完整 diff（真实
-// 文件行号）」 its chip promises).
+// TurnDiffOverlay is the turn's own 「完整 diff」: what THIS turn changed, at reading size and
+// with real file coordinates — the promise its chip makes is now only that ("本轮的完整改动，带
+// 真实文件行号", with the baseline left to the head line below).
+//
+// The BASELINE is decided by the backend and printed by this pane's own head line: the turn's two
+// checkpoint trees when it has a pair (Source "checkpoint", 「与这一轮开始时的快照对比」), else the
+// working tree against HEAD limited to the declared paths (「与 git HEAD 对照」). That is not a
+// detail to hard-code here — the turn-scoped REVIEW pane reads the same entry, so both surfaces
+// show the same diff and a finding's line numbers mean the same thing in each.
 //
 // It is scoped to the CLICK rather than to a side-channel run: the paths arrive as a prop, the
 // diff is fetched on open and dropped on close, and nothing about it is remembered. That is the

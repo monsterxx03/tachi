@@ -10,9 +10,9 @@ import {
   type SessionItem,
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, type SessionRow } from './lib'
-import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
+import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
-  ContextMeter, CacheRing, ProcessStrip, RollingLine, UserBubble, MCPPanel, AskForm, PermissionForm,
+  ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel, Caret,
 } from './components'
 import { TurnPart } from './parts'
@@ -63,7 +63,7 @@ function useElapsedMs(ts: string | undefined, running: boolean): number {
   return Number.isNaN(start) ? 0 : Math.max(0, now - start)
 }
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, elapsedMs, onFoldToggle, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, elapsedMs, onFoldToggle, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onReviewAll, onOpenOneOff, reviewPending, reviewDone, reviewNotice, allReviewPending, allReviewDone, allReviewNotice, allReviewFiles, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
@@ -76,6 +76,18 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // The clicked turn's message id travels with the request, so the run's state can be shown
   // on the very footer that started it (and on no other).
   onReviewChanges?: (turn: number, paths: string[], msgId?: string) => void
+  // Starts a review of the WHOLE working tree against HEAD. Passed only for the LATEST turn: that
+  // subject is the tree as it is now, so it belongs to the turn the reader has just watched rather
+  // than to every turn in the transcript (the turn-scoped entry above is the opposite — its
+  // subject is frozen in that turn's checkpoints).
+  onReviewAll?: (msgId: string) => void
+  // The number of uncommitted files in the working tree, and this entry's state. allReviewFiles is
+  // BOTH its gate (>0 = there is something to review) and, on a turn that changed nothing of its
+  // own, the only thing the row can say — see the footer.
+  allReviewFiles?: number
+  allReviewPending?: boolean
+  allReviewDone?: string
+  allReviewNotice?: string
   // Opens the side-channel panel — where a review's process, findings and report live.
   onOpenOneOff?: () => void
   reviewPending?: boolean
@@ -133,6 +145,13 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
     ? '本轮改动，来自检查点：与这一轮开始时的快照对比（真实 numstat，包含 shell 命令的改动）'
     : `本轮改动来自工具调用：只是片段内的行数，不是 git numstat${chip.note ? `；检查点没有给出这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在这里' : ''}`)
     + (diffParts.length === 0 ? '；点击打开完整 diff' : '；点击展开本轮所有片段 diff')
+
+  // Whether this footer carries the 「评审所有改动」 entry. onReviewAll is passed only for the LATEST
+  // turn (see the message list), and the count is its gate: 0 uncommitted files is nothing to
+  // review, and offering it anyway would be a chip that can only refuse. The two RUN states are
+  // added to the gate so a run that has started stays reachable — and visible — even if the tree
+  // stops looking dirty under it (a /commit, or a count that came back empty for its own reasons).
+  const showAllReview = !!onReviewAll && ((allReviewFiles ?? 0) > 0 || !!allReviewPending || !!allReviewDone)
 
   let askShown = false
   let permShown = false
@@ -232,57 +251,66 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         ) : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
         {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
-        {chip.files > 0 ? (
+        {chip.files > 0 || showAllReview ? (
           <div className="msg-footer">
-            <button type="button" className="diff-chip"
-              title={chipTitle}
-              onClick={() => {
-                // Nothing to unfold: the turn's changes came from a shell command (or from a
-                // form the fragments cannot express), so the only place they are readable is the
-                // full diff. Toggling here would open the fold onto an empty list.
-                if (diffParts.length === 0) {
-                  onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)
-                  return
-                }
-                // The diffs live inside their tool cards, and those cards sit in the fold:
-                // opening every diff without opening the fold would look like a dead click.
-                if (!allDiffsOpen) setProcessOpen(true)
-                onToggleAllDiffs?.(!allDiffsOpen)
-              }}>
-              🧾 {chip.files} files
-              {chip.added > 0 ? <span className="diff-count is-add">+{chip.added}</span> : null}
-              {chip.removed > 0 ? <span className="diff-count is-del">−{chip.removed}</span> : null}
-              {chip.source === 'tools' && diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
-              {chip.source === 'tools' ? <span className="diff-chip-shell">· 来自工具调用</span> : null}
-            </button>
-            {/* The second view: the same changes against git HEAD, with real file
-                line numbers. The chip above stays the light touch (it toggles the
-                inline fragment diffs); this one is the full picture. */}
-            <button type="button" className="diff-chip" title="与 git HEAD 对照的完整 diff（真实文件行号）"
-              onClick={() => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)}>完整 diff</button>
-            {/* The review entry: ONE per turn, never per edit card — the review's scope
-                is this turn's file set, and findings carry real file lines that a
-                fragment card has no coordinates for.
-                It is a small state machine, because a review is a side-channel run: its
-                process goes to the panel, so once it is done this chip is the way TO it
-                rather than another way to start one. */}
-            <button type="button" className="diff-chip"
-              /* Both 「评审中…」 and 「已评审 · 查看」 LOOK at a run — one to watch it work, one to
-                 read it — so both stay clickable. Only STARTING a review waits for the turn to
-                 finish. (Disabling on sessionBusy alone is what made the chip unclickable while
-                 it was busy running the very review it was reporting on.) */
-              disabled={!reviewPending && !reviewDone && sessionBusy}
-              title={reviewPending ? '评审进行中（过程在右侧面板）'
-                : reviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
-                  : sessionBusy ? '等这一轮跑完'
-                    : '让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）'}
-              onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id))}>
-              {reviewPending ? '评审中…' : (reviewDone || '评审本轮改动')}
-            </button>
-            {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it
-                shoved the chips around (the sentence is a whole line), and hovering is the
-                honest place for the detail — 「完整 diff」 spells out the same thing. */}
-            {reviewNotice ? <span className="diff-notice" title={reviewNotice}>⚠ 没有开始评审</span> : null}
+            {chip.files > 0 ? (
+              <>
+                <button type="button" className="diff-chip"
+                  title={chipTitle}
+                  onClick={() => {
+                    // Nothing to unfold: the turn's changes came from a shell command (or from a
+                    // form the fragments cannot express), so the only place they are readable is the
+                    // full diff. Toggling here would open the fold onto an empty list.
+                    if (diffParts.length === 0) {
+                      onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)
+                      return
+                    }
+                    // The diffs live inside their tool cards, and those cards sit in the fold:
+                    // opening every diff without opening the fold would look like a dead click.
+                    if (!allDiffsOpen) setProcessOpen(true)
+                    onToggleAllDiffs?.(!allDiffsOpen)
+                  }}>
+                  🧾 {chip.files} files
+                  {chip.added > 0 ? <span className="diff-count is-add">+{chip.added}</span> : null}
+                  {chip.removed > 0 ? <span className="diff-count is-del">−{chip.removed}</span> : null}
+                  {chip.source === 'tools' && diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
+                  {chip.source === 'tools' ? <span className="diff-chip-shell">· 来自工具调用</span> : null}
+                </button>
+                {/* The second view: this turn's changes as ONE diff, in a lightbox with real file
+                    line numbers — the chip above stays the light touch (it toggles the inline
+                    fragment diffs). The BASELINE is not this chip's promise: a turn with a
+                    checkpoint pair is read from its own two trees (frozen — a shell command's
+                    writes are in it, and a commit since does not empty it), and only a turn
+                    without one falls back to the working tree against HEAD. So the tooltip names
+                    both and points at the overlay's own head line, the one place that knows which
+                    answer came back — a promise made here would be a second, guessing surface. */}
+                <button type="button" className="diff-chip"
+                  title="本轮的完整改动，带真实文件行号（浮层顶部会说明这一次与什么对照：有检查点的是这一轮自己的两个快照，没有的是 git HEAD）"
+                  onClick={() => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)}>完整 diff</button>
+                {/* The review entry: ONE per turn, never per edit card — the review's scope
+                    is this turn's file set, and findings carry real file lines that a
+                    fragment card has no coordinates for. */}
+                <ReviewChip label="评审本轮改动" scope="让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）"
+                  pending={!!reviewPending} done={reviewDone} notice={reviewNotice} busy={!!sessionBusy}
+                  onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id))} />
+              </>
+            ) : null}
+            {showAllReview ? (
+              <>
+                {/* A turn that changed nothing of its OWN still carries this entry, because the
+                    working tree's changes (from earlier turns) are exactly what it reviews — and
+                    without this row they would be unreachable from the transcript. The row then
+                    has no 🧾 chip to explain itself, so the count does the explaining: a bare
+                    「评审所有改动」 under a turn that changed nothing invites the reader to ask
+                    "review what?". */}
+                {chip.files === 0 ? (
+                  <span className="diff-hint">工作树里还有 {allReviewFiles} 个未提交的改动（来自更早的轮次）</span>
+                ) : null}
+                <ReviewChip label="评审所有改动" scope="让 agent 评审工作树里所有未提交的改动（与 git HEAD 对照，只读；过程与意见在右侧面板）"
+                  pending={!!allReviewPending} done={allReviewDone} notice={allReviewNotice} busy={!!sessionBusy}
+                  onClick={() => (allReviewPending || allReviewDone ? onOpenOneOff?.() : onReviewAll?.(m.id))} />
+              </>
+            ) : null}
           </div>
         ) : null}
         {m.summary ? (
@@ -425,8 +453,10 @@ function App() {
   //
   // The REVIEW's findings and its diff are the side-channel panel's business instead: the panel
   // reads them per RUN (desktop/oneoff.go collects each record's own ReportFinding calls), while
-  // this overlay answers a question about a TURN — "what does the working tree look like now,
-  // against HEAD" — which is answerable with no run at all.
+  // this overlay answers a question about a TURN — "what did this turn change, with real line
+  // numbers" — which is answerable with no run at all. WHICH baseline answers it (the turn's own
+  // two checkpoint trees, or the working tree against HEAD limited to the declared files) is the
+  // backend's call, and the overlay's head line is where the reader learns which one came back.
   const [turnDiff, setTurnDiff] = useState<{ sessionId: string; turn: number; paths: string[] } | null>(null)
   useEffect(() => { setTurnDiff(null) }, [currentId])
 
@@ -481,18 +511,19 @@ function App() {
     setMode(next)
   }, [refreshMode])
   // A review run started from a turn's footer. Local to the app (not persisted) and keyed by
-  // THE TURN WHOSE BUTTON WAS CLICKED (its message id): the button belongs to one footer, so
-  // its "评审中…" state and its refusal reason belong there too. Un-scoped they appeared on
-  // every turn's footer — and, because the session's messages are re-rendered on a switch,
-  // on every other session's as well. A turn id settles both: a message id is unique across
-  // sessions, so no bubble can show another turn's answer.
-  const [reviewPending, setReviewPending] = useState<{ msgId: string } | null>(null)
+  // THE TURN WHOSE BUTTON WAS CLICKED (its message id) — and by WHICH of that turn's two entries
+  // it was (ReviewSlot.whole): one footer now carries 「评审本轮改动」 and 「评审所有改动」, and state
+  // keyed by the turn alone would have them report each other's runs. Un-scoped, the pending state
+  // and its refusal reason also appeared on every other turn's footer — and, because the session's
+  // messages are re-rendered on a switch, on every other session's as well. A message id is unique
+  // across sessions, so no bubble can show another turn's answer.
+  const [reviewPending, setReviewPending] = useState<ReviewSlot | null>(null)
   // The finished review, for the footer chip of the turn that started it. It survives the
   // pending state (which the session going idle clears) so the chip can say 已评审 N 条.
-  const [reviewResult, setReviewResult] = useState<{ msgId: string; run: OneOffRun } | null>(null)
-  // Which turn the run in flight belongs to, held across the result event (see startReview).
-  const reviewForRef = useRef('')
-  const [reviewNotice, setReviewNotice] = useState<{ msgId: string; text: string } | null>(null)
+  const [reviewResult, setReviewResult] = useState<(ReviewSlot & { run: OneOffRun }) | null>(null)
+  // Which slot the run in flight belongs to, held across the result event (see startReview).
+  const reviewForRef = useRef<ReviewSlot | null>(null)
+  const [reviewNotice, setReviewNotice] = useState<(ReviewSlot & { text: string }) | null>(null)
   // The chip's "+N" badge: the chip itself shows the primary path, so this is what
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
@@ -700,6 +731,11 @@ function App() {
   const runningIdx = isCurrentRunning ? lastRunningAssistantIndex(messages) : -1
   const runningMsg = runningIdx >= 0 ? messages[runningIdx] : undefined
   const runningElapsedMs = useElapsedMs(runningMsg?.ts, !!runningMsg)
+
+  // Which turn is "the latest" — the one footer that carries 「评审所有改动」 (see the message list),
+  // and the id the run records so its chip can report back after a restart.
+  const latestIdx = lastAssistantIndex(messages)
+  const latestTurnMsgId = latestIdx >= 0 ? messages[latestIdx].id : ''
 
   // The composer: the input box, the @-picker and "/" palette, the queue of messages typed
   // while a turn runs, and the answer form for a parked question. It routes what the user
@@ -922,12 +958,6 @@ function App() {
     }
   }, [workDir, refreshWorkspace])
 
-  // openDiffPanel fetches the turn's files against git HEAD. It is a deliberate
-  // on-demand call: git runs once per open, not once per render.
-  // The review's findings and its diff are the side-channel panel's business now: it reads
-  // them per RUN (desktop/oneoff.go collects each record's own ReportFinding calls) instead of
-  // asking for "the newest review in the session".
-
   // A review is over when its RUN is over — and the session's busy flag cannot decide that: between
   // the click and the fork going busy the session is still idle, so a "clear while idle" rule fired
   // in exactly that window and dropped the pending state before the run had even started. That rule
@@ -940,27 +970,29 @@ function App() {
   // turn must not disable this session's chip).
   const sessionBusy = state.status !== 'idle' && state.status !== 'error'
 
-  // startReview runs the review fork scoped to one turn's files. The run is a normal
-  // turn, so its findings stream into the transcript and the diff panel picks them up
-  // from there — no extra plumbing, and they survive a restart like any other message.
-  // startReview runs the review fork scoped to one turn's files. It runs as a turn (the
-  // session goes busy, Stop cancels it), but its process goes to the side-channel panel: the
-  // conversation keeps this turn's footer as the anchor, the panel shows the rest.
-  const startReview = useCallback(async (turn: number, paths: string[], msgId?: string) => {
+  // runReview starts one review fork and pairs it back to the footer that asked for it. The
+  // scope itself is the caller's call (a thunk), because the two entries ask different questions
+  // — one turn's own two checkpoint trees, or the whole working tree against HEAD — while
+  // everything around the ask is the same.
+  //
+  // The run is a normal turn as far as the backend is concerned (the session goes busy, Stop
+  // cancels it), but its process goes to the side-channel panel: the conversation keeps this
+  // turn's footer as the anchor, the panel shows the rest.
+  //
+  // `slot` is null when there is no footer to light up (a re-run from the panel of a run that
+  // recorded no turn). The run is worth starting either way; what it cannot do is report back.
+  const runReview = useCallback(async (slot: ReviewSlot | null, start: (sid: string) => Promise<string>) => {
     const sid = currentId
     setReviewNotice(null)
-    // msgId pairs the run back to the turn whose chip started it. A re-run from the panel may
-    // have none (a whole-tree review has no turn) — the run is worth starting either way; what
-    // it cannot do is light up a footer that does not exist.
-    if (msgId) {
-      setReviewPending({ msgId })
-      // Remember which turn this is for. The run's result arrives as an event, and by then this
+    if (slot) {
+      setReviewPending(slot)
+      // Remember which slot this is for. The run's result arrives as an event, and by then this
       // state may already be cleared (the session going idle does that), so the pairing cannot
       // lean on reviewPending still being set.
-      reviewForRef.current = msgId
+      reviewForRef.current = slot
     }
     try {
-      const res = await AgentService.ReviewChanges(sid, turn, paths, msgId || '')
+      const res = await start(sid)
       // A refusal means no run started, so the pending state ends HERE. Success must NOT clear
       // it: this call only ever STARTS the fork (it runs on in the background), so clearing here
       // made the chip flash 「评审中…」 and fall straight back — onto 「已评审 · 查看」, because
@@ -969,19 +1001,60 @@ function App() {
       // and it WAS unclickable, because the session is busy running the review.
       if (res) {
         setReviewPending(null)
-        reviewForRef.current = ''
+        reviewForRef.current = null
         // The refusal belongs to the chip that asked (if one did); a re-run from the panel has
         // nowhere to show it, and its own pane says what happened to the run.
-        if (msgId) setReviewNotice({ msgId, text: res })
+        if (slot) setReviewNotice({ ...slot, text: res })
       }
     } catch (e) {
       setReviewPending(null)
-      reviewForRef.current = ''
-      if (msgId) setReviewNotice({ msgId, text: String(e) })
+      reviewForRef.current = null
+      if (slot) setReviewNotice({ ...slot, text: String(e) })
     }
   }, [currentId])
 
-  // reviewDoneLabel is the footer chip's 已评审 state for a turn, from two sources:
+  // startReview is the turn-scoped entry: the files this turn changed, read from its own two
+  // checkpoint trees when they have a pair (which is why a review of already-committed changes
+  // still has something to read).
+  const startReview = useCallback((turn: number, paths: string[], msgId?: string) => {
+    void runReview(msgId ? { msgId, whole: false } : null,
+      (sid) => AgentService.ReviewChanges(sid, turn, paths, msgId || ''))
+  }, [runReview])
+
+  // startReviewAll is the working-tree entry: everything uncommitted against HEAD, from any turn.
+  // It reads that list from the backend at click time rather than taking it from the footer —
+  // the footer's count is a hint that was true a moment ago, and the run has to name what it
+  // actually reviewed.
+  const startReviewAll = useCallback((msgId: string) => {
+    void runReview(msgId ? { msgId, whole: true } : null, (sid) => AgentService.ReviewAllChanges(sid, msgId))
+  }, [runReview])
+
+  // wholeTreeFiles is how many files the working tree holds uncommitted against HEAD: the gate of
+  // the 「评审所有改动」 entry (>0 means there is something to review) AND its evidence when the turn
+  // carrying it changed nothing of its own — the row then has nothing else to say with.
+  //
+  // Asked when the session comes to REST, not on every render: it is a git walk per root, and the
+  // answer only moves when a turn ends, when the reader switches sessions, or when a side-channel
+  // run ends (a /commit commits exactly what the entry was offering to review). While a turn is
+  // running the last answer is left in place rather than cleared — the entry stays on screen,
+  // disabled, the way 评审本轮改动 does, instead of blinking out and back once per turn.
+  const [wholeTreeFiles, setWholeTreeFiles] = useState(0)
+  useEffect(() => {
+    if (!currentId || isCurrentRunning) return
+    let alive = true
+    AgentService.CountWorkingTreeChanges(currentId)
+      .then((n) => { if (alive) setWholeTreeFiles(n || 0) })
+      .catch(() => { if (alive) setWholeTreeFiles(0) })
+    return () => { alive = false }
+  }, [currentId, isCurrentRunning, oneoffRun.result])
+
+  // ReviewSlot identifies one review entry on one turn's footer: WHICH turn asked (its message id,
+// unique across sessions) and WHICH of the two scopes that turn offers. Both halves are needed —
+// a turn has one entry of each, and every piece of per-entry state (pending, the finished run, the
+// refusal reason) is keyed by the pair.
+type ReviewSlot = { msgId: string; whole: boolean }
+
+// reviewDoneLabel is the footer chip's 已评审 state for a turn, from two sources:
 //
 //   - the run that just finished in THIS window (its count is exact — the backend tallied the
 //     findings as they were called); and
@@ -990,15 +1063,20 @@ function App() {
 //     Those runs have no loaded count (counting means reading the whole record), so the chip
 //     says 已评审 and the panel — which loads the run's detail when selected — shows how many.
 //
-// Returns undefined when this turn has never been reviewed, which is what leaves the chip as
-// 「评审本轮改动」.
-function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun } | null, runs: OneOffVO[]): string | undefined {
-  if (result?.msgId === msgId) return oneOffRunLabel(result.run)
+// The slot carries WHICH entry is being asked about (its turn's own changes, or the whole working
+// tree): a turn has one of each, and a matcher that ignored that would have yesterday's
+// whole-tree run answer for today's turn-scoped chip.
+//
+// Returns undefined when this slot has never been reviewed, which is what leaves the chip as
+// 「评审本轮改动」/「评审所有改动」.
+function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRun }) | null, runs: OneOffVO[]): string | undefined {
+  if (result && result.msgId === slot.msgId && result.whole === slot.whole) return oneOffRunLabel(result.run)
   // A run that is STILL GOING does not count as done, even though its record is already on disk
   // with this turn's id in it: that is what made the chip claim 已评审 while the review was
   // still working. The record's own running flag is an mtime heuristic, so this is the same
   // "still writing" notion the panel uses.
-  return runs.some((it) => it.reviewedMsg === msgId && !it.running) ? '已评审 · 查看' : undefined
+  return runs.some((it) => it.reviewedMsg === slot.msgId && !!it.wholeTree === slot.whole && !it.running)
+    ? '已评审 · 查看' : undefined
 }
 
 // ── The conversation's one line about a side-channel run ─────────────────────
@@ -1012,10 +1090,10 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   useEffect(() => {
     const run = oneoffRun.result
     if (!run || run.kind !== 'review') return
-    const msgId = reviewForRef.current
-    if (!msgId) return // started from the composer: the notice path owns it
-    reviewForRef.current = ''
-    setReviewResult({ msgId, run })
+    const slot = reviewForRef.current
+    if (!slot) return // started from the composer: the notice path owns it
+    reviewForRef.current = null
+    setReviewResult({ ...slot, run })
     // The run is over, so the chip leaves 评审中… — the end EVENT is what says so (see the note
     // above about the idle-flag rule that used to clear it too early).
     setReviewPending(null)
@@ -1037,14 +1115,18 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     if (oneoffRun.live) setOneOffOpen(true)
   }, [oneoffRun.live?.at])
 
-  // openDiffPanel is the turn's 「完整 diff」 entry: the files THIS turn changed, against git
-  // HEAD, in a lightbox over the conversation.
+  // openDiffPanel is the turn's 「完整 diff」 entry: what THIS turn changed, in a lightbox over the
+  // conversation, with real file line numbers. The baseline is the backend's choice, stated on the
+  // pane's own head line: the turn's two checkpoint trees when it has a pair (exact — a shell
+  // command's writes are in it — and frozen, so a commit since does not empty it), otherwise the
+  // working tree against HEAD limited to the tool-declared paths.
   //
   // It used to hand the job to the side-channel panel, which is scoped to a RUN — so a turn
   // nobody had reviewed opened an empty column (there is no run to show, and the panel's list
   // says so), and a reviewed one showed the SELECTED run's file set rather than this turn's.
   // The paths are the click's own: fetched on open, dropped on close, and never stored per run
-  // — which is also what keeps them from becoming the stale anchor P4 removed.
+  // — which is also what keeps them from becoming the stale anchor P4 removed, and why git runs
+  // once per open rather than once per render.
   const openDiffPanel = useCallback((turn: number, paths: string[]) => {
     setTurnDiff({ sessionId: currentId, turn, paths })
   }, [currentId])
@@ -1738,18 +1820,32 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                 {messages.length === 0 && (
                   <div className="welcome"><div className="welcome-mark">◆</div><div className="welcome-title">你好，我是 Tachi</div><div className="welcome-sub">在下方输入问题开始对话。左侧可切换或新建会话。</div></div>
                 )}
-                {messages.map((m) =>
-                  m.role === 'user' ? (
-                    <Fragment key={m.id}>
-                      <UserBubble onContextMenu={(e) => { void openRewindMenu(e, m, currentId) }}>
-                        {m.text}
-                        <span className="user-meta">
-                          {m.reminder ? <button className="reminder-head" title="系统提醒" onClick={() => setReminderModal(m.reminder || '')}><span className="reminder-ico">!</span></button> : null}
-                          {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
-                        </span>
-                      </UserBubble>
-                    </Fragment>
-                  ) : (
+                {messages.map((m) => {
+                  if (m.role === 'user') {
+                    return (
+                      <Fragment key={m.id}>
+                        <UserBubble onContextMenu={(e) => { void openRewindMenu(e, m, currentId) }}>
+                          {m.text}
+                          <span className="user-meta">
+                            {m.reminder ? <button className="reminder-head" title="系统提醒" onClick={() => setReminderModal(m.reminder || '')}><span className="reminder-ico">!</span></button> : null}
+                            {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
+                          </span>
+                        </UserBubble>
+                      </Fragment>
+                    )
+                  }
+                  // 「评审所有改动」 is offered on the LATEST turn ONLY (isLatest): its subject is the
+                  // working tree as it is now, so it belongs to the turn the reader has just watched
+                  // rather than to every turn in the transcript. The turn-scoped entry is the
+                  // opposite and stays on every turn that has one — its subject is frozen in that
+                  // turn's checkpoints and does not move.
+                  //
+                  // The number passed with it is the working tree's uncommitted file count, which is
+                  // also what makes a turn that changed NOTHING of its own carry the entry: the
+                  // changes it reviews came from earlier turns, and this footer is the only place in
+                  // the transcript that can say so.
+                  const isLatest = m.id === latestTurnMsgId
+                  return (
                     <AssistantBubble
                       key={m.id}
                       m={m}
@@ -1765,14 +1861,19 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                       onOpenDiffPanel={openDiffPanel}
                       onReviewChanges={startReview}
+                      onReviewAll={isLatest ? startReviewAll : undefined}
+                      allReviewFiles={isLatest ? wholeTreeFiles : undefined}
                       onOpenOneOff={() => setOneOffOpen(true)}
-                      reviewPending={reviewPending?.msgId === m.id}
-                      reviewDone={reviewDoneLabel(m.id, reviewResult, oneoff.items)}
-                      reviewNotice={reviewNotice?.msgId === m.id ? reviewNotice.text : undefined}
+                      reviewPending={reviewPending?.msgId === m.id && !reviewPending.whole}
+                      reviewDone={reviewDoneLabel({ msgId: m.id, whole: false }, reviewResult, oneoff.items)}
+                      reviewNotice={reviewNotice?.msgId === m.id && !reviewNotice.whole ? reviewNotice.text : undefined}
+                      allReviewPending={isLatest && reviewPending?.msgId === m.id && reviewPending.whole}
+                      allReviewDone={isLatest ? reviewDoneLabel({ msgId: m.id, whole: true }, reviewResult, oneoff.items) : undefined}
+                      allReviewNotice={isLatest && reviewNotice?.msgId === m.id && reviewNotice.whole ? reviewNotice.text : undefined}
                       sessionBusy={sessionBusy}
                     />
-                  ),
-                )}
+                  )
+                })}
               </>
             )}
             </div>
@@ -1900,7 +2001,11 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         </main>
         {oneoffOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
           onResizeCommit={commitOneOffWidth} onSend={sendFindings}
-          onRerun={(turn, paths, msgId) => void startReview(turn, paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
+          /* The re-run asks the SAME question the record says was asked: a whole-tree run is
+             re-run as a whole-tree run (re-reading the working tree, which is the point — the
+             changes may have moved since), and a turn-scoped one over that turn's files. */
+          onRerun={(turn, paths, msgId, whole) => void (whole ? startReviewAll(msgId) : startReview(turn, paths, msgId))}
+          onClose={() => setOneOffOpen(false)} /> : null}
       </div>
       {rewindMenu && (() => {
         // The menu is built here rather than inline so the target resolution reads in one

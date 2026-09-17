@@ -968,6 +968,46 @@ func TestAppendReviewScopeGroupsRoots(t *testing.T) {
 	}
 }
 
+// TestAppendReviewScopeWholeTree: the working-tree entry (评审所有改动) reviews every uncommitted
+// change, from any turn. The scope paragraph has to SAY that — a reviewer told "what the latest turn
+// touched" audits the wrong thing: it goes looking for one turn's intent, and discounts a file it
+// believes is unrelated. The two sentences are mutually exclusive, so each is checked in BOTH
+// directions (present for its mode, absent for the other).
+func TestAppendReviewScopeWholeTree(t *testing.T) {
+	const base = "Review the current repo changes.\n"
+	got := AppendReviewScope(base, ReviewScope{WholeTree: true, Paths: []string{"NOTES.md", "src/main.go"}})
+	for _, want := range []string{
+		"## Scope (only these files)",
+		"EVERY uncommitted change in the working tree",
+		"- NOTES.md",
+		"- src/main.go",
+		"git diff HEAD -- NOTES.md src/main.go",
+		"git ls-files --others --exclude-standard -- NOTES.md src/main.go",
+		// The trailing caveat has to be the whole-tree one: there is no "rest of the working
+		// tree" for a file to be outside of, and what git does hide is worth naming.
+		"a file that shows up outside it is one git ignores",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("whole-tree prompt is missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "what the latest turn touched") {
+		t.Errorf("a whole-tree scope must not claim the changes came from one turn:\n%s", got)
+	}
+	if strings.Contains(got, "ignore them: they are outside this review") {
+		t.Errorf("a whole-tree scope must not tell the reviewer to ignore files in the list:\n%s", got)
+	}
+
+	// The turn-scoped mode keeps its own sentence, and must not borrow the whole-tree one.
+	turn := AppendReviewScope(base, ReviewScope{Paths: []string{"src/main.go"}})
+	if !strings.Contains(turn, "what the latest turn touched") {
+		t.Errorf("a turn-scoped prompt lost its provenance sentence:\n%s", turn)
+	}
+	if strings.Contains(turn, "EVERY uncommitted change") {
+		t.Errorf("a turn-scoped prompt must not claim the whole tree:\n%s", turn)
+	}
+}
+
 // TestReviewScopeReachesThePrompt is the plumbing check that matters: a scoped run
 // (desktop's "review these changes") sets ReviewOptions.Scope, and the only thing the
 // forked reviewer ever sees is the prompt the orchestrator hands it. If the scope stops

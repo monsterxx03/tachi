@@ -79,18 +79,36 @@ const OneOffKeyPaths = "paths"
 // all look like they name files the turn never touched.
 const OneOffKeyTurn = "turn"
 
+// OneOffKeyWholeTree is the Extra key marking a review whose Paths are EVERY uncommitted change
+// in the working tree (the desktop's 评审所有改动 entry), rather than the files one turn touched.
+//
+// It is what the diff pane reads the run's diff FROM. The two scopes carry a file list each, but
+// they mean different things by it, and only this key tells them apart: the turn-scoped one reads
+// the turn's own two checkpoint trees (which survive a commit), while this one reads the working
+// tree against HEAD (which does not — the whole point is "what is uncommitted right now").
+const OneOffKeyWholeTree = "whole_tree"
+
 // ReviewOrigin is the desktop's context for a review round: which turn asked for it and which
-// files it covers. Both are optional — the TUI, ACP and channel frontends review the whole
+// files it covers. All of it is optional — the TUI, ACP and channel frontends review the whole
 // working tree and have no turn to point at, so they pass the zero value.
 type ReviewOrigin struct {
 	// ReviewedMsg is the message id of the turn whose footer started the review ("" when the
 	// review was started from a command line).
 	ReviewedMsg string
-	// Paths is the file set the review is scoped to (nil = the whole working tree).
+	// Paths is the file set the review is scoped to. nil = no scope was recorded at all (a typed
+	// /review, or a frontend that never had one): the reviewer reads the working tree and the
+	// diff pane has no file list to show. Non-nil with WholeTree is the complete uncommitted set;
+	// non-nil without it is the files one turn touched.
 	Paths []string
 	// Turn is the checkpointed turn the review is scoped to (0 when there is none — a typed
-	// /review, or a session without checkpoints).
+	// /review, a working-tree review, or a session without checkpoints).
 	Turn int
+	// WholeTree marks Paths as every uncommitted change in the working tree. Nothing about the
+	// review itself changes (both scopes run `git diff HEAD`), but the RECORD has to say which
+	// one it was: the pane reads a turn-scoped run from that turn's checkpoint pair and a
+	// whole-tree one from the working tree, and the two would otherwise be indistinguishable
+	// presentations of "here is a file list".
+	WholeTree bool
 }
 
 // OneOffMetaForReview is the recorded meta of a review round: which kind of review it was,
@@ -112,6 +130,9 @@ func OneOffMetaForReview(kind llm.UsageKind, sessionID, reportPath string, origi
 		if b, err := json.Marshal(origin.Paths); err == nil {
 			extra[OneOffKeyPaths] = string(b)
 		}
+	}
+	if origin.WholeTree {
+		extra[OneOffKeyWholeTree] = "1"
 	}
 	if len(extra) > 0 {
 		meta.Extra = extra

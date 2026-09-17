@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -659,6 +661,76 @@ func TestReviewChangesGuards(t *testing.T) {
 	d.activeID = "some-session"
 	if got := svc.ReviewChanges("another-session", 0, []string{"a.go"}, ""); !strings.Contains(got, "当前会话") {
 		t.Errorf("session mismatch = %q, want a refusal", got)
+	}
+}
+
+// TestReviewAllChangesGuards covers the working-tree entry's refusals. Its subject is resolved
+// FIRST, like ReviewChanges', and the order matters for what the reader is told: a clean tree is
+// "nothing to review" whatever state the session is in, while a session problem must not be
+// answered with a sentence about the tree.
+//
+// The scope itself is exercised through wholeTreeScope (a successful ReviewAllChanges would start a
+// real run, which is not what a guard test is for).
+func TestReviewAllChangesGuards(t *testing.T) {
+	// A clean repository: the subject is empty, so the answer is about the TREE and never about
+	// the session — even with no active session at all.
+	_, cleanSvc, cleanSid := newRootsApp(t, gitRepoForTest(t))
+	got := cleanSvc.ReviewAllChanges(cleanSid, "")
+	if !strings.Contains(got, "没有未提交的改动") {
+		t.Errorf("clean tree = %q, want the nothing-uncommitted refusal", got)
+	}
+	if strings.Contains(got, "活跃会话") {
+		t.Errorf("clean tree = %q, want the subject answered before the session's state", got)
+	}
+
+	// A dirty repository: now the session guards are what can refuse. The session id is REAL
+	// (the subject has to be resolvable for the guard to be the next thing asked); what is missing
+	// is the ACTIVE one.
+	repo := gitRepoForTest(t)
+	writeTestFile(t, repo, "NOTES.md")
+	d, svc, sid := newRootsApp(t, repo)
+	if got := svc.ReviewAllChanges(sid, ""); !strings.Contains(got, "活跃会话") {
+		t.Errorf("no active session = %q, want the session refusal", got)
+	}
+
+	d.activeID = "some-session"
+	if got := svc.ReviewAllChanges(sid, ""); !strings.Contains(got, "当前会话") {
+		t.Errorf("session mismatch = %q, want the mismatch refusal", got)
+	}
+}
+
+// TestWholeTreeScope pins the subject the working-tree entry reviews: EVERY uncommitted file
+// (the modified one and the brand new one — `git diff HEAD` alone would miss the latter), with no
+// DiffCommand, because the working tree IS the baseline that entry is about. WholeTree is the flag
+// the prompt and the record both read, so it has to be set here and nowhere else.
+func TestWholeTreeScope(t *testing.T) {
+	repo := gitRepoForTest(t)
+	writeTestFile(t, repo, "src/main.go")
+	writeTestFile(t, repo, "NOTES.md")
+	_, svc, sid := newRootsApp(t, repo)
+
+	scope, notice := svc.wholeTreeScope(sid)
+	if notice != "" {
+		t.Fatalf("notice = %q, want none (the tree has uncommitted changes)", notice)
+	}
+	if !scope.WholeTree {
+		t.Error("WholeTree must be set: it is what keeps the prompt from blaming one turn")
+	}
+	if scope.Turn != 0 {
+		t.Errorf("Turn = %d, want 0: the working tree has no turn behind it", scope.Turn)
+	}
+	if scope.DiffCommand != "" {
+		t.Errorf("DiffCommand = %q, want none: the reviewer reads git diff HEAD, which is the subject",
+			scope.DiffCommand)
+	}
+	sort.Strings(scope.Paths)
+	if want := []string{"NOTES.md", "src/main.go"}; !slices.Equal(scope.Paths, want) {
+		t.Errorf("Paths = %v, want %v (every uncommitted file)", scope.Paths, want)
+	}
+	// One root is not grouped: the flat list is already unambiguous, and the prompt is a
+	// paragraph shorter for it (the same rule the turn-scoped scope follows).
+	if len(scope.Roots) != 0 {
+		t.Errorf("Roots = %+v, want none for a single-root session", scope.Roots)
 	}
 }
 

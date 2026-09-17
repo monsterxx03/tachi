@@ -38,12 +38,12 @@
   smoke.check('评审前没有已评审状态', !smoke.qa('.diff-chip').some((b) => b.textContent.indexOf('已评审') >= 0), '')
 
   // ── 「完整 diff」 belongs to the TURN, and works with no review at all ────────
-  // This is the entry's own promise (与 git HEAD 对照的完整 diff，真实行号), and it used to be
-  // routed into the side-channel panel — which is keyed by RUN. On a turn nobody had reviewed
-  // there was no run to show, so the click opened an empty column (「点完整 diff，侧边栏是空的」);
-  // once a run did exist, the panel showed the SELECTED run's file set rather than this turn's.
-  // Hence both halves are pinned HERE, before any review exists: the turn's own files are in the
-  // overlay, and no panel was involved in getting them.
+  // This is the entry's own promise (本轮的完整改动，带真实行号；与什么对照由浮层顶部那行说明),
+  // and it used to be routed into the side-channel panel — which is keyed by RUN. On a turn nobody
+  // had reviewed there was no run to show, so the click opened an empty column (「点完整 diff，侧边栏
+  // 是空的」); once a run did exist, the panel showed the SELECTED run's file set rather than this
+  // turn's. Hence both halves are pinned HERE, before any review exists: the turn's own files are in
+  // the overlay, and no panel was involved in getting them.
   const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
   if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
   diffChip.click()

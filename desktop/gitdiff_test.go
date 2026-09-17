@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -286,6 +287,75 @@ func TestGetTurnDiffCleanTree(t *testing.T) {
 	}
 	if vo.Root != repo {
 		t.Errorf("Root = %q, want the workspace %q", vo.Root, repo)
+	}
+}
+
+// TestGetWorkingTreeChanges: the 评审所有改动 entry's diff — every uncommitted file, whatever turn
+// touched it — under its OWN Source. The pane heads itself from that field (全部改动 vs 本轮改动),
+// so a diff that came back as anything else would be presented as one turn's work.
+func TestGetWorkingTreeChanges(t *testing.T) {
+	repo := gitRepo(t)
+	writeRepoFile(t, repo, "src/main.go", "package main\n\nfunc main() {\n\tnewWith(30 * time.Second)\n}\n")
+	writeRepoFile(t, repo, "NOTES.md", "a note\n")
+	_, svc, sid := newRootsApp(t, repo)
+
+	vo := svc.GetWorkingTreeChanges(sid)
+	if vo.Source != changeSourceHead {
+		t.Errorf("Source = %q, want %q", vo.Source, changeSourceHead)
+	}
+	if vo.Note != "" {
+		t.Errorf("Note = %q, want none", vo.Note)
+	}
+	var got []string
+	for _, f := range vo.Files {
+		got = append(got, f.Path)
+	}
+	sort.Strings(got)
+	// The tracked edit AND the brand new file: the entry reviews what is uncommitted, and
+	// `git diff HEAD` alone would leave the new one out.
+	if want := []string{"NOTES.md", "src/main.go"}; !slices.Equal(got, want) {
+		t.Errorf("files = %v, want %v", got, want)
+	}
+
+	// A clean tree answers in the entry's own words. The pane's generic empty state names another
+	// surface (「完整 diff」), which would read as a link out of a surface the reader is already on.
+	_, cleanSvc, cleanSid := newRootsApp(t, gitRepo(t))
+	empty := cleanSvc.GetWorkingTreeChanges(cleanSid)
+	if len(empty.Files) != 0 {
+		t.Fatalf("clean tree files = %+v, want none", empty.Files)
+	}
+	if empty.Source != changeSourceHead {
+		t.Errorf("clean Source = %q, want %q", empty.Source, changeSourceHead)
+	}
+	if !strings.Contains(empty.Note, "没有未提交的改动") {
+		t.Errorf("clean Note = %q, want the entry's own sentence", empty.Note)
+	}
+}
+
+// TestCountWorkingTreeChanges: the footer's cheap gate. It must count the same set the entry
+// reviews — untracked files INCLUDED, which is exactly what the diff alone would miss — and answer
+// 0 for the states a chip must not be offered in: a clean tree, and a root that is not in a git
+// work tree at all.
+func TestCountWorkingTreeChanges(t *testing.T) {
+	repo := gitRepo(t)
+	_, svc, sid := newRootsApp(t, repo)
+	if n := svc.CountWorkingTreeChanges(sid); n != 0 {
+		t.Errorf("clean tree = %d, want 0", n)
+	}
+
+	writeRepoFile(t, repo, "src/main.go", "package main\n\nfunc main() {\n\tnewWith(30 * time.Second)\n}\n")
+	if n := svc.CountWorkingTreeChanges(sid); n != 1 {
+		t.Errorf("one modified file = %d, want 1", n)
+	}
+
+	writeRepoFile(t, repo, "NOTES.md", "a note\n")
+	if n := svc.CountWorkingTreeChanges(sid); n != 2 {
+		t.Errorf("a modified file plus an untracked one = %d, want 2", n)
+	}
+
+	_, plain, plainSid := newRootsApp(t, t.TempDir())
+	if n := plain.CountWorkingTreeChanges(plainSid); n != 0 {
+		t.Errorf("a root outside any repository = %d, want 0", n)
 	}
 }
 

@@ -304,23 +304,31 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   // committed — or deleted — since renders as an empty pane whose findings all look like they
   // name files the turn never touched.
   const runTurn = detail?.header.turn ?? 0
+  // …and whether the run was scoped to the WHOLE working tree instead (评审所有改动). Then the
+  // same rule points at the other diff: the tree against HEAD, which is what that reviewer read.
+  // The two are asked through different entries on purpose — GetTurnChanges answers about a TURN
+  // and will not widen to the whole tree under a turn's heading (see its comment).
+  const wholeTree = !!detail?.header.wholeTree
   const diffRunRef = useRef('')
   useEffect(() => {
     if (tab !== 'findings' || !runKey) return
     const files = pathsKey ? pathsKey.split('\n') : []
-    if (files.length === 0 && runTurn === 0) {
+    if (files.length === 0 && runTurn === 0 && !wholeTree) {
       setDiff(null)
       setDiffError('')
       diffRunRef.current = ''
       return
     }
-    const key = `${runKey}\n${runTurn}\n${pathsKey}`
+    const key = `${runKey}\n${runTurn}\n${pathsKey}\n${wholeTree}`
     if (diffRunRef.current === key) return
     diffRunRef.current = key
     let alive = true
     setDiffLoading(true)
     setDiffError('')
-    AgentService.GetTurnChanges(sessionId, runTurn, files)
+    const read = wholeTree
+      ? AgentService.GetWorkingTreeChanges(sessionId)
+      : AgentService.GetTurnChanges(sessionId, runTurn, files)
+    read
       .then((d) => { if (alive) setDiff(d || null) })
       .catch((e) => {
         if (!alive) return
@@ -332,7 +340,11 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
       })
       .finally(() => { if (alive) setDiffLoading(false) })
     return () => { alive = false }
-  }, [tab, sessionId, runKey, pathsKey, runTurn])
+    // `wholeTree` is in the deps even though it is derived from `detail` (as runKey and pathsKey
+    // are): it decides WHICH entry is read, and the key below records that choice — a re-render
+    // where only the flag changed would then read the wrong diff and cache it under a key that
+    // looks right. Derived-so-it-cannot-change-alone is a coincidence, not a guarantee.
+  }, [tab, sessionId, runKey, pathsKey, runTurn, wholeTree])
 
   // openReport shows the pane; readReport does the reading. The read is driven by the PANE and
   // not by the click: every fact that can change the answer — which run is selected, whether the
@@ -409,11 +421,11 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   const refreshCurrent = useCallback(() => void refresh(sessionId), [refresh, sessionId])
   return useMemo(() => ({
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, runTurn, diff,
+    select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, runTurn, wholeTree, diff,
     diffLoading, diffError, reportText, reportNote, openReport, reloadReport, runKey,
   }), [
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, runTurn, diff, diffLoading, diffError, reportText, reportNote,
+    refreshCurrent, loadRequest, tab, pathsKey, runTurn, wholeTree, diff, diffLoading, diffError, reportText, reportNote,
     openReport, reloadReport, runKey,
   ])
 }
@@ -440,16 +452,19 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   // Runs another review over the same scope (see DiffFindingsPane's onRerun). The turn, the
   // paths and the reviewed message come from the run's own record, which is what makes a re-run
   // from a historical entry as ordinary as one from the chip — and what keeps it reading the
-  // same two trees when the changes it reviewed are no longer in the working tree.
-  onRerun?: (turn: number, paths: string[], reviewedMsg: string) => void
+  // same two trees when the changes it reviewed are no longer in the working tree. `wholeTree`
+  // says the record's scope was the WORKING TREE rather than a turn, which is the one case where
+  // re-running deliberately does NOT ask the same question: it re-reads the tree as it is now,
+  // which is what that entry is for.
+  onRerun?: (turn: number, paths: string[], reviewedMsg: string, wholeTree: boolean) => void
   onClose: () => void
 }) {
-  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, runTurn, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
+  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, runTurn, wholeTree, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
   // Whether this run recorded a scope at all: a typed /review covers the whole tree and has
   // nothing to name, which is a different thing from "the scope could not be read". A TURN is a
   // scope too — a turn whose changes came from a shell command declared no paths, and saying "no
   // file list was recorded" about it would deny the review that just read it.
-  const hasScope = pathsKey.length > 0 || runTurn > 0
+  const hasScope = pathsKey.length > 0 || runTurn > 0 || wholeTree
   // The pane's scroller doubles as the find root: the bar sticks to its top, and a jump scrolls
   // it rather than the window.
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -730,9 +745,10 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
                 /* Only a run that recorded its scope can be re-run over "the same files": a
                    typed /review covers the whole tree and has nothing to name. The TURN travels
                    with it so the re-run asks the same question — the same two trees — and not
-                   the working tree, which is what it would fall back to. */
+                   the working tree, which is what it would fall back to. A WORKING-TREE run
+                   travels with its flag instead, and is re-run as exactly that. */
                 onRerun={hasScope && onRerun
-                  ? () => onRerun(runTurn, detail.header.paths || [], detail.header.reviewedMsg || '')
+                  ? () => onRerun(runTurn, detail.header.paths || [], detail.header.reviewedMsg || '', !!detail.header.wholeTree)
                   : undefined} />
             ) : null}
 

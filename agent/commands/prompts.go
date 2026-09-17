@@ -252,6 +252,13 @@ type ReviewScope struct {
 	// two roots can hold the same relative path, so a single flat list would leave the reviewer
 	// guessing which tree (and which file) an entry means.
 	Roots []ScopeRoot
+	// WholeTree says Paths is EVERY uncommitted change in the working tree rather than the files
+	// one turn touched. The two scopes read the same way (`git diff HEAD`), so what it changes is
+	// the prompt's own sentence: "what the latest turn touched" is a lie about a working tree
+	// whose changes came from several turns, and a reviewer told the wrong provenance audits the
+	// wrong thing — it goes looking for a turn's intent, or discounts a file it thinks is
+	// unrelated. Set by the desktop's 评审所有改动 entry, which diffs against HEAD.
+	WholeTree bool
 }
 
 // ScopeRoot is one root's slice of a review's scope.
@@ -278,7 +285,13 @@ func AppendReviewScope(prompt string, scope ReviewScope) string {
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(prompt, "\n"))
 	b.WriteString("\n\n## Scope (only these files)\n\n")
-	b.WriteString("Review ONLY the changes in these files — they are what the latest turn touched:\n")
+	if scope.WholeTree {
+		b.WriteString("Review ONLY the changes in these files — they are EVERY uncommitted change in " +
+			"the working tree (everything `git diff HEAD` reports), and they need not come from one " +
+			"turn or from one author:\n")
+	} else {
+		b.WriteString("Review ONLY the changes in these files — they are what the latest turn touched:\n")
+	}
 	if len(scope.Roots) > 1 {
 		// Several workspace roots: listing them flat would be ambiguous the moment two roots
 		// hold the same relative path, so each group names its root.
@@ -309,7 +322,15 @@ func AppendReviewScope(prompt string, scope ReviewScope) string {
 			"and for files that are brand new `git ls-files --others --exclude-standard -- " +
 			strings.Join(scope.Paths, " ") + "`.\n")
 	}
-	b.WriteString("If a command happens to show changes to other files, ignore them: they are outside this review.\n")
+	if scope.WholeTree {
+		// The list above is the whole answer, so the trailing caveat has to say something
+		// different from the turn-scoped one: there is no "rest of the working tree" to be
+		// outside of, and a file that shows up beyond this list is one git HIDES.
+		b.WriteString("`git diff HEAD` is exactly this list: a file that shows up outside it is one git ignores, " +
+			"not one this review left out.\n")
+	} else {
+		b.WriteString("If a command happens to show changes to other files, ignore them: they are outside this review.\n")
+	}
 	return b.String()
 }
 

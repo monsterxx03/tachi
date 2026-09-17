@@ -90,14 +90,20 @@ type OneOffVO struct {
 	// ReviewedMsg is the conversation message this run was started for (a review's entry
 	// records it), which is what lets a turn's chip say 已评审 after a restart.
 	ReviewedMsg string `json:"reviewedMsg,omitempty"`
-	// Paths is the file set a scoped review was limited to (nil for a whole-tree review).
-	// The diff pane needs it to show anything, and it is a property of the turn that asked,
-	// so the record is where it has to live.
+	// Paths is the file set a scoped review was limited to (nil for a review that recorded no
+	// scope at all). The diff pane needs it to show anything, and it is a property of the turn
+	// that asked, so the record is where it has to live.
 	Paths []string `json:"paths,omitempty"`
-	// Turn is the checkpointed turn a scoped review was scoped to (0 for a whole-tree review
-	// or a session without checkpoints). The pane reads the SAME diff the reviewer read from
-	// it (the turn's own two trees), so a review of changes that were committed — or edited
-	// again — since still shows what was reviewed, with the findings anchored.
+	// WholeTree marks Paths as EVERY uncommitted change in the working tree (the 评审所有改动
+	// entry) rather than the files one turn touched. The pane reads a different diff for each —
+	// the turn's checkpoint pair vs the working tree against HEAD — so a frontend that ignored
+	// this would render one scope's findings against the other scope's diff.
+	WholeTree bool `json:"wholeTree,omitempty"`
+	// Turn is the checkpointed turn a scoped review was scoped to (0 for a review with no turn
+	// behind it — a typed /review, the working-tree entry, or a session without checkpoints).
+	// The pane reads the SAME diff the reviewer read from it (the turn's own two trees), so a
+	// review of changes that were committed — or edited again — since still shows what was
+	// reviewed, with the findings anchored.
 	Turn int `json:"turn,omitempty"`
 	// Findings counts the run's ReportFinding calls. Only LoadOneOff fills it: counting
 	// means reading the whole file, and paying that for every record in the list is not
@@ -408,6 +414,10 @@ func readOneOffHeader(path, name string) (OneOffVO, time.Time, error) {
 			// the findings without a diff, which is what an unscoped review looks like too.
 			_ = json.Unmarshal([]byte(raw), &vo.Paths)
 		}
+		// Read beside Paths, because it QUALIFIES them: the same non-empty list means "the files
+		// one turn touched" without it and "every uncommitted change" with it, and the pane reads
+		// a different diff for each (a checkpoint pair vs the working tree).
+		vo.WholeTree = m.Extra[agent.OneOffKeyWholeTree] != ""
 	}
 	started := m.StartedAt
 	if st, err := f.Stat(); err == nil {

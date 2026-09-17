@@ -96,6 +96,21 @@ export function CompleteMCPServerAuth(name: string, redirectURL: string): $Cance
 }
 
 /**
+ * CountWorkingTreeChanges is how many files the session's roots hold uncommitted against HEAD —
+ * what decides whether the latest turn's footer offers 「评审所有改动」 at all. 0 when there is
+ * nothing to review (a clean tree, no workspace, or no repository).
+ * 
+ * It exists beside GetWorkingTreeChanges because the two run at different rhythms. This one is
+ * asked at every idle moment, so it stays on the cheap side of the same question: `git status
+ * --porcelain` per root, without a hunk being parsed or a file read. Handing the footer a number
+ * rather than a boolean is what lets it say how much there is to review — the only thing that
+ * tells a reader that a turn with no changes of its own still has something behind the entry.
+ */
+export function CountWorkingTreeChanges(sessionID: string): $CancellablePromise<number> {
+    return $Call.ByID(3621498715, sessionID);
+}
+
+/**
  * CreateProject adds a project. name may be empty, in which case it is derived from the
  * primary directory's base name (with -2 / -3 while it collides).
  */
@@ -275,6 +290,25 @@ export function GetTurnDiff(sessionID: string, paths: string[] | null): $Cancell
 
 export function GetUIState(): $CancellablePromise<$models.UIStateVO> {
     return $Call.ByID(518078095);
+}
+
+/**
+ * GetWorkingTreeChanges is the whole working tree against HEAD: every uncommitted file under the
+ * session's roots, no path filter, no turn. It is what the 评审所有改动 entry reviews and what its
+ * findings pane renders, and the two reading the SAME thing is the point — a pane showing a
+ * different diff than the reviewer saw would explain findings against coordinates nobody read.
+ * 
+ * This is deliberately NOT reachable through GetTurnChanges(turn, paths): that entry answers about
+ * a TURN, and it refuses to widen its answer to the whole tree (see its comment — the whole tree
+ * under a turn's heading is a different claim, and a wrong one). The empty path list here is not a
+ * fallback; it is the subject.
+ * 
+ * It costs a git walk per root, so the FOOTER does not call it to decide whether to offer the
+ * entry: CountWorkingTreeChanges answers that cheaper question, and this runs when a pane or a
+ * review actually wants the text.
+ */
+export function GetWorkingTreeChanges(sessionID: string): $CancellablePromise<$models.TurnDiffVO> {
+    return $Call.ByID(2422676864, sessionID);
 }
 
 /**
@@ -463,6 +497,25 @@ export function ResolveDroppedPaths(sessionID: string, paths: string[] | null): 
  */
 export function RevealPath(path: string): $CancellablePromise<string> {
     return $Call.ByID(1709803226, path);
+}
+
+/**
+ * ReviewAllChanges starts a review of everything UNCOMMITTED in the session's working tree
+ * against HEAD — the 评审所有改动 entry, which answers "I have been working for a while, look at
+ * all of it" rather than "look at what this one turn did".
+ * 
+ * The subject is the same diff the footer's 完整 diff shows and the findings pane will show,
+ * read ONCE, with no path filter (GetTurnDiff's empty list is the whole tree). So the file list
+ * the reviewer is handed cannot disagree with what is under review, and the run records it, which
+ * is what lets the pane render the same set after a restart.
+ * 
+ * There is no checkpoint pair here, and that is not an omission: those two trees belong to a TURN,
+ * while "everything uncommitted" spans turns. This scope reads the working tree's own diff, so
+ * committing mid-conversation empties it — the same trade the 完整 diff pane makes, and the reason
+ * both are named for the working tree rather than for a turn.
+ */
+export function ReviewAllChanges(sessionID: string, reviewedMsg: string): $CancellablePromise<string> {
+    return $Call.ByID(988595868, sessionID, reviewedMsg);
 }
 
 /**

@@ -127,6 +127,18 @@ export function lastRunningAssistantIndex(list: Message[]): number {
   return -1
 }
 
+// lastAssistantIndex is the newest assistant message: "the latest turn" as the transcript sees
+// it. It decides which footer carries the whole-working-tree review entry (评审所有改动), whose
+// subject is the tree as it is NOW — so it belongs to the turn just watched, not to every turn in
+// the history. Deliberately not "the newest turn WITH a checkpoint": reviewing the working tree
+// needs none, and a session without checkpoints must still get the entry.
+export function lastAssistantIndex(list: Message[]): number {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === 'assistant') return i
+  }
+  return -1
+}
+
 // ── Turn view: the process fold ─────────────────────────────────────────────
 //
 // A long turn renders one row per part (thinking, tool card, intermediate text), so a

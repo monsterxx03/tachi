@@ -3,6 +3,13 @@ package main
 // Working-tree diff for the changes panel (P2): what the files a turn touched look
 // like NOW, against HEAD, with REAL line numbers.
 //
+// This is the FALLBACK half of that panel, not the whole story: `turnchanges.go`'s GetTurnChanges
+// answers a turn's 「完整 diff」 from the turn's own two checkpoint trees whenever it has a pair
+// (exact — a shell command's writes are in it — and frozen, so a commit since does not empty it),
+// and `GetWorkingTreeChanges` answers the 评审所有改动 entry by diffing the whole tree here with an
+// empty path list. So "the changes panel shows the working tree" is true only when neither of those
+// applies; every diff that comes out of this file says so in its own Source.
+//
 // P1 answers "what did this call set out to change" from the call's own arguments.
 // That is enough for a card but carries no file coordinates. This is the other half —
 // the authoritative view of the working tree — and it is also the only place review
@@ -50,9 +57,12 @@ type TurnDiffVO struct {
 	// empty diff, and its refusal has to say "the reviewer cannot see this file" rather than
 	// "there is nothing to review".
 	Ignored int `json:"ignored,omitempty"`
-	// Source says where this diff came from: "checkpoint" (the turn's own two trees — exact,
-	// frozen, shell commands included) or "tools" (this working-tree comparison of the paths
-	// the tool calls declared). See turnchanges.go.
+	// Source says where this diff came from: "checkpoint" (a turn's own two trees — exact,
+	// frozen, shell commands included), "tools" (this working-tree comparison of the paths a
+	// turn's tool calls declared) or "head" (the WHOLE working tree against HEAD, which is the
+	// 评审所有改动 entry's subject and has no turn behind it). See turnchanges.go and
+	// GetWorkingTreeChanges — a surface that presents one of them as another is the failure this
+	// field exists to prevent.
 	Source string `json:"source,omitempty"`
 }
 
@@ -165,6 +175,78 @@ func (s *AgentService) GetTurnDiff(sessionID string, paths []string) TurnDiffVO 
 		vo.Note = joinNotes(vo.Note, ignoredNote(ignored))
 	}
 	return vo
+}
+
+// changeSourceHead is the third source a TurnDiffVO can come back as: the WORKING TREE against
+// HEAD, with no turn and no checkpoint pair behind it (see GetWorkingTreeChanges).
+//
+// The three are not interchangeable claims. changeSourceCheckpoint says "this is what that turn
+// changed" — frozen, so it survives a commit. changeSourceTools says "these are the files a turn's
+// tool calls declared, read as they are now". This one says "these are ALL the uncommitted changes,
+// wherever they came from" — and it stops being true the moment they are committed.
+const changeSourceHead = "head"
+
+// GetWorkingTreeChanges is the whole working tree against HEAD: every uncommitted file under the
+// session's roots, no path filter, no turn. It is what the 评审所有改动 entry reviews and what its
+// findings pane renders, and the two reading the SAME thing is the point — a pane showing a
+// different diff than the reviewer saw would explain findings against coordinates nobody read.
+//
+// This is deliberately NOT reachable through GetTurnChanges(turn, paths): that entry answers about
+// a TURN, and it refuses to widen its answer to the whole tree (see its comment — the whole tree
+// under a turn's heading is a different claim, and a wrong one). The empty path list here is not a
+// fallback; it is the subject.
+//
+// It costs a git walk per root, so the FOOTER does not call it to decide whether to offer the
+// entry: CountWorkingTreeChanges answers that cheaper question, and this runs when a pane or a
+// review actually wants the text.
+func (s *AgentService) GetWorkingTreeChanges(sessionID string) TurnDiffVO {
+	vo := s.GetTurnDiff(sessionID, nil)
+	vo.Source = changeSourceHead
+	if len(vo.Files) == 0 && vo.Note == "" {
+		// The pane's generic empty-state sentence names a different surface (「完整 diff」), so
+		// the answer carries its own. The GetTurnDiff cases that DO have something to explain —
+		// no workspace, not a repository, an ignored file — already said it.
+		vo.Note = "工作树里没有未提交的改动（可能已经提交）"
+	}
+	return vo
+}
+
+// CountWorkingTreeChanges is how many files the session's roots hold uncommitted against HEAD —
+// what decides whether the latest turn's footer offers 「评审所有改动」 at all. 0 when there is
+// nothing to review (a clean tree, no workspace, or no repository).
+//
+// It exists beside GetWorkingTreeChanges because the two run at different rhythms. This one is
+// asked at every idle moment, so it stays on the cheap side of the same question: `git status
+// --porcelain` per root, without a hunk being parsed or a file read. Handing the footer a number
+// rather than a boolean is what lets it say how much there is to review — the only thing that
+// tells a reader that a turn with no changes of its own still has something behind the entry.
+func (s *AgentService) CountWorkingTreeChanges(sessionID string) int {
+	primary, additional := s.desk.sessionRoots(sessionID)
+	if primary == "" {
+		return 0
+	}
+	count := 0
+	for _, root := range append([]string{primary}, additional...) {
+		if !fileutil.IsDir(root) {
+			continue // a root whose directory is gone has nothing to report
+		}
+		if out, err := gitOutput(root, "rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+			continue
+		}
+		out, err := gitOutput(root, "status", "--porcelain")
+		if err != nil {
+			continue
+		}
+		// One line per changed entry (a rename stays one line without `-z`, and a path with a
+		// newline in it is C-quoted by git), so lines are the count. Untracked files are entries
+		// here, which is what this entry reviews: `git diff HEAD` alone would miss them.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // rootChanges is one root's share of a working-tree diff.

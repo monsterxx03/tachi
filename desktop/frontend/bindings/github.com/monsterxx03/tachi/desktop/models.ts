@@ -494,17 +494,26 @@ export interface OneOffVO {
     "reviewedMsg"?: string;
 
     /**
-     * Paths is the file set a scoped review was limited to (nil for a whole-tree review).
-     * The diff pane needs it to show anything, and it is a property of the turn that asked,
-     * so the record is where it has to live.
+     * Paths is the file set a scoped review was limited to (nil for a review that recorded no
+     * scope at all). The diff pane needs it to show anything, and it is a property of the turn
+     * that asked, so the record is where it has to live.
      */
     "paths"?: string[] | null;
 
     /**
-     * Turn is the checkpointed turn a scoped review was scoped to (0 for a whole-tree review
-     * or a session without checkpoints). The pane reads the SAME diff the reviewer read from
-     * it (the turn's own two trees), so a review of changes that were committed — or edited
-     * again — since still shows what was reviewed, with the findings anchored.
+     * WholeTree marks Paths as EVERY uncommitted change in the working tree (the 评审所有改动
+     * entry) rather than the files one turn touched. The pane reads a different diff for each —
+     * the turn's checkpoint pair vs the working tree against HEAD — so a frontend that ignored
+     * this would render one scope's findings against the other scope's diff.
+     */
+    "wholeTree"?: boolean;
+
+    /**
+     * Turn is the checkpointed turn a scoped review was scoped to (0 for a review with no turn
+     * behind it — a typed /review, the working-tree entry, or a session without checkpoints).
+     * The pane reads the SAME diff the reviewer read from it (the turn's own two trees), so a
+     * review of changes that were committed — or edited again — since still shows what was
+     * reviewed, with the findings anchored.
      */
     "turn"?: number;
 
@@ -974,9 +983,12 @@ export interface TurnDiffVO {
     "ignored"?: number;
 
     /**
-     * Source says where this diff came from: "checkpoint" (the turn's own two trees — exact,
-     * frozen, shell commands included) or "tools" (this working-tree comparison of the paths
-     * the tool calls declared). See turnchanges.go.
+     * Source says where this diff came from: "checkpoint" (a turn's own two trees — exact,
+     * frozen, shell commands included), "tools" (this working-tree comparison of the paths a
+     * turn's tool calls declared) or "head" (the WHOLE working tree against HEAD, which is the
+     * 评审所有改动 entry's subject and has no turn behind it). See turnchanges.go and
+     * GetWorkingTreeChanges — a surface that presents one of them as another is the failure this
+     * field exists to prevent.
      */
     "source"?: string;
 }
