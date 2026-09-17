@@ -68,6 +68,33 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 // SetCompactStrategy replaces the strategy used for auto-compact summary
 // generation. Tests use this to inject a fake that returns a fixed summary
 // without needing a real LLM provider.
+//
+// A strategy installed this way is OWNED by the caller: rebindCompactStrategy
+// leaves it alone on a provider switch (see there).
 func (a *AIAgent) SetCompactStrategy(s CompactStrategy) {
 	a.Config.CompactStrategy = s
+}
+
+// rebindCompactStrategy re-points the PRODUCTION compact strategy at the
+// agent's current main provider.
+//
+// The strategy is built at construction — and its provider is read nowhere
+// else — while SetResolvedProvider replaces a.Config.Resolved wholesale. So
+// without this call, /model would switch the conversation to the new provider
+// and leave /compact (plus auto-compact) asking the OLD one for the summary:
+// the request would go to a model the user just left, and the usage row would
+// name it as well. Context window and thinking follow SetResolvedProvider
+// already; the compact path was the one dimension that did not.
+//
+// A strategy the caller OWNS is deliberately untouched: tests inject
+// fakeCompactStrategy via SetCompactStrategy precisely to keep the LLM out of
+// the loop, and swapping it for the production implementation would turn every
+// such test into a real network call. The concrete-type check is what tells
+// the two apart — llmCompactStrategy is the one this package builds itself and
+// no caller can name.
+func (a *AIAgent) rebindCompactStrategy() {
+	if _, ok := a.Config.CompactStrategy.(*llmCompactStrategy); !ok {
+		return
+	}
+	a.Config.CompactStrategy = &llmCompactStrategy{provider: a.Config.Resolved.Provider}
 }

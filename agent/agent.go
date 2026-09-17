@@ -375,12 +375,15 @@ func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 // SetResolvedProvider replaces every dimension together, so a wholesale
 // provider switch (e.g. tachi -p with a configured run provider) picks up
 // the target's resolved ContextWindow / Thinking / ThinkingEffort without
-// per-field overrides. The provider is re-wrapped for usage billing (so
-// post-switch calls stay on the ledger; the ledger row's provider name comes
-// from the provider itself — config-resolved providers carry it via
-// NewNamedProvider). The applied ResolvedProvider is returned for callers
-// that need display metadata (Type / Model / MaxTokens); it is the caller's
-// copy — the agent owns a detached one.
+// per-field overrides. The compact strategy is re-pointed too
+// (rebindCompactStrategy) — it holds a provider of its own, so a switch that
+// skipped it would leave /compact summarising through the model the user just
+// left. The provider is re-wrapped for usage billing (so post-switch calls
+// stay on the ledger; the ledger row's provider name comes from the provider
+// itself — config-resolved providers carry it via NewNamedProvider). The
+// applied ResolvedProvider is returned for callers that need display metadata
+// (Type / Model / MaxTokens); it is the caller's copy — the agent owns a
+// detached one.
 func (a *AIAgent) SetResolvedProvider(providerName string) (*llm.ResolvedProvider, error) {
 	if a.Config.FullConfig == nil {
 		return nil, errors.New("SetResolvedProvider: no FullConfig to resolve provider from")
@@ -392,6 +395,7 @@ func (a *AIAgent) SetResolvedProvider(providerName string) (*llm.ResolvedProvide
 	c := *rp // detach: the agent owns its Resolved (see AgentConfig.Resolved)
 	c.Provider = wrapForUsage(c.Provider, a.usageRecorder(), a.Config.FullConfig)
 	a.Config.Resolved = &c
+	a.rebindCompactStrategy()
 	return rp, nil
 }
 
@@ -448,6 +452,40 @@ func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
 // rules). nil disables policy checks (everything allowed, pre-feature behavior).
 func (a *AIAgent) SetPermissionPolicy(p *permission.Policy) {
 	a.Config.PermissionPolicy = p
+}
+
+// SetPermissionRoot rebuilds the permission policy for the project containing
+// dir, and installs it.
+//
+// dir is any directory inside the project — normally the session's working
+// directory, which is exactly what ReloadSkillsIn takes, so a caller that
+// re-points one re-points the other with the same value. The root is resolved
+// the same way there (config.FindProjectRootFrom); an empty dir means "no
+// project", i.e. the global rules alone.
+//
+// It exists because the project half of the rules is per TREE while one process
+// can host several trees: the default build (configure) resolves the root from
+// the PROCESS working directory, which for a GUI app is "/" — so the file it
+// looked for was /.tachi/permissions.yaml, and a project's own rules were
+// silently absent. Frontends that know which tree a conversation is in call
+// this instead of relying on that default.
+//
+// The session-scoped approvals carry over (InheritSessionApprovals): a user who
+// answered 「本会话全部允许」 is not asked again merely because the conversation
+// moved, or because the frontend re-resolved the same tree. The RULES do not
+// carry over — they are exactly what changes, and deny is decided before any
+// ask, so the inherited approval can never resurrect a forbidden command.
+//
+// No FullConfig (bare agents, sub-agents) leaves the policy untouched.
+func (a *AIAgent) SetPermissionRoot(ctx context.Context, dir string) {
+	if a.Config.FullConfig == nil {
+		return
+	}
+	root := config.FindProjectRootFrom(dir)
+	built := NewPermissionPolicyFromConfig(a.Config.FullConfig, root, a.Config.Logger)
+	built.InheritSessionApprovals(a.Config.PermissionPolicy)
+	a.Config.PermissionPolicy = built
+	a.Config.Logger.Debug(ctx, "Agent: permission policy rebuilt", "dir", dir, "project_root", root)
 }
 
 // PermissionPolicy returns the installed policy, or nil.

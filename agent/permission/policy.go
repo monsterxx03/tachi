@@ -168,6 +168,32 @@ func (p *Policy) ResetSessionApprovals() {
 	p.allowAllAsks = false
 }
 
+// InheritSessionApprovals copies the session-scoped approvals from prev onto p.
+//
+// A frontend whose session can move between trees (the desktop: one process,
+// several sessions, each with its own working directory) has to REBUILD the
+// policy when the tree changes, because the project half of the rules is read
+// from <tree>/.tachi/permissions.yaml. Rebuilding would otherwise re-ask for
+// every command the user had already waved through with 「本会话全部允许」 —
+// a regression the user cannot see coming, since the card simply reappears.
+//
+// Only the APPROVALS carry over; the rules come from the new tree. That is the
+// whole point: the tree changed, so which commands are forbidden changed with
+// it, and deny is still decided before any ask is reached. prev may be nil
+// (no policy to inherit from), in which case p is left as built.
+func (p *Policy) InheritSessionApprovals(prev *Policy) {
+	if p == nil || prev == nil {
+		return
+	}
+	prev.mu.Lock()
+	approved := prev.allowAllAsks
+	prev.mu.Unlock()
+	if !approved {
+		return
+	}
+	p.AllowAllAsksForSession()
+}
+
 // CheckBash evaluates command against the policy and returns the decision
 // plus the matched rule (or a short reason) for display to the user/LLM.
 //
