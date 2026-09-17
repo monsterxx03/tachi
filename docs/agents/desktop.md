@@ -1048,7 +1048,9 @@ const type = (el, t) => {
   and the send bar's ends go off-screen with it. Three things together fix it: `flex-wrap: wrap` on those
   rows, `flex: 1 1 0; min-width: 0` on the path (basis alone is not enough — the automatic minimum is the
   min-content), and `max-width: min(1100px, 100%)` on `.viewer-doc.is-diff`, which the file-preview overlay
-  and the panel share. Moving the button to the bar's left end does NOT fix it: the bar spans the content
+  and the panel share (`min(1390px, 100%)` when the overlay's file index is showing — the cap has to cover the
+  index too, or the diff body would lose exactly the column's width against every other way of opening the
+  same diff). Moving the button to the bar's left end does NOT fix it: the bar spans the content
   width, so either end can scroll away. The user's bubble is the same problem in miniature: a pasted URL has
   no break opportunity, so it takes `overflow-wrap: anywhere` rather than `break-word`, because only the
   former also shrinks the min-content (pinned by `bubble-wrap`).
@@ -1058,6 +1060,26 @@ const type = (el, t) => {
   bottom: 0`), the only thing in that pane that stays put — jumping to a finding must not scroll the control
   away, and where you are in the list is not a decision about sending. The cost is `flex-wrap: wrap` on the
   bar: it holds seven controls, and its min-content would otherwise widen the panel past its 419px column.
+
+- **The overlay's file index PINS inside the pane's existing scroller — it never gets one of its own**
+  (`desktop/frontend/src/diff.tsx` + `chat.css`): `.diff-filelist` is `position: sticky` in a flex row beside
+  the diff, so it stays put while the diff scrolls past it — and it pins BELOW the pane's pinned head, not
+  over it, because the head (`.diff-panel-head` is `sticky; top: 0` too) would otherwise paint over the
+  list's first rows. That offset is the head's MEASURED height, published by the pane as `--diff-head-h`
+  (`ResizeObserver` on the head, written straight to the element's style, no state): the head WRAPS — title,
+  repo root, note, 重新评审 — so there is no constant to hard-code, and a jumped-to file's `scroll-margin-top`
+  reads the same variable so it lands below the head rather than behind it. Two traps. (1) The scroller is
+  whichever box the pane already lives in — the overlay's `.viewer-stage`, the panel's `.oneoff-body` — and
+  BOTH the find bar (`useFind`) and the finding walk bind to that box: a nested `overflow: auto` container
+  would leave them searching and scrolling the wrong one (and would make the sticky column pin to the wrong
+  edge). (2) It is OVERLAY-ONLY, and absent with a single file, on purpose: the panel is a column the reader
+  drags (320px floor), where a 210px index takes a third of the width and the diff stops being readable — it
+  has the ↑/↓ walk for the same job. One file is nothing to choose between, and the column would cost the diff
+  210px in the common single-file case. A click unfolds the file FIRST and scrolls after that commit (the same
+  two steps as the finding walk), lands it 10px below the scroller's top (`scroll-margin-top`) and flashes the
+  same `is-jump-target` a finding gets. `oneoff-footer` pins the pinning (at two different scroll positions the
+  head's top equals the scroller's and the list's equals the head's bottom — which is what "fixed" means; at
+  rest the list sits below the head, as it should), the landing offset and the panel's lack of an index.
 
 - **The width the reader drags is NOT React state** (`desktop/frontend/src/oneoff.tsx`): the width lives on
   the panel element, so a `setState` per `pointermove` re-renders the whole panel — the 意见 pane's diff

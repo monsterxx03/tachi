@@ -245,6 +245,41 @@ function DiffCounts({ added, removed }: { added: number; removed: number }) {
   )
 }
 
+// fileKey is a diff file's identity, for React keys, for the fold state and for the file index's
+// jump: (root, oldPath, path) — never the path alone. A session can carry additional roots, two of
+// them can hold the same relative path, and with the path alone clicking one root's file would
+// unfold the other root's. \n cannot appear in a path, so the join is unambiguous.
+function fileKey(f: FileDiffVO): string {
+  return (f.root || '') + '\n' + (f.oldPath || '') + f.path
+}
+
+// fileTree is the root a diff file lives in: its OWN, falling back to the pane's — a session can
+// carry additional roots and a path under one of them is relative to THAT root, so using the
+// pane's (the primary) resolves a same-named file in the primary root. This is the one place that
+// fallback is written: fileAbsPath and the group's root badge both read it from here.
+function fileTree(file: FileDiffVO, root: string): string {
+  return file.root || root
+}
+
+// fileAbsPath is where a diff file lives on disk (see fileTree for why it is not simply the
+// pane's root plus the path).
+function fileAbsPath(file: FileDiffVO, root: string): string {
+  const tree = fileTree(file, root)
+  return tree && !file.path.startsWith('/') ? `${tree}/${file.path}` : file.path
+}
+
+// fileRootName is which tree a diff file is in, in the words the rest of the app uses: an
+// additional root is named by its directory (the backend's label), the primary by 主目录 — the
+// roots panel's own word for it, and the distinction the review prompt draws when it writes
+// "(primary)" next to a directory name. Leaving the primary bare only works while there is
+// nothing to compare it with; in a multi-root diff the bare row is the one you cannot place.
+//
+// These three live at module level because the file index and the file GROUP both need them: two
+// copies is how the list comes to name a different tree than the diff under it.
+function fileRootName(file: FileDiffVO, root: string, multiRoot: boolean): string {
+  return file.rootLabel || (multiRoot && root ? PRIMARY_ROOT_LABEL : '')
+}
+
 // JUMP_HIGHLIGHT_MS is how long the row an arrow landed on stays marked. Long enough to
 // find it after the scroll settles, short enough not to look like a selection — the tick
 // box is what expresses "this one", and a second, stronger-looking state would compete.
@@ -270,7 +305,7 @@ function jumpRank(f: FindingVO, fileOrder: Map<string, number>, root: string): [
 // report that explains them belong side by side in the side-channel panel — and an overlay
 // covering the conversation is exactly what this design set out to remove
 // (docs/2026-09-12-desktop-oneoff-panel-design.md §5.3).
-export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, expandAll, onSend, onOpenReport, onRerun }: {
+export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, expandAll, fileList, onSend, onOpenReport, onRerun }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
@@ -292,6 +327,12 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // with nothing to read (measured: `.diff-ln` count 0 in the smoke run — the line numbers the
   // chip promises were behind a fold nobody asked for).
   expandAll?: boolean
+  // Show the file INDEX down the left of the diff — one row per changed file, and clicking one
+  // jumps to it (see jumpToFile). On for the overlay, where the pane is the width of a lightbox
+  // and a diff of twenty files is otherwise a wall to scroll through looking for one; off for the
+  // side-channel panel, which is a column the reader drags to taste (a 210px index there would
+  // take a third of it and leave the diff unreadable) and which already has the ↑/↓ walk.
+  fileList?: boolean
   // Why the diff could not be read ("" when it was). An empty pane must not have to guess.
   diffError?: string
   // Sends the picked findings as an ordinary user message. Absent only when there is
@@ -305,6 +346,12 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
 }) {
   const counts: Record<string, number> = { bug: 0, warn: 0, info: 0 }
   for (const f of findings) counts[f.severity] = (counts[f.severity] || 0) + 1
+
+  // What this diff IS, in the backend's own words (TurnDiffVO.Source): a turn's frozen changes, or
+  // the whole working tree against HEAD. The headings and the 「不在…差异里」 badge have to say
+  // which, because a whole-tree review's findings must not be read as "this turn's" — and deriving
+  // it here, from the answer, keeps the pane from claiming a scope the diff does not have.
+  const wholeTree = diff?.source === 'head'
 
   // The draft is the reader's EDITS, keyed by the finding's index in the payload; an
   // untouched finding has no entry and falls back to defaultPick. Nothing has to be seeded
@@ -347,19 +394,18 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // not news) — and a pane whose diff has no findings at all (TurnDiffOverlay) passes
   // `expandAll`, because there the diff is the only content there is. Nothing has to be seeded
   // when the payload arrives, and a re-run's findings cannot fight a stored default — the same
-  // What this diff IS, in the backend's own words (TurnDiffVO.Source): a turn's frozen changes, or
-  // the whole working tree against HEAD. The headings and the 「不在…差异里」 badge have to say
-  // which, because a whole-tree review's findings must not be read as "this turn's" — and deriving
-  // it here, from the answer, keeps the pane from claiming a scope the diff does not have.
-  const wholeTree = diff?.source === 'head'
-
   // shape the picking draft uses.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({})
-  // A file's identity is (root, path), never the path alone: a session can carry additional
-  // roots, two of them can hold the same relative path, and this string is what React keys the
-  // group by and what the fold state hangs on — with the path alone, clicking one root's file
-  // would unfold the other root's. \n cannot appear in a path, so the join is unambiguous.
-  const keyOf = (f: FileDiffVO) => (f.root || '') + '\n' + (f.oldPath || '') + f.path
+  // The index is offered only when there is something to CHOOSE between: with one file it is a
+  // column that says nothing and takes 210px from the diff — and a single-file diff is the common
+  // case. (The pane's width cap follows the same flag, or a one-file diff would keep the extra
+  // room the index never claimed.)
+  const showFileList = !!fileList && (diff?.files || []).length > 1
+  // A file's identity is (root, oldPath, path) — `fileKey`, which the GROUP also wears as a data
+  // attribute so the file index can jump to it. Module level because of exactly that: the fold
+  // state, the React key and the jump anchor have to be the same string, or the index unfolds one
+  // root's file and scrolls to the other's.
+  const keyOf = fileKey
   // Anchoring judges each group against ITS OWN root: that is what makes an absolute finding
   // path resolve to the right one of two same-named files. (A finding that names a bare
   // relative path is still ambiguous between such roots — the reviewer is told the roots for
@@ -379,6 +425,8 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
 
   // ── Jumping between findings (the ↑/↓ pair in the header) ───────────────────
   const paneRef = useRef<HTMLDivElement>(null)
+  // The head, measured for its height (see the --diff-head-h block below).
+  const headRef = useRef<HTMLDivElement>(null)
   // The walk order and the current position. Both are derived from the payload rather than
   // from the DOM, so a folded file's findings are still reachable (see jumpRank).
   const fileOrder = new Map<string, number>()
@@ -396,6 +444,63 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // below, i.e. AFTER React has committed the unfold the jump may have asked for. `at` makes
   // two jumps to the same finding two different states, so the second one still runs.
   const [pendingJump, setPendingJump] = useState<{ idx: number; at: number } | null>(null)
+
+  // ── The space the pinned head occupies, for everything that hangs below it ──
+  // The head is PINNED (CSS), so two things below it need its height: the file index pins at
+  // `--diff-head-h` rather than 0 (a `top: 0` index slides UNDER the head and loses its first
+  // rows), and a jumped-to file stops `--diff-head-h + 10px` down rather than behind the head.
+  //
+  // What is published is the head's BOX plus the margin below it, not just the box: the head
+  // paints that 12px gap in its own background (so scrolled rows cannot show through it — see the
+  // CSS), and an index pinned at the box's bottom edge would have its first row under that paint.
+  // Measured rather than guessed, because the head WRAPS (title, root, note, 重新评审) and neither
+  // number is a constant. Written straight to the pane's style instead of into state, for the
+  // reason the panel's width drag gives: a re-render per resize would re-render every diff row.
+  useEffect(() => {
+    const head = headRef.current
+    const pane = paneRef.current
+    if (!head || !pane || !fileList) return
+    const publish = () => {
+      const gap = parseFloat(getComputedStyle(head).marginBottom) || 0
+      pane.style.setProperty('--diff-head-h', `${Math.round(head.getBoundingClientRect().height + gap)}px`)
+    }
+    publish()
+    // A ResizeObserver, not a window listener: the height changes when the CONTENT wraps too (a
+    // longer root path, a longer note), which no window event covers. Its callback riding the
+    // rendering cycle is fine here — if it never arrives, the value published above still holds,
+    // and the only thing a stale one costs is a few pixels of pin offset.
+    const ro = new ResizeObserver(publish)
+    ro.observe(head)
+    return () => { ro.disconnect(); pane.style.removeProperty('--diff-head-h') }
+  }, [fileList, diff])
+
+  // ── Jumping to a file (the index on the left) ──────────────────────────────
+  // The same two steps as the finding walk, for the same reason: a FOLDED file has no rows to
+  // scroll to, so it is unfolded first and the scroll waits for that commit (pendingFile). The
+  // landing is marked with the same flash a finding gets — in a diff this long, "did it move?"
+  // is otherwise a question about 3000 pixels of identical-looking hunks.
+  const [pendingFile, setPendingFile] = useState<{ key: string; at: number } | null>(null)
+  const jumpToFile = (f: FileDiffVO) => {
+    const key = fileKey(f)
+    setFileOpen((prev) => ({ ...prev, [key]: true }))
+    setPendingFile({ key, at: Date.now() })
+  }
+  useEffect(() => {
+    if (!pendingFile) return
+    // Found by attribute rather than by a selector built from the key: the key holds a path, and
+    // a quote or a backslash in it would have to be escaped to survive `querySelector`.
+    const groups = paneRef.current?.querySelectorAll<HTMLElement>('.diff-file') || []
+    const el = Array.from(groups).find((g) => g.dataset.fileKey === pendingFile.key)
+    if (!el) return
+    // NOT smooth: an index click is meant to cross the whole diff (that is what it is for), and
+    // landing instantly is what makes the flash readable as "you are here" rather than as the
+    // tail of an animation. It also keeps the jump independent of the motion preference, which
+    // `scroll-behavior` does not consult.
+    el.scrollIntoView({ block: 'start' })
+    el.classList.add('is-jump-target')
+    const timer = window.setTimeout(() => el.classList.remove('is-jump-target'), JUMP_HIGHLIGHT_MS)
+    return () => { window.clearTimeout(timer); el.classList.remove('is-jump-target') }
+  }, [pendingFile])
 
   // The draft and the walk belong to the RUN whose payload they describe. Switching runs in
   // the switcher, or re-running a review, replaces the findings — and BOTH indexes point at
@@ -439,7 +544,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   }, [pendingJump])
 
   return (
-    <div className="viewer-doc is-diff" ref={paneRef} tabIndex={-1}
+    <div className={`viewer-doc is-diff${showFileList ? ' has-filelist' : ''}`} ref={paneRef} tabIndex={-1}
       // Alt+↑/↓ walks the findings from anywhere inside the pane (a click on a tick box is
       // enough to put focus here) — the buttons are the pointer's way to the same walk.
       onKeyDown={(e) => {
@@ -447,7 +552,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         e.preventDefault()
         jumpTo(e.key === 'ArrowDown' ? 1 : -1)
       }}>
-      <div className="diff-panel-head">
+      <div className="diff-panel-head" ref={headRef}>
         <span className="diff-panel-title">{wholeTree ? '全部改动' : '本轮改动'}</span>
         {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
         <span className="diff-panel-note">
@@ -493,25 +598,51 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       {!loading && !diffError && hasPaths && !diff?.note && (diff?.files || []).length === 0 ? (
         <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——「完整 diff」只能看工作树里未提交的差异</div>
       ) : null}
-      {(diff?.files || []).map((f) => (
-        <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''} multiRoot={multiRoot}
-          findings={findingsOf(f)}
-          picks={picks} onPick={onPick} open={isOpen(f)} onToggle={() => setFileOpen((p) => ({ ...p, [keyOf(f)]: !isOpen(f) }))} />
-      ))}
-      {outsideItems.length > 0 ? (
-        <div className="diff-file">
-          <div className="diff-file-head">
-            <span className="diff-path">其它文件</span>
-            <span className="diff-badge" title="评审提到了这一轮没有改动的文件">不在本轮差异里</span>
-            <span className="finding-count is-bug" title="该文件上的评审意见">{outsideItems.length} 条意见</span>
-          </div>
-          {/* No code lines here, so the rows drop the code-column indent they get
-              when they sit under a line. */}
-          <div className="finding-list">
-            {outsideItems.map((it) => (
-              <FindingRow key={it.idx} item={it} pick={picks[it.idx] ?? defaultPick(it.finding.severity)}
-                onPick={onPick} orphan />
+      {(diff?.files || []).length > 0 ? (
+        <div className="diff-split">
+          {/* The index: one row per changed file, pinned while the diff scrolls (see the CSS —
+              it is `position: sticky` inside the pane's OWN scroller rather than a second scroll
+              container, because the find bar and the finding walk both bind to that scroller).
+              Off in the panel, and absent with a single file (see showFileList). */}
+          {showFileList ? (
+            <nav className="diff-filelist" aria-label="文件列表">
+              {(diff?.files || []).map((f) => (
+                <button key={keyOf(f)} type="button" className="diff-filelist-row"
+                  title={fileAbsPath(f, diff?.root || '')} onClick={() => jumpToFile(f)}>
+                  <span className="diff-filelist-path">{f.path}</span>
+                  {fileRootName(f, diff?.root || '', multiRoot)
+                    ? <span className="diff-filelist-root">{fileRootName(f, diff?.root || '', multiRoot)}</span>
+                    : null}
+                  <DiffCounts added={f.added} removed={f.removed} />
+                </button>
+              ))}
+            </nav>
+          ) : null}
+          <div className="diff-split-body">
+            {(diff?.files || []).map((f) => (
+              <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''} multiRoot={multiRoot}
+                findings={findingsOf(f)}
+                picks={picks} onPick={onPick} open={isOpen(f)} onToggle={() => setFileOpen((p) => ({ ...p, [keyOf(f)]: !isOpen(f) }))} />
             ))}
+            {outsideItems.length > 0 ? (
+              <div className="diff-file">
+                <div className="diff-file-head">
+                  <span className="diff-path">其它文件</span>
+                  <span className="diff-badge" title={wholeTree ? '评审提到了这次改动之外的文件' : '评审提到了这一轮没有改动的文件'}>
+                    {wholeTree ? '不在差异里' : '不在本轮差异里'}
+                  </span>
+                  <span className="finding-count is-bug" title="该文件上的评审意见">{outsideItems.length} 条意见</span>
+                </div>
+                {/* No code lines here, so the rows drop the code-column indent they get
+                    when they sit under a line. */}
+                <div className="finding-list">
+                  {outsideItems.map((it) => (
+                    <FindingRow key={it.idx} item={it} pick={picks[it.idx] ?? defaultPick(it.finding.severity)}
+                      onPick={onPick} orphan />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -636,7 +767,7 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
           expandAll: with no findings to fold AROUND, every file opens — the diff is the content
           here, not context for a review. */}
       <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${turn}\n${files}`}
-        hasPaths={hasScope} diffError={error} expandAll />
+        hasPaths={hasScope} diffError={error} expandAll fileList />
     </ViewerOverlay>
   )
 }
@@ -658,22 +789,15 @@ function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, o
   onToggle: () => void
 }) {
   // The file's own root wins over the panel's: a session can carry additional roots, and a
-  // path under one of them is relative to THAT root. Using the panel's (the primary) would
-  // resolve a same-named file in the primary root — previewing, opening and 发送 the wrong file,
-  // silently. file.root is empty for a single-root session, where the panel's root IS the root.
-  const fileRoot = file.root || root
-  const abs = fileRoot && !file.path.startsWith('/') ? `${fileRoot}/${file.path}` : file.path
-  // Which tree this file is in, in the words the rest of the app uses: an additional root is
-  // named by its directory (the backend's label), the primary by 主目录 — the roots panel's own
-  // word for it, and the distinction the review prompt draws when it writes "(primary)" next to
-  // a directory name. Leaving the primary bare only works while there is nothing to compare it
-  // with; in a multi-root diff the bare row is the one you cannot place.
-  const rootName = file.rootLabel || (multiRoot && root ? PRIMARY_ROOT_LABEL : '')
+  // path under one of them is relative to THAT root (see fileAbsPath/fileRootName — shared with
+  // the file index, so the list cannot name a different tree than the group it jumps to).
+  const abs = fileAbsPath(file, root)
+  const rootName = fileRootName(file, root, multiRoot)
   // The file's own content, the way every other file in this app is shown — the same
   // PreviewFile machinery behind the attachment cards.
   const [peek, setPeek] = useState(false)
   return (
-    <div className={`diff-file${open ? '' : ' is-folded'}`}>
+    <div className={`diff-file${open ? '' : ' is-folded'}`} data-file-key={fileKey(file)}>
       <div className="diff-file-head">
         <button type="button" className="diff-file-toggle" aria-expanded={open}
           title={open ? '收起这个文件的差异' : '展开这个文件的差异'}
@@ -691,7 +815,7 @@ function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, o
             (see rootName above): a single-root diff is unchanged, and in a multi-root one no row
             is left bare. */}
         {rootName ? (
-          <span className="diff-badge" title={fileRoot}>{rootName}</span>
+          <span className="diff-badge" title={fileTree(file, root)}>{rootName}</span>
         ) : null}
         {file.changedSince ? (
           <span className="diff-badge" title="这个文件在这一轮之后又被改过：这里显示的是当时的内容，不是磁盘上的现在">之后又改过</span>

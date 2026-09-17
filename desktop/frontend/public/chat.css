@@ -1002,6 +1002,72 @@ button.work-dir {
   max-width: min(1100px, 100%);
   padding: 18px 22px;
 }
+/* With the file index (the overlay) the cap has to cover the INDEX too, or the diff body would
+   lose exactly the column's width against every other way of opening the same diff. */
+.viewer-doc.is-diff.has-filelist {
+  max-width: min(1390px, 100%);
+}
+/* ── The file index ───────────────────────────────────────────────────────── */
+/* A diff of twenty files is a wall, and the reader arrives with one file in mind. The list PINS
+   while the diff scrolls — under the PINNED head, not over it (hence `--diff-head-h` instead of
+   `top: 0`) — and it does that with `position: sticky` inside whichever scroller the pane
+   already has (the overlay's stage, the panel's body) rather than by introducing a second scroll
+   container: the find bar and the finding walk both bind to that scroller, and a nested one would
+   leave them searching and scrolling the wrong box.
+   `max-height` is what keeps the tail of a long index reachable: a pinned list taller than the
+   viewport would clip its own end, so it scrolls on its own past that height. The 200px is the
+   overlay's own padding (40 top + 84 bottom) plus the pane's head and margins — the room the
+   list has to stay inside, not a taste — and the head's own height is subtracted on top of it. */
+.diff-split {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+}
+.diff-filelist {
+  /* `--diff-head-h` is the space the PINNED head occupies, measured by the pane: its box PLUS the
+     gap below it that its shadow paints. A `top: 0` index would slide under the head and lose its
+     first rows; an index pinned at the box's bottom edge would have its first row under that
+     paint; and the height below has to shrink by the same amount, or the list's tail would be
+     pinned out of reach. */
+  position: sticky;
+  top: var(--diff-head-h, 0px);
+  flex: 0 0 230px;
+  max-height: calc(100vh - 200px - var(--diff-head-h, 0px));
+  overflow: auto;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+}
+.diff-split-body { flex: 1 1 0; min-width: 0; }
+.diff-filelist-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  /* 12.5px is the app's control size (see .find-input), and the diff's own text is 11.5px: an
+     index read to FIND a file may not be the smallest type on the surface. */
+  font-size: 12.5px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  text-align: left;
+  padding: 4px 7px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.diff-filelist-row:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The path takes the row's spare room and truncates: a long path must not set the column's
+   width (the same rule `.diff-path` follows in the head, and for the same reason — min-content
+   of a nowrap path is the whole string). */
+.diff-filelist-path {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-filelist-root { flex-shrink: 0; color: var(--text-faint); }
 .diff-panel-head {
   display: flex;
   align-items: baseline;
@@ -1009,6 +1075,16 @@ button.work-dir {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
+  /* PINNED: a long diff must not scroll away the answer to "which diff is this, against what" —
+     and the file index must not scroll past it either (see --diff-head-h below). Two things come
+     with `sticky`: an opaque background, because rows scroll UNDER it, and a shadow that paints
+     the 12px BELOW it in the same colour — that gap is the head's own margin, and a margin is a
+     hole a scrolling row shows through. Keep this 12px in step with the margin above it. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel-solid);
+  box-shadow: 0 12px 0 var(--panel-solid);
   /* This row, and the two below, WRAP instead of widening the pane. The panel is a narrow
      column by design (the reader drags it to taste), and a row of non-shrinkable controls —
      badges, 预览/打开, the note — gave the pane a min-content width of nearly twice the
@@ -1041,6 +1117,10 @@ button.work-dir {
   color: var(--text-faint);
 }
 .diff-file + .diff-file { margin-top: 16px; }
+/* A jumped-to file (the overlay's index) stops 10px below the PINNED head rather than behind it:
+   landing the file the reader asked for under the pane's own title bar would hide exactly the
+   line they jumped to look at. (In the panel the variable is unset, so this is the old 10px.) */
+.diff-file { scroll-margin-top: calc(var(--diff-head-h, 0px) + 10px); }
 .diff-file-head {
   display: flex;
   align-items: center;
@@ -1205,6 +1285,10 @@ button.work-dir {
    "this one", so the walk only has to be findable — an animated wash that fades out,
    plus a leading edge the eye catches after a scroll. */
 .finding.is-jump-target { animation: finding-landed 1.4s var(--ease); }
+/* The same flash where a FILE jump lands (the overlay's index): the same gesture on a bigger
+   target, and without it "did it move?" is a question about thousands of identical-looking
+   diff rows. */
+.diff-file.is-jump-target { animation: finding-landed 1.4s var(--ease); }
 @keyframes finding-landed {
   from { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent-2); }
   to { background: var(--wash); box-shadow: inset 3px 0 0 transparent; }
@@ -1306,6 +1390,18 @@ button.work-dir {
   color: var(--amber);
   cursor: help;
 }
+/* The one row that has chips but no 🧾 chip to explain them: the latest turn's 「评审所有改动」 entry
+   when the turn itself changed nothing (the working tree's changes came from earlier turns). It
+   says how much there is, because a bare chip under a turn that changed nothing invites the reader
+   to ask "review what?". Muted and shrinkable: it is context for the chip, not a chip. */
+.diff-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+}
 
 /* ── Side-channel panel body ────────────────────────────────────────────────
    P1 renders the 过程 pane: the run's own messages, replayed through the same
@@ -1390,18 +1486,6 @@ button.work-dir {
   background: var(--wash);
   color: var(--text-dim);
   font-family: inherit;
-/* The one row that has chips but no 🧾 chip to explain them: the latest turn's 「评审所有改动」 entry
-   when the turn itself changed nothing (the working tree's changes came from earlier turns). It
-   says how much there is, because a bare chip under a turn that changed nothing invites the reader
-   to ask "review what?". Muted and shrinkable: it is context for the chip, not a chip. */
-.diff-hint {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--text-faint);
-}
   font-size: 11px;
   text-align: left;
   cursor: pointer;

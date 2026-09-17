@@ -68,6 +68,69 @@
     smoke.qa('.viewer-doc.is-diff .diff-file').every((g) => !g.classList.contains('is-folded')),
     smoke.qa('.viewer-doc.is-diff .diff-file').map((g) => g.className).join(' | '))
   smoke.check('没有评审就没有意见行', !smoke.q('.viewer-doc.is-diff .finding'), '')
+
+  // ── The file index down the left ────────────────────────────────────────────
+  // A diff of twenty files is a wall, and the reader arrives with one file in mind. Two facts are
+  // pinned here that the markup alone does not promise: the list does NOT move while the diff
+  // scrolls (the requirement is "fixed", not "scrolls along"), and a click LANDS on that file.
+  const filelist = smoke.q('.viewer-doc.is-diff .diff-filelist')
+  smoke.check('完整 diff 浮层里有左侧文件索引', !!filelist, filelist ? smoke.text(filelist) : '(没有 .diff-filelist)')
+  const rows = smoke.qa('.diff-filelist-row')
+  smoke.check('索引里每个文件一行（本轮两个文件两行）',
+    rows.length === 2 && smoke.text(rows[0]).indexOf('NOTES.md') >= 0 && smoke.text(rows[1]).indexOf('OTHER.md') >= 0,
+    rows.map((r) => smoke.text(r)).join(' | '))
+
+  const stage = smoke.q('.viewer-overlay .viewer-stage')
+  const head = smoke.q('.viewer-doc.is-diff .diff-panel-head')
+  const topOf = (el) => (el ? Math.round(el.getBoundingClientRect().top) : NaN)
+  // 钉住 = 滚到哪儿它都停在该在的位置。起点不算：不滚的时候列表在头部下方（它的自然位置），那正是
+  // 它该在的地方 —— sticky 是"要滚出去时留在那儿"，不是"永远不动"。所以取两个滚过的位置比较：
+  //   头部 → 滚动区顶端（它就是标题栏，滚走了读者就不知道这是谁的 diff）；
+  //   列表 → 头部底边（在头部下方，不是钻到它里面 —— 那会吃掉前几行）。
+  // 跟内容一起滚的话，这两个位置都会随 scrollTop 变。
+  const stageTop = topOf(stage)
+  // 头部占的垂直空间 = 它的盒子 + 它下面那道被阴影涂上的缝（12px）。列表要钉在这整段之下：
+  // 钉在盒子底边的话，第一行会被那道阴影盖掉一半。
+  const headH = head
+    ? Math.round(head.getBoundingClientRect().height + (parseFloat(getComputedStyle(head).marginBottom) || 0))
+    : 0
+  const at = (y) => { if (stage) stage.scrollTop = y; return { head: topOf(head), list: topOf(filelist) } }
+  const mid = at(Math.round((stage ? stage.scrollHeight : 0) / 3))
+  const bottom = at(stage ? stage.scrollHeight : 0)
+  const diffScrolled = !!stage && stage.scrollTop > 0
+  smoke.check('标题栏钉在滚动区顶部（滚到哪都在）',
+    diffScrolled && Math.abs(mid.head - stageTop) <= 2 && Math.abs(bottom.head - stageTop) <= 2,
+    `滚动区 top=${stageTop}；标题栏 top 在 1/3 处=${mid.head}、底部=${bottom.head}（高 ${headH}）`)
+  smoke.check('列表钉在标题栏下方（滚到哪都在，也没被标题栏盖住）',
+    diffScrolled && Math.abs(mid.list - (stageTop + headH)) <= 2 && Math.abs(bottom.list - (stageTop + headH)) <= 2,
+    `期望 ${stageTop + headH}（滚动区 top ${stageTop} + 标题栏高 ${headH}）；` +
+    `列表 top 在 1/3 处=${mid.list}、底部=${bottom.list}`)
+
+  // 从底部点第一行（NOTES.md 那 80 行在 OTHER.md 之前）：跳的方向穿越整份 diff，而且落点一定
+  // 到得了。反过来点末尾那个文件就证明不了什么 —— 滚动区已经到底，位置会被钳住。
+  const notesGroup = () => smoke.qa('.viewer-doc.is-diff .diff-file').find((el) => {
+    const p = el.querySelector('.diff-path')
+    return p && smoke.text(p) === 'NOTES.md'
+  }) || null
+  const notesOffset = () => {
+    const g = notesGroup()
+    return g && stage ? Math.round(g.getBoundingClientRect().top - stage.getBoundingClientRect().top) : null
+  }
+  if (rows[0]) rows[0].click()
+  const want = headH + 10 // 标题栏高 + scroll-margin：落点必须在钉住的标题栏下方
+  const fileLanded = await smoke.waitFor(
+    // 滚动区此刻在底部，所以这个位置顺带证明了"真的滚了"，而不是"恰好没动"。±3px 是取整 +
+    // 头部高度测量的误差。
+    () => { const d = notesOffset(); return d !== null && Math.abs(d - want) <= 3 ? d : null },
+    '点索引后 NOTES.md 的组落到标题栏下方', 5000)
+  smoke.check('点索引跳到那个文件（落在标题栏下方，不是被它盖住）', fileLanded !== null,
+    `落在滚动区顶部下 ${notesOffset()}px（期望 ${want} = 标题栏 ${headH} + 10）；` +
+    `scrollTop=${stage ? Math.round(stage.scrollTop) : 'n/a'}`)
+  smoke.check('落点带高亮（"就是这里"）', !!(notesGroup() || {}).classList
+    && notesGroup().classList.contains('is-jump-target'),
+    notesGroup() ? notesGroup().className : '')
+  if (stage) stage.scrollTop = 0
+
   // ── ⌘F in the diff overlay ─────────────────────────────────────────────────
   // A diff is the surface find exists for, and this overlay is one of its three hosts (the panel
   // and a previewed file are the others). NOTES.md's fixture repeats one line 80 times, so the
@@ -185,6 +248,10 @@
     smoke.log('诊断：面板此刻的状态', smoke.text('.oneoff-body').slice(0, 200))
     return smoke.finish()
   }
+  // 文件索引只属于浮层：面板是读者可拖窄的列，210px 的索引会吃掉三分之一，把 diff 挤到读不了
+  // （而且那边已经有 ↑/↓ 走查）。
+  smoke.check('面板的意见区没有文件索引（那是浮层的）', !smoke.q('.oneoff-body .diff-filelist'),
+    smoke.q('.oneoff-body .diff-filelist') ? '面板里出现了 .diff-filelist' : '')
 
   // ── The file groups, their fold, and the walk between findings ───────────────
   // The turn wrote two files and the review reported ONE finding, so the two rules can be
