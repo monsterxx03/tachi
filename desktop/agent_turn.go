@@ -155,7 +155,7 @@ func (d *desktopApp) startTurn(id, text string) string {
 	// Ensure this session has its own agent (lazy per-session build). No config
 	// (bootstrap failed) → fall back to the simulated turn.
 	if r.agent == nil {
-		if d.cfg == nil {
+		if d.config() == nil {
 			if !d.startSimulatedTurn(context.Background(), id, text) {
 				return refuseTurnRunning
 			}
@@ -234,7 +234,7 @@ func (d *desktopApp) startTurn(id, text string) string {
 			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 		}
 		ch := r.agent.RunConversationStream(ctx, history, text, d.systemPromptFor(id), llm.ChatOptions{
-			MaxTokens: d.cfg.MaxTokens,
+			MaxTokens: d.config().MaxTokens,
 		}, ropts...)
 		for ev := range ch {
 			switch ev.Type {

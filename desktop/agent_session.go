@@ -188,8 +188,8 @@ func (s *AgentService) CurrentSession() *SessionInfo {
 func (s *AgentService) NewSession(projectID string) SessionInfo {
 	d := s.desk
 	pname := "default"
-	if d.cfg != nil {
-		if p := d.cfg.DefaultProviderName(); p != "" {
+	if cfg := d.config(); cfg != nil {
+		if p := cfg.DefaultProviderName(); p != "" {
 			pname = p
 		}
 	}
@@ -238,7 +238,7 @@ func (s *AgentService) NewSession(projectID string) SessionInfo {
 	// Build this session's own agent. No config (bootstrap failed) → leave the
 	// run agent-less so turns fall back to simulation.
 	var a *agent.AIAgent
-	if d.cfg != nil {
+	if d.config() != nil {
 		a, err = d.buildAgentForSession(context.Background(), sess.ID, sm)
 		if err != nil {
 			a = nil

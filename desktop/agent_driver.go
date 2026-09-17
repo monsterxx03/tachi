@@ -24,12 +24,12 @@ import (
 func (d *desktopApp) initAgent(ctx context.Context) error {
 	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		d.cfg = nil
+		d.setConfig(nil)
 		d.sm = d.newSessionManager()
 		return err
 	}
 	cfg := boot.Config
-	d.cfg = cfg
+	d.setConfig(cfg)
 	d.sm = d.newSessionManager()
 	// The system prompt is deliberately NOT built here: it is session-derived
 	// (working directory, ID), so systemPromptFor resolves it per turn — and that
@@ -127,7 +127,8 @@ func (d *desktopApp) sessionMode(id string) string {
 // (and a zoomable overlay for them). A session with no workspace yet is passed
 // through as an explicit state (WithoutWorkingDir), never as the process cwd.
 func (d *desktopApp) systemPromptFor(id string) string {
-	if d.cfg == nil {
+	cfg := d.config()
+	if cfg == nil {
 		return ""
 	}
 	// A session that has not chosen a workspace says exactly that, and nothing is
@@ -155,7 +156,7 @@ func (d *desktopApp) systemPromptFor(id string) string {
 		return cached
 	}
 
-	prompt := agent.BuildSystemPromptWithRoots(d.cfg.Language, cwd, roots, id, d.cfg.ExtraSystemPrompt, opts...)
+	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, roots, id, cfg.ExtraSystemPrompt, opts...)
 	// Plan mode is a property of the TURN (the mode can change between turns), so the
 	// supplement is appended here rather than baked into the session prompt — the same
 	// shape the TUI uses (effectiveSystemPrompt) and ACP applies per prompt.
@@ -177,7 +178,7 @@ func (d *desktopApp) systemPromptFor(id string) string {
 // logged; partial discovery is acceptable (mirrors channel's populateSharedMCP).
 func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	defer mgr.MarkInitDone()
-	_, _, errs := mgr.PopulateFromConnect(ctx, d.cfg)
+	_, _, errs := mgr.PopulateFromConnect(ctx, d.config())
 	for _, err := range errs {
 		// A server that answers "OAuth authorization required" is not a load error to
 		// shrug off: it is the one failure the user can FIX from the panel, so it is
@@ -225,8 +226,8 @@ func (d *desktopApp) newSessionManager() *session.Manager {
 	// NewManagerWithStore starts uncapped; reproduce what NewManager would have
 	// given, then let the config override it.
 	sm.SetMaxKeep(session.DefaultMaxKeep)
-	if d.cfg != nil {
-		sm.SetMaxKeep(d.cfg.SessionCleanupMaxCount)
+	if cfg := d.config(); cfg != nil {
+		sm.SetMaxKeep(cfg.SessionCleanupMaxCount)
 	}
 	return sm
 }
@@ -265,6 +266,10 @@ func (d *desktopApp) sessionStore() *session.FileStore {
 // agent goroutine on the user, and the answer must reach THAT conversation (see
 // permission.go).
 func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string, sm *session.Manager) (*agent.AIAgent, error) {
+	// One snapshot for the agent's whole configuration. The pointer is NOT swapped
+	// afterwards (see withConfig), so the agent keeps seeing settings the user
+	// changes later — that is the contract, not a race.
+	cfg := d.config()
 	// No iteration budget: this frontend is INTERACTIVE, like the TUI, ACP and channel, and
 	// none of those cap a turn (main.go: "TUI is interactive — no iteration budget cap").
 	// `max_iterations` in config.yaml is the SINGLE-SHOT knob — main_agent.go's `tachi -p` and
@@ -311,8 +316,8 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		// Plan mode's structured output. The desktop renders it as the footer's plan
 		// panel, which is exactly the "plan card UI" this flag gates registration on.
 		PlanToolEnabled: true,
-		FullConfig:      d.cfg,
-		SystemConfig:    agent.SystemConfigFromConfig(d.cfg),
+		FullConfig:      cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
 		return nil, err

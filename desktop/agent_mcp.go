@@ -43,7 +43,7 @@ type MCPServerVO struct {
 // with no tools until connected.
 func (s *AgentService) ListMCPServers() []MCPServerVO {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return nil
 	}
 	d.mu.Lock()
@@ -56,9 +56,10 @@ func (s *AgentService) ListMCPServers() []MCPServerVO {
 		byServer[t.ServerName] = append(byServer[t.ServerName], t)
 	}
 
-	out := make([]MCPServerVO, 0, len(d.cfg.MCPServers))
+	cfg := d.config()
+	out := make([]MCPServerVO, 0, len(cfg.MCPServers))
 	needsAuth := d.mcpNeedsAuthSnapshot()
-	for _, srv := range d.cfg.MCPServers {
+	for _, srv := range cfg.MCPServers {
 		vo := MCPServerVO{
 			Name:      srv.Name,
 			Type:      string(srv.Type),
@@ -80,10 +81,21 @@ func (s *AgentService) ListMCPServers() []MCPServerVO {
 }
 
 // mcpServerByName returns the configured server with this name, or nil.
+//
+// The returned pointer ALIASES the live config's slice, and the caller may write
+// through it (persistMCPServerEnabled updates Enabled in place so the panel and
+// the next profile switch see what the file now says). That is the ONE place the
+// cfgMu rules get bent, and it is tolerable only because it is a single bool on a
+// single element: no reader can observe a torn value, and the field is not one any
+// agent caches at construction. Anything larger belongs behind withConfig.
 func (d *desktopApp) mcpServerByName(name string) *config.MCPServerConfig {
-	for i := range d.cfg.MCPServers {
-		if d.cfg.MCPServers[i].Name == name {
-			return &d.cfg.MCPServers[i]
+	cfg := d.config()
+	if cfg == nil {
+		return nil
+	}
+	for i := range cfg.MCPServers {
+		if cfg.MCPServers[i].Name == name {
+			return &cfg.MCPServers[i]
 		}
 	}
 	return nil
@@ -133,7 +145,7 @@ func (d *desktopApp) enableMCPServer(srv *config.MCPServerConfig) (string, error
 // change is runtime-only (restart reverts to config).
 func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
 	srv := d.mcpServerByName(name)
@@ -223,7 +235,7 @@ func withNote(res, note string) string {
 // Per-session only — no global persistence.
 func (s *AgentService) SetMCPToolEnabled(name string, enabled bool) string {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
 	sid := d.currentID()
@@ -287,11 +299,12 @@ func (d *desktopApp) runManager(id string) *session.Manager {
 // mcpProjectRoot for why that distinction is the whole point of this call.
 func (s *AgentService) ListMCPProfiles() map[string]any {
 	d := s.desk
-	if d.cfg == nil {
+	cfg := d.config()
+	if cfg == nil {
 		return nil
 	}
 	return map[string]any{
-		"active":    d.cfg.ActiveMCPProfile,
+		"active":    cfg.ActiveMCPProfile,
 		"available": config.ListMCPProfiles(d.mcpProjectRoot()),
 	}
 }
@@ -308,7 +321,7 @@ func (s *AgentService) ListMCPProfiles() map[string]any {
 // that exists only globally pass as a project profile.
 func (s *AgentService) SetMCPProfile(name string) string {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
 	a, refuse := d.agentOf(d.currentID())
@@ -369,7 +382,7 @@ const mcpAuthTimeout = 10 * time.Minute
 // answer to wait for here.
 func (s *AgentService) AuthorizeMCPServer(name string) string {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
 	srv := d.mcpServerByName(name)
@@ -442,7 +455,7 @@ func (s *AgentService) AuthorizeMCPServer(name string) string {
 // it starts waiting (see mcp.tryBrowserCallback).
 func (s *AgentService) CompleteMCPServerAuth(name, redirectURL string) string {
 	d := s.desk
-	if d.cfg == nil || d.mcp == nil {
+	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
 	srv := d.mcpServerByName(name)
@@ -483,8 +496,12 @@ func (s *AgentService) CompleteMCPServerAuth(name, redirectURL string) string {
 // Servers that are disabled stay off — the token being shared is not consent to run them.
 func (d *desktopApp) reconnectMCPTokenSiblings(srv *config.MCPServerConfig) {
 	key := srv.TokenStorageName()
-	for i := range d.cfg.MCPServers {
-		other := &d.cfg.MCPServers[i]
+	cfg := d.config()
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.MCPServers {
+		other := &cfg.MCPServers[i]
 		if other.Name == srv.Name || other.Type != config.MCPTransportHTTP {
 			continue
 		}

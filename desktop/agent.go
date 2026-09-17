@@ -100,7 +100,14 @@ type desktopApp struct {
 	// "displayed" session is tracked separately via activeID (guarded by mu).
 	sm  *session.Manager
 	mcp *mcp.Manager // shared MCP manager (nil = no MCP configured)
-	cfg *config.Config
+
+	// cfg is the process-wide configuration. Read it through config() and change
+	// it through withConfig(); see those for the two rules that make it safe.
+	//
+	// Guarded by cfgMu, NOT by mu: reads happen on turn goroutines (a turn reads
+	// MaxTokens as it starts) and must never wait behind the app-wide lock.
+	cfgMu sync.RWMutex
+	cfg   *config.Config
 
 	// store is the ONE session FileStore this app reads and writes through: sm and
 	// every per-run manager are built on it (see sessionStore). Sharing it is not
@@ -170,6 +177,62 @@ func newDesktopApp() *desktopApp {
 		fileIndex: newFileIndex(),
 		projects:  &projectTable{},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Configuration access (cfgMu)
+// ---------------------------------------------------------------------------
+//
+// The config is read concurrently — a turn reads MaxTokens and Language as it
+// starts, a panel reads MCPServers as it renders, every agent holds the pointer
+// as its FullConfig — so it has one lock, one reader and one writer.
+
+// config returns the process-wide configuration, or nil when bootstrap failed
+// (the app then runs agent-less and browses on-disk sessions only).
+//
+// Callers must NOT hold the returned pointer across an await: another goroutine
+// may be applying a settings change. Reading the fields it needs during one
+// synchronous operation is what every current caller does.
+func (d *desktopApp) config() *config.Config {
+	d.cfgMu.RLock()
+	defer d.cfgMu.RUnlock()
+	return d.cfg
+}
+
+// withConfig applies fn to the live configuration under the write lock.
+//
+// ⚠️ fn MUST MUTATE THE EXISTING OBJECT — never assign d.cfg = something else.
+// Replacing the pointer looks cleaner and is silently WRONG here, because the
+// pointer is captured by things that outlive this call:
+//
+//   - every provider is wrapped by wrapForUsage, whose price/credit resolvers
+//     CLOSE OVER the *config.Config and dereference it at each LLM call, so a
+//     replaced object leaves the usage ledger billing at the old prices;
+//   - each session's agent holds it as AgentConfig.FullConfig (26 read sites);
+//   - the shared MCP manager and its background refresher hold it too.
+//
+// Those holders resolve the fields LAZILY, which is what makes an in-place edit
+// take effect everywhere at once — and what makes a pointer swap fail
+// everywhere at once, with no error anywhere to notice.
+//
+// fn runs under the write lock, so it must be quick and must not call back into
+// anything that reads the config (that would deadlock on cfgMu). One settings
+// save is one field: see settings.go.
+func (d *desktopApp) withConfig(fn func(*config.Config)) {
+	d.cfgMu.Lock()
+	defer d.cfgMu.Unlock()
+	if d.cfg != nil {
+		fn(d.cfg)
+	}
+}
+
+// setConfig installs the bootstrap result. Called once from initAgent, before
+// any turn can exist; it takes the write lock like any other writer so the
+// rules above hold for this write too.
+func (d *desktopApp) setConfig(cfg *config.Config) {
+	d.cfgMu.Lock()
+	defer d.cfgMu.Unlock()
+	d.cfg = cfg
 }
 
 func (d *desktopApp) currentID() string {
@@ -300,7 +363,7 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	// run is kept agent-less so the UI browses the session and falls back to
 	// simulated turns.
 	var a *agent.AIAgent
-	if d.cfg != nil {
+	if d.config() != nil {
 		a, err = d.buildAgentForSession(ctx, id, sm)
 		if err != nil {
 			return nil, err

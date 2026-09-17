@@ -44,17 +44,18 @@ func (s *AgentService) SetMode(mode string) string {
 
 // ListProviders returns the configured providers (priority-ordered).
 func (s *AgentService) ListProviders() []config.ProviderConfig {
-	if s.desk.cfg == nil {
+	cfg := s.desk.config()
+	if cfg == nil {
 		return nil
 	}
-	return s.desk.cfg.Providers
+	return cfg.Providers
 }
 
 // SwitchProvider switches the active session's agent to the given config
 // provider, persisting it to that session's metadata (like TUI does).
 func (s *AgentService) SwitchProvider(name string) string {
 	d := s.desk
-	if d.cfg == nil {
+	if d.config() == nil {
 		return "agent not ready"
 	}
 	id := d.currentID()
@@ -117,8 +118,10 @@ func (s *AgentService) GetProviderInfo() map[string]any {
 			provider = curr.ProviderName
 		}
 	}
-	if provider == "" && d.cfg != nil {
-		provider = d.cfg.DefaultProviderName()
+	if provider == "" {
+		if cfg := d.config(); cfg != nil {
+			provider = cfg.DefaultProviderName()
+		}
 	}
 	// Context estimate: prefer the agent's live estimate; when the session was
 	// just opened (no turn yet, estimate is 0) fall back to the most recent
@@ -152,7 +155,7 @@ func (s *AgentService) GetThinkingLevel() string {
 // thinking. Persisted to the session's metadata.
 func (s *AgentService) SetThinkingLevel(level string) string {
 	d := s.desk
-	if d.cfg == nil {
+	if d.config() == nil {
 		return "agent not ready"
 	}
 	id := d.currentID()

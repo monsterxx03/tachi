@@ -388,7 +388,7 @@ func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewed
 	r := d.getRun(id)
 	d.mu.Unlock()
 	if r.agent == nil {
-		if d.cfg == nil {
+		if d.config() == nil {
 			return "agent 不可用（未配置，模拟模式）"
 		}
 		pr, err := d.prepareSession(context.Background(), id)
@@ -525,7 +525,7 @@ func runCompactCommand(c *commandRun) error {
 	systemPrompt := c.desk.systemPromptFor(c.id)
 
 	stream := r.agent.RunConversationStream(c.ctx, history, cmds.BuildCompactInstruction(),
-		systemPrompt, llm.ChatOptions{MaxTokens: c.desk.cfg.MaxTokens}, agent.WithNoTools())
+		systemPrompt, llm.ChatOptions{MaxTokens: c.desk.config().MaxTokens}, agent.WithNoTools())
 
 	var summary strings.Builder
 	for ev := range stream {
@@ -575,7 +575,7 @@ func runCompactCommand(c *commandRun) error {
 // one-off stream is forwarded into the transcript.
 func runReviewCommand(c *commandRun) error {
 	a := c.run.agent
-	cfg := c.desk.cfg
+	cfg := c.desk.config()
 
 	reviewProvider := a.Provider()
 	if rp := a.ReviewProvider(); rp != nil {
@@ -637,7 +637,7 @@ func runReviewCommand(c *commandRun) error {
 // run is one-off — it never appends to the session — so the conversation is left
 // exactly as it was, with only the transcript showing what happened.
 func runCommitCommand(c *commandRun) error {
-	stream := c.run.agent.RunCommitOneOff(c.ctx, c.desk.systemPromptFor(c.id), c.id, c.desk.cfg.MaxTokens, "")
+	stream := c.run.agent.RunCommitOneOff(c.ctx, c.desk.systemPromptFor(c.id), c.id, c.desk.config().MaxTokens, "")
 	for ev := range stream {
 		c.ech <- ev
 	}

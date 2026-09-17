@@ -30,7 +30,7 @@ func (d *desktopApp) rebuildCostCredit(r *sessionRun) {
 	var have bool
 	for _, row := range rows {
 		cost += row.Cost()
-		credit += row.CreditValue(llm.ResolveCreditRate(d.cfg, row.Provider, row.Model))
+		credit += row.CreditValue(llm.ResolveCreditRate(d.config(), row.Provider, row.Model))
 		lastInTok = row.InputTokens
 		lastCrTok = row.CacheReadInputTokens
 		have = true
