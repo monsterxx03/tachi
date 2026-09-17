@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { latestSessionOf, projectMatches } from './lib'
+import { latestSessionOf, listNav, projectMatches } from './lib'
 import type { SessionItem } from './types'
 
 // ProjectPalette is ⌘P: type to filter the desktop's projects, Enter to open the chosen
@@ -56,12 +56,15 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
     else onClose()
   }
 
+  // ↑↓ and Ctrl+N/Ctrl+P both walk the list (`listNav` — the same pair the composer's pickers
+  // take, matching the TUI's keymap). Navigation WRAPS here, unlike those pickers: the palette is
+  // a switcher, so ↑ off the first row landing on the last is what a reader expects.
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const delta = listNav(e)
+    if (delta) {
       e.preventDefault()
       if (rows.length === 0) return
-      const step = e.key === 'ArrowDown' ? 1 : -1
-      setIdx((i) => (i + step + rows.length) % rows.length)
+      setIdx((i) => (i + delta + rows.length) % rows.length)
       return
     }
     if (e.key === 'Enter') {

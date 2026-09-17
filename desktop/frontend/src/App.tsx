@@ -1387,6 +1387,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
+  // focusAfterPalette puts the caret in the composer once the palette is gone — ⌘P is the one entry
+  // point that closes a dialog on its way to a session, and the box's own input is what holds focus
+  // while it is open, so a focus taken DURING the pick is dropped with the input when React removes it
+  // (focus falls back to <body> and the next keystroke goes nowhere). The timeout is what gets behind
+  // that commit: a discrete keydown flushes its state updates before the browser runs the callback, so
+  // this is ordered after the unmount rather than racing it.
+  const focusAfterPalette = useCallback(() => {
+    window.setTimeout(() => composer.focusInput(), 0)
+  }, [composer.focusInput])
+
   // pickProject answers the ⌘P palette (see palette.tsx): open the chosen project's most recent
   // conversation, or make its first one. It returns "" when it acted — the palette then closes —
   // or the reason to show IN the palette instead of closing it, because a refusal that dismisses
@@ -1396,18 +1406,30 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // gone): the backend's NewSession falls back to the last used workspace and binds nothing when
   // a project does not drive, so Enter on 「新建会话」 would quietly produce a 无项目 session. Its
   // EXISTING sessions are opened as usual — those fall back to their own snapshot by design.
+  //
+  // The way IN also opens the group it lands in. ⌘P means 「带我去那个项目」, and the reader's next
+  // move is to look at the sidebar — a collapsed group answers with a header and nothing under it,
+  // hiding the row that just became active, which is the same as not having gone there. The rule is
+  // this entry point's own: a collapse is the reader's own doing, and forcing the group open from
+  // every path would make collapsing the one you are sitting in impossible. A refusal expands
+  // nothing, since nothing was switched.
   const pickProject = useCallback((p: ProjectVO) => {
+    const reveal = () => setCollapsedProjects((c) => (c[p.id] ? { ...c, [p.id]: false } : c))
     const latest = latestSessionOf(sessions, p.id)
     if (latest) {
+      reveal()
       void clickSession(latest.id)
+      focusAfterPalette()
       return ''
     }
     if (!p.rootsUsable) {
       return `「${p.name}」的主目录已不可用，不能在这里新建会话；请先在项目组上右键「编辑目录」修好它`
     }
+    reveal()
     void newChat(p.id)
+    focusAfterPalette()
     return ''
-  }, [sessions, clickSession, newChat])
+  }, [sessions, clickSession, newChat, focusAfterPalette])
 
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Cmd+N starts a new session, Cmd+P searches projects. (No native menu binds
@@ -2235,6 +2257,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
+            <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>

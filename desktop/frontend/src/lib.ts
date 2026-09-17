@@ -172,6 +172,18 @@ export function actOnKey(fn: () => void) {
   }
 }
 
+// listNav turns a key event into a list-navigation step: ↓ / Ctrl+N is +1, ↑ / Ctrl+P is -1, and
+// anything else is 0. The Ctrl pair is the TUI's keymap (readline's next/previous), which is what
+// a hand already on the keyboard reaches for in a list — and it is the reason a caller must
+// preventDefault on a non-zero step: on macOS the text field underneath reads Ctrl+N/P as its own
+// caret movement (emacs bindings), so an unconsumed one would move the caret INSTEAD of, or on top
+// of, the highlight.
+export function listNav(e: { key: string; ctrlKey: boolean }): -1 | 0 | 1 {
+  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')) return 1
+  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')) return -1
+  return 0
+}
+
 // SessionRow is one line of the sidebar: a conversation, plus the sessions it was compacted from.
 export type SessionRow<T> = { session: T; compactedFrom: T[] }
 

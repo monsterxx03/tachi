@@ -174,6 +174,14 @@ const type = (el, t) => {
   gets tight. Before believing a failure, check `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the
   scenario on its own: the synthetic DRAGS are the flakiest of all, so a lone drag assertion failing in a full
   run is the harness until proven otherwise.
+- **A driver that does not PARSE fails as "the app did not start".** The injected payload is one
+  `(function(){…})()`, so a syntax error anywhere in the driver — the easy one is a `const` declared twice in
+  the same IIFE, which a middle-of-the-file edit hits unnoticed — throws on EVERY retry: the
+  `__tachiDriverStarted` guard sits in the same parse unit, so the driver never marks itself started and
+  nothing is reported for the whole `driverContactWindow`. The app's own log is clean (its session dir is
+  created, no demo error), which is exactly what a window that never came up looks like. `node --check
+  itest/desktop/drivers/<name>.js` costs a second; a failing run's kept sandbox holds the copy that actually
+  ran (`<sandbox>/<scenario>/driver.js`).
 - `open -a <path>` matches by BUNDLE and `pkill` by executable path; a capture of the wrong window looks
   plausible, so confirm the shot is yours (titlebar / session id).
 - **A capture is not part of the suite**: the window-capture APIs are gone on this OS (`-R` fails on
@@ -829,24 +837,36 @@ const type = (el, t) => {
   accent fill and is smaller than both a row title and a project name, and that ⌘N adds a row INSIDE the
   project group (a row count alone cannot tell which group it landed in).
 - **⌘P opens the project palette** (`desktop/frontend/src/palette.tsx`, `App.tsx`'s `pickProject`): type to
-  filter, ↑/↓, Enter, Esc — and Enter is the whole feature: open that project's most recently used
-  conversation, or make its first one. "Most recently used" is the MEMBER with the largest `updatedAt`
-  (`latestSessionOf`, `lib.ts`), which is the backend's own meaning of a project's newest session
+  filter, ↑/↓ (or Ctrl+N/Ctrl+P — `listNav` in `lib.ts`, the same pair the composer's two pickers take, i.e.
+  the TUI's keymap; deliberately absent from the ⌘? key sheet, since it is a reach-for-it alternative to ↑/↓
+  rather than a gesture to learn), Enter, Esc — and Enter is the whole feature: open that project's most
+  recently used conversation, or make its first one. **The caret then goes back to the composer**
+  (`focusAfterPalette` in `App.tsx`): ⌘P is the only entry point that closes a dialog ON THE WAY to a
+  session, and the palette's own input is what holds focus while it is open — removing it drops focus on
+  `<body>`, where the next keystroke goes nowhere, so the hand-back is scheduled to land after that
+  unmount rather than racing it. "Most recently used" is the MEMBER with the largest
+  `updatedAt` (`latestSessionOf`, `lib.ts`), which is the backend's own meaning of a project's newest session
   (`memberSessions` in `desktop/projects.go`) — deliberately NOT the sidebar's row order, which is
   `ListSessions` by `createdAt`; a session another member was compacted FROM is skipped, since that one is
   the folded-away 「压缩前」 row of a conversation whose newest link is the one to open. Because the two
   clocks can disagree, **each row says what Enter will do** (`→ <会话标题>` / `→ 新建会话`): a palette of bare
-  names would make Enter a guess. Three contracts travel with it. (1) `onPick` RETURNS the refusal reason
+  names would make Enter a guess. Four contracts travel with it. (1) `onPick` RETURNS the refusal reason
   ("" = it acted), and the palette closes only on "" — a refusal that dismissed the box would read as
   success. (2) A project whose primary directory is gone (`rootsUsable === false`) with NO members refuses to
   create one: the backend's `NewSession` falls back to the last used workspace and binds NOTHING when a
   project does not drive, so Enter would quietly produce a 无项目 session; its existing sessions still open
   (those fall back to their own snapshot by design). (3) The palette reads the list the sidebar is already
   rendering and issues no fetch on open — a second source of truth would need its own staleness story for a
-  question the sidebar has already answered. `project-palette` pins all three ends (the row texts, Enter
-  landing on the group's FIRST row after ⌘N made a newer member, the created session's `project_id` read off
-  disk, and that no model request happens at all: `project_id`, not `projectId` — meta.json's json tag, not
-  the binding's camelCase).
+  question the sidebar has already answered. (4) It EXPANDS the target group on the way in: ⌘P means 「take me
+  there」, and a collapsed group answers with a header and nothing under it — the row that just became active
+  hidden inside it, which is the same as not having gone there. That rule belongs to THIS entry point alone
+  (a collapse is the reader's own doing, and forcing the group open on every path would make collapsing the
+  group you are sitting in impossible), and a refusal expands nothing, nothing having been switched.
+  `project-palette` pins all four ends (the row texts, Enter landing on the group's FIRST row after ⌘N made a
+  newer member, the created session's `project_id` read off disk, that no model request happens at all —
+  `project_id`, not `projectId`: meta.json's json tag, not the binding's camelCase — plus the fold-then-⌘P
+  round trip, which folds the group by hand first so the expansion cannot be the initial state, and the focus
+  hand-back on BOTH branches).
 - **A project write re-reads the reader** (`agent:workspace_changed`, emitted by `CreateProject` /
   `RenameProject` / `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend
   holds a session's workspace and the sidebar's groups BY VALUE, so a rename or an edit moved nothing on
@@ -1064,7 +1084,13 @@ const type = (el, t) => {
 - **The composer is `desktop/frontend/src/composer.tsx`** (`useComposer` + the `Composer` element): the input
   box, the @-picker, the "/" palette, the queue of messages typed while a turn runs, and the parked-question
   form. All four share one decision — `route`: send now, queue for the next steer point, or dispatch as a
-  slash command — so keep new input/queue behavior there, not in App.tsx.
+  slash command — so keep new input/queue behavior there, not in App.tsx. **The box's HEIGHT has three ways in
+  and one implementation** (`nudgeHeight`, composer.tsx): the handle's drag, ↑/↓ on the focused handle, and
+  ⌘⇧↑/⌘⇧↓ typed in the textarea — all three share the step and the floor/ceiling (`COMPOSER_INPUT_KEY_STEP`,
+  `composerInputMaxH()`), and at the floor the value returns to `null` so "not resized" stays one value (the
+  stylesheet's). The pair is bound in the TEXTAREA's own keydown, never window-wide: ⌥↑/⌥↓ is already the diff
+  pane's finding walk and bare ⌘↑/⌘↓ the text system's caret gestures, which is what the `composer-height`
+  scenario pins from both sides (the pair moves the box, plain ⌘↓ does not).
 
 - **A parked permission is the composer's state too, and its card is matched by tool CALL ID**
   (`composer.tsx` + `App.tsx`): `perms` sits next to `asks` and follows the same rules — keyed by session,

@@ -23,7 +23,7 @@ import {
 } from './types'
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
+import { atRefAt, countAtRefs, insertRefText, listNav, replaceRefText } from './lib'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
 import { oneOffDoneLabel } from './oneoff'
@@ -717,14 +717,20 @@ export function useComposer(deps: ComposerDeps) {
     document.body.classList.add('is-resizing-y')
     heightDetachRef.current = detach
   }
+  // One step of keyboard height, shared by the handle's ↑↓ and by ⌘⇧↑/↓ inside the field: same step,
+  // same floor and ceiling, so the two ways in cannot drift apart. Back at the floor the value returns
+  // to null — "not resized" stays ONE value, and that value is the stylesheet's.
+  const nudgeHeight = (dir: number) => {
+    const from = inputHeight ?? composerRef.current?.offsetHeight ?? COMPOSER_INPUT_MIN_H
+    const next = Math.max(COMPOSER_INPUT_MIN_H, Math.min(composerInputMaxH(), from + dir * COMPOSER_INPUT_KEY_STEP))
+    setInputHeight(next > COMPOSER_INPUT_MIN_H ? next : null)
+  }
   // Arrow keys resize too: the handle is a real focusable separator, not a decoration.
   const onHeightKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const dir = e.key === 'ArrowUp' ? 1 : e.key === 'ArrowDown' ? -1 : 0
     if (!dir) return
     e.preventDefault()
-    const from = inputHeight ?? composerRef.current?.offsetHeight ?? COMPOSER_INPUT_MIN_H
-    const next = Math.max(COMPOSER_INPUT_MIN_H, Math.min(composerInputMaxH(), from + dir * COMPOSER_INPUT_KEY_STEP))
-    setInputHeight(next > COMPOSER_INPUT_MIN_H ? next : null)
+    nudgeHeight(dir)
   }
   // Height and max-height together, and only once the reader has resized.
   const inputStyle = inputHeight ? { height: inputHeight, maxHeight: inputHeight } : undefined
@@ -747,7 +753,7 @@ export function useComposer(deps: ComposerDeps) {
     // input box
     input, setInput, composerRef, composingRef, syncAtRef, closeAt, focusInput, focusTranscript,
     // input box height (drag / arrow keys; never persisted)
-    inputStyle, startHeightDrag, onHeightKey, heightDragging,
+    inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight,
     // @-picker + "/" palette
     at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, cmdQuery, setCmdDismissed, acceptCommand,
     // queue
@@ -786,7 +792,7 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
 export function Composer({ api, running, onStop }: { api: ComposerApi; running: boolean; onStop: () => void }) {
-  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, onPaste, pasteError } = api
+  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError } = api
 
   return (
     <>
@@ -849,17 +855,23 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
             onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
             onKeyDown={(e) => {
               const ime = composingRef.current || imeActive(e)
+              // ⌘⇧↑/⌘⇧↓ resize the box from INSIDE the field — the handle's own ↑↓ and the drag stay
+              // as they are. Deliberately not a window-level binding: ⌥↑/⌥↓ already walks the diff
+              // pane's findings, and a global handler would have to out-guess which pane is focused.
+              // Plain ⌘↑/⌘↓ keep the text system's caret gestures (and still select, with ⇧, to the
+              // ends of the box).
+              if (!ime && e.metaKey && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault()
+                nudgeHeight(e.key === 'ArrowUp' ? 1 : -1)
+                return
+              }
               // While the @-picker is open it owns the navigation keys; an IME composing
               // (candidate selection) owns them first.
               if (!ime && at) {
-                // ↑↓ and Ctrl+N/Ctrl+P both move the highlight (Ctrl+N/P matches the TUI's
-                // keymap, and preventDefault keeps Cocoa's own Ctrl+N/P caret movement out of
-                // the way).
-                const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
-                const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
-                if (down || up) {
+                // ↑↓ / Ctrl+N·P move the highlight (see listNav); the picker clamps at the ends.
+                const delta = listNav(e)
+                if (delta) {
                   e.preventDefault()
-                  const delta = down ? 1 : -1
                   setAt((p) => (p && p.items.length
                     ? { ...p, idx: Math.max(0, Math.min(p.items.length - 1, p.idx + delta)) }
                     : p))
@@ -876,11 +888,9 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
               // The "/" palette owns the navigation keys while it is open (the @-picker cannot
               // be open at the same time: one is triggered by "@", the other by a leading "/").
               if (!ime && cmdOpen) {
-                const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
-                const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
-                if (down || up) {
+                const delta = listNav(e)
+                if (delta) {
                   e.preventDefault()
-                  const delta = down ? 1 : -1
                   setCmdIdx((i) => Math.max(0, Math.min(cmdMatches.length - 1, i + delta)))
                   return
                 }

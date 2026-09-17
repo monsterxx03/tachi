@@ -70,5 +70,31 @@
   const keyed = await smoke.waitFor(() => box() > initial, '↑ 也能加高', 3000)
   smoke.check('焦点在手柄上时 ↑ 也能加高', !!keyed, `${initial} → ${box()}px`)
 
+  // …and the same ±, without leaving the field: ⌘⇧↑/↓ is bound in the textarea, so the hand that is
+  // typing can resize the box it types into. The pair has to come back down to the floor too — that is
+  // the same "not resized" (no inline height) the drag proves, reached from the other end.
+  const keyIn = (key, mods) => {
+    smoke.q('.composer-input').dispatchEvent(new KeyboardEvent('keydown', Object.assign({
+      key, bubbles: true, cancelable: true,
+    }, mods)))
+  }
+  smoke.q('.composer-input').focus()
+  const midHot = box()
+  keyIn('ArrowUp', { metaKey: true, shiftKey: true })
+  const hotGrew = await smoke.waitFor(() => box() > midHot, '⌘⇧↑ 加高输入框', 3000)
+  smoke.check('焦点在输入框里时 ⌘⇧↑ 加高', !!hotGrew, `${midHot} → ${box()}px`)
+  const tall = box()
+  keyIn('ArrowDown', { metaKey: true, shiftKey: true })
+  const hotShrank = await smoke.waitFor(() => box() < tall, '⌘⇧↓ 变矮输入框', 3000)
+  smoke.check('⌘⇧↓ 变矮', !!hotShrank, `${tall} → ${box()}px`)
+  keyIn('ArrowDown', { metaKey: true, shiftKey: true })
+  const hotFloor = await smoke.waitFor(() => Math.abs(box() - initial) <= 1, '⌘⇧↓ 一路回到默认高度', 3000)
+  smoke.check('⌘⇧↓ 到底即回到默认高度', !!hotFloor, `${box()} vs ${initial}px`)
+  // The boundary: ⌘↓ (no ⇧) is the text system's own "caret to the end of the box" and must stay that
+  // way — a handler that widened to bare ⌘arrows would take a caret gesture away silently.
+  const beforePlain = box()
+  keyIn('ArrowDown', { metaKey: true })
+  smoke.check('单独的 ⌘↓ 不动高度（光标手势留给文本框）', box() === beforePlain, `${beforePlain} → ${box()}px`)
+
   smoke.finish()
 })()

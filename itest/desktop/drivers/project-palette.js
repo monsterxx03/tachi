@@ -14,14 +14,27 @@
 
   // 组头 → 它那一组的行。两个项目名一个包含另一个（smoke-pal / smoke-pal-empty），所以按
   // .proj-name 精确比，不能拿组头文本找子串。
+  //
+  // 折叠的组会把自己的 .proj-rows 整个从 DOM 里摘掉，所以往后找时必须在下一个 .proj-head 处停下：
+  // 不停的话会一路走到**别的项目**的 .proj-rows，把它的行报成本组的（实测：折叠后 smoke-pal 的
+  // 行数变成了 smoke-pal-empty 的 1 行）。折叠与否只认 aria-expanded，不认行数。
+  const headOf = (name) => smoke.qa('.proj-head').find((h) => {
+    const n = h.querySelector('.proj-name')
+    return !!n && n.textContent.trim() === name
+  })
+  const expandedOf = (name) => {
+    const h = headOf(name)
+    const t = h && h.querySelector('.proj-toggle')
+    return !!t && t.getAttribute('aria-expanded') === 'true'
+  }
   const groupOf = (name) => {
-    const head = smoke.qa('.proj-head').find((h) => {
-      const n = h.querySelector('.proj-name')
-      return !!n && n.textContent.trim() === name
-    })
+    const head = headOf(name)
     if (!head) return null
     let el = head.nextElementSibling
-    while (el && !el.classList.contains('proj-rows')) el = el.nextElementSibling
+    while (el && !el.classList.contains('proj-rows')) {
+      if (el.classList.contains('proj-head')) return null
+      el = el.nextElementSibling
+    }
     return el
   }
   const rowsOf = (name) => {
@@ -33,6 +46,13 @@
     const sel = smoke.q('.palette-row.is-sel')
     const n = sel && sel.querySelector('.palette-name')
     return n ? n.textContent.trim() : ''
+  }
+  // 焦点在哪儿：「活动元素就是输入框」。⌘P 是唯一一个关掉浮层再去换会话的入口，浮层的输入框一卸载，
+  // 焦点就落到 <body>，下一次敲键哪儿都不去——所以这条得等（waitFor），不能只看一眼。
+  const focusedComposer = () => document.activeElement === smoke.q('.composer-input')
+  const activeDesc = () => {
+    const a = document.activeElement
+    return a ? (a.className || a.tagName) : '(没有焦点)'
   }
 
   // ── 1. 起手：显式进项目会话（谁被启动时选中是 fixture 的顺序细节），再 ⌘N 添一个成员 ──
@@ -71,6 +91,8 @@
   smoke.check('回车切到项目最近的会话（组里第一行）', !!back, 'active 下标 ' + activeIndex('smoke-pal'))
   await smoke.waitGone('.palette-box', '浮层关闭', 4000)
   smoke.check('打开之后就关掉，不留着挡路', !smoke.q('.palette-box'), smoke.text('.palette-box') || '(已关)')
+  const refocused = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框', 3000)
+  smoke.check('切完会话焦点落在输入框（可以直接打字）', !!refocused, activeDesc())
 
   // ── 3. 过滤；Esc 什么都不做 ─────────────────────────────────────────────
   smoke.key(document.body, 'p', { metaKey: true })
@@ -86,12 +108,22 @@
   smoke.check('Esc 没有建会话', rowsOf('smoke-pal-empty').length === 0, rowsOf('smoke-pal-empty').length + ' 行')
   smoke.check('Esc 没有切会话', activeIndex('smoke-pal') === 0, 'active 下标 ' + activeIndex('smoke-pal'))
 
-  // ── 4. 空项目：回车建出它的第一个会话 ───────────────────────────────────
+  // ── 4. 空项目：回车建出它的第一个会话（高亮靠 Ctrl+N / Ctrl+P 走） ────────────
+  // Ctrl+N / Ctrl+P 是 TUI 那套键位（readline 的 next/previous），在有输入框的浮层里顶替 ↑↓。
+  // Cocoa 默认把这两个键当成光标上下移动，所以 handler 必须自己 preventDefault——驱动只能证明
+  // 高亮动了，够钉住「这两个键确实被这一步接管了」；键盘焦点之外的效果看不到。
   smoke.key(document.body, 'p', { metaKey: true })
   if (!(await smoke.waitFor('.palette-box', '浮层第三次打开', 8000))) return smoke.finish()
-  smoke.key('.palette-input', 'ArrowDown')
-  const moved = await smoke.waitFor(() => (selectedName() === 'smoke-pal-empty' ? true : null), '↓ 把高亮移到空项目', 4000)
-  smoke.check('↓ 移动高亮（不靠鼠标）', !!moved, selectedName() || '(没有高亮行)')
+  smoke.key('.palette-input', 'n', { ctrlKey: true })
+  const moved = await smoke.waitFor(() => (selectedName() === 'smoke-pal-empty' ? true : null), 'Ctrl+N 把高亮下移', 4000)
+  smoke.check('Ctrl+N 下移高亮（不靠鼠标）', !!moved, selectedName() || '(没有高亮行)')
+  smoke.key('.palette-input', 'p', { ctrlKey: true })
+  const up = await smoke.waitFor(() => (selectedName() === 'smoke-pal' ? true : null), 'Ctrl+P 把高亮上移', 4000)
+  smoke.check('Ctrl+P 上移高亮', !!up, selectedName() || '(没有高亮行)')
+  smoke.key('.palette-input', 'n', { ctrlKey: true })
+  if (!(await smoke.waitFor(() => (selectedName() === 'smoke-pal-empty' ? true : null), '高亮回到空项目', 4000))) {
+    return smoke.finish()
+  }
   smoke.key('.palette-input', 'Enter')
   const created = await smoke.waitFor(() => (rowsOf('smoke-pal-empty').length === 1 ? true : null), '空项目里建出会话', 10000)
   smoke.check('空项目回车建出第一个会话', !!created, rowsOf('smoke-pal-empty').length + ' 行')
@@ -101,6 +133,33 @@
     'chip 指向新会话所属的项目', 8000)
   smoke.check('chip 显示空项目的名字（会话确实属于它）', !!chip, smoke.text('.work-dir'))
   await smoke.waitGone('.palette-box', '建完关掉浮层', 4000)
+  // 新建那一路走的是 newChat，它自己会在建完会话后聚焦输入框；但 ⌘P 这条路上浮层还在卸载，
+  // 所以这里同样要等一次——同一个理由，两条分支都得钉。
+  const refocusedNew = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框（新建那一路）', 3000)
+  smoke.check('新建出来的会话焦点也在输入框', !!refocusedNew, activeDesc())
+
+  // ── 5. 折叠的项目组：⌘P 进去之后它必须自己展开 ──────────────────────────
+  // ⌘P 的意思是「带我去那个项目」，而读者的下一个动作是看侧栏：折叠的组只剩一个组头，刚变 active
+  // 的那一行藏在里面，等于没送到。但折叠是读者自己按出来的，所以这条规则只属于 ⌘P 这条入口——别的
+  // 路径进来不该替他展开，否则「把正在用的项目收起来」就永远做不到。
+  const head = headOf('smoke-pal')
+  if (!head) return smoke.fail('找到 smoke-pal 的组头', smoke.allText('.proj-name').join(' | '))
+  smoke.check('起手时该项目是展开的', expandedOf('smoke-pal'), 'aria-expanded=' + head.querySelector('.proj-toggle').getAttribute('aria-expanded'))
+  head.querySelector('.proj-toggle').click()
+  const folded = await smoke.waitFor(() => (expandedOf('smoke-pal') ? null : true), '手动折叠该项目', 4000)
+  smoke.check('先手动把项目收起来（组头说自己收起了）', !!folded, 'aria-expanded=' + (folded ? 'false' : 'true'))
+  if (!folded) return smoke.finish()
+  smoke.check('收起后它的行不再留在 DOM 里', rowsOf('smoke-pal').length === 0,
+    rowsOf('smoke-pal').length + ' 行（折叠时容器被摘掉）')
+
+  smoke.key(document.body, 'p', { metaKey: true })
+  if (!(await smoke.waitFor('.palette-box', '浮层第四次打开', 8000))) return smoke.finish()
+  if (selectedName() !== 'smoke-pal') return smoke.fail('高亮在 smoke-pal 上（回车才会打开它）', selectedName())
+  smoke.key('.palette-input', 'Enter')
+  const revealed = await smoke.waitFor(() => (expandedOf('smoke-pal') ? true : null), '⌘P 打开后项目展开', 8000)
+  smoke.check('⌘P 打开的项目组自动展开', !!revealed, rowsOf('smoke-pal').length + ' 行')
+  smoke.check('展开之后行又看得见（2 个成员）', rowsOf('smoke-pal').length === 2, rowsOf('smoke-pal').length + ' 行')
+  smoke.check('展开之后 active 就在那一组里', activeIndex('smoke-pal') === 0, 'active 下标 ' + activeIndex('smoke-pal'))
 
   smoke.finish()
 })()
