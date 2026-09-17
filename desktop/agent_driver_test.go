@@ -230,7 +230,7 @@ func TestSessionSkillStoreWithoutWorkspace(t *testing.T) {
 // to be re-pointed. Without it the session keeps serving the OLD tree's project skills
 // — and sends Skill create's "project" target there — until it is reloaded.
 //
-// The move only MARKS the session (sessionRun.skillsStale): the caller is the UI
+// The move only MARKS the session (sessionRun.treeStale): the caller is the UI
 // goroutine, which cannot prove this session is not mid-turn, and the reload rewrites
 // the store and the tool registry. The turn's own start applies it — before its
 // goroutine exists, which is the only such point.
@@ -262,7 +262,7 @@ func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
 	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
 		t.Error("SetSessionWorkingDir must not rewrite a live agent's skill store")
 	}
-	if !r.skillsStale {
+	if !r.treeStale {
 		t.Fatal("the session must be marked as needing a skill-store reload")
 	}
 
@@ -282,7 +282,7 @@ func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
 	if slices.Contains(names, "skill-a") {
 		t.Errorf("the old tree's skills must be gone, got %v", names)
 	}
-	if r.skillsStale {
+	if r.treeStale {
 		t.Error("the reload must clear the flag")
 	}
 }

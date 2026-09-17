@@ -609,12 +609,16 @@ index / 工作区，对象库共享（几乎不占额外磁盘）。这正是"�
 1. **技能**：`sessionSkillStore`（`agent_driver.go`）本来就接收一个目录，改成接收**配置根**即可；
    `ReloadSkillsIn` 的入参同步改成配置根，否则在 worktree 会话里换目录会把技能指回工作根（§4.1 同一条路径）。
 2. **MCP 是进程级的，而且今天取的是进程 cwd**：`agent/bootstrap.go` 启动时按 `config.FindProjectRoot()`
-   加载一次 `cfg.MCPServers`（一份全局 slice），`desktop/agent_mcp.go` 的 profile 列表与切换也都取
-   `config.FindProjectRoot()`。desktop **从不 chdir**，所以"进程 cwd"在 Finder 启动时是 `/`——项目级
-   `mcp.json` 今天在 desktop 里并不是"按会话生效"，而是"按 app 启动目录生效"。
-   配置根要真正成立，这里必须先做一步改造：**MCP servers 按项目（主检出）加载或合并，profile 查询接受
-   一个显式的配置根**。这是 P4 的前置项，不是附带项。
-3. **权限**：`permissions.yaml` 同样取进程 cwd（`agent/agent_configure.go`），与 MCP 是同一条改造。
+   加载一次 `cfg.MCPServers`（一份全局 slice），desktop **从不 chdir**，所以"进程 cwd"在 Finder 启动时
+   是 `/`——项目级 `mcp.json` 今天在 desktop 里并不是"按会话生效"，而是"按 app 启动目录生效"。
+   ⚠️ **已修的是查询侧**：`desktop/agent_mcp.go` 的 profile 列表与切换现在走 `desktopApp.mcpProjectRoot`
+   （当前会话的树）。**未修的仍是加载侧**：bootstrap 在会话存在之前就跑完，`cfg.MCPServers` 依然是全局
+   一份。配置根要真正成立，这里仍须改造：**MCP servers 按项目（主检出）加载或合并**。这是 P4 的前置项，
+   不是附带项。
+3. **权限**（✅ 已修）：`permissions.yaml` 同样取进程 cwd（`agent/agent_configure.go` 的默认构造）。
+   现已由 `AIAgent.SetPermissionRoot(dir)` 按会话树重建，desktop 在 `buildAgentForSession` 接线、
+   在 `beginTurn` 随 `treeStale` 重指向——与技能 store 同一个标志、同一处（见 `docs/agents/desktop.md`
+   的 Desktop Session Tree）。重建时 `Policy.InheritSessionApprovals` 保住「本会话全部允许」。
 4. **`.tachi.md`**：它读的是工作目录（`project_reminder.go`）。按上表改取配置根——它是项目级的模型指令，
    与 `.tachi/skills` 同一性质；不改的话 worktree 会话同样会"静默少一条项目上下文"。
 

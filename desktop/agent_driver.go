@@ -317,6 +317,18 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return nil, err
 	}
+	// The project half of the bash permission rules comes from
+	// <project>/.tachi/permissions.yaml, and configure's default resolves that
+	// project from the PROCESS cwd — "/" for a Finder-launched app, so the file
+	// it looked for was /.tachi/permissions.yaml and a project's own deny/ask
+	// rules were silently absent. Re-point it at THIS session's tree, through the
+	// same resolver the skill store above uses, so the two can never disagree
+	// about which tree the session is in.
+	//
+	// Also re-applied at the start of every turn whose tree moved
+	// (beginTurn's stale flag), because a store's and a policy's inputs are fixed
+	// when they are built: changing the folder has to re-point both.
+	a.SetPermissionRoot(ctx, d.sessionPrimaryDir(sm))
 	// The ask decision belongs to this session's user. Installed after construction
 	// because the handler reaches back into the agent for 「本会话全部允许」 (which
 	// flips the session-wide switch on this agent's own policy).

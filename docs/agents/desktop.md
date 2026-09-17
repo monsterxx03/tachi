@@ -15,7 +15,7 @@ split + index when a subject grows) apply to every split of it, this one include
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
-| **Desktop Skills** | you touch skill discovery, or anything that changes which tree a session works in |
+| **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
 | **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
 | **Desktop Themes** | you touch colours |
@@ -383,23 +383,27 @@ Fixtures, all because the real path needs something a driver cannot do:
   because a flow that completes in microseconds can only be asserted on after the fact — the panel's WAITING
   state would never be on screen when the driver looks.
 
-## Desktop Skills (the store belongs to the SESSION, never to the process cwd)
+## Desktop Session Tree (every path that is per-tree must come from the SESSION)
 
+- **The process cwd is `/` and is never the answer.** A Finder/LaunchServices-launched app gets the
+  filesystem root as its working directory, and desktop hosts several sessions in different trees anyway — so
+  `config.FindProjectRoot()` (which reads the process cwd, and returns `/` there, NOT "") describes nothing
+  useful. Anything that must resolve "which tree does this conversation work in" goes through
+  `sessionRoots`/`sessionPrimaryDir` (the resolver the prompt, `wdctx`, `@`-files and checkpoints already
+  share). The failure mode is always the same and always SILENT: a lookup under `/.tachi/<file>` finds
+  nothing, the global scope still works, so nothing looks broken.
+- **`config.FindProjectRootFrom(dir)` is the session-scoped exit**, and `FindProjectRootFrom("")` returns ""
+  ("no project") — the correct answer for a session with no folder yet.
+- **Three call sites were wrong and are now fixed**; a new one is a bug of the same shape:
+  - skills — `sessionSkillStore` (per session, injected as `AgentConfig.SkillStore`). The DEFAULT path is the
+    trap: `initSkills()` builds `skill.NewStore(config.FindProjectRoot())`, so a default-built store scans
+    `/.tachi/skills`, offers no project skills, and points `Skill create`'s `source: project` at the
+    filesystem root.
+  - permissions — `AIAgent.SetPermissionRoot` (see below).
+  - MCP profile scope — `desktopApp.mcpProjectRoot`, used by `ListMCPProfiles` / `SetMCPProfile`; the project
+    `mcp.<profile>.json` lives in `<tree>/.tachi/` and was read from `/.tachi/`.
 - **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes (`tachi -p`, `tachi commit`);
   this frontend has a human in front of it.
-- **The store is built per session, from that session's primary workspace root** (`sessionSkillStore` →
-  `sessionPrimaryDir`, the same resolver the prompt and the tools use) and handed to the agent as
-  `AgentConfig.SkillStore`. The DEFAULT path is the trap: `initSkills()` builds
-  `skill.NewStore(config.FindProjectRoot())` — the PROCESS cwd — and a Finder-launched app's cwd is `/`, so a
-  default-built store would scan `/.tachi/skills`, offer no project skills, and point `Skill create`'s
-  `source: project` at the filesystem root.
-- **A store's scan roots are FIXED when it is built**, so a session that MOVES has to be re-pointed — and the
-  re-pointing happens in `beginTurn` and NOWHERE ELSE. A folder change (`SetSessionWorkingDir`) and a project
-  edit (`invalidateMemberSkills`) only set `sessionRun.skillsStale`: both run on the UI goroutine, which cannot
-  prove the session is not mid-turn, and `ReloadSkillsIn` rewrites `Config.SkillStore` and the tool registry
-  under whatever is reading them. Without it the session keeps serving the old tree's project skills — and
-  sends `Skill create`'s project target there. The reload also clears the activation state, which is correct:
-  the same name may resolve to another file after the move.
 - **The scope is the session's git root, plus the global dir** (`config.GlobalSkillsDir()` = `<base>/skills`,
   note NOT `<base>/.tachi/skills` — a fixture written for one is invisible to the other). **Additional roots
   are NOT scanned**: they are extra places to read and write, not a second configuration home.
@@ -409,6 +413,28 @@ Fixtures, all because the real path needs something a driver cannot do:
 - **The `skill-catalog` smoke scenario pins the scan**: its fixture carries
   `.tachi/skills/smoke-skill/SKILL.md`, and the assertion is on the REQUEST (`SMOKE-SKILL-MARKER` in the first
   request's skill catalog) — nothing in the UI names a skill until one is used.
+
+### Tree-derived state: ONE stale flag, re-pointed in beginTurn
+
+- **Inputs fixed at build time must be re-pointed when the session MOVES, and that happens in `beginTurn`
+  and NOWHERE ELSE.** A folder change (`SetSessionWorkingDir`) and a project edit (`invalidateMemberSkills` /
+  `DeleteProject`) only set `sessionRun.treeStale`: both run on the UI goroutine, which cannot prove the
+  session is not mid-turn, and re-pointing rewrites state under whatever is reading it. `beginTurn` is the
+  one place that can prove no turn of this session is in flight.
+- **The flag is ONE, and its members move together**: `ReloadSkillsIn(sessionTree)` (scan roots) and
+  `SetPermissionRoot(ctx, sessionTree)` (project rules). A second, parallel "stale" flag is how one member
+  ends up describing the tree the other just left — the two are fed from the same resolved
+  `sessionRootsFrom` value in the same block for that reason. Adding a third tree-derived member means adding
+  it THERE, not growing a new flag.
+- **The permission policy needs `SetPermissionRoot` because `configure` resolves its project from the process
+  cwd** (`agent/agent_configure.go`): the project half of `permissions.bash` lives in
+  `<tree>/.tachi/permissions.yaml`, so `/`-cwd meant the file was `/.tachi/permissions.yaml` — never found.
+  Global rules kept working, which is why the loss was invisible.
+- **A rebuilt policy inherits the session's approvals** (`Policy.InheritSessionApprovals`): `allowAllAsks` is
+  the user's 「本会话全部允许」 answer and MUST survive a re-point, or a folder change re-asks a question they
+  already answered. The RULES do not carry over — that is the point — and deny is decided before any ask, so
+  an inherited approval can never resurrect a forbidden command (`TestSetPermissionRoot_*` in `agent/`,
+  `TestSessionTreeMove*` in `desktop/`).
 
 ## Desktop Turn History (the interrupted-turn merge)
 

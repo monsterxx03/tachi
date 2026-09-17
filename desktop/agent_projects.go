@@ -225,7 +225,7 @@ func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, pri
 		// project owned it (design §4.1/§6.2). The paths are normally identical, and the mark
 		// is what keeps that from being silently assumed.
 		if r := d.runs[sess.ID]; r != nil && r.agent != nil {
-			r.skillsStale = true
+			r.treeStale = true
 		}
 	}
 	return ""
@@ -266,7 +266,7 @@ func (d *desktopApp) emitWorkspaceChanged(projectID, sessionID string) {
 // directory, which is persisted by the time anyone reads it.
 func (d *desktopApp) invalidateMemberSkills(projectID string) {
 	for _, sess := range d.memberSessions(projectID) {
-		d.markSkillsStale(sess.ID)
+		d.markTreeStale(sess.ID)
 	}
 }
 

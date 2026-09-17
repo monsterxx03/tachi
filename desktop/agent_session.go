@@ -526,7 +526,7 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	// running turn would rewrite the store and the tool registry under it (the same
 	// reason SetProjectRoots marks its members). A session with no agent yet is fine: its
 	// agent will be built with the new directory, which is persisted above.
-	d.markSkillsStale(id)
+	d.markTreeStale(id)
 	// Remember the explicit choice: the next new session starts here.
 	rememberWorkspace(abs)
 	// The session's tree moved: a roots-aware MCP server has to be told, or it keeps confining

@@ -386,7 +386,7 @@ func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
 	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
 		t.Error("a project edit must not rewrite a live agent's skill store")
 	}
-	if !r.skillsStale {
+	if !r.treeStale {
 		t.Fatal("the member must be marked as needing a skill-store reload")
 	}
 
@@ -404,7 +404,7 @@ func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
 	if slices.Contains(names, "skill-a") {
 		t.Errorf("the old tree's skills must be gone, got %v", names)
 	}
-	if r.skillsStale {
+	if r.treeStale {
 		t.Error("the reload must clear the flag")
 	}
 }

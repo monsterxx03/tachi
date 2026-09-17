@@ -291,11 +291,11 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 	r.turnStartCredit = r.credit
 
 	ctx, cancel = context.WithCancel(context.Background())
-	// The session's skill store is re-pointed here, BEFORE the turn goroutine exists: a
-	// folder change or a project edit only marks the run (skillsStale), because doing it
-	// from the UI goroutine could rewrite the store under a running turn. This is the one
-	// point where no turn of this session can be in flight.
-	var skillsRoot string
+	// The session's tree-derived state is re-pointed here, BEFORE the turn goroutine
+	// exists: a folder change or a project edit only marks the run (treeStale), because
+	// doing it from the UI goroutine could rewrite the store under a running turn. This
+	// is the one point where no turn of this session can be in flight.
+	var sessionTree string
 	if r.sm != nil {
 		// The turn's working directory comes from the ONE root-set resolver
 		// (sessionRootsFrom), not from the record directly: the prompt, the @-file
@@ -305,14 +305,14 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 		if cur := r.sm.Current(); cur != nil {
 			if primary, _ := d.sessionRootsFrom(cur); primary != "" {
 				ctx = wdctx.WithDir(ctx, primary)
-				skillsRoot = primary
+				sessionTree = primary
 			}
 		}
 	}
-	reloadSkills := r.skillsStale && r.agent != nil && skillsRoot != ""
+	reloadTree := r.treeStale && r.agent != nil && sessionTree != ""
 	// Cleared either way: a session with no workspace has no tree to re-point at, and
 	// retrying every turn would be busywork.
-	r.skillsStale = false
+	r.treeStale = false
 	r.turnCtx, r.turnCancel = ctx, cancel
 	// Steer wiring: the agent emits steer_check and parks on steerCh between
 	// tool calls; the frontend answers via AgentService.Steer. Buffered (cap 1)
@@ -323,24 +323,34 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 	turnDone = make(chan struct{})
 	r.steerCh = steerCh
 	r.turnDone = turnDone
-	if reloadSkills {
+	if reloadTree {
+		// Everything whose inputs are FIXED AT BUILD TIME and derived from the
+		// session's tree gets re-pointed here. Two members today, and they are
+		// re-pointed together on purpose — a second, parallel "stale" flag is how
+		// one of them ends up pointing at the tree the other just left:
+		//   - the skill store's scan roots (sessionSkillStore), so the session stops
+		//     offering the old tree's project skills and Skill create's "project"
+		//     target stops landing there;
+		//   - the bash permission policy's project rules (<tree>/.tachi/permissions.yaml),
+		//     so a command the new tree forbids is not judged by the old tree's file.
 		// Cheap — dir lists plus tool registration, no scan — and done under d.mu on
 		// purpose: holding it is what keeps another turn of this session from starting
-		// while the store is being swapped.
-		r.agent.ReloadSkillsIn(skillsRoot)
+		// while they are being swapped.
+		r.agent.ReloadSkillsIn(sessionTree)
+		r.agent.SetPermissionRoot(ctx, sessionTree)
 	}
 	return ctx, cancel, steerCh, turnDone, true
 }
 
-// markSkillsStale records that the session's skill store must be re-pointed at the start of
-// its next turn (see sessionRun.skillsStale). Called from the UI goroutine — the writers are
+// markTreeStale records that the session's tree-derived state must be re-pointed at the start
+// of its next turn (see sessionRun.treeStale). Called from the UI goroutine — the writers are
 // a folder change and a project edit — so it takes d.mu and nothing else; an unknown session
 // or one with no run at all is a no-op, since an agent built later reads the new tree anyway.
-func (d *desktopApp) markSkillsStale(id string) {
+func (d *desktopApp) markTreeStale(id string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if r := d.runs[id]; r != nil {
-		r.skillsStale = true
+		r.treeStale = true
 	}
 }
 
@@ -886,13 +896,16 @@ type sessionRun struct {
 	// it so "stop, then immediately reply" never races a still-running turn.
 	turnDone chan struct{}
 
-	// skillsStale records that this session's skill store no longer points at the tree the
-	// session works in (a folder change, or a project edit that moved every member), and
-	// that it must be re-pointed at the start of the next turn. It is set from the UI
-	// goroutine and applied in beginTurn, which is the only place that can prove no turn of
-	// this session is mid-flight — a ReloadSkillsIn racing a running turn would rewrite the
-	// store and the tool registry under it. Guarded by d.mu.
-	skillsStale bool
+	// treeStale records that this session's TREE-DERIVED state no longer points at the tree
+	// the session works in (a folder change, or a project edit that moved every member), and
+	// that it must be re-pointed at the start of the next turn. See beginTurn for the members
+	// it covers; they are deliberately re-pointed together, from one flag and one resolved
+	// directory, so none of them can end up describing a tree another has left.
+	//
+	// It is set from the UI goroutine and applied in beginTurn, which is the only place that
+	// can prove no turn of this session is mid-flight — re-pointing a store or a policy while
+	// a turn reads it is a data race. Guarded by d.mu.
+	treeStale bool
 
 	// cost/credit are the session's cumulative CNY cost and ledger credit
 	// ("积分"), rebuilt from the usage ledger (see rebuildCostCredit) — the
