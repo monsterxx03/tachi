@@ -154,43 +154,75 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
 用户的 `~/.tachi/config.yaml` 含注释、引号与手工格式。全量 `Marshal` 一次就会丢掉全部注释，
 **不可逆**。
 
-### 方案：`yaml.Node` 读-改-写（已实测）
+### 方案：`goccy/go-yaml` 的 Path API（✅ spike 已做，方案已定）
 
-实测结论（用真实的 63 行 config.yaml，改 1 个叶子值）：
+**结论：用 `github.com/goccy/go-yaml`，不用 `gopkg.in/yaml.v3`。** 两个库都实测过，
+用真实的 63 行 config.yaml 改 1 个叶子值：
 
-| 现象 | 结果 |
-|---|---|
-| 注释（`HeadComment`/`LineComment`/`FootComment`） | ✅ **保住** |
-| 流式写法 `extensions: [".go"]` | ✅ **保住**（没被展开） |
-| 引号 `command: "gopls"` | ✅ 保住 |
-| **缩进** | ❌ **全文件被重排**：2 空格 → 4 空格 |
-| **序列缩进风格** | ❌ `servers:\n- name:` → `servers:\n    - name:` |
-| 段落空行 | ❌ 被压掉 |
+| 方案 | 改 1 个值的行差异 | 注释 | 缩进 / 序列风格 | 流式写法 |
+|---|---|---|---|---|
+| `yaml.v3` + `SetIndent(2)` | **70 行**（全文件重排） | ✅ 保住 | ❌ 2→4 空格、序列被加宽 | ✅ |
+| **`goccy` 的 `Path` API** | **3 行**（只改目标） | ✅ 保住 | ✅ **逐字节保住** | ✅ |
 
-**v1.0 说「保留未触碰节点的注释与样式」——注释对，样式错。** 两条根因，都不是「小心一点」能绕过的：
+yaml.v3 的两个根因，都不是「小心一点」能绕过的：
 
 1. **缩进是 encoder 的全局设置，不是节点属性。** `yaml.Node` 不记录缩进，默认
-   `best_indent = 4`；`yaml.NewEncoder` 的 `SetIndent(2)` 能修好标量/映射缩进，但**修不了序列**——
+   `best_indent = 4`；`SetIndent(2)` 能修好标量/映射缩进，但**修不了序列**——
    序列缩进是「父级缩进 + `best_indent`」硬编码，yaml.v3 没有 indentless-sequence 开关。
 2. **必须「就地改 `node.Value`」，不能替换 value 节点。** 替换会让挂在节点上的
-   `LineComment` 一起消失（实测）：
-   ```go
-   // ❌ 替换 value 节点 → 行尾注释被丢掉
-   cur.Content[j+1] = &yaml.Node{Kind: yaml.ScalarNode, Value: val}
-   // ✅ 就地改值 → 节点（连同注释/样式）留在原地
-   next.Value = val
-   ```
-3. 序列索引要单独分支：节点 `Kind == SequenceNode` 时没有 key，得按数字下标走。
+   `LineComment` 一起消失（实测）。
 
-### P0 验收标准（v1.0 的太松）
+goccy 走的不是这条路：它有 yaml.v3 完全没有的 **`Path` API**（`$.providers[0].model`），
+直接对 AST 做外科手术式替换，不动其余节点。这是实测中最关键的发现。
 
-v1.0 只要求「保住注释的读写回环」——实测表明那条太容易通过，而缩进已经被毁。改成：
+### 已实现的接口（`config/save_partial.go`）
 
-1. 改一个叶子值后，**除目标行外无内容差异**（注释、引号、流式写法）
-2. **缩进差异被显式断言**：`SetIndent(2)` + 序列加宽「接受」并写进断言，或换用保真度更高的库
-   （如 `goccy/go-yaml`，它对 `Node` 有序列缩进选项）——**这值得先做一次 spike 再定**
-3. 空行/段落被压掉，写成已知限制或纳入断言
-4. **失败路径**：校验失败时文件**字节级不变**
+```go
+func SavePartial(updates map[string]any) error
+func SavePartialTo(path string, updates map[string]any) error  // 测试/显式路径
+```
+
+- **路径形式统一为点分**：`"language"`、`"lsp.enabled"`、`"providers.0.model"`。
+  goccy 要的是 `providers[0]`，翻译在 `yamlPath` 里一处完成，调用方与错误信息统一说点分。
+- **值按类型渲染**：`string` / `bool` / `int` / `int64` / `float64` / `[]string`，
+  以及**指针形式**（`*bool` 等）——配置里那些可选字段本身就是指针，传指针进来就不用在
+  调用方拼格式化。渲染出的字面量再**解析成节点**（而不是包成 `ast.String`），
+  这样标量、列表走同一条路。
+- **字符串只在必要时加引号**（`"12345"` 必须保住是字符串，普通文本保持裸写，
+  否则每次保存都会改写用户的写法风格）。
+- **`nil` 与未知类型直接报错**，不会写成 `null` 悄悄清掉一项设置。
+
+### 两个实测陷阱（v1.0 完全没提）
+
+1. **不存在的路径 `ReplaceWithNode` 会静默"成功"。** 返回 nil 却什么也没写。
+   所以 `SavePartial` **写盘前回读校验**每个路径的实际值——这个校验同时覆盖了
+   "路径不存在"与"值没生效"两种情况。**只更新已存在的键**是明确的产品决策：
+   新增一个键是另一个功能（放在哪个块下？），不在这里猜。
+2. **行尾注释前的对齐填充会被规范化。** `main          # 注释` 变成 `main # 注释`。
+   注释内容活着，对齐空格没了。这**不是**被改行才有的——**整个文件的所有行尾注释**
+   都会。所以本包的承诺是「**文件内容被保留**」，不是「文件逐字节不变」，
+   并且用 `TestSavePartial_TrailingCommentPaddingIsNormalized` 钉住。
+
+### ⚠️ 依赖版本有硬下限：`goccy/go-yaml >= v1.19`
+
+**v1.18.0 会静默丢掉行尾注释**（实测：同一个文件、同一个编辑，v1.18 输出
+`extensions: [".go"]`，v1.19 输出 `extensions: [".go"] # 紧凑写法`）。
+
+更麻烦的是它的触发条件：**只在文件里有多条注释时出现**（单注释的最小文件两个版本都正常），
+所以一个只看小 fixture 的测试会漏掉它，而真实用户的配置文件一定有注释。
+`go.mod` 现在钉 `v1.19.2`；**降级这个依赖等于悄悄开始毁用户的配置**，不要降。
+
+> 追查记录：这个 bug 一开始表现成"我的测试 fixture 有问题"，因为 spike 用 `@latest`（v1.19.2）
+> 而 go.mod 里已是 v1.18.0（ginkgo→go-snaps 带进来的间接依赖）。**同一份 fixture、
+> 同一份代码、两个版本、不同结果**——这才定位到版本。升级依赖后测试立刻全绿。
+
+### P0 验收标准（✅ 已实现于 `config/save_partial_test.go`）
+
+1. 改一个叶子值后，**行数不变**、目标行带新值、**其余行除对齐填充外逐字不变**
+2. 注释（顶部 / 行尾 / 独立）、缩进、**indentless 序列**、流式写法、引号全部保住
+3. 嵌套路径与序列索引都可达（`providers.0.spec.vision`、`lsp.servers.0.command`）
+4. **失败路径**：不存在的路径 / 越界索引 / `nil` / 未知类型都报错，且**文件字节级不变**
+5. 无编辑时不重写文件；文件 mode 保持（0600 不会变 0644）
 
 ### 原子性
 
@@ -205,9 +237,42 @@ v1.0 只要求「保住注释的读写回环」——实测表明那条太容易
 
 第 4 步失败：内存已改是**可接受**的（下次启动会读回旧值），但必须报错，不能静默。
 
-**写盘用 `fileutil.AtomicWriteFilePrivate`，不要沿用 `Save` 的非原子路径。**
+**写盘是原子的**（`SavePartial` 内部用 `fileutil.AtomicWriteFile`，沿用文件原有的 mode）。
 理由与 session 的 meta.json 相同：config.yaml 有并发读者（另一个 Tachi 进程启动时
-`config.Load`），而 `WriteFilePrivate` 是就地重写，读者可能读到截断文件。
+`config.Load`），而 `Save` 的 `WriteFilePrivate` 是就地重写，读者可能读到截断文件。
+
+### 内存侧的并发（✅ 已实现）
+
+文件那一半之上还有一半：`d.cfg` 今天在启动后就**只读**，所以无锁也安全——但设置页的
+全部意义就是运行时改它，那一刻 `d.cfg` 就被跨 goroutine 写了（turn goroutine 读
+`MaxTokens` / `Language`，MCP 后台 goroutine 读 `MCPServers`，每个 agent 把它当
+`FullConfig` 持有）。
+
+已建好的地基（`desktop/agent.go`）：
+
+```go
+func (d *desktopApp) config() *config.Config            // RLock，只读访问
+func (d *desktopApp) withConfig(fn func(*config.Config)) // Lock，唯一写入口
+func (d *desktopApp) setConfig(cfg *config.Config)       // 仅 initAgent
+```
+
+⚠️ **铁律：只能原地改字段，永不换 `d.cfg` 指针。** 换指针看起来更干净，但会静默出错——
+指针被这些东西**长期持有**：
+
+- 每个 provider 被 `wrapForUsage` 包过，它的 price/credit resolver **闭包捕获**了
+  `*config.Config`，每次 LLM 调用才解引用 → 换指针后**账本继续按旧价格记账**；
+- 每个会话的 agent 把它当 `AgentConfig.FullConfig`（26 个读点）；
+- 共享 MCP manager 及其后台 refresher 也持有它。
+
+这些持有者是**惰性读取**的，这正是"原地改一处、到处生效"的原因，也正是
+"换指针则到处失效、且不报错"的原因。所以：
+
+- **不能用 `atomic.Pointer[config.Config]`**：它为"换指针"提供安全，而换指针在这里是错的
+  （代价是 12 个闭包 + MCP manager + 26 个读点全部改成"每次去取"）。
+- 一次保存只应用**一个叶子值**，所以没有"多字段撕裂"的问题。
+- 唯一例外的写：`persistMCPServerEnabled` 就地改 `MCPServers[i].Enabled`（一个 bool），
+  在 `mcpServerByName` 的注释里写明了为什么可接受。
+
 
 ## 七、实现结构
 
@@ -267,13 +332,26 @@ cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i
 
 | 期 | 内容 | 风险 |
 |---|---|---|
-| **P0** | `config.SavePartial` + 单测（保住注释的读写回环 + §六的 P0 验收四条） | ⚠️ **最高，先做先验证** |
+| **P0-a** | ✅ **已完成**：`config.SavePartial` + `config/save_partial_test.go`（§六的验收五条，全部通过） | — |
+| **P0-b** | ✅ **已完成**：`d.cfg` 的 `cfgMu` + `config()` / `withConfig()`，全部读点改访问器 | — |
 | P1 | `App.tsx` view 状态 + `settings.tsx` 外壳 + 分类导航 + CSS 隐藏保状态 + 屏蔽对话快捷键 | 低 |
+| P1.5 | 顺手可热改项（见下「P0 之后、开工之前」） | 低 |
 | P2 | 后端 `GetSettingsSchema` / `SaveSettings` + 🔥 类表单 + 热改（含 `liveAgents()` 广播） | 中 |
 | P3 | 🟡 / 🔴 类表单 + `⟳` 徽标 + 保存后汇总提示 | 低 |
 | P4 | desktop smoke 场景（改一项 → 断言 config.yaml 的值 + UI 反馈） | 低 |
 
-P0 值得**单独先做原型**：它决定了「保存会不会毁掉用户手写的配置文件」这个不可逆后果。
+P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手写的配置文件」这个不可逆后果，
+而且 P0-b 的锁约定决定了 P2 的 `SaveSettings` 怎么写（唯一写入口 `withConfig`）。
+
+## 八之二、P0 之后、开工之前（其余小项）
+
+这三条都不阻塞开工，但做了能让 P2 少一类特例：
+
+| 项 | 为什么值得先做 | 规模 |
+|---|---|---|
+| `ckptKey` 纳入 `checkpoint.Options` | `checkpoints.{max_files,max_bytes,retain}` 改了不重建 manager（`agent/agent_checkpoint.go` 的 key 只含 `sess.ID + roots`）。修完这 3 项从「小重构」变「真热改」 | 小 |
+| `promptCache` 清空入口 | `language` / `extra_system_prompt` 热改的前提。desktop 目前**只**在容量满时整体重建，没有清空点；`systemPromptFor` 已每轮现读 `d.cfg`，加一个清空方法即可 | 小（3 行） |
+| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项 | 中 |
 
 ## 九、不做的事
 
@@ -309,3 +387,6 @@ P0 值得**单独先做原型**：它决定了「保存会不会毁掉用户手�
 | `max_iterations` | 列为可热改 | desktop 走「不适用」（只有 `-p` 读它） |
 | `config.Save` | 「全库 0 处调用」 | 成立，且是死代码 |
 | 行号 | `App.tsx:1355` / `agent_driver.go:151` / `config.go:1055,1218` / `agent_mcp.go:66` | `1856` / `129` / `1064,1227` / `134` |
+| 实现方案 | 「`yaml.Node` 读-改-写」 | **`goccy/go-yaml` 的 `Path` API**（spike 实测：v3 改 1 值动 70 行，goccy 动 3 行） |
+| 依赖下限 | 未提 | **`goccy/go-yaml >= v1.19`**：v1.18.0 会在多注释文件上静默丢行尾注释 |
+| 内存并发 | 未提 | 第八之二节：`cfgMu` + `config()`/`withConfig()`，**永不换指针**（12 个闭包捕获 + 26 个读点） |

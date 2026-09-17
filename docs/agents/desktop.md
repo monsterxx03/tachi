@@ -202,6 +202,27 @@ Fixtures, all because the real path needs something a driver cannot do:
   package** — a signature change under `desktop/` can leave its tests unbuildable with every root-level check
   still green. After touching `desktop/`, run `cd desktop && GOWORK=off go test ./...` too; `make lint` at the
   root does not cover it either.
+- **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
+  separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
+  root code imports. A package the root starts importing (`github.com/goccy/go-yaml`, when `config` gained
+  `SavePartial`) builds and tests fine at the root while `desktop/` fails with
+  `missing go.sum entry for module providing package ...` — and, because the root `go test ./...` does not
+  compile `desktop/`, **every root-level check stays green**. Fix: `cd desktop && GOWORK=off go mod tidy`.
+  The reverse also holds: bumping such a dependency at the root must be re-tidied here.
+- **`d.cfg` is read under `cfgMu` and written through ONE entry point** (`desktopApp.config()` /
+  `withConfig()`, in `agent.go`). It used to be plain-field access, which was safe only while nothing wrote
+  it after startup — the settings page is exactly the thing that changes that.
+- **⚠️ Never swap the `d.cfg` POINTER; mutate the existing object.** `withConfig`'s comment carries the full
+  reason and it is worth re-reading before any "let me just install a fresh config" idea: every provider is
+  wrapped by `wrapForUsage`, whose price/credit resolvers CLOSE OVER the `*config.Config` and dereference it
+  per LLM call, so a replaced object leaves the usage ledger billing at the old prices; each session's agent
+  holds it as `AgentConfig.FullConfig` (26 read sites); the shared MCP manager and its refresher hold it too.
+  Those holders read LAZILY, which is what makes an in-place edit take effect everywhere at once — and what
+  makes a pointer swap fail everywhere at once, silently. So `atomic.Pointer[config.Config]` is the wrong
+  tool here, however tempting it looks.
+- **One save is one field.** `withConfig` runs under the write lock, so multi-field saves would need readers to
+  take it too (they do not); keeping a save to a single leaf is what makes the current shape correct.
+  `mcpServerByName` is the one documented exception (a single bool written in place).
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
   `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the
   red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits a
