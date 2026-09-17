@@ -1,8 +1,6 @@
 # Tachi — Desktop Handbook (split out of .tachi.md)
 
-Read this **before changing anything under `desktop/`**: the smoke suite (drivers, fixtures, the
-bundle/pkill/keep-awake rules), macOS build & signing, and the frontend's UI-state conventions (which
-module owns what).
+Read this **before changing anything under `desktop/`**.
 
 `.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions that
 apply anywhere in the repo and points here for the rest. **New desktop lessons belong in THIS file, not back
@@ -13,12 +11,12 @@ split + index when a subject grows) apply to every split of it, this one include
 
 | Section | Read it when |
 | --- | --- |
-| **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) |
+| **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
-| **Desktop MCP Auth** | you touch MCP authorization, the MCP panel's per-server state, or the deferred-tools pool/reminder path |
+| **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Skills** | you touch skill discovery, or anything that changes which tree a session works in |
-| **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued (the interrupted-turn path) |
+| **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
 | **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
 | **Desktop Themes** | you touch colours |
 
@@ -26,236 +24,145 @@ split + index when a subject grows) apply to every split of it, this one include
 
 Desktop-only paths (Wails wiring, rendered UI, end-to-end flows) need the real window: unit tests and itest
 cannot see whether a binding's result reaches a card. **Use the in-repo suite** for anything touching desktop
-state, events or UI, and add a scenario when a fix deserves a regression test. It owns the sandbox, the
-isolated HOME, the scripted model and the report; the verdict is an exit code.
+state, events or UI, and add a scenario when a fix deserves a regression test.
 
 ```sh
-make desktop-smoke                                  # every scenario
-make desktop-smoke ARGS="-run send-now -v"          # one of them, every assertion printed
-make desktop-smoke ARGS="-keep"                     # keep the sandbox after a pass (artifacts)
+make desktop-smoke ARGS="-run send-now,perm-allow -v"   # the scenarios your change touches (see below)
+make desktop-smoke                                      # everything (~45 scenarios, minutes)
+make desktop-smoke ARGS="-keep"                         # keep the sandbox after a pass (artifacts)
 ```
+
+### Which scenarios to run — run the touched ones, not the suite
+
+**Pick from this table; a full run is for a change that reshapes the transcript or the event plumbing
+itself.** When two rows apply, run both. `-run` takes a comma-separated list.
+
+| You changed | Run |
+| --- | --- |
+| transcript rendering / turn folding / process strip | `transcript`, `transcript-fold`, `transcript-live` |
+| the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
+| a message bubble's own layout (long links, wrapping) | `bubble-wrap` |
+| composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
+| scroll pinning, session switch, load | `switch-load`, `switch-scroll` |
+| sidebar rows, grouping, titles, type scale, carets | `sessions`, `sidebar-text`, `switch-load` |
+| the stop control / which session a status belongs to | `session-running` |
+| projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
+| permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session` |
+| a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
+| the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
+| review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
+| rewind / checkpoints | `rewind`, `compact` |
+| context meter, usage numbers, auto-compaction | `ctx-ring`, `compact` |
+| MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
+| skills discovery / the catalog | `skill-catalog`, `project-context` |
+| workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
+| a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
+| plans, `SavePlan`, the plan panel | `plan-writeback` |
+| sending/receiving files or images | `paste-image` |
+| deleting sessions, running-session guards | `delete-running` |
+| whatever else — the transcript itself, session rows | `transcript`, `sessions` |
 
 The suite does not need its window in front, and does not take the front: demo mode keeps the page awake
 while another window covers it, and a run launches without activating itself — so a run can be left going
 while you work.
 
-The suite is `itest/desktop/`: `main.go` (runner: sandbox, launch, verdict, report), `scenarios.go` (one
+### Shape of the suite
+
+It is `itest/desktop/`: `main.go` (runner: sandbox, launch, verdict, report), `scenarios.go` (one
 conversation per scenario — the mock's steps plus the Go-side `after` assertions), `sandbox.go` (bundle prep,
 isolated HOME, launch/kill), `sink.go` (the loopback endpoint drivers report to), `drivers/` (harness.js +
 one script per scenario). Per run it builds a throwaway sandbox holding a private copy of the app (executable
-renamed so no `pkill` can reach the user's own Tachi), an isolated HOME with a `config.yaml` pointing at the
-scripted model, the work dir, `driver.js`, `dom.html` (the page as the verdict found it) and
+renamed `TachiSmoke` so no `pkill` can reach the user's own Tachi), an isolated HOME with a `config.yaml`
+pointing at the scripted model, the work dir, `driver.js`, `dom.html` (the page as the verdict found it) and
 `mock-requests.txt` (what the model was actually asked). **`desktop/bin/Tachi.app` must exist**
-(`make -C desktop build`); the runner refreshes the executable inside it from `bin/Tachi` on every run, so the
-app under test is always the current tree.
+(`make -C desktop build`); the runner refreshes the executable inside it from `bin/Tachi` on every run.
 
 A driver asserts what the UI **shows** (transcript shape, chips, buttons); the scenario's Go half asserts what
 actually **happened** (the prompt the model received, the files written) — a regression usually shows up in
-exactly one of the two, so write both. **Adding a scenario** = `drivers/<name>.js` written against the harness
-(`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`, plus
+exactly one of the two, so write both.
+
+**Adding a scenario** = `drivers/<name>.js` written against the harness (`smoke.waitFor` — never a fixed
+sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`, plus
 `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`) and an entry in `scenarios.go` (the mock's
 `steps`, the work-dir `files`, an `after` func for the Go-side checks). Keep both halves small: one behaviour
-per scenario, and assert what the user would notice. A scenario that needs an ADDITIONAL workspace root sets
-`extraRoots` (one directory per entry under the sandbox, holding that entry's files): the root set is seeded
-into the session fixture rather than added in the UI, because the UI's only way in is a NATIVE directory
-picker no driver can click — reach a seeded root from the work dir as `../<name>/…`, since a scripted bash
-command cannot know the sandbox's absolute path. A scenario that needs settings the shared sandbox config
-does not carry sets `config` — a YAML block appended to the generated `config.yaml`, which is how a
-parked-permission scenario gets its `permissions.bash.ask` rule. A scenario that needs a desktop PROJECT
-sets `project` (the primary directory's files + its additional roots): `projects.json` and the session's
-`project_id` are seeded, because the project form can only pick directories through the same native picker.
-**A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
-so the session whose behaviour a driver asserts on has to be seeded LAST; seeding an unbound session after
-it made the driver assert on the wrong one, which reads exactly like "the project does not drive its member".
-`smoke.type` picks the native value setter
-by ELEMENT (textarea vs input): React ignores `el.value = …`, and a textarea's setter called on an input
-throws, so an `<input>` field (the find bar) could not be driven at all until the harness stopped assuming
-the composer's textarea.
+per scenario, and assert what the user would notice. Then add the scenario to the routing table above.
 
-### Manual recipe — only for exploring something the suite does not cover
+Fixtures, all because the real path needs something a driver cannot do:
 
-```bash
-# one-time per sandbox: a private bundle whose executable name is unique, so no pkill can
-# hit the user's own Tachi (see the bundle rules below)
-cp -R desktop/bin/Tachi.app /tmp/tachi-smoke/TachiSmoke.app
-cp desktop/bin/Tachi /tmp/tachi-smoke/TachiSmoke.app/Contents/MacOS/TachiSmoke
-plutil -replace CFBundleExecutable -string TachiSmoke /tmp/tachi-smoke/TachiSmoke.app/Contents/Info.plist
-codesign --force --deep --sign - /tmp/tachi-smoke/TachiSmoke.app
-
-# every run — launch → drive → capture → kill in ONE shell invocation
-cd desktop && make frontend && go build -o bin/Tachi .
-pkill -f TachiSmoke; sleep 2; test "$(pgrep -f TachiSmoke | wc -l)" = 0
-HOME=/tmp/tachi-smoke /tmp/mock-bin &        # writes config.yaml + dumps requests
-MOCK=$!; sleep 2
-open /tmp/tachi-smoke/TachiSmoke.app \
-  --env HOME=/tmp/tachi-smoke --env TACHI_DEMO=1 --env TACHI_DEMO_JS=/tmp/drive.js
-sleep 24                                     # mount + the driver's own timing (the app waits
-                                             # for ApplicationDidFinishLaunching and then
-                                             # TACHI_DEMO_LOAD_MS, 0.5s; this sleep is generous
-                                             # because a hand-run has no sink to wait on)
-R=$(osascript -e 'tell application "System Events" to tell process "TachiSmoke" to get {position, size} of window 1')
-I=$(echo "$R" | tr -dc '0-9, '); screencapture -x -R "$I" /tmp/tachi-smoke/shot.png
-pkill -f TachiSmoke; kill $MOCK
-```
-
-- `--env TACHI_DESKTOP_APPEARANCE=dark|light` forces a theme (dev aid); run twice for both palettes
-- The `osascript` query above needs **Accessibility granted to whatever runs it**: without it you get no
-  window bounds and a system prompt left on screen for the user to dismiss. The suite never needs it — it
-  drives the page from inside the app and pins window-level facts in Go tests
-- The scripted model is a driver program, not a config: `mockllm.NewServer(...)`,
-  `Script(Step{Reply: Stream(Text("…"), Finish("stop"), UsageWithCache(…), Done())})`, print `BaseURL()`,
-  block. It writes the isolated `config.yaml` (the port is random) and dumps `mock.Requests()` to a file —
-  **assert at the LLM boundary**, not only on the rendered bubble
-- Fixtures: `$HOME/.tachi/session/<id>/{meta.json,messages.jsonl}` (shapes as `session.Store`),
-  `additional_dirs`, `desktop_ui.json`; bump `updated_at` so the app auto-loads it
-
-### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go`)
-
-**The demo starts from `ApplicationDidFinishLaunching`, never from a sleep.** Its first act is a
-dispatch onto the main thread, and Wails dereferences its platform impl there — which does not
-exist until `App.Run()` builds it. A dispatch that lands first is a nil-pointer panic in the
-goroutine, i.e. the app dies, and from outside that is indistinguishable from "the app did not
-start": no window, no driver, no log line (measured — it is why scenarios failed in clusters on a
-busy machine while the same tree passed minutes earlier). Two guards, and they are not
-redundant: main.go starts the sequence from that event (the true "runtime is up" moment), and
-`keepPageAwake` converts any too-early dispatch into a retryable reason (`awakeOnce`) so a future
-early caller cannot take the process down again. The bootstrap delay that used to guess at this,
-and its `TACHI_DEMO_BOOTSTRAP_MS` knob, are gone.
-
-What remains is `TACHI_DEMO_LOAD_MS` (demo.go), the head start the driver's first injection
-attempt gets — paid once per scenario, so it is kept tight and must not be trimmed by eye (see
-the comment on it for the grid it was measured at).
-
-The LOAD wait is not what stands between a slow page and a silent failure: the driver's
-payload is re-issued every `demoInjectStep` for `demoInjectWindow` (`TACHI_DEMO_INJECT_MS`, 10s
-by default), because a script injected into a document that is still loading is simply dropped —
-and losing it used to cost the scenario its WHOLE budget with nothing to show for it (measured
-twice on a machine that was busy compiling: the app was up, its session directory created, and not
-one assertion ever arrived). The repeats are safe because the payload guards on
-`window.__tachiDriverStarted`, so the first attempt that lands runs the driver and the rest return
-immediately — a scenario that reports its assertions TWICE means that guard is gone. The app logs
-one line (`demo: driver injection retried`) the first time an attempt does not take, which is how
-to tell "the page was slow" from "the page was ready".
-
-The runner also refuses to wait for a driver that never showed up at all: any line within
-`driverContactWindow` (15s, main.go) means it is running (the harness's first act is a line), and
-nothing by then fails the scenario with that as the reason — 15 seconds instead of 90. A launch that
-produced nothing AT ALL is retried once first, because one cause is the harness's own doing: `open`
-on a bundle LaunchServices still counts as running is a no-op that reports success, and the previous
-scenario's app was killed moments earlier (measured: the fourth scenario of a run, its sandbox left
-without even a state directory). The retry is logged; a real startup crash fails as before.
-
-```js
-// React inputs ignore `el.value = …`: native setter + input event
-const type = (el, t) => {
-  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, t)
-  el.dispatchEvent(new Event('input', { bubbles: true }))
-}
-// selects need the same treatment, plus a change event; window-capture key handlers get the
-// event dispatched on the focused element
-// assertions in a banner (#smoke-result), not the console: one screenshot carries UI + verdict
-```
+- `extraRoots` — additional workspace roots (`<name>: {<relative path>: <content>}`); the root set is seeded
+  into the session rather than added in the UI, because the UI's only way in is a NATIVE directory picker no
+  driver can click. Reach a seeded root from the work dir as `../<name>/…`.
+- `config` — a YAML block appended to the generated `config.yaml` (how a parked-permission scenario gets its
+  `permissions.bash.ask` rule).
+- `project` — a desktop project (the primary directory's files + its additional roots): `projects.json` and
+  the session's `project_id` are seeded, same native-picker reason.
+- `seedMessages` / `seedSecond` — a transcript written before the app launches. A driver cannot produce a
+  reload by itself (switching sessions serves the in-memory copy), so this is how a restart-shaped assertion
+  is staged.
+- **A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
+  so the session a driver asserts on has to be seeded LAST; seeding an unbound session after it made the
+  driver assert on the wrong one, which reads exactly like "the project does not drive its member".
 
 ### Rules and traps
 
-- **Only one instance may run**: `open` on a live instance only hands the launch to the running process and
-  passes NO environment (so the driver never runs and the previous scenario's app answers), and
-  `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's running app. The unique executable name is
-  what makes `pkill -f TachiSmoke` safe — check with `pgrep -fl Tachi`. But that pattern also matches the
-  SANDBOX's own build (`codesign --force --deep --sign - …/TachiSmoke.app` carries it on the command line),
-  so a stray `pkill -f TachiSmoke` while a run is preparing kills the ad-hoc signing and the scenario reports
-  `sandbox — codesign …: signal: terminated` before its app ever launches. Never kill a run in flight: every
-  sandbox app shares the bundle id `com.monsterxx03.tachi.smoke`, so the instance it leaves behind is exactly
-  what the next run's `open` will activate.
-- **Run the suite SERIALLY — one invocation at a time.** Each driver has a 1m30s budget and its assertions
-  wait ~3s for a transient state, so a starved webview misses both. An EMPTY `mock-requests.txt` in the
-  failing scenario's sandbox is the signature of a starved run rather than a broken app. A failing run keeps
-  its sandbox (`artifacts: …`), so they pile up in `$TMPDIR` — inert, but worth clearing when the root volume
-  gets tight. Before believing a failure, check `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the
-  scenario on its own: the synthetic DRAGS are the flakiest of all, so a lone drag assertion failing in a full
-  run is the harness until proven otherwise.
-- **A driver that does not PARSE fails as "the app did not start".** The injected payload is one
-  `(function(){…})()`, so a syntax error anywhere in the driver — the easy one is a `const` declared twice in
-  the same IIFE, which a middle-of-the-file edit hits unnoticed — throws on EVERY retry: the
-  `__tachiDriverStarted` guard sits in the same parse unit, so the driver never marks itself started and
-  nothing is reported for the whole `driverContactWindow`. The app's own log is clean (its session dir is
-  created, no demo error), which is exactly what a window that never came up looks like. `node --check
-  itest/desktop/drivers/<name>.js` costs a second; a failing run's kept sandbox holds the copy that actually
-  ran (`<sandbox>/<scenario>/driver.js`).
-- `open -a <path>` matches by BUNDLE and `pkill` by executable path; a capture of the wrong window looks
-  plausible, so confirm the shot is yours (titlebar / session id).
-- **A capture is not part of the suite**: the window-capture APIs are gone on this OS (`-R` fails on
-  macOS 26) and the window would have to be on the visible Space anyway — a "screenshot" that silently
-  returns the desktop is worse than none. The suite keeps `dom.html` + the assertion lines; take a picture
-  by hand when you want one.
+- **Only one instance may run.** `open` on a live instance only hands the launch to the running process and
+  passes NO environment (the driver never runs and the previous scenario's app answers), and
+  `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's own app. The unique executable name is what
+  makes `pkill -f TachiSmoke` safe. That pattern also matches the SANDBOX's own build (`codesign` carries it
+  on its command line), so a stray `pkill -f TachiSmoke` while a run is preparing kills the ad-hoc signing and
+  the scenario reports `codesign …: signal: terminated` before its app ever launches. Never kill a run in
+  flight: every sandbox app shares one bundle id, so the instance left behind is what the next `open` activates.
+- **Run one invocation at a time.** Each driver has a 1m30s budget and its assertions wait ~3s for a transient
+  state, so a starved webview misses both. An EMPTY `mock-requests.txt` in a failing scenario's sandbox is the
+  signature of a starved run rather than a broken app. Before believing a failure, check
+  `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the scenario on its own.
+- **A driver that does not PARSE fails as "the app did not start".** The payload is one `(function(){…})()`, so
+  a syntax error anywhere in it — the easy one is a `const` declared twice in the same IIFE — throws on EVERY
+  retry, and the app's own log stays clean (session dir created, no demo error). `node --check
+  itest/desktop/drivers/<name>.js` costs a second; a failing run's kept sandbox holds the copy that ran.
 - **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the real
-  Finder — a window on the user's machine, outside the sandbox, taking the foreground — so the sidebar
-  scenario asserts the menu item is there (and that its own mouseleave rule closes the menu) and leaves the
-  click alone. The path it would hand over is pinned where the argument is known:
-  `TestOpenSessionDirOpensTheSessionDirectory` stubs `openFile` (attach.go) and reads the argv. Any
-  "open in …" action has this shape — assert the control on screen, pin the argument off screen.
-- **A probe only measures what it reads at the right moment, and only ever proves one direction**: content
-  that grows AFTER a pin (a mermaid diagram finishing its async render) is pinned again from a
-  `ResizeObserver`, which the browser runs after layout and before paint — so a read taken BEFORE that pin
-  reports a gap nobody ever saw. Reading `scrollHeight` FORCES layout, so a `requestAnimationFrame` callback
-  is exactly such a read. Read from the driver's OWN `ResizeObserver` instead — observers are called in
-  registration order, so one registered after the app's runs after its pin and still before the paint — and
-  keep a timer series as the fallback. Then verify the judge BOTH ways: 0 with the fix in place, and the drift
-  with the fix disabled.
-- **An assertion belongs to the scenario that produces the fact** (and to the line that produces it). A check
-  that sat in `oneoff-footer`'s `after` while the driver producing the fact is `oneoff-panel`'s read a
-  default forever; the fix was moving the check, not the code. Its sibling: **a control used as a TRIGGER for
-  another behaviour pins neither** — a button and a page switch must not ride on one click.
-- **A transient state belongs to the trail; a steady state belongs to a direct read.** A ~10ms sampler that
-  catches the middle of a state machine can be starved while the webview is busy, so its last tick may never
-  see the state that persisted. Read the END state off the element the wait returned.
-- **The console is part of the report**: the driver's `console.error` lines ride in the result body
-  (`Result.Console`), and the runner prints them for passing runs too.
-- **A proxy signal becomes true before the fact it stands for — wait for the fact the action reads**, not for
-  a neighbour that merely correlates with it. The turn's 评审本轮改动 chip exists after its FIRST changed
-  file, not after its last, so a click on 「完整 diff」 that waits only for the chip captures a one-file
-  `paths` set. And widen a suspect window before you trust a fix: a race you cannot widen is one you cannot
-  verify a fix against.
-- **A stale element swallows a gesture**: re-query the handle (`.composer-resizer`) for EVERY synthetic drag
-  — a drag that lands on a detached node passes against the previous value without dragging at all.
-- **A run must not take the foreground either** (`TACHI_DEMO_NO_ACTIVATE=1`, set by `sandbox.go`). Three
-  things hold it down, each leaking a ~0.6s foreground flash per launch when missing: `sandbox.go` launches
-  with **`open -g`**; the app starts as an **ACCESSORY** app (`activationPolicy()` in `demo.go`); and its
-  window is created `Hidden: true` and ordered in by the demo bootstrap with
-  `orderWindow:NSWindowBelow relativeTo:0` (on screen but at the BOTTOM of the window stack, so it neither
-  becomes key nor covers the user's work). Two ordering traps live in that bootstrap: the show must come
-  AFTER the app's runtime exists — a main-thread dispatch before `App.Run()` builds it PANICS the process
-  (see the Driver JS section; the sequence starts from `ApplicationDidFinishLaunching` for exactly this
-  reason) — and BEFORE the driver's own wait (a script injected into a loading document is simply lost). An
-  interactive hand-run leaves the var unset on purpose, so `open` still brings the window forward.
-- **A covered window is no longer a paused run — demo mode keeps the page awake, deliberately.** WebKit reads
-  a page's visibility off the WINDOW alone (on screen, not miniaturized, not occluded) and never off which
-  app is frontmost — so an ordinary window that another window covers is a *hidden* page: its frames stop and
-  its DOM timers clamp to 1Hz. With that, every `waitFor` in a driver runs ~10x slower and a run can post
-  NOTHING before the runner's `-timeout` prints `等了 90s 没收到结果` — read that message as *the page was
-  throttled*, not as *the driver hung*; the run's own `页面节流已解除` line says whether the switch was lifted
-  and names the reason when it was not. `demoEnabled()` therefore lifts it from `runJsDemo` through
-  `keepPageAwake` (`desktop/webview_awake_darwin.go`: `_setWindowOcclusionDetectionEnabled:NO` +
-  `_setHiddenPageDOMTimerThrottlingEnabled:NO` — private SPI, declared locally, applied only after a
-  `respondsToSelector:` check). Two things about that call are load-bearing: it must run on the MAIN thread,
-  and it must WAIT for the window (the NSWindow is created on the main thread from the Wails window's own
-  `run()`, so `keepPageAwake` retries the two transient answers). Three things keep the result honest: the app
-  hands the outcome — and, on failure, its reason — to the driver (`window.__tachiDemoUnthrottled` /
-  `__tachiDemoUnthrottleError`, riding in the SAME `ExecJS` call as the driver) and the harness asserts it on
-  EVERY scenario (`页面节流已解除`), so a Wails/WebKit update that drops the SPI fails on one readable line;
-  this is demo-only, since the shipped app must follow the machine's power behaviour; and the window still has
-  to be on screen and un-minimized. A driver still must not pace on a *frame*: keep waits event-driven
-  (`waitFor` + a macrotask yield), and leave a rAF-paced probe to a hand-run on an idle machine.
-- **With Reduce motion ON, EVERY property change is a real transition** (`transition-property` defaults to
-  `all`, and base.css's blanket `@media (prefers-reduced-motion: reduce)` sets `transition-duration: 0.01ms
-  !important`). 0.01ms is not zero: it creates a `CSSTransition`, whose USED value only advances on the next
-  frame. So a driver that writes a style and reads `getBoundingClientRect()`/`getComputedStyle()` **in the
-  same task gets the OLD value, no matter how correct the code is**. Wait for the value; never assert it in
-  the write's own task.
-- **A control run is worth nothing until the build is PROVEN to carry it** (`make frontend && go build
-  -o bin/Tachi .`): `npm run build` is `tsc && vite build`, so a control edit that does not type-check fails
-  tsc, the `&&` skips the Go build, and the run measures the PREVIOUS binary. Check the freshness
-  (`[ bin/Tachi -nt <the edited source> ]`), and disable nothing via a build that can fail silently.
+  Finder. Assert the control on screen and pin the argument off screen (`TestOpenSessionDirOpensTheSessionDirectory`
+  stubs `openFile` and reads the argv). Any "open in …" action has this shape.
+- **A control used as a TRIGGER for another behaviour pins neither** — a button and a page switch must not ride
+  on one click. And **an assertion belongs to the scenario that produces the fact**: a check that sat in
+  `oneoff-footer`'s `after` while the driver producing the fact is `oneoff-panel`'s read a default forever.
+- **Wait for the fact the action reads, not for a neighbour that correlates with it.** The 评审本轮改动 chip
+  exists after its FIRST changed file, not its last, so a click on 「完整 diff」 that waits only for the chip
+  captures a one-file set.
+- **A transient state belongs to the trail; a steady state belongs to a direct read.** A UI state whose length
+  is the WORK's length (the 评审中… chip) makes `waitFor` a coin flip — sample on a ~10ms timer, dedupe into a
+  trail, assert the trail CONTAINS the state. But read the END state off the element the wait returned.
+- **With Reduce motion ON, EVERY property change is a real transition** (`transition-duration: 0.01ms
+  !important` in base.css). 0.01ms is not zero: a driver that writes a style and reads
+  `getBoundingClientRect()` in the same task gets the OLD value, however correct the code is.
+- **A stale element swallows a gesture**: re-query the handle for EVERY synthetic drag, or the drag lands on a
+  detached node and passes against the previous value without dragging at all.
+- **A control run proves nothing until the build is PROVEN to carry it** (`make frontend && go build -o bin/Tachi .`):
+  `npm run build` is `tsc && vite build`, so an edit that does not type-check skips the Go build via `&&` and
+  the run measures the PREVIOUS binary. Check `[ bin/Tachi -nt <the edited source> ]`.
+- **A capture is not part of the suite**: the window-capture APIs are gone on this OS (`-R` fails on macOS 26)
+  and the window would have to be on the visible Space anyway. The suite keeps `dom.html` + the assertion
+  lines; a "screenshot" that silently returns the desktop is worse than none. To SEE a palette change, render
+  the tokens into an HTML page instead (see Themes).
+- **An unchanged demo bootstrap is not worth re-deriving.** `TACHI_DEMO_LOAD_MS` (demo.go) is the driver's
+  head start, the payload is re-issued for a 10s window (`demoInjectStep` / `demoInjectWindow`) because a
+  script injected into a loading document is dropped, and the repeats are safe because the payload guards on
+  `window.__tachiDriverStarted` (a scenario reporting TWICE means that guard is gone). The demo starts from
+  `ApplicationDidFinishLaunching`, never a sleep: a main-thread dispatch before `App.Run()` builds the platform
+  impl PANICS the process, which from outside is indistinguishable from "the app did not start". Leave this
+  machinery alone unless you are fixing it.
+- **A covered window is not a paused run — demo mode keeps the page awake, deliberately.** WebKit reads a
+  page's visibility off the WINDOW alone (on screen, not miniaturized, not occluded) and never off which app is
+  frontmost, so an ordinary covered window is a *hidden* page: frames stop and DOM timers clamp to 1Hz, and a
+  run can post NOTHING before the timeout. Read `等了 90s 没收到结果` as *the page was throttled*, not *the
+  driver hung*; the run's `页面节流已解除` line says whether the switch was lifted. `keepPageAwake`
+  (`webview_awake_darwin.go`) lifts it from `runJsDemo` with two private SPIs, applied only after a
+  `respondsToSelector:` check — but the call must run on the MAIN thread and must WAIT for the window, so
+  `keepPageAwake` retries the two transient answers. The harness asserts the outcome on EVERY scenario, so a
+  Wails/WebKit update that drops the SPI fails on one readable line. This is demo-only and the window must
+  still be on screen and un-minimized.
+- **The console is part of the report**: the driver's `console.error` lines ride in `Result.Console`, printed
+  for passing runs too.
 
 ## Desktop Build & Signing (macOS)
 
@@ -271,18 +178,15 @@ const type = (el, t) => {
   3's default PKCS#12 algorithms — "MAC verification failed"), `security import … -T /usr/bin/codesign`, then
   `security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem`.
 - **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in
-  front proves nothing — and a no-activate smoke run is *never* focused, so that path is live during a run; it
-  stays silent only because the sandbox bundle is ad-hoc signed and TCC refuses the request. The TUI's
-  notifications are a different mechanism entirely (`terminal-notifier` / `osascript`) — **but they can still
-  be the desktop's fault**: the app is often launched from a herdr pane, inherits
-  `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook (`agent/configureHooks`
-  → `hooks.DetectHerdr`), so herdr, not Tachi, raises a terminal notification for a window that has no pane.
-  `DetectHerdr` therefore also requires stdout to be a terminal. To check what actually ran:
-  `log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"' --style compact` prints the TCC
-  attribution with the **responsible** process. `notifyTurnDone` is for the transcript lane only: a
-  side-channel run (/review, /commit) has no turn on screen, so it gets its own copy through
-  `notifyOneOffDone` — 评审完成 · N 条意见 / 未报问题 / 已停止 / 未完成（见日志）, 提交完成 — raised from
-  `commands.go`, where the outcome is known.
+  front proves nothing. The TUI's notifications are a different mechanism (`terminal-notifier` / `osascript`),
+  **but they can still be the desktop's fault**: the app is often launched from a herdr pane, inherits
+  `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook — so herdr, not Tachi,
+  raises a terminal notification for a window that has no pane. `DetectHerdr` therefore also requires stdout
+  to be a terminal. To check what actually ran: `log show --last 10m --predicate 'eventMessage CONTAINS
+  "terminal-notifier"' --style compact` prints the TCC attribution with the **responsible** process.
+  `notifyTurnDone` is for the transcript lane only: a side-channel run (/review, /commit) has no turn on
+  screen, so it gets its own copy through `notifyOneOffDone` — 评审完成 · N 条意见 / 未报问题 / 已停止 /
+  未完成（见日志）, 提交完成 — raised from `commands.go`, where the outcome is known.
 
 ## Desktop Backend (bindings & paths)
 
@@ -290,310 +194,221 @@ const type = (el, t) => {
   (`frontend/bindings/github.com/monsterxx03/tachi/desktop/agentservice.ts`). Adding, renaming or deleting an
   exported method on `AgentService` means re-running
   `cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i` (that is `build/Taskfile.yml`'s
-  `generate:bindings`, which `make build` runs for you; `-clean` empties `frontend/bindings` first). Never
-  hand-edit one: the numeric `$Call.ByID(...)` is derived from the method, and a frontend calling a method the
-  generator has not seen fails `tsc` — which is the only thing that type-checks the call at all. Regenerating
-  on a clean tree is a no-op, so a diff in that directory is always a real change.
+  `generate:bindings`, which `make build` runs for you). Never hand-edit one: the numeric `$Call.ByID(...)` is
+  derived from the method, and a frontend calling a method the generator has not seen fails `tsc` — the only
+  thing that type-checks the call at all. Regenerating on a clean tree is a no-op.
 - **Only `desktop/` is a Go module of its own** (it is NOT listed in the repo-root `go.work`), so every Go
-  command for it runs with `GOWORK=off`. **The root `go test ./...` therefore does NOT compile `desktop/`'s
-  test package** — a signature change under `desktop/` can leave its tests unbuildable with every root-level
-  check still green. After touching `desktop/`, run `cd desktop && GOWORK=off go test ./...` too; `make lint`
-  at the root does not cover it either.
+  command for it runs with `GOWORK=off`. **The root `go test ./...` does NOT compile `desktop/`'s test
+  package** — a signature change under `desktop/` can leave its tests unbuildable with every root-level check
+  still green. After touching `desktop/`, run `cd desktop && GOWORK=off go test ./...` too; `make lint` at the
+  root does not cover it either.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
-  `RegisterHook(WindowClosing)` right beside the window's creation): on darwin a user-initiated close (⌘W,
-  the red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits
-  a closing event instead, and its own unconditionally-registered listener runs `impl.close` +
-  `Window.Remove(id)`. Every handle to the window then points at nothing while the app keeps running in the
-  menu bar, and all three ways back went silent together: the tray's 「打开主窗口」 and a tray click (`Show`
-  on a destroyed window is a no-op — `Run` only creates an impl that is not nil), a notification click (the
-  same call), and a Dock click (Wails' own `applicationShouldHandleReopen` handler only shows windows that
-  still EXIST and are invisible). Hooks run SYNCHRONOUSLY before the listeners and `WindowEvent.Cancel` stops
-  the rest, which is the only lever that turns the close into a hide — and hiding is what makes the three
-  paths work again WITHOUT touching them, the window staying in the manager as "exists, not visible": the
-  page is never torn down either, so the transcript on screen, a drafted message and a streaming turn all
-  survive. The interception is on `Common.WindowClosing`, which is the id the destroy listener is registered
-  on: the mac event (`Mac.WindowShouldClose`) first reaches the mapping listener `setupEventMapping` installed
-  for it, and THAT listener is what emits `Common.WindowClosing` — a second `HandleWindowEvent` in which this
-  hook runs and cancels, so the mapping hop is not a reason to register twice. (`window.Close()` from Go goes
-  through the same emit, so a programmatic close hides too.) Two rules ride with it. (1) The shutdown path
-  must pass through (`desktopApp.quitting`, set from `app.OnShutdown`): `app.Quit` → `[NSApp terminate:]` →
-  `cleanup()` closes every window on its way out, and the flag is already true because cleanup runs its
-  shutdown tasks BEFORE that loop. (2) The hide is
+  `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the
+  red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits a
+  closing event instead, and its own listener runs `impl.close` + `Window.Remove(id)`. Every handle then
+  pointed at nothing while the app kept running in the menu bar, and all three ways back went silent together
+  (tray 「打开主窗口」, a tray click, a notification click, a Dock click). Hooks run SYNCHRONOUSLY before the
+  listeners and `WindowEvent.Cancel` stops the rest, which is the only lever that turns the close into a hide
+  — and hiding is what makes the three paths work again without touching them, the window staying in the
+  manager as "exists, not visible" (page, drafted message and streaming turn all survive). The interception is
+  on `Common.WindowClosing`, the id the destroy listener is registered on. Two rules ride with it: the
+  shutdown path must pass through (`desktopApp.quitting`, set from `app.OnShutdown`), and the hide is
   load-bearing, not cosmetic — the notifier, the theme controller and the tray all hold the window pointer,
-  which is only safe while nothing destroys it, so a future change that closes the window for real re-opens
-  this whole class of bug at once.
+  which is only safe while nothing destroys it.
 - **A session's directory is `config.SessionDir()` + ONE path element**: `sessionDirPath(id)` in
   `sessiondir.go` is the single resolver, and it REFUSES anything a webview could send that is not a single
-  name (`../..`, `a/b`, `.`, empty). `oneOffDir` shares it — every "where is this conversation stored"
-  question goes through that one function.
+  name (`../..`, `a/b`, `.`, empty). `oneOffDir` shares it.
 - **A GUI process's working directory is `/` — never derive a workspace root from it.** macOS launches an app
-  with CWD `/`, so anything that falls back to the ambient CWD sees the filesystem root: `wdctx.Dir(ctx)`
-  returns the process CWD when the context carries none, so a rewind invoked from an RPC handler (a bare
-  `context.Background()`) would rebuild its snapshot manager with root `/` and `git add -A --work-tree=/`
-  would walk the whole filesystem. Workspace roots come from the SESSION (`sess.WorkingDir` + `AdditionalDirs`
-  — what `/cd` updates and what survives a reload) and go through ONE exit, `desktop/roots.go`'s
+  with CWD `/`, so a fallback to the ambient CWD sees the filesystem root: a rewind invoked from an RPC
+  handler (a bare `context.Background()`) would rebuild its snapshot manager with root `/`. Workspace roots
+  come from the SESSION (`sess.WorkingDir` + `AdditionalDirs`) and go through ONE exit, `desktop/roots.go`'s
   `sessionRoots` / `sessionRootsFrom`: the turn's `wdctx`, the prompt, the `@`-file root, git diff and the
   skill store all read that, so they cannot drift apart after a directory change. A root that is `/`,
-  `$HOME`, or one that contains `config.BaseDir()` is refused outright (Tachi's own state — shadow checkpoint
-  repos, session records, worktrees — must never sit inside a workspace root). `NewSession` applies the same
-  rule (`defaultWorkspaceFor` / `wideRootReason`).
+  `$HOME`, or one that contains `config.BaseDir()` is refused outright (Tachi's own state must never sit
+  inside a workspace root). `NewSession` applies the same rule (`defaultWorkspaceFor` / `wideRootReason`).
 - **A desktop project OWNS its members' workspaces, and the session record becomes a snapshot.**
-  `projects.json` (next to `desktop_ui.json`; `desktop/projects.go`) holds `{名称, 主目录, 附加目录}`;
-  a member session stores only `project_id`, and every read resolves through
-  `(*desktopApp).sessionRootsFrom` — the project's roots win while the project DRIVES the session, otherwise
-  the session's own `WorkingDir`/`AdditionalDirs` (creation snapshot) are used, and `GetSessionRoots` flags
-  `projectMissing` so the panel can say so instead of showing dead paths. It is ONE predicate
-  (`projectTable.drives`) shared by the resolver, the write guards and the panel's `rootsUsable`, so a
-  session can never be project-owned for a read and editable for a write: `SetSessionWorkingDir` /
-  `AddSessionRoots` / `RemoveSessionRoot` refuse with the project's name while it drives the session, and
-  stop refusing when it no longer does (a lost `projects.json` must degrade, not lock the user out). It
-  judges the PRIMARY only: a vanished ADDITIONAL root is a fact about one directory — kept in the set,
-  reported `exists=false`, skipped by the prompt and the @-file search, exactly as for a session — and
-  never a reason to move every member back to its snapshot. Roots are validated on the way in AND on the way
-  out (the file is hand-editable), and a project's root can never be wider than a session's. A
-  `projects.json` that cannot be parsed reads as "no projects" but is NEVER written over — a save would
-  replace a file the user can still repair with just the entry being added — and `upsert` re-reads it first,
-  so repairing it is enough, with no restart. Two consequences worth remembering: editing a project writes
-  ONE file (no fan-out into session meta, which is why nothing can clobber a running turn's snapshot), and
-  the skill store is the exception, since a store's scan roots are fixed when it is built: a project edit
-  INVALIDATES every live member (`invalidateMemberSkills`) and each member re-points itself when its own
-  next turn starts — the only point that can prove it is not mid-turn. `AgentConfig.RootsFunc` carries the
-  same resolver to the agent, so a checkpoint covers the tree the tools worked in rather than the record's
-  snapshot; `nil` there means "read the record" and is what tui / acp / channel / `-p` keep doing. Snapshot
-  fields travel with the conversation on COMPACTION too: `FinalizeCompact` copies `AdditionalDirs` and
-  `project_id` by hand, and one it misses is silently zeroed — for a member that means the child stops
-  resolving through the project and works in the snapshot instead (see `agent/compact.go`).
-- **A binding is made in exactly two places.** `NewSession(projectID)` is the only SETTER: `""` is an
-  ordinary session (unchanged), otherwise the project's roots are copied into the record as the snapshot and
-  `project_id` goes in with them; a project that cannot drive a session (deleted, primary gone) yields an
-  ordinary session rather than one bound to nothing. `DeleteProject` is the only un-setter, and it DETACHES
-  (design §6.2): members keep their workspace, with the snapshot refreshed to the project's roots as of that
-  moment, and it is refused while any member is mid-turn — the running check and the meta writes share one
-  `d.mu` critical section (`updateSessionMetaLocked`), because a turn starting in between would be writing
-  while we rewrite. §7.4's refresh event is still to come with the sidebar (P3), so today the panel a
-  frontend already has open does not hear about either operation.
+  `projects.json` (next to `desktop_ui.json`; `desktop/projects.go`) holds `{名称, 主目录, 附加目录}`; a member
+  stores only `project_id`, and every read resolves through `(*desktopApp).sessionRootsFrom` — the project's
+  roots win while the project DRIVES the session, otherwise the session's own fields (creation snapshot) are
+  used, and `GetSessionRoots` flags `projectMissing` so the panel can say so instead of showing dead paths. It
+  is ONE predicate (`projectTable.drives`) shared by the resolver, the write guards and the panel's
+  `rootsUsable`, so a session can never be project-owned for a read and editable for a write. It judges the
+  PRIMARY only: a vanished ADDITIONAL root is a fact about one directory — kept in the set, reported
+  `exists=false`, skipped by the prompt and the @-file search. A `projects.json` that cannot be parsed reads as
+  "no projects" but is NEVER written over (a save would replace a file the user can still repair), and `upsert`
+  re-reads it first. Two consequences: editing a project writes ONE file (no fan-out into session meta, which
+  is why nothing can clobber a running turn's snapshot), and the skill store is the exception — a store's scan
+  roots are fixed when it is built, so a project edit INVALIDATES every live member
+  (`invalidateMemberSkills`) and each member re-points itself when its own next turn starts. `AgentConfig.RootsFunc`
+  carries the same resolver to the agent, so a checkpoint covers the tree the tools worked in rather than the
+  record's snapshot. Snapshot fields travel with the conversation on COMPACTION too: `FinalizeCompact` copies
+  `AdditionalDirs` and `project_id` by hand, and one it misses is silently zeroed (see `agent/compact.go`).
+- **A binding is made in exactly two places.** `NewSession(projectID)` is the only SETTER: `""` is an ordinary
+  session, otherwise the project's roots are copied into the record as the snapshot and `project_id` goes in
+  with them; a project that cannot drive a session yields an ordinary one rather than one bound to nothing.
+  `DeleteProject` is the only un-setter, and it DETACHES: members keep their workspace, with the snapshot
+  refreshed to the project's roots as of that moment, and it is refused while any member is mid-turn — the
+  running check and the meta writes share one `d.mu` critical section (`updateSessionMetaLocked`).
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
-  open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
-  popping a real Finder window.
-- **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`,
-  `SessionRootsVO.PrimaryBranch`/`PrimaryDetached`; `shutil.GitBranch`): that panel lists the session's
-  directories by path, and two checkouts of the same repository are then the same row — the branch is
-  the one thing that tells them apart before a turn goes and edits files. It is probed PER ROOT when
-  the panel opens (never stored: a checkout moves under you), skipped for a root that does not exist,
-  and EMPTY for one that is not a work tree — the frontend renders nothing then, so "not a repository"
-  is never dressed up as a branch name. A detached HEAD reports the short commit AND sets `Detached`,
-  because a bare hash presented as a branch is a lie the panel would tell on every detached checkout.
-  `shutil.GitBranch` is the ONE probe: the system reminder's `Git branch/HEAD` line reads it too, so
-  the branch a reader sees in the UI is the branch the model was told about. `pkg/shutil`'s test and
-  the desktop's `TestGetSessionRootsCarriesTheGitBranch` pin both halves (a real repo, a detached
-  HEAD, a plain directory, and a subdirectory of a repo); `roots-branch` drives it end to end — and
-  its fixture is one git root beside one plain root on purpose, because "no chip" is half the rule.
+  open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv.
+- **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`;
+  `shutil.GitBranch`): that panel lists the session's directories by path, and two checkouts of the same
+  repository are then the same row — the branch is the one thing that tells them apart before a turn edits
+  files. It is probed PER ROOT when the panel opens (never stored: a checkout moves under you), skipped for a
+  root that does not exist, and EMPTY for one that is not a work tree — "not a repository" is never dressed up
+  as a branch name. A detached HEAD reports the short commit AND sets `Detached`. `shutil.GitBranch` is the
+  ONE probe: the system reminder's `Git branch` line reads it too.
 - **A pasted image is stored, then attached by reference — the same route a dropped file takes**
-  (`SavePastedImage`, `desktop/fileservice.go`, + `composer.tsx`'s `onPaste`): a screenshot on the
-  clipboard is BYTES with no path, so the composer sends them (base64 — the only shape the page
-  has) to a binding that writes them under the SESSION's own directory (`pasted/`, beside `oneoff/`
-  and `subagent/`, so the file dies with the conversation and never appears in the user's workspace
-  diff) and answers with an ABSOLUTE `@`-reference to splice in at the caret. Everything downstream
-  is the @-file machinery that already existed: expansion turns the reference into a multi-modal
-  part, and the bubble keeps showing what the user sent. Three things to know before touching it:
-  (1) the answer is a VO, not "ok"/reason — the composer needs the REFERENCE on success and the
-  reason on failure, and a paste that silently does nothing is the same class of bug as a message
-  that silently goes nowhere; (2) **nothing is re-expanded on RELOAD** —
-  `ConvertSessionToLLMMessages` never touches `atfile`, the record keeps the expanded text (with the
-  `[图片: …]` placeholder) plus the raw display text, so the image reaches the model for the turn it
-  was sent with and a later turn sees only the placeholder (true of every `@`-image, not just
-  pastes); (3) one file per paste — a timestamp alone collided for two pastes in the same
-  millisecond (the unit test caught the second one overwriting the first), hence the short uuid in
-  the name. `paste-image` covers the whole route and asserts the pasted BYTES at the LLM boundary —
-  which requires the smoke provider to declare vision (`sandbox.go`'s `spec.vision: true`, or the
-  agent describes the image instead of attaching it, `agent/vision_fallback.go`) and the assertion to
-  read `RawBody` (the normalized request view keeps text only, so an image part is invisible to
-  `requestSeen` by construction).
+  (`SavePastedImage`, + `composer.tsx`'s `onPaste`): a screenshot is BYTES with no path, so the composer sends
+  them (base64) to a binding that writes them under the SESSION's own directory (`pasted/`, beside `oneoff/`
+  and `subagent/`, so the file dies with the conversation and never appears in the user's workspace diff) and
+  answers with an ABSOLUTE `@`-reference. Three things to know: the answer is a VO, not "ok"/reason (a paste
+  that silently does nothing is the same class of bug as a message that silently goes nowhere); **nothing is
+  re-expanded on RELOAD** — the record keeps the expanded text plus the raw display text, so the image reaches
+  the model for the turn it was sent with and a later turn sees only the placeholder (true of every
+  `@`-image); and one file per paste, hence the short uuid (a timestamp alone collided for two pastes in the
+  same millisecond). `paste-image` asserts the pasted BYTES at the LLM boundary — which requires the smoke
+  provider to declare vision (`spec.vision: true`, or the agent describes the image instead,
+  `agent/vision_fallback.go`) and the assertion to read `RawBody` (the normalized view keeps text only).
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`,
-  `desktop/agent_turn.go`): both read the session from `d.activeID` and answered `"ok"` for a message
-  they never started a turn for — `startTurn`'s two escape hatches (no active session, one already
-  running) were bare `return`s, and a simulated turn that found one in flight returned silently too.
-  The frontend draws the user's bubble and a running placeholder BEFORE the call (`sendText`), so a
-  dropped message left the reader looking at their own text under a 正在执行 nothing could clear: no
-  turn, no write, no event, no error — and it is unrecoverable, because the text never reached a
-  session file at all (measured: a message that left no trace in ANY session and no line in the log,
-  while the app had been restarted — a fresh backend has no active session while the window has one on
-  screen). The id comes from the caller now and every refusal is a returned string, which the composer
-  renders in the placeholder it opened (`finishNotice` + `markRunning(false)` — the shape a refused
-  slash command already used). Two traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN
-  map, so it is false for a session that exists on disk and has not been loaded yet — i.e. every first
-  send), and the busy check has to come BEFORE the agent build, or a refusal would depend on how far
-  the run happens to be built.
-- **Every desktop manager is built on ONE `FileStore` (`d.sessionStore()`), and that is load-bearing, not
-  tidiness.** `FileStore.ListSessions` memoizes the session list, because the sidebar asks for its rows, then
-  for the per-project counts, then for one project's members, each as a separate call — every one of them used
-  to walk the base directory and re-read every `meta.json`. A manager built any other way
-  (`session.NewManager(nil)`) holds a store of its own, whose snapshot nothing can drop: a turn's
-  `AppendMessage → UpdateMeta` runs on the per-run manager, and an in-place `meta.json` rewrite moves no
-  directory mtime, so the listing manager would keep serving the pre-turn title
-  (`TestEveryDesktopManagerSharesTheSessionStore` is the one that fails). `LoadMeta` stays un-memoized on
-  purpose — it feeds the live record and the read half of `updateSessionMeta`'s read-modify-write, where a
-  stale read is a lost write. `session/store.go`'s `FileStore` comment carries the invalidation contract.
-- **A bash `ask` rule is a question for the USER, and the desktop answers it the way ACP does — the shape
-  the TUI confirmation and ACP's `session/request_permission` already use — never with a fourth
-  `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a
-  `PermissionHandler` (`desktop/permission.go`), so `agent_permission.go`'s ask branch parks the turn on the
-  window and the decision comes back through `AgentService.AnswerPermission`. `PermissionModeSkip` is the
-  wrong posture here: its ask branch is the *unattended* one (channel / subagent / `tachi -p`) — it refuses
-  the command and says "add an allow rule", to the user who wrote that rule. `deny` behaves identically
-  either way; only `ask` differs. Four properties worth keeping: an answer is addressed by **session + tool
-  call id** (`permKey`), because the ids come from the model and two conversations can generate the same one,
-  and `AnswerPermission` refuses an id that is not the ask actually waiting; the pending entry is dropped by
-  the waiting goroutine itself, so Stop (ctx cancel) cannot leave an approvable orphan behind; a side-channel
-  run has no turn on screen, so `commands.go` marks its ctx (`withoutAsk`) and the handler refuses instead of
-  parking a run nobody could answer; and 「本会话全部允许」 is a **session** decision, not a command memory —
-  both frontends flip the same switch (`Policy.AllowAllAsksForSession`), so later asks never reach either
-  frontend at all (an agent's shell commands almost never repeat verbatim, so remembering the approved one
-  was a button that could not deliver; the TUI's prompt labels the choice `[a]lways(session)`). The switch
-  sits BELOW the deny checks in `CheckBash` on purpose — "stop asking me" must never become "run what I
-  forbade", and `perm-session` pins both halves.
+  `desktop/agent_turn.go`). Both used to read the session from `d.activeID` and answered `"ok"` for a message
+  they never started a turn for. The frontend draws the user's bubble and a running placeholder BEFORE the
+  call, so a dropped message left the reader looking at their own text under a 正在执行 nothing could clear —
+  and it is unrecoverable, the text never reaching a session file at all. The id comes from the caller now and
+  every refusal is a returned string, which the composer renders in the placeholder it opened
+  (`finishNotice` + `markRunning(false)`). Two traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN
+  map, so it is false for a session that exists on disk and has not been loaded — every first send), and the
+  busy check has to come BEFORE the agent build.
+- **Every desktop manager is built on ONE `FileStore` (`d.sessionStore()`).** `FileStore.ListSessions`
+  memoizes the session list, because the sidebar asks for its rows, then the per-project counts, then one
+  project's members, each as a separate call. A manager built any other way (`session.NewManager(nil)`) holds
+  a store of its own, whose snapshot nothing can drop: a turn's `AppendMessage → UpdateMeta` runs on the
+  per-run manager, and an in-place `meta.json` rewrite moves no directory mtime, so the listing manager would
+  keep serving the pre-turn title (`TestEveryDesktopManagerSharesTheSessionStore` is the one that fails).
+  `LoadMeta` stays un-memoized on purpose — it feeds the live record and the read half of
+  `updateSessionMeta`'s read-modify-write, where a stale read is a lost write.
+- **A bash `ask` rule is a question for the USER, and the desktop answers it the way ACP does — never with a
+  fourth `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a
+  `PermissionHandler` (`desktop/permission.go`), so the turn parks on the window and the decision comes back
+  through `AgentService.AnswerPermission`. `PermissionModeSkip` is the wrong posture: its ask branch is the
+  *unattended* one (channel / subagent / `tachi -p`) — it refuses the command and says "add an allow rule", to
+  the user who wrote that rule. `deny` behaves identically either way; only `ask` differs. Four properties:
+  an answer is addressed by **session + tool call id** (`permKey`), because two conversations can generate the
+  same id; the pending entry is dropped by the waiting goroutine itself, so Stop cannot leave an approvable
+  orphan; a side-channel run has no turn on screen, so `commands.go` marks its ctx (`withoutAsk`) and the
+  handler refuses instead of parking a run nobody could answer; and 「本会话全部允许」 is a **session**
+  decision, not a command memory — both frontends flip the same switch
+  (`Policy.AllowAllAsksForSession`). The switch sits BELOW the deny checks in `CheckBash` on purpose — "stop
+  asking me" must never become "run what I forbade".
 
-## Desktop MCP Auth (an OAuth2 server the panel can authorize)
+## Desktop MCP
 
-- **The MCP panel opens with every server FOLDED** (`expanded` in `MCPPanel`, empty = all folded), and that is a rule rather than a styling choice: a tools list belongs to a connected server, so "expand when connected" left an unconnected server showing nothing and the same control read as two different ones. Two consequences to keep in mind: the tool rows do not EXIST in the DOM until the row is clicked (`mcp-auth` asserts both halves — absent while folded, present after a click), and a folded row needs its caret, because a name + state + count with no disclosure mark looks like a static line. The fold is per-opening, not remembered: it lives in the component, which unmounts with the panel; persisting it belongs in `desktop_ui.json` beside the rest of the UI state.
-- **A connected server can be TOOL-LESS for a few seconds, and the panel must survive it.** `manager.connect`
-  registers a connection as soon as its own handshake + `tools/list` succeed, but the shared pool is filled only
-  after EVERY server has answered (`ConnectAll` waits for the slowest) — so "已连接 + 池子里还没有工具" is a
-  real window, seconds wide when one server is slow. Two things keep the panel honest about it: it re-reads on
-  every open (`App.tsx`'s effect on `mcpOpen`; nothing else would ever correct a stale snapshot) and the backend
-  emits `agent:mcp_ready` when the pool is settled, which a panel that was ALREADY open needs (`useMCPReady`).
-- **A tool row opens its own contract, fetched on demand** (`GetMCPToolSchema`, clicked like a server
-  row). On demand, not part of `ListMCPServers`: that list is up to a hundred rows and is re-read on every
-  panel open and after every authorization, so shipping the schemas with it would pay for the one row the
-  user clicks. The VO is FLATTENED — type resolved to a single string (see `agent/mcp/tool.go`'s
-  `propertyType`), required marks placed, enum/default/array-element type as separate fields, and the
-  parameters SORTED (the schema is a map: a list that reshuffles between two opens is worse than any order).
-  A raw inputSchema was rejected deliberately: it makes the reader reconstruct the contract from `$ref`s and
-  unions, and a schema tree in a 380px popover is unreadable. One default, not a convention: an unknown name
-  returns the zero value rather than an error, because the panel may be showing a list fetched before that
-  server went away (the detail says so).
-- **Tools in the pool are LISTED whether or not this session has loaded them, and the two must be told apart.**
-  Under MCP tool search a server auto-loads nothing, so "not loaded" is the normal state and a row that simply
-  disappears reads as a missing tool: unloaded rows carry `.unloaded` (greyed name and state) while loaded ones
-  stay at full strength (normal name, ✓ in green, the action reading 禁用). The action button is never greyed —
-  it is the way out. `mcp-auth` asserts both ends: listed+greyed after connecting, and the flip to loaded after
-  pressing 启用 (which is also why that press happens AFTER the turn that asserts the deferred-tools reminder:
-  a loaded tool is no longer "undiscovered", so the reminder would stop naming it).
-- **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving.**
-  `Manager.SetRootsFunc` makes every connection declare the capability and answer `roots/list` on
-  demand; the ANSWER differs by mode because the connection lifetime does — the desktop wires
-  `desktopApp.mcpRoots` on its shared manager (one connection serves every session, so the answer is
-  the union of their workspaces), while ACP wires it per session through `AgentConfig.MCPRootsFunc`
-  (its managers are per session, so the answer is that session's `cwd` + `additionalDirectories`,
-  and `session/resume` rewrites them in place — which is `agent/acp`'s `sessionRoots` object and why
-  it is an object rather than a captured copy). The shape of the answer itself (file:// URIs, only
-  directories that exist, deduplicated, sorted) is ONE rule, `mcp.RootsForDirs`, for both. It is not optional in practice: a roots-aware server CONFINes file
-  access to what it is told, and the official chrome-devtools server, when the client declares no
-  roots at all, allows only the OS temp dir — which is the "not within any of the configured
-  workspace roots" failure, i.e. a tool that exports a file into the project dying on a path check.
-  Three things make the answer what it is: it is the UNION of every live session's workspace (the
-  desktop shares one manager, connection and pool across sessions, so a single-session answer would
-  break a background session the moment the user switched away), it holds only directories that
-  EXIST (a server realpath-resolves each root and skips the ones it cannot), and it is deduplicated
-  and sorted (servers cache it; a reshuffled list is churn). The roots the server sees are asserted
-  from the SERVER's side — the stub stdio server in `agent_mcp_test.go` exposes a tool that asks for
-  them (`TestMCPRootsReachTheServer`), because nothing about the exchange is visible from Tachi.
-- **`Client.Start` is what installs the handler for requests the SERVER sends** (`roots/list`,
-  sampling, elicitation) — not `transport.Start`, and not the SDK's convenience constructors, which
-  only start the transport. Skipping it is silent on Tachi's side and answers the server with "No
-  request handler configured": `connectStdio` / `connectHTTP` therefore build the transport and call
-  `client.Start` themselves (they must anyway, to pass the client options that carry the roots
-  handler — `NewStdioMCPClientWithOptions`, `NewStreamableHttpClient` accept none).
-- **A panel toggle is written back into the mcp.json the server came from** (`MCPServerConfig.SourceFile`,
-  stamped at load with the file that WON a name clash; `config.SetServerEnabledInFile` edits it). The rule is
-  "the file it came from", never "the active profile": a server in `mcp.json` and one in `mcp.<profile>.json`
-  are different entries in different files, and writing both into the profile file would shadow the base entry
-  (profile files override base files) while writing both into the base file would be overridden — either way
-  the change is lost on the next profile switch. The edit is SURGICAL (one value's bytes; indentation, key
-  order and unknown fields survive), because mcp.json is hand-written and a click should not reformat it.
-  The **profile SWITCH stays runtime-only** — nothing writes `active_mcp_profile` into config.yaml, so a
-  dropdown cannot silently make one profile the default for every future launch. A server whose `SourceFile` is
-  empty (a config assembled in code) simply keeps the old runtime-only behavior.
-  `config_test.go` pins the routing across all four files (global/project × base/profile) and the surgical
-  edit; the `mcp-auth` scenario pins the end-to-end write ("original file + exactly one line").
-- **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is
-  set wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as
-  well as on a manual enable — because a server that wants a token otherwise looks exactly like one that is
-  down, and the one action that fixes it had nowhere to appear. `desktopApp`'s `mcpAuth*` fields carry their
-  own lock (never `d.mu`: they are written from a background authorization goroutine) and hold both the
-  in-flight flag (two flows would race the same callback port and the same token file) and the running flow's
-  cancel.
-- **`AuthorizeMCPServer(name)` starts the flow and returns "ok"; the progress arrives as `agent:mcp_auth`.** It
-  has to: the flow needs a browser and often a human, so there is no answer to wait for. `CompleteMCPServerAuth(name, url)`
-  is the paste-back path (`mcp.CompleteManualAuth`), and it CANCELS an in-flight flow first — both ways out
-  spend the same single-use authorization code.
 - **`enableMCPServer` is the ONE enable path.** The panel's toggle and the end of an authorization both go
   through it, so an authorized server ends up exactly as connected as a toggled one: tools into the shared
-  pool plus `NotifyDeferredToolsAdded` for every live agent (that reminder fires at most once per session, so
-  a server connected mid-session is invisible to the model without it; the smoke scenario asserts the model
-  really was told). A new "connect a server" path belongs inside it, not beside it.
+  pool AND `NotifyDeferredToolsAdded` for every live agent. That reminder fires at most once per session, so a
+  server connected mid-session is invisible to the model without the dirty mark — a pool write alone is the
+  bug (a real session's debug log showed zero `DeferredToolReminder fired` after a mid-session enable). A new
+  "connect a server" path belongs INSIDE it. Toggling is a GLOBAL fact (one pool, one connection for every
+  session), so all live agents are notified (`liveAgents()`), and disabling runs `UnregisterMCPServer`
+  (registry + every session's discovered set), not a bare pool removal. `.tachi.md` carries the general rule.
+- **The MCP panel opens with every server FOLDED** (`expanded` in `MCPPanel`, empty = all folded): a tools
+  list belongs to a connected server, so "expand when connected" left an unconnected server showing nothing
+  and the same control read as two different ones. The tool rows do not EXIST in the DOM until the row is
+  clicked, and a folded row needs its caret. The fold is per-opening, not remembered.
+- **A connected server can be TOOL-LESS for a few seconds, and the panel must survive it.** `manager.connect`
+  registers a connection as soon as its own handshake + `tools/list` succeed, but the shared pool is filled
+  only after EVERY server has answered (`ConnectAll` waits for the slowest) — so "已连接 + 池子里还没有工具"
+  is a real window, seconds wide when one server is slow. The panel re-reads on every open (nothing else would
+  correct a stale snapshot) and the backend emits `agent:mcp_ready` when the pool is settled, which a panel
+  that was ALREADY open needs (`useMCPReady`).
+- **A tool row opens its own contract, fetched on demand** (`GetMCPToolSchema`). On demand, not part of
+  `ListMCPServers`: that list is up to a hundred rows and is re-read on every panel open. The VO is FLATTENED
+  — type resolved to a single string, required marks placed, enum/default/array-element type as separate
+  fields, parameters SORTED. An unknown name returns the zero value rather than an error, because the panel
+  may be showing a list fetched before that server went away.
+- **Tools in the pool are LISTED whether or not this session has loaded them, and the two must be told apart.**
+  Under MCP tool search a server auto-loads nothing, so "not loaded" is the normal state and a row that simply
+  disappears reads as a missing tool: unloaded rows carry `.unloaded` while loaded ones stay at full strength.
+  The action button is never greyed — it is the way out.
+- **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving.**
+  `Manager.SetRootsFunc` makes every connection declare the capability and answer `roots/list` on demand. The
+  ANSWER differs by mode because the connection lifetime does: the desktop wires `desktopApp.mcpRoots` on its
+  shared manager (one connection serves every session, so the answer is the UNION of their workspaces), while
+  ACP wires it per session through `AgentConfig.MCPRootsFunc`. The shape itself (file:// URIs, only directories
+  that exist, deduplicated, sorted) is ONE rule, `mcp.RootsForDirs`, for both. It is not optional in practice:
+  a roots-aware server CONFINes file access to what it is told, and the official chrome-devtools server, when
+  the client declares no roots, allows only the OS temp dir — i.e. a tool that exports a file into the project
+  dying on a path check. Asserted from the SERVER's side (`agent_mcp_test.go`'s stub exposes a tool that asks
+  for them), because nothing about the exchange is visible from Tachi.
+- **`client.Start` is what installs the handler for requests the SERVER sends** (`roots/list`, sampling,
+  elicitation) — not `transport.Start`, and not the SDK's convenience constructors. Skipping it is silent on
+  Tachi's side and answers the server with "No request handler configured".
+- **A panel toggle is written back into the mcp.json the server came from** (`MCPServerConfig.SourceFile`,
+  stamped at load with the file that WON a name clash; `config.SetServerEnabledInFile`). The rule is "the file
+  it came from", never "the active profile": a server in `mcp.json` and one in `mcp.<profile>.json` are
+  different entries in different files, and writing both into either would lose the change on the next profile
+  switch. The edit is SURGICAL (one value's bytes; indentation, key order and unknown fields survive), because
+  mcp.json is hand-written. The **profile SWITCH stays runtime-only** — nothing writes `active_mcp_profile`
+  into config.yaml, so a dropdown cannot silently make one profile the default for every future launch.
+- **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is set
+  wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as well as
+  on a manual enable — because a server that wants a token otherwise looks exactly like one that is down.
+  `desktopApp`'s `mcpAuth*` fields carry their own lock (never `d.mu`: they are written from a background
+  authorization goroutine).
+- **`AuthorizeMCPServer(name)` starts the flow and returns "ok"; the progress arrives as `agent:mcp_auth`.** It
+  has to: the flow needs a browser and often a human, so there is no answer to wait for.
+  `CompleteMCPServerAuth(name, url)` is the paste-back path, and it CANCELS an in-flight flow first — both ways
+  out spend the same single-use authorization code.
 - **The browser is a variable (`mcp.BrowserOpener`), and a scripted run replaces it.** `TACHI_DEMO_BROWSER_FETCH=1`
   (desktop/demo.go, installed before the agent is built) turns "open the user's browser" into one HTTP GET —
-  what a browser does first anyway, and enough against an authorization endpoint that redirects straight back
-  to the callback listener. A smoke run must never open a window on the machine it is running on; a demo
-  RECORDING must, which is why this is a flag of its own rather than part of `TACHI_DEMO=1`.
+  enough against an authorization endpoint that redirects straight back to the callback listener. A smoke run
+  must never open a window on the machine it is running on; a demo RECORDING must, which is why this is a flag
+  of its own rather than part of `TACHI_DEMO=1`.
 - **The callback address is fixed BEFORE anything is registered or exchanged** (`mcp.ensureCallbackAddr`):
-  dynamic client registration sends the redirect_uri (RFC 7591) and the token exchange sends it again, so a
-  port chosen after registration hands the two different values and a server that validates redirect_uri
-  rejects the exchange. For the same reason the flow persists its state + PKCE verifier on the BROWSER path
-  too, not only on the manual one: pasting the redirect URL out of the address bar has to work while the
+  dynamic client registration sends the redirect_uri and the token exchange sends it again, so a port chosen
+  after registration hands the two different values. The flow persists its state + PKCE verifier on the BROWSER
+  path too, not only the manual one: pasting the redirect URL out of the address bar has to work while the
   callback is still pending.
 - **A 401 is one fact however it arrives.** `mcp.isAuthRequired` maps both transport sentinels
-  (`ErrOAuthAuthorizationRequired` from the OAuth handler, `ErrAuthorizationRequired` from a rejected token) to
-  `OAuthRequiredError` at the `Initialize` AND the `ListTools` step. Mapping only the later one left an
-  unauthenticated server reporting a plain connect error, so no frontend could offer the fix.
-- **The fixture is `itest/mcpauth/`, and both halves of the feature run against it.** One process, one loopback
-  origin: 401 + `WWW-Authenticate` → PRM → AS metadata → DCR → `/authorize` (302 with a code) → `/token`
-  (it refuses a verifier that does not match the challenge) → an MCP endpoint that requires the bearer. The
-  desktop's unit test drives it in-process; the `mcp-auth` smoke scenario starts it in the runner and points the
-  sandbox's `mcp.json` at it (its port is only known at run time, so that file is written per run). `desktop/`
-  reaches the package through its module `replace`: one fake, not two.
-- **The smoke scenario delays the consent step** (`mcpauth.WithAuthorizeDelay` + the runner's `mcpConsentDelay`).
-  A flow that completes in microseconds can only be asserted on after the fact — the panel's WAITING state (the
-  URL to open, the paste box) would never be on screen when the driver looks. The delay is what makes the state
-  the flow really lives in observable.
+  (`ErrOAuthAuthorizationRequired`, `ErrAuthorizationRequired`) to `OAuthRequiredError` at the `Initialize` AND
+  the `ListTools` step. Mapping only the later one left an unauthenticated server reporting a plain connect
+  error, so no frontend could offer the fix.
+- **The fixture is `itest/mcpauth/`, and both halves of the feature run against it.** One process, one
+  loopback origin: 401 + `WWW-Authenticate` → PRM → AS metadata → DCR → `/authorize` → `/token` (it refuses a
+  verifier that does not match the challenge) → an MCP endpoint that requires the bearer. The desktop's unit
+  test drives it in-process; `mcp-auth` starts it in the runner and points the sandbox's `mcp.json` at it (its
+  port is only known at run time). `desktop/` reaches the package through its module `replace`: one fake, not
+  two. The scenario delays the consent step (`mcpauth.WithAuthorizeDelay` + the runner's `mcpConsentDelay`),
+  because a flow that completes in microseconds can only be asserted on after the fact — the panel's WAITING
+  state would never be on screen when the driver looks.
 
 ## Desktop Skills (the store belongs to the SESSION, never to the process cwd)
 
 - **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes (`tachi -p`, `tachi commit`);
   this frontend has a human in front of it.
 - **The store is built per session, from that session's primary workspace root** (`sessionSkillStore` →
-  `sessionPrimaryDir` in `agent_driver.go` — the same resolver the prompt and the tools use, never the record
-  read directly) and handed to the agent as `AgentConfig.SkillStore`. The DEFAULT path is the trap:
-  `initSkills()` builds `skill.NewStore(config.FindProjectRoot())` — the PROCESS cwd — and a Finder-launched
-  app's cwd is `/`, so a default-built store would scan `/.tachi/skills`, offer no project skills at all, and
-  point `Skill create`'s `source: project` at the filesystem root. Same shape as the system-reminder trap
-  (`config.FindProjectRootFrom`, `systemreminder.workDir`): a per-session thing resolved from a process
-  global.
-- **A store's scan roots are FIXED when it is built** (`skill.Store` re-reads the disk on every `List`/`Load`
-  but never re-resolves its directories), so a session that MOVES has to be re-pointed — and the re-pointing
-  happens in `beginTurn` and NOWHERE ELSE. A folder change (`SetSessionWorkingDir`) and a project edit
-  (`invalidateMemberSkills`) only set `sessionRun.skillsStale`: both run on the UI goroutine, which cannot
+  `sessionPrimaryDir`, the same resolver the prompt and the tools use) and handed to the agent as
+  `AgentConfig.SkillStore`. The DEFAULT path is the trap: `initSkills()` builds
+  `skill.NewStore(config.FindProjectRoot())` — the PROCESS cwd — and a Finder-launched app's cwd is `/`, so a
+  default-built store would scan `/.tachi/skills`, offer no project skills, and point `Skill create`'s
+  `source: project` at the filesystem root.
+- **A store's scan roots are FIXED when it is built**, so a session that MOVES has to be re-pointed — and the
+  re-pointing happens in `beginTurn` and NOWHERE ELSE. A folder change (`SetSessionWorkingDir`) and a project
+  edit (`invalidateMemberSkills`) only set `sessionRun.skillsStale`: both run on the UI goroutine, which cannot
   prove the session is not mid-turn, and `ReloadSkillsIn` rewrites `Config.SkillStore` and the tool registry
-  under whatever is reading them. The session's own next turn is quiescent by construction, and nothing but a
-  turn reads the store in between, so the deferred swap is invisible. Without it the session keeps serving
-  the old tree's project skills — and sends `Skill create`'s project target there. The reload also clears the
-  activation state, which is correct: the same name may resolve to another file after the move.
+  under whatever is reading them. Without it the session keeps serving the old tree's project skills — and
+  sends `Skill create`'s project target there. The reload also clears the activation state, which is correct:
+  the same name may resolve to another file after the move.
 - **The scope is the session's git root, plus the global dir** (`config.GlobalSkillsDir()` = `<base>/skills`,
-  note NOT `<base>/.tachi/skills` — the two shapes differ, and a test fixture written for one is invisible to
-  the other). **Additional roots are NOT scanned**: they are extra places to read and write, not a second
-  configuration home.
+  note NOT `<base>/.tachi/skills` — a fixture written for one is invisible to the other). **Additional roots
+  are NOT scanned**: they are extra places to read and write, not a second configuration home.
 - **There is no `/skill` command and no skill UI here**: the shared registry's `Modes` for it exclude
-  `ModeDesktop`, so the catalog reminder is what tells the model what exists and the model calls the `Skill`
-  tool itself. Adding the command is the registry entry PLUS a desktop handler — its own decision, not a side
-  effect of turning discovery on. Until then the catalog's closing line ("or the user can type /skill-name")
-  is a dead end in this frontend: `RunCommand` answers 「未知命令」 for that form and 「desktop 暂不支持
-  /skill」 for the bare one.
-- **The `skill-catalog` smoke scenario pins the scan**: its fixture tree carries
-  `.tachi/skills/smoke-skill/SKILL.md`, and the assertion is on the REQUEST (`SMOKE-SKILL-MARKER` found in
-  the first request's skill catalog) — nothing in the UI names a skill until one is used. The driver's half
-  asserts the injection disturbed nothing: a turn ran, no tool card, no permission card.
+  `ModeDesktop`, so the catalog reminder is what tells the model what exists. Adding the command is the
+  registry entry PLUS a desktop handler — its own decision, not a side effect of turning discovery on.
+- **The `skill-catalog` smoke scenario pins the scan**: its fixture carries
+  `.tachi/skills/smoke-skill/SKILL.md`, and the assertion is on the REQUEST (`SMOKE-SKILL-MARKER` in the first
+  request's skill catalog) — nothing in the UI names a skill until one is used.
 
 ## Desktop Turn History (the interrupted-turn merge)
 
@@ -605,671 +420,392 @@ const type = (el, t) => {
   `mergeTrailingUserMessage` (`agent_turn.go`): an interrupted or killed session can leave the history ending
   on a user message, and that message is folded into the next turn's text so the provider never sees two
   consecutive user messages. Merging the content verbatim would carry the PREVIOUS turn's block along — the
-  model would read a stale plan id, stale diagnostics and a stale branch as if they were current, and because
-  the merged text is recorded as the new message the block would walk forward through the session turn after
-  turn. It now strips via `systemreminder.UnwrapUserMessage`, the single implementation of that inverse.
+  model would read a stale plan id, stale diagnostics and a stale branch as current, and because the merged
+  text is recorded as the new message the block would walk forward turn after turn. It strips via
+  `systemreminder.UnwrapUserMessage`, the single implementation of that inverse.
 - **A trailing message that is nothing but a block is left alone — deliberately.** Two shapes look identical
   there: a reminder the loop injected mid-run (`injectLoopReminders` appends one as a user message, so a Stop
   landing right there leaves it trailing), which is stale scaffolding; and a trailing artifact reminder, which
   `ConvertSessionToLLMMessages` appends as its own user message ON PURPOSE so a reload cannot drop it (an
   `/research` or `/review` finding must still reach the model after a restart). No marker separates them, so
-  dropping the message would break the second to tidy up the first. Do not "finish the job" here without a
-  way to tell them apart.
+  dropping the message would break the second to tidy up the first.
 - **That state is reached by RELOAD or by a well-timed Stop, not by an ordinary Stop**: a stop mid-stream has
   already recorded the partial assistant text, so the history ends on an assistant message and no merge
-  happens. What produces a trailing user message with real text in it is a session reopened after the reply
-  was never recorded (the process was killed, or the turn hard-failed) — which is why no smoke scenario covers
-  it, and why `desktop/agent_turn_test.go` builds its fixture through the REAL conversion instead of
-  hand-writing a history shape.
+  happens. What produces a trailing user message with real text is a session reopened after the reply was never
+  recorded (the process was killed, or the turn hard-failed) — which is why no smoke scenario covers it, and
+  why `desktop/agent_turn_test.go` builds its fixture through the REAL conversion.
 
 ## Desktop UI State
 
-- **A turn's changes are read from its CHECKPOINT trees, everywhere they are shown.** The footer chip
-  (`N files +x −y`), 「完整 diff」 and 「评审本轮改动」 all go through `GetTurnChanges`/`reviewScopeFor`
-  (`desktop/turnchanges.go`), which diffs the turn's recorded start and end trees — so a file a SHELL
-  command wrote counts, created/deleted files are exact, and the answer does not move when the working tree
-  does (a commit no longer empties the review's subject). The tool-call fragments (`turnDiffStat`) are only
-  the FALLBACK for when there are no checkpoints, and the surface must say which source answered
-  (`TurnChangesVO.Source` / `TurnDiffVO.Source`): the same number means two different things. Four traps come
-  with it. (1) The turn's end snapshot must be taken BEFORE the `turn_complete` event (`emitTurnComplete`),
-  or the footer reads nil and silently falls back — and it must run on a context DETACHED from the turn's
-  cancellation (`context.WithoutCancel`), because the error/cancel exit is a stopped turn whose context is
-  already dead, and git on it fails instantly. (2) A refused end (`Diff.Skipped`) arrives as a note and
-  ZEROES: the chip must fall back to the tool-call numbers rather than take them as the answer, or a turn
-  that DID change files renders no footer at all (the chip, 「完整 diff」 and 「评审本轮改动」 all live in
-  it). (3) A refused end releases only its own end ref: the START ref is the turn's rewind point AND the
-  parent `parentRef` names for the NEXT writing turn, so dropping it makes `commit-tree -p <ref>` fail, and
-  every turn after that loses its checkpoint too. (4) A turn whose changes came from a shell command has NO
-  tool-declared paths, so anything that skips work on an empty path list hides exactly that case (the
-  `TurnDiffOverlay` fetch keys on the turn, not on the paths). A file the working tree no longer has where
-  the turn left it is marked 「之后又改过」 rather than shown as if the panel were the disk.
-- **`评审所有改动` is the ONE review entry whose subject is not a turn** (`ReviewAllChanges`): every
-  uncommitted file in the working tree, from any turn, read against HEAD. It rides the LATEST turn's footer
-  only (`lastAssistantIndex`), because the tree as it is NOW belongs to the turn just watched — and it must
-  STILL be there on a turn that changed nothing of its own: those changes came from earlier turns, and that
-  footer is the only place in the transcript that can offer them (`CountWorkingTreeChanges`, a cheap
-  `git status --porcelain` gate, decides whether to offer it at all; with no 🧾 chip on the row it also prints
-  how many there are, or the reader has to guess what is being reviewed). Four things travel with the scope
-  and every one of them is a lie if it lapses: the prompt's provenance sentence (`ReviewScope.WholeTree` —
-  "what the latest turn touched" is false about a tree whose changes span turns), the record
-  (`OneOffKeyWholeTree`, which is what the pane reads the run's diff FROM), the diff itself
-  (`GetWorkingTreeChanges` → `TurnDiffVO.Source == "head"`, so the pane heads itself 全部改动 rather than
-  本轮改动 — `GetTurnChanges` deliberately refuses to widen to the whole tree under a turn's heading), and the
-  chip's own state (`reviewDoneLabel` pairs on (msgId, whole), since one footer now carries two entries that
-  would otherwise report each other's runs). `review-all` pins the placement, the gap, the prompt and the pane.
-- **Every path in a diff carries the ROOT it came from.** A session can hold additional workspace
-  roots (`Session.AdditionalDirs`), and the paths inside each diff are RELATIVE to it — so a file
-  without its root resolves against the primary one, and a same-named file there is what 预览/打开
-  would show, silently. `FileDiffVO.Root` (absolute) + `RootLabel` ("" for the primary, else the
-  base name, or the full path when two roots share a basename — `rootLabels`, the SAME rule and
-  strings as `AtMatch.root`, so two roots are told apart everywhere and not in two different ways),
-  and the panel resolves `abs` from the file's own root. Four traps: (1) a group's identity for
-  React keys and fold state is `(root, path)` — with the path alone, folding one root's file folds
-  the other's (`diff.tsx`'s `keyOf`); (2) `GetTurnDiff` diffs EVERY root — a path in an additional
-  root is in a DIFFERENT repository, not "outside the repository", and judging it per root reported
-  every such path as belonging nowhere; (3) `checkpoint.Manager.TurnDiff`/`ChangedSinceTurn` return
-  per root (`RootDiff`/`RootChanged`) and must never be merged into one text or one path set, which
-  is also why the review's scope groups by root (`ReviewOptions.ScopeRoots` → `AppendReviewScope`);
-  (4) **every row is labelled as soon as ONE of them has to be** (`multiRoot` in `DiffFindingsPane`:
-  a file that names a root is proof the session has more than one). Labelling only the additional
-  roots left the primary's row bare, and a bare row beside a labelled one reads as belonging to no
-  tree at all — the one thing the reader was trying to find out. The primary is named 主目录
-  (`PRIMARY_ROOT_LABEL`): the roots panel's word for it, and the line the review prompt draws as
-  `(primary)`. A single-root diff is unchanged, since a lone root has nothing to be told apart from.
-- **A review's PANE reads the same diff the reviewer read, by TURN.** The run record keeps the turn
-  (`OneOffKeyTurn` → `OneOffVO.Turn`, set from `reviewScope.Turn`), and the findings pane fetches
-  `GetTurnChanges(sessionId, turn, …)` — so a review of changes that were committed, or deleted, since
-  still shows the files it read, with its findings anchored. Two traps: the pane used to fetch by the
-  recorded PATH list alone, which is the working tree against HEAD (an empty pane whose findings all fell
-  into 「不在本轮差异里」); and 「重新评审」 used to hardcode turn 0, so re-running from the pane was refused
-  with 「工作树里已经没有未提交的差异」 exactly when the frozen pair made it possible. The `frozen-panel`
-  scenario pins both (turn 2 deletes what turn 1 wrote, and the pane must still show it).
-- **A rewind is only offered for the conversation the reader is still IN — a compacted-away session is
-  refused.** Compaction does not rewrite the session it compacts: it starts a NEW one that continues from a
-  summary (`agent/compact.go`), so the predecessor's checkpoints describe the state before that point while
-  the live conversation is the successor. Rewinding there would move the workspace backwards under a
-  successor that has kept writing since, leaving two sessions whose checkpoints describe inconsistent trees
-  and neither knowing it. `AIAgent.rewindBlockedByCompaction` finds the successor from the session's own link
-  OR from a session naming it as parent (`compact.go` writes the predecessor's side BEST-EFFORT, so the scan
-  is not redundant), and the refusal is raised by the PREVIEW (`RewindPreview.Blocked`) as well as the action:
-  the card then says 「不能回退：…」, disables 回退 and lists no files. Refusing only on confirm would have
-  built a card offering a rewind that cannot happen. `compact` pins both the card and the filesystem half
-  (a refused rewind leaves no `rewound/` sidecar).
-- **The transcript's turn stamps cover every record of a turn, not only its opening one.** `sessionTurnStamps`
-  (`desktop/turnchanges.go`) keys turns by the record that BEGINS them; `buildSessionMessages` resolves that
-  to "the turn in force at this record" (`stampBefore`) and stamps every record of the page with it. A page is
-  the newest `sessionPageSize` records, so a long turn's opening record sits on an EARLIER page — resolving
-  the boundary exactly leaves the card of exactly the longest (shell-heavy) turns without its turn when the
-  transcript is reloaded: no chip numbers, and a diff panel / review scoped by turn 0. The frontend reads the
-  stamp off the record that starts the card (`buildTurns`), keeping the carry across user/reminder records for
-  the live path.
+Each bullet is a rule a change must keep, with the bug it prevents.
+
+**Ownership — where new code goes**
+
+- **The transcript lives in `useTranscript.ts`** (messages per session, running flags, the loaded window + its
+  cursor, the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the
+  one funnel — so "this belongs to a conversation" is enforced by the signature. App.tsx must not declare its
+  own `useState<Record<string, Message[]>>`; a new per-session need is a new op in that hook.
+- **The composer is `composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker,
+  the "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share
+  one decision — `route`: send now, queue for the next steer point, or dispatch as a slash command.
+- **The composer's HEIGHT has three ways in and one implementation** (`nudgeHeight`): the handle's drag, ↑/↓ on
+  the focused handle, and ⌘⇧↑/⌘⇧↓ typed in the textarea — all three share the step and the floor/ceiling
+  (`COMPOSER_INPUT_KEY_STEP`, `composerInputMaxH()`), and at the floor the value returns to `null` so "not
+  resized" stays one value (the stylesheet's). The pair is bound in the TEXTAREA's own keydown, never
+  window-wide: ⌥↑/⌥↓ is already the diff pane's finding walk and bare ⌘↑/⌘↓ the text system's caret gestures.
+- **Backend events are subscribed in `agentEvents.ts`** (`useAgentStatus` / `useSessionUsage` /
+  `useAgentStream`). Each payload names its session; compare it against `currentId` only where the UI genuinely
+  means "on screen" (a sidebar row, the error bubble), never to address storage.
+- **A parked permission is the composer's state too, and its card is matched by tool CALL ID** (`perms` sits
+  next to `asks`: keyed by session, NOT cleared on session switch — the agent is still parked — moved on
+  auto-compaction, cleared on `agent:idle`). Matching by tool NAME is the trap: a model emits a whole batch of
+  calls before any of them runs, so "the newest unfinished Bash card" is usually a different call than the one
+  waiting. The form shows the backend's own preview verbatim and clears only when `AnswerPermission` returns
+  `"ok"` — a refused one must stay on screen with its reason.
+
+**The transcript**
+
 - **A turn's process is folded by the CONVERSATION, not by the part renderer**: `turnView()` (`transcript.ts`,
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
-  (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate
-  messages, the turn's LAST prose, and the parts that must never be hidden: a FAILED call, the call a
-  permission card is parked on, the call an AskUserQuestion form waits on, and notices. **A DELIVERED file is
-  a class of its own**: a `SendFile` call that succeeded IS the file card, so `turnView` puts it in
-  `attachments` and App renders that group at the turn's TAIL (`.turn-files`, after the conclusion) — behind
-  the fold it was not merely collapsed but ABSENT from the DOM, so 「把 X 发给我」 hid its own answer behind
-  「展开时序」. It is never in the timeline as well (one card, one place, or two cards read as two files), and a
-  turn whose only tool call was the send then has nothing folded left, so it shows no strip at all.
-  **Intermediate prose
-  (any but the LAST `text`) is folded whether or not the turn failed** — an exposed failure card does not drag
-  its own round's text out with it, and the recall affordance is the strip's 「含 N 段过程说明」; `transcript-fold`
-  pins both directions (a failing turn and a failure-free control turn). **A steer splits the turn**, and
-  therefore the fold: `injectSteerVisual` seals the currently streaming segment and opens a fresh assistant
-  message for what follows, so each segment folds on its own — the prose before a steer becomes THAT segment's
-  conclusion, step counts are per segment (N steers = N+1 strips), and a rebuild splits in the same place (the
-  steer is a user record with `iteration > 0`); `steer-fold`'s Go half also proves the steered text reached the
-  model as the next request's user message. A call that is merely RUNNING is not among the exposed: the live
-  row reports it (`processLiveState` — the switching half only; the elapsed clock stays outside that string,
-  so the row can roll the state without the once-a-second clock re-triggering the roll), and a call parked on
-  a form is waiting rather than running. `TurnPart`
-  stays atomic because `oneoff.tsx` replays the very same parts and exists to show them all. The open/closed
-  state is per turn and presentational (never persisted), and the footer's diff chip opens the fold when it
-  opens every diff, since those diffs live inside the folded cards. Smoke cost: a scenario that asserts a
-  *successful* tool card must expand the strip first (`.process-head`), and "no tool cards" is no longer
-  evidence of "no tool calls" — assert the strip's absence too; `perm-deny` needs neither (a denied call is a
-  failed part, and failures never fold); and an ATTACHMENT card is the exception to the expand-first rule —
-  it is on screen folded, so wait for it directly (`file-find`).
-  **Do not reintroduce an "activity row" above the composer**: one
-  existed, appeared and vanished once per step, and shoved the message area up and down; if it ever comes
-  back, it must hold its place for the whole turn. **Do not compensate a layout change from a
-  `requestAnimationFrame`** — a covered window makes WebKit stop the page's frames outright, and a
-  `setTimeout` is throttled just as unpredictably. Compensate in a LAYOUT effect instead: the new content is
-  in the DOM and the adjustment lands before paint. This is how the fold toggle keeps a bottom-following
-  reader pinned — without it, expanding a turn slides the view up and auto-follow switches itself off.
-- **A row that alternates between two states must not change GEOMETRY — only its content may.** The
-  process row flips between the live line and the summary once per tool call, so anything that differs
-  between those two states changes the row's height that many times, and the transcript is bottom-pinned:
-  the visible content jumps with it. A `border: 1px` on the live state alone was exactly 2px of that
-  (24px live vs 22px static, twice per step for the whole turn); the ring is a `box-shadow: inset 0 0 0
-  1px` now, which draws the same edge without taking space — the same reason the codebase paints every
-  focus ring with `box-shadow`. `transcript-live` samples `.process-head`'s height every 10ms across a
-  two-call turn (live → between calls → live) and requires ONE value, plus that the row never disappears
-  mid-turn; its fixture pauses before the second call so the "between calls" state is reachable at all.
-  **The same rule governs the live line's own text, which ROLLS when its state changes** (`RollingLine` in
-  `components.tsx`: the outgoing line leaves upward as the new one arrives, because a fast turn swaps the
-  label faster than a word can be read, and an instant swap reads as unrelated words flashing). Its box is
-  exactly `1lh` and clips; `1lh` and not an `em` estimate — a made-up `1.35em` came out 0.5px taller than the
-  summary line it replaces, and broke the height assertion above. The roll is also a THIRD case in base.css's
-  `prefers-reduced-motion` block, which otherwise has two: a STATUS indicator keeps its motion, decoration
-  loses it, and a content SWAP changes which animation plays (the slide becomes a fade, `roll-in` in
-  `widgets.css`) — freezing it would put back the instant cut the roll exists to remove. `live-roll` pins it,
-  asserting on every state change that an animation ran and that its name matches the setting, so it tests
-  both machines rather than skipping the branch it is not on.
-
-- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
-  (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge
-  by one `margin-left: auto`; a new titlebar control belongs in that cluster. **The agent state is not echoed
-  in the chrome**: 运行中 already reads from the sidebar row's `spin-dot` and the reply's typing dots. The
-  removed status badge took its own styles with it — `STATUS_META` (`types.ts`), `.status-badge` / `.dot*` /
-  `.status-label` / `dot-pulse` (`layout.css`) and the reduced-motion exemption (`base.css`) — so a status dot
-  that comes back starts from those, not from a bare node.
-
-- **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate**
-  (`desktop/contextinfo.go` → `AIAgent.LastInputEstimateWithBreakdown`). The estimate
-  (`agent/token_estimate.go`) is character-class based and its bias depends on the content: it over-counts
-  plain English and UNDER-counts mixed CJK + JSON (whitespace is charged nothing). So the reported number is
-  the last call's real prompt size (`llm.PromptTokens`: input + cache read + cache creation for Anthropic;
-  the total alone for OpenAI-family, whose `prompt_tokens` already contains the cache reads) scaled by the
-  estimate's movement since that call — the bias then applies to one turn's additions instead of the whole
-  prompt. Two consequences worth keeping: the breakdown in the popover is scaled to that total
-  (`Breakdown.ScaleTo`, because the parts must add up to the number above them — `ctx-ring` asserts they agree
-  within 0.5 points), and a session restored from disk anchors on the last recorded message
-  (`estimateFromMessages`), so a reload is not a step backwards. The popover's own caveat has to follow: it
-  must not call the number a local estimate and NOT API usage once it is anchored. The correction is a RATIO
-  of the estimate's movement applied to the anchored real value, not an additive delta with a floor: after a
-  compaction the history is REPLACED by a summary, and a floor would leave the ring sitting on the
-  pre-compaction number — the one number compaction exists to bring down (`compact` asserts the meter falls).
-  The auto-compact THRESHOLD reads the anchored value too (`shouldAutoCompact`), so the trigger and the meter
-  agree; the cooldown is the one comparison still on the raw estimate, and rightly so (it measures the
-  conversation against itself, where the bias cancels). A smoke scenario about the meter, or about
-  AUTO-compaction, must give the mock a plausible prompt size (`textStreamPrompt`): a fixed 1200-token report
-  next to a 30k-token history is a state the app cannot reach in production.
-
-- **The context ring measures the PROMPT of the last call — a reply enters it only on the NEXT turn**
-  (`agent/token_estimate.go` + `desktop/agent_model.go`): the estimate is computed before each API call, so a
-  turn that ends in a plain reply leaves the meter describing the history *without* that reply, and a
-  compaction of a small conversation is invisible under the system-prompt/tool-schema floor. `compact`
-  therefore puts TWO turns in front of the compaction: turn 1's reply is what turn 2's prompt measures. A
-  scenario about "the context got smaller" must fill the window first, or it asserts nothing.
-
-- **A number that "follows the turn" lags a long turn — the context ring must follow each API CALL**
-  (`desktop/agent_turn.go` + `desktop/frontend/src/agentEvents.ts`): the ring's estimate was read only on
-  mount / new / switch / `turn_complete` (through `refreshProvider`), while the popover fetches
-  `GetContextInfo` when it opens — so during a long turn the ring sat at whatever the turn started with while
-  the popover at the SAME moment already showed the current value, and switching sessions only "fixed" it
-  because switching happens to refresh. `emitUsage` already ran after every API call, so the estimate now
-  rides that event (`agent:cost` carries `contextEstimate`/`contextWindow`, from the one `contextUsageOf`
-  rule `GetProviderInfo` shares) and the frontend keeps it in `useSessionUsage`, re-reading by id
-  (`GetContextInfo`) only for a session that has not run a turn in this process yet. Two lessons: "the turn
-  ended" and "the call ended" are different refresh points, and two surfaces describing the same fact must
-  read it from ONE rule. Pinned by `ctx-ring` (a `sleep 4` tool holds the window open and the ring is read
-  while the tool runs).
-
-- **The sidebar is `sessionRow` in `App.tsx`**: the conversation list, the folded compaction chains
-  (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
-  重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
-  hands the screen to another app is asserted, never clicked, in a driver.
-- **The sidebar is GROUPED, and the grouping is a pure join** (`sessionGroups(sessions, projects)` in
-  `lib.ts`): one header per project (name, member count, a `＋` that creates a session INSIDE it, a
-  right-click menu for rename / edit roots / delete) and one final 无项目 bucket. Grouping happens BEFORE
-  `sessionRows`, so a compaction chain folds inside its own group. Two rules that are easy to break: a
-  session whose `projectId` names a project that is NOT in the list belongs to the bucket, because that is
-  what the backend's resolver does with it. **EVERY project gets a group, including one with no sessions yet**
-  — the header carries the ＋ that makes the first session and the menu that renames/edits/deletes the project,
-  so a rule that hid empty groups made a freshly created project invisible (the reader saw nothing after
-  pressing 保存: "I made a project and nothing happened"). The chip and the workspace panel wear the project's NAME
-  while a project drives the session, and the panel is READ-ONLY then — the three session-level writers are
-  refused by the backend, so buttons that could only fail are not offered; it stays editable (with the reason
-  spelled out) whenever the project stops driving the session, which is the same predicate the guards use.
-- **`＋ 新建会话` belongs to the 无项目 group, and ⌘N follows the session on screen** (`App.tsx`: the sidebar
-  renders `newSessionButton` at the head of the loose bucket, or at the tail of the list when no loose bucket
-  exists yet — exactly once, never both). The button makes a PROJECT-LESS session, so it lives above the
-  label of the bucket it adds rows to: pinned at the top of the sidebar it was a full-width accent pill, the
-  loudest thing on screen and above the conversations that are the content, which read as the page's primary
-  action instead of "one more row here". ⌘N passes the current session's `projectId` when that project is
-  still in the list — ⌘N means "another one of these", and the project is what supplies the workspace, the
-  extra roots and the skills, so a project-less successor would silently drop all three. Membership is
-  resolved by the same rule as the grouping, so a dangling id (a session shown under 无项目) makes a
-  project-less session too. The `projects` smoke scenario asserts the DOM order, that the button carries no
-  accent fill and is smaller than both a row title and a project name, and that ⌘N adds a row INSIDE the
-  project group (a row count alone cannot tell which group it landed in).
-- **⌘P opens the project palette** (`desktop/frontend/src/palette.tsx`, `App.tsx`'s `pickProject`): type to
-  filter, ↑/↓ (or Ctrl+N/Ctrl+P — `listNav` in `lib.ts`, the same pair the composer's two pickers take, i.e.
-  the TUI's keymap; deliberately absent from the ⌘? key sheet, since it is a reach-for-it alternative to ↑/↓
-  rather than a gesture to learn), Enter, Esc — and Enter is the whole feature: open that project's most
-  recently used conversation, or make its first one. **The caret then goes back to the composer**
-  (`focusAfterPalette` in `App.tsx`): ⌘P is the only entry point that closes a dialog ON THE WAY to a
-  session, and the palette's own input is what holds focus while it is open — removing it drops focus on
-  `<body>`, where the next keystroke goes nowhere, so the hand-back is scheduled to land after that
-  unmount rather than racing it. "Most recently used" is the MEMBER with the largest
-  `updatedAt` (`latestSessionOf`, `lib.ts`), which is the backend's own meaning of a project's newest session
-  (`memberSessions` in `desktop/projects.go`) — deliberately NOT the sidebar's row order, which is
-  `ListSessions` by `createdAt`; a session another member was compacted FROM is skipped, since that one is
-  the folded-away 「压缩前」 row of a conversation whose newest link is the one to open. Because the two
-  clocks can disagree, **each row says what Enter will do** (`→ <会话标题>` / `→ 新建会话`): a palette of bare
-  names would make Enter a guess. Four contracts travel with it. (1) `onPick` RETURNS the refusal reason
-  ("" = it acted), and the palette closes only on "" — a refusal that dismissed the box would read as
-  success. (2) A project whose primary directory is gone (`rootsUsable === false`) with NO members refuses to
-  create one: the backend's `NewSession` falls back to the last used workspace and binds NOTHING when a
-  project does not drive, so Enter would quietly produce a 无项目 session; its existing sessions still open
-  (those fall back to their own snapshot by design). (3) The palette reads the list the sidebar is already
-  rendering and issues no fetch on open — a second source of truth would need its own staleness story for a
-  question the sidebar has already answered. (4) It EXPANDS the target group on the way in: ⌘P means 「take me
-  there」, and a collapsed group answers with a header and nothing under it — the row that just became active
-  hidden inside it, which is the same as not having gone there. That rule belongs to THIS entry point alone
-  (a collapse is the reader's own doing, and forcing the group open on every path would make collapsing the
-  group you are sitting in impossible), and a refusal expands nothing, nothing having been switched.
-  `project-palette` pins all four ends (the row texts, Enter landing on the group's FIRST row after ⌘N made a
-  newer member, the created session's `project_id` read off disk, that no model request happens at all —
-  `project_id`, not `projectId`: meta.json's json tag, not the binding's camelCase — plus the fold-then-⌘P
-  round trip, which folds the group by hand first so the expansion cannot be the initial state, and the focus
-  hand-back on BOTH branches).
-- **A project write re-reads the reader** (`agent:workspace_changed`, emitted by `CreateProject` /
-  `RenameProject` / `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend
-  holds a session's workspace and the sidebar's groups BY VALUE, so a rename or an edit moved nothing on
-  screen until the user switched sessions. The payload names what changed (`projectId`, and `sessionId` for a
-  detach); the handler re-reads the session on screen plus the sidebar. The driver asserts this without
-  switching: rename in the header, then the chip must say the new name (`projects`).
-
-- **A session list is a list of CONVERSATIONS, not of session dirs** (`sessionRows` in
-  `desktop/frontend/src/lib.ts`): a compaction chain shares one title, so rendering `ListSessions` raw shows
-  the pre-compaction session as a second, identical-looking row. The shape is derived from
-  `compactedParentId` (`SessionInfo`, from `meta.json`), folded under the newest link and closed; the
-  ancestors stay clickable history.
-
-- **Deleting a session with a turn in flight is REFUSED, by the backend** (`DeleteSession` in
-  `desktop/agent_session.go`): the running turn owns a goroutine whose session writes (`AppendMessage` —
-  `O_APPEND` with no `O_CREATE`, so it just fails once the directory is gone) and run-map writes
-  (`setSessionState` → `getRun`) are keyed by nothing but that id, so deleting underneath it loses the
-  transcript silently, keeps the model running and the tools firing, and can rebuild a directory holding
-  `meta.json` but no `messages.jsonl` — a phantom row in the sidebar that opens empty. Stopping is therefore
-  the user's explicit call, and the refusal (`refuseDeleteRunning`) names it. Two rules ride with it: the
-  running flag is read and the run removed in ONE critical section (a turn starting between the two would be
-  dropped from the map mid-flight), and the frontend renders the reason in the confirmation box that raised
-  the delete while the menu's 删除 entry is `disabled` for a running session — a `.catch(() => {})` here would
-  read as a no-op. Covered by `TestDeleteSessionRefuses*` and the `delete-running` smoke scenario.
-
-- **Following the bottom must survive async height changes, not just message updates**
-  (`desktop/frontend/src/App.tsx`): the transcript pin ran only when `msgCache` changed, so anything that grew
-  the content afterwards — a mermaid diagram finishing its async render, an image/attachment card loading, a
-  tool card expanding — slid the visible content up by exactly that height until the next delta pinned it
-  back. The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes
-  when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the
-  same observer.
-  **…and only the READER ends following, never growth.** `handleScroll` used to decide "the reader scrolled
-  away" from the distance to the bottom (over 48px away = gone), which cannot tell a reader from a transcript
-  that grew: content arriving BELOW the viewport leaves `scrollTop` exactly where it was and pushes the bottom
-  away, and the scroll event the app's own pin had queued then arrived carrying that larger distance — so
-  following switched itself off, the view rested short of the newest message with 回到最新消息 showing, and it
-  was intermittent because it needs the growth to land before that queued event is delivered. Every pin now
-  goes through `pinBottom`, which RECORDS where it landed, and following ends only when `scrollTop` decreases
-  below that record — a reader's wheel, drag, `gg` or `Ctrl+U` still ends it, while growth (and the clamp a
-  session switch performs) cannot. `switch-load` pins both halves.
-
-- **A width bound must subtract every other fixed column — and it must limit what is SHOWN, not what is
-  STORED**: `.oneoff-panel` exists so the conversation keeps a real reading width, but computing its ceiling
-  from `window.innerWidth` alone forgets the 280px sidebar. Read the sibling's REAL width from the DOM
-  (`panelRoom()` in `frontend/src/oneoff.tsx`, so a folded sidebar hands the room back) and re-measure on
-  `resize`. Then keep the two numbers apart: App holds the width the reader CHOSE (persisted), the panel
-  derives what there is room to show (`clampPanelWidth(chosen, room)`) — writing the clamped value back to
-  state makes "widening the window gives the width back" true only on the next launch.
-  **The conversation's share is a FLOOR plus a SHARE (`CHAT_MIN_WIDTH` 560, `CHAT_MIN_SHARE` 0.5), and the
-  share is the half that is easy to leave out**: a bare floor pins the conversation AT the floor and hands
-  every extra pixel to the panel — on the default 1200px window that was 480px of prose beside a 440px
-  panel, and on a 1600px one 480 beside 840. With both, 1200 gives 560/360 and anything past ~1600 splits
-  evenly. `oneoff-panel` asserts the two facts (prose ≥ 560, panel ≤ half the content area) rather than
-  recomputing the formula — but only the FLOOR is really pinned there: at the smoke's 1200px window the two
-  halves of the rule agree (560 of 920), so deleting the share would not turn that run red. The share earns
-  its keep past ~1600px, which the suite cannot stage. **And the reading column itself is `--reading-width`
-  (860px) — the same measure `.viewer-doc` gives a previewed document**, so a reply and a previewed file are
-  read at one size: a change to either is a change to both.
-
-- **Anything cached per run or per session must be KEYED by it**: key the cache with `sessionId/run` (a
-  record's name is a timestamp within its session, so two sessions can hold the same one), and prefer the
-  run's OWN record over anything a caller passes in: `agent.OneOffKeyPaths` is per run by construction, while
-  a caller's idea of "which turn was this" is not. **The key says what is IN HAND, never "we asked once"**:
-  the report pane's text is a file, and its PATH is recorded when the run starts (it is what the round's
-  prompt tells the model to write) while the file arrives at the END — so a read taken in between finds
-  nothing, and storing that under the run's key freezes the pane for good (「review 过后，点击报告页，是空
-  的」: 「报告是空的」 over a report written a moment later). Store only content; keep the reason in a second,
-  equally keyed state (`reportMissNote` in `oneoff.tsx`: missing / unreadable / not text / genuinely empty),
-  because an empty pane cannot tell them apart — the debt `diffError` pays on the diff's own surface. The
-  read is driven by the PANE (tab + run + liveness, with the cleared key as the retry), so switching runs and
-  the run ENDING both re-read, and ⟳ drops what was read instead of leaving a failure on screen.
-
-- **A panel opened BY an event cannot assume what that event announces is on disk yet**: the run's `start` is
-  emitted BEFORE the recorder is opened, so the side panel's own list read comes back empty — and with
-  nothing selected the detail poll has nothing to ask for, so a whole review hides behind 「这个会话还没有
-  旁路运行（评审、提交）」 until it ends. The live follow therefore re-reads the LIST too and takes the record
-  that appears as the one it is on (`seenNewest`, compared by name, so the reader's own pick in the switcher
-  is left alone). Both halves are pinned by `oneoff-report`, whose first checks are red when only the list
-  half is missing and whose report checks are red when only the read is.
-
-- **The lightbox's fit() measures the WINDOW, not the stage** (`desktop/frontend/src/viewer.tsx`): the stage is
-  a flex item with `margin: auto`, so it hugs its content instead of filling the overlay — fitting to that box
-  can only shrink (measured: a diagram 708px wide in the message gave a 336×53 stage inside a 1200×780
-  lightbox, so fit chose 0.245× and the diagram opened 73px wide, smaller than the message it was clicked
-  from). `viewerArea` reads the overlay's padding box instead. Two more traps come with the same feature:
-  (1) a mermaid SVG carries `width="100%"` plus its natural size in its own inline `max-width`, and inside a
-  `width: max-content` paper that percentage falls back to the replaced-element default (300px) — so "1:1"
-  meant 300px until `MermaidViewer` copies that max-width into an explicit width; (2) **`getBoundingClientRect`
-  inside a CSS-zoomed subtree is in PRE-zoom units** in this WebKit (probe: at zoom 3 the paper reads 303
-  while its unzoomed parent reads 909), so a reading of "how big is it on screen" must multiply by the zoom —
-  `mermaid-zoom` computes it that way, and its first version was fooled by exactly that into thinking a 0.245×
-  diagram was 298px wide.
-  **fit() only ever SHRINKS** — it stops at the content's own size and never magnifies to fill the window.
-  "As large as it fits" applied in both directions opened the SAME gesture at wildly different sizes
-  depending on a thing the reader cannot see (measured: a two-node diagram at 277%, a wide one at 94%, a tall
-  one at 53%, with the 6× clamp reachable for anything smaller still) — the report reads as "sometimes it
-  opens huge" and has no trigger in the reader's actions. Magnifying is what the wheel, `+` and the clamp are
-  for; upscaling an IMAGE is also blur, not fitting. `zoom-fit` pins both halves (never magnified, always
-  inside the offered area).
-- **⌘F searches a SURFACE, not the page** (`desktop/frontend/src/find.tsx`): the diff pane, a previewed file
-  and a review's report each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not
-  scroll the transcript behind it. The side panel is ONE host covering its three panes (过程 / 意见+diff /
-  报告), so the pane decides what "here" means. Four rules ride with it:
-  · hits are painted with the **CSS Custom Highlight API** (`::highlight()`, two names registered in
-    `base.css`), never by wrapping text in `<mark>` — these panes re-render under the reader (a live run's
-    record is re-read every second, a report fills in when it lands), and a DOM mutation would be thrown
-    away by the next render; a re-render only invalidates the ranges, which a MutationObserver collects
-    again (debounced: one text walk per streamed token is work nobody asked for);
-  · the key owner is installed ONCE at **module load** (window, capture). A bar may mount after the overlay
-    it sits inside, and among capture listeners on the same target the first registered runs first — so a
-    later-installed bar would lose Esc to the overlay. It consumes Esc with `stopImmediatePropagation`,
-    which is what lets the bar close instead of the viewer behind it;
-  · the bar is **mounted only while open on every surface** (`findable && find.open`) and the host handle's
-    `call()` always goes through the open path. Branching on "the field already exists" is the trap: a
-    mounted-but-closed bar looks open to the handle, `open` never becomes true, and the collect effects
-    (gated on it) never run — every count reads 无匹配 while the field and the document look perfect;
-  · `findable` is **opt-in per viewer**: an image, or an HTML/PDF frame, has no text in THIS document. The
-    shell still owns ⌘F there, so it cannot fall through to the bar of the panel dimmed behind it.
-  `file-find` pins the whole interaction (count, painted hits, Enter/Shift+Enter, the Esc ordering) and
-  `oneoff-footer` / `oneoff-report` pin the two panel panes.
-
+  (`ProcessStrip`) standing in for its thinking blocks, tool cards and intermediate messages, the turn's LAST
+  prose, and the parts that must never be hidden: a FAILED call, the call a permission card is parked on, the
+  call an AskUserQuestion form waits on, and notices. **A DELIVERED file is a class of its own**: a `SendFile`
+  call that succeeded IS the file card, rendered at the turn's TAIL (`.turn-files`, after the conclusion) —
+  behind the fold it was not merely collapsed but ABSENT from the DOM, so 「把 X 发给我」 hid its own answer.
+  It is never in the timeline as well (one card, one place). **Intermediate prose (any but the LAST `text`) is
+  folded whether or not the turn failed**; the recall affordance is the strip's 「含 N 段过程说明」.
+  **A steer splits the turn**, and therefore the fold: `injectSteerVisual` seals the streaming segment and
+  opens a fresh assistant message, so each segment folds on its own (N steers = N+1 strips). Smoke cost: a
+  scenario asserting a *successful* tool card must expand the strip first (`.process-head`), and "no tool
+  cards" is no longer evidence of "no tool calls"; an ATTACHMENT card is the exception — it is on screen
+  folded (`file-find`).
+- **A row that alternates between two states must not change GEOMETRY — only its content may.** The process
+  row flips between the live line and the summary once per tool call, and the transcript is bottom-pinned: the
+  visible content jumps with any height difference. A `border: 1px` on the live state alone was exactly 2px of
+  that; the ring is a `box-shadow: inset` now — the same reason the codebase paints every focus ring with
+  `box-shadow`. **The same rule governs the live line's own text, which ROLLS when its state changes**
+  (`RollingLine`): a fast turn swaps the label faster than a word can be read. Its box is exactly `1lh` and
+  clips — `1lh` and not an `em` estimate, which came out 0.5px taller and broke the height assertion. The roll
+  is a THIRD case in base.css's `prefers-reduced-motion` block: a STATUS indicator keeps its motion,
+  decoration loses it, and a content SWAP changes which animation plays.
 - **Never run a side effect inside a state updater**: React may invoke an updater more than once for the same
-  update (StrictMode does; concurrent re-basing can), so `setState(prev => { fetch(...); return ... })` fires
-  the request twice — and an `if (prev[k]) return prev` guard cannot help, because both invocations see the
-  same pre-update state. Keep the in-flight bookkeeping in a ref instead.
-
-- **A transient state cannot be waited for — sample the sequence**: a UI state whose length is the WORK's
-  length (the review chip's 评审中… lasts as long as the run) makes `waitFor` a coin flip, and a synchronous
-  read right after `.click()` sees the pre-Render state because React commits asynchronously. Sample the
-  element on a ~10ms timer, dedupe into a trail, and assert the trail CONTAINS the state; the trail then
-  doubles as the failure message.
-
+  update, so `setState(prev => { fetch(...); return ... })` fires the request twice — and an
+  `if (prev[k]) return prev` guard cannot help, because both invocations see the same pre-update state. Keep
+  in-flight bookkeeping in a ref.
 - **A state flag must be ended by the fact that ends it**: `reviewPending` was cleared when `ReviewChanges`
-  returned (that call only STARTS the fork) and, in a second rule, whenever the session was idle — but the
-  session is still idle in the window between the click and the fork going busy, so the middle state was wiped
-  before it could ever be seen, and the chip fell through to 已评审 while being disabled by the very run it
-  described. The run's own end event is the fact that ends it.
+  returned (that call only STARTS the fork), so the middle state was wiped before it could be seen. The run's
+  own end event is the fact that ends it.
+- **A system reminder is a HISTORY artifact, not a live one**: `Message.reminder` is set only by `buildTurns`,
+  from the store's `role: reminder` rows, so the `!` affordance appears on a user bubble once the transcript is
+  REBUILT (load / switch / restart). Assert injected context at the LLM boundary (`project-context`) or through
+  a rebuild; a driver waiting for `.reminder-head` on a live first message waits forever.
+- **A rebuilt transcript shows the user's OWN words, not what was SENT**: the `@`-file expansion happens
+  BEFORE the agent is called, so a `user` record's `Content` is the file inlined between `UNTRUSTED FILE
+  CONTENT` markers while `displayContent` holds what was typed — and the bubble reads the latter.
+  **`Content` stays authoritative for the model**: `ConvertSessionToLLMMessages` rebuilds the next request from
+  it, so writing the raw text there would send a prefix the model never saw (prompt cache gone from that point)
+  and retroactively rewrite what the history says it was told. The session TITLE comes from the user's own words
+  too. **A driver cannot pin a reload by switching sessions** — that serves the in-memory copy — which is why
+  `at-file-reload` seeds the transcript and asserts the FIRST render.
+
+**Scrolling and layout**
+
+- **Following the bottom must survive async height changes, not just message updates**: the transcript pin ran
+  only when `msgCache` changed, so a mermaid diagram finishing its async render, an image loading, or a tool
+  card expanding slid the visible content up by exactly that height. The fix is a `ResizeObserver` on a
+  `.chat-content` wrapper (the scrollport's own box never changes when its content grows); any new "sticky
+  bottom" behavior goes through the same observer.
+- **…and only the READER ends following, never growth.** `handleScroll` used to decide "the reader scrolled
+  away" from the distance to the bottom (over 48px away = gone), which cannot tell a reader from a transcript
+  that grew: content arriving BELOW the viewport leaves `scrollTop` where it was and pushes the bottom away.
+  Every pin now goes through `pinBottom`, which RECORDS where it landed, and following ends only when
+  `scrollTop` decreases below that record.
+- **A width bound must subtract every other fixed column — and it must limit what is SHOWN, not what is
+  STORED**: `.oneoff-panel`'s ceiling computed from `window.innerWidth` alone forgets the 280px sidebar. Read
+  the sibling's REAL width from the DOM (`panelRoom()`, so a folded sidebar hands the room back) and re-measure
+  on `resize`. Then keep the two numbers apart: App holds the width the reader CHOSE (persisted), the panel
+  derives what there is room to show (`clampPanelWidth(chosen, room)`). **The conversation's share is a FLOOR
+  plus a SHARE (`CHAT_MIN_WIDTH` 560, `CHAT_MIN_SHARE` 0.5)**: a bare floor pins the conversation AT the floor
+  and hands every extra pixel to the panel (480px of prose beside an 840px panel on a 1600px window).
+  **And the reading column itself is `--reading-width` (860px) — the same measure `.viewer-doc` gives a
+  previewed document.**
+- **A pane's width is its MIN-CONTENT width, and that is set by whichever row cannot shrink**: every diff head
+  row holds non-shrinkable badges/buttons, and a `white-space: nowrap` path with the default `min-width: auto`
+  contributes its WHOLE string — so the pane scrolls sideways. Three things together fix it: `flex-wrap: wrap`
+  on those rows, `flex: 1 1 0; min-width: 0` on the path (basis alone is not enough — the automatic minimum is
+  the min-content), and `max-width: min(1100px, 100%)` on `.viewer-doc.is-diff` (`min(1390px, 100%)` when the
+  overlay's file index is showing). The user's bubble is the same problem in miniature: a pasted URL takes
+  `overflow-wrap: anywhere` rather than `break-word`, because only the former also shrinks the min-content.
+- **A control the reader uses WHILE a pane scrolls belongs in the sticky bar, not in the header**: the 意见
+  pane's ↑/↓ walk sits in `.diff-sendbar` (`position: sticky; bottom: 0`). The cost is `flex-wrap: wrap` on
+  the bar: it holds seven controls, and its min-content would otherwise widen the panel past its column.
+
+**Sessions and the sidebar**
 
 - **Session-scoped UI state must be keyed by session, or reset on switch**: one React tree renders every
   session, so anything derived from the ACTIVE session silently leaks into the next one — the review notice
-  (keyed by the clicked turn's message id), plan/findings (reloaded on switch), the cache-hit ring + cost (a
-  new session inheriting the previous one's numbers), and the agent STATUS. Anything fetched per session must
-  be applied unconditionally; `if (u)` keeps stale values when the payload is empty.
-
+  (keyed by the clicked turn's message id), plan/findings (reloaded on switch), the cache-hit ring + cost, and
+  the agent STATUS. Anything fetched per session must be applied unconditionally; `if (u)` keeps stale values
+  when the payload is empty.
 - **The agent status is per SESSION, and its event names the session**: `agent:state` carries `sessionId`, and
   `useAgentStatus(currentId)` keeps one entry per conversation — a status is never one global value here,
-  because the desktop runs every session's turn in its own goroutine (switching sessions cancels nothing). So
-  `setSessionState` emits for EVERY session, and the only global surface is the menu bar, which reflects the
-  DISPLAYED one (`reflectTray` decides that under the same lock that read `activeID`; `ActivateSession`
-  re-reports the session it switches to, so the tray follows the switch too). Emitting only while that session
-  was displayed — plus a frontend that kept the one value it received — produces four faces at once: the stop
-  control follows the reader into an idle session; a background turn's END is never reported at all, so it
-  never clears (and Stop acts on the DISPLAYED session — the dead button); a stale busy state makes the
-  composer QUEUE a message instead of sending it; and the review chip waits on a neighbour's turn. Pinned by
-  the `session-running` scenario. The mount snapshot (`GetState`) may only SEED a session that no event has
-  named yet — it is a read racing the same events, and a late one used to overwrite a newer turn-end, which
-  leaves a busy state (and a stop control) that nothing can clear.
-
+  because the desktop runs every session's turn in its own goroutine (switching sessions cancels nothing). The
+  only global surface is the menu bar, which reflects the DISPLAYED one (`reflectTray`; `ActivateSession`
+  re-reports the session it switches to). Emitting only while that session was displayed produces four faces
+  at once: the stop control follows the reader into an idle session; a background turn's END is never reported;
+  a stale busy state makes the composer QUEUE a message instead of sending it; and the review chip waits on a
+  neighbour's turn. The mount snapshot (`GetState`) may only SEED a session that no event has named yet.
 - **A session's "running" answer and the event that says its turn is over must not disagree**
-  (`RunningSessions` in `desktop/agent.go`): it answers from the per-session STATE (`StatusThinking` /
-  `StatusToolRunning` / `StatusBusy`), never from `sessionRun.running`. The flag is the guard that keeps a
-  second turn of a session from starting, and `endTurn` clears it — but a turn publishes its own `turn_complete`
-  from inside the agent's event loop and only THEN exits to `endTurn`, while the frontend re-reads the running
-  set exactly once, on that event. Answering from the flag told the frontend "the turn is over" and "this
-  session is still running" in the same breath, with nothing later to correct it: the sidebar's spinner, the
-  stop control, the delete-session guard and the composer's queue all stayed stuck behind a finished turn (an
-  intermittent full-suite failure in `rewind` / `transcript-fold`). The state is set BEFORE the event is
-  emitted, so it can never contradict it. Pinned by `TestAFinishedTurnIsNotReportedAsRunning`.
+  (`RunningSessions`): answer from the per-session STATE, never from `sessionRun.running`. The flag is the
+  guard that keeps a second turn from starting, and `endTurn` clears it — but a turn publishes its own
+  `turn_complete` from inside the event loop and only THEN exits to `endTurn`, while the frontend re-reads the
+  running set exactly once, on that event. The state is set BEFORE the event is emitted, so it can never
+  contradict it (`TestAFinishedTurnIsNotReportedAsRunning`).
+- **A session list is a list of CONVERSATIONS, not of session dirs** (`sessionRows` in `lib.ts`): a compaction
+  chain shares one title, so rendering `ListSessions` raw shows the pre-compaction session as a second,
+  identical-looking row. The shape is derived from `compactedParentId`, folded under the newest link and
+  closed; the ancestors stay clickable history.
+- **The sidebar is GROUPED, and the grouping is a pure join** (`sessionGroups(sessions, projects)` in `lib.ts`):
+  one header per project (name, member count, a `＋` that creates a session INSIDE it, a right-click menu) and
+  one final 无项目 bucket. Grouping happens BEFORE `sessionRows`, so a compaction chain folds inside its own
+  group. A session whose `projectId` names a project NOT in the list belongs to the bucket, because that is
+  what the backend's resolver does with it. **EVERY project gets a group, including one with no sessions yet**
+  — the header carries the ＋ that makes the first session, so hiding empty groups made a freshly created
+  project invisible. The chip and the workspace panel wear the project's NAME while a project drives the
+  session, and the panel is READ-ONLY then (the three session-level writers are refused by the backend).
+- **`＋ 新建会话` belongs to the 无项目 group, and ⌘N follows the session on screen**: the button makes a
+  PROJECT-LESS session, so it lives above the label of the bucket it adds rows to — pinned at the top of the
+  sidebar it was a full-width accent pill, the loudest thing on screen, reading as the page's primary action
+  instead of "one more row here". ⌘N passes the current session's `projectId` when that project is still in
+  the list: ⌘N means "another one of these", and the project supplies the workspace, the extra roots and the
+  skills. Membership is resolved by the same rule as the grouping, so a dangling id makes a project-less
+  session too.
+- **⌘P opens the project palette** (`palette.tsx`, `App.tsx`'s `pickProject`): type to filter, ↑/↓ (or
+  Ctrl+N/Ctrl+P — `listNav`, the same pair the composer's pickers take), Enter, Esc. Enter is the whole
+  feature: open that project's most recently used conversation, or make its first one. **The caret then goes
+  back to the composer** (`focusAfterPalette`): ⌘P is the only entry point that closes a dialog ON THE WAY to a
+  session, and the palette's own input holds focus while it is open — removing it drops focus on `<body>`.
+  "Most recently used" is the MEMBER with the largest `updatedAt` (`latestSessionOf`), which is the backend's
+  own meaning (`memberSessions` in `desktop/projects.go`) — deliberately NOT the sidebar's row order, which is
+  `ListSessions` by `createdAt`; a session another member was compacted FROM is skipped. Four contracts:
+  `onPick` RETURNS the refusal reason ("" = it acted) and the palette closes only on ""; a project whose
+  primary directory is gone with NO members refuses to create one (the backend would bind NOTHING); the palette
+  reads the list the sidebar already renders and issues no fetch; and it EXPANDS the target group — ⌘P means
+  「take me there」, and a collapsed group answers with a header and nothing under it. That expansion belongs to
+  THIS entry point alone (a collapse is the reader's own doing, and forcing groups open everywhere would make
+  collapsing the group you are sitting in impossible).
+- **A project write re-reads the reader** (`agent:workspace_changed`, from `CreateProject` / `RenameProject` /
+  `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend holds a session's
+  workspace and the sidebar's groups BY VALUE, so a rename moved nothing on screen until the user switched
+  sessions. The payload names what changed (`projectId`, and `sessionId` for a detach).
+- **Deleting a session with a turn in flight is REFUSED, by the backend**: the running turn owns a goroutine
+  whose session writes (`AppendMessage` is `O_APPEND` with no `O_CREATE`, so it just fails once the directory
+  is gone) and run-map writes are keyed by nothing but that id — so deleting underneath it loses the
+  transcript silently, keeps the model running and the tools firing, and can rebuild a directory holding
+  `meta.json` but no `messages.jsonl`. Two rules ride with it: the running flag is read and the run removed in
+  ONE critical section, and the frontend renders the reason in the confirmation box that raised the delete
+  while the menu's 删除 entry is `disabled` for a running session.
+- **The sidebar has a type floor and an ORDER, and there is ONE caret size** (`--caret-size` in `base.css`):
+  the disclosure carets had grown four different answers (8–9px of ▾ is a DOT — the one control that says
+  "these rows are a group"), so they are `components.tsx`'s `<Caret>` now: an inline SVG sized by
+  `--caret-size`, NOT the glyphs, because a text glyph's size follows the font. The sidebar is 15px/620 group
+  headers against 14px rows with 12.5px timestamps, and nothing inside it is under 12px — 14px against 13.5px
+  was true on paper and invisible on screen.
 
-- **An entry's data source must belong to the surface the entry opens** (`desktop/frontend/src/App.tsx` +
-  `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn's* change set with real line numbers — WHICH
-  baseline answers that (its own two checkpoint trees, or the working tree against HEAD limited to the declared
-  paths) is the backend's choice and is stated on the pane's own head line, so the chip's tooltip names both
-  instead of promising one. It opens a surface of its own — `TurnDiffOverlay` (`ViewerOverlay` +
-  `DiffFindingsPane` with `findings=[]`), whose paths are the click's own: fetched on open, dropped on close,
-  so they can never become a stale anchor. The side-channel panel cannot do better: after P4 its diff comes
-  from the run's recorded scope (`header.paths`) and nowhere else, because a caller-supplied set outlives the
-  run it came from. Two corollaries worth keeping: **a fold default belongs to the surface that shows the
-  diff** (the panel's rule "a file with findings opens, one without stays folded" folded EVERY file on a
-  surface that has no findings at all, so the promised diff arrived as a list of filenames — hence
-  `expandAll`), and **a helper whose only caller is gone goes with it**.
+**A turn's changes, diffs and reviews**
 
-- **The transcript itself lives in `desktop/frontend/src/useTranscript.ts`** (messages per session, running
-  flags, the loaded window + its cursor, the frame-batched delta queue). Every mutator takes the session it
-  is for — `updateSession` is the one funnel, everything else is built on it — so "this belongs to a
-  conversation" is enforced by the signature instead of remembered. App.tsx must not declare its own
-  `useState<Record<string, Message[]>>`; a new per-session need is a new op in that hook.
+- **A turn's changes are read from its CHECKPOINT trees, everywhere they are shown.** The footer chip
+  (`N files +x −y`), 「完整 diff」 and 「评审本轮改动」 all go through `GetTurnChanges`/`reviewScopeFor`
+  (`desktop/turnchanges.go`), which diffs the turn's recorded start and end trees — so a file a SHELL command
+  wrote counts, created/deleted files are exact, and the answer does not move when the working tree does. The
+  tool-call fragments (`turnDiffStat`) are only the FALLBACK for when there are no checkpoints, and the
+  surface must say which source answered (`TurnChangesVO.Source`). Four traps: (1) the turn's end snapshot must
+  be taken BEFORE the `turn_complete` event, and on a context DETACHED from the turn's cancellation
+  (`context.WithoutCancel`), because the error/cancel exit is a stopped turn whose context is already dead;
+  (2) a refused end (`Diff.Skipped`) arrives as a note and ZEROES — the chip must fall back to the tool-call
+  numbers rather than take them as the answer; (3) a refused end releases only its own end ref — the START ref
+  is the turn's rewind point AND the parent `parentRef` for the NEXT writing turn, so dropping it makes
+  `commit-tree -p <ref>` fail and every later turn loses its checkpoint too; (4) a turn whose changes came from
+  a shell command has NO tool-declared paths, so anything that skips work on an empty path list hides exactly
+  that case.
+- **`评审所有改动` is the ONE review entry whose subject is not a turn** (`ReviewAllChanges`): every
+  uncommitted file in the working tree, from any turn, read against HEAD. It rides the LATEST turn's footer
+  only (`lastAssistantIndex`), because the tree as it is NOW belongs to the turn just watched — and it must
+  STILL be there on a turn that changed nothing of its own. Four things travel with the scope and every one is
+  a lie if it lapses: the prompt's provenance sentence (`ReviewScope.WholeTree`), the record
+  (`OneOffKeyWholeTree`), the diff itself (`GetWorkingTreeChanges` → `TurnDiffVO.Source == "head"`, so the pane
+  heads itself 全部改动), and the chip's own state (`reviewDoneLabel` pairs on (msgId, whole), since one footer
+  now carries two entries that would otherwise report each other's runs).
+- **Every path in a diff carries the ROOT it came from.** A session can hold additional workspace roots, and
+  the paths inside each diff are RELATIVE to one — so a file without its root resolves against the primary one,
+  and a same-named file there is what 预览/打开 would show, silently. `FileDiffVO.Root` (absolute) +
+  `RootLabel` ("" for the primary, else the base name, or the full path when two roots share a basename —
+  `rootLabels`, the SAME rule and strings as `AtMatch.root`). Four traps: (1) a group's identity for React keys
+  and fold state is `(root, path)` — with the path alone, folding one root's file folds the other's; (2)
+  `GetTurnDiff` diffs EVERY root — a path in an additional root is in a DIFFERENT repository, not "outside the
+  repository"; (3) `checkpoint.Manager.TurnDiff`/`ChangedSinceTurn` return per root (`RootDiff`/`RootChanged`)
+  and must never be merged into one text or path set; (4) **every row is labelled as soon as ONE of them has
+  to be** (`multiRoot` in `DiffFindingsPane`) — labelling only the additional roots left the primary's row bare,
+  and a bare row beside a labelled one reads as belonging to no tree at all. The primary is named 主目录
+  (`PRIMARY_ROOT_LABEL`).
+- **A review's PANE reads the same diff the reviewer read, by TURN.** The run record keeps the turn
+  (`OneOffKeyTurn` → `OneOffVO.Turn`) and the findings pane fetches `GetTurnChanges(...)` — so a review of
+  changes that were committed or deleted since still shows the files it read, with its findings anchored. Two
+  traps: the pane used to fetch by the recorded PATH list alone, which is the working tree against HEAD (an
+  empty pane); and 「重新评审」 used to hardcode turn 0, so re-running from the pane was refused exactly when
+  the frozen pair made it possible.
+- **A rewind is only offered for the conversation the reader is still IN — a compacted-away session is
+  refused.** Compaction starts a NEW session that continues from a summary, so the predecessor's checkpoints
+  describe the state before that point while the live conversation is the successor; rewinding there would move
+  the workspace backwards under a successor that has kept writing since. `rewindBlockedByCompaction` finds the
+  successor from the session's own link OR from a session naming it as parent, and the refusal is raised by the
+  PREVIEW (`RewindPreview.Blocked`) as well as the action — refusing only on confirm would have built a card
+  offering a rewind that cannot happen.
+- **The transcript's turn stamps cover every record of a turn, not only its opening one.** `sessionTurnStamps`
+  keys turns by the record that BEGINS them; `buildSessionMessages` resolves that to "the turn in force at this
+  record" (`stampBefore`) and stamps every record of the page. A page is the newest `sessionPageSize` records,
+  so a long turn's opening record sits on an EARLIER page — resolving the boundary exactly leaves the card of
+  exactly the longest (shell-heavy) turns without its turn when the transcript is reloaded.
+- **An entry's data source must belong to the surface the entry opens.** The turn footer's 「完整 diff」 opens
+  a surface of its own (`TurnDiffOverlay`) whose paths are the click's own: fetched on open, dropped on close,
+  so they can never become a stale anchor. Two corollaries: **a fold default belongs to the surface that shows
+  the diff** (the panel's rule "a file with findings opens" folded EVERY file on a surface with no findings —
+  hence `expandAll`), and **a helper whose only caller is gone goes with it**.
+- **Anything cached per run or per session must be KEYED by it**: key the cache with `sessionId/run` (a
+  record's name is a timestamp WITHIN its session, so two sessions can hold the same one), and prefer the run's
+  OWN record over anything a caller passes in. **The key says what is IN HAND, never "we asked once"**: the
+  report pane's text is a file whose PATH is recorded when the run starts while the file arrives at the END —
+  so a read taken in between finds nothing, and storing that under the run's key freezes the pane for good.
+  Store only content; keep the reason in a second, equally keyed state (`reportMissNote`: missing /
+  unreadable / not text / genuinely empty), because an empty pane cannot tell them apart. The read is driven
+  by the PANE (tab + run + liveness), so switching runs and the run ENDING both re-read.
+- **A panel opened BY an event cannot assume what that event announces is on disk yet**: the run's `start` is
+  emitted BEFORE the recorder is opened, so the side panel's own list read comes back empty — and with nothing
+  selected the detail poll has nothing to ask for, so a whole review hides behind 「这个会话还没有旁路运行」
+  until it ends. The live follow therefore re-reads the LIST too and takes the record that appears as the one
+  it is on (`seenNewest`, compared by name, so the reader's own pick in the switcher is left alone).
 
-- **A system reminder is a HISTORY artifact, not a live one** (`lib.ts` + `App.tsx`): `Message.reminder` is
-  set only by `buildTurns`, from the store's `role: reminder` rows, so the `!` affordance appears on a user
-  bubble once the transcript is REBUILT (load / switch / restart) — a turn that has just run shows none,
-  however much context the model actually received. Assert injected context at the LLM boundary (the
-  `project-context` scenario) or through a rebuild; a driver waiting for `.reminder-head` on a live first
-  message waits forever.
+**Overlays, the panel and find**
 
-- **A rebuilt transcript shows the user's OWN words, not what was SENT** (`lib.ts` + `session.Message`):
-  the `@`-file expansion happens BEFORE the agent is called, so a `user` record's `Content` is the file
-  inlined between `UNTRUSTED FILE CONTENT` markers while `displayContent` holds what was typed — and the
-  bubble reads the latter, falling back to `Content` (which is also the shape of every record written
-  before the field existed). **`Content` stays authoritative for the model**: `ConvertSessionToLLMMessages`
-  rebuilds the next request from it, so writing the raw text there instead would send a prefix the model
-  never saw (the provider's prompt cache gone from that point) and retroactively rewrite what the history
-  says it was told. The session TITLE comes from the user's own words too, or a conversation that started
-  with `@README.md 看看` gets named after the inlined file (and pays a file's worth of tokens for it).
-  **A driver cannot pin a reload by switching sessions** — that serves the in-memory copy, so the bug is
-  invisible there — which is why `at-file-reload` seeds the transcript (`scenario.seedMessages`, written
-  before the app launches) and asserts the FIRST render: that is what a restart finds.
+- **The overlay's file index PINS inside the pane's existing scroller — it never gets one of its own.** The
+  pinned thing is `.diff-filelist-col` (the list PLUS its drag handle, one flex item beside the diff). It pins
+  BELOW the pane's pinned head, at the head's MEASURED height (`--diff-head-h`, published by the pane from a
+  `ResizeObserver`: the head WRAPS, so there is no constant to hard-code), and a jumped-to file's
+  `scroll-margin-top` reads the same variable. Two traps: the scroller is whichever box the pane already lives
+  in (a nested `overflow: auto` would leave find and the finding walk searching the wrong one), and the index
+  is OVERLAY-ONLY and absent with a single file — the panel is a column the reader drags, where a 210px index
+  takes a third of the width.
+- **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click** (`currentKey`):
+  a pinned index whose highlight only moves when clicked reports the reader's last jump rather than the file in
+  front of them. The rule is stated in the SAME terms as the jump — a jumped-to file's top comes to rest on the
+  line `--diff-land` names, and the current file is the LAST group whose top has reached it — with the line
+  PUBLISHED from one place (the pane's `publish()`) and consumed twice (the CSS `scroll-margin-top` and this
+  rule). **Both ENDS need a fallback**: at the top of the scroll nothing has reached the line yet, and at the
+  bottom nothing is left to reach it; without them the highlight vanishes in both places. The listeners are
+  `window` + CAPTURE (`scroll` does not bubble), the walk is coalesced onto a frame, and the mark is a bar AND
+  a wash AND `aria-current` — never colour alone (the bar is an inset shadow, so marking a row cannot change
+  its height).
+- **The index is draggable, and the width the reader drags is NOT React state** (`startResize`): what is SHOWN
+  is the reader's width clamped to the pane (`180`–`560`, never leaving the body under `420`), the drag writes
+  the element's style straight from the pointermove handler (a `setState` per move re-renders the whole panel,
+  the diff included, before the browser has laid the new width out) and commits to React once on release.
+  A `useLayoutEffect` re-asserts the drag's own number after every commit. The width is remembered at MODULE
+  level (`fileListWidth`) so closing and reopening the overlay does not forget it — deliberately NOT persisted:
+  `desktop_ui.json` is where the panel's width lives because Go has to honour it before the window exists.
+- **A click unfolds the file FIRST and scrolls after that commit** (the same two steps as the finding walk),
+  lands it 10px below the scroller's top and flashes the same `is-jump-target` a finding gets.
+- **The lightbox's `fit()` measures the WINDOW, not the stage**: the stage is a flex item with `margin: auto`,
+  so it hugs its content instead of filling the overlay — fitting to that box can only shrink. `viewerArea`
+  reads the overlay's padding box instead. **`fit()` only ever SHRINKS** — "as large as it fits" applied in
+  both directions opened the SAME gesture at wildly different sizes depending on a thing the reader cannot see.
+  **`getBoundingClientRect` inside a CSS-zoomed subtree is in PRE-zoom units** in this WebKit, so a reading of
+  "how big is it on screen" must multiply by the zoom.
+- **⌘F searches a SURFACE, not the page** (`find.tsx`): the diff pane, a previewed file and a review's report
+  each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not scroll the transcript
+  behind it. The side panel is ONE host covering its three panes, so the pane decides what "here" means. Four
+  rules: hits are painted with the **CSS Custom Highlight API** (`::highlight()`), never by wrapping text in
+  `<mark>` — these panes re-render under the reader and a DOM mutation would be thrown away; the key owner is
+  installed ONCE at **module load** (a bar may mount after the overlay it sits inside, and among capture
+  listeners on the same target the first registered runs first), and it consumes Esc with
+  `stopImmediatePropagation` so the bar closes instead of the viewer behind it; the bar is **mounted only while
+  open on every surface** (a mounted-but-closed bar looks open to the host handle, `open` never becomes true,
+  and every count reads 无匹配); and `findable` is **opt-in per viewer** — an image or an HTML/PDF frame has no
+  text in THIS document, and the shell still owns ⌘F there.
+- **The one-off panel's × promises Esc, and who owns the FIRST press is decided by focus**: a column is not a
+  `ViewerOverlay`, so the viewers' dismissal contract never covered it. `App`'s global handler must not claim
+  every Escape unconditionally (`defaultPrevented` is the handshake), and the panel is a window-level listener
+  that refuses only an ALREADY-CLAIMED key. Because `/review` leaves the focus in the composer, the first Esc
+  there only hands the focus to the message area and the SECOND closes; a field inside the panel blurs on the
+  first.
 
-- **Backend events are subscribed in `desktop/frontend/src/agentEvents.ts`** (`useAgentStatus` /
-  `useSessionUsage` / `useAgentStream`) — status, the active session's live numbers, and the agent stream that
-  writes the transcript. Each payload names its session; compare it against `currentId` only where the UI
-  genuinely means "on screen" (a sidebar row, the error bubble), never to address storage.
+**Text and dialogs**
 
-- **The composer is `desktop/frontend/src/composer.tsx`** (`useComposer` + the `Composer` element): the input
-  box, the @-picker, the "/" palette, the queue of messages typed while a turn runs, and the parked-question
-  form. All four share one decision — `route`: send now, queue for the next steer point, or dispatch as a
-  slash command — so keep new input/queue behavior there, not in App.tsx. **The box's HEIGHT has three ways in
-  and one implementation** (`nudgeHeight`, composer.tsx): the handle's drag, ↑/↓ on the focused handle, and
-  ⌘⇧↑/⌘⇧↓ typed in the textarea — all three share the step and the floor/ceiling (`COMPOSER_INPUT_KEY_STEP`,
-  `composerInputMaxH()`), and at the floor the value returns to `null` so "not resized" stays one value (the
-  stylesheet's). The pair is bound in the TEXTAREA's own keydown, never window-wide: ⌥↑/⌥↓ is already the diff
-  pane's finding walk and bare ⌘↑/⌘↓ the text system's caret gestures, which is what the `composer-height`
-  scenario pins from both sides (the pair moves the box, plain ⌘↓ does not).
-
-- **A parked permission is the composer's state too, and its card is matched by tool CALL ID**
-  (`composer.tsx` + `App.tsx`): `perms` sits next to `asks` and follows the same rules — keyed by session,
-  NOT cleared on session switch (the agent is still parked), moved on auto-compaction, cleared on
-  `agent:idle` — and the form replaces the tool card whose `toolCallId` equals the request's (every live push
-  of a tool part sets it from `ev.ToolID`). Matching by tool NAME is the trap: a model emits a whole batch of
-  calls before any of them runs, so "the newest unfinished Bash card" is usually a different call than the
-  one waiting. `agent:permission` carries the agent's own preview rendering (`bashAskPreview` — `$ command` +
-  the matched rule) and the form shows it verbatim: parsing it in the frontend would be a second definition
-  of a format the backend owns. The form keeps its answer's own state (`busy`/`err`) and clears only when
-  `AnswerPermission` returns `"ok"` — a refused one (the run is gone, it was already answered) must stay on
-  screen with its reason rather than vanishing into a turn that will never move again.
-
-- **Path tries are byte-keyed: iterate strings by BYTE, not `for i := range s`** (`for i := range s` walks
-  rune boundaries, so `s[i]` yields only the first byte of each multi-byte character) — otherwise Chinese
-  file names come back mangled from the @-file index (the picker shows `?` and the inserted `@`-reference
-  points at a file that does not exist). `pkg/container/pathtrie.go`.
-
-- **A pane's width is its MIN-CONTENT width, and that is set by whichever row cannot shrink**
-  (`desktop/frontend/public/chat.css`): in the side panel every diff head row (`.diff-panel-head`,
-  `.diff-file-head`, `.diff-findings`) holds non-shrinkable badges/buttons, and a `white-space: nowrap` path
-  with the default `min-width: auto` contributes its WHOLE string — so the pane's content scrolls sideways
-  and the send bar's ends go off-screen with it. Three things together fix it: `flex-wrap: wrap` on those
-  rows, `flex: 1 1 0; min-width: 0` on the path (basis alone is not enough — the automatic minimum is the
-  min-content), and `max-width: min(1100px, 100%)` on `.viewer-doc.is-diff`, which the file-preview overlay
-  and the panel share (`min(1390px, 100%)` when the overlay's file index is showing — the cap has to cover the
-  index too, or the diff body would lose exactly the column's width against every other way of opening the
-  same diff). Moving the button to the bar's left end does NOT fix it: the bar spans the content
-  width, so either end can scroll away. The user's bubble is the same problem in miniature: a pasted URL has
-  no break opportunity, so it takes `overflow-wrap: anywhere` rather than `break-word`, because only the
-  former also shrinks the min-content (pinned by `bubble-wrap`).
-
-- **A control the reader uses WHILE a pane scrolls belongs in the sticky bar, not in the header**
-  (`desktop/frontend/src/diff.tsx`): the 意见 pane's ↑/↓ walk sits in `.diff-sendbar` (`position: sticky;
-  bottom: 0`), the only thing in that pane that stays put — jumping to a finding must not scroll the control
-  away, and where you are in the list is not a decision about sending. The cost is `flex-wrap: wrap` on the
-  bar: it holds seven controls, and its min-content would otherwise widen the panel past its 419px column.
-
-- **The overlay's file index PINS inside the pane's existing scroller — it never gets one of its own**
-  (`desktop/frontend/src/diff.tsx` + `chat.css`): the pinned thing is `.diff-filelist-col` — the list PLUS
-  its drag handle, one flex item beside the diff — so the handle travels with the list it resizes and its
-  height is the list's (`align-items: stretch` on a wrapper whose height is the list's own; two sticky
-  siblings would drift apart the moment the list is short enough not to scroll). It pins BELOW the pane's
-  pinned head, not over it, because the head (`.diff-panel-head` is `sticky; top: 0` too) would otherwise
-  paint over the
-  list's first rows. That offset is the head's MEASURED height, published by the pane as `--diff-head-h`
-  (`ResizeObserver` on the head, written straight to the element's style, no state): the head WRAPS — title,
-  repo root, note, 重新评审 — so there is no constant to hard-code, and a jumped-to file's `scroll-margin-top`
-  reads the same variable so it lands below the head rather than behind it. Two traps. (1) The scroller is
-  whichever box the pane already lives in — the overlay's `.viewer-stage`, the panel's `.oneoff-body` — and
-  BOTH the find bar (`useFind`) and the finding walk bind to that box: a nested `overflow: auto` container
-  would leave them searching and scrolling the wrong one (and would make the sticky column pin to the wrong
-  edge). (2) It is OVERLAY-ONLY, and absent with a single file, on purpose: the panel is a column the reader
-  drags (320px floor), where a 210px index takes a third of the width and the diff stops being readable — it
-  has the ↑/↓ walk for the same job. One file is nothing to choose between, and the column would cost the diff
-  210px in the common single-file case. A click unfolds the file FIRST and scrolls after that commit (the same
-  two steps as the finding walk), lands it 10px below the scroller's top (`scroll-margin-top`) and flashes the
-  same `is-jump-target` a finding gets. **A diff that spans more than one working directory is indexed in
-  one section per tree** (`fileGroups`): the section head carries the label the rows used to repeat on every
-  line (`主目录` — `PRIMARY_ROOT_LABEL`, the roots panel's word — or the additional root's directory name), a
-  count, and the absolute tree as its tooltip, and it is itself `position: sticky` at the top of the LIST's
-  own scroll container (opaque background: a long multi-root index scrolls, and a reader in its second half
-  must still see which tree they are reading). Two rules decide the shape. (1) The header is driven by
-  `multiRoot` (some file carries a root label), NOT by the number of sections: a diff in which only an
-  ADDITIONAL root changed has one section, whose rows still have to say which tree that is. (2) Section order
-  is the backend's file order untouched — the same order the diff BODY renders its groups in, so index and
-  content read the same way down; it is NOT always primary-first (the checkpoint path emits whatever order the
-  roots arrive in), so nothing sorts. A single-root diff gets no headers at all.
-  **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click**
-  (`currentKey`): a pinned index whose highlight only moves when clicked reports the reader's last jump
-  rather than the file in front of them, and on a diff this long the two part ways with one flick of the
-  wheel. The rule is stated in the SAME terms as the jump — a jumped-to file's top comes to rest on the
-  line `--diff-land` names, and the current file is the LAST group whose top has reached it — with the
-  line PUBLISHED from one place (the pane's `publish()`, alongside `--diff-head-h`) and consumed twice:
-  the CSS `scroll-margin-top` and this rule. Reading the computed `scroll-margin-top` back instead is what
-  an earlier version did, and the number is fine; hard-coding either side is how the two drift, and a
-  rule with its own line ("the first group whose bottom is still below the head") marked the row ABOVE the
-  one just clicked, because the previous file's bottom lands a few pixels under the landing line. **Both
-  ENDS need a fallback**, and both were measured: at the top of the scroll nothing has reached the line
-  yet (the first file's top sits below it — the scroller has padding of its own), and at the bottom nothing
-  is left to reach it (the last file is usually too short to climb that far). Without them the highlight
-  simply vanishes in both places, which reads as "I clicked a file and nothing is marked". The listeners
-  are `window` + CAPTURE (`scroll` does not bubble, and the scroller is the surface's box, not this pane's),
-  the walk is coalesced onto a frame, and the group with no `data-file-key` (其它文件) is neither current
-  nor counts as the first or last. The mark is a bar AND a wash AND `aria-current` — never colour alone —
-  and the bar is an inset shadow so marking a row cannot change its height.
-  **The index is draggable** (`startResize`, the same bargain the side panel's width strikes): what is SHOWN
-  is the reader's width clamped to the pane (`180`–`560`, never leaving the body under `420`), the width
-  under the pointer during a drag is written straight to the element instead of into state, and it is handed
-  back to React once on release. The handle is a real focusable control (role=separator: ArrowLeft/Right
-  step it), it rides in the pinned column, and it sits in the row's own gap via a negative margin so the
-  list's visible width stays exactly the number the reader chose. The width is remembered at MODULE level
-  (`fileListWidth`) so closing and reopening the overlay does not forget it — deliberately NOT persisted:
-  `desktop_ui.json` is where the panel's width lives because Go has to honour it before the window exists,
-  which is a bargain this column does not need. `oneoff-footer` pins the pinning (at two different scroll positions the
-  head's top equals the scroller's and the list's equals the head's bottom — which is what "fixed" means; at
-  rest the list sits below the head, as it should), the landing offset, the panel's lack of an index, the
-  highlight (click, bottom-of-scroll, back to top, exactly one row at a time, and — in
-  `file-index`, whose fixture is THREE files for exactly this reason — that clicking the MIDDLE row marks
-  the middle row: with two files the last one's fallback hides the off-by-one, which is why the reader
-  found it before the suite did) and the drag (press → follow →
-  clamp at both ends → the body still has its room);
-  `multi-root` pins the sections (two trees, the labels, and each same-named file landing under its OWN
-  tree's section — the association, not just the presence — plus that the rows no longer repeat the label),
-  and `oneoff-footer` also pins that a one-tree diff shows no section head at all.
-
-- **The width the reader drags is NOT React state** (`desktop/frontend/src/oneoff.tsx`): the width lives on
-  the panel element, so a `setState` per `pointermove` re-renders the whole panel — the 意见 pane's diff
-  included, a couple of hundred rows in the smoke fixture and thousands on a real review — before the browser
-  has even laid the new width out. The drag writes `panelRef.current.style.width` straight from the
-  pointermove handler and commits to React once, on release (which is also what persists it). A
-  `useLayoutEffect` re-asserts the drag's own number after every commit, because a render that happens
-  mid-drag must not put React's older width back on screen. Pinned by `oneoff-panel` (press → follow → clamp
-  → commit → persist); the *smoothness* has no assertion — a same-task read cannot see it (see the
-  Reduce-motion trap).
-
-- **The one-off panel's × promises Esc, and who owns the FIRST press is decided by focus**
-  (`desktop/frontend/src/oneoff.tsx`): a column is not a `ViewerOverlay`, so the viewers' dismissal contract
-  never covered it. Two rules: `App`'s global handler must not claim every Escape unconditionally (it would
-  swallow the panel's — `defaultPrevented` is the handshake), and the panel is a window-level listener that
-  refuses only an ALREADY-CLAIMED key, so a viewer or modal still wins by construction (ViewerOverlay claims
-  it in the capture phase and stops it there). Both orderings are pinned in `oneoff-footer`, because the
-  composer is the common case: `/review` leaves the focus in the composer, so there the first Esc only hands
-  the focus to the message area (`.chat`) and the SECOND closes; a field inside the panel blurs on the first.
-  The ordering is deliberate: the panel's own input field blurs on the first press, and the composer's Esc
-  is the same gesture.
-
-- **A dialog that renders a PANEL's rows inherits that panel's type scale — and the shared box's max-width**
-  (`desktop/frontend/public/overlays.css`): the project form reuses the roots panel's rows (`.roots-*`),
-  sized for a compact popover beside the sidebar (11px paths and buttons), so the 520px modal read as a
-  shrunken dialog between its own 14px title and 13.5px field. Its width was clamped the same quiet way:
-  `.confirm-box`'s `max-width: 380px` beats `.project-form`'s `width: 520px`, so the fields ellipsised paths
-  they had room for. The form raises those shared sizes SCOPED to `.project-form` (the popover keeps its own
-  compact scale) and declares its own `max-width`. `form-text` pins a floor rather than the numbers — nothing
-  inside the form under 12px, and the box is the width it claims — so retuning the design later is not a
-  test failure.
-
-- **One caret size — and the sidebar has a type floor and an ORDER** (`--caret-size` in `base.css`,
-  `layout.css`): the disclosure carets had grown four different answers (the sidebar group toggle
-  9px, the chain caret 8px, the thinking block 9px, the turn's process row 9px, the diff panel 9px),
-  and 8–9px of ▾ is a DOT — the one control that says "these rows are a group", or "this turn has a
-  process you can open", was invisible. They are `components.tsx`'s `<Caret>` now: an inline SVG sized
-  by `--caret-size`, NOT the glyphs. A text glyph's size follows the font, so raising the font-size
-  only ever bought a slightly larger dot — 12px of ▾ is still a ~6px triangle, which is why "make the
-  arrow bigger" came back a second time after the numbers were raised. A new caret uses that component
-  rather than picking characters or numbers. The sidebar is the densest surface in the window and its hierarchy was 14px group
-  headers against 13.5px rows — true on paper, invisible on screen (the report was 「项目字体太小了」);
-  it is 15px/620 headers against 14px rows with 12.5px timestamps now, and nothing inside it is under
-  12px. `sidebar-text` pins the INTENT rather than the numbers — a floor, a strict order (header >
-  row), and every caret at the shared size — so retuning the scale later is not a test failure.
+- **A dialog that renders a PANEL's rows inherits that panel's type scale — and the shared box's max-width**:
+  the project form reuses the roots panel's rows (`.roots-*`), sized for a compact popover (11px paths and
+  buttons), so the 520px modal read as a shrunken dialog between its own 14px title and 13.5px field — and
+  `.confirm-box`'s `max-width: 380px` beat `.project-form`'s `width: 520px`. The form raises those shared sizes
+  SCOPED to `.project-form` and declares its own `max-width`. `form-text` pins a floor rather than the numbers
+  (nothing under 12px, and the box is the width it claims).
+- **Path tries are byte-keyed: iterate strings by BYTE, not `for i := range s`** (`for i := range s` walks rune
+  boundaries, so `s[i]` yields only the first byte of each multi-byte character) — otherwise Chinese file names
+  come back mangled from the @-file index. `pkg/container/pathtrie.go`.
+- **Do not reintroduce an "activity row" above the composer**: one existed, appeared and vanished once per
+  step, and shoved the message area up and down; if it ever comes back, it must hold its place for the whole
+  turn. **Do not compensate a layout change from a `requestAnimationFrame`** — a covered window makes WebKit
+  stop the page's frames outright. Compensate in a LAYOUT effect instead: the new content is in the DOM and the
+  adjustment lands before paint.
+- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
+  (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge by
+  one `margin-left: auto`; a new titlebar control belongs in that cluster. **The agent state is not echoed in
+  the chrome**: 运行中 already reads from the sidebar row's `spin-dot` and the reply's typing dots.
+- **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate**
+  (`desktop/contextinfo.go` → `AIAgent.LastInputEstimateWithBreakdown`). The estimate
+  (`agent/token_estimate.go`) is character-class based and its bias depends on the content: it over-counts
+  plain English and UNDER-counts mixed CJK + JSON. So the reported number is the last call's real prompt size
+  (`llm.PromptTokens`: input + cache read + cache creation for Anthropic; the total alone for OpenAI-family)
+  scaled by the estimate's movement since that call. The breakdown in the popover is scaled to that total
+  (`Breakdown.ScaleTo`, because the parts must add up to the number above them), and a session restored from
+  disk anchors on the last recorded message. The correction is a RATIO of the estimate's movement applied to
+  the anchored real value, not an additive delta with a floor: after a compaction the history is REPLACED by a
+  summary, and a floor would leave the ring sitting on the pre-compaction number. The auto-compact THRESHOLD
+  reads the anchored value too, so the trigger and the meter agree; the cooldown is the one comparison still on
+  the raw estimate (it measures the conversation against itself, where the bias cancels).
+- **The context ring must follow each API CALL, not each turn** (`desktop/agent_turn.go` + `agentEvents.ts`):
+  the ring's estimate was read only on mount / new / switch / `turn_complete`, while the popover fetches
+  `GetContextInfo` when it opens — so during a long turn the ring sat at whatever the turn started with while
+  the popover at the SAME moment already showed the current value. `emitUsage` already ran after every API
+  call, so the estimate now rides that event (`agent:cost` carries `contextEstimate`/`contextWindow`, from the
+  one `contextUsageOf` rule `GetProviderInfo` shares). Two lessons: "the turn ended" and "the call ended" are
+  different refresh points, and two surfaces describing the same fact must read it from ONE rule.
+- **The context ring measures the PROMPT of the last call — a reply enters it only on the NEXT turn**: the
+  estimate is computed before each API call, so a turn that ends in a plain reply leaves the meter describing
+  the history *without* that reply. A scenario about "the context got smaller" must fill the window first, or
+  it asserts nothing.
 
 ## Desktop Themes (the dark palette)
 
 - **The dark theme is Ayu Mirage-derived and its contrast is low ON PURPOSE — do not "fix" it.** The family
-  is that theme's blue-grey (`surface.base` #1F2430, panel #282E3B, panel shadow black @0.2), lifted one
-  OKLCH step so the app reads as graphite instead of black (`--bg` #252a35, chroma ~0.022 against a neutral
-  ~0.010), with Ayu's *warm* grey editor fg as the CONTENT ink (`--text` #cecdc6) and its cool `ui.fg` family
-  as the CHROME ink (`--text-dim`/`--text-faint`, 10.5–11.5px metadata).
+  is that theme's blue-grey (`surface.base` #1F2430, panel #282E3B), lifted one OKLCH step so the app reads as
+  graphite instead of black (`--bg` #252a35, chroma ~0.022 against a neutral ~0.010), with Ayu's *warm* grey
+  editor fg as the CONTENT ink (`--text` #cecdc6) and its cool `ui.fg` family as the CHROME ink
+  (`--text-dim`/`--text-faint`, 10.5–11.5px metadata).
 - **Every "go" button is ONE flat recipe — do not put the gradient back.** `.send-btn`, `.pending-send`,
   `.diff-sendbar-go` and `.plan-start` share a single solid `--accent-strong` fill: no gradient, no inset
-  sheen, no coloured glow (`.new-chat` is the tinted variant of the same idea). Two consequences worth
-  keeping: button contrast is tuned in ONE place (`--accent-strong`, which is why the dark theme's sits at
-  chroma ~0.11), and **a fill that carries white text always takes the `-strong` variant** — `--red` is tuned
-  as INK and puts a white glyph below 4.5:1.
-- **Find hits are amber on purpose** (`--find-hit` wash + `--find-hit-current`, a solid plane with dark ink
-  painted over the others — base.css, both themes): a hit has to be findable inside a diff, where green and
-  red already mean added and removed, and inside prose, where the accent means a link or inline code.
+  sheen, no coloured glow (`.new-chat` is the tinted variant of the same idea). Two consequences: button
+  contrast is tuned in ONE place, and **a fill that carries white text always takes the `-strong` variant** —
+  `--red` is tuned as INK and puts a white glyph below 4.5:1.
+- **Find hits are amber on purpose** (`--find-hit` wash + `--find-hit-current`, base.css, both themes): a hit
+  has to be findable inside a diff, where green and red already mean added and removed, and inside prose, where
+  the accent means a link or inline code.
 - **The reading surfaces take their sizes from ONE place** (`base.css`: `--fs-prose` 15.5px / `--fs-bubble`
-  15px / `--fs-finding` 13px). "The text is too small" is an edit there, not a hunt through four files: the
-  transcript's prose, the reader's own message and a review finding all read it, and code inside prose
-  follows its parent (0.88em). The scale is deliberately NOT a blanket multiplier — labels, badges and
-  metadata are chrome and keep their own sizes, and the panel's diff body stays at 11px so a finding is what
-  stands out against the code it is about.
-- **What bounds the palette is `--text-faint`'s 4.5:1 floor, not `--text`.** It is the token that lands on
-  the *lightest* plane (placeholders, MCP labels, `.file-note` — panel-solid, and panel-2 under the
-  picker/CSV headers), so it pins both the ink (~#9ca3b1) and the top of the ladder (~#303541). Any "make it
-  lighter/greyer still" edit has to trade against that: raise the planes and the smallest text is what breaks
-  first, and `--text` has room to spare. Verify with a WCAG ratio check across every plane (`luminance` +
-  alpha compositing), not by eye.
+  15px / `--fs-finding` 13px). "The text is too small" is an edit there, not a hunt through four files. The
+  scale is deliberately NOT a blanket multiplier — labels, badges and metadata are chrome and keep their own
+  sizes, and the panel's diff body stays at 11px so a finding is what stands out against the code it is about.
+- **What bounds the palette is `--text-faint`'s 4.5:1 floor, not `--text`.** It is the token that lands on the
+  *lightest* plane (placeholders, MCP labels, `.file-note`), so it pins both the ink and the top of the ladder
+  (~#303541). Any "make it lighter still" edit has to trade against that: raise the planes and the smallest
+  text is what breaks first, and `--text` has room to spare. Verify with a WCAG ratio check across every plane
+  (`luminance` + alpha compositing), not by eye.
 - **`windowBgLight`/`windowBgDark` (main.go) are the same decision in a second place** — the pre-paint window
   colour, which `uitheme.go` also feeds to the native appearance. Move them with `--bg`.
 - **One definition per mode, and it lives in `frontend/public/base.css`**: the `:root[data-theme="dark"]`
@@ -1277,8 +813,7 @@ const type = (el, t) => {
   `prefers-color-scheme`, and no other file carries dark colours — the hljs tokens in `widgets.css` map onto
   the semantic tokens, so a palette edit covers code blocks for free; upward shadows use `--shadow-up`.
 - **To SEE a palette change, do not reach for the app window** (window capture is dead on macOS 26). Render
-  the tokens instead: extract both blocks from base.css (next to
-  `git show HEAD:desktop/frontend/public/base.css` for the before) into a small HTML page whose swatches/mock
-  rows read `var(--token)`, one scope per variant, and screenshot it with headless Chrome
-  (`--headless=new --force-device-scale-factor=2.6 --window-size=…`). That gives a real A/B of the REAL
-  values without a rebuild loop.
+  the tokens instead: extract both blocks from base.css (next to `git show HEAD:desktop/frontend/public/base.css`
+  for the before) into a small HTML page whose swatches/mock rows read `var(--token)`, one scope per variant,
+  and screenshot it with headless Chrome (`--headless=new --force-device-scale-factor=2.6 --window-size=…`).
+  That gives a real A/B of the REAL values without a rebuild loop.
