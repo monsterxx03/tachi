@@ -1104,9 +1104,12 @@ const type = (el, t) => {
   bar: it holds seven controls, and its min-content would otherwise widen the panel past its 419px column.
 
 - **The overlay's file index PINS inside the pane's existing scroller — it never gets one of its own**
-  (`desktop/frontend/src/diff.tsx` + `chat.css`): `.diff-filelist` is `position: sticky` in a flex row beside
-  the diff, so it stays put while the diff scrolls past it — and it pins BELOW the pane's pinned head, not
-  over it, because the head (`.diff-panel-head` is `sticky; top: 0` too) would otherwise paint over the
+  (`desktop/frontend/src/diff.tsx` + `chat.css`): the pinned thing is `.diff-filelist-col` — the list PLUS
+  its drag handle, one flex item beside the diff — so the handle travels with the list it resizes and its
+  height is the list's (`align-items: stretch` on a wrapper whose height is the list's own; two sticky
+  siblings would drift apart the moment the list is short enough not to scroll). It pins BELOW the pane's
+  pinned head, not over it, because the head (`.diff-panel-head` is `sticky; top: 0` too) would otherwise
+  paint over the
   list's first rows. That offset is the head's MEASURED height, published by the pane as `--diff-head-h`
   (`ResizeObserver` on the head, written straight to the element's style, no state): the head WRAPS — title,
   repo root, note, 重新评审 — so there is no constant to hard-code, and a jumped-to file's `scroll-margin-top`
@@ -1119,9 +1122,54 @@ const type = (el, t) => {
   has the ↑/↓ walk for the same job. One file is nothing to choose between, and the column would cost the diff
   210px in the common single-file case. A click unfolds the file FIRST and scrolls after that commit (the same
   two steps as the finding walk), lands it 10px below the scroller's top (`scroll-margin-top`) and flashes the
-  same `is-jump-target` a finding gets. `oneoff-footer` pins the pinning (at two different scroll positions the
+  same `is-jump-target` a finding gets. **A diff that spans more than one working directory is indexed in
+  one section per tree** (`fileGroups`): the section head carries the label the rows used to repeat on every
+  line (`主目录` — `PRIMARY_ROOT_LABEL`, the roots panel's word — or the additional root's directory name), a
+  count, and the absolute tree as its tooltip, and it is itself `position: sticky` at the top of the LIST's
+  own scroll container (opaque background: a long multi-root index scrolls, and a reader in its second half
+  must still see which tree they are reading). Two rules decide the shape. (1) The header is driven by
+  `multiRoot` (some file carries a root label), NOT by the number of sections: a diff in which only an
+  ADDITIONAL root changed has one section, whose rows still have to say which tree that is. (2) Section order
+  is the backend's file order untouched — the same order the diff BODY renders its groups in, so index and
+  content read the same way down; it is NOT always primary-first (the checkpoint path emits whatever order the
+  roots arrive in), so nothing sorts. A single-root diff gets no headers at all.
+  **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click**
+  (`currentKey`): a pinned index whose highlight only moves when clicked reports the reader's last jump
+  rather than the file in front of them, and on a diff this long the two part ways with one flick of the
+  wheel. The rule is stated in the SAME terms as the jump — a jumped-to file's top comes to rest on the
+  line `--diff-land` names, and the current file is the LAST group whose top has reached it — with the
+  line PUBLISHED from one place (the pane's `publish()`, alongside `--diff-head-h`) and consumed twice:
+  the CSS `scroll-margin-top` and this rule. Reading the computed `scroll-margin-top` back instead is what
+  an earlier version did, and the number is fine; hard-coding either side is how the two drift, and a
+  rule with its own line ("the first group whose bottom is still below the head") marked the row ABOVE the
+  one just clicked, because the previous file's bottom lands a few pixels under the landing line. **Both
+  ENDS need a fallback**, and both were measured: at the top of the scroll nothing has reached the line
+  yet (the first file's top sits below it — the scroller has padding of its own), and at the bottom nothing
+  is left to reach it (the last file is usually too short to climb that far). Without them the highlight
+  simply vanishes in both places, which reads as "I clicked a file and nothing is marked". The listeners
+  are `window` + CAPTURE (`scroll` does not bubble, and the scroller is the surface's box, not this pane's),
+  the walk is coalesced onto a frame, and the group with no `data-file-key` (其它文件) is neither current
+  nor counts as the first or last. The mark is a bar AND a wash AND `aria-current` — never colour alone —
+  and the bar is an inset shadow so marking a row cannot change its height.
+  **The index is draggable** (`startResize`, the same bargain the side panel's width strikes): what is SHOWN
+  is the reader's width clamped to the pane (`180`–`560`, never leaving the body under `420`), the width
+  under the pointer during a drag is written straight to the element instead of into state, and it is handed
+  back to React once on release. The handle is a real focusable control (role=separator: ArrowLeft/Right
+  step it), it rides in the pinned column, and it sits in the row's own gap via a negative margin so the
+  list's visible width stays exactly the number the reader chose. The width is remembered at MODULE level
+  (`fileListWidth`) so closing and reopening the overlay does not forget it — deliberately NOT persisted:
+  `desktop_ui.json` is where the panel's width lives because Go has to honour it before the window exists,
+  which is a bargain this column does not need. `oneoff-footer` pins the pinning (at two different scroll positions the
   head's top equals the scroller's and the list's equals the head's bottom — which is what "fixed" means; at
-  rest the list sits below the head, as it should), the landing offset and the panel's lack of an index.
+  rest the list sits below the head, as it should), the landing offset, the panel's lack of an index, the
+  highlight (click, bottom-of-scroll, back to top, exactly one row at a time, and — in
+  `file-index`, whose fixture is THREE files for exactly this reason — that clicking the MIDDLE row marks
+  the middle row: with two files the last one's fallback hides the off-by-one, which is why the reader
+  found it before the suite did) and the drag (press → follow →
+  clamp at both ends → the body still has its room);
+  `multi-root` pins the sections (two trees, the labels, and each same-named file landing under its OWN
+  tree's section — the association, not just the presence — plus that the rows no longer repeat the label),
+  and `oneoff-footer` also pins that a one-tree diff shows no section head at all.
 
 - **The width the reader drags is NOT React state** (`desktop/frontend/src/oneoff.tsx`): the width lives on
   the panel element, so a `setState` per `pointermove` re-renders the whole panel — the 意见 pane's diff

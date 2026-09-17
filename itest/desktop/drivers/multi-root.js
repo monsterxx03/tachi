@@ -53,6 +53,41 @@
   smoke.check('两个 root 的改动都显示出来了',
     pane.indexOf('main-change') >= 0 && pane.indexOf('lib-change') >= 0, pane.slice(0, 160))
 
+  // ── 左侧文件索引：按 working dir 分区 ──────────────────────────────────────
+  // 索引是一份「先挑哪棵树」的清单。混着两棵树时，一行裸路径正是 root 标签要消掉的那个歧义
+  // ——而且这里比正文更严重：正文旁边有分组标题，索引里什么都没有。所以多根下一棵树一段，
+  // 归属由分区标题说一次，行里不再逐行重复（重复两遍等于没有重点）。
+  const heads = smoke.qa('.viewer-doc.is-diff .diff-filelist-group')
+  const sectionName = (h) => {
+    const n = h.querySelector('.diff-filelist-group-name')
+    return n ? smoke.text(n) : ''
+  }
+  const rowsUnder = (h) => {
+    const out = []
+    let el = h.nextElementSibling
+    while (el && !el.classList.contains('diff-filelist-group')) {
+      if (el.classList.contains('diff-filelist-row')) out.push(smoke.text(el))
+      el = el.nextElementSibling
+    }
+    return out
+  }
+  const sections = heads.map((h) => ({ name: sectionName(h), rows: rowsUnder(h) }))
+  smoke.check('文件索引按 working dir 分区（两棵树两段）', sections.length === 2,
+    sections.map((s) => s.name).join(' | ') || '(没有分区)')
+  smoke.check('分区标题说的是哪棵树（主目录 + additional 的目录名）',
+    sections.some((s) => s.name === '主目录') && sections.some((s) => s.name === 'shared-lib'),
+    sections.map((s) => s.name).join(' | '))
+  // 关联才是重点：每个同名文件必须落在**自己那棵树**那一段里。
+  smoke.check('每个同名文件落在自己那棵树的分区下',
+    sections.length === 2 && sections.every((s) => s.rows.length === 1 && s.rows[0].indexOf('notes.md') >= 0),
+    sections.map((s) => s.name + ':' + s.rows.join(',')).join(' | '))
+  smoke.check('行里不再重复标注归属（分区标题已经说了）',
+    smoke.qa('.viewer-doc.is-diff .diff-filelist-row').every((r) => {
+      const t = smoke.text(r)
+      return t.indexOf('主目录') < 0 && t.indexOf('shared-lib') < 0
+    }),
+    smoke.allText('.viewer-doc.is-diff .diff-filelist-row').join(' | '))
+
   // 折叠状态按 (root, path) 记：点一个分组的折叠按钮，不能把另一个也折了。
   const toggles = smoke.qa('.viewer-doc.is-diff .diff-file-toggle')
   if (toggles.length === 2) {

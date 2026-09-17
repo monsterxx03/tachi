@@ -11,7 +11,7 @@
 // Both render the same `Hunk` lines through DiffLines, which is what keeps the two
 // views from drifting: the difference is a flag, not a second implementation.
 
-import { Fragment, memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { AgentService, type FileChangeVO, type FileDiffVO, type FindingVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Hunk } from '../bindings/github.com/monsterxx03/tachi/pkg/linediff'
 import { FilePreviewOverlay } from './filepreview'
@@ -21,6 +21,56 @@ import { InlineMd } from './markdown'
 
 // DIFF_FOLD_LINES is how much of a change shows before folding.
 const DIFF_FOLD_LINES = 24
+
+// The file index's width: the column the reader drags, its bounds, and one arrow-key step.
+//
+// The default is the number the CSS used to hard-code; the ceiling exists because the index is a
+// way to FIND a file, not a second diff to read, and the floor because a column narrower than the
+// shortest path shows nothing at all. The body keeps DIFF_FILELIST_BODY_MIN whatever the reader
+// asks for — this column grows into the room the pane has, never into the diff.
+const DIFF_FILELIST_DEFAULT_WIDTH = 230
+const DIFF_FILELIST_MIN_WIDTH = 180
+const DIFF_FILELIST_MAX_WIDTH = 560
+const DIFF_FILELIST_BODY_MIN = 420
+const DIFF_FILELIST_KEY_STEP = 16
+// How far below the pinned head a jumped-to file comes to rest. It is published as `--diff-land`
+// (the head's height plus this) and read by BOTH the CSS `scroll-margin-top` and the highlight's
+// own rule, so the jump and the mark are one definition — hard-coding the number in either place
+// is how they drift, and reading the computed `scroll-margin-top` back turned out to be a value
+// WebKit may hand over empty (measured: the landing line collapsed to the scroller's top, and the
+// highlight vanished on the first scroll).
+const DIFF_FILE_JUMP_GAP = 10
+
+// fileListWidth survives the pane being unmounted (the overlay is closed and reopened), because a
+// width the reader set a second ago must not be forgotten on reopen. Module level on purpose:
+// this is the same kind of memory as the theme's own (see theme.ts), NOT a preference the app
+// persists — the panel's width lives in desktop_ui.json because Go has to honour it before the
+// window exists, which is a bargain this column does not need to strike.
+let fileListWidth = DIFF_FILELIST_DEFAULT_WIDTH
+
+// clampFileListWidth bounds a requested width by the pane it has to fit in: never narrower than
+// the floor, never so wide that the diff body drops below DIFF_FILELIST_BODY_MIN. A pane that
+// cannot be measured yet (the first render, before the element exists) has no ceiling to impose —
+// bounding by that zero would show the floor for a frame and only correct itself on the next
+// render, which never comes until the reader does something.
+function clampFileListWidth(px: number, paneWidth: number): number {
+  const ceiling = paneWidth > 0
+    ? Math.max(DIFF_FILELIST_MIN_WIDTH, Math.min(DIFF_FILELIST_MAX_WIDTH, paneWidth - DIFF_FILELIST_BODY_MIN))
+    : DIFF_FILELIST_MAX_WIDTH
+  return Math.max(DIFF_FILELIST_MIN_WIDTH, Math.min(ceiling, Math.round(px)))
+}
+
+// scrollableAncestor is the box the pane actually scrolls in — the overlay's stage, the panel's
+// body (the pane itself is the content, not the scroller; see the CSS). Found by walking up rather
+// than passed in, because the same pane is mounted in both surfaces and neither one's class is the
+// other's business. It is also what "which file am I looking at" has to be measured against.
+function scrollableAncestor(el: HTMLElement | null): HTMLElement | null {
+  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY
+    if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') return n
+  }
+  return null
+}
 
 // findingMatchesFile compares a finding's path with a panel entry's: the reviewer may
 // have written it relative to the repo or absolutely, and both mean the same file.
@@ -280,6 +330,46 @@ function fileRootName(file: FileDiffVO, root: string, multiRoot: boolean): strin
   return file.rootLabel || (multiRoot && root ? PRIMARY_ROOT_LABEL : '')
 }
 
+// FileGroup is one working directory's slice of a diff, for the file index.
+type FileGroup = {
+  // tree is the absolute root every file here lives in — the group's identity (two roots can hold
+  // the same relative path, so it is never the label).
+  tree: string
+  label: string
+  files: FileDiffVO[]
+}
+
+// fileGroups buckets a diff's files by the tree they live in, keeping the order the backend
+// emitted them in — deliberately: that is the order the diff BODY renders the groups in, so the
+// index and the content read the same way down. (The order itself is the backend's business and
+// is not always primary-first: the checkpoint path emits whatever order the roots' diffs arrive
+// in, which is why nothing here sorts.)
+//
+// The index is a LIST the reader scans to pick a tree, and a bare path in a list that mixes two
+// trees is the same ambiguity the root label exists to remove — one step worse, since here there
+// is no diff body next to the row to disambiguate it. So a multi-root diff gets one section per
+// working directory (`multiRoot` decides, not the number of sections: a diff where only an
+// additional root changed has ONE section, and its rows still need to say which tree that is).
+// A single-root diff gets no headers at all — a lone 「主目录」 over the only tree there is would
+// be a label with nothing to be told apart from.
+function fileGroups(files: FileDiffVO[], root: string, multiRoot: boolean): FileGroup[] {
+  const groups: FileGroup[] = []
+  const byTree = new Map<string, FileGroup>()
+  for (const f of files) {
+    const tree = fileTree(f, root)
+    let g = byTree.get(tree)
+    if (!g) {
+      // Every file of a root carries the same label (the backend derives it per root), so the
+      // first one names the section.
+      g = { tree, label: fileRootName(f, root, multiRoot), files: [] }
+      byTree.set(tree, g)
+      groups.push(g)
+    }
+    g.files.push(f)
+  }
+  return groups
+}
+
 // JUMP_HIGHLIGHT_MS is how long the row an arrow landed on stays marked. Long enough to
 // find it after the scroll settles, short enough not to look like a selection — the tick
 // box is what expresses "this one", and a second, stronger-looking state would compete.
@@ -456,13 +546,23 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // Measured rather than guessed, because the head WRAPS (title, root, note, 重新评审) and neither
   // number is a constant. Written straight to the pane's style instead of into state, for the
   // reason the panel's width drag gives: a re-render per resize would re-render every diff row.
-  useEffect(() => {
+  //
+  // A LAYOUT effect, not an effect: the pinned column reads this variable through CSS, so a value
+  // that arrived one paint late would leave it pinned at the `0px` fallback for that frame — the
+  // index tucked under the head — and the measurement that follows (a driver, a reader's eye) can
+  // catch exactly that frame. Layout effects run after the DOM is updated but BEFORE paint, which
+  // is where a compensated layout belongs (the same rule the fold toggle follows).
+  useLayoutEffect(() => {
     const head = headRef.current
     const pane = paneRef.current
     if (!head || !pane || !fileList) return
     const publish = () => {
       const gap = parseFloat(getComputedStyle(head).marginBottom) || 0
-      pane.style.setProperty('--diff-head-h', `${Math.round(head.getBoundingClientRect().height + gap)}px`)
+      const h = Math.round(head.getBoundingClientRect().height + gap)
+      pane.style.setProperty('--diff-head-h', `${h}px`)
+      // Where a jumped-to file's top comes to rest: the CSS `scroll-margin-top` and the index's
+      // own "which file am I on" rule both read this, so the jump and the mark cannot disagree.
+      pane.style.setProperty('--diff-land', `${h + DIFF_FILE_JUMP_GAP}px`)
     }
     publish()
     // A ResizeObserver, not a window listener: the height changes when the CONTENT wraps too (a
@@ -474,17 +574,160 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
     return () => { ro.disconnect(); pane.style.removeProperty('--diff-head-h') }
   }, [fileList, diff])
 
+  // ── The index's width (the handle between the list and the diff) ───────────
+  // The same bargain the side panel's width strikes, for the same reason: what is SHOWN is the
+  // reader's width clamped to the room the pane has, and the number under the pointer during a
+  // drag is written straight to the element instead of into state (a state update per pointermove
+  // re-renders the whole pane — every diff row — before the browser has laid the new width out).
+  // The number goes back to React once, on release.
+  const [width, setWidth] = useState(fileListWidth)
+  const [resizing, setResizing] = useState(false)
+  const listRef = useRef<HTMLElement>(null)
+  const dragPxRef = useRef<number | null>(null)
+  // A drag still in flight when the overlay closes would never remove its window listeners.
+  const detachRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => detachRef.current?.(), [])
+  // A render that happens mid-drag must not put React's older number back on screen.
+  useLayoutEffect(() => {
+    if (dragPxRef.current !== null && listRef.current) listRef.current.style.width = `${dragPxRef.current}px`
+  })
+  const paneWidth = () => paneRef.current?.clientWidth || 0
+  const shownWidth = clampFileListWidth(width, paneWidth())
+
+  // Rows hold their own handlers; these live here because both the drag and the arrow keys commit
+  // through the same place (module memory + state), so a width set one way is remembered the other.
+  const commitWidth = (px: number) => {
+    fileListWidth = clampFileListWidth(px, paneWidth())
+    setWidth(fileListWidth)
+  }
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const start = { x: e.clientX, w: shownWidth }
+    dragPxRef.current = shownWidth
+    setResizing(true)
+    // Listeners attach HERE rather than in an effect keyed on `resizing`: React commits that state
+    // asynchronously, and a fast drag delivers its first moves before such an effect could run (the
+    // side panel's drag learned this — a synthetic down+move sent back to back moved nothing).
+    const widthAt = (clientX: number) => clampFileListWidth(start.w + (clientX - start.x), paneWidth())
+    const move = (ev: PointerEvent) => {
+      const px = widthAt(ev.clientX)
+      dragPxRef.current = px
+      if (listRef.current) listRef.current.style.width = `${px}px`
+    }
+    const finish = (ev: PointerEvent) => {
+      const px = widthAt(ev.clientX)
+      dragPxRef.current = null
+      detach()
+      setResizing(false)
+      commitWidth(px)
+    }
+    const detach = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      document.body.classList.remove('is-resizing')
+      detachRef.current = null
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    document.body.classList.add('is-resizing')
+    detachRef.current = detach
+  }
+  // The handle is a real control (role=separator), so arrow keys resize too.
+  const onResizeKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowLeft' ? -DIFF_FILELIST_KEY_STEP : e.key === 'ArrowRight' ? DIFF_FILELIST_KEY_STEP : 0
+    if (!step) return
+    e.preventDefault()
+    commitWidth(shownWidth + step)
+  }
+
   // ── Jumping to a file (the index on the left) ──────────────────────────────
   // The same two steps as the finding walk, for the same reason: a FOLDED file has no rows to
   // scroll to, so it is unfolded first and the scroll waits for that commit (pendingFile). The
   // landing is marked with the same flash a finding gets — in a diff this long, "did it move?"
   // is otherwise a question about 3000 pixels of identical-looking hunks.
   const [pendingFile, setPendingFile] = useState<{ key: string; at: number } | null>(null)
+  // The (root, path) key of the file the reader is on — the index's highlight, driven by the click
+  // and then by the scroll (see the effect below).
+  const [currentKey, setCurrentKey] = useState('')
   const jumpToFile = (f: FileDiffVO) => {
     const key = fileKey(f)
     setFileOpen((prev) => ({ ...prev, [key]: true }))
+    setCurrentKey(key)
     setPendingFile({ key, at: Date.now() })
   }
+
+  // ── Which file the reader is looking at (the index's own highlight) ─────────
+  // Set by a click, and then kept honest by the SCROLL: a pinned index whose highlight only moves
+  // when clicked reports the reader's last jump rather than the file in front of them, and on a
+  // diff this long the two part ways with one flick of the wheel.
+  //
+  // The rule is stated in the SAME terms as the jump, which is the whole point: a jumped-to file's
+  // top stops on the line `.diff-file`'s `scroll-margin-top` names (below the pinned head), and the
+  // current file is the LAST group whose top has reached that line. Reading it off the CSS
+  // (`scrollMarginTop`) rather than hard-coding the number is what keeps the two in step: with a
+  // measured-line rule of my own — "the first group whose bottom is still below the head" — the
+  // previous file's bottom lands a few pixels UNDER the line after every jump, so clicking a row
+  // marked the row above it. One line, one definition, no second constant to drift.
+  //
+  // The one exception is the END of the scroll, where the last file wins: a file too short to reach
+  // the line (the usual shape of the last one) would otherwise never be marked while the reader is
+  // looking straight at it — and clicking its row would mark the file above it, the same bug by
+  // another route.
+  //
+  // Recomputed on a frame, not per scroll event: a wheel emits dozens per frame and each one would
+  // otherwise walk every group. setCurrentKey with an unchanged key is a no-op for React, so a
+  // scroll that stays inside one file re-renders nothing.
+  useEffect(() => {
+    if (!fileList) return
+    const pane = paneRef.current
+    const scroller = scrollableAncestor(pane)
+    if (!pane || !scroller) return
+    let raf = 0
+    const measure = () => {
+      raf = 0
+      const groups = Array.from(pane.querySelectorAll<HTMLElement>('.diff-file'))
+      if (groups.length === 0) return
+      // The landing line, in viewport coordinates: where a jumped-to group's top comes to rest.
+      const margin = parseFloat(getComputedStyle(pane).getPropertyValue('--diff-land')) || 0
+      // +1 for rounding: a group sitting exactly on the line counts as having reached it, and the
+      // next group's top is far below it, so nothing is decided by the odd pixel.
+      const line = scroller.getBoundingClientRect().top + margin + 1
+      let key = ''
+      let last = ''
+      let first = ''
+      for (const g of groups) {
+        // An empty key is the 其它文件 group (findings with no diff of their own): it is not a file
+        // the index can point at, so it neither becomes current nor counts as the first or last one.
+        const k = g.dataset.fileKey || ''
+        if (!k) continue
+        if (!first) first = k
+        last = k
+        if (g.getBoundingClientRect().top <= line) key = k
+      }
+      // Two ends, both of them real: nothing has reached the line yet (the diff is scrolled to its
+      // TOP, where the first file's top sits below the line because the scroller has padding of its
+      // own), or nothing is left to reach it (the scroll is at its END and the last file is too
+      // short to climb to the line). Without these, the highlight simply disappears in both places —
+      // which is what the reader saw as "clicked a file and nothing is marked".
+      if (!key) key = first
+      const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1
+      if (atEnd && last) key = last
+      setCurrentKey(key)
+    }
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(measure) }
+    measure()
+    // window + capture, not the scroller itself: `scroll` does not bubble, so a capture listener
+    // at the top is the one place that hears this pane's scroller — whichever box that turns out
+    // to be in the surface it is mounted in (the overlay's stage, the panel's body).
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll, { capture: true })
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [fileList, diff])
+
   useEffect(() => {
     if (!pendingFile) return
     // Found by attribute rather than by a selector built from the key: the key holds a path, and
@@ -600,23 +843,55 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       ) : null}
       {(diff?.files || []).length > 0 ? (
         <div className="diff-split">
-          {/* The index: one row per changed file, pinned while the diff scrolls (see the CSS —
-              it is `position: sticky` inside the pane's OWN scroller rather than a second scroll
+          {/* The index: one row per changed file — grouped by working directory when the diff
+              spans more than one — pinned while the diff scrolls (see the CSS — it is
+              `position: sticky` inside the pane's OWN scroller rather than a second scroll
               container, because the find bar and the finding walk both bind to that scroller).
               Off in the panel, and absent with a single file (see showFileList). */}
           {showFileList ? (
-            <nav className="diff-filelist" aria-label="文件列表">
-              {(diff?.files || []).map((f) => (
-                <button key={keyOf(f)} type="button" className="diff-filelist-row"
-                  title={fileAbsPath(f, diff?.root || '')} onClick={() => jumpToFile(f)}>
-                  <span className="diff-filelist-path">{f.path}</span>
-                  {fileRootName(f, diff?.root || '', multiRoot)
-                    ? <span className="diff-filelist-root">{fileRootName(f, diff?.root || '', multiRoot)}</span>
-                    : null}
-                  <DiffCounts added={f.added} removed={f.removed} />
-                </button>
-              ))}
-            </nav>
+            /* The column (list + handle) is what PINS, not the list: the handle has to travel with
+               it, and the handle's height has to be the list's (see the CSS). */
+            <div className="diff-filelist-col">
+              <nav className="diff-filelist" aria-label="文件列表" ref={listRef} style={{ width: shownWidth }}>
+                {fileGroups(diff?.files || [], diff?.root || '', multiRoot).map((g) => (
+                  <Fragment key={g.tree}>
+                    {/* One section per working directory, and only in a multi-root diff (see
+                        fileGroups): the label the rows used to repeat on every line is said once,
+                        here, and it stays pinned at the top of the list while its own rows scroll
+                        past (the list is a scroll container of its own — see the CSS). */}
+                    {multiRoot ? (
+                      <div className="diff-filelist-group" title={g.tree}>
+                        <span className="diff-filelist-group-name">{g.label}</span>
+                        <span className="diff-filelist-group-count">{g.files.length}</span>
+                      </div>
+                    ) : null}
+                    {g.files.map((f) => {
+                      // The row the reader is ON: set by the click, kept honest by the scroll (see
+                      // the effect above). aria-current is the same fact for a screen reader — the
+                      // bar and the wash are what the eye gets, and colour is never the only carrier.
+                      const key = keyOf(f)
+                      const current = key === currentKey
+                      return (
+                        <button key={key} type="button"
+                          className={`diff-filelist-row${current ? ' is-current' : ''}`}
+                          aria-current={current ? 'true' : undefined}
+                          title={fileAbsPath(f, diff?.root || '')} onClick={() => jumpToFile(f)}>
+                          <span className="diff-filelist-path">{f.path}</span>
+                          <DiffCounts added={f.added} removed={f.removed} />
+                        </button>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+              </nav>
+              {/* The grab strip between the index and the diff. Like the panel's, it is a real
+                  focusable control (role=separator) — a drag is not the only way to widen a column,
+                  and ArrowLeft/Right is what the keyboard gets. */}
+              <div className={`diff-filelist-resizer${resizing ? ' is-dragging' : ''}`} role="separator"
+                aria-orientation="vertical" aria-label="调整文件列表宽度" tabIndex={0}
+                title="拖动调整文件列表宽度（← → 也可以）"
+                onPointerDown={startResize} onKeyDown={onResizeKey} />
+            </div>
           ) : null}
           <div className="diff-split-body">
             {(diff?.files || []).map((f) => (

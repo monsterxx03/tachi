@@ -1733,6 +1733,31 @@ permissions:
 		},
 		//
 		//
+		// file-index: 索引里「当前是哪个文件」只有三个以上文件才试得出来 —— 点中间那一条时，上一条的
+		// 底边正好落在跳转落点那条线的下方（见 diff.tsx 的 scrollMarginTop 规则），只按「谁的底边还在
+		// 头栏下面」判就会亮上一条，正是读者报的那个症状。两个文件的 fixture 抓不到它：第二个就是最后
+		// 一个，而「滚到底时最后一个胜出」的兜底会把答案修正回来，看起来是对的。所以这里第三个文件
+		// 故意写得很长，好让**中间**那条够得着落点线 —— 只为让这条断言成立。
+		{
+			name: "file-index",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe file-index scenario's working directory\n",
+			},
+			gitInit: true,
+			steps: []mockllm.Step{
+				{Reply: writeFileStream(0, "NOTES.md", strings.Repeat("一行笔记：这一行只是为了让 diff 长到需要滚动。\n", 80), "call_x1")},
+				{Reply: writeFileStream(0, "OTHER.md", "another file\n", "call_x2")},
+				// 排序在最后、而且很长：中间那条（OTHER.md）的跳转落点才落在还能滚到的范围里。
+				{Reply: writeFileStream(0, "ZED.md", strings.Repeat("最后一段：同样的填充，只为把可滚动范围撑开。\n", 40), "call_x3")},
+				{Reply: textStream("三个文件都写好了。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("只有一轮对话（三次写文件 + 一次结论）", len(c.requests) == 4, requestCount(c.requests))
+			},
+		},
+		//
+		//
 		// paste-image: a screenshot pasted into the box must reach the model as an IMAGE. The driver
 		// dispatches a real paste event carrying PNG bytes (a screenshot on the clipboard is bytes
 		// with no path — which is why the composer stores it through a binding instead of inserting a

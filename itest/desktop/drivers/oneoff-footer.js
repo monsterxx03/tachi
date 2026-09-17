@@ -79,6 +79,9 @@
   smoke.check('索引里每个文件一行（本轮两个文件两行）',
     rows.length === 2 && smoke.text(rows[0]).indexOf('NOTES.md') >= 0 && smoke.text(rows[1]).indexOf('OTHER.md') >= 0,
     rows.map((r) => smoke.text(r)).join(' | '))
+  // 单根 diff 不分区：一棵树没有要区分的东西，一条「主目录」标题只会白占一行高度。
+  smoke.check('单根 diff 的索引没有分区标题', !smoke.q('.diff-filelist-group'),
+    smoke.q('.diff-filelist-group') ? '出现了 .diff-filelist-group' : '')
 
   const stage = smoke.q('.viewer-overlay .viewer-stage')
   const head = smoke.q('.viewer-doc.is-diff .diff-panel-head')
@@ -104,7 +107,21 @@
   smoke.check('列表钉在标题栏下方（滚到哪都在，也没被标题栏盖住）',
     diffScrolled && Math.abs(mid.list - (stageTop + headH)) <= 2 && Math.abs(bottom.list - (stageTop + headH)) <= 2,
     `期望 ${stageTop + headH}（滚动区 top ${stageTop} + 标题栏高 ${headH}）；` +
-    `列表 top 在 1/3 处=${mid.list}、底部=${bottom.list}`)
+    `列表 top 在 1/3 处=${mid.list}、底部=${bottom.list}` +
+    // What the pin actually resolves to, for the one failure this check cannot explain on its own:
+    // the sticky element is the COLUMN (`.diff-filelist-col`), and its offset is the pane's
+    // measured `--diff-head-h`. A pin at the scroller's top means that variable resolved to 0.
+    (() => {
+      const pane = smoke.q('.viewer-doc.is-diff')
+      const col = smoke.q('.diff-filelist-col')
+      return `；${['pane', 'col'].map((n) => {
+        const el = n === 'pane' ? pane : col
+        return `${n} var=${el ? getComputedStyle(el).getPropertyValue('--diff-head-h').trim() || '(空)' : '(无元素)'}` +
+          ` position=${el ? getComputedStyle(el).position : '-'}` +
+          ` top=${el ? getComputedStyle(el).top : '-'}`
+      }).join(' / ')}` +
+        `；col top=${topOf(col)} navTop=${topOf(filelist)} head bottom=${head ? Math.round(head.getBoundingClientRect().bottom) : NaN}`
+    })())
 
   // 从底部点第一行（NOTES.md 那 80 行在 OTHER.md 之前）：跳的方向穿越整份 diff，而且落点一定
   // 到得了。反过来点末尾那个文件就证明不了什么 —— 滚动区已经到底，位置会被钳住。
@@ -130,6 +147,56 @@
     && notesGroup().classList.contains('is-jump-target'),
     notesGroup() ? notesGroup().className : '')
   if (stage) stage.scrollTop = 0
+
+  // ── 索引里"当前是哪个文件" ────────────────────────────────────────────────
+  // 索引钉在左边、正文在滚，所以这个问题只能由**滚动**回答：只跟着点击走的话，它报的是读者上一次
+  // 点的位置，而正文早就飘到别的文件去了。点击给一个即时的答案，滚动再把它纠正 —— 两条都钉。
+  const rowFor = (name) => smoke.qa('.diff-filelist-row').find((r) => smoke.text(r).indexOf(name) >= 0) || null
+  const isCurrent = (name) => { const r = rowFor(name); return !!r && r.classList.contains('is-current') }
+  smoke.check('点过的那一行就是当前文件', isCurrent('NOTES.md'),
+    smoke.allText('.diff-filelist-row.is-current').join(' | ') || '(没有高亮行)')
+  smoke.check('同一时刻只有一行是当前', smoke.qa('.diff-filelist-row.is-current').length === 1,
+    smoke.qa('.diff-filelist-row.is-current').length + ' 行高亮')
+  // 滚到底：当前文件必须换成第二个。这一步与点击无关，是"高亮在回答我在读什么"的唯一证据。
+  if (stage) stage.scrollTop = stage.scrollHeight
+  const followed = await smoke.waitFor(() => (isCurrent('OTHER.md') ? true : null), '滚到底后高亮跟到 OTHER.md', 4000)
+  smoke.check('高亮跟着滚动走（不是只跟着点击）', !!followed,
+    smoke.allText('.diff-filelist-row.is-current').join(' | ') || '(没有高亮行)')
+  if (stage) stage.scrollTop = 0
+  const back = await smoke.waitFor(() => (isCurrent('NOTES.md') ? true : null), '回到顶部高亮回到第一个', 4000)
+  smoke.check('滚回顶部高亮跟着回来', !!back, smoke.allText('.diff-filelist-row.is-current').join(' | ') || '(没有高亮行)')
+
+  // ── 索引列可拖拽（文件名太长看不全时的那条出路）────────────────────────────
+  // 与旁路面板同一条判据：按下就进拖拽态、拖动改宽度、两端有钳位、正文不许被吃穿。
+  const listEl = () => smoke.q('.viewer-doc.is-diff .diff-filelist')
+  const diffBodyEl = () => smoke.q('.viewer-doc.is-diff .diff-split-body')
+  const widthOf = (el) => (el ? Math.round(el.getBoundingClientRect().width) : 0)
+  const handle = smoke.q('.diff-filelist-resizer')
+  if (!handle) return smoke.fail('索引有拖拽手柄', '找不到 .diff-filelist-resizer')
+  // 手柄自己会跟着宽度跑，所以每次按下都重新读它的位置（第二次拖还用旧坐标就是拖了个空气）。
+  const pressHandle = () => {
+    const b = handle.getBoundingClientRect()
+    const x = b.left + 4, y = b.top + 30
+    handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+    return { x, y }
+  }
+  const moveTo = (x, y) => window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+  const releaseAt = (x, y) => window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
+
+  const sizesBefore = { list: widthOf(listEl()), body: widthOf(diffBodyEl()) }
+  let p = pressHandle()
+  smoke.check('按下手柄即进入拖拽态', document.body.classList.contains('is-resizing'), `body=${document.body.className}`)
+  moveTo(p.x - 5000, p.y); releaseAt(p.x - 5000, p.y) // 往左拖到底 → 钳在下限
+  const floored = await smoke.waitFor(() => (widthOf(listEl()) === 180 ? 180 : null), '列表被钳在最小宽度', 3000)
+  smoke.check('列表有下限（再窄就没法读路径了）', !!floored, `${sizesBefore.list} → ${widthOf(listEl())}px`)
+  p = pressHandle()
+  moveTo(p.x + 5000, p.y); releaseAt(p.x + 5000, p.y) // 往右拖到底 → 钳在"正文还有地方"的那条线
+  const widened = await smoke.waitFor(() => (widthOf(listEl()) > sizesBefore.list ? true : null), '列表被拖宽', 3000)
+  smoke.check('拖动手柄能把列表拉宽（长路径看全的出路）', !!widened, `${sizesBefore.list} → ${widthOf(listEl())}px`)
+  smoke.check('列表宽度有上限（它是找文件的索引，不是第二份 diff）', widthOf(listEl()) <= 560,
+    widthOf(listEl()) + 'px')
+  smoke.check('拉宽之后正文仍然是正文（没被索引吃掉）', widthOf(diffBodyEl()) >= 420,
+    `正文 ${widthOf(diffBodyEl())}px（拖前 ${sizesBefore.body}px）`)
 
   // ── ⌘F in the diff overlay ─────────────────────────────────────────────────
   // A diff is the surface find exists for, and this overlay is one of its three hosts (the panel

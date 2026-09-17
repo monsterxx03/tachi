@@ -1023,20 +1023,53 @@ button.work-dir {
   gap: 18px;
   align-items: flex-start;
 }
-.diff-filelist {
-  /* `--diff-head-h` is the space the PINNED head occupies, measured by the pane: its box PLUS the
-     gap below it that its shadow paints. A `top: 0` index would slide under the head and lose its
-     first rows; an index pinned at the box's bottom edge would have its first row under that
-     paint; and the height below has to shrink by the same amount, or the list's tail would be
-     pinned out of reach. */
+/* The index's column: the list plus its drag handle, pinned as ONE flex item — the handle has to
+   travel with the list it resizes, and its height has to be the list's (align-items: stretch on a
+   wrapper whose height is the list's own). Splitting them into two sticky items would let them
+   drift apart the moment the list is short enough not to scroll. */
+.diff-filelist-col {
   position: sticky;
   top: var(--diff-head-h, 0px);
-  flex: 0 0 230px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+}
+.diff-filelist {
+  /* `--diff-head-h` is the space the PINNED head occupies, measured by the pane: its box PLUS the
+     gap below it that its shadow paints (the column above is what pins at that offset; the height
+     below has to shrink by the same amount, or the list's tail would be pinned out of reach). */
+  flex: 0 0 auto;
   max-height: calc(100vh - 200px - var(--diff-head-h, 0px));
   overflow: auto;
   padding-right: 10px;
   border-right: 1px solid var(--border);
 }
+/* The grab strip between the index and the diff, sitting in the row's own gap (the negative margin
+   is what keeps it from adding width: the list's visible column stays exactly the width the reader
+   chose). Its pill says "there is a handle here" without drawing a second divider. */
+.diff-filelist-resizer {
+  position: relative;
+  flex: 0 0 16px;
+  margin-right: -14px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.diff-filelist-resizer::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  background: var(--border-2);
+  transition: background 0.15s var(--ease);
+}
+.diff-filelist-resizer:hover::after,
+.diff-filelist-resizer:focus-visible::after,
+.diff-filelist-resizer.is-dragging::after { background: var(--accent-2); }
+.diff-filelist-resizer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); border-radius: var(--radius-xs); }
 .diff-split-body { flex: 1 1 0; min-width: 0; }
 .diff-filelist-row {
   display: flex;
@@ -1057,6 +1090,14 @@ button.work-dir {
   cursor: pointer;
 }
 .diff-filelist-row:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The row the reader is ON. It is marked by a bar AND a wash, never by colour alone (the row is not
+   a button that was pressed — it is the answer to "which file am I reading"), and the bar is an
+   inset shadow so marking a row cannot change its height: the list is scrolled by the diff, and a
+   row that grew by a border would move every row under it. Declared AFTER :hover, so hovering the
+   current row keeps saying "current" rather than overwriting it with the hover tint. */
+.diff-filelist-row.is-current { background: var(--veil); box-shadow: inset 2px 0 0 var(--accent); }
+.diff-filelist-row.is-current,
+.diff-filelist-row.is-current .diff-filelist-path { color: var(--text); font-weight: 560; }
 /* The path takes the row's spare room and truncates: a long path must not set the column's
    width (the same rule `.diff-path` follows in the head, and for the same reason — min-content
    of a nowrap path is the whole string). */
@@ -1067,7 +1108,37 @@ button.work-dir {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.diff-filelist-root { flex-shrink: 0; color: var(--text-faint); }
+/* One working directory's section in the index (multi-root diffs only — see fileGroups). It is
+   PINNED at the top of the list's own scroll container: the index of a large multi-root diff is
+   longer than the column, and a reader who has scrolled into the second half must still be able
+   to see which tree they are reading. Opaque background because rows scroll under it. */
+.diff-filelist-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 7px;
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--border);
+}
+.diff-filelist-group + .diff-filelist-group { margin-top: 6px; }
+/* The label the rows used to repeat: now said once per section, so it can be a section head —
+   the roots panel's own word for the primary (PRIMARY_ROOT_LABEL), or an additional root's
+   directory name. */
+.diff-filelist-group-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.diff-filelist-group-count { flex-shrink: 0; color: var(--text-faint); font-size: 11px; }
 .diff-panel-head {
   display: flex;
   align-items: baseline;
@@ -1120,7 +1191,7 @@ button.work-dir {
 /* A jumped-to file (the overlay's index) stops 10px below the PINNED head rather than behind it:
    landing the file the reader asked for under the pane's own title bar would hide exactly the
    line they jumped to look at. (In the panel the variable is unset, so this is the old 10px.) */
-.diff-file { scroll-margin-top: calc(var(--diff-head-h, 0px) + 10px); }
+.diff-file { scroll-margin-top: var(--diff-land, 0px); }
 .diff-file-head {
   display: flex;
   align-items: center;
