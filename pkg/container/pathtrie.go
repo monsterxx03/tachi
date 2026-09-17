@@ -182,10 +182,9 @@ func (t *PathTrie) searchDFS(
 }
 
 // Search performs fuzzy search and returns up to topN matches sorted by
-// score descending. When query contains "/", the prefix up to (and
-// including) the last "/" scopes the search to that subtree via exact
-// (case-insensitive) prefix match, and only the portion after the final
-// "/" is fuzzy-matched.
+// score descending. A "/" in the query scopes the walk to the directory the
+// query names; when it names none, the query degrades to a whole-tree fuzzy
+// match rather than coming back empty (see scope).
 func (t *PathTrie) Search(query string, topN int) []Match {
 	if query == "" {
 		return nil
@@ -198,20 +197,7 @@ func (t *PathTrie) Search(query string, topN int) []Match {
 	h := &matchHeap{}
 	heap.Init(h)
 
-	startNode := t.root
-	fuzzyQuery := query
-	var prefixPath []byte
-
-	if idx := strings.LastIndex(query, "/"); idx >= 0 {
-		prefix := query[:idx+1]
-		fuzzyQuery = query[idx+1:]
-		prefixPath = []byte(prefix)
-		startNode = t.walkPrefix(prefix)
-		if startNode == nil {
-			return nil
-		}
-	}
-
+	startNode, fuzzyQuery, prefixPath := t.scope(query)
 	t.searchDFS(startNode, fuzzyQuery, 0, 0, 0, prefixPath, h, topN)
 
 	results := make([]Match, h.Len())
@@ -219,6 +205,32 @@ func (t *PathTrie) Search(query string, topN int) []Match {
 		results[i] = heap.Pop(h).(Match)
 	}
 	return results
+}
+
+// scope decides where searchDFS starts and which part of the query it matches
+// fuzzily.
+//
+// A query containing "/" is read as a path: everything up to and including the
+// last "/" must name a real directory, and only the tail is fuzzy-matched. That
+// scoping is what makes "docs/agents/deskt" a narrowing of the tree instead of
+// a subsequence hunt through every path carrying those letters.
+//
+// When the prefix names NO directory the query still has to be answerable: it
+// degrades to a subsequence match over the whole tree, where the "/" is just
+// another character the match may skip. One wrong character in a directory name
+// ("doc/2026" for docs/2026-09-01.md) then shows the file the reader is aiming
+// at instead of emptying the picker. Addressing an existing prefix always wins,
+// so the fallback never dilutes a real drill-down.
+func (t *PathTrie) scope(query string) (start *trieNode, fuzzy string, prefix []byte) {
+	idx := strings.LastIndex(query, "/")
+	if idx < 0 {
+		return t.root, query, nil
+	}
+	dir := query[:idx+1]
+	if node := t.walkPrefix(dir); node != nil {
+		return node, query[idx+1:], []byte(dir)
+	}
+	return t.root, query, nil
 }
 
 // walkPrefix follows an exact (case-insensitive) path through the trie.

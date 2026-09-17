@@ -82,6 +82,25 @@ func TestSearchFuzzyOverTree(t *testing.T) {
 	assert.True(t, hasPath(matches, "src/handler/agent.go"))
 }
 
+// TestSearchUnmatchedPrefixStillFindsTheFile pins the picker-level rule behind a
+// slash: a query whose directory part names no directory degrades to a fuzzy
+// match over the whole tree, so a half-typed or mistyped directory
+// ("doc/2026" for docs/2026-09-01.md) shows the file instead of an empty list.
+func TestSearchUnmatchedPrefixStillFindsTheFile(t *testing.T) {
+	requireRipgrep(t)
+	root := t.TempDir()
+	writeFile(t, root, "docs/2026-09-01.md", "x")
+	writeFile(t, root, "docs/2026-09-02.md", "x")
+	writeFile(t, root, "desktop/main.go", "x")
+
+	ix := New(nil)
+
+	matches, err := ix.Search(root, "doc/2026", 20)
+	require.NoError(t, err)
+	assert.True(t, hasPath(matches, "docs/2026-09-01.md"))
+	assert.False(t, hasPath(matches, "desktop/main.go"), "an unrelated path must not ride along")
+}
+
 // TestSearchForceIncludesTachi covers the .tachi exception: its contents are
 // normally gitignored, yet stay referenceable.
 func TestSearchForceIncludesTachi(t *testing.T) {

@@ -203,11 +203,58 @@ func TestSearchPrefixScoped(t *testing.T) {
 		t.Errorf("Search(tui/inp) = %v, want [tui/input.go]", got)
 	}
 
-	// Non-existent prefix
-	got = tr.Search("foo/bar", 10)
+	// An existing prefix scopes HARD: nothing outside it comes back, even when
+	// the tail would fuzzy-match there.
+	got = tr.Search("tui/agent", 10)
 	if len(got) != 0 {
-		t.Errorf("Search(foo/bar) = %v, want []", got)
+		t.Errorf("Search(tui/agent) = %v, want [] (agent.go lives outside tui/)", got)
 	}
+}
+
+// TestSearchUnmatchedPrefixFallsBackToFuzzy: a directory part that names no
+// directory must not empty the list. The query degrades to a subsequence match
+// over the whole tree, so one wrong character ("doc/2026" for docs/2026-09-01.md)
+// still finds the file the reader is aiming at — the '/' becomes a character
+// the match may skip.
+func TestSearchUnmatchedPrefixFallsBackToFuzzy(t *testing.T) {
+	tr := NewPathTrie(paths(
+		"docs/2026-09-01.md",
+		"docs/agents/desktop.md",
+		"desktop/main.go",
+	))
+
+	tests := []struct {
+		query string
+		want  []string // paths expected in the result, order-insensitive
+	}{
+		{"doc/2026", []string{"docs/2026-09-01.md"}},
+		{"doc/", []string{"docs/2026-09-01.md", "docs/agents/desktop.md"}},
+		{"ocs/2026", []string{"docs/2026-09-01.md"}},
+		{"agents/desk", []string{"docs/agents/desktop.md"}},
+		{"zzz/2026", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got := tr.Search(tt.query, 10)
+			for _, want := range tt.want {
+				if !hasMatchPath(got, want) {
+					t.Errorf("Search(%q) = %v, want %q among the results", tt.query, got, want)
+				}
+			}
+			if tt.want == nil && len(got) != 0 {
+				t.Errorf("Search(%q) = %v, want []", tt.query, got)
+			}
+		})
+	}
+}
+
+func hasMatchPath(ms []Match, path string) bool {
+	for _, m := range ms {
+		if m.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSearchTopN(t *testing.T) {
