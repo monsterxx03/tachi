@@ -291,6 +291,29 @@ const type = (el, t) => {
   test package** — a signature change under `desktop/` can leave its tests unbuildable with every root-level
   check still green. After touching `desktop/`, run `cd desktop && GOWORK=off go test ./...` too; `make lint`
   at the root does not cover it either.
+- **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
+  `RegisterHook(WindowClosing)` right beside the window's creation): on darwin a user-initiated close (⌘W,
+  the red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits
+  a closing event instead, and its own unconditionally-registered listener runs `impl.close` +
+  `Window.Remove(id)`. Every handle to the window then points at nothing while the app keeps running in the
+  menu bar, and all three ways back went silent together: the tray's 「打开主窗口」 and a tray click (`Show`
+  on a destroyed window is a no-op — `Run` only creates an impl that is not nil), a notification click (the
+  same call), and a Dock click (Wails' own `applicationShouldHandleReopen` handler only shows windows that
+  still EXIST and are invisible). Hooks run SYNCHRONOUSLY before the listeners and `WindowEvent.Cancel` stops
+  the rest, which is the only lever that turns the close into a hide — and hiding is what makes the three
+  paths work again WITHOUT touching them, the window staying in the manager as "exists, not visible": the
+  page is never torn down either, so the transcript on screen, a drafted message and a streaming turn all
+  survive. The interception is on `Common.WindowClosing`, which is the id the destroy listener is registered
+  on: the mac event (`Mac.WindowShouldClose`) first reaches the mapping listener `setupEventMapping` installed
+  for it, and THAT listener is what emits `Common.WindowClosing` — a second `HandleWindowEvent` in which this
+  hook runs and cancels, so the mapping hop is not a reason to register twice. (`window.Close()` from Go goes
+  through the same emit, so a programmatic close hides too.) Two rules ride with it. (1) The shutdown path
+  must pass through (`desktopApp.quitting`, set from `app.OnShutdown`): `app.Quit` → `[NSApp terminate:]` →
+  `cleanup()` closes every window on its way out, and the flag is already true because cleanup runs its
+  shutdown tasks BEFORE that loop. (2) The hide is
+  load-bearing, not cosmetic — the notifier, the theme controller and the tray all hold the window pointer,
+  which is only safe while nothing destroys it, so a future change that closes the window for real re-opens
+  this whole class of bug at once.
 - **A session's directory is `config.SessionDir()` + ONE path element**: `sessionDirPath(id)` in
   `sessiondir.go` is the single resolver, and it REFUSES anything a webview could send that is not a single
   name (`../..`, `a/b`, `.`, empty). `oneOffDir` shares it — every "where is this conversation stored"

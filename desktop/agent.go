@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -84,6 +85,11 @@ type desktopApp struct {
 	app    *application.App
 	tray   *application.SystemTray
 	window *application.WebviewWindow
+	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what
+	// lets the main window's close hook tell a USER-initiated close (which hides the window)
+	// from the one the shutdown path performs on its way out (which must go through). Without
+	// it the hook would be the app's own exit being cancelled.
+	quitting atomic.Bool
 	// notify posts native notifications for turns that finish (or questions that
 	// appear) while the window is unfocused. Set once during startup, before any
 	// turn can run (see newNotifier).

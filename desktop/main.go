@@ -186,6 +186,37 @@ func main() {
 	desk.app = app
 	desk.window = window
 
+	// ⌘W and the red button HIDE the main window; only 退出 Tachi Desktop closes the app.
+	//
+	// The reason is not taste. On darwin a user-initiated close ALWAYS destroyed this window:
+	// AppKit's `windowShouldClose` returns NO, the framework emits a closing event instead, and its
+	// own unconditionally-registered listener then ran `impl.close` + `Window.Remove(id)`. Every
+	// handle to the window — `desk.window`, the notifier's, the theme controller's — pointed at
+	// nothing afterwards, and all three ways back to it went silent at once: the tray's
+	// 「打开主窗口」 and its click (Show on a destroyed window is a no-op: `Run` only creates an
+	// impl that is not nil), a notification click (same call), and a Dock click — Wails' own
+	// `applicationShouldHandleReopen` handler only shows windows that still EXIST and are
+	// invisible, so with the window gone there was nothing to show.
+	//
+	// Hooks run SYNCHRONOUSLY before the listeners and `WindowEvent.Cancel` stops the remaining
+	// ones, which makes this the one place the close can be turned into a hide. Hiding is also what
+	// makes all three paths work again WITHOUT touching them: the window stays in the manager, so
+	// the tray finds it, the notifier finds it, and a Dock click finds it as "exists, not visible"
+	// — which is exactly the case Wails' reopen handler is written for. And the page is never torn
+	// down: the transcript on screen, a drafted message and a streaming turn all survive.
+	//
+	// The shutdown path must go through, or the app cannot exit: `app.Quit` → `[NSApp terminate:]`
+	// → cleanup() closes every window, and quitting is already true by then because cleanup runs
+	// its shutdown tasks BEFORE that loop.
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if desk.quitting.Load() {
+			return
+		}
+		window.Hide()
+		e.Cancel()
+	})
+	app.OnShutdown(func() { desk.quitting.Store(true) })
+
 	// Native notifications for the two moments the app waits on the user (a
 	// finished turn, a parked AskUserQuestion). They are posted only while the
 	// window is unfocused; permission is asked once, in the background, so the
