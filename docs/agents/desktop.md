@@ -223,6 +223,15 @@ Fixtures, all because the real path needs something a driver cannot do:
 - **One save is one field.** `withConfig` runs under the write lock, so multi-field saves would need readers to
   take it too (they do not); keeping a save to a single leaf is what makes the current shape correct.
   `mcpServerByName` is the one documented exception (a single bool written in place).
+- **A config key's "what does it take to make this live" is declared in `desktop/settings.go`, one row per key
+  in `settingsTable`** (`applyLazy` = readers already re-read it / `applyPush` = something must be rebuilt,
+  `Apply` carries that / `applyRestart` / `applyUnused` = another entry mode owns it). Two tests in
+  `desktop/settings_test.go` hold it to the whole of `config.Config` by reflection, so **adding a config field
+  fails the build until it gets a row**; `settingApply.needsRestart()` is DERIVED (`Apply == nil` and not
+  lazy/unused), never a flag to remember. A row's `Apply` only does the PUSH half — the value itself is
+  written into `d.cfg` by the caller — and anything that has to reach every session goes through
+  `d.applyToLiveAgents(fn)` (`agent.go`), which returns failures labelled with the session's title (or its id).
+  Design: `docs/2026-09-14-desktop-settings-design.md` §七、§八之三.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
   `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the
   red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits a
@@ -331,7 +340,7 @@ Fixtures, all because the real path needs something a driver cannot do:
   server connected mid-session is invisible to the model without the dirty mark — a pool write alone is the
   bug (a real session's debug log showed zero `DeferredToolReminder fired` after a mid-session enable). A new
   "connect a server" path belongs INSIDE it. Toggling is a GLOBAL fact (one pool, one connection for every
-  session), so all live agents are notified (`liveAgents()`), and disabling runs `UnregisterMCPServer`
+  session), so all live agents are notified (`applyToLiveAgents()`), and disabling runs `UnregisterMCPServer`
   (registry + every session's discovered set), not a bare pool removal. `.tachi.md` carries the general rule.
 - **The MCP panel opens with every server FOLDED** (`expanded` in `MCPPanel`, empty = all folded): a tools
   list belongs to a connected server, so "expand when connected" left an unconnected server showing nothing

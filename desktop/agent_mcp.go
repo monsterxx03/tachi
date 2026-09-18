@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -133,9 +134,14 @@ func (d *desktopApp) enableMCPServer(srv *config.MCPServerConfig) (string, error
 		}
 		d.mcp.Pool().Add(mcp.NewDeferredToolFromMCPTool(t, hint))
 	}
-	for _, a := range d.liveAgents() {
+	// The fan-out goes through applyToLiveAgents for the same reason the doc comment above
+	// gives: this is a global fact, not the displayed session's. Its failures are dropped on
+	// purpose — NotifyDeferredToolsAdded has no error to report (the pool is already filled
+	// by the lines above; the notify only makes the reminder re-arm).
+	d.applyToLiveAgents(func(a *agent.AIAgent) error {
 		a.NotifyDeferredToolsAdded()
-	}
+		return nil
+	})
 	d.markMCPNeedsAuth(srv.Name, false)
 	return "ok", nil
 }
@@ -175,10 +181,11 @@ func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 		// explicitly enabled must leave the registry, or the model keeps calling a
 		// tool whose server is gone. UnregisterMCPServer also drops the tools from
 		// every session's discovered set, so a later re-enable does not report them
-		// as already loaded.
-		for _, a := range d.liveAgents() {
+		// as already loaded. Failures are dropped: there is nothing here to fail.
+		d.applyToLiveAgents(func(a *agent.AIAgent) error {
 			a.UnregisterMCPServer(name)
-		}
+			return nil
+		})
 	}
 	note := d.persistMCPServerEnabled(srv, false)
 	if discErr != nil {

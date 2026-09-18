@@ -1,9 +1,19 @@
 # Desktop 设置页 — 设计
 
-> 版本: 2.0 | 日期: 2026-09-17（v1.0: 2026-09-14）| 状态: 设计阶段（未实现）
+> 版本: 2.2 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0/v2.1: 2026-09-17/18）| 状态: P0-a、P0-b 与
+> **结构前置（§八之三）已实现**；设置页 UI 未开始
 >
 > v2.0 是 v1.0 的**全面复核**：热改分层按实际消费点重做，P0 的验收标准收紧
 > （`yaml.Node` 回环实测发现 v1.0 承诺的「样式保留」不成立），原子性顺序修正。
+>
+> v2.1 是把 §五 的分层表**按代码逐条反查**的结果：两条判重了（`system_reminder.git_reminder`、
+> `logs.level` 其实可热），两条漏了消费点（`tool_result.*` 还喂共享 MCP manager，
+> `memory.type` 还要换 reminder 里捕获的 backend），一条判轻了（`mcp_tool_search.*`），
+> 一条把「没接线」写成了「包一层即可」（desktop 侧没有任何 `Setup*` 调用点）。
+>
+> v2.2 是**开工记录**：§八之三 的三条结构前置已落地（应用表 `desktop/settings.go`、键覆盖守卫
+> `desktop/settings_test.go`、广播原语 `applyToLiveAgents`），并顺手做了 §八之二 的 prompt 缓存清空。
+> 落地与设想的三处出入写在 §八之三 里。
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 
@@ -87,9 +97,14 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
 
 ## 五、配置分层（已核实）
 
-热改的基础设施**已经存在**：`AIAgent` 上已有 25 个 `Set*`/`Setup*` 方法，且
-`desktop/agent_mcp.go:134` 的 `SetMCPServerEnabled` 就是「改内存配置 + 立即生效」的先例
+热改的基础设施**已经存在**：`AIAgent` 上已有 **26** 个 `Set*`/`Setup*` 方法，且
+`desktop/agent_mcp.go` 的 `SetMCPServerEnabled` 就是「改内存配置 + 立即生效」的先例
 （它同时把 enable 状态写回 mcp.json——设置页正好补上 config.yaml 那半）。
+
+⚠️ **但 desktop 侧一个 `Setup*` 都没调用过**（已 grep：`desktop/*.go` 里只有 `SetThinking`、
+`SetResolvedProvider`、`SetMode` 与 MCP 那几个的调用点）。下表 🔥 里那些「包一层导出即可」的项，
+实际要做的是**新增 fan-out**——它们今天只在 `NewAIAgentWithConfig` 构造期被调用一次。
+这个 fan-out 是 §八之三 的第 ③ 条，也是 P2 所有热改项共用的形状。
 
 ### 🔥 可热改
 
@@ -97,9 +112,9 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
 |---|---|
 | `provider` / `providers` | `SetResolvedProvider`（同时重指 compact 策略） |
 | `provider[].spec.thinking_level` | 随 `SetResolvedProvider` 一体切换 |
-| `title_generation` | `SetTitleGenEnabled` |
-| `title_provider` / `commit_provider` / `review.provider` / `run_provider` / `subagent.provider` | 各 `Setup*Provider`（已有现成路径，包一层导出即可） |
-| `permissions.bash.*` | `SetPermissionPolicy`（**零重构**） |
+| `title_generation` | `SetTitleGenEnabled`（方法已有；desktop 无调用点，要新写 fan-out） |
+| `title_provider` / `commit_provider` / `review.provider` / `run_provider` / `subagent.provider` | 各 `Setup*Provider` 已存在，但 desktop **没有任何调用点**（见本节开头的 ⚠️）——要新写 fan-out，即 §八之三 ③ |
+| `permissions.bash.*` | `SetPermissionPolicy`（方法本身**零重构**；同样要先有 fan-out） |
 | `compact.auto` / `compact.threshold` | `shouldAutoCompact()` **每轮**读 `FullConfig` |
 | `compact.timeout` / `compact.max_tokens` | `doCompact` 现读 |
 | `oneoff.enabled` / `retention_days` | `oneoffEnabled()` 现读 |
@@ -107,32 +122,35 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
 | `session_cleanup_max_count` | 建新会话时读（`Manager.New` 内建 `cleanupLocked`） |
 | `review.*` / `deep_research.*` | `ResolveReviewOptions(cfg)` / `NewDeepResearch(cfg)` 每次命令现读 |
 | `active_mcp_profile` | `SwitchMCPProfile`（内存态，重启回退——既有先例） |
-| `language` / `extra_system_prompt` | 清 `d.promptCache` 即可。`systemPromptFor` 是**每轮现读** `d.cfg` 的，cache key 只含 `(cwd,id,roots,mode)`，加一个清空入口就够，不必往 key 里加字段 |
+| `language` / `extra_system_prompt` | 清 `d.promptCache` 即可——但清空入口是**前提**，不是锦上添花：`systemPromptFor` 确实每轮现读 `d.cfg`，可它只在**未命中**时重建，而 cache key 只含 `(cwd,id,roots,mode)`（不含语言），今天唯一的失效路径是容量满时整体丢弃（`desktop/agent_driver.go:167-172`）。加一个清空方法，不必往 key 里加字段 |
+| `logs.level` | 只在 `pkg/logger` 改一处：标量全局 `cfgLevel` → `*slog.LevelVar`，`textHandler.minLevel` 从值改成指向同一个 `LevelVar` 的指针 → **所有已建 logger 立刻跟着变**，零调用点改动（约 10 行）。见 §五之三 |
+| `system_reminder.git_reminder` | 给 `GitReminder` 加惰性开关 + **无条件注册**（照 `attachSharedMCPReminder` 的既有写法）。**不要**重建 collector，见 §五之三 |
 
 ### 🟡 小重构后可热（要做的是「重建 + 换入」）
 
 | 配置 | 需要什么 |
 |---|---|
-| `web_search.*` / `web_fetch.*` / `tool_result.*` | 在 `RegisterTools` 里重建工具对象再 `Registry.Register`（同名覆盖）。`WebSearchTool` 的 `sync.Once` 缓存只随实例走，换实例即生效 |
+| `web_search.*` / `web_fetch.*` | 在 `RegisterTools` 里重建工具对象再 `Registry.Register`（同名覆盖）。`WebSearchTool` 的 `sync.Once` 缓存只随实例走，换实例即生效。注意 `web_search` 在未配置时**根本没注册**，所以增减都要处理 |
+| `tool_result.*` | ⚠️ 两条路都要动：web/bash 工具同上，**外加共享 MCP manager**——它在构造期把 `MaxResultChars()`/`ResultFileDir()` 快照进 `m.maxResultChars/resultFileDir`（`agent/mcp/manager.go:200-203`，每次 MCP 工具调用都用），改配置不碰它就等于只对一半工具有效。让它每调用现读最省事 |
 | `checkpoints.max_files` / `max_bytes` / `retain` | ⚠️ `ckptKey` 只含 `sess.ID + roots`，**不含 Options**——必须把 Options 并进 key，否则改了不重建 |
-| `mcp_tool_search.*` | 只在 `PopulateFromConnect` 读一次 |
-| `mcp_tool_refresh.interval` | `StopRefresher()` + `StartRefresher()` |
-| `lsp.*`（含 `servers`） | `LSPManager` **没有 Restart API**，只有 `Shutdown` → 新建 manager + 重注册 2 个工具 + 换 reminder collector |
-| `hooks.*` | `HookDispatcher` 构造期一次性构建，重建即可 |
-| `subagent.*` | `subagent.NewExecutor` + 重注册 `SubagentTool` |
-| `memory.type` / `decay_half_life_days` | `TopicBackend` 构造期吃一半；换 backend 要重建 `MemoryState` + 重注册 memory 工具 |
-| `memory.keyword_provider` | `resolveKeywordProvider(cfg)` 已是幂等独立函数，导出即可 |
+| `mcp_tool_search.*` | **比 v2.0 写的重**：改它要重跑 `PopulateFromConnect`（＝重连所有 server）、重算 autoLoad、还要 unregister 差集；`autoLoadNames` 只 append 没有 reset（`agent/mcp/manager.go:468`），也没有"不重连就重算"的 API。第一版建议标 🔴 或只读展示 |
+| `mcp_tool_refresh.interval` | `StopRefresher()` + `StartRefresher()`（`StartRefresher` 内部已会先停）。⚠️ shared manager 的 refresh callback 会绑到**触发它的那个 agent**（`agent/agent_configure.go:297` 的闭包捕获 `a`），所以要从 app 层驱动，别从某个会话的 agent 驱动 |
+| `lsp.*`（含 `servers`） | `LSPManager` **没有 Restart API**，只有 `Shutdown`（`agent/lsp/manager.go:144`），且**必须先调**——它停掉每个 server 的子进程（`agent/lsp/server.go:302→541`），不调就是孤儿进程 + 泄漏的 goroutine。然后新建 manager + 重注册 2 个工具（`LSP`/`LSPDiagnostics`）+ 换掉 reminder 里的 provider（**不是**重建 collector，见 §五之三）。另：`enabled` false→true 时工具与 reminder 根本不存在，要**新增**注册 |
+| `hooks.*` | `HookDispatcher` 构造期一次性构建，重建即可。⚠️ 新配置**禁用** hooks 时必须把 `a.Config.HookDispatcher` 显式置 nil——`initHookSystemFrom` 只在启用时赋值，否则旧的留着 |
+| `subagent.*` | `subagent.NewExecutor` + 重注册 `SubagentTool`（`Registry.Register` 同名覆盖，`agent/tools/tool.go:144-152`）。worktree 也要重新 `EnableWorktree`；并发信号量随 executor 重建 |
+| `memory.type` | 重建 `MemoryState` + backend、重注册 2 个 memory 工具，**并且**换掉 `MemoryRecallReminder` 里捕获的 `Backend`（`agent/agent_configure.go:500-510`）——v2.0 漏了这条 |
+| `memory.decay_half_life_days` | `halfLifeDays` 是 `TopicBackend` 的私有字段，只在构造期赋值（`agent/memory/topic_backend.go:136`），**没有 setter** → 要么加一个，要么走上面的整份重建 |
+| `memory.keyword_provider` | 其实**已经热**：`resolveKeywordProvider(cfg)` 幂等且现读（`agent/agent_configure.go:521`），接线即可 |
 
 ### 🔴 必须重启
 
 | 配置 | 原因（已核实） |
 |---|---|
-| `logs.*` | `logger.Init`（`pkg/logger/logger.go:32`）写全局量；且 `textHandler.minLevel` 是**每个 logger 构造时快照**的，改全局对已建实例无效 |
-| `debug.pprof.*` | `startPprof` 启动即绑端口（`agent/bootstrap.go:48`） |
+| `logs.max_size` / `max_files` | `logger.Init`（`pkg/logger/logger.go:32`）写全局量，而 `rotatingWriter` 把两个上限与**打开的 fd** 一起冻结在构造期——热改要动那个 mutex 保护的 writer，不值当。`logs.level` 已单独提到 🔥，其余 `logs.*` 不存在（没有 format / file 键，别在表单里编出来） |
+| `debug.pprof.*` | `startPprof` 启动即绑端口（`agent/bootstrap.go:48`）。**这是实现现状，不是约束**：留住 `net.Listener` + `cancel` 后 Stop/Start 是 ~30 行（`http.DefaultServeMux` 可复用），只是第一版不做 |
 | `web.*` | `tachi web` 是独立进程，端口已绑 |
 | `channel.*` / `cron.*` / `dream.*` | channel 模式的后台循环；desktop 本不启用。各 channel 构造期就固化了 token/proxy 等 |
 | `herdr.enabled` | 由 `HERDR_ENV` 环境变量推导，启动期判定 |
-| `system_reminder.git_reminder` | 需重建 `ReminderCollector` |
 | `tui.*` | TUI 专属，widget 构造期消费 |
 | `provider_aliases` | `ExpandProviderAliases` 只在 `LoadFrom` 末尾跑，且别名已被展开成真名 |
 
@@ -143,6 +161,45 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
   只有 `tachi -p` 真正读它（`main_agent.go:39,139`）。设置页要么不显示，要么标注「仅命令行模式」。
 - **`max_tokens` 分层不同**：desktop 每轮现读 `d.cfg.MaxTokens`（`agent_turn.go:237`）→ 热；
   TUI 启动时拷进 `ChatOpts`（`main.go:283`）→ 冷。同一个配置项在不同入口分层不同。
+
+### 五之三、两处结构性阻塞，以及它们的正确解法（v2.1 反查所得）
+
+分层表里最难的两处不是"多写几行"，而是**对象换了、引用换不掉**。两条都已核实，解法都不是
+"重建整个 collector"。
+
+**1. reminder 侧的引用换不掉。** `systemreminder.Collector` 只有 `AddReminder`（只 append，
+`agent/systemreminder/reminder.go:119-123`），接口也只有 `Collect` / `CollectPieces` /
+`AddReminder` 三个方法（`agent/reminder_collector.go:14+`）；而 `LSPDiagnosticsReminder` 与
+`MemoryRecallReminder` 都把对象**当字段捕获**（`agent/agent_configure.go:159`、`:500`）。于是：
+
+- 给接口加 `Remove`/`Replace`：破 `disabledReminderCollector` 与一批测试 fake；
+- 重建整个 collector：**丢状态**——`DeferredToolReminder` 的 `hasFired`/dirty、channel 的
+  thread reminder、`SkillListReminder` 的 dirty 标记都是运行时注册进去的，重建等于清空它们
+  "已经注入过"的记忆（表现为提醒重复出现）。
+
+解法是第三种，而且**已有先例**：照 `SkillListReminder.SetProvider`
+（`agent/systemreminder/skill_reminder.go:45`）给这两个 reminder 加一个可换的 provider 字段
+（换完顺手 `dirty = true`）。collector 零改动，`lsp.*` 与 `memory.type` 都不需要重建它。
+
+> ⚠️ 反向的坑也记在这里，免得下次又顺手写"重建就行"：`git_reminder` 在 v2.0 被判成
+> 「需重建 `ReminderCollector`」，而这里**重建是有害的**（上面三个状态都会丢）。它现在是个
+> **无状态空结构体**（`agent/systemreminder/git_reminder.go:15`），加一个惰性开关、改成
+> **无条件注册**（照 `attachSharedMCPReminder` 的写法：注册永远发生，开关由 reminder 自己读）
+> 即可从 🔴 直达 🔥。
+
+**2. `logs.level` 只差一层间接。** 实测：`cfgLevel` 是标量全局、`textHandler.minLevel` 是
+**构造期快照的值**、全库 `LevelVar` 出现 0 次（`pkg/logger/logger.go:17-24`、`:230-234`、
+`:273-275`）。但所有 handler 都取自同一个来源，所以：
+
+```go
+cfgLevel = slog.LevelInfo        →  cfgLevelVar = new(slog.LevelVar)      // Init 写它
+textHandler.minLevel slog.Level  →  minLevel *slog.LevelVar               // Enabled 里 .Level()
+func SetLevel(s string)          // 热改入口，一处
+```
+
+`LevelVar.Level()` 是原子的，热路径不加锁；`New`/`With` 出来的所有 logger 共享这一个 `LevelVar`，
+所以**改一次全进程立刻生效**，既不用重建 logger，也不用碰那几十处构造期持有 `*logger.Logger`
+的字段。`logs.max_size`/`max_files` 仍然是 🔴（见上表）。
 
 ## 六、核心挑战：保存不能毁掉用户手写的配置
 
@@ -307,17 +364,42 @@ type SettingField struct {
     Kind         string   // "string" | "int" | "bool" | "enum" | "string_list"
     Value        any      // 当前值
     Options      []string // enum 用
-    NeedsRestart bool     // ← 由后端保证，不靠人记
+    NeedsRestart bool     // ← 后端派生（settingApply.needsRestart()），前端只读
     Help         string
 }
 ```
 
 「要不要重启」由后端**代码保证**——新增一个配置项时，忘了标 `NeedsRestart` 会是最典型的
-错误，所以这个字段必须和热改的 `apply` 函数放在一起。
+错误。**✅ 已落地**（§八之三）：它不是 SettingField 上要人记的字段，而是由应用表的
+`needsRestart()` **派生**出来的一条：`Apply == nil` 且该行不是 lazy/unused，就等于"今天只能靠重启"。
+没有标记可忘。
+
+```go
+// desktop/settings.go（已实现，这里只是形状）
+type settingApply struct {
+    Key   string                                       // 与 SettingField.Key 同一份
+    Mode  applyMode                                    // applyLazy / applyPush / applyRestart / applyUnused
+    Apply func(*desktopApp, *config.Config) error      // 只做"推送"那一半，nil = 代码还没写
+    Note  string                                       // restart / unused / push-未实现 必须说明理由
+}
+func (s settingApply) needsRestart() bool
+func settingFor(key string) (settingApply, bool)       // 最具体的一行胜出
+```
+
+`SettingField` 由这张表派生（`Key`/`Label`/`Kind`/`Value`/`Options` 来自表项，`NeedsRestart`
+取 `needsRestart()`），**reflect 守卫测试**则断言 `config.Config` 的每个 yaml 叶子都有处置
+（§八之三 ②）。没有这道守卫，漏标迟早发生一次。
 
 ⚠️ **多会话注意**：`d.cfg` 是全进程唯一的一份，而 `AIAgent` 是**每会话**一个。
-热改一个配置要遍历 `liveAgents()`（先例见 `desktop/agent_mcp.go` 的 MCP toggle），
-不能只改当前显示的会话。
+热改一个配置要遍历会话（先例见 `desktop/agent_mcp.go` 的 MCP toggle），不能只改当前显示的那一个。
+这条已落地为 `d.applyToLiveAgents(fn) (failures []string)`（`desktop/agent.go`）：它对每个**已建出
+agent 的**会话跑 `fn`，把失败收成「「标题」：原因」的行（无标题时用 session id），并按 id 排序，
+所以保存后的汇总能一次说清是哪一个会话没吃下改动。MCP 的两处 fan-out 也已改走它——原来那个
+返回 `[]*agent.AIAgent` 的 `liveAgents()` 因此删掉了（同一个形状留一个）。
+
+另一件同源的事：**`Apply` 只做"推送"那一半**。改值本身由 `SaveSettings` 在 `withConfig` 里完成，
+表里的 `Apply` 只负责让已经构造出来的东西跟着变（重建工具、清 prompt 缓存、广播到各会话）——
+否则同一个叶子会有两个写者。
 
 ### 各入口的一致性
 
@@ -335,23 +417,69 @@ cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i
 | **P0-a** | ✅ **已完成**：`config.SavePartial` + `config/save_partial_test.go`（§六的验收五条，全部通过） | — |
 | **P0-b** | ✅ **已完成**：`d.cfg` 的 `cfgMu` + `config()` / `withConfig()`，全部读点改访问器 | — |
 | P1 | `App.tsx` view 状态 + `settings.tsx` 外壳 + 分类导航 + CSS 隐藏保状态 + 屏蔽对话快捷键 | 低 |
-| P1.5 | 顺手可热改项（见下「P0 之后、开工之前」） | 低 |
-| P2 | 后端 `GetSettingsSchema` / `SaveSettings` + 🔥 类表单 + 热改（含 `liveAgents()` 广播） | 中 |
-| P3 | 🟡 / 🔴 类表单 + `⟳` 徽标 + 保存后汇总提示 | 低 |
+| **P1.5** | ✅ **结构前置已完成**（§八之三：应用表 + 键覆盖守卫 + 广播原语）；其余小改见 §八之二 | 低 |
+| P2 | 后端 `GetSettingsSchema` / `SaveSettings`（读 `settingsTable`，写 `SavePartial`）+ 🔥 类表单 + 逐项补 `Apply` | 中 |
+| P3 | 🟡 / 🔴 类表单 + `⟳` 徽标（由 `settingApply.needsRestart()` 派生）+ 保存后汇总提示 | 低 |
 | P4 | desktop smoke 场景（改一项 → 断言 config.yaml 的值 + UI 反馈） | 低 |
 
 P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手写的配置文件」这个不可逆后果，
-而且 P0-b 的锁约定决定了 P2 的 `SaveSettings` 怎么写（唯一写入口 `withConfig`）。
+而且 P0-b 的锁约定决定了 P2 的 `SaveSettings` 怎么写（唯一写入口 `withConfig`；唯一例外是
+`persistMCPServerEnabled` 那处就地写，见 §六）。
 
-## 八之二、P0 之后、开工之前（其余小项）
+## 八之二、开工之前：小改（每条都让 P2 少一个特例）
 
-这三条都不阻塞开工，但做了能让 P2 少一类特例：
+都不阻塞 P1（纯前端），但做了能让 P2 的 apply 表少一类特例。前两条是 v2.0 列出的，
+其余来自 v2.1 的逐条反查：
 
 | 项 | 为什么值得先做 | 规模 |
 |---|---|---|
-| `ckptKey` 纳入 `checkpoint.Options` | `checkpoints.{max_files,max_bytes,retain}` 改了不重建 manager（`agent/agent_checkpoint.go` 的 key 只含 `sess.ID + roots`）。修完这 3 项从「小重构」变「真热改」 | 小 |
-| `promptCache` 清空入口 | `language` / `extra_system_prompt` 热改的前提。desktop 目前**只**在容量满时整体重建，没有清空点；`systemPromptFor` 已每轮现读 `d.cfg`，加一个清空方法即可 | 小（3 行） |
-| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项 | 中 |
+| `ckptKey` 纳入 `checkpoint.Options` | `checkpoints.{max_files,max_bytes,retain}` 改了不重建 manager（`agent/agent_checkpoint.go:249-265` 的 key 只含 `sess.ID + roots`）。修完这 3 项从「小重构」变「真热改」 | 小 |
+| `promptCache` 清空入口 | ✅ **已完成**：`desktopApp.invalidateSystemPrompts()`（`desktop/agent_driver.go`），`language` / `extra_system_prompt` 两行真的热了（`TestLanguageRowClearsThePromptCache` 钉住） | — |
+| reminder 换 provider 的先例 | 给 `LSPDiagnosticsReminder` / `MemoryRecallReminder` 加 `SetProvider`（照 `SkillListReminder`）：collector 层零改动，`lsp.*` 与 `memory.type` 都不必重建 collector（§五之三 1） | 小 |
+| `GitReminder` 惰性开关 + 无条件注册 | 让 `system_reminder.git_reminder` 从 🔴 直达 🔥，同时避开"重建 collector 会丢状态"的坑（§五之三 1 的警告） | 小 |
+| `logs.level` 的 `LevelVar` | 顺带把用户最想要的那项（不重启开 debug）变成真的热改（§五之三 2） | 小（~10 行） |
+| `tool_result.*` 让 MCP manager 现读 | 否则改了只对 web/bash 工具生效，MCP 工具结果仍按旧上限截断（`agent/mcp/manager.go:200-203` 是构造期快照） | 小 |
+| `hooks.*` 重建时显式置 nil | 新配置禁用 hooks 时旧 `HookDispatcher` 必须清掉（`initHookSystemFrom` 只在启用时赋值） | 小 |
+| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项，不阻塞 P1/P2 | 中 |
+
+## 八之三、开工之前：结构前置（三条，零 UI 依赖）
+
+动机只有一句：让 P2 的 `SaveSettings` 是**一次循环**（校验 → `withConfig` → `SavePartial`
+→ 广播），而不是二十个特例。
+
+**✅ 三条都已落地**（2026-09-18，`desktop/settings.go` + `desktop/settings_test.go` +
+`desktop/agent.go`）。落地时与下面的设想有三处不同，都是动手才看清的：
+
+1. **应用表放在 desktop，不在 agent。** 设想里倾向 agent 侧（便于 tui/acp/channel 复用），
+   但多数行的运行期那一半是 desktop 独有的：prompt 缓存、共享 MCP manager、跨会话广播。
+   放进 agent 就得反过来给它一个 app 级别的钩子接口。表里的 `Apply` 因此收的是
+   `func(*desktopApp, *config.Config)`；纯 agent 知识的那些写成闭包，将来要下沉不必动表的形状。
+2. **豁免不是一份 `notConfigurable` 名单，而是第 4 种 mode（`applyUnused`）。** 与
+   `applyRestart` 分开：前者是"重启后才能生效"，后者是"这个进程根本不读它"（tui/channel/acp/web 的键），
+   两者对读者的要求不同（重启 app vs 去改另一个进程读的文件）。
+3. **形态比设想的多一个 `applyLazy`。** "什么都不用推"和"推不动"是两件事：`compact.*`、
+   `oneoff.*`、`checkpoints.enabled` 的读点本来每次现读，标成 push 会凭空多出一个不存在的动作。
+   于是 mode 有四种，而 `NeedsRestart` **不是字段**——它由 `needsRestart()` 派生：
+   `Apply == nil` 且不是 lazy/unused，就是今天只能靠重启（含"push 的代码还没写"这一状态）。
+   没有可以忘记标的标记。
+
+落地的东西：
+
+| 件 | 位置 |
+|---|---|
+| `settingsTable`（41 行，覆盖 166 个 yaml 叶子）+ `settingFor`（最具体的一行胜出） | `desktop/settings.go` |
+| `applyMode` / `settingApply` / `needsRestart()` / `offered()` / `pushError` | 同上 |
+| `yamlLeafPaths`（reflect 遍历器）+ 5 个守卫测试 | `desktop/settings_test.go` |
+| `liveRuns` / `applyToLiveAgents`（按 id 排序、失败带会话名） | `desktop/agent.go` |
+| `invalidateSystemPrompts`（§八之二 的第 2 条，顺带做了） | `desktop/agent_driver.go` |
+
+守卫测试钉住的是四件事：每个叶子都有处置（新配置项不可能悄悄进来）；没有空行（键写错会红）；
+每种 mode 的规则（lazy 不许带 Apply、push 没代码就必须有 Note、restart/unused 不许有代码且必须
+有理由）；`settingFor` 取最具体的一行（`checkpoints.enabled` 是 lazy 而 `checkpoints.max_bytes`
+是 push；前缀按**段**匹配，`provider` 不会吃掉 `provider_aliases`）。
+
+`liveAgents()`（返回 `[]*agent.AIAgent`，没有 session 身份、没有错误聚合）在 MCP 两处改走
+`applyToLiveAgents` 之后被删掉了——同一个形状只留一个。MCP 的 fan-out 本身没有变化，只是换了入口。
 
 ## 九、不做的事
 
@@ -362,6 +490,8 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 | ❌ 密钥脱敏 | 已定：直接回显 |
 | ❌ 文件监听 / 自动 reload | 用户显式保存；监听引入竞态 |
 | ❌ 权限规则的图形化编辑 | `permissions.bash` 是规则列表，结构复杂，留到后续 |
+| ❌ MCP server 的 enable 开关 | 它**不在 config.yaml 里**：`config.Config.MCPServers` 是 `yaml:"-"`（`config/config.go:814`），内容来自 `mcp.json`（`LoadMCPServers`）。设置页若要暴露，只能走既有的 `SetMCPServerEnabled`（写 `SourceFile` 指向的那个 json），不能走 `SavePartial` |
+| ❌ （暂时）死配置 `mcp_tool_search.max_deferred_schema_bytes` | 全库 **0 个读点**（只在 `config/config.go:1169` 声明）。放进表单 = 用户改了没反应；要么先接上，要么不显示 |
 
 ## 十、待确认
 
@@ -371,6 +501,12 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 - **运行时切换的持久化策略不一致**：`/model` 的 provider 切换**会**持久化到会话 meta，
   而 `SwitchMCPProfile` 明确是「in-memory only, reverts on restart」。两条同类操作行为不同，
   第一版不统一，但要在 UI 上分别说清哪条会留下、哪条不会。
+- **`logs.level` 第一版就给热改吗？** 它是用户最想要的一项（排查问题时要开 debug），
+  代价是 `pkg/logger` 的一次小改（§五之三 2）——比让用户改完重启便宜得多。
+- **`mcp_tool_search.*` 显示为只读，还是整个不显示？** 它的热改要重连所有 MCP server
+  （见 🟡 表），第一版做不划算；而显示一个改不动的开关比不显示更糟。
+- **`session_cleanup_max_count` 的措辞**：它读进的是**新建会话**的 manager
+  （`desktop/agent_driver.go:229`），不能说"实时生效"，只能写"对新建会话生效"。
 
 ---
 
@@ -389,4 +525,26 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 | 行号 | `App.tsx:1355` / `agent_driver.go:151` / `config.go:1055,1218` / `agent_mcp.go:66` | `1856` / `129` / `1064,1227` / `134` |
 | 实现方案 | 「`yaml.Node` 读-改-写」 | **`goccy/go-yaml` 的 `Path` API**（spike 实测：v3 改 1 值动 70 行，goccy 动 3 行） |
 | 依赖下限 | 未提 | **`goccy/go-yaml >= v1.19`**：v1.18.0 会在多注释文件上静默丢行尾注释 |
-| 内存并发 | 未提 | 第八之二节：`cfgMu` + `config()`/`withConfig()`，**永不换指针**（12 个闭包捕获 + 26 个读点） |
+| 内存并发 | 未提 | §六「内存侧的并发」：`cfgMu` + `config()`/`withConfig()`，**永不换指针**（12 个闭包捕获 + 26 个读点） |
+
+---
+
+## 附：v2.0 → v2.1 的修正清单
+
+反查方式：把 §五 的每一行拿回代码里找它的消费点（构造期快照 / 惰性读取 / 有几处持有），
+不采信"应该可以"。下表每一格都能在文件里指到行。
+
+| 项 | v2.0 | v2.1 |
+|---|---|---|
+| `system_reminder.git_reminder` | 🔴「需重建 `ReminderCollector`」 | 🔥：惰性开关 + 无条件注册。**重建反而有害**（会丢 `DeferredToolReminder` / thread / skill 的运行态），§五之三 1 |
+| `logs.level` | 🔴（与 `max_size`/`max_files` 同列） | 🔥：`*slog.LevelVar` 一处改动，所有**已建** logger 跟着变；只有 `max_size`/`max_files` 留 🔴，§五之三 2 |
+| `tool_result.*` | 🟡（与 `web_search` 合一条，只说重建工具） | 🟡：它还喂**共享 MCP manager**（构造期快照）——漏了这条就只有一半工具有效 |
+| `memory.type` | 🟡「重建 `MemoryState` + 重注册工具」 | 🟡：还要换掉 `MemoryRecallReminder` 捕获的 `Backend`；`decay_half_life_days` 无 setter，另立一行 |
+| `mcp_tool_search.*` | 🟡「只在 `PopulateFromConnect` 读一次」 | 🟡 偏 🔴：要重连所有 server + 重算 autoLoad + unregister 差集，`autoLoadNames` 无 reset。另 `max_deferred_schema_bytes` 是**死配置**（0 读点） |
+| `lsp.*` | 「换 reminder collector」 | `Shutdown` **必须先调**（否则孤儿 LSP 进程）；reminder 换的是 provider，collector 不动；`enabled` false→true 还要**新增**注册 |
+| `hooks.*` / `subagent.*` | 「重建即可」 | 各补一个坑：禁用 hooks 要显式置 nil；executor 重建要带上 worktree 与并发信号量 |
+| `mcp_tool_refresh.interval` | 「`StopRefresher()` + `StartRefresher()`」 | 补：shared manager 的回调会绑到**触发它的那个 agent**，要从 app 层驱动 |
+| 「包一层导出即可」那几行 | 5 个 `Setup*Provider` + `SetTitleGenEnabled` 被写成现成路径 | desktop 侧**零调用点**（已 grep）——实际是新增 fan-out，即 §八之三 ③ |
+| setter 数量 | 25 个 | **26** 个（`grep -c '^func (a \*AIAgent) \(Set\|Setup\)'`） |
+| MCP server 的 enable | 未提 | 它不在 config.yaml（`MCPServers` 是 `yaml:"-"`），只走 mcp.json → 写进 §九 不做 |
+| 开工前的活 | §八之二 三条小项 | §八之二 八条小改 + §八之三 三条结构前置（应用表 / 键覆盖守卫 / 广播原语） |

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -299,29 +300,65 @@ func (d *desktopApp) agentOf(id string) (*agent.AIAgent, string) {
 	return r.agent, ""
 }
 
-// liveAgents returns every session whose agent has been built, for a change that
-// applies to ALL of them rather than to the displayed session.
+// liveRun pairs a session with its built agent. The session identity is the point: a bare
+// []*agent.AIAgent drops it, and "2 个会话失败" without saying which ones is not something a
+// reader can act on.
+type liveRun struct {
+	ID    string
+	Agent *agent.AIAgent
+}
+
+// liveRuns snapshots every session that has a built agent, sorted by ID so a failure list
+// reads the same way twice (map order is random).
 //
-// It exists for facts about the SHARED MCP layer: the deferred pool and the server
-// connections are one instance for the whole app, so enabling or disabling a server is
-// not a per-session event — a session sitting in the background has to learn about it
-// too, or it stays blind to tools the user just turned on. It is deliberately a snapshot
-// (the lock is released before returning) because the callers notify agents, which takes
-// each agent's own locks; holding d.mu across that would put the app-wide lock under a
-// per-agent one, the same inversion the rest of this file avoids. A run created after
-// the snapshot is not missed in practice: its agent picks the pool up as it is built.
+// It exists for facts about the SHARED layers — the MCP pool and connections, the config
+// object, the system-prompt cache are one instance for the whole app — so enabling a server
+// or changing a setting is not a per-session event: a session sitting in the background has
+// to learn about it too. It is deliberately a snapshot (the lock is released before
+// returning) because the callers then invoke per-agent code, which takes each agent's own
+// locks; holding d.mu across that would put the app-wide lock under a per-agent one, the
+// same inversion the rest of this file avoids. A run created after the snapshot is not
+// missed in practice: its agent sees the new state as it is built.
 //
 // Callers must NOT hold d.mu.
-func (d *desktopApp) liveAgents() []*agent.AIAgent {
+func (d *desktopApp) liveRuns() []liveRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]*agent.AIAgent, 0, len(d.runs))
-	for _, r := range d.runs {
-		if r.agent != nil {
-			out = append(out, r.agent)
+	out := make([]liveRun, 0, len(d.runs))
+	for id, r := range d.runs {
+		if r != nil && r.agent != nil {
+			out = append(out, liveRun{ID: id, Agent: r.agent})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// applyToLiveAgents pushes a change into every session that has a built agent, and returns
+// the failures as user-facing lines ("「标题」：原因") — nil when every session took it.
+//
+// It is the fan-out a config change needs, and the reason is the same one the MCP toggle
+// has: `d.cfg` is ONE object for the whole process while an AIAgent is one PER SESSION, so
+// any change that is more than "mutate the config object" has to reach each of them — a
+// session sitting in the background would otherwise keep the old behaviour. `fn` runs
+// outside d.mu, so a row may call back into the app.
+//
+// The label is the session's title when it has one, its id otherwise: the strings end up in
+// the post-save summary, which has no session list of its own to point at.
+func (d *desktopApp) applyToLiveAgents(fn func(*agent.AIAgent) error) []string {
+	var failures []string
+	for _, r := range d.liveRuns() {
+		err := fn(r.Agent)
+		if err == nil {
+			continue
+		}
+		label := d.sessionTitle(r.ID)
+		if label == "" {
+			label = r.ID
+		}
+		failures = append(failures, fmt.Sprintf("「%s」%v", label, err))
+	}
+	return failures
 }
 
 // activeRun returns the run for the currently displayed session (nil when no

@@ -173,6 +173,23 @@ func (d *desktopApp) systemPromptFor(id string) string {
 	return prompt
 }
 
+// invalidateSystemPrompts drops EVERY built prompt, so the next turn rebuilds it.
+//
+// It exists for the two config keys that are part of the prompt but NOT part of the cache
+// key — `language` and `extra_system_prompt`: the key holds per-session facts
+// (cwd / roots / mode / session id), so without this a saved language is served the prompt
+// that was built under the old one, until the cache happens to fill up and drop itself
+// (the only invalidation there used to be).
+//
+// A whole-map flush rather than a per-session one, because the change is global: that is the
+// same granularity the capacity flush already uses, and one rebuild per open session is
+// cheap next to a turn. See desktop/settings.go — this is the runtime half of those rows.
+func (d *desktopApp) invalidateSystemPrompts() {
+	d.promptMu.Lock()
+	defer d.promptMu.Unlock()
+	d.promptCache = nil
+}
+
 // populateSharedMCP connects all configured MCP servers in the background and
 // fills the manager's deferred pool / per-session discovered sets. Errors are
 // logged; partial discovery is acceptable (mirrors channel's populateSharedMCP).
