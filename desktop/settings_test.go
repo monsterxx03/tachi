@@ -21,6 +21,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 func configLeaves(t *testing.T) []string {
@@ -108,16 +109,16 @@ func TestSettingsTableRules(t *testing.T) {
 	}
 }
 
-// TestSettingForPrefersTheMostSpecificRow: a leaf must not inherit its block's mode. The
-// two rows that actually split are `checkpoints` — its flag is read per call, its three
-// limits are baked into a manager — and the prefix match must respect segment boundaries,
-// or `provider` would cover `provider_aliases` (a different fact with a different fate).
+// TestSettingForPrefersTheMostSpecificRow: a leaf must not inherit its block's mode. `logs` is
+// the block that actually splits — its level is hot, its rotation limits are frozen in an open
+// file handle — and the prefix match must respect segment boundaries, or `provider` would cover
+// `provider_aliases` (a different fact with a different fate).
 func TestSettingForPrefersTheMostSpecificRow(t *testing.T) {
-	if row, _ := settingFor("checkpoints.enabled"); row.Mode != applyLazy {
-		t.Errorf("checkpoints.enabled resolved to %v, want the lazy row", row.Mode)
+	if row, _ := settingFor("logs.level"); row.Mode != applyPush || row.needsRestart() {
+		t.Errorf("logs.level resolved to (%v, needsRestart=%v), want the hot push row", row.Mode, row.needsRestart())
 	}
-	if row, _ := settingFor("checkpoints.max_bytes"); row.Mode != applyPush {
-		t.Errorf("checkpoints.max_bytes resolved to %v, want the push row", row.Mode)
+	if row, _ := settingFor("logs.max_bytes"); row.Mode != applyRestart {
+		t.Errorf("logs.max_bytes resolved to %v, want the block's restart row", row.Mode)
 	}
 	// Segment boundaries: a prefix is a whole segment, never a string prefix.
 	if row, ok := settingFor("provider_aliases"); !ok || row.Mode != applyRestart {
@@ -293,8 +294,14 @@ providers:
 	if f := byKey["lsp.enabled"]; f.Value != true || f.Kind != "bool" {
 		t.Errorf("lsp.enabled = %+v (an unset *bool must read as its default)", f)
 	}
-	if f := byKey["logs.level"]; !f.NeedsRestart || f.Note == "" {
-		t.Errorf("logs.level = %+v (a restart-only row must carry ⟳ and a reason)", f)
+	// One block, two fates: the level is hot (a shared LevelVar reaches every logger), the
+	// rotation limits are not (frozen in a rotatingWriter with an open fd) — and the ⟳ badge
+	// follows the leaf, not the block.
+	if f := byKey["logs.level"]; f.NeedsRestart {
+		t.Errorf("logs.level = %+v, want it hot", f)
+	}
+	if f := byKey["logs.max_files"]; !f.NeedsRestart || f.Note == "" {
+		t.Errorf("logs.max_files = %+v (a restart-only leaf must carry ⟳ and a reason)", f)
 	}
 }
 
@@ -384,5 +391,119 @@ func TestSaveSettingsRollsBackWhenTheFileRefusesAKey(t *testing.T) {
 	}
 	if got := readFileT(t, path); got != before {
 		t.Errorf("the file changed: %q", got)
+	}
+}
+
+// TestSaveSettingsPushesNothingWhenTheFileRefusesTheKey: the failure path must leave the
+// RUNNING process untouched too, not just the config object. A push has no undo — it moves a
+// process-wide log level, rebuilds tools, reconnects servers — so it must not run before the
+// write that can still fail. Otherwise the answer's 「这次改动已撤销，内存与文件都没变」 would
+// be false and the process would sit on values neither the file nor the restored memory has.
+func TestSaveSettingsPushesNothingWhenTheFileRefusesTheKey(t *testing.T) {
+	beforeLevel := logger.CurrentLevel()
+	t.Cleanup(func() { logger.SetLevel(beforeLevel) })
+	logger.SetLevel("info")
+
+	// logs.level is NOT in this file, so SavePartial refuses it (adding a key is a separate
+	// feature) — exactly the write failure this test needs.
+	d, svc, path := settingsFixture(t, "language: en\n")
+	fileBefore := readFileT(t, path)
+
+	msg := svc.SaveSettings(map[string]any{"logs.level": "debug"})
+	if !strings.Contains(msg, "没能写入 config.yaml") || !strings.Contains(msg, "已撤销") {
+		t.Fatalf("summary = %q, want a write failure that says the change was undone", msg)
+	}
+	if got := logger.CurrentLevel(); got != "info" {
+		t.Errorf("log level = %q after a failed save: the push ran before the write that failed", got)
+	}
+	if d.cfg.Logs.Level == "debug" {
+		t.Errorf("Logs.Level = %q after a failed save, want it rolled back", d.cfg.Logs.Level)
+	}
+	if got := readFileT(t, path); got != fileBefore {
+		t.Errorf("the file changed: %q", got)
+	}
+}
+
+// --- which keys are hot: the fence around the promise ---
+
+// TestTheLikelyEditsStayHot is a fence, not a proof. Every key listed here is one a user can
+// reasonably expect to change without restarting the app, and each needs its own code path: a
+// reload method, a lazy read, or a cache key that carries the value. If a refactor silently
+// makes one of them need a restart again, the failure lands HERE rather than on someone who
+// saved a setting, saw nothing happen, and stopped trusting the page.
+//
+// Adding a key to this list is a promise; removing one is a decision that belongs in the design
+// doc's 🔴 table, with its reason.
+func TestTheLikelyEditsStayHot(t *testing.T) {
+	for _, key := range []string{
+		"language", "extra_system_prompt", // → the prompt cache is dropped
+		"title_generation", "title_provider", "commit_provider", "run_provider", // → per-agent rebuild
+		"providers", // → re-resolved per session, under each session's own provider name
+		"provider",  // → lazy: the default for sessions that do not exist yet
+		"logs.level",
+		"permissions.bash.allow",
+		"hooks.enabled",
+		"web_search.max_results", "web_fetch.timeout", "tool_result.max_chars",
+		"checkpoints.enabled", "checkpoints.max_files", "checkpoints.retain",
+		"system_reminder.git_reminder",
+		"lsp.enabled", "lsp.max_results", "memory.type", "memory.decay_half_life_days",
+		"subagent.worktree", "subagent.max_concurrency",
+		"active_mcp_profile", "mcp_tool_search.enabled", "mcp_tool_refresh.interval",
+		"compact.auto", "compact.threshold", "oneoff.enabled", "max_tokens",
+		"session_cleanup_max_count", "review.max_iterations",
+	} {
+		row, ok := settingFor(key)
+		if !ok {
+			t.Errorf("%s has no row in settingsTable", key)
+			continue
+		}
+		if row.needsRestart() {
+			t.Errorf("%s needs a restart again (mode %s): %s", key, row.Mode, row.Note)
+		}
+	}
+}
+
+// TestTheRestartOnlyKeysSayWhy is the other half: the keys that genuinely cannot be hot declare
+// it WITH a reason, because a page that offers a switch nothing reads (or promises a restart the
+// code cannot honour) is worse than one that admits the limit.
+func TestTheRestartOnlyKeysSayWhy(t *testing.T) {
+	for _, key := range []string{
+		"logs.max_size", "logs.max_files", "provider_aliases", "debug.pprof.enabled", "herdr.enabled",
+	} {
+		row, ok := settingFor(key)
+		if !ok {
+			t.Errorf("%s has no row", key)
+			continue
+		}
+		if !row.needsRestart() || row.Note == "" {
+			t.Errorf("%s: needsRestart=%v note=%q — a restart-only key must say why", key, row.needsRestart(), row.Note)
+		}
+	}
+}
+
+// TestSaveSettingsMakesALogLevelChangeLive walks the one hot key whose effect is visible outside
+// any session: the log level is process-wide, so the whole app's logging follows a save. It also
+// pins the summary's two halves — the same block has a leaf that CANNOT be hot, and the answer
+// has to distinguish them rather than calling the save a success.
+func TestSaveSettingsMakesALogLevelChangeLive(t *testing.T) {
+	before := logger.CurrentLevel()
+	t.Cleanup(func() { logger.SetLevel(before) })
+
+	_, svc, path := settingsFixture(t, "logs:\n  level: info\n  max_files: 3\n")
+
+	msg := svc.SaveSettings(map[string]any{"logs.level": "debug"})
+	if !strings.Contains(msg, "1 项已生效") {
+		t.Errorf("summary = %q, want the level reported live", msg)
+	}
+	if got := logger.CurrentLevel(); got != "debug" {
+		t.Errorf("logger level = %q after saving logs.level=debug", got)
+	}
+	if file := readFileT(t, path); !strings.Contains(file, "level: debug") {
+		t.Errorf("config.yaml = %q", file)
+	}
+
+	msg = svc.SaveSettings(map[string]any{"logs.max_files": float64(5)})
+	if !strings.Contains(msg, "需重启后生效") || !strings.Contains(msg, "logs.max_files") {
+		t.Errorf("summary = %q, want the rotation limit reported as restart-only, by name", msg)
 	}
 }

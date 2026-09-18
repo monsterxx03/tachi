@@ -28,6 +28,8 @@ package main
 // Design: docs/2026-09-14-desktop-settings-design.md §七、§八之三.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -35,6 +37,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // applyMode says what it takes for a saved value to reach the running process.
@@ -170,15 +173,67 @@ var settingsTable = []settingApply{
 			}))
 		},
 	},
-	{Key: "title_provider", Mode: applyPush, Note: "每个会话一份的 title provider，要在所有 live agent 上重解析"},
-	{Key: "commit_provider", Mode: applyPush, Note: "每个会话一份的 commit provider，要在所有 live agent 上重解析"},
-	{Key: "run_provider", Mode: applyPush, Note: "同上（run 模式的 provider）"},
+	{
+		Key:  "title_provider",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			return pushError("标题 provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				a.SetupTitleProvider(cfg)
+				return nil
+			}))
+		},
+	},
+	{
+		Key:  "commit_provider",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			return pushError("提交信息 provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				a.SetupCommitProvider(cfg)
+				return nil
+			}))
+		},
+	},
+	{
+		Key:  "run_provider",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			return pushError("run provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				a.SetupRunProvider(cfg)
+				return nil
+			}))
+		},
+	},
 
 	// --- model and providers ---
 	// Prices and credit rates are read lazily by the usage ledger, but resolving a
 	// provider is a per-session fact (SetResolvedProvider), so the row is a push.
-	{Key: "provider", Mode: applyPush, Note: "SetResolvedProvider 是每个会话一份，要广播"},
-	{Key: "providers", Mode: applyPush, Note: "同 provider；改的是同一个解析结果"},
+	// The two are NOT the same kind of fact. `provider` is the DEFAULT for sessions that do not
+	// exist yet: every running session has its own provider recorded (the /model switch), so a
+	// new default reaches them only by being used — which is lazy, not a rebuild.
+	{Key: "provider", Mode: applyLazy, Note: "这是新会话的默认值；已开的会话各自记录着自己的 provider，要用 /model 切换"},
+	// `providers` is the provider DEFINITIONS (model, base_url, api_key, thinking_level): an
+	// edit has to reach the agents that were resolved before it.
+	{
+		Key:  "providers",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			return pushError("provider 定义", d.applyToLiveRuns(func(r liveRun) error {
+				if r.Agent.Config.Resolved == nil {
+					return nil // not resolved yet: it reads the new config when it is built
+				}
+				// Re-resolve under the name this session already uses, so the CHOICE is left
+				// alone and only the definition behind it moves.
+				name := r.Agent.Config.Resolved.Name
+				if _, err := r.Agent.SetResolvedProvider(name); err != nil {
+					return err
+				}
+				// The provider's own thinking_level came in with the resolve; a session's
+				// explicit override has to win again — the order SwitchProvider uses.
+				applyThinking(r.Agent, d.sessionThinkingLevel(r.ID))
+				return nil
+			}))
+		},
+	},
 	{Key: "provider_aliases", Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
 	{Key: "max_tokens", Mode: applyLazy},
 	{Key: "max_iterations", Mode: applyUnused, Note: "desktop 不传 MaxIterations（0 = 无限），只有 tachi -p 读它"},
@@ -190,54 +245,189 @@ var settingsTable = []settingApply{
 	{
 		Key:  "web_search",
 		Mode: applyPush,
-		Note: "工具对象在 RegisterTools 里构建（含 sync.Once 的 provider 缓存），要重建再同名覆盖",
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			// ReloadTools rebuilds every built-in from the live config (the sync.Once provider
+			// caches live on the tool instance, so a fresh instance re-reads) and drops
+			// web_search when it is no longer configured.
+			return pushError("搜索工具", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadTools()
+			}))
+		},
 	},
-	{Key: "web_fetch", Mode: applyPush, Note: "同 web_search"},
-	// The second consumer is the trap here: the shared MCP manager snapshots max_chars and
-	// file_dir at construction, so rebuilding the tools alone would leave MCP results
-	// truncated by the old limits.
-	{Key: "tool_result", Mode: applyPush, Note: "工具要重建；共享 MCP manager 还在构造期快照了这两个值"},
-	{Key: "permissions.bash", Mode: applyPush, Note: "SetPermissionPolicy 是每个会话一份（策略在构造期建好）"},
+	{
+		Key:  "web_fetch",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			return pushError("抓取工具", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadTools()
+			}))
+		},
+	},
+	{
+		Key:  "tool_result",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			// Both halves or neither: the built-in tools AND the shared MCP manager, which
+			// snapshots these two values at construction. Rebuilding only the tools would leave
+			// MCP results truncated by the old limits while the page says the change is live.
+			if d.mcp != nil {
+				d.mcp.SetToolResultLimits(cfg.ToolResult.ResultFileDir(), cfg.ToolResult.MaxResultChars())
+			}
+			return pushError("工具结果上限", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadTools()
+			}))
+		},
+	},
+	{
+		Key:  "permissions.bash",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			return pushError("权限策略", d.applyToLiveRuns(func(r liveRun) error {
+				// SetPermissionRoot is the same rebuild a tree change already goes through: it
+				// compiles a fresh policy from the LIVE config against this session's own tree
+				// (project-level rules live there) and inherits the session's approvals. The
+				// engine needs no new path — only the trigger was missing.
+				r.Agent.SetPermissionRoot(context.Background(), d.sessionWorkDir(r.ID))
+				return nil
+			}))
+		},
+	},
 
 	// --- MCP ---
-	{Key: "active_mcp_profile", Mode: applyPush, Note: "全进程一份的事实，要广播（SwitchMCPProfile 只动一个会话）"},
+	{
+		Key:  "active_mcp_profile",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			if d.mcp == nil {
+				return nil // MCP is off: the value is written down and read at the next start
+			}
+			a, note := d.appAgentForMCP()
+			if a == nil {
+				return errors.New(note)
+			}
+			// One call, not one per session: the manager and its connections are shared, and the
+			// profile file is resolved against the displayed session's tree (mcp.<name>.json can
+			// live in a project).
+			if _, err := a.SwitchMCPProfile(context.Background(), d.config().ActiveMCPProfile, d.mcpProjectRoot()); err != nil {
+				return err
+			}
+			return nil
+		},
+	},
 	{
 		Key:  "mcp_tool_search",
 		Mode: applyPush,
-		Note: "要重跑 PopulateFromConnect（= 重连所有 server）并重算 autoLoad；max_deferred_schema_bytes 全库 0 读点",
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			if d.mcp == nil {
+				return nil
+			}
+			// No reconnect: the pool already holds every discovered tool, so the auto-load
+			// decision is re-derived from it (the manager also updates the live sessions'
+			// discovered sets). The registry half is per agent — the pool is per process.
+			added, removed := d.mcp.RecomputeAutoLoad(cfg)
+			if len(added) == 0 && len(removed) == 0 {
+				return nil
+			}
+			return pushError("MCP 工具搜索", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				for _, dt := range removed {
+					a.UnregisterTool(dt.Name)
+				}
+				for _, dt := range added {
+					a.RegisterTool(dt.Tool)
+				}
+				return nil
+			}))
+		},
 	},
-	{Key: "mcp_tool_refresh", Mode: applyPush, Note: "StopRefresher + 重启；回调绑在触发它的那个 agent 上，要从 app 层驱动"},
+	{
+		Key:  "mcp_tool_refresh",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			if d.mcp == nil {
+				return nil
+			}
+			a, note := d.appAgentForMCP()
+			if a == nil {
+				return errors.New(note)
+			}
+			// ONCE, from the app — not per session: StartRefresher re-points the SHARED poller's
+			// callback at whichever agent calls it, so driving it from every session would leave
+			// it bound to whichever ran last.
+			return a.ReloadMCPToolRefresh(context.Background(), cfg)
+		},
+	},
 
 	// --- per-session subsystems built at construction ---
 	{
 		Key:  "lsp",
 		Mode: applyPush,
-		Note: "先 Shutdown（否则留下孤儿的语言服务器进程）再新建 manager、重注册 2 个工具、换 reminder 的 provider",
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			// Per session: the manager is built per agent, and ReloadLSP tears the old one down
+			// first (its child processes would otherwise be orphaned).
+			return pushError("LSP", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadLSP(context.Background(), cfg)
+			}))
+		},
 	},
-	{Key: "subagent", Mode: applyPush, Note: "executor 与 SubagentTool 在构造期建立，要重建并重注册（worktree 与并发信号量一起重来）"},
-	{Key: "memory", Mode: applyPush, Note: "backend 与两个 memory 工具在构造期建立；reminder 里捕获的 backend 也要换"},
-	{Key: "hooks", Mode: applyPush, Note: "dispatcher 构造期构建；新配置禁用时要显式置 nil，否则旧的留着"},
+	{
+		Key:  "subagent",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			// Covers subagent.provider too: ReloadSubagent re-resolves the dedicated provider
+			// and rebuilds the executor (worktree included) under one call.
+			return pushError("subagent", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadSubagent(cfg)
+			}))
+		},
+	},
+	{
+		Key:  "memory",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			// The reminder is in the collector for the agent's life, so it is pointed at the new
+			// backend instead of being re-registered — see ReloadMemory.
+			return pushError("memory", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadMemory(context.Background(), cfg)
+			}))
+		},
+	},
+	{
+		Key:  "hooks",
+		Mode: applyPush,
+		Apply: func(d *desktopApp, cfg *config.Config) error {
+			return pushError("hooks", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				return a.ReloadHooks(cfg)
+			}))
+		},
+	},
 
 	// --- snapshots and bookkeeping ---
 	{Key: "checkpoints.enabled", Mode: applyLazy},
-	{
-		Key:  "checkpoints.max_files",
-		Mode: applyPush,
-		Note: "ckptKey 未含 Options：今天改了不重建 manager（设计 §八之二 ① 修完后即真热改）",
-	},
-	{Key: "checkpoints.max_bytes", Mode: applyPush, Note: "同 checkpoints.max_files"},
-	{Key: "checkpoints.retain", Mode: applyPush, Note: "同 checkpoints.max_files"},
+	// The three limits need no reload call: the manager bakes them in at construction, and the
+	// per-session key now CONTAINS them, so the next use rebuilds it with the new values.
+	{Key: "checkpoints.max_files", Mode: applyLazy, Note: "Options 已并进检查点 manager 的 key：下次用到时按新值重建"},
+	{Key: "checkpoints.max_bytes", Mode: applyLazy, Note: "同 checkpoints.max_files"},
+	{Key: "checkpoints.retain", Mode: applyLazy, Note: "同 checkpoints.max_files"},
 	{Key: "oneoff", Mode: applyLazy},
 	{Key: "compact", Mode: applyLazy},
 	{Key: "review", Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读"},
-	{
-		Key:  "system_reminder",
-		Mode: applyRestart,
-		Note: "git reminder 只在构造期注册进 collector；改成惰性开关（设计 §八之二）后即变 lazy",
-	},
+	// Registered unconditionally, reading the config on every generation (see GitReminder):
+	// nothing has to be pushed, and nothing has to be rebuilt — which is the point, since the
+	// collector cannot remove a reminder without taking every other reminder's state with it.
+	{Key: "system_reminder", Mode: applyLazy, Note: "git reminder 每次生成时现读配置"},
 
 	// --- consumed once at startup ---
-	{Key: "logs", Mode: applyRestart, Note: "level 差一层 LevelVar（设计 §五之三 2）；max_size/max_files 是构造期冻结的 writer"},
+	{
+		Key:  "logs.level",
+		Mode: applyPush,
+		Apply: func(_ *desktopApp, cfg *config.Config) error {
+			// Process-wide, not per session: every handler holds the same LevelVar, so this
+			// reaches loggers built at startup — which is exactly what the old scalar could not.
+			logger.SetLevel(cfg.Logs.Level)
+			return nil
+		},
+	},
+	{Key: "logs", Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
 	{Key: "debug.pprof", Mode: applyRestart, Note: "启动即绑端口"},
 	{Key: "herdr", Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
 
@@ -356,17 +546,27 @@ func kindOf(v any) string {
 //     whole batch before anything is touched. A half-saved form is a state no reader can
 //     reason about.
 //  2. validate the values against the FILE's own type table, before memory changes.
-//  3. snapshot the leaves, apply them in one locked step (all or none), and push each row's
-//     `Apply` — the in-memory half of a runtime change.
-//  4. write config.yaml LAST, and only then is the save done. If the write fails, the memory
-//     is put back exactly as it was and the answer says so: "applied for this session but not
-//     saved" is a state the next restart contradicts, and the reader cannot tell which of the
-//     two they have.
+//  3. snapshot the leaves and apply them in one locked step (all or none).
+//  4. write config.yaml. Only a save that got this far continues: if the write fails, the
+//     memory is put back exactly as it was and the answer says so — "applied for this session
+//     but not saved" is a state the next restart contradicts, and the reader cannot tell which
+//     of the two they have.
+//  5. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
+//     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
+//     before the write, a failure at step 4 would leave the running process on values the file
+//     (and the restored memory) does not have, while the answer promised the opposite. Its own
+//     failures are per-session and reported, not fatal — the value IS saved.
+//
+// The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
+// interleave their snapshots, config writes and pushes.
 //
 // Returns the summary the page shows (the desktop's convention for bound methods: a sentence
 // rather than an error the frontend would have to translate).
 func (s *AgentService) SaveSettings(updates map[string]any) string {
 	d := s.desk
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+
 	cfg := d.config()
 	if cfg == nil {
 		return "配置尚未加载，改不了"
@@ -399,7 +599,7 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		return "值不合法：" + err.Error()
 	}
 
-	// 3. In memory, then into what is already built.
+	// 3. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
 	snap, err := config.SnapshotLeaves(cfg, keys)
 	if err != nil {
 		return "改不了：" + err.Error()
@@ -412,6 +612,15 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		return "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"
 	}
 
+	// 4. The file: it is what survives the process. A failure here undoes the memory and
+	// returns — and it is honest to say so, because nothing has been pushed yet (step 5).
+	if err := config.SavePartial(updates); err != nil {
+		d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
+		return "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"
+	}
+
+	// 5. The runtime half: everything already built that keeps its own copy of these values.
+	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
 	var pushFailures []string
 	for _, key := range keys {
 		row := rows[key]
@@ -421,12 +630,6 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		if err := row.Apply(d, cfg); err != nil {
 			pushFailures = append(pushFailures, pushError(key, []string{err.Error()}).Error())
 		}
-	}
-
-	// 4. The file last: it is what survives the process.
-	if err := config.SavePartial(updates); err != nil {
-		d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
-		return "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）"
 	}
 
 	// The summary: what took effect, what waits for a restart, and what some session refused.

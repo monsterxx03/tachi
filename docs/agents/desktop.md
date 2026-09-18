@@ -240,6 +240,28 @@ Fixtures, all because the real path needs something a driver cannot do:
   exists instead of re-reading through `ReadPath` — that substitutes defaults for unset pointers).
   Values are read and written by the SAME dot path as the file, via `config.ReadPath`/`SetPath`: one grammar
   for the file, the form and the error messages.
+  A row's PUSH half is a reload method from `agent/agent_reload.go` (`ReloadTools`, `ReloadHooks`, `ReloadLSP`,
+  `ReloadMemory`, `ReloadSubagent`, `ReloadMCPToolRefresh`) or a call into one that already existed
+  (`SetResolvedProvider` under the session's own provider name, `SetPermissionRoot`, `Setup*Provider`): each is
+  idempotent, does only the push half, and never replaces something a FRONTEND injected
+  (`AgentConfig.HookDispatcher` / `.SubagentRunner`, tracked by `hooksInjected` / `subagentInjected`).
+  Two invariants the whole family shares: a REMINDER cannot be replaced (the collector only appends), so the
+  agent holds `LSPDiagnosticsReminder` / `MemoryRecallReminder` itself and re-points them
+  (`SetProvider` / `SetBackend` — nil means off; both setters are synchronized, because they are called from
+  the settings goroutine while a turn generates); and a rebuild that owns a child process or an external
+  resource tears the old one down FIRST (`ReloadLSP` → `Shutdown`, or its servers would be orphaned).
+  A rebuilt subsystem is not identical to a constructed one: `ReloadMemory` must re-apply the two wirings
+  construction adds AFTER configure (the dedicated keyword provider, the topic backend's session fallback)
+  plus `MemoryState.SkipRecall` — losing them is silent degradation, not an error.
+  PUSHES RUN ONLY AFTER `config.yaml` is written: a failed save pushes nothing, which is what makes the
+  rollback message true (a push has no undo — log level, rebuilt tools/backends, MCP reconnects). One save
+  is serialized end to end by `d.settingsMu`.
+  MCP rows are shared-layer facts driven ONCE from the app (`appAgentForMCP`), never per session — and
+  `mcp_tool_search` re-derives the auto-load set from the pool (`Manager.RecomputeAutoLoad`, which counts the
+  same tools `PopulateFromConnect` pools, so a fresh start and a toggle land in the same place) instead of
+  reconnecting every server.
+  `TestTheLikelyEditsStayHot` fences the keys users edit most: if a refactor makes one of
+  them need a restart again, that test — not a confused user — is what fails.
   Design: `docs/2026-09-14-desktop-settings-design.md` §六、§七、§八之三.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
   `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the

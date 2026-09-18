@@ -16,13 +16,46 @@ import (
 
 var (
 	logDir      string
-	cfgMaxSize  int64    = 10 * 1024 * 1024 // 10MB default
-	cfgMaxFiles int      = 10
-	cfgLevel             = slog.LevelInfo
-	writers     sync.Map // map[string]*rotatingWriter — keyed by file path
-	onceDef     sync.Once
-	defaultL    *Logger
+	cfgMaxSize  int64 = 10 * 1024 * 1024 // 10MB default
+	cfgMaxFiles int   = 10
+	// cfgLevel is the ONE level every logger shares, held as a LevelVar rather than a
+	// copied scalar so SetLevel can move it at runtime: a handler reads .Level() per
+	// record, and a logger built before the change sees it too. The zero value IS
+	// LevelInfo, so nothing has to initialise it.
+	cfgLevel *slog.LevelVar = new(slog.LevelVar)
+	writers  sync.Map       // map[string]*rotatingWriter — keyed by file path
+	onceDef  sync.Once
+	defaultL *Logger
 )
+
+// SetLevel moves the level for the WHOLE process, including loggers that already exist.
+//
+// It works on running loggers because the level is not copied into them: every handler holds
+// the one shared LevelVar (see cfgLevel) and reads it per record. That is what makes a
+// settings change reach a logger built at startup — the alternative would be hunting down
+// every component that stored a *Logger at construction.
+//
+// An unrecognised level falls back to info, exactly as Init does (parseLevel).
+func SetLevel(level string) {
+	cfgLevel.Set(parseLevel(level).slogLevel())
+}
+
+// CurrentLevel reports the level in force, in the config's own spelling. It is the other half
+// of SetLevel: a settings page showing the value from config.yaml is showing what was ASKED
+// for, and this is what is actually in effect. (Named CurrentLevel because `Level` is the
+// package's own enum.)
+func CurrentLevel() string {
+	switch cfgLevel.Level() {
+	case slog.LevelDebug:
+		return "debug"
+	case slog.LevelWarn:
+		return "warn"
+	case slog.LevelError:
+		return "error"
+	default:
+		return "info"
+	}
+}
 
 // Init sets the global log directory and configuration. Must be called once
 // before any New() calls. The log directory is created if it doesn't exist.
@@ -39,7 +72,7 @@ func Init(dir string, cfg Config) error {
 		cfgMaxSize = sz
 	}
 	if cfg.Level != "" {
-		cfgLevel = parseLevel(cfg.Level).slogLevel()
+		cfgLevel.Set(parseLevel(cfg.Level).slogLevel())
 	}
 
 	return os.MkdirAll(dir, 0755)
@@ -215,7 +248,7 @@ func newLogger(name string, parentWriter *rotatingWriter) *Logger {
 	h := &textHandler{
 		w:        w,
 		name:     name,
-		minLevel: cfgLevel,
+		minLevel: cfgLevel, // the shared LevelVar, not a copy of its current value
 	}
 
 	// Build slog.Logger with source + pid attributes. pid is captured at
@@ -266,12 +299,12 @@ type textHandler struct {
 	w        io.Writer
 	mu       sync.Mutex
 	name     string
-	minLevel slog.Level
+	minLevel *slog.LevelVar // shared: a runtime SetLevel reaches every handler already built
 	attrs    []slog.Attr
 }
 
 func (h *textHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.minLevel
+	return level >= h.minLevel.Level()
 }
 
 func (h *textHandler) Handle(ctx context.Context, r slog.Record) error {

@@ -10,7 +10,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/agent/subagent"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -40,28 +39,8 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
 	// --- Memory backend (before skills — buildReminderCollector reads a.Config.Memory) ---
 	if sysCfg.Memory.Type != "" {
-		// BaseDir is runtime-only (yaml:"-") — inject the state base dir here.
-		memCfg := sysCfg.Memory
-		memCfg.BaseDir = config.BaseDir()
-		backend, err := memory.New(sysCfg.Memory.Type, memCfg, a.Config.Logger)
-		if err != nil {
+		if err := a.initMemoryBackend(ctx, sysCfg.Memory); err != nil {
 			a.Config.Logger.Error(ctx, "Memory: failed to init backend", err, "type", sysCfg.Memory.Type)
-		} else {
-			a.Config.Memory = &MemoryState{Backend: backend}
-			a.Config.Logger.Info(ctx, "Memory: using backend", "type", sysCfg.Memory.Type)
-
-			// Wire keyword extractor for topic backend.
-			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
-			// Keyword provider resolution (from config provider name) is the
-			// caller's responsibility — pass a pre-resolved provider in
-			// AgentConfig.KeywordProvider, or let configure fall back to the
-			// main provider.
-			if tb, ok := backend.(*memory.TopicBackend); ok && a.Provider() != nil {
-				ext := NewLLMKeywordExtractor(a.Provider(), a.Model(), sysCfg.Memory.Timeout, a.Config.Logger)
-				ext.SetSessionIDResolver(a.sessionID)
-				tb.SetKeywordExtractor(ext)
-				a.Config.Logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
-			}
 		}
 	}
 
@@ -132,14 +111,13 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		if a.Config.FullConfig != nil {
 			a.SetupSubagentProvider(a.Config.FullConfig)
 		}
-		executor := subagent.NewExecutor(a, sysCfg.Subagent)
-		if sysCfg.Subagent.Worktree {
-			executor.EnableWorktree(a.Config.Logger)
-		}
+		executor := a.newSubagentExecutor(sysCfg.Subagent)
 		a.Config.SubagentRunner = executor
 		a.RegisterTool(tools.NewSubagentTool(executor))
 	} else {
-		// Custom SubagentRunner provided via AgentConfig — register the tool anyway
+		// Custom SubagentRunner provided via AgentConfig — register the tool anyway, and
+		// remember it is not ours to replace (see ReloadSubagent).
+		a.subagentInjected = true
 		a.RegisterTool(tools.NewSubagentTool(a.Config.SubagentRunner))
 	}
 
@@ -148,19 +126,12 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 	// skip parsing config hooks entirely in that case.
 	if a.Config.HookDispatcher == nil {
 		a.initHookSystemFrom(&sysCfg)
+	} else {
+		a.hooksInjected = true // the frontend's own dispatcher: not ours to replace
 	}
 
 	// --- LSP servers ---
-	if sysCfg.LSP.IsEnabled() && len(sysCfg.LSP.Servers) > 0 {
-		lspCfg := convertLSPConfig(&sysCfg.LSP)
-		a.Config.LSPManager = lsp.NewManager(lspCfg, a.Config.Logger)
-		a.RegisterTool(tools.NewLSPTool(a.Config.LSPManager))
-		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.Config.LSPManager))
-		a.Config.ReminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
-			Provider: a.Config.LSPManager,
-		})
-		a.Config.Logger.Info(ctx, "LSP: initialized", "servers", len(lspCfg.Servers))
-	}
+	a.initLSP(ctx, sysCfg.LSP)
 
 	return mgr, nil
 }
@@ -481,10 +452,10 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 		reminders = append(reminders, systemreminder.PlanTrackingReminder{})
 	}
 
-	// Git reminder (configurable).
-	if sysCfg.GitReminder == nil || *sysCfg.GitReminder {
-		reminders = append(reminders, systemreminder.GitReminder{})
-	}
+	// Git reminder — registered unconditionally, and it reads the config on every generation:
+	// see GitReminder's own comment for why (the collector cannot remove a reminder, and
+	// rebuilding it would cost every other reminder its runtime state).
+	reminders = append(reminders, systemreminder.GitReminder{Enabled: a.gitReminderEnabled})
 
 	// Pprof debug reminder — one shot per agent instance, carrying the actual
 	// bound port (bootstrap may have auto-incremented it) and the process PID.
@@ -496,20 +467,31 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 		})
 	}
 
-	// Memory recall reminder (only when memory backend is enabled).
+	// Memory recall reminder (only when memory backend is enabled). The reminder is created
+	// through the agent's own handle and appended BY POINTER: the collector keeps it for the
+	// agent's life and cannot replace it, so a later memory.* change swaps its backend instead
+	// (see ReloadMemory). register=false because the collector is being assembled from this very
+	// slice, one line below.
 	if a.Config.Memory != nil {
 		limit := sysCfg.MemoryRecallLimit
 		if limit <= 0 {
 			limit = 5
 		}
-		reminders = append(reminders, systemreminder.MemoryRecallReminder{
-			Backend: a.Config.Memory.Backend,
-			Limit:   limit,
-			Timeout: sysCfg.MemoryRecallTimeout,
-		})
+		r := a.memoryReminderFor(false)
+		r.SetPolicy(limit, sysCfg.MemoryRecallTimeout)
+		r.SetBackend(a.Config.Memory.Backend)
+		reminders = append(reminders, r)
 	}
 
 	a.Config.ReminderCollector = systemreminder.NewCollector(reminders...)
+}
+
+// gitReminderEnabled reports whether the git reminder should fire. It reads the LIVE config on
+// every generation — the reminder is registered unconditionally (see buildReminderCollectorFrom)
+// and asks this per call, which is what makes the switch hot.
+func (a *AIAgent) gitReminderEnabled() bool {
+	cfg := a.Config.FullConfig
+	return cfg == nil || cfg.SystemReminder.GitReminder == nil || *cfg.SystemReminder.GitReminder
 }
 
 // resolveKeywordProvider resolves the configured KeywordProvider from config

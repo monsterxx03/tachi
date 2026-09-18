@@ -12,9 +12,21 @@ import (
 // of a brand-new conversation. It runs git commands to gather branch info and
 // status, giving the model awareness of the git context without hard-coding it
 // in the system prompt.
-type GitReminder struct{}
+//
+// It is registered UNCONDITIONALLY and asks Enabled instead of being left out of the
+// collector when the config says off. That is what makes `system_reminder.git_reminder`
+// hot: the collector has no way to remove a reminder (AddReminder only appends), and
+// rebuilding the collector to drop one would take the runtime state of every OTHER reminder
+// with it (DeferredToolReminder's fire-once mark, the channel thread reminder, the skill
+// list's dirty flag). A nil Enabled means always on — the config's own default.
+type GitReminder struct {
+	Enabled func() bool
+}
 
-func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
+func (r GitReminder) Generate(ctx context.Context, rctx Context) []string {
+	if r.Enabled != nil && !r.Enabled() {
+		return nil
+	}
 	if !rctx.IsFirstMessage {
 		return nil
 	}

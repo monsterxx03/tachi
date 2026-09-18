@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -73,10 +76,12 @@ type Manager struct {
 	// by PopulateFromConnect; protected by mu.
 	autoLoadNames []string
 
-	// Tool result truncation — configured from config.ToolResult.
-	// 0 means no limit (opt-out).
-	maxResultChars int
-	resultFileDir  string
+	// Tool result truncation — configured from config.ToolResult, and REPLACEABLE at runtime
+	// (the settings page's `tool_result` row). Atomically held rather than guarded by mu, so a
+	// tool call reading it can never race a save and the setter can never deadlock against the
+	// manager's own lock. 0 means no limit (opt-out).
+	maxResultChars atomic.Int64
+	resultFileDir  atomic.Pointer[string]
 
 	// roots answers a server's roots/list: the directories this client is working in.
 	// nil means "declare nothing", which is the right default — a client that advertises the
@@ -204,18 +209,17 @@ func NewManager(ctx context.Context, cfg *config.Config, l *logger.Logger) *Mana
 	}
 
 	m := &Manager{
-		clients:        make(map[string]MCPClient),
-		logger:         l,
-		pool:           NewDeferredPool(),
-		sets:           make(map[string]*DiscoveredSet),
-		initDone:       make(chan struct{}),
-		maxResultChars: maxChars,
-		resultFileDir:  resultDir,
-		toolCache:      newToolListCache(),
-		serverTypes:    make(map[string]bool),
+		clients:     make(map[string]MCPClient),
+		logger:      l,
+		pool:        NewDeferredPool(),
+		sets:        make(map[string]*DiscoveredSet),
+		initDone:    make(chan struct{}),
+		toolCache:   newToolListCache(),
+		serverTypes: make(map[string]bool),
 	}
-	if m.resultFileDir != "" {
-		m.cleanupOldToolResults(ctx, m.resultFileDir, defaultToolResultMaxAge)
+	m.SetToolResultLimits(resultDir, maxChars)
+	if dir := m.ToolResultFileDir(); dir != "" {
+		m.cleanupOldToolResults(ctx, dir, defaultToolResultMaxAge)
 	}
 	return m
 }
@@ -225,10 +229,26 @@ func (m *Manager) Pool() *DeferredPool { return m.pool }
 
 // ToolResultMaxChars returns the configured max chars for tool results.
 // 0 means no limit.
-func (m *Manager) ToolResultMaxChars() int { return m.maxResultChars }
+func (m *Manager) ToolResultMaxChars() int { return int(m.maxResultChars.Load()) }
 
 // ToolResultFileDir returns the configured directory for storing oversized results.
-func (m *Manager) ToolResultFileDir() string { return m.resultFileDir }
+func (m *Manager) ToolResultFileDir() string {
+	if p := m.resultFileDir.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// SetToolResultLimits replaces where and how large an oversized MCP tool result may be spilled.
+//
+// It exists because the manager BAKES the two values in at construction (NewManager reads
+// config.ToolResult once), and the values are read per tool call — so without a setter the
+// settings page's `tool_result` row could only take effect for web/bash tools, leaving MCP
+// results truncated by the old limits while the page said the change was live.
+func (m *Manager) SetToolResultLimits(dir string, maxChars int) {
+	m.maxResultChars.Store(int64(maxChars))
+	m.resultFileDir.Store(&dir)
+}
 
 // SetFor returns the discovered-tools set for the given session, lazily
 // creating it and restoring its persisted state from disk on first use.
@@ -404,6 +424,108 @@ func (m *Manager) WaitInit(ctx context.Context) error {
 	}
 }
 
+// RecomputeAutoLoad re-derives the auto-load set from the tools ALREADY in the pool under a new
+// ToolSearch configuration, and reports what changed.
+//
+// It exists for the settings page's `mcp_tool_search` row, where reconnecting every server to
+// re-learn a decision that depends only on tools we already have would be absurd — and where
+// PopulateFromConnect cannot simply be re-run: it APPENDS to autoLoadNames (a second run would
+// duplicate every name) and it re-handshakes every server.
+//
+// Two things move together, because either alone is invisible:
+//
+//   - `autoLoadNames`, the baseline every session's discovered set is injected from;
+//   - the discovered sets of the sessions that already exist, which are what the model
+//     actually sees (a session open across the change would otherwise keep the old view).
+//
+// The caller still owns the REGISTRY half (registering the tools of `added`, unregistering
+// `removed`), because a registry is per agent while the pool is per process.
+//
+// The threshold is compared against the pool's size rather than against a fresh discovery: the
+// pool is what a search would have to sift through, and it is the number a reader can be told
+// without another round trip. PopulateFromConnect counts the same thing (the tools that survive
+// the whitelist/blacklist filter), so the two agree on where the boundary falls.
+func (m *Manager) RecomputeAutoLoad(cfg *config.Config) (added, removed []*DeferredTool) {
+	pooled := m.pool.All()
+	useToolSearch := cfg.MCPToolSearch.IsEnabled() && len(pooled) > cfg.MCPToolSearch.MinToolsForSearch
+
+	m.mu.Lock()
+	was := make(map[string]bool, len(m.autoLoadNames))
+	for _, n := range m.autoLoadNames {
+		was[n] = true
+	}
+	now := make([]string, 0, len(pooled))
+	for _, dt := range pooled {
+		if !isAutoLoadTool(dt, useToolSearch, m.serverCfgs[dt.ServerName]) {
+			continue
+		}
+		now = append(now, dt.Name)
+		if !was[dt.Name] {
+			added = append(added, dt)
+		}
+	}
+	sort.Strings(now)
+	m.autoLoadNames = now
+	for _, dt := range pooled {
+		if was[dt.Name] && !slices.Contains(now, dt.Name) {
+			removed = append(removed, dt)
+		}
+	}
+	// The live sessions' sets follow in the same critical section, so a set can never be
+	// readable in a state where autoLoadNames and the set disagree. The writes are IN MEMORY
+	// only: Add/Remove persist on every call, and doing that here would be one full file write
+	// per tool per session (250 of them for 50 tools × 5 sessions) with m.mu held, stalling
+	// every CallTool behind them. Consistency does not need that — the touched sets are
+	// persisted once each below, after the lock is released.
+	var touched []*DiscoveredSet
+	if len(added) > 0 || len(removed) > 0 {
+		for _, set := range m.sets {
+			for _, dt := range added {
+				set.addNoPersist(dt.Name)
+			}
+			for _, dt := range removed {
+				set.removeNoPersist(dt.Name)
+			}
+			touched = append(touched, set)
+		}
+	}
+	m.mu.Unlock()
+
+	// One write per touched set, outside the manager's lock (DiscoveredSet guards itself). The
+	// in-memory set stays authoritative; a failed write is logged, like every other persist
+	// here (the next successful one rewrites the whole list).
+	for _, set := range touched {
+		if err := set.Save(); err != nil {
+			m.logger.Error(context.Background(), "MCP: failed to persist recomputed auto-load tools", err)
+		}
+	}
+
+	if len(added) > 0 || len(removed) > 0 {
+		m.logger.Info(context.Background(), "MCP: auto-load recomputed",
+			"auto_load", len(now), "added", len(added), "removed", len(removed), "tool_search", useToolSearch)
+	}
+	return added, removed
+}
+
+// isAutoLoadTool is the auto-load decision, in ONE place: PopulateFromConnect and
+// RecomputeAutoLoad must agree, or toggling the setting would land somewhere different from
+// where a fresh start lands.
+func isAutoLoadTool(dt *DeferredTool, useToolSearch bool, srvCfg config.MCPServerConfig) bool {
+	if !useToolSearch {
+		return true
+	}
+	bare := dt.Name
+	if mt, ok := dt.Tool.(MCPTool); ok {
+		bare = mt.ToolName()
+	}
+	for _, name := range srvCfg.AlwaysLoadTools {
+		if matchWildcard(name, bare) {
+			return true
+		}
+	}
+	return false
+}
+
 // PopulateFromConnect connects to all servers in cfg.MCPServers, inflates the
 // manager's deferred pool with every discovered tool, and adds the subset of
 // "auto-load" tools (when ToolSearch is disabled, or the per-server
@@ -428,18 +550,24 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		return nil, nil, errs
 	}
 
-	useToolSearch := cfg.MCPToolSearch.IsEnabled() &&
-		len(all) > cfg.MCPToolSearch.MinToolsForSearch
-
+	// The threshold counts the tools that will actually enter the POOL — i.e. after the
+	// whitelist/blacklist filter — not everything the servers listed. The pool is the set a
+	// search has to sift through, and it is the same basis RecomputeAutoLoad uses (len(pool));
+	// counting the unfiltered list here made the two disagree the moment a filter was
+	// configured (100 discovered, 95 blacklisted: a fresh start said "search", the settings
+	// page said "auto-load"), which is exactly the drift isAutoLoadTool exists to prevent.
+	kept := make([]MCPTool, 0, len(all))
 	for _, t := range all {
-		srvCfg, hasCfg := m.serverCfgs[t.ServerName()]
-
-		// Whitelist / blacklist filtering.
-		// Whitelist is applied first: only matching tools are kept.
-		// Blacklist then filters out matching tools from the narrowed set.
-		if hasCfg && m.shouldSkipTool(t.ServerName(), t.ToolName()) {
+		if _, hasCfg := m.serverCfgs[t.ServerName()]; hasCfg && m.shouldSkipTool(t.ServerName(), t.ToolName()) {
 			continue
 		}
+		kept = append(kept, t)
+	}
+	useToolSearch := cfg.MCPToolSearch.IsEnabled() &&
+		len(kept) > cfg.MCPToolSearch.MinToolsForSearch
+
+	for _, t := range kept {
+		srvCfg, hasCfg := m.serverCfgs[t.ServerName()]
 
 		var searchHint string
 		if hasCfg && srvCfg.SearchHints != nil {
@@ -449,15 +577,9 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		dt := NewDeferredToolFromMCPTool(t, searchHint)
 		m.pool.Add(dt)
 
-		isAutoLoad := !useToolSearch
-		if !isAutoLoad && hasCfg {
-			for _, name := range srvCfg.AlwaysLoadTools {
-				if matchWildcard(name, t.ToolName()) {
-					isAutoLoad = true
-					break
-				}
-			}
-		}
+		// The decision lives in isAutoLoadTool (shared with RecomputeAutoLoad): the two must
+		// agree, or toggling the setting lands somewhere a fresh start would not.
+		isAutoLoad := isAutoLoadTool(dt, useToolSearch, srvCfg)
 
 		if isAutoLoad {
 			// Auto-load tools are the baseline of every session's discovered

@@ -1,8 +1,8 @@
 # Desktop 设置页 — 设计
 
-> 版本: 2.3 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0/v2.1/v2.2: 2026-09-17~18）| 状态: P0-a、P0-b、
-> **结构前置（§八之三）与 P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）已实现；
-> 设置页 UI 未开始
+> 版本: 2.5 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0~v2.4: 2026-09-17~18）| 状态: P0-a、P0-b、
+> **结构前置（§八之三）、P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）以及
+> **全部热改路径**（§五之四：97 个输入框里 91 个已能免重启生效）已实现；设置页 UI 未开始
 >
 > v2.0 是 v1.0 的**全面复核**：热改分层按实际消费点重做，P0 的验收标准收紧
 > （`yaml.Node` 回环实测发现 v1.0 承诺的「样式保留」不成立），原子性顺序修正。
@@ -19,6 +19,13 @@
 > v2.3 是 **P2 后端的落地记录**：`config` 多了一套与 `SavePartial` 同源的点分路径读写（§六）、
 > `SettingFieldVO` 的形状按实现定稿（§七）、保存的顺序与回滚语义写进 §七；§六 里「一次保存只应用
 > 一个叶子」作废。
+>
+> v2.4 是**把能不用重启的项做掉**：热改从 9 行涨到 24 行（表单 97 个输入框里 53 个），还剩 10 行
+> 需重启；新增 `agent/agent_reload.go`（重建家族）与 `pkg/logger` 的共享 `LevelVar`，现状见 §五之四。
+>
+> v2.5 是**剩下 6 行也做掉**：`lsp` / `memory` / `subagent` / `active_mcp_profile` /
+> `mcp_tool_search` / `mcp_tool_refresh`。现在的口径是 **30 行热 / 4 行需重启**（97 个输入框里
+> 91 个能免重启生效），剩下 4 行全是真结构性（§五之四）。
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 
@@ -158,6 +165,41 @@ composer 另有全局监听。设置页期间不屏蔽的话，输入会被下�
 | `herdr.enabled` | 由 `HERDR_ENV` 环境变量推导，启动期判定 |
 | `tui.*` | TUI 专属，widget 构造期消费 |
 | `provider_aliases` | `ExpandProviderAliases` 只在 `LoadFrom` 末尾跑，且别名已被展开成真名 |
+
+### 五之四、落地后的现状（v2.5）
+
+**权威是代码**：`desktop/settings.go` 的 `settingsTable`，以及它的守卫测试与「这些键必须保持热」
+那道围栏（`TestTheLikelyEditsStayHot`）。上面的 🔥/🟡/🔴 是设计期的分类，两批做完之后：
+
+- **🔥 真热改 30 行**（表单 97 个输入框里的 **91 个**）；
+- **仍需重启 4 行 / 6 个输入框**，且全是真结构性：`provider_aliases`（别名在 LoadFrom 里就展开成
+  真名）、`logs.max_size` / `logs.max_files`（冻结在 `rotatingWriter` 与它打开的 fd 上）、
+  `debug.pprof`（启动即绑端口）、`herdr`（hook 初始化时读 + `HERDR_ENV`）。
+
+**第一批（v2.4，15 行）的形状**——接下来接任何一行都值得照抄：
+
+- 能**惰性**的一律惰性（`checkpoints.*` 的三个上限只要把 Options 并进 manager 的 key；`git_reminder`
+  改成一个每次生成现读的开关；`provider` 本来就是"新会话的默认值"）——没有推送就没有可忘的地方；
+- 必须推送的走 `agent/agent_reload.go`：**幂等**、**只做推送那一半**、**绝不碰前端注入的对象**；
+- 一次改动能复用既有路径的，就别新开一条：`permissions.bash` 用的是已有的 `SetPermissionRoot`
+  （按会话自己的树重编译策略并继承会话审批），`providers` 用的是 `SwitchProvider` 的配方
+  （按会话**自己**的 provider 名重解析，再放回该会话的 thinking 覆盖）。
+
+**第二批（v2.5，那 6 行）的形状**——每个子系统一条重建路径，四条不变量是共用的：
+
+- **reminder 只能被"指向"，不能被替换**：collector 不能删/换 reminder（`AddReminder` 只 append，
+  重建会丢掉其它 reminder 的运行态），所以 `LSPDiagnosticsReminder` / `MemoryRecallReminder` 从
+  构造起就被 agent 自己持有（`lspReminder` / `memoryReminder`），重建后调它们的
+  `SetProvider` / `SetBackend` 换掉指向的对象——**"关掉"就是把指向置 nil**（各自的 Generate 会提前返回）。
+- **前端注入的对象不动**：`hooksInjected` / `subagentInjected` 记录哪些是 `AgentConfig` 送进来的，
+  重建只动 configure() 自己建的那些。
+- 三个"要拆掉再建"的（LSP 的子进程、memory 的 backend、subagent 的 executor）都遵循
+  **先拆后建、拆完能失败**：`ReloadLSP` 先 `Shutdown`（否则留下孤儿的语言服务器进程），
+  `ReloadMemory` 先把 backend 卸下（工具注销 + reminder 置 nil）再建新的，建失败就停在"memory 关着"，
+  而不是半个装上。
+- MCP 那三条是**共享层**，所以由 app 驱动、只做一次：`RecomputeAutoLoad` 从**池里已有的工具**重算
+  auto-load（不重连任何 server），并把在线会话的 discovered set 一起更新；`mcp_tool_refresh` 的
+  poller 回调会绑到调用它的那个 agent 上，所以只能从一个 agent 重启。
 
 ### 两个边界情况
 
@@ -315,12 +357,15 @@ func PathsFor(cfg *Config) []string  // 按值展开（`providers.0.model`），
 
 ```
 1. 校验 updates（类型、取值域）
-2. 应用变更到内存（d.cfg + 各 setter）—— 失败即回滚，此时文件未动
+2. 应用变更到内存（d.cfg）—— 失败即回滚，此时文件未动
 3. 序列化到临时文件 → 失败即放弃，内存回滚到快照
 4. 原子 rename 临时文件 → config.yaml
+5. 各 setter 的运行时推送（v2.5 起在写盘成功之后，见 §七「保存的顺序」）
 ```
 
-第 4 步失败：内存已改是**可接受**的（下次启动会读回旧值），但必须报错，不能静默。
+第 4 步失败：内存已改是**可接受**的（下次启动会读回旧值），但必须报错，不能静默。第 5 步
+排在最后是**不可调换**的：推送没有撤销路径（它换日志级别、重建工具与 backend、重连 MCP server），
+在写盘之前跑，一次写盘失败就会让运行态停在新值上，而回答却承诺「什么都没变」。
 
 **写盘是原子的**（`SavePartial` 内部用 `fileutil.AtomicWriteFile`，沿用文件原有的 mode）。
 理由与 session 的 meta.json 相同：config.yaml 有并发读者（另一个 Tachi 进程启动时
@@ -432,14 +477,19 @@ func settingFor(key string) (settingApply, bool)       // 最具体的一行胜�
 ### 保存的顺序（✅ 已实现于 `AgentService.SaveSettings`）
 
 `SaveSettings(updates map[string]any) string` —— 返回的是给页面显示的**一句话汇总**，不是错误
-（desktop 的绑定惯例：前端不翻译 Go 错误）。顺序就是 §六 的，每一步都是因为上一步会留下什么：
+（desktop 的绑定惯例：前端不翻译 Go 错误）。每一步都是因为上一步会留下什么，**推送排在写盘
+之后**（v2.5 起）：
 
 1. **逐个键解析**（`settingFor`）：未知键、`applyUnused` 的键 → **整单拒绝**，一个字节都不动；
 2. `config.ValidateUpdates` —— 写盘会用的那张类型表，**在改内存之前**跑；
-3. `config.SnapshotLeaves` 抓精确快照 → 一把锁内 `config.ApplyUpdates`（全有或全无）→ 逐行 `Apply`
-   推送（失败按会话收进汇总，不致命）；
-4. **最后**才 `config.SavePartial`。写盘失败 → `RestoreLeaves` 精确还原内存，回答里明说
-   「没能写入 config.yaml……（这次改动已撤销）」。
+3. `config.SnapshotLeaves` 抓精确快照 → 一把锁内 `config.ApplyUpdates`（全有或全无）；
+4. `config.SavePartial`。写盘失败 → `RestoreLeaves` 精确还原内存，回答里明说
+   「没能写入 config.yaml……（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）」——
+   这句现在为真，因为**推送还没有发生**；
+5. **最后**逐行 `Apply` 推送（失败按会话收进汇总，不致命；值已经存进文件了）。
+   顺序不可调换：推送没有撤销路径（日志级别、工具与 backend 重建、MCP 重连），先在写盘之前跑，
+   一次写盘失败就会让运行态停在新值上，而回答承诺「什么都没变」。整个序列由 `d.settingsMu` 串行化，
+   两个并发保存不会交错各自的快照与推送。
 
 汇总的形状：`N 项已生效` / `M 项需重启后生效（键名…）` / `有会话没能跟着更新：…`，按实际发生拼接。
 
@@ -490,14 +540,14 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 
 | 项 | 为什么值得先做 | 规模 |
 |---|---|---|
-| `ckptKey` 纳入 `checkpoint.Options` | `checkpoints.{max_files,max_bytes,retain}` 改了不重建 manager（`agent/agent_checkpoint.go:249-265` 的 key 只含 `sess.ID + roots`）。修完这 3 项从「小重构」变「真热改」 | 小 |
+| `ckptKey` 纳入 `checkpoint.Options` | ✅ **已完成**：key 现在含三个 Options，manager 在下次用到时按新值重建（`TestCheckpointManagerKeyCarriesItsOptions` 钉住"改了要重建、无关改动不重建"） | — |
 | `promptCache` 清空入口 | ✅ **已完成**：`desktopApp.invalidateSystemPrompts()`（`desktop/agent_driver.go`），`language` / `extra_system_prompt` 两行真的热了（`TestLanguageRowClearsThePromptCache` 钉住） | — |
-| reminder 换 provider 的先例 | 给 `LSPDiagnosticsReminder` / `MemoryRecallReminder` 加 `SetProvider`（照 `SkillListReminder`）：collector 层零改动，`lsp.*` 与 `memory.type` 都不必重建 collector（§五之三 1） | 小 |
-| `GitReminder` 惰性开关 + 无条件注册 | 让 `system_reminder.git_reminder` 从 🔴 直达 🔥，同时避开"重建 collector 会丢状态"的坑（§五之三 1 的警告） | 小 |
-| `logs.level` 的 `LevelVar` | 顺带把用户最想要的那项（不重启开 debug）变成真的热改（§五之三 2） | 小（~10 行） |
-| `tool_result.*` 让 MCP manager 现读 | 否则改了只对 web/bash 工具生效，MCP 工具结果仍按旧上限截断（`agent/mcp/manager.go:200-203` 是构造期快照） | 小 |
-| `hooks.*` 重建时显式置 nil | 新配置禁用 hooks 时旧 `HookDispatcher` 必须清掉（`initHookSystemFrom` 只在启用时赋值） | 小 |
-| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项，不阻塞 P1/P2 | 中 |
+| reminder 换 provider 的先例 | ✅ **已完成**：`LSPDiagnosticsReminder.SetProvider` / `MemoryRecallReminder.SetBackend` + agent 自己持有那两个实例——collector 层零改动，`lsp` / `memory` 两行因此可热改（§五之三 1） | — |
+| `GitReminder` 惰性开关 + 无条件注册 | ✅ **已完成**：`GitReminder.Enabled` 每次生成现读，注册无条件（`agent/systemreminder/git_reminder_test.go`）——避开了"重建 collector 会丢状态"的坑 | — |
+| `logs.level` 的 `LevelVar` | ✅ **已完成**：`pkg/logger` 的级别改成一个共享 `LevelVar` + `SetLevel`，**已建的 logger 跟着变**（`TestSetLevelReachesLoggersBuiltBeforeIt`、`TestSaveSettingsMakesALogLevelChangeLive`） | — |
+| `tool_result.*` 让 MCP manager 现读 | ✅ **已完成**：`Manager.SetToolResultLimits`（原子字段，避免与工具调用竞态），与工具重建一起推送 | — |
+| `hooks.*` 重建时显式置 nil | ✅ **已完成**：`ReloadHooks`（禁用时显式清空、前端注入的 dispatcher 不动、**"从没有 → 新增"这条路径也覆盖**） | — |
+| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项，不阻塞 P1/P2。**这是本表唯一剩下的一条** | 中 |
 
 ## 八之三、开工之前：结构前置（三条，零 UI 依赖）
 

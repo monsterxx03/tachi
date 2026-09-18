@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -417,4 +418,91 @@ func TestMatchWildcard(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestRecomputeAutoLoadTogglesTheBaselineWithoutReconnecting: the auto-load decision depends only
+// on tools the pool already holds, so re-deriving it must move three things together — the shared
+// name list, the delta the caller needs for its registries, and the live sessions' discovered
+// sets (which are what the model actually sees).
+func TestRecomputeAutoLoadTogglesTheBaselineWithoutReconnecting(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(ctx, nil, logger.New("mcp-test"))
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		mgr.Pool().Add(autoLoadTestTool("srv", name))
+	}
+	// A live session's set, injected directly: SetFor would read/write the real session dir.
+	set := NewDiscoveredSet(filepath.Join(t.TempDir(), "discovered.json"))
+	mgr.mu.Lock()
+	mgr.sets["sid"] = set
+	mgr.mu.Unlock()
+
+	on, off := true, false
+	cfg := &config.Config{}
+	cfg.MCPToolSearch.Enabled = &on
+	cfg.MCPToolSearch.MinToolsForSearch = 1
+
+	// Search on, nothing auto-loaded before either: no delta, and the set stays empty.
+	added, removed := mgr.RecomputeAutoLoad(cfg)
+	assert.Empty(t, added)
+	assert.Empty(t, removed)
+	assert.False(t, set.Contains("mcp__srv__alpha"))
+
+	// Turning search OFF makes every pooled tool auto-load…
+	cfg.MCPToolSearch.Enabled = &off
+	added, removed = mgr.RecomputeAutoLoad(cfg)
+	assert.Len(t, added, 3)
+	assert.Empty(t, removed)
+	assert.True(t, set.Contains("mcp__srv__alpha"), "a live session must see the new baseline")
+	if n := len(mgr.autoLoadNames); n != 3 {
+		t.Errorf("autoLoadNames = %d, want 3 (and no duplicates)", n)
+	}
+
+	// …and turning it back on takes them out again, from the registry's point of view (the
+	// delta) and from the session's (the set).
+	cfg.MCPToolSearch.Enabled = &on
+	added, removed = mgr.RecomputeAutoLoad(cfg)
+	assert.Empty(t, added)
+	assert.Len(t, removed, 3)
+	assert.False(t, set.Contains("mcp__srv__alpha"))
+	if n := len(mgr.autoLoadNames); n != 0 {
+		t.Errorf("autoLoadNames = %d, want 0", n)
+	}
+
+	// Idempotent: re-running with the same config changes nothing.
+	added, removed = mgr.RecomputeAutoLoad(cfg)
+	assert.Empty(t, added)
+	assert.Empty(t, removed)
+}
+
+// TestRecomputeAutoLoadHonoursAlwaysLoadTools: with search on, the per-server always_load list
+// still wins — and it is matched against the BARE tool name ("query"), the form the config uses,
+// not the prefixed one.
+func TestRecomputeAutoLoadHonoursAlwaysLoadTools(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(ctx, nil, logger.New("mcp-test"))
+	for _, name := range []string{"query", "list_tables"} {
+		mgr.Pool().Add(autoLoadTestTool("postgres", name))
+	}
+	mgr.mu.Lock()
+	mgr.serverCfgs = map[string]config.MCPServerConfig{
+		"postgres": {Name: "postgres", AlwaysLoadTools: []string{"query"}},
+	}
+	mgr.mu.Unlock()
+
+	on := true
+	cfg := &config.Config{}
+	cfg.MCPToolSearch.Enabled = &on
+	cfg.MCPToolSearch.MinToolsForSearch = 1
+
+	added, _ := mgr.RecomputeAutoLoad(cfg)
+	require.Len(t, added, 1)
+	assert.Equal(t, "mcp__postgres__query", added[0].Name)
+}
+
+// autoLoadTestTool builds a pooled tool the way discovery would.
+func autoLoadTestTool(server, name string) *DeferredTool {
+	return NewDeferredToolFromMCPTool(MCPTool{
+		serverName: server,
+		serverTool: &mcp.Tool{Name: name, Description: name + " tool"},
+	}, "")
 }

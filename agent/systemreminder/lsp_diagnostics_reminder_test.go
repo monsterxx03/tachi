@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/lsp"
@@ -130,5 +131,43 @@ func TestLSPDiagnosticsReminder_HashDedup(t *testing.T) {
 	r := &LSPDiagnosticsReminder{}
 	if r.lastHashes != nil {
 		t.Error("expected nil lastHashes initially")
+	}
+}
+
+// TestLSPDiagnosticsReminder_SwapProviderIsSafeUnderConcurrentGenerate is the race the reload
+// path creates: the settings goroutine rebuilds the LSP manager and calls SetProvider while the
+// turn goroutine runs Generate. Two failure modes are pinned here — an interface read torn by a
+// concurrent write, and the provider being nil'd between Generate's check and its use (that one
+// panics). Run with -race.
+func TestLSPDiagnosticsReminder_SwapProviderIsSafeUnderConcurrentGenerate(t *testing.T) {
+	configured := func() LSPDiagnosticsProvider {
+		return &mockLSPDiagProvider{configured: true, servers: map[string]*lsp.LSPServer{}}
+	}
+	r := &LSPDiagnosticsReminder{Provider: configured()}
+	rctx := Context{IsToolResult: true, ToolNames: []string{tools.ToolNameEdit}}
+
+	const rounds = 300
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range rounds {
+			if i%2 == 0 {
+				r.SetProvider(nil) // LSP turned off mid-conversation
+				continue
+			}
+			r.SetProvider(configured())
+		}
+	}()
+
+	for range rounds {
+		_ = r.Generate(t.Context(), rctx)
+	}
+	wg.Wait()
+
+	// Usable again afterwards, and still following the provider it is pointed at.
+	r.SetProvider(configured())
+	if got := r.Generate(t.Context(), rctx); got != nil {
+		t.Errorf("expected no diagnostics (no servers), got %v", got)
 	}
 }

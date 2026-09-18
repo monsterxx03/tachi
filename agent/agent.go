@@ -109,6 +109,22 @@ type AIAgent struct {
 	titleModelProvider llm.Provider
 	titleGenEnabled    bool
 
+	// lspReminder / memoryReminder 是注册进 collector 的那两个 reminder 实例（见
+	// agent_reload.go）：collector 只能追加、不能替换，所以 lsp.*/memory.* 改了要换的是
+	// 它们各自指向的对象，而不是容器。
+	lspReminder    *systemreminder.LSPDiagnosticsReminder
+	memoryReminder *systemreminder.MemoryRecallReminder
+
+	// subagentInjected 记录 SubagentRunner 是前端通过 AgentConfig 注入的（true）：重建
+	// executor 只能动 configure() 自己建的那个。
+	subagentInjected bool
+
+	// hooksInjected 记录 HookDispatcher 是前端通过 AgentConfig 注入的（true），还是本该由
+	// configure() 按 config.yaml 建（false，哪怕最后没建成——配置里一条 hook 都没有时它也是
+	// nil）。运行时重建只能动后者：注入的那个属于调用方，换了就是我们替它做了决定；而"没有"
+	// 恰恰是必须重建的一种状态（用户刚在设置页加了第一条 hook）。见 agent_reload.go。
+	hooksInjected bool
+
 	// ⏳ 暂留（待后续步骤迁移）
 	activeSkills         map[string]bool
 	deferredToolReminder *systemreminder.DeferredToolReminder
@@ -521,15 +537,26 @@ func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
 
 func (a *AIAgent) SetSessionManager(sm SessionManager) {
 	a.Config.SessionManager = sm
-	// Wire session provider into TopicBackend for temporal query fallback.
-	// This enables queries like "我们最近聊过什么" where keyword-based grep
-	// cannot match — the backend falls back to recent session summaries.
-	if a.Config.Memory != nil {
-		if tb, ok := a.Config.Memory.Backend.(*memory.TopicBackend); ok {
-			tb.SetSessionProvider(&topicSessionProvider{manager: sm})
-			a.Config.Logger.Info(context.Background(), "Memory: session provider wired for topic backend")
-		}
+	a.wireMemorySessionProvider(sm)
+}
+
+// wireMemorySessionProvider points the CURRENT topic backend's temporal-query fallback at sm.
+//
+// It is a method (rather than three lines inside SetSessionManager) because two callers need
+// it and they run at different times: SetSessionManager at construction, and ReloadMemory
+// after it has built a NEW backend — the wiring lives ON the backend object, so a rebuilt one
+// silently loses the fallback ("我们最近聊过什么"型查询退化成纯关键词) unless it is re-applied.
+// One shared helper is what keeps those two from drifting.
+func (a *AIAgent) wireMemorySessionProvider(sm SessionManager) {
+	if sm == nil || a.Config.Memory == nil {
+		return
 	}
+	tb, ok := a.Config.Memory.Backend.(*memory.TopicBackend)
+	if !ok || tb == nil {
+		return
+	}
+	tb.SetSessionProvider(&topicSessionProvider{manager: sm})
+	a.Config.Logger.Info(context.Background(), "Memory: session provider wired for topic backend")
 }
 
 // topicSessionProvider adapts SessionManager to memory.SessionProvider,
@@ -711,12 +738,7 @@ func (a *AIAgent) RegisterTools() {
 
 	// WebSearch — only register if at least one provider + key is configured
 	if a.Config.FullConfig != nil {
-		ws := tools.NewWebSearchTool(tools.WebSearchToolConfig{
-			Providers:  a.Config.FullConfig.WebSearch.Providers,
-			Timeout:    a.Config.FullConfig.WebSearch.Timeout,
-			MaxResults: a.Config.FullConfig.WebSearch.MaxResults,
-			Proxy:      a.Config.FullConfig.WebSearch.Proxy,
-		})
+		ws := tools.NewWebSearchTool(webSearchToolConfig(a.Config.FullConfig))
 		if ws.Configured() {
 			a.Config.ToolRegistry.Register(ws)
 		}
@@ -733,11 +755,9 @@ func (a *AIAgent) RegisterTools() {
 		}))
 	}
 
-	// RecordMemory / MemoryRecall — only when memory backend is configured
-	if a.Config.Memory != nil {
-		a.Config.ToolRegistry.Register(tools.NewRecordMemoryTool(a))
-		a.Config.ToolRegistry.Register(tools.NewMemoryRecallTool(a.Config.Memory.Backend))
-	}
+	// RecordMemory / MemoryRecall — only when memory backend is configured (and dropped here
+	// when it is not, so a ReloadTools after `memory.type` was cleared leaves no dead tools).
+	a.registerMemoryTools()
 
 	// SavePlan — only registered for frontends with a plan card UI (ACP).
 	// TUI/channel have no way to render the structured plan, so the tool

@@ -22,18 +22,47 @@ type LSPDiagnosticsProvider interface {
 	IsConfigured() bool
 }
 
+// SetProvider points the reminder at a different manager, or at none at all (nil disables it:
+// Generate returns early for a nil provider).
+//
+// It exists because the collector holds this reminder for the agent's whole life and CANNOT
+// replace it (AddReminder only appends), while the manager behind it is rebuilt whenever
+// lsp.* changes — the object is swapped instead of the container. The per-server hash cache is
+// dropped with it: hashes belong to the servers that produced them, and keeping them across a
+// rebuild would suppress the first diagnostics of the new ones. Provider and cache move under
+// the same lock because Generate reads them from the turn's goroutine (see mu).
+func (r *LSPDiagnosticsReminder) SetProvider(p LSPDiagnosticsProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastHashes = nil
+	r.Provider = p
+}
+
+// provider returns the manager in force, read under the lock (see Generate).
+func (r *LSPDiagnosticsReminder) provider() LSPDiagnosticsProvider {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Provider
+}
+
 // LSPDiagnosticsReminder injects an LSP diagnostics block at tool-result
 // boundaries when new diagnostics (errors/warnings/hints) are detected on
 // any LSP server. It tracks the last diagnostic state per server with a
 // content hash to avoid repeating the same diagnostics every iteration.
 // The block is merged into the single <system-reminder> wrapper.
 type LSPDiagnosticsReminder struct {
+	// mu guards Provider and lastHashes together. Both are touched from two goroutines: the
+	// settings goroutine rebuilds the manager and calls SetProvider, the turn goroutine runs
+	// Generate. An interface read concurrent with a write can be observed torn, and Generate
+	// reading Provider twice without the lock could see the manager swapped (or nil'd)
+	// between its nil check and the Servers() call — so it snapshots the provider once here.
+	mu sync.Mutex
+
 	Provider LSPDiagnosticsProvider
 
 	// lastHashes caches per-server diagnostic content hashes to detect
 	// when diagnostics have changed since the last injection.
-	lastHashes   map[string]string
-	lastHashesMu sync.Mutex
+	lastHashes map[string]string
 
 	// MaxDiagnostics limits how many individual diagnostic lines are shown
 	// in the reminder block. Defaults to 10 if <= 0.
@@ -41,7 +70,10 @@ type LSPDiagnosticsReminder struct {
 }
 
 func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []string {
-	if r.Provider == nil || !r.Provider.IsConfigured() {
+	// ONE snapshot of the provider, taken under the lock: it is swapped at runtime, and two
+	// unsynchronized reads could disagree (or find it nil after the nil check).
+	provider := r.provider()
+	if provider == nil || !provider.IsConfigured() {
 		return nil
 	}
 	// Only fire at tool-result boundaries in the agent loop.
@@ -54,7 +86,7 @@ func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []s
 		return nil
 	}
 
-	servers := r.Provider.Servers()
+	servers := provider.Servers()
 	if len(servers) == 0 {
 		return nil
 	}
@@ -137,8 +169,8 @@ func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []s
 	}
 
 	// Check for changes versus last injection.
-	r.lastHashesMu.Lock()
-	defer r.lastHashesMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if r.lastHashes == nil {
 		r.lastHashes = make(map[string]string)

@@ -154,6 +154,16 @@ func (t *TopicBackend) SetSessionProvider(sp SessionProvider) {
 	t.sessionProvider = sp
 }
 
+// SessionProviderWired reports whether SetSessionProvider has been given a provider.
+//
+// It exists because the wiring is attached to the BACKEND OBJECT, while the callers that
+// attach it run at different moments (SetSessionManager at construction, AIAgent.ReloadMemory
+// after it rebuilds the backend). Losing it that way has no other symptom — recall just stops
+// supplementing temporal queries — so this is what a regression test can hold on to.
+func (t *TopicBackend) SessionProviderWired() bool {
+	return t.sessionProvider != nil
+}
+
 // Recall searches topic files and inbox for matching content.
 func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]Entry, error) {
 	if query == "" {

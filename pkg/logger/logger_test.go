@@ -1,6 +1,8 @@
 package logger
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -201,5 +203,47 @@ func TestFormatAttr(t *testing.T) {
 				t.Errorf("expected quoting for %q", tt.val)
 			}
 		}
+	}
+}
+
+// TestSetLevelReachesLoggersBuiltBeforeIt is the point of the shared LevelVar: the desktop's
+// settings page changes the log level of a RUNNING process, whose loggers were built at
+// startup and are held all over the tree (each component stores its own *Logger). A level
+// copied into each handler at construction could only ever be changed by rebuilding them.
+func TestSetLevelReachesLoggersBuiltBeforeIt(t *testing.T) {
+	Init(t.TempDir(), Config{Level: "info"})
+	before := New("settings-test")
+	h, ok := before.slog.Handler().(*textHandler)
+	if !ok {
+		t.Fatalf("handler is %T, want *textHandler", before.slog.Handler())
+	}
+	if h.Enabled(context.Background(), slog.LevelDebug) {
+		t.Fatal("debug is enabled at info — the fixture is wrong")
+	}
+	if got := CurrentLevel(); got != "info" {
+		t.Errorf("CurrentLevel() = %q, want info", got)
+	}
+
+	SetLevel("debug")
+	if !h.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("an already-built handler did not follow SetLevel")
+	}
+	if got := CurrentLevel(); got != "debug" {
+		t.Errorf("CurrentLevel() = %q, want debug", got)
+	}
+
+	// A derived logger (With/NewSub) shares the same level source — its handler is a copy of
+	// the struct, but the LevelVar is a pointer — and an unknown level falls back to info
+	// rather than silencing everything.
+	dh, ok := before.With("k", "v").slog.Handler().(*textHandler)
+	if !ok {
+		t.Fatalf("derived handler is %T, want *textHandler", before.With("k", "v").slog.Handler())
+	}
+	if !dh.Enabled(context.Background(), slog.LevelDebug) {
+		t.Error("a derived handler did not follow SetLevel")
+	}
+	SetLevel("nonsense")
+	if got := CurrentLevel(); got != "info" {
+		t.Errorf("CurrentLevel() after an unknown level = %q, want info (parseLevel's fallback)", got)
 	}
 }

@@ -142,6 +142,12 @@ type desktopApp struct {
 	// until the frontend answers via AgentService.AnswerPermission. Guarded by mu.
 	perms map[string]*pendingPermission
 
+	// settingsMu serializes SaveSettings end to end (snapshot → memory → file → pushes).
+	// Two saves landing at once — a double-clicked button, two windows — would otherwise
+	// interleave their snapshots and pushes: the second one's rollback would restore a
+	// snapshot taken around the first one's writes.
+	settingsMu sync.Mutex
+
 	// fileIndex backs @-file completion in the input area (one cached path
 	// index per searched root).
 	fileIndex *fileindex.Index
@@ -334,6 +340,29 @@ func (d *desktopApp) liveRuns() []liveRun {
 	return out
 }
 
+// applyToLiveRuns runs fn for every session that has a built agent, and returns the failures as
+// user-facing lines ("「标题」：原因") — nil when every session took it. It is the primitive;
+// applyToLiveAgents is the same thing for a caller that does not need the session itself.
+//
+// A row needs the session (not just its agent) whenever the per-session facts around it matter:
+// a permission policy is compiled against the session's own tree, a provider re-resolve has to
+// re-apply that session's thinking override.
+func (d *desktopApp) applyToLiveRuns(fn func(liveRun) error) []string {
+	var failures []string
+	for _, r := range d.liveRuns() {
+		err := fn(r)
+		if err == nil {
+			continue
+		}
+		label := d.sessionTitle(r.ID)
+		if label == "" {
+			label = r.ID
+		}
+		failures = append(failures, fmt.Sprintf("「%s」%v", label, err))
+	}
+	return failures
+}
+
 // applyToLiveAgents pushes a change into every session that has a built agent, and returns
 // the failures as user-facing lines ("「标题」：原因") — nil when every session took it.
 //
@@ -346,19 +375,38 @@ func (d *desktopApp) liveRuns() []liveRun {
 // The label is the session's title when it has one, its id otherwise: the strings end up in
 // the post-save summary, which has no session list of its own to point at.
 func (d *desktopApp) applyToLiveAgents(fn func(*agent.AIAgent) error) []string {
-	var failures []string
-	for _, r := range d.liveRuns() {
-		err := fn(r.Agent)
-		if err == nil {
-			continue
-		}
-		label := d.sessionTitle(r.ID)
-		if label == "" {
-			label = r.ID
-		}
-		failures = append(failures, fmt.Sprintf("「%s」%v", label, err))
+	return d.applyToLiveRuns(func(r liveRun) error { return fn(r.Agent) })
+}
+
+// appAgentForMCP picks the agent that drives an operation on a SHARED layer: the displayed
+// session's when it has one, else any live session's, else none with the reason to report.
+//
+// The MCP manager (and its connections, its refresher and its pool) is one per process, so the
+// choice only decides whose callback and whose registry the operation lands on — and the session
+// the user is looking at is the one whose view they expect to change. It returns an error string
+// rather than an error because every caller turns it into a line of the post-save summary.
+func (d *desktopApp) appAgentForMCP() (*agent.AIAgent, string) {
+	if a, refuse := d.agentOf(d.currentID()); refuse == "" && a != nil {
+		return a, ""
 	}
-	return failures
+	if runs := d.liveRuns(); len(runs) > 0 {
+		return runs[0].Agent, ""
+	}
+	return nil, "没有已打开的会话，这一项要等下次开对话时才生效"
+}
+
+// sessionThinkingLevel is a session's stored thinking override ("" = follow the provider's own
+// default). It lives here rather than inline because three callers ask the same question —
+// /model's SwitchProvider, /thinking, and the settings reload that re-resolves a provider.
+func (d *desktopApp) sessionThinkingLevel(id string) string {
+	r := d.runOf(id)
+	if r == nil || r.sm == nil {
+		return ""
+	}
+	if cur := r.sm.Current(); cur != nil {
+		return cur.ThinkingLevel
+	}
+	return ""
 }
 
 // activeRun returns the run for the currently displayed session (nil when no

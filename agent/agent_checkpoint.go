@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -244,7 +245,14 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 	}
 	sess := sm.Current()
 	roots := a.checkpointRoots(sess)
-	key := sess.ID + "\x00" + strings.Join(roots, "\x00")
+	// The key carries the Options as well as the identity: the manager BAKES them in (the two
+	// guards and the retention are read once, at construction), so a session whose
+	// checkpoints.{max_files,max_bytes,retain} changed must NOT be served the old manager —
+	// that is the "I changed it and nothing happened" bug, and it is why these three keys
+	// need no reload call at all: the next use rebuilds.
+	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%d",
+		sess.ID, strings.Join(roots, "\x00"),
+		cfg.Checkpoints.MaxFiles, cfg.Checkpoints.MaxBytes, cfg.Checkpoints.Retain)
 
 	a.ckptMu.Lock()
 	defer a.ckptMu.Unlock()
