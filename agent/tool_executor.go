@@ -163,6 +163,9 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			_ = a.lazyRegisterMCPTool(tc.Function.Name)
 
 			// Build event sink for SubAgent tool to forward internal tool calls upstream.
+			// Same shape as executeToolCallsSequential's: sink on top of subCtx (with the
+			// tool ID), never on ctx — the two paths must hand the tool the same context,
+			// since which one runs is decided by grouping, not by the call.
 			subCtx := ctx
 			subCtx = tools.WithToolID(subCtx, tc.ID)
 			if tc.Function.Name == tools.ToolNameSubAgent {
@@ -310,12 +313,17 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 		_ = a.lazyRegisterMCPTool(tc.Function.Name)
 
 		// For SubAgent: build event sink to forward internal tool calls upstream
-		// (real-time display in TUI).
+		// (real-time display in TUI). The sink wraps subCtx, NOT ctx: the context handed to
+		// the tool must be the same one executeToolCallsParallel hands over, and the tool ID
+		// is part of it (the ACP terminal embeds itself under it — see bash.go). SubagentTool
+		// is declared Parallel(), so the SAME call can arrive through either path depending
+		// on how the model's calls grouped; wrapping ctx here made the ID vanish on this one
+		// only, i.e. sometimes present, sometimes not.
 		subCtx := ctx
 		subCtx = tools.WithToolID(subCtx, tc.ID)
 		if tc.Function.Name == tools.ToolNameSubAgent {
 			sink := a.newSubagentEventSink(ch, tc.ID)
-			subCtx = tools.WithSubagentEventSink(ctx, sink)
+			subCtx = tools.WithSubagentEventSink(subCtx, sink)
 		}
 
 		// Bash permission policy check (allow/ask/deny rules). Runs before the

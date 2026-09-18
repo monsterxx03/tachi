@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -388,4 +390,61 @@ func TestAgentLoop_SingleParallelTool(t *testing.T) {
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "done", result.Response)
+}
+
+// TestSubagentCallCarriesTheToolIDOnBothPaths: SubagentTool is declared Parallel(), so the SAME
+// call reaches the agent through executeToolCallsParallel when the model batches it and through
+// executeToolCallsSequential when it stands alone — which path runs is decided by grouping, not
+// by the call. The two must therefore hand the tool the same context, and the tool ID is the
+// part that silently differed (the sequential path wrapped `ctx`, dropping the ID the line above
+// had just added). A reader of tools.ToolID — the ACP terminal embeds itself under that call —
+// would then work or not depending on how the model happened to group its calls.
+func TestSubagentCallCarriesTheToolIDOnBothPaths(t *testing.T) {
+	subagentCall := llm.ToolCall{
+		ID: "call_sub", Type: "function",
+		Function: llm.ToolCallFunction{Name: tools.ToolNameSubAgent, Arguments: `{"prompt":"go"}`},
+	}
+	neighbour := llm.ToolCall{
+		ID: "call_read", Type: "function",
+		Function: llm.ToolCallFunction{Name: "Read", Arguments: `{"path":"a"}`},
+	}
+
+	tests := []struct {
+		name  string
+		calls []llm.ToolCall
+	}{
+		{"sequential (the subagent call stands alone)", []llm.ToolCall{subagentCall}},
+		{"parallel (the subagent call is batched)", []llm.ToolCall{subagentCall, neighbour}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newTestAgent(t, nil)
+
+			var mu sync.Mutex
+			seen := map[string]string{} // tool ID seen by the tool → its args
+			a.RegisterTool(&stubTool{
+				name:     tools.ToolNameSubAgent,
+				parallel: true, // as SubagentTool declares itself
+				executeFn: func(ctx context.Context, args string) (string, error) {
+					mu.Lock()
+					seen[tools.ToolID(ctx)] = args
+					mu.Unlock()
+					return "ok", nil
+				},
+			})
+			a.RegisterTool(slowStub("Read"))
+
+			ch := make(chan AgentEvent, 32)
+			_, err := a.executeToolCalls(t.Context(), &RunState{}, tt.calls, ch)
+			require.NoError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if _, ok := seen[subagentCall.ID]; !ok {
+				t.Errorf("the subagent tool saw tool IDs %v, want %q among them: the path dropped "+
+					"the context value the other path hands over", seen, subagentCall.ID)
+			}
+		})
+	}
 }

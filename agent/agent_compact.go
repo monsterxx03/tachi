@@ -31,11 +31,18 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 	defer cancel()
 
 	// Forward conversation cancellation — user Ctrl+C still aborts compact.
+	//
+	// The channel is captured BY VALUE, not through the variable: compactCtx is reassigned
+	// below (to carry the session id), and a closure reading that variable races with the
+	// write — the race detector flags it, and a torn read of a context interface could hand
+	// the goroutine a context nobody cancels. Snapshotted here, the goroutine only ever sees
+	// the channel it is waiting on.
+	compactDone := compactCtx.Done()
 	go func() {
 		select {
 		case <-ctx.Done():
 			cancel()
-		case <-compactCtx.Done():
+		case <-compactDone:
 		}
 	}()
 
