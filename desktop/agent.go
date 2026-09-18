@@ -148,6 +148,18 @@ type desktopApp struct {
 	// snapshot taken around the first one's writes.
 	settingsMu sync.Mutex
 
+	// pushing and deferredThisSave belong to the saving goroutine only (settingsMu serializes
+	// saves): `pushing` marks the push step, which is what makes the fan-outs queue a push for
+	// a session that is mid-turn instead of applying it, and deferredThisSave collects those
+	// sessions for the summary. See deferred_push.go for the whole rule.
+	pushing          bool
+	deferredThisSave []string
+
+	// pushMu guards pendingPushes: the pushes a save deferred, per session, waiting for that
+	// session's turn to end (drained by endTurn).
+	pushMu        sync.Mutex
+	pendingPushes map[string][]deferredPush
+
 	// fileIndex backs @-file completion in the input area (one cached path
 	// index per searched root).
 	fileIndex *fileindex.Index
@@ -308,10 +320,12 @@ func (d *desktopApp) agentOf(id string) (*agent.AIAgent, string) {
 
 // liveRun pairs a session with its built agent. The session identity is the point: a bare
 // []*agent.AIAgent drops it, and "2 个会话失败" without saying which ones is not something a
-// reader can act on.
+// reader can act on. Running carries the session's busy flag as it was at SNAPSHOT time, which is
+// what a settings push consults before touching that session's agent (see deferred_push.go).
 type liveRun struct {
-	ID    string
-	Agent *agent.AIAgent
+	ID      string
+	Agent   *agent.AIAgent
+	Running bool
 }
 
 // liveRuns snapshots every session that has a built agent, sorted by ID so a failure list
@@ -333,7 +347,7 @@ func (d *desktopApp) liveRuns() []liveRun {
 	out := make([]liveRun, 0, len(d.runs))
 	for id, r := range d.runs {
 		if r != nil && r.agent != nil {
-			out = append(out, liveRun{ID: id, Agent: r.agent})
+			out = append(out, liveRun{ID: id, Agent: r.agent, Running: r.running})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -347,9 +361,17 @@ func (d *desktopApp) liveRuns() []liveRun {
 // A row needs the session (not just its agent) whenever the per-session facts around it matter:
 // a permission policy is compiled against the session's own tree, a provider re-resolve has to
 // re-apply that session's thinking override.
+//
+// During a settings save's push step (`pushing`), a session whose turn is in flight is SKIPPED
+// and the push is queued for its turn end instead of being applied under a running turn — see
+// deferred_push.go for why, and for what deliberately does not defer.
 func (d *desktopApp) applyToLiveRuns(fn func(liveRun) error) []string {
 	var failures []string
 	for _, r := range d.liveRuns() {
+		if d.pushing && r.Running {
+			d.deferPush(r.ID, fn)
+			continue
+		}
 		err := fn(r)
 		if err == nil {
 			continue

@@ -611,10 +611,12 @@ index / 工作区，对象库共享（几乎不占额外磁盘）。这正是"�
 2. **MCP 是进程级的，而且今天取的是进程 cwd**：`agent/bootstrap.go` 启动时按 `config.FindProjectRoot()`
    加载一次 `cfg.MCPServers`（一份全局 slice），desktop **从不 chdir**，所以"进程 cwd"在 Finder 启动时
    是 `/`——项目级 `mcp.json` 今天在 desktop 里并不是"按会话生效"，而是"按 app 启动目录生效"。
-   ⚠️ **已修的是查询侧**：`desktop/agent_mcp.go` 的 profile 列表与切换现在走 `desktopApp.mcpProjectRoot`
-   （当前会话的树）。**未修的仍是加载侧**：bootstrap 在会话存在之前就跑完，`cfg.MCPServers` 依然是全局
-   一份。配置根要真正成立，这里仍须改造：**MCP servers 按项目（主检出）加载或合并**。这是 P4 的前置项，
-   不是附带项。
+   ⚠️ **查询侧与加载侧都已修（v2.5 之后）**：profile 列表与切换走 `desktopApp.mcpProjectRoot`
+   （当前会话的树），而**加载**由 `desktopApp.reloadMCPForActiveTree`（`desktop/agent_mcp.go`）在
+   会话激活/载入、会话换目录、项目改根/删项目、以及 bootstrap 连接结束时按同一棵树重读并做 diff 调和
+   ——所以 `cfg.MCPServers` 现在跟随**显示中的会话**，不再是 app 启动目录。仍待项目设计解决的是"
+   多个项目同时开着"：一份共享 `cfg.MCPServers` 只能有一棵胜出树，**按项目（主检出）加载或合并**这件事
+   仍是 P4 的前置项。
 3. **权限**（✅ 已修）：`permissions.yaml` 同样取进程 cwd（`agent/agent_configure.go` 的默认构造）。
    现已由 `AIAgent.SetPermissionRoot(dir)` 按会话树重建，desktop 在 `buildAgentForSession` 接线、
    在 `beginTurn` 随 `treeStale` 重指向——与技能 store 同一个标志、同一处（见 `docs/agents/desktop.md`

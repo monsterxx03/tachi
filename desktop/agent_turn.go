@@ -367,7 +367,12 @@ func (d *desktopApp) endTurn(id, endReason string) {
 		r.turnDone = nil
 	}
 	d.mu.Unlock()
-	d.emitIdle(d.followCompaction(id), endReason)
+	// The pushes a settings save deferred for this session run now: the turn is over, and this is
+	// the point where no turn of it can be in flight (see deferred_push.go). Before agent:idle, so
+	// the change is in place before the messages the user queued during the turn go out.
+	now := d.followCompaction(id)
+	d.flushDeferredPushes(id, now)
+	d.emitIdle(now, endReason)
 }
 
 // emitUsage recomputes a session's cost/credit from the usage ledger and pushes them to

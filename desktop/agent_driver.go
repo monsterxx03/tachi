@@ -214,6 +214,14 @@ func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	// those seconds renders "已连接 with no tools" from a read that was true when it was taken,
 	// and nothing else would ever correct it. This tells an open panel to re-read; a panel
 	// opened later re-reads on its own (see App.tsx).
+	//
+	// Before that: the servers just connected were read against the BOOTSTRAP tree (the process
+	// root — "/" for a Finder-launched app), so if the user is already in a session, re-point the
+	// set at that session's tree now. MarkInitDone is called explicitly first (the deferred one
+	// below is the panic net; the call is idempotent) because SwitchMCPProfile refuses while
+	// initialization is still in flight — and this reconcile drives exactly that.
+	mgr.MarkInitDone()
+	d.reloadMCPForActiveTree()
 	d.emitMCPReady()
 }
 

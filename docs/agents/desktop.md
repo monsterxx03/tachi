@@ -255,7 +255,12 @@ Fixtures, all because the real path needs something a driver cannot do:
   plus `MemoryState.SkipRecall` — losing them is silent degradation, not an error.
   PUSHES RUN ONLY AFTER `config.yaml` is written: a failed save pushes nothing, which is what makes the
   rollback message true (a push has no undo — log level, rebuilt tools/backends, MCP reconnects). One save
-  is serialized end to end by `d.settingsMu`.
+  is serialized end to end by `d.settingsMu`. A push is also never applied UNDER a running turn: the fan-out
+  queues it for a session whose `r.running` is set and `endTurn` runs the queue (`desktop/deferred_push.go`),
+  which is why a save made mid-turn answers `K 项等这一轮结束生效（…）：会话「甲」正在运行` instead of
+  claiming the key is live. Process-wide and shared-layer rows (log level, prompt-cache clear, the manager's
+  own limits, a profile switch, the poller) are NOT deferred — none of them swaps a field a turn reads
+  unlocked, and their "session" is the displayed one, not the running one.
   MCP rows are shared-layer facts driven ONCE from the app (`appAgentForMCP`), never per session — and
   `mcp_tool_search` re-derives the auto-load set from the pool (`Manager.RecomputeAutoLoad`, which counts the
   same tools `PopulateFromConnect` pools, so a fresh start and a toggle land in the same place) instead of
@@ -463,6 +468,12 @@ Fixtures, all because the real path needs something a driver cannot do:
   - permissions — `AIAgent.SetPermissionRoot` (see below).
   - MCP profile scope — `desktopApp.mcpProjectRoot`, used by `ListMCPProfiles` / `SetMCPProfile`; the project
     `mcp.<profile>.json` lives in `<tree>/.tachi/` and was read from `/.tachi/`.
+  - MCP server LOAD — `desktopApp.reloadMCPForActiveTree`, called from every place the displayed tree can
+    move (session activation/`LoadSession`, `SetSessionWorkingDir`, a project's roots edit/delete, and the
+    end of the bootstrap connect). It re-reads `<tree>/.tachi/mcp.json` through `SwitchMCPProfile`, whose
+    diff keeps unchanged connections; the tree that wins is the DISPLAYED session's, so a background session
+    in another tree does not hold its own servers (per-project splitting is the project design's P4). A new
+    "the tree moved" writer is a bug of the same shape as the three above.
 - **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes (`tachi -p`, `tachi commit`);
   this frontend has a human in front of it.
 - **The scope is the session's git root, plus the global dir** (`config.GlobalSkillsDir()` = `<base>/skills`,

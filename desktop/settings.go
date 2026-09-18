@@ -621,23 +621,42 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 
 	// 5. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
-	var pushFailures []string
+	//
+	// `pushing` marks this step: the fan-out queues a push for a session whose turn is in flight
+	// (see deferred_push.go), and those sessions are reported in the summary instead of being
+	// counted as already in effect.
+	var pushFailures, deferredKeys []string
+	d.deferredThisSave = nil
+	d.pushing = true
 	for _, key := range keys {
 		row := rows[key]
 		if row.Apply == nil {
 			continue // nothing built yet that needs telling (or a key nothing consumes)
 		}
+		before := len(d.deferredThisSave)
 		if err := row.Apply(d, cfg); err != nil {
 			pushFailures = append(pushFailures, pushError(key, []string{err.Error()}).Error())
 		}
+		if len(d.deferredThisSave) > before {
+			deferredKeys = append(deferredKeys, key)
+		}
 	}
+	d.pushing = false
 
-	// The summary: what took effect, what waits for a restart, and what some session refused.
+	// The summary: what took effect, what waits for a restart, what waits for a turn to end, and
+	// what some session refused. A deferred key is NOT counted as already in effect — it is in
+	// the file, and the running process will have it when the turn it is in finishes.
+	deferred := make(map[string]bool, len(deferredKeys))
+	for _, key := range deferredKeys {
+		deferred[key] = true
+	}
 	var live, restart []string
 	for _, key := range keys {
-		if rows[key].needsRestart() {
+		switch {
+		case rows[key].needsRestart():
 			restart = append(restart, key)
-		} else {
+		case deferred[key]:
+		default:
 			live = append(live, key)
 		}
 	}
@@ -648,6 +667,10 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 	if len(restart) > 0 {
 		parts = append(parts, fmt.Sprintf("%d 项需重启后生效（%s）", len(restart), strings.Join(restart, "、")))
 	}
+	if len(deferredKeys) > 0 {
+		parts = append(parts, fmt.Sprintf("%d 项等这一轮结束生效（%s）：会话%s正在运行",
+			len(deferredKeys), strings.Join(deferredKeys, "、"), strings.Join(d.deferredSessionLabels(), "、")))
+	}
 	if len(pushFailures) > 0 {
 		parts = append(parts, "有会话没能跟着更新："+strings.Join(pushFailures, "；"))
 	}
@@ -655,4 +678,19 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		return "已保存"
 	}
 	return strings.Join(parts, "；")
+}
+
+// deferredSessionLabels names the sessions whose push waited for a turn to end, in the summary's
+// own words ("「标题」", falling back to the id). Read by the saving goroutine, which is the only
+// writer of deferredThisSave.
+func (d *desktopApp) deferredSessionLabels() []string {
+	out := make([]string, 0, len(d.deferredThisSave))
+	for _, id := range d.deferredThisSave {
+		if t := d.sessionTitle(id); t != "" {
+			out = append(out, "「"+t+"」")
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }

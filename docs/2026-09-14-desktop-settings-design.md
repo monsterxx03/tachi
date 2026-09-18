@@ -490,8 +490,14 @@ func settingFor(key string) (settingApply, bool)       // 最具体的一行胜�
    顺序不可调换：推送没有撤销路径（日志级别、工具与 backend 重建、MCP 重连），先在写盘之前跑，
    一次写盘失败就会让运行态停在新值上，而回答承诺「什么都没变」。整个序列由 `d.settingsMu` 串行化，
    两个并发保存不会交错各自的快照与推送。
+   推送**不落在正在跑的回合上**：`pushing` 期间扇出遇到 `r.running` 的会话就入队
+   （`desktop/deferred_push.go`），由 `endTurn` 执行——那正是这个会话没有回合在飞的时刻。
+   汇总把它单算一类（`N 项等这一轮结束生效（键名）：会话「甲」正在运行`），不计入「已生效」。
+   进程级与共享层的行不延后（日志级别、prompt 缓存清理、MCP manager 自己的上限、profile 切换、
+   轮询器）：它们不换回合裸读的字段，目标也是共享层——那里的"会话"是显示中的那个，不是运行中的那个。
 
-汇总的形状：`N 项已生效` / `M 项需重启后生效（键名…）` / `有会话没能跟着更新：…`，按实际发生拼接。
+汇总的形状：`N 项已生效` / `M 项需重启后生效（键名…）` /
+`K 项等这一轮结束生效（键名…）：会话「甲」正在运行` / `有会话没能跟着更新：…`，按实际发生拼接。
 
 ⚠️ **多会话注意**：`d.cfg` 是全进程唯一的一份，而 `AIAgent` 是**每会话**一个。
 热改一个配置要遍历会话（先例见 `desktop/agent_mcp.go` 的 MCP toggle），不能只改当前显示的那一个。
@@ -547,7 +553,7 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 | `logs.level` 的 `LevelVar` | ✅ **已完成**：`pkg/logger` 的级别改成一个共享 `LevelVar` + `SetLevel`，**已建的 logger 跟着变**（`TestSetLevelReachesLoggersBuiltBeforeIt`、`TestSaveSettingsMakesALogLevelChangeLive`） | — |
 | `tool_result.*` 让 MCP manager 现读 | ✅ **已完成**：`Manager.SetToolResultLimits`（原子字段，避免与工具调用竞态），与工具重建一起推送 | — |
 | `hooks.*` 重建时显式置 nil | ✅ **已完成**：`ReloadHooks`（禁用时显式清空、前端注入的 dispatcher 不动、**"从没有 → 新增"这条路径也覆盖**） | — |
-| MCP profile 的**加载侧**按会话树 | 查询侧已修（`mcpProjectRoot`）；加载侧 bootstrap 早于会话存在，仍是全局一份。属 `desktop-project-design.md` §P4 前置项，不阻塞 P1/P2。**这是本表唯一剩下的一条** | 中 |
+| MCP profile 的**加载侧**按会话树 | ✅ **已完成**：`reloadMCPForActiveTree`（`desktop/agent_mcp.go`）复用 `SwitchMCPProfile` 按会话树重读配置并做 diff 调和，挂在会话激活/载入、会话换目录、项目改根与删项目、以及 bootstrap 连接结束（`MarkInitDone` 之后）这些"显示中的树可能移动"的入口上；`TestActivateSessionLoadsTheProjectsMCPServers` 钉住"开会话即读到该树的 mcp.json"。共享 manager 的胜出树是**显示中的会话**（与查询侧一致），按项目拆开仍是 `desktop-project-design.md` §P4 的事 | — |
 
 ## 八之三、开工之前：结构前置（三条，零 UI 依赖）
 
