@@ -634,12 +634,19 @@ export function SavePastedImage(sessionID: string, mediaType: string, data: stri
  *     whole batch before anything is touched. A half-saved form is a state no reader can
  *     reason about.
  *  2. validate the values against the FILE's own type table, before memory changes.
- *  3. snapshot the leaves, apply them in one locked step (all or none), and push each row's
- *     `Apply` — the in-memory half of a runtime change.
- *  4. write config.yaml LAST, and only then is the save done. If the write fails, the memory
- *     is put back exactly as it was and the answer says so: "applied for this session but not
- *     saved" is a state the next restart contradicts, and the reader cannot tell which of the
- *     two they have.
+ *  3. snapshot the leaves and apply them in one locked step (all or none).
+ *  4. write config.yaml. Only a save that got this far continues: if the write fails, the
+ *     memory is put back exactly as it was and the answer says so — "applied for this session
+ *     but not saved" is a state the next restart contradicts, and the reader cannot tell which
+ *     of the two they have.
+ *  5. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
+ *     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
+ *     before the write, a failure at step 4 would leave the running process on values the file
+ *     (and the restored memory) does not have, while the answer promised the opposite. Its own
+ *     failures are per-session and reported, not fatal — the value IS saved.
+ * 
+ * The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
+ * interleave their snapshots, config writes and pushes.
  * 
  * Returns the summary the page shows (the desktop's convention for bound methods: a sentence
  * rather than an error the frontend would have to translate).
