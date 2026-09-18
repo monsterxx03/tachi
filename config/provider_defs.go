@@ -11,6 +11,22 @@ const (
 	ProviderTypeAnthropic       = "anthropic"
 )
 
+// ProviderTypes lists every provider type this code can construct, in the order a form should
+// offer them.
+//
+// It exists because a settings page can present the choice instead of accepting a typo:
+// nothing validates a provider's `type` at LOAD time, so a misspelling shows up later — when a
+// session resolves its provider and llm.NewNamedProvider reaches its default branch with
+// "unsupported provider type: …". A list here is not a second source of truth, it is the same
+// three constants the construction switch dispatches on: adding a type means adding it in both
+// places, which is one decision.
+//
+// A fresh slice each call: the caller is a bound method whose payload is serialized, and a
+// package-level slice would be shared with it.
+func ProviderTypes() []string {
+	return []string{ProviderTypeOpenAI, ProviderTypeOpenAIResponses, ProviderTypeAnthropic}
+}
+
 // ProviderOptions collects optional behavioral parameters for provider
 // construction. Zero values mean "use the path's default".
 //

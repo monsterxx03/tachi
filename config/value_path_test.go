@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // readPathFixture is a config with one of every shape the settings table addresses: a plain
@@ -331,5 +332,130 @@ func TestApplyUpdatesIsAllOrNothing(t *testing.T) {
 	}
 	if cfg.Language != "zh" {
 		t.Errorf("Language = %q: a failed batch left the first write behind", cfg.Language)
+	}
+}
+
+// A duration leaf answers with the STRING the file holds, whichever of the config's two
+// duration types it is declared as.
+//
+// The two used to answer a binding differently, and both answers were wrong for a form:
+// time.Duration has no marshaller of its own, so it crossed as 30000000000 (nanoseconds — not
+// something a person edits); config.Duration marshals as a string, so it crossed as "30s" and
+// then could not be SAVED at all, because the write path only accepted an integer. The path
+// API is the file's own view of the config, and `timeout: 30s` is what the file holds.
+func TestDurationLeavesReadAndWriteAsTheFileHolds(t *testing.T) {
+	cfg := &Config{}
+	cfg.LSP.RequestTimeout = Duration(45 * time.Second) // config.Duration
+	cfg.Memory.Timeout = 90 * time.Second               // time.Duration
+	cfg.MCPToolRefresh.Interval = 2 * time.Minute       // …and one under a block
+
+	for _, tt := range []struct{ key, want string }{
+		{"lsp.request_timeout", "45s"},
+		{"memory.timeout", "1m30s"},
+		{"mcp_tool_refresh.interval", "2m0s"},
+	} {
+		got, err := ReadPath(cfg, tt.key)
+		if err != nil {
+			t.Fatalf("ReadPath(%q): %v", tt.key, err)
+		}
+		if got != tt.want {
+			t.Errorf("ReadPath(%q) = %#v, want %q", tt.key, got, tt.want)
+		}
+	}
+
+	// Writing takes the same form, and the struct holds a real duration afterwards.
+	if err := SetPath(cfg, "lsp.request_timeout", "1m30s"); err != nil {
+		t.Fatalf("SetPath with a duration string: %v", err)
+	}
+	if cfg.LSP.RequestTimeout != Duration(90*time.Second) {
+		t.Errorf("LSP.RequestTimeout = %v, want 1m30s", time.Duration(cfg.LSP.RequestTimeout))
+	}
+	if got, _ := ReadPath(cfg, "lsp.request_timeout"); got != "1m30s" {
+		t.Errorf("round trip = %#v, want %q", got, "1m30s")
+	}
+	// A NUMBER is still accepted: nothing was removed, and that is what a caller holding the
+	// raw value passes.
+	if err := SetPath(cfg, "memory.timeout", 5*time.Second); err != nil {
+		t.Fatalf("SetPath with a raw duration: %v", err)
+	}
+	if cfg.Memory.Timeout != 5*time.Second {
+		t.Errorf("Memory.Timeout = %v, want 5s", cfg.Memory.Timeout)
+	}
+
+	// A string that is not a duration is refused BY NAME, and the refusal changes nothing: this
+	// is the mistake a text box makes (typing "45 seconds"), so the message has to be the one
+	// the reader needs.
+	err := SetPath(cfg, "lsp.request_timeout", "45 seconds")
+	if err == nil {
+		t.Fatal("SetPath took a string that is not a duration")
+	}
+	if !strings.Contains(err.Error(), "lsp.request_timeout") || !strings.Contains(err.Error(), "时长") {
+		t.Errorf("err = %v, want the key and the word 时长", err)
+	}
+	if cfg.LSP.RequestTimeout != Duration(90*time.Second) {
+		t.Errorf("LSP.RequestTimeout = %v after the refusal, want it untouched", time.Duration(cfg.LSP.RequestTimeout))
+	}
+}
+
+// DescribeLeaf answers the two questions a form cannot read off the VALUE: what control this
+// leaf wants, and whether "unset" is a state of its own. The second one is the reason it exists —
+// an unset *bool reads as nothing at all, and `vision: nil` means "decide it from the model",
+// which is neither true nor false.
+func TestDescribeLeafTellsAnUnsetLeafFromAnEmptyOne(t *testing.T) {
+	cfg := &Config{Language: "zh", Providers: []ProviderConfig{{Name: "main", Model: "m"}}}
+	tests := []struct {
+		key      string
+		kind     string
+		optional bool
+		isSet    bool
+	}{
+		// A plain scalar: a text box, always set.
+		{"language", "string", false, true},
+		// Optional, and unset: a switch whose third state is 自动.
+		{"providers.0.spec.vision", "bool", true, false},
+		{"providers.0.spec.max_retries", "int", true, false},
+		{"providers.0.spec.context_window", "int", true, false},
+		{"providers.0.spec.credit_rate", "float", true, false},
+		// A pointer WITH a `default:` tag is not "optional" in this sense: the default says what
+		// unset means, so unset and the default are one fact and the form shows a plain checkbox.
+		{"lsp.enabled", "bool", false, false},
+		// And a list is the whole list as one value.
+		{"review.allowed_tools", "string_list", false, true},
+	}
+	for _, tt := range tests {
+		info, err := DescribeLeaf(cfg, tt.key)
+		if err != nil {
+			t.Errorf("DescribeLeaf(%q): %v", tt.key, err)
+			continue
+		}
+		if info.Kind != tt.kind || info.Optional != tt.optional || info.IsSet != tt.isSet {
+			t.Errorf("DescribeLeaf(%q) = %+v, want {Kind:%s Optional:%v IsSet:%v}",
+				tt.key, info, tt.kind, tt.optional, tt.isSet)
+		}
+	}
+
+	// Setting one makes IsSet true; clearing it with Unset puts it back — and a leaf that is not
+	// optional refuses to be cleared at all (an int has no null).
+	if err := SetPath(cfg, "providers.0.spec.vision", true); err != nil {
+		t.Fatalf("SetPath: %v", err)
+	}
+	if info, _ := DescribeLeaf(cfg, "providers.0.spec.vision"); !info.IsSet {
+		t.Error("vision reads as unset after being set")
+	}
+	if err := SetPath(cfg, "providers.0.spec.vision", Unset{}); err != nil {
+		t.Fatalf("SetPath(Unset): %v", err)
+	}
+	if cfg.Providers[0].Spec.Vision != nil {
+		t.Errorf("vision = %v after Unset, want nil", *cfg.Providers[0].Spec.Vision)
+	}
+	if info, _ := DescribeLeaf(cfg, "providers.0.spec.vision"); info.IsSet {
+		t.Error("vision reads as set after Unset")
+	}
+	err := SetPath(cfg, "language", Unset{})
+	if err == nil || !strings.Contains(err.Error(), "不是可选项") {
+		t.Errorf("err = %v, want a refusal naming the reason", err)
+	}
+	if cfg.Language != "zh" {
+		t.Errorf("language = %q after a refused Unset, want it untouched", cfg.Language)
 	}
 }

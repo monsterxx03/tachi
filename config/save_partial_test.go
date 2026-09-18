@@ -149,15 +149,15 @@ func TestSavePartial_PreservesCommentsIndentAndStyle(t *testing.T) {
 	s := string(got)
 
 	for _, want := range []string{
-		"# 顶部注释：这是用户的配置", // head comment
-		"provider: main", // an UNTOUCHED line keeps its content
-		"# 行尾注释",       // ...and its trailing comment (goccy re-aligns the padding; see KNOWN_LIMIT)
-		"  # 独立注释：语言服务器", // standalone comment
-		`extensions: [".go"]`,     // flow style not expanded
-		`command: "gopls"`,        // explicit quoting kept
-		"\n\nlsp:",                // blank-line grouping kept
+		"# 顶部注释：这是用户的配置",                           // head comment
+		"provider: main",                           // an UNTOUCHED line keeps its content
+		"# 行尾注释",                                   // ...and its trailing comment (goccy re-aligns the padding; see KNOWN_LIMIT)
+		"  # 独立注释：语言服务器",                           // standalone comment
+		`extensions: [".go"]`,                      // flow style not expanded
+		`command: "gopls"`,                         // explicit quoting kept
+		"\n\nlsp:",                                 // blank-line grouping kept
 		"\nproviders:\n    - name: deepseek-flash", // 4-space indent kept as written
-		"  servers:\n  - name: gopls",             // INDENTLESS sequence kept
+		"  servers:\n  - name: gopls",              // INDENTLESS sequence kept
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("output lost %q\n--- got ---\n%s", want, s)
@@ -173,10 +173,10 @@ func TestSavePartial_NestedAndIndexedPaths(t *testing.T) {
 	path := writeConfigFixture(t, richFixture)
 
 	err := SavePartialTo(path, map[string]any{
-		"providers.0.model":            "deepseek-flash-v2",
-		"providers.0.spec.vision":      false,
+		"providers.0.model":               "deepseek-flash-v2",
+		"providers.0.spec.vision":         false,
 		"providers.0.spec.context_window": 200000,
-		"lsp.servers.0.command":        "gopls-x",
+		"lsp.servers.0.command":           "gopls-x",
 	})
 	if err != nil {
 		t.Fatalf("SavePartialTo: %v", err)
@@ -466,5 +466,145 @@ func TestSavePartial_StringList(t *testing.T) {
 		if cfg.Permissions.Bash.Ask[i] != want[i] {
 			t.Errorf("ask[%d] = %q, want %q", i, cfg.Permissions.Bash.Ask[i], want[i])
 		}
+	}
+}
+
+// The two shapes a BOUND METHOD's payload has, which are NOT the shapes a Go caller passes:
+// a JS array arrives as []any, and a duration arrives as the string the form showed. Both were
+// reachable only from the settings page, which is why neither was covered until it existed —
+// and both failed: renderScalar had no []any case ("unsupported value type []any"), and the
+// write path had no duration-string case ("需要 time.Duration，收到 string").
+func TestSavePartial_AcceptsTheShapeABoundMethodReceives(t *testing.T) {
+	path := writeConfigFixture(t, `permissions:
+  bash:
+    allow: ["ls"]
+lsp:
+  request_timeout: 15s
+`)
+	updates := map[string]any{
+		"permissions.bash.allow": []any{"ls", "pwd", "git status"},
+		"lsp.request_timeout":    "45s",
+	}
+	if err := SavePartialTo(path, updates); err != nil {
+		t.Fatalf("SavePartialTo: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	var cfg struct {
+		Permissions struct {
+			Bash struct {
+				Allow []string `yaml:"allow"`
+			} `yaml:"bash"`
+		} `yaml:"permissions"`
+		LSP struct {
+			RequestTimeout string `yaml:"request_timeout"`
+		} `yaml:"lsp"`
+	}
+	if err := yaml.Unmarshal(got, &cfg); err != nil {
+		t.Fatalf("parse: %v\n%s", err, got)
+	}
+	if want := []string{"ls", "pwd", "git status"}; !reflect.DeepEqual(cfg.Permissions.Bash.Allow, want) {
+		t.Errorf("allow = %v, want %v", cfg.Permissions.Bash.Allow, want)
+	}
+	// The duration stays the string form the reader wrote — not nanoseconds. This is the half
+	// that makes the settings page's timeout fields editable at all.
+	if cfg.LSP.RequestTimeout != "45s" {
+		t.Errorf("request_timeout = %q, want %q", cfg.LSP.RequestTimeout, "45s")
+	}
+
+	// A list of something other than strings is refused by element type: the config has no list
+	// of numbers, and saying so beats writing a sequence the loader would reject.
+	err := SavePartialTo(path, map[string]any{"permissions.bash.allow": []any{"ls", 3}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported list element type") {
+		t.Errorf("err = %v, want it to name the element type", err)
+	}
+}
+
+// A null is how the file spells "not set", which is a state several fields give a MEANING to
+// (`vision: null` = decide it from the model, `max_retries: null` = the path's default). So the
+// write path has to be able to produce one — through config.Unset, never through a bare nil,
+// which is what a caller who forgot to dereference a pointer looks like (the test above).
+//
+// The load half is the part worth pinning: writing "null" is worthless if the loader reads it
+// back as an empty value rather than as unset.
+func TestUnsetWritesNullAndTheLoaderReadsItBackAsUnset(t *testing.T) {
+	path := writeConfigFixture(t, `providers:
+  - name: main
+    model: m
+    spec:
+      context_window: 200000
+      vision: true
+`)
+	updates := map[string]any{
+		"providers.0.spec.context_window": Unset{},
+		"providers.0.spec.vision":         Unset{},
+	}
+	if err := SavePartialTo(path, updates); err != nil {
+		t.Fatalf("SavePartialTo: %v", err)
+	}
+	body, _ := os.ReadFile(path)
+	if !strings.Contains(string(body), "context_window: null") || !strings.Contains(string(body), "vision: null") {
+		t.Fatalf("config.yaml = %q, want both keys written as null", body)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("the file this function wrote does not load: %v\n%s", err, body)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("providers = %d, want 1", len(cfg.Providers))
+	}
+	if got := cfg.Providers[0].Spec.ContextWindow; got != nil {
+		t.Errorf("context_window = %v after loading null, want unset", *got)
+	}
+	if got := cfg.Providers[0].Spec.Vision; got != nil {
+		t.Errorf("vision = %v after loading null, want unset", *got)
+	}
+}
+
+// The ONE key this function adds: one whose parent block is already in the file.
+//
+// It exists because the config OBJECT and the FILE do not have the same leaves: every struct
+// field is a leaf the settings form offers, while `omitempty` (or a hand-written file) may leave
+// one out. Without this, editing such a leaf fails with "not found in the file" — which reads as
+// a broken form rather than as a missing line, and it is exactly what a freshly added list item
+// produces (its skeleton writes the fields the struct always writes and leaves the rest).
+func TestSavePartial_AddsAKeyUnderAnExistingBlock(t *testing.T) {
+	path := writeConfigFixture(t, `providers:
+  - name: main
+    model: m
+    spec:
+      timeout: 30s
+`)
+	if err := SavePartialTo(path, map[string]any{"providers.0.spec.context_window": 200000}); err != nil {
+		t.Fatalf("SavePartialTo: %v", err)
+	}
+	body, _ := os.ReadFile(path)
+	// In place, inside spec, at spec's own indentation — and the file still loads.
+	if !strings.Contains(string(body), "\n      context_window: 200000") {
+		t.Errorf("config.yaml = %q, want the key under spec at its indentation", body)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("the file this function wrote does not load: %v\n%s", err, body)
+	}
+	if len(cfg.Providers) != 1 || cfg.Providers[0].Spec.ContextWindow == nil ||
+		*cfg.Providers[0].Spec.ContextWindow != 200000 {
+		t.Errorf("providers[0].spec.context_window did not land: %+v", cfg.Providers)
+	}
+
+	// The rest of the file is untouched: the sibling it was added NEXT TO keeps its value and
+	// position (appending to the block is not a rewrite).
+	if !strings.Contains(string(body), "      timeout: 30s") {
+		t.Errorf("config.yaml = %q, want the sibling key untouched", body)
+	}
+
+	// A key whose parent is a SEQUENCE is not this case: a list does not grow in the middle, and
+	// its new item is AppendListItem's job (which knows the element's shape).
+	err = SavePartialTo(path, map[string]any{"providers.1.name": "x"})
+	if err == nil {
+		t.Fatal("adding a sequence element through SavePartial must be refused")
+	}
+	if !strings.Contains(err.Error(), "providers") {
+		t.Errorf("the error should name the path, got: %v", err)
 	}
 }

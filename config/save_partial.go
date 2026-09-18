@@ -11,8 +11,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
-
-	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/goccy/go-yaml/token"
 )
 
 // SavePartial updates the given leaf values in config.yaml and leaves the rest of
@@ -40,13 +39,17 @@ import (
 // YAML scalars; a *bool / *int / *int64 / *float64 may be passed directly so a
 // pointer field keeps its field type (see renderScalar).
 //
-// ⚠️ Every path must ALREADY EXIST in the file. A path that does not is an error
-// rather than an append: goccy's ReplaceWithNode reports success for a missing
-// path while writing nothing (verified), so "no error" cannot be trusted — this
-// function re-reads the file and verifies each path holds the value it was given,
-// and that check is what catches it. Adding a key is a different feature with
-// different questions (where does it go? under an existing block or a new one?),
-// and this one does not guess.
+// ⚠️ Every path must ALREADY EXIST in the file, with ONE exception this function does handle:
+// a key whose PARENT mapping exists is added (a `spec:` block that does not spell out
+// `context_window` gains that line). There is nothing to guess there — the parent says where the
+// key goes — which is what makes it different from creating structure, and structure is still
+// refused: a missing parent, a sequence index past the end, a new top-level block, all error.
+// (The one place structure IS created is a list item, and that has its own entry point with its
+// own rules — see list_items.go.)
+//
+// The refusal is not "no error means success": goccy's ReplaceWithNode reports success for a
+// missing path while writing nothing (verified), so this function re-reads the file and verifies
+// each path holds the value it was given, and that check is what catches everything else.
 //
 // The write is atomic (tmp + rename) for the same reason session metadata is:
 // another Tachi process may be reading config.yaml at startup, and an in-place
@@ -99,6 +102,14 @@ func SavePartialTo(path string, updates map[string]any) error {
 		if err := p.ReplaceWithNode(file, node); err != nil {
 			return fmt.Errorf("%s: set %s: %w", path, key, err)
 		}
+		// ReplaceWithNode reports success for a path the file does not have while writing
+		// nothing, so existence is asked separately — and a missing key whose parent IS there is
+		// the one case this function adds rather than refuses (see the doc comment).
+		if _, err := p.FilterFile(file); err != nil {
+			if err := addMissingKey(file, key, lit); err != nil {
+				return fmt.Errorf("%s: %s: %w", path, key, err)
+			}
+		}
 	}
 
 	out := []byte(file.String())
@@ -120,12 +131,102 @@ func SavePartialTo(path string, updates map[string]any) error {
 
 	// Atomic: a concurrent `tachi` starting up reads this file, and it must never
 	// see a truncated one. Mode follows the existing file so a user's 0600 stays.
-	mode := os.FileMode(0o600)
-	if st, statErr := os.Stat(path); statErr == nil {
-		mode = st.Mode().Perm()
-	}
-	return fileutil.AtomicWriteFile(path, out, 0o700, mode)
+	return atomicWriteConfig(path, out)
 }
+
+// addMissingKey inserts `key: <lit>` into the file when the key's PARENT block already exists.
+//
+// It is the narrow half of "adding a key" — the other half (creating structure) stays refused,
+// because its answer is not in the file: which block would a new top-level key go under? A key
+// whose parent is right there has no such question. It is what makes a leaf representable that
+// the CONFIG OBJECT always has and a hand-written file may not: every struct field is a leaf the
+// settings form offers, while `omitempty` means the file may not spell out one — without this,
+// editing it would fail with "not found in the file" and look like a broken form.
+//
+// The KEY is BUILT rather than parsed from a snippet, and its column comes from the block itself
+// (see keyPosition): the emitter lays a mapping's lines out from each key token's column, and a
+// node parsed out of a standalone snippet carries positions that point into its own buffer — the
+// symptom is a key printed as garbage (`context_window` came out `ext_window`). The VALUE is
+// parsed, which is fine and is what the update path does: its token's text is its own.
+func addMissingKey(file *ast.File, key, lit string) error {
+	at := strings.LastIndex(key, ".")
+	if at <= 0 || at == len(key)-1 {
+		return fmt.Errorf("%w, and %q is not a key under an existing block", errNotInFile, key)
+	}
+	parent, err := yamlPath(key[:at])
+	if err != nil {
+		return err
+	}
+	node, err := parent.FilterFile(file)
+	if err != nil {
+		return fmt.Errorf("%w, and its parent %q is not either", errNotInFile, key[:at])
+	}
+	mapping, ok := node.(*ast.MappingNode)
+	if !ok {
+		return fmt.Errorf("%w: %q is a %s, and only a block can take a new key",
+			errNotInFile, key[:at], node.Type())
+	}
+	pos, err := keyPosition(file, key)
+	if err != nil {
+		return err
+	}
+	value, err := parseScalarNode(lit)
+	if err != nil {
+		return err
+	}
+	// A block that gains a key is no longer `{}`: an empty flow mapping has to become a real
+	// block, or the child would be emitted inside the braces on the parent's line.
+	mapping.IsFlowStyle = false
+	leaf := key[at+1:]
+	mapping.Values = append(mapping.Values, ast.MappingValue(nil, ast.String(token.New(leaf, leaf, pos)), value))
+	return nil
+}
+
+// keyPosition finds the column a new key of `key`'s parent block belongs at: the column of a key
+// already in that block.
+//
+// An EMPTY block (a `spec: {}` — what a freshly appended list item holds, since the fields the
+// struct always writes are the only ones a skeleton spells out) has no key to copy, so the search
+// walks UP to the nearest ancestor that has one and indents one step per level. Without this the
+// new key lands at the block's own level, which parses as a sibling of the block.
+func keyPosition(file *ast.File, key string) (*token.Position, error) {
+	segs := strings.Split(key, ".")
+	// One candidate per level up to the document root (prefix ""), which is where a TOP-LEVEL
+	// key's neighbours are: the root's own keys.
+	for drop := 1; drop <= len(segs); drop++ {
+		prefix := strings.Join(segs[:len(segs)-drop], ".")
+		var node ast.Node
+		if prefix == "" {
+			if len(file.Docs) == 0 || file.Docs[0].Body == nil {
+				break
+			}
+			node = file.Docs[0].Body
+		} else {
+			p, err := yamlPath(prefix)
+			if err != nil {
+				break
+			}
+			found, err := p.FilterFile(file)
+			if err != nil {
+				continue // this level is not in the file either; the one above it may be
+			}
+			node = found
+		}
+		m, ok := node.(*ast.MappingNode)
+		if !ok || len(m.Values) == 0 {
+			continue
+		}
+		pos := *m.Values[len(m.Values)-1].Key.GetToken().Position
+		pos.Column += 2 * (drop - 1)
+		pos.Offset += 2 * (drop - 1)
+		return &pos, nil
+	}
+	return nil, fmt.Errorf("%w, and no block above %q has a key to place one beside", errNotInFile, key)
+}
+
+// errNotInFile marks the "the file does not have this path" family, so the message a caller shows
+// keeps saying which path and why it could not be created.
+var errNotInFile = errors.New("not in the file")
 
 // parseScalarNode turns a rendered YAML literal into the node to place in the
 // file. Parsing (rather than constructing) is what lets one code path cover every
@@ -193,8 +294,13 @@ func verifyUpdates(after []byte, updates map[string]any) error {
 // type it did not expect. Passing the pointer through keeps the rendering here.
 func renderScalar(v any) (string, error) {
 	switch t := v.(type) {
+	case Unset:
+		// The one value that renders as a bare null: "not set", which is how these fields spell
+		// 自动 (`vision: null`). Reaching here for a leaf that cannot be unset is assignValue's
+		// to refuse — this function only knows the file's vocabulary, not the field's.
+		return "null", nil
 	case nil:
-		return "", errors.New("nil is not a supported value (use an explicit empty string)")
+		return "", errors.New("nil is not a supported value (use config.Unset to clear an optional leaf, or an explicit empty string)")
 	case string:
 		return quoteYAMLString(t), nil
 	case bool:
@@ -227,6 +333,20 @@ func renderScalar(v any) (string, error) {
 		return strconv.FormatFloat(*t, 'f', -1, 64), nil
 	case []string:
 		return renderStringList(t), nil
+	case []any:
+		// What a BOUND METHOD receives for a JS array: the settings page's payload arrives as
+		// map[string]any, so its lists are []any and not []string. The elements must be strings
+		// — the config has no list of numbers to render, and SetPath says the same thing about
+		// the memory side.
+		list := make([]string, 0, len(t))
+		for _, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return "", fmt.Errorf("unsupported list element type %T", e)
+			}
+			list = append(list, s)
+		}
+		return renderStringList(list), nil
 	default:
 		return "", fmt.Errorf("unsupported value type %T", v)
 	}
