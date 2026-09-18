@@ -416,6 +416,19 @@ function MCPIcon() {
   return (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v6" /><path d="M15 3v6" /><path d="M6 9h12v3a6 6 0 0 1-12 0V9z" /><path d="M12 18v3" /></svg>)
 }
 
+// PinIcon marks a pinned session row. It is drawn rather than written as 📌: the emoji's shape and
+// colour come from the system font (and it lands in whatever colours the OS picked), while this is
+// the same accent ink as the rest of the sidebar's marks at any size the sidebar can afford.
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9.6 3h4.8" />
+      <path d="M10.6 3v5.2L7.4 11.4v2.4h9.2v-2.4l-3.2-3.2V3" />
+      <path d="M12 13.8V21" />
+    </svg>
+  )
+}
+
 function SunIcon() {
   return (
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -1143,4 +1156,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret }

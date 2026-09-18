@@ -168,6 +168,39 @@ func TestFinalizeCompact_PreservesProjectID(t *testing.T) {
 	assert.Equal(t, "project-42", loaded.ProjectID)
 }
 
+// TestFinalizeCompact_MovesThePin: a compacted conversation keeps its pin, and the record it
+// came from gives it up. The sidebar's row for a chain is the CHILD (the parent folds away as
+// 「压缩前」), so a pin copied onto the child while the parent kept its own would leave the
+// user's 置顶 apparently working while a hidden ancestor stayed protected from cleanup
+// forever — and unpinning the row would not lift it off the ancestor. One pin, one record:
+// the conversation moved, so the pin moves with it.
+func TestFinalizeCompact_MovesThePin(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("anthropic", "/my/project")
+	require.NoError(t, err)
+	oldSess.Pinned = true
+	require.NoError(t, sm.UpdateMeta(oldSess))
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	newSess := sm.Current()
+	require.NotEqual(t, oldSess.ID, newSess.ID)
+	assert.True(t, newSess.Pinned, "the compacted child should carry the pin")
+
+	// On disk, both halves: the child keeps it (the next launch reads meta.json, not memory)
+	// and the parent has released it.
+	loadedChild, err := store.LoadMeta(newSess.ID)
+	require.NoError(t, err)
+	assert.True(t, loadedChild.Pinned, "the child's pin was not persisted")
+	loadedParent, err := store.LoadMeta(oldSess.ID)
+	require.NoError(t, err)
+	assert.False(t, loadedParent.Pinned, "the parent kept a pin it no longer means anything on")
+}
+
 // TestFinalizeCompact_MigratesThreadID guards against repeated auto-compact
 // on channel threads: after a compaction the new session must own the thread
 // binding and the old session must release it, so FindByThreadID (channel

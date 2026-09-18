@@ -79,5 +79,50 @@
   if (menu) menu.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
   const closed = await smoke.waitFor(() => !smoke.q('.ctx-menu'), '右键菜单失焦关闭', 2000)
   smoke.check('右键菜单移开后关闭', !!closed, closed ? '' : smoke.text('.ctx-menu'))
+
+  // ── 置顶：排到本组最前 ──────────────────────────────────────────────────
+  // 「右键 → 置顶 → 这一行升到最前」是一个完整的因果断言，只有在排序真的按 pinned 走时才成立：
+  // ListSessions 本身是 newest-first，而这些行全在「无项目」组里，老会话本来排在第二行。菜单里
+  // 多一项不算数，行的位置变了才算。取消置顶同样要验 —— 只能置顶不能取消比没有更糟。
+  const rowTitles = () => smoke.qa('.session-list .session').map((r) => smoke.text(r.querySelector('.session-title')))
+  const findRow = (title) => smoke.qa('.session-list .session').find((r) => smoke.text(r.querySelector('.session-title')) === title)
+  // menuAction 打开某一行的右键菜单并点掉指定文字的那一项。任一半缺失都返回 false，调用方报告
+  // 它要的那两个文字，而不是报一个选择器。
+  const menuAction = async (el, label) => {
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+    if (!(await smoke.waitFor('.ctx-menu', '右键菜单（' + label + '）', 3000))) return false
+    const item = smoke.qa('.ctx-item').find((b) => smoke.text(b) === label)
+    if (!item) return false
+    return smoke.click(item)
+  }
+  const beforePin = rowTitles()
+  if (beforePin[0] === oldTitle) return smoke.fail('置顶前老会话不在第一行', beforePin.join(' | '))
+  smoke.check('置顶前老会话在第二行（列表是 newest-first）', beforePin.indexOf(oldTitle) > 0, beforePin.join(' | '))
+
+  const pinTarget = findRow(oldTitle)
+  if (!pinTarget) return smoke.fail('找到要置顶的那一行', beforePin.join(' | '))
+  if (!(await menuAction(pinTarget, '置顶'))) return smoke.fail('点得到「置顶」', smoke.allText('.ctx-item').join(' / '))
+  const afterPin = await smoke.waitFor(
+    () => (rowTitles()[0] === oldTitle ? rowTitles() : null), '置顶的会话排到最前', 5000)
+  smoke.check('置顶后老会话升到第一行', !!afterPin, (afterPin || rowTitles()).join(' | '))
+  const pinnedRow = smoke.qa('.session-list .session')[0]
+  smoke.check('置顶的行有置顶标记', !!pinnedRow && !!pinnedRow.querySelector('.session-pin'),
+    pinnedRow ? pinnedRow.innerHTML.slice(0, 80) : '(没有行)')
+
+  if (!(await menuAction(pinnedRow, '取消置顶'))) return smoke.fail('点得到「取消置顶」', smoke.allText('.ctx-item').join(' / '))
+  const afterUnpin = await smoke.waitFor(
+    () => (rowTitles()[0] !== oldTitle ? rowTitles() : null), '取消置顶后回到原位', 5000)
+  smoke.check('取消置顶后老会话回到第二行',
+    !!afterUnpin && afterUnpin[1] === oldTitle, (afterUnpin || rowTitles()).join(' | '))
+  smoke.check('取消置顶后置顶标记消失', !smoke.q('.session-pin'), smoke.text('.session-list'))
+
+  // 再置顶一次，把「置顶落到了 meta.json」留给 Go 侧验证：界面上的顺序活不过重启，磁盘上的
+  // pinned 才是下次启动时行序的来源。
+  const repin = findRow(oldTitle)
+  if (!repin || !(await menuAction(repin, '置顶'))) return smoke.fail('再次置顶', rowTitles().join(' | '))
+  const repinned = await smoke.waitFor(
+    () => (rowTitles()[0] === oldTitle ? rowTitles() : null), '再次置顶生效', 5000)
+  smoke.check('再次置顶（留给 Go 侧验证落盘）', !!repinned, (repinned || rowTitles()).join(' | '))
+
   smoke.finish()
 })()

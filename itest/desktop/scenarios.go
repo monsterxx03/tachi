@@ -722,6 +722,18 @@ func scenarios() []scenario {
 					strutil.Truncate(withDisplay.Content, 120))
 				c.check("普通那条不带 DisplayContent（不写重复的字段）", plain.DisplayContent == "",
 					plain.DisplayContent)
+
+				// 置顶：driver 在界面上验的是行序（老会话升到「无项目」组第一行、取消后回到
+				// 第二行），这里验它落在了 meta.json 上 —— 界面上的顺序活不过重启，磁盘上的
+				// pinned 才是下次启动时行序的来源。只数「恰好一个」，不硬编码是哪一条：置顶的
+				// 那行标题是模型生成的。
+				pinned := 0
+				for _, m := range c.sessionMetas() {
+					if p, _ := m["pinned"].(bool); p {
+						pinned++
+					}
+				}
+				c.check("置顶写进了 meta.json（恰好一个会话）", pinned == 1, fmt.Sprintf("%d 个", pinned))
 			},
 		},
 		//
@@ -1663,6 +1675,11 @@ permissions:
 				c.check("detach 清掉了 project_id", bound.ProjectID == "", "project_id="+bound.ProjectID)
 				c.check("detach 把快照刷成了项目主目录", bound.WorkingDir == projectRoot,
 					fmt.Sprintf("WorkingDir=%s want=%s", bound.WorkingDir, projectRoot))
+				// 置顶：driver 在项目组里置顶了这条成员，界面上验的是它升到该组第一行且没跨组；
+				// 这里验它写对了记录 —— 置顶是会话自己的字段，不随项目走，detach 也必须原样保留
+				// （detach 只改 project_id 和快照，不许把别的东西整条重写掉）。
+				c.check("置顶挂在被置顶的那条会话上，且 detach 没弄丢它", bound.Pinned,
+					fmt.Sprintf("pinned=%v", bound.Pinned))
 			},
 		},
 		//

@@ -120,6 +120,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// agreeing with each other in the WRONG tree (the failure RootsFunc exists to prevent),
 	// plus a sidebar group and write guards the conversation silently left.
 	newSess.ProjectID = oldSess.ProjectID
+	// The pin travels with the conversation, and it MOVES rather than being copied: the
+	// sidebar's row for this conversation is the child now (the parent folds under it as
+	// 「压缩前」), so a pin left on the parent would be invisible state that also keeps an
+	// ancestor out of session cleanup forever. Same shape as ThreadID below — one binding,
+	// released from the record it no longer means anything on.
+	newSess.Pinned = oldSess.Pinned
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}
@@ -131,6 +137,10 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// pre-compact history). Also lets session cleanup reclaim the old
 	// session instead of pinning every compacted ancestor forever.
 	oldSess.ThreadID = ""
+	// The pin moved to the child above; clear it here so exactly one record of this
+	// conversation is pinned. Left alone it would be invisible state on a folded-away row
+	// AND a permanent exemption from session cleanup for an ancestor nobody can see.
+	oldSess.Pinned = false
 	if err := sm.UpdateMeta(oldSess); err != nil {
 		// Non-fatal: log but continue. The new session is already created.
 		// The old session's compacted_child_id is missing, but the new

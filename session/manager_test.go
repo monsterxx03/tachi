@@ -245,6 +245,71 @@ func TestManagerCleanup_RemovesClearedThreadSessions(t *testing.T) {
 	}
 }
 
+// TestManagerCleanup_KeepsPinnedSessions pins the rule that makes a pin mean something:
+// a pinned session is never removed, wherever its age puts it in the order. The two rules
+// meet on exactly one session — the old conversation someone keeps coming back to — and it
+// is the one the pin names, so the sweep must yield. The unpinned sessions around it are
+// still trimmed as usual: protecting a pin must not turn the cleanup off.
+func TestManagerCleanup_KeepsPinnedSessions(t *testing.T) {
+	store := newTempStore(t)
+	mgr := NewManagerWithStore(store, nil)
+	// No cap while the sessions are being made: New() runs the sweep itself, so a cap here
+	// would delete the old session long before the test can pin it.
+	mgr.SetMaxKeep(0)
+
+	// Five sessions, oldest first in sessionIDs. The OLDEST is pinned — the case the rule
+	// exists for (an old session the reader deliberately kept).
+	sessionIDs := make([]string, 0, 5)
+	for range 5 {
+		sess, err := mgr.New("openai", ".")
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+		sessionIDs = append(sessionIDs, sess.ID)
+	}
+	oldest := sessionIDs[0]
+	mgr.Load(oldest)
+	pinned := mgr.Current()
+	pinned.Pinned = true
+	if err := store.UpdateMeta(pinned); err != nil {
+		t.Fatalf("UpdateMeta failed: %v", err)
+	}
+	// Nothing may be protected by being CURRENT: the newest session is loaded so the
+	// pinned-and-old one is the only reason for a survivor below maxKeep.
+	mgr.Load(sessionIDs[4])
+
+	mgr.SetMaxKeep(2)
+	removed := mgr.CleanupOldSessions()
+	if removed == 0 {
+		t.Fatal("expected the unpinned old sessions to be removed")
+	}
+
+	sessions, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	ids := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		ids[s.ID] = true
+	}
+	if !ids[oldest] {
+		t.Errorf("the pinned session %s was deleted by cleanup (kept: %v)", oldest, ids)
+	}
+	// The pin survives the sweep on disk too — a session that outlived cleanup but came back
+	// unpinned would drop out of the sidebar's pinned block on the next launch.
+	loaded, err := store.LoadMeta(oldest)
+	if err != nil {
+		t.Fatalf("LoadMeta failed: %v", err)
+	}
+	if !loaded.Pinned {
+		t.Error("the surviving session lost its pinned flag")
+	}
+	// The sweep still did its job: an unpinned session older than maxKeep is gone.
+	if ids[sessionIDs[1]] {
+		t.Errorf("an unpinned old session %s survived cleanup", sessionIDs[1])
+	}
+}
+
 func newTempStore(t *testing.T) *FileStore {
 	t.Helper()
 	store, err := NewFileStore(t.TempDir())

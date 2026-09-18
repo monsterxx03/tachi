@@ -66,9 +66,10 @@ type FileStore struct {
 	// What survives all three is another process rewriting an EXISTING meta.json
 	// in place: the snapshot then lasts until the next create, delete or baseDir
 	// change. Only the title and timestamps can go stale through that door —
-	// project membership cannot, because ProjectID is written by the desktop alone
-	// (bind on create, detach on project delete, inherit on compaction) and every
-	// one of those writes goes through a store that invalidates.
+	// project membership and the pinned flag cannot: both are written by the desktop
+	// alone (ProjectID on bind/detach/compaction, Pinned on the sidebar's toggle and
+	// on compaction) and every one of those writes goes through a store that
+	// invalidates.
 	//
 	// The scan's own reads are safe for a second, independent reason: meta.json is
 	// written ATOMICALLY (tmp + rename, see UpdateMeta). A rewrite in place would

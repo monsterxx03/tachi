@@ -56,6 +56,14 @@ func (m *Manager) SetMaxKeep(maxKeep int) {
 // oldest sessions are at the end of the list. The current session is never
 // deleted. Returns the number of sessions removed.
 //
+// A PINNED session is never deleted either, wherever it sits in the order: the pin is the
+// reader's statement that this conversation must still be there tomorrow, and a session can
+// be pinned precisely BECAUSE it is old and rarely touched — the two rules would otherwise
+// point in opposite directions on the same session. The consequence is deliberate: pinned
+// sessions inside the excess stay, so the list can remain above maxKeep until their pin is
+// lifted. Nothing else is affected — the sweep still trims every unpinned session it would
+// have trimmed.
+//
 // Storage errors (e.g. listing sessions) are logged internally and reported as
 // zero removals, so callers don't need to handle an error return.
 func (m *Manager) CleanupOldSessions() int {
@@ -93,8 +101,14 @@ func (m *Manager) cleanupLocked() int {
 	removed := 0
 	skippedThread := 0
 	skipped := make([]string, 0)
+	skippedPinned := make([]string, 0)
 	for _, s := range excess {
 		if s.ID == currentID {
+			continue
+		}
+		// A pinned session is kept whatever its age — see CleanupOldSessions.
+		if s.Pinned {
+			skippedPinned = append(skippedPinned, s.ID)
 			continue
 		}
 		// Skip sessions that are actively used by IM channels.
@@ -117,6 +131,9 @@ func (m *Manager) cleanupLocked() int {
 
 	if skippedThread > 0 {
 		m.logger.Info(context.Background(), "session cleanup: skipped sessions with active ThreadID", "skipped", skippedThread, "ids", skipped)
+	}
+	if len(skippedPinned) > 0 {
+		m.logger.Info(context.Background(), "session cleanup: kept pinned sessions past maxKeep", "skipped", len(skippedPinned), "ids", skippedPinned)
 	}
 	if removed > 0 {
 		m.logger.Info(context.Background(), "session cleanup: removed old sessions", "removed", removed, "maxKeep", m.maxKeep)

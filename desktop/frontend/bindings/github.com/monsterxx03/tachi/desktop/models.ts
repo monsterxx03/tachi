@@ -773,6 +773,14 @@ export interface SessionInfo {
      * project relabels every row without touching a single session (design §3.3).
      */
     "projectId"?: string;
+
+    /**
+     * Pinned keeps this session at the top of ITS OWN group in the sidebar — a project's members,
+     * or the project-less bucket. It never crosses a group boundary, and it is the session
+     * record's own field (session.Session.Pinned), so the order survives a restart and every
+     * reader of the list agrees on it.
+     */
+    "pinned"?: boolean;
 }
 
 /**

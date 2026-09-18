@@ -45,6 +45,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | scroll pinning, session switch, load | `switch-load`, `switch-scroll` |
 | sidebar rows, grouping, titles, type scale, carets | `sessions`, `sidebar-text`, `switch-load` |
+| pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session` |
@@ -674,8 +675,18 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   — the header carries the ＋ that makes the first session, so hiding empty groups made a freshly created
   project invisible. The chip and the workspace panel wear the project's NAME while a project drives the
   session, and the panel is READ-ONLY then (the three session-level writers are refused by the backend).
+- **置顶 orders ONE group, and the mark explains the order** (`pinnedFirst` in `lib.ts`, applied to each
+  group's bucket BEFORE `sessionRows`): a pinned session goes to the head of its OWN group — a project's
+  members, or the 无项目 bucket — never above another project, and the groups keep the user's order. Sorting
+  before folding is not cosmetic: after it, a chain's 「压缩前」 ancestor would be torn away from the child it
+  hangs under. The flag is the session RECORD's (`session.Session.Pinned` in meta.json), which is what makes
+  the order survive a restart, exempts the session from `CleanupOldSessions`, and lets compaction TRANSFER it
+  to the child (the row a chain actually shows; `TestFinalizeCompact_MovesThePin`). The row carries a
+  `.session-pin` mark whose title states the rule — an order nobody can explain reads as a bug — and the
+  toggle is the row menu's FIRST item (置顶 / 取消置顶), applied optimistically and rolled back if the backend
+  refuses.
 - **`＋ 新建会话` belongs to the 无项目 group, and ⌘N follows the session on screen**: the button makes a
-  PROJECT-LESS session, so it lives above the label of the bucket it adds rows to — pinned at the top of the
+  PROJECT-LESS session, so it lives above the label of the bucket it adds rows to — docked at the top of the
   sidebar it was a full-width accent pill, the loudest thing on screen, reading as the page's primary action
   instead of "one more row here". ⌘N passes the current session's `projectId` when that project is still in
   the list: ⌘N means "another one of these", and the project supplies the workspace, the extra roots and the

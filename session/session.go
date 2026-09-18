@@ -26,7 +26,21 @@ type Session struct {
 	ProjectID string    `json:"project_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	SkipDream bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	// Pinned marks a session the reader keeps at hand. It is a property of the RECORD
+	// rather than of the reader's window, because it has to mean the same thing to every
+	// process that touches the list:
+	//   - the desktop sidebar sorts a pinned session to the top of ITS OWN group — a
+	//     project's members, or the project-less bucket. The pin never crosses a group
+	//     boundary: a pinned member of a project does not jump above another project;
+	//   - session cleanup SKIPS it: a pin is exactly the promise that its session will
+	//     still be there tomorrow, and a retention sweep that deletes it is a broken
+	//     promise, not a smaller list;
+	//   - compaction TRANSFERS it to the child the conversation continues in (see
+	//     agent/compact.go's FinalizeCompact), because the child is the row a reader sees.
+	// Empty for every session that was never pinned, so old meta.json files read back
+	// identically.
+	Pinned    bool `json:"pinned,omitempty"`
+	SkipDream bool `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
 	// Session mode: "auto" (default), "chat", or "plan".
 	// Controls tool visibility: auto = full access, chat/plan = read-only.

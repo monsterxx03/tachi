@@ -767,6 +767,21 @@ export function SetProjectRoots(id: string, primary: string, additional: string[
 }
 
 /**
+ * SetSessionPinned pins or unpins a session (the sidebar's 置顶 / 取消置顶 action).
+ * 
+ * The flag is written through updateSessionMeta, so it lands on the SAME snapshot a running
+ * turn is mutating — a read-modify-write of the whole meta.json from anywhere else would
+ * clobber a title or a workspace the turn just set. It is deliberately NOT guarded by
+ * projectGuard: pinning says where a row sits in the list, which is true of a project's
+ * member exactly as much as of a loose session (the group it sorts within differs; the pin
+ * does not). A running turn is no reason to refuse either — nothing about a pin is read by a
+ * turn in flight, and the sidebar's row may be pinned while the conversation works.
+ */
+export function SetSessionPinned(id: string, pinned: boolean): $CancellablePromise<string> {
+    return $Call.ByID(2931114290, id, pinned);
+}
+
+/**
  * SetSessionWorkingDir changes the session's working directory and persists it
  * to session meta. The NEXT turn runs tools under this directory (per-turn
  * wdctx injection, like channel agent_turn.go). Returns "ok" on success.

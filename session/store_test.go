@@ -443,8 +443,8 @@ func TestListSessionsHandsOutCopies(t *testing.T) {
 // so this store keeps serving what it read until a create or delete follows.
 //
 // Only the title and the timestamps can go stale through it. Project membership
-// cannot: ProjectID is written by the desktop alone, and every one of those writes
-// goes through a store that invalidates.
+// and the pinned flag cannot: both are written by the desktop alone, and every one
+// of those writes goes through a store that invalidates.
 func TestListSessionsMissesInPlaceWritesByAnotherWriter(t *testing.T) {
 	dir := t.TempDir()
 	mine, err := NewFileStore(dir)

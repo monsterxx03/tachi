@@ -221,6 +221,25 @@ export function sessionRows<T extends { id: string; compactedParentId?: string }
   return rows
 }
 
+// pinnedFirst orders ONE group's sessions for the sidebar: the pinned ones first, everything else
+// in the order it came in (ListSessions: newest first).
+//
+// Per GROUP, never the whole list — that is the whole rule. A pin asks for a row to sit at the head
+// of its own neighbours: inside the project it belongs to, or inside the project-less bucket. It
+// does not lift the row above another project's group, and it does not reorder the groups
+// themselves (the user's own project order stands).
+//
+// It runs BEFORE folding, and that ordering matters: sessionRows folds a compaction chain under its
+// newest link, so reordering the rows afterwards would tear a 「压缩前」 ancestor away from the child
+// it hangs under. Sorted input, folded output keeps a chain in one piece wherever it lands.
+//
+// Array.prototype.sort is stable (spec-guaranteed since ES2019), so the newest-first order survives
+// inside each half: the pinned block is newest-first, and so is the block below it.
+function pinnedFirst<T extends { pinned?: boolean }>(list: T[]): T[] {
+  if (!list.some((s) => s.pinned)) return list
+  return [...list].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned))
+}
+
 // SessionGroup is one group of the sidebar: a project (or null for the project-less bucket)
 // plus the rows that belong to it. Rows are the same conversation rows sessionRows builds —
 // grouping happens BEFORE folding, so a compaction chain folds inside its own group.
@@ -242,13 +261,14 @@ export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[]
 // reader sees nothing after the create, and cannot reach it to make a session), which is a bug
 // the reader reports as "I made a project and nothing happened".
 //
-// The order inside a group is the order it came in (ListSessions: newest first).
+// The order inside a group is the order it came in (ListSessions: newest first), except that a
+// pinned session goes to the head of its own group (see pinnedFirst).
 //
 // The join is ONE pass that buckets by projectId, not one pass per project: this runs on every
 // render of the app (during a turn, every streaming frame), and a per-project filter made it
 // O(projects × sessions) with a fresh Map and Set built per group — at a few thousand sessions
 // that is real work per frame, for a list whose shape is fixed until the next fetch.
-export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string }>(
+export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string; pinned?: boolean }>(
   list: T[],
   projects: ProjectVO[],
 ): SessionGroup<T>[] {
@@ -268,9 +288,9 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
 
   const groups: SessionGroup<T>[] = projects.map((p) => ({
     project: p,
-    rows: sessionRows(byProject.get(p.id) ?? []),
+    rows: sessionRows(pinnedFirst(byProject.get(p.id) ?? [])),
   }))
-  if (loose.length > 0) groups.push({ project: null, rows: sessionRows(loose) })
+  if (loose.length > 0) groups.push({ project: null, rows: sessionRows(pinnedFirst(loose)) })
   return groups
 }
 

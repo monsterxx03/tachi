@@ -13,7 +13,7 @@ import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroup
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
-  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel, Caret,
+  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -1234,6 +1234,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title: t } : s)))
   }, [editTitle])
 
+  // togglePin pins or unpins a session (the row's 置顶 / 取消置顶).
+  //
+  // The local list is updated FIRST: the row moves to the head of its own group on the very next
+  // render (sessionGroups sorts pinned-first), so the click lands immediately instead of after a
+  // round trip. The backend call is then the record of it — the flag lives in meta.json, which is
+  // what makes the order survive a restart — and a refusal puts the row back where it was rather
+  // than leaving the UI claiming something the disk does not say.
+  const togglePin = useCallback(async (sid: string, pinned: boolean) => {
+    setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, pinned } : s)))
+    const res = await (AgentService as any).SetSessionPinned?.(sid, pinned).catch((e: unknown) => String(e))
+    if (res && res !== 'ok') setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, pinned: !pinned } : s)))
+  }, [])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     const list = (await AgentService.ListSessions().catch(() => null)) || []
@@ -1688,6 +1701,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       )}
       <div className="session-meta">
         {runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
+        {/* A pinned row says so on its own line: the list is sorted pinned-first, and a row that
+            jumped to the top with no mark would read as an arbitrary order. The title states the
+            RULE, so the reader learns where the pin applies (this group) without having to try it. */}
+        {s.pinned ? <span className="session-pin" title="已置顶：排在本组最前（项目内的会话排在项目内）"><PinIcon /></span> : null}
         {/* A compacted-away session says what it is: same title, older time, and it is history. */}
         {compacted ? <span className="session-tag" title="这一段对话在压缩时被摘要取代，可以回看">压缩前</span> : null}
         {new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}
@@ -1723,6 +1740,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // The sidebar's grouping, built once: the list renders the project groups, then the plain
   // 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
   const groups = sessionGroups(sessions, projects)
+
+  // The row the context menu is open on, resolved once: both the 置顶 item's label (置顶 /
+  // 取消置顶) and its target read from it. Undefined when the row is gone (deleted while the
+  // menu stood open) — then the toggle is offered for a session that no longer exists, and the
+  // backend answers for it, which is the same path every other stale target takes.
+  const menuSession = menu ? sessions.find((s) => s.id === menu.sid) : undefined
 
   // The sidebar's own ＋ makes a session that belongs to NO project, so it sits at the head of
   // the 无项目 bucket — directly above the label of the group whose rows it adds to — rather than
@@ -2134,6 +2157,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       )}
       {menu && (
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          {/* 置顶 first: it is the item a reader reaches for while scanning the list, and the only
+              one here that is about WHERE the row sits rather than what happens to it. */}
+          <button className="ctx-item" role="menuitem"
+            onClick={() => { void togglePin(menu.sid, !menuSession?.pinned); setMenu(null) }}>{menuSession?.pinned ? '取消置顶' : '置顶'}</button>
           <button className="ctx-item" role="menuitem" onClick={() => { void openChain(menu.sid, sessions.find((x) => x.id === menu.sid)?.title || '会话') }}>回退链…</button>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>

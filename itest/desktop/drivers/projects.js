@@ -89,6 +89,36 @@
     '⌘N 之后 chip 还是项目', 8000)
   smoke.check('⌘N 之后 chip 还是项目（工作区没掉）', !!chipAfterCmdN, smoke.text('.work-dir'))
 
+  // ── 2c. 置顶在项目内部生效，不跨组 ──────────────────────────────────────
+  // 置顶的语义是「排到本组最前」：项目里的会话在项目里排，不会越到别的组头上，也不重排项目本身。
+  // 此刻项目里有两行（fixture 的老成员 + 刚 ⌘N 建的新会话），无项目组里也有行 —— 所以两个方向都
+  // 能断言：老成员升到项目组第一行，而侧栏第一行仍在项目组内部。
+  const memberTitles = () => smoke.qa('.proj-rows .session').map((r) => smoke.text(r.querySelector('.session-title')))
+  const beforePin = memberTitles()
+  const pinTarget = smoke.qa('.proj-rows .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
+  if (!pinTarget) return smoke.fail('找到项目里的老成员行', beforePin.join(' | '))
+  smoke.check('置顶前老成员不在项目组第一行', beforePin[0] !== '冒烟会话', beforePin.join(' | '))
+  pinTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+  if (!(await smoke.waitFor('.ctx-menu', '成员行右键菜单（置顶）', 3000))) return smoke.finish()
+  const pinItem = smoke.qa('.ctx-item').find((b) => smoke.text(b) === '置顶')
+  if (!pinItem) return smoke.fail('点得到「置顶」', smoke.allText('.ctx-item').join(' / '))
+  pinItem.click()
+  const memberFirst = await smoke.waitFor(
+    () => (memberTitles()[0] === '冒烟会话' ? memberTitles() : null), '置顶的成员升到项目组第一行', 5000)
+  smoke.check('置顶的成员升到项目组第一行', !!memberFirst, (memberFirst || memberTitles()).join(' | '))
+  const firstRow = smoke.q('.session-list .session')
+  smoke.check('置顶没有跨组：侧栏第一行仍在项目组内',
+    !!firstRow && !!firstRow.closest('.proj-rows'),
+    firstRow ? (firstRow.closest('.proj-rows') ? '在项目组内' : '跑到了项目组外') : '(没有行)')
+  smoke.check('置顶不重排项目（第一个组头还是 smoke-proj）',
+    smoke.text(smoke.qa('.proj-head')[0]).indexOf('smoke-proj') >= 0,
+    smoke.allText('.proj-head').join(' | '))
+  const pinnedMember = smoke.qa('.proj-rows .session')[0]
+  smoke.check('置顶标记落在项目内的那一行', !!pinnedMember && !!pinnedMember.querySelector('.session-pin'),
+    pinnedMember ? pinnedMember.innerHTML.slice(0, 80) : '(没有行)')
+  // 留着这个置顶跑到结尾：detach（第 6 步删项目）必须原样保留会话记录上的 pinned，Go 侧也断言
+  // 它挂在被置顶的那条会话上。
+
   // ── 3. 工作区面板只读,并指向项目 ────────────────────────────────────────
   smoke.click('.work-dir')
   if (!(await smoke.waitFor('.roots-panel', '工作区面板打开', 8000))) return smoke.finish()

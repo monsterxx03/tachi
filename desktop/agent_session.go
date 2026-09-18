@@ -33,6 +33,11 @@ type SessionInfo struct {
 	// travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
 	// project relabels every row without touching a single session (design §3.3).
 	ProjectID string `json:"projectId,omitempty"`
+	// Pinned keeps this session at the top of ITS OWN group in the sidebar — a project's members,
+	// or the project-less bucket. It never crosses a group boundary, and it is the session
+	// record's own field (session.Session.Pinned), so the order survives a restart and every
+	// reader of the list agrees on it.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -156,6 +161,27 @@ func (s *AgentService) RenameSession(id, title string) string {
 	}
 	sess.Title = title
 	if err := d.sm.UpdateMeta(sess); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
+// SetSessionPinned pins or unpins a session (the sidebar's 置顶 / 取消置顶 action).
+//
+// The flag is written through updateSessionMeta, so it lands on the SAME snapshot a running
+// turn is mutating — a read-modify-write of the whole meta.json from anywhere else would
+// clobber a title or a workspace the turn just set. It is deliberately NOT guarded by
+// projectGuard: pinning says where a row sits in the list, which is true of a project's
+// member exactly as much as of a loose session (the group it sorts within differs; the pin
+// does not). A running turn is no reason to refuse either — nothing about a pin is read by a
+// turn in flight, and the sidebar's row may be pinned while the conversation works.
+func (s *AgentService) SetSessionPinned(id string, pinned bool) string {
+	if s.desk.sm == nil {
+		return errNoSessionManager.Error()
+	}
+	if err := s.desk.updateSessionMeta(id, func(sess *session.Session) {
+		sess.Pinned = pinned
+	}); err != nil {
 		return err.Error()
 	}
 	return "ok"
@@ -463,6 +489,7 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		UpdatedAt:         ss.UpdatedAt,
 		CompactedParentID: ss.CompactedParentID,
 		ProjectID:         ss.ProjectID,
+		Pinned:            ss.Pinned,
 	}
 }
 

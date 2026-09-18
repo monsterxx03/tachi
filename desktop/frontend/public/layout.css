@@ -388,6 +388,16 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-size: 12px;
   color: var(--text-faint);
 }
+/* The pinned row's mark, in the row's meta line. It is there because the order is not
+   self-explaining: a row that sits above a newer one reads as a bug unless something on it says
+   why (see the row's own title attribute for the rule). Accent ink + a literal pushpin, the same
+   weight as the 压缩前 tag beside it — a state marker, not a button. */
+.session-pin {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--accent-2);
+  vertical-align: -1px;
+}
 
 .sidebar-footer {
   border-top: 1px solid var(--border);
