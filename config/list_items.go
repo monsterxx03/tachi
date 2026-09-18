@@ -17,20 +17,22 @@ import (
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
-// Adding and removing ITEMS of a config list: the one structural edit the settings page makes
-// that is not "change a value in place".
+// Adding and removing ITEMS of a config list: the structural edit the settings page makes that is
+// not "change a value in place".
 //
-// SavePartial's contract is "update a key that already exists, and add one only where its parent
-// block already is" — it never creates structure, because for an arbitrary new key the answer is
-// not in the file (which block would it go under?). A list item has no such question: there is
-// ONE place it can go (the end) and its shape is the element type's, so this file does the thing
-// that would be guessing anywhere else.
+// SavePartial's contract is "update a key that exists, and add one — together with any missing
+// BLOCK the path names — where the path says it goes" (see its doc comment). A list item is still
+// its own entry point, because a path does NOT answer everything about it: a new element's other
+// fields need a skeleton (the element type's), and there is exactly ONE place it can go (the end).
+// That is the part this file owns; the block a list lives in is the same "the path says where it
+// goes" as a key's, which is why `createListStructure` may create it and `ensureBlock`
+// (save_partial.go) may create a key's.
 //
 // The element written is what the app's own `tachi` init writes for a fresh one: the element
 // marshalled as a struct, so its key order is the struct's and a new block in a hand-written file
 // looks like the ones already beside it. Fields the struct does not always write (`omitempty`
 // ones, like a provider's `spec` contents) are left out — a later edit of such a leaf adds it,
-// which SavePartial now does for a key whose parent block exists.
+// block and all, which SavePartial does.
 
 // AppendListItem appends one element to the list at listPath, IN MEMORY, and reports the new
 // element's path and the YAML literal for it.
@@ -63,36 +65,35 @@ func AppendListItem(cfg *Config, listPath string) (elementPath, literal string, 
 
 // AppendListItemTo writes a new element at the END of the list at listPath in the file at path.
 //
-// The literal is parsed into a node and appended to the sequence's own values, so the file's
-// existing indentation style and the comments around it are untouched (this is the same
-// read-modify-write the update path does, one level up).
+// It is the one-off entry point for the same operation ApplyConfigEditsTo performs (the settings
+// page stages its adds into a save instead, see ListAppend): AppendListItem builds the element in
+// memory and hands its literal here, and this writes that literal into the file.
+//
+// ⚠️ The element is NOT rebuilt from ListAppend's values here, and it cannot be: the two callers
+// hold different things. AppendListItem has an element it already built (in memory, where a
+// default-less field and a defaulted one are told apart) and this function has the literal for it;
+// ApplyConfigEditsTo has the VALUES a form sent and no element at all. Both therefore go through
+// the shared node-level helper (appendElementNodeToFile) and each verifies what it can: this one
+// compares the re-read element to the literal it was given, ApplyConfigEditsTo compares each leaf
+// it sent. Rebuilding here instead would be a second, subtly different rendering of the same
+// element — the kind of drift that shows up as a new item whose fields the file does not have.
 func AppendListItemTo(path, listPath, literal string) error {
 	file, data, err := parseConfigFile(path)
 	if err != nil {
 		return err
 	}
-	seq, err := sequenceAt(file, listPath)
-	if err != nil {
-		// The list's block may not be in the file at all: a config that never configured search
-		// has no `web_search:` key, and "add the first one" is exactly when someone wants to. The
-		// path says where the block goes, which is the same no-guessing as the item itself — the
-		// reason an arbitrary new key is refused does not apply to a path the caller named.
-		seq, err = createListStructure(file, listPath)
-		if err != nil {
-			return err
-		}
+	if _, err := rootBlock(file); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
 	}
-	node, err := parseScalarNode(strings.TrimRight(literal, "\n"))
-	if err != nil {
-		return fmt.Errorf("%s: %w", listPath, err)
+	if _, err := appendElementNodeToFile(file, ListAppend{List: listPath, Index: NoIndexClaim}, literal); err != nil {
+		return err
 	}
-	seq.Values = append(seq.Values, node)
 	out := []byte(file.String())
 
-	// Verified the same way an update is: re-parse what we are about to write and compare the
-	// element we appended to the element we hold, as PARSED values on both sides so formatting
-	// cannot make it a false failure. A silently failed append is the failure mode this guards
-	// (the reason SavePartial re-reads at all).
+	// Verified the way an update is: re-parse what we are about to write and compare the element
+	// we appended to the element we hold, as PARSED values on both sides so formatting cannot
+	// make it a false failure. A silently failed append is the failure mode this guards (the
+	// reason SavePartial re-reads at all).
 	written, err := parseConfigBytes(out)
 	if err != nil {
 		return err
@@ -100,10 +101,6 @@ func AppendListItemTo(path, listPath, literal string) error {
 	after, err := sequenceAt(written, listPath)
 	if err != nil {
 		return err
-	}
-	if len(after.Values) != len(seq.Values) {
-		return fmt.Errorf("append %s: the file has %d items, expected %d",
-			listPath, len(after.Values), len(seq.Values))
 	}
 	var got, want any
 	if err := yaml.Unmarshal([]byte(after.Values[len(after.Values)-1].String()), &got); err != nil {
@@ -168,6 +165,11 @@ func RestoreListItem(cfg *Config, elementPath string, held any) error {
 // createListStructure builds the missing blocks of a list path in the file — `web_search` as a
 // block, `providers` as a list inside it — and returns the sequence to append to.
 //
+// The list's block may not be in the file at all: a config that never configured search has no
+// `web_search:` key, and "add the first one" is exactly when someone wants to. The path says where
+// the block goes — the same no-guessing as ensureBlock's key (save_partial.go), which is the other
+// half of this rule.
+//
 // Every node is built with a token whose COLUMN comes from the block it goes into (keyPosition),
 // because that is what the emitter lays a mapping's lines out from; a node parsed out of a
 // standalone snippet would carry positions pointing into its own buffer and print nonsense.
@@ -177,9 +179,9 @@ func createListStructure(file *ast.File, listPath string) (*ast.SequenceNode, er
 	if len(segs) == 0 || segs[0] == "" {
 		return nil, fmt.Errorf("%s: 不是一条路径", listPath)
 	}
-	root, ok := file.Docs[0].Body.(*ast.MappingNode)
-	if !ok {
-		return nil, fmt.Errorf("%s: 文件顶层不是块", listPath)
+	root, err := rootBlock(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", listPath, err)
 	}
 	cur := root
 	for i, seg := range segs {
@@ -207,69 +209,48 @@ func createListStructure(file *ast.File, listPath string) (*ast.SequenceNode, er
 			return nil, err
 		}
 		if i == len(segs)-1 {
-			// The start tokens are the encoder's own ("-" for a sequence, "" for a block map):
-			// the emitter reads a node's start position from them, so a node built without one
-			// panics when the file is printed.
+			// The start token is the encoder's own ("-"): the emitter reads a node's start
+			// position from it, so a node built without one panics when the file is printed.
 			seq := ast.Sequence(token.New("-", "-", pos), false)
-			cur.Values = append(cur.Values, ast.MappingValue(nil, ast.String(token.New(seg, seg, pos)), seq))
+			addKeyToBlock(cur, seg, seq, pos)
 			return seq, nil
 		}
-		next := ast.Mapping(token.New("", "", pos), false)
-		cur.Values = append(cur.Values, ast.MappingValue(nil, ast.String(token.New(seg, seg, pos)), next))
+		next := newBlockNode(pos)
+		addKeyToBlock(cur, seg, next, pos)
 		cur = next
 	}
 	return nil, fmt.Errorf("%s: 建不出这个列表", listPath)
 }
 
 // RemoveListItemFrom removes the element at elementPath from the file at path.
+//
+// The one-off entry point for the same operation ApplyConfigEditsTo performs (the settings page
+// stages its removals into a save instead, see ListEdits.Removes); both do the work through the
+// shared node-level helper (removeElementNode), which verifies by the SURVIVORS' identity.
 func RemoveListItemFrom(path, elementPath string) error {
-	listPath, index, err := splitElementPath(elementPath)
-	if err != nil {
-		return err
-	}
 	file, data, err := parseConfigFile(path)
 	if err != nil {
 		return err
 	}
-	seq, err := sequenceAt(file, listPath)
-	if err != nil {
+	if err := removeElementNode(file, elementPath); err != nil {
 		return err
 	}
-	if index >= len(seq.Values) {
-		return fmt.Errorf("%s: 第 %d 项不在文件里（共 %d 项）", listPath, index, len(seq.Values))
-	}
-	before := renderedValues(seq)
-	seq.Values = append(seq.Values[:index], seq.Values[index+1:]...)
 	out := []byte(file.String())
-
-	// Verified by identity of the SURVIVORS, not by counting: after the edit, every remaining item
-	// must be the one that was beside it — the same item, in the same position. A removal that took
-	// the wrong one, or reflowed a neighbour, fails here.
-	written, err := parseConfigBytes(out)
-	if err != nil {
-		return err
-	}
-	after, err := sequenceAt(written, listPath)
-	if err != nil {
-		return err
-	}
-	kept := renderedValues(after)
-	if len(kept) != len(before)-1 {
-		return fmt.Errorf("remove %s: the file has %d items, expected %d", listPath, len(kept), len(before)-1)
-	}
-	for i, got := range kept {
-		want := before[i]
-		if i >= index {
-			want = before[i+1]
-		}
-		if got != want {
-			return fmt.Errorf("remove %s: item %d is %q after the edit, expected %q", listPath, i, got, want)
-		}
-	}
 	if string(data) == string(out) {
 		return nil
 	}
 	return atomicWriteConfig(path, out)
+}
+
+// ListLen reports how many elements the list at listPath holds. It is what a caller needs to say
+// where a new element will land (the end), and therefore what a later write checks its own claim
+// against — see ListAppend.Index.
+func ListLen(cfg *Config, listPath string) (int, error) {
+	slice, err := listField(cfg, listPath)
+	if err != nil {
+		return 0, err
+	}
+	return slice.Len(), nil
 }
 
 // ListItemLeaves reports the leaf values of one list element, as SavePartial's updates map is
@@ -360,8 +341,16 @@ func listField(cfg *Config, listPath string) (reflect.Value, error) {
 	return v, nil
 }
 
-// splitElementPath splits "providers.2" into the list's path and the index. The index must be the
+// SplitElementPath splits "providers.2" into the list's path and the index. The index must be the
 // LAST segment: an element is addressed by its position and nothing else.
+//
+// Exported because a caller holding an element path it did not build itself has to take it apart the
+// same way this package does — the settings page's staged items are paths (`providers.3`) that its
+// own schema code has to resolve back to the list they belong to.
+func SplitElementPath(elementPath string) (listPath string, index int, err error) {
+	return splitElementPath(elementPath)
+}
+
 func splitElementPath(elementPath string) (listPath string, index int, err error) {
 	at := strings.LastIndex(elementPath, ".")
 	if at <= 0 || at == len(elementPath)-1 {

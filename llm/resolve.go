@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -42,7 +43,7 @@ func NewProviderFromConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 }
 
 // providerOptionsFromSpec 将 ProviderConfig.Spec 中可配置的 provider 行为
-// （重试次数、请求超时）转换为 config.ProviderOption。未设置的字段不产生
+// （重试次数、请求超时、代理）转换为 config.ProviderOption。未设置的字段不产生
 // option，由各 provider 路径使用默认值。
 func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 	var opts []config.ProviderOption
@@ -51,6 +52,9 @@ func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 	}
 	if spec.Timeout > 0 {
 		opts = append(opts, config.WithTimeout(spec.Timeout))
+	}
+	if spec.Proxy != "" {
+		opts = append(opts, config.WithProxy(spec.Proxy))
 	}
 	return opts
 }
@@ -145,6 +149,15 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 			return nil, fmt.Errorf("API key required for provider %q; set %s or add api_key in config", pCfg.Name, envName)
 		}
 		return nil, fmt.Errorf("API key required for provider %q; add api_key in config", pCfg.Name)
+	}
+
+	// A proxy URL is parsed HERE and not only where its transport is built
+	// (llm httpClient): an unusable one is a config typo, and it belongs at
+	// resolve time — where the settings page reports it while the user is
+	// still editing the field — rather than as a direct-connection error much
+	// later, or as a silent direct connection that looks like the proxy works.
+	if _, err := httpx.NewTransport(pCfg.Spec.Proxy); err != nil {
+		return nil, fmt.Errorf("provider %q: %w", pCfg.Name, err)
 	}
 
 	// Resolve context window: config override > model info lookup > default

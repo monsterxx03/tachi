@@ -20,12 +20,18 @@ type AnthropicProvider struct {
 // NewAnthropicProvider constructs the anthropic provider. The anthropic SDK
 // retries internally (default MaxRetries=2), so MaxRetries / Timeout map
 // directly to the SDK's option.WithMaxRetries / option.WithRequestTimeout;
+// Proxy (http/https/socks5) rides on the HTTP client the SDK then uses, and
 // unset options keep the SDK defaults.
 func NewAnthropicProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *AnthropicProvider {
 	o := applyOptions(opts)
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithHeader("User-Agent", userAgent()),
+		// Same client as the other two paths: the session-ID transport (from
+		// context) plus the configured proxy. The timeout is NOT set on it —
+		// option.WithRequestTimeout below is per request attempt, where a
+		// client-wide timeout would also cap a streaming response body.
+		option.WithHTTPClient(httpClient(o)),
 	}
 	if baseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))

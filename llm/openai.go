@@ -40,28 +40,20 @@ type OpenAIProvider struct {
 // NewOpenAIProvider constructs the go-openai provider. go-openai has no
 // built-in retry, so MaxRetries is stored on the returned provider's retryMax
 // field and consumed by NewNamedProvider when wrapping RetryProvider; Timeout
-// sets the HTTP client's per-request timeout.
+// sets the HTTP client's per-request timeout, Proxy the transport it dials
+// through.
 func NewOpenAIProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *OpenAIProvider {
 	o := applyOptions(opts)
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = baseURL
 	}
-	// Wrap the default HTTP client with a transport that injects the session
-	// ID header from context, allowing per-request session tracking.
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{}
-	}
-	if client, ok := cfg.HTTPClient.(*http.Client); ok {
-		baseTransport := client.Transport
-		if baseTransport == nil {
-			baseTransport = http.DefaultTransport
-		}
-		client.Transport = &tachiTransport{base: baseTransport}
-		if o.Timeout > 0 {
-			client.Timeout = o.Timeout
-		}
-	}
+	// The client carries the session-ID transport and the configured proxy;
+	// this path has no per-request timeout of its own, so the option lands on
+	// the client-wide timeout (0 = no timeout, this path's default).
+	hc := httpClient(o)
+	hc.Timeout = o.Timeout
+	cfg.HTTPClient = hc
 	// Default 2 retries keeps the pre-options behavior; explicit 0 disables.
 	retryMax := 2
 	if o.MaxRetries != nil {

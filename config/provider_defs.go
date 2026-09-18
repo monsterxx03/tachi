@@ -34,7 +34,9 @@ func ProviderTypes() []string {
 //   - openai (go-openai, no built-in retry): MaxRetries goes to the outer
 //     RetryProvider, Timeout sets the HTTP client timeout;
 //   - anthropic / openai-res (SDK retries internally): MaxRetries / Timeout
-//     map to the SDK's option.WithMaxRetries / option.WithRequestTimeout.
+//     map to the SDK's option.WithMaxRetries / option.WithRequestTimeout;
+//   - Proxy is the HTTP client's transport on every path (see httpClient in
+//     llm/options.go).
 type ProviderOptions struct {
 	// MaxRetries overrides the default number of retries after a failed
 	// attempt. nil = use the path default (currently 2 everywhere);
@@ -43,6 +45,11 @@ type ProviderOptions struct {
 	// Timeout overrides the default per-request API timeout;
 	// 0 = use the path default (no timeout).
 	Timeout time.Duration
+	// Proxy routes this provider's API requests through the given proxy
+	// (http:// / https:// / socks5://). Empty = no explicit proxy, leaving the
+	// default transport's environment lookup (HTTP_PROXY / HTTPS_PROXY /
+	// NO_PROXY) in effect.
+	Proxy string
 }
 
 // ProviderOption mutates ProviderOptions in a functional-options style.
@@ -54,6 +61,13 @@ type ProviderOption func(*ProviderOptions)
 // (0 disables retrying; unset uses the default).
 func WithMaxRetries(n int) ProviderOption {
 	return func(o *ProviderOptions) { o.MaxRetries = &n }
+}
+
+// WithProxy routes requests through a proxy URL (http, https or socks5).
+// Empty means "no explicit proxy": the default transport then still honors
+// HTTP_PROXY / HTTPS_PROXY from the environment.
+func WithProxy(proxyURL string) ProviderOption {
+	return func(o *ProviderOptions) { o.Proxy = proxyURL }
 }
 
 // WithTimeout sets the per-request API timeout (0 uses the default, i.e. no

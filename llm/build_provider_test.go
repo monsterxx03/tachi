@@ -133,6 +133,44 @@ func TestBuildProvider_SpecOptions(t *testing.T) {
 	}
 }
 
+// TestBuildProvider_InvalidProxy: an unusable spec.proxy is refused when the
+// provider is RESOLVED, not silently ignored. Falling back to a direct
+// connection would look like the proxy works (until the request fails as a
+// confusing network error), and the settings page saves exactly this path, so
+// the typo surfaces while the user is still editing the field.
+func TestBuildProvider_InvalidProxy(t *testing.T) {
+	cases := []struct {
+		name  string
+		proxy string
+		ok    bool
+	}{
+		{name: "no-scheme", proxy: "127.0.0.1:7890"},         // the plausible typo
+		{name: "unsupported-scheme", proxy: "ftp://host:21"}, // http/https/socks5 only
+		{name: "http", proxy: "http://127.0.0.1:7890", ok: true},
+		{name: "https", proxy: "https://proxy.example:8443", ok: true},
+		{name: "socks5", proxy: "socks5://127.0.0.1:1080", ok: true},
+		{name: "unset", proxy: "", ok: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Providers[0].Spec.Proxy = c.proxy
+			resolved, err := BuildProvider(cfg, "deepseek")
+			if c.ok {
+				require.NoError(t, err)
+				require.NotNil(t, resolved)
+				return
+			}
+			assert.Nil(t, resolved)
+			require.Error(t, err)
+			// The message names the provider and the offending value, so a
+			// config with several providers says which one to fix.
+			assert.Contains(t, err.Error(), `provider "deepseek"`)
+			assert.Contains(t, err.Error(), "proxy")
+		})
+	}
+}
+
 // TestBuildProvider_SpecOptionsDefault: without spec options the openai path
 // keeps the legacy default of 2 retries.
 func TestBuildProvider_SpecOptionsDefault(t *testing.T) {

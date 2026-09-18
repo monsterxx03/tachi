@@ -416,6 +416,9 @@ func TestDescribeLeafTellsAnUnsetLeafFromAnEmptyOne(t *testing.T) {
 		{"providers.0.spec.max_retries", "int", true, false},
 		{"providers.0.spec.context_window", "int", true, false},
 		{"providers.0.spec.credit_rate", "float", true, false},
+		// The proxy is a plain string: "" is its own "no explicit proxy" state, so there is no
+		// third state for a form to draw (unlike vision/max_retries/context_window above).
+		{"providers.0.spec.proxy", "string", false, true},
 		// A pointer WITH a `default:` tag is not "optional" in this sense: the default says what
 		// unset means, so unset and the default are one fact and the form shows a plain checkbox.
 		{"lsp.enabled", "bool", false, false},

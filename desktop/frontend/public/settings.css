@@ -104,16 +104,6 @@
 .settings-cat-count { font-size: 12px; color: var(--text-faint); font-weight: 400; }
 .settings-cat.is-active .settings-cat-count { color: var(--accent-2); }
 
-/* The rail's footnote: what ⟳ means, said once instead of on every row. */
-.settings-legend {
-  margin-top: auto;
-  padding: 10px 8px 2px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--text-faint);
-}
-.settings-legend b { font-weight: 600; }
-
 /* ── Right pane: one group's form ───────────────────────────────────────────── */
 
 .settings-pane {

@@ -294,6 +294,30 @@ func readFileT(t *testing.T, path string) string {
 	return string(data)
 }
 
+// makeConfigWriteFail makes the directory config.yaml lives in read-only, so the atomic write at
+// the end of a save is the step that fails. It is the write failure a real user hits (a read-only
+// home, a full disk) and — now that SavePartial creates the blocks a path names — the only one
+// left that a save can run into at all, which is why the rollback and push-ordering tests below
+// induce it this way instead of naming a key the file refuses.
+//
+// The directory (not the file) is what changes: 0500 still allows the READ that SavePartial starts
+// with, and creating the tmp file is what gets refused. Not root-proof: a superuser bypasses the
+// permission, and a test run as root would see the save succeed.
+func makeConfigWriteFail(t *testing.T, path string) {
+	t.Helper()
+	dir := filepath.Dir(path)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dir, err)
+	}
+	// Restored BEFORE t.TempDir's own cleanup (cleanups run last-registered-first), or that
+	// cleanup cannot remove a directory it may not write to.
+	t.Cleanup(func() { _ = os.Chmod(dir, info.Mode().Perm()) })
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod %s: %v", dir, err)
+	}
+}
+
 // TestSettingsSchemaCoversEveryOfferedRow: the schema is built from the CONFIG's leaves with
 // the table as the filter, so the two must agree in both directions — every row that claims to
 // be offered shows up, and nothing another entry mode owns ever appears (a switch that does
@@ -454,9 +478,8 @@ func TestSaveSettingsRefusesBeforeTouchingAnything(t *testing.T) {
 }
 
 // TestSaveSettingsRollsBackWhenTheFileRefusesAKey is the failure the write step can really
-// hit: SavePartial only updates keys the FILE has, so a value that lives in memory but not in
-// config.yaml is refused — and the change must then be gone from memory too, or the session
-// runs on a setting the next restart contradicts.
+// hit: the write itself fails (a read-only home, a full disk), and the change must then be gone
+// from memory too, or the session runs on a setting the next restart contradicts.
 //
 // `review.thinking` is the key on purpose: it has no `default:` tag, so a load leaves it NIL
 // (config.LoadFrom runs defaults.Set, which materializes the tagged ones). A nil pointer is
@@ -468,6 +491,7 @@ func TestSaveSettingsRollsBackWhenTheFileRefusesAKey(t *testing.T) {
 	if d.cfg.Review.Thinking != nil {
 		t.Fatalf("fixture: review.thinking should be unset, got %v", *d.cfg.Review.Thinking)
 	}
+	makeConfigWriteFail(t, path)
 
 	res := svc.SaveSettings(map[string]any{"review.thinking": true})
 	if res.OK {
@@ -494,10 +518,10 @@ func TestSaveSettingsPushesNothingWhenTheFileRefusesTheKey(t *testing.T) {
 	t.Cleanup(func() { logger.SetLevel(beforeLevel) })
 	logger.SetLevel("info")
 
-	// logs.level is NOT in this file, so SavePartial refuses it (adding a key is a separate
-	// feature) — exactly the write failure this test needs.
+	// The write fails while `logs.level` DOES have a push — exactly the ordering this pins.
 	d, svc, path := settingsFixture(t, "language: en\n")
 	fileBefore := readFileT(t, path)
+	makeConfigWriteFail(t, path)
 
 	res := svc.SaveSettings(map[string]any{"logs.level": "debug"})
 	if res.OK {
@@ -683,6 +707,48 @@ func TestSettingChoicesNameRealLeaves(t *testing.T) {
 	}
 }
 
+// TestSettingFoldedListsNameRealLists: settingFoldedLists is a DECLARATION about the config, so
+// its two failure modes are the same shape as settingChoices': a path that is not a list of
+// config.Config (a typo, or a field that was renamed) would fold nothing at all while looking like
+// a decision, and a path whose row is not offered would fold a card that is never drawn.
+//
+// The membership check is against config.ListItemPaths — the same walker that decides which lists
+// the page may grow — so "is this a real list" is answered by the config rather than by a second
+// list here, and a declaration naming a list the page cannot draw (a []string, a map) fails too.
+func TestSettingFoldedListsNameRealLists(t *testing.T) {
+	lists := config.ListItemPaths()
+	for _, path := range settingFoldedLists {
+		if !slices.Contains(lists, path) {
+			t.Errorf("settingFoldedLists names %q, which is not a list of config.Config "+
+				"(config.ListItemPaths: %v)", path, lists)
+		}
+	}
+	// And it must actually reach the page: the item's fold is decided from the schema, so a
+	// declaration the schema does not carry is a rule nobody follows.
+	_, svc, _ := settingsFixture(t, `providers:
+  - name: main
+    model: m
+web_search:
+  providers:
+    - type: exa
+`)
+	byPath := map[string]SettingListVO{}
+	for _, l := range svc.GetSettingsSchema().Lists {
+		byPath[l.Path] = l
+	}
+	for _, path := range settingFoldedLists {
+		if !byPath[path].Folded {
+			t.Errorf("the schema's %s list is not marked folded: %+v", path, byPath[path])
+		}
+	}
+	// The other direction, so `Folded` cannot become a field that is simply always true: a list
+	// a reader SCANS keeps the size rule.
+	if byPath["providers"].Folded {
+		t.Errorf("providers is marked folded, but its items are what the size rule is for: %+v",
+			byPath["providers"])
+	}
+}
+
 // TestProviderChoicesComeFromTheConfig: the list is what the config DEFINES, so it cannot go
 // stale the way a hard-coded one would. Two entries sharing a name collapse to one choice (they
 // are one choice to a reader), and a config that defines no provider yields no options at all —
@@ -775,6 +841,53 @@ func TestProviderTypeOptionsAreAClosedSet(t *testing.T) {
 				t.Errorf("%s carries provider types: %v", f.Key, f.Options)
 			}
 		}
+	}
+}
+
+// TestSaveSettingsProviderProxy: a new spec leaf needs no desktop code — the form walks the
+// config's own leaves and the `providers` row speaks for the whole block — so this pins the two
+// things that would silently STOP being true: the field is drawn as an ordinary string (the
+// proxy's empty value already means "no explicit proxy", so unlike vision/max_retries it must not
+// be offered as 自动), and an edit reaches memory, the file, and the provider re-resolve the row
+// pushes.
+//
+// The fixture's provider has NO `spec:` block at all: that is the case the settings page used to
+// refuse outright ("not in the file, and its parent is not either"), and the one a hand-written
+// provider actually has, since `omitempty` keeps a default-less block out of the file.
+func TestSaveSettingsProviderProxy(t *testing.T) {
+	d, svc, path := settingsFixture(t, `providers:
+  - name: main
+    type: openai
+    model: m
+    api_key: sk-test
+`)
+	byKey := map[string]SettingFieldVO{}
+	for _, f := range svc.GetSettingsSchema().Fields {
+		byKey[f.Key] = f
+	}
+	f, ok := byKey["providers.0.spec.proxy"]
+	if !ok {
+		t.Fatal("providers.0.spec.proxy is not offered — the providers row no longer covers the spec block")
+	}
+	if f.Kind != "string" || f.Optional || !f.IsSet || f.Category != "模型" {
+		t.Errorf("providers.0.spec.proxy = %+v, want a plain string field in 模型", f)
+	}
+
+	res := svc.SaveSettings(map[string]any{"providers.0.spec.proxy": "http://127.0.0.1:7890"})
+	if !res.OK {
+		t.Fatalf("save: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	if got := d.cfg.Providers[0].Spec.Proxy; got != "http://127.0.0.1:7890" {
+		t.Errorf("Spec.Proxy in memory = %q, want the saved URL", got)
+	}
+	// Read the file back rather than matching its text: the writer decides how
+	// a URL is quoted, the loader is what has to understand it.
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if got := reloaded.Providers[0].Spec.Proxy; got != "http://127.0.0.1:7890" {
+		t.Errorf("Spec.Proxy after reload = %q, want the saved URL (file: %q)", got, readFileT(t, path))
 	}
 }
 
@@ -875,37 +988,87 @@ title_provider: main
 	if !strings.Contains(added.Summary, "providers.1") {
 		t.Errorf("add summary = %q, want it to name the new item", added.Summary)
 	}
-	if len(d.cfg.Providers) != 2 || d.cfg.Providers[1].Name != "" {
-		t.Errorf("memory after the add: %+v", d.cfg.Providers)
+	// NOTHING is written yet: the item is staged for the next save. That is the property this
+	// method no longer has to satisfy (an item used to be written on the spot so its fields could be
+	// saved at all), and leaving the page without saving must leave the file alone.
+	if len(d.cfg.Providers) != 1 {
+		t.Errorf("memory after the add: %+v, want the staged item NOT in the config yet", d.cfg.Providers)
 	}
-	body := readFileT(t, path)
-	if !strings.Contains(body, `name: ""`) || !strings.Contains(body, "name: main") {
-		t.Errorf("config.yaml = %q, want the new item appended and the old one kept", body)
-	}
-	reloaded, err := config.LoadFrom(path)
-	if err != nil {
-		t.Fatalf("the file the add wrote does not load: %v\n%s", err, body)
-	}
-	if len(reloaded.Providers) != 2 {
-		t.Fatalf("providers after reload = %d, want 2", len(reloaded.Providers))
+	if body := readFileT(t, path); strings.Contains(body, "name: \"\"") {
+		t.Errorf("config.yaml already holds the new item — the add wrote it:\n%s", body)
 	}
 
-	// The item is editable at once: the values the user types go in through the ordinary save,
-	// including the leaves the skeleton did not spell out.
+	// The staged item is EDITABLE at once, which is what makes staging workable: it has no leaves in
+	// the config (it is not in the config), so the schema declares them from the element's type.
+	schema = svc.GetSettingsSchema()
+	staged := map[string]SettingFieldVO{}
+	for _, f := range schema.Fields {
+		if strings.HasPrefix(f.Key, "providers.1.") {
+			staged[f.Key] = f
+		}
+	}
+	if len(staged) == 0 {
+		t.Fatalf("the schema draws no field for the staged item — the card would be empty")
+	}
+	if f, ok := staged["providers.1.name"]; !ok || f.Kind != "string" || f.Category != catModel {
+		t.Errorf("providers.1.name = %+v (offered=%v), want a string field in %s", f, ok, catModel)
+	}
+
+	// ONE save carries the append and the values together — including a leaf the skeleton does not
+	// spell out (`spec.context_window`, whose block the write creates).
 	res := svc.SaveSettings(map[string]any{
 		"providers.1.name":                "added",
 		"providers.1.spec.context_window": 100000,
 	})
 	if !res.OK {
-		t.Fatalf("editing the new item: ok=%v summary=%s", res.OK, res.Summary)
+		t.Fatalf("saving the staged item: ok=%v summary=%s", res.OK, res.Summary)
 	}
 	final, err := config.LoadFrom(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the file this save wrote does not load: %v\n%s", err, readFileT(t, path))
+	}
+	if len(final.Providers) != 2 {
+		t.Fatalf("providers after reload = %d, want 2", len(final.Providers))
 	}
 	if final.Providers[1].Name != "added" || final.Providers[1].Spec.ContextWindow == nil ||
 		*final.Providers[1].Spec.ContextWindow != 100000 {
 		t.Errorf("the new item did not take its values: %+v", final.Providers[1])
+	}
+	// The staged mark is consumed by the save: a second look at the schema describes the element from
+	// the CONFIG (it is in it now), so no field carries the template's tell — a leaf the scaffold has
+	// no value for while the element it describes does not exist. A `spec.proxy` on a real element is
+	// a plain empty string; on a staged one it came from the template with the same shape, so the
+	// check is the one thing only a real element can show: its values are READ, not scaffolded.
+	schema = svc.GetSettingsSchema()
+	var sawProxy bool
+	for _, f := range schema.Fields {
+		if f.Key != "providers.1.spec.proxy" {
+			continue
+		}
+		sawProxy = true
+		if f.Note != "" && strings.Contains(f.Note, "读取失败") {
+			t.Errorf("the element is still described as missing after the save: %+v", f)
+		}
+	}
+	if !sawProxy {
+		t.Errorf("providers.1.spec.proxy is not offered after the save — the element is not in the schema")
+	}
+
+	// An item that is still only STAGED is cancelled, not scheduled for removal: it was never in the
+	// config, and validating its index against the config would refuse — the path a reader takes
+	// most often is "press ＋, look at the card, change my mind".
+	if got := svc.AddSettingsItem("providers"); !got.OK {
+		t.Fatalf("staging an item to cancel: %+v", got)
+	}
+	cancelled := svc.RemoveSettingsItem("providers.2")
+	if !cancelled.OK {
+		t.Fatalf("cancelling a staged item = %+v, want it to succeed", cancelled)
+	}
+	if !strings.Contains(cancelled.Summary, "取消") {
+		t.Errorf("cancel summary = %q, want it to say the item was cancelled", cancelled.Summary)
+	}
+	if len(d.pendingAdds) != 0 || len(d.pendingRemoves) != 0 {
+		t.Errorf("after the cancel: adds=%v removes=%v, want neither", d.pendingAdds, d.pendingRemoves)
 	}
 
 	// Removing reports what still points at it: `title_provider` names the item that just went.
@@ -916,12 +1079,48 @@ title_provider: main
 	if !strings.Contains(removed.Summary, "title_provider") {
 		t.Errorf("remove summary = %q, want it to warn about the key still naming it", removed.Summary)
 	}
-	if len(d.cfg.Providers) != 1 || d.cfg.Providers[0].Name != "added" {
-		t.Errorf("memory after the remove: %+v", d.cfg.Providers)
+	// Staged, not done: the item is still in the config and still in the file.
+	if len(d.cfg.Providers) != 2 {
+		t.Errorf("memory after the remove: %+v, want the item NOT removed yet", d.cfg.Providers)
 	}
-	left := readFileT(t, path)
-	if strings.Contains(left, "name: main") {
-		t.Errorf("config.yaml still holds the removed item:\n%s", left)
+	if body := readFileT(t, path); !strings.Contains(body, "name: main") {
+		t.Errorf("config.yaml lost the item before the save:\n%s", body)
+	}
+	// The save is what performs it, and it is one write for the removal and the edits around it.
+	if res := svc.SaveSettings(map[string]any{"providers.1.model": "m-edited"}); !res.OK {
+		t.Fatalf("saving the removal: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	reloaded, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Providers) != 1 || reloaded.Providers[0].Name != "added" {
+		t.Fatalf("providers = %+v, want only the added one", reloaded.Providers)
+	}
+	if reloaded.Providers[0].Model != "m-edited" {
+		t.Errorf("the edit in the same save did not land: %+v", reloaded.Providers[0])
+	}
+	if strings.Contains(readFileT(t, path), "name: main") {
+		t.Errorf("config.yaml still holds the removed item:\n%s", readFileT(t, path))
+	}
+
+	// A staged item that is dropped before the save cancels out: nothing is written for either
+	// half, which is what "point保存后才生效" means in the other direction.
+	if got := svc.AddSettingsItem("providers"); !got.OK {
+		t.Fatalf("re-adding: %+v", got)
+	}
+	if got := svc.RemoveSettingsItem("providers.1"); !got.OK {
+		t.Fatalf("removing the item just added: %+v", got)
+	}
+	if res := svc.SaveSettings(map[string]any{"providers.0.model": "m-again"}); !res.OK {
+		t.Fatalf("saving after add-then-remove: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	after, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Providers) != 1 {
+		t.Errorf("providers = %+v, want the add-then-remove to have cancelled out", after.Providers)
 	}
 
 	// The refusals: a list that is not a list of items, and an item that is not there.
@@ -930,5 +1129,19 @@ title_provider: main
 	}
 	if got := svc.RemoveSettingsItem("providers.9"); got.OK || !strings.Contains(got.Summary, "删不了") {
 		t.Errorf("removing a missing item = %+v, want a refusal", got)
+	}
+	// A staged add whose index no longer matches the list refuses the whole save: the form is
+	// working from a config that moved, and writing its values into another element would be silent.
+	if got := svc.AddSettingsItem("providers"); !got.OK {
+		t.Fatalf("staging for the stale-index case: %+v", got)
+	}
+	// Simulate another writer shrinking the list by hand: the staged index now points past the end.
+	d.withConfig(func(c *config.Config) { c.Providers = c.Providers[:0] })
+	res = svc.SaveSettings(map[string]any{"providers.1.name": "x"})
+	if res.OK {
+		t.Errorf("a save whose staged index no longer matches was accepted: %s", res.Summary)
+	}
+	if len(svc.desk.pendingAdds) == 0 {
+		t.Errorf("the refusal consumed the staged add — the reader cannot retry")
 	}
 }

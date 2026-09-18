@@ -63,20 +63,27 @@ func ReadPath(cfg *Config, key string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readLeafRef(leaf), nil
+}
+
+// readLeafRef is ReadPath for a leaf that has already been resolved, and the two rules above live
+// here so every caller that reports a leaf's value reports it the same way — including the element
+// template a list declares (config.ElementFields), whose leaves are not reachable from a *Config.
+func readLeafRef(leaf leafRef) any {
 	v := leaf.value
 	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			if d, ok := leaf.defaultValue(); ok {
-				return d, nil
+				return d
 			}
-			return nil, nil // unset, and the field declares no default
+			return nil // unset, and the field declares no default
 		}
 		v = v.Elem()
 	}
 	if isDurationType(v.Type()) {
-		return time.Duration(v.Int()).String(), nil
+		return time.Duration(v.Int()).String()
 	}
-	return v.Interface(), nil
+	return v.Interface()
 }
 
 // Unset is the value that CLEARS an optional leaf: it is written to the file as `null`, which
@@ -89,6 +96,12 @@ func ReadPath(cfg *Config, key string) (any, error) {
 // (TestSavePartial_NilIsRefused pins it). Only a value that SAYS it means "unset" can unset, and
 // only a pointer leaf can take one: an int has no null.
 type Unset struct{}
+
+// isUnset reports whether a value is the "clear this leaf" marker (see Unset).
+func isUnset(v any) bool {
+	_, ok := v.(Unset)
+	return ok
+}
 
 // LeafInfo is what a settings form needs to know about a leaf and the VALUE cannot answer: how
 // the leaf is declared, and whether it currently holds anything.
@@ -120,13 +133,20 @@ func DescribeLeaf(cfg *Config, key string) (LeafInfo, error) {
 	if err != nil {
 		return LeafInfo{}, err
 	}
+	return describeLeafRef(leaf), nil
+}
+
+// describeLeafRef is DescribeLeaf for a leaf that has already been resolved — the shared half, so
+// the config walk and the element walk (resolveElementPath, in config_edits.go) describe a leaf the
+// same way.
+func describeLeafRef(leaf leafRef) LeafInfo {
 	info := LeafInfo{Kind: kindOfType(leaf.value.Type()), IsSet: true}
 	if leaf.value.Kind() == reflect.Pointer {
 		_, hasDefault := leaf.defaultValue()
 		info.Optional = !hasDefault
 		info.IsSet = !leaf.value.IsNil()
 	}
-	return info, nil
+	return info
 }
 
 // KindOf names the input a value wants. Reflection rather than a switch on concrete types,

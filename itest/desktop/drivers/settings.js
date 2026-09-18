@@ -140,10 +140,11 @@
       blockKeys.indexOf('web_search.proxy') < 0 && blockKeys.indexOf('web_fetch.timeout') < 0,
     blockKeys.join(' / '))
 
-  // ── 列表能加条目、能删条目 ───────────────────────────────────────────────
-  // 一条列表在文件里得先有那一项，它的字段才存得进去（更新路径不认不存在的路径），所以 ＋ 是**立刻
-  // 写盘**的：卡片随即出现（并且展开），填完再常规保存。删除同理，只是方向相反，而且会警告还有谁
-  // 在引用那个名字。
+  // ── 列表能加条目、能删条目（暂存，点保存才写盘） ──────────────────────────
+  // 一条列表此前必须"先在文件里"，它的字段才存得进去（更新路径不认不存在的路径），所以 ＋ 原来是
+  // **立刻写盘**的。现在它只是**暂存**：新条目是页面上的一个待办，点保存时和它的字段值一起写进
+  // config.yaml（一次写盘，见 config.ListEdits 的顺序规则）。于是"＋ 了又反悔"什么都不写 ——
+  // 这正是「返回对话」暗示的语义，也是立刻写盘做不到的。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor('.set-elem-head', '回到模型组'))) return smoke.finish()
   const addBtn = smoke.qa('.set-add .btn')[0]
@@ -153,7 +154,8 @@
     const t = smoke.text('.settings-notice')
     return t.indexOf('加了一项') >= 0 ? t : null
   }, '添加条目的回执')
-  smoke.check('＋ 立即写入并回执', !!added, added || '')
+  smoke.check('＋ 只是暂存，回执说清"点保存才写进 config.yaml"',
+    !!added && added.indexOf('config.yaml') >= 0, added || '')
   // 新卡片出现、展开着、定位是 providers[1]（不是 providers.1）
   // 全新的条目没有名字，所以卡片头就是它的定位（providers[1]）—— 副标题此时是空的（head 里已经
   // 写了同一句话，重复一遍没有意义）。
@@ -166,8 +168,13 @@
   const opened = await smoke.waitFor(
     () => (newCard.querySelector('.set-elem-body') ? true : null), '新条目自动展开')
   smoke.check('新条目是展开的（正是要填它）', !!opened, opened ? '' : '仍然折着')
+  // 而且它**能填**：条目还不在配置里，所以它的叶子在 schema 里没有值可走 —— 字段是从元素类型
+  // 描述出来的（stagedFields）。没有这一条，＋ 画出来的就是一张空卡片，而那正是立刻写盘存在的理由。
+  const newCardKeys = smoke.allText('.set-elem-body .set-key').map((t) => t.replace(/⟳.*$/, '').trim())
+  smoke.check('暂存的条目有输入框（叶子从元素类型声明，不靠配置里的值）',
+    ['name', 'model', 'api_key'].every((k) => newCardKeys.indexOf(k) >= 0), newCardKeys.join(' / '))
 
-  // 没有块的列表：web_search 在沙箱配置里根本不存在，＋ 要把块建出来
+  // 没有块的列表：web_search 在沙箱配置里根本不存在，＋ 要能加（保存时把块建出来）
   smoke.click(catByName('工具与权限'))
   if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '工具与权限', '切到工具与权限（加列表）'))) return smoke.finish()
   // ＋ 按钮自己说是哪个列表（一个块里可能既有标量又有列表）
@@ -181,12 +188,22 @@
     const t = smoke.text('.settings-notice')
     return t.indexOf('web_search.providers') >= 0 && t.indexOf('加了一项') >= 0 ? t : null
   }, 'web_search 的添加回执')
-  smoke.check('文件里没有这个块时也能加（块被建出来）', !!wsAdded, wsAdded || '')
+  smoke.check('文件里没有这个块时也能加（暂存，保存时建块）', !!wsAdded, wsAdded || '')
+  // 新加的条目必须展开着，即使它所在的列表被声明为"一律折叠"：＋ 造出来的那一条就是拿来填的，
+  // 声明折针对的是"已经在那儿、你只是来看看"的条目（justAdded 优先，见 ElementCard）。
+  const wsNewCard = await smoke.waitFor(() => {
+    const sec = smoke.qa('.set-section').find((d) => smoke.text(d.querySelector('.set-section-head')) === 'web_search')
+    const card = sec ? sec.querySelector('.set-elem') : null
+    return card && card.querySelector('.set-elem-body') ? card : null
+  }, '新加的 web_search 条目展开')
+  smoke.check('声明为折叠的列表里，＋ 加出来的条目仍然展开', !!wsNewCard, '')
+  if (wsNewCard) smoke.click(wsNewCard.querySelector('.set-elem-head'))
 
-  // 删掉刚加的那个 provider：两步确认，删完回执里带上"谁还在引用它"
+  // 删掉一个**已经存在**的 provider：两步确认，回执里带上"谁还在引用它"。删是**暂存**的 ——
+  // 卡片要到保存之后才消失，这正是"点保存才生效"的意思。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor('.set-elem-head', '回到模型组（删除）'))) return smoke.finish()
-  const card = cardByHead('providers[1]')
+  const card = cardByHead('providers[0]')
   if (!card) return smoke.fail('找到要删的那张卡片', smoke.text('.settings-form').slice(0, 200))
   // 删除入口在卡片体里，所以先像用户那样把它展开。
   if (!card.querySelector('.set-elem-body')) smoke.click(card.querySelector('.set-elem-head'))
@@ -203,16 +220,82 @@
   const confirmBtn = await smoke.waitFor(
     () => smoke.qa('.set-elem-confirm .btn.danger')[0], '删除的第二步确认')
   if (!confirmBtn) return smoke.finish()
-  smoke.check('删除要确认第二次（写盘不可撤销）', true, '')
+  smoke.check('删除要确认第二次', true, '')
   smoke.click(confirmBtn)
   const removed = await smoke.waitFor(() => {
     const t = smoke.text('.settings-notice')
-    return t.indexOf('删除') >= 0 ? t : null
+    return t.indexOf('标记删除') >= 0 ? t : null
   }, '删除的回执')
-  smoke.check('删除回执', !!removed, removed || '')
-  const gone = await smoke.waitFor(
-    () => (smoke.qa('.set-elem-path').some((e) => smoke.text(e) === 'providers[1]') ? null : true), '卡片消失')
-  smoke.check('删掉的卡片从页面消失', !!gone, '')
+  smoke.check('删除只是暂存，回执说清"点保存后才写进 config.yaml"',
+    !!removed && removed.indexOf('config.yaml') >= 0, removed || '')
+  // 暂存：卡片还在（保存才生效），而且「谁还在引用它」的提醒不能等到保存才说。
+  smoke.check('标了删除的卡片还在页面上（保存才生效）',
+    !!cardByHead('providers[0]'), smoke.allText('.set-elem-head').join(' / '))
+  smoke.check('删除的回执点出还在引用这个名字的键', (removed || '').indexOf('title_provider') >= 0, removed || '')
+
+  // ── 保存才写盘：暂存的加/删 + 填进去的字段值，一次写进 config.yaml ────────
+  // 这一段是整套改动的验收：新条目的定位（providers[1]）在保存之前**不在配置里**，它的字段值却在
+  // 页面上填得进去；保存时两半一起写 —— 先建条目、再把值写进它（顺序见 config.ListEdits），
+  // 同时删掉标记了的那一项。Go 侧读回文件来断言（这一页看不见磁盘）。
+  // 这一页曾经被 ⌘, 重开过，回来停在第一个分组，所以先走到模型组。
+  smoke.click(catByName('模型'))
+  if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '模型', '回到模型组（保存）'))) return smoke.finish()
+  const addCard2 = await smoke.waitFor(() => cardByHead('providers[1]'), '暂存的新条目还在')
+  if (!addCard2) return smoke.fail('保存前新条目还在页面上', smoke.allText('.set-elem-head').join(' / '))
+  if (!addCard2.querySelector('.set-elem-body')) smoke.click(addCard2.querySelector('.set-elem-head'))
+  if (!(await smoke.waitFor(() => (addCard2.querySelector('.set-elem-body') ? true : null), '展开新条目'))) return smoke.finish()
+  const fill = (label, value) => {
+    const row = Array.prototype.slice.call(addCard2.querySelectorAll('.set-row'))
+      .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === label)
+    if (!row) return false
+    const input = row.querySelector('input, textarea')
+    if (!input) return false
+    smoke.type(input, value)
+    return true
+  }
+  if (!fill('name', 'added-by-smoke') || !fill('model', 'added-model')) {
+    return smoke.fail('给新条目填 name / model', addCard2.innerHTML.slice(0, 300))
+  }
+  // 新条目上的 `spec.vision` 也设成「开」：它是**可选**叶子，值会随新条目一起进文件（append 携带自己
+  // 的值）。这样下一次把它改回「自动」时，走的就是 SavePartial 的替换路径、写出 `vision: null` ——
+  // 两条路都在这一场里走到，而"未设置"这个状态本身在这页上是必须能存下去的（design §八之四）。
+  const visionInNew = Array.prototype.slice.call(addCard2.querySelectorAll('.set-row'))
+    .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === 'spec.vision')
+  const visionNewSel = visionInNew ? visionInNew.querySelector('select') : null
+  if (!visionNewSel || !smoke.pick(visionNewSel, 'true')) return smoke.fail('把新条目的 spec.vision 设成「开」', '')
+  smoke.check('填了新条目之后保存按钮可用（新条目的字段也是普通草稿）',
+    !!smoke.q('.settings-foot .btn') && !smoke.q('.settings-foot .btn').disabled, '')
+  smoke.click(smoke.q('.settings-foot .btn'))
+  const savedAll = await smoke.waitFor(() => {
+    const t = smoke.text('.settings-notice')
+    return t.indexOf('已生效') >= 0 ? t : null
+  }, '加/删/改一起保存的汇总句')
+  smoke.check('一次保存带走了暂存的加、删与字段值', !!savedAll, savedAll || '')
+  // 保存成功后页面重读 schema：新条目现在是配置里的真条目（头写的是刚填的名字），标记删除的那一项没了。
+  const afterSave = await smoke.waitFor(() => {
+    const heads = smoke.allText('.set-elem-head')
+    return heads.some((h) => h.indexOf('added-by-smoke') >= 0)
+      && !heads.some((h) => h.indexOf('smoke-model') >= 0) ? heads : null
+  }, '保存后：新条目成了真条目，被删的那一项不在了')
+  smoke.check('保存后新条目成为真条目（名字来自刚填的值），删掉的那一项不在了',
+    !!afterSave, afterSave ? afterSave.join(' / ') : smoke.allText('.set-elem-head').join(' / '))
+
+  // 再把它改回「自动」并保存：界面上唯一能表达"没有值"的状态，落到文件里是 `vision: null`。
+  // 这一条必须落在**还活着的**元素上（上一步把 fixture 里那个删掉了），所以问的是刚加的那个。
+  const savedCard = cardByHead('added-by-smoke')
+  if (!savedCard) return smoke.fail('找到保存后的新条目', smoke.allText('.set-elem-head').join(' / '))
+  if (!savedCard.querySelector('.set-elem-body')) smoke.click(savedCard.querySelector('.set-elem-head'))
+  if (!(await smoke.waitFor(() => (savedCard.querySelector('.set-elem-body') ? true : null), '展开新条目（自动）'))) return smoke.finish()
+  const visionBack = Array.prototype.slice.call(savedCard.querySelectorAll('.set-row'))
+    .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === 'spec.vision')
+  const visionBackSel = visionBack ? visionBack.querySelector('select') : null
+  if (!visionBackSel || !smoke.pick(visionBackSel, '')) return smoke.fail('把新条目的 spec.vision 改回「自动」', '')
+  smoke.click(smoke.q('.settings-foot .btn'))
+  const savedAuto = await smoke.waitFor(() => {
+    const t = smoke.text('.settings-notice')
+    return t.indexOf('已生效') >= 0 ? t : null
+  }, '「自动」保存的汇总句')
+  smoke.check('新条目上的「自动」也能保存（写出去的是 null）', !!savedAuto, savedAuto || '')
 
   // ── 字号下限（"设置那两个字好小"） ────────────────────────────────────────
   // 左栏那个「设置」原来是 11.5px + 大写字距，比它标着的分类（14.5px）还小 —— 一页的标题成了页脚
@@ -229,7 +312,6 @@
     '分类 .settings-cat': '.settings-cat',
     '分类计数 .settings-cat-count': '.settings-cat-count',
     '返回 .settings-back': '.settings-back',
-    '左栏脚注 .settings-legend': '.settings-legend',
     '组标题 .settings-title': '.settings-title',
     '组副标题 .settings-sub': '.settings-sub',
     '键名 .set-key': '.set-key',
@@ -266,13 +348,55 @@
     !!head && !!key && (head.family !== key.family || Math.abs(head.size - key.size) >= 1.5),
     head && key ? '标题 ' + head.size + 'px ' + head.family + ' vs 键名 ' + key.size + 'px ' + key.family : '取样点缺失')
 
-  // ── 返回对话 ─────────────────────────────────────────────────────────────
+  // ── 声明的折叠：web_search / web_fetch 的条目一律折起来 ────────────────────
+  // 大小规则（>3 叶才折）对这两个列表是错的：一个 web_search provider 只有三个叶子，却是那一页上
+  // 最大的东西 —— 三个展开的条目会把这一页真正的内容（proxy / timeout / max_results）压到下面去。
+  // 所以折叠是**声明**（SettingListVO.folded，见 settingFoldedLists）：声明到没到界面由这条钉住，
+  // 而"它没有变成恒真"（一个被人扫的列表仍然按大小）由 driver 的提供商卡片那条钉住（大卡片默认折）。
+  smoke.click(catByName('工具与权限'))
+  if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '工具与权限', '切到工具与权限（折叠）'))) return smoke.finish()
+  const wsSection2 = smoke.qa('.set-section').find((d) => smoke.text(d.querySelector('.set-section-head')) === 'web_search')
+  if (!wsSection2) return smoke.fail('web_search 段还在', smoke.text('.settings-form').slice(0, 200))
+  // 这一页在 fixture 里原来是空的，加过一项之后正好有一张卡：三个叶子、默认折着。
+  const wsCard = wsSection2.querySelector('.set-elem')
+  if (!wsCard) return smoke.fail('web_search 段里有卡片', wsSection2.innerHTML.slice(0, 200))
+  smoke.check('web_search 的条目默认折叠（三个叶子也折）', !wsCard.querySelector('.set-elem-body'),
+    'body=' + !!wsCard.querySelector('.set-elem-body'))
+
+  // 返回对话（点那条路）——这一页真正的出口，也顺手把"折着的卡片仍然点得开"试掉。
   smoke.click('.settings-back')
   const back = await smoke.waitFor(
     () => (!smoke.q('.settings-view') && !smoke.q('.app-body.is-hidden') ? true : null), '返回对话')
   smoke.check('返回后设置页消失、对话区恢复', !!back, back ? '' : 'settings-view=' + !!smoke.q('.settings-view'))
   smoke.check('对话区确实还在（没有被卸载过）', !!smoke.q('.app-body .chat') && !!smoke.q('.composer-input'),
     'chat=' + !!smoke.q('.app-body .chat'))
+
+  // ── 键盘：⌘, 进来，Esc 回去 ──────────────────────────────────────────────
+  // 两个手势都是给"整页"这个形态补的入口/出口，所以放在最后 —— Esc 那条会把页面收掉，页面没了就
+  // 没法再断言别的了。
+  //
+  // Esc 必须 CLAIM 掉这个键（capture + stopPropagation）：对话区是隐藏而不是卸载的，它自己的 Esc
+  // 监听还活着，不声明的话同一个 Esc 会把下面留着没关的面板也关掉 —— 而这一页的契约是"页面之外
+  // 什么都不动"。⌘, 反过来只对会话页生效（设置页上按它是无操作），两条合起来就是"进得去、出得来"。
+  smoke.key('body', ',', { metaKey: true })
+  if (!(await smoke.waitFor('.settings-view', '⌘, 打开设置页'))) return smoke.finish()
+  smoke.check('⌘, 打开设置页', true, '')
+  // 折叠的卡片仍然点得开（折叠不是禁用）。页面重开时停在自己的第一个分组（通用，那里没有列表卡片），
+  // 所以先像用户那样走到有卡片的一页去。
+  const toolsCat = catByName('工具与权限')
+  if (!toolsCat) return smoke.fail('左栏有「工具与权限」', smoke.allText('.settings-cat').join(' | '))
+  smoke.click(toolsCat)
+  if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '工具与权限', '切到工具与权限（展开）'))) return smoke.finish()
+  const wsCard2 = smoke.qa('.set-section .set-elem')[0]
+  if (!wsCard2) return smoke.fail('工具与权限页里有卡片', smoke.text('.settings-form').slice(0, 200))
+  smoke.check('折着的卡片点得开', smoke.click(wsCard2.querySelector('.set-elem-head')), '')
+  smoke.check('点开后叶子出来了',
+    await smoke.waitFor(() => (wsCard2.querySelector('.set-elem-body') ? true : null), '展开卡片') ? true : false, '')
+
+  smoke.key('body', 'Escape')
+  const escBack = await smoke.waitFor(
+    () => (!smoke.q('.settings-view') && !smoke.q('.app-body.is-hidden') ? true : null), 'Esc 回到会话')
+  smoke.check('在设置页按 Esc 回到会话界面', !!escBack, escBack ? '' : 'settings-view=' + !!smoke.q('.settings-view'))
 
   smoke.finish()
 })()

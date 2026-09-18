@@ -217,37 +217,158 @@ func TestSavePartial_NestedAndIndexedPaths(t *testing.T) {
 	}
 }
 
-// A path that does not exist must ERROR. goccy reports success while writing
-// nothing for a missing path, so this pins the verification step that catches it.
-func TestSavePartial_MissingPathIsAnError(t *testing.T) {
-	path := writeConfigFixture(t, richFixture)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+// A path whose blocks the FILE does not have is refused when the path cannot answer where it
+// goes — which is every case but a missing BLOCK. The three refusals below are the whole set: a
+// sequence element, a step through a node that is not a block, and a key on a list. None of them
+// is guessed at, and each leaves the file byte-for-byte unchanged.
+func TestSavePartial_RefusesWhatItCannotCreate(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		value any
+	}{
+		// A list is grown at its END with a skeleton the element type decides — AppendListItem's
+		// entry point, not a path's business.
+		{name: "element-in-a-list-that-is-not-there", key: "web_search.providers.0.type", value: "exa"},
+		// A MAP key is a name, and the file has no name to add: inventing one is the guessing.
+		{name: "key-in-a-map-that-is-not-there", key: "hooks.events.pre_tool.0.timeout", value: "5s"},
+		// A scalar holds no keys at all.
+		{name: "through-a-scalar", key: "language.foo", value: "x"},
+		// A list holds elements, not keys.
+		{name: "named-key-on-a-list", key: "providers.spec", value: "x"},
 	}
-
-	err = SavePartialTo(path, map[string]any{"logs.level": "debug"})
-	if err == nil {
-		t.Fatal("setting a nonexistent path must fail, not silently do nothing")
-	}
-	if !strings.Contains(err.Error(), "logs.level") {
-		t.Errorf("the error should name the offending path, got: %v", err)
-	}
-
-	after, readErr := os.ReadFile(path)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if string(before) != string(after) {
-		t.Error("a failed save must leave the file byte-for-byte unchanged")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := writeConfigFixture(t, richFixture)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = SavePartialTo(path, map[string]any{c.key: c.value})
+			if err == nil {
+				t.Fatalf("%s must be refused, not written", c.key)
+			}
+			if !strings.Contains(err.Error(), c.key) {
+				t.Errorf("the error should name the offending path, got: %v", err)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(before) != string(after) {
+				t.Errorf("a refused save must leave the file byte-for-byte unchanged; got:\n%s", after)
+			}
+		})
 	}
 }
 
-// A path that exists but whose PARENT does not is the same class of error.
+// Blocks the file does not spell out are CREATED, at the column the enclosing block's own keys
+// sit at — because the caller named the path and the path says where the block goes. The layout
+// is the assertion that matters here: a block emitted one level too shallow parses as a SIBLING
+// of the block it belongs to, which is a valid file holding the wrong shape.
+func TestSavePartial_CreatesTheBlocksThePathNames(t *testing.T) {
+	// A provider the user wrote by hand, whose `spec:` block does not exist yet — the case that
+	// made the settings page refuse to save a spec leaf at all.
+	path := writeConfigFixture(t, `providers:
+  - name: main
+    model: m
+    # 行尾注释：这一行不是我们要改的
+`)
+	err := SavePartialTo(path, map[string]any{
+		"providers.0.spec.context_window": 200000,
+		"providers.0.spec.proxy":          "http://127.0.0.1:7890",
+	})
+	if err != nil {
+		t.Fatalf("SavePartialTo: %v", err)
+	}
+	body, _ := os.ReadFile(path)
+	// One block, both keys in it, at the item's own key column (4) and one step deeper (6) — and
+	// the sibling key and its comment are where they were.
+	want := `providers:
+  - name: main
+    model: m
+    # 行尾注释：这一行不是我们要改的
+    spec:
+      context_window: 200000
+      proxy: "http://127.0.0.1:7890"
+`
+	if string(body) != want {
+		t.Errorf("config.yaml =\n%s\nwant:\n%s", body, want)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("the file this function wrote does not load: %v\n%s", err, body)
+	}
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("providers = %+v", cfg.Providers)
+	}
+	p := cfg.Providers[0]
+	if p.Spec.ContextWindow == nil || *p.Spec.ContextWindow != 200000 {
+		t.Errorf("context_window = %v", p.Spec.ContextWindow)
+	}
+	if p.Spec.Proxy != "http://127.0.0.1:7890" {
+		t.Errorf("proxy = %q", p.Spec.Proxy)
+	}
+	if p.Name != "main" || p.Model != "m" {
+		t.Errorf("the keys beside the new block moved: %+v", p)
+	}
+
+	// Two levels missing, one of them TOP-LEVEL: a key at the document root goes into the root
+	// block, which is a block like any other.
+	path2 := writeConfigFixture(t, "provider: main\n")
+	if err := SavePartialTo(path2, map[string]any{"memory.keyword_provider": "main"}); err != nil {
+		t.Fatalf("SavePartialTo (top-level block): %v", err)
+	}
+	body2, _ := os.ReadFile(path2)
+	if string(body2) != "provider: main\nmemory:\n  keyword_provider: main\n" {
+		t.Errorf("config.yaml = %q, want the block created at the top level", body2)
+	}
+	if m, err := LoadFrom(path2); err != nil || m.Memory.KeywordProvider != "main" {
+		t.Errorf("memory.keyword_provider did not land: %+v err=%v", m.Memory, err)
+	}
+
+	// Every block on the way is EMPTY (`a: {}`, and the ones created under it): the column still
+	// comes out right, because keyPosition walks up to the nearest block that HAS a key and
+	// indents one step per level — the same walk the list-item skeleton relies on.
+	path3 := writeConfigFixture(t, "a: {}\n")
+	if err := SavePartialTo(path3, map[string]any{"a.b.c": 1}); err != nil {
+		t.Fatalf("SavePartialTo (empty ancestors): %v", err)
+	}
+	body3, _ := os.ReadFile(path3)
+	if string(body3) != "a:\n  b:\n    c: 1\n" {
+		t.Errorf("config.yaml = %q, want three levels nested from an empty root key", body3)
+	}
+}
+
+// A path that exists but whose PARENT is absent is no longer "the same class of error": the parent
+// block is created when the path names it, so what fails here is a parent that is a LIST (an
+// element is AppendListItem's, and the file's own `providers` shows why a path cannot answer for
+// one).
 func TestSavePartial_MissingParentPathIsAnError(t *testing.T) {
 	path := writeConfigFixture(t, richFixture)
-	if err := SavePartialTo(path, map[string]any{"nope.deeper.value": 1}); err == nil {
-		t.Fatal("a nonexistent parent path must fail")
+	if err := SavePartialTo(path, map[string]any{"providers.3.name": "x"}); err == nil {
+		t.Fatal("a sequence element past the end must fail")
+	}
+}
+
+// A file with no top-level block at all — empty, or comments only — has nothing a key could go
+// in, and creating it would be inventing the file's whole shape. It must be a clear refusal (the
+// settings page shows it as 没能写入）, not a panic: rootBlock is what keeps the walk from
+// dereferencing a nil body — and goccy's ReplaceWithNode would panic on it (verified), which is
+// why the check runs before the update loop rather than inside it.
+func TestSavePartial_FileWithoutATopLevelBlockIsRefused(t *testing.T) {
+	for _, body := range []string{"", "# 只有一行注释\n"} {
+		path := writeConfigFixture(t, body)
+		err := SavePartialTo(path, map[string]any{"language": "zh"})
+		if err == nil {
+			t.Fatalf("a file with no top-level block must refuse the save (fixture %q)", body)
+		}
+		if !strings.Contains(err.Error(), "not a block") {
+			t.Errorf("error = %v, want it to say the top level is not a block", err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != body {
+			t.Errorf("the file changed: %q", got)
+		}
 	}
 }
 

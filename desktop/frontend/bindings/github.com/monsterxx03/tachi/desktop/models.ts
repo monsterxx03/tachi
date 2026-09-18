@@ -1028,6 +1028,15 @@ export interface SettingFieldVO {
 export interface SettingListVO {
     "path": string;
     "category": string;
+
+    /**
+     * Folded says this list's items are drawn folded whatever their size (settingFoldedLists).
+     * It rides on the list rather than on the field because it is a fact about the LIST: within
+     * one list every item is the same struct, so their sizes agree and the decision cannot differ
+     * per item. The page matches an item to its list by path — the item path IS the list path
+     * plus an index — so nothing has to be repeated per card.
+     */
+    "folded"?: boolean;
 }
 
 /**

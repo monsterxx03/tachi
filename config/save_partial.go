@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,17 +38,22 @@ import (
 // YAML scalars; a *bool / *int / *int64 / *float64 may be passed directly so a
 // pointer field keeps its field type (see renderScalar).
 //
-// ⚠️ Every path must ALREADY EXIST in the file, with ONE exception this function does handle:
-// a key whose PARENT mapping exists is added (a `spec:` block that does not spell out
-// `context_window` gains that line). There is nothing to guess there — the parent says where the
-// key goes — which is what makes it different from creating structure, and structure is still
-// refused: a missing parent, a sequence index past the end, a new top-level block, all error.
-// (The one place structure IS created is a list item, and that has its own entry point with its
-// own rules — see list_items.go.)
+// ⚠️ A path must NAME its blocks; the file does not have to spell them out. A key whose parent
+// block is missing is added under a block this function creates (`spec:` that the file lacks gains
+// its first key), because the caller named the path and the path says where the block goes — the
+// same no-guessing `createListStructure` (list_items.go) already relies on for a list's blocks.
+// What is still refused is what a path cannot answer, and none of it is guessed at:
+//
+//   - a SEQUENCE element: a list grows at its END, with a skeleton the element type decides, and
+//     that is AppendListItem's own entry point (list_items.go) — not this one;
+//   - a step through a node that is not a block (`language.foo`, `providers.type`): there is no
+//     block to put the key in;
+//   - a MAP key the file does not have (`hooks.events.pre_tool.…`): a map is keyed by name, so
+//     writing one means inventing the name.
 //
 // The refusal is not "no error means success": goccy's ReplaceWithNode reports success for a
 // missing path while writing nothing (verified), so this function re-reads the file and verifies
-// each path holds the value it was given, and that check is what catches everything else.
+// each path holds the value it was given, and that check is the net under everything else.
 //
 // The write is atomic (tmp + rename) for the same reason session metadata is:
 // another Tachi process may be reading config.yaml at startup, and an in-place
@@ -68,28 +72,25 @@ func SavePartial(updates map[string]any) error {
 // SavePartialTo is SavePartial for an explicit path (tests, and any caller that
 // already resolved it).
 func SavePartialTo(path string, updates map[string]any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
+	return ApplyConfigEditsTo(path, ListEdits{Updates: updates})
+}
 
-	// Parse with COMMENTS — without the option the parse drops them and the
-	// round trip silently strips every comment in the user's file.
-	file, err := parser.ParseBytes(data, parser.ParseComments)
-	if err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
-	}
-
+// applyUpdatesToFile edits the parsed file in place: the per-key half of a file edit, WITHOUT the
+// write, so a caller performing several kinds of edit can emit the result once (see
+// ApplyConfigEditsTo — one save is one write).
+//
+// The write itself, the "changed nothing" check and the atomic rename live in the caller.
+func applyUpdatesToFile(file *ast.File, updates map[string]any) error {
 	// Sorted paths, so a file with several edits is written in a stable order and
 	// a failure is reported for the same edit every time.
 	for _, key := range sortedKeys(updates) {
 		p, err := yamlPath(key)
 		if err != nil {
-			return fmt.Errorf("%s: invalid path %q: %w", path, key, err)
+			return fmt.Errorf("invalid path %q: %w", key, err)
 		}
 		lit, err := renderScalar(updates[key])
 		if err != nil {
-			return fmt.Errorf("%s: %s: %w", path, key, err)
+			return fmt.Errorf("%s: %w", key, err)
 		}
 		// The literal is PARSED rather than wrapped in ast.String: that is what
 		// makes a list render as a list (`["a", "b"]` becomes a SequenceNode),
@@ -97,74 +98,45 @@ func SavePartialTo(path string, updates map[string]any) error {
 		// everything as a string node silently wrote sequences as quoted text.
 		node, err := parseScalarNode(lit)
 		if err != nil {
-			return fmt.Errorf("%s: %s: %w", path, key, err)
+			return fmt.Errorf("%s: %w", key, err)
 		}
 		if err := p.ReplaceWithNode(file, node); err != nil {
-			return fmt.Errorf("%s: set %s: %w", path, key, err)
+			return fmt.Errorf("set %s: %w", key, err)
 		}
 		// ReplaceWithNode reports success for a path the file does not have while writing
-		// nothing, so existence is asked separately — and a missing key whose parent IS there is
-		// the one case this function adds rather than refuses (see the doc comment).
+		// nothing, so existence is asked separately — and a path the file does not have yet is
+		// added, block by block, as far as the path names blocks (see insertMissingKey).
 		if _, err := p.FilterFile(file); err != nil {
-			if err := addMissingKey(file, key, lit); err != nil {
-				return fmt.Errorf("%s: %s: %w", path, key, err)
+			if err := insertMissingKey(file, key, lit); err != nil {
+				return fmt.Errorf("%s: %w", key, err)
 			}
 		}
 	}
-
-	out := []byte(file.String())
-	// Verification before the write, because ReplaceWithNode is silent about a
-	// path it did not find (see the doc comment). Reading it back is also the only
-	// check that covers "the value we asked for is the value the file now holds"
-	// for EVERY path at once, whatever the library did internally.
-	if err := verifyUpdates(out, updates); err != nil {
-		return err
-	}
-
-	// A save that changed nothing must not rewrite the file: the caller may be
-	// re-saving a form it did not edit, and touching the mtime (or re-emitting the
-	// user's bytes) for that is rude at best. Compared on the bytes we would write,
-	// so this cannot hide a real edit.
-	if string(data) == string(out) {
-		return nil
-	}
-
-	// Atomic: a concurrent `tachi` starting up reads this file, and it must never
-	// see a truncated one. Mode follows the existing file so a user's 0600 stays.
-	return atomicWriteConfig(path, out)
+	return nil
 }
 
-// addMissingKey inserts `key: <lit>` into the file when the key's PARENT block already exists.
+// insertMissingKey puts `key: <lit>` into the file, creating whatever MAPPING blocks the path
+// names and the file does not have yet (see ensureBlock).
 //
-// It is the narrow half of "adding a key" — the other half (creating structure) stays refused,
-// because its answer is not in the file: which block would a new top-level key go under? A key
-// whose parent is right there has no such question. It is what makes a leaf representable that
-// the CONFIG OBJECT always has and a hand-written file may not: every struct field is a leaf the
-// settings form offers, while `omitempty` means the file may not spell out one — without this,
-// editing it would fail with "not found in the file" and look like a broken form.
+// It is the "adding a key" half of SavePartial's contract: the config OBJECT always has every
+// struct field as a leaf while `omitempty` means the FILE may not spell one out — without this,
+// editing such a leaf would fail with "not found in the file" and look like a broken form, which
+// is exactly what a freshly added list item produces (its skeleton writes the fields the struct
+// always writes and leaves the rest).
 //
 // The KEY is BUILT rather than parsed from a snippet, and its column comes from the block itself
 // (see keyPosition): the emitter lays a mapping's lines out from each key token's column, and a
 // node parsed out of a standalone snippet carries positions that point into its own buffer — the
 // symptom is a key printed as garbage (`context_window` came out `ext_window`). The VALUE is
 // parsed, which is fine and is what the update path does: its token's text is its own.
-func addMissingKey(file *ast.File, key, lit string) error {
-	at := strings.LastIndex(key, ".")
-	if at <= 0 || at == len(key)-1 {
-		return fmt.Errorf("%w, and %q is not a key under an existing block", errNotInFile, key)
+func insertMissingKey(file *ast.File, key, lit string) error {
+	leaf, parentPath := key, ""
+	if at := strings.LastIndex(key, "."); at > 0 {
+		leaf, parentPath = key[at+1:], key[:at]
 	}
-	parent, err := yamlPath(key[:at])
+	block, err := ensureBlock(file, parentPath)
 	if err != nil {
 		return err
-	}
-	node, err := parent.FilterFile(file)
-	if err != nil {
-		return fmt.Errorf("%w, and its parent %q is not either", errNotInFile, key[:at])
-	}
-	mapping, ok := node.(*ast.MappingNode)
-	if !ok {
-		return fmt.Errorf("%w: %q is a %s, and only a block can take a new key",
-			errNotInFile, key[:at], node.Type())
 	}
 	pos, err := keyPosition(file, key)
 	if err != nil {
@@ -174,21 +146,135 @@ func addMissingKey(file *ast.File, key, lit string) error {
 	if err != nil {
 		return err
 	}
-	// A block that gains a key is no longer `{}`: an empty flow mapping has to become a real
-	// block, or the child would be emitted inside the braces on the parent's line.
-	mapping.IsFlowStyle = false
-	leaf := key[at+1:]
-	mapping.Values = append(mapping.Values, ast.MappingValue(nil, ast.String(token.New(leaf, leaf, pos)), value))
+	addKeyToBlock(block, leaf, value, pos)
 	return nil
+}
+
+// ensureBlock returns the block that blockPath names, creating — as empty blocks, one key at a
+// time — every MAPPING between the document root and it that the file does not spell out. An
+// empty blockPath is the document root itself, which is where a top-level key goes.
+//
+// Creating a block is the same no-guessing as adding a key to one: the CALLER named the path, and
+// the path is where the block goes (the argument `createListStructure` in list_items.go already
+// makes for a list's own blocks — a config that never configured search has no `web_search:` key
+// either). What is refused is what a path cannot answer:
+//
+//   - a SEQUENCE element: nothing says what a new element's other fields hold, and a list is
+//     grown at its END with a skeleton — AppendListItem's entry point, not this one;
+//   - a step through a node that is not a block (a scalar or a sequence): there is no block to
+//     put the key in;
+//   - a MAP key the file does not have: a map is keyed by NAME, and inventing one is the guess
+//     this package refuses (`hooks.events.pre_tool`).
+func ensureBlock(file *ast.File, blockPath string) (*ast.MappingNode, error) {
+	cur, err := rootBlock(file)
+	if err != nil {
+		return nil, err
+	}
+	if blockPath == "" {
+		return cur, nil
+	}
+	var (
+		segs   = strings.Split(blockPath, ".")
+		inList bool // the step before was a list: it was poured through to reach an element
+	)
+	for i, seg := range segs {
+		at := strings.Join(segs[:i+1], ".")
+		node, err := filterNode(file, at)
+		if err == nil {
+			switch n := node.(type) {
+			case *ast.MappingNode:
+				cur, inList = n, false
+			case *ast.SequenceNode:
+				// A list is poured through only to reach ONE of its elements, by index: a
+				// named segment under it would be a key on a list, which YAML does not have.
+				if i+1 >= len(segs) || !isIndexSegment(segs[i+1]) {
+					return nil, fmt.Errorf("%w: %q in the file is a list, and only its elements "+
+						"can be reached through it (by index)", errNotInFile, at)
+				}
+				cur, inList = nil, true
+			default:
+				return nil, fmt.Errorf("%w: %q in the file is a %s, and only a block takes a new key",
+					errNotInFile, at, node.Type())
+			}
+			continue
+		}
+		// Missing: a NAME becomes a block, an INDEX never becomes anything — nothing says what
+		// a new element's other fields hold, and a list is grown at its END with a skeleton
+		// (AppendListItem), not from here.
+		if isIndexSegment(seg) {
+			return nil, fmt.Errorf("%w: %q is a sequence element, and a new one is appended through "+
+				"its own entry point (AppendListItem)", errNotInFile, at)
+		}
+		if inList {
+			return nil, fmt.Errorf("%w: %q is a key on a list, which holds elements by index",
+				errNotInFile, at)
+		}
+		pos, err := keyPosition(file, at)
+		if err != nil {
+			return nil, err
+		}
+		child := newBlockNode(pos)
+		addKeyToBlock(cur, seg, child, pos)
+		cur = child
+	}
+	return cur, nil
+}
+
+// isIndexSegment reports whether a path segment addresses a sequence element rather than a key.
+func isIndexSegment(seg string) bool {
+	_, err := strconv.Atoi(seg)
+	return err == nil
+}
+
+// rootBlock is the document's top-level block: the one block that is never missing, and the one
+// that is never created either — a file with no top level of its own (empty, or comments only)
+// has nothing a key could go in, and turning THAT into a block would be inventing the file's
+// whole shape, which is the one thing a path does not say.
+func rootBlock(file *ast.File) (*ast.MappingNode, error) {
+	if len(file.Docs) == 0 || file.Docs[0] == nil || file.Docs[0].Body == nil {
+		return nil, fmt.Errorf("%w: the file's top level is empty, not a block", errNotInFile)
+	}
+	root, ok := file.Docs[0].Body.(*ast.MappingNode)
+	if !ok {
+		return nil, fmt.Errorf("%w: the file's top level is a %s, not a block",
+			errNotInFile, file.Docs[0].Body.Type())
+	}
+	return root, nil
+}
+
+// filterNode resolves a dot path in the file, reporting the node the file holds there.
+func filterNode(file *ast.File, key string) (ast.Node, error) {
+	p, err := yamlPath(key)
+	if err != nil {
+		return nil, err
+	}
+	return p.FilterFile(file)
+}
+
+// addKeyToBlock appends `name: value` to a block's own keys — the ONE place a key enters a block,
+// for both this file's insertions and list_items.go's structure creation (the token layout is the
+// part that goes wrong silently, so it lives once).
+func addKeyToBlock(block *ast.MappingNode, name string, value ast.Node, pos *token.Position) {
+	// A block that gains a key stops being `{}`: an empty flow mapping keeps its braces on the
+	// parent's line, so the child would be emitted inside them (`spec: {proxy: x}`).
+	block.IsFlowStyle = false
+	block.Values = append(block.Values, ast.MappingValue(nil, ast.String(token.New(name, name, pos)), value))
+}
+
+// newBlockNode builds the empty block a created one starts as. Its start token carries the column
+// the emitter lays the block's lines out from; a node built without one panics when printed.
+func newBlockNode(pos *token.Position) *ast.MappingNode {
+	return ast.Mapping(token.New("", "", pos), false)
 }
 
 // keyPosition finds the column a new key of `key`'s parent block belongs at: the column of a key
 // already in that block.
 //
 // An EMPTY block (a `spec: {}` — what a freshly appended list item holds, since the fields the
-// struct always writes are the only ones a skeleton spells out) has no key to copy, so the search
-// walks UP to the nearest ancestor that has one and indents one step per level. Without this the
-// new key lands at the block's own level, which parses as a sibling of the block.
+// struct always writes are the only ones a skeleton spells out, and what a block this file just
+// CREATED starts as) has no key to copy, so the search walks UP to the nearest ancestor that has
+// one and indents one step per level. Without this the new key lands at the block's own level,
+// which parses as a sibling of the block.
 func keyPosition(file *ast.File, key string) (*token.Position, error) {
 	segs := strings.Split(key, ".")
 	// One candidate per level up to the document root (prefix ""), which is where a TOP-LEVEL
@@ -261,11 +347,10 @@ func verifyUpdates(after []byte, updates map[string]any) error {
 		}
 		node, err := p.FilterFile(file)
 		if err != nil {
-			// A path that does not exist lands here: the caller asked to update a
-			// key the file does not have (goccy's ReplaceWithNode reports success
-			// for it while writing nothing, which is why this check exists).
-			return fmt.Errorf("verify %s: not found in the file — SavePartial only updates "+
-				"keys that already exist: %w", key, err)
+			// A path the file does not hold even after the edit: the insert above refused
+			// (it returns before this), or it landed somewhere the path does not reach —
+			// either way nothing is written.
+			return fmt.Errorf("verify %s: not found in the file after the edit: %w", key, err)
 		}
 		// Compared as text, both normalized through the same parse+render path, so
 		// a formatting difference between the requested literal and what the emitter

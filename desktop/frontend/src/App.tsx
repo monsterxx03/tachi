@@ -1479,6 +1479,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       }
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
+      else if (e.key === ',') { e.preventDefault(); setView('settings') }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
       else if (e.key.toLowerCase() === 'p' && !e.shiftKey) { e.preventDefault(); setPaletteOpen((v) => !v) }
       else if (e.key.toLowerCase() === 'n') {
@@ -2297,6 +2298,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="confirm-msg">快捷键</div>
             <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
+            <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>

@@ -131,6 +131,18 @@ type ModelSpec struct {
 	// anthropic / openai-res 走 SDK 的 option.WithRequestTimeout。
 	Timeout time.Duration `yaml:"timeout,omitempty"`
 
+	// Proxy 该 provider 的 API 请求走哪个代理：
+	//
+	//	http://127.0.0.1:7890     HTTP 代理
+	//	https://host:8443         HTTPS 代理（CONNECT 隧道）
+	//	socks5://127.0.0.1:1080   SOCKS5 代理
+	//
+	// 空 = 不显式指定代理，走默认 transport 的环境变量（HTTP_PROXY /
+	// HTTPS_PROXY / NO_PROXY）——需要全局代理时用环境变量即可，本字段是
+	// "只有部分 provider 要走代理" 时的答案（境内直连、境外走代理）。
+	// URL 无法解析或 scheme 不支持时 provider 解析直接失败（不静默直连）。
+	Proxy string `yaml:"proxy,omitempty"`
+
 	// Pricing 定价覆盖（可选，覆盖内置价格表）。类型定义在本包
 	// （PricingConfig）——定价 schema 单一来源，config 只负责装载，
 	// 定价语义（内置表/分时带）由 llm 解析。

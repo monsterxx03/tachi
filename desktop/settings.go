@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -581,6 +582,26 @@ func providerNames(cfg *config.Config) []string {
 // ("unsupported provider type: …") — a config that loads and then cannot talk to anything.
 func providerTypes(*config.Config) []string { return config.ProviderTypes() }
 
+// settingFoldedLists names the config lists whose items the form draws FOLDED whatever their
+// size, and it exists because size is the wrong question for these two.
+//
+// The size rule's premise is that a folded item costs a click while an open one costs scrolling,
+// and that is true of a list a reader SCANS (`providers`, `lsp.servers`: pick the one you want and
+// open it). A web_search / web_fetch provider is not scanned — it is three leaves, and what the
+// reader comes for is the block's own scalars (`proxy`, `timeout`, `max_results`) or the one
+// provider they already know they want. Three open items therefore bury the page's real content
+// under a wall of API keys, which is precisely the scrolling the size rule was invented to avoid.
+//
+// It is a DECLARATION rather than another number, because there is no number that says this: the
+// items are small in leaves and large in screen, and a threshold that folded them would fold every
+// three-leaf item anywhere. Keyed by the list's own path — the same vocabulary
+// config.ListItemPaths writes, so this is a set membership the guard test can check rather than a
+// second list of paths.
+var settingFoldedLists = []string{
+	"web_search.providers",
+	"web_fetch.providers",
+}
+
 // choiceFor resolves a concrete leaf to the choice set declared for it: an exact key first, then
 // a structural one, where `*` stands for one segment (`providers.*.type` covers `providers.0.type`
 // and `providers.1.type` but never `web_search.providers.0.type` — that would be a different
@@ -689,16 +710,41 @@ type SettingsSchemaVO struct {
 	Lists []SettingListVO `json:"lists"`
 }
 
+// ListAppend and ListEdits are config's own vocabulary for the structural half of a save; they are
+// aliased here so this file reads the way the design does without a package prefix on every field.
+type (
+	// ListAppend is one element to add to a config list, at its end.
+	ListAppend = config.ListAppend
+	// ListEdits is one save's structural half: what to change, what to add, what to drop.
+	ListEdits = config.ListEdits
+)
+
+// pendingAdd is one staged list item: where it will land (`providers.3`), and nothing else.
+//
+// The index is the whole content because that is all the form needs and all the file side can
+// check: the item's VALUES are leaf updates like any other (the schema declares the element's
+// leaves, so the form draws them for an element that is not in the file yet), and the index is the
+// promise config.ListAppend verifies against the list's real length.
+type pendingAdd struct {
+	Element string
+}
+
 // SettingListVO is one list the settings page may grow: the list's own path, and the group it is
 // drawn in (which is the category of the row that owns it — `web_search.providers` belongs to
 // `web_search`'s row, not to a row of its own).
 type SettingListVO struct {
 	Path     string `json:"path"`
 	Category string `json:"category"`
+	// Folded says this list's items are drawn folded whatever their size (settingFoldedLists).
+	// It rides on the list rather than on the field because it is a fact about the LIST: within
+	// one list every item is the same struct, so their sizes agree and the decision cannot differ
+	// per item. The page matches an item to its list by path — the item path IS the list path
+	// plus an index — so nothing has to be repeated per card.
+	Folded bool `json:"folded,omitempty"`
 }
 
 // GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
-// of the live config.
+// of the live config — PLUS one per leaf of every item the page has staged (see pendingAdd).
 //
 // It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
 // is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
@@ -708,6 +754,12 @@ type SettingListVO struct {
 //
 // A value that cannot be read is still listed, with the reason in Note: hiding a field would
 // present a smaller settings page as a complete one, and the failure is the interesting part.
+//
+// The staged items are the exception that proves the rule. An item the reader just added is not in
+// the config, so nothing walks its leaves — and it must still be EDITABLE, or "add an item" would
+// draw a card with no inputs. They are therefore enumerated from the element type
+// (config.ElementFields) and appended as ordinary fields: the page's draft/dirty/save machinery
+// treats them like any other row, and SaveSettings carries them into the same batch as the appends.
 func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 	d := s.desk
 	cfg := d.config()
@@ -721,43 +773,114 @@ func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 		if !ok || !row.offered() {
 			continue
 		}
-		value, err := config.ReadPath(cfg, key)
-		note := row.Note
-		if err != nil {
-			note = joinNotes(note, "读取失败："+err.Error())
-		}
-		// How the leaf is declared, which the value cannot say: an unset *bool holds nothing to
-		// infer a control from, and `unset` is a state of its own for these fields.
-		info, infoErr := config.DescribeLeaf(cfg, key)
-		if infoErr != nil {
-			// The same walk ReadPath just failed at; one sentence is enough.
-			info.Kind = config.KindOf(value)
-		}
-		// A declared choice set is only offered on a leaf that can hold one: a dropdown on a
-		// number would be a way to save a value the field refuses. (The guard test in
-		// settings_test.go holds the table to config's own leaves, and to string leaves at that.)
-		var options []string
-		if choose, ok := choiceFor(key); ok && info.Kind == "string" {
-			options = choose(cfg)
-		}
-		fields = append(fields, SettingFieldVO{
-			Key:          key,
-			Kind:         info.Kind,
-			Value:        value,
-			NeedsRestart: row.needsRestart(),
-			Category:     row.Category,
-			Options:      options,
-			Optional:     info.Optional,
-			IsSet:        info.IsSet,
-			Note:         note,
-		})
+		fields = append(fields, settingField(cfg, key, row))
 	}
+	fields = append(fields, s.stagedFields(cfg)...)
 	// A fresh slice rather than settingsCategoryOrder itself: the binding serializes this, and
 	// a caller that appended to it would be mutating the package's own list.
 	return &SettingsSchemaVO{
 		Categories: append([]string(nil), settingsCategoryOrder...),
 		Fields:     fields,
 		Lists:      settingLists(),
+	}
+}
+
+// stagedFields describes the leaves of every list item this page has staged: the fields of an
+// element that is not in the config yet.
+//
+// Their KEY is the path the item will have (`providers.3.name`), which is what makes them ordinary
+// fields — the save sends them like any other leaf, and the append that creates the element is what
+// makes those paths exist by the time the same batch writes them (the append comes first, see
+// config.ListEdits). Their VALUE is the scaffold's (the element type's defaults), because the
+// element does not exist to have one.
+//
+// The row is resolved the same way an existing element's would be, through `settingFor`, so the
+// staged leaves appear in the right group with the right ⟳ mark — the list's row speaks for the
+// whole block. There is no separate declaration for "what a new item looks like", because there is
+// nothing to declare: it is the same element type.
+func (s *AgentService) stagedFields(cfg *config.Config) []SettingFieldVO {
+	d := s.desk
+	d.settingsMu.Lock()
+	staged := append([]pendingAdd(nil), d.pendingAdds...)
+	d.settingsMu.Unlock()
+	if len(staged) == 0 {
+		return nil
+	}
+
+	// One template per list, computed once: the leaves of an element are a property of its type,
+	// and a page with three staged providers must not describe the same type three times.
+	templates := make(map[string][]config.ElementField)
+	var out []SettingFieldVO
+	for _, add := range staged {
+		listPath, _, err := config.SplitElementPath(add.Element)
+		if err != nil {
+			continue
+		}
+		tmpl, ok := templates[listPath]
+		if !ok {
+			tmpl, err = config.ElementFields(listPath)
+			if err != nil {
+				continue
+			}
+			templates[listPath] = tmpl
+		}
+		for _, leaf := range tmpl {
+			key := add.Element + "." + leaf.Tail
+			row, ok := settingFor(key)
+			if !ok || !row.offered() {
+				continue
+			}
+			// Built from the TEMPLATE, not through settingField: that helper reads the value and
+			// describes the leaf against the config, and this element is not in the config — its
+			// path genuinely does not resolve yet (which is the whole reason the template exists).
+			// Only the row's own two facts come from the table, exactly as they do for a real one.
+			out = append(out, SettingFieldVO{
+				Key:          key,
+				Kind:         leaf.Kind,
+				Value:        leaf.Value,
+				NeedsRestart: row.needsRestart(),
+				Category:     row.Category,
+				Optional:     leaf.Optional,
+				IsSet:        leaf.IsSet,
+				Note:         row.Note,
+			})
+		}
+	}
+	return out
+}
+
+// settingField is one schema row: the table's answer for the key, plus everything that comes from
+// the value and the leaf's declaration.
+func settingField(cfg *config.Config, key string, row settingApply) SettingFieldVO {
+	value, err := config.ReadPath(cfg, key)
+	note := row.Note
+	if err != nil {
+		note = joinNotes(note, "读取失败："+err.Error())
+	}
+	// How the leaf is declared, which the value cannot say: an unset *bool holds nothing to
+	// infer a control from, and `unset` is a state of its own for these fields.
+	info, infoErr := config.DescribeLeaf(cfg, key)
+	if infoErr != nil {
+		// The same walk ReadPath just failed at; one sentence is enough.
+		info.Kind = config.KindOf(value)
+	}
+	// A declared choice set is only offered on a leaf that can hold one: a dropdown on a
+	// number would be a way to save a value the field refuses. (The guard test in
+	// settings_test.go holds the table to config's own leaves, and to string leaves at that.)
+	var options []string
+	if choose, ok := choiceFor(key); ok && info.Kind == "string" {
+		options = choose(cfg)
+	}
+	return SettingFieldVO{
+		Key:          key,
+		Kind:         info.Kind,
+		Value:        value,
+		NeedsRestart: row.needsRestart(),
+		Category:     row.Category,
+		Options:      options,
+		Optional:     info.Optional,
+		IsSet:        info.IsSet,
+		Note:         note,
 	}
 }
 
@@ -772,7 +895,11 @@ func settingLists() []SettingListVO {
 		if !ok || !row.offered() {
 			continue
 		}
-		out = append(out, SettingListVO{Path: path, Category: row.Category})
+		out = append(out, SettingListVO{
+			Path:     path,
+			Category: row.Category,
+			Folded:   slices.Contains(settingFoldedLists, path),
+		})
 	}
 	return out
 }
@@ -789,17 +916,18 @@ type SettingsItemResultVO struct {
 	ElementPath string `json:"elementPath,omitempty"`
 }
 
-// AddSettingsItem appends one item to a config list and writes it to config.yaml.
+// AddSettingsItem appends one item to a config list, IN THE BATCH THIS SAVE IS BUILDING.
 //
-// It writes immediately rather than staging the item in the form, and that is the whole design of
-// this method: the element has to exist IN THE FILE before any of its fields can be saved (the
-// update path refuses a path the file does not have), so an item that only lived in the form
-// would need a second, larger mechanism at save time — and every leaf the form offers would still
-// have to be written at once, because the save only sends what was edited.
+// It does not write config.yaml, and that is the change: it used to, because an item had to be in
+// the file before any of its fields could be saved (the update path refuses a path the file does
+// not have). Staging the structure here means the save that follows carries the item AND its
+// values into one file write (config.ListEdits, whose doc comment holds the ordering rules), so a
+// reader who adds an item and changes their mind can walk away with nothing written — which is
+// what the page's own 「返回对话」 implies and what the immediate write made impossible.
 //
-// Nothing is PUSHED: a new element holds nothing yet, and telling the running process about a
-// provider with no name would be telling it about nothing. The fields the user fills in are
-// pushed by the ordinary save that writes them.
+// Nothing is PUSHED here either, and that is not a new rule: an item with no values yet is nothing
+// to tell the running process about. The fields the user fills in are pushed by the save that
+// writes them.
 func (s *AgentService) AddSettingsItem(listPath string) *SettingsItemResultVO {
 	fail := func(summary string) *SettingsItemResultVO {
 		return &SettingsItemResultVO{Summary: summary}
@@ -814,37 +942,31 @@ func (s *AgentService) AddSettingsItem(listPath string) *SettingsItemResultVO {
 	if cfg == nil {
 		return fail("配置尚未加载，改不了")
 	}
-	path, err := config.ConfigPath()
+	// The index the item will land at, and the promise the save checks: the form is showing this
+	// list as it is NOW, so anything else means the config moved under it.
+	index, err := config.ListLen(cfg, listPath)
 	if err != nil {
-		return fail("找不到 config.yaml：" + err.Error())
+		return fail("加不了：" + err.Error())
 	}
-
-	var elementPath, literal string
-	var appendErr error
-	d.withConfig(func(c *config.Config) {
-		elementPath, literal, appendErr = config.AppendListItem(c, listPath)
-	})
-	if appendErr != nil {
-		return fail("加不了：" + appendErr.Error())
-	}
-	if err := config.AppendListItemTo(path, listPath, literal); err != nil {
-		d.withConfig(func(c *config.Config) { _, _ = config.RemoveListItem(c, elementPath) })
-		return fail("没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）")
-	}
+	elementPath := fmt.Sprintf("%s.%d", listPath, index)
+	d.pendingAdds = append(d.pendingAdds, pendingAdd{Element: elementPath})
 	return &SettingsItemResultVO{
 		OK:          true,
-		Summary:     fmt.Sprintf("已在 %s 末尾加了一项（%s）；填好字段后点保存，改动才会生效", listPath, elementPath),
+		Summary:     fmt.Sprintf("已在 %s 末尾加了一项（%s）；填好字段后点保存，它会和其余改动一起写进 config.yaml", listPath, elementPath),
 		ElementPath: elementPath,
 	}
 }
 
-// RemoveSettingsItem removes one item from a config list, in the file and in memory.
+// RemoveSettingsItem removes one item from a config list, IN THE BATCH THIS SAVE IS BUILDING.
 //
-// The references are checked BEFORE it goes, and reported after: a name a list item is known by
-// (`providers.2.name`) may be written into keys that mean "use that one" — `provider`,
-// `title_provider`, each `*_provider` — and those are not list items, so removing the item leaves
-// them pointing at nothing. Saying so is the difference between a warning and a config that
-// quietly stops resolving.
+// Like AddSettingsItem it no longer writes: the removal joins the save, so dropping an item and
+// then leaving the page writes nothing — the same promise, in the other direction.
+//
+// The references are still reported HERE rather than at save time, because this is the moment the
+// reader can act on them: a name a list item is known by (`providers.2.name`) may be written into
+// keys that mean "use that one" — `provider`, `title_provider`, each `*_provider` — and those are
+// not list items, so removing the item leaves them pointing at nothing. Saying so is the difference
+// between a warning and a config that quietly stops resolving.
 func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResultVO {
 	fail := func(summary string) *SettingsItemResultVO {
 		return &SettingsItemResultVO{Summary: summary}
@@ -856,11 +978,21 @@ func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResul
 	if cfg == nil {
 		return fail("配置尚未加载，改不了")
 	}
-	path, err := config.ConfigPath()
-	if err != nil {
-		return fail("找不到 config.yaml：" + err.Error())
+	// An item that is still only STAGED cancels out instead of being scheduled for removal: it was
+	// never in the config, so there is nothing to delete — and validating it against the config
+	// would refuse (its index does not exist yet), which is the one path a reader takes most often:
+	// press ＋, look at the card, change their mind.
+	if i := slices.IndexFunc(d.pendingAdds, func(a pendingAdd) bool { return a.Element == elementPath }); i >= 0 {
+		d.pendingAdds = slices.Delete(d.pendingAdds, i, i+1)
+		d.pendingRemoves = slices.DeleteFunc(d.pendingRemoves, func(p string) bool { return p == elementPath })
+		return &SettingsItemResultVO{
+			OK:      true,
+			Summary: "已取消这一项（它还没保存过，config.yaml 没有变）",
+		}
 	}
-	// What it was called, and who is pointing at it — read while it is still there.
+	if err := validatePendingRemoval(cfg, elementPath, d.pendingRemoves); err != nil {
+		return fail("删不了：" + err.Error())
+	}
 	name := ""
 	if leaves, err := config.ListItemLeaves(cfg, elementPath); err == nil {
 		if s, ok := leaves["name"].(string); ok {
@@ -869,24 +1001,97 @@ func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResul
 	}
 	dangling := danglingReferences(cfg, name)
 
-	var held any
-	var removeErr error
-	d.withConfig(func(c *config.Config) {
-		held, removeErr = config.RemoveListItem(c, elementPath)
-	})
-	if removeErr != nil {
-		return fail("删不了：" + removeErr.Error())
-	}
-	if err := config.RemoveListItemFrom(path, elementPath); err != nil {
-		d.withConfig(func(c *config.Config) { _ = config.RestoreListItem(c, elementPath, held) })
-		return fail("没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）")
-	}
-	summary := "已从 config.yaml 删除 " + elementPath
+	d.pendingRemoves = append(d.pendingRemoves, elementPath)
+	// An item added in this same visit and then dropped again cancels out: the save must not try to
+	// append an element it is also removing (the append would shift the index the removal names).
+	d.pendingAdds = slices.DeleteFunc(d.pendingAdds, func(a pendingAdd) bool { return a.Element == elementPath })
+
+	summary := "已标记删除 " + elementPath + "；点保存后才会写进 config.yaml"
 	if len(dangling) > 0 {
 		summary += fmt.Sprintf("；注意 %s 还写着「%s」，它现在指向一个不存在的条目，保存前请改掉",
 			strings.Join(dangling, "、"), name)
 	}
 	return &SettingsItemResultVO{OK: true, Summary: summary}
+}
+
+// validatePendingRemoval refuses an element path this save cannot remove: a malformed path, or an
+// index the list does not have (the form and the config disagree, which the reader has to fix by
+// reopening the page — the alternative is removing a different element than the one they clicked).
+//
+// The removals ALREADY staged for this list are subtracted from the length, because they are
+// already spoken for: two items marked in one visit are applied as two removals from the same
+// original list, so the second one's index is legal even though the live list no longer reaches it.
+func validatePendingRemoval(cfg *config.Config, elementPath string, already []string) error {
+	listPath, index, err := config.SplitElementPath(elementPath)
+	if err != nil {
+		return err
+	}
+	length, err := config.ListLen(cfg, listPath)
+	if err != nil {
+		return err
+	}
+	staged := 0
+	for _, p := range already {
+		if other, _, err := config.SplitElementPath(p); err == nil && other == listPath {
+			staged++
+		}
+	}
+	if index >= length-staged {
+		return fmt.Errorf("%s: 没有第 %d 项（这一页已经标了 %d 项要删，配置里还有 %d 项）",
+			listPath, index, staged, length)
+	}
+	return nil
+}
+
+// pendingAppends turns the staged adds into config's own shape, with the values the form supplied
+// for them: one ListAppend per item, at the index it will land at.
+//
+// The values are collected from the batch the page sent, keyed by the TAIL inside the element
+// (`type`, `spec.proxy` — which is the shape ListAppend takes, because a caller producing them
+// before the index is known cannot key by a path it does not have yet). They ride WITH the element
+// because the element does not exist when the leaf updates are applied: this is what lets a leaf
+// inside a brand-new item land in an item the config does not have.
+func pendingAppends(pending []pendingAdd, updates map[string]any) []ListAppend {
+	if len(pending) == 0 {
+		return nil
+	}
+	out := make([]ListAppend, 0, len(pending))
+	for _, add := range pending {
+		listPath, index, err := config.SplitElementPath(add.Element)
+		if err != nil {
+			continue
+		}
+		out = append(out, ListAppend{List: listPath, Index: index, Values: elementValuesOf(add.Element, updates)})
+	}
+	return out
+}
+
+// elementValuesOf collects the batch's leaves that belong to one element, keyed by their tail
+// inside it: `providers.3.spec.proxy` → `spec.proxy`.
+func elementValuesOf(element string, updates map[string]any) map[string]any {
+	prefix := element + "."
+	var out map[string]any
+	for key, value := range updates {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if out == nil {
+			out = map[string]any{}
+		}
+		out[strings.TrimPrefix(key, prefix)] = value
+	}
+	return out
+}
+
+// appendedIn reports whether a leaf path names a leaf INSIDE an element this save appends — the set
+// the in-memory half must skip (see SaveSettings) while the file half keeps.
+func appendedIn(key string, appends []ListAppend) bool {
+	for _, a := range appends {
+		if strings.HasPrefix(key, a.List+"."+strconv.Itoa(a.Index)+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // danglingReferences names the keys that currently hold this item's name, for the warning a
@@ -975,11 +1180,14 @@ type SaveSettingsResultVO struct {
 //  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
 //     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
 //  3. validate the values against the FILE's own type table, before memory changes.
-//  4. snapshot the leaves and apply them in one locked step (all or none).
-//  5. write config.yaml. Only a save that got this far continues: if the write fails, the
-//     memory is put back exactly as it was and the answer says so — "applied for this session
-//     but not saved" is a state the next restart contradicts, and the reader cannot tell which
-//     of the two they have.
+//  4. snapshot the leaves and apply them in one locked step (all or none), together with the
+//     STRUCTURAL half: the list items this page staged with ＋ and − are appended and removed here,
+//     in the order config.ListEdits documents (appends, then the leaf updates, then the removals —
+//     only that order addresses the elements the form meant).
+//  5. write config.yaml, as ONE write for the leaf and structural halves alike. Only a save that
+//     got this far continues: if the write fails, the memory is put back exactly as it was and the
+//     answer says so — "applied for this session but not saved" is a state the next restart
+//     contradicts, and the reader cannot tell which of the two they have.
 //  6. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
 //     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
 //     before the write, a failure at step 5 would leave the running process on values the file
@@ -987,7 +1195,8 @@ type SaveSettingsResultVO struct {
 //     failures are per-session and reported, not fatal — the value IS saved.
 //
 // The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
-// interleave their snapshots, config writes and pushes.
+// interleave their snapshots, config writes and pushes. It is also what makes the STAGED structure
+// consistent here: + and − take the same lock to add to it.
 //
 // Returns whether the batch was written, plus the sentence the page shows (the desktop's
 // convention for bound methods: a sentence rather than an error the frontend would have to
@@ -1001,7 +1210,15 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 	if cfg == nil {
 		return &SaveSettingsResultVO{OK: false, Summary: "配置尚未加载，改不了"}
 	}
-	if len(updates) == 0 {
+	// The staged structure joins this save and is CONSUMED by it: from here on the page's ＋/− marks
+	// belong to this batch, and a failure below leaves them where they were (nothing is cleared
+	// until the write is through), so the reader can fix what the sentence named and save again.
+	edits := ListEdits{
+		Updates: updates,
+		Appends: pendingAppends(d.pendingAdds, updates),
+		Removes: append([]string(nil), d.pendingRemoves...),
+	}
+	if edits.IsEmpty() {
 		return &SaveSettingsResultVO{OK: false, Summary: "没有要保存的改动"}
 	}
 
@@ -1036,41 +1253,59 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 
 	// 4. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
 	// A row that OWNS the write of its leaf (settingApply.OwnsWrite) is deliberately NOT in the
-	// batch: its push writes the value itself, at the moment the runtime can actually take it, so
-	// there is one writer and a failed push leaves the field alone.
+	// MEMORY batch: its push writes the value itself, at the moment the runtime can actually take it,
+	// so there is one writer of that leaf and a failed push leaves it alone. It is still written to
+	// the FILE by this save — that is what "saved" means for every row, and the file half is the one
+	// place that must carry it.
+	//
+	// The snapshot covers the structural half too, and it has to be taken BEFORE it: putting a
+	// config back means truncating the lists that grew and re-inserting what was dropped, which is
+	// only possible from what was recorded first.
+	//
+	// A leaf INSIDE an element this save appends is not an update at all: it travels WITH the element
+	// (see ListAppend.Values). That is what lets a leaf land in an element the config does not have,
+	// and it is the same rule in both halves (config.ListEdits.updatesOutsideAppends).
 	batched := make(map[string]any, len(updates))
-	batchedKeys := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if rows[key].OwnsWrite {
+		if rows[key].OwnsWrite || appendedIn(key, edits.Appends) {
 			continue
 		}
 		batched[key] = updates[key]
-		batchedKeys = append(batchedKeys, key)
 	}
-	var snap []config.LeafValue
-	if len(batched) > 0 {
+	memoryEdits := ListEdits{Updates: batched, Appends: edits.Appends, Removes: edits.Removes}
+	var snap *config.ListEditSnapshot
+	if !memoryEdits.IsEmpty() {
 		var snapErr error
-		snap, snapErr = config.SnapshotLeaves(cfg, batchedKeys)
+		d.withConfig(func(c *config.Config) {
+			snap, snapErr = config.SnapshotListEdits(c, memoryEdits)
+		})
 		if snapErr != nil {
 			return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + snapErr.Error()}
 		}
 		var applyErr error
 		d.withConfig(func(c *config.Config) {
-			applyErr = config.ApplyUpdates(c, batched)
+			applyErr = config.ApplyListEdits(c, memoryEdits)
 		})
 		if applyErr != nil {
+			d.withConfig(func(c *config.Config) { config.RestoreListEdits(c, snap) })
 			return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"}
 		}
 	}
 
-	// 5. The file: it is what survives the process. A failure here undoes the memory and
-	// returns — and it is honest to say so, because nothing has been pushed yet (step 5).
-	if err := config.SavePartial(updates); err != nil {
-		if len(batched) > 0 {
-			d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
+	// 5. The file: it is what survives the process, and it carries EVERY key — including the one a
+	// row owns, whose memory half just waited for its push. ONE write for the leaf and the structural
+	// halves: three passes would leave the file holding an item whose values were never written. A
+	// failure here undoes the memory and returns, and it is honest to say so, because nothing has been
+	// pushed yet (step 6).
+	if err := config.ApplyConfigEdits(edits); err != nil {
+		if !memoryEdits.IsEmpty() {
+			d.withConfig(func(c *config.Config) { config.RestoreListEdits(c, snap) })
 		}
 		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
 	}
+	// The write landed, so the staged structure is now part of the config and no longer pending.
+	d.pendingAdds = nil
+	d.pendingRemoves = nil
 
 	// 6. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.

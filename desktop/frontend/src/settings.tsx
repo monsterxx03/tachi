@@ -108,24 +108,57 @@ const ELEMENT_DETAIL_LEAVES = ['model'] as const
 
 /** How many leaves an item may have before its card starts folded. Small items (a hook command
  *  is a command and a timeout) cost more clicks folded than they save scrolling; a provider is
- *  eight leaves and buries the list. */
+ *  eight leaves and buries the list.
+ *
+ *  This is the DEFAULT, and the backend can override it for a whole list: a `web_search` /
+ *  `web_fetch` provider is three leaves but the largest thing on its page, so those items are
+ *  declared folded (SettingListVO.folded) whatever their size. Size alone cannot say that — see
+ *  settingFoldedLists in desktop/settings.go. */
 const ELEMENT_FOLD_OVER = 3
+
+/** The lists whose items are declared folded (SettingListVO.folded), by the list's own path. An
+ *  item's path is its list's path plus an index, so one lookup per item answers it. */
+function foldedLists(schema: SettingsSchemaVO | null): Set<string> {
+  return new Set((schema?.lists ?? []).filter((l) => l.folded).map((l) => l.path))
+}
+
+/** The list a card belongs to: its path minus the trailing index. null when the path is not an
+ *  item of a list, which is the same rule elementOf uses for the boundary. */
+function listOf(elementPath: string): string | null {
+  const at = elementPath.lastIndexOf('.')
+  if (at <= 0) return null
+  return /^\d+$/.test(elementPath.slice(at + 1)) ? elementPath.slice(0, at) : null
+}
 
 /** elementOf splits a leaf path into the list item that owns it and the leaf's own tail:
  *  `providers.0.spec.timeout` → `providers.0` + `spec.timeout`. null = the path is not inside a
  *  list, and the leaf keeps a row of its own.
  *
- *  The boundary is the RIGHTMOST numeric segment — the innermost list — because that is the item
- *  a reader thinks of as one thing: `hooks.events.pre_tool.0.command` is the first command of the
- *  pre_tool list, not something nested inside a `0` field of a `hooks.events.pre_tool` item. */
-function elementOf(key: string): { path: string; tail: string } | null {
+ *  Which paths count is decided by the SCHEMA, not by the path alone (`listPaths`), and the reason is
+ *  the staged item: the page's ＋ stages an item that is not in the config, and the schema describes
+ *  its leaves from the element's TYPE (see stagedFields in desktop/settings.go) — so they arrive as
+ *  ordinary fields under a path (`providers.1.name`) that no walk of the config would produce. They
+ *  are still one item, and must still fold into one card, so the set of paths that ARE items comes
+ *  from the backend and a numeric segment alone is not enough.
+ *
+ *  The boundary is the RIGHTMOST segment that names a list — `hooks.events.pre_tool.0.command` is the
+ *  first command of the pre_tool list, not something nested inside a `0` field of a
+ *  `hooks.events.pre_tool` item. */
+function elementOf(key: string, listPaths: Set<string>): { path: string; tail: string } | null {
   const segs = key.split('.')
   for (let i = segs.length - 1; i >= 0; i--) {
-    if (/^\d+$/.test(segs[i])) {
+    if (/^\d+$/.test(segs[i]) && listPaths.has(segs.slice(0, i).join('.'))) {
       return { path: segs.slice(0, i + 1).join('.'), tail: segs.slice(i + 1).join('.') }
     }
   }
   return null
+}
+
+/** The config lists the page knows about, by their own path (`providers`, `web_search.providers`).
+ *  One set, built from the backend's declaration, for every "is this an item of a list" question —
+ *  a list the backend does not declare is not one this page may draw as a card. */
+function listPathsOf(schema: SettingsSchemaVO | null): Set<string> {
+  return new Set((schema?.lists ?? []).map((l) => l.path))
 }
 
 /** elementLocator is the card's subtitle: WHICH list item this is.
@@ -186,7 +219,8 @@ type Item =
 /** itemsOf folds a group's paths into cards. The fields arrive in path order, so one item's
  *  leaves are already adjacent and the fold is a single walk — no re-sorting, which would move
  *  a leaf away from the position the config declares it in. */
-function itemsOf(fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, prefix: string): Item[] {
+function itemsOf(fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, prefix: string,
+                 listPaths: Set<string>): Item[] {
   const items: Item[] = []
   let path = ''
   let bucket: SettingFieldVO[] = []
@@ -201,7 +235,7 @@ function itemsOf(fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unkno
     bucket = []
   }
   for (const f of fields) {
-    const el = elementOf(f.key)
+    const el = elementOf(f.key, listPaths)
     if (!el) {
       flush()
       items.push({ kind: 'row', field: f })
@@ -259,7 +293,7 @@ type Section = {
  *  each declared list to the block that draws it (or gives it a block of its own when it has no
  *  fields at all). */
 function sectionsOf(
-  fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, lists: string[],
+  fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, lists: string[], listPaths: Set<string>,
 ): Section[] {
   const out: Section[] = []
   let seg = ''
@@ -267,7 +301,7 @@ function sectionsOf(
   const flush = () => {
     if (seg === '') return
     const prefix = bucket.length >= 2 ? commonPrefix(bucket.map((f) => f.key)) : ''
-    out.push({ key: bucket[0].key, prefix, items: itemsOf(bucket, valueOf, prefix) })
+    out.push({ key: bucket[0].key, prefix, items: itemsOf(bucket, valueOf, prefix, listPaths) })
     seg = ''
     bucket = []
   }
@@ -370,14 +404,50 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   // The lists this group may grow. Declared by the backend rather than inferred from the cards,
   // because an empty list has no cards — and an empty list is exactly where ＋ matters most.
   const listsHere = (schema?.lists ?? []).filter((l) => l.category === shown).map((l) => l.path)
+  // The lists whose items open FOLDED whatever their size (see ELEMENT_FOLD_OVER): a schema
+  // declaration, not a size the page measures.
+  const foldedHere = foldedLists(schema)
 
   // Going back only. The page has no state worth keeping across a return: the schema is
   // re-read on the way in, which is what makes the values on screen the values in the file.
   const back = useCallback(() => onBack(), [onBack])
 
-  // addItem grows a list. The item is created IN THE FILE right away (only then can its fields be
-  // saved — see AddSettingsItem), the page re-reads, and the card the backend names is opened:
-  // the reason someone presses ＋ is to fill the new item in.
+  // Esc returns to the conversation, the keyboard's way out of a page whose only other exit is
+  // the rail's 「返回对话」 — the same gesture every other surface here has (a viewer, the side
+  // panel, a palette).
+  //
+  // It CLAIMS the key (capture + stopPropagation) rather than merely acting on it: the chat view
+  // stays mounted behind this page, so its own Esc listeners are alive, and an unclaimed Escape
+  // would also close whatever panel was left open under here — a change the reader cannot see
+  // and did not ask for, on a page whose contract is "nothing outside it moves". The unlock
+  // confirm, a select's own popup and an IME candidate window take the key before we do, which is
+  // correct: those are the reader's current context.
+  //
+  // A dirty form is NOT a reason to stay or to ask: this returns exactly what 「返回对话」 does
+  // today, and a page whose two exits disagree is a page the reader has to remember. The drafts
+  // are dropped either way, and the foot's 「N 项未保存」 is what said so before they pressed it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      // An Escape the IME is using to dismiss its candidate window is the reader's current
+      // context (and it fires before the composition is torn down), not a way out of the page.
+      if (e.isComposing) return
+      e.preventDefault()
+      e.stopPropagation()
+      back()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [back])
+
+  // addItem grows a list. The item is STAGED, not written (see AddSettingsItem): it becomes part of
+  // the next save, and the page re-reads so the card the backend names is drawn — with its inputs,
+  // which the backend describes from the element's type precisely because the element is not in the
+  // config yet. The card opens: the reason someone presses ＋ is to fill the new item in.
+  //
+  // The re-read is a round trip for a change the page made itself, but it is the right one here: the
+  // schema is the only thing that knows what the new item's leaves ARE (a staged element has no
+  // values to walk), so drawing it from anything but the backend would be the page inventing them.
   const addItem = useCallback(async (listPath: string) => {
     setBusy(true)
     const res = await AgentService.AddSettingsItem(listPath).catch((e) => {
@@ -391,6 +461,9 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     await load()
   }, [load])
 
+  // removeItem marks an item for removal (or cancels one that is still staged — the backend tells
+  // the two apart). Nothing is written, so the page re-reads only to pick up the notice: the card
+  // stays where it is until the save, which is what 「点保存后才生效」 means.
   const removeItem = useCallback(async (elementPath: string) => {
     setBusy(true)
     const res = await AgentService.RemoveSettingsItem(elementPath).catch((e) => {
@@ -401,8 +474,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     if (!res) return
     setNotice({ bad: res.ok !== true, text: res.summary || '' })
     setJustAdded('')
-    await load()
-  }, [load])
+  }, [])
 
   const save = useCallback(async () => {
     const updates: Record<string, any> = {}
@@ -480,10 +552,6 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
             <span className="settings-cat-count">{g.fields.length}</span>
           </button>
         ))}
-        <div className="settings-legend">
-          <b>⟳</b> 标记的项要重启 Tachi 之后才生效。<br />
-          改完点右下角「保存」，保存会同时写进 config.yaml 与运行中的进程。
-        </div>
       </div>
 
       <div className="settings-pane">
@@ -504,7 +572,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           ) : shownFields.length === 0 ? (
             <div className="settings-empty">这一类下没有可配置项。</div>
           ) : (
-            sectionsOf(shownFields, currentValue, listsHere).map((sec) => {
+            sectionsOf(shownFields, currentValue, listsHere, listPathsOf(schema)).map((sec) => {
               // A row inside a block is labelled by the REST of its path: the heading already said
               // which block this is, and repeating it on every row is the noise the heading was
               // added to remove. (FieldRow keeps the full key in the tooltip.)
@@ -516,6 +584,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                     dirtyCount={it.fields.filter(isDirty).length}
                     hasError={it.fields.some((f) => fieldErrors[f.key])}
                     forceOpen={it.path === justAdded}
+                    forceFolded={!!listOf(it.path) && foldedHere.has(listOf(it.path)!)}
                     onRemove={sec.list ? () => void removeItem(it.path) : undefined}
                     renderRow={(f, label) => <FieldRow {...rowProps(f)} label={label} />} />
                 ),
@@ -607,17 +676,21 @@ function FieldRow({ f, label, draft, original, error, dirty, onChange, onReset }
  *  label — it is still what a reader needs in order to find the block in config.yaml, but it is
  *  not what they are looking at.
  *
- *  Folded by default when the item is big: a provider is eight leaves and a page of them buries
- *  the list. Small items stay open, where a fold would cost a click and save nothing. An item
- *  holding a value the form REFUSED is forced open: an error behind a fold is an error the reader
- *  cannot act on. */
-function ElementCard({ item, dirtyCount, hasError, forceOpen, onRemove, renderRow }: {
+ *  Folded by default when the item is big, or when its whole LIST is declared folded (a
+ *  web_search provider is three leaves and still the largest thing on its page — see
+ *  settingFoldedLists in desktop/settings.go). Small items in an ordinary list stay open, where a
+ *  fold would cost a click and save nothing. An item holding a value the form REFUSED is forced
+ *  open: an error behind a fold is an error the reader cannot act on. */
+function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRemove, renderRow }: {
   item: Extract<Item, { kind: 'elem' }>
   dirtyCount: number
   hasError: boolean
   /** Open this card whatever the default is: an item that was just ADDED is where the reader is
-   *  about to type, and eleven empty leaves behind a fold is a card they would have to find. */
+   *  about to type, and eleven empty leaves behind a fold is a card they would have to find. It
+   *  outranks forceFolded — filling in a new item is exactly what ＋ promised. */
   forceOpen?: boolean
+  /** The item's list is declared folded (SettingListVO.folded): shut whatever its size. */
+  forceFolded?: boolean
   /** Removing is only offered for an item of a declared list (see Section.list). It is a two-step
    *  button rather than one: the write is immediate and there is no undo, so the second click is
    *  the confirmation. */
@@ -628,10 +701,10 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, onRemove, renderRo
   // visit would; a click pins it either way.
   const [open, setOpen] = useState<boolean | null>(null)
   const [confirmRemove, setConfirmRemove] = useState(false)
-  // Folded by default when the item is big (a provider is eleven leaves and a page of them buries
-  // the list), or when the reader pinned it that way. An item that was just added opens: the
-  // reason someone pressed ＋ is to fill it in.
-  const defaultFolded = !forceOpen && item.fields.length > ELEMENT_FOLD_OVER
+  // Folded by default when the list says so, or when the item is big (a provider is eleven
+  // leaves and a page of them buries the list) — or when the reader pinned it that way. An item
+  // that was just added opens: the reason someone pressed ＋ is to fill it in.
+  const defaultFolded = !forceOpen && (forceFolded || item.fields.length > ELEMENT_FOLD_OVER)
   const folded = hasError ? false : (open ?? defaultFolded)
   return (
     <div className="set-elem">

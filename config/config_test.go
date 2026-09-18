@@ -778,6 +778,7 @@ providers:
       thinking_level: high
       max_retries: 3
       timeout: 90s
+      proxy: socks5://127.0.0.1:1080
       pricing:
         input_price: 2.5
         output_price: 8.0
@@ -805,6 +806,7 @@ providers:
 	require.NotNil(t, p.Spec.MaxRetries)
 	assert.Equal(t, 3, *p.Spec.MaxRetries)
 	assert.Equal(t, 90*time.Second, p.Spec.Timeout)
+	assert.Equal(t, "socks5://127.0.0.1:1080", p.Spec.Proxy)
 	require.NotNil(t, p.Spec.CreditRate)
 	assert.Equal(t, 0.05, *p.Spec.CreditRate)
 

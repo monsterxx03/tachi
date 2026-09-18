@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
@@ -33,15 +32,17 @@ type OpenAIResponsesProvider struct {
 // NewOpenAIResponsesProvider constructs the Responses API provider. The
 // official openai-go SDK retries internally (default MaxRetries=2), so
 // MaxRetries / Timeout map directly to the SDK's option.WithMaxRetries /
-// option.WithRequestTimeout; unset options keep the SDK defaults.
+// option.WithRequestTimeout; Proxy (http/https/socks5) rides on the HTTP
+// client the SDK then uses, and unset options keep the SDK defaults.
 func NewOpenAIResponsesProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *OpenAIResponsesProvider {
 	o := applyOptions(opts)
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
-		// Wrap the default HTTP client with a transport that injects the
-		// session ID header from context, allowing per-request session
-		// tracking (same as the chat-completions path).
-		option.WithHTTPClient(&http.Client{Transport: &tachiTransport{base: http.DefaultTransport}}),
+		// Same client as the other two paths: the session-ID transport (from
+		// context) plus the configured proxy. The timeout is NOT set on it —
+		// option.WithRequestTimeout below is per request attempt, where a
+		// client-wide timeout would also cap a streaming response body.
+		option.WithHTTPClient(httpClient(o)),
 	}
 	if baseURL != "" {
 		// Only override when set: an empty WithBaseURL produces an empty URL

@@ -277,28 +277,68 @@ Fixtures, all because the real path needs something a driver cannot do:
   leaf in the left column, a top-level key's leaves go under one heading (`web_search`, `debug.pprof` — the
   longest prefix they share, and rows below it drop that prefix), and a config list's item collapses into a
   card (`providers.0` → `main · claude-x`). A heading is skipped for a block of one item, and a card's rows
-  keep their own path tails. Four things about it a change can silently break, each pinned by `desktop/settings_test.go`:
+  keep their own path tails. Five things about it a change can silently break, each pinned by `desktop/settings_test.go`:
   a `Category` per offered row (`settingsCategoryOrder` is the nav, and a category with no row is a page that
   cannot be filled); `settingChoices`, a SECOND table for leaves with a closed value set — keyed by the
   structural path (`providers.*.type`, `*` = one index or map key, the same character `config.YAMLPaths`
-  writes) because the decision belongs to the list, not to item 0; `Optional` / `IsSet`, which is what lets
+  writes) because the decision belongs to the list, not to item 0; `settingFoldedLists`, a second
+  declaration about a LIST rather than a leaf, for the lists whose items are drawn folded whatever their
+  size (`web_search.providers` / `web_fetch.providers` — three leaves each, and still the largest thing on
+  their page, so the size rule `ELEMENT_FOLD_OVER` would open a wall of API keys over the block's own
+  scalars); `Optional` / `IsSet`, which is what lets
   the page draw 自动 instead of guessing from a value that an unset pointer does not have
   (`config.DescribeLeaf` — the declared type, since an unset `*bool` is still a switch); and
   `SaveSettings`'s `{ok, summary}`, because a page that cannot tell "written" from "refused" either keeps
   typing it should have dropped or drops an edit the reader still has to fix.
+  A card's fold is therefore settled in THREE places, and their precedence is the rule: a just-added item
+  opens (`forceOpen`), a declared list shuts (`forceFolded`, from `SettingListVO.Folded`), size decides the
+  rest. A form REFUSING a value forces its card open over all three — an error behind a fold is one the
+  reader cannot act on.
+- **The settings page is a VIEW, so it owns its own two ways in and out**: `⌘,` opens it (App's global
+  shortcut, a no-op while it is already up — the handlers gate on `view`) and Esc returns to the
+  conversation, exactly what the rail's 「返回对话」 does — a dirty form is NOT a reason to stay or to ask,
+  because a page whose two exits disagree is one the reader has to remember. The Esc listener CLAIMS the key
+  (`keydown` on the window, capture phase, `preventDefault` + `stopPropagation`): the chat view is hidden
+  rather than unmounted, so its own Esc listeners are alive and an unclaimed Escape would also dismiss
+  whatever panel was left open behind this opaque page. `e.isComposing` is skipped (an IME candidate window
+  owns that key), and App's handler returns early on `view === 'settings'` for the mirror-image reason.
+  The rail carries no explanation text: a ⟳ badge on the row and the foot's 「N 项未保存」 already say what
+  a restart costs and what is pending, and a paragraph in a navigation column reads as a footnote to
+  nothing.
 - **「未设置」 is a state with its own value** (`config.Unset` → `null` in the file; a bare `nil` stays
   REFUSED, because that is what a forgotten pointer dereference looks like). It is the only way back to a
   field's auto/default behaviour (`vision: null`, `max_retries: null`), and `Optional` is true only for a
   pointer with NO `default:` tag — a default already says what unset means, so those stay plain checkboxes.
-- **A list can be grown and shrunk from the page**, and that is the ONE structural edit
-  (`config/list_items.go`): `config.ListItemPaths()` names the lists it may touch (a slice of
-  structs by path — a `[]string` is one leaf, and a map key would have to be invented), and
-  `AppendListItem`/`AppendListItemTo` + `RemoveListItem`/`RemoveListItemFrom` are the memory and
-  file halves, split like `SetPath`/`SavePartial`. Add writes IMMEDIATELY (a field is only
-  savable once its item is in the FILE), which is why remove ships with it; remove warns about the
-  keys still naming the item (`settingChoices`), and neither pushes. SavePartial itself gains one
-  narrow rule — a key whose PARENT block exists is added (`spec.context_window`) — because the
-  skeleton of a new item leaves out its `omitempty` fields.
+- **A list is grown and shrunk by the SAVE, not by the button** (`config/config_edits.go`): `config.ListItemPaths()`
+  names the lists the page may touch (a slice of structs by path — a `[]string` is one leaf, and a map key would
+  have to be invented), and ＋ / 删除 only STAGE an item (`desktopApp.pendingAdds` / `.pendingRemoves`) which the
+  next `SaveSettings` consumes. It used to write on the spot, because an item had to BE in the file before any of
+  its fields could be saved (the update path refuses a path the file does not have) — and that is exactly what
+  staging had to solve, so **a staged item is drawn from the element TYPE**: `GetSettingsSchema` appends one
+  `SettingFieldVO` per leaf of every staged item (`config.ElementFields` — the element's declared shape plus a
+  defaulted scaffold's values), so the page's draft/dirty/save machinery treats it like any other row and needs
+  no special path. That is also why `elementOf` in `settings.tsx` matches a numeric segment against the schema's
+  OWN list paths instead of any digits: `providers.1.name` is the only field in the form whose path the config
+  cannot walk, and it is still one item of one list. The order inside one save is the whole design and is not a
+  preference: **appends, then the leaf updates, then the removals** — a removal shifts every later index, so an
+  update applied after it addresses the wrong element; and a new element carries its own values (`ListAppend.Values`,
+  keyed by the tail inside the element) because an update cannot reach an element the file does not have. Two
+  invariants ride with it: `ListAppend.Index` is a CLAIM that both halves check against the list's real length
+  (a form working from a config that moved must be told, not guessed around — and a refusal leaves the staging
+  intact so the reader can retry), and **one save is ONE write** (`ApplyConfigEditsTo` parses once and emits once;
+  the leaf and structural halves shared three read-modify-write passes before, which left the file holding an
+  element whose values were never written). The in-memory half skips a leaf INSIDE an appended element (it has no
+  snapshot to take and the truncation on rollback removes it anyway) while the file half keeps it. `SavePartialTo`
+  and `AppendListItemTo`/`RemoveListItemFrom` remain the one-off entry points and delegate to the same node-level
+  helpers (`applyUpdatesToFile`, `appendElementNodeToFile`, `removeElementNode`) so the two cannot drift.
+  A removal still warns about the keys still naming the item (`settingChoices`) — at STAGE time, because that is
+  when the reader can act on it — and an item that is dropped while it is still staged is a CANCEL, not a removal.
+  SavePartial adds a key whose block the path NAMES, creating any missing MAPPING block on the way — for a list's
+  own block and for a key's alike (the caller named the path, so there is nothing to guess; see `ensureBlock`),
+  which is what makes a `spec:` leaf savable in a file that never spelled `spec:` out. What stays
+  refused is everything a path cannot answer: a SEQUENCE element (the skeleton and the end
+  position are the missing answer), a step through a scalar or a list, and a MAP key the file does
+  not have (a map is keyed by a name, and a name is the guess this package does not make).
   Smoke: the `settings` scenario drives the page end to end and reads `config.yaml` back through
   `config.LoadFrom` on the Go side (including add, remove, and a list whose block was not in the
   file at all).
