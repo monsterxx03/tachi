@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
@@ -112,6 +113,48 @@ func TestSettingsTableRules(t *testing.T) {
 		if row.offered() == (row.Mode == applyUnused) {
 			t.Errorf("row %q: offered() = %v for mode %s", row.Key, row.offered(), row.Mode)
 		}
+		// The form's left column. A row that IS offered must name its group, and a row that is
+		// not must not: an unoffered key belongs to another entry mode, and a group for a field
+		// no form draws is a claim about a page that never exists. Requiring them to match
+		// offered() in both directions is what keeps Category a claim about THIS form rather
+		// than a decoration.
+		if row.offered() && row.Category == "" {
+			t.Errorf("row %q is offered but names no Category: the settings page has nowhere to put it", row.Key)
+		}
+		if !row.offered() && row.Category != "" {
+			t.Errorf("row %q is %s (never offered) but carries Category %q", row.Key, row.Mode, row.Category)
+		}
+		if row.Category != "" && !slices.Contains(settingsCategoryOrder, row.Category) {
+			t.Errorf("row %q: Category %q is not in settingsCategoryOrder, so the nav would never draw it",
+				row.Key, row.Category)
+		}
+	}
+
+	// A row that overrides another row's key must share its group. `logs.level` is the one case
+	// today (it is a more specific row than `logs`), and a disagreement would put two halves of
+	// one block on two pages — the reader would have no way to tell why 日志级别 is not sitting
+	// with the other log keys.
+	for _, a := range settingsTable {
+		for _, b := range settingsTable {
+			if a.Key == b.Key || !a.covers(b.Key) {
+				continue
+			}
+			if a.Category != b.Category {
+				t.Errorf("rows %q and %q override one another but disagree on the group (%q vs %q)",
+					a.Key, b.Key, a.Category, b.Category)
+			}
+		}
+	}
+
+	// The other direction: a declared group with no row is a page the nav offers and the form
+	// cannot fill.
+	for _, c := range settingsCategoryOrder {
+		if !slices.ContainsFunc(settingsTable, func(r settingApply) bool { return r.Category == c }) {
+			t.Errorf("category %q has no row — the nav would draw an empty page", c)
+		}
+	}
+	if len(slices.Compact(slices.Sorted(slices.Values(settingsCategoryOrder)))) != len(settingsCategoryOrder) {
+		t.Errorf("settingsCategoryOrder repeats a group: %v", settingsCategoryOrder)
 	}
 }
 
@@ -266,11 +309,14 @@ providers:
     model: claude-x
 `)
 	schema := svc.GetSettingsSchema()
-	if len(schema) < 50 {
-		t.Fatalf("schema has %d fields — a config this size offers far more", len(schema))
+	if schema == nil {
+		t.Fatal("GetSettingsSchema returned nil for a loaded config")
 	}
-	byKey := make(map[string]SettingFieldVO, len(schema))
-	for _, f := range schema {
+	if len(schema.Fields) < 50 {
+		t.Fatalf("schema has %d fields — a config this size offers far more", len(schema.Fields))
+	}
+	byKey := make(map[string]SettingFieldVO, len(schema.Fields))
+	for _, f := range schema.Fields {
 		if _, dup := byKey[f.Key]; dup {
 			t.Errorf("duplicate field %q", f.Key)
 		}
@@ -283,9 +329,36 @@ providers:
 		if !row.offered() {
 			continue
 		}
-		if !slices.ContainsFunc(schema, func(f SettingFieldVO) bool { return row.covers(f.Key) }) {
+		if !slices.ContainsFunc(schema.Fields, func(f SettingFieldVO) bool { return row.covers(f.Key) }) {
 			t.Errorf("row %q (mode %s) offers no field in the schema", row.Key, row.Mode)
 		}
+	}
+
+	// The groups ride along with the fields: the page's nav IS Categories, so a field whose
+	// group is not on that list is a field the page would silently drop, and a group with no
+	// field is a nav entry that opens onto nothing.
+	if !slices.Equal(schema.Categories, settingsCategoryOrder) {
+		t.Errorf("categories = %v, want %v", schema.Categories, settingsCategoryOrder)
+	}
+	for _, f := range schema.Fields {
+		if !slices.Contains(schema.Categories, f.Category) {
+			t.Errorf("field %q is in group %q, which the nav does not list", f.Key, f.Category)
+		}
+	}
+	for _, c := range schema.Categories {
+		if !slices.ContainsFunc(schema.Fields, func(f SettingFieldVO) bool { return f.Category == c }) {
+			t.Errorf("group %q has no field in this config", c)
+		}
+	}
+	// Two placements the dot path does NOT predict, which is the whole reason the group is on
+	// the row: the level sits with the rest of the log keys (it is a more specific row, and
+	// overriding must not move a leaf to another page), and the reminders sit with the session
+	// machinery rather than under anything named 提醒.
+	if f := byKey["logs.level"]; f.Category != catAdvanced {
+		t.Errorf("logs.level is in %q, want %q (same group as the row it overrides)", f.Category, catAdvanced)
+	}
+	if f := byKey["system_reminder.git_reminder"]; f.Category != catSession {
+		t.Errorf("system_reminder.git_reminder is in %q, want %q", f.Category, catSession)
 	}
 
 	// Values come from the live config, kinds from the value's own type, and an UNSET pointer
@@ -325,9 +398,12 @@ func TestSaveSettingsAppliesAndWrites(t *testing.T) {
 		t.Fatal("fixture: the prompt was not memoized")
 	}
 
-	msg := svc.SaveSettings(map[string]any{"language": "zh", "max_tokens": float64(2000)})
-	if !strings.Contains(msg, "2 项已生效") {
-		t.Errorf("summary = %q, want both fields reported live", msg)
+	res := svc.SaveSettings(map[string]any{"language": "zh", "max_tokens": float64(2000)})
+	if !res.OK {
+		t.Errorf("a save that reached the file reported OK = false: %q", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "2 项已生效") {
+		t.Errorf("summary = %q, want both fields reported live", res.Summary)
 	}
 	if d.cfg.Language != "zh" || d.cfg.MaxTokens != 2000 {
 		t.Errorf("memory: language=%q max_tokens=%d", d.cfg.Language, d.cfg.MaxTokens)
@@ -359,9 +435,14 @@ func TestSaveSettingsRefusesBeforeTouchingAnything(t *testing.T) {
 		{"unreadable key", map[string]any{"providers.3.model": "m"}, "下标"},
 	}
 	for _, tt := range tests {
-		msg := svc.SaveSettings(tt.updates)
-		if !strings.Contains(msg, tt.wantSub) {
-			t.Errorf("%s: summary = %q, want it to mention %q", tt.name, msg, tt.wantSub)
+		res := svc.SaveSettings(tt.updates)
+		// The page keeps the reader's typing on a refusal and clears it on a success, so the
+		// flag has to be right even when the sentence happens to read like a failure anyway.
+		if res.OK {
+			t.Errorf("%s: reported OK = true for a batch that was refused", tt.name)
+		}
+		if !strings.Contains(res.Summary, tt.wantSub) {
+			t.Errorf("%s: summary = %q, want it to mention %q", tt.name, res.Summary, tt.wantSub)
 		}
 		if got := readFileT(t, path); got != before {
 			t.Errorf("%s: the file changed: %q", tt.name, got)
@@ -388,9 +469,12 @@ func TestSaveSettingsRollsBackWhenTheFileRefusesAKey(t *testing.T) {
 		t.Fatalf("fixture: review.thinking should be unset, got %v", *d.cfg.Review.Thinking)
 	}
 
-	msg := svc.SaveSettings(map[string]any{"review.thinking": true})
-	if !strings.Contains(msg, "没能写入 config.yaml") || !strings.Contains(msg, "已撤销") {
-		t.Fatalf("summary = %q, want a write failure that says the change was undone", msg)
+	res := svc.SaveSettings(map[string]any{"review.thinking": true})
+	if res.OK {
+		t.Error("a batch whose write failed reported OK = true")
+	}
+	if !strings.Contains(res.Summary, "没能写入 config.yaml") || !strings.Contains(res.Summary, "已撤销") {
+		t.Fatalf("summary = %q, want a write failure that says the change was undone", res.Summary)
 	}
 	if d.cfg.Review.Thinking != nil {
 		t.Errorf("Review.Thinking = %v after a failed save, want it unset again", *d.cfg.Review.Thinking)
@@ -415,9 +499,12 @@ func TestSaveSettingsPushesNothingWhenTheFileRefusesTheKey(t *testing.T) {
 	d, svc, path := settingsFixture(t, "language: en\n")
 	fileBefore := readFileT(t, path)
 
-	msg := svc.SaveSettings(map[string]any{"logs.level": "debug"})
-	if !strings.Contains(msg, "没能写入 config.yaml") || !strings.Contains(msg, "已撤销") {
-		t.Fatalf("summary = %q, want a write failure that says the change was undone", msg)
+	res := svc.SaveSettings(map[string]any{"logs.level": "debug"})
+	if res.OK {
+		t.Error("a batch whose write failed reported OK = true")
+	}
+	if !strings.Contains(res.Summary, "没能写入 config.yaml") || !strings.Contains(res.Summary, "已撤销") {
+		t.Fatalf("summary = %q, want a write failure that says the change was undone", res.Summary)
 	}
 	if got := logger.CurrentLevel(); got != "info" {
 		t.Errorf("log level = %q after a failed save: the push ran before the write that failed", got)
@@ -497,9 +584,12 @@ func TestSaveSettingsMakesALogLevelChangeLive(t *testing.T) {
 
 	_, svc, path := settingsFixture(t, "logs:\n  level: info\n  max_files: 3\n")
 
-	msg := svc.SaveSettings(map[string]any{"logs.level": "debug"})
-	if !strings.Contains(msg, "1 项已生效") {
-		t.Errorf("summary = %q, want the level reported live", msg)
+	res := svc.SaveSettings(map[string]any{"logs.level": "debug"})
+	if !res.OK {
+		t.Errorf("summary = %q, want a save that landed", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "1 项已生效") {
+		t.Errorf("summary = %q, want the level reported live", res.Summary)
 	}
 	if got := logger.CurrentLevel(); got != "debug" {
 		t.Errorf("logger level = %q after saving logs.level=debug", got)
@@ -508,8 +598,337 @@ func TestSaveSettingsMakesALogLevelChangeLive(t *testing.T) {
 		t.Errorf("config.yaml = %q", file)
 	}
 
-	msg = svc.SaveSettings(map[string]any{"logs.max_files": float64(5)})
-	if !strings.Contains(msg, "需重启后生效") || !strings.Contains(msg, "logs.max_files") {
-		t.Errorf("summary = %q, want the rotation limit reported as restart-only, by name", msg)
+	res = svc.SaveSettings(map[string]any{"logs.max_files": float64(5)})
+	if !res.OK {
+		t.Errorf("summary = %q, want the limit written even though only a restart makes it live", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "需重启后生效") || !strings.Contains(res.Summary, "logs.max_files") {
+		t.Errorf("summary = %q, want the rotation limit reported as restart-only, by name", res.Summary)
+	}
+}
+
+// TestTheFormSeesAndSavesWhatTheFileHolds: a form does not send Go values, it sends what its
+// inputs hold — a list as []any, a duration as the string in the box — and neither shape was
+// reachable before the settings page existed. The write path had to be taught both (see
+// config's renderScalar and assignValue); this is the test that says the pair works from the
+// page's side, including what the page is SHOWN to begin with.
+func TestTheFormSeesAndSavesWhatTheFileHolds(t *testing.T) {
+	d, svc, path := settingsFixture(t, `permissions:
+  bash:
+    allow: ["ls"]
+lsp:
+  request_timeout: 15s
+memory:
+  timeout: 90s
+`)
+	byKey := map[string]SettingFieldVO{}
+	for _, f := range svc.GetSettingsSchema().Fields {
+		byKey[f.Key] = f
+	}
+	// The box shows the file's own form, not nanoseconds: a duration leaf is a plain string as
+	// far as the form is concerned, which is why it needs no Kind of its own — and why `timeout:
+	// 30s` in config.yaml stays `timeout: 30s` after an edit. Both duration types are here,
+	// because they used to answer differently.
+	for key, want := range map[string]string{
+		"lsp.request_timeout": "15s",   // config.Duration, which marshals as a string
+		"memory.timeout":      "1m30s", // time.Duration, which has no marshaller of its own
+	} {
+		if f := byKey[key]; f.Kind != "string" || f.Value != want {
+			t.Errorf("%s = %+v, want kind \"string\" and value %q", key, f, want)
+		}
+	}
+	if f := byKey["permissions.bash.allow"]; f.Kind != "string_list" {
+		t.Errorf("permissions.bash.allow = %+v, want a string_list", f)
+	}
+
+	res := svc.SaveSettings(map[string]any{
+		"permissions.bash.allow": []any{"ls", "pwd"}, // an array, as the bridge delivers one
+		"lsp.request_timeout":    "45s",              // the text the box held
+	})
+	if !res.OK {
+		t.Fatalf("save: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	if got := time.Duration(d.cfg.LSP.RequestTimeout); got != 45*time.Second {
+		t.Errorf("LSP.RequestTimeout = %v in memory, want 45s", got)
+	}
+	file := readFileT(t, path)
+	if !strings.Contains(file, "45s") || !strings.Contains(file, "pwd") {
+		t.Errorf("config.yaml = %q, want the duration in its written form and the new list", file)
+	}
+	if !strings.Contains(file, "allow: [ls, pwd]") {
+		t.Errorf("config.yaml = %q, want the list rendered as a list", file)
+	}
+}
+
+// TestSettingChoicesNameRealLeaves: the choices table's two failure modes. A key that is not a
+// config leaf (a typo, or a field that was renamed) would offer a dropdown nobody ever sees, and
+// a key on a row that is not offered would be dead code that looks alive.
+//
+// The leaves come from config.YAMLPaths — the same walker the schema is built on — so "is this a
+// real key" is answered by the config, not by a second list here.
+func TestSettingChoicesNameRealLeaves(t *testing.T) {
+	leaves := make(map[string]bool)
+	for _, l := range configLeaves(t) {
+		leaves[l] = true
+	}
+	for key := range settingChoices {
+		if !leaves[key] {
+			t.Errorf("settingChoices names %q, which is not a leaf of config.Config", key)
+		}
+		row, ok := settingFor(key)
+		if !ok || !row.offered() {
+			t.Errorf("settingChoices names %q, whose row is not offered (mode %s): the dropdown "+
+				"would never be drawn", key, row.Mode)
+		}
+	}
+}
+
+// TestProviderChoicesComeFromTheConfig: the list is what the config DEFINES, so it cannot go
+// stale the way a hard-coded one would. Two entries sharing a name collapse to one choice (they
+// are one choice to a reader), and a config that defines no provider yields no options at all —
+// which the page renders as a text box, since a dropdown with nothing in it is a trap.
+func TestProviderChoicesComeFromTheConfig(t *testing.T) {
+	_, svc, _ := settingsFixture(t, `provider: main
+providers:
+  - name: main
+    model: claude-x
+  - name: fast
+    model: haiku
+  - name: main
+    model: duplicate-name
+`)
+	byKey := map[string]SettingFieldVO{}
+	for _, f := range svc.GetSettingsSchema().Fields {
+		byKey[f.Key] = f
+	}
+	want := []string{"main", "fast"}
+	// The keys that NAME a provider, including the ones reached through a block row (subagent
+	// and memory speak for eleven leaves each; only their `provider` leaf is a choice).
+	for _, key := range []string{
+		"provider", "title_provider", "commit_provider", "run_provider",
+		"subagent.provider", "review.provider", "memory.keyword_provider",
+	} {
+		f, ok := byKey[key]
+		if !ok {
+			t.Errorf("%s is not in the schema at all", key)
+			continue
+		}
+		if !slices.Equal(f.Options, want) {
+			t.Errorf("%s options = %v, want %v", key, f.Options, want)
+		}
+	}
+
+	// Plenty of string leaves are NOT choices — the definitions themselves (which PROVIDE the
+	// names) and every plain string. A dropdown on those would be a way to save a value the
+	// field does not mean.
+	for _, key := range []string{"providers.0.name", "providers.0.model", "language", "subagent.worktree_branch"} {
+		if f, ok := byKey[key]; ok && len(f.Options) != 0 {
+			t.Errorf("%s carries options %v — it does not name a provider", key, f.Options)
+		}
+	}
+
+	// No providers defined → no choices (not an empty dropdown).
+	_, bare, _ := settingsFixture(t, "language: en\n")
+	for _, f := range bare.GetSettingsSchema().Fields {
+		if f.Key == "provider" || f.Key == "title_provider" {
+			if len(f.Options) != 0 {
+				t.Errorf("%s options = %v with no providers defined, want none", f.Key, f.Options)
+			}
+		}
+	}
+}
+
+// TestProviderTypeOptionsAreAClosedSet: a provider's `type` is one of three strings the code can
+// construct, and NOTHING validates it at load time — a typo parses fine and fails later, when a
+// session resolves its provider and llm reaches its default branch. So the form presents the
+// choice. The list comes from config's own constants, not from a list here.
+//
+// It is also the one choice declared on a leaf inside a LIST (`providers.*.type`): the item is
+// the same decision however many providers the config holds, so the key is config's structural
+// path and the lookup has to expand the index.
+func TestProviderTypeOptionsAreAClosedSet(t *testing.T) {
+	_, svc, _ := settingsFixture(t, `providers:
+  - name: main
+    model: m
+  - name: fast
+    model: f
+`)
+	byKey := map[string]SettingFieldVO{}
+	for _, f := range svc.GetSettingsSchema().Fields {
+		byKey[f.Key] = f
+	}
+	want := config.ProviderTypes()
+	if len(want) != 3 {
+		t.Fatalf("config.ProviderTypes() = %v, want the three the code constructs", want)
+	}
+	for _, key := range []string{"providers.0.type", "providers.1.type"} {
+		if got := byKey[key].Options; !slices.Equal(got, want) {
+			t.Errorf("%s options = %v, want %v", key, got, want)
+		}
+	}
+	// A DIFFERENT list's `type` is a different vocabulary (web search backends), and the
+	// structural key must not leak across: `providers.*.type` is two segments deep, and
+	// `web_search.providers.0.type` is four.
+	for _, f := range svc.GetSettingsSchema().Fields {
+		if strings.HasPrefix(f.Key, "web_search.providers.") && strings.HasSuffix(f.Key, ".type") {
+			if slices.Contains(f.Options, config.ProviderTypeAnthropic) {
+				t.Errorf("%s carries provider types: %v", f.Key, f.Options)
+			}
+		}
+	}
+}
+
+// TestSaveSettingsUnsetsAnOptionalLeaf: the form's 自动 sends a null, and that has to reach the
+// field as "unset" in memory, as `null` in the file, and back as unset when the page re-reads it.
+// The three fields it exists for are the ones whose nil MEANS something (`vision: nil` = decide
+// it from the model).
+func TestSaveSettingsUnsetsAnOptionalLeaf(t *testing.T) {
+	d, svc, path := settingsFixture(t, `providers:
+  - name: main
+    model: m
+    spec:
+      vision: true
+      max_retries: 3
+`)
+	byKey := func() map[string]SettingFieldVO {
+		out := map[string]SettingFieldVO{}
+		for _, f := range svc.GetSettingsSchema().Fields {
+			out[f.Key] = f
+		}
+		return out
+	}
+	// What the form draws: a three-state switch, currently 开.
+	for _, key := range []string{"providers.0.spec.vision", "providers.0.spec.max_retries"} {
+		f := byKey()[key]
+		if !f.Optional || !f.IsSet {
+			t.Errorf("%s = %+v, want an optional leaf that is currently set", key, f)
+		}
+	}
+	// A pointer WITH a default is not optional in this sense: the default says what unset means,
+	// so there is no third state to draw.
+	if f := byKey()["lsp.enabled"]; f.Optional {
+		t.Error("lsp.enabled is `*bool default:\"true\"` — unset and true are one fact, not two states")
+	}
+
+	res := svc.SaveSettings(map[string]any{"providers.0.spec.vision": nil, "providers.0.spec.max_retries": nil})
+	if !res.OK {
+		t.Fatalf("save: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	if got := d.cfg.Providers[0].Spec.Vision; got != nil {
+		t.Errorf("vision = %v in memory after 自动, want unset", *got)
+	}
+	if got := d.cfg.Providers[0].Spec.MaxRetries; got != nil {
+		t.Errorf("max_retries = %v in memory after 自动, want unset", *got)
+	}
+	file := readFileT(t, path)
+	if !strings.Contains(file, "vision: null") || !strings.Contains(file, "max_retries: null") {
+		t.Errorf("config.yaml = %q, want both written as null", file)
+	}
+	if f := byKey()["providers.0.spec.vision"]; f.IsSet || f.Value != nil {
+		t.Errorf("vision re-read as %+v, want it shown as 自动 again", f)
+	}
+
+	// And a nil for a leaf that has no unset state is still refused: the type check is what
+	// catches a caller who sent one by mistake.
+	res = svc.SaveSettings(map[string]any{"language": nil})
+	if res.OK {
+		t.Errorf("a nil for a leaf that cannot be unset was accepted: %s", res.Summary)
+	}
+}
+
+// TestSettingsItemAddAndRemove walks the two methods the page's ＋ / 删除 use.
+//
+// The add WRITES IMMEDIATELY, so what it must be held to is: the item is in the file as well as in
+// memory, the file still loads, and the item is then editable through the ordinary save (the
+// fields its skeleton left out are added by SavePartial's add-a-key rule). The remove must take
+// the item it was asked for and WARN about the keys still naming it.
+func TestSettingsItemAddAndRemove(t *testing.T) {
+	d, svc, path := settingsFixture(t, `provider: main
+providers:
+  - name: main
+    type: openai
+    model: m
+    base_url: http://x/v1
+    api_key: k
+title_provider: main
+`)
+	// The schema declares what the page may grow — including a list with no items at all, which is
+	// the case the fields alone cannot express.
+	schema := svc.GetSettingsSchema()
+	var providersList *SettingListVO
+	for i := range schema.Lists {
+		if schema.Lists[i].Path == "providers" {
+			providersList = &schema.Lists[i]
+		}
+	}
+	if providersList == nil {
+		t.Fatalf("the schema does not offer the providers list: %+v", schema.Lists)
+	}
+	if providersList.Category != catModel {
+		t.Errorf("providers is drawn in %q, want %q", providersList.Category, catModel)
+	}
+
+	added := svc.AddSettingsItem("providers")
+	if !added.OK || added.ElementPath != "providers.1" {
+		t.Fatalf("add = %+v, want it to name the new item", added)
+	}
+	if !strings.Contains(added.Summary, "providers.1") {
+		t.Errorf("add summary = %q, want it to name the new item", added.Summary)
+	}
+	if len(d.cfg.Providers) != 2 || d.cfg.Providers[1].Name != "" {
+		t.Errorf("memory after the add: %+v", d.cfg.Providers)
+	}
+	body := readFileT(t, path)
+	if !strings.Contains(body, `name: ""`) || !strings.Contains(body, "name: main") {
+		t.Errorf("config.yaml = %q, want the new item appended and the old one kept", body)
+	}
+	reloaded, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatalf("the file the add wrote does not load: %v\n%s", err, body)
+	}
+	if len(reloaded.Providers) != 2 {
+		t.Fatalf("providers after reload = %d, want 2", len(reloaded.Providers))
+	}
+
+	// The item is editable at once: the values the user types go in through the ordinary save,
+	// including the leaves the skeleton did not spell out.
+	res := svc.SaveSettings(map[string]any{
+		"providers.1.name":                "added",
+		"providers.1.spec.context_window": 100000,
+	})
+	if !res.OK {
+		t.Fatalf("editing the new item: ok=%v summary=%s", res.OK, res.Summary)
+	}
+	final, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Providers[1].Name != "added" || final.Providers[1].Spec.ContextWindow == nil ||
+		*final.Providers[1].Spec.ContextWindow != 100000 {
+		t.Errorf("the new item did not take its values: %+v", final.Providers[1])
+	}
+
+	// Removing reports what still points at it: `title_provider` names the item that just went.
+	removed := svc.RemoveSettingsItem("providers.0")
+	if !removed.OK {
+		t.Fatalf("remove = %+v", removed)
+	}
+	if !strings.Contains(removed.Summary, "title_provider") {
+		t.Errorf("remove summary = %q, want it to warn about the key still naming it", removed.Summary)
+	}
+	if len(d.cfg.Providers) != 1 || d.cfg.Providers[0].Name != "added" {
+		t.Errorf("memory after the remove: %+v", d.cfg.Providers)
+	}
+	left := readFileT(t, path)
+	if strings.Contains(left, "name: main") {
+		t.Errorf("config.yaml still holds the removed item:\n%s", left)
+	}
+
+	// The refusals: a list that is not a list of items, and an item that is not there.
+	if got := svc.AddSettingsItem("review.allowed_tools"); got.OK || !strings.Contains(got.Summary, "不是可以添加条目") {
+		t.Errorf("adding to a slice of scalars = %+v, want a refusal", got)
+	}
+	if got := svc.RemoveSettingsItem("providers.9"); got.OK || !strings.Contains(got.Summary, "删不了") {
+		t.Errorf("removing a missing item = %+v, want a refusal", got)
 	}
 }

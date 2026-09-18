@@ -1,0 +1,355 @@
+/* ── Settings page ─────────────────────────────────────────────────────────────
+   A whole view rather than a panel: it replaces the conversation area, because
+   the decision tree for "is this a modal or a page" lands on page for a task this
+   long (design §四) — and a tabbed modal is exactly the shape that does not work.
+
+   Two things about how it sits in the window:
+
+   • It is FIXED and opaque, above every floating surface the chat view can leave
+     open (ctx-menu 60 / confirm 70 / rewind chain 80 / preview lightbox 90 — see
+     overlays.css). Those surfaces render as siblings of .app-body, so hiding the
+     body does not hide them; covering them is what makes "the settings page is
+     what is on screen" true regardless of what was open a moment ago.
+
+   • The chat view stays MOUNTED and is only made invisible (.app-body.is-hidden,
+     layout.css). Its local state — collapsed project groups, the composer's
+     draft, the transcript's scroll position — is not worth rebuilding just to
+     come back to it, and `visibility` (rather than `display`) keeps the box, so
+     the scrollport's offset survives the round trip.                   */
+
+.settings-view {
+  position: fixed;
+  top: var(--titlebar-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+  display: flex;
+  /* Opaque, and the same surface as the chat view (see --app-bg): this layer COVERS the window
+     rather than sitting in it, so it has to paint a background of its own. */
+  background: var(--app-bg);
+}
+
+/* ── Left rail: the groups, and the way out ─────────────────────────────────── */
+
+.settings-rail {
+  width: 214px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 10px;
+  overflow-y: auto;
+  /* The recessed plane, like the sidebar: the form next to it is the page. */
+  background: var(--chrome);
+  border-right: 1px solid var(--border);
+}
+
+/* A real <button>, flat into the rail — the same treatment .footer-item gets, and
+   for the same reason (keyboard reachable, no chrome). */
+.settings-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  margin-bottom: 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.settings-back:hover { background: var(--hover); color: var(--text); }
+
+/* The rail's title. It was 11.5px with the uppercase/letter-spacing treatment the sidebar's
+   section labels use — which made a page's own heading smaller than the items it heads (and
+   letter-spacing does nothing for CJK but push the glyphs apart). It reads as a TITLE now:
+   larger than the entries below it, like a sidebar group header is larger than its rows. */
+.settings-group-label {
+  padding: 8px 8px 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-cat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14.5px;
+  text-align: left;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.settings-cat:hover { background: var(--hover); color: var(--text); }
+/* The selected group. It carries a left rule as well as a wash: at this size the
+   wash alone is easy to miss while scanning, and the rule is what makes the
+   column read as "you are here". */
+.settings-cat.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font-weight: 560;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.settings-cat-count { font-size: 12px; color: var(--text-faint); font-weight: 400; }
+.settings-cat.is-active .settings-cat-count { color: var(--accent-2); }
+
+/* The rail's footnote: what ⟳ means, said once instead of on every row. */
+.settings-legend {
+  margin-top: auto;
+  padding: 10px 8px 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.settings-legend b { font-weight: 600; }
+
+/* ── Right pane: one group's form ───────────────────────────────────────────── */
+
+.settings-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-head {
+  flex-shrink: 0;
+  padding: 20px 28px 12px;
+}
+.settings-title { margin: 0; font-size: 17.5px; font-weight: 600; }
+.settings-sub { margin-top: 5px; font-size: 13px; color: var(--text-faint); }
+
+/* The scrolling half. `min-height: 0` because a flex child will not shrink below
+   its content otherwise, which would push the footer off the window. */
+.settings-form {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 28px 20px;
+}
+
+.set-row {
+  display: grid;
+  /* The label column is a MAX rather than a width: a long key like
+     `mcp_tool_search.max_deferred_schema_bytes` would otherwise either overflow or
+     squeeze the input, and both are worse than a wider label. */
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 20px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: start;
+}
+.set-row:last-child { border-bottom: none; }
+
+.set-key {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-all;
+}
+/* The ⟳ badge: this value lands only after a restart. Derived on the BACKEND
+   (settingApply.needsRestart), so it cannot disagree with what the apply code
+   does. */
+.set-restart {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--amber);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  color: var(--amber);
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.set-note {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+/* A field with no input: the value is shown, the reader is told why it cannot be
+   changed here, and the alternative (hiding it) is worse — a page that looks
+   complete while some of the config has no way to be reached. */
+.set-readonly {
+  padding: 6px 0;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 13.5px;
+  color: var(--text-faint);
+}
+
+.set-input,
+.set-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 14.5px;
+  color: var(--text);
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  padding: 7px 10px;
+  outline: none;
+}
+.set-input:focus,
+.set-textarea:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-ring); }
+.set-textarea {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 13.5px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 62px;
+}
+/* Changed but not saved: the row says so where the change is, because the footer's
+   count only says how many there are. */
+.set-row.is-dirty { box-shadow: inset 2px 0 0 var(--accent); }
+.set-row.is-dirty .set-key { color: var(--accent-2); }
+/* A value the form itself refused (a number that is not a number): the field is
+   marked, and the batch is never sent — see fieldError. */
+.set-row.is-invalid .set-input,
+.set-row.is-invalid .set-textarea { border-color: var(--red); }
+.set-field-error { margin-top: 4px; font-size: 12.5px; color: var(--red); }
+
+.set-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.set-check input { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+
+/* One list item per line. The hint is inside the control column rather than in the
+   label, because it is about the BOX, not about the key. */
+.set-list-hint { margin-top: 4px; font-size: 12px; color: var(--text-faint); }
+
+/* ── A block of one category ────────────────────────────────────────────────── */
+/* One heading per top-level config key (`web_search`, `debug.pprof`), so a category with several
+   blocks in it reads as structure instead of one flat run of paths. The rows below it drop the
+   prefix they share with it — the heading already said it. */
+.set-section { margin-top: 22px; }
+/* A HEADING, set in the UI face at the rail title's size — deliberately NOT the mono the keys use.
+   It was mono/13px/dim, which made `web_fetch` sit on the page as one more config key that
+   simply had no input next to it: the reader sees a key-shaped line and looks for its box. The
+   family is what separates "this line names a block" from "this line is a setting". */
+.set-section-head {
+  padding: 0 0 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 640;
+  color: var(--text);
+  border-bottom: 1px solid var(--border-2);
+}
+
+/* ── One item of a config list ──────────────────────────────────────────────── */
+/* `providers.0` addresses an item; this is what the reader sees instead. The header is a real
+   button (click to fold), and the path is demoted to a dimmed subtitle — still there for anyone
+   editing config.yaml by hand, no longer the thing in front of them. */
+.set-elem {
+  margin: 12px 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  background: var(--veil);
+  overflow: hidden;
+}
+.set-elem-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+.set-elem-head:hover { background: var(--hover); }
+.set-elem-caret { display: inline-flex; align-items: center; color: var(--text-faint); }
+.set-elem-name { font-weight: 560; }
+.set-elem-path {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+/* The item's own state, pushed to the end of the header: an item whose edits are hidden inside a
+   fold still has to say that it holds some (and a refused value has to say that too — a card
+   with an error is forced open, so this is the case where the fold was already overridden). */
+.set-elem-flags { margin-left: auto; flex-shrink: 0; }
+.set-elem-count { font-size: 12.5px; color: var(--accent-2); }
+.set-elem-bad { font-size: 12.5px; color: var(--red); }
+.set-elem-body { padding: 2px 12px 6px; border-top: 1px solid var(--border); }
+/* Inside a card the labels are the tails of the paths, so the column can be narrower than the
+   page's. */
+.set-elem-body .set-row { grid-template-columns: minmax(0, 240px) minmax(0, 1fr); }
+.set-elem-body .set-row:last-child { border-bottom: none; }
+
+/* ── Growing and shrinking a list ───────────────────────────────────────────── */
+/* ＋ sits at the END of the block that draws the list, where the item it makes will appear. An
+   empty list has no cards at all, so the line says whose list it is — that is the one case the
+   page cannot show with fields (the backend declares these lists for it). */
+.set-add {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 2px;
+}
+.set-add-empty { font-size: 12.5px; color: var(--text-faint); }
+
+/* Removing is destructive AND immediate (it is written to config.yaml now, and nothing undoes it),
+   so it asks once, in the body of the card — where the reader has just looked at what they are
+   about to delete. */
+.set-elem-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 2px;
+  font-size: 12.5px;
+  color: var(--red);
+}
+.set-elem-body > .btn { margin: 8px 0 4px; padding: 3px 10px; font-size: 12px; }
+
+/* A dropdown in place of a text box: same box, same focus ring. `appearance` is left alone —
+   the platform's own chevron is the affordance, and drawing one by hand would be a second thing
+   to keep in step with the theme. */
+.set-select { cursor: pointer; }
+.set-select:disabled { cursor: default; }
+
+/* ── Footer: what the save did, and the save ───────────────────────────────── */
+
+.settings-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 28px;
+  border-top: 1px solid var(--border);
+  background: var(--chrome-2);
+  box-shadow: inset 0 1px 0 var(--sheen);
+}
+/* The save's answer. `flex: 1` so the sentence gets the room and the button keeps
+   its place at the end — the sentence is regularly long (it names the keys that
+   need a restart). */
+.settings-notice { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; color: var(--text-dim); }
+/* A refusal is red; a save that landed is not, because most of what the sentence
+   says is "3 项已生效，2 项需重启后生效" — which is information, not a warning. */
+.settings-notice.is-bad { color: var(--red); }
+.settings-dirty-count { flex-shrink: 0; font-size: 13px; color: var(--text-faint); }
+
+.settings-empty { padding: 24px 0; font-size: 14.5px; color: var(--text-faint); }
+.settings-error { padding: 24px 0; font-size: 14.5px; color: var(--red); }

@@ -40,15 +40,15 @@ func TestSaveSettingsDefersAPushForARunningTurn(t *testing.T) {
 	d, svc, r, sid := pushFixture(t)
 	r.running = true
 
-	msg := svc.SaveSettings(map[string]any{"hooks.enabled": true})
-	if !strings.Contains(msg, "hooks.enabled") || !strings.Contains(msg, "等这一轮结束生效") {
-		t.Errorf("summary = %q, want it to say the key waits for the running turn", msg)
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	if !strings.Contains(res.Summary, "hooks.enabled") || !strings.Contains(res.Summary, "等这一轮结束生效") {
+		t.Errorf("summary = %q, want it to say the key waits for the running turn", res.Summary)
 	}
-	if strings.Contains(msg, "项已生效") {
-		t.Errorf("summary = %q: a deferred key is not in effect yet", msg)
+	if strings.Contains(res.Summary, "项已生效") {
+		t.Errorf("summary = %q: a deferred key is not in effect yet", res.Summary)
 	}
-	if !strings.Contains(msg, sid) {
-		t.Errorf("summary = %q, want the running session named", msg)
+	if !strings.Contains(res.Summary, sid) {
+		t.Errorf("summary = %q, want the running session named", res.Summary)
 	}
 	if r.agent.Config.HookDispatcher != nil {
 		t.Error("the dispatcher was built under a running turn: the push was not deferred")
@@ -73,9 +73,9 @@ func TestSaveSettingsDefersAPushForARunningTurn(t *testing.T) {
 func TestSaveSettingsPushesImmediatelyWhenNoTurnIsRunning(t *testing.T) {
 	d, svc, r, _ := pushFixture(t)
 
-	msg := svc.SaveSettings(map[string]any{"hooks.enabled": true})
-	if !strings.Contains(msg, "1 项已生效") {
-		t.Errorf("summary = %q, want the key reported live", msg)
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	if !strings.Contains(res.Summary, "1 项已生效") {
+		t.Errorf("summary = %q, want the key reported live", res.Summary)
 	}
 	if r.agent.Config.HookDispatcher == nil {
 		t.Error("an idle session must be pushed to at once")
@@ -94,7 +94,7 @@ func TestSaveSettingsStillPushesTheOtherSessions(t *testing.T) {
 	idle := d.getRun("idle-session")
 	idle.agent = &agent.AIAgent{Config: agent.AgentConfig{Logger: logger.New("settings-test")}}
 
-	msg := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
 	if idle.agent.Config.HookDispatcher == nil {
 		t.Error("the idle session was not pushed to")
 	}
@@ -104,8 +104,8 @@ func TestSaveSettingsStillPushesTheOtherSessions(t *testing.T) {
 	if n := len(d.pendingPushes[busyID]); n != 1 {
 		t.Errorf("queued pushes for the busy session = %d, want 1", n)
 	}
-	if strings.Contains(msg, "项已生效") {
-		t.Errorf("summary = %q: the key is not in effect for the running session yet", msg)
+	if strings.Contains(res.Summary, "项已生效") {
+		t.Errorf("summary = %q: the key is not in effect for the running session yet", res.Summary)
 	}
 }
 

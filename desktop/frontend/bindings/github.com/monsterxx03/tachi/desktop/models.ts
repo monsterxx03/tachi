@@ -749,6 +749,32 @@ export interface RewindTurnVO {
 }
 
 /**
+ * SaveSettingsResultVO is what the page gets back from a save: whether anything was written,
+ * and the one sentence to show.
+ * 
+ * Two fields rather than a bare string, because the page does two different things with the
+ * answer: a save that WROTE clears the form and re-reads every value (they are the new ones),
+ * while a save that was REFUSED has to leave the reader's typing alone — they need to fix the
+ * value, and a form that threw away a whole batch over one typo would be worse than no form.
+ * The sentence stays a sentence (the desktop's convention for bound methods: the frontend does
+ * not translate Go errors), so nothing here asks the page to read the text.
+ */
+export interface SaveSettingsResultVO {
+    /**
+     * OK is true when the file was written: every value is in config.yaml, and the running
+     * process was told everything that can be told. False means nothing moved anywhere — not
+     * memory, not the file, not the running process.
+     */
+    "ok": boolean;
+
+    /**
+     * Summary is the sentence the page shows as it is: what took effect, what waits for a
+     * restart, what waits for a turn to end, and which session refused what.
+     */
+    "summary": string;
+}
+
+/**
  * SessionInfo is a lightweight session summary for the sidebar list.
  */
 export interface SessionInfo {
@@ -952,9 +978,103 @@ export interface SettingFieldVO {
     "needsRestart": boolean;
 
     /**
+     * Category is the row's own answer (settingApply.Category): which group of the form the
+     * field shows up under. The frontend groups by this name and never derives it from the
+     * key — "where does 日志 live" is not a question the dot path answers.
+     */
+    "category": string;
+
+    /**
+     * Options is the closed set this leaf's value comes from, when it has one: the provider
+     * names this config defines, or the provider TYPES, for the keys that name one (see
+     * settingChoices).
+     * 
+     * Empty means "no declared set", which is NOT the same as "nothing is legal" — it is the
+     * free-text case, and it is also what a config with no providers at all yields
+     * (providerNames). The page renders a dropdown only when there is something to choose, so
+     * the two are told apart by the caller seeing zero options and falling back.
+     * 
+     * A value the list does not contain is still legal — the form keeps it as its own entry
+     * rather than silently switching the field to something else.
+     */
+    "options"?: string[] | null;
+
+    /**
+     * Optional says the leaf can be left UNSET, and that being unset MEANS something: these are
+     * the fields whose nil is a third state rather than an empty one (`vision: nil` = decide it
+     * from the model, `max_retries: nil` = the path's default). The form draws 自动 for them, and
+     * they are the only fields it can clear back to it.
+     */
+    "optional"?: boolean;
+
+    /**
+     * IsSet says whether the leaf currently holds a value. `Optional && !IsSet` is the 自动
+     * state; a leaf that is not optional is always set. It cannot be read off Value: an unset
+     * pointer WITH a default reads as that default (see config.LeafInfo).
+     */
+    "isSet": boolean;
+
+    /**
      * Note is why: the reason a restart is needed, or which entry mode owns the key instead.
      */
     "note"?: string;
+}
+
+/**
+ * SettingListVO is one list the settings page may grow: the list's own path, and the group it is
+ * drawn in (which is the category of the row that owns it — `web_search.providers` belongs to
+ * `web_search`'s row, not to a row of its own).
+ */
+export interface SettingListVO {
+    "path": string;
+    "category": string;
+}
+
+/**
+ * SettingsItemResultVO is what growing or shrinking a list reports: whether it happened, the one
+ * sentence to show, and — for an add — the new item's own path.
+ * 
+ * The path is reported rather than left for the page to work out, because where the item landed is
+ * the LIST's fact, not the page's (the append position is its length). The page uses it to open
+ * the card it just made: the reason someone presses ＋ is to fill the new item in.
+ */
+export interface SettingsItemResultVO {
+    "ok": boolean;
+    "summary": string;
+    "elementPath"?: string;
+}
+
+/**
+ * SettingsSchemaVO is everything the settings page needs to draw itself, in one answer: the
+ * fields, and the order the left column lists their groups in.
+ * 
+ * The order rides along rather than being declared in the frontend for the same reason the
+ * categories do (see settingsCategoryOrder): a second list is a second thing to keep in step,
+ * and a field whose category the frontend does not know would be a field it silently drops.
+ */
+export interface SettingsSchemaVO {
+    /**
+     * Categories is settingsCategoryOrder: every group, in display order. All of them are
+     * non-empty — the guard test fails if one has no field, and the page's nav is this list.
+     */
+    "categories": string[] | null;
+
+    /**
+     * Fields is one entry per editable leaf of the live config, in path order. The form
+     * groups them; nothing here is sorted by category, because within a group the natural
+     * order is the config's own.
+     */
+    "fields": SettingFieldVO[] | null;
+
+    /**
+     * Lists are the config lists the page may ADD items to (config.ListItemPaths, filtered to the
+     * rows this process offers).
+     * 
+     * Declared rather than left for the form to infer from the fields, because an EMPTY list has
+     * no fields: without this the page could not offer the first item of a list, which is exactly
+     * when someone wants it.
+     */
+    "lists": SettingListVO[] | null;
 }
 
 /**

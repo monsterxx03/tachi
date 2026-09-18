@@ -14,6 +14,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -1949,6 +1950,65 @@ permissions:
 						at > 0 && string(raw)[:at]+string(raw)[at+len(inserted):] == c.mcpConfigBefore,
 						string(raw))
 				}
+			},
+		},
+		//
+		//
+		// settings: 设置页 —— 一个纯渲染器画出来的东西，以及一次保存真的走到了文件。
+		//
+		// 这一页把 GetSettingsSchema / settingsTable 的每一条声明变成控件，所以单测（Go）能钉住声明、
+		// 却看不见"声明有没有到界面"：分组与顺序、配置列表折成的卡片叫什么、下拉里有哪些值。
+		// 反过来说，driver 能看见界面、却看不见磁盘；所以**一次编辑的落点由 Go 侧读 config.yaml 断言**
+		// （并且真的用 config.LoadFrom 装载一遍 —— 界面写出的文件必须是装载器认得的）。
+		//
+		// 两条最容易默默坏掉的路在这里：
+		//   · 路径不当标签（`providers.0.model` 不该出现在表单里，卡片头说的是"哪个 provider"）；
+		//   · 「自动」= 未设置，落到文件里是 `vision: null` —— 唯一一个"没有值"也要写出去的状态
+		//     （config.Unset；裸 nil 是被拒绝的，那才是"忘了解引用指针"的样子）。
+		{
+			name: "settings",
+			files: map[string]string{
+				"README.md": "# smoke\n\nsettings scenario's working directory\n",
+			},
+			// title_provider 要先存在于文件里：SavePartial 只更新已经有的键（新增键是另一件事），
+			// 所以给它一个空值，driver 再把它改成 smoke。
+			config: "title_provider: \"\"\n",
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 设置页不该惊动任何会话。
+				c.check("设置页没有触发任何对话", len(c.requests) == 0, requestCount(c.requests))
+
+				path := filepath.Join(c.home, ".tachi", "config.yaml")
+				raw, err := os.ReadFile(path)
+				c.check("config.yaml 可读", err == nil, errText(err))
+				if err != nil {
+					return
+				}
+				cfg, err := config.LoadFrom(path)
+				c.check("界面写出的文件能被装载", err == nil, errText(err))
+				if err != nil {
+					return
+				}
+				c.check("保存写进了文件：title_provider = smoke", cfg.TitleProvider == "smoke",
+					"title_provider="+cfg.TitleProvider)
+				if len(cfg.Providers) == 0 {
+					c.check("fixture 至少有一个 provider", false, "providers 为空")
+					return
+				}
+				// 未设置的那一态：文件里是 `vision: null`，装载回来是 nil —— 两边都得对，
+				// 否则界面上的「自动」与 Tachi 实际的行为就是两回事。
+				c.check("「自动」把 vision 写成未设置（null 回读为 nil）",
+					cfg.Providers[0].Spec.Vision == nil, string(raw))
+				c.check("文件里确实是 null 这个字面量",
+					strings.Contains(string(raw), "vision: null"), string(raw))
+
+				// 列表的增删（driver 加了一项又删掉，并给一个文件里还没有的列表加了一项）：
+				// 加过又删掉的那个必须不留痕迹，而新建的块必须在，且是能装载的形状。
+				c.check("删掉的那一项没留下", len(cfg.Providers) == 1 && cfg.Providers[0].Name == "smoke",
+					fmt.Sprintf("providers=%d", len(cfg.Providers)))
+				c.check("文件里没有 web_search 块时，＋ 把它建出来了（含一项）",
+					len(cfg.WebSearch.Providers) == 1 && cfg.WebSearch.Providers[0].Type == config.WebSearchProviderExa,
+					fmt.Sprintf("web_search.providers=%+v", cfg.WebSearch.Providers))
 			},
 		},
 	}

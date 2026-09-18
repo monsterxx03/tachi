@@ -16,6 +16,24 @@
 }
 
 :root {
+  /* The window's own background: a soft accent halo bleeding down from behind the titlebar (so
+     the top of the transcript reads as lit rather than as a blank sheet), a corner tint
+     bottom-right, and a vertical falloff from --bg-top to --bg that gives the content plane
+     depth. Together they are what makes the background read as "Tachi blue" instead of neutral
+     grey — and agent text sits on a lived-in surface, not a stark white page.
+
+     Named here because two opaque surfaces paint it: .app (the chat view) and .settings-view,
+     which covers it while the settings page is up. They must not drift apart. */
+  --app-bg:
+    radial-gradient(1100px 540px at 50% -14%, var(--app-tint-a), transparent 62%),
+    radial-gradient(880px 620px at 104% 112%, var(--app-tint-b), transparent 58%),
+    linear-gradient(180deg, var(--bg-top), var(--bg) 46%);
+
+  /* The titlebar's height, named once because two rules need it: .titlebar itself, and the
+     settings view, which fills the window BELOW the bar (the design keeps the titlebar visible
+     — see docs/2026-09-14-desktop-settings-design.md §三). */
+  --titlebar-h: 44px;
+
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses
      MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
      every surface is a plain colour. The light theme is PAPER: a light warm
@@ -371,16 +389,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  /* Three flat layers, no blur: a soft accent halo bleeding down from behind
-     the titlebar (so the top of the transcript reads as lit rather than as a
-     blank sheet), a corner tint bottom-right, and a vertical falloff from
-     --bg-top to --bg that gives the content plane depth. Together they are
-     what makes the background read as "Tachi blue" instead of neutral grey —
-     and agent text sits on a lived-in surface, not a stark white page. */
-  background:
-    radial-gradient(1100px 540px at 50% -14%, var(--app-tint-a), transparent 62%),
-    radial-gradient(880px 620px at 104% 112%, var(--app-tint-b), transparent 58%),
-    linear-gradient(180deg, var(--bg-top), var(--bg) 46%);
+  background: var(--app-bg);
 }
 
 /* Keyboard affordance for the rows that are divs-with-onClick rather than

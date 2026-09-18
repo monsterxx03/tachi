@@ -1,8 +1,11 @@
 # Desktop 设置页 — 设计
 
-> 版本: 2.5 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0~v2.4: 2026-09-17~18）| 状态: P0-a、P0-b、
-> **结构前置（§八之三）、P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）以及
-> **全部热改路径**（§五之四：97 个输入框里 91 个已能免重启生效）已实现；设置页 UI 未开始
+> 版本: 2.7 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0~v2.5: 2026-09-17~18）| 状态: P0-a、P0-b、
+> **结构前置（§八之三）、P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）、
+> **全部热改路径**（§五之四：97 个输入框里 91 个已能免重启生效）以及
+> **P1/P2/P3 的前端**（§八之四：`App.tsx` 的 view 状态 + `settings.tsx` 外壳 + 分类导航 +
+> Kind 驱动的通用表单 + ⟳ 徽标 + 保存汇总）与 **P4 的 smoke 场景**（`settings`：37 项断言，含
+> 文件回读）均已实现
 >
 > v2.0 是 v1.0 的**全面复核**：热改分层按实际消费点重做，P0 的验收标准收紧
 > （`yaml.Node` 回环实测发现 v1.0 承诺的「样式保留」不成立），原子性顺序修正。
@@ -26,6 +29,22 @@
 > v2.5 是**剩下 6 行也做掉**：`lsp` / `memory` / `subagent` / `active_mcp_profile` /
 > `mcp_tool_search` / `mcp_tool_refresh`。现在的口径是 **30 行热 / 4 行需重启**（97 个输入框里
 > 91 个能免重启生效），剩下 4 行全是真结构性（§五之四）。
+>
+> v2.6 是 **P1/P2/P3 前端的落地记录**（§八之四）：`settings.tsx` 是一个不认识任何配置键的
+> 渲染器（分组、Kind、⟳、note 全部由后端给），为此后端多了 `Category` / `Options` /
+> `Optional` / `IsSet` 四列、`settingChoices` 一张表与 `SettingsSchemaVO` /
+> `SaveSettingsResultVO` 两个 VO；provider 名字与 provider 类型是下拉，配置列表
+> （`providers` / `lsp.servers` / `web_search.providers`）的叶子折成一张张卡片，头上写
+> `main · claude-x` 而不是 `providers.0`，`spec` 下那几个 `*bool` / `*int64` 有了「自动」
+> （未设置）这一态。
+> 开工后照例照出三处后端缺口——**时长**字段走桥是字符串、写盘只认整数，**列表**从 JS 过来是
+> `[]any`、`renderScalar` 只认 `[]string`，以及**指针的 nil 态写不回去**（路径 API 从来没有
+> "取消设置"这个操作）——都在 `config` 侧补上。
+>
+> v2.7 是**列表的增删**（§八之五）：设置页能往 `providers` / `web_search.providers` /
+> `web_fetch.providers` / `lsp.servers` 里加一项、删一项；"新增一个键"这条产品决策被**收窄**
+> （父块已存在的那一个键 + 列表末尾），没有推翻。剩余待办（其余枚举、`other` 的只读项）见
+> §八之四 末尾。
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 
@@ -325,6 +344,10 @@ func PathsFor(cfg *Config) []string  // 按值展开（`providers.0.model`），
    所以 `SavePartial` **写盘前回读校验**每个路径的实际值——这个校验同时覆盖了
    "路径不存在"与"值没生效"两种情况。**只更新已存在的键**是明确的产品决策：
    新增一个键是另一个功能（放在哪个块下？），不在这里猜。
+   （v2.7 把这条**收窄但没有推翻**：唯一被允许的新增是"父块已经在文件里"的那一个键
+   （`spec:` 在、`context_window` 不在），以及列表末尾追加/删除一项——见 §八之五。
+   两者都没有"放哪儿"的问题：父块写了位置，列表的末尾是唯一的末尾。新的顶层块、
+   中间插一项、越界下标，仍然一律报错。）
 2. **行尾注释前的对齐填充会被规范化。** `main          # 注释` 变成 `main # 注释`。
    注释内容活着，对齐空格没了。这**不是**被改行才有的——**整个文件的所有行尾注释**
    都会。所以本包的承诺是「**文件内容被保留**」，不是「文件逐字节不变」，
@@ -436,16 +459,22 @@ App.tsx
 ### 数据流
 
 后端**声明**可配置项（而不是前端硬编码），每条带元信息。**✅ 已实现**（`desktop/settings.go`），
-字段比 v2.0 的设想少三个（`Label` / `Options` / `Help`）：`Key` 就是路径、也是前端能显示的名字，
-`Note` 就是帮助文本，而"枚举的可选值"到现在一个键都没用到——需要时再加，比先摆着三列空的好：
+字段比 v2.0 的设想少两个（`Label` / `Help`）：`Key` 就是路径、也是前端能显示的名字，`Note`
+就是帮助文本。v2.6 加回来的四列都不是"先摆着"的空列，每一列都对应一个前端**否则会画错**的
+事实：`Category` 是"这一行画在哪"（§八之四 ①），`Options` 只在该叶子真的有封闭取值集时才有值
+且**从配置或常量算出**（④⑥），`Optional` / `IsSet` 是"unset 是不是一个含义独立的状态"（⑤）：
 
 ```go
 type SettingFieldVO struct {
-    Key          string // 点分路径，如 "language"；也是 SaveSettings 收回去的键
-    Kind         string // "string" | "bool" | "int" | "float" | "string_list" | "other"
-    Value        any    // 生效中的值（未设置的指针读作它的 default）
-    NeedsRestart bool   // ← 后端派生（settingApply.needsRestart()），前端只读
-    Note         string // 为什么要重启 / 这个键属于哪个入口模式
+    Key          string   // 点分路径，如 "language"；也是 SaveSettings 收回去的键
+    Kind         string   // "string" | "bool" | "int" | "float" | "string_list" | "other"
+    Value        any      // 生效中的值（未设置的指针读作它的 default）
+    NeedsRestart bool     // ← 后端派生（settingApply.needsRestart()），前端只读
+    Category     string   // ← 后端声明（settingApply.Category）：画在哪一组
+    Options      []string // ← 有封闭取值集时的可选项；空 = 自由文本
+    Optional     bool     // ← 后端派生（config.LeafInfo）：这个叶子可以「未设置」，而且那是一种状态
+    IsSet        bool     // ← 同上：它现在有没有值（Optional && !IsSet = 自动）
+    Note         string   // 为什么要重启 / 这个键属于哪个入口模式
 }
 ```
 
@@ -532,14 +561,14 @@ cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i
 |---|---|---|
 | **P0-a** | ✅ **已完成**：`config.SavePartial` + `config/save_partial_test.go`（§六的验收五条，全部通过） | — |
 | **P0-b** | ✅ **已完成**：`d.cfg` 的 `cfgMu` + `config()` / `withConfig()`，全部读点改访问器 | — |
-| P1 | `App.tsx` view 状态 + `settings.tsx` 外壳 + 分类导航 + CSS 隐藏保状态 + 屏蔽对话快捷键 | 低 |
+| **P1** | ✅ **已完成**（§八之四）：`App.tsx` view 状态 + `settings.tsx` 外壳 + 分类导航 + CSS 隐藏保状态 + 屏蔽对话快捷键 | 低 |
 | **P1.5** | ✅ **结构前置已完成**（§八之三：应用表 + 键覆盖守卫 + 广播原语）；其余小改见 §八之二 | 低 |
-| P2 | 后端 `GetSettingsSchema` / `SaveSettings`（读 `settingsTable`，写 `SavePartial`）+ 🔥 类表单 + 逐项补 `Apply` | 中 |
-| P3 | 🟡 / 🔴 类表单 + `⟳` 徽标（由 `settingApply.needsRestart()` 派生）+ 保存后汇总提示 | 低 |
-| P4 | desktop smoke 场景（改一项 → 断言 config.yaml 的值 + UI 反馈） | 低 |
+| **P2** | ✅ **已完成**：后端 `GetSettingsSchema` / `SaveSettings`（读 `settingsTable`，写 `SavePartial`）+ 🔥 类表单 + 逐项补 `Apply`（前端见 §八之四） | 中 |
+| **P3** | ✅ **已完成**：🟡 / 🔴 类表单 + `⟳` 徽标（由 `settingApply.needsRestart()` 派生）+ 保存后汇总提示 | 低 |
+| **P4** | ✅ **已完成**：`itest/desktop` 的 `settings` 场景（进页面 → 分组/卡片/下拉 → 改一项保存 → 「自动」保存 → 返回；Go 侧读 config.yaml 并用 `config.LoadFrom` 装载） | 低 |
 
 **P2 拆成两半，后端那一半 ✅ 已完成**（2026-09-18）：`config.ReadPath`/`SetPath`/`ApplyUpdates`/… +
-`GetSettingsSchema`/`SaveSettings` + 重生成的 binding；前端调用点未动（等 P1 的外壳）。
+`GetSettingsSchema`/`SaveSettings` + 重生成的 binding；前端那一半随 P1 一起落地（§八之四）。
 表里 22 行 push 中仍有 19 行 `Apply == nil`，它们落在「需重启」那一档，直到逐项补上。
 
 P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手写的配置文件」这个不可逆后果，
@@ -600,6 +629,171 @@ P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手�
 
 `liveAgents()`（返回 `[]*agent.AIAgent`，没有 session 身份、没有错误聚合）在 MCP 两处改走
 `applyToLiveAgents` 之后被删掉了——同一个形状只留一个。MCP 的 fan-out 本身没有变化，只是换了入口。
+
+## 八之四、前端的落地记录（v2.6）
+
+新增两个文件，改了三处既有的：
+
+| 文件 | 职责 |
+|---|---|
+| `desktop/frontend/src/settings.tsx` | 页面：分类导航 + Kind 驱动的表单 + dirty 跟踪 + 保存 + 汇总 |
+| `desktop/frontend/public/settings.css` | 它的样式（`index.html` 多引一行） |
+| `desktop/settings.go` | 多 `Category` 一列、`settingChoices` 一张表、`SettingsSchemaVO`、`SaveSettingsResultVO`、`normalizeUnsets` |
+| `config/value_path.go` | 多 `Unset` / `LeafInfo` / `DescribeLeaf` / `KindOf`（`kindOf` 从 desktop 搬过来，config 才是类型的归属） |
+| `config/provider_defs.go` | 多 `ProviderTypes()`：三个类型常量与 llm 的构造 switch 共用一份 |
+| `desktop/frontend/src/App.tsx` | `view` 状态、footer「设置」启用、`app-body.is-hidden`、门禁 window keydown |
+| `desktop/frontend/public/{base,layout}.css` | `--app-bg` / `--titlebar-h` 两个变量、`.app-body.is-hidden` |
+| `itest/desktop/{drivers/settings.js,scenarios.go}` | P4 的 smoke 场景：真机点进设置页，Go 侧回读 config.yaml |
+
+**这个页面不认识任何一个配置键。** 名字（`key`）、值、输入框形态（`kind`）、要不要 ⟳
+（`needsRestart`）、归到哪一组（`category`）、以及那句解释（`note`）全部来自后端；前端只做
+三件它该做的事：把草稿变成值（`parseField`）、判断哪几行改过、以及保存被拒时**保住用户刚敲的字**。
+加一个配置项因此仍然只改 Go（§八之三 ①的口径）。
+
+### 七处与本文档设想不同的决定
+
+1. **分类进了后端表**（`settingApply.Category` + `settingsCategoryOrder`）。文档 §三 只画了
+   五个分类名，没说它从哪来；放进表里才和 `Mode`/`Note` 同源——前端那份映射会是第二份需要
+   手工同步的配置键清单，而守卫测试看不见它。守卫测试现在双向要求：**offered 的行必须有
+   分类、unoffered 的行必须没有**（并且分类必须在有序列表里、每条分类至少有一行、
+   覆盖同一键的两行必须同分类——`logs` 与 `logs.level` 是今天唯一一对）。
+   七个分类：通用 / 模型 / 工具与权限 / MCP / 会话与上下文 / 扩展能力 / 高级。
+   文档原来写的「外观」没有落点（主题是 desktop 的 UI 状态，不在 config 里），所以它不存在
+   而不是空着——nav 里出现一个打不开任何东西的入口比没有更糟。
+
+2. **`SaveSettings` 回的是一对值，不是一句话**：`{ok, summary}`。理由是页面要拿这个答案做
+   两件不同的事——**写成**了要重读一遍（值已经是新的）并清空草稿，**被拒**了必须原样留着
+   读者的输入（他正要按那句话去改）。文档 §七 定的「返回给页面显示的一句话，不是错误」
+   仍然成立：`summary` 还是一句话，前端仍然不翻译 Go 错误，`ok` 只是让页面知道该做哪件。
+
+3. **schema 回一个 VO**：`{categories, fields}`。顺序随字段一起给，前端不自己声明一份。
+   字段比 §七 的设想多两列（`Category`、`Options`，两者都在下面单列）；仍然没有 `Label` 与
+   `Help`——`Key` 就是路径、也是它能显示的名字，`Note` 就是帮助文本。分类不在"可选元数据"
+   之列：它不是装饰，是"这一行画在哪"。
+
+4. **选项集是第二张表**（`settingChoices`），不是 `settingApply` 上的一列。粒度不同：一行管一个
+   **块**（`subagent` 覆盖十一个叶子、用同一个 `Apply` 推），而"可选值"属于**单个叶子**
+   （`subagent.provider` 是 provider 名字，`subagent.max_concurrency` 是数字）。挂在行上就得为了
+   一个下拉把块行拆成叶子行，还得把 `Apply` 闭包抄一份。表的**值是函数**（`func(*config.Config)
+   []string`），因为可选值就是这份配置定义的东西——今天 `providerNames` 读 `providers.*.name`，
+   写死的名字表会是"有哪些 provider"的第二个答案，加一个 provider 就错。
+   七个键：`provider` / `title_provider` / `commit_provider` / `run_provider` /
+   `subagent.provider` / `review.provider` / `memory.keyword_provider`。
+   键可以是**列表项里的叶子**，用 `*` 代表一个下标或 map key——就是 `config.YAMLPaths` 写的那种
+   写法（`providers.*.type`），于是守卫测试变成"这个键必须是 config 自己的结构叶子之一"的
+   集合成员判断，而不是另一份清单；一个决定，不管配置里有几个 provider。
+   守卫测试还要求键指向的行是 offered（认不出来的键会是没人看得见的下拉）。
+
+5. **配置列表的叶子折成卡片**，而且是**按路径形状**折的，不是按键名。`providers.0.api_key` 是
+   *路径寻址一个列表项*的方式，当地标签读不了（读者看的是"第二个 provider"，不是下标 1）。
+   两条规则都只用到形状：
+   - 元素边界 = 路径里**最靠右**的数字段（最内层列表），所以 `hooks.events.pre_tool.0.command`
+     属于 pre_tool 列表的第 0 项，而不是某个 `hooks.events.pre_tool` 项里的 `0` 字段；
+   - 标题 = 元素自己的 `name`（没有就是 `type`）+ `model`，逗号那半边是因为"main"单独出现时
+     说不出它指向哪个模型。这三者是配置自己的词汇（它 yaml 里的词），所以可以是前端常量；
+     一个都没有的元素退回显示自己的路径——丑，但那是它唯一的名字。
+   折叠的默认值按大小：超过 3 个叶子才折（一个 hook 命令是命令 + 超时，折起来多花一次点击），
+   带**填错**的元素强制展开（藏在折叠里的错误没法处理）。这条同样落在 `lsp.servers.N` 与
+   `web_search.providers.N` 上——同一个丑法，同一个修法。
+   同一个"路径不当标签"的问题还有两层：一个分类里**一个顶层 key 的叶子归到一个标题下**
+   （`web_search` / `web_fetch` / `debug.pprof`），标题取它们共享的最长段前缀，块内的行只写余下的
+   路径；卡片的副标题是**列表项定位**（`web_fetch.providers.0` → `providers[0]`，去掉标题已经说过
+   的前缀，但绝不丢掉给列表命名的那一段——`[0]` 单独出现是"往一个没有名字的东西里取第 0 项"）。
+   标题必须**换一种排印**（界面字体 15px/640，不是键名那套 mono 13.5px）：第一版用 mono 画标题，
+   结果 `web_fetch` 在页面上就是"一条没有输入框的配置项"，读者会去找它的输入框。没有这一层，`web_search.*` 与 `web_fetch.*` 在一条平面列表里只能靠读者自己去认前缀，
+   而列表卡片还插在中间（这正是"web_search.xxxx、web_fetch.xxxx 能不能放在子标题下"的由来）。
+   只有一个条目的块不出标题——那会是一行噪音，此时那一条照旧写全路径。
+
+6. **`providers.N.type` 是封闭集**，不是自由文本：`openai` / `openai-res` / `anthropic`，
+   取自 `config.ProviderTypes()`（与 llm 的构造 switch 同一批常量）。这个字段**装载时不校验**，
+   拼错照样 parse 成功，然后在某个会话解析 provider 时才炸（`unsupported provider type: …`）
+   ——正是下拉能挡掉的那类失败。它与 ④ 的 provider 名字不同：一个是配置算出来的，一个是常量，
+   但两者都走同一个"值是函数"的形状，调用方不必知道是哪种。
+
+7. **「未设置」是一等状态**（`config.Unset` + `config.DescribeLeaf`）。`providers.N.spec` 下的
+   `context_window` / `max_retries` / `vision` 是 `*int64` / `*int` / `*bool`，它们的 nil 不是
+   "空"，而是一个有含义的第三态（`vision: nil` = 按模型能力表自动判断）。要能在界面上改，缺的
+   不只是控件：**路径 API 没有任何办法把指针写回未设置**。所以：
+   - `config.Unset` 是一个**具名值**，写进文件是 `null`（装载回来就是 nil，已实测回环）。
+     不用裸 nil 是有意的——nil 正是"忘了解引用指针"的样子，而把它写进用户的文件会悄悄清掉一个
+     没人想动的设置，`SavePartial` 一直拒绝裸 nil（`TestSavePartial_NilIsRefused` 钉着）。
+   - `DescribeLeaf` 回答值的形态答不出的两件事：叶子**声明**成什么（未设置的 `*bool` 也是个开关，
+     不能因为读出来是 nil 就画成"改不了"），以及它现在有没有值（`Optional && !IsSet` = 自动）。
+     `Optional` 只对"没有 `default:` 标签的指针"为真：带默认值的指针，默认值说明了 unset 的含义，
+     两者是同一件事，画成普通复选框就好（`lsp.enabled` 就是这种）。
+   - 表单那边，一个 optional 叶子第一件事就是「自动」：bool 变成三选一（复选框放不下第三个位置），
+     其余保留自己的控件 + 一个「自动」勾选。空值一路以 `null` 传到文件。
+
+### 开工后照出的三处后端缺陷（都在 `config` 侧修掉）
+
+写这个页面之前，`GetSettingsSchema` 的字段没有任何调用点——**这两条路径从来没有被端到端
+走过一次**，一走就露了两个洞（第三个是能力缺失，见 ⑦）：
+
+- **时长**：配置里有两个时长类型，跨 binding 时给的是两种答案。`time.Duration` 没有
+  `MarshalJSON`，出去是 `30000000000`（纳秒，没有人会那样编辑）；`config.Duration` 有，出去是
+  `"30s"`，然后**根本存不回去**——写路径只认整数。现在路径 API 两边都按时长在文件里的字符串
+  形态走（`ReadPath` 返回 `"30s"`，`assignValue` 用 `time.ParseDuration` 收下），
+  所以 `Timeout` 是个普通的文本框，没有自己的 Kind。
+- **列表**：JS 数组过来是 `[]any`，而 `renderScalar` 只认 `[]string`——`SetPath` 的注释一直
+  写着"列表以 `[]any` 到达"，只有写文件那半边没跟上。四个 `string_list` 字段
+  （`permissions.bash.{allow,ask,deny}` / `review.allowed_tools`）之前一个都存不了。
+
+- **未设置写不回去**：见 ⑦。回环那一半有 `config/save_partial_test.go` 的
+  `TestUnsetWritesNullAndTheLoaderReadsItBackAsUnset` 钉着——写 `null` 而装载不回 nil 的话，
+  整个「自动」都是假的。
+
+三条各有测试钉住（另外还有 `config/value_path_test.go` 的
+`TestDurationLeavesReadAndWriteAsTheFileHolds`、`TestDescribeLeafTellsAnUnsetLeafFromAnEmptyOne`，
+`config/save_partial_test.go` 的 `TestSavePartial_AcceptsTheShapeABoundMethodReceives`，
+以及 desktop 侧的 `TestTheFormSeesAndSavesWhatTheFileHolds`——它同时断言**页面上显示的是文件里
+那个形态**、`TestProviderTypeOptionsAreAClosedSet`、`TestSaveSettingsUnsetsAnOptionalLeaf`）。
+
+### 八之五、列表的增删（v2.7）
+
+设置页现在能**往列表里加一项、也能删一项**（`providers` / `web_search.providers` /
+`web_fetch.providers` / `lsp.servers`：`config.ListItemPaths()` —— 一组「按字段」的列表，
+按路径可达、不带 map key；`[]string` 是一个叶子，`hooks.events.<event>` 的 key 得由调用方
+编一个名字，两者都不算"加一项"）。
+
+四个决定：
+
+1. **"加一项"是点 ＋ 立刻写入文件**，不是暂存在表单里等保存。理由是更新路径本身：
+   字段要能存进去，文件里得先有那个条目。暂存的话，保存时得同时造结构、还得把所有叶子
+   一次写完（保存只发改过的），那是另一套更大的机制。回执里明说"填好字段后点保存"。
+   代价：加了不填，文件里会留一条空条目——所以删除是这一期的一部分。
+2. **写入的条目 = 结构体 marshal 出来的块**（字段顺序、`omitempty` 照旧），所以新块和它旁边
+   那些长得一样。`defaults.Set` 先跑一遍：`web_search.providers` 的新条目自带 `type: exa`，
+   是一个"填个 key 就能用"的起点，而不是一堆零值。
+3. **列表的块不在文件里就建出来**（`web_search` 从没配过 → 新建 `web_search:` +
+   `providers:`）。位置由路径给出，仍然没有"放哪儿"的问题。AST 操作踩了两个坑，都写进了
+   代码注释：从别的 buffer 解析出来的节点 token 位置是错的（键会打成乱码 `ext_window`），
+   键的列号要从同级/上级的键借（`keyPosition`）；空 flow 映射（骨架里的 `spec: {}`）还要
+   顺便改回块样式。
+4. **删除要确认第二次**（写盘立刻生效且没有撤销），并且回执里**警告谁还在引用这个名字**
+   （`settingChoices` 里那些"值是一个选择"的键：`provider` / `title_provider` / 各
+   `*_provider`）。它们不是列表项，删掉条目会让它们指向不存在的东西——说出来是警告，
+   不说就是一份悄悄解析不了的配置。
+   增删都**不推送**：新条目还没有内容；删掉的条目对运行态的影响（引用的键）由用户按警告处理。
+
+smoke 场景 `settings` 把它跑了一遍（真机 67 项断言）：＋ → 文件里有、新卡片出现且展开 →
+删 → 文件里没有，并断言了"文件里没有 web_search 块时也能加"。
+
+### 已知待办（都不阻塞 P4）
+
+- **还有哪些枚举该进 `settingChoices`**：provider 名字（④）与 provider 类型（⑥）已经做了。
+  同一个"自由文本框拼错不报错"的问题还剩这些键：`logs.level`、`memory.type`、
+  `active_mcp_profile`（值来自 mcp profile 文件，得另找来源）、`*.thinking_level`
+  （`providers.N.spec` 与 `review` 各一个）。`web_search.providers.*.type`（exa / brave）也
+  在名单里——它今天**故意**不是 provider 类型（结构键 `providers.*.type` 只匹配两段，匹配不到
+  四段的它），要做就为它加一个自己的键。它们的可选值大多是写死的短名单。
+- **`other` 的七项**（`provider_aliases` 与几个"unset = 自动"的指针）在页面上是只读的，
+  并写明了"请直接编辑 config.yaml"。它们不是漏掉，是**没有单一标量可编辑**；
+  给它们编一个"自动"的表示是另一件事。列表项里的同类叶子（`lsp.servers.0.env`、
+  `hooks.events.pre_tool.0.env` 这些 map）也一样。
+- 草稿在页面里，不在 localStorage：关掉窗口就没了。这是有意的（保存才是承诺），
+  但值得记住。
+- §三 的图里画了「保存后……一个『立即重启』入口（可选）」——没做。汇总句里说清了哪几项要重启，
+  重启按钮涉及"怎么重启一个 desktop 进程"（连托盘、未保存的会话都在里面），是另一件事。
 
 ## 九、不做的事
 

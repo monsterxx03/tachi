@@ -31,7 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -83,6 +83,46 @@ func (m applyMode) String() string {
 	return fmt.Sprintf("applyMode(%d)", int(m))
 }
 
+// The settings page's groups, in the order its left column lists them.
+//
+// They are declared HERE, next to the rows rather than in the frontend, for the same reason
+// Mode and Note are: "where does this key belong" is a claim about the key, and the key's
+// owner is this file. A frontend-side mapping would be a second list of config keys to keep
+// in step — the drift this table exists to prevent — and no guard test could see it.
+//
+// The order is written out rather than derived from settingsTable's row order because the
+// rows are ordered for READING THE CLASSIFICATION (hot first, then restart-only, then other
+// entry modes' keys), which is not the order a person walks a settings page in.
+var settingsCategoryOrder = []string{
+	catGeneral, catModel, catTools, catMCP, catSession, catExtend, catAdvanced,
+}
+
+const (
+	// catGeneral is the landing group: what a session says, and who writes the text that
+	// surrounds it (titles, commit messages, `run`).
+	catGeneral = "通用"
+	// catModel is the provider DEFINITIONS and the default pick — not the per-command
+	// bindings, which are in 通用 because the reader looks for them with the feature.
+	catModel = "模型"
+	// catTools is what the agent may do to the world, and the limits on what comes back.
+	catTools = "工具与权限"
+	// catMCP is the shared MCP layer: which profile is loaded, what auto-loads, how often
+	// the tool list is re-read. A separate group because these three are one subsystem, and
+	// one of them (the profile) is the only key in the table that is its own writer.
+	catMCP = "MCP"
+	// catSession is the machinery a turn runs through: compaction, review, the side-channel
+	// runs, checkpoints, and the reminders injected into the prompt.
+	catSession = "会话与上下文"
+	// catExtend is the subsystems an agent is BUILT with — LSP, memory, subagents, hooks.
+	// They behave alike (a per-session object, rebuilt on the live sessions) and a reader
+	// looking for one looks for the others.
+	catExtend = "扩展能力"
+	// catAdvanced is what is consumed once at startup, plus the keys whose only route to the
+	// running process is a restart. The ⟳ badge is not the group's definition — it is where
+	// they happen to end up.
+	catAdvanced = "高级"
+)
+
 // settingApply is one row.
 type settingApply struct {
 	// Key is a dot path covering itself and everything under it, on SEGMENT boundaries:
@@ -113,6 +153,13 @@ type settingApply struct {
 	// that owns its write must be applyPush WITH an Apply: with no code there would be no writer
 	// at all.
 	OwnsWrite bool
+	// Category is which group of the form the field shows up under, from settingsCategoryOrder.
+	//
+	// Required exactly when the row is offered, and forbidden otherwise: an unoffered row is
+	// another entry mode's key, and a group for a field no form draws is a claim about a page
+	// that does not exist. The two states therefore mean one thing each, which is what lets the
+	// guard test check both directions.
+	Category string
 }
 
 // needsRestart reports whether a value saved now can only take effect after a restart.
@@ -154,8 +201,9 @@ func settingFor(key string) (settingApply, bool) {
 var settingsTable = []settingApply{
 	// --- prompts and titles (what a session SAYS) ---
 	{
-		Key:  "language",
-		Mode: applyPush,
+		Key:      "language",
+		Category: catGeneral,
+		Mode:     applyPush,
 		// The prompt is built once per (cwd, session, roots, mode) and memoized, and the
 		// language is not part of that key — so without this the old prompt is served
 		// forever (that is why the design doc calls the clear a PREREQUISITE, not a
@@ -166,13 +214,15 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:   "extra_system_prompt",
-		Mode:  applyPush,
-		Apply: func(d *desktopApp, _ *config.Config) error { d.invalidateSystemPrompts(); return nil },
+		Key:      "extra_system_prompt",
+		Category: catGeneral,
+		Mode:     applyPush,
+		Apply:    func(d *desktopApp, _ *config.Config) error { d.invalidateSystemPrompts(); return nil },
 	},
 	{
-		Key:  "title_generation",
-		Mode: applyPush,
+		Key:      "title_generation",
+		Category: catGeneral,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			// nil = the default (on), the same reading config uses everywhere.
 			enabled := cfg.TitleGeneration == nil || *cfg.TitleGeneration
@@ -183,8 +233,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "title_provider",
-		Mode: applyPush,
+		Key:      "title_provider",
+		Category: catGeneral,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			return pushError("标题 provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				a.SetupTitleProvider(cfg)
@@ -193,8 +244,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "commit_provider",
-		Mode: applyPush,
+		Key:      "commit_provider",
+		Category: catGeneral,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			return pushError("提交信息 provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				a.SetupCommitProvider(cfg)
@@ -203,8 +255,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "run_provider",
-		Mode: applyPush,
+		Key:      "run_provider",
+		Category: catGeneral,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			return pushError("run provider", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				a.SetupRunProvider(cfg)
@@ -219,12 +272,13 @@ var settingsTable = []settingApply{
 	// The two are NOT the same kind of fact. `provider` is the DEFAULT for sessions that do not
 	// exist yet: every running session has its own provider recorded (the /model switch), so a
 	// new default reaches them only by being used — which is lazy, not a rebuild.
-	{Key: "provider", Mode: applyLazy, Note: "这是新会话的默认值；已开的会话各自记录着自己的 provider，要用 /model 切换"},
+	{Key: "provider", Category: catModel, Mode: applyLazy, Note: "这是新会话的默认值；已开的会话各自记录着自己的 provider，要用 /model 切换"},
 	// `providers` is the provider DEFINITIONS (model, base_url, api_key, thinking_level): an
 	// edit has to reach the agents that were resolved before it.
 	{
-		Key:  "providers",
-		Mode: applyPush,
+		Key:      "providers",
+		Category: catModel,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			return pushError("provider 定义", d.applyToLiveRuns(func(r liveRun) error {
 				if r.Agent.Config.Resolved == nil {
@@ -243,17 +297,18 @@ var settingsTable = []settingApply{
 			}))
 		},
 	},
-	{Key: "provider_aliases", Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
-	{Key: "max_tokens", Mode: applyLazy},
+	{Key: "provider_aliases", Category: catModel, Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
+	{Key: "max_tokens", Category: catModel, Mode: applyLazy},
 	{Key: "max_iterations", Mode: applyUnused, Note: "desktop 不传 MaxIterations（0 = 无限），只有 tachi -p 读它"},
 
 	// --- sessions ---
-	{Key: "session_cleanup_max_count", Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},
+	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},
 
 	// --- tools ---
 	{
-		Key:  "web_search",
-		Mode: applyPush,
+		Key:      "web_search",
+		Category: catTools,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			// ReloadTools rebuilds every built-in from the live config (the sync.Once provider
 			// caches live on the tool instance, so a fresh instance re-reads) and drops
@@ -264,8 +319,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "web_fetch",
-		Mode: applyPush,
+		Key:      "web_fetch",
+		Category: catTools,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			return pushError("抓取工具", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				return a.ReloadTools()
@@ -273,8 +329,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "tool_result",
-		Mode: applyPush,
+		Key:      "tool_result",
+		Category: catTools,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			// Both halves or neither: the built-in tools AND the shared MCP manager, which
 			// snapshots these two values at construction. Rebuilding only the tools would leave
@@ -288,8 +345,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "permissions.bash",
-		Mode: applyPush,
+		Key:      "permissions.bash",
+		Category: catTools,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			return pushError("权限策略", d.applyToLiveRuns(func(r liveRun) error {
 				// SetPermissionRoot is the same rebuild a tree change already goes through: it
@@ -304,8 +362,9 @@ var settingsTable = []settingApply{
 
 	// --- MCP ---
 	{
-		Key:  "active_mcp_profile",
-		Mode: applyPush,
+		Key:      "active_mcp_profile",
+		Category: catMCP,
+		Mode:     applyPush,
 		// This row OWNS the write of its leaf (OwnsWrite): the batch must not pre-apply the profile,
 		// or a switch that fails would leave the field naming a profile whose servers are not
 		// loaded — and the panel would show it as active. d.switchMCPProfileTo writes it, under
@@ -329,8 +388,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "mcp_tool_search",
-		Mode: applyPush,
+		Key:      "mcp_tool_search",
+		Category: catMCP,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			if d.mcp == nil {
 				return nil
@@ -354,8 +414,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "mcp_tool_refresh",
-		Mode: applyPush,
+		Key:      "mcp_tool_refresh",
+		Category: catMCP,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			if d.mcp == nil {
 				return nil
@@ -373,8 +434,9 @@ var settingsTable = []settingApply{
 
 	// --- per-session subsystems built at construction ---
 	{
-		Key:  "lsp",
-		Mode: applyPush,
+		Key:      "lsp",
+		Category: catExtend,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			// Per session: the manager is built per agent, and ReloadLSP tears the old one down
 			// first (its child processes would otherwise be orphaned).
@@ -384,8 +446,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "subagent",
-		Mode: applyPush,
+		Key:      "subagent",
+		Category: catExtend,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			// Covers subagent.provider too: ReloadSubagent re-resolves the dedicated provider
 			// and rebuilds the executor (worktree included) under one call.
@@ -395,8 +458,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "memory",
-		Mode: applyPush,
+		Key:      "memory",
+		Category: catExtend,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			// The reminder is in the collector for the agent's life, so it is pointed at the new
 			// backend instead of being re-registered — see ReloadMemory.
@@ -406,8 +470,9 @@ var settingsTable = []settingApply{
 		},
 	},
 	{
-		Key:  "hooks",
-		Mode: applyPush,
+		Key:      "hooks",
+		Category: catExtend,
+		Mode:     applyPush,
 		Apply: func(d *desktopApp, cfg *config.Config) error {
 			return pushError("hooks", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				return a.ReloadHooks(cfg)
@@ -416,24 +481,25 @@ var settingsTable = []settingApply{
 	},
 
 	// --- snapshots and bookkeeping ---
-	{Key: "checkpoints.enabled", Mode: applyLazy},
+	{Key: "checkpoints.enabled", Category: catSession, Mode: applyLazy},
 	// The three limits need no reload call: the manager bakes them in at construction, and the
 	// per-session key now CONTAINS them, so the next use rebuilds it with the new values.
-	{Key: "checkpoints.max_files", Mode: applyLazy, Note: "Options 已并进检查点 manager 的 key：下次用到时按新值重建"},
-	{Key: "checkpoints.max_bytes", Mode: applyLazy, Note: "同 checkpoints.max_files"},
-	{Key: "checkpoints.retain", Mode: applyLazy, Note: "同 checkpoints.max_files"},
-	{Key: "oneoff", Mode: applyLazy},
-	{Key: "compact", Mode: applyLazy},
-	{Key: "review", Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读"},
+	{Key: "checkpoints.max_files", Category: catSession, Mode: applyLazy, Note: "Options 已并进检查点 manager 的 key：下次用到时按新值重建"},
+	{Key: "checkpoints.max_bytes", Category: catSession, Mode: applyLazy, Note: "同 checkpoints.max_files"},
+	{Key: "checkpoints.retain", Category: catSession, Mode: applyLazy, Note: "同 checkpoints.max_files"},
+	{Key: "oneoff", Category: catSession, Mode: applyLazy},
+	{Key: "compact", Category: catSession, Mode: applyLazy},
+	{Key: "review", Category: catSession, Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读"},
 	// Registered unconditionally, reading the config on every generation (see GitReminder):
 	// nothing has to be pushed, and nothing has to be rebuilt — which is the point, since the
 	// collector cannot remove a reminder without taking every other reminder's state with it.
-	{Key: "system_reminder", Mode: applyLazy, Note: "git reminder 每次生成时现读配置"},
+	{Key: "system_reminder", Category: catSession, Mode: applyLazy, Note: "git reminder 每次生成时现读配置"},
 
 	// --- consumed once at startup ---
 	{
-		Key:  "logs.level",
-		Mode: applyPush,
+		Key:      "logs.level",
+		Category: catAdvanced,
+		Mode:     applyPush,
 		Apply: func(_ *desktopApp, cfg *config.Config) error {
 			// Process-wide, not per session: every handler holds the same LevelVar, so this
 			// reaches loggers built at startup — which is exactly what the old scalar could not.
@@ -441,9 +507,9 @@ var settingsTable = []settingApply{
 			return nil
 		},
 	},
-	{Key: "logs", Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
-	{Key: "debug.pprof", Mode: applyRestart, Note: "启动即绑端口"},
-	{Key: "herdr", Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
+	{Key: "logs", Category: catAdvanced, Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
+	{Key: "debug.pprof", Category: catAdvanced, Mode: applyRestart, Note: "启动即绑端口"},
+	{Key: "herdr", Category: catAdvanced, Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},
@@ -453,6 +519,96 @@ var settingsTable = []settingApply{
 	{Key: "acp", Mode: applyUnused, Note: "ACP 入口的配置"},
 	{Key: "deep_research", Mode: applyUnused, Note: "desktop 没有 research 命令（TUI 与 tachi -p 才有）"},
 	{Key: "web", Mode: applyUnused, Note: "tachi web 是独立进程，重启那个进程即可"},
+}
+
+// settingChoices declares the leaves whose value is a CHOICE from a closed set, and where that
+// set comes from.
+//
+// It is keyed by the leaf's path, and it is a SECOND table rather than a field on settingApply,
+// because the two have different granularity. A row speaks for a BLOCK — `subagent` covers
+// eleven leaves and pushes them all the same way — while a choice belongs to ONE leaf:
+// `subagent.provider` names a provider, `subagent.max_concurrency` is a number. Hanging this on
+// the row would mean splitting block rows per leaf, and copying their Apply closures, just to
+// attach a dropdown.
+//
+// A key may stand for a LIST ITEM'S leaf, with `*` for a sequence index or a map key — the same
+// character config.YAMLPaths writes, so the key here is the leaf as the config's own walker
+// names it (`providers.*.type`). That is what makes the guard test a set membership rather than
+// a second list: every key must BE one of config's structural leaves. One decision, however many
+// providers the config happens to hold.
+//
+// The values are FUNCTIONS of the live config, because the choices are what THIS config defines:
+// a list of provider names hard-coded here would be a second answer to "which providers exist",
+// and it would be wrong the moment someone adds one. A closed set is the other direction — see
+// providerTypes — and takes the function shape all the same, so a caller never has to know which
+// kind it is looking at.
+var settingChoices = map[string]func(*config.Config) []string{
+	"provider":                providerNames,
+	"title_provider":          providerNames,
+	"commit_provider":         providerNames,
+	"run_provider":            providerNames,
+	"subagent.provider":       providerNames,
+	"review.provider":         providerNames,
+	"memory.keyword_provider": providerNames,
+	"providers.*.type":        providerTypes,
+}
+
+// providerNames lists the providers this config defines, in file order — the choice list for
+// every key that NAMES one: the default pick (`provider`), the per-command bindings
+// (title / commit / run) and the subsystem ones (subagent, review, memory's keyword extractor).
+//
+// An entry with no name is skipped (a half-written provider is not a choice), and duplicates
+// collapse: two entries sharing a name are one choice to the reader even though they are two
+// providers. Empty when the config defines none — which the page shows as a text box, because
+// a dropdown with nothing in it is a trap.
+func providerNames(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Providers))
+	seen := make(map[string]bool, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		if p.Name == "" || seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// providerTypes is the closed set of provider TYPES (openai / openai-res / anthropic), from the
+// constants config and llm share. It is static where providerNames is config-derived, and the
+// reason it is worth a dropdown either way: nothing validates this field at load time, so a
+// typo survives parsing and then fails when a session resolves its provider
+// ("unsupported provider type: …") — a config that loads and then cannot talk to anything.
+func providerTypes(*config.Config) []string { return config.ProviderTypes() }
+
+// choiceFor resolves a concrete leaf to the choice set declared for it: an exact key first, then
+// a structural one, where `*` stands for one segment (`providers.*.type` covers `providers.0.type`
+// and `providers.1.type` but never `web_search.providers.0.type` — that would be a different
+// list, whose `type` means a different thing).
+func choiceFor(key string) (func(*config.Config) []string, bool) {
+	if fn, ok := settingChoices[key]; ok {
+		return fn, true
+	}
+	for pattern, fn := range settingChoices {
+		if !strings.Contains(pattern, "*") {
+			continue
+		}
+		ps, ks := strings.Split(pattern, "."), strings.Split(key, ".")
+		if len(ps) != len(ks) {
+			continue
+		}
+		matched := true
+		for i := range ps {
+			if ps[i] != "*" && ps[i] != ks[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return fn, true
+		}
+	}
+	return nil, false
 }
 
 // pushError folds per-session failures into one error for a row's Apply, or nil when every
@@ -481,8 +637,64 @@ type SettingFieldVO struct {
 	// NeedsRestart is the row's own answer (settingApply.needsRestart): the form puts ⟳ beside
 	// these and nothing else. It is not a flag anyone sets.
 	NeedsRestart bool `json:"needsRestart"`
+	// Category is the row's own answer (settingApply.Category): which group of the form the
+	// field shows up under. The frontend groups by this name and never derives it from the
+	// key — "where does 日志 live" is not a question the dot path answers.
+	Category string `json:"category"`
+	// Options is the closed set this leaf's value comes from, when it has one: the provider
+	// names this config defines, or the provider TYPES, for the keys that name one (see
+	// settingChoices).
+	//
+	// Empty means "no declared set", which is NOT the same as "nothing is legal" — it is the
+	// free-text case, and it is also what a config with no providers at all yields
+	// (providerNames). The page renders a dropdown only when there is something to choose, so
+	// the two are told apart by the caller seeing zero options and falling back.
+	//
+	// A value the list does not contain is still legal — the form keeps it as its own entry
+	// rather than silently switching the field to something else.
+	Options []string `json:"options,omitempty"`
+	// Optional says the leaf can be left UNSET, and that being unset MEANS something: these are
+	// the fields whose nil is a third state rather than an empty one (`vision: nil` = decide it
+	// from the model, `max_retries: nil` = the path's default). The form draws 自动 for them, and
+	// they are the only fields it can clear back to it.
+	Optional bool `json:"optional,omitempty"`
+	// IsSet says whether the leaf currently holds a value. `Optional && !IsSet` is the 自动
+	// state; a leaf that is not optional is always set. It cannot be read off Value: an unset
+	// pointer WITH a default reads as that default (see config.LeafInfo).
+	IsSet bool `json:"isSet"`
 	// Note is why: the reason a restart is needed, or which entry mode owns the key instead.
 	Note string `json:"note,omitempty"`
+}
+
+// SettingsSchemaVO is everything the settings page needs to draw itself, in one answer: the
+// fields, and the order the left column lists their groups in.
+//
+// The order rides along rather than being declared in the frontend for the same reason the
+// categories do (see settingsCategoryOrder): a second list is a second thing to keep in step,
+// and a field whose category the frontend does not know would be a field it silently drops.
+type SettingsSchemaVO struct {
+	// Categories is settingsCategoryOrder: every group, in display order. All of them are
+	// non-empty — the guard test fails if one has no field, and the page's nav is this list.
+	Categories []string `json:"categories"`
+	// Fields is one entry per editable leaf of the live config, in path order. The form
+	// groups them; nothing here is sorted by category, because within a group the natural
+	// order is the config's own.
+	Fields []SettingFieldVO `json:"fields"`
+	// Lists are the config lists the page may ADD items to (config.ListItemPaths, filtered to the
+	// rows this process offers).
+	//
+	// Declared rather than left for the form to infer from the fields, because an EMPTY list has
+	// no fields: without this the page could not offer the first item of a list, which is exactly
+	// when someone wants it.
+	Lists []SettingListVO `json:"lists"`
+}
+
+// SettingListVO is one list the settings page may grow: the list's own path, and the group it is
+// drawn in (which is the category of the row that owns it — `web_search.providers` belongs to
+// `web_search`'s row, not to a row of its own).
+type SettingListVO struct {
+	Path     string `json:"path"`
+	Category string `json:"category"`
 }
 
 // GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
@@ -496,14 +708,14 @@ type SettingFieldVO struct {
 //
 // A value that cannot be read is still listed, with the reason in Note: hiding a field would
 // present a smaller settings page as a complete one, and the failure is the interesting part.
-func (s *AgentService) GetSettingsSchema() []SettingFieldVO {
+func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 	d := s.desk
 	cfg := d.config()
 	if cfg == nil {
 		return nil
 	}
 	paths := config.PathsFor(cfg)
-	out := make([]SettingFieldVO, 0, len(paths))
+	fields := make([]SettingFieldVO, 0, len(paths))
 	for _, key := range paths {
 		row, ok := settingFor(key)
 		if !ok || !row.offered() {
@@ -514,41 +726,242 @@ func (s *AgentService) GetSettingsSchema() []SettingFieldVO {
 		if err != nil {
 			note = joinNotes(note, "读取失败："+err.Error())
 		}
-		out = append(out, SettingFieldVO{
+		// How the leaf is declared, which the value cannot say: an unset *bool holds nothing to
+		// infer a control from, and `unset` is a state of its own for these fields.
+		info, infoErr := config.DescribeLeaf(cfg, key)
+		if infoErr != nil {
+			// The same walk ReadPath just failed at; one sentence is enough.
+			info.Kind = config.KindOf(value)
+		}
+		// A declared choice set is only offered on a leaf that can hold one: a dropdown on a
+		// number would be a way to save a value the field refuses. (The guard test in
+		// settings_test.go holds the table to config's own leaves, and to string leaves at that.)
+		var options []string
+		if choose, ok := choiceFor(key); ok && info.Kind == "string" {
+			options = choose(cfg)
+		}
+		fields = append(fields, SettingFieldVO{
 			Key:          key,
-			Kind:         kindOf(value),
+			Kind:         info.Kind,
 			Value:        value,
 			NeedsRestart: row.needsRestart(),
+			Category:     row.Category,
+			Options:      options,
+			Optional:     info.Optional,
+			IsSet:        info.IsSet,
 			Note:         note,
 		})
+	}
+	// A fresh slice rather than settingsCategoryOrder itself: the binding serializes this, and
+	// a caller that appended to it would be mutating the package's own list.
+	return &SettingsSchemaVO{
+		Categories: append([]string(nil), settingsCategoryOrder...),
+		Fields:     fields,
+		Lists:      settingLists(),
+	}
+}
+
+// settingLists reports the config lists this page may add items to, each with the group it is
+// drawn in. The rows decide that group — a list belongs where the block that owns it is drawn,
+// and a list whose row is not offered (another entry mode's key) is not offered either.
+func settingLists() []SettingListVO {
+	paths := config.ListItemPaths()
+	out := make([]SettingListVO, 0, len(paths))
+	for _, path := range paths {
+		row, ok := settingFor(path)
+		if !ok || !row.offered() {
+			continue
+		}
+		out = append(out, SettingListVO{Path: path, Category: row.Category})
 	}
 	return out
 }
 
-// kindOf names the input a value wants. Reflection rather than a switch on concrete types,
-// because the config has named scalar types (`config.Duration` is an int64 underneath) that
-// are still numbers to a form.
-func kindOf(v any) string {
-	if v == nil {
-		return "other"
+// SettingsItemResultVO is what growing or shrinking a list reports: whether it happened, the one
+// sentence to show, and — for an add — the new item's own path.
+//
+// The path is reported rather than left for the page to work out, because where the item landed is
+// the LIST's fact, not the page's (the append position is its length). The page uses it to open
+// the card it just made: the reason someone presses ＋ is to fill the new item in.
+type SettingsItemResultVO struct {
+	OK          bool   `json:"ok"`
+	Summary     string `json:"summary"`
+	ElementPath string `json:"elementPath,omitempty"`
+}
+
+// AddSettingsItem appends one item to a config list and writes it to config.yaml.
+//
+// It writes immediately rather than staging the item in the form, and that is the whole design of
+// this method: the element has to exist IN THE FILE before any of its fields can be saved (the
+// update path refuses a path the file does not have), so an item that only lived in the form
+// would need a second, larger mechanism at save time — and every leaf the form offers would still
+// have to be written at once, because the save only sends what was edited.
+//
+// Nothing is PUSHED: a new element holds nothing yet, and telling the running process about a
+// provider with no name would be telling it about nothing. The fields the user fills in are
+// pushed by the ordinary save that writes them.
+func (s *AgentService) AddSettingsItem(listPath string) *SettingsItemResultVO {
+	fail := func(summary string) *SettingsItemResultVO {
+		return &SettingsItemResultVO{Summary: summary}
 	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "bool"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return "int"
-	case reflect.Float32, reflect.Float64:
-		return "float"
-	case reflect.Slice:
-		if rv.Type().Elem().Kind() == reflect.String {
-			return "string_list"
+	d := s.desk
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+	if !slices.Contains(config.ListItemPaths(), listPath) {
+		return fail(fmt.Sprintf("%s 不是可以添加条目的列表", listPath))
+	}
+	cfg := d.config()
+	if cfg == nil {
+		return fail("配置尚未加载，改不了")
+	}
+	path, err := config.ConfigPath()
+	if err != nil {
+		return fail("找不到 config.yaml：" + err.Error())
+	}
+
+	var elementPath, literal string
+	var appendErr error
+	d.withConfig(func(c *config.Config) {
+		elementPath, literal, appendErr = config.AppendListItem(c, listPath)
+	})
+	if appendErr != nil {
+		return fail("加不了：" + appendErr.Error())
+	}
+	if err := config.AppendListItemTo(path, listPath, literal); err != nil {
+		d.withConfig(func(c *config.Config) { _, _ = config.RemoveListItem(c, elementPath) })
+		return fail("没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）")
+	}
+	return &SettingsItemResultVO{
+		OK:          true,
+		Summary:     fmt.Sprintf("已在 %s 末尾加了一项（%s）；填好字段后点保存，改动才会生效", listPath, elementPath),
+		ElementPath: elementPath,
+	}
+}
+
+// RemoveSettingsItem removes one item from a config list, in the file and in memory.
+//
+// The references are checked BEFORE it goes, and reported after: a name a list item is known by
+// (`providers.2.name`) may be written into keys that mean "use that one" — `provider`,
+// `title_provider`, each `*_provider` — and those are not list items, so removing the item leaves
+// them pointing at nothing. Saying so is the difference between a warning and a config that
+// quietly stops resolving.
+func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResultVO {
+	fail := func(summary string) *SettingsItemResultVO {
+		return &SettingsItemResultVO{Summary: summary}
+	}
+	d := s.desk
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+	cfg := d.config()
+	if cfg == nil {
+		return fail("配置尚未加载，改不了")
+	}
+	path, err := config.ConfigPath()
+	if err != nil {
+		return fail("找不到 config.yaml：" + err.Error())
+	}
+	// What it was called, and who is pointing at it — read while it is still there.
+	name := ""
+	if leaves, err := config.ListItemLeaves(cfg, elementPath); err == nil {
+		if s, ok := leaves["name"].(string); ok {
+			name = s
 		}
 	}
-	return "other"
+	dangling := danglingReferences(cfg, name)
+
+	var held any
+	var removeErr error
+	d.withConfig(func(c *config.Config) {
+		held, removeErr = config.RemoveListItem(c, elementPath)
+	})
+	if removeErr != nil {
+		return fail("删不了：" + removeErr.Error())
+	}
+	if err := config.RemoveListItemFrom(path, elementPath); err != nil {
+		d.withConfig(func(c *config.Config) { _ = config.RestoreListItem(c, elementPath, held) })
+		return fail("没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）")
+	}
+	summary := "已从 config.yaml 删除 " + elementPath
+	if len(dangling) > 0 {
+		summary += fmt.Sprintf("；注意 %s 还写着「%s」，它现在指向一个不存在的条目，保存前请改掉",
+			strings.Join(dangling, "、"), name)
+	}
+	return &SettingsItemResultVO{OK: true, Summary: summary}
+}
+
+// danglingReferences names the keys that currently hold this item's name, for the warning a
+// removal reports.
+//
+// It walks settingChoices — the keys whose value is a CHOICE from a set — because that is exactly
+// the set of keys that can point at a list item. A structural key (`providers.*.type`) is skipped:
+// its choices are the list's own vocabulary, not a reference to a particular item, and comparing a
+// user's provider name against them would warn about the wrong thing.
+func danglingReferences(cfg *config.Config, name string) []string {
+	if name == "" {
+		return nil
+	}
+	var out []string
+	for key := range settingChoices {
+		if strings.Contains(key, "*") {
+			continue
+		}
+		value, err := config.ReadPath(cfg, key)
+		if err != nil {
+			continue
+		}
+		if s, ok := value.(string); ok && s == name {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// normalizeUnsets turns the PAGE's null into config.Unset, for the leaves that can take one.
+//
+// The two are not the same thing to the rest of this pipeline: config refuses a bare nil on
+// purpose (it is what a caller who forgot to dereference a pointer looks like, and writing that
+// would silently clear a setting), while Unset is a value that means it. A form needs to say
+// "unset" (its 自动 state), so the translation happens at the boundary where the form's
+// vocabulary lives — and only for a leaf that can be unset at all.
+//
+// A nil for any other leaf is left alone: the type check refuses it with the sentence that says
+// what a nil is, which is the right answer for a leaf whose field has no null to write.
+//
+// It mutates updates in place: that map came from this call's own binding, and the steps after
+// need to see what config will actually be given.
+func normalizeUnsets(cfg *config.Config, updates map[string]any) {
+	for key, v := range updates {
+		if v != nil {
+			continue
+		}
+		info, err := config.DescribeLeaf(cfg, key)
+		if err != nil {
+			continue // an unreadable path is reported by the step that resolves it
+		}
+		if info.Optional {
+			updates[key] = config.Unset{}
+		}
+	}
+}
+
+// SaveSettingsResultVO is what the page gets back from a save: whether anything was written,
+// and the one sentence to show.
+//
+// Two fields rather than a bare string, because the page does two different things with the
+// answer: a save that WROTE clears the form and re-reads every value (they are the new ones),
+// while a save that was REFUSED has to leave the reader's typing alone — they need to fix the
+// value, and a form that threw away a whole batch over one typo would be worse than no form.
+// The sentence stays a sentence (the desktop's convention for bound methods: the frontend does
+// not translate Go errors), so nothing here asks the page to read the text.
+type SaveSettingsResultVO struct {
+	// OK is true when the file was written: every value is in config.yaml, and the running
+	// process was told everything that can be told. False means nothing moved anywhere — not
+	// memory, not the file, not the running process.
+	OK bool `json:"ok"`
+	// Summary is the sentence the page shows as it is: what took effect, what waits for a
+	// restart, what waits for a turn to end, and which session refused what.
+	Summary string `json:"summary"`
 }
 
 // SaveSettings applies a batch of edited leaves and tells the running process about them.
@@ -559,34 +972,37 @@ func kindOf(v any) string {
 //  1. resolve EVERY key first — an unknown key, or one another entry mode owns, refuses the
 //     whole batch before anything is touched. A half-saved form is a state no reader can
 //     reason about.
-//  2. validate the values against the FILE's own type table, before memory changes.
-//  3. snapshot the leaves and apply them in one locked step (all or none).
-//  4. write config.yaml. Only a save that got this far continues: if the write fails, the
+//  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
+//     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
+//  3. validate the values against the FILE's own type table, before memory changes.
+//  4. snapshot the leaves and apply them in one locked step (all or none).
+//  5. write config.yaml. Only a save that got this far continues: if the write fails, the
 //     memory is put back exactly as it was and the answer says so — "applied for this session
 //     but not saved" is a state the next restart contradicts, and the reader cannot tell which
 //     of the two they have.
-//  5. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
+//  6. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
 //     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
-//     before the write, a failure at step 4 would leave the running process on values the file
+//     before the write, a failure at step 5 would leave the running process on values the file
 //     (and the restored memory) does not have, while the answer promised the opposite. Its own
 //     failures are per-session and reported, not fatal — the value IS saved.
 //
 // The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
 // interleave their snapshots, config writes and pushes.
 //
-// Returns the summary the page shows (the desktop's convention for bound methods: a sentence
-// rather than an error the frontend would have to translate).
-func (s *AgentService) SaveSettings(updates map[string]any) string {
+// Returns whether the batch was written, plus the sentence the page shows (the desktop's
+// convention for bound methods: a sentence rather than an error the frontend would have to
+// translate). The two are not redundant — see SaveSettingsResultVO.
+func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultVO {
 	d := s.desk
 	d.settingsMu.Lock()
 	defer d.settingsMu.Unlock()
 
 	cfg := d.config()
 	if cfg == nil {
-		return "配置尚未加载，改不了"
+		return &SaveSettingsResultVO{OK: false, Summary: "配置尚未加载，改不了"}
 	}
 	if len(updates) == 0 {
-		return "没有要保存的改动"
+		return &SaveSettingsResultVO{OK: false, Summary: "没有要保存的改动"}
 	}
 
 	keys := make([]string, 0, len(updates))
@@ -600,20 +1016,25 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 	for _, key := range keys {
 		row, ok := settingFor(key)
 		if !ok {
-			return fmt.Sprintf("未知配置项：%s", key)
+			return &SaveSettingsResultVO{OK: false, Summary: fmt.Sprintf("未知配置项：%s", key)}
 		}
 		if !row.offered() {
-			return fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)
+			return &SaveSettingsResultVO{OK: false, Summary: fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)}
 		}
 		rows[key] = row
 	}
 
-	// 2. The type table the file write uses, so a bad value never reaches memory.
+	// 2. The page's null means 自动 on a leaf that has that state — see normalizeUnsets. It has to
+	// happen before the type check below, because what the check and the write both need to see is
+	// what config will actually be given.
+	normalizeUnsets(cfg, updates)
+
+	// 3. The type table the file write uses, so a bad value never reaches memory.
 	if err := config.ValidateUpdates(updates); err != nil {
-		return "值不合法：" + err.Error()
+		return &SaveSettingsResultVO{OK: false, Summary: "值不合法：" + err.Error()}
 	}
 
-	// 3. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
+	// 4. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
 	// A row that OWNS the write of its leaf (settingApply.OwnsWrite) is deliberately NOT in the
 	// batch: its push writes the value itself, at the moment the runtime can actually take it, so
 	// there is one writer and a failed push leaves the field alone.
@@ -631,27 +1052,27 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		var snapErr error
 		snap, snapErr = config.SnapshotLeaves(cfg, batchedKeys)
 		if snapErr != nil {
-			return "改不了：" + snapErr.Error()
+			return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + snapErr.Error()}
 		}
 		var applyErr error
 		d.withConfig(func(c *config.Config) {
 			applyErr = config.ApplyUpdates(c, batched)
 		})
 		if applyErr != nil {
-			return "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"
+			return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"}
 		}
 	}
 
-	// 4. The file: it is what survives the process. A failure here undoes the memory and
+	// 5. The file: it is what survives the process. A failure here undoes the memory and
 	// returns — and it is honest to say so, because nothing has been pushed yet (step 5).
 	if err := config.SavePartial(updates); err != nil {
 		if len(batched) > 0 {
 			d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
 		}
-		return "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"
+		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
 	}
 
-	// 5. The runtime half: everything already built that keeps its own copy of these values.
+	// 6. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
 	//
 	// `pushing` marks this step: the fan-out queues a push for a session whose turn is in flight
@@ -709,9 +1130,9 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		parts = append(parts, "有会话没能跟着更新："+strings.Join(pushFailures, "；"))
 	}
 	if len(parts) == 0 {
-		return "已保存"
+		return &SaveSettingsResultVO{OK: true, Summary: "已保存"}
 	}
-	return strings.Join(parts, "；")
+	return &SaveSettingsResultVO{OK: true, Summary: strings.Join(parts, "；")}
 }
 
 // deferredSessionLabels names the sessions whose push waited for a turn to end, in the summary's

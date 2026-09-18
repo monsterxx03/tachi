@@ -59,6 +59,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
+| the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
 | sending/receiving files or images | `paste-image` |
 | deleting sessions, running-session guards | `delete-running` |
 | whatever else — the transcript itself, session rows | `transcript`, `sessions` |
@@ -271,7 +272,37 @@ Fixtures, all because the real path needs something a driver cannot do:
   reconnecting every server.
   `TestTheLikelyEditsStayHot` fences the keys users edit most: if a refactor makes one of
   them need a restart again, that test — not a confused user — is what fails.
-  Design: `docs/2026-09-14-desktop-settings-design.md` §六、§七、§八之三.
+- **The form itself is a pure renderer of that declaration** (`frontend/src/settings.tsx` holds no config
+  key). Three levels of grouping, all of them rules about PATHS rather than about keys: a `Category` puts a
+  leaf in the left column, a top-level key's leaves go under one heading (`web_search`, `debug.pprof` — the
+  longest prefix they share, and rows below it drop that prefix), and a config list's item collapses into a
+  card (`providers.0` → `main · claude-x`). A heading is skipped for a block of one item, and a card's rows
+  keep their own path tails. Four things about it a change can silently break, each pinned by `desktop/settings_test.go`:
+  a `Category` per offered row (`settingsCategoryOrder` is the nav, and a category with no row is a page that
+  cannot be filled); `settingChoices`, a SECOND table for leaves with a closed value set — keyed by the
+  structural path (`providers.*.type`, `*` = one index or map key, the same character `config.YAMLPaths`
+  writes) because the decision belongs to the list, not to item 0; `Optional` / `IsSet`, which is what lets
+  the page draw 自动 instead of guessing from a value that an unset pointer does not have
+  (`config.DescribeLeaf` — the declared type, since an unset `*bool` is still a switch); and
+  `SaveSettings`'s `{ok, summary}`, because a page that cannot tell "written" from "refused" either keeps
+  typing it should have dropped or drops an edit the reader still has to fix.
+- **「未设置」 is a state with its own value** (`config.Unset` → `null` in the file; a bare `nil` stays
+  REFUSED, because that is what a forgotten pointer dereference looks like). It is the only way back to a
+  field's auto/default behaviour (`vision: null`, `max_retries: null`), and `Optional` is true only for a
+  pointer with NO `default:` tag — a default already says what unset means, so those stay plain checkboxes.
+- **A list can be grown and shrunk from the page**, and that is the ONE structural edit
+  (`config/list_items.go`): `config.ListItemPaths()` names the lists it may touch (a slice of
+  structs by path — a `[]string` is one leaf, and a map key would have to be invented), and
+  `AppendListItem`/`AppendListItemTo` + `RemoveListItem`/`RemoveListItemFrom` are the memory and
+  file halves, split like `SetPath`/`SavePartial`. Add writes IMMEDIATELY (a field is only
+  savable once its item is in the FILE), which is why remove ships with it; remove warns about the
+  keys still naming the item (`settingChoices`), and neither pushes. SavePartial itself gains one
+  narrow rule — a key whose PARENT block exists is added (`spec.context_window`) — because the
+  skeleton of a new item leaves out its `omitempty` fields.
+  Smoke: the `settings` scenario drives the page end to end and reads `config.yaml` back through
+  `config.LoadFrom` on the Go side (including add, remove, and a list whose block was not in the
+  file at all).
+  Design: `docs/2026-09-14-desktop-settings-design.md` §六、§七、§八之三、§八之四.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
   `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the
   red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits a

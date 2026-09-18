@@ -442,6 +442,12 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-height: 0;
 }
+/* The chat view while the settings page is up. `visibility` rather than `display: none`: the
+   box keeps its size, so the transcript's scroll offset survives the round trip (`display`
+   would drop the scrollport, and the reader would come back to the top of a long conversation),
+   and a hidden element is out of the tab order either way. The settings view covers the window
+   — see settings.css. */
+.app-body.is-hidden { visibility: hidden; }
 
 /* Titlebar: flat chrome matching the sidebar, with a hairline along the bottom
    edge so the chrome/content boundary reads as a fold rather than a drawn line.
@@ -452,7 +458,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 14px;
   padding: 0 16px 0 78px; /* left pad leaves room for native traffic lights */
-  height: 44px;
+  height: var(--titlebar-h);
   border-bottom: 1px solid var(--border);
   background: var(--chrome-2);
   box-shadow: inset 0 1px 0 var(--sheen);

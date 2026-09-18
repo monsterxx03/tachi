@@ -23,6 +23,7 @@ import { ProjectPalette } from './palette'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
+import { SettingsPage } from './settings'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
@@ -533,6 +534,11 @@ function App() {
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Which of the two top-level views is on screen. It is App's state, not a route, and the chat
+  // view is HIDDEN rather than unmounted while settings is up: a conversation holds more local
+  // state than a route could rebuild (collapsed project groups, the composer's draft, the
+  // transcript's scroll offset), and coming back from a settings page must not cost any of it.
+  const [view, setView] = useState<'chat' | 'settings'>('chat')
   // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
   // active theme to Go, which owns the window colour outside the webview.
   const [theme, toggleTheme] = useTheme()
@@ -1449,6 +1455,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // them, so the webview sees the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The settings page has no conversation shortcuts. Gating here rather than leaving it to
+      // focus is deliberate: the chat view is still MOUNTED (hidden), so its windows-level
+      // listeners are alive, and ⌘N on the settings page must not quietly start a session
+      // behind it. Escape is gated with the rest — the page's own dismissals are its own.
+      if (view === 'settings') return
       if (e.key === 'Escape') {
         // Claim the gesture only when something here was actually dismissed: the side panel
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
@@ -1495,7 +1506,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen])
+    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, view])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -1786,7 +1797,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         </div>
       </header>
 
-      <div className="app-body">
+      <div className={`app-body${view === 'settings' ? ' is-hidden' : ''}`}>
         <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
@@ -1874,9 +1885,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             {groups.length === 0 && <div className="session-empty">暂无会话</div>}
           </nav>
           <footer className="sidebar-footer">
-            {/* Both entries are placeholders: disabled (and dimmed) rather than
-                clickable-looking no-ops. */}
-            <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><SettingsIcon /></span> 设置</button>
+            {/* 设置 opens the settings page (a whole view, not a panel — see view in App).
+                用量 is still a placeholder: disabled (and dimmed) rather than a
+                clickable-looking no-op. */}
+            <button className="footer-item" onClick={() => setView('settings')}
+              title="设置：config.yaml 里的可配置项">
+              <span className="footer-ico"><SettingsIcon /></span> 设置
+            </button>
             <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><UsageIcon /></span> 用量</button>
           </footer>
         </aside>
@@ -2316,6 +2331,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       {chain ? <RewindChainOverlay turns={chain.turns} title={chain.title} position={chain.position ?? -1}
         onPick={(turn) => { const sid = chain.sid; setChain(null); void openRewindCard(sid, turn) }}
         onClose={() => setChain(null)} /> : null}
+      {/* Last, so it is above the floating chat surfaces as well as over them by z-index (see
+          settings.css): a settings page opened while one of them was up must still be the page
+          on screen, and it must be the page the keyboard belongs to.
+
+          Rendered only while it is the current view — unlike the chat view, which is hidden
+          rather than unmounted. Nothing here is worth keeping across a visit, and a fresh read
+          of the schema on the way in is exactly what makes the values on screen the values in
+          the file. */}
+      {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} /> : null}
     </div>
   )
 }
