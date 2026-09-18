@@ -220,9 +220,11 @@ Fixtures, all because the real path needs something a driver cannot do:
   Those holders read LAZILY, which is what makes an in-place edit take effect everywhere at once — and what
   makes a pointer swap fail everywhere at once, silently. So `atomic.Pointer[config.Config]` is the wrong
   tool here, however tempting it looks.
-- **One save is one field.** `withConfig` runs under the write lock, so multi-field saves would need readers to
-  take it too (they do not); keeping a save to a single leaf is what makes the current shape correct.
-  `mcpServerByName` is the one documented exception (a single bool written in place).
+- **One SAVE is one locked batch.** `withConfig` runs under the write lock, so a multi-field save needs its
+  reads to happen under the same lock — which they do: `SaveSettings` passes the whole batch to
+  `config.ApplyUpdates` inside ONE `withConfig` call, all-or-nothing, so no reader can ever observe a
+  half-applied batch. (`mcpServerByName` is still the one documented exception: a single bool written in
+  place, outside the lock.)
 - **A config key's "what does it take to make this live" is declared in `desktop/settings.go`, one row per key
   in `settingsTable`** (`applyLazy` = readers already re-read it / `applyPush` = something must be rebuilt,
   `Apply` carries that / `applyRestart` / `applyUnused` = another entry mode owns it). Two tests in
@@ -231,7 +233,14 @@ Fixtures, all because the real path needs something a driver cannot do:
   lazy/unused), never a flag to remember. A row's `Apply` only does the PUSH half — the value itself is
   written into `d.cfg` by the caller — and anything that has to reach every session goes through
   `d.applyToLiveAgents(fn)` (`agent.go`), which returns failures labelled with the session's title (or its id).
-  Design: `docs/2026-09-14-desktop-settings-design.md` §七、§八之三.
+  The settings page's two bound methods are `GetSettingsSchema` (the table filtered through the CONFIG's
+  leaves — `config.PathsFor` — one field per editable leaf) and `SaveSettings` (resolve every key and refuse the
+  whole batch, validate, snapshot + `config.ApplyUpdates` all-or-nothing, push each row's `Apply`, and write
+  `config.SavePartial` LAST: a failed write restores the exact snapshot, which is why the snapshot primitive
+  exists instead of re-reading through `ReadPath` — that substitutes defaults for unset pointers).
+  Values are read and written by the SAME dot path as the file, via `config.ReadPath`/`SetPath`: one grammar
+  for the file, the form and the error messages.
+  Design: `docs/2026-09-14-desktop-settings-design.md` §六、§七、§八之三.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the
   `RegisterHook(WindowClosing)` right beside the window's creation). On darwin a user-initiated close (⌘W, the
   red button) always DESTROYED the window — AppKit's `windowShouldClose` returns NO, the framework emits a

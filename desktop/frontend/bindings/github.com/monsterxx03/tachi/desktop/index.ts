@@ -45,6 +45,7 @@ export type {
     SessionPage,
     SessionRootVO,
     SessionRootsVO,
+    SettingFieldVO,
     ToolCallVo,
     TurnChangesVO,
     TurnDiffVO,

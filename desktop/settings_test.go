@@ -7,13 +7,14 @@ package main
 // every yaml leaf must resolve to a row, and every row must match a real leaf. That is what
 // turns "somebody has to remember to mark this one 需重启" into a failing build.
 //
-// The leaf list is derived by reflection rather than written down, because a hand-written
-// list is exactly the thing that rots when a field is added — the failure this file exists
-// to prevent.
+// The leaf list comes from config.YAMLPaths — the same walker the settings SCHEMA is built
+// on — so there is one definition of "what a leaf is" for the guard, the form, and the path
+// API. A hand-written list here is exactly the thing that rots when a field is added.
 
 import (
 	"errors"
-	"reflect"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,58 +23,9 @@ import (
 	"github.com/monsterxx03/tachi/config"
 )
 
-// yamlLeafPaths returns one dot path per leaf a settings form could name, with "*" standing
-// for a slice element or a map key (both are unbounded, and a form never addresses one).
-//
-// A field tagged `yaml:"-"` is skipped, which is what makes MCPServers (loaded from
-// mcp.json, not config.yaml) correctly absent: it is not a key of this file at all.
-func yamlLeafPaths(t reflect.Type, prefix string, out *[]string) {
-	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface {
-		if t.Kind() == reflect.Interface {
-			*out = append(*out, prefix)
-			return
-		}
-		t = t.Elem()
-	}
-	switch t.Kind() {
-	case reflect.Slice, reflect.Array, reflect.Map:
-		yamlLeafPaths(t.Elem(), prefix+".*", out)
-	case reflect.Struct:
-		if t.PkgPath() != "" && t.Name() == "Time" {
-			*out = append(*out, prefix)
-			return
-		}
-		for i := range t.NumField() {
-			f := t.Field(i)
-			if f.PkgPath != "" { // unexported
-				continue
-			}
-			name := ""
-			if tag, ok := f.Tag.Lookup("yaml"); ok {
-				name = strings.Split(tag, ",")[0]
-				if name == "-" {
-					continue
-				}
-			}
-			if name == "" {
-				// yaml's own default is the lowercased field name.
-				name = strings.ToLower(f.Name)
-			}
-			child := name
-			if prefix != "" {
-				child = prefix + "." + name
-			}
-			yamlLeafPaths(f.Type, child, out)
-		}
-	default:
-		*out = append(*out, prefix)
-	}
-}
-
 func configLeaves(t *testing.T) []string {
 	t.Helper()
-	var leaves []string
-	yamlLeafPaths(reflect.TypeOf(config.Config{}), "", &leaves)
+	leaves := config.YAMLPaths()
 	if len(leaves) < 100 {
 		t.Fatalf("only %d leaves found — the walker is wrong, not the config", len(leaves))
 	}
@@ -258,5 +210,179 @@ func TestLanguageRowClearsThePromptCache(t *testing.T) {
 	}
 	if got := d.systemPromptFor(sid); !strings.Contains(got, "Reply in zh") {
 		t.Errorf("the prompt after the apply does not carry the new language: %q", got)
+	}
+}
+
+// --- the schema and the save: P2's backend half ---
+
+// settingsFixture writes a config.yaml into a temp base dir and loads it the way the app
+// does. Call it AFTER any session helper: those each point config.SetBaseDir at their own
+// temp dir (it is a process global), and this one must be the last to set it.
+func settingsFixture(t *testing.T, yamlText string) (*desktopApp, *AgentService, string) {
+	t.Helper()
+	dir := t.TempDir()
+	config.SetBaseDir(dir)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(yamlText), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	d := newTestApp()
+	d.cfg = cfg
+	return d, &AgentService{desk: d}, path
+}
+
+func readFileT(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// TestSettingsSchemaCoversEveryOfferedRow: the schema is built from the CONFIG's leaves with
+// the table as the filter, so the two must agree in both directions — every row that claims to
+// be offered shows up, and nothing another entry mode owns ever appears (a switch that does
+// nothing is worse than no switch).
+func TestSettingsSchemaCoversEveryOfferedRow(t *testing.T) {
+	// A provider is in the fixture because the `providers` row's fields are its ELEMENTS: with
+	// an empty list there is nothing for it to offer, which is correct (the design does not add
+	// or remove providers) and would make the "every row appears" assertion meaningless.
+	_, svc, _ := settingsFixture(t, `language: zh
+max_tokens: 4096
+providers:
+  - name: main
+    model: claude-x
+`)
+	schema := svc.GetSettingsSchema()
+	if len(schema) < 50 {
+		t.Fatalf("schema has %d fields — a config this size offers far more", len(schema))
+	}
+	byKey := make(map[string]SettingFieldVO, len(schema))
+	for _, f := range schema {
+		if _, dup := byKey[f.Key]; dup {
+			t.Errorf("duplicate field %q", f.Key)
+		}
+		byKey[f.Key] = f
+		if row, ok := settingFor(f.Key); !ok || !row.offered() {
+			t.Errorf("%q is in the schema but its row is not offered (mode %s)", f.Key, row.Mode)
+		}
+	}
+	for _, row := range settingsTable {
+		if !row.offered() {
+			continue
+		}
+		if !slices.ContainsFunc(schema, func(f SettingFieldVO) bool { return row.covers(f.Key) }) {
+			t.Errorf("row %q (mode %s) offers no field in the schema", row.Key, row.Mode)
+		}
+	}
+
+	// Values come from the live config, kinds from the value's own type, and an UNSET pointer
+	// reads as its default — an empty box for "unset, therefore true" would misstate what is in
+	// effect.
+	if f := byKey["language"]; f.Value != "zh" || f.Kind != "string" || f.NeedsRestart {
+		t.Errorf("language = %+v", f)
+	}
+	if f := byKey["max_tokens"]; f.Value != 4096 || f.Kind != "int" {
+		t.Errorf("max_tokens = %+v", f)
+	}
+	if f := byKey["lsp.enabled"]; f.Value != true || f.Kind != "bool" {
+		t.Errorf("lsp.enabled = %+v (an unset *bool must read as its default)", f)
+	}
+	if f := byKey["logs.level"]; !f.NeedsRestart || f.Note == "" {
+		t.Errorf("logs.level = %+v (a restart-only row must carry ⟳ and a reason)", f)
+	}
+}
+
+// TestSaveSettingsAppliesAndWrites walks one save end to end: memory, the running process (the
+// language row's Apply clears the prompt cache), and the file — in that order, with the file
+// last because it is what survives the process.
+func TestSaveSettingsAppliesAndWrites(t *testing.T) {
+	sm := newSessionManagerForTest(t, t.TempDir()) // sets the base dir; the fixture re-sets it
+	sid := sm.Current().ID
+	d, svc, path := settingsFixture(t, "language: en\nmax_tokens: 1000\n")
+	d.sm = sm
+	d.getRun(sid).sm = sm
+	_ = d.systemPromptFor(sid) // warm the prompt memo, so the clear is observable
+	if len(d.promptCache) == 0 {
+		t.Fatal("fixture: the prompt was not memoized")
+	}
+
+	msg := svc.SaveSettings(map[string]any{"language": "zh", "max_tokens": float64(2000)})
+	if !strings.Contains(msg, "2 项已生效") {
+		t.Errorf("summary = %q, want both fields reported live", msg)
+	}
+	if d.cfg.Language != "zh" || d.cfg.MaxTokens != 2000 {
+		t.Errorf("memory: language=%q max_tokens=%d", d.cfg.Language, d.cfg.MaxTokens)
+	}
+	if n := len(d.promptCache); n != 0 {
+		t.Errorf("the language row's Apply did not clear the prompt cache (%d entries)", n)
+	}
+	file := readFileT(t, path)
+	if !strings.Contains(file, "language: zh") || !strings.Contains(file, "max_tokens: 2000") {
+		t.Errorf("config.yaml = %q", file)
+	}
+}
+
+// TestSaveSettingsRefusesBeforeTouchingAnything: a batch with one bad key changes NOTHING —
+// not the file, not the memory. Each refusal names its own reason, because "保存失败" alone
+// leaves the reader with a form full of values and no idea which one is the problem.
+func TestSaveSettingsRefusesBeforeTouchingAnything(t *testing.T) {
+	d, svc, path := settingsFixture(t, "language: en\n")
+	before := readFileT(t, path)
+	tests := []struct {
+		name    string
+		updates map[string]any
+		wantSub string
+	}{
+		{"unknown key", map[string]any{"nope": "x"}, "未知配置项"},
+		{"another entry mode's key", map[string]any{"tui.input_history_limit": float64(5)}, "别的入口模式"},
+		{"nil value", map[string]any{"language": nil}, "值不合法"},
+		{"wrong field type", map[string]any{"max_tokens": "1000"}, "改不了"},
+		{"unreadable key", map[string]any{"providers.3.model": "m"}, "下标"},
+	}
+	for _, tt := range tests {
+		msg := svc.SaveSettings(tt.updates)
+		if !strings.Contains(msg, tt.wantSub) {
+			t.Errorf("%s: summary = %q, want it to mention %q", tt.name, msg, tt.wantSub)
+		}
+		if got := readFileT(t, path); got != before {
+			t.Errorf("%s: the file changed: %q", tt.name, got)
+		}
+	}
+	if d.cfg.Language != "en" {
+		t.Errorf("language = %q after the refusals, want it untouched", d.cfg.Language)
+	}
+}
+
+// TestSaveSettingsRollsBackWhenTheFileRefusesAKey is the failure the write step can really
+// hit: SavePartial only updates keys the FILE has, so a value that lives in memory but not in
+// config.yaml is refused — and the change must then be gone from memory too, or the session
+// runs on a setting the next restart contradicts.
+//
+// `review.thinking` is the key on purpose: it has no `default:` tag, so a load leaves it NIL
+// (config.LoadFrom runs defaults.Set, which materializes the tagged ones). A nil pointer is
+// the case SnapshotLeaves exists for — restoring it through the value a form reads would
+// leave an explicit pointer behind instead of an unset field.
+func TestSaveSettingsRollsBackWhenTheFileRefusesAKey(t *testing.T) {
+	d, svc, path := settingsFixture(t, "language: en\n")
+	before := readFileT(t, path)
+	if d.cfg.Review.Thinking != nil {
+		t.Fatalf("fixture: review.thinking should be unset, got %v", *d.cfg.Review.Thinking)
+	}
+
+	msg := svc.SaveSettings(map[string]any{"review.thinking": true})
+	if !strings.Contains(msg, "没能写入 config.yaml") || !strings.Contains(msg, "已撤销") {
+		t.Fatalf("summary = %q, want a write failure that says the change was undone", msg)
+	}
+	if d.cfg.Review.Thinking != nil {
+		t.Errorf("Review.Thinking = %v after a failed save, want it unset again", *d.cfg.Review.Thinking)
+	}
+	if got := readFileT(t, path); got != before {
+		t.Errorf("the file changed: %q", got)
 	}
 }

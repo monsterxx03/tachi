@@ -1,7 +1,8 @@
 # Desktop 设置页 — 设计
 
-> 版本: 2.2 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0/v2.1: 2026-09-17/18）| 状态: P0-a、P0-b 与
-> **结构前置（§八之三）已实现**；设置页 UI 未开始
+> 版本: 2.3 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0/v2.1/v2.2: 2026-09-17~18）| 状态: P0-a、P0-b、
+> **结构前置（§八之三）与 P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）已实现；
+> 设置页 UI 未开始
 >
 > v2.0 是 v1.0 的**全面复核**：热改分层按实际消费点重做，P0 的验收标准收紧
 > （`yaml.Node` 回环实测发现 v1.0 承诺的「样式保留」不成立），原子性顺序修正。
@@ -14,6 +15,10 @@
 > v2.2 是**开工记录**：§八之三 的三条结构前置已落地（应用表 `desktop/settings.go`、键覆盖守卫
 > `desktop/settings_test.go`、广播原语 `applyToLiveAgents`），并顺手做了 §八之二 的 prompt 缓存清空。
 > 落地与设想的三处出入写在 §八之三 里。
+>
+> v2.3 是 **P2 后端的落地记录**：`config` 多了一套与 `SavePartial` 同源的点分路径读写（§六）、
+> `SettingFieldVO` 的形状按实现定稿（§七）、保存的顺序与回滚语义写进 §七；§六 里「一次保存只应用
+> 一个叶子」作废。
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 
@@ -232,12 +237,35 @@ yaml.v3 的两个根因，都不是「小心一点」能绕过的：
 goccy 走的不是这条路：它有 yaml.v3 完全没有的 **`Path` API**（`$.providers[0].model`），
 直接对 AST 做外科手术式替换，不动其余节点。这是实测中最关键的发现。
 
-### 已实现的接口（`config/save_partial.go`）
+### 已实现的接口（`config/save_partial.go` + `config/value_path.go`）
 
 ```go
 func SavePartial(updates map[string]any) error
 func SavePartialTo(path string, updates map[string]any) error  // 测试/显式路径
 ```
+
+v2.2 起还有**同一套点分路径**的内存侧读写（`config/value_path.go`），它们与 `SavePartial` 共享
+一个语法、一个叶子规则：
+
+```go
+func ReadPath(cfg *Config, key string) (any, error)          // 表单显示的"生效中的值"
+func SetPath(cfg *Config, key string, value any) error       // 原地写一个叶子
+func ValidateUpdates(updates map[string]any) error           // 写盘前的类型校验（复用 renderScalar）
+func ApplyUpdates(cfg *Config, updates map[string]any) error // 一批，全有或全无
+func SnapshotLeaves(cfg *Config, keys []string) ([]LeafValue, error) // 精确快照
+func RestoreLeaves(snap []LeafValue)                          // 还原
+func YAMLPaths() []string            // 结构上的全部叶子（`providers.*.model`），守卫测试用
+func PathsFor(cfg *Config) []string  // 按值展开（`providers.0.model`），表单用
+```
+
+**叶子规则**（两处必须一致，否则表单会给出 `SavePartial` 渲染不了的路径）：
+**标量集合是一个叶子**（`review.allowed_tools` 整条列表就是一个值，`renderScalar` 接受 `[]string`），
+**结构体集合是每个元素一个叶子**（`providers.0.model`）。
+
+两个落地时才看清的细节：`config.LoadFrom` 会跑 `defaults.Set`，所以**带 `default:` tag 的指针字段
+在加载后已经被 materialize**（`ReadPath` 的"nil 读作默认"只对没有 tag 的字段与代码里构造的 config 生效）；
+而 `map[string][]T` 里的**元素是可写的**（切片头拷贝、底层数组共享），`hooks.events.<event>.<i>.command`
+在 `SetPath` 下真的能写。
 
 - **路径形式统一为点分**：`"language"`、`"lsp.enabled"`、`"providers.0.model"`。
   goccy 要的是 `providers[0]`，翻译在 `yamlPath` 里一处完成，调用方与错误信息统一说点分。
@@ -326,7 +354,14 @@ func (d *desktopApp) setConfig(cfg *config.Config)       // 仅 initAgent
 
 - **不能用 `atomic.Pointer[config.Config]`**：它为"换指针"提供安全，而换指针在这里是错的
   （代价是 12 个闭包 + MCP manager + 26 个读点全部改成"每次去取"）。
-- 一次保存只应用**一个叶子值**，所以没有"多字段撕裂"的问题。
+- **一次保存是一批叶子，不是一个。** v2.0 写的是"一次保存只应用一个叶子值"——那是按当时的
+  假设（表单逐个字段提交）写的，而 UI 是**每个分类一个保存按钮**，所以实际会一次带上多个字段。
+  落地时改成：`config.ApplyUpdates(cfg, updates)` 在**一把锁内**全有或全无地改（失败即把已改的
+  原地还原），所以"多字段撕裂"依然不可能被读到；写盘仍然是**一次** `SavePartial`（它本来就吃 map）。
+- **回滚存的是原始值，不是表单读到的值。** `config.SnapshotLeaves` 在改之前抓一份**精确**内存快照
+  （`LeafValue`），写盘失败时 `RestoreLeaves` 用它还原。不能拿 `ReadPath` 的结果来还原：它把
+  **带 `default:` tag 的 nil 指针**读成默认值，于是"还原"会把一个未设置的字段写成显式值——
+  一个没人要求过的配置改动，由失败路径写出来。
 - 唯一例外的写：`persistMCPServerEnabled` 就地改 `MCPServers[i].Enabled`（一个 bool），
   在 `mcpServerByName` 的注释里写明了为什么可接受。
 
@@ -355,19 +390,23 @@ App.tsx
 
 ### 数据流
 
-后端**声明**可配置项（而不是前端硬编码），每条带元信息：
+后端**声明**可配置项（而不是前端硬编码），每条带元信息。**✅ 已实现**（`desktop/settings.go`），
+字段比 v2.0 的设想少三个（`Label` / `Options` / `Help`）：`Key` 就是路径、也是前端能显示的名字，
+`Note` 就是帮助文本，而"枚举的可选值"到现在一个键都没用到——需要时再加，比先摆着三列空的好：
 
 ```go
-type SettingField struct {
-    Key          string   // 点分路径，如 "language"
-    Label        string
-    Kind         string   // "string" | "int" | "bool" | "enum" | "string_list"
-    Value        any      // 当前值
-    Options      []string // enum 用
-    NeedsRestart bool     // ← 后端派生（settingApply.needsRestart()），前端只读
-    Help         string
+type SettingFieldVO struct {
+    Key          string // 点分路径，如 "language"；也是 SaveSettings 收回去的键
+    Kind         string // "string" | "bool" | "int" | "float" | "string_list" | "other"
+    Value        any    // 生效中的值（未设置的指针读作它的 default）
+    NeedsRestart bool   // ← 后端派生（settingApply.needsRestart()），前端只读
+    Note         string // 为什么要重启 / 这个键属于哪个入口模式
 }
 ```
+
+`Kind` 由值的**动态类型**推导，不逐行声明：行的 `Key` 已经固定了 Go 字段，第二处声明就是第二个
+会写错的地方。schema 也不是"一行一个字段"——遍历的是**config 的叶子**（`config.PathsFor`），用表
+过滤：`lsp` 一行管十一个叶子，表单要的是十一个输入框，各自带这一行的 mode 与 note。
 
 「要不要重启」由后端**代码保证**——新增一个配置项时，忘了标 `NeedsRestart` 会是最典型的
 错误。**✅ 已落地**（§八之三）：它不是 SettingField 上要人记的字段，而是由应用表的
@@ -386,9 +425,23 @@ func (s settingApply) needsRestart() bool
 func settingFor(key string) (settingApply, bool)       // 最具体的一行胜出
 ```
 
-`SettingField` 由这张表派生（`Key`/`Label`/`Kind`/`Value`/`Options` 来自表项，`NeedsRestart`
-取 `needsRestart()`），**reflect 守卫测试**则断言 `config.Config` 的每个 yaml 叶子都有处置
-（§八之三 ②）。没有这道守卫，漏标迟早发生一次。
+`SettingFieldVO` 由这张表派生（`Key` 来自表项、`Kind` 由值的类型推导、`Value` 来自 `config.ReadPath`、
+`NeedsRestart` 取 `needsRestart()`、`Note` 取表项的 Note），**reflect 守卫测试**则断言
+`config.Config` 的每个 yaml 叶子都有处置（§八之三 ②）。没有这道守卫，漏标迟早发生一次。
+
+### 保存的顺序（✅ 已实现于 `AgentService.SaveSettings`）
+
+`SaveSettings(updates map[string]any) string` —— 返回的是给页面显示的**一句话汇总**，不是错误
+（desktop 的绑定惯例：前端不翻译 Go 错误）。顺序就是 §六 的，每一步都是因为上一步会留下什么：
+
+1. **逐个键解析**（`settingFor`）：未知键、`applyUnused` 的键 → **整单拒绝**，一个字节都不动；
+2. `config.ValidateUpdates` —— 写盘会用的那张类型表，**在改内存之前**跑；
+3. `config.SnapshotLeaves` 抓精确快照 → 一把锁内 `config.ApplyUpdates`（全有或全无）→ 逐行 `Apply`
+   推送（失败按会话收进汇总，不致命）；
+4. **最后**才 `config.SavePartial`。写盘失败 → `RestoreLeaves` 精确还原内存，回答里明说
+   「没能写入 config.yaml……（这次改动已撤销）」。
+
+汇总的形状：`N 项已生效` / `M 项需重启后生效（键名…）` / `有会话没能跟着更新：…`，按实际发生拼接。
 
 ⚠️ **多会话注意**：`d.cfg` 是全进程唯一的一份，而 `AIAgent` 是**每会话**一个。
 热改一个配置要遍历会话（先例见 `desktop/agent_mcp.go` 的 MCP toggle），不能只改当前显示的那一个。
@@ -421,6 +474,10 @@ cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i
 | P2 | 后端 `GetSettingsSchema` / `SaveSettings`（读 `settingsTable`，写 `SavePartial`）+ 🔥 类表单 + 逐项补 `Apply` | 中 |
 | P3 | 🟡 / 🔴 类表单 + `⟳` 徽标（由 `settingApply.needsRestart()` 派生）+ 保存后汇总提示 | 低 |
 | P4 | desktop smoke 场景（改一项 → 断言 config.yaml 的值 + UI 反馈） | 低 |
+
+**P2 拆成两半，后端那一半 ✅ 已完成**（2026-09-18）：`config.ReadPath`/`SetPath`/`ApplyUpdates`/… +
+`GetSettingsSchema`/`SaveSettings` + 重生成的 binding；前端调用点未动（等 P1 的外壳）。
+表里 22 行 push 中仍有 19 行 `Apply == nil`，它们落在「需重启」那一档，直到逐项补上。
 
 P0 已先做完，理由不变：它决定了「保存会不会毁掉用户手写的配置文件」这个不可逆后果，
 而且 P0-b 的锁约定决定了 P2 的 `SaveSettings` 怎么写（唯一写入口 `withConfig`；唯一例外是

@@ -243,6 +243,23 @@ export function GetSessionWorkingDir(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
+ * of the live config.
+ * 
+ * It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
+ * is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
+ * the block's mode and note. The two filters are the row's: a key no row covers cannot happen
+ * (the guard test in settings_test.go fails the build first), and an applyUnused row is another
+ * entry mode's key, so it is left out rather than offered as a switch that does nothing.
+ * 
+ * A value that cannot be read is still listed, with the reason in Note: hiding a field would
+ * present a smaller settings page as a complete one, and the failure is the interesting part.
+ */
+export function GetSettingsSchema(): $CancellablePromise<$models.SettingFieldVO[] | null> {
+    return $Call.ByID(1740909494);
+}
+
+/**
  * GetState returns the current agent state — the DISPLAYED session's, named by that
  * session's id so the frontend can file it under the conversation it belongs to.
  */
@@ -322,6 +339,9 @@ export function ListCommands(): $CancellablePromise<$models.CommandVO[] | null> 
 /**
  * ListMCPProfiles returns the active MCP profile and all available profiles
  * (mcp.<name>.json in global/project scope).
+ * 
+ * The project scope is the ACTIVE SESSION's tree, not the process cwd — see
+ * mcpProjectRoot for why that distinction is the whole point of this call.
  */
 export function ListMCPProfiles(): $CancellablePromise<{ [_ in string]?: any } | null> {
     return $Call.ByID(3487132922);
@@ -605,6 +625,30 @@ export function SavePastedImage(sessionID: string, mediaType: string, data: stri
 }
 
 /**
+ * SaveSettings applies a batch of edited leaves and tells the running process about them.
+ * 
+ * The order is the design's (§六), and each step exists because of what the previous one can
+ * leave behind:
+ * 
+ *  1. resolve EVERY key first — an unknown key, or one another entry mode owns, refuses the
+ *     whole batch before anything is touched. A half-saved form is a state no reader can
+ *     reason about.
+ *  2. validate the values against the FILE's own type table, before memory changes.
+ *  3. snapshot the leaves, apply them in one locked step (all or none), and push each row's
+ *     `Apply` — the in-memory half of a runtime change.
+ *  4. write config.yaml LAST, and only then is the save done. If the write fails, the memory
+ *     is put back exactly as it was and the answer says so: "applied for this session but not
+ *     saved" is a state the next restart contradicts, and the reader cannot tell which of the
+ *     two they have.
+ * 
+ * Returns the summary the page shows (the desktop's convention for bound methods: a sentence
+ * rather than an error the frontend would have to translate).
+ */
+export function SaveSettings(updates: { [_ in string]?: any } | null): $CancellablePromise<string> {
+    return $Call.ByID(3863358292, updates);
+}
+
+/**
  * SearchFiles returns @-file completion matches for a session.
  * 
  * The whole root set is searched (primary + the session's additional roots): an
@@ -644,6 +688,13 @@ export function SendMessage(sessionID: string, text: string): $CancellablePromis
  * SetMCPProfile switches the active MCP profile at runtime (reverts on restart).
  * It uses the current session's agent (whose manager is the shared one) and
  * reconciles the connected servers via SwitchMCPProfile.
+ * 
+ * The workDir is the active session's tree for the same reason as
+ * ListMCPProfiles: a profile switch has to read the project's own
+ * mcp.<profile>.json, and reading it from the process cwd found nothing.
+ * SwitchMCPProfile validates the name against the very directory it is given,
+ * so passing one root for the check and another for the load would let a name
+ * that exists only globally pass as a project profile.
  */
 export function SetMCPProfile(name: string): $CancellablePromise<string> {
     return $Call.ByID(1957064157, name);

@@ -914,6 +914,42 @@ export interface SessionRootsVO {
 }
 
 /**
+ * SettingFieldVO is one field of the settings form: a settingsTable row plus the value the
+ * form should show.
+ */
+export interface SettingFieldVO {
+    /**
+     * Key is the dot path the form sends back, and the same path SavePartial writes.
+     */
+    "key": string;
+
+    /**
+     * Kind is how to render the input: "string" / "bool" / "int" / "float" / "string_list" /
+     * "other". Derived from the value's own Go type rather than declared per row, because the
+     * row's Key already fixes the field and a second declaration is a second thing to get
+     * wrong. A key that needs more (an enum's choices) will carry it here when one exists.
+     */
+    "kind": string;
+
+    /**
+     * Value is the effective value — an unset pointer reads as its default, so the form never
+     * shows an empty box for a setting that is effectively true.
+     */
+    "value": any;
+
+    /**
+     * NeedsRestart is the row's own answer (settingApply.needsRestart): the form puts ⟳ beside
+     * these and nothing else. It is not a flag anyone sets.
+     */
+    "needsRestart": boolean;
+
+    /**
+     * Note is why: the reason a restart is needed, or which entry mode owns the key instead.
+     */
+    "note"?: string;
+}
+
+/**
  * ToolCallVo is a minimal tool-call descriptor for rendering a tool card.
  */
 export interface ToolCallVo {

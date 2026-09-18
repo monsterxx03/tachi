@@ -29,6 +29,8 @@ package main
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -257,4 +259,197 @@ func pushError(what string, failures []string) error {
 		return nil
 	}
 	return fmt.Errorf("%s：%s", what, strings.Join(failures, "；"))
+}
+
+// SettingFieldVO is one field of the settings form: a settingsTable row plus the value the
+// form should show.
+type SettingFieldVO struct {
+	// Key is the dot path the form sends back, and the same path SavePartial writes.
+	Key string `json:"key"`
+	// Kind is how to render the input: "string" / "bool" / "int" / "float" / "string_list" /
+	// "other". Derived from the value's own Go type rather than declared per row, because the
+	// row's Key already fixes the field and a second declaration is a second thing to get
+	// wrong. A key that needs more (an enum's choices) will carry it here when one exists.
+	Kind string `json:"kind"`
+	// Value is the effective value — an unset pointer reads as its default, so the form never
+	// shows an empty box for a setting that is effectively true.
+	Value any `json:"value"`
+	// NeedsRestart is the row's own answer (settingApply.needsRestart): the form puts ⟳ beside
+	// these and nothing else. It is not a flag anyone sets.
+	NeedsRestart bool `json:"needsRestart"`
+	// Note is why: the reason a restart is needed, or which entry mode owns the key instead.
+	Note string `json:"note,omitempty"`
+}
+
+// GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
+// of the live config.
+//
+// It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
+// is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
+// the block's mode and note. The two filters are the row's: a key no row covers cannot happen
+// (the guard test in settings_test.go fails the build first), and an applyUnused row is another
+// entry mode's key, so it is left out rather than offered as a switch that does nothing.
+//
+// A value that cannot be read is still listed, with the reason in Note: hiding a field would
+// present a smaller settings page as a complete one, and the failure is the interesting part.
+func (s *AgentService) GetSettingsSchema() []SettingFieldVO {
+	d := s.desk
+	cfg := d.config()
+	if cfg == nil {
+		return nil
+	}
+	paths := config.PathsFor(cfg)
+	out := make([]SettingFieldVO, 0, len(paths))
+	for _, key := range paths {
+		row, ok := settingFor(key)
+		if !ok || !row.offered() {
+			continue
+		}
+		value, err := config.ReadPath(cfg, key)
+		note := row.Note
+		if err != nil {
+			note = joinNotes(note, "读取失败："+err.Error())
+		}
+		out = append(out, SettingFieldVO{
+			Key:          key,
+			Kind:         kindOf(value),
+			Value:        value,
+			NeedsRestart: row.needsRestart(),
+			Note:         note,
+		})
+	}
+	return out
+}
+
+// kindOf names the input a value wants. Reflection rather than a switch on concrete types,
+// because the config has named scalar types (`config.Duration` is an int64 underneath) that
+// are still numbers to a form.
+func kindOf(v any) string {
+	if v == nil {
+		return "other"
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "int"
+	case reflect.Float32, reflect.Float64:
+		return "float"
+	case reflect.Slice:
+		if rv.Type().Elem().Kind() == reflect.String {
+			return "string_list"
+		}
+	}
+	return "other"
+}
+
+// SaveSettings applies a batch of edited leaves and tells the running process about them.
+//
+// The order is the design's (§六), and each step exists because of what the previous one can
+// leave behind:
+//
+//  1. resolve EVERY key first — an unknown key, or one another entry mode owns, refuses the
+//     whole batch before anything is touched. A half-saved form is a state no reader can
+//     reason about.
+//  2. validate the values against the FILE's own type table, before memory changes.
+//  3. snapshot the leaves, apply them in one locked step (all or none), and push each row's
+//     `Apply` — the in-memory half of a runtime change.
+//  4. write config.yaml LAST, and only then is the save done. If the write fails, the memory
+//     is put back exactly as it was and the answer says so: "applied for this session but not
+//     saved" is a state the next restart contradicts, and the reader cannot tell which of the
+//     two they have.
+//
+// Returns the summary the page shows (the desktop's convention for bound methods: a sentence
+// rather than an error the frontend would have to translate).
+func (s *AgentService) SaveSettings(updates map[string]any) string {
+	d := s.desk
+	cfg := d.config()
+	if cfg == nil {
+		return "配置尚未加载，改不了"
+	}
+	if len(updates) == 0 {
+		return "没有要保存的改动"
+	}
+
+	keys := make([]string, 0, len(updates))
+	for key := range updates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	// 1. Every key must be one this page owns.
+	rows := make(map[string]settingApply, len(keys))
+	for _, key := range keys {
+		row, ok := settingFor(key)
+		if !ok {
+			return fmt.Sprintf("未知配置项：%s", key)
+		}
+		if !row.offered() {
+			return fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)
+		}
+		rows[key] = row
+	}
+
+	// 2. The type table the file write uses, so a bad value never reaches memory.
+	if err := config.ValidateUpdates(updates); err != nil {
+		return "值不合法：" + err.Error()
+	}
+
+	// 3. In memory, then into what is already built.
+	snap, err := config.SnapshotLeaves(cfg, keys)
+	if err != nil {
+		return "改不了：" + err.Error()
+	}
+	var applyErr error
+	d.withConfig(func(c *config.Config) {
+		applyErr = config.ApplyUpdates(c, updates)
+	})
+	if applyErr != nil {
+		return "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"
+	}
+
+	var pushFailures []string
+	for _, key := range keys {
+		row := rows[key]
+		if row.Apply == nil {
+			continue // nothing built yet that needs telling (or a key nothing consumes)
+		}
+		if err := row.Apply(d, cfg); err != nil {
+			pushFailures = append(pushFailures, pushError(key, []string{err.Error()}).Error())
+		}
+	}
+
+	// 4. The file last: it is what survives the process.
+	if err := config.SavePartial(updates); err != nil {
+		d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
+		return "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变）"
+	}
+
+	// The summary: what took effect, what waits for a restart, and what some session refused.
+	var live, restart []string
+	for _, key := range keys {
+		if rows[key].needsRestart() {
+			restart = append(restart, key)
+		} else {
+			live = append(live, key)
+		}
+	}
+	var parts []string
+	if len(live) > 0 {
+		parts = append(parts, fmt.Sprintf("%d 项已生效", len(live)))
+	}
+	if len(restart) > 0 {
+		parts = append(parts, fmt.Sprintf("%d 项需重启后生效（%s）", len(restart), strings.Join(restart, "、")))
+	}
+	if len(pushFailures) > 0 {
+		parts = append(parts, "有会话没能跟着更新："+strings.Join(pushFailures, "；"))
+	}
+	if len(parts) == 0 {
+		return "已保存"
+	}
+	return strings.Join(parts, "；")
 }
