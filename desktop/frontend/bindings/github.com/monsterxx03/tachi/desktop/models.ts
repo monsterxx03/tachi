@@ -953,7 +953,7 @@ export interface SessionRootsVO {
  */
 export interface SettingFieldVO {
     /**
-     * Key is the dot path the form sends back, and the same path SavePartial writes.
+     * Key is the dot path the form sends back, and the same path config's reader and writer take.
      */
     "key": string;
 

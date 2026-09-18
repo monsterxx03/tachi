@@ -9,13 +9,12 @@ import (
 
 // The set of leaves a settings form can address, in the two shapes the two callers need.
 //
-// One rule decides where a path STOPS, and it is the same rule SavePartial's value table
-// uses: a slice or map whose element is a scalar is ONE leaf (`review.allowed_tools` is edited
-// as a flow list, and renderScalar accepts []string for exactly that reason), while a
-// collection of structs is a collection of leaves, one per element (`providers.0.model`).
-// Getting this wrong is not cosmetic: a form offering `allowed_tools.0` would write a path
-// SavePartial cannot render, and one offering `providers` as a single field would show a whole
-// struct in a text box.
+// One rule decides where a path STOPS, and it is the same rule the path API's value table uses:
+// a slice or map whose element is a scalar is ONE leaf (as a flow list, which is how a hand-written
+// config usually writes one), while a collection of structs is a collection of leaves, one per
+// element (`providers.0.model`). Getting this wrong is not cosmetic: a form offering
+// `allowed_tools.0` would write a path no leaf ever answers to, and one offering `providers` as a
+// single field would show a whole struct in a text box.
 
 // YAMLPaths returns every leaf path config.Config can have, with "*" standing for a sequence
 // element or a map key (both unbounded, and neither known without a value).

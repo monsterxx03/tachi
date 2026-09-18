@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,10 +17,13 @@ import (
 )
 
 const (
-	DefaultMaxTokens          = 128000
-	DefaultMaxIterations      = 50
-	configDirName             = ".tachi"
-	configFileName            = "config.yaml"
+	DefaultMaxTokens     = 128000
+	DefaultMaxIterations = 50
+	configDirName        = ".tachi"
+	configFileName       = "config.yaml"
+	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
+	// the hand-written original, beside the file the settings page now owns.
+	backupSuffix              = ".bak"
 	inputHistoryFileName      = "input_history"
 	sessionDirName            = "session"
 	logsDirName               = "logs"
@@ -1073,19 +1077,79 @@ func LoadFrom(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// Save writes the whole config to config.yaml, in ONE atomic write.
+//
+// It is the settings page's write half (the runtime half is desktop's SaveSettings, which
+// pushes the values at the running process). "Whole" is what makes it simple: the file is the
+// in-memory config's own projection, so there is no path to resolve in a document this process
+// did not write, no missing block to create, and no index to keep in step — a value the form
+// changed is just a field that holds something else by the time this runs.
+//
+// The price is that config.yaml stops being a hand-written document the moment it is saved
+// through the settings page: comments, blank lines, the file's own indentation and any key the
+// Config struct does not declare are not carried over. backupOnce is what keeps that from
+// being irreversible.
+//
+// A save whose result would be the bytes already in the file writes NOTHING — the file's mtime
+// (and, on the first such save, its comments) must not be disturbed for a change that came to
+// nothing.
 func Save(cfg *Config) error {
-	dir := configDir()
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	path, err := ConfigPath()
+	if err != nil {
 		return err
 	}
+	return SaveTo(path, cfg)
+}
 
+// SaveTo is Save for an explicit path (tests, and any caller that already resolved it).
+func SaveTo(path string, cfg *Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
+	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, data) {
+		return nil
+	}
+	if err := backupOnce(path); err != nil {
+		return err
+	}
+	return atomicWriteConfig(path, data)
+}
 
-	path := filepath.Join(dir, configFileName)
-	return fileutil.WriteFilePrivate(path, data)
+// backupOnce keeps the file as it was before the FIRST whole-file write, beside it as
+// config.yaml.bak.
+//
+// It guards the one loss here that cannot be undone: config.yaml is hand-editable, people
+// explain their API keys and their proxy in comments, and the first save through the settings
+// page rewrites the whole document. One copy, taken once, turns that from "gone" into "your
+// old file is right there" — and an existing .bak is never overwritten, so no later save can
+// bury the original under an already-rewritten file.
+//
+// A file that is not there is not a failure: there is nothing to preserve.
+func backupOnce(path string) error {
+	current, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if _, err := os.Stat(path + backupSuffix); err == nil {
+		return nil // already kept
+	}
+	return fileutil.WriteFilePrivate(path+backupSuffix, current)
+}
+
+// atomicWriteConfig writes the config file atomically, keeping the mode the file already had: a
+// user's 0600 must not become 0644. Atomic (tmp + rename) for the same reason session metadata
+// is — another Tachi process may be reading config.yaml at startup, and an in-place rewrite can
+// hand it a half-written file.
+func atomicWriteConfig(path string, out []byte) error {
+	mode := os.FileMode(0o600)
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	return fileutil.AtomicWriteFile(path, out, 0o700, mode)
 }
 
 func Init() (string, error) {

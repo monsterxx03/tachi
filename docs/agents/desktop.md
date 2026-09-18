@@ -206,14 +206,13 @@ Fixtures, all because the real path needs something a driver cannot do:
   root does not cover it either.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
-  root code imports. A package the root starts importing (`github.com/goccy/go-yaml`, when `config` gained
-  `SavePartial`) builds and tests fine at the root while `desktop/` fails with
+  root code imports. A package the root starts importing builds and tests fine at the root while `desktop/` fails with
   `missing go.sum entry for module providing package ...` — and, because the root `go test ./...` does not
   compile `desktop/`, **every root-level check stays green**. Fix: `cd desktop && GOWORK=off go mod tidy`.
   The reverse also holds: bumping such a dependency at the root must be re-tidied here.
 - **`d.cfg` is read under `cfgMu` and written through ONE entry point** (`desktopApp.config()` /
-  `withConfig()`, in `agent.go`). It used to be plain-field access, which was safe only while nothing wrote
-  it after startup — the settings page is exactly the thing that changes that.
+  `withConfig()`, in `agent.go`). Plain-field access is a data race here, not merely a style choice: the
+  settings page writes the object while turns read it.
 - **⚠️ Never swap the `d.cfg` POINTER; mutate the existing object.** `withConfig`'s comment carries the full
   reason and it is worth re-reading before any "let me just install a fresh config" idea: every provider is
   wrapped by `wrapForUsage`, whose price/credit resolvers CLOSE OVER the `*config.Config` and dereference it
@@ -237,19 +236,25 @@ Fixtures, all because the real path needs something a driver cannot do:
   `d.applyToLiveAgents(fn)` (`agent.go`), which returns failures labelled with the session's title (or its id).
   The settings page's two bound methods are `GetSettingsSchema` (the table filtered through the CONFIG's
   leaves — `config.PathsFor` — one field per editable leaf) and `SaveSettings` (resolve every key and refuse the
-  whole batch, validate, snapshot + `config.ApplyUpdates` all-or-nothing, push each row's `Apply`, and write
-  `config.SavePartial` LAST: a failed write restores the exact snapshot, which is why the snapshot primitive
+  whole batch, snapshot + `config.ApplyUpdates` all-or-nothing, write the WHOLE config with `config.Save`, and
+  push each row's `Apply` LAST: a failed write restores the exact snapshot, which is why the snapshot primitive
   exists instead of re-reading through `ReadPath` — that substitutes defaults for unset pointers).
+  The file is that object marshalled, so nothing has to be addressed per key: a key this page does not own rides
+  along untouched, and the file stops being a hand-written document (comments and layout do not survive;
+  `config.Save` keeps one copy of the original as `config.yaml.bak` on the first save that rewrites it).
   Values are read and written by the SAME dot path as the file, via `config.ReadPath`/`SetPath`: one grammar
   for the file, the form and the error messages.
   A row's PUSH half is a reload method from `agent/agent_reload.go` (`ReloadTools`, `ReloadHooks`, `ReloadLSP`,
-  `ReloadMemory`, `ReloadSubagent`, `ReloadMCPToolRefresh`) or a call into one that already existed
+  `ReloadMemory`, `ReloadSubagent`, `ReloadMCPToolRefresh`) or a call into an existing one
   (`SetResolvedProvider` under the session's own provider name, `SetPermissionRoot`, `Setup*Provider`): each is
   idempotent, does only the push half, and never replaces something a FRONTEND injected
   (`AgentConfig.HookDispatcher` / `.SubagentRunner`, tracked by `hooksInjected` / `subagentInjected`).
   One row is the exception: `active_mcp_profile` sets `OwnsWrite`, because its push IS the writer —
   the batch skips the leaf so a failed switch cannot leave the field naming a profile whose servers
   are not loaded (the desktop's `switchMCPProfileTo` writes it under `cfgMu`, after the reconcile).
+  A whole-object write would therefore miss it (the push has not run yet), so `SaveSettings` lays
+  those leaves over the object for that one marshal and lifts them again (`overlayOwnedLeaves`):
+  the file holds what the user asked for, memory holds what the runtime accepted.
   Two invariants the whole family shares: a REMINDER cannot be replaced (the collector only appends), so the
   agent holds `LSPDiagnosticsReminder` / `MemoryRecallReminder` itself and re-points them
   (`SetProvider` / `SetBackend` — nil means off; both setters are synchronized, because they are called from
@@ -305,40 +310,28 @@ Fixtures, all because the real path needs something a driver cannot do:
   The rail carries no explanation text: a ⟳ badge on the row and the foot's 「N 项未保存」 already say what
   a restart costs and what is pending, and a paragraph in a navigation column reads as a footnote to
   nothing.
-- **「未设置」 is a state with its own value** (`config.Unset` → `null` in the file; a bare `nil` stays
-  REFUSED, because that is what a forgotten pointer dereference looks like). It is the only way back to a
-  field's auto/default behaviour (`vision: null`, `max_retries: null`), and `Optional` is true only for a
-  pointer with NO `default:` tag — a default already says what unset means, so those stay plain checkboxes.
+- **「未设置」 is a state with its own value** (`config.Unset` → the key is simply NOT written, since every
+  optional leaf's yaml tag is `omitempty`; a bare `nil` stays REFUSED, because that is what a forgotten pointer
+  dereference looks like). It is the only way back to a field's auto/default behaviour, it round-trips (absent
+  key → nil → 自动), and `Optional` is true only for a pointer with NO `default:` tag — a default already says
+  what unset means, so those stay plain checkboxes.
 - **A list is grown and shrunk by the SAVE, not by the button** (`config/config_edits.go`): `config.ListItemPaths()`
   names the lists the page may touch (a slice of structs by path — a `[]string` is one leaf, and a map key would
   have to be invented), and ＋ / 删除 only STAGE an item (`desktopApp.pendingAdds` / `.pendingRemoves`) which the
-  next `SaveSettings` consumes. It used to write on the spot, because an item had to BE in the file before any of
-  its fields could be saved (the update path refuses a path the file does not have) — and that is exactly what
-  staging had to solve, so **a staged item is drawn from the element TYPE**: `GetSettingsSchema` appends one
+  next `SaveSettings` consumes. Staging is what lets an item be EDITED before it exists, so **a staged item is
+  drawn from the element TYPE**: `GetSettingsSchema` appends one
   `SettingFieldVO` per leaf of every staged item (`config.ElementFields` — the element's declared shape plus a
   defaulted scaffold's values), so the page's draft/dirty/save machinery treats it like any other row and needs
   no special path. That is also why `elementOf` in `settings.tsx` matches a numeric segment against the schema's
   OWN list paths instead of any digits: `providers.1.name` is the only field in the form whose path the config
-  cannot walk, and it is still one item of one list. The order inside one save is the whole design and is not a
-  preference: **appends, then the leaf updates, then the removals** — a removal shifts every later index, so an
-  update applied after it addresses the wrong element; and a new element carries its own values (`ListAppend.Values`,
-  keyed by the tail inside the element) because an update cannot reach an element the file does not have. Two
-  invariants ride with it: `ListAppend.Index` is a CLAIM that both halves check against the list's real length
-  (a form working from a config that moved must be told, not guessed around — and a refusal leaves the staging
-  intact so the reader can retry), and **one save is ONE write** (`ApplyConfigEditsTo` parses once and emits once;
-  the leaf and structural halves shared three read-modify-write passes before, which left the file holding an
-  element whose values were never written). The in-memory half skips a leaf INSIDE an appended element (it has no
-  snapshot to take and the truncation on rollback removes it anyway) while the file half keeps it. `SavePartialTo`
-  and `AppendListItemTo`/`RemoveListItemFrom` remain the one-off entry points and delegate to the same node-level
-  helpers (`applyUpdatesToFile`, `appendElementNodeToFile`, `removeElementNode`) so the two cannot drift.
+  cannot walk, and it is still one item of one list. The order inside one save is the whole mechanism, not a
+  preference: **appends, then the leaf updates, then the removals** — a removal shifts every
+  later index, so an update applied after it addresses the wrong element, and an appended element's own values
+  are ORDINARY updates, which resolve only because the append ran before them. `SnapshotListEdits` skips a leaf
+  INSIDE an element the same batch appends (it does not resolve yet, and dropping the element on rollback takes
+  its leaves with it), and the rollback puts the three kinds back in the order `RestoreListEdits` documents.
   A removal still warns about the keys still naming the item (`settingChoices`) — at STAGE time, because that is
   when the reader can act on it — and an item that is dropped while it is still staged is a CANCEL, not a removal.
-  SavePartial adds a key whose block the path NAMES, creating any missing MAPPING block on the way — for a list's
-  own block and for a key's alike (the caller named the path, so there is nothing to guess; see `ensureBlock`),
-  which is what makes a `spec:` leaf savable in a file that never spelled `spec:` out. What stays
-  refused is everything a path cannot answer: a SEQUENCE element (the skeleton and the end
-  position are the missing answer), a step through a scalar or a list, and a MAP key the file does
-  not have (a map is keyed by a name, and a name is the guess this package does not make).
   Smoke: the `settings` scenario drives the page end to end and reads `config.yaml` back through
   `config.LoadFrom` on the Go side (including add, remove, and a list whose block was not in the
   file at all).
@@ -413,11 +406,11 @@ Fixtures, all because the real path needs something a driver cannot do:
   provider to declare vision (`spec.vision: true`, or the agent describes the image instead,
   `agent/vision_fallback.go`) and the assertion to read `RawBody` (the normalized view keeps text only).
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`,
-  `desktop/agent_turn.go`). Both used to read the session from `d.activeID` and answered `"ok"` for a message
-  they never started a turn for. The frontend draws the user's bubble and a running placeholder BEFORE the
-  call, so a dropped message left the reader looking at their own text under a 正在执行 nothing could clear —
-  and it is unrecoverable, the text never reaching a session file at all. The id comes from the caller now and
-  every refusal is a returned string, which the composer renders in the placeholder it opened
+  `desktop/agent_turn.go`). The id comes from the CALLER, and every refusal is a returned string — never a bare
+  `"ok"` for a message that started no turn, because the frontend draws the user's bubble and a running
+  placeholder BEFORE the call: a dropped message would leave the reader looking at their own text under a
+  正在执行 nothing could clear, and it is unrecoverable, the text never reaching a session file at all.
+  The composer renders the returned string in the placeholder it opened
   (`finishNotice` + `markRunning(false)`). Two traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN
   map, so it is false for a session that exists on disk and has not been loaded — every first send), and the
   busy check has to come BEFORE the agent build.
@@ -650,7 +643,7 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   **A steer splits the turn**, and therefore the fold: `injectSteerVisual` seals the streaming segment and
   opens a fresh assistant message, so each segment folds on its own (N steers = N+1 strips). Smoke cost: a
   scenario asserting a *successful* tool card must expand the strip first (`.process-head`), and "no tool
-  cards" is no longer evidence of "no tool calls"; an ATTACHMENT card is the exception — it is on screen
+  cards" is NOT evidence of "no tool calls"; an ATTACHMENT card is the exception — it is on screen
   folded (`file-find`).
 - **A row that alternates between two states must not change GEOMETRY — only its content may.** The process
   row flips between the live line and the summary once per tool call, and the transcript is bottom-pinned: the
@@ -688,11 +681,11 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   card expanding slid the visible content up by exactly that height. The fix is a `ResizeObserver` on a
   `.chat-content` wrapper (the scrollport's own box never changes when its content grows); any new "sticky
   bottom" behavior goes through the same observer.
-- **…and only the READER ends following, never growth.** `handleScroll` used to decide "the reader scrolled
-  away" from the distance to the bottom (over 48px away = gone), which cannot tell a reader from a transcript
-  that grew: content arriving BELOW the viewport leaves `scrollTop` where it was and pushes the bottom away.
-  Every pin now goes through `pinBottom`, which RECORDS where it landed, and following ends only when
-  `scrollTop` decreases below that record.
+- **…and only the READER ends following, never growth.** Distance to the bottom is NOT a usable test for "the
+  reader scrolled away": content arriving BELOW the viewport leaves `scrollTop` where it was and pushes the
+  bottom away, so a growing transcript reads exactly like a reader who left. Every pin therefore goes through
+  `pinBottom`, which RECORDS where it landed, and following ends only when `scrollTop` decreases below that
+  record.
 - **A width bound must subtract every other fixed column — and it must limit what is SHOWN, not what is
   STORED**: `.oneoff-panel`'s ceiling computed from `window.innerWidth` alone forgets the 280px sidebar. Read
   the sibling's REAL width from the DOM (`panelRoom()`, so a folded sidebar hands the room back) and re-measure
@@ -834,9 +827,9 @@ Each bullet is a rule a change must keep, with the bug it prevents.
 - **A review's PANE reads the same diff the reviewer read, by TURN.** The run record keeps the turn
   (`OneOffKeyTurn` → `OneOffVO.Turn`) and the findings pane fetches `GetTurnChanges(...)` — so a review of
   changes that were committed or deleted since still shows the files it read, with its findings anchored. Two
-  traps: the pane used to fetch by the recorded PATH list alone, which is the working tree against HEAD (an
-  empty pane); and 「重新评审」 used to hardcode turn 0, so re-running from the pane was refused exactly when
-  the frozen pair made it possible.
+  traps: fetching by the recorded PATH list ALONE is the working tree against HEAD, which is an empty pane for
+  a review whose changes have since been committed; and 「重新评审」 must carry the turn it re-runs, not 0 —
+  turn 0 is refused exactly when the frozen pair makes the re-run possible.
 - **A rewind is only offered for the conversation the reader is still IN — a compacted-away session is
   refused.** Compaction starts a NEW session that continues from a summary, so the predecessor's checkpoints
   describe the state before that point while the live conversation is the successor; rewinding there would move

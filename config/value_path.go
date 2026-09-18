@@ -4,24 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Reading and writing ONE leaf of the in-memory config by the dot path SavePartial already
-// speaks.
+// Reading and writing ONE leaf of the in-memory config by a dot path.
 //
 // Why a path API instead of more Set* methods: the desktop's settings table declares one
 // string per field (`desktop/settings.go`), and forty hand-written accessors would be
-// forgotten one by one. SavePartial owns the path syntax for the FILE side; this file owns
-// the same syntax for the STRUCT side, so "providers.0.model" means one thing everywhere and
-// an error message can name the key the caller actually typed.
+// forgotten one by one. So `providers.0.model` means one thing everywhere, an error message
+// can name the key the caller actually typed, and the form needs no vocabulary of its own.
 //
-// The two sides are deliberately not one implementation: the file is edited as YAML text
-// (preserving comments and style), the struct is walked by reflection. What they share is the
-// path grammar — and it is a grammar, not a convention: this file's rule for a segment is
-// exactly yamlPath's (a numeric segment indexes a sequence; everything else names a key).
+// The grammar is a grammar, not a convention: a numeric segment indexes a sequence, every
+// other segment names a struct field (by its yaml tag) or a map key — the same names the file
+// uses, because the file IS this object, marshalled (see Save).
 
 // A duration leaf reads and writes as the STRING the file holds ("30s"), not as the int64 it
 // is underneath.
@@ -29,10 +27,13 @@ import (
 // The path API is the file's own view of the config — that is the whole reason its paths are
 // yaml paths — and `timeout: 30s` is what a reader writes there. It also closes a real hole:
 // the config has TWO duration types, and they answered a binding differently. time.Duration
-// has no marshaller, so it crossed as 30000000000 (nanoseconds, uneditable by a person);
+// has no JSON marshaller, so it crossed as 30000000000 (nanoseconds, uneditable by a person);
 // config.Duration marshals as a string, so it crossed as "30s" and then could not be saved at
 // all, because the write path only accepted integers. Both are covered here, so a leaf does
 // not behave differently depending on which of the two it happens to be declared as.
+//
+// (In YAML the two agree — goccy and yaml.v3 both spell each of them "30s" — so this is about
+// the binding a form talks through, not about the file.)
 var (
 	durationType    = reflect.TypeOf(time.Duration(0))
 	cfgDurationType = reflect.TypeOf(Duration(0))
@@ -86,22 +87,19 @@ func readLeafRef(leaf leafRef) any {
 	return v.Interface()
 }
 
-// Unset is the value that CLEARS an optional leaf: it is written to the file as `null`, which
-// the loader reads back as "not set" — the state these fields mean by 自动 (`vision: null` =
-// decide it from the model, `max_retries: null` = the path's default).
+// Unset is the value that CLEARS an optional leaf: it leaves the pointer nil, which the loader
+// reads back as "not set" — the state these fields mean by 自动 (an unset `vision` = decide it
+// from the model, an unset `max_retries` = the path's default).
+//
+// Such a leaf is declared `omitempty`, so in the file it is a key that is simply not there;
+// what it expresses is the ABSENCE of a value, and its whole vocabulary is "write it" or
+// "leave it out".
 //
 // It is a named type rather than a nil because nil in an updates map is what a caller who forgot
-// to dereference a pointer looks like, and writing that to a user's file would silently clear a
-// setting nobody meant to touch — SavePartial refuses a bare nil for exactly that reason
-// (TestSavePartial_NilIsRefused pins it). Only a value that SAYS it means "unset" can unset, and
-// only a pointer leaf can take one: an int has no null.
+// to dereference a pointer looks like, and taking that as "unset" would silently clear a setting
+// nobody meant to touch — assignValue refuses a bare nil for exactly that reason. Only a value
+// that SAYS it means "unset" can unset, and only a pointer leaf can take one: an int has no null.
 type Unset struct{}
-
-// isUnset reports whether a value is the "clear this leaf" marker (see Unset).
-func isUnset(v any) bool {
-	_, ok := v.(Unset)
-	return ok
-}
 
 // LeafInfo is what a settings form needs to know about a leaf and the VALUE cannot answer: how
 // the leaf is declared, and whether it currently holds anything.
@@ -197,12 +195,11 @@ func kindOfType(t reflect.Type) string {
 // SetPath writes value into the in-memory config at key, doing exactly the half a runtime
 // change needs before anything is told about it.
 //
-// Two rules, both of them the file side's rules, because memory and config.yaml must not be
-// able to disagree about what was saved:
+// Two rules:
 //
-//   - the path must ALREADY EXIST (SavePartial only updates keys the file has; a path that
-//     resolves to nothing here would be written to memory and then refused by the file, which
-//     is the "already applied but not saved" state the design forbids);
+//   - the path must resolve to a leaf of this struct, and only a leaf a caller can write: a
+//     path that resolves to nothing, or that stops on a whole block, is a caller bug and is
+//     reported rather than guessed around;
 //   - the value must fit the field's type, and a mismatch is an ERROR rather than a
 //     conversion. The one conversion that IS accepted is the JSON shape a bound method
 //     receives — numbers arrive as float64 and lists as []any — because that is the shape the
@@ -217,22 +214,6 @@ func SetPath(cfg *Config, key string, value any) error {
 		return err
 	}
 	return assignValue(leaf, key, value)
-}
-
-// ValidateUpdates reports whether SavePartial would accept these values — the same type table
-// the write uses, without touching the file. SaveSettings runs it BEFORE the config object is
-// mutated, so a value the file would refuse cannot reach memory first (design §六's ordering:
-// validate, then apply, then write).
-//
-// It says nothing about the FIELD types: those are SetPath's business, and a mismatch there
-// is caught by ApplyUpdates' rollback.
-func ValidateUpdates(updates map[string]any) error {
-	for _, key := range sortedKeys(updates) {
-		if _, err := renderScalar(updates[key]); err != nil {
-			return fmt.Errorf("%s: %w", key, err)
-		}
-	}
-	return nil
 }
 
 // LeafValue is an opaque handle on one leaf's current value, for putting it back later.
@@ -296,6 +277,17 @@ func ApplyUpdates(cfg *Config, updates map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// sortedKeys returns a map's keys in a stable order, so a multi-key batch applies (and reports
+// its first failure) in the same order on every run.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // leafRef is a resolved path: the value itself, plus the struct field the LAST segment named

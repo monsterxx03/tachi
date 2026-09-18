@@ -13,7 +13,6 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creasty/defaults v1.8.0
-	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v69 v69.2.0
 	github.com/google/uuid v1.6.0
@@ -55,6 +54,7 @@ require (
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect

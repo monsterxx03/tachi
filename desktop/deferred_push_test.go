@@ -13,9 +13,9 @@ import (
 )
 
 // pushFixture returns an app with ONE prepared session whose agent is a bare AIAgent, and a
-// config.yaml that already carries `hooks.enabled` (SavePartial refuses a key the file does not
-// have). The `hooks` row is the probe: its push is observable from here as
-// `agent.Config.HookDispatcher`, and it is a per-session row, so it goes through the fan-out.
+// config.yaml that already carries `hooks.enabled`. The `hooks` row is the probe: its push is
+// observable from here as `agent.Config.HookDispatcher`, and it is a per-session row, so it goes
+// through the fan-out.
 func pushFixture(t *testing.T) (*desktopApp, *AgentService, *sessionRun, string) {
 	t.Helper()
 	sm := newSessionManagerForTest(t, t.TempDir()) // sets the base dir; the fixture re-sets it

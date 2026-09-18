@@ -7,7 +7,7 @@
 // 三条断言是这一页独有的、也最容易默默坏掉的：
 //   · 路径不当标签：`providers.0.model` 这种字符串不该出现在表单里（卡片头说"是哪个 provider"）；
 //   · 下拉的选项来自**这份配置**（`providers.*.name`），不是一张写死的表；
-//   · 「自动」= 未设置，落到文件里是 `vision: null` —— 这是唯一一个"没有值"也要写出去的状态。
+//   · 「自动」= 未设置，落到文件里是那个键**不出现** —— 这是唯一一个"没有值"也有表达的状态。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
@@ -256,9 +256,9 @@
   if (!fill('name', 'added-by-smoke') || !fill('model', 'added-model')) {
     return smoke.fail('给新条目填 name / model', addCard2.innerHTML.slice(0, 300))
   }
-  // 新条目上的 `spec.vision` 也设成「开」：它是**可选**叶子，值会随新条目一起进文件（append 携带自己
-  // 的值）。这样下一次把它改回「自动」时，走的就是 SavePartial 的替换路径、写出 `vision: null` ——
-  // 两条路都在这一场里走到，而"未设置"这个状态本身在这页上是必须能存下去的（design §八之四）。
+  // 新条目上的 `spec.vision` 也设成「开」：它是**可选**叶子。这样下一次把它改回「自动」时走的是
+  // config.Unset 那条路 —— 文件里那个键直接不出现（omitempty），回读是 nil。两条路都在这一场里
+  // 走到，而"未设置"这个状态本身在这页上是必须能存下去的（design §八之四）。
   const visionInNew = Array.prototype.slice.call(addCard2.querySelectorAll('.set-row'))
     .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === 'spec.vision')
   const visionNewSel = visionInNew ? visionInNew.querySelector('select') : null
@@ -280,7 +280,7 @@
   smoke.check('保存后新条目成为真条目（名字来自刚填的值），删掉的那一项不在了',
     !!afterSave, afterSave ? afterSave.join(' / ') : smoke.allText('.set-elem-head').join(' / '))
 
-  // 再把它改回「自动」并保存：界面上唯一能表达"没有值"的状态，落到文件里是 `vision: null`。
+  // 再把它改回「自动」并保存：界面上唯一能表达"没有值"的状态，落到文件里是那个键不出现。
   // 这一条必须落在**还活着的**元素上（上一步把 fixture 里那个删掉了），所以问的是刚加的那个。
   const savedCard = cardByHead('added-by-smoke')
   if (!savedCard) return smoke.fail('找到保存后的新条目', smoke.allText('.set-elem-head').join(' / '))
@@ -295,7 +295,7 @@
     const t = smoke.text('.settings-notice')
     return t.indexOf('已生效') >= 0 ? t : null
   }, '「自动」保存的汇总句')
-  smoke.check('新条目上的「自动」也能保存（写出去的是 null）', !!savedAuto, savedAuto || '')
+  smoke.check('新条目上的「自动」也能保存（写出去的是一片没有这个键的元素）', !!savedAuto, savedAuto || '')
 
   // ── 字号下限（"设置那两个字好小"） ────────────────────────────────────────
   // 左栏那个「设置」原来是 11.5px + 大写字距，比它标着的分类（14.5px）还小 —— 一页的标题成了页脚

@@ -1964,16 +1964,17 @@ permissions:
 		//
 		// 两条最容易默默坏掉的路在这里：
 		//   · 路径不当标签（`providers.0.model` 不该出现在表单里，卡片头说的是"哪个 provider"）；
-		//   · 「自动」= 未设置，落到文件里是 `vision: null` —— 唯一一个"没有值"也要写出去的状态
-		//     （config.Unset；裸 nil 是被拒绝的，那才是"忘了解引用指针"的样子）。
+		//   · 「自动」= 未设置，落到文件里是那个键**不出现**（可选叶子是 omitempty）—— 唯一一个
+		//     "没有值"也有表达的状态（config.Unset；裸 nil 是被拒绝的，那才是"忘了解引用指针"
+		//     的样子）。
 		{
 			name: "settings",
 			files: map[string]string{
 				"README.md": "# smoke\n\nsettings scenario's working directory\n",
 			},
 			// title_provider 故意**不**写进 fixture：这条保存要证明的正是"文件里没有的键也能存下去"
-			// —— 文件里的键由 SavePartial 按路径建出来（顶层键进根块），driver 把它改成 smoke，
-			// Go 侧再从文件里读回来。以前这里必须先放一个空值，否则那一次保存会被"只更新已有的键"拒绝。
+			// —— 保存写的是**整份配置**（config.Save），所以文件里有没有这个键都无所谓，driver 把它
+			// 改成 smoke，Go 侧再从文件里读回来。
 			//
 			// 嵌套块（provider 的 `spec:` 缺整块）那一路由单测钉住：共享的 provider fixture 必须
 			// 带着 spec（mock 的 context_window 是别的场景要用的），从界面侧腾不出那个位置。
@@ -1999,20 +2000,19 @@ permissions:
 					c.check("fixture 至少有一个 provider", false, "providers 为空")
 					return
 				}
-				// 未设置的那一态：文件里是 `vision: null`，装载回来是 nil —— 两边都得对，
-				// 否则界面上的「自动」与 Tachi 实际的行为就是两回事。
+				// 未设置的那一态：文件里**没有这个键**（可选叶子是 omitempty），装载回来是 nil
+				// —— 两边都得对，否则界面上的「自动」与 Tachi 实际的行为就是两回事。
 				// 这一条落在**新加的那个 provider** 上：它是界面造出来的条目，界面上把它的
-				// spec.vision 选成「自动」再保存，文件里就该是 null（走的是 SavePartial 的替换
-				// 路径 —— 新条目此刻已经是配置里的真条目了）。
-				c.check("「自动」把 vision 写成未设置（null 回读为 nil）",
+				// spec.vision 选成「自动」再保存，那个键就该从文件里消失。
+				c.check("「自动」把 vision 写成未设置（键不出现，回读为 nil）",
 					cfg.Providers[0].Spec.Vision == nil, string(raw))
-				c.check("文件里确实是 null 这个字面量",
-					strings.Contains(string(raw), "vision: null"), string(raw))
+				c.check("文件里没有 vision 这个键",
+					!strings.Contains(string(raw), "vision"), string(raw))
 
 				// 列表的增删：driver 现在**不是立刻写盘**的那一套了 —— ＋ 与删除只是暂存，保存时和字段值
-				// 一起写进文件（一次写盘，见 config.ListEdits）。所以这里断言的是**保存之后**的文件：
-				// 新条目在（带着从界面填进去的值），标了删除的那一项不在，而那个全新列表的块是保存时
-				// 建出来的（沙箱配置里根本没有 web_search 这个键）。
+				// 一起写进同一份配置（见 config.ListEdits）。所以这里断言的是**保存之后**的文件：
+				// 新条目在（带着从界面填进去的值），标了删除的那一项不在，而那个全新列表也一起出现了
+				// （沙箱配置里根本没有 web_search 这个键）。
 				names := make([]string, 0, len(cfg.Providers))
 				for _, p := range cfg.Providers {
 					names = append(names, p.Name)

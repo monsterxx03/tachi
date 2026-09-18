@@ -33,7 +33,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -128,8 +127,8 @@ const (
 type settingApply struct {
 	// Key is a dot path covering itself and everything under it, on SEGMENT boundaries:
 	// "compact" covers "compact.auto", never "compaction"; "language" covers only itself.
-	// It is also the path SavePartial is given, which is why it is dotted rather than
-	// slash- or index-based.
+	// It is also the path config's own reader and writer take, which is why it is dotted
+	// rather than slash- or index-based.
 	Key string
 	// Mode is what the key needs, per the block above.
 	Mode applyMode
@@ -374,7 +373,7 @@ var settingsTable = []settingApply{
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			profile, ok := d.savingUpdates["active_mcp_profile"].(string)
 			if !ok {
-				return nil // not a string: ValidateUpdates refused it long before this step
+				return nil // not a string: the batch's type check refused it long before this step
 			}
 			if d.mcp == nil {
 				// MCP is off: the value is written down and read at the next start. The row is
@@ -645,7 +644,7 @@ func pushError(what string, failures []string) error {
 // SettingFieldVO is one field of the settings form: a settingsTable row plus the value the
 // form should show.
 type SettingFieldVO struct {
-	// Key is the dot path the form sends back, and the same path SavePartial writes.
+	// Key is the dot path the form sends back, and the same path config's reader and writer take.
 	Key string `json:"key"`
 	// Kind is how to render the input: "string" / "bool" / "int" / "float" / "string_list" /
 	// "other". Derived from the value's own Go type rather than declared per row, because the
@@ -710,21 +709,16 @@ type SettingsSchemaVO struct {
 	Lists []SettingListVO `json:"lists"`
 }
 
-// ListAppend and ListEdits are config's own vocabulary for the structural half of a save; they are
-// aliased here so this file reads the way the design does without a package prefix on every field.
-type (
-	// ListAppend is one element to add to a config list, at its end.
-	ListAppend = config.ListAppend
-	// ListEdits is one save's structural half: what to change, what to add, what to drop.
-	ListEdits = config.ListEdits
-)
+// ListEdits is config's own vocabulary for the structural half of a save, aliased here so this file
+// reads the way the design does without a package prefix on every field.
+type ListEdits = config.ListEdits
 
 // pendingAdd is one staged list item: where it will land (`providers.3`), and nothing else.
 //
-// The index is the whole content because that is all the form needs and all the file side can
-// check: the item's VALUES are leaf updates like any other (the schema declares the element's
-// leaves, so the form draws them for an element that is not in the file yet), and the index is the
-// promise config.ListAppend verifies against the list's real length.
+// The index is the whole content because that is all the staging has to say: the item's VALUES are
+// leaf updates like any other (the schema declares the element's leaves, so the form draws them for
+// an element that is not in the config yet), and the element is created by the append that runs
+// before those updates in the same batch.
 type pendingAdd struct {
 	Element string
 }
@@ -1043,55 +1037,71 @@ func validatePendingRemoval(cfg *config.Config, elementPath string, already []st
 	return nil
 }
 
-// pendingAppends turns the staged adds into config's own shape, with the values the form supplied
-// for them: one ListAppend per item, at the index it will land at.
-//
-// The values are collected from the batch the page sent, keyed by the TAIL inside the element
-// (`type`, `spec.proxy` — which is the shape ListAppend takes, because a caller producing them
-// before the index is known cannot key by a path it does not have yet). They ride WITH the element
-// because the element does not exist when the leaf updates are applied: this is what lets a leaf
-// inside a brand-new item land in an item the config does not have.
-func pendingAppends(pending []pendingAdd, updates map[string]any) []ListAppend {
-	if len(pending) == 0 {
-		return nil
-	}
-	out := make([]ListAppend, 0, len(pending))
-	for _, add := range pending {
-		listPath, index, err := config.SplitElementPath(add.Element)
-		if err != nil {
-			continue
-		}
-		out = append(out, ListAppend{List: listPath, Index: index, Values: elementValuesOf(add.Element, updates)})
-	}
-	return out
-}
-
-// elementValuesOf collects the batch's leaves that belong to one element, keyed by their tail
-// inside it: `providers.3.spec.proxy` → `spec.proxy`.
-func elementValuesOf(element string, updates map[string]any) map[string]any {
-	prefix := element + "."
+// ownedLeaves collects the batch's leaves whose row writes them ITSELF (settingApply.OwnsWrite):
+// they are the ones this save must not put into memory yet.
+func ownedLeaves(rows map[string]settingApply, updates map[string]any) map[string]any {
 	var out map[string]any
-	for key, value := range updates {
-		if !strings.HasPrefix(key, prefix) {
+	for key, row := range rows {
+		if !row.OwnsWrite {
 			continue
 		}
 		if out == nil {
 			out = map[string]any{}
 		}
-		out[strings.TrimPrefix(key, prefix)] = value
+		out[key] = updates[key]
 	}
 	return out
 }
 
-// appendedIn reports whether a leaf path names a leaf INSIDE an element this save appends — the set
-// the in-memory half must skip (see SaveSettings) while the file half keeps.
-func appendedIn(key string, appends []ListAppend) bool {
-	for _, a := range appends {
-		if strings.HasPrefix(key, a.List+"."+strconv.Itoa(a.Index)+".") {
-			return true
-		}
+// overlayOwnedLeaves lays those leaves over the config and returns the function that lifts them
+// again — so the marshal in between writes what the user asked for while the running process is
+// told nothing.
+//
+// The row's push is what writes them for real (and what refuses to, when the switch it represents
+// cannot be made); the file must hold them either way, because that is what "saved" means. The two
+// orders meet here and nowhere else.
+//
+// The returned function is never nil and is safe to defer unconditionally.
+func overlayOwnedLeaves(cfg *config.Config, leaves map[string]any) func() {
+	if len(leaves) == 0 {
+		return func() {}
 	}
-	return false
+	keys := make([]string, 0, len(leaves))
+	for key := range leaves {
+		keys = append(keys, key)
+	}
+	snap, err := config.SnapshotLeaves(cfg, keys)
+	if err != nil {
+		// A leaf this batch resolved but cannot be read back would be a bug in the path API, and
+		// there is nothing to lift: the marshal writes the value the object already holds.
+		return func() {}
+	}
+	if err := config.ApplyUpdates(cfg, leaves); err != nil {
+		config.RestoreLeaves(snap)
+		return func() {}
+	}
+	return func() { config.RestoreLeaves(snap) }
+}
+
+// pendingAppendLists turns the staged adds into the lists they grow: one element at the end of
+// each item's own list.
+//
+// The element's INDEX is what the staging recorded (`providers.3`), but nothing here carries it:
+// the list grows at its end, so the index is the list's own answer, and the batch's updates — keyed
+// by the full path the page saw — land on it once the append has run (see config.ListEdits).
+func pendingAppendLists(pending []pendingAdd) []string {
+	if len(pending) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(pending))
+	for _, add := range pending {
+		listPath, _, err := config.SplitElementPath(add.Element)
+		if err != nil {
+			continue
+		}
+		out = append(out, listPath)
+	}
+	return out
 }
 
 // danglingReferences names the keys that currently hold this item's name, for the warning a
@@ -1179,18 +1189,19 @@ type SaveSettingsResultVO struct {
 //     reason about.
 //  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
 //     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
-//  3. validate the values against the FILE's own type table, before memory changes.
-//  4. snapshot the leaves and apply them in one locked step (all or none), together with the
+//  3. snapshot the leaves and apply them in one locked step (all or none), together with the
 //     STRUCTURAL half: the list items this page staged with ＋ and − are appended and removed here,
 //     in the order config.ListEdits documents (appends, then the leaf updates, then the removals —
-//     only that order addresses the elements the form meant).
-//  5. write config.yaml, as ONE write for the leaf and structural halves alike. Only a save that
-//     got this far continues: if the write fails, the memory is put back exactly as it was and the
-//     answer says so — "applied for this session but not saved" is a state the next restart
-//     contradicts, and the reader cannot tell which of the two they have.
-//  6. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
+//     only that order addresses the elements the form meant). The type check is this step's own:
+//     config.SetPath refuses a value the field cannot hold, and the batch is put back whole.
+//  4. write config.yaml, as ONE write of the WHOLE config (config.Save): the file is the object
+//     marshalled, so there is no per-key half to keep in step. Only a save that got this far
+//     continues: if the write fails, the memory is put back exactly as it was and the answer says
+//     so — "applied for this session but not saved" is a state the next restart contradicts, and
+//     the reader cannot tell which of the two they have.
+//  5. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
 //     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
-//     before the write, a failure at step 5 would leave the running process on values the file
+//     before the write, a failure at step 4 would leave the running process on values the file
 //     (and the restored memory) does not have, while the answer promised the opposite. Its own
 //     failures are per-session and reported, not fatal — the value IS saved.
 //
@@ -1215,7 +1226,7 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 	// until the write is through), so the reader can fix what the sentence named and save again.
 	edits := ListEdits{
 		Updates: updates,
-		Appends: pendingAppends(d.pendingAdds, updates),
+		Appends: pendingAppendLists(d.pendingAdds),
 		Removes: append([]string(nil), d.pendingRemoves...),
 	}
 	if edits.IsEmpty() {
@@ -1242,32 +1253,30 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 	}
 
 	// 2. The page's null means 自动 on a leaf that has that state — see normalizeUnsets. It has to
-	// happen before the type check below, because what the check and the write both need to see is
+	// happen before the values are applied, because what the apply and the write both need to see is
 	// what config will actually be given.
 	normalizeUnsets(cfg, updates)
 
-	// 3. The type table the file write uses, so a bad value never reaches memory.
-	if err := config.ValidateUpdates(updates); err != nil {
-		return &SaveSettingsResultVO{OK: false, Summary: "值不合法：" + err.Error()}
-	}
-
-	// 4. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
+	// 3. In memory first: a batch is all-or-nothing. The value's own type is what validates it here
+	// (config.SetPath refuses what the field cannot hold), and ApplyUpdates puts back every leaf it
+	// already wrote if a later one fails — so a bad value never reaches the file, and "validated but
+	// not applied" is not a state this leaves behind.
 	// A row that OWNS the write of its leaf (settingApply.OwnsWrite) is deliberately NOT in the
 	// MEMORY batch: its push writes the value itself, at the moment the runtime can actually take it,
 	// so there is one writer of that leaf and a failed push leaves it alone. It is still written to
-	// the FILE by this save — that is what "saved" means for every row, and the file half is the one
-	// place that must carry it.
+	// the FILE by this save — that is what "saved" means for every row, and the file carries the
+	// whole config (see step 4).
 	//
 	// The snapshot covers the structural half too, and it has to be taken BEFORE it: putting a
 	// config back means truncating the lists that grew and re-inserting what was dropped, which is
 	// only possible from what was recorded first.
 	//
-	// A leaf INSIDE an element this save appends is not an update at all: it travels WITH the element
-	// (see ListAppend.Values). That is what lets a leaf land in an element the config does not have,
-	// and it is the same rule in both halves (config.ListEdits.updatesOutsideAppends).
+	// A leaf of a staged item is an ORDINARY update: the appends below run first, so by the time the
+	// updates land the element exists and the path resolves. Order is the whole mechanism — one
+	// object means there is nothing else to keep in step.
 	batched := make(map[string]any, len(updates))
 	for _, key := range keys {
-		if rows[key].OwnsWrite || appendedIn(key, edits.Appends) {
+		if rows[key].OwnsWrite {
 			continue
 		}
 		batched[key] = updates[key]
@@ -1292,22 +1301,40 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 		}
 	}
 
-	// 5. The file: it is what survives the process, and it carries EVERY key — including the one a
-	// row owns, whose memory half just waited for its push. ONE write for the leaf and the structural
-	// halves: three passes would leave the file holding an item whose values were never written. A
-	// failure here undoes the memory and returns, and it is honest to say so, because nothing has been
-	// pushed yet (step 6).
-	if err := config.ApplyConfigEdits(edits); err != nil {
+	// 4. The file: it is what survives the process, and what it holds is the WHOLE config — the file
+	// IS the config object, marshalled (config.Save), so a key this page does not own rides along
+	// untouched instead of having to be named in the batch, and a row that owns its write is written
+	// here like every other leaf.
+	//
+	// That is the trade: the file stops being a hand-written document, so its comments and its own
+	// layout do not survive (config.Save's doc says so; backupOnce keeps one copy of the original).
+	// What it buys is that there is nothing left to keep in step.
+	//
+	// The marshal happens UNDER the lock, like every other read and write of the object: a
+	// concurrent writer (the MCP profile switch) must not be mid-way through it.
+	//
+	// A row that OWNS its leaf (OwnsWrite) is the one value the marshal cannot carry by itself: it
+	// reaches MEMORY during its push, which has not run yet — because a switch that fails must leave
+	// the field naming the profile that is actually loaded. The FILE still has to hold what the user
+	// asked for, so those leaves are laid over the object for this one marshal and lifted again
+	// before the push writes them for real (see overlayOwnedLeaves).
+	var saveErr error
+	d.withConfig(func(c *config.Config) {
+		lift := overlayOwnedLeaves(c, ownedLeaves(rows, updates))
+		defer lift()
+		saveErr = config.Save(c)
+	})
+	if saveErr != nil {
 		if !memoryEdits.IsEmpty() {
 			d.withConfig(func(c *config.Config) { config.RestoreListEdits(c, snap) })
 		}
-		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
+		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + saveErr.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
 	}
 	// The write landed, so the staged structure is now part of the config and no longer pending.
 	d.pendingAdds = nil
 	d.pendingRemoves = nil
 
-	// 6. The runtime half: everything already built that keeps its own copy of these values.
+	// 5. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
 	//
 	// `pushing` marks this step: the fan-out queues a push for a session whose turn is in flight

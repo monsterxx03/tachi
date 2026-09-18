@@ -675,18 +675,19 @@ export function SavePastedImage(sessionID: string, mediaType: string, data: stri
  *     reason about.
  *  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
  *     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
- *  3. validate the values against the FILE's own type table, before memory changes.
- *  4. snapshot the leaves and apply them in one locked step (all or none), together with the
+ *  3. snapshot the leaves and apply them in one locked step (all or none), together with the
  *     STRUCTURAL half: the list items this page staged with ＋ and − are appended and removed here,
  *     in the order config.ListEdits documents (appends, then the leaf updates, then the removals —
- *     only that order addresses the elements the form meant).
- *  5. write config.yaml, as ONE write for the leaf and structural halves alike. Only a save that
- *     got this far continues: if the write fails, the memory is put back exactly as it was and the
- *     answer says so — "applied for this session but not saved" is a state the next restart
- *     contradicts, and the reader cannot tell which of the two they have.
- *  6. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
+ *     only that order addresses the elements the form meant). The type check is this step's own:
+ *     config.SetPath refuses a value the field cannot hold, and the batch is put back whole.
+ *  4. write config.yaml, as ONE write of the WHOLE config (config.Save): the file is the object
+ *     marshalled, so there is no per-key half to keep in step. Only a save that got this far
+ *     continues: if the write fails, the memory is put back exactly as it was and the answer says
+ *     so — "applied for this session but not saved" is a state the next restart contradicts, and
+ *     the reader cannot tell which of the two they have.
+ *  5. push each row's `Apply` — the runtime half, and LAST, because a push has no undo: it
  *     rebuilds tools, moves a process-wide log level, swaps backends, reconnects servers. Run
- *     before the write, a failure at step 5 would leave the running process on values the file
+ *     before the write, a failure at step 4 would leave the running process on values the file
  *     (and the restored memory) does not have, while the answer promised the opposite. Its own
  *     failures are per-session and reported, not fatal — the value IS saved.
  * 

@@ -1,6 +1,6 @@
 # Desktop 设置页 — 设计
 
-> 版本: 2.7 | 日期: 2026-09-18（v1.0: 2026-09-14，v2.0~v2.5: 2026-09-17~18）| 状态: P0-a、P0-b、
+> 版本: 3.0 | 日期: 2026-09-19（v1.0: 2026-09-14，v2.0~v2.7: 2026-09-17~18）| 状态: P0-a、P0-b、
 > **结构前置（§八之三）、P2 的后端**（`GetSettingsSchema` / `SaveSettings` + `config` 的路径读写）、
 > **全部热改路径**（§五之四：97 个输入框里 91 个已能免重启生效）以及
 > **P1/P2/P3 的前端**（§八之四：`App.tsx` 的 view 状态 + `settings.tsx` 外壳 + 分类导航 +
@@ -45,6 +45,20 @@
 > `web_fetch.providers` / `lsp.servers` 里加一项、删一项；"新增一个键"这条产品决策被**收窄**
 > （父块已存在的那一个键 + 列表末尾），没有推翻。剩余待办（其余枚举、`other` 的只读项）见
 > §八之四 末尾。
+>
+> v3.0 是**把 §六 的文件侧推翻**：产品上真正要的只有「改完不用重启」（§五之四 的整张热改表、一行未动），
+> 而"保留用户手写文件的注释与缩进"是这一页唯一还没有独立价值的成本 —— 它要求把 config.yaml 当成
+> **独立一份文本**按路径寻址，由此才有 `SavePartial` / `ensureBlock` / `ListAppend.Index` /
+> `updatesOutsideAppends` / 按幸存者验证删除这一整套，以及"文件拒绝某个键"这条只存在于两个半边之间的失败模式。
+> 现在文件就是内存对象 Marshal 出来的（`config.Save`，原子写 + 保留 mode），`SaveSettings` 六步变五步：
+> 键校验 → 归一 Unset → 整批写内存（含结构半边）→ **整份写盘** → 逐行推送。列表的增删 UX（暂存、保存时
+> 才落盘）保留，但它不再需要索引声明与跨半边去重 —— 追加先进内存，条目的叶子就是普通 update。
+> 代价实测在案：用户自己的 config.yaml 一次保存后由 65 行变 ~148 行（`defaults.Set` 的默认值被显式写出），
+> 注释不可逆，故 `config.backupOnce` 在第一次整体重写前把原文件留成 `config.yaml.bak`；「自动」在文件里
+> 从 `vision: null` 变成**那个键不出现**（`omitempty`），回读仍是 nil；`goccy/go-yaml` 随之从依赖里消失。
+> 未改：`settingsTable` 的每一行、全部 `Apply`、`deferred_push`、`GetSettingsSchema` 与前端（schema 驱动，
+> 签名未变）。
+>
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 

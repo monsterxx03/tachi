@@ -25,7 +25,7 @@ func readPathFixture() *Config {
 	}
 }
 
-func TestReadPathWalksTheSameGrammarAsSavePartial(t *testing.T) {
+func TestReadPathWalksTheDottedPathGrammar(t *testing.T) {
 	cfg := readPathFixture()
 	tests := []struct {
 		key  string
@@ -147,7 +147,7 @@ func TestSetPathRefusesWhatItCannotWrite(t *testing.T) {
 		{"max_tokens", 1.5, "需要"},    // a non-integer into an int field
 		{"max_tokens", "2000", "需要"}, // a string into an int field
 		{"language", 42, "需要"},       // a number into a string field
-		{"language", nil, "nil"},     // nil would clear the key (SavePartial refuses too)
+		{"language", nil, "nil"},     // nil is refused: clearing a leaf takes config.Unset, in memory as in the file
 		{"nope", "x", "没有"},
 		{"providers", []any{"x"}, "叶子"}, // a sequence of structs is not a leaf
 	}
@@ -188,12 +188,16 @@ func TestSetPathReachesInsideAMapValue(t *testing.T) {
 	}
 }
 
-// TestValidateUpdatesSharesTheWritesTypeTable: the pre-flight check must reject exactly what
-// the file write would, because its whole purpose is to keep a bad value out of memory before
-// the write is attempted.
-func TestValidateUpdatesSharesTheWritesTypeTable(t *testing.T) {
-	if err := ValidateUpdates(map[string]any{"language": "en", "max_tokens": 100}); err != nil {
-		t.Errorf("ValidateUpdates on good values: %v", err)
+// ApplyUpdates is where a value is validated: the FIELD's own type decides, and a mismatch is an
+// error rather than a conversion — so a bad value never reaches the file, which is what the
+// pre-flight check this replaced used to guarantee.
+func TestApplyUpdatesRefusesWhatTheFieldCannotHold(t *testing.T) {
+	cfg, err := LoadFrom(writeConfigFixture(t, "language: zh\nmax_tokens: 100\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyUpdates(cfg, map[string]any{"language": "en", "max_tokens": 200}); err != nil {
+		t.Errorf("ApplyUpdates on good values: %v", err)
 	}
 	for _, tt := range []struct {
 		name    string
@@ -201,10 +205,12 @@ func TestValidateUpdatesSharesTheWritesTypeTable(t *testing.T) {
 	}{
 		{"nil value", map[string]any{"language": nil}},
 		{"unsupported type", map[string]any{"language": struct{ X int }{}}},
+		{"a number where a string goes", map[string]any{"language": 3}},
+		{"a non-integer where an int goes", map[string]any{"max_tokens": 1.5}},
 	} {
-		err := ValidateUpdates(tt.updates)
+		err := ApplyUpdates(cfg, tt.updates)
 		if err == nil {
-			t.Errorf("%s: ValidateUpdates = nil, want an error", tt.name)
+			t.Errorf("%s: ApplyUpdates = nil, want an error", tt.name)
 			continue
 		}
 		for key := range tt.updates {
@@ -215,8 +221,28 @@ func TestValidateUpdatesSharesTheWritesTypeTable(t *testing.T) {
 	}
 }
 
-// TestYAMLPathsKeepsTheLeafRulesShape: a collection of SCALARS is one leaf (the whole list is
-// the value renderScalar accepts), while a collection of STRUCTS is one leaf per element. The
+// …and a batch that fails is put back WHOLE: every leaf it already wrote goes back to what it
+// held, so a half-applied batch is not a state the caller can be left holding.
+func TestApplyUpdatesIsAllOrNone(t *testing.T) {
+	cfg, err := LoadFrom(writeConfigFixture(t, "language: zh\nmax_tokens: 100\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted order puts `language` first, so the bad `max_tokens` fails AFTER it was written —
+	// which is the only way this test can see the rollback at all.
+	if err := ApplyUpdates(cfg, map[string]any{"language": "en", "max_tokens": "not a number"}); err == nil {
+		t.Fatal("a string in an int field was accepted")
+	}
+	if cfg.Language != "zh" {
+		t.Errorf("language = %q, want the pre-batch value: the batch half-landed", cfg.Language)
+	}
+	if cfg.MaxTokens != 100 {
+		t.Errorf("max_tokens = %d, want it untouched", cfg.MaxTokens)
+	}
+}
+
+// TestYAMLPathsKeepsTheLeafRulesShape: a collection of SCALARS is one leaf (the whole list is one
+// value), while a collection of STRUCTS is one leaf per element. The
 // structural walker is what the desktop's settings guard uses — it must be able to answer for a
 // config with an empty provider list.
 func TestYAMLPathsKeepsTheLeafRulesShape(t *testing.T) {

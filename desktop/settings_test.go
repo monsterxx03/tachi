@@ -296,12 +296,12 @@ func readFileT(t *testing.T, path string) string {
 
 // makeConfigWriteFail makes the directory config.yaml lives in read-only, so the atomic write at
 // the end of a save is the step that fails. It is the write failure a real user hits (a read-only
-// home, a full disk) and — now that SavePartial creates the blocks a path names — the only one
-// left that a save can run into at all, which is why the rollback and push-ordering tests below
-// induce it this way instead of naming a key the file refuses.
+// home, a full disk) and the only one a save can run into at all — the file is written whole, so
+// there is no longer a key it could refuse. That is why the rollback and push-ordering tests below
+// induce it this way.
 //
-// The directory (not the file) is what changes: 0500 still allows the READ that SavePartial starts
-// with, and creating the tmp file is what gets refused. Not root-proof: a superuser bypasses the
+// The directory (not the file) is what changes: 0500 still allows the READ the save starts with,
+// and creating the tmp file is what gets refused. Not root-proof: a superuser bypasses the
 // permission, and a test run as root would see the save succeed.
 func makeConfigWriteFail(t *testing.T, path string) {
 	t.Helper()
@@ -454,7 +454,7 @@ func TestSaveSettingsRefusesBeforeTouchingAnything(t *testing.T) {
 	}{
 		{"unknown key", map[string]any{"nope": "x"}, "未知配置项"},
 		{"another entry mode's key", map[string]any{"tui.input_history_limit": float64(5)}, "别的入口模式"},
-		{"nil value", map[string]any{"language": nil}, "值不合法"},
+		{"nil value", map[string]any{"language": nil}, "nil 不是可保存的值"},
 		{"wrong field type", map[string]any{"max_tokens": "1000"}, "改不了"},
 		{"unreadable key", map[string]any{"providers.3.model": "m"}, "下标"},
 	}
@@ -633,9 +633,9 @@ func TestSaveSettingsMakesALogLevelChangeLive(t *testing.T) {
 
 // TestTheFormSeesAndSavesWhatTheFileHolds: a form does not send Go values, it sends what its
 // inputs hold — a list as []any, a duration as the string in the box — and neither shape was
-// reachable before the settings page existed. The write path had to be taught both (see
-// config's renderScalar and assignValue); this is the test that says the pair works from the
-// page's side, including what the page is SHOWN to begin with.
+// reachable before the settings page existed. config's assignValue had to be taught both; this is
+// the test that says the pair works from the page's side, including what the page is SHOWN to
+// begin with.
 func TestTheFormSeesAndSavesWhatTheFileHolds(t *testing.T) {
 	d, svc, path := settingsFixture(t, `permissions:
   bash:
@@ -679,7 +679,7 @@ memory:
 	if !strings.Contains(file, "45s") || !strings.Contains(file, "pwd") {
 		t.Errorf("config.yaml = %q, want the duration in its written form and the new list", file)
 	}
-	if !strings.Contains(file, "allow: [ls, pwd]") {
+	if !strings.Contains(file, "allow:") || !strings.Contains(file, "- ls") || !strings.Contains(file, "- pwd") {
 		t.Errorf("config.yaml = %q, want the list rendered as a list", file)
 	}
 }
@@ -892,9 +892,9 @@ func TestSaveSettingsProviderProxy(t *testing.T) {
 }
 
 // TestSaveSettingsUnsetsAnOptionalLeaf: the form's 自动 sends a null, and that has to reach the
-// field as "unset" in memory, as `null` in the file, and back as unset when the page re-reads it.
-// The three fields it exists for are the ones whose nil MEANS something (`vision: nil` = decide
-// it from the model).
+// field as "unset" in memory, as a key the FILE does not have, and back as unset when the page
+// re-reads it. The fields it exists for are the ones whose nil MEANS something (`vision: nil` =
+// decide it from the model).
 func TestSaveSettingsUnsetsAnOptionalLeaf(t *testing.T) {
 	d, svc, path := settingsFixture(t, `providers:
   - name: main
@@ -934,8 +934,12 @@ func TestSaveSettingsUnsetsAnOptionalLeaf(t *testing.T) {
 		t.Errorf("max_retries = %v in memory after 自动, want unset", *got)
 	}
 	file := readFileT(t, path)
-	if !strings.Contains(file, "vision: null") || !strings.Contains(file, "max_retries: null") {
-		t.Errorf("config.yaml = %q, want both written as null", file)
+	// An unset optional leaf is `omitempty`: the file expresses 自动 by NOT having the key, and the
+	// loader reads the absence back as nil. (`vision: null` would be a second way to say one thing.)
+	for _, key := range []string{"vision", "max_retries"} {
+		if strings.Contains(file, key) {
+			t.Errorf("config.yaml = %q, want no %s key at all after 自动", file, key)
+		}
 	}
 	if f := byKey()["providers.0.spec.vision"]; f.IsSet || f.Value != nil {
 		t.Errorf("vision re-read as %+v, want it shown as 自动 again", f)
@@ -951,10 +955,10 @@ func TestSaveSettingsUnsetsAnOptionalLeaf(t *testing.T) {
 
 // TestSettingsItemAddAndRemove walks the two methods the page's ＋ / 删除 use.
 //
-// The add WRITES IMMEDIATELY, so what it must be held to is: the item is in the file as well as in
-// memory, the file still loads, and the item is then editable through the ordinary save (the
-// fields its skeleton left out are added by SavePartial's add-a-key rule). The remove must take
-// the item it was asked for and WARN about the keys still naming it.
+// Neither writes anything on its own: both STAGE the structural change into the save that follows
+// (see AddSettingsItem), so what they must be held to is what they report — the item's path, the
+// warning about keys that still name the one being dropped — and that one save then puts the whole
+// thing in the file, which still loads.
 func TestSettingsItemAddAndRemove(t *testing.T) {
 	d, svc, path := settingsFixture(t, `provider: main
 providers:
