@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -466,9 +465,24 @@ func (m *Manager) RecomputeAutoLoad(cfg *config.Config) (added, removed []*Defer
 	}
 	sort.Strings(now)
 	m.autoLoadNames = now
+	nowSet := make(map[string]bool, len(now))
+	for _, n := range now {
+		nowSet[n] = true
+	}
 	for _, dt := range pooled {
-		if was[dt.Name] && !slices.Contains(now, dt.Name) {
+		if was[dt.Name] && !nowSet[dt.Name] {
 			removed = append(removed, dt)
+		}
+	}
+	// Names that were auto-loaded and have left the POOL entirely (their server went away): they
+	// cannot appear in `removed` — there is no pooled tool to hand back to the caller — but a live
+	// session's set would go on advertising a tool that no longer exists. They are dropped from the
+	// sets below; the REGISTRY half is the tool-list refresher's job (onMCPToolsRefreshed
+	// unregisters whatever a server reports gone).
+	var gone []string
+	for name := range was {
+		if !nowSet[name] && m.pool.Get(name) == nil {
+			gone = append(gone, name)
 		}
 	}
 	// The live sessions' sets follow in the same critical section, so a set can never be
@@ -478,13 +492,16 @@ func (m *Manager) RecomputeAutoLoad(cfg *config.Config) (added, removed []*Defer
 	// every CallTool behind them. Consistency does not need that — the touched sets are
 	// persisted once each below, after the lock is released.
 	var touched []*DiscoveredSet
-	if len(added) > 0 || len(removed) > 0 {
+	if len(added) > 0 || len(removed) > 0 || len(gone) > 0 {
 		for _, set := range m.sets {
 			for _, dt := range added {
 				set.addNoPersist(dt.Name)
 			}
 			for _, dt := range removed {
 				set.removeNoPersist(dt.Name)
+			}
+			for _, name := range gone {
+				set.removeNoPersist(name)
 			}
 			touched = append(touched, set)
 		}
@@ -500,9 +517,10 @@ func (m *Manager) RecomputeAutoLoad(cfg *config.Config) (added, removed []*Defer
 		}
 	}
 
-	if len(added) > 0 || len(removed) > 0 {
+	if len(added) > 0 || len(removed) > 0 || len(gone) > 0 {
 		m.logger.Info(context.Background(), "MCP: auto-load recomputed",
-			"auto_load", len(now), "added", len(added), "removed", len(removed), "tool_search", useToolSearch)
+			"auto_load", len(now), "added", len(added), "removed", len(removed), "gone", len(gone),
+			"tool_search", useToolSearch)
 	}
 	return added, removed
 }

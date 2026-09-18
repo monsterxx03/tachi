@@ -510,6 +510,13 @@ agent 的**会话跑 `fn`，把失败收成「「标题」：原因」的行（�
 表里的 `Apply` 只负责让已经构造出来的东西跟着变（重建工具、清 prompt 缓存、广播到各会话）——
 否则同一个叶子会有两个写者。
 
+**唯一的例外是 `OwnsWrite`**（目前只有 `active_mcp_profile` 一行）：这一行的推送自己就是那个写者，
+批次必须跳过它。理由是"改了没生效"的反面——profile 的切换可能失败（profile 文件读不出来），
+而批次先写、推送后失败就会让字段停在一个服务器并未加载的 profile 上（面板会把它显示成 active）。
+`OwnsWrite` 的行从 `d.savingUpdates` 取自己的新值，并在**切换成功之后**才写（`switchMCPProfileTo`，
+走 `cfgMu`）；失败时字段保持旧值，文件里有的是用户存的意图，汇总里报的是这次推送失败。
+守卫测试（`TestSettingsTableRules`）要求 `OwnsWrite` 必须是带 `Apply` 的 push：没有代码就等于没有写者。
+
 ### 各入口的一致性
 
 `AgentService` 的改动是「四个面」（见 `docs/agents/desktop.md`）：Go 方法、重新生成的

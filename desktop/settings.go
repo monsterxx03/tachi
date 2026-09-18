@@ -104,6 +104,15 @@ type settingApply struct {
 	// unused rows, and for a push whose Apply is missing — those are exactly the cases a
 	// settings page has to tell the reader about, so they must not be silent.
 	Note string
+	// OwnsWrite says this row applies its OWN value, so SaveSettings must not pre-apply it in the
+	// batch: there would be two writers of one leaf, and the batch's value would survive a push
+	// that failed — a field describing a change the runtime refused (the panel would show the new
+	// value while the connections were still the old one).
+	//
+	// The push reads its new value from d.savingUpdates (see SaveSettings), which is why a row
+	// that owns its write must be applyPush WITH an Apply: with no code there would be no writer
+	// at all.
+	OwnsWrite bool
 }
 
 // needsRestart reports whether a value saved now can only take effect after a restart.
@@ -297,21 +306,26 @@ var settingsTable = []settingApply{
 	{
 		Key:  "active_mcp_profile",
 		Mode: applyPush,
+		// This row OWNS the write of its leaf (OwnsWrite): the batch must not pre-apply the profile,
+		// or a switch that fails would leave the field naming a profile whose servers are not
+		// loaded — and the panel would show it as active. d.switchMCPProfileTo writes it, under
+		// cfgMu, only after the connections have actually moved.
+		OwnsWrite: true,
 		Apply: func(d *desktopApp, _ *config.Config) error {
-			if d.mcp == nil {
-				return nil // MCP is off: the value is written down and read at the next start
+			profile, ok := d.savingUpdates["active_mcp_profile"].(string)
+			if !ok {
+				return nil // not a string: ValidateUpdates refused it long before this step
 			}
-			a, note := d.appAgentForMCP()
-			if a == nil {
-				return errors.New(note)
+			if d.mcp == nil {
+				// MCP is off: the value is written down and read at the next start. The row is
+				// still its writer, so it is written HERE.
+				d.withConfig(func(c *config.Config) { c.ActiveMCPProfile = profile })
+				return nil
 			}
 			// One call, not one per session: the manager and its connections are shared, and the
 			// profile file is resolved against the displayed session's tree (mcp.<name>.json can
 			// live in a project).
-			if _, err := a.SwitchMCPProfile(context.Background(), d.config().ActiveMCPProfile, d.mcpProjectRoot()); err != nil {
-				return err
-			}
-			return nil
+			return d.switchMCPProfileTo(profile)
 		},
 	},
 	{
@@ -600,22 +614,40 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 	}
 
 	// 3. In memory first: a batch is all-or-nothing, and a bad value never reaches the file.
-	snap, err := config.SnapshotLeaves(cfg, keys)
-	if err != nil {
-		return "改不了：" + err.Error()
+	// A row that OWNS the write of its leaf (settingApply.OwnsWrite) is deliberately NOT in the
+	// batch: its push writes the value itself, at the moment the runtime can actually take it, so
+	// there is one writer and a failed push leaves the field alone.
+	batched := make(map[string]any, len(updates))
+	batchedKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if rows[key].OwnsWrite {
+			continue
+		}
+		batched[key] = updates[key]
+		batchedKeys = append(batchedKeys, key)
 	}
-	var applyErr error
-	d.withConfig(func(c *config.Config) {
-		applyErr = config.ApplyUpdates(c, updates)
-	})
-	if applyErr != nil {
-		return "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"
+	var snap []config.LeafValue
+	if len(batched) > 0 {
+		var snapErr error
+		snap, snapErr = config.SnapshotLeaves(cfg, batchedKeys)
+		if snapErr != nil {
+			return "改不了：" + snapErr.Error()
+		}
+		var applyErr error
+		d.withConfig(func(c *config.Config) {
+			applyErr = config.ApplyUpdates(c, batched)
+		})
+		if applyErr != nil {
+			return "改不了：" + applyErr.Error() + "（已撤销，配置文件未动）"
+		}
 	}
 
 	// 4. The file: it is what survives the process. A failure here undoes the memory and
 	// returns — and it is honest to say so, because nothing has been pushed yet (step 5).
 	if err := config.SavePartial(updates); err != nil {
-		d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
+		if len(batched) > 0 {
+			d.withConfig(func(c *config.Config) { config.RestoreLeaves(snap) })
+		}
 		return "没能写入 config.yaml：" + err.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"
 	}
 
@@ -628,6 +660,7 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 	var pushFailures, deferredKeys []string
 	d.deferredThisSave = nil
 	d.pushing = true
+	d.savingUpdates = updates
 	for _, key := range keys {
 		row := rows[key]
 		if row.Apply == nil {
@@ -642,6 +675,7 @@ func (s *AgentService) SaveSettings(updates map[string]any) string {
 		}
 	}
 	d.pushing = false
+	d.savingUpdates = nil
 
 	// The summary: what took effect, what waits for a restart, what waits for a turn to end, and
 	// what some session refused. A deferred key is NOT counted as already in effect — it is in

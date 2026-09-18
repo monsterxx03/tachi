@@ -269,3 +269,26 @@ func TestReloadSubagentKeepsAnInjectedRunner(t *testing.T) {
 	require.NoError(t, a.ReloadSubagent(cfg))
 	assert.Same(t, injected, a.Config.SubagentRunner, "an injected runner must survive a reload")
 }
+
+// TestReloadToolsKeepsAskUserGatedForANonInteractiveFrontend: RegisterTools registers
+// AskUserQuestion unconditionally, while the CONSTRUCTOR drops it for a frontend that cannot
+// answer it (PermissionModeSkip without AskUserEnabled: channel, `tachi -p`, subagents). A
+// settings-page rebuild must not hand those agents a tool whose answer nobody can give — the
+// gating has to be part of the reload, not only of construction.
+func TestReloadToolsKeepsAskUserGatedForANonInteractiveFrontend(t *testing.T) {
+	// newTestAgent is exactly the non-interactive shape (PermissionModeSkip, AskUserEnabled false).
+	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"})
+	require.NoError(t, a.ReloadTools())
+	if a.Config.ToolRegistry.GetTool(tools.ToolNameAskUser) != nil {
+		t.Error("ReloadTools resurrected AskUserQuestion on a frontend that cannot answer it")
+	}
+
+	// The interactive frontends keep it (desktop / TUI / ACP).
+	b := newTestAgent(t, &mockStreamProvider{name: "anthropic"})
+	b.Config.PermissionMode = PermissionModeExternal
+	b.Config.AskUserEnabled = true
+	require.NoError(t, b.ReloadTools())
+	if b.Config.ToolRegistry.GetTool(tools.ToolNameAskUser) == nil {
+		t.Error("an interactive frontend must keep AskUserQuestion across a reload")
+	}
+}

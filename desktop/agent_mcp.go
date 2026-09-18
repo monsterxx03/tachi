@@ -288,6 +288,55 @@ func (d *desktopApp) mcpProjectRoot() string {
 	return d.sessionPrimaryDir(d.runManager(d.currentID()))
 }
 
+// switchMCPProfileTo switches the shared MCP manager to the named profile for the ACTIVE session's
+// tree: it loads that profile's config, reconciles the connections, and only THEN writes the two
+// config fields — under cfgMu, and nowhere else.
+//
+// It is the desktop's own path for what AIAgent.SwitchMCPProfile does for the frontends that have
+// no app-wide config lock (tui / acp / channel). The split matters twice over:
+//
+//   - the config has exactly ONE guarded writer (`withConfig`), while turns read MCPServers as
+//     they start — SwitchMCPProfile writes both fields itself, unguarded;
+//   - the write happens AFTER the connections moved, so the profile field never names a profile
+//     whose servers failed to load. The old order wrote it first, and a failure had nothing to
+//     roll back to (the value it captured as "previous" was already the new one).
+//
+// Unlike the settings rows, this is NOT deferred for a running turn: it is a shared-layer
+// operation (one connection serves every session) and the user asked for it now — see
+// deferred_push.go for the split.
+func (d *desktopApp) switchMCPProfileTo(profile string) error {
+	cfg := d.config()
+	if cfg == nil {
+		return errors.New("no config")
+	}
+	a, note := d.appAgentForMCP()
+	if a == nil {
+		return errors.New(note)
+	}
+	tree := d.mcpProjectRoot()
+	if err := agent.ValidateMCPProfile(profile, tree); err != nil {
+		return err
+	}
+	// The load is a pure read of the JSON files: it does not touch the config, so a profile that
+	// cannot even be read leaves everything as it was.
+	next, err := config.LoadMCPConfig(profile, tree)
+	if err != nil {
+		return fmt.Errorf("loading profile %q: %w", profile, err)
+	}
+	result, final, err := a.ReconcileMCPServers(context.Background(), profile, cfg.MCPServers, next)
+	if err != nil {
+		return err
+	}
+	d.withConfig(func(c *config.Config) {
+		c.ActiveMCPProfile = profile
+		c.MCPServers = final
+	})
+	logger.New("desktop").Info(context.Background(), "MCP: profile switched",
+		"profile", profile, "added", len(result.Added), "removed", len(result.Removed),
+		"reconnected", len(result.Reconned), "errors", len(result.Errors))
+	return nil
+}
+
 // reloadMCPForActiveTree reconciles the shared MCP server set with the ACTIVE session's tree.
 //
 // The query side has always resolved the tree per session (mcpProjectRoot): the panel, the
@@ -319,11 +368,10 @@ func (d *desktopApp) reloadMCPForActiveTree() {
 	if cfg == nil {
 		return
 	}
-	a, _ := d.appAgentForMCP()
-	if a == nil {
+	if _, note := d.appAgentForMCP(); note != "" {
 		return // nothing built yet — the next activation (or the bootstrap itself) reconciles
 	}
-	if _, err := a.SwitchMCPProfile(context.Background(), cfg.ActiveMCPProfile, d.mcpProjectRoot()); err != nil {
+	if err := d.switchMCPProfileTo(cfg.ActiveMCPProfile); err != nil {
 		logger.New("desktop").Info(context.Background(),
 			"MCP: could not load the active tree's servers", "err", err)
 	}
@@ -372,11 +420,14 @@ func (s *AgentService) SetMCPProfile(name string) string {
 	if d.config() == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
-	a, refuse := d.agentOf(d.currentID())
-	if refuse != "" {
+	if _, refuse := d.agentOf(d.currentID()); refuse != "" {
 		return refuse
 	}
-	if _, err := a.SwitchMCPProfile(context.Background(), name, d.mcpProjectRoot()); err != nil {
+	// The desktop's own path: it writes the config under cfgMu and only after the connections
+	// moved (see switchMCPProfileTo — the agent's SwitchMCPProfile writes config itself, which is
+	// fine for tui/acp/channel and wrong here). The refusal above is what tells the user "no live
+	// session" first; switchMCPProfileTo picks its agent through the same helper.
+	if err := d.switchMCPProfileTo(name); err != nil {
 		return err.Error()
 	}
 	return "ok"

@@ -340,9 +340,7 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	// elicitation capability check (supportsElicitation) decides separately
 	// whether the tool stays usable, and AskUserEnabled forces it on for
 	// interactive frontends that run with skipped permissions (desktop).
-	if cfg.PermissionMode == PermissionModeSkip && !cfg.AskUserEnabled {
-		a.UnregisterTool(tools.ToolNameAskUser)
-	}
+	a.applyAskUserGating()
 
 	// Return mcpMgr only when we own it (caller should Close it)
 	if a.mcpOwned {
@@ -774,6 +772,21 @@ func (a *AIAgent) RegisterTool(tool tools.Tool) {
 // UnregisterTool removes a tool from the agent's registry by name.
 func (a *AIAgent) UnregisterTool(name string) {
 	a.Config.ToolRegistry.Unregister(name)
+}
+
+// applyAskUserGating drops the AskUser tool for a frontend that cannot answer it (the
+// non-interactive modes: channel, `tachi -p`, subagents). It reads the CONSTRUCT-TIME inputs
+// (PermissionMode, AskUserEnabled), so it is safe to re-run — and it MUST be re-run after
+// anything that rebuilds the registry from scratch.
+//
+// That is the whole reason it exists as a function: RegisterTools registers AskUser
+// unconditionally, so ReloadTools (the settings page's rebuild) would otherwise resurrect the
+// tool on an agent whose frontend was deliberately denied it — the construction-time gating and
+// the reload path have to be the same statement.
+func (a *AIAgent) applyAskUserGating() {
+	if a.Config.PermissionMode == PermissionModeSkip && !a.Config.AskUserEnabled {
+		a.UnregisterTool(tools.ToolNameAskUser)
+	}
 }
 
 // UnregisterMCPServer removes all tools belonging to an MCP server from

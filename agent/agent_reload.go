@@ -83,12 +83,16 @@ func (a *AIAgent) ReloadHooks(cfg *config.Config) error {
 //     justifies. WebSearch is the one built-in that can lose its justification (it is only
 //     registered when a provider with a key is configured), so it is dropped explicitly below;
 //     the model must not keep calling a tool that cannot work.
+//   - the rebuild re-registers AskUserQuestion, which the CONSTRUCTOR drops for a frontend that
+//     cannot answer it (channel / `-p` / subagents). That gating is re-applied here, or a saved
+//     setting would hand those agents a tool whose answer nobody can give.
 func (a *AIAgent) ReloadTools() error {
 	cfg := a.Config.FullConfig
 	a.RegisterTools()
 	if cfg != nil && !tools.NewWebSearchTool(webSearchToolConfig(cfg)).Configured() {
 		a.UnregisterTool(tools.ToolNameWebSearch)
 	}
+	a.applyAskUserGating()
 	return nil
 }
 

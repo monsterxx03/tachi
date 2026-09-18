@@ -245,6 +245,9 @@ Fixtures, all because the real path needs something a driver cannot do:
   (`SetResolvedProvider` under the session's own provider name, `SetPermissionRoot`, `Setup*Provider`): each is
   idempotent, does only the push half, and never replaces something a FRONTEND injected
   (`AgentConfig.HookDispatcher` / `.SubagentRunner`, tracked by `hooksInjected` / `subagentInjected`).
+  One row is the exception: `active_mcp_profile` sets `OwnsWrite`, because its push IS the writer —
+  the batch skips the leaf so a failed switch cannot leave the field naming a profile whose servers
+  are not loaded (the desktop's `switchMCPProfileTo` writes it under `cfgMu`, after the reconcile).
   Two invariants the whole family shares: a REMINDER cannot be replaced (the collector only appends), so the
   agent holds `LSPDiagnosticsReminder` / `MemoryRecallReminder` itself and re-points them
   (`SetProvider` / `SetBackend` — nil means off; both setters are synchronized, because they are called from

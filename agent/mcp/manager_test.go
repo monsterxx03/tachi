@@ -506,3 +506,48 @@ func autoLoadTestTool(server, name string) *DeferredTool {
 		serverTool: &mcp.Tool{Name: name, Description: name + " tool"},
 	}, "")
 }
+
+// TestRecomputeAutoLoadDropsNamesThatLeftThePool: a tool that was auto-loaded and has since left
+// the pool entirely (its server went away) cannot be reported in `removed` — there is no pooled
+// tool to hand back — but a live session's set must stop advertising it, or the model keeps
+// seeing a tool that no longer exists. The registry half belongs to the refresher, which is why
+// nothing is returned for it.
+func TestRecomputeAutoLoadDropsNamesThatLeftThePool(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(ctx, nil, logger.New("mcp-test"))
+	for _, name := range []string{"alpha", "beta"} {
+		mgr.Pool().Add(autoLoadTestTool("srv", name))
+	}
+	set := NewDiscoveredSet(filepath.Join(t.TempDir(), "discovered.json"))
+	mgr.mu.Lock()
+	mgr.sets["sid"] = set
+	mgr.mu.Unlock()
+
+	off := false
+	cfg := &config.Config{}
+	cfg.MCPToolSearch.Enabled = &off
+
+	// Both look auto-loadable: the baseline and the session's set hold them.
+	added, _ := mgr.RecomputeAutoLoad(cfg)
+	if len(added) != 2 {
+		t.Fatalf("added = %d, want 2 (the fixture should auto-load both)", len(added))
+	}
+	if !set.Contains("mcp__srv__beta") {
+		t.Fatal("fixture: beta should be in the session's set")
+	}
+
+	// beta's server goes away.
+	if mgr.Pool().Remove("mcp__srv__beta") == nil {
+		t.Fatal("fixture: beta was not in the pool")
+	}
+	_, removed := mgr.RecomputeAutoLoad(cfg)
+
+	for _, dt := range removed {
+		if dt.Name == "mcp__srv__beta" {
+			t.Error("a tool that left the pool was reported as removed — there is no pooled tool to return")
+		}
+	}
+	if set.Contains("mcp__srv__beta") {
+		t.Error("the session's set still advertises a tool that no longer exists")
+	}
+}

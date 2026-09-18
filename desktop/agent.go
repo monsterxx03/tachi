@@ -148,12 +148,15 @@ type desktopApp struct {
 	// snapshot taken around the first one's writes.
 	settingsMu sync.Mutex
 
-	// pushing and deferredThisSave belong to the saving goroutine only (settingsMu serializes
-	// saves): `pushing` marks the push step, which is what makes the fan-outs queue a push for
-	// a session that is mid-turn instead of applying it, and deferredThisSave collects those
-	// sessions for the summary. See deferred_push.go for the whole rule.
+	// pushing, deferredThisSave and savingUpdates belong to the saving goroutine only (settingsMu
+	// serializes saves): `pushing` marks the push step, which is what makes the fan-outs queue a
+	// push for a session that is mid-turn instead of applying it; deferredThisSave collects those
+	// sessions for the summary; and savingUpdates is the batch being pushed, which a row that OWNS
+	// the write of its leaf (settingApply.OwnsWrite) reads its new value from. See
+	// deferred_push.go for the whole rule.
 	pushing          bool
 	deferredThisSave []string
+	savingUpdates    map[string]any
 
 	// pushMu guards pendingPushes: the pushes a save deferred, per session, waiting for that
 	// session's turn to end (drained by endTurn).

@@ -101,6 +101,12 @@ func TestSettingsTableRules(t *testing.T) {
 			t.Errorf("row %q: needsRestart() = %v, want %v (mode %s, Apply set: %v)",
 				row.Key, row.needsRestart(), wantRestart, row.Mode, row.Apply != nil)
 		}
+		// A row that OWNS its write is the only writer of that leaf (the batch skips it), so it
+		// must be a push WITH code — otherwise nothing would ever apply the value.
+		if row.OwnsWrite && (row.Mode != applyPush || row.Apply == nil) {
+			t.Errorf("row %q: OwnsWrite with mode %s and Apply set: %v — a row that owns its write "+
+				"must have the code that does it", row.Key, row.Mode, row.Apply != nil)
+		}
 		// An unused key is the one kind the form must not offer: a switch nothing reads is
 		// worse than no switch.
 		if row.offered() == (row.Mode == applyUnused) {
@@ -117,8 +123,8 @@ func TestSettingForPrefersTheMostSpecificRow(t *testing.T) {
 	if row, _ := settingFor("logs.level"); row.Mode != applyPush || row.needsRestart() {
 		t.Errorf("logs.level resolved to (%v, needsRestart=%v), want the hot push row", row.Mode, row.needsRestart())
 	}
-	if row, _ := settingFor("logs.max_bytes"); row.Mode != applyRestart {
-		t.Errorf("logs.max_bytes resolved to %v, want the block's restart row", row.Mode)
+	if row, _ := settingFor("logs.max_size"); row.Mode != applyRestart {
+		t.Errorf("logs.max_size resolved to %v, want the block's restart row", row.Mode)
 	}
 	// Segment boundaries: a prefix is a whole segment, never a string prefix.
 	if row, ok := settingFor("provider_aliases"); !ok || row.Mode != applyRestart {

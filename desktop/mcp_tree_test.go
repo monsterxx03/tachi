@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -111,4 +112,84 @@ func TestReloadMCPForActiveTreeWithoutAManager(t *testing.T) {
 	d.activeID = sid
 	d.mu.Unlock()
 	d.reloadMCPForActiveTree() // must not panic
+}
+
+// writeMCPProfileJSON drops a profile file into a tree's .tachi dir (mcp.<profile>.json).
+func writeMCPProfileJSON(t *testing.T, tree, profile, body string) {
+	t.Helper()
+	path := filepath.Join(tree, ".tachi", "mcp."+profile+".json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestSwitchMCPProfileToInstallsTheProfilesServers: the desktop's own switch path loads the
+// profile for the active tree, reconciles the connections, and writes both config fields — under
+// cfgMu, and only after the reconcile returned. This pins the end state.
+func TestSwitchMCPProfileToInstallsTheProfilesServers(t *testing.T) {
+	tree := t.TempDir()
+	d, _, sid := mcpTreeFixture(t, tree)
+	writeMCPProfileJSON(t, tree, "prod",
+		`{"servers":[{"name":"prod-server","type":"stdio","command":"true","enabled":false}]}`)
+
+	d.mu.Lock()
+	d.activeID = sid
+	d.mu.Unlock()
+
+	if err := d.switchMCPProfileTo("prod"); err != nil {
+		t.Fatalf("switchMCPProfileTo: %v", err)
+	}
+	if got := d.cfg.ActiveMCPProfile; got != "prod" {
+		t.Errorf("ActiveMCPProfile = %q, want prod", got)
+	}
+	names := serverNames(d.cfg.MCPServers)
+	if len(names) != 2 || names[0] != "proj-server" || names[1] != "prod-server" {
+		t.Errorf("MCPServers = %v, want the base file plus the profile overlay", names)
+	}
+}
+
+// TestSwitchMCPProfileToLeavesTheConfigAloneWhenTheProfileIsUnknown is the rollback that used to
+// be vacuous: the profile field was written before the switch, so a failure had nothing to restore
+// it to (the "previous" value it captured was already the new one). Writing only after a
+// successful reconcile means there is nothing to roll back — the config still describes the
+// servers that are actually loaded.
+func TestSwitchMCPProfileToLeavesTheConfigAloneWhenTheProfileIsUnknown(t *testing.T) {
+	tree := t.TempDir()
+	d, _, sid := mcpTreeFixture(t, tree)
+	d.mu.Lock()
+	d.activeID = sid
+	d.mu.Unlock()
+
+	if err := d.switchMCPProfileTo("nope"); err == nil {
+		t.Fatal("switching to a profile no file provides must fail")
+	}
+	if got := d.cfg.ActiveMCPProfile; got != "" {
+		t.Errorf("ActiveMCPProfile = %q after a failed switch, want it untouched", got)
+	}
+	if got := serverNames(d.cfg.MCPServers); len(got) != 0 {
+		t.Errorf("MCPServers = %v after a failed switch, want it untouched", got)
+	}
+}
+
+// TestSaveSettingsAppliesAnOwnedKeyThroughItsRow: `active_mcp_profile` is the one row that OWNS
+// the write of its leaf (OwnsWrite) — the batch must not pre-apply it, and the row must still
+// write the value in the branch where there is nothing to switch (MCP off), or the setting would
+// reach the file and not the process.
+func TestSaveSettingsAppliesAnOwnedKeyThroughItsRow(t *testing.T) {
+	sm := newSessionManagerForTest(t, t.TempDir())
+	sid := sm.Current().ID
+	d, svc, path := settingsFixture(t, "active_mcp_profile: \"\"\n")
+	d.sm = sm
+	d.getRun(sid).sm = sm
+
+	msg := svc.SaveSettings(map[string]any{"active_mcp_profile": "prod"})
+	if !strings.Contains(msg, "1 项已生效") {
+		t.Errorf("summary = %q, want the key reported live", msg)
+	}
+	if got := d.cfg.ActiveMCPProfile; got != "prod" {
+		t.Errorf("ActiveMCPProfile = %q, want the row to have written it", got)
+	}
+	if file := readFileT(t, path); !strings.Contains(file, "active_mcp_profile: prod") {
+		t.Errorf("config.yaml = %q", file)
+	}
 }

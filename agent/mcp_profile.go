@@ -95,27 +95,24 @@ func sameMCPConfig(a, b config.MCPServerConfig) bool {
 // Returns an error (without touching any runtime state) if a switch is
 // already running, MCP is still initializing, the profile does not exist in
 // any scope, or the new profile's config fails to load.
+//
+// This entry point owns the CONFIG write as well as the connections, because the frontends that
+// use it (tui / acp / channel) have no app-wide config lock to write under. The desktop must NOT
+// use it: its config has one guarded writer, so it loads the profile itself and calls
+// ReconcileMCPServers (see desktop.switchMCPProfileTo) — passing the same profile name through
+// this function would write cfg.MCPServers and cfg.ActiveMCPProfile twice, unguarded.
 func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string) (MCPSwitchResult, error) {
+	// The guards come first and in this order (refusing before anything is written), which is what
+	// the locked variant below preserves.
 	if !a.mcpSwitchMu.TryLock() {
 		return MCPSwitchResult{}, errors.New("an MCP profile switch is already in progress")
 	}
 	defer a.mcpSwitchMu.Unlock()
-
-	mgr := a.Config.MCPManager
-	if mgr == nil {
-		return MCPSwitchResult{}, errors.New("MCP is not configured")
+	if err := a.mcpReadyForSwitch(); err != nil {
+		return MCPSwitchResult{}, err
 	}
-	select {
-	case <-mgr.InitDone():
-	default:
-		return MCPSwitchResult{}, errors.New("MCP initialization still in progress, try again in a moment")
-	}
-
-	// Reject unknown profiles explicitly: LoadMCPConfig silently skips
-	// missing files, so without this check a typo would "succeed" as a
-	// no-op (and stamp a nonexistent profile as active).
-	if profile != "" && !slices.Contains(config.ListMCPProfiles(workDir), profile) {
-		return MCPSwitchResult{}, fmt.Errorf("MCP profile %q not found (no mcp.%s.json in global or project scope)", profile, profile)
+	if err := ValidateMCPProfile(profile, workDir); err != nil {
+		return MCPSwitchResult{}, err
 	}
 
 	cfg := a.Config.FullConfig
@@ -131,7 +128,78 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 		return MCPSwitchResult{}, fmt.Errorf("loading profile %q: %w", profile, err)
 	}
 
-	diff := diffMCPServers(oldCfgs, cfg.MCPServers)
+	result, final, err := a.reconcileMCPServersLocked(ctx, profile, oldCfgs, cfg.MCPServers)
+	if err != nil {
+		// The switch never happened (see ReconcileMCPServers): put the config back so the profile
+		// field describes the servers that are actually loaded.
+		cfg.ActiveMCPProfile, cfg.MCPServers = prevProfile, oldCfgs
+		return MCPSwitchResult{}, err
+	}
+	cfg.MCPServers = final
+	return result, nil
+}
+
+// mcpReadyForSwitch is the readiness gate both switch entry points share: a manager to switch, and
+// an initialization that has finished (a switch during bootstrap would diff against a pool that is
+// still filling).
+func (a *AIAgent) mcpReadyForSwitch() error {
+	mgr := a.Config.MCPManager
+	if mgr == nil {
+		return errors.New("MCP is not configured")
+	}
+	select {
+	case <-mgr.InitDone():
+		return nil
+	default:
+		return errors.New("MCP initialization still in progress, try again in a moment")
+	}
+}
+
+// ValidateMCPProfile rejects a profile name that no mcp.<name>.json provides, in either scope.
+//
+// It exists because LoadMCPConfig SILENTLY skips a missing profile file: without this check a typo
+// would "succeed" as a no-op and stamp a nonexistent profile as active. Exported because the
+// desktop's locked path (which loads the profile itself, to keep the config write on one side of
+// its own lock) needs the same guard BEFORE it loads anything.
+func ValidateMCPProfile(profile, workDir string) error {
+	if profile == "" {
+		return nil
+	}
+	if !slices.Contains(config.ListMCPProfiles(workDir), profile) {
+		return fmt.Errorf("MCP profile %q not found (no mcp.%s.json in global or project scope)", profile, profile)
+	}
+	return nil
+}
+
+// ReconcileMCPServers switches the running connections from oldCfgs to nextCfgs, and returns the
+// server list the caller should INSTALL as the config's MCPServers — nextCfgs with the old object
+// retained for every unchanged server, so a runtime Enabled toggle (the panel's switch) survives.
+//
+// It deliberately does NOT touch the config: the caller owns that write, which is the whole point
+// of the split. The desktop writes it under its own lock, after this returns — so the config only
+// ever describes connections that are actually up, and there is no half-applied state (a profile
+// field naming a profile whose servers failed to load) to roll back.
+//
+// Everything else is SwitchMCPProfile's contract, unchanged: serialized (a second concurrent
+// switch fails immediately), refuses while MCP is initializing, keeps untouched connections,
+// retries kept-but-never-connected servers, and returns the same MCPSwitchResult.
+func (a *AIAgent) ReconcileMCPServers(ctx context.Context, profile string, oldCfgs, nextCfgs []config.MCPServerConfig) (MCPSwitchResult, []config.MCPServerConfig, error) {
+	if !a.mcpSwitchMu.TryLock() {
+		return MCPSwitchResult{}, nil, errors.New("an MCP profile switch is already in progress")
+	}
+	defer a.mcpSwitchMu.Unlock()
+	if err := a.mcpReadyForSwitch(); err != nil {
+		return MCPSwitchResult{}, nil, err
+	}
+	return a.reconcileMCPServersLocked(ctx, profile, oldCfgs, nextCfgs)
+}
+
+// reconcileMCPServersLocked is the switch itself. The caller MUST hold mcpSwitchMu and have passed
+// mcpReadyForSwitch (both entry points above do).
+func (a *AIAgent) reconcileMCPServersLocked(ctx context.Context, profile string, oldCfgs, nextCfgs []config.MCPServerConfig) (MCPSwitchResult, []config.MCPServerConfig, error) {
+	mgr := a.Config.MCPManager
+
+	diff := diffMCPServers(oldCfgs, nextCfgs)
 	result := MCPSwitchResult{Profile: profile}
 
 	// Servers to (re)connect: added, changed, plus kept servers that never
@@ -171,9 +239,10 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 
 	// Rebuild the merged list in the new config's order, but keep the old
 	// objects for unchanged servers (preserves runtime Enabled toggles and
-	// manager-side identity).
-	final := make([]config.MCPServerConfig, 0, len(cfg.MCPServers))
-	for _, newSrv := range cfg.MCPServers {
+	// manager-side identity). The result is the caller's to install: this function
+	// never writes the config (see its doc comment).
+	final := make([]config.MCPServerConfig, 0, len(nextCfgs))
+	for _, newSrv := range nextCfgs {
 		old, found := findServerByName(diff.kept, newSrv.Name)
 		if !found {
 			final = append(final, newSrv)
@@ -184,7 +253,6 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 			result.Kept = append(result.Kept, old.Name)
 		}
 	}
-	cfg.MCPServers = final
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -215,7 +283,7 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 	a.Config.Logger.Info(ctx, "MCP: profile switched",
 		"profile", profile, "kept", len(result.Kept), "removed", len(result.Removed),
 		"added", len(result.Added), "reconnected", len(result.Reconned), "errors", len(result.Errors))
-	return result, nil
+	return result, final, nil
 }
 
 // profileSwitchMargin is added on top of the largest per-server timeout to
