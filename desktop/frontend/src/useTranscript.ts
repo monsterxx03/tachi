@@ -216,8 +216,34 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
 
   // prependSessionPage puts an OLDER page in front of what is loaded (scrolling to the
   // top) and moves the cursor back with it.
+  //
+  // Each page arrives as its own `buildTurns` result, and that is what the seam repair below is
+  // for: a turn that STRADDLES the seam used to come out as one card per page — two cards for one
+  // turn, each with its own process strip and its own copy of the turn's diff chips. That is what
+  // a reader reported after scrolling back into a long turn ("上面两条 agent 输出都会被折叠的，
+  // 切回来就变成按中间输出切分" — issue #29).
+  //
+  // Two ADJACENT assistant messages cannot come out of ONE `buildTurns` call: it only starts a new
+  // card after a user record (a real prompt, or a steer — and a steer puts a user bubble between
+  // them). So an assistant message meeting an assistant message is always one turn, and the two
+  // halves are merged back into one card. The newer half owns the live state (`running`, `summary`,
+  // `changes`); the older half owns the turn's opening parts and its timestamp.
   const prependSessionPage = useCallback((sid: string, page: SessionPage) => {
-    setMsgCache((prev) => ({ ...prev, [sid]: [...page.messages, ...(prev[sid] || [])] }))
+    setMsgCache((prev) => {
+      const older = page.messages
+      const existing = prev[sid] || []
+      const last = older[older.length - 1]
+      const first = existing[0]
+      if (!last || !first || last.role !== 'assistant' || first.role !== 'assistant') {
+        return { ...prev, [sid]: [...older, ...existing] }
+      }
+      const joined: Message = {
+        ...first,
+        parts: [...(last.parts || []), ...(first.parts || [])],
+        ts: last.ts || first.ts,
+      }
+      return { ...prev, [sid]: [...older.slice(0, -1), joined, ...existing.slice(1)] }
+    })
     setCursor(sid, page)
   }, [setCursor])
 

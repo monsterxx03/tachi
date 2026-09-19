@@ -336,6 +336,46 @@ func bashStream(cmd, id string) mockllm.ReplyFunc {
 	)
 }
 
+// longTurnPagesFixture seeds a transcript whose FIRST turn is longer than one history page
+// (PAGE_SIZE raw records, see desktop/frontend/src/types.ts). The app loads the newest page
+// first, so that turn arrives SLICED: its tail comes with the first page, and its head only when
+// the reader scrolls to the top and the older page is prepended — the seam #29 is about.
+//
+// The two later turns are long PROSE on purpose: the transcript has to overflow before scrolling
+// to the top can trigger a load at all (a folded turn is one line tall).
+func longTurnPagesFixture() []session.Message {
+	// Distinct, increasing stamps — the paging cursor is a TIMESTAMP ("older than this"), so
+	// records that share one stamp leave LoadSessionMore with nothing older to return and the
+	// transcript looks like it IS the whole history.
+	base := time.Now().Add(-time.Hour)
+	n := 0
+	stamp := func(m session.Message) session.Message {
+		n++
+		m.Timestamp = base.Add(time.Duration(n) * time.Second)
+		return m
+	}
+	out := []session.Message{stamp(session.Message{Type: session.MessageTypeUser, Content: "长回合开始"})}
+	for i := range 40 {
+		id := fmt.Sprintf("call_%d", i)
+		out = append(out,
+			stamp(session.Message{Type: session.MessageTypeAssistant, Iteration: i + 1}),
+			stamp(session.Message{Type: session.MessageTypeToolCall, Name: "Bash", ToolCallID: id,
+				Args: map[string]any{"command": fmt.Sprintf("echo %d", i)}, Iteration: i + 1}),
+			stamp(session.Message{Type: session.MessageTypeToolResult, Name: "Bash", ToolCallID: id,
+				Result: fmt.Sprintf("第 %d 步的结果", i), Iteration: i + 1}),
+		)
+	}
+	out = append(out, stamp(session.Message{Type: session.MessageTypeAssistant, Content: "长回合结束。"}))
+	filler := strings.Repeat("这一段只是把转写撑长一点，好让它真的可以滚动。", 30)
+	for _, turn := range []string{"第二轮", "第三轮"} {
+		out = append(out,
+			stamp(session.Message{Type: session.MessageTypeUser, Content: turn}),
+			stamp(session.Message{Type: session.MessageTypeAssistant, Content: turn + "的回复。\n\n" + filler}),
+		)
+	}
+	return out
+}
+
 func scenarios() []scenario {
 	return []scenario{
 		//
@@ -1729,6 +1769,23 @@ permissions:
 				c.check("有会话的项目里有两个成员（原成员 + ⌘N 的新成员）", members == 2,
 					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", members))
 			},
+		},
+		// turn-paging: 一轮 turn 跨了分页边界时，它必须还是**一张**卡片。
+		//
+		// 转写是分页载入的（PAGE_SIZE 条原始记录一页，「滚到顶再往前取」走另一个 binding），而
+		// 每页都各自跑一遍 buildTurns —— 于是一轮跨越分页边界的长回合会变成**每页一张卡片**，
+		// 每张都有自己的过程条、以及同一份「本轮改动」（issue #29 的截图正是如此：三张卡、
+		// chips 相同）。buildTurns 只在 user 记录处开新卡（steer 也会在中间留一个 user 气泡），
+		// 所以「助手贴着助手」只可能是分页缝 —— prependSessionPage 负责把它接回去。
+		//
+		// 这个 fixture 就是为那条缝造的：第一轮故意长过一页（40 组 assistant+tool_call+
+		// tool_result = 121 条），后面两轮的正文很长，好让转写真的能滚、能触发上翻加载。
+		{
+			name: "turn-paging",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe turn-paging scenario's working directory\n",
+			},
+			seedSecond: longTurnPagesFixture(),
 		},
 		//
 		//

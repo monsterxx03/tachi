@@ -43,7 +43,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
 | a message bubble's own layout (long links, wrapping) | `bubble-wrap` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
-| scroll pinning, session switch, load | `switch-load`, `switch-scroll` |
+| scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets | `sessions`, `sidebar-text`, `switch-load` |
 | pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
@@ -648,6 +648,15 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   cursor, the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the
   one funnel — so "this belongs to a conversation" is enforced by the signature. App.tsx must not declare its
   own `useState<Record<string, Message[]>>`; a new per-session need is a new op in that hook.
+  **The history window is paged, and every page is converted on its own** (`buildTurns` per `LoadSession` /
+  `LoadSessionMore` page), so `prependSessionPage` has to repair the SEAM: a turn that straddles the page
+  boundary arrived as one card per page — each with its own process strip and its own copy of the turn's diff
+  chips (issue #29: three cards, same chips). Two ADJACENT assistant messages cannot come out of one
+  `buildTurns` call, because it only starts a new card after a user record (a steer puts a user bubble between
+  them), so at a seam where assistant meets assistant the two are one turn and are merged back — newer half
+  keeps the live state (`running`/`summary`/`changes`), older half the opening parts and the timestamp.
+  `turn-paging` pins it (fixture: a first turn longer than `PAGE_SIZE`, so the seam lands inside it) —
+  against the pre-fix code it reports 4 cards for 3 turns with the first card holding 8 of the turn's 40 steps.
 - **The composer is `composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker,
   the "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share
   one decision — `route`: send now, queue for the next steer point, or dispatch as a slash command.
