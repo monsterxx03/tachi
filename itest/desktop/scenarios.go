@@ -1380,6 +1380,40 @@ permissions:
 		// 权限确认（拒绝）: the same rule and the same command, but the driver clicks 拒绝.
 		// The command must NOT run, and the model must be told the user refused it.
 		//
+		// perm-unparseable: 命令**解析不出来**时的确认卡，不能说自己"命中了某条 ask 规则"。
+		//
+		// 政策对解析不了的命令（末尾挂着 && 、引号没闭合这类）是保守地问一次 —— 它**根本没走到**任何
+		// 规则；可卡片那句中文是写死的「命中 permissions.bash.ask 规则」，而 agent 的预览又把哨兵值
+		// 当成规则名念出来，于是读者看到的是"一条我没写过的规则 + 一条看着像被截断的命令"（issue #40
+		// 的截图正是这两件事叠在一起）。政策现在用 permission.AskNoRule 区分这两种来源，预览与卡片
+		// 各说各的真话。
+		//
+		// config 里那条 ask 规则故意与命令**无关**：它只为让政策存在（没有规则时 agent 不做检查），
+		// 于是"卡片没提它"本身就是断言的一部分。
+		{
+			name: "perm-unparseable",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe perm-unparseable scenario's working directory\n",
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("ls -la | head && ", "call_pu1")},
+				{Reply: textStream("好，那条命令我不跑了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 「保守地问一次」仍然是一条真的询问：拒绝后命令没跑，模型被告知。
+				_, ran := c.requestSeen("total ")
+				c.check("拒绝后那条命令没有执行", !ran, requestCount(c.requests))
+				_, told := c.requestSeen("denied")
+				c.check("模型被告知这条命令被拒绝", told, "")
+			},
+		},
 		{
 			name: "perm-deny",
 			files: map[string]string{

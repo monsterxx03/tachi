@@ -134,6 +134,17 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 			return tools.ToolResult{}, false, nil
 		}
 		a.Config.Logger.Info(ctx, "Agent: bash ask denied in non-interactive mode", "rule", rule, "command", cmd)
+		if rule == permission.AskNoRule {
+			// Not a rule the user could allow: the policy never got far enough to consult one.
+			// Fixing the command is the only way through, so say that instead of naming a rule
+			// that does not exist.
+			return tools.ToolResult{
+				Status: tools.ToolResultError,
+				Err: fmt.Errorf("the command could not be parsed, so it needs approval that is unavailable " +
+					"in this non-interactive context — the command was NOT executed. Fix the syntax (an " +
+					"unclosed quote/bracket, or a trailing &&)"),
+			}, true, nil
+		}
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("command requires interactive approval (matched ask rule %q), which is unavailable "+
@@ -191,7 +202,26 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 	}
 }
 
-// bashAskPreview renders the confirmation prompt content for a bash ask.
+// bashAskPreview renders the confirmation prompt content for a bash ask: the command, a blank
+// line, then WHY it is being asked about.
+//
+// The reason is worded from the rule slot, and the slot has two different kinds of content — a rule
+// that matched, or permission.AskNoRule for a command the policy could not parse (nothing matched;
+// there is no rule to name). Saying "matched ask rule" for the second kind is what made the desktop
+// card claim a rule that does not exist, and made a malformed command look like a truncated one
+// (issue #40): the reader saw `… | head &&` hanging in the air and a rule name they had never
+// written.
 func bashAskPreview(cmd, rule string) string {
-	return fmt.Sprintf("$ %s\n\nmatched ask rule: %q", cmd, rule)
+	return fmt.Sprintf("$ %s\n\n%s", cmd, askReasonLine(rule))
+}
+
+// askReasonLine words one ask's cause for a HUMAN. AskNoRule gets a sentence that says what is
+// actually wrong and what fixes it, because that case is the one a reader has to act on (a rule
+// they wrote is a rule they can recognise).
+func askReasonLine(rule string) string {
+	if rule == permission.AskNoRule {
+		return "这条命令没能解析出来（引号/括号没闭合、末尾挂着 && 之类），没有命中任何规则 —— " +
+			"保守起见先问你一次；把语法写对就不会再问"
+	}
+	return fmt.Sprintf("命中 ask 规则: %q", rule)
 }

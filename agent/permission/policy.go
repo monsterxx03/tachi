@@ -194,6 +194,18 @@ func (p *Policy) InheritSessionApprovals(prev *Policy) {
 	p.AllowAllAsksForSession()
 }
 
+// AskNoRule is what the returned RULE slot carries when no rule was consulted at all: the command
+// could not be parsed, so there is nothing to name and the policy asks conservatively (see
+// CheckBash's "Unparseable commands → Ask").
+//
+// It is a distinct VALUE rather than a sentence on purpose. That slot is read by everything that
+// shows or logs an ask — the TUI prompt, the desktop's confirmation card, the non-interactive
+// refusal, the log fields — and those surfaces have to word it DIFFERENTLY from "a rule matched":
+// a human-readable sentence sitting in a field named `rule` is exactly what made the desktop card
+// claim 「命中 permissions.bash.ask 规则」 for a command that hit no rule at all, sending the reader
+// looking for a rule that does not exist (issue #40).
+const AskNoRule = "no-rule:unparseable"
+
 // CheckBash evaluates command against the policy and returns the decision
 // plus the matched rule (or a short reason) for display to the user/LLM.
 //
@@ -225,7 +237,7 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 	// body of a heredoc is data: it does not appear in the segments and cannot trip a rule.
 	segments, err := splitShellCommands(command)
 	if err != nil {
-		return DecisionAsk, "command could not be parsed"
+		return DecisionAsk, AskNoRule
 	}
 
 	askRule := ""

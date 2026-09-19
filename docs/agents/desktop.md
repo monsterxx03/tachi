@@ -48,7 +48,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
-| permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session` |
+| permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
 | the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
 | review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
@@ -612,6 +612,20 @@ Fixtures, all because the real path needs something a driver cannot do:
   already answered. The RULES do not carry over — that is the point — and deny is decided before any ask, so
   an inherited approval can never resurrect a forbidden command (`TestSetPermissionRoot_*` in `agent/`,
   `TestSessionTreeMove*` in `desktop/`).
+
+- **A bash `ask` has TWO causes, and nothing may conflate them** (`agent/permission`'s `AskNoRule`,
+  `agent/agent_permission.go`'s `askReasonLine`, the card in `components.tsx`). A command either matched an
+  `ask` rule, or the policy could not PARSE it (an unclosed quote, a trailing `&&`) — and in the second case
+  no rule was consulted at all, so the command is asked about conservatively, with nothing to name. The
+  second case used to be rendered through the first one's sentence: the card's subtitle claimed
+  「命中 permissions.bash.ask 规则」 and the agent's preview printed the sentinel as a rule name
+  (`matched ask rule: "command could not be parsed"`). That sends the reader hunting for a rule they never
+  wrote, and it makes a MALFORMED command look like a TRUNCATED one — which is exactly how issue #40 was
+  reported (a command ending in `&&` beside a phantom rule name). The rule slot therefore carries a machine
+  value (`permission.AskNoRule`) that each surface words for its own reader: the prompt says what is wrong and
+  what fixes it, the non-interactive refusal says the same in the LLM's language, and the card's subtitle
+  states only the CONSEQUENCE (「允许后本轮继续；deny 规则不受影响」).
+  Smoke: `perm-unparseable` (the card's wording, with a rule in the config that deliberately does NOT match).
 
 ## Desktop Turn History (the interrupted-turn merge)
 

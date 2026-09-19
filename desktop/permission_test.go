@@ -17,7 +17,7 @@ import (
 const (
 	askCmd  = "git push origin main"
 	askArgs = `{"command":"git push origin main"}`
-	askPrev = "$ git push origin main\n\nmatched ask rule: \"git push*\""
+	askPrev = "$ git push origin main\n\n命中 ask 规则: \"git push*\""
 )
 
 // newAskTest builds the pieces one parked ask needs: the app (a bare one — with no

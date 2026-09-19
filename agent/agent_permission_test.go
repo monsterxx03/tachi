@@ -450,3 +450,40 @@ func TestNewPermissionPolicyFromConfig_ProjectAllowIgnored(t *testing.T) {
 		t.Error("project allow must be ignored — npm test should still hit project ask")
 	}
 }
+
+// TestBashAskPreviewNamesTheRealCause: an ask's prompt has to say WHY it is being asked, and the
+// rule slot holds two different kinds of thing — a rule that matched, or permission.AskNoRule for a
+// command the policy could not parse.
+//
+// The second case used to be rendered through the first case's sentence, so a malformed command's
+// card said 「matched ask rule: "command could not be parsed"」 — a rule nobody wrote, which is what
+// made the reader of issue #40 read their own truncated-looking command (`… | head &&`) as a
+// rendering bug. A command that could not be parsed is also the case a reader has to ACT on, so the
+// sentence says what is wrong and what fixes it.
+func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
+	matched := bashAskPreview("git push origin main", "git push*")
+	assert.Contains(t, matched, "$ git push origin main")
+	assert.Contains(t, matched, "git push*")
+
+	malformed := bashAskPreview(`cd /tmp && grep -rn "x" . | head && `, permission.AskNoRule)
+	assert.Contains(t, malformed, "$ cd /tmp && grep -rn \"x\" . | head && ")
+	assert.NotContains(t, malformed, "命中 ask 规则",
+		"a command that hit no rule must not be presented as one that did")
+	assert.Contains(t, malformed, "没能解析出来",
+		"the sentence has to name the actual problem (unparseable) — that is the part the reader acts on")
+	assert.NotContains(t, malformed, "no-rule:unparseable",
+		"the sentinel is machine-facing: it must not leak into what a human reads")
+}
+
+// TestCheckBashUnparseableIsItsOwnValue: the sentinel is what every surface tells "no rule was
+// consulted" apart by, so the policy has to return it — and a command that parses fine but matches
+// a rule must keep returning that rule.
+func TestCheckBashUnparseableIsItsOwnValue(t *testing.T) {
+	p := permission.NewPolicy(permission.Rules{Ask: []string{"git push*"}}, permission.Rules{})
+	if d, rule := p.CheckBash(`cd /tmp && grep "x" . | head && `); d != permission.DecisionAsk || rule != permission.AskNoRule {
+		t.Errorf("unparseable command = (%v, %q), want (ask, %q)", d, rule, permission.AskNoRule)
+	}
+	if d, rule := p.CheckBash("git push origin main"); d != permission.DecisionAsk || rule != "git push*" {
+		t.Errorf("matched rule = (%v, %q), want (ask, \"git push*\")", d, rule)
+	}
+}

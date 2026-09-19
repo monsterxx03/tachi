@@ -1142,7 +1142,11 @@ function PermissionForm({ perm, onAnswer }: {
     <div className="perm-form" aria-label="等待授权">
       <div className="perm-head">
         <span className="perm-title">需要你确认这条命令</span>
-        <span className="perm-sub">命中 permissions.bash.ask 规则，允许后本轮继续</span>
+        {/* Not 「命中 ask 规则」: that was hard-coded and FALSE for the other way an ask is
+            raised — a command the policy could not parse, where no rule was consulted at all (and
+            the card then sent the reader looking for a rule they never wrote). What the preview
+            below says is the reason; this line only states the consequence. */}
+        <span className="perm-sub">允许后本轮继续；deny 规则不受影响</span>
       </div>
       <pre className="perm-preview">{perm.req.preview}</pre>
       {perm.err ? <div className="perm-err">{perm.err}</div> : null}
