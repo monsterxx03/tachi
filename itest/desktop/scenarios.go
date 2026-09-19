@@ -345,6 +345,46 @@ func diffLayoutLine(tag string) string {
 	return tag + " · " + strings.Repeat("填充，让半宽的格子装不下这一行。", 10)
 }
 
+// chatFindFixture seeds a long conversation for the ⌘F-over-the-transcript scenario. Three tokens,
+// one per place a match can come from, and the counts they must produce are the whole test:
+//
+//	· CHATFIND-USER in the FIRST user message, which the app cannot show on open (the transcript is
+//	  pinned to the bottom) — so finding it also proves the jump;
+//	· CHATFIND-TOOL in a Bash call's ARGS and RESULT — two places a reader searching their
+//	  conversation does NOT mean, and the reason the search is scoped (issue #35);
+//	· CHATFIND-TOOL once more in the assistant's PROSE, the one hit that must be found.
+//
+// The filler turns exist so the transcript really scrolls: without them everything is on screen and
+// "直接定位到消息" would be asserted against nothing.
+func chatFindFixture() []session.Message {
+	base := time.Now().Add(-time.Hour)
+	n := 0
+	stamp := func(m session.Message) session.Message {
+		n++
+		m.Timestamp = base.Add(time.Duration(n) * time.Second)
+		return m
+	}
+	out := []session.Message{stamp(session.Message{Type: session.MessageTypeUser,
+		Content: "第一条消息：这里有个词 CHATFIND-USER，它只出现在用户输入里。"})}
+	out = append(out,
+		stamp(session.Message{Type: session.MessageTypeAssistant, Iteration: 1}),
+		stamp(session.Message{Type: session.MessageTypeToolCall, Name: "Bash", ToolCallID: "call_cf1",
+			Args: map[string]any{"command": "echo CHATFIND-TOOL"}, Iteration: 1}),
+		stamp(session.Message{Type: session.MessageTypeToolResult, Name: "Bash", ToolCallID: "call_cf1",
+			Result: "CHATFIND-TOOL\n（这是工具结果，不是对话正文）", Iteration: 1}),
+		stamp(session.Message{Type: session.MessageTypeAssistant, Iteration: 1,
+			Content: "命令跑完了，输入里有 CHATFIND-TOOL 这个词。"}),
+	)
+	filler := strings.Repeat("这一段只是把转写撑长，好让查找真的需要滚动。", 24)
+	for i := range 4 {
+		out = append(out,
+			stamp(session.Message{Type: session.MessageTypeUser, Content: fmt.Sprintf("第 %d 轮的问题", i+2)}),
+			stamp(session.Message{Type: session.MessageTypeAssistant, Content: fmt.Sprintf("第 %d 轮的回答。\n\n%s", i+2, filler)}),
+		)
+	}
+	return out
+}
+
 // longTurnPagesFixture seeds a transcript whose FIRST turn is longer than one history page
 // (PAGE_SIZE raw records, see desktop/frontend/src/types.ts). The app loads the newest page
 // first, so that turn arrives SLICED: its tail comes with the first page, and its head only when
@@ -1852,6 +1892,18 @@ permissions:
 				c.check("有会话的项目里有两个成员（原成员 + ⌘N 的新成员）", members == 2,
 					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", members))
 			},
+		},
+		//
+		//
+		// chat-find: ⌘F 搜消息区（issue #35）。两件事只有真机才验得到 —— 搜索的**范围**（用户输入 +
+		// 模型正文，不含工具的参数与结果）和**落点**（直接滚到那一条消息）。fixture 里三个 token 各就
+		// 各位，数出来的条数就是断言本身。
+		{
+			name: "chat-find",
+			files: map[string]string{
+				"README.md": "# smoke\n\nchat-find scenario's working directory\n",
+			},
+			seedMessages: chatFindFixture(),
 		},
 		// turn-paging: 一轮 turn 跨了分页边界时，它必须还是**一张**卡片。
 		//

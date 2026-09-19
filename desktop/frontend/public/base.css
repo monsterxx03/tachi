@@ -425,6 +425,10 @@ body {
 /* The body's own padding would let content show through above a sticky bar pinned at 0. */
 .find-bar.is-panel { position: sticky; top: -10px; align-self: flex-end; }
 .find-bar.is-overlay { position: absolute; top: 44px; right: 36px; }
+/* Floating over the transcript (see App.tsx): the bar appears on a keypress, and a bar that took a
+   row of the column would push every message down at the moment the reader is reading one. It sits
+   above the grid pseudo-element and the scroller (z-index 0 and 1). */
+.find-bar.is-chat { position: absolute; top: 10px; right: 22px; z-index: 6; }
 .find-input {
   width: 168px;
   padding: 3px 7px;

@@ -35,7 +35,13 @@ const BAR_SELECTOR = '.find-bar'
 // inside a <code> span) is missed, the trade every find UI without a text extractor makes. Worth
 // revisiting only if a real document needs it — the panes here are prose and code lines, where a
 // query lands inside one node.
-function findRanges(root: HTMLElement, query: string): Range[] {
+//
+// `scope` narrows the search to the text the caller MEANS by its content. A whole document (a diff,
+// a previewed file, a report) needs none; the transcript does, because most of a session's text is
+// tool arguments and tool output — the reader searching their conversation means their own words and
+// the model's answer (issue #35). It is stated as "what to search" rather than "what to skip" on
+// purpose: a card type added later would otherwise join the search silently.
+function findRanges(root: HTMLElement, query: string, scope?: string): Range[] {
   const needle = query.toLowerCase()
   if (!needle) return []
   const out: Range[] = []
@@ -43,6 +49,7 @@ function findRanges(root: HTMLElement, query: string): Range[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node as Text
     if (!text.data || !text.parentElement || text.parentElement.closest(BAR_SELECTOR)) continue
+    if (scope && !text.parentElement.closest(scope)) continue
     const hay = text.data.toLowerCase()
     let at = hay.indexOf(needle)
     while (at >= 0) {
@@ -110,7 +117,7 @@ export type Find = {
   close: () => void
 }
 
-export function useFind(rootRef: RefObject<HTMLElement | null> | null): Find {
+export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: string): Find {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [ranges, setRanges] = useState<Range[]>([])
@@ -131,11 +138,11 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null): Find {
       setIndex(0)
       return
     }
-    const next = findRanges(root, query)
+    const next = findRanges(root, query, scope)
     setRanges(next)
     setIndex(0)
     if (next.length) window.requestAnimationFrame(() => scrollRangeIntoView(next[0]))
-  }, [rootRef, open, query])
+  }, [rootRef, open, query, scope])
 
   // The CONTENT changed under a query that is already typed (a re-render, a report landing, a
   // diff arriving): collect again and keep the reader's place. Debounced by a short timer rather
@@ -148,7 +155,7 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null): Find {
     if (!root || !open || !query) return
     let timer = 0
     const collect = () => {
-      const next = findRanges(root, query)
+      const next = findRanges(root, query, scope)
       setRanges(next)
       setIndex((i) => (i < next.length ? i : 0))
     }
@@ -161,7 +168,7 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null): Find {
       window.clearTimeout(timer)
       observer.disconnect()
     }
-  }, [rootRef, open, query])
+  }, [rootRef, open, query, scope])
 
   // Paint the hits. The current one is a second highlight: the registry paints in registration
   // order, so the later name wins wherever the ranges overlap.

@@ -24,6 +24,7 @@ import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
+import { FindBar, FindButton, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -31,8 +32,18 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
+
 import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady } from './agentEvents'
 import { useComposer, Composer, imeActive } from './composer'
+// CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
+// prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
+// the whole transcript is a search over file dumps (issue #35). Positive rather than a skip list, for
+// find.tsx's reason: a card type added later must not join the search by accident.
+//
+// The two containers are stable because they are the app's "this is prose" markers: a user bubble's
+// content, and MarkdownBlock's root (every text part and every turn conclusion). Thinking rows,
+// notices, process strips, tool cards, file cards and forms all live outside them.
+const CHAT_FIND_SCOPE = '.msg-user .msg-content, .assistant-text'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
 // Streaming replaces only the message being written (its siblings keep the
@@ -544,6 +555,11 @@ function App() {
   // state than a route could rebuild (collapsed project groups, the composer's draft, the
   // transcript's scroll offset), and coming back from a settings page must not cost any of it.
   const [view, setView] = useState<'chat' | 'settings'>('chat')
+  // ⌘F over the conversation. It is the LOWEST host in find.tsx's stack (the chat mounts first), so
+  // any overlay or panel on top keeps the key for itself — the rule that lets a preview or a review's
+  // pane search its own text. No root while the settings page is up: that view COVERS the chat (the
+  // body is only inert), and a bar opening behind it would be a search nobody can see.
+  const chatFind = useFind(view === 'chat' ? chatRef : null, CHAT_FIND_SCOPE)
   // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
   // active theme to Go, which owns the window colour outside the webview.
   const [theme, toggleTheme] = useTheme()
@@ -1923,6 +1939,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
         <main className="main">
           <div className="chat-wrap">
+            {/* The bar floats over the transcript (its own position: .find-bar.is-chat) rather than
+                taking a row: it appears on a keypress, and a row appearing would shift every message
+                down at the moment the reader is trying to read one. */}
+            {chatFind.open ? <FindBar find={chatFind} className="is-chat" /> : null}
             <div className="chat" ref={chatRef} onScroll={handleScroll} tabIndex={0} onKeyDown={onChatKey}>
             {/* The transcript's own box, and the thing follow-the-bottom watches: the
                 SCROLLPORT's box does not change when its content grows, so the observer has to
@@ -2084,6 +2104,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
                 </span>
+                {/* ⌘F is invisible, so the same gesture is also a button — in the composer's status
+                    row because it is the one row that is always on screen beside the conversation
+                    (the find bar itself lives over the transcript). */}
+                <FindButton find={chatFind} />
                 <span className="popover-anchor">
                   <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
                     <span className="mcp-ico"><MCPIcon /></span>

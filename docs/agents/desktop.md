@@ -61,6 +61,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
+| ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
 | sending/receiving files or images | `paste-image` |
@@ -1070,10 +1071,10 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   both directions opened the SAME gesture at wildly different sizes depending on a thing the reader cannot see.
   **`getBoundingClientRect` inside a CSS-zoomed subtree is in PRE-zoom units** in this WebKit, so a reading of
   "how big is it on screen" must multiply by the zoom.
-- **⌘F searches a SURFACE, not the page** (`find.tsx`): the diff pane, a previewed file and a review's report
-  each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not scroll the transcript
-  behind it. The side panel is ONE host covering its three panes, so the pane decides what "here" means. Four
-  rules: hits are painted with the **CSS Custom Highlight API** (`::highlight()`), never by wrapping text in
+- **⌘F searches a SURFACE, not the page** (`find.tsx`): the transcript, the diff pane, a previewed file and a
+  review's report each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not scroll
+  the transcript behind it. The side panel is ONE host covering its three panes, so the pane decides what
+  "here" means. Four rules: hits are painted with the **CSS Custom Highlight API** (`::highlight()`), never by wrapping text in
   `<mark>` — these panes re-render under the reader and a DOM mutation would be thrown away; the key owner is
   installed ONCE at **module load** (a bar may mount after the overlay it sits inside, and among capture
   listeners on the same target the first registered runs first), and it consumes Esc with
@@ -1081,6 +1082,20 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   open on every surface** (a mounted-but-closed bar looks open to the host handle, `open` never becomes true,
   and every count reads 无匹配); and `findable` is **opt-in per viewer** — an image or an HTML/PDF frame has no
   text in THIS document, and the shell still owns ⌘F there.
+- **The transcript's ⌘F searches what the reader MEANS by their conversation, not its DOM** (`CHAT_FIND_SCOPE`
+  in App.tsx, the `scope` parameter of `findRanges`/`useFind`): the reader's own words plus the model's prose
+  (`.msg-user .msg-content`, `.assistant-text` — MarkdownBlock's root, so every text part and every turn
+  conclusion). Most of a session's text is tool arguments and tool results, and a search over the whole
+  subtree is a search over file dumps (issue #35). The scope is stated POSITIVELY for the reason the whole
+  feature is: a card type added later must not join the search because nobody remembered to exclude it.
+  Two consequences worth keeping: the chat's host is the LOWEST in the stack (it mounts first), so a preview or
+  the panel keeps ⌘F while it is up — and `useFind(null)` while the settings page is up, because that view
+  COVERS the chat (the body is only inert) and a bar opening behind it would be a search nobody can see.
+  The bar floats over the transcript (`.find-bar.is-chat`) instead of taking a row — it appears on a keypress,
+  and a row appearing would shift every message at the moment the reader is reading one. A smoke fixture that
+  wants to pin the SCOPE has to expand the tool card first: a successful call folds into the process strip, so
+  its args and result are not in the DOM at all (`chat-find` asserts the four occurrences are there and only
+  one of them counts — against a folded card the assertion is vacuous, which is how the first A/B passed).
 - **The one-off panel's × promises Esc, and who owns the FIRST press is decided by focus**: a column is not a
   `ViewerOverlay`, so the viewers' dismissal contract never covered it. `App`'s global handler must not claim
   every Escape unconditionally (`defaultPrevented` is the handshake), and the panel is a window-level listener
