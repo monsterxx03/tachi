@@ -1981,6 +1981,33 @@ permissions:
 		// dot). Pinned as INTENT, not as numbers: nothing in the sidebar under 12px, a group header
 		// strictly larger than a session row, and every disclosure caret at the one shared size
 		// (--caret-size) — retuning the design later is not a test failure.
+		// sidebar-width: 会话列表的宽度是读者拖出来的，而且记得住。
+		//
+		// 三件事在这里：拖右边缘真的改宽度（拖拽期间不走 state —— 见 sidebar.tsx）、宽度被钳在
+		// 「对话区至少 560px / 一半」这条线内、以及宽度写进了 desktop_ui.json（Go 侧 after 读回文件）。
+		// 键盘（← →）与浮空/折起状态不在这里：前者是同一套 commit 的另一条入口，后者本来就没有宽度。
+		{
+			name: "sidebar-width",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sidebar-width scenario's working directory\n",
+			},
+			after: func(c *checkCtx) {
+				c.check("设置页/会话列表没有惊动模型", len(c.requests) == 0, requestCount(c.requests))
+				raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "desktop_ui.json"))
+				c.check("desktop_ui.json 可读", err == nil, errText(err))
+				if err == nil {
+					var st struct {
+						SidebarWidth int `json:"sidebarWidth"`
+					}
+					if err := json.Unmarshal(raw, &st); err != nil {
+						c.check("desktop_ui.json 可解析", false, errText(err))
+					} else {
+						c.check("拖出来的宽度落盘了（sidebarWidth）", st.SidebarWidth > 0 && st.SidebarWidth != 280,
+							fmt.Sprintf("sidebarWidth=%d；%s", st.SidebarWidth, string(raw)))
+					}
+				}
+			},
+		},
 		{
 			name: "sidebar-text",
 			files: map[string]string{

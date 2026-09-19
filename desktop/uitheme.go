@@ -68,6 +68,11 @@ type uiState struct {
 	// default). A preference file is editable by hand, so the setter refuses values outside
 	// the panel's own bounds rather than trusting the number (see validOneOffPanelWidth).
 	OneOffPanelWidth int `json:"oneOffPanelWidth,omitempty"`
+	// SidebarWidth is the session list's width in CSS pixels (0 = never dragged, use the default).
+	// Same bargain as the panel's: what is STORED is the width the reader chose, what a layout can
+	// SHOW is a separate number the frontend derives from the room there is, and the setter refuses
+	// a hand-edited value the layout could not honour.
+	SidebarWidth int `json:"sidebarWidth,omitempty"`
 }
 
 // The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it
@@ -80,6 +85,36 @@ const (
 
 func validOneOffPanelWidth(px int) bool {
 	return px >= oneOffPanelMinWidth && px <= oneOffPanelMaxWidth
+}
+
+// The sidebar's width bounds, mirrored by the frontend (desktop/frontend/src/sidebar.tsx). The floor
+// is where the rows stop being readable; the ceiling is a sanity bound for the stored value — what
+// is SHOWN is clamped to the room the window has, so a wide choice survives a narrow window instead
+// of being overwritten by it.
+const (
+	sidebarMinWidth = 200
+	sidebarMaxWidth = 600
+)
+
+func validSidebarWidth(px int) bool {
+	return px >= sidebarMinWidth && px <= sidebarMaxWidth
+}
+
+// SetSidebarWidth records how wide the reader made the session list, refusing a value outside the
+// bounds above (a hand-editable file, and a width no layout can honour is worse than the default).
+//
+// It lives here rather than beside a subsystem because the session list has no Go side of its own:
+// this is the persistence half of a frontend layout choice, and uiState is what this file owns.
+func (s *AgentService) SetSidebarWidth(px int) {
+	if !validSidebarWidth(px) {
+		return
+	}
+	st := loadUIState()
+	if st.SidebarWidth == px {
+		return
+	}
+	st.SidebarWidth = px
+	saveUIState(st)
 }
 
 func uiStatePath() string { return filepath.Join(config.BaseDir(), uiStateFile) }

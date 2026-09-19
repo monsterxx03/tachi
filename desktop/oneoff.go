@@ -499,11 +499,17 @@ type UIStateVO struct {
 	OneOffPanelOpen bool `json:"oneOffPanelOpen"`
 	// OneOffPanelWidth is that panel's width in CSS pixels; 0 means "never dragged".
 	OneOffPanelWidth int `json:"oneOffPanelWidth,omitempty"`
+	// SidebarWidth is the session list's width in CSS pixels; 0 means "never dragged".
+	SidebarWidth int `json:"sidebarWidth,omitempty"`
 }
 
 func (s *AgentService) GetUIState() UIStateVO {
 	st := loadUIState()
-	return UIStateVO{OneOffPanelOpen: st.OneOffPanelOpen, OneOffPanelWidth: st.OneOffPanelWidth}
+	return UIStateVO{
+		OneOffPanelOpen:  st.OneOffPanelOpen,
+		OneOffPanelWidth: st.OneOffPanelWidth,
+		SidebarWidth:     st.SidebarWidth,
+	}
 }
 
 // SetOneOffPanelOpen records whether the side-channel panel is open. Written on every toggle

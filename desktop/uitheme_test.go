@@ -140,3 +140,35 @@ func TestOneOffPanelWidthBounds(t *testing.T) {
 		t.Errorf("state = %+v, want both fields kept", st)
 	}
 }
+
+// TestSidebarWidthBounds: the session list's width is the same bargain as the panel's — a preference
+// file is hand-editable, so a number the layout cannot honour is refused rather than stored (the
+// default width is a better failure than a 3px column), and it shares the file with the other fields.
+func TestSidebarWidthBounds(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	svc := &AgentService{}
+
+	svc.SetSidebarWidth(320)
+	if got := svc.GetUIState().SidebarWidth; got != 320 {
+		t.Errorf("width = %d, want 320", got)
+	}
+	for _, bad := range []int{0, 10, sidebarMinWidth - 1, sidebarMaxWidth + 1, 100000, -400} {
+		svc.SetSidebarWidth(bad)
+		if got := svc.GetUIState().SidebarWidth; got != 320 {
+			t.Errorf("width after %d = %d, want the previous 320 (out of bounds is not stored)", bad, got)
+		}
+	}
+	// Both bounds are inclusive: they are what the drag clamps to.
+	for _, ok := range []int{sidebarMinWidth, sidebarMaxWidth} {
+		svc.SetSidebarWidth(ok)
+		if got := svc.GetUIState().SidebarWidth; got != ok {
+			t.Errorf("width = %d, want %d", got, ok)
+		}
+	}
+	// The panel's fields and the sidebar's share the file without clobbering each other.
+	svc.SetOneOffPanelWidth(500)
+	svc.SetOneOffPanelOpen(true)
+	if st := svc.GetUIState(); st.SidebarWidth != sidebarMaxWidth || st.OneOffPanelWidth != 500 || !st.OneOffPanelOpen {
+		t.Errorf("state = %+v, want all three kept", st)
+	}
+}

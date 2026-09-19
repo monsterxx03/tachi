@@ -2,8 +2,13 @@
 /* A quiet flat panel: slightly darker than the chat background so the two
    regions read as separate planes without borders shouting about it. */
 .sidebar {
+  position: relative;
+  /* The width is the reader's (App writes it inline from useSidebarWidth, remembered across
+     restarts); 280px is what a reader who never dragged one gets. `flex: 0 0 auto` rather than a
+     min-width: the column never SHRINKS under a narrow window — the hook clamps the shown width so
+     the conversation keeps its own floor (see sidebar.tsx), and a collapsed sidebar is 0 wide. */
   width: 280px;
-  min-width: 280px;
+  flex: 0 0 auto;
   background: var(--chrome);
   border-right: 1px solid var(--border);
   display: flex;
@@ -12,13 +17,35 @@
   overflow: hidden;
   transition: width 0.22s var(--ease), min-width 0.22s var(--ease), padding 0.22s var(--ease);
 }
+/* Folding and unfolding animate; a DRAG must not — a transitioned width lags the pointer by its
+   whole duration (the panel's strip has no transition, which is why it never had to say this). */
+.sidebar.is-resizing { transition: none; }
 
 .sidebar.collapsed {
   width: 0;
-  min-width: 0;
   padding: 0;
   border-right: none;
 }
+
+/* The sidebar's grab strip, along its right edge — inside it, because the sidebar clips its own
+   overflow. Same bargain as the panel's handle: a real focusable separator (role=separator on the
+   element), invisible until the pointer is on it, and 6px wide because the pointer has to land on
+   something. */
+.sidebar-resizer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s var(--ease);
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+.sidebar-resizer.is-dragging { background: var(--accent-line-soft); }
+.sidebar-resizer:focus-visible { outline: none; }
 
 /* ── Side-channel panel (the third column) ──────────────────────────────────
    The mirror of the sidebar, for /review and /commit: those run as one-off

@@ -46,6 +46,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets | `sessions`, `sidebar-text`, `switch-load` |
+| the sidebar's width (drag, clamp, the choice surviving a restart) | `sidebar-width` |
 | pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
@@ -772,6 +773,19 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   and hands every extra pixel to the panel (480px of prose beside an 840px panel on a 1600px window).
   **And the reading column itself is `--reading-width` (860px) — the same measure `.viewer-doc` gives a
   previewed document.**
+- **The session list's width is the reader's, and it is the panel's bargain a second time** (`sidebar.tsx`,
+  `desktop/uitheme.go`'s `uiState.SidebarWidth`): the stored number is what the reader dragged, what is
+  SHOWN is that number clamped to `window - max(CHAT_MIN_WIDTH, 50%)`, the in-flight width during a drag is
+  written straight to the element (never React state — a width per pointermove laid the whole chat out
+  again), and the choice survives a restart through `desktop_ui.json`. Three things are the sidebar's own:
+  it is the FIRST column, so nothing can hand it room the way folding it hands room to the panel; its width
+  is TRANSITIONED (folding animates), so a drag writes `transition: none` on the element itself — the class
+  React adds lands a commit later, and a pointermove arriving before it would animate (the width lagging the
+  pointer); and a COLLAPSED sidebar has no width at all, where the hook hands back `null` and App leaves the
+  style alone. The handle sits INSIDE the column (the sidebar clips its own overflow) and is a real focusable
+  separator, ← → included. Smoke: `sidebar-width` (drag 90px, drag past the ceiling, one arrow press, then
+  the Go half reads `desktop_ui.json` back).
+
 - **A pane's width is its MIN-CONTENT width, and that is set by whichever row cannot shrink**: every diff head
   row holds non-shrinkable badges/buttons, and a `white-space: nowrap` path with the default `min-width: auto`
   contributes its WHOLE string — so the pane scrolls sideways. Three things together fix it: `flex-wrap: wrap`

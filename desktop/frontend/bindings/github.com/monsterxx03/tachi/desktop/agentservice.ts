@@ -811,6 +811,17 @@ export function SetSessionWorkingDir(id: string, dir: string): $CancellablePromi
 }
 
 /**
+ * SetSidebarWidth records how wide the reader made the session list, refusing a value outside the
+ * bounds above (a hand-editable file, and a width no layout can honour is worse than the default).
+ * 
+ * It lives here rather than beside a subsystem because the session list has no Go side of its own:
+ * this is the persistence half of a frontend layout choice, and uiState is what this file owns.
+ */
+export function SetSidebarWidth(px: number): $CancellablePromise<void> {
+    return $Call.ByID(701485564, px);
+}
+
+/**
  * SetThinkingLevel sets the active session's thinking level. "default"/""
  * means DON'T set it — follow the provider's own default; "none" disables
  * thinking. Persisted to the session's metadata.

@@ -1232,4 +1232,9 @@ export interface UIStateVO {
      * OneOffPanelWidth is that panel's width in CSS pixels; 0 means "never dragged".
      */
     "oneOffPanelWidth"?: number;
+
+    /**
+     * SidebarWidth is the session list's width in CSS pixels; 0 means "never dragged".
+     */
+    "sidebarWidth"?: number;
 }

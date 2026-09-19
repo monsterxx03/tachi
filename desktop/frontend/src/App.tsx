@@ -24,6 +24,7 @@ import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
+import { useSidebarWidth } from './sidebar'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
@@ -534,6 +535,10 @@ function App() {
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // The session list's width: the reader drags its edge, and the choice is remembered across
+  // restarts (desktop_ui.json). See sidebar.tsx — the number under the pointer during a drag is NOT
+  // state, and what is shown is the chosen width clamped to the room the window has.
+  const sidebarW = useSidebarWidth(sidebarCollapsed)
   // Which of the two top-level views is on screen. It is App's state, not a route, and the chat
   // view is HIDDEN rather than unmounted while settings is up: a conversation holds more local
   // state than a route could rebuild (collapsed project groups, the composer's draft, the
@@ -1811,7 +1816,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       </header>
 
       <div className="app-body" ref={appBodyRef}>
-        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
+        <aside ref={sidebarW.ref as React.RefObject<HTMLElement>}
+          className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}${sidebarW.resizing ? ' is-resizing' : ''}`}
+          style={sidebarW.width === null ? undefined : { width: sidebarW.width, minWidth: sidebarW.width }}>
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
               rather than hiding the feature until a session happens to be bound. This is the
@@ -1907,6 +1914,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             </button>
             <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><UsageIcon /></span> 用量</button>
           </footer>
+          {/* The grab strip along the sidebar's right edge — inside it, like the panel's, because the
+              sidebar clips its own overflow and a handle hanging outside would be cut off. A real
+              focusable separator: a drag is not the only way to widen the list. Absent while the
+              sidebar is folded, where there is no width to drag. */}
+          {sidebarCollapsed ? null : <div className={`sidebar-resizer${sidebarW.resizing ? ' is-dragging' : ''}`} {...sidebarW.handleProps} />}
         </aside>
 
         <main className="main">
