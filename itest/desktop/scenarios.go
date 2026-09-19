@@ -336,6 +336,15 @@ func bashStream(cmd, id string) mockllm.ReplyFunc {
 	)
 }
 
+// diffLayoutLine is one line of the diff-layout scenario's file: a tag the driver recognises,
+// then enough filler that HALF of the pane cannot show the line whole. Every line needs it, not
+// just one: the columns scroll together, and a short line's cell has nothing to scroll — a
+// scrollLeft assigned to it is clamped straight back to 0, which reads exactly like "the mirror is
+// broken" when it is only "this row cannot move".
+func diffLayoutLine(tag string) string {
+	return tag + " · " + strings.Repeat("填充，让半宽的格子装不下这一行。", 10)
+}
+
 // longTurnPagesFixture seeds a transcript whose FIRST turn is longer than one history page
 // (PAGE_SIZE raw records, see desktop/frontend/src/types.ts). The app loads the newest page
 // first, so that turn arrives SLICED: its tail comes with the first page, and its head only when
@@ -1904,6 +1913,32 @@ permissions:
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("只有一轮对话（三次写文件 + 一次结论）", len(c.requests) == 4, requestCount(c.requests))
+			},
+		},
+		//
+		//
+		// diff-layout: diff 的 上下 / 左右 两套布局（#34）。这个 fixture 的形状是为左右那一栏挑的：
+		// 一段「删三行、加一行」的替换块，问出「谁跟谁并排」（one 对 ONE）与「多出来的一侧留不留空位」
+		// （two/three 右边是空格子）；每一行都带同样的长填充，问出第三件 —— 两列各自横滚、同一列一起动
+		// （短行没有可滚的余地，程序设 scrollLeft 会被钳回 0，看着就像同步坏了，见 diffLayoutLine）。
+		{
+			name: "diff-layout",
+			files: map[string]string{
+				"README.md": strings.Join([]string{
+					diffLayoutLine("alpha"), diffLayoutLine("pad"),
+					diffLayoutLine("one"), diffLayoutLine("two"), diffLayoutLine("three"), diffLayoutLine("omega"),
+				}, "\n") + "\n",
+			},
+			gitInit: true,
+			steps: []mockllm.Step{
+				{Reply: writeFileStream(0, "README.md", strings.Join([]string{
+					diffLayoutLine("alpha"), diffLayoutLine("pad"), diffLayoutLine("ONE"), diffLayoutLine("omega"),
+				}, "\n")+"\n", "call_dl1")},
+				{Reply: textStream("改好了。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("只有一轮对话（一次写文件 + 一次结论）", len(c.requests) == 2, requestCount(c.requests))
 			},
 		},
 		//

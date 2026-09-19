@@ -848,6 +848,22 @@ P2 三问已定稿（§12）：findings 用 `ReportFinding` 工具上报；评�
   markdown/mermaid、HTML 沙箱、图片 lightbox、高亮源码、CSV 表格）与**打开**（系统默认应用）。
   「预览」这条也顺带回答了原 §11 待决 3。
 
+**布局开关（#34 补）**：面板头部多了 上下 / 左右 两颗按钮（各自用 `aria-pressed` 报自己是不是当前那套），
+`DiffLines` 收到一个 `split` 开关就换成两列——同一份 `Hunk`、同一个渲染器，配对规则在 `splitRows`：
+ctx 行两侧都画（左右各自读起来都是一个完整的文件），「连续删 + 连续加」按下标一行对一行，多出来的一侧
+留空格子（不等长的替换块没有空格子就会从那里开始整体错位）。三件只有真机才验得到的决定：
+**开关只作用于文件**（tool card 的片段 diff 不跟，它只有一列宽）；左右模式下两列各自横滚、同一列一起动
+（`mirrorScroll`），意见行仍占整行宽；偏好记在 `localStorage` 的 `tachi.desktop.diffLayout`（与 theme
+同处，模块加载时同步读，所以第一帧就是读者挑的那套）。真机验证在 `diff-layout` 场景，
+理由与坑记在 [docs/agents/desktop.md](agents/desktop.md)。
+
+**浮层是整窗的（#34 后续）**：`完整 diff` 那个浮层里，diff 不再受 1100/1390px 的阅读宽度上限约束
+（那是给侧栏窄列的），pane 铺满整个 stage、边距只留点击关闭的缝（`ViewerOverlay` 的
+`overlayClass="is-flush"`）。长行也不再由每个文件的 body / 每一格各自滚：**pane 底部一根共享的横滚条**
+（`hscroll`）统一驱动它们，条的长度就是这份 diff 最宽那一行的溢出——上下模式因此不再每个文件一条，
+左右模式的两列一起动（配对在整份文件上都不会错位）。侧栏面板保持原样：它是读者拖宽度的窄列，长行由
+各自那个盒子滚，而那正是 pane 不会撑破这一列的原因。
+
 ### 12.3 P2b 评审产物：`ReportFinding` 工具 —— ✅ 已实现
 
 实现落点：`agent/tools/reportfinding.go`（参数校验 + 只回一行确认，不写任何文件）；

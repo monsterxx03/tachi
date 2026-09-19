@@ -121,6 +121,41 @@
   smoke.check('意见区报出条数', (pane || '').indexOf('评审意见 1 条') >= 0, '')
   smoke.check('意见挂在 diff 行上（有 finding 行）', !!smoke.q('.oneoff-body .finding'), '')
 
+  // ── 左右布局（#34）：面板这一侧拿到的也是同一颗开关 ────────────────────────
+  // 两个界面共用 DiffFindingsPane，所以这里钉的是「另一侧也有它」，配对/空位/横滚那些规则在
+  // diff-layout 场景里钉（那边有专门的 fixture）。顺带钉一件事：左右模式下意见行仍然占整行宽 ——
+  // 一条批注挤进半个宽度的格子里就没法读了。
+  const layoutBtn = (label) => smoke.qa('.oneoff-body .diff-layout-btn').find((b) => smoke.text(b) === label) || null
+  if (!layoutBtn('左右')) return smoke.fail('面板的 diff 头上有左右切换', smoke.text('.oneoff-body .diff-panel-head'))
+  layoutBtn('左右').click()
+  const columnized = await smoke.waitFor(
+    () => (smoke.q('.oneoff-body .diff-body.is-split') && smoke.q('.oneoff-body .diff-split-row') ? true : null),
+    '面板里的 diff 切成两列', 5000)
+  smoke.check('面板里点「左右」，文件也跟着切成两列', !!columnized,
+    smoke.qa('.oneoff-body .diff-split-row').length + ' 行对')
+  const findingBox = smoke.q('.oneoff-body .finding')
+  const cellBox = smoke.q('.oneoff-body .diff-side')
+  smoke.check('左右模式下意见行不在半格的格子里，而是横跨整行（批注挤进半个格子没法读）',
+    !!findingBox && !!cellBox && !smoke.q('.oneoff-body .diff-side .finding')
+      && findingBox.getBoundingClientRect().width > cellBox.getBoundingClientRect().width,
+    findingBox && cellBox
+      ? `意见行 ${Math.round(findingBox.getBoundingClientRect().width)}px / 单格 ${Math.round(cellBox.getBoundingClientRect().width)}px`
+      : '(找不到意见行或格子)')
+  // 面板不铺满、也没有那根共享条：它是读者拖宽度的窄列，长行由每个文件（上下）/每格（左右）自己滚，
+  // 而那正是让 pane 不会撑破这一列的机制（浮层才由底部一根共享条统一驱动，见 diff-layout）。
+  smoke.check('面板里没有共享横滚条，长行还是自己滚（窄列里没有余地铺开）',
+    !smoke.q('.oneoff-body .diff-hscroll')
+      && smoke.qa('.oneoff-body .diff-body').every((b) => getComputedStyle(b).overflowX !== 'hidden'),
+    smoke.qa('.oneoff-body .diff-body').map((b) => getComputedStyle(b).overflowX).join(','))
+  smoke.check('面板的 pane 仍然有阅读宽度上限（不铺满这一列）',
+    !smoke.q('.oneoff-body .viewer-doc.is-diff')
+      || getComputedStyle(smoke.q('.oneoff-body .viewer-doc.is-diff')).maxWidth !== 'none',
+    smoke.q('.oneoff-body .viewer-doc.is-diff') ? getComputedStyle(smoke.q('.oneoff-body .viewer-doc.is-diff')).maxWidth : '(没有 pane)')
+  layoutBtn('上下').click()
+  const backToUnified = await smoke.waitFor(
+    () => (smoke.q('.oneoff-body .diff-body.is-split') ? null : true), '面板切回上下', 5000)
+  smoke.check('面板里切回上下', !!backToUnified, '')
+
   // 运行过之后入口仍然可点，而且点它是回到面板（不是再起一次评审）——两个入口共用这四态，
   // 这里顺带确认整树那一个也守同样的约定。
   if (!smoke.click('.oneoff-toggle')) return smoke.fail('关掉面板', '按钮找不到')

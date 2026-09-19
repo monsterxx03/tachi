@@ -200,8 +200,11 @@ export function useViewerZoomKeys({ fit, reset, zoomBy }: {
 // because a viewer whose content is not in this document — an image, or a PDF/HTML
 // iframe — has nothing to search, and the shell still owns ⌘F there so it cannot fall
 // through to a bar behind the backdrop.
-export function ViewerOverlay({ label, stageRef, stageClass, stageProps, controls, onClose, findable, children }: {
+export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stageProps, controls, onClose, findable, children }: {
   label: string
+  // A surface that wants the SHELL laid out differently (padding, backdrop) says so — the diff pane
+  // takes the whole window, a mermaid diagram keeps the roomy margin around it.
+  overlayClass?: string
   stageRef?: RefObject<HTMLDivElement>
   stageClass?: string
   stageProps?: ComponentPropsWithoutRef<'div'>
@@ -245,7 +248,7 @@ export function ViewerOverlay({ label, stageRef, stageClass, stageProps, control
   }, [onClose])
 
   return createPortal(
-    <div className="viewer-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={label}>
+    <div className={`viewer-overlay${overlayClass ? ' ' + overlayClass : ''}`} onClick={onClose} role="dialog" aria-modal="true" aria-label={label}>
       <div ref={stage} className={`viewer-stage${stageClass ? ' ' + stageClass : ''}`}
         {...stageProps}
         onClick={(e) => {

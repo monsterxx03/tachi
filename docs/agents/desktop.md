@@ -53,6 +53,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
 | the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
+| the diff's 上下/左右 layout (pairing, blank cells, column scroll, the choice surviving) | `diff-layout`, `review-all` |
 | review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
 | rewind / checkpoints | `rewind`, `compact` |
 | context meter, usage numbers, auto-compaction | `ctx-ring`, `compact` |
@@ -972,6 +973,46 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   `.viewer-stage`, the side panel in `.oneoff-body`. `file-index` pins the reader's half of it with
   `elementFromPoint` below the last row (against the pre-fix CSS the probe lands on the diff body).
 
+- **The diff has two layouts, and the layout is a FLAG on the one renderer** (`splitRows` + `DiffLines`'s
+  `split` prop): a context line becomes a row drawn on BOTH sides — so either column reads as one whole
+  file — while a run of removals followed by a run of additions pairs by INDEX (the line that went
+  beside the line that came), and whatever is left over keeps its own row with an EMPTY cell opposite.
+  Without that cell an uneven block (three lines out, one in) shifts the two columns apart from there
+  on, which is the whole risk of a side-by-side view. The switch sits in the pane HEAD rather than in
+  the sticky bar (it is a setting you touch once; the bar already carries what a review needs all the
+  time), and it applies to FILES only — a tool card's fragment diff stays 上下, being a column a third
+  of the window wide. Each column reports its OWN file's line number, and a finding row spans the whole
+  row: a review comment in a half-width cell is unreadable.
+- **In 左右 the two columns scroll as two columns** (`mirrorScroll`): each cell gets its own `overflow-x`
+  (and per-cell scrollbars are hidden — one per row is a wall of them), and a cell's `scrollLeft` is
+  copied to every cell of the SAME side, because a column that scrolled one row at a time is only paired
+  under the pointer. The listener is React's `onScroll` ON THE CELL, which React attaches to that
+  element: a capture-phase listener on the body — the obvious equivalent — received NOTHING in this
+  engine. This is the SIDE PANEL's mechanism; the overlay drives everything from one bar instead (next
+  bullet). `diff-layout` pins the environment half of it too: a `scrollLeft` set from JS must dispatch a
+  `scroll` event, and a cell whose line is SHORT cannot move at all (the value clamps back to 0, which
+  reads exactly like a broken mirror — the fixture therefore makes every line long).
+- **In the overlay the whole diff is scrolled by ONE bar pinned to the pane's bottom** (`hscroll`):
+  a window-sized surface otherwise makes the reader go find a bar at the bottom of every FILE (上下),
+  and in 左右 finds none at all. So there the boxes give up their own bars (`overflow-x: hidden` — which
+  also keeps a long line from painting over the column beside it) and `hdrag` drives them all from
+  `.diff-hscroll`, whose run is exactly the widest overflow in the pane. `hidden`, not `visible`, is
+  what makes it work — and note the trap this hid for one round: a `visible` box still reports a
+  `scrollWidth` bigger than its client (so a "the bar's run equals the widest overflow" assertion passes)
+  while its `scrollLeft` stays 0 no matter what is assigned. The assertion that catches it is the one
+  that DRAGS the bar and then looks at the boxes. Sticky bottom, like the send bar, and earlier in the
+  DOM so a surface with both stacks them.
+- **The overlay's diff pane is the whole window** (`.viewer-doc.is-diff`'s 1100/1390px reading cap is
+  lifted there): the cap exists for the side panel, a column the reader drags where the pane must never
+  outgrow the column. The shell says which surface it is (`ViewerOverlay`'s `overlayClass="is-flush"`,
+  which also shrinks the overlay's own margin to the click-outside sliver) — a surface that wants the
+  shell laid out differently says so, rather than a descendant `:has()` reaching up to restyle it.
+- **A layout is REMEMBERED, a width the pane derives is not** (`tachi.desktop.diffLayout`): the choice
+  lives in `localStorage` — the theme's own store, read SYNCHRONOUSLY at module load, so a pane's first
+  paint is already the reader's layout — while the file index's width stays module-level only. The
+  widths in `desktop_ui.json` are the ones Go has to honour before the window exists (the sidebar, the
+  panel); a mode the reader picked is a decision about reading, and one they would otherwise have to
+  re-make on every launch.
 - **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click** (`currentKey`):
   a pinned index whose highlight only moves when clicked reports the reader's last jump rather than the file in
   front of them. The rule is stated in the SAME terms as the jump — a jumped-to file's top comes to rest on the

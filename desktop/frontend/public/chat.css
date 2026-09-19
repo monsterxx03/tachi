@@ -953,6 +953,65 @@ button.work-dir {
 }
 .diff-line.is-add { background: var(--diff-add-wash); }
 .diff-line.is-del { background: var(--diff-del-wash); }
+/* ── 左右 (side-by-side) ─────────────────────────────────────────────────────── */
+/* The pane's layout switch: 上下 is the body above, 左右 puts the same hunks in two columns. Both
+   are DiffLines — the layout is a flag, not a second renderer (see splitRows) — so what changes
+   here is only the box: a row is a pair of cells.
+   The body gives up its horizontal scrolling in this mode and each CELL gets its own, because the
+   two columns are the two files: sideways scroll in one of them drags that whole column with it
+   (see mirrorScroll in DiffLines), and a scrollbar per row would be a wall of them — hence
+   `scrollbar-width: none`, the overlay scrollbars macOS hides anyway being the other half of that
+   bet. Vertical position stays SHARED: the columns are cells of one grid, so a row is a row. */
+.diff-body.is-split { overflow-x: visible; }
+.diff-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+}
+.diff-side {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+/* One rule says where the old file ends and the new one begins — on the RIGHT cell's left edge,
+   so it is drawn once per row instead of twice on top of itself. */
+.diff-side.is-right { border-left: 1px solid var(--border); }
+/* The half-width cell cannot afford the unified view's number column: the number is the same
+   information at a smaller size, and the code is what the reader came for. */
+.diff-body.is-split .diff-ln { width: 30px; }
+/* Where a file has no line at all (the right half of a deletion, the left half of an addition). It
+   is a box like any other — the row keeps its height and its columns — but an empty one, and the
+   wash is what says "nothing here" rather than "an empty line here". */
+.diff-body.is-split .diff-line.is-blank { background: var(--wash); }
+/* In the OVERLAY the boxes give up their own bars: the pane brings ONE to its bottom and drives
+   every one of them (see DiffFindingsPane's hscroll). `hidden` rather than `visible` is what keeps
+   a long line from painting over the column beside it — and the box stays scrollable from code,
+   which is the whole mechanism. The side panel keeps the per-box bars: there the inner scroller is
+   what keeps the pane from growing wider than the column it lives in. */
+.viewer-overlay.is-flush .diff-body,
+.viewer-overlay.is-flush .diff-side { overflow-x: hidden; }
+/* The shared bar. Sticky like the send bar, and for the same reason: a long diff is read by
+   scrolling, and a bar that scrolls away with the content is one the reader has to go find — the
+   exact complaint a per-file bar earns. It owns the pane's bottom edge, so it comes BEFORE the
+   send bar in the DOM and the send bar (in a surface that has one) stacks above it. */
+.diff-hscroll {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 6px;
+  background: var(--panel-solid);
+  /* The strip above the scrollbar paints over the rows scrolling under it (the spacer is 1px). */
+  padding-top: 4px;
+  /* THE point of the element: this is the scroller. Without it an `overflow: visible` box still
+     reports a `scrollWidth` bigger than its client — the run below measures the overflow, and the
+     element looks scrollable — while its `scrollLeft` stays 0 no matter what is assigned, which is
+     a bar that measures right and does nothing. */
+  overflow-x: auto;
+}
+.diff-hscroll:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+/* The run the bar scrolls along: as long as the widest line's overflow and not one pixel longer,
+   so the bar's own length means something ("how much is there to see"). */
+.diff-hscroll-run { height: 1px; }
 .diff-sign { flex-shrink: 0; width: 8px; color: var(--text-faint); }
 .diff-line.is-add .diff-sign { color: var(--green); }
 .diff-line.is-del .diff-sign { color: var(--red); }
@@ -1007,6 +1066,10 @@ button.work-dir {
 .viewer-doc.is-diff.has-filelist {
   max-width: min(1390px, 100%);
 }
+/* …but in the OVERLAY there is no reading measure to keep at all: the diff is code, the window is
+   the room it gets, and the pane is what the reader came for (the cap above exists for the side
+   panel, a narrow column). The shell says which surface this is (see .viewer-overlay.is-flush). */
+.viewer-overlay.is-flush .viewer-doc.is-diff { max-width: none; }
 /* ── The file index ───────────────────────────────────────────────────────── */
 /* A diff of twenty files is a wall, and the reader arrives with one file in mind. The list PINS
    while the diff scrolls — under the PINNED head, not over it (hence `--diff-head-h` instead of
@@ -1197,6 +1260,35 @@ button.work-dir {
   white-space: nowrap;
 }
 .diff-panel-note { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+/* The 上下/左右 switch. Two buttons rather than one toggling button: the reader has to be able to
+   see WHICH layout is on without hovering for a tooltip, and a label that changes under the
+   cursor ("切到左右" → "切到上下") is a thing you have to read twice to be sure of. */
+.diff-layout {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--radius-xs);
+  background: var(--wash);
+}
+.diff-layout-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 1px 7px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+/* The one that is ON is the panel's own colour, not a wash — it has to stay legible as the
+   "current" one against the group's background. */
+.diff-layout-btn.is-on { background: var(--panel-solid); color: var(--accent-2); }
+.diff-layout-btn:hover { color: var(--accent-2); }
+.diff-layout-btn.is-on:hover { background: var(--panel-solid); }
+.diff-layout-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
 .diff-panel-empty {
   padding: 10px 0;
   font-size: 11.5px;

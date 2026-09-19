@@ -11,7 +11,7 @@
 // Both render the same `Hunk` lines through DiffLines, which is what keeps the two
 // views from drifting: the difference is a flag, not a second implementation.
 
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, useSyncExternalStore } from 'react'
 import { AgentService, type FileChangeVO, type FileDiffVO, type FindingVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Hunk } from '../bindings/github.com/monsterxx03/tachi/pkg/linediff'
 import { FilePreviewOverlay } from './filepreview'
@@ -60,6 +60,51 @@ function clampFileListWidth(px: number, paneWidth: number): number {
   return Math.max(DIFF_FILELIST_MIN_WIDTH, Math.min(ceiling, Math.round(px)))
 }
 
+// ── The diff's layout: 上下 (unified) or 左右 (side-by-side) ──────────────────
+//
+// A READING preference, not a layout the window is built from — which is why it lives at MODULE
+// level, like the file index's width and unlike the side panel's (that one is a column the window's
+// own geometry depends on). One value for both surfaces the pane mounts in: toggling it in the
+// overlay is how the side panel reads next time, which is what a reader who picked a layout means.
+//
+// It persists in localStorage rather than in desktop_ui.json (where the widths go): the widths are
+// GEOMETRY, and Go owns the window those numbers have to fit; this is a preference about reading,
+// like the theme, and the same store already keeps that one. Reading it here — synchronously, at
+// module load — is also what keeps a pane from painting 上下 and then flipping to 左右.
+const DIFF_LAYOUT_KEY = 'tachi.desktop.diffLayout'
+
+function storedDiffSplit(): boolean {
+  try {
+    return localStorage.getItem(DIFF_LAYOUT_KEY) === 'split'
+  } catch {
+    return false // storage can be blocked; the toggle still works for this session
+  }
+}
+
+let diffSplit = storedDiffSplit()
+const layoutListeners = new Set<() => void>()
+
+/** Sets the diff layout (and remembers it) and re-renders every pane (both surfaces). */
+function setDiffSplit(on: boolean) {
+  if (diffSplit === on) return
+  diffSplit = on
+  try {
+    localStorage.setItem(DIFF_LAYOUT_KEY, on ? 'split' : 'unified')
+  } catch {
+    /* storage blocked: this session still switches, it just will not persist */
+  }
+  layoutListeners.forEach((cb) => cb())
+}
+
+function subscribeDiffLayout(cb: () => void): () => void {
+  layoutListeners.add(cb)
+  return () => { layoutListeners.delete(cb) }
+}
+
+function useDiffSplit(): boolean {
+  return useSyncExternalStore(subscribeDiffLayout, () => diffSplit, () => diffSplit)
+}
+
 // scrollableAncestor is the box the pane actually scrolls in — the overlay's stage, the panel's
 // body (the pane itself is the content, not the scroller; see the CSS). Found by walking up rather
 // than passed in, because the same pane is mounted in both surfaces and neither one's class is the
@@ -89,13 +134,47 @@ function findingMatchesFile(root: string, findingPath: string, filePath: string)
 // Placement of findings is this component's job; how one is DRAWN belongs to the caller
 // (in the panel a row carries a pick box and a comment field; a tool card's fragment diff
 // has no findings to draw at all).
-function DiffLines({ hunks, lineNumbers, findings, renderFinding }: {
+// splitRows pairs a hunk's lines for the 左右 layout: a CONTEXT line is a row of its own — the same
+// text on BOTH sides, because each column is meant to read as one whole file — and a run of removals
+// followed by a run of additions becomes one row per index: the line that went, beside the line that
+// came. Whatever is left over on either side keeps its own row with an empty cell opposite, which is
+// what makes an uneven replacement block (three lines out, one line in) read correctly instead of
+// shifting the two columns apart.
+//
+// A `del` run that is NOT followed by an `add` run (a pure deletion) still pairs row-by-row —
+// holes on the right — for the same reason.
+type SplitRow = { left?: Hunk; right?: Hunk; ctx?: Hunk }
+
+function splitRows(hunks: Hunk[]): SplitRow[] {
+  const out: SplitRow[] = []
+  let i = 0
+  while (i < hunks.length) {
+    const h = hunks[i]
+    // Anything that is not an add or a del is context: the Hunk model has exactly three kinds, and
+    // the unified view below reads them the same way (its sign falls through to a space).
+    if (h.kind !== 'add' && h.kind !== 'del') { out.push({ ctx: h }); i++; continue }
+    if (h.kind === 'add') { out.push({ right: h }); i++; continue }
+    const dels: Hunk[] = []
+    while (i < hunks.length && hunks[i].kind === 'del') dels.push(hunks[i++])
+    const adds: Hunk[] = []
+    while (i < hunks.length && hunks[i].kind === 'add') adds.push(hunks[i++])
+    for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
+      out.push({ left: dels[k], right: adds[k] })
+    }
+  }
+  return out
+}
+
+function DiffLines({ hunks, lineNumbers, findings, renderFinding, split = false }: {
   hunks: Hunk[]
   lineNumbers: boolean
   // Findings are placed inline, right under the line they are about — a review comment
   // belongs next to the code it questions.
   findings?: PlacedFinding[]
   renderFinding?: (item: PlacedFinding, orphan: boolean) => ReactNode
+  /** 左右 layout (see splitRows). The caller decides: the pane follows the reader's toggle, a tool
+   *  card's fragment diff stays 上下 (it lives in a column a third of the window wide). */
+  split?: boolean
 }) {
   const draw = renderFinding
   // Which findings land under which hunk line: a finding names a NEW-side line (the
@@ -107,28 +186,91 @@ function DiffLines({ hunks, lineNumbers, findings, renderFinding }: {
   }
   const placed = new Set<FindingVO>()
 
+  // take collects the findings of a hunk line and marks them placed, so the same one cannot come
+  // back through the other side of a 左右 row (a finding names one LINE NUMBER, and a paired del/add
+  // can legitimately carry the same number on both sides) nor through the orphan list at the end.
+  const take = (h?: Hunk): PlacedFinding[] => {
+    if (!h) return []
+    const here = h.newLine ? byLine.get(h.newLine) : h.kind === 'del' ? byLine.get(h.oldLine) : undefined
+    const fresh = (here || []).filter((item) => !placed.has(item.finding))
+    for (const item of fresh) placed.add(item.finding)
+    return fresh
+  }
+
+  // one line of code, on the side it belongs to. The 上下 view draws left+right merged (that is what
+  // a unified diff IS): it passes the line's own kind through, and its line-number column carries
+  // both coordinates. The 左右 view gives each cell ONE coordinate — the old side's number on the
+  // left, the new side's on the right — because that is what the column is showing.
+  const line = (h: Hunk, side?: 'left' | 'right') => {
+    const numbers = !lineNumbers ? [] : side === 'left' ? [h.oldLine] : side === 'right' ? [h.newLine] : [h.oldLine, h.newLine]
+    return (
+      <div className={`diff-line is-${h.kind}`}>
+        {numbers.map((n, i) => <span key={i} className="diff-ln">{n || ''}</span>)}
+        {/* The sign carries the meaning; the colour only reinforces it. */}
+        <span className="diff-sign">{h.kind === 'add' ? '+' : h.kind === 'del' ? '−' : ' '}</span>
+        <span className="diff-text">{h.text === '' ? ' ' : h.text}</span>
+      </div>
+    )
+  }
+  // A cell with no line on this side (a pure deletion's right half, an addition's left): the row has
+  // to keep its height and its columns aligned with every other row, so it is a real box, empty.
+  const blank = () => (
+    <div className="diff-line is-blank">
+      {lineNumbers ? <span className="diff-ln" /> : null}
+      <span className="diff-sign" />
+    </div>
+  )
+
+  // 左右 mode: the two columns ARE the two files, so each one scrolls as a COLUMN rather than as a
+  // grid of independent rows — dragging one left cell sideways moves every left cell with it, and the
+  // pairing stays true for the whole file instead of only for the row under the pointer.
+  //
+  // The listener sits on each CELL (React's onScroll on an element is attached to that element, and
+  // this is exactly why: a capture-phase listener on the body looked equivalent and caught NOTHING in
+  // this engine — measured in the diff-layout smoke, where only the dragged row moved). The mirror
+  // writes the same value back into the other cells and stops there: assigning a scrollLeft that is
+  // already set fires no further event.
+  const mirrorScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const src = e.currentTarget
+    const group = src.classList.contains('is-left') ? 'is-left' : 'is-right'
+    const body = src.closest('.diff-body')
+    if (!body) return
+    for (const el of body.querySelectorAll<HTMLElement>(`.diff-side.${group}`)) {
+      if (el !== src) el.scrollLeft = src.scrollLeft
+    }
+  }
+
   return (
-    <div className="diff-body">
-      {hunks.map((h, i) => {
-        const here = h.newLine ? byLine.get(h.newLine) : h.kind === 'del' ? byLine.get(h.oldLine) : undefined
-        for (const item of here || []) placed.add(item.finding)
-        return (
-          <div key={i}>
-            <div className={`diff-line is-${h.kind}`}>
-              {lineNumbers ? (
-                <>
-                  <span className="diff-ln">{h.oldLine || ''}</span>
-                  <span className="diff-ln">{h.newLine || ''}</span>
-                </>
-              ) : null}
-              {/* The sign carries the meaning; the colour only reinforces it. */}
-              <span className="diff-sign">{h.kind === 'add' ? '+' : h.kind === 'del' ? '−' : ' '}</span>
-              <span className="diff-text">{h.text === '' ? ' ' : h.text}</span>
+    <div className={`diff-body${split ? ' is-split' : ''}`}>
+      {split
+        ? splitRows(hunks).map((row, i) => {
+          // The right side FIRST: a finding names a new-side line, so when a paired del/add happen
+          // to carry the same number, the new-side line is the one it is about.
+          const here = [...take(row.right), ...take(row.left)]
+          return (
+            <div key={i}>
+              {/* The row is the pair; each cell is one file's line. A context line is drawn on both
+                  sides rather than stretched across, so either column reads as one whole file. */}
+              <div className="diff-split-row">
+                <div className="diff-side is-left" onScroll={mirrorScroll}>{row.ctx || row.left ? line((row.ctx || row.left)!, 'left') : blank()}</div>
+                <div className="diff-side is-right" onScroll={mirrorScroll}>{row.ctx || row.right ? line((row.ctx || row.right)!, 'right') : blank()}</div>
+              </div>
+              {/* A finding spans the whole row instead of sitting in a half-width column: it is a
+                  note about the pair, and a review comment in a 150px cell is unreadable. Which cell
+                  it belongs to is already said by the new-side anchor it carries. */}
+              {here.map((item, j) => <Fragment key={j}>{draw ? draw(item, false) : null}</Fragment>)}
             </div>
-            {(here || []).map((item, j) => <Fragment key={j}>{draw ? draw(item, false) : null}</Fragment>)}
-          </div>
-        )
-      })}
+          )
+        })
+        : hunks.map((h, i) => {
+          const here = take(h)
+          return (
+            <div key={i}>
+              {line(h)}
+              {here.map((item, j) => <Fragment key={j}>{draw ? draw(item, false) : null}</Fragment>)}
+            </div>
+          )
+        })}
       {/* A finding whose line is not in the diff (the reviewer saw a wider window, or the
           file changed after the review) still has to be readable. */}
       {(findings || []).filter((item) => !placed.has(item.finding))
@@ -395,7 +537,7 @@ function jumpRank(f: FindingVO, fileOrder: Map<string, number>, root: string): [
 // report that explains them belong side by side in the side-channel panel — and an overlay
 // covering the conversation is exactly what this design set out to remove
 // (docs/2026-09-12-desktop-oneoff-panel-design.md §5.3).
-export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, expandAll, fileList, onSend, onOpenReport, onRerun }: {
+export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, expandAll, fileList, hscroll, onSend, onOpenReport, onRerun }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
@@ -423,6 +565,13 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // side-channel panel, which is a column the reader drags to taste (a 210px index there would
   // take a third of it and leave the diff unreadable) and which already has the ↑/↓ walk.
   fileList?: boolean
+  // ONE horizontal scroller for the whole surface, pinned to the pane's bottom (the overlay).
+  // Without it, long lines scroll inside the box they are drawn in — a file's body (上下) or a
+  // column's cell (左右) — which in a window-sized surface leaves the reader hunting a bar at the
+  // bottom of every file, and in 左右 finds none at all (see the CSS: per-row bars are hidden
+  // there). Off for the side panel: it is a column the reader drags, with no room to widen, and
+  // there the inner scroller is exactly what keeps the pane from growing.
+  hscroll?: boolean
   // Why the diff could not be read ("" when it was). An empty pane must not have to guess.
   diffError?: string
   // Sends the picked findings as an ordinary user message. Absent only when there is
@@ -471,7 +620,9 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // all — which is exactly the question the labels exist to answer. Single-root diffs (the
   // overwhelmingly common case) are untouched.
   const multiRoot = (diff?.files || []).some((f) => !!f.rootLabel)
-  // The report is a file like any other, and the 报告 pane renders it with the app's own
+  // The layout switch in the head; the groups below subscribe to the same store, so one click moves
+  // every file in the pane (and the other surface's pane, see useDiffSplit).
+  const split = useDiffSplit()  // The report is a file like any other, and the 报告 pane renders it with the app's own
   // markdown renderer — but it is a PANE of this panel, not another overlay stacked on top.
   const reportButton = report ? (
     <button type="button" className="diff-open" title={report}
@@ -596,6 +747,39 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       pane.style.removeProperty('--diff-room-h')
     }
   }, [fileList, diff])
+
+  // ── ONE horizontal scroller for the whole pane (the overlay) ───────────────
+  // Every box that can scroll sideways stops showing a bar of its own in the overlay (see the CSS)
+  // and is driven from a single bar pinned to the pane's bottom instead: `hboxes` is all of them —
+  // a file's body in 上下, a row's cell in 左右 — and the bar's LENGTH is the widest overflow among
+  // them, so it is exactly as long as the longest line and no longer.
+  //
+  // Why not let each box keep its own: in a window-sized surface a bar at the bottom of every FILE
+  // is a bar the reader has to go find, and in 左右 there is none at all (one per row would be a
+  // wall of them). What the reader gets instead is the bar where they look for one, moving the
+  // whole diff together — in 左右 that means both columns at once, which is also what keeps the
+  // pairing honest while they read.
+  const hbar = useRef<HTMLDivElement>(null)
+  const hboxes = () => Array.from(paneRef.current?.querySelectorAll<HTMLElement>('.diff-body, .diff-side') || [])
+  const hdrag = (x: number) => { for (const el of hboxes()) el.scrollLeft = x }
+  const [hmax, setHmax] = useState(0)
+  useLayoutEffect(() => {
+    if (!hscroll) return
+    // Reads layout, so it belongs in a layout effect (before paint) for the same reason the head's
+    // height does. Deps: what changes the boxes — the payload, the fold, the layout. A window
+    // resize does NOT (the boxes' clientWidth is the pane's), which is what the observer below is for.
+    const measure = () => {
+      const max = hboxes().reduce((m, el) => Math.max(m, el.scrollWidth - el.clientWidth), 0)
+      setHmax(max)
+      // Re-apply where the bar already is: a fold or a layout switch rebuilds the boxes at 0, and a
+      // reader who had scrolled away should not be snapped back to the left edge.
+      hdrag(hbar.current?.scrollLeft || 0)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    if (paneRef.current) ro.observe(paneRef.current)
+    return () => ro.disconnect()
+  }, [hscroll, diff, split, fileOpen])
 
   // ── The index's width (the handle between the list and the diff) ───────────
   // The same bargain the side panel's width strikes, for the same reason: what is SHOWN is the
@@ -824,6 +1008,19 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         <span className="diff-panel-note">
           {diff?.source === 'checkpoint' ? '与这一轮开始时的快照对比' : '与 git HEAD 对照'} · 行号为文件真实行号
         </span>
+        {/* The layout switch. It sits in the head rather than in the sticky bar: it is a reading
+            setting you touch once, and the bar is already carrying the two things a review needs
+            all the time (what is picked, where you are in the findings).
+            aria-pressed rather than a radio pair: these are two buttons that each state whether the
+            current layout IS them, which is what a screen reader needs to read the pair. */}
+        <span className="diff-layout" role="group" aria-label="diff 布局">
+          <button type="button" className={`diff-layout-btn${split ? '' : ' is-on'}`}
+            aria-pressed={!split} title="上下：改动的两个版本逐行对照，长行整行横着看"
+            onClick={() => setDiffSplit(false)}>上下</button>
+          <button type="button" className={`diff-layout-btn${split ? ' is-on' : ''}`}
+            aria-pressed={split} title="左右：旧的一列、新的一列，一行一行对齐着看"
+            onClick={() => setDiffSplit(true)}>左右</button>
+        </span>
         {onRerun ? (
           <button type="button" className="diff-open" title="按同一批文件再评审一次（改动还可以更新）"
             onClick={onRerun}>重新评审</button>
@@ -944,6 +1141,17 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
           </div>
         </div>
       ) : null}
+      {/* ONE horizontal bar for the whole diff, pinned where the reader looks for it (see the
+          hscroll block above). Only when something actually overflows: an empty 11px strip under
+          every short diff would be a bar that does nothing. `aria-label` + tabIndex, because a
+          scrollbar the reader cannot reach from the keyboard is a bar for mouse users only. */}
+      {hscroll && hmax > 0 ? (
+        <div className="diff-hscroll" ref={hbar} tabIndex={0} aria-label="横向滚动整份 diff"
+          title="左右拖动横向查看长行（也可以在这里用 ← →）"
+          onScroll={(e) => hdrag(e.currentTarget.scrollLeft)}>
+          <div className="diff-hscroll-run" style={{ width: `calc(100% + ${hmax}px)` }} />
+        </div>
+      ) : null}
       {/* The way out AND the way through: the picked findings become one ordinary user message,
           and the ↑/↓ pair walks the findings. It is a STICKY bar rather than another row in the
           header for a reason the walk made concrete: the pane scrolls (that is how a long diff
@@ -1057,15 +1265,18 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
   const hasScope = count > 0 || !!diff?.note
   return (
     <ViewerOverlay label={`本轮改动 — ${count} 个文件（${source}）`} onClose={onClose} stageClass="is-doc"
+      overlayClass="is-flush"
       findable
       controls={<CloseButton onClose={onClose} />}>
       {/* findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
           Everything else (the head, the per-file fold, 预览/打开) is the panel's own rendering,
           which is what keeps the two diffs from drifting apart.
           expandAll: with no findings to fold AROUND, every file opens — the diff is the content
-          here, not context for a review. */}
+          here, not context for a review.
+          hscroll: this surface is the whole window, so the long lines get ONE bar at its bottom
+          instead of one per file (and none at all in 左右) — see the pane's hscroll block. */}
       <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${turn}\n${files}`}
-        hasPaths={hasScope} diffError={error} expandAll fileList />
+        hasPaths={hasScope} diffError={error} expandAll fileList hscroll />
     </ViewerOverlay>
   )
 }
@@ -1091,6 +1302,9 @@ function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, o
   // the file index, so the list cannot name a different tree than the group it jumps to).
   const abs = fileAbsPath(file, root)
   const rootName = fileRootName(file, root, multiRoot)
+  // The reader's layout (see useDiffSplit): the FILE is where the toggle applies — a tool card's
+  // fragment diff stays 上下, because it lives in a column a third of the window wide.
+  const split = useDiffSplit()
   // The file's own content, the way every other file in this app is shown — the same
   // PreviewFile machinery behind the attachment cards.
   const [peek, setPeek] = useState(false)
@@ -1132,7 +1346,7 @@ function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, o
       {!open ? null : file.binary ? (
         <div className="diff-panel-empty">二进制文件，git 不逐行比较</div>
       ) : file.hunks?.length ? (
-        <DiffLines hunks={file.hunks} lineNumbers findings={findings}
+        <DiffLines hunks={file.hunks} lineNumbers findings={findings} split={split}
           renderFinding={(item, orphan) => (
             <FindingRow item={item} pick={picks[item.idx] ?? defaultPick(item.finding.severity)}
               onPick={onPick} orphan={orphan} />

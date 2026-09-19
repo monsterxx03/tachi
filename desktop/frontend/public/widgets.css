@@ -623,6 +623,11 @@
   padding: 40px 32px 84px;
   animation: scrim-in 0.16s ease both;
 }
+/* A surface that IS the window rather than a card in it (the diff pane): the margins go down to
+   the click-outside sliver, because every pixel here is a line of code — and the diff's own
+   reading cap is lifted in the same breath (see .viewer-doc.is-diff). The bottom keeps its room:
+   that is where the control pill floats. */
+.viewer-overlay.is-flush { padding: 14px 12px 76px; }
 .viewer-stage {
   /* margin:auto centres without clipping when the content outgrows the space
      (align-items:center would cut off its top/left edge under overflow). */
