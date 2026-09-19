@@ -188,11 +188,14 @@ export function useAgentStream(deps: AgentStreamDeps) {
 
   useEffect(() => {
     const off = Events.On('agent:tool', (event) => {
-      const t = event.data as { name: string; title: string; args: string; change?: FileChangeVO | null }
+      // toolCallId is what tells one card from another when the same tool is called several times
+      // in one response (see matchToolPart) — without it every parallel call's args landed on the
+      // newest card (issue #39).
+      const t = event.data as { toolCallId?: string; name: string; title: string; args: string; change?: FileChangeVO | null }
       updateSession(currentId, (list) => {
         const target = [...list].reverse().find((m) => m.role === 'assistant' && m.running)
         if (!target) return list
-        return list.map((m) => (m.id === target.id ? updateToolPart(m, t.name, t.title, t.args, t.change) : m))
+        return list.map((m) => (m.id === target.id ? updateToolPart(m, t.toolCallId || '', t.name, t.title, t.args, t.change) : m))
       })
     })
     return () => off?.()
@@ -269,7 +272,7 @@ export function useAgentStream(deps: AgentStreamDeps) {
         // The two stream events that may have to OPEN the message they write to: a turn can
         // start before the frontend has placed its placeholder (see applyToSession).
         case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, toolCallId: ev.ToolID, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
-        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
+        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolID || '', ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
         case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'session_title': {
           // The generated title arrives here and nowhere else: the sidebar renders the list it

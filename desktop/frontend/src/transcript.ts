@@ -28,17 +28,36 @@ export function pushPart(m: Message, p: Part): Message {
   return { ...m, parts: [...(m.parts || []), p] }
 }
 
-// finishToolPart closes the newest still-running call of the named tool.
-export function finishToolPart(m: Message, name: string, summary: string, ok: boolean, durationMs?: number): Message {
+// finishToolPart closes the call a result belongs to (see matchToolPart for how "belongs to" is
+// decided).
+export function finishToolPart(m: Message, toolCallId: string, name: string, summary: string, ok: boolean, durationMs?: number): Message {
   const parts = [...(m.parts || [])]
+  const i = matchToolPart(parts, toolCallId, name)
+  if (i >= 0) parts[i] = { ...parts[i], summary, ok, done: true, durationMs }
+  return { ...m, parts }
+}
+
+// matchToolPart answers the one question every tool event asks: WHICH card is this about?
+//
+// The tool call's own ID when the event carries one, and — only for an event that has none — the
+// newest unfinished card of the same name. The id is what makes it correct, because a parallel
+// burst arrives as all the STARTS first and all the ARGS after them: the response streams four
+// tool-call blocks (the consumer emits a start per block, see stream_consumer.go), and the executor
+// emits the args when it is about to run them (executeToolCallsParallel does it as one phase). A
+// name match therefore put every arg on the NEWEST card — of four parallel `SubAgent` calls the
+// first three stayed 「执行中…」 with no args, and the fourth showed the last one's (issue #39). The
+// name rule stays as the fallback for an event without an id (nothing sends one today; it keeps a
+// missing field from silently dropping the update).
+function matchToolPart(parts: Part[], toolCallId: string, name: string): number {
+  if (toolCallId) {
+    const i = parts.findIndex((p) => p.type === 'tool' && p.toolCallId === toolCallId)
+    if (i >= 0) return i
+  }
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i]
-    if (p.type === 'tool' && !p.done && p.name === name) {
-      parts[i] = { ...p, summary, ok, done: true, durationMs }
-      break
-    }
+    if (p.type === 'tool' && !p.done && p.name === name) return i
   }
-  return { ...m, parts }
+  return -1
 }
 
 // finishNotice completes the newest in-flight notice (auto-compaction pushes one
@@ -61,15 +80,10 @@ export function finishNotice(m: Message, label: string, summary?: string): Messa
 // fires twice — once when the model starts the call (args still empty) and once with
 // the complete arguments right before execution — so the second patch is what
 // actually brings the diff in.
-export function updateToolPart(m: Message, name: string, title: string, args: string, change?: FileChangeVO | null): Message {
+export function updateToolPart(m: Message, toolCallId: string, name: string, title: string, args: string, change?: FileChangeVO | null): Message {
   const parts = [...(m.parts || [])]
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const p = parts[i]
-    if (p.type === 'tool' && !p.done && p.name === name) {
-      parts[i] = { ...p, title, args, change: change ?? p.change }
-      break
-    }
-  }
+  const i = matchToolPart(parts, toolCallId, name)
+  if (i >= 0) parts[i] = { ...parts[i], title, args, change: change ?? parts[i].change }
   return { ...m, parts }
 }
 

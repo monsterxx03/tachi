@@ -1353,6 +1353,46 @@ func scenarios() []scenario {
 		// where the ask rule silently did not match would run the command unprompted and the
 		// driver's click would land on nothing.
 		//
+		// parallel-tools: 一个回复里同名工具被调用多次时，每张卡都要落上**自己**的参数。
+		//
+		// 事件的到达顺序是"先全部的 start，后全部的 args"：start 由消费流的一侧发出（每见到一个
+		// tool-call 块就发一次，那时还没有参数），args 由执行侧发出（`executeToolCallsParallel` 先
+		// 把这一批的 args 一起发完，`Sequential` 也是先发再跑）。前端原本按**工具名 + 最新未完成**
+		// 认卡，于是一批同名的调用里，每个 args 都盖在最新那张上：四张卡只有最后一张有参数与标题，
+		// 前三张永远停在「执行中…」（issue #39）。修法是把 tool call 的 id 一路带过去（agent:tool
+		// 载荷里加了 toolCallId），按 id 认卡。
+		//
+		// 这里用四个 ReadFile 而不是四个 SubAgent：同一个前端缺陷，不需要子 agent 那一整套 mock。
+		{
+			name: "parallel-tools",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe parallel-tools scenario's working directory\n",
+				"a.md":      "A-FILE-CONTENT\n",
+				"b.md":      "B-FILE-CONTENT\n",
+				"c.md":      "C-FILE-CONTENT\n",
+				"d.md":      "D-FILE-CONTENT\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_r1", "ReadFile", `{"path":"a.md"}`),
+					mockllm.ToolCallStart("call_r2", "ReadFile", `{"path":"b.md"}`),
+					mockllm.ToolCallStart("call_r3", "ReadFile", `{"path":"c.md"}`),
+					mockllm.ToolCallStart("call_r4", "ReadFile", `{"path":"d.md"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 60, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("四份都读完了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 四份文件的内容都回喂给了模型：这一批真的都执行了（而不是只跑了一张卡）。
+				for _, name := range []string{"A-FILE", "B-FILE", "C-FILE", "D-FILE"} {
+					_, seen := c.requestSeen(name)
+					c.check("工具结果里有 "+name, seen, requestCount(c.requests))
+				}
+			},
+		},
 		{
 			name: "perm-allow",
 			files: map[string]string{

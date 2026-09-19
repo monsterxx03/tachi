@@ -40,6 +40,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | You changed | Run |
 | --- | --- |
 | transcript rendering / turn folding / process strip | `transcript`, `transcript-fold`, `transcript-live` |
+| tool cards (their own args and result, several calls of one tool in a turn) | `parallel-tools`, `transcript-fold` |
 | the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
 | a message bubble's own layout (long links, wrapping) | `bubble-wrap` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
@@ -690,6 +691,17 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   `"ok"` — a refused one must stay on screen with its reason.
 
 **The transcript**
+
+- **A tool event is matched to its card by the tool call's ID, never by the tool's name**
+  (`transcript.ts`'s `matchToolPart`, fed by `agent:tool`'s `toolCallId` and `agent:event`'s
+  `ToolID`). One response can call the same tool several times, and the events arrive in two
+  PHASES: the consumer emits a `tool_call_start` per block while the response streams (no args yet),
+  and the executor emits the args when it is about to run them (`executeToolCallsParallel` as one
+  phase, `Sequential` per call). A name match therefore lands every arg on the NEWEST unfinished
+  card: of four parallel calls the first three kept an empty title and the fourth showed the last
+  one's args (issue #39). The name rule survives only as the fallback for an event with no id.
+  Smoke: `parallel-tools` (four `ReadFile` calls in one response — the same frontend bug, without a
+  subagent fixture; against the name rule it reports `(空) | (空) | (空) | d.md`).
 
 - **A turn's process is folded by the CONVERSATION, not by the part renderer**: `turnView()` (`transcript.ts`,
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip

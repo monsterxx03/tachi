@@ -461,6 +461,11 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 				"title":  tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
 				"args":   ev.ToolArgs,
 				"change": changeVO(ev.ToolName, ev.ToolArgs),
+				// The tool call's own id: a response can call the same tool SEVERAL times, and the
+				// starts arrive before the args (the consumer emits a start per block while the
+				// response streams, the executor the args when it runs them), so the frontend cannot
+				// tell the cards apart by name — every arg landed on the newest one (issue #39).
+				"toolCallId": ev.ToolID,
 			})
 		}
 	case agent.AgentEventToolResult:
