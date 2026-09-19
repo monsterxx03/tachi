@@ -608,19 +608,28 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		}
 		// User-initiated stop is a normal conclusion, NOT an error — same
 		// semantics as tui (Ctrl+C), acp (prompt cancel) and channel (/stop).
-		// Keep the partial history so the next turn can continue from it.
 		interrupted := ev.Result != nil &&
 			(ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled)
 		if interrupted {
 			d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已停止"})
-			d.mu.Lock()
-			if r := d.getRun(id); ev.Messages != nil {
-				r.history = ev.Messages
-			}
-			d.mu.Unlock()
 		} else {
 			d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: detail})
 		}
+		// The partial history is kept on EVERY exit that carries one — not only the interrupted
+		// one. A stream that dies mid-turn (the client's own timeout, a dropped connection) has
+		// already EXECUTED tool calls by then: the loop hands rs.Messages over, the session file
+		// already holds them, and dropping them here is how the next turn's request comes to be
+		// missing work the model actually did — so it repeats it (issue #38; tui and acp have
+		// always taken whatever the event carried). What arrives is complete pairs only, since a
+		// partially accumulated assistant message is never appended to rs.Messages.
+		//
+		// The STATE above still says 出错: keeping the history is not the same as calling the turn
+		// a success, and the frontend draws the failure from its own event.
+		d.mu.Lock()
+		if r := d.getRun(id); ev.Messages != nil {
+			r.history = ev.Messages
+		}
+		d.mu.Unlock()
 		// A conversation turn concludes its newest assistant bubble; an one-off run has no
 		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
 		// patching "the newest assistant" would hit the turn the review was FOR.

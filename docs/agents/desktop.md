@@ -62,6 +62,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
+| a turn whose stream dies mid-flight (what it keeps, what the next turn sends) | `stream-fail` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
 | sending/receiving files or images | `paste-image` |
@@ -843,6 +844,19 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   `turn_complete` from inside the event loop and only THEN exits to `endTurn`, while the frontend re-reads the
   running set exactly once, on that event. The state is set BEFORE the event is emitted, so it can never
   contradict it (`TestAFinishedTurnIsNotReportedAsRunning`).
+- **A turn that fails MID-STREAM keeps the history it already produced** (`handleEvent`'s AgentEventError
+  branch): the partial messages the loop attaches are adopted on EVERY error exit that carries them, not only
+  on `ExitReasonInterrupted`. A stream that dies while the turn runs (the client's own timeout, a dropped
+  connection) has already EXECUTED tool calls by then; the session file holds them, so dropping them from the
+  in-memory history is how the next turn's request comes to be missing work the model did, and redoes it
+  (issue #38). What arrives is complete pairs — a partially accumulated assistant message is never appended —
+  so the adopted history is always a legal request. The STATE still says 出错: keeping the history is not
+  calling the turn a success. Two neighbours worth knowing: the frontend already looks idle when this happens
+  (its busy signal is the state, not the turn's guard), and the guard stays held for a few hundred ms AFTER
+  the error event because the agent finalizes the turn's checkpoint before it closes the stream — so a send
+  landing in that window is refused with 「会话正在运行，这条消息没有发出去」. That window is real but
+  unobservable from the UI, which is why `stream-fail`'s driver retries the way a reader would (the notice
+  says to) instead of sleeping for a magic number.
 - **Copying goes through `copyText` (`lib.ts`), never a bare `navigator.clipboard`.** The page is not a secure
   context, so `navigator.clipboard` is UNDEFINED there: `navigator.clipboard?.writeText(...)` reads as an
   optional-chain no-op and the clipboard stays empty, with nothing failing anywhere. `copyText` tries the

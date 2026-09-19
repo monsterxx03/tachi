@@ -114,6 +114,31 @@ func (c *checkCtx) check(label string, ok bool, detail string) {
 	*c.lines = append(*c.lines, Line{Label: "go: " + label, OK: ok, Detail: detail})
 }
 
+// requestHasText reports whether ONE request's messages contain want. The scenario-level
+// requestSeen asks "at any point"; tests about what a LATER turn was told need this one, since the
+// earlier requests legitimately contain the text too.
+func requestHasText(r *mockllm.RecordedRequest, want string) bool {
+	for _, m := range r.Messages {
+		if strings.Contains(m.Content, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// requestTail is the last few messages of a request, for a failure's detail: "what did the model
+// actually see" is the question both of these helpers exist for.
+func requestTail(r *mockllm.RecordedRequest) string {
+	var parts []string
+	for _, m := range r.Messages {
+		parts = append(parts, fmt.Sprintf("%s:%s", m.Role, strutil.Truncate(m.Content, 40)))
+	}
+	if len(parts) > 4 {
+		parts = parts[len(parts)-4:]
+	}
+	return strings.Join(parts, " | ")
+}
+
 // requestSeen reports whether any request's messages contain want (the prompt-level
 // assertion: "did the model actually get told this?").
 func (c *checkCtx) requestSeen(want string) (int, bool) {
@@ -1891,6 +1916,41 @@ permissions:
 				}
 				c.check("有会话的项目里有两个成员（原成员 + ⌘N 的新成员）", members == 2,
 					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", members))
+			},
+		},
+		//
+		//
+		// stream-fail: 一轮 turn 的流在**工具跑完之后**断掉时，那一轮已经执行的步骤必须留在对话
+		// 历史里（issue #38）。判据不是"界面还看得见那张卡"（那是页面自己的缓存），而是**出错之后的
+		// 下一次请求里带着那条工具结果** —— 只有 Go 侧读得到请求，而模型能不能看见它才是这件事的
+		// 全部意义：不然模型会把已经做过的事再做一遍。
+		{
+			name: "stream-fail",
+			files: map[string]string{
+				"README.md": "# smoke\n\nstream-fail scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 1. 一轮正常的工具调用：它会被真正执行（mock 的 Bash 写不了盘，但结果里有这个字符串）
+				{Reply: bashStream("echo smoke-step-ok", "call_sf1")},
+				// 2. 同一个 turn 的下一次调用：流断在这里（不是 ctx 取消，是流本身坏了 —— 正是客户
+				//    端超时/连接断掉的样子）。此时这一轮已经执行过一步。
+				{Reply: mockllm.MalformedSSE()},
+				// 3. 出错之后用户又发了一条：这一轮的请求必须带着上面那一步。
+				{Reply: textStream("接着来。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三次请求：工具调用 / 断掉的流 / 出错后的下一轮", len(c.requests) == 3, requestCount(c.requests))
+				if len(c.requests) < 3 {
+					return
+				}
+				// 前提：断开的那一次（第 2 个请求）里**已经**有那条工具结果 —— 说明这一步确实执行过，
+				// 而且它当时就在历史里。没有这一条，下面那条断言会在"什么都没跑"的 fixture 上假绿。
+				c.check("前提：断流那一次的请求里已经有这一步的结果",
+					requestHasText(c.requests[1], "smoke-step-ok"), requestTail(c.requests[1]))
+				// 正题：出错之后的下一轮仍然带着它。
+				c.check("断流之后的那一轮把上一轮已执行的步骤带给了模型",
+					requestHasText(c.requests[2], "smoke-step-ok"), requestTail(c.requests[2]))
 			},
 		},
 		//

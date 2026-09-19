@@ -886,10 +886,23 @@ func (a *AIAgent) runLoop(
 }
 
 // terminalError fires the "error" hook and returns the terminal
-// AgentEventError for the loop, unifying the four error-exit sites. msgs is
-// attached to the event only on resume-oriented exits (interrupted), so
-// frontends can continue the partial turn; hard failures pass nil to leave
-// the frontend's history untouched.
+// AgentEventError for the loop, unifying the error-exit sites.
+//
+// msgs is the turn's partial history, and EACH SITE decides whether it has one worth keeping —
+// the rule is "did this turn produce anything yet?", not "was the failure hard":
+//
+//   - a stream that died mid-turn (a timeout, a dropped connection) hands over rs.Messages: the
+//     tool calls it already ran are in there, complete with their results, and a frontend that
+//     dropped them would send the next turn a history missing work the model actually did. The
+//     request that failed for its own reasons is still a turn that RAN.
+//   - an interrupt / cancellation hands it over so the next turn can continue from where the user
+//     stopped it (both the tui and acp have always taken whatever arrives).
+//   - the exits that fail BEFORE the model produced anything — the iteration budget, a call that
+//     never opened a stream — pass nil: there is no partial turn, only the user's message, and a
+//     frontend that stored it would keep a question with no answer it never got.
+//
+// A frontend that only takes the partial history when ExitReason is Interrupted is therefore
+// DROPPING the mid-turn failure case (desktop/agent_turn.go did, until issue #38).
 func (a *AIAgent) terminalError(ctx context.Context, rs *RunState, exitReason string, err error, msgs []llm.Message) AgentEvent {
 	a.dispatchEvent(ctx, hooks.EventError, hooks.Payload{
 		ErrorMessage: err.Error(),

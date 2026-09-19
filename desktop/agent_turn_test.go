@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -164,6 +165,46 @@ func TestAFinishedTurnIsNotReportedAsRunning(t *testing.T) {
 				t.Errorf("the session is still reported as running after its turn ended: %v", got)
 			}
 		})
+	}
+}
+
+// TestAMidTurnFailureKeepsTheStepsTheTurnAlreadyRan pins issue #38. A stream that dies while the
+// turn is running (the client's own timeout, a dropped connection) reaches the frontend as an
+// AgentEventError with ExitReason "error" — NOT "interrupted" — and this handler used to keep the
+// partial history only in the interrupted branch. The tool calls that had already run were
+// therefore missing from the next turn's request (while the session FILE kept them, so the model
+// and the transcript disagreed about what had happened), and the model re-did work it had done.
+//
+// The exit is deliberately the hard one: that is the whole point of the test.
+func TestAMidTurnFailureKeepsTheStepsTheTurnAlreadyRan(t *testing.T) {
+	const id = "s1"
+	d := newTestApp()
+	d.runs[id] = &sessionRun{history: []llm.Message{{Role: "user", Content: "旧的一轮"}}}
+	// What the loop hands over after a failed stream: the history plus the user's message and the
+	// tool call this turn already executed (with its result — pairs, never a dangling tool call).
+	partial := []llm.Message{
+		{Role: "user", Content: "旧的一轮"},
+		{Role: "user", Content: "把 X 改掉"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: "{}"}}}},
+		{Role: "tool", ToolCallID: "c1", Content: "改完了"},
+	}
+	d.handleEvent(id, agent.AgentEvent{
+		Type:     agent.AgentEventError,
+		Messages: partial,
+		Result:   &agent.RunResult{ExitReason: agent.ExitReasonError, Error: errors.New("context deadline exceeded")},
+	})
+
+	got := d.runHistory(id)
+	if len(got) != len(partial) {
+		t.Fatalf("history = %d 条, want %d（这一轮已经执行的步骤必须留着）: %+v", len(got), len(partial), got)
+	}
+	if got[3].Role != "tool" || got[3].Content != "改完了" {
+		t.Errorf("最后一条 = %+v, want 这一轮那条工具结果", got[3])
+	}
+	// …and the turn is still a FAILURE: keeping the history is not the same as calling it a
+	// success, so the state (which the window shows) must not have turned into 空闲.
+	if st := d.runs[id].state; st.Status != StatusError {
+		t.Errorf("state = %+v, want StatusError（失败还是失败）", st)
 	}
 }
 
