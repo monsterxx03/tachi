@@ -39,24 +39,6 @@ export function AddSessionRoots(id: string, dirs: string[] | null): $Cancellable
 }
 
 /**
- * AddSettingsItem appends one item to a config list, IN THE BATCH THIS SAVE IS BUILDING.
- * 
- * It does not write config.yaml, and that is the change: it used to, because an item had to be in
- * the file before any of its fields could be saved (the update path refuses a path the file does
- * not have). Staging the structure here means the save that follows carries the item AND its
- * values into one file write (config.ListEdits, whose doc comment holds the ordering rules), so a
- * reader who adds an item and changes their mind can walk away with nothing written — which is
- * what the page's own 「返回对话」 implies and what the immediate write made impossible.
- * 
- * Nothing is PUSHED here either, and that is not a new rule: an item with no values yet is nothing
- * to tell the running process about. The fields the user fills in are pushed by the save that
- * writes them.
- */
-export function AddSettingsItem(listPath: string): $CancellablePromise<$models.SettingsItemResultVO | null> {
-    return $Call.ByID(1680806465, listPath);
-}
-
-/**
  * AnswerPermission delivers the user's decision for a parked ask, unblocking the
  * agent loop. sessionID + toolID must name the ask that is actually waiting: the
  * frontend answers with the id it was given, so a card left over from an earlier
@@ -261,8 +243,8 @@ export function GetSessionWorkingDir(id: string): $CancellablePromise<string> {
 }
 
 /**
- * GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
- * of the live config — PLUS one per leaf of every item the page has staged (see pendingAdd).
+ * GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf of the
+ * live config.
  * 
  * It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
  * is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
@@ -273,11 +255,10 @@ export function GetSessionWorkingDir(id: string): $CancellablePromise<string> {
  * A value that cannot be read is still listed, with the reason in Note: hiding a field would
  * present a smaller settings page as a complete one, and the failure is the interesting part.
  * 
- * The staged items are the exception that proves the rule. An item the reader just added is not in
- * the config, so nothing walks its leaves — and it must still be EDITABLE, or "add an item" would
- * draw a card with no inputs. They are therefore enumerated from the element type
- * (config.ElementFields) and appended as ordinary fields: the page's draft/dirty/save machinery
- * treats them like any other row, and SaveSettings carries them into the same batch as the appends.
+ * The schema is a pure function of the CONFIG, and that is a property worth keeping: the page's own
+ * unsaved state (the item it is about to add, the one it dropped) is the page's, so a re-read never
+ * has to reproduce it — it hands over the two facts an item that does not exist yet needs (the
+ * list's Length and its Element template, see SettingListVO) and lets the page draw it.
  */
 export function GetSettingsSchema(): $CancellablePromise<$models.SettingsSchemaVO | null> {
     return $Call.ByID(1740909494);
@@ -514,22 +495,6 @@ export function RemoveSessionRoot(id: string, dir: string): $CancellablePromise<
 }
 
 /**
- * RemoveSettingsItem removes one item from a config list, IN THE BATCH THIS SAVE IS BUILDING.
- * 
- * Like AddSettingsItem it no longer writes: the removal joins the save, so dropping an item and
- * then leaving the page writes nothing — the same promise, in the other direction.
- * 
- * The references are still reported HERE rather than at save time, because this is the moment the
- * reader can act on them: a name a list item is known by (`providers.2.name`) may be written into
- * keys that mean "use that one" — `provider`, `title_provider`, each `*_provider` — and those are
- * not list items, so removing the item leaves them pointing at nothing. Saying so is the difference
- * between a warning and a config that quietly stops resolving.
- */
-export function RemoveSettingsItem(elementPath: string): $CancellablePromise<$models.SettingsItemResultVO | null> {
-    return $Call.ByID(1255875418, elementPath);
-}
-
-/**
  * RenameProject changes a project's name. Nothing else moves: sessions store the ID and
  * the sidebar joins the name in, so one write relabels every row at once (design §3.3).
  */
@@ -665,21 +630,29 @@ export function SavePastedImage(sessionID: string, mediaType: string, data: stri
 }
 
 /**
- * SaveSettings applies a batch of edited leaves and tells the running process about them.
+ * SaveSettings applies a batch of edited leaves — plus the list items the page is adding and
+ * dropping — and tells the running process about them.
+ * 
+ * The three arguments are ONE transaction, which is the whole point: the page's unsaved state is
+ * the page's own (a draft, an item it is about to add, an item it just dropped), and this is where
+ * all of it becomes real at once. `appends` are the element paths the page DREW (`providers.3`),
+ * and `removes` are the elements it dropped; both are checked against the config here, because a
+ * page that has been open a while is the only thing in this system that can hold a stale view.
  * 
  * The order is the design's (§六), and each step exists because of what the previous one can
  * leave behind:
  * 
  *  1. resolve EVERY key first — an unknown key, or one another entry mode owns, refuses the
  *     whole batch before anything is touched. A half-saved form is a state no reader can
- *     reason about.
+ *     reason about. The structural half is checked in the same spirit (see validateRemovals).
  *  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
  *     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
  *  3. snapshot the leaves and apply them in one locked step (all or none), together with the
- *     STRUCTURAL half: the list items this page staged with ＋ and − are appended and removed here,
- *     in the order config.ListEdits documents (appends, then the leaf updates, then the removals —
- *     only that order addresses the elements the form meant). The type check is this step's own:
- *     config.SetPath refuses a value the field cannot hold, and the batch is put back whole.
+ *     STRUCTURAL half: the list items the page is adding and dropping are appended and removed
+ *     here, in the order config.ListEdits documents (appends, then the leaf updates, then the
+ *     removals — only that order addresses the elements the form meant). The type check is this
+ *     step's own: config.SetPath refuses a value the field cannot hold, and the batch is put back
+ *     whole.
  *  4. write config.yaml, as ONE write of the WHOLE config (config.Save): the file is the object
  *     marshalled, so there is no per-key half to keep in step. Only a save that got this far
  *     continues: if the write fails, the memory is put back exactly as it was and the answer says
@@ -692,15 +665,14 @@ export function SavePastedImage(sessionID: string, mediaType: string, data: stri
  *     failures are per-session and reported, not fatal — the value IS saved.
  * 
  * The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
- * interleave their snapshots, config writes and pushes. It is also what makes the STAGED structure
- * consistent here: + and − take the same lock to add to it.
+ * interleave their snapshots, config writes and pushes.
  * 
  * Returns whether the batch was written, plus the sentence the page shows (the desktop's
  * convention for bound methods: a sentence rather than an error the frontend would have to
  * translate). The two are not redundant — see SaveSettingsResultVO.
  */
-export function SaveSettings(updates: { [_ in string]?: any } | null): $CancellablePromise<$models.SaveSettingsResultVO | null> {
-    return $Call.ByID(3863358292, updates);
+export function SaveSettings(updates: { [_ in string]?: any } | null, appends: string[] | null, removes: string[] | null): $CancellablePromise<$models.SaveSettingsResultVO | null> {
+    return $Call.ByID(3863358292, updates, appends, removes);
 }
 
 /**
@@ -845,6 +817,24 @@ export function SetSessionWorkingDir(id: string, dir: string): $CancellablePromi
  */
 export function SetThinkingLevel(level: string): $CancellablePromise<string> {
     return $Call.ByID(2835565002, level);
+}
+
+/**
+ * SettingsRemovalWarning answers the two questions a page has when the reader drops a list item,
+ * and it is READ-ONLY: the removal itself is the page's own pending state, which joins the next
+ * save (see SaveSettings).
+ * 
+ *  1. CAN it be dropped? A malformed path, or an index the list does not have, means the page and
+ *     the config disagree — and the answer has to come now, while the card is still on screen,
+ *     rather than at save time when the reader has already thrown it away.
+ *  2. WHAT still names it? A name a list item is known by (`providers.2.name`) may be written into
+ *     keys that mean "use that one" — `provider`, `title_provider`, each `*_provider` — and those
+ *     are not list items, so dropping the item leaves them pointing at nothing. Saying so is the
+ *     difference between a warning and a config that quietly stops resolving, and it is said HERE
+ *     because this is the moment the reader can act on it.
+ */
+export function SettingsRemovalWarning(elementPath: string): $CancellablePromise<$models.SettingsRemovalVO | null> {
+    return $Call.ByID(3333342229, elementPath);
 }
 
 /**

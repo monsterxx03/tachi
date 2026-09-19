@@ -158,23 +158,6 @@ type desktopApp struct {
 	deferredThisSave []string
 	savingUpdates    map[string]any
 
-	// pendingAdds and pendingRemoves are the STRUCTURAL half of the settings page's next save: the
-	// list items the reader added or dropped, staged instead of written on the spot (settingsMu
-	// serializes them with the save that consumes them).
-	//
-	// Staging is what makes "add an item, then leave without saving" write nothing — and it is why
-	// they are not simply part of `savingUpdates`: an item that does not exist yet has no leaf
-	// paths to update, and the item's values arrive as a SECOND save of the same form (the reader
-	// adds it, the card opens, they fill it in, and SaveSettings carries both because the page
-	// sends everything it holds). See config.ListEdits for the order they are applied in, and why.
-	//
-	// A pendingAdd carries no values of its own: a staged element is an index and nothing else, and
-	// the values come in through the ordinary leaf updates once the form shows them (the schema
-	// declares the element's leaves — config.ElementLeaves — which is what lets the page draw a
-	// field for an element that is not in the file yet).
-	pendingAdds    []pendingAdd
-	pendingRemoves []string
-
 	// pushMu guards pendingPushes: the pushes a save deferred, per session, waiting for that
 	// session's turn to end (drained by endTurn).
 	pushMu        sync.Mutex

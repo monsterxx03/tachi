@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import type { SettingFieldVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { SettingFieldVO, SettingListVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { Caret } from './components'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
@@ -13,7 +13,9 @@ import { Caret } from './components'
 // is a change in Go alone — which is the point of the table.
 //
 // What it DOES own is the shape of an edit: what the boxes hold, when a row is dirty, what a
-// refused save does to the reader's typing.
+// refused save does to the reader's typing — and the items it is holding that the config is not (an
+// item ＋ made, an item 删除 dropped). All of it is unsaved state and all of it goes to the same
+// save: a page owns what it has not written yet, and nothing else does.
 
 /** What one input holds. Text for everything except a switch, where the value IS the state —
  *  and text rather than a parsed value so that a half-typed number ("1" on the way to "150")
@@ -92,6 +94,12 @@ function readonlyText(f: SettingFieldVO): string {
 //
 // Both rules below are about the SHAPE of a path, not about any config key: which segment is a
 // list index, and which leaf names identify an item. Nothing here knows what `providers` is.
+//
+// ADDING and REMOVING live here too, and they are THIS PAGE's state — the same kind of thing as a
+// draft. An item the reader adds exists nowhere but on this screen until the save that carries it
+// (see SaveSettings): that is what lets them press ＋, look at the card, and walk away with nothing
+// written. So the backend hands over what an item of a list LOOKS like (`SettingListVO`) and the
+// page keeps the rest — which item it is holding, and which one it dropped.
 
 /** The leaf names that identify an item of a config list, in the order they are shown.
  *
@@ -135,11 +143,11 @@ function listOf(elementPath: string): string | null {
  *  list, and the leaf keeps a row of its own.
  *
  *  Which paths count is decided by the SCHEMA, not by the path alone (`listPaths`), and the reason is
- *  the staged item: the page's ＋ stages an item that is not in the config, and the schema describes
- *  its leaves from the element's TYPE (see stagedFields in desktop/settings.go) — so they arrive as
- *  ordinary fields under a path (`providers.1.name`) that no walk of the config would produce. They
- *  are still one item, and must still fold into one card, so the set of paths that ARE items comes
- *  from the backend and a numeric segment alone is not enough.
+ *  the item the page is holding: ＋ makes a card for an item that is not in the config, whose leaves
+ *  arrived from the list's TEMPLATE (SettingListVO.element) — ordinary fields under a path
+ *  (`providers.1.name`) that no walk of the config would produce. They are still one item, and must
+ *  still fold into one card, so the set of paths that ARE items comes from the backend and a numeric
+ *  segment alone is not enough.
  *
  *  The boundary is the RIGHTMOST segment that names a list — `hooks.events.pre_tool.0.command` is the
  *  first command of the pre_tool list, not something nested inside a `0` field of a
@@ -159,6 +167,61 @@ function elementOf(key: string, listPaths: Set<string>): { path: string; tail: s
  *  a list the backend does not declare is not one this page may draw as a card. */
 function listPathsOf(schema: SettingsSchemaVO | null): Set<string> {
   return new Set((schema?.lists ?? []).map((l) => l.path))
+}
+
+/** listByPath resolves a list's own path to the backend's declaration of it: how many items it holds
+ *  now (`length`) and what one of its items looks like (`element`) — the two facts this page cannot
+ *  read off a value, because the item it is about to draw does not exist. */
+function listByPath(schema: SettingsSchemaVO | null, path: string): SettingListVO | undefined {
+  return (schema?.lists ?? []).find((l) => l.path === path)
+}
+
+/** One item the page is holding and the config is not: the path it will have (`providers.3`) and
+ *  the list it belongs to. */
+type PendingAdd = { path: string; list: string }
+
+/** pendingFields draws the leaves of the items the page has added: ordinary rows, synthesized from
+ *  the list's TEMPLATE — the same shape the backend sends for a real item, so the card they make is
+ *  edited, validated and saved by the same machinery as every other row.
+ *
+ *  The KEY is the one thing the template cannot carry: the template is the same for every item of a
+ *  list, and the path is per item (`providers.3.name`). Composing it here is what makes the item the
+ *  page's own: `providers.3` is the index the page chose (the list's length plus the items it is
+ *  already holding), and the save checks that the config agrees. */
+function pendingFields(schema: SettingsSchemaVO | null, adds: PendingAdd[]): SettingFieldVO[] {
+  const out: SettingFieldVO[] = []
+  for (const add of adds) {
+    for (const leaf of listByPath(schema, add.list)?.element ?? []) {
+      out.push({
+        key: `${add.path}.${leaf.tail}`,
+        kind: leaf.kind,
+        value: leaf.value,
+        options: leaf.options,
+        optional: leaf.optional,
+        isSet: leaf.isSet,
+        needsRestart: leaf.needsRestart,
+        category: leaf.category,
+        note: leaf.note,
+      })
+    }
+  }
+  return out
+}
+
+/** fieldsInOrder merges what the config holds with what the page is holding, in the one order both
+ *  sides speak: by path.
+ *
+ *  The backend hands its own over sorted (config.PathsFor sorts) and the folds below — one item's
+ *  leaves into one card, one top-level key into one block — are a SINGLE walk that relies on it, so
+ *  a merged list that was not sorted would draw the same block twice (a `providers: 0 …` heading
+ *  next to a `providers: 3 …` one) and two cards would stop being one list.
+ *
+ *  A pending item of `providers` sorts where a real one of the same list does, which is exactly the
+ *  point: the reader sees it at the END of the list it is joining, next to where the ＋ that made it
+ *  sits. */
+function fieldsInOrder(schema: SettingsSchemaVO | null, adds: PendingAdd[]): SettingFieldVO[] {
+  return [...(schema?.fields ?? []), ...pendingFields(schema, adds)]
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
 }
 
 /** elementLocator is the card's subtitle: WHICH list item this is.
@@ -285,7 +348,7 @@ type Section = {
   /** The declared LIST this block can grow, when it holds one. The backend declares them
    *  (SettingListVO) because an empty list has no fields — without the declaration the page
    *  could not offer the first item of a list, which is exactly when someone wants it. */
-  list?: string
+  list?: SettingListVO
 }
 
 /** sectionsOf groups one category into blocks, in the config's own path order (a string sort
@@ -293,7 +356,7 @@ type Section = {
  *  each declared list to the block that draws it (or gives it a block of its own when it has no
  *  fields at all). */
 function sectionsOf(
-  fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, lists: string[], listPaths: Set<string>,
+  fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, lists: SettingListVO[], listPaths: Set<string>,
 ): Section[] {
   const out: Section[] = []
   let seg = ''
@@ -318,12 +381,23 @@ function sectionsOf(
   for (const list of lists) {
     // The innermost block whose prefix the list lives under — `web_search.providers` belongs to
     // the `web_search` block, and `providers` to a `providers` one.
-    const host = out.filter((sec) => sec.prefix !== '' && (list === sec.prefix || list.startsWith(sec.prefix + '.')))
+    const host = out.filter((sec) => sec.prefix !== '' && (list.path === sec.prefix || list.path.startsWith(sec.prefix + '.')))
       .sort((a, b) => b.prefix.length - a.prefix.length)[0]
     if (host) host.list = list
-    else out.push({ key: list, prefix: list, items: [], list })
+    else out.push({ key: list.path, prefix: list.path, items: [], list })
   }
   return out
+}
+
+/** pendingText is the foot's count of what the save will carry. The three kinds are one
+ *  transaction, so one line has to say all of them — a page holding an item that is not in the
+ *  config and reporting "0 项未保存" would be telling the reader nothing is about to happen. */
+function pendingText(dirty: number, addCount: number, removeCount: number): string {
+  const parts: string[] = []
+  if (dirty > 0) parts.push(`${dirty} 项未保存`)
+  if (addCount > 0) parts.push(`${addCount} 条待新增`)
+  if (removeCount > 0) parts.push(`${removeCount} 条待删除`)
+  return parts.join(' · ')
 }
 
 export function SettingsPage({ onBack }: { onBack: () => void }) {
@@ -334,12 +408,15 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   const [active, setActive] = useState('')
   const [notice, setNotice] = useState<{ bad: boolean; text: string } | null>(null)
   const [saving, setSaving] = useState(false)
-  // An add or a remove in flight. They are not "saves" (they write immediately, and a save's
-  // draft rules do not apply), so they get their own flag — and the same notice line.
-  const [busy, setBusy] = useState(false)
-  // The item that was just added, so its card opens: a new element is 11 leaves of nothing, and
-  // the reason the reader pressed ＋ was to fill them in.
-  const [justAdded, setJustAdded] = useState('')
+  // A removal being CHECKED against the config (the warning call). It is not a save — the removal
+  // is local, and no draft rule applies — so it gets its own flag and shares the notice line.
+  const [checking, setChecking] = useState(false)
+  // What this page is holding that the config is not, and it is the SAME KIND OF THING as a draft:
+  // the items ＋ made (nothing but a path and a set of drafts) and the items 删除 dropped. Both are
+  // gone when the page is (the drafts are), and the save is the one place they become real — which
+  // is why the backend no longer keeps a copy of either (see SaveSettings).
+  const [adds, setAdds] = useState<PendingAdd[]>([])
+  const [removes, setRemoves] = useState<string[]>([])
 
   // load re-reads the whole schema. It is also what a SUCCESSFUL save ends with: the values in
   // the file are the truth, and the form is not — so the page takes the new values (and drops
@@ -361,9 +438,14 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
 
   useEffect(() => { void load() }, [load])
 
-  const fields = useMemo(() => schema?.fields ?? [], [schema])
+  // What the form draws: the config's own leaves AND the leaves of every item this page is holding
+  // (pendingFields), in one order — the folds below are a single walk and rely on it.
+  const fields = useMemo(() => fieldsInOrder(schema, adds), [schema, adds])
 
   // What each field was when it was read: the yardstick for "dirty", and what a box is reset to.
+  // A pending item's yardstick is the TEMPLATE's value (a new provider starts at its type's
+  // defaults), so typing one of them in is a change and leaving it alone is not — which is exactly
+  // what "the save carries what the reader typed" means for an item that has nothing yet.
   const original = useMemo(() => {
     const m = new Map<string, Draft>()
     for (const f of fields) m.set(f.key, fieldDraft(f))
@@ -403,7 +485,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   const shownFields = groups.find((g) => g.name === shown)?.fields ?? []
   // The lists this group may grow. Declared by the backend rather than inferred from the cards,
   // because an empty list has no cards — and an empty list is exactly where ＋ matters most.
-  const listsHere = (schema?.lists ?? []).filter((l) => l.category === shown).map((l) => l.path)
+  const listsHere = (schema?.lists ?? []).filter((l) => l.category === shown)
   // The lists whose items open FOLDED whatever their size (see ELEMENT_FOLD_OVER): a schema
   // declaration, not a size the page measures.
   const foldedHere = foldedLists(schema)
@@ -440,40 +522,77 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [back])
 
-  // addItem grows a list. The item is STAGED, not written (see AddSettingsItem): it becomes part of
-  // the next save, and the page re-reads so the card the backend names is drawn — with its inputs,
-  // which the backend describes from the element's type precisely because the element is not in the
-  // config yet. The card opens: the reason someone presses ＋ is to fill the new item in.
+  // addItem grows a list, entirely on this page: the item becomes a card with inputs (its leaves
+  // come from the list's TEMPLATE — see pendingFields), the reader fills it in, and the next save
+  // carries both the item and its values in one write.
   //
-  // The re-read is a round trip for a change the page made itself, but it is the right one here: the
-  // schema is the only thing that knows what the new item's leaves ARE (a staged element has no
-  // values to walk), so drawing it from anything but the backend would be the page inventing them.
-  const addItem = useCallback(async (listPath: string) => {
-    setBusy(true)
-    const res = await AgentService.AddSettingsItem(listPath).catch((e) => {
-      setNotice({ bad: true, text: String(e) })
-      return null
+  // Nothing is asked of the backend and nothing is written, which is the point: ＋ is the one gesture
+  // whose whole meaning is "maybe" — press it, look at the card, walk away — and an item that
+  // existed nowhere but on this screen is the only kind that can be taken back by leaving.
+  //
+  // The index is this page's own arithmetic: the list's length (from the schema) plus the items of
+  // that list it is ALREADY holding, so pressing ＋ twice yields `providers.3` and `providers.4`
+  // rather than naming the same element twice. The save is what holds it to the truth — the element
+  // path it is given must be the list's end (config.ListEdits).
+  const addItem = useCallback((listPath: string) => {
+    setAdds((prev) => {
+      const taken = new Set(prev.map((a) => a.path))
+      let index = listByPath(schema, listPath)?.length ?? 0
+      while (taken.has(`${listPath}.${index}`)) index++
+      return [...prev, { path: `${listPath}.${index}`, list: listPath }]
     })
-    setBusy(false)
-    if (!res) return
-    setNotice({ bad: res.ok !== true, text: res.summary || '' })
-    if (res.ok && res.elementPath) setJustAdded(res.elementPath)
-    await load()
-  }, [load])
+    setNotice(null)
+  }, [schema])
 
-  // removeItem marks an item for removal (or cancels one that is still staged — the backend tells
-  // the two apart). Nothing is written, so the page re-reads only to pick up the notice: the card
-  // stays where it is until the save, which is what 「点保存后才生效」 means.
+  // removeItem drops an item, and it is one gesture: the card leaves the list at once, a line in its
+  // place says what was dropped, and the save is what makes it real. There is no second question to
+  // ask — nothing is written yet, and 「撤销」 is the answer to a mistake, which a confirmation
+  // dialog is a worse version of.
+  //
+  // What the backend IS asked is the one question this page cannot answer: what still names the item
+  // (`SettingsRemovalWarning` — a key like `title_provider` may hold this provider's name, and a
+  // warning is only worth having while the reader can still fix it). An item the page is holding and
+  // the config never had is dropped without that call: there is nothing to warn about.
   const removeItem = useCallback(async (elementPath: string) => {
-    setBusy(true)
-    const res = await AgentService.RemoveSettingsItem(elementPath).catch((e) => {
+    const dropDrafts = () => setDrafts((d) => {
+      const next = { ...d }
+      for (const key of Object.keys(next)) {
+        if (key === elementPath || key.startsWith(elementPath + '.')) delete next[key]
+      }
+      return next
+    })
+    if (adds.some((a) => a.path === elementPath)) {
+      setAdds((prev) => prev.filter((a) => a.path !== elementPath))
+      dropDrafts()
+      setNotice(null)
+      return
+    }
+    setChecking(true)
+    const res = await AgentService.SettingsRemovalWarning(elementPath).catch((e) => {
       setNotice({ bad: true, text: String(e) })
       return null
     })
-    setBusy(false)
+    setChecking(false)
     if (!res) return
-    setNotice({ bad: res.ok !== true, text: res.summary || '' })
-    setJustAdded('')
+    if (res.ok !== true) {
+      // The page and the config disagree about this list: the card stays where it is, and the
+      // sentence says what to do about it.
+      setNotice({ bad: true, text: res.summary || '' })
+      return
+    }
+    setRemoves((prev) => (prev.includes(elementPath) ? prev : [...prev, elementPath]))
+    dropDrafts()
+    // The sentence is this page's, because the removal is: the backend's clause is about the CONFIG
+    // (which keys still name the item), and the locator is the page's own vocabulary.
+    const marked = `已标记删除 ${elementLocator(elementPath, '')}；保存后才会写进 config.yaml`
+    setNotice({ bad: false, text: res.summary ? `${marked}；${res.summary}` : marked })
+  }, [adds])
+
+  // undoRemove puts a dropped item back in the list. It is the exact inverse of removeItem: no call
+  // to the backend either way, because the removal is nothing but this page's own mark.
+  const undoRemove = useCallback((elementPath: string) => {
+    setRemoves((prev) => prev.filter((p) => p !== elementPath))
+    setNotice({ bad: false, text: `已撤销：${elementLocator(elementPath, '')} 还在 config.yaml 里，什么都没变` })
   }, [])
 
   const save = useCallback(async () => {
@@ -492,25 +611,33 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
       setNotice({ bad: true, text: `有 ${bad.length} 项填得不对，没有保存：${bad.join('、')}` })
       return
     }
-    if (dirty.length === 0) {
+    // The page's whole unsaved state goes in one call: the drafts, the items it is holding (by the
+    // path it gave each one) and the items it dropped. Counted together, because any one of the
+    // three is a change the reader is about to make.
+    if (dirty.length === 0 && adds.length === 0 && removes.length === 0) {
       setNotice({ bad: false, text: '没有改动需要保存' })
       return
     }
 
     setSaving(true)
-    const res = await AgentService.SaveSettings(updates).catch((e) => {
+    const res = await AgentService.SaveSettings(updates, adds.map((a) => a.path), removes).catch((e) => {
       setNotice({ bad: true, text: String(e) })
       return null
     })
     setSaving(false)
     if (!res) return
-    // A save that wrote re-reads (the values are the new ones). A save that was REFUSED does
-    // not: nothing changed anywhere, and the reader's typing has to survive — they are about to
-    // fix whatever the sentence named. Either way the sentence is shown as the backend wrote it
-    // (this page does not translate Go errors).
-    if (res.ok) await load()
+    // A save that wrote re-reads (the values are the new ones, the items it added are now real and
+    // the ones it dropped are gone). A save that was REFUSED does not: nothing changed anywhere, and
+    // the reader's typing — and their pending items — have to survive, because they are about to fix
+    // whatever the sentence named. Either way the sentence is shown as the backend wrote it (this
+    // page does not translate Go errors).
+    if (res.ok) {
+      setAdds([])
+      setRemoves([])
+      await load()
+    }
     setNotice({ bad: res.ok !== true, text: res.summary || '' })
-  }, [dirty, byKey, drafts, load])
+  }, [dirty, byKey, drafts, load, adds, removes])
 
   // rowProps is every row's wiring, in one place: a standalone row and a row inside a card must
   // behave identically (same dirty rule, same draft, same reset), and the only thing that
@@ -576,14 +703,20 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
               // A row inside a block is labelled by the REST of its path: the heading already said
               // which block this is, and repeating it on every row is the noise the heading was
               // added to remove. (FieldRow keeps the full key in the tooltip.)
-              const items = sec.items.map((it) =>
+              //
+              // The items a reader DROPPED are left out of the list they were drawn in — that is
+              // what "删除直接把它移出列表" looks like — and the line under the ＋ is where they went.
+              const gone = sec.list ? removes.filter((p) => listOf(p) === sec.list!.path) : []
+              const items = sec.items
+                .filter((it) => it.kind !== 'elem' || !removes.includes(it.path))
+                .map((it) =>
                 it.kind === 'row' ? (
                   <FieldRow {...rowProps(it.field)} label={shorten(it.field.key, sec.prefix)} />
                 ) : (
                   <ElementCard key={it.path} item={it}
                     dirtyCount={it.fields.filter(isDirty).length}
                     hasError={it.fields.some((f) => fieldErrors[f.key])}
-                    forceOpen={it.path === justAdded}
+                    forceOpen={adds.some((a) => a.path === it.path)}
                     forceFolded={!!listOf(it.path) && foldedHere.has(listOf(it.path)!)}
                     onRemove={sec.list ? () => void removeItem(it.path) : undefined}
                     renderRow={(f, label) => <FieldRow {...rowProps(f)} label={label} />} />
@@ -603,11 +736,22 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                       // which the button has to say or the reader cannot tell what they are making.
                       <div className="set-add">
                         {sec.items.length === 0
-                          ? <span className="set-add-empty">{shorten(sec.list, sec.prefix)} 还没有条目</span>
+                          ? <span className="set-add-empty">{shorten(sec.list.path, sec.prefix)} 还没有条目</span>
                           : null}
-                        <button className="btn" disabled={busy} onClick={() => void addItem(sec.list!)}>
-                          ＋ 添加 {shorten(sec.list, sec.prefix)}
+                        <button className="btn" onClick={() => addItem(sec.list!.path)}>
+                          ＋ 添加 {shorten(sec.list.path, sec.prefix)}
                         </button>
+                        {/* What the reader dropped, where the item used to be listed — a line per
+                            item, with the one way back. It says 「保存后移除」 because that is the
+                            truth: nothing is written yet, which is also why a second question before
+                            dropping would be asking about the wrong thing. */}
+                        {gone.map((path) => (
+                          <span className="set-removed" key={path}>
+                            <span className="set-removed-item">{elementLocator(path, sec.prefix)}</span>
+                            <span>已标记删除，保存后移除</span>
+                            <button className="btn ghost" onClick={() => undoRemove(path)}>撤销</button>
+                          </span>
+                        ))}
                       </div>
                     ) : null}
                   </div>
@@ -618,8 +762,14 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
 
         <div className="settings-foot">
           <div className={`settings-notice${notice?.bad ? ' is-bad' : ''}`}>{notice?.text ?? ''}</div>
-          {dirty.length > 0 ? <div className="settings-dirty-count">{dirty.length} 项未保存</div> : null}
-          <button className="btn" onClick={() => void save()} disabled={saving || dirty.length === 0}>
+          {/* What the save will carry, counted the way the reader counts it: fields they changed,
+              items they added, items they dropped. The three are one transaction, so the foot must
+              not say "0 项未保存" while the form holds an item that is not in the config. */}
+          {pendingText(dirty.length, adds.length, removes.length) ? (
+            <div className="settings-dirty-count">{pendingText(dirty.length, adds.length, removes.length)}</div>
+          ) : null}
+          <button className="btn" onClick={() => void save()}
+            disabled={saving || checking || (dirty.length === 0 && adds.length === 0 && removes.length === 0)}>
             {saving ? '保存中…' : '保存'}
           </button>
         </div>
@@ -685,22 +835,22 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRem
   item: Extract<Item, { kind: 'elem' }>
   dirtyCount: number
   hasError: boolean
-  /** Open this card whatever the default is: an item that was just ADDED is where the reader is
-   *  about to type, and eleven empty leaves behind a fold is a card they would have to find. It
+  /** Open this card whatever the default is: an item this page has just added is where the reader
+   *  is about to type, and eleven empty leaves behind a fold is a card they would have to find. It
    *  outranks forceFolded — filling in a new item is exactly what ＋ promised. */
   forceOpen?: boolean
   /** The item's list is declared folded (SettingListVO.folded): shut whatever its size. */
   forceFolded?: boolean
-  /** Removing is only offered for an item of a declared list (see Section.list). It is a two-step
-   *  button rather than one: the write is immediate and there is no undo, so the second click is
-   *  the confirmation. */
+  /** Removing is offered for an item of a declared list (see Section.list), and it is ONE gesture:
+   *  the card leaves the list and a line at the foot of the block offers 「撤销」. That works
+   *  because the removal is not written — the save is what performs it — so the confirmation a
+   *  destructive button would need is nothing but a worse undo. */
   onRemove?: () => void
   renderRow: (f: SettingFieldVO, label: string) => ReactNode
 }) {
   // null = follow the default, so an item that grows or shrinks still opens the way a first
   // visit would; a click pins it either way.
   const [open, setOpen] = useState<boolean | null>(null)
-  const [confirmRemove, setConfirmRemove] = useState(false)
   // Folded by default when the list says so, or when the item is big (a provider is eleven
   // leaves and a page of them buries the list) — or when the reader pinned it that way. An item
   // that was just added opens: the reason someone pressed ＋ is to fill it in.
@@ -722,17 +872,9 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRem
         <div className="set-elem-body">
           {item.fields.map((f) => renderRow(f, f.key.slice(item.path.length + 1)))}
           {onRemove ? (
-            confirmRemove ? (
-              <div className="set-elem-confirm">
-                <span>删除 {item.locator}？会立刻写进 config.yaml。</span>
-                <button className="btn danger" onClick={onRemove}>删除</button>
-                <button className="btn ghost" onClick={() => setConfirmRemove(false)}>取消</button>
-              </div>
-            ) : (
-              // 危险色：这是唯一会把东西从用户配置里拿走的入口，和旁边的「撤销这一项」（中性灰）
-              // 必须一眼分得开。`.ghost` 只去掉边框，颜色留在 `.danger` 上。
-              <button className="btn danger ghost" onClick={() => setConfirmRemove(true)}>删除这一项…</button>
-            )
+            // 危险色：这是唯一会把东西从用户配置里拿走的入口，和旁边的「撤销这一项」（中性灰）
+            // 必须一眼分得开。`.ghost` 只去掉边框，颜色留在 `.danger` 上。
+            <button className="btn danger ghost" onClick={onRemove}>删除这一项</button>
           ) : null}
         </div>
       )}

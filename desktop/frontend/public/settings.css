@@ -297,21 +297,25 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 10px 0 2px;
 }
 .set-add-empty { font-size: 12.5px; color: var(--text-faint); }
 
-/* Removing is destructive AND immediate (it is written to config.yaml now, and nothing undoes it),
-   so it asks once, in the body of the card — where the reader has just looked at what they are
-   about to delete. */
-.set-elem-confirm {
+/* Removing takes the card out of the list at once and leaves this line in its place — the list IS
+   the pending change, and the button is the way back. Nothing is written until the save, so the
+   sentence says where it went rather than warning about what already happened. */
+.set-removed {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 0 2px;
+  flex-basis: 100%;
+  padding: 6px 0 0;
   font-size: 12.5px;
-  color: var(--red);
+  color: var(--text-dim);
 }
+.set-removed .set-removed-item { text-decoration: line-through; color: var(--text-faint); }
+.set-removed .btn { padding: 2px 8px; font-size: 11.5px; }
 .set-elem-body > .btn { margin: 8px 0 4px; padding: 3px 10px; font-size: 12px; }
 
 /* A dropdown in place of a text box: same box, same focus ring. `appearance` is left alone —

@@ -713,19 +713,10 @@ type SettingsSchemaVO struct {
 // reads the way the design does without a package prefix on every field.
 type ListEdits = config.ListEdits
 
-// pendingAdd is one staged list item: where it will land (`providers.3`), and nothing else.
-//
-// The index is the whole content because that is all the staging has to say: the item's VALUES are
-// leaf updates like any other (the schema declares the element's leaves, so the form draws them for
-// an element that is not in the config yet), and the element is created by the append that runs
-// before those updates in the same batch.
-type pendingAdd struct {
-	Element string
-}
-
-// SettingListVO is one list the settings page may grow: the list's own path, and the group it is
-// drawn in (which is the category of the row that owns it — `web_search.providers` belongs to
-// `web_search`'s row, not to a row of its own).
+// SettingListVO is one list the settings page may grow: the list's own path, the group it is drawn
+// in (which is the category of the row that owns it — `web_search.providers` belongs to
+// `web_search`'s row, not to a row of its own), and the two facts a page needs in order to draw an
+// item that is not in the config yet.
 type SettingListVO struct {
 	Path     string `json:"path"`
 	Category string `json:"category"`
@@ -735,10 +726,83 @@ type SettingListVO struct {
 	// per item. The page matches an item to its list by path — the item path IS the list path
 	// plus an index — so nothing has to be repeated per card.
 	Folded bool `json:"folded,omitempty"`
+	// Length is how many items the list holds NOW (config.ListLen). It is what lets the page name
+	// the item it is about to add: that path is this length, plus however many items of its own
+	// list the page is already holding. The arithmetic is the page's — its unsaved state is its own
+	// (see Element) — and config.ListEdits checks the answer at save time (the element path it is
+	// given must be the list's end).
+	Length int `json:"length"`
+	// Element is the TEMPLATE of one item: the leaves it has, how to draw each and what it starts
+	// at (config.ElementFields — the element's declared shape, plus a defaulted scaffold's values).
+	//
+	// It rides on the list because it is the same for every item of it, and because it is the only
+	// way to draw an item that does not exist: every other field the page draws comes from a value
+	// the config holds (PathsFor walks the live config), and a new item has no value anywhere.
+	Element []SettingElementFieldVO `json:"element"`
 }
 
-// GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf
-// of the live config — PLUS one per leaf of every item the page has staged (see pendingAdd).
+// SettingElementFieldVO is one leaf of a list's item template: SettingFieldVO minus the path,
+// because the path is the page's to compose — `<list>.<index>.<tail>`, for an index only the page
+// knows (it is the list's length plus its own pending items).
+//
+// A tail rather than a key is what makes the template reusable, and the rest of the fields are
+// SettingFieldVO's for the same reason they are there: the page's draft/dirty/save machinery must
+// treat a synthesized row exactly like a read one, or a new item's card would be a second kind of
+// field with its own rules.
+type SettingElementFieldVO struct {
+	// Tail is the leaf's path inside the element (`name`, `spec.proxy`).
+	Tail string `json:"tail"`
+	// Kind, Value, Optional, IsSet, NeedsRestart, Category, Options and Note are SettingFieldVO's
+	// own — see there for what each one means.
+	Kind         string   `json:"kind"`
+	Value        any      `json:"value"`
+	Options      []string `json:"options,omitempty"`
+	Optional     bool     `json:"optional,omitempty"`
+	IsSet        bool     `json:"isSet"`
+	NeedsRestart bool     `json:"needsRestart"`
+	Category     string   `json:"category"`
+	Note         string   `json:"note,omitempty"`
+}
+
+// listElementTemplate describes one item of the list at listPath: the leaves a new item will have,
+// each with the row that speaks for it and the choices that leaf offers.
+//
+// The row and the choices are looked up against a SYNTHETIC index (`providers.0.<tail>`), which is
+// not a shortcut: `settingFor` and `choiceFor` both read a numeric segment as "one element of that
+// list" — `providers.*.type` is the same leaf whatever the index — so one lookup serves every item
+// the page will ever add. A template per index would be the same answer spelled N times.
+//
+// An empty answer means the shape could not be described at all, which a path ListItemPaths named
+// cannot do (it is a slice of structs by construction) — and the guard test would catch it either
+// way: a declared list with no template is a ＋ that draws an empty card.
+func listElementTemplate(cfg *config.Config, listPath string) []SettingElementFieldVO {
+	leaves, err := config.ElementFields(listPath)
+	if err != nil {
+		return nil
+	}
+	probe := listPath + ".0"
+	out := make([]SettingElementFieldVO, 0, len(leaves))
+	for _, leaf := range leaves {
+		key := probe + "." + leaf.Tail
+		row, ok := settingFor(key)
+		if !ok || !row.offered() {
+			continue
+		}
+		var options []string
+		if choose, ok := choiceFor(key); ok && leaf.Kind == "string" {
+			options = choose(cfg)
+		}
+		out = append(out, SettingElementFieldVO{
+			Tail: leaf.Tail, Kind: leaf.Kind, Value: leaf.Value, Options: options,
+			Optional: leaf.Optional, IsSet: leaf.IsSet,
+			NeedsRestart: row.needsRestart(), Category: row.Category, Note: row.Note,
+		})
+	}
+	return out
+}
+
+// GetSettingsSchema enumerates the fields the settings page may offer, one per editable leaf of the
+// live config.
 //
 // It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
 // is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
@@ -749,11 +813,10 @@ type SettingListVO struct {
 // A value that cannot be read is still listed, with the reason in Note: hiding a field would
 // present a smaller settings page as a complete one, and the failure is the interesting part.
 //
-// The staged items are the exception that proves the rule. An item the reader just added is not in
-// the config, so nothing walks its leaves — and it must still be EDITABLE, or "add an item" would
-// draw a card with no inputs. They are therefore enumerated from the element type
-// (config.ElementFields) and appended as ordinary fields: the page's draft/dirty/save machinery
-// treats them like any other row, and SaveSettings carries them into the same batch as the appends.
+// The schema is a pure function of the CONFIG, and that is a property worth keeping: the page's own
+// unsaved state (the item it is about to add, the one it dropped) is the page's, so a re-read never
+// has to reproduce it — it hands over the two facts an item that does not exist yet needs (the
+// list's Length and its Element template, see SettingListVO) and lets the page draw it.
 func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 	d := s.desk
 	cfg := d.config()
@@ -769,78 +832,13 @@ func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 		}
 		fields = append(fields, settingField(cfg, key, row))
 	}
-	fields = append(fields, s.stagedFields(cfg)...)
 	// A fresh slice rather than settingsCategoryOrder itself: the binding serializes this, and
 	// a caller that appended to it would be mutating the package's own list.
 	return &SettingsSchemaVO{
 		Categories: append([]string(nil), settingsCategoryOrder...),
 		Fields:     fields,
-		Lists:      settingLists(),
+		Lists:      settingLists(cfg),
 	}
-}
-
-// stagedFields describes the leaves of every list item this page has staged: the fields of an
-// element that is not in the config yet.
-//
-// Their KEY is the path the item will have (`providers.3.name`), which is what makes them ordinary
-// fields — the save sends them like any other leaf, and the append that creates the element is what
-// makes those paths exist by the time the same batch writes them (the append comes first, see
-// config.ListEdits). Their VALUE is the scaffold's (the element type's defaults), because the
-// element does not exist to have one.
-//
-// The row is resolved the same way an existing element's would be, through `settingFor`, so the
-// staged leaves appear in the right group with the right ⟳ mark — the list's row speaks for the
-// whole block. There is no separate declaration for "what a new item looks like", because there is
-// nothing to declare: it is the same element type.
-func (s *AgentService) stagedFields(cfg *config.Config) []SettingFieldVO {
-	d := s.desk
-	d.settingsMu.Lock()
-	staged := append([]pendingAdd(nil), d.pendingAdds...)
-	d.settingsMu.Unlock()
-	if len(staged) == 0 {
-		return nil
-	}
-
-	// One template per list, computed once: the leaves of an element are a property of its type,
-	// and a page with three staged providers must not describe the same type three times.
-	templates := make(map[string][]config.ElementField)
-	var out []SettingFieldVO
-	for _, add := range staged {
-		listPath, _, err := config.SplitElementPath(add.Element)
-		if err != nil {
-			continue
-		}
-		tmpl, ok := templates[listPath]
-		if !ok {
-			tmpl, err = config.ElementFields(listPath)
-			if err != nil {
-				continue
-			}
-			templates[listPath] = tmpl
-		}
-		for _, leaf := range tmpl {
-			key := add.Element + "." + leaf.Tail
-			row, ok := settingFor(key)
-			if !ok || !row.offered() {
-				continue
-			}
-			// Built from the TEMPLATE, not through settingField: that helper reads the value and
-			// describes the leaf against the config, and this element is not in the config — its
-			// path genuinely does not resolve yet (which is the whole reason the template exists).
-			// Only the row's own two facts come from the table, exactly as they do for a real one.
-			out = append(out, SettingFieldVO{
-				Key:          key,
-				Kind:         leaf.Kind,
-				Value:        leaf.Value,
-				NeedsRestart: row.needsRestart(),
-				Category:     row.Category,
-				Optional:     leaf.Optional,
-				IsSet:        leaf.IsSet,
-				Note:         row.Note,
-			})
-		}
-	}
-	return out
 }
 
 // settingField is one schema row: the table's answer for the key, plus everything that comes from
@@ -879,9 +877,12 @@ func settingField(cfg *config.Config, key string, row settingApply) SettingField
 }
 
 // settingLists reports the config lists this page may add items to, each with the group it is
-// drawn in. The rows decide that group — a list belongs where the block that owns it is drawn,
-// and a list whose row is not offered (another entry mode's key) is not offered either.
-func settingLists() []SettingListVO {
+// drawn in and the two facts an item that does not exist yet needs (SettingListVO).
+//
+// The rows decide the group — a list belongs where the block that owns it is drawn, and a list
+// whose row is not offered (another entry mode's key) is not offered either — while the length and
+// the template come from the config itself: they are what the page draws its own pending item from.
+func settingLists(cfg *config.Config) []SettingListVO {
 	paths := config.ListItemPaths()
 	out := make([]SettingListVO, 0, len(paths))
 	for _, path := range paths {
@@ -889,103 +890,53 @@ func settingLists() []SettingListVO {
 		if !ok || !row.offered() {
 			continue
 		}
+		length, err := config.ListLen(cfg, path)
+		if err != nil {
+			length = 0 // not reachable for a path ListItemPaths named; a wrong index is refused at save
+		}
 		out = append(out, SettingListVO{
 			Path:     path,
 			Category: row.Category,
 			Folded:   slices.Contains(settingFoldedLists, path),
+			Length:   length,
+			Element:  listElementTemplate(cfg, path),
 		})
 	}
 	return out
 }
 
-// SettingsItemResultVO is what growing or shrinking a list reports: whether it happened, the one
-// sentence to show, and — for an add — the new item's own path.
+// SettingsRemovalVO is what the page is told when it drops an item: whether the drop is possible
+// at all, and the one sentence to show.
 //
-// The path is reported rather than left for the page to work out, because where the item landed is
-// the LIST's fact, not the page's (the append position is its length). The page uses it to open
-// the card it just made: the reason someone presses ＋ is to fill the new item in.
-type SettingsItemResultVO struct {
-	OK          bool   `json:"ok"`
-	Summary     string `json:"summary"`
-	ElementPath string `json:"elementPath,omitempty"`
+// Two fields rather than a bare string for the same reason SaveSettingsResultVO has two: OK tells
+// the page whether to REMOVE the card (it has not, and if this is false it must not), while Summary
+// is the page's to print as it is. A drop that is fine may still have something to say (the keys
+// still naming the item), so "OK with a sentence" is a real state.
+type SettingsRemovalVO struct {
+	OK      bool   `json:"ok"`
+	Summary string `json:"summary"`
 }
 
-// AddSettingsItem appends one item to a config list, IN THE BATCH THIS SAVE IS BUILDING.
+// SettingsRemovalWarning answers the two questions a page has when the reader drops a list item,
+// and it is READ-ONLY: the removal itself is the page's own pending state, which joins the next
+// save (see SaveSettings).
 //
-// It does not write config.yaml, and that is the change: it used to, because an item had to be in
-// the file before any of its fields could be saved (the update path refuses a path the file does
-// not have). Staging the structure here means the save that follows carries the item AND its
-// values into one file write (config.ListEdits, whose doc comment holds the ordering rules), so a
-// reader who adds an item and changes their mind can walk away with nothing written — which is
-// what the page's own 「返回对话」 implies and what the immediate write made impossible.
-//
-// Nothing is PUSHED here either, and that is not a new rule: an item with no values yet is nothing
-// to tell the running process about. The fields the user fills in are pushed by the save that
-// writes them.
-func (s *AgentService) AddSettingsItem(listPath string) *SettingsItemResultVO {
-	fail := func(summary string) *SettingsItemResultVO {
-		return &SettingsItemResultVO{Summary: summary}
-	}
+//  1. CAN it be dropped? A malformed path, or an index the list does not have, means the page and
+//     the config disagree — and the answer has to come now, while the card is still on screen,
+//     rather than at save time when the reader has already thrown it away.
+//  2. WHAT still names it? A name a list item is known by (`providers.2.name`) may be written into
+//     keys that mean "use that one" — `provider`, `title_provider`, each `*_provider` — and those
+//     are not list items, so dropping the item leaves them pointing at nothing. Saying so is the
+//     difference between a warning and a config that quietly stops resolving, and it is said HERE
+//     because this is the moment the reader can act on it.
+func (s *AgentService) SettingsRemovalWarning(elementPath string) *SettingsRemovalVO {
 	d := s.desk
-	d.settingsMu.Lock()
-	defer d.settingsMu.Unlock()
-	if !slices.Contains(config.ListItemPaths(), listPath) {
-		return fail(fmt.Sprintf("%s 不是可以添加条目的列表", listPath))
-	}
 	cfg := d.config()
 	if cfg == nil {
-		return fail("配置尚未加载，改不了")
+		return &SettingsRemovalVO{Summary: "配置尚未加载，改不了"}
 	}
-	// The index the item will land at, and the promise the save checks: the form is showing this
-	// list as it is NOW, so anything else means the config moved under it.
-	index, err := config.ListLen(cfg, listPath)
-	if err != nil {
-		return fail("加不了：" + err.Error())
-	}
-	elementPath := fmt.Sprintf("%s.%d", listPath, index)
-	d.pendingAdds = append(d.pendingAdds, pendingAdd{Element: elementPath})
-	return &SettingsItemResultVO{
-		OK:          true,
-		Summary:     fmt.Sprintf("已在 %s 末尾加了一项（%s）；填好字段后点保存，它会和其余改动一起写进 config.yaml", listPath, elementPath),
-		ElementPath: elementPath,
-	}
-}
-
-// RemoveSettingsItem removes one item from a config list, IN THE BATCH THIS SAVE IS BUILDING.
-//
-// Like AddSettingsItem it no longer writes: the removal joins the save, so dropping an item and
-// then leaving the page writes nothing — the same promise, in the other direction.
-//
-// The references are still reported HERE rather than at save time, because this is the moment the
-// reader can act on them: a name a list item is known by (`providers.2.name`) may be written into
-// keys that mean "use that one" — `provider`, `title_provider`, each `*_provider` — and those are
-// not list items, so removing the item leaves them pointing at nothing. Saying so is the difference
-// between a warning and a config that quietly stops resolving.
-func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResultVO {
-	fail := func(summary string) *SettingsItemResultVO {
-		return &SettingsItemResultVO{Summary: summary}
-	}
-	d := s.desk
-	d.settingsMu.Lock()
-	defer d.settingsMu.Unlock()
-	cfg := d.config()
-	if cfg == nil {
-		return fail("配置尚未加载，改不了")
-	}
-	// An item that is still only STAGED cancels out instead of being scheduled for removal: it was
-	// never in the config, so there is nothing to delete — and validating it against the config
-	// would refuse (its index does not exist yet), which is the one path a reader takes most often:
-	// press ＋, look at the card, change their mind.
-	if i := slices.IndexFunc(d.pendingAdds, func(a pendingAdd) bool { return a.Element == elementPath }); i >= 0 {
-		d.pendingAdds = slices.Delete(d.pendingAdds, i, i+1)
-		d.pendingRemoves = slices.DeleteFunc(d.pendingRemoves, func(p string) bool { return p == elementPath })
-		return &SettingsItemResultVO{
-			OK:      true,
-			Summary: "已取消这一项（它还没保存过，config.yaml 没有变）",
-		}
-	}
-	if err := validatePendingRemoval(cfg, elementPath, d.pendingRemoves); err != nil {
-		return fail("删不了：" + err.Error())
+	if err := validateRemoval(cfg, elementPath, nil); err != nil {
+		return &SettingsRemovalVO{Summary: "删不了：" + err.Error()}
 	}
 	name := ""
 	if leaves, err := config.ListItemLeaves(cfg, elementPath); err == nil {
@@ -994,28 +945,42 @@ func (s *AgentService) RemoveSettingsItem(elementPath string) *SettingsItemResul
 		}
 	}
 	dangling := danglingReferences(cfg, name)
-
-	d.pendingRemoves = append(d.pendingRemoves, elementPath)
-	// An item added in this same visit and then dropped again cancels out: the save must not try to
-	// append an element it is also removing (the append would shift the index the removal names).
-	d.pendingAdds = slices.DeleteFunc(d.pendingAdds, func(a pendingAdd) bool { return a.Element == elementPath })
-
-	summary := "已标记删除 " + elementPath + "；点保存后才会写进 config.yaml"
-	if len(dangling) > 0 {
-		summary += fmt.Sprintf("；注意 %s 还写着「%s」，它现在指向一个不存在的条目，保存前请改掉",
-			strings.Join(dangling, "、"), name)
+	if len(dangling) == 0 {
+		return &SettingsRemovalVO{OK: true}
 	}
-	return &SettingsItemResultVO{OK: true, Summary: summary}
+	return &SettingsRemovalVO{OK: true, Summary: fmt.Sprintf("注意 %s 还写着「%s」，它现在指向一个不存在的条目，保存前请改掉",
+		strings.Join(dangling, "、"), name)}
 }
 
-// validatePendingRemoval refuses an element path this save cannot remove: a malformed path, or an
-// index the list does not have (the form and the config disagree, which the reader has to fix by
-// reopening the page — the alternative is removing a different element than the one they clicked).
+// validateRemovals refuses a set of removals this save cannot perform, BEFORE anything is touched:
+// a malformed path, a duplicate, or an index the list does not have.
 //
-// The removals ALREADY staged for this list are subtracted from the length, because they are
-// already spoken for: two items marked in one visit are applied as two removals from the same
-// original list, so the second one's index is legal even though the live list no longer reaches it.
-func validatePendingRemoval(cfg *config.Config, elementPath string, already []string) error {
+// The removals are applied against the list as it is NOW (the appends that may run before them only
+// add at the END, so no index moves), and they are applied ONE BY ONE — so the second removal of a
+// path that is already spoken for would delete a second, unrelated element. That is not a
+// hypothetical: a page that offers the same button twice (or a stale window) can send `providers.0`
+// twice, and the pair silently drops two providers. Duplicates are therefore refused rather than
+// deduplicated: the caller's intent is not knowable, and the honest answer is "this page is
+// confused, reload it".
+func validateRemovals(cfg *config.Config, removes []string) error {
+	seen := make(map[string]bool, len(removes))
+	for i, elementPath := range removes {
+		if seen[elementPath] {
+			return fmt.Errorf("%s 被标了两次要删", elementPath)
+		}
+		seen[elementPath] = true
+		if err := validateRemoval(cfg, elementPath, removes[:i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemoval refuses one element path the list cannot drop. `before` is the removals of the
+// SAME batch that are applied before it: they are already spoken for, so they are subtracted from
+// the list's length — otherwise a batch that drops two items of one list would refuse the second
+// one's index, which is legal against the list as the caller saw it.
+func validateRemoval(cfg *config.Config, elementPath string, before []string) error {
 	listPath, index, err := config.SplitElementPath(elementPath)
 	if err != nil {
 		return err
@@ -1024,15 +989,15 @@ func validatePendingRemoval(cfg *config.Config, elementPath string, already []st
 	if err != nil {
 		return err
 	}
-	staged := 0
-	for _, p := range already {
+	earlier := 0
+	for _, p := range before {
 		if other, _, err := config.SplitElementPath(p); err == nil && other == listPath {
-			staged++
+			earlier++
 		}
 	}
-	if index >= length-staged {
-		return fmt.Errorf("%s: 没有第 %d 项（这一页已经标了 %d 项要删，配置里还有 %d 项）",
-			listPath, index, staged, length)
+	if index >= length-earlier {
+		return fmt.Errorf("%s: 没有第 %d 项（这一批已经删了 %d 项，配置里还有 %d 项）",
+			listPath, index, earlier, length)
 	}
 	return nil
 }
@@ -1081,27 +1046,6 @@ func overlayOwnedLeaves(cfg *config.Config, leaves map[string]any) func() {
 		return func() {}
 	}
 	return func() { config.RestoreLeaves(snap) }
-}
-
-// pendingAppendLists turns the staged adds into the lists they grow: one element at the end of
-// each item's own list.
-//
-// The element's INDEX is what the staging recorded (`providers.3`), but nothing here carries it:
-// the list grows at its end, so the index is the list's own answer, and the batch's updates — keyed
-// by the full path the page saw — land on it once the append has run (see config.ListEdits).
-func pendingAppendLists(pending []pendingAdd) []string {
-	if len(pending) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(pending))
-	for _, add := range pending {
-		listPath, _, err := config.SplitElementPath(add.Element)
-		if err != nil {
-			continue
-		}
-		out = append(out, listPath)
-	}
-	return out
 }
 
 // danglingReferences names the keys that currently hold this item's name, for the warning a
@@ -1179,21 +1123,29 @@ type SaveSettingsResultVO struct {
 	Summary string `json:"summary"`
 }
 
-// SaveSettings applies a batch of edited leaves and tells the running process about them.
+// SaveSettings applies a batch of edited leaves — plus the list items the page is adding and
+// dropping — and tells the running process about them.
+//
+// The three arguments are ONE transaction, which is the whole point: the page's unsaved state is
+// the page's own (a draft, an item it is about to add, an item it just dropped), and this is where
+// all of it becomes real at once. `appends` are the element paths the page DREW (`providers.3`),
+// and `removes` are the elements it dropped; both are checked against the config here, because a
+// page that has been open a while is the only thing in this system that can hold a stale view.
 //
 // The order is the design's (§六), and each step exists because of what the previous one can
 // leave behind:
 //
 //  1. resolve EVERY key first — an unknown key, or one another entry mode owns, refuses the
 //     whole batch before anything is touched. A half-saved form is a state no reader can
-//     reason about.
+//     reason about. The structural half is checked in the same spirit (see validateRemovals).
 //  2. turn the page's null into config.Unset for the leaves that can take one (normalizeUnsets):
 //     the form's 自动 is the only thing that can say "unset", and a bare nil stays refused.
 //  3. snapshot the leaves and apply them in one locked step (all or none), together with the
-//     STRUCTURAL half: the list items this page staged with ＋ and − are appended and removed here,
-//     in the order config.ListEdits documents (appends, then the leaf updates, then the removals —
-//     only that order addresses the elements the form meant). The type check is this step's own:
-//     config.SetPath refuses a value the field cannot hold, and the batch is put back whole.
+//     STRUCTURAL half: the list items the page is adding and dropping are appended and removed
+//     here, in the order config.ListEdits documents (appends, then the leaf updates, then the
+//     removals — only that order addresses the elements the form meant). The type check is this
+//     step's own: config.SetPath refuses a value the field cannot hold, and the batch is put back
+//     whole.
 //  4. write config.yaml, as ONE write of the WHOLE config (config.Save): the file is the object
 //     marshalled, so there is no per-key half to keep in step. Only a save that got this far
 //     continues: if the write fails, the memory is put back exactly as it was and the answer says
@@ -1206,13 +1158,12 @@ type SaveSettingsResultVO struct {
 //     failures are per-session and reported, not fatal — the value IS saved.
 //
 // The whole sequence is serialized by d.settingsMu: two saves landing at once would otherwise
-// interleave their snapshots, config writes and pushes. It is also what makes the STAGED structure
-// consistent here: + and − take the same lock to add to it.
+// interleave their snapshots, config writes and pushes.
 //
 // Returns whether the batch was written, plus the sentence the page shows (the desktop's
 // convention for bound methods: a sentence rather than an error the frontend would have to
 // translate). The two are not redundant — see SaveSettingsResultVO.
-func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultVO {
+func (s *AgentService) SaveSettings(updates map[string]any, appends, removes []string) *SaveSettingsResultVO {
 	d := s.desk
 	d.settingsMu.Lock()
 	defer d.settingsMu.Unlock()
@@ -1221,14 +1172,7 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 	if cfg == nil {
 		return &SaveSettingsResultVO{OK: false, Summary: "配置尚未加载，改不了"}
 	}
-	// The staged structure joins this save and is CONSUMED by it: from here on the page's ＋/− marks
-	// belong to this batch, and a failure below leaves them where they were (nothing is cleared
-	// until the write is through), so the reader can fix what the sentence named and save again.
-	edits := ListEdits{
-		Updates: updates,
-		Appends: pendingAppendLists(d.pendingAdds),
-		Removes: append([]string(nil), d.pendingRemoves...),
-	}
+	edits := ListEdits{Updates: updates, Appends: appends, Removes: removes}
 	if edits.IsEmpty() {
 		return &SaveSettingsResultVO{OK: false, Summary: "没有要保存的改动"}
 	}
@@ -1251,6 +1195,13 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 		}
 		rows[key] = row
 	}
+	// …and the structural half has to be doable at all: a page that has been open a while can name
+	// an index the list no longer has, or the same one twice (see validateRemovals). The appends are
+	// checked in step 3 by the code that creates them — the list's own length decides it, and there
+	// is nothing to keep in step with here.
+	if err := validateRemovals(cfg, removes); err != nil {
+		return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + err.Error()}
+	}
 
 	// 2. The page's null means 自动 on a leaf that has that state — see normalizeUnsets. It has to
 	// happen before the values are applied, because what the apply and the write both need to see is
@@ -1271,9 +1222,9 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 	// config back means truncating the lists that grew and re-inserting what was dropped, which is
 	// only possible from what was recorded first.
 	//
-	// A leaf of a staged item is an ORDINARY update: the appends below run first, so by the time the
-	// updates land the element exists and the path resolves. Order is the whole mechanism — one
-	// object means there is nothing else to keep in step.
+	// A leaf of an item this same batch APPENDS is an ORDINARY update: the appends below run first,
+	// so by the time the updates land the element exists and the path resolves. Order is the whole
+	// mechanism — one object means there is nothing else to keep in step.
 	batched := make(map[string]any, len(updates))
 	for _, key := range keys {
 		if rows[key].OwnsWrite {
@@ -1330,10 +1281,6 @@ func (s *AgentService) SaveSettings(updates map[string]any) *SaveSettingsResultV
 		}
 		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + saveErr.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
 	}
-	// The write landed, so the staged structure is now part of the config and no longer pending.
-	d.pendingAdds = nil
-	d.pendingRemoves = nil
-
 	// 5. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
 	//

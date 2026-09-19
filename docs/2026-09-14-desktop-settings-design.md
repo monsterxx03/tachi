@@ -59,6 +59,18 @@
 > 未改：`settingsTable` 的每一行、全部 `Apply`、`deferred_push`、`GetSettingsSchema` 与前端（schema 驱动，
 > 签名未变）。
 >
+> v3.1 是**把列表增删的暂存区从后端抹掉**：v2.7 的「＋ 立刻写盘」在 v3.0 之后只剩一半理由，于是留了一份
+> **跨请求存活**的暂存状态（`desktopApp.pendingAdds`/`.pendingRemoves`）。它与字段草稿分属两个主人，
+> 于是会漂移 —— 实测抓到三处：＋ 两次给两个条目同一个 index（保存后列表多一条空元素、两条字段互相踩）、
+> 同一条目录删两次（两次删除都执行，静默丢掉两条）、标了删除后离开设置页再保存别的字段（那一项跟着被删）。
+> 现在**未保存状态只有一个主人：页面**。`SaveSettings(updates, appends, removes)` 一次带走全部待办，
+> 后端删掉 `pendingAdds`/`pendingRemoves`/`AddSettingsItem`/`stagedFields`，`SettingsRemovalWarning`
+> 只剩一个只读问题（能不能删、还有谁写着它的名字）；`GetSettingsSchema` 回到**配置的纯函数**，新条目靠
+> 它给的 `SettingListVO.Length` + `.Element`（条目模板）由页面自己画。`ListEdits.Appends` 从列表路径收紧为
+> **元素路径**（`providers.3`），保存因此能校验"表单看到的那个列表"还成立；删除去重（同一路径两次直接拒绝）。
+> UX 随之简化：**删除一次点击**，卡片立刻移出列表、原位一行「已标记删除 · 撤销」（这是 v2.7 的二次确认
+> 与 v3.0 那句「会立刻写进 config.yaml」的终点 —— 两句话都已经不成立）。
+>
 > 关联: [desktop one-off panel](./2026-09-12-desktop-oneoff-panel-design.md)、
 >       [desktop project](./2026-09-14-desktop-project-design.md)
 

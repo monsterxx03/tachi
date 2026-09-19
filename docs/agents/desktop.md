@@ -315,25 +315,44 @@ Fixtures, all because the real path needs something a driver cannot do:
   dereference looks like). It is the only way back to a field's auto/default behaviour, it round-trips (absent
   key → nil → 自动), and `Optional` is true only for a pointer with NO `default:` tag — a default already says
   what unset means, so those stay plain checkboxes.
-- **A list is grown and shrunk by the SAVE, not by the button** (`config/config_edits.go`): `config.ListItemPaths()`
-  names the lists the page may touch (a slice of structs by path — a `[]string` is one leaf, and a map key would
-  have to be invented), and ＋ / 删除 only STAGE an item (`desktopApp.pendingAdds` / `.pendingRemoves`) which the
-  next `SaveSettings` consumes. Staging is what lets an item be EDITED before it exists, so **a staged item is
-  drawn from the element TYPE**: `GetSettingsSchema` appends one
-  `SettingFieldVO` per leaf of every staged item (`config.ElementFields` — the element's declared shape plus a
-  defaulted scaffold's values), so the page's draft/dirty/save machinery treats it like any other row and needs
-  no special path. That is also why `elementOf` in `settings.tsx` matches a numeric segment against the schema's
-  OWN list paths instead of any digits: `providers.1.name` is the only field in the form whose path the config
-  cannot walk, and it is still one item of one list. The order inside one save is the whole mechanism, not a
-  preference: **appends, then the leaf updates, then the removals** — a removal shifts every
-  later index, so an update applied after it addresses the wrong element, and an appended element's own values
-  are ORDINARY updates, which resolve only because the append ran before them. `SnapshotListEdits` skips a leaf
-  INSIDE an element the same batch appends (it does not resolve yet, and dropping the element on rollback takes
-  its leaves with it), and the rollback puts the three kinds back in the order `RestoreListEdits` documents.
-  A removal still warns about the keys still naming the item (`settingChoices`) — at STAGE time, because that is
-  when the reader can act on it — and an item that is dropped while it is still staged is a CANCEL, not a removal.
+- **A list is grown and shrunk by the SAVE, and the page owns the pending item** (`config/config_edits.go` +
+  `desktop/frontend/src/settings.tsx`): `config.ListItemPaths()` names the lists the page may touch (a slice of
+  structs by path — a `[]string` is one leaf, and a map key would have to be invented). ＋ and 删除 are then
+  THIS PAGE's state, exactly like a draft — there is no staging area on the server (`desktopApp` keeps no
+  `pending*`; a page is the only thing in the system that can hold an unsaved view) — so
+  `SaveSettings(updates, appends, removes)` carries the whole unsaved state in one call and the backend writes
+  it in one `config.Save`.
+  - **The backend hands over the two facts an item that does not exist needs**: `SettingListVO.Length` (where a
+    new item lands — the page's index is this length plus the items of that list it already holds) and
+    `SettingListVO.Element` (the item template, `config.ElementFields` — the element's declared shape plus a
+    defaulted scaffold's values; the row and the choices are looked up against a SYNTHETIC index `providers.0.*`,
+    which works because `settingFor`/`choiceFor` read a numeric segment as "one element of that list"). The page
+    composes each leaf's key (`providers.3.name`) from it, so a new item's card is edited, validated and saved by
+    the same machinery as any read row. `GetSettingsSchema` is therefore a PURE function of the config, and
+    `elementOf` in `settings.tsx` matches a numeric segment against the schema's OWN list paths rather than any
+    digits: `providers.3.name` is the only field in the form whose path the config cannot walk, and it is still
+    one item of one list.
+  - **The appends are ELEMENT paths** (`providers.3`), not list paths, and the append refuses an index that is not
+    the list's current length: the page drew that path, so a mismatch means the config moved under it and writing
+    the batch's values anyway would rewrite whichever element now sits there. `validateRemovals` refuses the same
+    kind of staleness for removals (an index off the end, or **the same element twice** — removals run one by one,
+    so a duplicate silently drops two items).
+  - The order inside one save is the whole mechanism, not a preference: **appends, then the leaf updates, then the
+    removals** — a removal shifts every later index, so an update applied after it addresses the wrong element,
+    an appended element's own values are ORDINARY updates (they resolve only because the append ran first), and an
+    append's index is only that list's length before anything else moves. `SnapshotListEdits` skips a leaf INSIDE
+    an element the same batch appends (it does not resolve yet, and dropping the element on rollback takes its
+    leaves with it), and the rollback puts the three kinds back in the order `RestoreListEdits` documents.
+  - 删除 is ONE click, and the undo is what makes that safe: the card leaves the list, a `.set-removed` line in the
+    block's foot names it and offers 「撤销」, and nothing is written until the save — a confirmation dialog would
+    be a worse version of the same thing. The one call a removal makes is `SettingsRemovalWarning` (read-only),
+    and both its answers have to arrive while the card is still on screen: whether the index is legal at all, and
+    which keys still NAME the item (`settingChoices` — `provider`, `title_provider`, …); after the save the
+    reader cannot act on either.
+  - When a save WINS, the page drops its pending lists and re-reads the schema (`load`), so the items it added are
+    real cards and the dropped ones are gone. A REFUSED save keeps them, like it keeps the typing.
   Smoke: the `settings` scenario drives the page end to end and reads `config.yaml` back through
-  `config.LoadFrom` on the Go side (including add, remove, and a list whose block was not in the
+  `config.LoadFrom` on the Go side (including add, remove, undo, and a list whose block was not in the
   file at all).
   Design: `docs/2026-09-14-desktop-settings-design.md` §六、§七、§八之三、§八之四.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`, the

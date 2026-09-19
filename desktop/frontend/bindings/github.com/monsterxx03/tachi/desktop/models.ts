@@ -948,6 +948,36 @@ export interface SessionRootsVO {
 }
 
 /**
+ * SettingElementFieldVO is one leaf of a list's item template: SettingFieldVO minus the path,
+ * because the path is the page's to compose — `<list>.<index>.<tail>`, for an index only the page
+ * knows (it is the list's length plus its own pending items).
+ * 
+ * A tail rather than a key is what makes the template reusable, and the rest of the fields are
+ * SettingFieldVO's for the same reason they are there: the page's draft/dirty/save machinery must
+ * treat a synthesized row exactly like a read one, or a new item's card would be a second kind of
+ * field with its own rules.
+ */
+export interface SettingElementFieldVO {
+    /**
+     * Tail is the leaf's path inside the element (`name`, `spec.proxy`).
+     */
+    "tail": string;
+
+    /**
+     * Kind, Value, Optional, IsSet, NeedsRestart, Category, Options and Note are SettingFieldVO's
+     * own — see there for what each one means.
+     */
+    "kind": string;
+    "value": any;
+    "options"?: string[] | null;
+    "optional"?: boolean;
+    "isSet": boolean;
+    "needsRestart": boolean;
+    "category": string;
+    "note"?: string;
+}
+
+/**
  * SettingFieldVO is one field of the settings form: a settingsTable row plus the value the
  * form should show.
  */
@@ -1021,9 +1051,10 @@ export interface SettingFieldVO {
 }
 
 /**
- * SettingListVO is one list the settings page may grow: the list's own path, and the group it is
- * drawn in (which is the category of the row that owns it — `web_search.providers` belongs to
- * `web_search`'s row, not to a row of its own).
+ * SettingListVO is one list the settings page may grow: the list's own path, the group it is drawn
+ * in (which is the category of the row that owns it — `web_search.providers` belongs to
+ * `web_search`'s row, not to a row of its own), and the two facts a page needs in order to draw an
+ * item that is not in the config yet.
  */
 export interface SettingListVO {
     "path": string;
@@ -1037,20 +1068,39 @@ export interface SettingListVO {
      * plus an index — so nothing has to be repeated per card.
      */
     "folded"?: boolean;
+
+    /**
+     * Length is how many items the list holds NOW (config.ListLen). It is what lets the page name
+     * the item it is about to add: that path is this length, plus however many items of its own
+     * list the page is already holding. The arithmetic is the page's — its unsaved state is its own
+     * (see Element) — and config.ListEdits checks the answer at save time (the element path it is
+     * given must be the list's end).
+     */
+    "length": number;
+
+    /**
+     * Element is the TEMPLATE of one item: the leaves it has, how to draw each and what it starts
+     * at (config.ElementFields — the element's declared shape, plus a defaulted scaffold's values).
+     * 
+     * It rides on the list because it is the same for every item of it, and because it is the only
+     * way to draw an item that does not exist: every other field the page draws comes from a value
+     * the config holds (PathsFor walks the live config), and a new item has no value anywhere.
+     */
+    "element": SettingElementFieldVO[] | null;
 }
 
 /**
- * SettingsItemResultVO is what growing or shrinking a list reports: whether it happened, the one
- * sentence to show, and — for an add — the new item's own path.
+ * SettingsRemovalVO is what the page is told when it drops an item: whether the drop is possible
+ * at all, and the one sentence to show.
  * 
- * The path is reported rather than left for the page to work out, because where the item landed is
- * the LIST's fact, not the page's (the append position is its length). The page uses it to open
- * the card it just made: the reason someone presses ＋ is to fill the new item in.
+ * Two fields rather than a bare string for the same reason SaveSettingsResultVO has two: OK tells
+ * the page whether to REMOVE the card (it has not, and if this is false it must not), while Summary
+ * is the page's to print as it is. A drop that is fine may still have something to say (the keys
+ * still naming the item), so "OK with a sentence" is a real state.
  */
-export interface SettingsItemResultVO {
+export interface SettingsRemovalVO {
     "ok": boolean;
     "summary": string;
-    "elementPath"?: string;
 }
 
 /**

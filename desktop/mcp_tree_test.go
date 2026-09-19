@@ -182,7 +182,7 @@ func TestSaveSettingsAppliesAnOwnedKeyThroughItsRow(t *testing.T) {
 	d.sm = sm
 	d.getRun(sid).sm = sm
 
-	res := svc.SaveSettings(map[string]any{"active_mcp_profile": "prod"})
+	res := svc.SaveSettings(map[string]any{"active_mcp_profile": "prod"}, nil, nil)
 	if !strings.Contains(res.Summary, "1 项已生效") {
 		t.Errorf("summary = %q, want the key reported live", res.Summary)
 	}

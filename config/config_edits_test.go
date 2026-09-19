@@ -67,7 +67,7 @@ func providerNamesOf(cfg *Config) []string {
 func TestApplyListEditsAppendsThenUpdatesThenRemoves(t *testing.T) {
 	cfg, path := loadEditsFixture(t, editsFixture)
 	edits := ListEdits{
-		Appends: []string{"providers"},
+		Appends: []string{"providers.3"},
 		Updates: map[string]any{
 			"providers.0.model":   "m0-edited",
 			"providers.3.name":    "added",
@@ -139,7 +139,7 @@ func TestApplyListEditsUpdatesBeforeRemoving(t *testing.T) {
 func TestApplyListEditsAppendsAWorkingElement(t *testing.T) {
 	cfg, _ := loadEditsFixture(t, "language: zh\n")
 	edits := ListEdits{
-		Appends: []string{"web_search.providers"},
+		Appends: []string{"web_search.providers.0"},
 		Updates: map[string]any{"web_search.providers.0.key": "sk-exa"},
 	}
 	if err := ApplyListEdits(cfg, edits); err != nil {
@@ -157,14 +157,43 @@ func TestApplyListEditsAppendsAWorkingElement(t *testing.T) {
 	}
 }
 
-// A list named twice gains two elements: that is what two presses of ＋ mean.
-func TestApplyListEditsAppendsOneElementPerName(t *testing.T) {
+// Two appends into one list gain two elements: that is what two presses of ＋ mean, and their
+// indices are consecutive because each one lands at the list's END — the first makes the second's
+// index true (see ListEdits.Appends).
+func TestApplyListEditsAppendsOneElementPerPath(t *testing.T) {
 	cfg, _ := loadEditsFixture(t, editsFixture)
-	if err := ApplyListEdits(cfg, ListEdits{Appends: []string{"providers", "providers"}}); err != nil {
+	edits := ListEdits{
+		Appends: []string{"providers.3", "providers.4"},
+		Updates: map[string]any{"providers.3.name": "first", "providers.4.name": "second"},
+	}
+	if err := ApplyListEdits(cfg, edits); err != nil {
 		t.Fatalf("ApplyListEdits: %v", err)
 	}
-	if len(cfg.Providers) != 5 {
-		t.Errorf("providers = %+v, want the two appended elements", cfg.Providers)
+	if want := "main,fast,spare,first,second"; strings.Join(providerNamesOf(cfg), ",") != want {
+		t.Errorf("providers = %v, want %v", providerNamesOf(cfg), want)
+	}
+}
+
+// An append whose index is not the list's end is REFUSED, and this is the failure the element path
+// exists to catch: a form working from a config that moved would otherwise write its values into
+// an element somebody else is using (`providers.2` is `spare`, not a free slot).
+func TestApplyListEditsRefusesAnAppendThatIsNotTheEnd(t *testing.T) {
+	cfg, _ := loadEditsFixture(t, editsFixture)
+	err := ApplyListEdits(cfg, ListEdits{
+		Appends: []string{"providers.1"},
+		Updates: map[string]any{"providers.1.name": "would-have-overwritten-fast"},
+	})
+	if err == nil {
+		t.Fatal("appending at index 1 of a three-element list was accepted")
+	}
+	if !strings.Contains(err.Error(), "现在有 3 项") {
+		t.Errorf("err = %v, want it to say how long the list is", err)
+	}
+	if want := "main,fast,spare"; strings.Join(providerNamesOf(cfg), ",") != want {
+		t.Errorf("providers = %v, want the list untouched", providerNamesOf(cfg))
+	}
+	if cfg.Providers[1].Name != "fast" {
+		t.Errorf("providers[1] = %+v, want `fast` untouched", cfg.Providers[1])
 	}
 }
 
@@ -192,7 +221,7 @@ func TestApplyListEditsRefusesARemovalOffTheEnd(t *testing.T) {
 func TestApplyListEditsAppendsAnElementWithAnUnsetLeaf(t *testing.T) {
 	cfg, _ := loadEditsFixture(t, "language: zh\nproviders:\n  - name: main\n    model: m\n")
 	edits := ListEdits{
-		Appends: []string{"providers"},
+		Appends: []string{"providers.1"},
 		Updates: map[string]any{
 			"providers.1.name":             "added",
 			"providers.1.spec.vision":      Unset{},
@@ -256,7 +285,7 @@ func TestSaveLeavesAnUnsetLeafOutOfTheFile(t *testing.T) {
 func TestSnapshotAndRestoreListEdits(t *testing.T) {
 	cfg, _ := loadEditsFixture(t, editsFixture)
 	edits := ListEdits{
-		Appends: []string{"providers"},
+		Appends: []string{"providers.3"},
 		Updates: map[string]any{
 			"providers.0.model":   "m0-edited",
 			"providers.2.api_key": "k2-edited",

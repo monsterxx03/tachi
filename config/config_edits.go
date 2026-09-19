@@ -8,8 +8,8 @@ import (
 	"github.com/creasty/defaults"
 )
 
-// The STRUCTURAL half of a config save: the list items the settings page added and the ones it
-// dropped, applied to the in-memory config.
+// The STRUCTURAL half of a config save: the list items a caller is adding and the ones it is
+// dropping, applied to the in-memory config.
 //
 // It exists because "a value changed" and "an item appeared" are different edits, and the order
 // between them is what makes the second addressable:
@@ -17,7 +17,8 @@ import (
 //  1. APPENDS come first. A new element's values are ordinary leaf updates like any other, but
 //     they can only resolve once the element EXISTS — an update path cannot reach an element the
 //     config does not have. Appending first is therefore not a preference; it is what makes
-//     "add a provider and fill in its model" one batch.
+//     "add a provider and fill in its model" one batch. It is also what makes the append's own
+//     index checkable against the list's length at that moment (see ListEdits.Appends).
 //  2. UPDATES name elements that exist, BY INDEX — so they must land before anything shifts the
 //     indexes.
 //  3. REMOVALS come last, for exactly that reason.
@@ -33,11 +34,18 @@ import (
 type ListEdits struct {
 	// Updates are leaf values, by full path (`providers.0.model`).
 	Updates map[string]any
-	// Appends names lists that each gain ONE element at their end (`providers`). A list named
-	// twice gains two, which is what two presses of ＋ mean. The element is built from its type's
-	// own defaults — a `web_search` provider starts at `type: exa`, so a new entry is a working
-	// starting point rather than a field of zeroes — and its values arrive as ordinary updates,
-	// which is why the order below matters and why nothing has to carry them.
+	// Appends names the ELEMENT each append must create (`providers.3`) — the path the caller DREW,
+	// not the list it lands in. That is what makes the append checkable: an element can only be
+	// created at the END of its list, so an index that is not the list's length right now means the
+	// caller is working from a config that moved, and its values would land on somebody else's
+	// element. The check is possible only because the appends run FIRST (see below) — two appends
+	// into one list therefore name `providers.3` and `providers.4`, and neither is stale by the time
+	// it runs.
+	//
+	// The element is built from its type's own defaults — a `web_search` provider starts at
+	// `type: exa`, so a new entry is a working starting point rather than a field of zeroes — and
+	// its values arrive as ordinary updates, which is why the order below matters and why nothing
+	// has to carry them.
 	Appends []string
 	// Removes are elements to drop, by their own path (`providers.2`).
 	Removes []string
@@ -59,8 +67,8 @@ func ApplyListEdits(cfg *Config, edits ListEdits) error {
 		return nil
 	}
 	// 1. Appends, each element starting from its type's defaults.
-	for _, listPath := range edits.Appends {
-		if err := appendListElement(cfg, listPath); err != nil {
+	for _, elementPath := range edits.Appends {
+		if err := appendListElement(cfg, elementPath); err != nil {
 			return err
 		}
 	}
@@ -79,11 +87,25 @@ func ApplyListEdits(cfg *Config, edits ListEdits) error {
 	return nil
 }
 
-// appendListElement adds one element to the end of the list at listPath.
-func appendListElement(cfg *Config, listPath string) error {
+// appendListElement adds one element to the end of the list named by elementPath, which is where
+// that element must land: its index has to BE the list's current length.
+//
+// The check is the point of naming the ELEMENT rather than the list. The caller drew this path
+// (it is what the form showed the reader), so a mismatch means the caller's config is not this
+// one — and appending anyway would put the values that follow on an element somebody else is
+// using. Refusing is the only answer that cannot silently rewrite the wrong item.
+func appendListElement(cfg *Config, elementPath string) error {
+	listPath, index, err := splitElementPath(elementPath)
+	if err != nil {
+		return err
+	}
 	slice, err := listField(cfg, listPath)
 	if err != nil {
 		return err
+	}
+	if index != slice.Len() {
+		return fmt.Errorf("%s: 表单按第 %d 项填的，%s 现在有 %d 项（配置变过，重开这一页再改）",
+			elementPath, index, listPath, slice.Len())
 	}
 	elem, err := newListElement(listPath)
 	if err != nil {
@@ -111,7 +133,8 @@ func newListElement(listPath string) (reflect.Value, error) {
 }
 
 // resolveElementPath walks a tail (`spec.proxy`) inside ONE element, which is a standalone value
-// rather than a *Config: an element is resolved against itself, since a staged one is in no list.
+// rather than a *Config: an element is resolved against itself, since the one this describes is in
+// no list.
 //
 // The grammar is resolvePath's (a segment names a yaml field, a pointer is followed once set).
 // ElementFields is its caller: describing a leaf of an element that does not exist yet is the one
@@ -146,7 +169,7 @@ func resolveElementPath(elem reflect.Value, tail string) (leafRef, error) {
 }
 
 // ElementField is one leaf of a list element, described without needing an element to exist: what a
-// form needs to draw a field for an item that has just been staged (see ElementFields).
+// form needs to draw a field for an item it is about to add (see ElementFields).
 type ElementField struct {
 	// Tail is the leaf's path INSIDE the element (`name`, `spec.proxy`) — the shape a caller can
 	// address against an element whose index it names itself.
@@ -164,10 +187,9 @@ type ElementField struct {
 // ElementFields describes every leaf an element of the list at listPath has, in the config's own
 // declaration order.
 //
-// It exists for the one thing a form cannot ask the config about: an element that is STAGED but not
-// written yet. Every other field a form draws comes from a value (PathsFor walks the live config),
-// and a staged element has no value anywhere — which is the whole reason the settings page's list
-// items used to have to be written to the file before they could be edited.
+// It exists for the one thing a form cannot ask the config about: an element that does not exist
+// yet. Every other field a form draws comes from a value (PathsFor walks the live config), and an
+// element nobody has added has no value anywhere — so its card has to be described from the type.
 //
 // The shape is the element TYPE's, and the values are a scaffold's: one element built with the
 // type's defaults applied and no caller values, which is exactly what a new item will hold.
@@ -281,7 +303,13 @@ type removedElement struct {
 func SnapshotListEdits(cfg *Config, edits ListEdits) (*ListEditSnapshot, error) {
 	snap := &ListEditSnapshot{}
 	seen := make(map[string]bool, len(edits.Appends))
-	for _, listPath := range edits.Appends {
+	for _, elementPath := range edits.Appends {
+		// Two appends into one list are one list to put back, and its length BEFORE the first of
+		// them is what it goes back to.
+		listPath, _, err := splitElementPath(elementPath)
+		if err != nil {
+			return nil, err
+		}
 		if seen[listPath] {
 			continue
 		}

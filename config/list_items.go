@@ -60,9 +60,10 @@ func RestoreListItem(cfg *Config, elementPath string, held any) error {
 	return nil
 }
 
-// ListLen reports how many elements the list at listPath holds. It is what tells a reader where
-// a new element will land (the end), and therefore what the settings page shows them as they
-// fill one in.
+// ListLen reports how many elements the list at listPath holds. It is what tells a reader where a
+// new element will land (the end), and therefore what lets a form name the item it is about to add
+// (the settings page gets it as SettingListVO.Length, and the append checks it again at save time —
+// see ListEdits.Appends).
 func ListLen(cfg *Config, listPath string) (int, error) {
 	slice, err := listField(cfg, listPath)
 	if err != nil {
@@ -163,8 +164,8 @@ func listField(cfg *Config, listPath string) (reflect.Value, error) {
 // LAST segment: an element is addressed by its position and nothing else.
 //
 // Exported because a caller holding an element path it did not build itself has to take it apart the
-// same way this package does — the settings page's staged items are paths (`providers.3`) that its
-// own schema code has to resolve back to the list they belong to.
+// same way this package does — a form addresses its own unsaved item as a path (`providers.3`), and
+// the save has to resolve it back to the list it belongs to.
 func SplitElementPath(elementPath string) (listPath string, index int, err error) {
 	return splitElementPath(elementPath)
 }

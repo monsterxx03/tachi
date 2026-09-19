@@ -140,39 +140,56 @@
       blockKeys.indexOf('web_search.proxy') < 0 && blockKeys.indexOf('web_fetch.timeout') < 0,
     blockKeys.join(' / '))
 
-  // ── 列表能加条目、能删条目（暂存，点保存才写盘） ──────────────────────────
+  // ── 列表能加条目、能删条目（都在页面上，保存时一次写盘） ────────────────────
   // 一条列表此前必须"先在文件里"，它的字段才存得进去（更新路径不认不存在的路径），所以 ＋ 原来是
-  // **立刻写盘**的。现在它只是**暂存**：新条目是页面上的一个待办，点保存时和它的字段值一起写进
-  // config.yaml（一次写盘，见 config.ListEdits 的顺序规则）。于是"＋ 了又反悔"什么都不写 ——
-  // 这正是「返回对话」暗示的语义，也是立刻写盘做不到的。
+  // **立刻写盘**的。现在它连后端都不经过：新条目是**页面上**的一个待办（字段草稿的同一种东西），
+  // 保存时和字段值一起进同一个请求、一次写盘（config.ListEdits 的顺序规则）。于是"＋ 了又反悔"
+  // 什么都不写 —— 这正是「返回对话」暗示的语义，也是立刻写盘做不到的。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor('.set-elem-head', '回到模型组'))) return smoke.finish()
   const addBtn = smoke.qa('.set-add .btn')[0]
   if (!addBtn) return smoke.fail('模型组里有「＋ 添加一项」', smoke.text('.settings-form'))
-  smoke.click(addBtn)
-  const added = await smoke.waitFor(() => {
-    const t = smoke.text('.settings-notice')
-    return t.indexOf('加了一项') >= 0 ? t : null
-  }, '添加条目的回执')
-  smoke.check('＋ 只是暂存，回执说清"点保存才写进 config.yaml"',
-    !!added && added.indexOf('config.yaml') >= 0, added || '')
   // 新卡片出现、展开着、定位是 providers[1]（不是 providers.1）
   // 全新的条目没有名字，所以卡片头就是它的定位（providers[1]）—— 副标题此时是空的（head 里已经
   // 写了同一句话，重复一遍没有意义）。
   const cardByHead = (want) =>
     smoke.qa('.set-elem').find((c) => smoke.text(c.querySelector('.set-elem-head')).indexOf(want) >= 0)
+  smoke.click(addBtn)
   const newCard = await smoke.waitFor(() => cardByHead('providers[1]'), '新条目的卡片')
-  smoke.check('新条目出现，头是 providers[1]', !!newCard,
+  smoke.check('＋ 立刻画出新条目（不必问后端，也没有回执要等）', !!newCard,
     newCard ? smoke.text(newCard.querySelector('.set-elem-head')) : '')
   // 等它展开（新增的条目就是拿来填的，不该还折着）
   const opened = await smoke.waitFor(
     () => (newCard.querySelector('.set-elem-body') ? true : null), '新条目自动展开')
   smoke.check('新条目是展开的（正是要填它）', !!opened, opened ? '' : '仍然折着')
-  // 而且它**能填**：条目还不在配置里，所以它的叶子在 schema 里没有值可走 —— 字段是从元素类型
-  // 描述出来的（stagedFields）。没有这一条，＋ 画出来的就是一张空卡片，而那正是立刻写盘存在的理由。
+  // 而且它**能填**：条目还不在配置里，所以它的叶子在 schema 里没有值可走 —— 字段来自后端给的
+  // 「条目模板」（SettingListVO.element）。没有这一条，＋ 画出来的就是一张空卡片。
   const newCardKeys = smoke.allText('.set-elem-body .set-key').map((t) => t.replace(/⟳.*$/, '').trim())
-  smoke.check('暂存的条目有输入框（叶子从元素类型声明，不靠配置里的值）',
+  smoke.check('新条目有输入框（叶子来自条目模板，不靠配置里的值）',
     ['name', 'model', 'api_key'].every((k) => newCardKeys.indexOf(k) >= 0), newCardKeys.join(' / '))
+  // 页脚要把它算进"未保存"：它是这个页面持有、配置里还没有的东西。
+  const footPending = smoke.text('.settings-dirty-count')
+  smoke.check('页脚把待新增的条目也数进去', footPending.indexOf('待新增') >= 0, footPending)
+  // 再按一次 ＋：两条待新增必须落在**两个不同的下标**上（页面的算术：列表长度 + 它已经持有的条数）。
+  // 曾经这里两边都算成 providers.1 —— 保存时两个条目的字段互相踩，列表里还多出一条空元素。
+  smoke.click(smoke.qa('.set-add .btn')[0])
+  const secondNew = await smoke.waitFor(() => cardByHead('providers[2]'), '第二次 ＋ 的卡片')
+  smoke.check('＋ 两次落在两个下标上（providers[1] / providers[2]）',
+    !!secondNew && !!cardByHead('providers[1]'), smoke.allText('.set-elem-head').join(' / '))
+  // 待新增的条目是页面的待办，所以"删掉它"就是把它从待办里拿掉：没有 config.yaml 可改，也没有回执，
+  // 而另一条待新增必须原样还在。
+  if (secondNew) {
+    if (!secondNew.querySelector('.set-elem-body')) smoke.click(secondNew.querySelector('.set-elem-head'))
+    if (!(await smoke.waitFor(() => (secondNew.querySelector('.set-elem-body') ? true : null), '展开第二条新条目'))) return smoke.finish()
+    const dropNew = Array.prototype.slice.call(secondNew.querySelectorAll('.btn'))
+      .find((b) => smoke.text(b).indexOf('删除这一项') >= 0)
+    if (!dropNew) return smoke.fail('新条目的卡片里也有「删除这一项」', secondNew.innerHTML.slice(0, 200))
+    smoke.click(dropNew)
+    const dropped = await smoke.waitFor(
+      () => (!cardByHead('providers[2]') && cardByHead('providers[1]') ? true : null), '待新增的那条被拿掉')
+    smoke.check('删掉一条还没保存的条目 = 从待办里拿掉（另一条不受影响）', !!dropped,
+      smoke.allText('.set-elem-head').join(' / '))
+  }
 
   // 没有块的列表：web_search 在沙箱配置里根本不存在，＋ 要能加（保存时把块建出来）
   smoke.click(catByName('工具与权限'))
@@ -185,12 +202,15 @@
   if (!wsAdd) return smoke.fail('web_search 段里有 ＋', smoke.text('.settings-form'))
   smoke.click(wsAdd.querySelector('.btn'))
   const wsAdded = await smoke.waitFor(() => {
-    const t = smoke.text('.settings-notice')
-    return t.indexOf('web_search.providers') >= 0 && t.indexOf('加了一项') >= 0 ? t : null
-  }, 'web_search 的添加回执')
-  smoke.check('文件里没有这个块时也能加（暂存，保存时建块）', !!wsAdded, wsAdded || '')
+    const sec = smoke.qa('.set-section').find((d) => smoke.text(d.querySelector('.set-section-head')) === 'web_search')
+    const card = sec ? sec.querySelector('.set-elem') : null
+    return card ? smoke.text(card.querySelector('.set-elem-head')) : null
+  }, 'web_search 新条目的卡片')
+  // 头写的是"哪个条目"（它的 type 是 exa），副标题才是定位 —— 而定位会省掉块标题已经说过的那一段，
+  // 所以这里是 `providers[0]`（`web_search` 由上面的标题说了）。
+  smoke.check('文件里没有这个块时也能加（保存时建块）', !!wsAdded && wsAdded.indexOf('providers[0]') >= 0, wsAdded || '')
   // 新加的条目必须展开着，即使它所在的列表被声明为"一律折叠"：＋ 造出来的那一条就是拿来填的，
-  // 声明折针对的是"已经在那儿、你只是来看看"的条目（justAdded 优先，见 ElementCard）。
+  // 声明折针对的是"已经在那儿、你只是来看看"的条目（forceOpen 优先，见 ElementCard）。
   const wsNewCard = await smoke.waitFor(() => {
     const sec = smoke.qa('.set-section').find((d) => smoke.text(d.querySelector('.set-section-head')) === 'web_search')
     const card = sec ? sec.querySelector('.set-elem') : null
@@ -199,8 +219,8 @@
   smoke.check('声明为折叠的列表里，＋ 加出来的条目仍然展开', !!wsNewCard, '')
   if (wsNewCard) smoke.click(wsNewCard.querySelector('.set-elem-head'))
 
-  // 删掉一个**已经存在**的 provider：两步确认，回执里带上"谁还在引用它"。删是**暂存**的 ——
-  // 卡片要到保存之后才消失，这正是"点保存才生效"的意思。
+  // 删掉一个**已经存在**的 provider：一次点击就把它移出列表，原位留一行「撤销」，回执里带上
+  // "谁还在引用它"。不问第二次 —— 删除在保存之前不写任何东西，撤销就是那个问题的答案。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor('.set-elem-head', '回到模型组（删除）'))) return smoke.finish()
   const card = cardByHead('providers[0]')
@@ -217,30 +237,54 @@
     !!plainBtn && getComputedStyle(delBtn).color !== getComputedStyle(plainBtn).color,
     getComputedStyle(delBtn).color + ' vs 普通按钮 ' + (plainBtn ? getComputedStyle(plainBtn).color : '(无)'))
   smoke.click(delBtn)
-  const confirmBtn = await smoke.waitFor(
-    () => smoke.qa('.set-elem-confirm .btn.danger')[0], '删除的第二步确认')
-  if (!confirmBtn) return smoke.finish()
-  smoke.check('删除要确认第二次', true, '')
-  smoke.click(confirmBtn)
   const removed = await smoke.waitFor(() => {
     const t = smoke.text('.settings-notice')
     return t.indexOf('标记删除') >= 0 ? t : null
   }, '删除的回执')
-  smoke.check('删除只是暂存，回执说清"点保存后才写进 config.yaml"',
-    !!removed && removed.indexOf('config.yaml') >= 0, removed || '')
-  // 暂存：卡片还在（保存才生效），而且「谁还在引用它」的提醒不能等到保存才说。
-  smoke.check('标了删除的卡片还在页面上（保存才生效）',
-    !!cardByHead('providers[0]'), smoke.allText('.set-elem-head').join(' / '))
+  // "一次点击"的判据不是"某个确认框没出现"，而是"页面上没有第二步要按"：删除入口旁边不该再有任何
+  // 取消/确认一类的东西。真正兜住这件事的是下一条 —— 点完一次，卡片就已经不在列表里了。
+  smoke.check('删除是一次点击（页面上没有第二步要按）',
+    smoke.allText('.set-elem .btn').every((t) => t.indexOf('取消') < 0), smoke.allText('.set-elem .btn').join(' / '))
+  // 移出列表 + 原地一行"撤销"：这一行就是"保存前还能反悔"的唯一入口，它得说清自己是什么。
+  const strip = await smoke.waitFor(() => smoke.q('.set-removed'), '已删除的那一行')
+  smoke.check('删掉的卡片立刻移出列表',
+    !cardByHead('providers[0]'), smoke.allText('.set-elem-head').join(' / '))
+  smoke.check('原位留下「已标记删除，保存后移除 · 撤销」',
+    !!strip && smoke.text(strip).indexOf('保存后移除') >= 0 && smoke.text(strip).indexOf('providers[0]') >= 0,
+    strip ? smoke.text(strip) : '')
+  // "谁还在引用它"的提醒不能等到保存才说 —— 那时候读者已经没法改了。
   smoke.check('删除的回执点出还在引用这个名字的键', (removed || '').indexOf('title_provider') >= 0, removed || '')
 
-  // ── 保存才写盘：暂存的加/删 + 填进去的字段值，一次写进 config.yaml ────────
+  // 撤销：卡片回到列表里，什么都没有变（这一页从不写盘）。
+  const undoBtn = strip ? strip.querySelector('.btn') : null
+  if (!undoBtn) return smoke.fail('那一行里有「撤销」', strip ? strip.innerHTML : '(没有那一行)')
+  smoke.click(undoBtn)
+  const undone = await smoke.waitFor(() => {
+    const t = smoke.text('.settings-notice')
+    return t.indexOf('已撤销') >= 0 ? t : null
+  }, '撤销的回执')
+  smoke.check('撤销把卡片放回列表（且没有写盘）',
+    !!undone && !!cardByHead('providers[0]') && !smoke.q('.set-removed'),
+    undone || smoke.allText('.set-elem-head').join(' / '))
+
+  // 再删一次，留给后面那一次保存（这条才是"保存之后文件里它不在了"的那一半）。
+  const card2 = cardByHead('providers[0]')
+  if (!card2) return smoke.fail('撤销后卡片回到列表', smoke.allText('.set-elem-head').join(' / '))
+  if (!card2.querySelector('.set-elem-body')) smoke.click(card2.querySelector('.set-elem-head'))
+  if (!(await smoke.waitFor(() => (card2.querySelector('.set-elem-body') ? true : null), '再次展开卡片'))) return smoke.finish()
+  const delBtn2 = Array.prototype.slice.call(card2.querySelectorAll('.btn'))
+    .find((b) => smoke.text(b).indexOf('删除这一项') >= 0)
+  if (!delBtn2) return smoke.fail('卡片里有「删除这一项」', card2.innerHTML.slice(0, 200))
+  smoke.click(delBtn2)
+  if (!(await smoke.waitFor(() => smoke.q('.set-removed'), '再次删除的那一行'))) return smoke.finish()
+
+  // ── 保存才写盘：页面的加/删 + 填进去的字段值，一次写进 config.yaml ────────
   // 这一段是整套改动的验收：新条目的定位（providers[1]）在保存之前**不在配置里**，它的字段值却在
-  // 页面上填得进去；保存时两半一起写 —— 先建条目、再把值写进它（顺序见 config.ListEdits），
+  // 页面上填得进去；保存时三样一起写 —— 先建条目、再把值写进它（顺序见 config.ListEdits），
   // 同时删掉标记了的那一项。Go 侧读回文件来断言（这一页看不见磁盘）。
-  // 这一页曾经被 ⌘, 重开过，回来停在第一个分组，所以先走到模型组。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '模型', '回到模型组（保存）'))) return smoke.finish()
-  const addCard2 = await smoke.waitFor(() => cardByHead('providers[1]'), '暂存的新条目还在')
+  const addCard2 = await smoke.waitFor(() => cardByHead('providers[1]'), '待新增的条目还在')
   if (!addCard2) return smoke.fail('保存前新条目还在页面上', smoke.allText('.set-elem-head').join(' / '))
   if (!addCard2.querySelector('.set-elem-body')) smoke.click(addCard2.querySelector('.set-elem-head'))
   if (!(await smoke.waitFor(() => (addCard2.querySelector('.set-elem-body') ? true : null), '展开新条目'))) return smoke.finish()
@@ -270,8 +314,9 @@
     const t = smoke.text('.settings-notice')
     return t.indexOf('已生效') >= 0 ? t : null
   }, '加/删/改一起保存的汇总句')
-  smoke.check('一次保存带走了暂存的加、删与字段值', !!savedAll, savedAll || '')
-  // 保存成功后页面重读 schema：新条目现在是配置里的真条目（头写的是刚填的名字），标记删除的那一项没了。
+  smoke.check('一次保存带走了页面持有的加、删与字段值', !!savedAll, savedAll || '')
+  // 保存成功后页面重读 schema：新条目现在是配置里的真条目（头写的是刚填的名字），删掉的那一项没了，
+  // 而页面持有的待办也清空了（它们已经变成了配置的一部分）。
   const afterSave = await smoke.waitFor(() => {
     const heads = smoke.allText('.set-elem-head')
     return heads.some((h) => h.indexOf('added-by-smoke') >= 0)

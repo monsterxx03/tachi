@@ -2009,18 +2009,18 @@ permissions:
 				c.check("文件里没有 vision 这个键",
 					!strings.Contains(string(raw), "vision"), string(raw))
 
-				// 列表的增删：driver 现在**不是立刻写盘**的那一套了 —— ＋ 与删除只是暂存，保存时和字段值
-				// 一起写进同一份配置（见 config.ListEdits）。所以这里断言的是**保存之后**的文件：
-				// 新条目在（带着从界面填进去的值），标了删除的那一项不在，而那个全新列表也一起出现了
+				// 列表的增删：这一页**不是立刻写盘**的那一套 —— ＋ 与删除都只是页面自己的待办，
+				// 保存时和字段值一起写进同一份配置（见 config.ListEdits）。所以这里断言的是**保存之后**
+				// 的文件：新条目在（带着从界面填进去的值），删掉的那一项不在，而那个全新列表也一起出现了
 				// （沙箱配置里根本没有 web_search 这个键）。
 				names := make([]string, 0, len(cfg.Providers))
 				for _, p := range cfg.Providers {
 					names = append(names, p.Name)
 				}
-				c.check("保存把暂存的「＋」写进了文件（带着界面上填的值）",
+				c.check("保存把界面上「＋」的条目写进了文件（带着填进去的值）",
 					len(cfg.Providers) == 1 && names[0] == "added-by-smoke" && cfg.Providers[0].Model == "added-model",
 					fmt.Sprintf("providers=%v", names))
-				c.check("保存把暂存的「删除」也写进了文件（原来那个 provider 不在了）",
+				c.check("保存把界面上删掉的那一项也写进了文件（原来那个 provider 不在了）",
 					!slices.Contains(names, "smoke"), fmt.Sprintf("providers=%v", names))
 				c.check("文件里没有 web_search 块时，保存把它和条目一起建了出来",
 					len(cfg.WebSearch.Providers) == 1 && cfg.WebSearch.Providers[0].Type == config.WebSearchProviderExa,

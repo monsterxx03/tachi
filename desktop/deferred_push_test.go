@@ -40,7 +40,7 @@ func TestSaveSettingsDefersAPushForARunningTurn(t *testing.T) {
 	d, svc, r, sid := pushFixture(t)
 	r.running = true
 
-	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true}, nil, nil)
 	if !strings.Contains(res.Summary, "hooks.enabled") || !strings.Contains(res.Summary, "等这一轮结束生效") {
 		t.Errorf("summary = %q, want it to say the key waits for the running turn", res.Summary)
 	}
@@ -73,7 +73,7 @@ func TestSaveSettingsDefersAPushForARunningTurn(t *testing.T) {
 func TestSaveSettingsPushesImmediatelyWhenNoTurnIsRunning(t *testing.T) {
 	d, svc, r, _ := pushFixture(t)
 
-	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true}, nil, nil)
 	if !strings.Contains(res.Summary, "1 项已生效") {
 		t.Errorf("summary = %q, want the key reported live", res.Summary)
 	}
@@ -94,7 +94,7 @@ func TestSaveSettingsStillPushesTheOtherSessions(t *testing.T) {
 	idle := d.getRun("idle-session")
 	idle.agent = &agent.AIAgent{Config: agent.AgentConfig{Logger: logger.New("settings-test")}}
 
-	res := svc.SaveSettings(map[string]any{"hooks.enabled": true})
+	res := svc.SaveSettings(map[string]any{"hooks.enabled": true}, nil, nil)
 	if idle.agent.Config.HookDispatcher == nil {
 		t.Error("the idle session was not pushed to")
 	}
