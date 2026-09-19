@@ -134,6 +134,10 @@ function findingMatchesFile(root: string, findingPath: string, filePath: string)
 // Placement of findings is this component's job; how one is DRAWN belongs to the caller
 // (in the panel a row carries a pick box and a comment field; a tool card's fragment diff
 // has no findings to draw at all).
+//
+// It is exported because the settings page's preview of the generated config.yaml is the third
+// caller: the same `Hunk` model, the same renderer — a second implementation of "show a diff" is
+// how the two come to disagree about what a changed line looks like.
 // splitRows pairs a hunk's lines for the 左右 layout: a CONTEXT line is a row of its own — the same
 // text on BOTH sides, because each column is meant to read as one whole file — and a run of removals
 // followed by a run of additions becomes one row per index: the line that went, beside the line that
@@ -165,7 +169,7 @@ function splitRows(hunks: Hunk[]): SplitRow[] {
   return out
 }
 
-function DiffLines({ hunks, lineNumbers, findings, renderFinding, split = false }: {
+export function DiffLines({ hunks, lineNumbers, findings, renderFinding, split = false }: {
   hunks: Hunk[]
   lineNumbers: boolean
   // Findings are placed inline, right under the line they are about — a review comment

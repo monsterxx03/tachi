@@ -1101,9 +1101,19 @@ func Save(cfg *Config) error {
 	return SaveTo(path, cfg)
 }
 
+// Marshal renders the whole config exactly as Save writes it.
+//
+// It is exported for the callers that have to SHOW the file rather than write it — the settings
+// page's preview of what a save would produce marshals the same object on both sides of the batch,
+// and its answer is only worth anything while it is the same function that writes the file. A
+// second `yaml.Marshal` at that call site would be that answer, one encoder swap away from lying.
+func Marshal(cfg *Config) ([]byte, error) {
+	return yaml.Marshal(cfg)
+}
+
 // SaveTo is Save for an explicit path (tests, and any caller that already resolved it).
 func SaveTo(path string, cfg *Config) error {
-	data, err := yaml.Marshal(cfg)
+	data, err := Marshal(cfg)
 	if err != nil {
 		return err
 	}

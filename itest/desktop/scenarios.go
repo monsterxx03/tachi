@@ -2218,6 +2218,21 @@ permissions:
 				c.check("文件里没有 web_search 块时，保存把它和条目一起建了出来",
 					len(cfg.WebSearch.Providers) == 1 && cfg.WebSearch.Providers[0].Type == config.WebSearchProviderExa,
 					fmt.Sprintf("web_search.providers=%+v", cfg.WebSearch.Providers))
+				// 预览是只读的：driver 最后在设置页里**改过又没保存**就离开了（预览过、又改回
+				// smoke、再收起、再返回），所以这里读到的必须还是上一次保存留下的样子。这一条
+				// 只有 Go 侧看得见（页面看不见磁盘），而它抓的正是"预览顺手写了一次盘"这种错。
+				c.check("预览（以及那之后没保存的改动）没有写盘：title_provider 还是上次保存的 smoke",
+					cfg.TitleProvider == "smoke", "title_provider="+cfg.TitleProvider)
+				// 同一件事的第二个证人：driver 最后把 language 改成 en 又改成 fr（两次都预览过），
+				// 文件里必须还是 fixture 写下的 zh。页面上"预览过、改过、没保存"的那一路只要碰过
+				// 磁盘，这两条里至少有一条会红。
+				c.check("预览没有写盘：language 还是 fixture 的 zh",
+					cfg.Language == "zh", "language="+cfg.Language)
+				// 头一次保存已经把这个文件变成了本进程写出来的样子，所以 driver 后半段那次预览
+				// 不该再报「会被整份重写」——而它前面那次（手写文件）必须报。两条都在 driver 里，
+				// 这里补的是"文件确实已经被重写过一次"这个前提：注释没了。
+				c.check("第一次保存之后，config.yaml 里已经没有手写注释（文件被整份重写过）",
+					!strings.Contains(string(raw), "# vision:"), string(raw)[:200])
 			},
 		},
 	}

@@ -372,6 +372,29 @@ Fixtures, all because the real path needs something a driver cannot do:
     reader cannot act on either.
   - When a save WINS, the page drops its pending lists and re-reads the schema (`load`), so the items it added are
     real cards and the dropped ones are gone. A REFUSED save keeps them, like it keeps the typing.
+  - **保存前的预览 is the SAME batch put through the SAME pre-flight, and then marshalled instead of written**
+    (`PreviewSettings`): one page function builds the batch (`collectBatch`) and one backend function vets it
+    (`resolveBatch`, which `SaveSettings` calls too), so a preview cannot promise something the save refuses — and
+    it answers that question for free, before the reader has committed to anything. It applies the batch to the
+    LIVE config and rolls it back with the save's own snapshot pair rather than diffing a copy: a copy would have
+    to be marshalled and re-read, and both go through the code the answer is about.
+  - **The diff is generated-vs-generated, and the fact it cannot carry is said in words.** The left side is what
+    `yaml.Marshal` would write NOW and the right side is the same with the batch applied — never the bytes on
+    disk, which are a hand-written document full of comments and its own layout, and whose differences from the
+    marshalled form include things the batch did not do (defaults and provider-alias expansion happen in memory at
+    load). `Rewrites` carries what that excludes: the file on disk is not what this process would write, so the
+    save rewrites the whole document (comments, blank lines, keys `Config` does not declare — `config.Save`;
+    `backupOnce` keeps ONE copy as `config.yaml.bak`). The page shows it only when true, which is why the smoke
+    asserts it PRESENT before the first save and ABSENT after one.
+  - **A whole-file diff is `linediff.DiffContext`, not `Fragments`.** `Fragments` trims only the common prefix and
+    suffix, which is right for a tool call's fragment and wrong for a file with two changes in it (no common
+    prefix, no common suffix → the whole file back as one delete run against one add run). `DiffContext` aligns
+    with an LCS and keeps `diffPreviewContext` lines around each change; the page renders it with the SAME
+    `DiffLines` the diff pane uses (exported for that reason), so a changed line looks the same everywhere.
+  - **The preview never writes, and the page says so when it goes stale.** Pressing 预览 is not a confirmation step:
+    保存 stays where it was and writes immediately, as before. A form that moves on while the panel is open gets
+    「表单已经改过，这份预览是旧的」 + 重新预览 rather than a silent diff of edits the reader has since changed,
+    and a save that lands drops the panel (it described a batch that is now in the file).
   Smoke: the `settings` scenario drives the page end to end and reads `config.yaml` back through
   `config.LoadFrom` on the Go side (including add, remove, undo, and a list whose block was not in the
   file at all).

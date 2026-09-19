@@ -135,6 +135,148 @@ func trimTerminator(oldLines, newLines []string) ([]string, []string) {
 	}
 }
 
+// DiffContext diffs two WHOLE texts into the hunks a reader wants when the question is "what
+// changed in this file": every change, `keep` lines of context around it, and the unchanged
+// stretches between changes dropped.
+//
+// Fragments is the other tool and answers a different question. It trims only the common PREFIX and
+// SUFFIX, which is exactly right for what it was written for — one tool call's old block against
+// its new block, where the change IS the content and the two ends are what stayed — and wrong for a
+// file with two changes in it: no common prefix, no common suffix, and the whole file comes back as
+// one delete run against one add run (that is the shape the 多处替换，整段对照 note labels). The
+// settings page's preview of a generated config.yaml is the case that needs the real thing.
+//
+// The alignment is a longest-common-subsequence table: O(n·m) time and memory, which is chosen for
+// the input this is for (a config file, a few hundred lines). A caller with an unbounded file wants
+// Myers' algorithm, not this one.
+//
+// Within one change region the DELETIONS come first and the insertions after them: the 左右 layout
+// pairs a deletion run with the insertion run that follows (see splitRows in the frontend), so an
+// interleaved region would pair the wrong lines side by side.
+func DiffContext(oldText, newText string, keep int) []Hunk {
+	oldLines, newLines := splitLines(oldText), splitLines(newText)
+	oldLines, newLines = trimTerminator(oldLines, newLines)
+	n, m := len(oldLines), len(newLines)
+
+	// lcs[i][j] is the length of the longest common subsequence of oldLines[i:] and newLines[j:] —
+	// filled from the end so the walk below can ask "which side can still match more?".
+	lcs := make([][]int, n+1)
+	for i := range lcs {
+		lcs[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if oldLines[i] == newLines[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+
+	raw := make([]Hunk, 0, n+m)
+	i, j := 0, 0
+	for i < n && j < m {
+		switch {
+		case oldLines[i] == newLines[j]:
+			raw = append(raw, Hunk{Kind: KindContext, OldLine: i + 1, NewLine: j + 1, Text: oldLines[i]})
+			i++
+			j++
+		case lcs[i+1][j] >= lcs[i][j+1]:
+			raw = append(raw, Hunk{Kind: KindDel, OldLine: i + 1, Text: oldLines[i]})
+			i++
+		default:
+			raw = append(raw, Hunk{Kind: KindAdd, NewLine: j + 1, Text: newLines[j]})
+			j++
+		}
+	}
+	for ; i < n; i++ {
+		raw = append(raw, Hunk{Kind: KindDel, OldLine: i + 1, Text: oldLines[i]})
+	}
+	for ; j < m; j++ {
+		raw = append(raw, Hunk{Kind: KindAdd, NewLine: j + 1, Text: newLines[j]})
+	}
+	return TrimContext(groupRegions(raw), keep)
+}
+
+// groupRegions rewrites every change region as all its deletions followed by all its insertions (see
+// DiffContext's last paragraph). A region is a maximal run of non-context hunks, so the order is
+// settled without touching where anything sits: each hunk keeps its line number.
+func groupRegions(hunks []Hunk) []Hunk {
+	out := make([]Hunk, 0, len(hunks))
+	for i := 0; i < len(hunks); {
+		if hunks[i].Kind == KindContext {
+			out = append(out, hunks[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(hunks) && hunks[j].Kind != KindContext {
+			j++
+		}
+		for _, h := range hunks[i:j] {
+			if h.Kind == KindDel {
+				out = append(out, h)
+			}
+		}
+		for _, h := range hunks[i:j] {
+			if h.Kind == KindAdd {
+				out = append(out, h)
+			}
+		}
+		i = j
+	}
+	return out
+}
+
+// TrimContext keeps only `keep` lines of context on each side of every change, so a caller that
+// wants a DIFF (rather than the whole text) can show what changed instead of a wall with the
+// change buried in it. It is the equivalent of `git diff -U<keep>`, and DiffContext applies it to
+// everything it produces.
+//
+// Fragments returns the entire text — every unchanged line is a context hunk — because a tool
+// card's fragment IS the thing the reader is looking at, and it is small. A caller diffing two
+// whole texts is the other case: there the change is what the reader asked for, and the context is
+// what tells them where they are.
+//
+// Unchanged RUNS are what get shortened, never a change: a run keeps its last `keep` lines when a
+// change precedes it and its first `keep` when one follows, and the middle is dropped. Dropping
+// lines means the caller renders a jump — the line numbers say so, and that is the same signal a
+// `git diff` reader reads — so nothing here invents a marker for it.
+func TrimContext(hunks []Hunk, keep int) []Hunk {
+	if keep < 0 {
+		keep = 0
+	}
+	out := make([]Hunk, 0, len(hunks))
+	for i := 0; i < len(hunks); {
+		if hunks[i].Kind != KindContext {
+			out = append(out, hunks[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(hunks) && hunks[j].Kind == KindContext {
+			j++
+		}
+		run := hunks[i:j]
+		head, tail := 0, 0
+		if i > 0 {
+			head = keep // a change sits above this run
+		}
+		if j < len(hunks) {
+			tail = keep // …and one below it
+		}
+		if head+tail >= len(run) {
+			out = append(out, run...)
+		} else {
+			out = append(out, run[:head]...)
+			out = append(out, run[len(run)-tail:]...)
+		}
+		i = j
+	}
+	return out
+}
+
 // FileDiff is one file's changes in a unified diff — the shape `git diff` emits, and
 // what the desktop's changes panel renders. Unlike a fragment diff (Fragments), the
 // line numbers here are REAL file coordinates: that is the whole point of parsing

@@ -1,7 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import type { SettingFieldVO, SettingListVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { SettingFieldVO, SettingListVO, SettingsPreviewVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { Caret } from './components'
+import { DiffLines } from './diff'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
 //
@@ -411,6 +412,11 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   // A removal being CHECKED against the config (the warning call). It is not a save — the removal
   // is local, and no draft rule applies — so it gets its own flag and shares the notice line.
   const [checking, setChecking] = useState(false)
+  // The save's preview: what the file would get, fetched on demand and NEVER applied. `key` is what
+  // the batch was when it was taken — the form can move on while the panel is open, and a diff of
+  // edits the reader has since changed is the one thing the panel must not pretend about.
+  const [preview, setPreview] = useState<{ res: SettingsPreviewVO; key: string } | null>(null)
+  const [previewing, setPreviewing] = useState(false)
   // What this page is holding that the config is not, and it is the SAME KIND OF THING as a draft:
   // the items ＋ made (nothing but a path and a set of drafts) and the items 删除 dropped. Both are
   // gone when the page is (the drafts are), and the save is the one place they become real — which
@@ -595,7 +601,11 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     setNotice({ bad: false, text: `已撤销：${elementLocator(elementPath, '')} 还在 config.yaml 里，什么都没变` })
   }, [])
 
-  const save = useCallback(async () => {
+  // collectBatch is the page's WHOLE unsaved state as the batch the backend takes: the drafts, the
+  // items ＋ made (by the path each one was given) and the items 删除 dropped. One function, because
+  // the preview and the save have to send the same thing — a preview of a different batch than the
+  // save carries would be worse than no preview (the reader acts on it).
+  const collectBatch = useCallback(() => {
     const updates: Record<string, any> = {}
     const errors: Record<string, string> = {}
     for (const key of dirty) {
@@ -605,6 +615,38 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
       if (parsed.error) errors[key] = parsed.error
       else updates[key] = parsed.value
     }
+    return { updates, errors }
+  }, [dirty, byKey, drafts])
+
+  // What the batch IS, as a string: the preview remembers it so a form that moved on can say so,
+  // instead of showing a diff of edits that are no longer the ones on screen.
+  const batchKey = useMemo(
+    () => JSON.stringify([dirty.map((k) => [k, drafts[k]]), adds.map((a) => a.path), removes]),
+    [dirty, drafts, adds, removes])
+
+  // preview asks the backend what 保存 would write and shows it. It is the SAME batch and the same
+  // backend pre-flight, so it answers a second question for free: a batch the save would refuse is
+  // refused here, before the reader has committed to anything.
+  const openPreview = useCallback(async () => {
+    const { updates, errors } = collectBatch()
+    setFieldErrors(errors)
+    const bad = Object.keys(errors)
+    if (bad.length > 0) {
+      setNotice({ bad: true, text: `有 ${bad.length} 项填得不对，预览不了：${bad.join('、')}` })
+      return
+    }
+    setPreviewing(true)
+    const res = await AgentService.PreviewSettings(updates, adds.map((a) => a.path), removes).catch((e) => {
+      setNotice({ bad: true, text: String(e) })
+      return null
+    })
+    setPreviewing(false)
+    if (!res) return
+    setPreview({ res, key: batchKey })
+  }, [collectBatch, adds, removes, batchKey])
+
+  const save = useCallback(async () => {
+    const { updates, errors } = collectBatch()
     setFieldErrors(errors)
     const bad = Object.keys(errors)
     if (bad.length > 0) {
@@ -634,10 +676,13 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
     if (res.ok) {
       setAdds([])
       setRemoves([])
+      // The preview described a batch that has now been written: keeping it on screen would show a
+      // diff of the past next to a form that no longer holds those edits.
+      setPreview(null)
       await load()
     }
     setNotice({ bad: res.ok !== true, text: res.summary || '' })
-  }, [dirty, byKey, drafts, load, adds, removes])
+  }, [collectBatch, load, dirty, adds, removes])
 
   // rowProps is every row's wiring, in one place: a standalone row and a row inside a card must
   // behave identically (same dirty rule, same draft, same reset), and the only thing that
@@ -760,6 +805,55 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           )}
         </div>
 
+        {/* The preview: what 保存 would write, as a diff of the generated config.yaml. It sits
+            between the form and the foot because that is the order of the reader's act — look, then
+            press — and it is the BACKEND's own answer (the same batch, the same pre-flight, the same
+            marshaller), so nothing here can drift from what the save will do. */}
+        {preview ? (
+          <section className="set-preview" aria-label="保存前预览">
+            <div className="set-preview-head">
+              <span className="set-preview-title">
+                {preview.res.ok ? '保存会写进 config.yaml 的改动' : '这次改动保存不了'}
+              </span>
+              {preview.res.ok ? (
+                <span className="set-preview-counts">
+                  {preview.res.added > 0 ? <span className="diff-count is-add">+{preview.res.added}</span> : null}
+                  {preview.res.removed > 0 ? <span className="diff-count is-del">−{preview.res.removed}</span> : null}
+                </span>
+              ) : null}
+              <button className="btn ghost" onClick={() => setPreview(null)} title="收起预览（不影响表单）">收起</button>
+            </div>
+            {/* A form that moved on: the diff below describes edits that are no longer the ones on
+                screen, and saying so is the only honest thing to do with it. */}
+            {preview.key !== batchKey ? (
+              <div className="set-preview-stale">
+                <span>表单已经改过，这份预览是旧的</span>
+                <button className="btn ghost" onClick={() => void openPreview()} disabled={previewing}>
+                  {previewing ? '重新预览中…' : '重新预览'}
+                </button>
+              </div>
+            ) : null}
+            {/* The one thing the diff cannot carry: the file on disk is not what this process would
+                write, so saving rewrites the whole document (config.Save; the original is kept as
+                config.yaml.bak). Shown only when it is true. */}
+            {preview.res.ok && preview.res.rewrites ? (
+              <div className="set-preview-warn">
+                保存会把整个 config.yaml 重新生成：你手写的注释、空行与排版不会保留。原文件会留成一份
+                <span className="set-preview-path">config.yaml.bak</span>
+              </div>
+            ) : null}
+            {!preview.res.ok ? (
+              <div className="set-preview-refused">{preview.res.summary}</div>
+            ) : (preview.res.hunks || []).length === 0 ? (
+              <div className="set-preview-empty">这次改动不会写进文件（表单里的值和文件里的一致）</div>
+            ) : (
+              <div className="set-preview-diff">
+                <DiffLines hunks={preview.res.hunks || []} lineNumbers />
+              </div>
+            )}
+          </section>
+        ) : null}
+
         <div className="settings-foot">
           <div className={`settings-notice${notice?.bad ? ' is-bad' : ''}`}>{notice?.text ?? ''}</div>
           {/* What the save will carry, counted the way the reader counts it: fields they changed,
@@ -768,7 +862,14 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           {pendingText(dirty.length, adds.length, removes.length) ? (
             <div className="settings-dirty-count">{pendingText(dirty.length, adds.length, removes.length)}</div>
           ) : null}
-          <button className="btn" onClick={() => void save()}
+          <button className="btn ghost" onClick={() => void openPreview()}
+            disabled={saving || checking || previewing || (dirty.length === 0 && adds.length === 0 && removes.length === 0)}
+            title="先看一眼这次保存会写进 config.yaml 的改动（不会写文件）">
+            {previewing ? '预览中…' : '预览'}
+          </button>
+          {/* The save button carries its own class: 预览 sits beside it, and "the first .btn in the
+              foot" stopped being a way to name this one (the smoke driver clicks it by name). */}
+          <button className="btn settings-save" onClick={() => void save()}
             disabled={saving || checking || (dirty.length === 0 && adds.length === 0 && removes.length === 0)}>
             {saving ? '保存中…' : '保存'}
           </button>

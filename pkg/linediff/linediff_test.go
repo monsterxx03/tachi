@@ -1,6 +1,11 @@
 package linediff
 
-import "testing"
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+)
 
 // TestFragments covers the shapes a tool call actually produces.
 func TestFragments(t *testing.T) {
@@ -122,6 +127,111 @@ func TestCounts(t *testing.T) {
 	if added != 2 || removed != 1 {
 		t.Errorf("Counts = %d added / %d removed, want 2/1: %+v", added, removed, hunks)
 	}
+}
+
+// TestDiffContext: a whole-file diff keeps the changes and the context a reader needs to place
+// them, and drops the rest. The cases here are the ones a config preview lives on: one leaf
+// changed (the common case), two leaves changed far apart (where Fragments would hand back the
+// whole file), and a value that moved rather than changed.
+func TestDiffContext(t *testing.T) {
+	lines := func(n int, from string) string {
+		s := strings.Builder{}
+		for i := range n {
+			fmt.Fprintf(&s, "%s%d\n", from, i)
+		}
+		return s.String()
+	}
+	kindsOf := func(hunks []Hunk) []Kind {
+		out := make([]Kind, 0, len(hunks))
+		for _, h := range hunks {
+			out = append(out, h.Kind)
+		}
+		return out
+	}
+
+	// One line replaced in the middle of a 21-line file: two lines of context on each side, the
+	// other fifteen dropped, and the kept ones still carry the file's own coordinates.
+	hunks := DiffContext(lines(10, "a")+"b\n"+lines(10, "a"), lines(10, "a")+"B\n"+lines(10, "a"), 2)
+	want := []Kind{KindContext, KindContext, KindDel, KindAdd, KindContext, KindContext}
+	if !slices.Equal(kindsOf(hunks), want) {
+		t.Fatalf("kinds = %v, want %v (%+v)", kindsOf(hunks), want, hunks)
+	}
+	if got := []int{hunks[1].OldLine, hunks[2].OldLine, hunks[3].NewLine, hunks[4].NewLine}; !slices.Equal(got, []int{10, 11, 11, 12}) {
+		t.Errorf("the kept lines lost their coordinates: %v (%+v)", got, hunks)
+	}
+
+	// TWO changes far apart is the case Fragments cannot answer (no common prefix, no common
+	// suffix, so it hands back the whole file as one delete run against one add run). The regions
+	// stay two, each with its own context, and the 8 lines between them are dropped.
+	two := DiffContext("a\n"+lines(8, "g")+"b\n", "A\n"+lines(8, "g")+"B\n", 2)
+	wantTwo := []Kind{
+		KindDel, KindAdd,
+		KindContext, KindContext, // two lines below the first change
+		KindContext, KindContext, // …and two above the second
+		KindDel, KindAdd,
+	}
+	if !slices.Equal(kindsOf(two), wantTwo) {
+		t.Fatalf("two changes: kinds = %v, want %v (%+v)", kindsOf(two), wantTwo, two)
+	}
+	if two[2].OldLine != 2 || two[5].OldLine != 9 {
+		t.Errorf("two changes: kept lines %d..%d, want 2..9", two[2].OldLine, two[5].OldLine)
+	}
+
+	// A change region speaks deletions-then-insertions even when the walk met them interleaved:
+	// the 左右 layout pairs the two runs, so the order is part of the contract (see the doc).
+	moved := DiffContext("x\na\nb\n", "b\na\nx\n", 3)
+	seenAdd := false
+	for _, h := range moved {
+		if h.Kind == KindAdd {
+			seenAdd = true
+		} else if h.Kind == KindDel && seenAdd {
+			t.Errorf("a deletion came after an insertion inside one region: %+v", moved)
+		}
+	}
+
+	// keep=0 is the boundary, and nothing here may panic on a text with no change in it at all.
+	if got := kindsOf(DiffContext("a\nb\nc\n", "a\nB\nc\n", 0)); !slices.Equal(got, []Kind{KindDel, KindAdd}) {
+		t.Errorf("keep=0 = %v, want the change and nothing else", got)
+	}
+	if got := DiffContext("a\nb\n", "a\nb\n", 2); len(got) != 0 {
+		t.Errorf("an unchanged text = %+v, want no hunks", got)
+	}
+	if got := DiffContext("", "", 3); len(got) != 0 {
+		t.Errorf("two empty texts = %+v, want no hunks", got)
+	}
+	// A whole file appearing and a whole file going away are both all-add / all-del.
+	if got := DiffContext("", "a\nb\n", 2); !slices.Equal(kindsOf(got), []Kind{KindAdd, KindAdd}) {
+		t.Errorf("a new file = %v", got)
+	}
+	if got := DiffContext("a\nb\n", "", 2); !slices.Equal(kindsOf(got), []Kind{KindDel, KindDel}) {
+		t.Errorf("a deleted file = %v", got)
+	}
+}
+
+// TestTrimContext is the trimming half on its own: the boundary cases of a run it cannot shorten.
+func TestTrimContext(t *testing.T) {
+	if got := TrimContext(nil, 3); len(got) != 0 {
+		t.Errorf("TrimContext(nil) = %+v, want nothing", got)
+	}
+	// A run with room for the context on the side that matters is kept whole (and a run that is
+	// longer than that is trimmed from the far end — the `keep` lines nearest the change are the
+	// ones that place it).
+	short := Fragments("a\nb\n", "a\nB\n")
+	if got := TrimContext(short, 2); len(got) != len(short) {
+		t.Errorf("a 1-line run with keep=2 must stay whole: %+v", got)
+	}
+	long := TrimContext(Fragments("a\nb\nc\n", "a\nb\nc\nx\n"), 2)
+	if got := kindsOf(long); !slices.Equal(got, []Kind{KindContext, KindContext, KindAdd}) {
+		t.Errorf("a 3-line run with keep=2 must keep its two nearest the change: %v (%+v)", got, long)
+	}
+}
+
+func kindsOf(hunks []Hunk) []Kind {
+	out := make([]Kind, 0, len(hunks))
+	for _, h := range hunks {
+		out = append(out, h.Kind)
+	}
+	return out
 }
 
 // TestFragmentsMultiOccurrence pins the documented shape of a replace_all edit: the

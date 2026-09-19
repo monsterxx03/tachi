@@ -98,7 +98,42 @@
 
   // ── 改一项 → 保存 → 汇总句 ───────────────────────────────────────────────
   smoke.pick(tpSel, 'smoke')
-  const saveBtn = smoke.q('.settings-foot .btn')
+
+  // ── 保存前预览（第一次保存之前：config.yaml 还是手写的那一份）────────────
+  // 预览必须是"这次保存会写什么"的**后端答案**（同一个 batch、同一个 pre-flight、同一个 marshal），
+  // 而不是前端照着表单画的：所以这里断言的是 diff 的内容（改的那一行 + 它的上下文），以及一件事
+  // 只有后端知道、diff 本身看不出来的事实 —— 这份手写文件会被整份重写。
+  const preBtn = () => smoke.qa('.settings-foot .btn').find((b) => smoke.text(b) === '预览')
+  if (!preBtn()) return smoke.fail('页脚有「预览」按钮', smoke.allText('.settings-foot .btn').join(' / '))
+  smoke.click(preBtn())
+  const panel = await smoke.waitFor('.set-preview', '预览面板出现')
+  smoke.check('点「预览」出现面板', !!panel, panel ? '' : '(没有 .set-preview)')
+  if (!panel) return smoke.finish()
+  const lines = smoke.qa('.set-preview-diff .diff-line')
+  const texts = lines.map((l) => smoke.text(l))
+  smoke.check('预览里是这次改动的 diff（title_provider 那一行有删有加）',
+    lines.length >= 2
+      && lines.some((l) => l.className.indexOf('is-del') >= 0 && smoke.text(l).indexOf('title_provider') >= 0)
+      && lines.some((l) => l.className.indexOf('is-add') >= 0 && smoke.text(l).indexOf('title_provider') >= 0),
+    texts.join(' | ').slice(0, 200))
+  smoke.check('预览带上了行号（真机文件行号，和保存后的一致）',
+    smoke.qa('.set-preview-diff .diff-ln').length > 0,
+    String(smoke.qa('.set-preview-diff .diff-ln').length))
+  smoke.check('面板报出 +N −M', smoke.text('.set-preview-counts').indexOf('+1') >= 0
+    && smoke.text('.set-preview-counts').indexOf('−1') >= 0, smoke.text('.set-preview-counts'))
+  // 手写文件（沙箱那份 spec 里带注释）不是这个进程会写出来的样子，所以这次保存要把整个文档重写一遍。
+  smoke.check('手写文件会被整份重写这件事，预览用文字说了（diff 说不出来）',
+    !!smoke.q('.set-preview-warn') && smoke.text('.set-preview-warn').indexOf('config.yaml.bak') >= 0,
+    smoke.text('.set-preview-warn') || '(没有警告行)')
+  smoke.check('预览不碰表单（草稿还在，保存键仍然可用）',
+    !!smoke.q('.set-row.is-dirty') && !smoke.q('.settings-foot .settings-save').disabled, '')
+  smoke.check('预览画在表单之外（它是答案，不是又一个输入框）',
+    !!smoke.q('.set-preview-diff') && !smoke.q('.settings-form .set-preview-diff'), '')
+  const closed = smoke.click(smoke.qa('.set-preview .btn').find((b) => smoke.text(b) === '收起'))
+  const gone = await smoke.waitFor(() => (!smoke.q('.set-preview') ? true : null), '收起预览')
+  smoke.check('「收起」把面板收掉，表单不受影响', !!closed && !!gone,
+    '收起=' + closed + ' 面板=' + !!smoke.q('.set-preview') + ' 脏行=' + !!smoke.q('.set-row.is-dirty'))
+  const saveBtn = smoke.q('.settings-foot .settings-save')
   smoke.check('改过之后行被标脏、保存按钮可用',
     !!smoke.q('.set-row.is-dirty') && !!saveBtn && !saveBtn.disabled,
     'dirty=' + !!smoke.q('.set-row.is-dirty') + ' disabled=' + (saveBtn ? saveBtn.disabled : '?'))
@@ -120,7 +155,7 @@
     return r ? r.querySelector('select') : null
   })()
   if (!autoSel || !smoke.pick(autoSel, '')) return smoke.fail('把 spec.vision 选成「自动」', '')
-  smoke.click(smoke.q('.settings-foot .btn'))
+  smoke.click(smoke.q('.settings-foot .settings-save'))
   const second = await smoke.waitFor(() => {
     const t = smoke.text('.settings-notice')
     return t.indexOf('已生效') >= 0 ? t : null
@@ -241,7 +276,7 @@
     .find((b) => smoke.text(b).indexOf('删除这一项') >= 0)
   if (!delBtn) return smoke.fail('卡片里有「删除这一项」', card.innerHTML.slice(0, 200))
   // 危险入口得和普通按钮看得出区别（这是整页唯一会把东西从用户配置里拿走的按钮）。
-  const plainBtn = smoke.q('.settings-foot .btn')
+  const plainBtn = smoke.q('.settings-foot .settings-save')
   smoke.check('删除入口是危险色，和普通按钮分得开',
     !!plainBtn && getComputedStyle(delBtn).color !== getComputedStyle(plainBtn).color,
     getComputedStyle(delBtn).color + ' vs 普通按钮 ' + (plainBtn ? getComputedStyle(plainBtn).color : '(无)'))
@@ -317,8 +352,8 @@
   const visionNewSel = visionInNew ? visionInNew.querySelector('select') : null
   if (!visionNewSel || !smoke.pick(visionNewSel, 'true')) return smoke.fail('把新条目的 spec.vision 设成「开」', '')
   smoke.check('填了新条目之后保存按钮可用（新条目的字段也是普通草稿）',
-    !!smoke.q('.settings-foot .btn') && !smoke.q('.settings-foot .btn').disabled, '')
-  smoke.click(smoke.q('.settings-foot .btn'))
+    !!smoke.q('.settings-foot .settings-save') && !smoke.q('.settings-foot .settings-save').disabled, '')
+  smoke.click(smoke.q('.settings-foot .settings-save'))
   const savedAll = await smoke.waitFor(() => {
     const t = smoke.text('.settings-notice')
     return t.indexOf('已生效') >= 0 ? t : null
@@ -344,7 +379,7 @@
     .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === 'spec.vision')
   const visionBackSel = visionBack ? visionBack.querySelector('select') : null
   if (!visionBackSel || !smoke.pick(visionBackSel, '')) return smoke.fail('把新条目的 spec.vision 改回「自动」', '')
-  smoke.click(smoke.q('.settings-foot .btn'))
+  smoke.click(smoke.q('.settings-foot .settings-save'))
   const savedAuto = await smoke.waitFor(() => {
     const t = smoke.text('.settings-notice')
     return t.indexOf('已生效') >= 0 ? t : null
@@ -456,6 +491,52 @@
       getComputedStyle(smoke.q('.session-title')).visibility === 'visible',
     smoke.allText('.session-title').join(' | '))
   smoke.check('在设置页按 Esc 回到会话界面', !!escBack, escBack ? '' : 'settings-view=' + !!smoke.q('.settings-view'))
+
+  // ── 保存过的文件不再有"会被重写"的警告；表单改过之后预览会说自己旧了 ──────
+  // 两件事都只有"文件已经是这个进程写出来的样子"之后才试得出来 —— 上面那几条保存在这之前跑。
+  // 这一整段**不保存**：草稿留到最后，Go 侧读 config.yaml 断言它没被动过（预览不写盘）。
+  smoke.key('body', ',', { metaKey: true })
+  if (!(await smoke.waitFor('.settings-view', '⌘, 再次打开设置页'))) return smoke.finish()
+  smoke.click(catByName('通用'))
+  if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '通用', '切到通用（预览不写盘）'))) return smoke.finish()
+  // A free-text row (`language`), not the provider dropdown: the dropdown's options come from THIS
+  // config, and the provider named smoke was deleted by the saves above — picking a value that has
+  // no option would leave the form untouched and the whole block would test nothing.
+  const langInput = (() => {
+    const r = rowByKey('language')
+    return r ? r.querySelector('input') : null
+  })()
+  if (!langInput || !smoke.type(langInput, 'en')) return smoke.fail('把 language 改成 en（预览用）', '')
+  smoke.click(smoke.qa('.settings-foot .btn').find((b) => smoke.text(b) === '预览'))
+  if (!(await smoke.waitFor('.set-preview', '再次预览'))) return smoke.finish()
+  smoke.check('文件已经就是这个进程写出来的样子时，不再警告「会被整份重写」',
+    !smoke.q('.set-preview-warn'), smoke.text('.set-preview-warn') || '')
+  smoke.check('第一次保存之后，预览的差异就只有这一次改动',
+    smoke.text('.set-preview-counts').indexOf('+1') >= 0 && smoke.text('.set-preview-counts').indexOf('−1') >= 0,
+    smoke.text('.set-preview-counts'))
+  smoke.check('这一次的 diff 就是刚改的那一行（language zh → en）',
+    smoke.qa('.set-preview-diff .diff-line').some((l) => smoke.text(l).indexOf('language: en') >= 0),
+    smoke.qa('.set-preview-diff .diff-line').map((l) => smoke.text(l)).join(' | ').slice(0, 160))
+  // 表单动了 → 面板必须说自己是旧的（它描述的是另一批改动），而不是安静地继续显示。
+  smoke.type(langInput, 'fr')
+  const stale = await smoke.waitFor('.set-preview-stale', '面板报出「表单已经改过」')
+  smoke.check('开着预览时改表单，面板说这份预览是旧的', !!stale, smoke.text('.set-preview-stale') || '')
+  const refreshed = smoke.click(smoke.qa('.set-preview-stale .btn')[0])
+  const fresh = await smoke.waitFor(
+    () => (!smoke.q('.set-preview-stale') && smoke.q('.set-preview-diff') ? true : null), '「重新预览」之后不再是旧的')
+  smoke.check('「重新预览」把面板刷新到当前表单', !!refreshed && !!fresh,
+    fresh ? '' : smoke.text('.set-preview-stale'))
+  smoke.check('刷新后的 diff 说的是新值（language: fr）',
+    smoke.qa('.set-preview-diff .diff-line').some((l) => smoke.text(l).indexOf('language: fr') >= 0),
+    smoke.qa('.set-preview-diff .diff-line').map((l) => smoke.text(l)).join(' | ').slice(0, 160))
+  // 收起面板，然后什么都不保存地离开：Go 侧读文件来断言这一路确实一个字节都没写。
+  smoke.click(smoke.qa('.set-preview .btn').find((b) => smoke.text(b) === '收起'))
+  if (!(await smoke.waitFor(() => (!smoke.q('.set-preview') ? true : null), '收起第二次预览'))) return smoke.finish()
+  smoke.click('.settings-back')
+  const leftDirty = await smoke.waitFor(
+    () => (!smoke.q('.settings-view') ? true : null), '带着未保存的草稿返回对话')
+  smoke.check('预览过、又改过、还没保存 —— 就这样返回对话', !!leftDirty,
+    smoke.text('.settings-notice') || '')
 
   smoke.finish()
 })()

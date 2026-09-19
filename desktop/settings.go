@@ -28,15 +28,18 @@ package main
 // Design: docs/2026-09-14-desktop-settings-design.md §七、§八之三.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/linediff"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -1104,6 +1107,44 @@ func normalizeUnsets(cfg *config.Config, updates map[string]any) {
 	}
 }
 
+// resolveBatch is the pre-flight half of EVERY batch this page sends — the save and the preview
+// run it before either touches anything, so a preview cannot promise something the save then
+// refuses (nor the other way round: the reader would have been shown "nothing to change" for a
+// batch that is about to be rejected).
+//
+//  1. every key must be one this page owns: an unknown key, or one another entry mode owns,
+//     refuses the whole batch before anything is touched. A half-saved form is a state no reader
+//     can reason about.
+//  2. the structural half has to be doable at all: a page that has been open a while can name an
+//     index the list no longer has, or the same one twice (see validateRemovals). The appends are
+//     checked by the code that creates them — the list's own length decides it.
+//
+// Returns the rows of the keys it accepted (and those keys, sorted — the order every later step
+// speaks in), or the sentence to show instead of doing anything.
+func resolveBatch(cfg *config.Config, edits config.ListEdits) (map[string]settingApply, []string, string) {
+	keys := make([]string, 0, len(edits.Updates))
+	for key := range edits.Updates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	rows := make(map[string]settingApply, len(keys))
+	for _, key := range keys {
+		row, ok := settingFor(key)
+		if !ok {
+			return nil, nil, fmt.Sprintf("未知配置项：%s", key)
+		}
+		if !row.offered() {
+			return nil, nil, fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)
+		}
+		rows[key] = row
+	}
+	if err := validateRemovals(cfg, edits.Removes); err != nil {
+		return nil, nil, "改不了：" + err.Error()
+	}
+	return rows, keys, ""
+}
+
 // SaveSettingsResultVO is what the page gets back from a save: whether anything was written,
 // and the one sentence to show.
 //
@@ -1177,30 +1218,12 @@ func (s *AgentService) SaveSettings(updates map[string]any, appends, removes []s
 		return &SaveSettingsResultVO{OK: false, Summary: "没有要保存的改动"}
 	}
 
-	keys := make([]string, 0, len(updates))
-	for key := range updates {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	// 1. Every key must be one this page owns.
-	rows := make(map[string]settingApply, len(keys))
-	for _, key := range keys {
-		row, ok := settingFor(key)
-		if !ok {
-			return &SaveSettingsResultVO{OK: false, Summary: fmt.Sprintf("未知配置项：%s", key)}
-		}
-		if !row.offered() {
-			return &SaveSettingsResultVO{OK: false, Summary: fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)}
-		}
-		rows[key] = row
-	}
-	// …and the structural half has to be doable at all: a page that has been open a while can name
-	// an index the list no longer has, or the same one twice (see validateRemovals). The appends are
-	// checked in step 3 by the code that creates them — the list's own length decides it, and there
-	// is nothing to keep in step with here.
-	if err := validateRemovals(cfg, removes); err != nil {
-		return &SaveSettingsResultVO{OK: false, Summary: "改不了：" + err.Error()}
+	// 1. Every key must be one this page owns — and the structural half has to be doable at all.
+	// One pre-flight, shared with the PREVIEW (see resolveBatch): two copies is how a preview comes
+	// to promise something this refuses.
+	rows, keys, refusal := resolveBatch(cfg, edits)
+	if refusal != "" {
+		return &SaveSettingsResultVO{OK: false, Summary: refusal}
 	}
 
 	// 2. The page's null means 自动 on a leaf that has that state — see normalizeUnsets. It has to
@@ -1342,6 +1365,141 @@ func (s *AgentService) SaveSettings(updates map[string]any, appends, removes []s
 		return &SaveSettingsResultVO{OK: true, Summary: "已保存"}
 	}
 	return &SaveSettingsResultVO{OK: true, Summary: strings.Join(parts, "；")}
+}
+
+// SettingsPreviewVO is what the reader sees when they ask what 保存 is about to do: the lines the
+// save would add and drop in config.yaml, and the one thing a diff of it cannot show.
+type SettingsPreviewVO struct {
+	// OK is true when the batch is one the save would accept. False means it would be REFUSED, and
+	// Summary says why — the same sentence the save itself would answer with, because both run the
+	// same pre-flight (resolveBatch). That is worth more than it looks: a reader can find out that a
+	// key is not theirs, or that an item cannot be dropped, without touching the file.
+	OK bool `json:"ok"`
+	// Summary is the refusal, or "" when there is something to show.
+	Summary string `json:"summary"`
+	// Hunks are the file's changed lines in the app's one diff model (pkg/linediff), so the page
+	// renders them with the same renderer every other diff uses.
+	Hunks []linediff.Hunk `json:"hunks"`
+	// Added / Removed count those hunks (linediff.Counts — the same numbers the diff pane shows).
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+	// Rewrites is the fact the diff CANNOT carry: config.yaml on disk is not what this process
+	// would write, so saving rewrites the whole document — the reader's comments, blank lines and
+	// hand layout do not survive it (see config.Save, and backupOnce, which keeps ONE copy of the
+	// original as config.yaml.bak). False once the file is the marshalled form, which is the state
+	// every file reaches after its first save from this page.
+	//
+	// It is a PREDICATE rather than a sentence because it is a fact about the file; the page decides
+	// how to warn (it also has the diff right there to point at).
+	Rewrites bool `json:"rewrites"`
+}
+
+// diffPreviewContext is how much of the generated file the preview keeps around each change. Three
+// is `git diff`'s own default, and the reason holds here too: enough to see what the changed line
+// belongs to (its neighbours, the item it sits in), little enough that the change is what the
+// reader sees first.
+const diffPreviewContext = 3
+
+// PreviewSettings answers "what will pressing 保存 write?": the same batch, through the same
+// pre-flight and the same apply, MARSHALLED instead of written — and then put back.
+//
+// It diffs the GENERATED file against the generated file, not against the bytes on disk: the file
+// is a projection of the config object (config.Save marshals it whole), so a diff against the
+// reader's hand-written document would be mostly the document's own comments and layout — noise
+// that buries the two lines they are about to change, and noise that is not this save's doing
+// (defaults and provider-alias expansion are applied in memory at load, so the first save would
+// "change" keys nobody touched). What that rewrite DOES cost the reader is Rewrites, said in words
+// and only when it is true.
+//
+// The batch is applied to the LIVE config and rolled back, rather than to a copy: a copy would have
+// to be built by marshalling and re-reading, and both of those go through the same code the answer
+// is about — a copy that marshals differently from the object would make the preview lie in the one
+// direction that matters. Rollback is SnapshotListEdits/RestoreListEdits, the pair the save itself
+// uses when the file write fails, so what this sends is exactly what a save would send.
+//
+// It holds d.settingsMu like the save does — it mutates the config, so it must not interleave with
+// one — and it is READ-ONLY from the outside: nothing is written, and nothing is pushed.
+func (s *AgentService) PreviewSettings(updates map[string]any, appends, removes []string) *SettingsPreviewVO {
+	d := s.desk
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+
+	cfg := d.config()
+	if cfg == nil {
+		return &SettingsPreviewVO{Summary: "配置尚未加载，改不了"}
+	}
+	edits := config.ListEdits{Updates: updates, Appends: appends, Removes: removes}
+	if edits.IsEmpty() {
+		return &SettingsPreviewVO{OK: true, Summary: "没有要保存的改动"}
+	}
+	rows, keys, refusal := resolveBatch(cfg, edits)
+	if refusal != "" {
+		return &SettingsPreviewVO{Summary: refusal}
+	}
+	// The page's null means 自动 on a leaf that has that state — the save's step 2, and it has to
+	// happen before anything is marshalled, because what the diff shows is what config will be
+	// given. (It writes into the caller's map, exactly as the save does; each call arrives with its
+	// own.)
+	normalizeUnsets(cfg, updates)
+
+	// The save's step 3, split the same way and for the same reason (see SaveSettings): a row that
+	// OWNS its leaf is NOT applied to memory — its push writes it later, when the runtime can take
+	// it — while the FILE carries it like every other value. So it is laid over the object for this
+	// one marshal and lifted again, or the preview would show "no change" for the very key whose
+	// change the reader is asking about.
+	batched := make(map[string]any, len(updates))
+	for _, key := range keys {
+		if rows[key].OwnsWrite {
+			continue
+		}
+		batched[key] = updates[key]
+	}
+	applied := config.ListEdits{Updates: batched, Appends: appends, Removes: removes}
+
+	var before, after []byte
+	var previewErr error
+	d.withConfig(func(c *config.Config) {
+		// The file as this process would write it RIGHT NOW is the diff's left side…
+		if before, previewErr = config.Marshal(c); previewErr != nil {
+			return
+		}
+		// …and the same thing with the batch applied is the right side. All of it under ONE
+		// withConfig: the write lock is what keeps a concurrent reader (or the MCP profile switch,
+		// which writes the config too) from seeing the config mid-batch. An EMPTY applied edit is
+		// the normal case for the keys that own their write, and it still needs the overlay below.
+		snap, err := config.SnapshotListEdits(c, applied)
+		if err != nil {
+			previewErr = err
+			return
+		}
+		if err := config.ApplyListEdits(c, applied); err != nil {
+			config.RestoreListEdits(c, snap)
+			previewErr = err
+			return
+		}
+		lift := overlayOwnedLeaves(c, ownedLeaves(rows, updates))
+		after, previewErr = config.Marshal(c)
+		lift()
+		config.RestoreListEdits(c, snap)
+	})
+	if previewErr != nil {
+		return &SettingsPreviewVO{Summary: "改不了：" + previewErr.Error()}
+	}
+
+	// The one fact the two marshals cannot show. Read outside the lock: the file is not this
+	// process's memory, and SaveTo compares the same two things before deciding to write at all.
+	rewrites := false
+	if path, err := config.ConfigPath(); err == nil {
+		if current, err := os.ReadFile(path); err == nil {
+			rewrites = !bytes.Equal(current, before)
+		}
+	}
+	// The diff is a WHOLE-FILE one with a few lines of context (DiffContext, not Fragments): the
+	// change is what the reader asked for, and Fragments would hand back the whole config the moment
+	// two leaves changed in different places (it trims only the common prefix and suffix).
+	hunks := linediff.DiffContext(string(before), string(after), diffPreviewContext)
+	added, removed := linediff.Counts(hunks)
+	return &SettingsPreviewVO{OK: true, Hunks: hunks, Added: added, Removed: removed, Rewrites: rewrites}
 }
 
 // deferredSessionLabels names the sessions whose push waited for a turn to end, in the summary's

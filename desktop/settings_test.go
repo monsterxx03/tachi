@@ -23,6 +23,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/linediff"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -1092,6 +1093,145 @@ title_provider: main
 	}
 	if len(d.cfg.Providers) != 2 {
 		t.Errorf("memory = %+v, want the batch applied", d.cfg.Providers)
+	}
+}
+
+// showsLine is "does the diff show a line like this, this way" — the question every preview
+// assertion below is really asking. A SUBSTRING rather than the whole line: the generated YAML's
+// indentation is the marshaller's business, and a test that spelled it out would break on a change
+// of nesting rather than on a broken diff.
+func showsLine(hunks []linediff.Hunk, kind linediff.Kind, sub string) bool {
+	for _, h := range hunks {
+		if h.Kind == kind && strings.Contains(h.Text, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPreviewSettingsShowsTheChangeAndLeavesNothingBehind: the preview is a save that stops one step
+// short — it applies the batch to the LIVE config and rolls it back — so the two things it must not
+// do are the two the reader would pay for: leave the config changed, and touch the file.
+func TestPreviewSettingsShowsTheChangeAndLeavesNothingBehind(t *testing.T) {
+	d, svc, path := settingsFixture(t, "language: en\nmax_tokens: 1000\n")
+	before := readFileT(t, path)
+
+	res := svc.PreviewSettings(map[string]any{"language": "zh"}, nil, nil)
+	if !res.OK {
+		t.Fatalf("the preview refused a batch the save accepts: %q", res.Summary)
+	}
+	if res.Added != 1 || res.Removed != 1 {
+		t.Errorf("added/removed = %d/%d, want 1/1: %+v", res.Added, res.Removed, res.Hunks)
+	}
+	if !showsLine(res.Hunks, linediff.KindDel, "language: en") || !showsLine(res.Hunks, linediff.KindAdd, "language: zh") {
+		t.Errorf("the diff does not show the change: %+v", res.Hunks)
+	}
+	// The neighbours come along — three above the changed line and three below (see
+	// diffPreviewContext) — which is what says WHERE in the file it is, and they carry the file's
+	// own line numbers (the ones the saved file will have).
+	context := 0
+	for _, h := range res.Hunks {
+		if h.Kind != linediff.KindContext {
+			continue
+		}
+		context++
+		if h.OldLine == 0 || h.NewLine == 0 {
+			t.Errorf("a context line came without coordinates: %+v", h)
+		}
+	}
+	if context != 2*diffPreviewContext {
+		t.Errorf("the diff kept %d context lines, want %d (3 above, 3 below)", context, 2*diffPreviewContext)
+	}
+	if d.cfg.Language != "en" {
+		t.Errorf("the preview left the config changed: language = %q", d.cfg.Language)
+	}
+	if got := readFileT(t, path); got != before {
+		t.Errorf("the preview touched the file:\n%s", got)
+	}
+}
+
+// TestPreviewSettingsRefusesWhatTheSaveRefuses: ONE pre-flight answers both, so the sentences are
+// the same. A preview that promised something the save then refuses (or showed "nothing to change"
+// for a batch that was about to be rejected) is worse than no preview — the reader acted on it.
+func TestPreviewSettingsRefusesWhatTheSaveRefuses(t *testing.T) {
+	d, svc, path := settingsFixture(t, "language: en\n")
+	before := readFileT(t, path)
+	tests := []struct {
+		name    string
+		updates map[string]any
+	}{
+		{"unknown key", map[string]any{"nope": "x"}},
+		{"another entry mode's key", map[string]any{"tui.input_history_limit": float64(5)}},
+	}
+	for _, tt := range tests {
+		pre := svc.PreviewSettings(tt.updates, nil, nil)
+		save := svc.SaveSettings(tt.updates, nil, nil)
+		if pre.OK {
+			t.Errorf("%s: the preview accepted a batch the save refuses", tt.name)
+		}
+		if pre.Summary != save.Summary {
+			t.Errorf("%s: the preview says %q, the save says %q — one pre-flight has to answer both",
+				tt.name, pre.Summary, save.Summary)
+		}
+		if len(pre.Hunks) != 0 {
+			t.Errorf("%s: a refused preview came with a diff: %+v", tt.name, pre.Hunks)
+		}
+		if got := readFileT(t, path); got != before {
+			t.Errorf("%s: the file changed: %q", tt.name, got)
+		}
+	}
+	if d.cfg.Language != "en" {
+		t.Errorf("language = %q after the refusals, want it untouched", d.cfg.Language)
+	}
+}
+
+// TestPreviewSettingsShowsStructuralEdits: an append and a removal are the batch's other half, and
+// the diff shows them like any other change — while the LIST is back to what it was afterwards. The
+// rollback is the save's own snapshot pair (taken before the apply), which is the point: what the
+// preview shows cannot be a different batch than the one a save would carry.
+func TestPreviewSettingsShowsStructuralEdits(t *testing.T) {
+	d, svc, _ := settingsFixture(t, `providers:
+  - name: main
+    type: openai
+    model: m0
+  - name: second
+    type: openai
+    model: m1
+`)
+	list := findList(t, svc.GetSettingsSchema(), "providers")
+	added := fmt.Sprintf("providers.%d", list.Length)
+
+	res := svc.PreviewSettings(map[string]any{added + ".name": "added"}, []string{added}, []string{"providers.1"})
+	if !res.OK {
+		t.Fatalf("the preview refused the batch: %q", res.Summary)
+	}
+	if !showsLine(res.Hunks, linediff.KindAdd, "name: added") {
+		t.Errorf("the appended item is not in the diff: %+v", res.Hunks)
+	}
+	if !showsLine(res.Hunks, linediff.KindDel, "name: second") {
+		t.Errorf("the dropped item is not in the diff: %+v", res.Hunks)
+	}
+	if len(d.cfg.Providers) != 2 || d.cfg.Providers[1].Name != "second" {
+		t.Errorf("the preview left the list changed: %+v", d.cfg.Providers)
+	}
+}
+
+// TestPreviewSettingsSaysWhenTheFileWillBeRewritten is the fact the diff cannot carry: the two
+// marshals are the generated file either side of the batch, so they say nothing about the bytes on
+// disk — and a hand-written config.yaml (comments, its own layout) is not what this process would
+// write, so saving it rewrites the whole document.
+func TestPreviewSettingsSaysWhenTheFileWillBeRewritten(t *testing.T) {
+	d, svc, _ := settingsFixture(t, "# my config\nlanguage: en\n")
+	if res := svc.PreviewSettings(map[string]any{"language": "zh"}, nil, nil); !res.Rewrites {
+		t.Error("a hand-written file (it has a comment) was not reported as one a save rewrites")
+	}
+	// Save once: the file becomes the marshalled form, and the NEXT preview has nothing to warn
+	// about — the change is then exactly the diff it shows.
+	if res := svc.SaveSettings(map[string]any{"language": "zh"}, nil, nil); !res.OK {
+		t.Fatalf("the save this test needs was refused: %q", res.Summary)
+	}
+	if res := svc.PreviewSettings(map[string]any{"language": "en"}, nil, nil); res.Rewrites {
+		t.Errorf("a file this app wrote was still reported as one a save rewrites (memory language = %q)", d.cfg.Language)
 	}
 }
 

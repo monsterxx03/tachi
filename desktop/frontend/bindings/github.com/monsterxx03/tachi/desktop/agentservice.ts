@@ -487,6 +487,31 @@ export function PreviewRewind(id: string, turn: number): $CancellablePromise<$mo
 }
 
 /**
+ * PreviewSettings answers "what will pressing 保存 write?": the same batch, through the same
+ * pre-flight and the same apply, MARSHALLED instead of written — and then put back.
+ * 
+ * It diffs the GENERATED file against the generated file, not against the bytes on disk: the file
+ * is a projection of the config object (config.Save marshals it whole), so a diff against the
+ * reader's hand-written document would be mostly the document's own comments and layout — noise
+ * that buries the two lines they are about to change, and noise that is not this save's doing
+ * (defaults and provider-alias expansion are applied in memory at load, so the first save would
+ * "change" keys nobody touched). What that rewrite DOES cost the reader is Rewrites, said in words
+ * and only when it is true.
+ * 
+ * The batch is applied to the LIVE config and rolled back, rather than to a copy: a copy would have
+ * to be built by marshalling and re-reading, and both of those go through the same code the answer
+ * is about — a copy that marshals differently from the object would make the preview lie in the one
+ * direction that matters. Rollback is SnapshotListEdits/RestoreListEdits, the pair the save itself
+ * uses when the file write fails, so what this sends is exactly what a save would send.
+ * 
+ * It holds d.settingsMu like the save does — it mutates the config, so it must not interleave with
+ * one — and it is READ-ONLY from the outside: nothing is written, and nothing is pushed.
+ */
+export function PreviewSettings(updates: { [_ in string]?: any } | null, appends: string[] | null, removes: string[] | null): $CancellablePromise<$models.SettingsPreviewVO | null> {
+    return $Call.ByID(3511495093, updates, appends, removes);
+}
+
+/**
  * RemoveSessionRoot drops one additional root. The primary is not removable (the
  * UI offers "change" instead), so a path equal to it is simply not found here.
  */

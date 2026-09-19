@@ -1090,6 +1090,49 @@ export interface SettingListVO {
 }
 
 /**
+ * SettingsPreviewVO is what the reader sees when they ask what 保存 is about to do: the lines the
+ * save would add and drop in config.yaml, and the one thing a diff of it cannot show.
+ */
+export interface SettingsPreviewVO {
+    /**
+     * OK is true when the batch is one the save would accept. False means it would be REFUSED, and
+     * Summary says why — the same sentence the save itself would answer with, because both run the
+     * same pre-flight (resolveBatch). That is worth more than it looks: a reader can find out that a
+     * key is not theirs, or that an item cannot be dropped, without touching the file.
+     */
+    "ok": boolean;
+
+    /**
+     * Summary is the refusal, or "" when there is something to show.
+     */
+    "summary": string;
+
+    /**
+     * Hunks are the file's changed lines in the app's one diff model (pkg/linediff), so the page
+     * renders them with the same renderer every other diff uses.
+     */
+    "hunks": linediff$0.Hunk[] | null;
+
+    /**
+     * Added / Removed count those hunks (linediff.Counts — the same numbers the diff pane shows).
+     */
+    "added": number;
+    "removed": number;
+
+    /**
+     * Rewrites is the fact the diff CANNOT carry: config.yaml on disk is not what this process
+     * would write, so saving rewrites the whole document — the reader's comments, blank lines and
+     * hand layout do not survive it (see config.Save, and backupOnce, which keeps ONE copy of the
+     * original as config.yaml.bak). False once the file is the marshalled form, which is the state
+     * every file reaches after its first save from this page.
+     * 
+     * It is a PREDICATE rather than a sentence because it is a fact about the file; the page decides
+     * how to warn (it also has the diff right there to point at).
+     */
+    "rewrites": boolean;
+}
+
+/**
  * SettingsRemovalVO is what the page is told when it drops an item: whether the drop is possible
  * at all, and the one sentence to show.
  * 
