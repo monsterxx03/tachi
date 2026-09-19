@@ -30,6 +30,28 @@
     && smoke.text(rows[2]).indexOf('ZED.md') >= 0,
     smoke.allText('.diff-filelist-row').join(' | '))
 
+  // 拖拽条要**能抓**整列的高度，而不是只有列表那么高（issue #31）：索引只有三行时，读者仍然要能在
+  // 行下方的空白里抓住它。判据是 elementFromPoint —— 那正是"鼠标能不能落上去"的定义。
+  //
+  // 注意量的是**可抓区域**，不是条的盒子：条本身仍然只有列表那么高（它跟着列表走、药丸居中在列表
+  // 上），延伸到整列的是它那个绝对定位的 ::before（见 chat.css）。所以这里不比较高度，而是在最后一行
+  // 下面 40px / 120px 处各探一次。
+  const resizer = smoke.q('.diff-filelist-resizer')
+  const list = smoke.q('.diff-filelist')
+  if (!resizer || !list) return smoke.fail('列表与拖拽条都在', '')
+  const lBox = list.getBoundingClientRect()
+  const rBox = resizer.getBoundingClientRect()
+  smoke.log('索引与拖拽条', `列表 ${Math.round(lBox.height)}px / 条 ${Math.round(rBox.height)}px` +
+    ` / 可抓高度 ${getComputedStyle(resizer).getPropertyValue('--diff-room-h').trim() || '(未测?)'}`)
+  const probes = [40, 120].map((dy) => {
+    const y = lBox.bottom + dy
+    const hit = document.elementFromPoint(rBox.left + rBox.width / 2, y)
+    const ok = !!hit && (hit === resizer || resizer.contains(hit))
+    return { dy, ok, got: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'null' }
+  })
+  smoke.check('最后一行下面的空白处也抓得到拖拽条（40px / 120px 两处）',
+    probes.every((p) => p.ok), probes.map((p) => `y+${p.dy}: ${p.got}`).join(' / '))
+
   const current = () => {
     const sel = smoke.qa('.diff-filelist-row.is-current')
     return sel.length === 1 ? smoke.text(sel[0]) : `(${sel.length} 行高亮)`

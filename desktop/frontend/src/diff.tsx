@@ -556,6 +556,11 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
     const head = headRef.current
     const pane = paneRef.current
     if (!head || !pane || !fileList) return
+    // The scroller this pane lives in, whatever it is: the overlay's `.viewer-stage`, the side
+    // panel's `.oneoff-body`. It is what the index's room is measured against (see --diff-room-h
+    // below), and the two layouts scroll in different elements — which is exactly why the value is
+    // measured here instead of being spelled `100vh` in the stylesheet.
+    const scroller = pane.parentElement
     const publish = () => {
       const gap = parseFloat(getComputedStyle(head).marginBottom) || 0
       const h = Math.round(head.getBoundingClientRect().height + gap)
@@ -563,6 +568,17 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       // Where a jumped-to file's top comes to rest: the CSS `scroll-margin-top` and the index's
       // own "which file am I on" rule both read this, so the jump and the mark cannot disagree.
       pane.style.setProperty('--diff-land', `${h + DIFF_FILE_JUMP_GAP}px`)
+      // …and the room the file index may occupy: the visible height minus the head. The index's
+      // column is floored at this, so its drag strip spans the whole column rather than only the
+      // rows — a two-row index used to give a two-row grab target (issue #31).
+      //
+      // The scroller's own padding comes off too: `clientHeight` includes it, and a column 18px
+      // taller than the visible area (the panel body's padding) stops being pinned exactly that
+      // much before the bottom — the file list drifts up in the last stretch of the scroll.
+      const cs = scroller ? getComputedStyle(scroller) : null
+      const pad = cs ? (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) : 0
+      const room = Math.round((scroller?.clientHeight || 0) - pad - h)
+      if (room > 0) pane.style.setProperty('--diff-room-h', `${room}px`)
     }
     publish()
     // A ResizeObserver, not a window listener: the height changes when the CONTENT wraps too (a
@@ -571,7 +587,14 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
     // and the only thing a stale one costs is a few pixels of pin offset.
     const ro = new ResizeObserver(publish)
     ro.observe(head)
-    return () => { ro.disconnect(); pane.style.removeProperty('--diff-head-h') }
+    // The room changes when the SCROLLER resizes (a window resize, the panel's width drag), which is
+    // a different element from the head.
+    if (scroller) ro.observe(scroller)
+    return () => {
+      ro.disconnect()
+      pane.style.removeProperty('--diff-head-h')
+      pane.style.removeProperty('--diff-room-h')
+    }
   }, [fileList, diff])
 
   // ── The index's width (the handle between the list and the diff) ───────────

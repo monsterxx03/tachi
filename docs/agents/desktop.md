@@ -948,6 +948,16 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   in (a nested `overflow: auto` would leave find and the finding walk searching the wrong one), and the index
   is OVERLAY-ONLY and absent with a single file — the panel is a column the reader drags, where a 210px index
   takes a third of the width.
+- **The index's drag handle is as tall as the ROWS, but what the reader can GRAB is the room the column
+  may occupy** (`.diff-filelist-resizer`'s `::before` in chat.css, `--diff-room-h` published by the pane next
+  to `--diff-head-h`). Two different numbers on purpose: the strip's box has to stay the list's height (the
+  pill sits at ITS centre, and a taller box would change the column's height — which is what the pinning is
+  measured against), while a grab area that stopped at the last row made a two-row index draggable only beside
+  its rows (issue #31). The extension is absolutely positioned, so it adds no height, and it is measured
+  rather than spelled `100vh` because the two layouts scroll in different elements — the overlay in
+  `.viewer-stage`, the side panel in `.oneoff-body`. `file-index` pins the reader's half of it with
+  `elementFromPoint` below the last row (against the pre-fix CSS the probe lands on the diff body).
+
 - **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click** (`currentKey`):
   a pinned index whose highlight only moves when clicked reports the reader's last jump rather than the file in
   front of them. The rule is stated in the SAME terms as the jump — a jumped-to file's top comes to rest on the

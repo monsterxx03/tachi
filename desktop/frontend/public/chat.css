@@ -1054,6 +1054,21 @@ button.work-dir {
   cursor: col-resize;
   touch-action: none;
 }
+/* The strip is as tall as the ROWS (it travels with the list — see .diff-filelist-col), but the
+   area a reader can grab is the room the column may occupy. A hit area that stopped at the last row
+   made a short index draggable only beside its rows — the reader had to catch a two-row strip to
+   widen the column (issue #31). The extension is absolutely positioned, so it adds NO height: the
+   column's own height (and with it the pinning, and the pill's centre) is exactly what it was.
+   `--diff-room-h` is measured by the pane, which is the only thing that knows the scroller — the
+   overlay scrolls in `.viewer-stage`, the side panel in `.oneoff-body`. */
+.diff-filelist-resizer::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--diff-room-h, 100%);
+}
 .diff-filelist-resizer::after {
   content: '';
   position: absolute;
