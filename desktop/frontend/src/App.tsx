@@ -1450,13 +1450,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return ''
   }, [sessions, clickSession, newChat, focusAfterPalette])
 
+  // The app body is INERT while the settings page is up: the page is fixed, opaque and covers the
+  // window (settings.css), so what is behind it needs to leave the tab order and the accessibility
+  // tree — and nothing else. NOT `visibility: hidden`: WebKit does not paint a hidden subtree and
+  // does not reliably resume painting the runs inside it that carry a `text-overflow: ellipsis`, so
+  // the sidebar's session titles came back BLANK after every visit to the settings page until
+  // something repainted the row (issue #27). `inert` leaves the paint alone, which is also what
+  // keeps the transcript's scroll offset and the composer's draft alive across the round trip.
+  const appBodyRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    appBodyRef.current?.toggleAttribute('inert', view === 'settings')
+  }, [view])
+
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Cmd+N starts a new session, Cmd+P searches projects. (No native menu binds
   // them, so the webview sees the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The settings page has no conversation shortcuts. Gating here rather than leaving it to
-      // focus is deliberate: the chat view is still MOUNTED (hidden), so its windows-level
+      // focus is deliberate: the chat view is still MOUNTED (inert), so its windows-level
       // listeners are alive, and ⌘N on the settings page must not quietly start a session
       // behind it. Escape is gated with the rest — the page's own dismissals are its own.
       if (view === 'settings') return
@@ -1794,7 +1806,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         </div>
       </header>
 
-      <div className={`app-body${view === 'settings' ? ' is-hidden' : ''}`}>
+      <div className="app-body" ref={appBodyRef}>
         <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly

@@ -122,6 +122,14 @@ Fixtures, all because the real path needs something a driver cannot do:
   a syntax error anywhere in it — the easy one is a `const` declared twice in the same IIFE — throws on EVERY
   retry, and the app's own log stays clean (session dir created, no demo error). `node --check
   itest/desktop/drivers/<name>.js` costs a second; a failing run's kept sandbox holds the copy that ran.
+- **The harness can read the DOM, not the PAINT.** Every assertion here goes through `getComputedStyle`,
+  geometry or text, so a bug where WebKit simply does not paint something (issue #27: a subtree that was
+  `visibility: hidden` came back with its `text-overflow: ellipsis` runs unpainted) is INVISIBLE to a green
+  run — the elements are there, their box is right, their computed styles are right. Two ways to tell such a
+  bug from the outside: the browser's own screenshot, or the reporter's. What a driver CAN do is pin the
+  mechanism that causes it (see the `settings` scenario's `.app-body[inert]` + sidebar-`visibility`
+  assertions), which is what stops the cause from being reintroduced. Do not read "no spec fails" as
+  "it renders correctly".
 - **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the real
   Finder. Assert the control on screen and pin the argument off screen (`TestOpenSessionDirOpensTheSessionDirectory`
   stubs `openFile` and reads the argv). Any "open in …" action has this shape.
@@ -299,11 +307,21 @@ Fixtures, all because the real path needs something a driver cannot do:
   opens (`forceOpen`), a declared list shuts (`forceFolded`, from `SettingListVO.Folded`), size decides the
   rest. A form REFUSING a value forces its card open over all three — an error behind a fold is one the
   reader cannot act on.
+- **While the settings page is up the app body is `inert`, and that is NOT the same as hidden** (App.tsx sets
+  the attribute in a layout effect; layout.css carries the full account). The page is fixed, opaque and covers
+  the window, so what is behind it only has to leave the tab order and the accessibility tree — but it must
+  keep being PAINTED. It used to be `visibility: hidden`, and WebKit then dropped, for good, the paint of the
+  runs inside that subtree that carry a `text-overflow: ellipsis`: the sidebar's session titles came back BLANK
+  after every visit to the settings page, with the timestamp on the same row painted fine and a hover (which
+  repaints the row) bringing the title back (issue #27 has the screenshot). `inert` is also what keeps the
+  transcript's scroll offset and the composer's draft across the round trip, which is the reason this is not
+  `display: none` either. The `settings` smoke pins the mechanism in both directions: `.app-body[inert]` while
+  the page is up, and `.sidebar` computed `visibility: visible` the whole time.
 - **The settings page is a VIEW, so it owns its own two ways in and out**: `⌘,` opens it (App's global
   shortcut, a no-op while it is already up — the handlers gate on `view`) and Esc returns to the
   conversation, exactly what the rail's 「返回对话」 does — a dirty form is NOT a reason to stay or to ask,
   because a page whose two exits disagree is one the reader has to remember. The Esc listener CLAIMS the key
-  (`keydown` on the window, capture phase, `preventDefault` + `stopPropagation`): the chat view is hidden
+  (`keydown` on the window, capture phase, `preventDefault` + `stopPropagation`): the chat view is inert
   rather than unmounted, so its own Esc listeners are alive and an unclaimed Escape would also dismiss
   whatever panel was left open behind this opaque page. `e.isComposing` is skipped (an IME candidate window
   owns that key), and App's handler returns early on `view === 'settings'` for the mirror-image reason.

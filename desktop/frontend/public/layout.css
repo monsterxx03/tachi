@@ -423,12 +423,19 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-height: 0;
 }
-/* The chat view while the settings page is up. `visibility` rather than `display: none`: the
-   box keeps its size, so the transcript's scroll offset survives the round trip (`display`
-   would drop the scrollport, and the reader would come back to the top of a long conversation),
-   and a hidden element is out of the tab order either way. The settings view covers the window
-   — see settings.css. */
-.app-body.is-hidden { visibility: hidden; }
+/* The app body while the settings page is up (App.tsx sets `inert` on it). The settings view is
+   fixed, opaque and covers the window, so what is behind it is not seen — but it must not be
+   HIDDEN from paint either:
+   `visibility: hidden` (what this used to be) makes WebKit skip painting the subtree, and on the
+   way back it does not regenerate everything it skipped. The runs that carry a
+   `text-overflow: ellipsis` are the ones it loses: the sidebar's session titles came back BLANK
+   after every visit to the settings page — the timestamp on the same row painted fine, and a hover
+   (which repaints that row) brought the title back. Issue #27 has the screenshot.
+   `inert` is the right primitive regardless: the body stays laid out and painted (so the
+   transcript's scroll offset and the composer's draft survive, which is why this is not
+   `display: none`), and it takes the subtree out of the TAB ORDER and out of the accessibility
+   tree — which is what `visibility` was there for in the first place, and what it did only by
+   disabling the paint WebKit cannot undo. */
 
 /* Titlebar: flat chrome matching the sidebar, with a hairline along the bottom
    edge so the chrome/content boundary reads as a fold rather than a drawn line.

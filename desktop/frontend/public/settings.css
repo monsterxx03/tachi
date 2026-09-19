@@ -11,11 +11,13 @@
      body does not hide them; covering them is what makes "the settings page is
      what is on screen" true regardless of what was open a moment ago.
 
-   • The chat view stays MOUNTED and is only made invisible (.app-body.is-hidden,
+   • The chat view stays MOUNTED and is only made INERT (.app-body[inert],
      layout.css). Its local state — collapsed project groups, the composer's
      draft, the transcript's scroll position — is not worth rebuilding just to
-     come back to it, and `visibility` (rather than `display`) keeps the box, so
-     the scrollport's offset survives the round trip.                   */
+     come back to it, and `inert` (rather than `display` or `visibility`) leaves
+     the box AND the paint alone, so the scrollport's offset survives the round
+     trip. It must leave the paint alone: hiding the subtree is what made WebKit
+     drop the sidebar's ellipsized titles for good (issue #27 — see layout.css). */
 
 .settings-view {
   position: fixed;

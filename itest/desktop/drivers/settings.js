@@ -23,13 +23,22 @@
   if (!settingsBtn) return smoke.fail('侧栏底部有「设置」入口', smoke.allText('.footer-item').join(' / '))
   smoke.click(settingsBtn)
   if (!(await smoke.waitFor('.settings-view', '设置页出现'))) return smoke.finish()
-  // 替换对话区的是"隐藏"而不是卸载：转写、输入草稿、滚动位置都得活到返回之后（design §四）。
-  // 所以这里同时断言两半——隐藏了，但还在 DOM 里。
+  // 替换对话区的是"inert"而不是卸载：转写、输入草稿、滚动位置都得活到返回之后（design §四）。
+  // 所以这里同时断言两半 —— 不可交互了，但还在 DOM 里。
+  //
+  // 而且必须是 inert，不能是"藏起来"（visibility/display）：WebKit 不给隐藏的子树画，回来时也不
+  // 补画带 `text-overflow: ellipsis` 的那种文本 —— 侧栏会话标题曾经每次从设置页回来都变空白
+  // （issue #27），下面两条把这个机制钉住：body 上是 inert，而侧栏**看得见**（没被隐藏）。
   smoke.check(
-    '对话区被隐藏但仍挂载（状态不丢）',
-    !!smoke.q('.app-body.is-hidden') && !!smoke.q('.app-body .chat'),
-    'is-hidden=' + !!smoke.q('.app-body.is-hidden') + ' · .chat=' + !!smoke.q('.app-body .chat')
+    '对话区变成 inert 但仍挂载（状态不丢）',
+    !!smoke.q('.app-body[inert]') && !!smoke.q('.app-body .chat'),
+    'inert=' + !!smoke.q('.app-body[inert]') + ' · .chat=' + !!smoke.q('.app-body .chat')
   )
+  const sidebarVis = (() => {
+    const el = smoke.q('.app-body .sidebar')
+    return el ? getComputedStyle(el).visibility : '(没有侧栏)'
+  })()
+  smoke.check('侧栏没有被藏起来（藏了就丢标题，issue #27）', sidebarVis === 'visible', sidebarVis)
 
   // ── 左栏：分组与顺序都由后端给 ────────────────────────────────────────────
   const cats = smoke.qa('.settings-cat').map((b) => smoke.text(b.firstElementChild))
@@ -411,7 +420,7 @@
   // 返回对话（点那条路）——这一页真正的出口，也顺手把"折着的卡片仍然点得开"试掉。
   smoke.click('.settings-back')
   const back = await smoke.waitFor(
-    () => (!smoke.q('.settings-view') && !smoke.q('.app-body.is-hidden') ? true : null), '返回对话')
+    () => (!smoke.q('.settings-view') && !smoke.q('.app-body[inert]') ? true : null), '返回对话')
   smoke.check('返回后设置页消失、对话区恢复', !!back, back ? '' : 'settings-view=' + !!smoke.q('.settings-view'))
   smoke.check('对话区确实还在（没有被卸载过）', !!smoke.q('.app-body .chat') && !!smoke.q('.composer-input'),
     'chat=' + !!smoke.q('.app-body .chat'))
@@ -420,7 +429,7 @@
   // 两个手势都是给"整页"这个形态补的入口/出口，所以放在最后 —— Esc 那条会把页面收掉，页面没了就
   // 没法再断言别的了。
   //
-  // Esc 必须 CLAIM 掉这个键（capture + stopPropagation）：对话区是隐藏而不是卸载的，它自己的 Esc
+  // Esc 必须 CLAIM 掉这个键（capture + stopPropagation）：对话区是 inert 而不是卸载的，它自己的 Esc
   // 监听还活着，不声明的话同一个 Esc 会把下面留着没关的面板也关掉 —— 而这一页的契约是"页面之外
   // 什么都不动"。⌘, 反过来只对会话页生效（设置页上按它是无操作），两条合起来就是"进得去、出得来"。
   smoke.key('body', ',', { metaKey: true })
@@ -440,7 +449,12 @@
 
   smoke.key('body', 'Escape')
   const escBack = await smoke.waitFor(
-    () => (!smoke.q('.settings-view') && !smoke.q('.app-body.is-hidden') ? true : null), 'Esc 回到会话')
+    () => (!smoke.q('.settings-view') && !smoke.q('.app-body[inert]') ? true : null), 'Esc 回到会话')
+  // 回来的那一步正是 #27 的现场：侧栏标题必须还在 DOM 里、还看得见（不再被 WebKit 丢掉重绘）。
+  smoke.check('返回后侧栏标题仍然在（且没被藏）',
+    smoke.allText('.session-title').length > 0 &&
+      getComputedStyle(smoke.q('.session-title')).visibility === 'visible',
+    smoke.allText('.session-title').join(' | '))
   smoke.check('在设置页按 Esc 回到会话界面', !!escBack, escBack ? '' : 'settings-view=' + !!smoke.q('.settings-view'))
 
   smoke.finish()
