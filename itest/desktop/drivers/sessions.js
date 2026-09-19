@@ -96,14 +96,44 @@
     return smoke.click(item)
   }
   // 会话菜单里有一项「复制 session id」—— 标题栏不再显示 id 之后，这是拿到它的唯一入口（原来那
-  // 个"点一下复制"在标题栏上）。这里只钉"菜单里有这一项、点下去菜单关掉"：剪贴板读回来要权限，
-  // 而这一条断言要守的是入口还在。
+  // 个"点一下复制"在标题栏上）。这里要把**剪贴板真读回来**：第一版只钉了"菜单里有这一项、点下去
+  // 菜单关掉"，而那一项当时调的是 `navigator.clipboard?.writeText(...)` —— 这一页不是 secure
+  // context，那个调用读起来像空操作，剪贴板一直是空的，测试却是绿的。
+  //
+  // 读回来的路走 Wails 运行时自己的 clipboard 对象（`POST /wails/runtime`，object 1 /
+  // method 0=SetText、1=Text），也就是 copyText 的首选路径 —— 它是唯一不依赖 webview 权限的那条，
+  // 顺便也证明它在这个 app 里真的通。跑完把读者原来的剪贴板放回去。
+  const clip = (method, args) => fetch('/wails/runtime', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-wails-client-id': 'smoke-clipboard' },
+    body: JSON.stringify(args === undefined ? { object: 1, method } : { object: 1, method, args }),
+  }).then((r) => r.text())
+  const clipText = () => clip(1).catch(() => null)
+  const clipSet = (t) => clip(0, { text: t }).catch(() => null)
+
   const idTarget = findRow(oldTitle)
   if (!idTarget) return smoke.fail('找到要右键的那一行', rowTitles().join(' | '))
+  // 期望的 id 从 app 根上读（#41 之后它在那儿），也就是正要右键的那一行所属的会话 —— 此刻它就是
+  // 活动会话（上面刚切回来）。
+  const appRoot = smoke.q('.app')
+  const wantId = (appRoot && appRoot.getAttribute('data-session-id')) || ''
+  smoke.check('拿到期望的 session id（挂在 app 根上的 data-session-id）', wantId !== '', wantId)
+
+  const beforeClip = await clipText()
   if (!(await menuAction(idTarget, '复制 session id'))) {
     return smoke.fail('菜单里有「复制 session id」', smoke.allText('.ctx-item').join(' / '))
   }
   smoke.check('点「复制 session id」后菜单关闭（那一项属于会话菜单）', !smoke.q('.ctx-menu'), '')
+  // 写是异步的（走 bridge），所以轮询而不是等一个固定时长；`waitFor` 在这儿用不了 —— 它的判据是
+  // 同步的真值，而"读剪贴板"本身就是一个 promise。
+  let copied = ''
+  for (let i = 0; i < 20 && copied !== wantId; i++) {
+    await smoke.sleep(150)
+    copied = (await clipText()) || ''
+  }
+  smoke.check('点「复制 session id」真的把 id 写进了系统剪贴板', copied === wantId,
+    `剪贴板=${JSON.stringify(copied)} 期望=${JSON.stringify(wantId)}（之前=${JSON.stringify(beforeClip)}）`)
+  if (beforeClip !== null) await clipSet(beforeClip)
 
   const beforePin = rowTitles()
   if (beforePin[0] === oldTitle) return smoke.fail('置顶前老会话不在第一行', beforePin.join(' | '))

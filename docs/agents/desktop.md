@@ -819,6 +819,15 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   `turn_complete` from inside the event loop and only THEN exits to `endTurn`, while the frontend re-reads the
   running set exactly once, on that event. The state is set BEFORE the event is emitted, so it can never
   contradict it (`TestAFinishedTurnIsNotReportedAsRunning`).
+- **Copying goes through `copyText` (`lib.ts`), never a bare `navigator.clipboard`.** The page is not a secure
+  context, so `navigator.clipboard` is UNDEFINED there: `navigator.clipboard?.writeText(...)` reads as an
+  optional-chain no-op and the clipboard stays empty, with nothing failing anywhere. `copyText` tries the
+  Wails runtime's own clipboard object first (a bridge call to the NATIVE clipboard, the only path that does
+  not depend on the webview's permissions), then the async API, then the legacy `execCommand` path. That
+  ordering exists so a copy either works or is visible as a failure — which is also why the `sessions` smoke
+  now reads the clipboard BACK (through the same runtime object: `POST /wails/runtime` with object 1,
+  method 0=SetText / 1=Text, putting the reader's own clipboard back afterwards) instead of asserting only
+  that the menu item exists.
 - **A session list is a list of CONVERSATIONS, not of session dirs** (`sessionRows` in `lib.ts`): a compaction
   chain shares one title, so rendering `ListSessions` raw shows the pre-compaction session as a second,
   identical-looking row. The shape is derived from `compactedParentId`, folded under the newest link and

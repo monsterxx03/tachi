@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -2204,9 +2204,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           <button className="ctx-item" role="menuitem" onClick={() => { void openChain(menu.sid, sessions.find((x) => x.id === menu.sid)?.title || '会话') }}>回退链…</button>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           {/* No 「已复制」 flash: the menu is gone by the time the promise settles, and the click
-              closing it IS the acknowledgement — the same bargain the titlebar's affordance made. */}
+              closing it IS the acknowledgement — the same bargain the titlebar's affordance made.
+              copyText, not navigator.clipboard: this page is not a secure context, and the bare call
+              reads as a no-op there (the clipboard stayed empty — see lib.ts). */}
           <button className="ctx-item" role="menuitem"
-            onClick={() => { navigator.clipboard?.writeText(menu.sid).catch(() => {}); setMenu(null) }}>复制 session id</button>
+            onClick={() => { copyText(menu.sid); setMenu(null) }}>复制 session id</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
             title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}

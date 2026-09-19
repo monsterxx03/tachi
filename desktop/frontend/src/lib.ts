@@ -1,3 +1,4 @@
+import { Clipboard } from '@wailsio/runtime'
 import type { KeyboardEvent } from 'react'
 import type { ProjectVO, SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AttachmentInfo, Message } from './types'
@@ -442,12 +443,20 @@ export function insertRefText(value: string, caret: number, text: string, traili
 }
 
 
-// copyText writes text to the clipboard. The async clipboard API can be
-// unavailable or reject in a webview without permission, so a hidden textarea
-// (the legacy execCommand path) stays as the fallback.
+// copyText writes text to the clipboard. Three paths, in the order that works HERE first — a copy
+// that silently does nothing is the one failure mode this function exists to prevent:
+//
+//  1. the Wails runtime's own clipboard object: a call over the bridge to the NATIVE clipboard, and
+//     the only path that does not depend on the webview's permissions at all.
+//  2. `navigator.clipboard`, for a context where the runtime is not there (a browser, a test page).
+//     It is undefined outside a "secure context" — which is what the app's own page is — so calling
+//     it directly is exactly the bug this order fixes: `navigator.clipboard?.writeText(...)` reads
+//     as a no-op and the clipboard stays empty.
+//  3. the legacy execCommand path, which needs the text in the document AND a user gesture. Both are
+//     true at a click, and it is what a webview without either of the above still honours.
 export function copyText(text: string): void {
   if (!text) return
-  const fallback = () => {
+  const legacy = () => {
     try {
       const ta = document.createElement('textarea')
       ta.value = text
@@ -457,10 +466,17 @@ export function copyText(text: string): void {
       document.body.removeChild(ta)
     } catch { /* ignore */ }
   }
+  const viaWeb = () => {
+    try {
+      navigator.clipboard.writeText(text).catch(legacy)
+    } catch {
+      legacy()
+    }
+  }
   try {
-    navigator.clipboard.writeText(text).catch(fallback)
+    Clipboard.SetText(text).catch(viaWeb)
   } catch {
-    fallback()
+    viaWeb()
   }
 }
 

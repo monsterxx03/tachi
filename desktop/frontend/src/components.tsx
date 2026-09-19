@@ -634,7 +634,7 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
                 {state.authUrl && (
                   <div className="mcp-auth-url">
                     <input readOnly value={state.authUrl} onFocus={(e) => e.target.select()} />
-                    <button className="mcp-toggle" onClick={() => { void navigator.clipboard?.writeText(state.authUrl) }}>复制</button>
+                    <button className="mcp-toggle" title="复制授权链接" onClick={() => { copyText(state.authUrl) }}>复制</button>
                   </div>
                 )}
                 {(authPhase === 'browser' || authPhase === 'waiting' || authPhase === 'manual') && (
