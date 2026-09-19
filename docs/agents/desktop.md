@@ -981,12 +981,15 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   turn. **Do not compensate a layout change from a `requestAnimationFrame`** — a covered window makes WebKit
   stop the page's frames outright. Compensate in a LAYOUT effect instead: the new content is in the DOM and the
   adjustment lands before paint.
-- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: the sidebar toggle, the session id
-  (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge by
-  one `margin-left: auto`; a new titlebar control belongs in that cluster. **The agent state is not echoed in
-  the chrome**: 运行中 already reads from the sidebar row's `spin-dot` and the reply's typing dots.
-  It carries no app name or logo (both were removed): the window chrome is not a place to advertise the
-  product, and the space reads better given the native traffic lights already own the left edge.
+- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: the sidebar toggle, then `titlebar-right` —
+  the side-panel toggle and the theme switch, held at the far edge by one `margin-left: auto`; a new titlebar
+  control belongs in that cluster. **The agent state is not echoed in the chrome**: 运行中 already reads from
+  the sidebar row's `spin-dot` and the reply's typing dots. It carries no app name, no logo and no session id
+  (all three were removed): the window chrome is not a place to advertise the product, and an id is an
+  implementation handle, not something to read all day. **The id is still readable, just not shown** —
+  `data-session-id` on the app root carries the displayed session (that is what the smoke drivers read to tell
+  "switched session" from "still the same one"; a title cannot: 未命名会话 repeats), and the copy gesture moved
+  into the session row's context menu (「复制 session id」, next to 打开会话目录).
 - **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate**
   (`desktop/contextinfo.go` → `AIAgent.LastInputEstimateWithBreakdown`). The estimate
   (`agent/token_estimate.go`) is character-class based and its bias depends on the content: it over-counts

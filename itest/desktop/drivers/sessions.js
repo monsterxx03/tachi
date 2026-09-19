@@ -95,6 +95,16 @@
     if (!item) return false
     return smoke.click(item)
   }
+  // 会话菜单里有一项「复制 session id」—— 标题栏不再显示 id 之后，这是拿到它的唯一入口（原来那
+  // 个"点一下复制"在标题栏上）。这里只钉"菜单里有这一项、点下去菜单关掉"：剪贴板读回来要权限，
+  // 而这一条断言要守的是入口还在。
+  const idTarget = findRow(oldTitle)
+  if (!idTarget) return smoke.fail('找到要右键的那一行', rowTitles().join(' | '))
+  if (!(await menuAction(idTarget, '复制 session id'))) {
+    return smoke.fail('菜单里有「复制 session id」', smoke.allText('.ctx-item').join(' / '))
+  }
+  smoke.check('点「复制 session id」后菜单关闭（那一项属于会话菜单）', !smoke.q('.ctx-menu'), '')
+
   const beforePin = rowTitles()
   if (beforePin[0] === oldTitle) return smoke.fail('置顶前老会话不在第一行', beforePin.join(' | '))
   smoke.check('置顶前老会话在第二行（列表是 newest-first）', beforePin.indexOf(oldTitle) > 0, beforePin.join(' | '))

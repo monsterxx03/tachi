@@ -454,36 +454,6 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   position: relative;
   z-index: 2;
 }
-.titlebar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.titlebar-title h2 {
-  margin: 0;
-  font-size: 13.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.titlebar-title .session-meta { font-size: 11px; color: var(--text-faint); }
-.titlebar-title .session-id {
-  font-size: 10.5px;
-  color: var(--text-faint);
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: copy;
-  user-select: text;
-  padding: 2px 5px;
-  border-radius: var(--radius-xs);
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
-}
-.titlebar-title .session-id:hover { background: var(--hover); color: var(--text-dim); }
-.titlebar-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border-2);
-}
 
 /* Right-hand cluster: the side-panel toggle and the theme switch sit at the far
    edge (one auto margin, so nothing else can drift between them mid-window). */

@@ -14,11 +14,14 @@
 // 这里两种模式下都判"每次切换有动效"，只是要求的名字不同 —— 本机开着 reduced-motion，跑到的是
 // 淡入那一支；关掉该设置的机器跑的是 roll-up 那一支，判法一样。
 ;(async () => {
+  // 当前显示的是哪个会话：标题栏不再显示 id 了，读 app 根上的 data-session-id（唯一稳定的把手 ——
+  // 标题做不到这件事，第二个会话一建出来「未命名会话」就会重复）。
+  const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
   // 编辑器比会话先出现：启动时那是个空壳（currentId 还没选上），此时打进去的字会落进一个没人
   // 渲染的桶里 —— 发送键一样会亮，点下去输入框清空、没有请求也没有消息，看起来像"turn 没起来"。
   // 标题栏的会话 id 才是"应用已经选好会话"（同 session-running.js 的等待），先等它再动手。
-  if (!(await smoke.waitFor('.session-id', '会话加载完成（标题栏出现会话 id）'))) return smoke.finish()
+  if (!(await smoke.waitFor(() => (sessionId() ? true : null), '会话加载完成（app 上出现 data-session-id）'))) return smoke.finish()
 
   smoke.type('.composer-input', '跑一条命令，再回来说一声')
   // 发送这一步单独判一句：编辑器是受控输入，文字若没进 React 状态，发送按钮就一直 disabled，

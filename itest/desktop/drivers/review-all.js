@@ -10,8 +10,11 @@
 //   3. 状态机：和另一个入口一样是 评审所有改动 → 评审中… → 已评审 N 条 · 查看，两个入口共用
 //      一轮的 footer，所以它们的状态绝不能互相顶替（此处只有它一个在跑，用来看它自己的状态）。
 ;(async () => {
+  // 当前显示的是哪个会话：标题栏不再显示 id 了，读 app 根上的 data-session-id（唯一稳定的把手 ——
+  // 标题做不到这件事，第二个会话一建出来「未命名会话」就会重复）。
+  const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
-  if (!(await smoke.waitFor('.session-id', '会话加载完成（标题栏出现会话 id）'))) return smoke.finish()
+  if (!(await smoke.waitFor(() => (sessionId() ? true : null), '会话加载完成（app 上出现 data-session-id）'))) return smoke.finish()
 
   const chipIn = (bubble, label) =>
     Array.from(bubble.querySelectorAll('.diff-chip')).find((b) => b.textContent.indexOf(label) >= 0) || null

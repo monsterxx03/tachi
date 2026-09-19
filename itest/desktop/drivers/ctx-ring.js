@@ -9,6 +9,9 @@
 //
 // `sleep 4` 的工具把那个窗口撑开，断言就是「进行中环也有数」，并与同一时刻的明细对比。
 ;(async () => {
+  // 当前显示的是哪个会话：标题栏不再显示 id 了，读 app 根上的 data-session-id（唯一稳定的把手 ——
+  // 标题做不到这件事，第二个会话一建出来「未命名会话」就会重复）。
+  const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
   const ringLabel = () => {
@@ -30,14 +33,14 @@
   }
 
   smoke.q('.chat').focus()
-  const fixtureId = smoke.text('.session-id')
+  const fixtureId = sessionId()
   if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
   // The SWITCH is what has to be waited for, not the 欢迎屏: this scenario's fixture session is
   // empty too, so the welcome screen is already on screen the instant it is asked for — a send
   // that raced the switch ran its turn in the OLD session (correctly leaving the new one empty,
   // which then reads as "the turn never started"). The titlebar names the session on screen, so
   // that is the thing that says the switch landed.
-  if (!(await smoke.waitFor(() => smoke.text('.session-id') !== fixtureId, '切到新会话（标题栏会话 id 变了）', 10000))) return smoke.finish()
+  if (!(await smoke.waitFor(() => sessionId() !== fixtureId, '切到新会话（显示的会话 id 变了）', 10000))) return smoke.finish()
   if (!(await smoke.waitFor('.welcome', '新会话是空的（welcome 出现）', 8000))) return smoke.finish()
   smoke.log('新建会话后（还没跑 turn）', ringLabel())
 

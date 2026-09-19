@@ -1787,15 +1787,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   )
 
   return (
-    <div className="app">
+    // data-session-id is the ONLY place the displayed session's id is readable now that the
+    // titlebar stopped showing it: the smoke drivers use it to tell "switched to another session"
+    // from "still on the same one" — a title cannot do that, because 未命名会话 repeats as soon as a
+    // second session exists.
+    <div className="app" data-session-id={currentId}>
       <header className="titlebar drag-region">
         <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg>
         </button>
-        <div className="titlebar-divider" />
-        <div className="titlebar-title no-drag">
-          {currentId ? <span className="session-id" title={currentId + '（点击复制）'} onClick={() => navigator.clipboard?.writeText(currentId).catch(() => {})}>{currentId}</span> : null}
-        </div>
+        {/* The titlebar used to name the session by its ID here (click to copy). It does not any more:
+            the id is an implementation handle, not something to read all day, and the one gesture it
+            offered now lives in the session's context menu (「复制 session id」). The DIVIDER went with
+            it — it existed to separate the id from the toggle beside it. */}
         <div className="titlebar-right no-drag">
           <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
             onClick={() => setOneOffOpen(!oneoffOpen)}
@@ -2187,6 +2191,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             onClick={() => { void togglePin(menu.sid, !menuSession?.pinned); setMenu(null) }}>{menuSession?.pinned ? '取消置顶' : '置顶'}</button>
           <button className="ctx-item" role="menuitem" onClick={() => { void openChain(menu.sid, sessions.find((x) => x.id === menu.sid)?.title || '会话') }}>回退链…</button>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
+          {/* No 「已复制」 flash: the menu is gone by the time the promise settles, and the click
+              closing it IS the acknowledgement — the same bargain the titlebar's affordance made. */}
+          <button className="ctx-item" role="menuitem"
+            onClick={() => { navigator.clipboard?.writeText(menu.sid).catch(() => {}); setMenu(null) }}>复制 session id</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
             title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}
