@@ -121,37 +121,18 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 .sidebar-toggle:hover { background: var(--accent-soft); color: var(--accent-2); }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.brand-mark {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  filter: var(--glow-accent);
-}
-
-.brand-name {
-  font-weight: 650;
-  font-size: 15px;
-  letter-spacing: 0.2px;
-  /* Gradient wordmark — a small identity touch that costs nothing. */
-  background: linear-gradient(135deg, var(--text) 30%, var(--accent-2));
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
 /* The sidebar's own ＋ — which is also the 无项目 bucket's action, since that is the group whose
    rows it makes. It is a row-height ghost button, sized below the rows it adds: it used to be a
    full-width tinted pill pinned to the top of the sidebar, where it was the loudest thing on
    screen, sitting above the conversations that are the actual content, so it read as the page's
-   primary action rather than as "one more row here". Nothing about it is accent-tinted now —
-   the only affordance it needs is the hover the rows and the project headers already have. */
+   primary action rather than as "one more row here". Nothing about it is accent-tinted at REST —
+   that is what keeps it from competing with the rows.
+   Its HOVER is the sidebar's ACTION hover (accent-soft + accent ink), the one 新建项目 and the
+   titlebar toggles wear — not the neutral wash the rows and the project headers use. The two are
+   the same gesture ("＋ 新建 X", sitting at opposite ends of the list and reading as siblings), so
+   hovering one and then the other must not give two different kinds of feedback; and `--hover` vs
+   accent is the real axis: a row answers "yes, this is clickable", an action answers "this is
+   something that will happen". */
 .new-chat {
   display: flex;
   align-items: center;
@@ -169,7 +150,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   cursor: pointer;
   transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
-.new-chat:hover { background: var(--hover); color: var(--text); }
+.new-chat:hover { background: var(--accent-soft); color: var(--accent-2); }
 .new-chat-plus { font-size: 14px; }
 
 /* The 无项目 bucket's heading. It sits at the same LEVEL as a project's header (both are
@@ -240,9 +221,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 
 /* ── Project groups (design §7.1) ────────────────────────────────────────── */
 /* The sidebar's top action now that 新建会话 moved down into the list: a dashed box, the only
-   thing on the first screen that offers a way to organise the conversations. Its 12.5px text and
-   its ＋ match .new-chat, so the two read as siblings even though they sit at opposite ends of
-   the list. */
+   thing on the first screen that offers a way to organise the conversations. Its text, its ＋ and
+   its hover all match .new-chat, so the two read as siblings even though they sit at opposite ends
+   of the list. */
 .new-project {
   display: flex;
   align-items: center;

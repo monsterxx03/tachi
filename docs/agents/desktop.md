@@ -664,6 +664,11 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   scenario asserting a *successful* tool card must expand the strip first (`.process-head`), and "no tool
   cards" is NOT evidence of "no tool calls"; an ATTACHMENT card is the exception — it is on screen
   folded (`file-find`).
+  **A turn's failures are COUNTED, not painted**: the strip still carries the `failed` class and renders
+  「⚠ N 步失败」, but the row keeps the wash every other strip has — tainting the whole container red read as an
+  alarm about the TURN, where one step failed, and it competed with the failed cards themselves (which stay
+  unfolded and wear the error colour). So colour is not the carrier here, the count is; `transcript-fold` pins
+  both directions by comparing the marked row's computed background with the control turn's.
 - **A row that alternates between two states must not change GEOMETRY — only its content may.** The process
   row flips between the live line and the summary once per tool call, and the transcript is bottom-pinned: the
   visible content jumps with any height difference. A `border: 1px` on the live state alone was exactly 2px of
@@ -949,10 +954,12 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   turn. **Do not compensate a layout change from a `requestAnimationFrame`** — a covered window makes WebKit
   stop the page's frames outright. Compensate in a LAYOUT effect instead: the new content is in the DOM and the
   adjustment lands before paint.
-- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
+- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: the sidebar toggle, the session id
   (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge by
   one `margin-left: auto`; a new titlebar control belongs in that cluster. **The agent state is not echoed in
   the chrome**: 运行中 already reads from the sidebar row's `spin-dot` and the reply's typing dots.
+  It carries no app name or logo (both were removed): the window chrome is not a place to advertise the
+  product, and the space reads better given the native traffic lights already own the left edge.
 - **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate**
   (`desktop/contextinfo.go` → `AIAgent.LastInputEstimateWithBreakdown`). The estimate
   (`agent/token_estimate.go`) is character-class based and its bias depends on the content: it over-counts

@@ -27,7 +27,11 @@
   if (!strip) return smoke.fail('过程条存在', '找不到 .process-head')
   const label = strip.textContent.trim()
   smoke.check('过程条给出步数与失败数', label.indexOf('2 步') >= 0 && label.indexOf('1 步失败') >= 0, label)
-  smoke.check('失败时过程条染红', strip.className.indexOf('failed') >= 0, strip.className)
+  // 失败由**计数**说出来，不靠整条染色：这一行仍然带 `failed` 标记（DOM 层的语义锚点，也是计数
+  // span 的依据），但底色必须和没有失败的那一轮一样——两天前它还是整条红底，把"有一小步失败"
+  // 变成了整轮的警报。两轮底色的比较在对照轮那段（那时才有第二个过程条可对照）。
+  const failedBg = getComputedStyle(strip).backgroundColor
+  smoke.check('失败的行带标记，但不整条染色', strip.className.indexOf('failed') >= 0, strip.className)
   smoke.check('过程条提示中间还有正文（召回的口子）', label.indexOf('含 2 段过程说明') >= 0, label)
   smoke.check('结论正文恒显（未展开也在）',
     smoke.text('.msg-assistant').indexOf('两步都处理完了。') >= 0, smoke.text('.msg-assistant').slice(-60))
@@ -61,9 +65,13 @@
   if (!(await smoke.waitText('.msg-assistant .msg-content', '对照轮的收尾结论。', 30000))) return smoke.finish()
   if (!(await smoke.waitFor(() => !smoke.q('.stop-btn'), '对照轮结束'))) return smoke.finish()
   const controlStrip = smoke.qa('.process-head')[smoke.qa('.process-head').length - 1]
-  smoke.check('对照轮没有失败（过程条不染红）',
+  smoke.check('对照轮没有失败（过程条不带失败标记）',
     !!controlStrip && controlStrip.className.indexOf('failed') < 0,
     controlStrip ? controlStrip.className : '(没有过程条)')
+  // 两级比较：有失败的那一轮与这一轮底色完全相同 —— 失败不是用颜色说的，是用那一行文字说的。
+  smoke.check('两轮底色相同（失败不染色）',
+    !!controlStrip && getComputedStyle(controlStrip).backgroundColor === failedBg,
+    controlStrip ? getComputedStyle(controlStrip).backgroundColor + ' vs ' + failedBg : '(没有过程条)')
   const bubbles = smoke.qa('.msg-assistant')
   const lastText = bubbles.length ? bubbles[bubbles.length - 1].textContent.replace(/\s+/g, ' ').trim() : ''
   smoke.check('对照轮：中间正文同样折起来（与失败无关）',
