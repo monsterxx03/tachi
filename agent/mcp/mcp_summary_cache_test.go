@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/monsterxx03/tachi/llm"
@@ -13,8 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeSummarizerProvider answers the summary call without a model.
+// fakeSummarizerProvider answers the summary call without a model. Its fields
+// are mutex-guarded because servers are summarized in parallel — a test double
+// that races would hide exactly the production behaviour the tests are here for.
 type fakeSummarizerProvider struct {
+	mu     sync.Mutex
 	text   string
 	err    error
 	calls  int
@@ -23,6 +27,8 @@ type fakeSummarizerProvider struct {
 }
 
 func (f *fakeSummarizerProvider) CreateChat(_ context.Context, msgs []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (*llm.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	for _, m := range msgs {
 		if m.Role == "user" {
@@ -33,6 +39,18 @@ func (f *fakeSummarizerProvider) CreateChat(_ context.Context, msgs []llm.Messag
 		return nil, f.err
 	}
 	return &llm.Response{Content: f.text}, nil
+}
+
+func (f *fakeSummarizerProvider) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func (f *fakeSummarizerProvider) lastPrompt() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.prompt
 }
 func (f *fakeSummarizerProvider) Name() string         { return "fake" }
 func (f *fakeSummarizerProvider) ProviderName() string { return "fake" }
@@ -71,20 +89,24 @@ func TestSummaryGeneratorGeneratesThenCaches(t *testing.T) {
 	text, err := gen.Generate("srv", tools)
 	require.NoError(t, err)
 	assert.Equal(t, "股票与指数数据（共 1 个工具）", text)
-	assert.Equal(t, 1, provider.calls)
+	assert.Equal(t, 1, provider.callCount())
+	// The tool list really reached the model: the summary describes what the
+	// prompt listed, not something the generator made up.
+	assert.Contains(t, provider.lastPrompt(), "mcp__srv__query")
+	assert.Contains(t, provider.lastPrompt(), "N = 1")
 
 	// The next message reads what the background call stored.
 	text, err = gen.Generate("srv", tools)
 	require.NoError(t, err)
 	assert.Equal(t, "股票与指数数据（共 1 个工具）", text)
-	assert.Equal(t, 1, provider.calls, "a cached summary must not call the model again")
+	assert.Equal(t, 1, provider.callCount(), "a cached summary must not call the model again")
 
 	// And it survives a restart: a fresh generator over the same directory.
 	restarted := &SummaryGenerator{Provider: func() llm.Provider { return provider }, Cache: gen.Cache}
 	text, err = restarted.Generate("srv", tools)
 	require.NoError(t, err)
 	assert.Equal(t, "股票与指数数据（共 1 个工具）", text)
-	assert.Equal(t, 1, provider.calls)
+	assert.Equal(t, 1, provider.callCount())
 }
 
 // The key is the tool SET: an edit, an addition or a rename invalidates; the
@@ -121,11 +143,11 @@ func TestSummaryGeneratorDoesNotRetryAFailedToolSet(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, text)
 	}
-	assert.Equal(t, 1, provider.calls, "give up on this tool set, not on the provider")
+	assert.Equal(t, 1, provider.callCount(), "give up on this tool set, not on the provider")
 
 	// A changed tool set is a new question, so it is asked again.
 	gen.Generate("srv", summaryTools("mcp__srv__query", "mcp__srv__other"))
-	assert.Equal(t, 2, provider.calls)
+	assert.Equal(t, 2, provider.callCount())
 }
 
 // The same tool set in two servers is two summaries: the files are per server.

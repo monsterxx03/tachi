@@ -3,6 +3,7 @@ package mcp
 import (
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -59,6 +60,11 @@ const (
 	summaryTextLimit = 600
 	// heuristicKeywordLimit is how many tool-name words the fallback shows.
 	heuristicKeywordLimit = 8
+	// summaryGenerateConcurrency bounds how many servers are summarized at
+	// once. A handful of MCP servers is the common case; beyond a few, the
+	// provider's rate limit is what would suffer, and the calls would not get
+	// any faster.
+	summaryGenerateConcurrency = 4
 )
 
 // ServerSummarizer builds the one-line summaries for the reminder. The zero
@@ -89,37 +95,74 @@ func (s *ServerSummarizer) Summaries() []ServerSummary {
 		byServer[t.ServerName] = append(byServer[t.ServerName], t)
 	}
 
-	out := make([]ServerSummary, 0, len(byServer))
-	for server, tools := range byServer {
-		// Sorted so a generated summary (and the cache key that guards it) sees
-		// one order for one pool.
-		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-		text, source := s.text(server, tools)
-		out = append(out, ServerSummary{Server: server, Text: text, Source: source})
+	// Sorted by server name before anything is generated: the order of the
+	// block, the order the calls go out in, and the tool order a cache key is
+	// computed from all have to be the same on every render.
+	servers := make([]string, 0, len(byServer))
+	for server := range byServer {
+		servers = append(servers, server)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Server < out[j].Server })
+	sort.Strings(servers)
+	for _, server := range servers {
+		tools := byServer[server]
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+	}
+
+	// The cheap layer first, for every server: a server that describes itself
+	// never reaches the model at all.
+	out := make([]ServerSummary, len(servers))
+	var pending []int
+	for i, server := range servers {
+		text, source := s.instructionsFor(server)
+		out[i] = ServerSummary{Server: server, Text: text, Source: source}
+		if text == "" {
+			pending = append(pending, i) // still needs a summary, generated or local
+		}
+	}
+
+	// Then the rest, IN PARALLEL: the wait is the slowest call rather than their
+	// sum, which for a cold cache is the difference between one provider round
+	// trip in front of the message and one per server. Each goroutine writes its
+	// own slot, so nothing here needs a lock.
+	if len(pending) > 0 {
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, summaryGenerateConcurrency)
+		for _, i := range pending {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				slots <- struct{}{}
+				defer func() { <-slots }()
+
+				server, tools := servers[i], byServer[servers[i]]
+				if s.Generate != nil {
+					if text, err := s.Generate(server, tools); err == nil {
+						if text = collapse(text); text != "" {
+							out[i].Text, out[i].Source = text, GeneratedSource
+							return
+						}
+					}
+				}
+				// No generated summary: the tool names are what is left, and
+				// they are better than an empty line.
+				out[i].Text, out[i].Source = heuristicText(server, tools), HeuristicSource
+			}(i)
+		}
+		wg.Wait()
+	}
 	return out
 }
 
-// text picks a description for one server — the server's own words, else a
-// generated summary, else the local heuristic — and names where it came from.
-func (s *ServerSummarizer) text(server string, tools []*DeferredTool) (string, string) {
-	if s.Instructions != nil {
-		if text := collapse(s.Instructions(server)); text != "" {
-			return text, ServerInstructionsSource
-		}
+// instructionsFor is the free layer: the server's own description, or "" when it
+// gave none.
+func (s *ServerSummarizer) instructionsFor(server string) (string, string) {
+	if s.Instructions == nil {
+		return "", HeuristicSource
 	}
-	if s.Generate != nil {
-		if text, err := s.Generate(server, tools); err == nil {
-			if text = collapse(text); text != "" {
-				return text, GeneratedSource
-			}
-		}
-		// A failed generation is not an error here: the heuristic below is what
-		// a reader gets, and the cache layer logs its own failure. A reminder
-		// that could not be built would be worse than a thin one.
+	if text := collapse(s.Instructions(server)); text != "" {
+		return text, ServerInstructionsSource
 	}
-	return heuristicText(server, tools), HeuristicSource
+	return "", HeuristicSource
 }
 
 // heuristicText describes a server from its tool names alone: the count plus

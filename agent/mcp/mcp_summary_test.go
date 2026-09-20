@@ -3,7 +3,10 @@ package mcp
 import (
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -110,6 +113,64 @@ func TestServerSummarizerGeneratesOnAColdCache(t *testing.T) {
 	assert.Equal(t, ServerInstructionsSource, got.Source)
 	assert.Equal(t, "理杏仁自己写的说明", got.Text)
 	assert.Equal(t, 2, provider.calls, "instructions win, caches hold, nothing is called")
+}
+
+// Servers are summarized AT THE SAME TIME: what a reader waits for in front of
+// a message is the slowest call, not their sum.
+//
+// Pinned with a barrier rather than a stopwatch: all three generations must be
+// in flight before any of them returns, which a sequential implementation can
+// only satisfy by hitting the guard below.
+func TestServerSummarizerGeneratesServersInParallel(t *testing.T) {
+	pool := NewDeferredPool()
+	for _, server := range []string{"alpha", "beta", "gamma"} {
+		pool.Add(testDeferredTool("mcp__"+server+"__tool", server, "does a thing"))
+	}
+
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	sum := &ServerSummarizer{Pool: pool, Generate: func(server string, _ []*DeferredTool) (string, error) {
+		if arrived.Add(1) == 3 {
+			once.Do(func() { close(release) })
+		}
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			return "", errors.New("generated one at a time")
+		}
+		return "summary of " + server, nil
+	}}
+
+	got := sum.Summaries()
+	names := make([]string, 0, len(got))
+	for _, g := range got {
+		names = append(names, g.Server)
+		assert.Equal(t, GeneratedSource, g.Source)
+		assert.Equal(t, "summary of "+g.Server, g.Text)
+	}
+	// The order is the pool's, not the order the calls happened to finish.
+	assert.Equal(t, []string{"alpha", "beta", "gamma"}, names)
+}
+
+// One server's failure is that server's problem: the others are still generated
+// and the failing one falls back locally.
+func TestServerSummarizerOneFailureDoesNotBlockTheRest(t *testing.T) {
+	pool := NewDeferredPool()
+	for _, server := range []string{"alpha", "beta"} {
+		pool.Add(testDeferredTool("mcp__"+server+"__query", server, "does a thing"))
+	}
+	sum := &ServerSummarizer{Pool: pool, Generate: func(server string, _ []*DeferredTool) (string, error) {
+		if server == "alpha" {
+			return "", errors.New("provider down")
+		}
+		return "summary of beta", nil
+	}}
+
+	got := summaryByServer(t, sum)
+	assert.Equal(t, GeneratedSource, got["beta"].Source)
+	assert.Equal(t, HeuristicSource, got["alpha"].Source)
+	assert.Contains(t, got["alpha"].Text, "query")
 }
 
 // With nothing to generate from, the tool names are the description — the only
