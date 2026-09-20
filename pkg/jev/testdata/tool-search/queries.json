@@ -1,0 +1,116 @@
+{
+  "notes": "The judged intents the tool-search case file is generated from. Each intent is written twice (zh / en) and pairs the two forms, so the report's pair table answers the only question that matters for a multilingual gate: does the SAME intent move the probability when the language changes. `expect` is the tool that directly does the job; `distract` are near-misses — same domain, different action (query vs describe vs list, navigate vs snapshot) — because a distractor that is obviously unrelated calibrates nothing. The no_tool arm is where a false positive costs the most: the right answer there is 'no tool', and any tool the gate lets through is a wrong tool offered to the model.",
+  "intents": [
+    {
+      "id": "pg-list-tables",
+      "zh": "数据库里现在有哪些表？",
+      "en": "what tables are in the database right now?",
+      "expect": ["mcp__postgres__list_tables"],
+      "distract": ["mcp__postgres__query", "mcp__filesystem__list_dir"]
+    },
+    {
+      "id": "pg-columns",
+      "zh": "users 表都有哪些字段？",
+      "en": "what columns does the users table have?",
+      "expect": ["mcp__postgres__describe_table"],
+      "distract": ["mcp__postgres__list_tables", "mcp__postgres__query"]
+    },
+    {
+      "id": "pg-select",
+      "zh": "帮我查一下 users 表里最近注册的 10 个用户",
+      "en": "run a SQL query for the 10 most recently registered users",
+      "expect": ["mcp__postgres__query"],
+      "distract": ["mcp__postgres__describe_table", "mcp__filesystem__search_files"]
+    },
+    {
+      "id": "gh-open-pr",
+      "zh": "把当前分支的改动提一个 PR",
+      "en": "open a pull request for the current branch",
+      "expect": ["mcp__github__create_pr"],
+      "distract": ["mcp__github__list_prs", "mcp__github__merge_pr"]
+    },
+    {
+      "id": "gh-pr-review",
+      "zh": "看看 PR 42 里评审都说了什么",
+      "en": "what did the reviewers say on pull request 42?",
+      "expect": ["mcp__github__get_pull_request"],
+      "distract": ["mcp__github__list_prs", "mcp__github__comment_issue"]
+    },
+    {
+      "id": "gh-merge-pr",
+      "zh": "把 42 号 PR 合了",
+      "en": "merge pull request 42",
+      "expect": ["mcp__github__merge_pr"],
+      "distract": ["mcp__github__create_pr", "mcp__github__get_pull_request"]
+    },
+    {
+      "id": "fs-read",
+      "zh": "读一下 README.md 的内容",
+      "en": "read the contents of README.md",
+      "expect": ["mcp__filesystem__read_file"],
+      "distract": ["mcp__filesystem__write_file", "mcp__filesystem__search_files"]
+    },
+    {
+      "id": "fs-find-calls",
+      "zh": "在仓库里找出所有调用 jev 的地方",
+      "en": "find every place in the repo that calls jev",
+      "expect": ["mcp__filesystem__search_files"],
+      "distract": ["mcp__filesystem__read_file", "mcp__exa__web_search_exa"]
+    },
+    {
+      "id": "browser-open",
+      "zh": "打开 localhost:3000 看看首页渲染出来没有",
+      "en": "open localhost:3000 and check whether the home page renders",
+      "expect": ["mcp__chrome_devtools__navigate_page"],
+      "distract": ["mcp__chrome_devtools__take_snapshot", "mcp__exa__web_search_exa"]
+    },
+    {
+      "id": "browser-network",
+      "zh": "看看这个页面都发了哪些网络请求",
+      "en": "list the network requests this page has made",
+      "expect": ["mcp__chrome_devtools__list_network_requests"],
+      "distract": ["mcp__chrome_devtools__evaluate_script", "mcp__chrome_devtools__navigate_page"]
+    },
+    {
+      "id": "web-search",
+      "zh": "搜一下 tachikoma 是什么",
+      "en": "search the web for what a tachikoma is",
+      "expect": ["mcp__exa__web_search_exa"],
+      "distract": ["mcp__exa__research_paper_search", "mcp__filesystem__search_files"]
+    },
+    {
+      "id": "stock-capital-flow",
+      "zh": "茅台最近的主力资金流向怎么样",
+      "en": "what is the recent capital flow for ticker 600519?",
+      "expect": ["mcp__lixinger__get_capital_flow"],
+      "distract": ["mcp__lixinger__get_stock_fundamentals", "mcp__lixinger__get_index_constituents"]
+    },
+    {
+      "id": "index-constituents",
+      "zh": "沪深300 现在有哪些成分股",
+      "en": "list the constituents of the CSI 300 index",
+      "expect": ["mcp__lixinger__get_index_constituents"],
+      "distract": ["mcp__lixinger__get_stock_fundamentals", "mcp__exa__web_search_exa"]
+    }
+  ],
+  "no_tool": [
+    {
+      "id": "chat-recap",
+      "zh": "把刚才的对话总结一下",
+      "en": "summarize our conversation so far",
+      "distract": ["mcp__exa__web_search_exa", "mcp__filesystem__read_file"]
+    },
+    {
+      "id": "local-edit",
+      "zh": "把这个函数的返回值改成布尔",
+      "en": "change this function to return a boolean",
+      "distract": ["mcp__filesystem__write_file", "mcp__github__comment_issue"]
+    },
+    {
+      "id": "explain-error",
+      "zh": "这个报错是什么意思",
+      "en": "what does this error mean?",
+      "distract": ["mcp__filesystem__search_files", "mcp__chrome_devtools__evaluate_script"]
+    }
+  ]
+}
