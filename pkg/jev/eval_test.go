@@ -99,7 +99,13 @@ const (
 
 // evalThresholds are the candidate gate cut-offs, swept in the report. They
 // span "act on almost everything" to "act only on near-certainty".
-var evalThresholds = []float64{0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99}
+//
+// The low end (0.30-0.45) is there for gates whose act/no-act split sits BELOW
+// half: a noul question that asks "can this tool do the job" answers a lot of
+// true cases in the 0.5-0.7 band, and tool search's cut-off lands at 0.35 (see
+// docs/2026-09-20-jev-tool-search-design.md §六). A sweep that started at 0.50
+// could not have shown the corridor it was chosen from.
+var evalThresholds = []float64{0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99}
 
 // evalQuestion is the JSON form of a question. jev.Question cannot be
 // decoded directly — its Criteria is a sealed interface — so a case file
