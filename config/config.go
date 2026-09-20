@@ -1304,6 +1304,26 @@ type MCPToolSearchConfig struct {
 	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
 	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
 	MaxDeferredSchemaBytes int   `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
+
+	// Matcher picks how a prose query is matched against the deferred pool:
+	// "bm25" = the keyword search (the original behaviour), "jev" = the System
+	// One judgment gate, "auto" = the gate whenever Jev.Configured(), keyword
+	// search otherwise. A query that NAMES what it wants (a tool name, a
+	// select: list, an mcp__server prefix) is resolved by exact lookup under
+	// every setting — that is a lookup, not a judgment.
+	Matcher string `yaml:"matcher" default:"auto"`
+	// JevThreshold is the noul probability at which a tool is offered. It is
+	// NOT a fact: 0.35 is the middle of a corridor measured on 5 x 94 cases
+	// (should-not-act up to 0.215, should-act from 0.470) against
+	// pkg/jev/testdata/tool-search-noul.json with jev-1.13.0 — and it belongs to
+	// that prompt (docs/agents/jev.md, and §六 of the design doc for the table).
+	// Changing the question text, the case file or jev.model invalidates it:
+	// re-sweep, one command.
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.35"`
+	// JevBudget bounds one search (all its chunked calls), not one HTTP
+	// attempt: a search runs inside a model turn and degrades to the keyword
+	// search rather than making the turn wait out pkg/jev's retry loop.
+	JevBudget Duration `yaml:"jev_budget" default:"6s"`
 }
 
 // MCPToolRefreshConfig controls background tool list polling for HTTP MCP servers.

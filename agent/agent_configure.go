@@ -96,7 +96,7 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		// We still register the search tool and DeferredToolReminder so this
 		// agent can use the shared deferred pool for tool discovery.
 		a.attachSharedMCPReminder()
-		searchTool := tools.NewMCPSearchToolsTool(a.DeferredPool(), a.Config.MCPManager)
+		searchTool := tools.NewMCPSearchToolsTool(a.mcpSearcher(a.DeferredPool()), a.Config.MCPManager)
 		a.RegisterTool(searchTool)
 	} else if len(sysCfg.MCPServers) > 0 {
 		var err error
@@ -325,7 +325,7 @@ func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*
 	// Register MCPSearchTools immediately so the LLM can discover tools
 	// as they come in. The pool is empty initially, so search returns
 	// nothing until MCP servers finish connecting.
-	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr)
+	searchTool := tools.NewMCPSearchToolsTool(a.mcpSearcher(mgr.Pool()), mgr)
 	a.RegisterTool(searchTool)
 	a.Config.Logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
 

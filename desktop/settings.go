@@ -407,10 +407,12 @@ var settingsTable = []settingApply{
 			// No reconnect: the pool already holds every discovered tool, so the auto-load
 			// decision is re-derived from it (the manager also updates the live sessions'
 			// discovered sets). The registry half is per agent — the pool is per process.
+			//
+			// RefreshMCPSearch is the other half of this row: `matcher` and the jev_*
+			// leaves are read when an agent BUILDS its searcher, so without it a live
+			// session would keep matching the old way (and, for a matcher change, keep
+			// describing the old advice to the model).
 			added, removed := d.mcp.RecomputeAutoLoad(cfg)
-			if len(added) == 0 && len(removed) == 0 {
-				return nil
-			}
 			return pushError("MCP 工具搜索", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				for _, dt := range removed {
 					a.UnregisterTool(dt.Name)
@@ -418,6 +420,7 @@ var settingsTable = []settingApply{
 				for _, dt := range added {
 					a.RegisterTool(dt.Tool)
 				}
+				a.RefreshMCPSearch()
 				return nil
 			}))
 		},

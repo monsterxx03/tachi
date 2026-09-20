@@ -34,9 +34,14 @@ That is the whole boundary, and it is why `pkg/jev` deliberately does **not** im
 put two unrelated contracts behind one type and invite call sites that need one to reach for the
 other.
 
-**`pkg/jev` is a client with no production caller.** `config.JevConfig` exists and is read by
-nothing. Grep for `jev.NewClient` and you will find tests only — that is the current state, not a
-bug. The first gate to land is what turns this package into part of the running system.
+**There is one production caller: the MCP tool search** (`agent/mcp/jev_search.go`, matcher
+`mcp_tool_search.matcher: auto` with a usable `jev` block). It turns a prose request into one `noul`
+question per candidate tool and offers the ones over the cut-off; the question text lives in
+`agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
+the measurement cannot describe a question the gate no longer asks. Its calibration — τ = 0.35, the
+corridor it came from, and the case file it was swept on — is recorded in the design doc
+(`docs/2026-09-20-jev-tool-search-design.md` §六) and re-measurable with one command. Everything else
+in the repo still asks a generative model and parses the reply.
 
 ## When to use it — and when not to
 
@@ -96,6 +101,10 @@ Four things every gate needs, in the order they matter:
    the page would otherwise save a value that reaches nothing until the agent is rebuilt. The bound
    reaches the client through `WithHTTPClient(httpx.NewClient(cfg.Jev.Timeout, cfg.Jev.Proxy))`,
    the way `web_search` does it — `pkg/jev` has no `WithTimeout` option.
+   The tool-search gate is the worked example of the second half: its searcher is built per agent
+   (`agent.mcpSearcher`, `agent/agent_jev.go`), so the desktop's `mcp_tool_search` row calls
+   `a.RefreshMCPSearch()` on every save — without it, `matcher` / `jev_threshold` / `jev_budget`
+   would read as live settings that only a new agent ever sees.
 2. **A pinned model.** `pkg/jev`'s `DefaultModel` is a concrete version; leave a blank config field
    blank so the package default applies. The service's `jev-latest` alias moves, and a threshold
    swept against the old weights silently stops applying when it does.
@@ -154,6 +163,14 @@ only on request errors and malformed case files.
 `TestEvalCaseFilesAreWellFormed` runs offline and checks the case files before anyone spends calls on
 them: a typo in a label otherwise shows up as "the gate never separated anything", which reads
 exactly like a model failure.
+
+**Where a swept threshold is recorded**: with the gate, as a comment on the config field it became —
+τ, the case file it was swept on, and the model version, because none of the three can move without
+invalidating the number. The tool search's is `mcp_tool_search.jev_threshold`, and its corridor,
+per-case table and cost are in `docs/2026-09-20-jev-tool-search-design.md` §六 (one command re-runs it:
+`JEV_EVAL_FILE=tool-search-noul.json`). A question whose text is per-case goes through the case-level
+`instructions` override, and the generator must build that text by calling the production function —
+otherwise the file measures a prompt the gate never sends.
 
 ## Traps
 

@@ -124,11 +124,14 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 		lines = append(lines, fmt.Sprintf("  %s — %s", t.Name, desc))
 	}
 
-	// Add search hint at the end
-	totalHint := fmt.Sprintf("(共 %d 个 MCP 工具可用。使用 MCPSearchTools 搜索并加载。)", len(all))
+	// Add search hint at the end. It says what to DO with MCPSearchTools rather
+	// than which syntax to write: the tool's own description carries the
+	// matcher's advice (a sentence for the Jev gate, keywords for the pool), and
+	// repeating a syntax here is how the two drift apart.
+	totalHint := fmt.Sprintf("(共 %d 个 MCP 工具可用。用 MCPSearchTools 告诉它你要做什么，用中英文都可以。)", len(all))
 	if len(undiscovered) < len(all) {
 		totalHint = fmt.Sprintf(
-			"(共 %d 个 MCP 工具，%d 个已加载。使用 MCPSearchTools 搜索更多工具。)",
+			"(共 %d 个 MCP 工具，%d 个已加载。用 MCPSearchTools 描述你要做什么，可以加载更多。)",
 			len(all), len(all)-len(undiscovered))
 	}
 	lines = append(lines, "", "  "+totalHint)

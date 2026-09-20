@@ -24,10 +24,33 @@ type MCPSearchResult struct {
 	Description string `json:"description"`
 }
 
+// What the tool's description tells the model to write. One of these is picked
+// per searcher (see MCPSearchAdvice): the keyword path can only match terms
+// that appear in the tools' own text and has no answer for a sentence in
+// Chinese, while the Jev gate judges a request written in any language. A
+// description that promised the wrong one would send the model down a path that
+// returns nothing, and it would read as "there is no such tool".
+const (
+	KeywordSearchAdvice = "Search with keywords that appear in the tool names and descriptions (English)."
+	ProseSearchAdvice   = "Describe what you are trying to do in a sentence — in any language, the request you would have made to a person."
+	// ExactNameAdvice is true of every searcher: a name is a lookup, not a search.
+	ExactNameAdvice = "To load a tool you already know, pass its name (or \"select:name1,name2\" for several, or \"mcp__server\" for every tool of a server) — a name is resolved exactly and skips the search."
+)
+
+// MCPSearchAdvice is an optional MCPSearcher method: how THIS searcher wants to
+// be asked, in its own words. A searcher without it is described as a keyword
+// one, which is what the pool does.
+type MCPSearchAdvice interface {
+	SearchAdvice() string
+}
+
 // MCPSearcher is the interface for searching deferred MCP tools.
-// Implemented by mcp.DeferredPool.
+// Implemented by mcp.PoolSearcher and mcp.JevSearcher.
 type MCPSearcher interface {
-	Search(query string, maxResults int) []MCPSearchResultItem
+	// Search takes a context because a searcher may reach a service (the Jev
+	// gate does): the call has to die with the turn that made it, and a search
+	// that overruns degrades inside the implementation rather than blocking.
+	Search(ctx context.Context, query string, maxResults int) []MCPSearchResultItem
 }
 
 // MCPSearchResultItem is a raw search result from the pool.
@@ -69,25 +92,26 @@ func NewMCPSearchToolsTool(searcher MCPSearcher, provider MCPSearchTrackerProvid
 func (t *MCPSearchToolsTool) Name() string { return ToolNameMCPSearchTools }
 
 func (t *MCPSearchToolsTool) Description() string {
-	return "Search for and load MCP tools by name or capability. " +
+	return "Search for and load MCP tools. " +
 		"MCP tools provide access to external services and are not loaded by default — " +
 		"use this tool to find and load them. " +
-		"Query forms: \"select:ToolName1,ToolName2\" for exact names " +
-		"(suffix-only names like \"query\" match \"mcp__server__query\" automatically), " +
-		"\"mcp__serverName\" for all tools of a server, " +
-		"or keywords like \"database query\" for relevance search. " +
-		"Prefix a term with + to require it (e.g. \"+postgres query\"). " +
+		t.advice() + " " +
+		ExactNameAdvice + " " +
 		"Once loaded, a tool can be called like any built-in tool."
+}
+
+// advice is what the searcher behind this tool says about how to ask it.
+func (t *MCPSearchToolsTool) advice() string {
+	if a, ok := t.searcher.(MCPSearchAdvice); ok {
+		return a.SearchAdvice()
+	}
+	return KeywordSearchAdvice
 }
 func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"query": {
-			Type: "string",
-			Description: "Search query. Forms: " +
-				"\"select:ToolName1,ToolName2\" — load exact tools by name; " +
-				"\"mcp__serverName\" — load all tools for a server; " +
-				"keywords — search by capability. " +
-				"Prefix a term with + to require it (e.g. \"+postgres query\").",
+			Type:        "string",
+			Description: t.advice() + " " + ExactNameAdvice,
 		},
 		"max_results": {
 			Type:        "integer",
@@ -132,7 +156,7 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	params.MaxResults = min(params.MaxResults, maxMCPSearchMaxResults)
 
 	// Search the deferred pool
-	results := t.searcher.Search(params.Query, params.MaxResults)
+	results := t.searcher.Search(ctx, params.Query, params.MaxResults)
 
 	// Resolve the tracker for the session active in this tool call. The
 	// agent loop injects the session ID into the context (tools.WithSessionID);
