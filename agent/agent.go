@@ -958,14 +958,22 @@ func (a *AIAgent) ensureDeferredReminder() *systemreminder.DeferredToolReminder 
 	return r
 }
 
-// NotifyDeferredToolsAdded marks the DeferredToolReminder as dirty so the LLM is
-// told about newly available deferred tools on the next user message. Safe to
-// call even when the reminder hasn't been set up yet — it is created and
-// registered here on first use.
+// NotifyDeferredToolsAdded re-arms the DeferredToolReminder, so the LLM is told
+// about the tool set again on the next user message. Safe to call even when the
+// reminder hasn't been set up yet — it is created and registered here on first
+// use.
 //
-// This is the ONE entry point for "deferred tools appeared mid-session": the
-// tools must be in the pool before it is called (see AddDeferredMCPTools). A
-// caller that only writes the pool leaves the reminder un-dirtied, and the
+// This is the ONE entry point for "what the reminder renders is no longer
+// true", which is two situations:
+//
+//   - tools appeared mid-session (a server enabled by hand, an OAuth flow that
+//     finished, a refresh that found new tools, a shared pool another session
+//     filled). The tools must be in the pool BEFORE calling — see
+//     AddDeferredMCPTools — because the reminder reads the pool when it renders.
+//   - the SHAPE the block would use changed, with the same tools (the search
+//     fell back from the Jev gate to keywords; see markJevSearchDegraded).
+//
+// A caller that only writes the pool leaves the reminder un-dirtied, and the
 // once-per-session guard then keeps the model uninformed for the rest of the
 // conversation.
 func (a *AIAgent) NotifyDeferredToolsAdded() {
