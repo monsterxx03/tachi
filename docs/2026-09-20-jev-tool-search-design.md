@@ -107,7 +107,7 @@ POST /v1/systemone
 
 | 位置 | 改动 |
 | --- | --- |
-| `config/config.go` `MCPToolSearchConfig` | 新增 `matcher`（`auto`/`bm25`/`jev`，默认 auto）、`jev_threshold`（浮点，默认 0.5 → 待扫描后改为实测值）、`jev_budget`（`Duration`，默认 6s）。三个叶子都落在既有的 `mcp_tool_search` 行下，桌面设置页自动收下，无需前端改动 |
+| `config/config.go` `MCPToolSearchConfig` | 新增 `matcher`（`auto`/`bm25`/`jev`，默认 auto）、`jev_threshold`（浮点，默认 **0.35** —— 实测值，出处见 §六）、`jev_budget`（`Duration`，默认 6s）。三个叶子都落在既有的 `mcp_tool_search` 行下，桌面设置页自动收下，无需前端改动 |
 | `agent/mcp/jev_search.go`（新） | `JevSearcher`：实现 `tools.MCPSearcher`；包含 fast path 复用、问句构造、分片、阈值排序、降级。`Judge` 小接口（`Evaluate(ctx, state, questions)`）包住 `*jev.Client`，单测用假实现 |
 | `agent/tools/mcp_tool_search.go` | `MCPSearcher.Search` **加 `context.Context`**（Jev 请求必须能被回合取消；现在是 `Search(query, maxResults)`，没有取消路径）；`Description`/`Properties` 改写：删语法教学，改成"用自然语言描述你要做什么，中英文都可以；会话里的请求本身就是最好的 query"；输出加可选 `note` |
 | `agent/agent_configure.go` | 两处 `NewMCPSearchToolsTool(...)`（`:99`、`:328`）改走一个 helper：`auto` + `Jev.Configured()` 时包一层 `JevSearcher`，否则原样传 pool |
@@ -136,6 +136,35 @@ jev.md 的纪律：**本仓库没有任何一个阈值是事实**，`confidence`
    "合批（塞进 30 条问句里）"两种形态下各测一遍，概率若有实质差异，则阈值必须以**合批**形态扫定。
    另外值得顺手做一次廉价 A/B：同一批 case 用 `score`（不相关/可能相关/直接完成三档）再跑一遍，看分离度
    是不是比二值 noul 好——成本是多一次 sweep，换来一个可能的形状改进。
+
+### 已实测（本机，2026-09-20，jev-1.13.0，`testdata/tool-search-noul.json`）
+
+94 个 case × 5 次重复 = 470 次调用，input 184,130 token（mean 391/call）：
+
+| 量 | 值 |
+| --- | --- |
+| 阈值走廊 | 不该触发 **最大 0.215** ＜ τ ≤ 该触发 **最小 0.470** |
+| **取 τ = 0.35** | 走廊中偏**下**（理由见下面第 2 条） |
+| no-tool 臂 | 最大 **0.060** —— 一个数量级的余量 |
+| 重复间标签翻转 | 1/94（`pg-select-en`，位于 0.48–0.50 → 在 0.35 处是稳的） |
+| 同时跨候选阈值的 case | 13 个，全在 ≥0.50 处 → 0.35 处没有一个会抖 |
+| zh / en 同一判断 | 偏移最大 **0.37**、多数 ≤0.19 —— **比走廊还宽** |
+| 合批 vs 单发 | max Δ **0.040**、mean **0.002** → 单发扫的阈值可移植，不必给 harness 加批模式 |
+| 延迟 | 单问句 420ms 均值；一请求 22 问句 **632ms** 均值（≈ 不随 N 线性增长） |
+| 一次搜索的成本 | 22 个候选 = **2,945 input token**（≈134/问 + 固定）；N=100 约 13–15k |
+
+三条从这次测量本身学到的、会改变实现的东西：
+
+1. **标签的定义就是语料**。第一版把"能力重叠"的工具标成 false（`postgres__query` 对"有哪些表"），
+   模型给 0.79 —— **模型是对的，标签是错的**：一条 SQL 查询确实能列出表。改判为 true 之后走廊才出现。
+   §三 的问句问的是"能不能直接完成"，所以能力重叠必然是 true，而 gate 同时给出两条可用的工具是**好结果**。
+   规则写在 `testdata/tool-search/queries.json` 的 notes 里。
+2. **语言偏移比走廊宽**，所以 τ 取走廊偏低处而不是中值：漏判的代价是模型重搜一轮（一整次带长历史的往返），
+   误判的代价是多给一个同域候选（模型自己会挑）。在 0.35 处误报侧仍有一个数量级余量，在 0.42+ 处最低的那批
+   真目标开始掉出去。
+3. **阈值有出处**：τ、case 文件、模型版本三者绑在一起写进 `docs/agents/jev.md`。换权重、改语料、改问句
+   文本，都会让它作废——重跑一条命令即可（`JEV_EVAL_FILE=tool-search-noul.json`）。
+
 
 ## 七、非目标（明确不做）
 
