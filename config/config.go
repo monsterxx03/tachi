@@ -34,6 +34,7 @@ const (
 	sessionDirName            = "session"
 	logsDirName               = "logs"
 	mcpTokensDirName          = "mcp_tokens"
+	mcpSummariesDirName       = "mcp_summaries"
 	mcpDiscoveredFileName     = "mcp_discovered.json"
 	skillsDirName             = "skills"
 	weixinStateDirName        = "weixin"
@@ -1042,6 +1043,17 @@ func LogsDir() string {
 // MCPTokensDir returns the path to the MCP OAuth tokens directory.
 func MCPTokensDir() string {
 	return filepath.Join(BaseDir(), mcpTokensDirName)
+}
+
+// MCPSummariesDir returns the path to the generated MCP server summaries.
+//
+// One small JSON file per server, keyed by a hash of the tool set it was
+// generated from, so it survives restarts and is only rewritten when the
+// server's tools change (agent/mcp/mcp_summary_cache.go). It sits beside the
+// tokens rather than inside a session: a summary describes a SERVER, not a
+// conversation.
+func MCPSummariesDir() string {
+	return filepath.Join(BaseDir(), mcpSummariesDirName)
 }
 
 // MCPDiscoveredFile returns the path to the persisted MCP discovered-tools

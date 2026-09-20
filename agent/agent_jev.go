@@ -88,14 +88,34 @@ func (a *AIAgent) mcpSearchUsesJev() bool {
 }
 
 // mcpSummarizer builds the per-server summarizer for the reminder: the pool it
-// groups, plus the descriptions the servers gave about themselves at connect
-// time. A nil Manager (MCP off) leaves only the heuristic layer.
+// groups, the descriptions the servers gave about themselves at connect time,
+// and the generated layer backed by the on-disk cache. Each missing layer just
+// means the next one answers (a nil Manager leaves the heuristic).
 func (a *AIAgent) mcpSummarizer(pool *mcp.DeferredPool) *mcp.ServerSummarizer {
 	sum := &mcp.ServerSummarizer{Pool: pool}
 	if mgr := a.Config.MCPManager; mgr != nil {
 		sum.Instructions = mgr.ServerInstructions
 	}
+	sum.Generate = a.mcpSummaryGenerator().Generate
 	return sum
+}
+
+// mcpSummaryGenerator builds the generator once per agent, and keeps it: the
+// in-flight and given-up bookkeeping is per process, and a generator rebuilt per
+// reminder would retry a failing generation on every single message.
+func (a *AIAgent) mcpSummaryGenerator() *mcp.SummaryGenerator {
+	a.summaryGenOnce.Do(func() {
+		a.summaryGen = &mcp.SummaryGenerator{
+			// The provider is resolved at CALL time: a session can switch
+			// providers, and a summary is maintenance work with no session of
+			// its own.
+			Provider:  a.Provider,
+			Cache:     mcp.NewSummaryCache(config.MCPSummariesDir()),
+			Logger:    a.Config.Logger,
+			SessionID: a.currentSessionID,
+		}
+	})
+	return a.summaryGen
 }
 
 // newJevJudge builds the System One client, or nil when the integration cannot

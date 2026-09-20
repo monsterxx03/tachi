@@ -51,6 +51,11 @@ const (
 	// the row is written by the gate itself (agent/mcp/jev_search.go). Grouped
 	// separately so "what does tool search cost" is answerable from the ledger.
 	UsageKindJev UsageKind = "jev"
+	// UsageKindMCPSummary marks the one-off call that describes an MCP server
+	// for the deferred-tools reminder (agent/mcp/mcp_summary_cache.go). It is a
+	// normal provider call — unlike Jev — so the wrapper bills it; the kind is
+	// what keeps a maintenance cost out of the session's conversation bucket.
+	UsageKindMCPSummary UsageKind = "mcp-summary"
 )
 
 // ctxKeyUsageKind is the context key for the per-call usage kind.

@@ -156,7 +156,13 @@ type AIAgent struct {
 	// 解析一次；err 为 nil 时 delegate 才可用（无可用 provider 也会缓存）。
 	visionDelegateOnce sync.Once
 	visionDelegate     llm.Provider
-	visionDelegateErr  error
+
+	// MCP server summaries for the deferred-tools reminder (agent_jev.go): the
+	// generator holds the in-flight/given-up state for background generations,
+	// so it lives as long as the agent does.
+	summaryGenOnce    sync.Once
+	summaryGen        *mcp.SummaryGenerator
+	visionDelegateErr error
 	// visionDelegateOverride（仅测试）直接替换 config 解析的 delegate，
 	// 用于单测描述转换逻辑而不触发真实 provider 构建。
 	visionDelegateOverride llm.Provider
