@@ -89,7 +89,13 @@ Four things every gate needs, in the order they matter:
    call site's existing behaviour, and the fallback must err toward the conservative side of that
    gate's purpose — not toward "silently drop what the user should have seen". Config gates the whole
    thing: `config.JevConfig.Configured()` is enabled-AND-key, so a half-filled section keeps the old
-   path everywhere instead of failing per call.
+   path everywhere instead of failing per call. The desktop settings page already offers the block
+   (`desktop/settings.go`'s single `jev` row, `applyLazy`, under 模型): a gate that reads the config
+   when it judges keeps that row honest, while one that builds and caches a client has to turn it into
+   `applyPush` + an `Apply` in the same commit — a cached client makes the key a push-shaped fact, and
+   the page would otherwise save a value that reaches nothing until the agent is rebuilt. The bound
+   reaches the client through `WithHTTPClient(httpx.NewClient(cfg.Jev.Timeout, cfg.Jev.Proxy))`,
+   the way `web_search` does it — `pkg/jev` has no `WithTimeout` option.
 2. **A pinned model.** `pkg/jev`'s `DefaultModel` is a concrete version; leave a blank config field
    blank so the package default applies. The service's `jev-latest` alias moves, and a threshold
    swept against the old weights silently stops applying when it does.

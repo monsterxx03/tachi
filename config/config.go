@@ -19,8 +19,14 @@ import (
 const (
 	DefaultMaxTokens     = 128000
 	DefaultMaxIterations = 50
-	configDirName        = ".tachi"
-	configFileName       = "config.yaml"
+	// DefaultJevTimeout is the bound ONE Jev HTTP attempt gets when the file omits
+	// jev.timeout. The number lives twice by necessity — a struct tag cannot be a
+	// constant, which is the same reason DefaultMaxTokens appears in the MaxTokens tag
+	// too — so config_test pins the tag against this constant, and pkg/jev.DefaultTimeout
+	// holds the same value for a client built without a config.
+	DefaultJevTimeout = 10 * time.Second
+	configDirName     = ".tachi"
+	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
 	backupSuffix              = ".bak"
@@ -385,9 +391,17 @@ type JevConfig struct {
 	Model string `yaml:"model"`
 	// BaseURL overrides the API host (empty = pkg/jev's DefaultBaseURL).
 	BaseURL string `yaml:"base_url"`
-	// Timeout bounds one HTTP attempt (empty = pkg/jev's DefaultTimeout).
-	// The client's retry loop can outlast this several times over.
-	Timeout time.Duration `yaml:"timeout"`
+	// Proxy routes the request through a local proxy (http://, https:// or
+	// socks5:// — e.g. a clash on 127.0.0.1:7890). The endpoint is overseas,
+	// so a machine without a system-wide proxy needs it. Empty leaves the
+	// choice to the environment: the plain client httpx builds still honours
+	// HTTP(S)_PROXY.
+	Proxy string `yaml:"proxy"`
+	// Timeout bounds one HTTP attempt. The tag carries DefaultJevTimeout, so the
+	// field is never left at zero by a load — the same number pkg/jev.DefaultTimeout
+	// gives a client built without a config. The client's retry loop can outlast
+	// this several times over.
+	Timeout time.Duration `yaml:"timeout" default:"10s"`
 }
 
 // Configured reports whether the integration can actually run: switched on

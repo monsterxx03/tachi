@@ -65,8 +65,10 @@ const (
 	DefaultModel = "jev-1.13.0"
 
 	// DefaultTimeout bounds a single HTTP attempt; the retry loop can outlast
-	// it several times over.
-	DefaultTimeout = 30 * time.Second
+	// it several times over. It is the value config.JevConfig.Timeout carries
+	// by default (config.DefaultJevTimeout), so a caller that builds a client
+	// with no config is bounded like one that passes the field through.
+	DefaultTimeout = 10 * time.Second
 
 	// DefaultMaxAttempts bounds the retry loop for retryable failures.
 	DefaultMaxAttempts = 4

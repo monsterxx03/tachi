@@ -303,6 +303,12 @@ var settingsTable = []settingApply{
 	{Key: "provider_aliases", Category: catModel, Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
 	{Key: "max_tokens", Category: catModel, Mode: applyLazy},
 	{Key: "max_iterations", Mode: applyUnused, Note: "desktop 不传 MaxIterations（0 = 无限），只有 tachi -p 读它"},
+	// Jev is a judgment endpoint rather than a provider, but it is still "which model answers
+	// this", so it sits with the model keys. One row covers the whole block: whoever calls it
+	// builds its client from the live config at the moment it judges, so there is nothing to
+	// push — and a row per leaf would be five rows saying the same thing.
+	{Key: "jev", Category: catModel, Mode: applyLazy,
+		Note: "TypeSafe System One 判定端点；pkg/jev 目前还没有生产调用点，值先写进 config.yaml，调用点在发起判定时读这份 live 配置"},
 
 	// --- sessions ---
 	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},

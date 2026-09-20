@@ -77,6 +77,10 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, DefaultMaxTokens, cfg.MaxTokens)
 	assert.Equal(t, DefaultMaxIterations, *cfg.MaxIterations)
+	// The tag on JevConfig.Timeout, held against its constant: the two are the same value
+	// written twice (a tag cannot name a constant), and this is what notices the day one of
+	// them moves. A config that never mentions the block still gets the bound.
+	assert.Equal(t, DefaultJevTimeout, cfg.Jev.Timeout)
 }
 
 func TestSaveAndLoad(t *testing.T) {
