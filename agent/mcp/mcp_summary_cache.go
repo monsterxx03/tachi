@@ -65,6 +65,13 @@ type SummaryGenerator struct {
 	// Kick runs the background work. nil = `go f()`; tests pass a synchronous
 	// one so the assertion after a call can see the result.
 	Kick func(func())
+	// OnReady is called after a summary has been generated and cached. The
+	// reminder fires at most once per session, so without it a session would
+	// keep the heuristic line it rendered while the call was still running and
+	// only a LATER session would see the generated one. The caller marks the
+	// reminder dirty — the same signal a newly discovered tool sends, because
+	// the block's content is what changed.
+	OnReady func()
 
 	mu       sync.Mutex
 	inFlight map[string]bool
@@ -181,6 +188,9 @@ func (g *SummaryGenerator) generateNow(server string, tools []*DeferredTool, key
 	}
 	g.log().Info(ctx, "MCP: server summary generated",
 		"server", server, "tools", len(tools), "model", provider.Model(), "chars", len(text))
+	if g.OnReady != nil {
+		g.OnReady()
+	}
 	return text, nil
 }
 

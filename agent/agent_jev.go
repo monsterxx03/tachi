@@ -113,6 +113,9 @@ func (a *AIAgent) mcpSummaryGenerator() *mcp.SummaryGenerator {
 			Cache:     mcp.NewSummaryCache(config.MCPSummariesDir()),
 			Logger:    a.Config.Logger,
 			SessionID: a.currentSessionID,
+			// The block changed: let the next message render it again, in this
+			// session rather than only in the next one.
+			OnReady: a.NotifyDeferredToolsAdded,
 		}
 	})
 	return a.summaryGen

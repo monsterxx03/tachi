@@ -89,6 +89,30 @@ func TestSummaryGeneratorGeneratesThenCaches(t *testing.T) {
 	assert.Equal(t, 1, provider.calls)
 }
 
+// A finished generation re-renders the block in the SAME session: the reminder
+// fires once per session, so without this signal the reader would keep the
+// heuristic line until the next conversation.
+func TestSummaryGeneratorSignalsWhenReady(t *testing.T) {
+	provider := &fakeSummarizerProvider{text: "摘要（共 1 个工具）", model: "test-model"}
+	gen := syncGenerator(t, provider)
+	ready := 0
+	gen.OnReady = func() { ready++ }
+
+	gen.Generate("srv", summaryTools("mcp__srv__query"))
+	assert.Equal(t, 1, ready, "a stored summary must ask for a re-render")
+
+	// Served from cache: nothing new to render.
+	gen.Generate("srv", summaryTools("mcp__srv__query"))
+	assert.Equal(t, 1, ready)
+
+	// A failure changes nothing, so it must not wake the reminder.
+	failing := syncGenerator(t, &fakeSummarizerProvider{err: errors.New("down")})
+	failed := 0
+	failing.OnReady = func() { failed++ }
+	failing.Generate("srv", summaryTools("mcp__srv__query"))
+	assert.Zero(t, failed)
+}
+
 // The key is the tool SET: an edit, an addition or a rename invalidates; the
 // same set in a different order does not.
 func TestSummaryKeyFollowsTheTools(t *testing.T) {
