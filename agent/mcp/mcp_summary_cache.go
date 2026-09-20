@@ -22,15 +22,17 @@ import (
 // The generated layer of a server summary: one LLM call per server per TOOL
 // SET, cached on disk so a restart, a new session or the next process reuses it.
 //
-// Two things it deliberately is not:
+// Generate is SYNCHRONOUS: a cache miss is one call, waited for. That is
+// affordable because the key is the tool set — a pool that does not change is
+// summarized once ever — and because the cheaper layers run first: a server with
+// its own `instructions` never reaches this, and a server whose generation fails
+// is not asked again for that tool set. What it buys is a reminder that is
+// right the first time it renders, instead of one that shows a placeholder and
+// repairs itself a message later.
 //
-//   - it is never on the turn's critical path. Generate returns the cached text
-//     or "" (the caller falls back to the heuristic) and starts the call in the
-//     background; the reminder runs inside turn preparation, and a model call
-//     there would add its latency to the first message of every session.
-//   - it is never trusted over the server's own words. A server that describes
-//     itself wins (see ServerSummarizer), so the cache only exists for the ones
-//     that do not.
+// It is never trusted over the server's own words: a server that describes
+// itself wins (see ServerSummarizer), so the cache only exists for the ones that
+// do not.
 const (
 	// summaryPromptVersion is part of the cache key. Changing the prompt MUST
 	// invalidate every stored summary, or the cache would keep serving text
@@ -39,9 +41,11 @@ const (
 	summaryPromptVersion = "1"
 	// summaryMaxTokens bounds a paragraph, not a document.
 	summaryMaxTokens = 300
-	// summaryTimeout bounds one generation. It runs in the background, so it is
-	// generous; a hung provider must not leak a goroutine forever.
-	summaryTimeout = 45 * time.Second
+	// summaryTimeout bounds one generation. It runs inside turn preparation —
+	// the reminder is built before a message goes out — so it stays short: a
+	// slow provider costs a stall, and the heuristic layer is a better answer
+	// than a long wait.
+	summaryTimeout = 20 * time.Second
 	// summaryToolTextLimit is how much of a tool's description the summarizer
 	// reads — the same first line the reminder shows, so the summary describes
 	// what the reader could have seen.
@@ -62,20 +66,9 @@ type SummaryGenerator struct {
 	Logger *logger.Logger
 	// SessionID anchors the ledger row to a session (optional).
 	SessionID func() string
-	// Kick runs the background work. nil = `go f()`; tests pass a synchronous
-	// one so the assertion after a call can see the result.
-	Kick func(func())
-	// OnReady is called after a summary has been generated and cached. The
-	// reminder fires at most once per session, so without it a session would
-	// keep the heuristic line it rendered while the call was still running and
-	// only a LATER session would see the generated one. The caller marks the
-	// reminder dirty — the same signal a newly discovered tool sends, because
-	// the block's content is what changed.
-	OnReady func()
 
-	mu       sync.Mutex
-	inFlight map[string]bool
-	failed   map[string]bool
+	mu     sync.Mutex
+	failed map[string]bool
 }
 
 // SummaryKey is the hash a summary is valid for: the prompt version plus every
@@ -100,9 +93,9 @@ func summaryToolText(t *DeferredTool) string {
 	return strutil.FirstLineOrTruncate(t.Description, summaryToolTextLimit)
 }
 
-// Generate answers with the cached summary for this tool set, or with "" while
-// a background generation runs. It never blocks and never returns an error the
-// caller has to handle: the fallback is the heuristic layer, which always works.
+// Generate answers with the summary for this tool set: from the cache, or from
+// one call it waits for. An error is not the caller's to handle — it means "no
+// generated summary", and the heuristic layer answers instead.
 func (g *SummaryGenerator) Generate(server string, tools []*DeferredTool) (string, error) {
 	if g == nil || len(tools) == 0 {
 		return "", nil
@@ -114,42 +107,24 @@ func (g *SummaryGenerator) Generate(server string, tools []*DeferredTool) (strin
 		}
 	}
 	if g.giveUp(server, key) {
-		// The same tool set already failed to summarize: retrying it on every
-		// message would spend a call per turn to fail the same way.
+		// This tool set already failed once: asking again would put the same
+		// timeout in front of every later message for no new information. A
+		// changed tool set is a new question and is asked.
 		return "", nil
 	}
-
-	g.mu.Lock()
-	if g.inFlight == nil {
-		g.inFlight = map[string]bool{}
+	text, err := g.generateNow(server, tools, key)
+	if err != nil {
+		// Reported once per tool set (later messages short-circuit above), so a
+		// broken provider is visible without becoming a per-message log storm.
+		g.log().Warn(context.Background(), "MCP: server summary unavailable, using the local fallback",
+			"server", server, "tools", len(tools), "err", err)
+		g.markFailed(server, key)
+		return "", err
 	}
-	flightKey := server + "\x00" + key
-	if g.inFlight[flightKey] {
-		g.mu.Unlock()
-		return "", nil
-	}
-	g.inFlight[flightKey] = true
-	g.mu.Unlock()
-
-	kick := g.Kick
-	if kick == nil {
-		kick = func(f func()) { go f() }
-	}
-	kick(func() {
-		defer func() {
-			g.mu.Lock()
-			delete(g.inFlight, flightKey)
-			g.mu.Unlock()
-		}()
-		if _, err := g.generateNow(server, tools, key); err != nil {
-			g.markFailed(server, key)
-		}
-	})
-	return "", nil
+	return text, nil
 }
 
-// generateNow is the work itself: cache, call, store. Exported to the package's
-// tests only — production reaches it through Generate's background kick.
+// generateNow is the work itself: call, store.
 func (g *SummaryGenerator) generateNow(server string, tools []*DeferredTool, key string) (string, error) {
 	if g.Provider == nil {
 		return "", fmt.Errorf("no provider for MCP server summaries")
@@ -188,9 +163,6 @@ func (g *SummaryGenerator) generateNow(server string, tools []*DeferredTool, key
 	}
 	g.log().Info(ctx, "MCP: server summary generated",
 		"server", server, "tools", len(tools), "model", provider.Model(), "chars", len(text))
-	if g.OnReady != nil {
-		g.OnReady()
-	}
 	return text, nil
 }
 

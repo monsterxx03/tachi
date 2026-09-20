@@ -84,19 +84,32 @@ func TestServerSummarizerUsesGeneratedSummary(t *testing.T) {
 // The layers compose in the order the reminder needs them: with a generator
 // wired but nothing cached yet, the reader gets the heuristic immediately and
 // the generated summary from the next message on.
-func TestServerSummarizerFallsBackWhileGenerationRuns(t *testing.T) {
+func TestServerSummarizerGeneratesOnAColdCache(t *testing.T) {
 	provider := &fakeSummarizerProvider{text: "股票与指数数据（共 3 个工具）", model: "test-model"}
-	// Inline kick: the "background" call completes before Generate returns, so
-	// the second Summaries() is what a later message would see.
-	gen := syncGenerator(t, provider)
-	sum := &ServerSummarizer{Pool: summaryPool(), Generate: gen.Generate}
+	sum := &ServerSummarizer{Pool: summaryPool(), Generate: testGenerator(t, provider).Generate}
 
-	first := summaryByServer(t, sum)["lixinger"]
-	assert.Equal(t, HeuristicSource, first.Source, "a cold cache answers with what it has")
+	// The generated layer answers on the FIRST render: one call per tool set is
+	// worth waiting for, and a placeholder that repairs itself a message later
+	// leaves the reader with a reminder it cannot use yet.
+	got := summaryByServer(t, sum)["lixinger"]
+	assert.Equal(t, GeneratedSource, got.Source)
+	assert.Equal(t, "股票与指数数据（共 3 个工具）", got.Text)
+	// Both servers in the fixture lack instructions, so both were generated —
+	// once each, for this tool set.
+	assert.Equal(t, 2, provider.calls)
 
-	second := summaryByServer(t, sum)["lixinger"]
-	assert.Equal(t, GeneratedSource, second.Source)
-	assert.Equal(t, "股票与指数数据（共 3 个工具）", second.Text)
+	// A server with its own description never reaches the generator, and the
+	// other one is now a cache hit: rendering the same pool again calls nothing.
+	sum.Instructions = func(server string) string {
+		if server == "lixinger" {
+			return "理杏仁自己写的说明"
+		}
+		return ""
+	}
+	got = summaryByServer(t, sum)["lixinger"]
+	assert.Equal(t, ServerInstructionsSource, got.Source)
+	assert.Equal(t, "理杏仁自己写的说明", got.Text)
+	assert.Equal(t, 2, provider.calls, "instructions win, caches hold, nothing is called")
 }
 
 // With nothing to generate from, the tool names are the description — the only

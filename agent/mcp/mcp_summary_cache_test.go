@@ -41,16 +41,13 @@ func (f *fakeSummarizerProvider) CreateChatStream(context.Context, []llm.Message
 	return nil, errors.New("not used")
 }
 
-// syncGenerator is a generator whose background work runs inline, so a test can
-// assert on the state right after the call.
-func syncGenerator(t *testing.T, provider llm.Provider) *SummaryGenerator {
+// testGenerator is a generator over a throwaway cache directory.
+func testGenerator(t *testing.T, provider llm.Provider) *SummaryGenerator {
 	t.Helper()
-	g := &SummaryGenerator{
+	return &SummaryGenerator{
 		Provider: func() llm.Provider { return provider },
 		Cache:    NewSummaryCache(t.TempDir()),
-		Kick:     func(f func()) { f() }, // inline: no goroutine to wait for
 	}
-	return g
 }
 
 func summaryTools(names ...string) []*DeferredTool {
@@ -66,13 +63,14 @@ func summaryTools(names ...string) []*DeferredTool {
 // The first call generates and stores; the next one is served from disk.
 func TestSummaryGeneratorGeneratesThenCaches(t *testing.T) {
 	provider := &fakeSummarizerProvider{text: "股票与指数数据（共 1 个工具）", model: "test-model"}
-	gen := syncGenerator(t, provider)
+	gen := testGenerator(t, provider)
 	tools := summaryTools("mcp__srv__query")
 
-	// Generate kicks the work and answers "" — the caller falls back for now.
+	// A cold cache is one call, waited for: the reminder renders the real
+	// summary on its first message.
 	text, err := gen.Generate("srv", tools)
 	require.NoError(t, err)
-	assert.Empty(t, text, "a cold cache answers with nothing, never by waiting")
+	assert.Equal(t, "股票与指数数据（共 1 个工具）", text)
 	assert.Equal(t, 1, provider.calls)
 
 	// The next message reads what the background call stored.
@@ -87,30 +85,6 @@ func TestSummaryGeneratorGeneratesThenCaches(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "股票与指数数据（共 1 个工具）", text)
 	assert.Equal(t, 1, provider.calls)
-}
-
-// A finished generation re-renders the block in the SAME session: the reminder
-// fires once per session, so without this signal the reader would keep the
-// heuristic line until the next conversation.
-func TestSummaryGeneratorSignalsWhenReady(t *testing.T) {
-	provider := &fakeSummarizerProvider{text: "摘要（共 1 个工具）", model: "test-model"}
-	gen := syncGenerator(t, provider)
-	ready := 0
-	gen.OnReady = func() { ready++ }
-
-	gen.Generate("srv", summaryTools("mcp__srv__query"))
-	assert.Equal(t, 1, ready, "a stored summary must ask for a re-render")
-
-	// Served from cache: nothing new to render.
-	gen.Generate("srv", summaryTools("mcp__srv__query"))
-	assert.Equal(t, 1, ready)
-
-	// A failure changes nothing, so it must not wake the reminder.
-	failing := syncGenerator(t, &fakeSummarizerProvider{err: errors.New("down")})
-	failed := 0
-	failing.OnReady = func() { failed++ }
-	failing.Generate("srv", summaryTools("mcp__srv__query"))
-	assert.Zero(t, failed)
 }
 
 // The key is the tool SET: an edit, an addition or a rename invalidates; the
@@ -128,17 +102,23 @@ func TestSummaryKeyFollowsTheTools(t *testing.T) {
 	assert.NotEqual(t, SummaryKey(tools), SummaryKey(added))
 }
 
-// A tool set that already failed is not retried on every message: the reminder
-// runs per turn, and a failing provider would otherwise be called once per turn
-// forever.
+// A tool set that already failed is not retried on every message: the call is
+// waited for, so a failing provider would put its timeout in front of every
+// message forever.
 func TestSummaryGeneratorDoesNotRetryAFailedToolSet(t *testing.T) {
 	provider := &fakeSummarizerProvider{err: errors.New("provider down")}
-	gen := syncGenerator(t, provider)
+	gen := testGenerator(t, provider)
 	tools := summaryTools("mcp__srv__query")
 
-	for range 3 {
+	// The first attempt fails and says so; the caller falls back to the heuristic.
+	text, err := gen.Generate("srv", tools)
+	require.Error(t, err)
+	assert.Empty(t, text)
+	// Every later message gets the quiet answer instead: this tool set is known
+	// bad, and asking again would put the same timeout in front of each of them.
+	for range 2 {
 		text, err := gen.Generate("srv", tools)
-		require.NoError(t, err, "a failed generation is not the caller's error")
+		require.NoError(t, err)
 		assert.Empty(t, text)
 	}
 	assert.Equal(t, 1, provider.calls, "give up on this tool set, not on the provider")
@@ -216,11 +196,12 @@ func TestSummaryPromptShape(t *testing.T) {
 // A generation that answers nothing usable must not be cached as a summary.
 func TestSummaryGeneratorRejectsBlankResponses(t *testing.T) {
 	provider := &fakeSummarizerProvider{text: "   \n  "}
-	gen := syncGenerator(t, provider)
+	gen := testGenerator(t, provider)
 	tools := summaryTools("mcp__srv__query")
 
-	_, err := gen.Generate("srv", tools)
-	require.NoError(t, err)
+	text, err := gen.Generate("srv", tools)
+	require.Error(t, err, "an empty answer is a failure, not a summary")
+	assert.Empty(t, text)
 	if _, ok := gen.Cache.Load("srv", SummaryKey(tools)); ok {
 		t.Error("a blank response must not be stored")
 	}
