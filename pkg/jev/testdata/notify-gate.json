@@ -1,0 +1,85 @@
+{
+  "name": "cron-notify-gate",
+  "notes": "Template case set for the cron when_relevant silence gate: a job has finished, and the question is whether its result is worth interrupting the user for. The ground-truth labels are ONE PERSON'S judgment, not data — replace them with outcomes you have actually observed before trusting a threshold swept on them. Chinese cases are included deliberately: the service supports CJK but its accuracy there is unmeasured, and a threshold calibrated on English does not carry over.",
+  "action_label": "true",
+  "question": {
+    "type": "noul",
+    "instructions": "A scheduled job has just finished running. Does its result contain something the user needs to be told about now — a problem, a meaningful change, or an answer they asked to be watched for? Routine runs, unchanged readings and no-op outcomes do not qualify.",
+    "yes": "Something actionable, changed or newly broken that the user would want to know about now",
+    "no": "A routine or unchanged outcome that carries no new information for the user"
+  },
+  "cases": [
+    {
+      "id": "notify-disk-full",
+      "group": "clear",
+      "expect": "true",
+      "state": "任务：检查磁盘用量\n结果：/data 分区已用 94%，剩余 12GB。上次检查为 71%。"
+    },
+    {
+      "id": "notify-ci-failed",
+      "group": "clear",
+      "expect": "true",
+      "state": "Task: watch CI on main\nResult: build #4821 FAILED — 3 tests failing in agent/checkpoint. First failure on this branch."
+    },
+    {
+      "id": "notify-error-spike",
+      "group": "clear",
+      "expect": "true",
+      "state": "Task: monitor the API 5xx rate\nResult: rate went from 0.2% to 7.8% over the last 10 minutes and is still climbing."
+    },
+    {
+      "id": "notify-maintainer-replied",
+      "group": "clear",
+      "expect": "true",
+      "state": "任务：跟踪 issue #331 的回复\n结果：维护者回复了，要求补充复现步骤，并说他会在下个版本处理。"
+    },
+    {
+      "id": "notify-backup-slow",
+      "group": "ambiguous",
+      "expect": "true",
+      "state": "任务：检查每日备份\n结果：备份已完成，但耗时 2h11m，平时是 42m。没有报错。"
+    },
+    {
+      "id": "notify-dependency-minor",
+      "group": "ambiguous",
+      "expect": "true",
+      "state": "Task: check for new releases of pinned dependencies\nResult: go-openai released v2.4.0. Changelog lists one fix for streaming retries plus documentation updates."
+    },
+    {
+      "id": "silent-disk-steady",
+      "group": "clear",
+      "expect": "false",
+      "state": "Task: check disk usage\nResult: /data is at 41%. Unchanged since the last check."
+    },
+    {
+      "id": "silent-ci-green",
+      "group": "clear",
+      "expect": "false",
+      "state": "任务：检查 CI\n结果：main 分支构建通过，无新提交。"
+    },
+    {
+      "id": "silent-error-normal",
+      "group": "clear",
+      "expect": "false",
+      "state": "Task: monitor the API 5xx rate\nResult: rate is 0.19%, within the normal range for this hour."
+    },
+    {
+      "id": "silent-no-releases",
+      "group": "clear",
+      "expect": "false",
+      "state": "任务：检查依赖更新\n结果：没有任何依赖有新版本。"
+    },
+    {
+      "id": "silent-flaky-absent",
+      "group": "ambiguous",
+      "expect": "false",
+      "state": "Task: watch CI on main\nResult: build #4822 passed. The flaky test in agent/checkpoint did not appear this time."
+    },
+    {
+      "id": "silent-disk-creep",
+      "group": "ambiguous",
+      "expect": "false",
+      "state": "任务：检查磁盘\n结果：/data 已用 45%，比上次上涨 1%。"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "name": "escape-hatch-probe",
+  "notes": "Reproduces the escape-hatch experiment: the same junk inputs judged with and without a catch-all option. Several cases are copied verbatim from that experiment's table, where removing the catch-all turned 'Hi, thanks!' into a 0.99-confidence how-to question. The sweep below thresholds p(no_clear_request), so 'should act' means 'the escape hatch correctly claimed this input' — a HIGH separation is what you want here, the opposite of the notify gate's reading. If junk and real requests both put mass on the hatch, the option list is not carrying the distinction and confidence is not calibrated either way.",
+  "action_label": "no_clear_request",
+  "question": {
+    "type": "choice",
+    "instructions": "A group chat contains this message, sent by someone other than you. Which of the following does it ask for?",
+    "options": {
+      "answer_question": "Asks a factual or how-to question that someone could answer",
+      "report_problem": "Reports something broken, failing or not working as expected",
+      "no_clear_request": "A greeting, thanks, banter, a fragment, or garbled text — nothing actionable is being asked for"
+    }
+  },
+  "cases": [
+    {
+      "id": "real-checkpoint-path",
+      "group": "clear",
+      "expect": "answer_question",
+      "state": "有人知道 tachi 的 checkpoint 存在哪个目录吗"
+    },
+    {
+      "id": "real-rotate-key",
+      "group": "clear",
+      "expect": "answer_question",
+      "state": "How do I rotate the DeepSeek API key without restarting the agent?"
+    },
+    {
+      "id": "real-api-500",
+      "group": "clear",
+      "expect": "report_problem",
+      "state": "刚发版之后 /api/usage 就一直 500，本地复现不了"
+    },
+    {
+      "id": "real-tests-failing",
+      "group": "clear",
+      "expect": "report_problem",
+      "state": "the desktop smoke suite has been failing since this morning, looks like the bindings are stale"
+    },
+    {
+      "id": "junk-thanks",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "Hi, thanks!"
+    },
+    {
+      "id": "junk-garbled",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "asdfghjkl"
+    },
+    {
+      "id": "junk-followup",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "跟进一下"
+    },
+    {
+      "id": "junk-banter",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "哈哈这个有意思"
+    },
+    {
+      "id": "junk-vague-thing",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "It keeps doing the thing again."
+    },
+    {
+      "id": "junk-two-topics",
+      "group": "ambiguous",
+      "expect": "no_clear_request",
+      "state": "Can we get the thing we discussed? Also the invoice."
+    }
+  ]
+}

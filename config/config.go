@@ -361,6 +361,42 @@ type DreamConfig struct {
 	MaxMessageChars int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
 }
 
+// JevConfig configures the optional TypeSafe Jev integration: a System One
+// model that returns typed judgments — a probability, a chosen option, a
+// score on ordered levels — rather than generated text. It fits narrow
+// semantic gates where the current alternative is asking a generative model
+// for a short answer and parsing it out of the reply.
+//
+// It can NEVER stand in for a call whose output is shown or stored:
+// generation stays on llm.Provider. pkg/jev documents the model's own
+// constraints (the 32k state limit, silent failure on non-text input, why
+// confidence is relative to the option set).
+//
+// Disabled by default, so an existing installation keeps its current path
+// everywhere until a gate is deliberately moved over.
+type JevConfig struct {
+	Enabled bool `yaml:"enabled" default:"false"`
+	// APIKey authenticates against the evaluation endpoint (Bearer).
+	APIKey string `yaml:"api_key"`
+	// Model pins the model version. Empty means pkg/jev's DefaultModel — a
+	// concrete version, never the service's `jev-latest` alias. The alias
+	// moves, and a threshold swept against the old weights silently stops
+	// applying when it does, so leaving this blank is the safe direction.
+	Model string `yaml:"model"`
+	// BaseURL overrides the API host (empty = pkg/jev's DefaultBaseURL).
+	BaseURL string `yaml:"base_url"`
+	// Timeout bounds one HTTP attempt (empty = pkg/jev's DefaultTimeout).
+	// The client's retry loop can outlast this several times over.
+	Timeout time.Duration `yaml:"timeout"`
+}
+
+// Configured reports whether the integration can actually run: switched on
+// AND holding a key. Callers gate on this, so a half-filled section degrades
+// to the existing path instead of failing per call.
+func (c JevConfig) Configured() bool {
+	return c.Enabled && strings.TrimSpace(c.APIKey) != ""
+}
+
 // ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
 type ACPConfig struct {
 	// ConnectConfiguredMCP controls whether to connect MCP servers from mcp.json
@@ -852,6 +888,7 @@ type Config struct {
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
+	Jev                    JevConfig            `yaml:"jev"`                             // TypeSafe Jev semantic judgments (optional)
 	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
 	Permissions            PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
 	Oneoff                 OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)

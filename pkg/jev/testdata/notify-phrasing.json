@@ -1,0 +1,321 @@
+{
+  "name": "notify-phrasing-2x2",
+  "notes": "A 2x2 grid per judgment: language (en / zh) x register (formal job-report template / plain colloquial). ONLY THE FULL GRID separates the two dimensions, and this file is the evidence for that: with just the two formal arms, en and zh agreed to within 0.10 across two independent runs, and that agreement was reported as the language effect — it was the register they shared. Adding the plain arms moved the same pairs by up to 0.46 and flipped their labels in BOTH languages, leaving an EMPTY threshold corridor: dependency-minor-en-plain sits at 0.30 while flaky-absent-zh sits at 0.58. So a gate on free prose is not thresholable, and repeating a confounded two-arm run to tighter error bars does not make it unconfounded. Labels are still one person's judgment, and the plain arms are casual in tone by construction — the effect is register and tone together, not register alone.",
+  "action_label": "true",
+  "question": {
+    "type": "noul",
+    "instructions": "A scheduled job has just finished running. Does its result contain something the user needs to be told about now — a problem, a meaningful change, or an answer they asked to be watched for? Routine runs, unchanged readings and no-op outcomes do not qualify.",
+    "yes": "Something actionable, changed or newly broken that the user would want to know about now",
+    "no": "A routine or unchanged outcome that carries no new information for the user"
+  },
+  "cases": [
+    {
+      "id": "disk-full-en",
+      "pair": "disk-full",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: check disk usage\nResult: /data is at 94%, 12GB free. Last check was 71%."
+    },
+    {
+      "id": "disk-full-en-plain",
+      "pair": "disk-full",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "Took a look at the disk — /data is up to 94% now, only 12G left. It was 71% last time."
+    },
+    {
+      "id": "disk-full-zh",
+      "pair": "disk-full",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：检查磁盘用量\n结果：/data 已用 94%，剩余 12GB。上次检查是 71%。"
+    },
+    {
+      "id": "disk-full-zh-plain",
+      "pair": "disk-full",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "看了下磁盘，/data 已经用到 94% 了，只剩 12G。上次看才 71%。"
+    },
+    {
+      "id": "ci-failed-en",
+      "pair": "ci-failed",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: watch CI on main\nResult: build #4821 FAILED — 3 tests failing in agent/checkpoint."
+    },
+    {
+      "id": "ci-failed-en-plain",
+      "pair": "ci-failed",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "main's CI is red — build #4821 failed, 3 tests broken in agent/checkpoint."
+    },
+    {
+      "id": "ci-failed-zh",
+      "pair": "ci-failed",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：监控 main 分支的 CI\n结果：构建 #4821 失败 —— agent/checkpoint 里有 3 个测试挂了。"
+    },
+    {
+      "id": "ci-failed-zh-plain",
+      "pair": "ci-failed",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "main 的 CI 挂了，构建 #4821 没过，agent/checkpoint 里有 3 个测试失败。"
+    },
+    {
+      "id": "error-spike-en",
+      "pair": "error-spike",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: monitor the API 5xx rate\nResult: went from 0.2% to 7.8% in the last 10 minutes and is still climbing."
+    },
+    {
+      "id": "error-spike-en-plain",
+      "pair": "error-spike",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "the API 5xx rate was 0.2% a minute ago, now it's 7.8% over the last 10 minutes, still climbing."
+    },
+    {
+      "id": "error-spike-zh",
+      "pair": "error-spike",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：监控 API 的 5xx 比例\n结果：过去 10 分钟从 0.2% 涨到 7.8%，而且还在继续涨。"
+    },
+    {
+      "id": "error-spike-zh-plain",
+      "pair": "error-spike",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "API 的 5xx 比例刚才还 0.2%，这十分钟涨到 7.8% 了，还在涨。"
+    },
+    {
+      "id": "maintainer-replied-en",
+      "pair": "maintainer-replied",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: track replies on issue #331\nResult: the maintainer replied, asking for reproduction steps, and said they would handle it in the next release."
+    },
+    {
+      "id": "maintainer-replied-en-plain",
+      "pair": "maintainer-replied",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "the maintainer got back on #331 — wants repro steps, says they'll deal with it next release."
+    },
+    {
+      "id": "maintainer-replied-zh",
+      "pair": "maintainer-replied",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：跟踪 issue #331 的回复\n结果：维护者回复了，要求补充复现步骤，并说会在下个版本处理。"
+    },
+    {
+      "id": "maintainer-replied-zh-plain",
+      "pair": "maintainer-replied",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "issue #331 维护者回了，让我们补一下复现步骤，说下个版本处理。"
+    },
+    {
+      "id": "disk-steady-en",
+      "pair": "disk-steady",
+      "group": "en",
+      "expect": "false",
+      "state": "Task: check disk usage\nResult: /data is at 41%. Unchanged since the last check."
+    },
+    {
+      "id": "disk-steady-en-plain",
+      "pair": "disk-steady",
+      "group": "en-plain",
+      "expect": "false",
+      "state": "checked the disk, /data is at 41%, same as last time."
+    },
+    {
+      "id": "disk-steady-zh",
+      "pair": "disk-steady",
+      "group": "zh",
+      "expect": "false",
+      "state": "任务：检查磁盘用量\n结果：/data 已用 41%。和上次检查相比没有变化。"
+    },
+    {
+      "id": "disk-steady-zh-plain",
+      "pair": "disk-steady",
+      "group": "zh-plain",
+      "expect": "false",
+      "state": "磁盘看了下，/data 是 41%，跟上回一样没变。"
+    },
+    {
+      "id": "no-releases-en",
+      "pair": "no-releases",
+      "group": "en",
+      "expect": "false",
+      "state": "Task: check dependencies for new releases\nResult: no dependency has a new version."
+    },
+    {
+      "id": "no-releases-en-plain",
+      "pair": "no-releases",
+      "group": "en-plain",
+      "expect": "false",
+      "state": "went through the deps, nothing has a new version."
+    },
+    {
+      "id": "no-releases-zh",
+      "pair": "no-releases",
+      "group": "zh",
+      "expect": "false",
+      "state": "任务：检查依赖是否有新版本\n结果：没有任何依赖有新版本。"
+    },
+    {
+      "id": "no-releases-zh-plain",
+      "pair": "no-releases",
+      "group": "zh-plain",
+      "expect": "false",
+      "state": "依赖都查过了，没有新的版本。"
+    },
+    {
+      "id": "ci-green-en",
+      "pair": "ci-green",
+      "group": "en",
+      "expect": "false",
+      "state": "Task: watch CI on main\nResult: build #4820 passed. No new commits."
+    },
+    {
+      "id": "ci-green-en-plain",
+      "pair": "ci-green",
+      "group": "en-plain",
+      "expect": "false",
+      "state": "main's CI is green, build #4820 passed, no new commits either."
+    },
+    {
+      "id": "ci-green-zh",
+      "pair": "ci-green",
+      "group": "zh",
+      "expect": "false",
+      "state": "任务：监控 main 分支的 CI\n结果：构建 #4820 通过。没有新提交。"
+    },
+    {
+      "id": "ci-green-zh-plain",
+      "pair": "ci-green",
+      "group": "zh-plain",
+      "expect": "false",
+      "state": "main 的 CI 过了，构建 #4820 通过，也没有新提交。"
+    },
+    {
+      "id": "backup-slow-en",
+      "pair": "backup-slow",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: check the nightly backup\nResult: the backup completed, but took 2h11m instead of the usual 42m. No errors."
+    },
+    {
+      "id": "backup-slow-en-plain",
+      "pair": "backup-slow",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "backup finished, though it took 2h11m — normally it's done in 42m. No errors."
+    },
+    {
+      "id": "backup-slow-zh",
+      "pair": "backup-slow",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：检查每日备份\n结果：备份完成了，但耗时 2h11m，平时是 42m。没有报错。"
+    },
+    {
+      "id": "backup-slow-zh-plain",
+      "pair": "backup-slow",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "备份跑完了，不过花了 2 小时 11 分，平时 42 分就完事。没报错。"
+    },
+    {
+      "id": "dependency-minor-en",
+      "pair": "dependency-minor",
+      "group": "en",
+      "expect": "true",
+      "state": "Task: check dependencies for new releases\nResult: go-openai released v2.4.0 — one fix for streaming retries, plus documentation updates."
+    },
+    {
+      "id": "dependency-minor-en-plain",
+      "pair": "dependency-minor",
+      "group": "en-plain",
+      "expect": "true",
+      "state": "go-openai put out v2.4.0, just a streaming retry fix and some doc updates."
+    },
+    {
+      "id": "dependency-minor-zh",
+      "pair": "dependency-minor",
+      "group": "zh",
+      "expect": "true",
+      "state": "任务：检查依赖是否有新版本\n结果：go-openai 发布了 v2.4.0 —— 一个流式重试的修复，加上文档更新。"
+    },
+    {
+      "id": "dependency-minor-zh-plain",
+      "pair": "dependency-minor",
+      "group": "zh-plain",
+      "expect": "true",
+      "state": "go-openai 出了个 v2.4.0，就修了个流式重试的问题，加上文档更新。"
+    },
+    {
+      "id": "flaky-absent-en",
+      "pair": "flaky-absent",
+      "group": "en",
+      "expect": "false",
+      "state": "Task: watch CI on main\nResult: build #4822 passed. The flaky test in agent/checkpoint did not appear this time."
+    },
+    {
+      "id": "flaky-absent-en-plain",
+      "pair": "flaky-absent",
+      "group": "en-plain",
+      "expect": "false",
+      "state": "main's CI is green, build #4822 passed, that flaky checkpoint test didn't show up this time."
+    },
+    {
+      "id": "flaky-absent-zh",
+      "pair": "flaky-absent",
+      "group": "zh",
+      "expect": "false",
+      "state": "任务：监控 main 分支的 CI\n结果：构建 #4822 通过。agent/checkpoint 那个不稳定的测试这次没有出现。"
+    },
+    {
+      "id": "flaky-absent-zh-plain",
+      "pair": "flaky-absent",
+      "group": "zh-plain",
+      "expect": "false",
+      "state": "main 的 CI 过了，构建 #4822 通过，checkpoint 那个不稳定测试这次没冒出来。"
+    },
+    {
+      "id": "disk-creep-en",
+      "pair": "disk-creep",
+      "group": "en",
+      "expect": "false",
+      "state": "Task: check disk\nResult: /data is at 45%, up 1% since last time."
+    },
+    {
+      "id": "disk-creep-en-plain",
+      "pair": "disk-creep",
+      "group": "en-plain",
+      "expect": "false",
+      "state": "checked the disk, /data is at 45%, up 1% from last time."
+    },
+    {
+      "id": "disk-creep-zh",
+      "pair": "disk-creep",
+      "group": "zh",
+      "expect": "false",
+      "state": "任务：检查磁盘\n结果：/data 已用 45%，比上次上涨 1%。"
+    },
+    {
+      "id": "disk-creep-zh-plain",
+      "pair": "disk-creep",
+      "group": "zh-plain",
+      "expect": "false",
+      "state": "磁盘看了下，/data 是 45%，比上次多了 1%。"
+    }
+  ]
+}
