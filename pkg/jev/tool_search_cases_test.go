@@ -29,6 +29,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/agent/mcp/jevsearch"
 )
 
 const (
@@ -38,25 +40,11 @@ const (
 	toolSearchGenEnv = "TOOL_SEARCH_GEN"
 )
 
-// The question text. English, like the other case files and like the tool
-// descriptions the model sees; the STATE is whatever language the model wrote
-// its query in, which is the variable this file is about.
-const (
-	// toolSearchFrame is the file-level instruction: the shape of the question
-	// with the candidate left out. It is never sent — every case overrides it —
-	// but it is what the file MEANS, and validateEvalFile requires it.
-	toolSearchFrame = "The state is a request from the user. Decide whether the tool described below can carry that request out directly."
-	// toolSearchQuestionFmt is the production per-candidate text: the tool's
-	// name, the server it lives on, the keywords SearchHint carries, and the
-	// first line of its description — then the question itself.
-	toolSearchQuestionFmt = "Tool %s (server: %s; related terms: %s): %s\nCan this tool carry the request out directly?"
-
-	// The criteria. Supplying them is what makes the probability
-	// interpretable: without them the model guesses what "yes" covers, and the
-	// guess leans toward the label it is about to pick.
-	toolSearchYes = "Calling this tool now would directly carry out what the request asks for."
-	toolSearchNo  = "The request asks for something else, or this tool needs input the request does not provide, or its action is only RELATED to what was asked rather than the same action."
-)
+// The question text is NOT defined here: it comes from agent/mcp/jevsearch,
+// which is the same function the gate calls at runtime. A threshold belongs to
+// the prompt it was swept on (docs/agents/jev.md), so the measurement and the
+// gate build the same bytes from the same code — a wording change cannot leave
+// this file describing a question the gate no longer asks.
 
 // toolRecord is one entry of the corpus fixture.
 type toolRecord struct {
@@ -125,7 +113,9 @@ func buildToolSearchCases(t *testing.T) evalCaseFile {
 		if !ok {
 			t.Fatalf("queries name %s, which the corpus does not define", name)
 		}
-		return fmt.Sprintf(toolSearchQuestionFmt, tool.Name, tool.Server, tool.Hint, tool.Summary)
+		return jevsearch.Instructions(jevsearch.Candidate{
+			Name: tool.Name, Server: tool.Server, Hint: tool.Hint, Summary: tool.Summary,
+		})
 	}
 
 	var cases []evalCase
@@ -169,9 +159,9 @@ func buildToolSearchCases(t *testing.T) evalCaseFile {
 			"(see the design doc §六).",
 		Question: evalQuestion{
 			Type:         "noul",
-			Instructions: toolSearchFrame,
-			Yes:          toolSearchYes,
-			No:           toolSearchNo,
+			Instructions: jevsearch.Frame,
+			Yes:          jevsearch.Yes,
+			No:           jevsearch.No,
 		},
 		Cases: cases,
 	}

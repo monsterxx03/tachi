@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/mcp/jevsearch"
 	"github.com/monsterxx03/tachi/pkg/jev"
 )
 
@@ -173,8 +174,10 @@ func allQuestions(corpus toolCorpus) map[string]jev.Question {
 	out := make(map[string]jev.Question, len(corpus.Tools))
 	for _, tool := range corpus.Tools {
 		out[tool.Name] = mustBuildNoul(
-			fmt.Sprintf(toolSearchQuestionFmt, tool.Name, tool.Server, tool.Hint, tool.Summary),
-			toolSearchYes, toolSearchNo)
+			jevsearch.Instructions(jevsearch.Candidate{
+				Name: tool.Name, Server: tool.Server, Hint: tool.Hint, Summary: tool.Summary,
+			}),
+			jevsearch.Yes, jevsearch.No)
 	}
 	return out
 }
