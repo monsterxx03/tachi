@@ -63,6 +63,11 @@ type Manager struct {
 
 	initDoneOnce sync.Once
 
+	// Server-level usage descriptions from MCP `initialize` (`instructions`),
+	// keyed by server name. Empty string = the server did not provide one.
+	// Guarded by mu.
+	serverInstructions map[string]string
+
 	// Per-session discovered-tool sets, keyed by session ID. Lazily created
 	// by SetFor on first use and restored from the session's persistence
 	// file, so each session keeps its own set of tools loaded via
@@ -225,6 +230,26 @@ func NewManager(ctx context.Context, cfg *config.Config, l *logger.Logger) *Mana
 
 // Pool returns the deferred-tool pool owned by this manager. Always non-nil.
 func (m *Manager) Pool() *DeferredPool { return m.pool }
+
+// SetServerInstructions records a server's own usage description from MCP
+// `initialize` (empty when the server did not provide one — which overwrites
+// any stale text from an earlier connection, on purpose).
+func (m *Manager) SetServerInstructions(server, instructions string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.serverInstructions == nil {
+		m.serverInstructions = make(map[string]string)
+	}
+	m.serverInstructions[server] = instructions
+}
+
+// ServerInstructions returns the description the server gave about itself, or
+// "" when it gave none.
+func (m *Manager) ServerInstructions(server string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.serverInstructions[server]
+}
 
 // ToolResultMaxChars returns the configured max chars for tool results.
 // 0 means no limit.
@@ -770,7 +795,8 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	}
 	initReq.Params.Capabilities = mcp.ClientCapabilities{}
 
-	if _, err := c.Initialize(ctx, initReq); err != nil {
+	initResult, err := c.Initialize(ctx, initReq)
+	if err != nil {
 		c.Close()
 		// A 401 can arrive here rather than at ListTools — it is the FIRST request that
 		// meets it — and it is the same fact: this server wants an OAuth2 token.
@@ -784,7 +810,15 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
-	logger.FromContext(ctx).Info(ctx, "MCP: connected to server", "server", srv.Name, "type", srv.Type)
+	// The server's own usage description (MCP `initialize.instructions`) — how
+	// to use this server and its features, in its author's words. It is the
+	// one server-level summary nobody has to generate: free, always current,
+	// and written by someone who knows what is behind it. Empty is common
+	// (many servers leave it out), which is why the reminder has fallbacks.
+	m.SetServerInstructions(srv.Name, initResult.Instructions)
+
+	logger.FromContext(ctx).Info(ctx, "MCP: connected to server", "server", srv.Name, "type", srv.Type,
+		"instructions_chars", len(initResult.Instructions))
 
 	// Discover tools
 	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})

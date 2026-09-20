@@ -19,7 +19,24 @@ import (
 // deferredToolProviderAdapter adapts mcp.DeferredPool to the
 // systemreminder.DeferredToolProvider interface.
 type deferredToolProviderAdapter struct {
+	a    *AIAgent
 	pool *mcp.DeferredPool
+}
+
+// Summaries is the per-server half of the reminder, offered only while the
+// search reads sentences (the Jev matcher). Under the keyword matcher a reader
+// needs the tool NAMES — they are what it matches on — so the reminder keeps
+// the per-tool catalog and this returns nil.
+func (a *deferredToolProviderAdapter) Summaries() []systemreminder.DeferredToolSummary {
+	if !a.a.mcpSearchUsesJev() {
+		return nil
+	}
+	summaries := a.a.mcpSummarizer(a.pool).Summaries()
+	out := make([]systemreminder.DeferredToolSummary, 0, len(summaries))
+	for _, s := range summaries {
+		out = append(out, systemreminder.DeferredToolSummary{Server: s.Server, Text: s.Text, Source: s.Source})
+	}
+	return out
 }
 
 func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord {

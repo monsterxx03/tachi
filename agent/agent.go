@@ -939,7 +939,7 @@ func (a *AIAgent) ensureDeferredReminder() *systemreminder.DeferredToolReminder 
 		return nil
 	}
 	r := &systemreminder.DeferredToolReminder{
-		Provider: &deferredToolProviderAdapter{pool: pool},
+		Provider: &deferredToolProviderAdapter{a: a, pool: pool},
 		Tracker:  a.sessionAwareTracker(),
 	}
 	a.deferredToolReminder = r

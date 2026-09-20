@@ -82,6 +82,47 @@ func TestMCPSearcherFollowsTheLiveConfig(t *testing.T) {
 	assert.Equal(t, tools.ProseSearchAdvice, after.(tools.MCPSearchAdvice).SearchAdvice())
 }
 
+// The reminder's shape follows the matcher, read LIVE: a server summary tells
+// the reader to describe a scenario, which only the Jev search can use. Under
+// the keyword matcher that line would be a promise nothing keeps, so the catalog
+// (which carries the names the keywords match) stays.
+func TestMCPSummariesOnlyUnderTheJevMatcher(t *testing.T) {
+	cfg := &config.Config{
+		MCPToolSearch: config.MCPToolSearchConfig{Matcher: "auto"},
+		Jev:           config.JevConfig{Enabled: true, APIKey: "k"},
+	}
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Resolved:      &llm.ResolvedProvider{},
+		SkipConfigure: true,
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
+		FullConfig:    cfg,
+	})
+	require.NoError(t, err)
+
+	pool := mcp.NewDeferredPool()
+	tool := &mcp.DeferredTool{Name: "mcp__lixinger__list_companies", ServerName: "lixinger",
+		Description: "获取 A 股公司详细信息列表"}
+	pool.Add(tool)
+	adapter := &deferredToolProviderAdapter{a: a, pool: pool}
+
+	// Jev gate active: one line per server, no LLM and no manager yet, so the
+	// heuristic layer is what answers (and the line is still worth rendering).
+	got := adapter.Summaries()
+	require.Len(t, got, 1)
+	assert.Equal(t, "lixinger", got[0].Server)
+	assert.NotEmpty(t, got[0].Text)
+
+	// Flipping the setting switches the shape with no rebuild — the reminder
+	// asks on every generation.
+	cfg.MCPToolSearch.Matcher = "bm25"
+	assert.Empty(t, adapter.Summaries())
+
+	// And a half-filled jev block is not the gate either.
+	cfg.MCPToolSearch.Matcher = "auto"
+	cfg.Jev.APIKey = ""
+	assert.Empty(t, adapter.Summaries())
+}
+
 // Refreshing with MCP off is a no-op rather than a panic: there is no search
 // tool to rebuild.
 func TestRefreshMCPSearchWithoutMCP(t *testing.T) {

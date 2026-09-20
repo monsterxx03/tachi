@@ -20,9 +20,96 @@ type DeferredToolRecord struct {
 	Description string
 }
 
+// DeferredToolSummary is one MCP server described in a line: what domains it
+// covers, not which tools it holds.
+type DeferredToolSummary struct {
+	// Server is the server name ("lixinger").
+	Server string
+	// Text says what the server covers. Already one line.
+	Text string
+	// Source names where Text came from (the server's own description, a
+	// generated summary, a local heuristic). Logged, not rendered: a thin line
+	// is diagnosable only if the log says which layer produced it.
+	Source string
+}
+
+// DeferredToolSummarizer is the optional other half of DeferredToolProvider: a
+// provider that implements it can be described per SERVER instead of per tool.
+//
+// It returns nil when the per-server shape does not apply — the caller asks
+// every time, so the answer can follow a setting that changed mid-session (the
+// search matcher; see agent.mcpSearcher). The per-tool catalog stays the
+// fallback, which is what the keyword matcher needs and what a server with no
+// description to offer gets.
+type DeferredToolSummarizer interface {
+	Summaries() []DeferredToolSummary
+}
+
 // DeferredToolTracker reports which tools have already been discovered.
 type DeferredToolTracker interface {
 	Contains(name string) bool
+}
+
+// summaryLines renders the per-SERVER shape, or nil when the provider does not
+// offer one.
+//
+// A server with nothing left to discover is skipped: the block is a hint about
+// what can still be loaded, and a fully-loaded server has nothing to hint. The
+// counts stay the reminder's own (it holds the full list and the tracker), so
+// the two shapes can never disagree about how much is behind a line.
+func (r *DeferredToolReminder) summaryLines(all, undiscovered []DeferredToolRecord) []string {
+	summarizer, ok := r.Provider.(DeferredToolSummarizer)
+	if !ok {
+		return nil
+	}
+	summaries := summarizer.Summaries()
+	if len(summaries) == 0 {
+		return nil
+	}
+	total := map[string]int{}
+	remaining := map[string]int{}
+	for _, t := range all {
+		total[serverOf(t.Name)]++
+	}
+	for _, t := range undiscovered {
+		remaining[serverOf(t.Name)]++
+	}
+	lines := make([]string, 0, len(summaries))
+	var sources []string
+	for _, s := range summaries {
+		left := remaining[s.Server]
+		if left == 0 {
+			continue
+		}
+		text := s.Text
+		if text == "" {
+			text = "（该 server 未提供描述）"
+		}
+		lines = append(lines, fmt.Sprintf("  mcp__%s — %d 个工具（%d 个未加载）：%s",
+			s.Server, total[s.Server], left, text))
+		sources = append(sources, s.Server+"="+s.Source)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	r.summarySources = strings.Join(sources, ",")
+	return lines
+}
+
+// serverOf reads the server segment out of a tool name ("mcp__lixinger__x" →
+// "lixinger"). An unexpected shape returns the name itself, which only means
+// the line is filed under a name no server will match — never a panic, and the
+// reader still sees the tool.
+func serverOf(toolName string) string {
+	rest, ok := strings.CutPrefix(toolName, "mcp__")
+	if !ok {
+		return toolName
+	}
+	server, _, ok := strings.Cut(rest, "__")
+	if !ok {
+		return rest
+	}
+	return server
 }
 
 // DeferredToolReminder injects a deferred-tools block showing
@@ -47,6 +134,11 @@ type DeferredToolReminder struct {
 	mu       sync.Mutex
 	hasFired bool // set once output was generated; prevents repeats
 	dirty    bool // when true, re-fires even if hasFired (mid-session tool change)
+
+	// summarySources is which layer described each server on the last render
+	// ("lixinger=instructions,lixinger=..."), for the log line below. Written
+	// and read on the turn goroutine only.
+	summarySources string
 }
 
 // MarkDirty makes the reminder fire again on the next user message, even if it
@@ -119,9 +211,11 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	r.markFired()
 
 	var lines []string
-	for _, t := range undiscovered {
-		desc := strutil.FirstLineOrTruncate(t.Description, 100)
-		lines = append(lines, fmt.Sprintf("  %s — %s", t.Name, desc))
+	if lines = r.summaryLines(all, undiscovered); lines == nil {
+		for _, t := range undiscovered {
+			desc := strutil.FirstLineOrTruncate(t.Description, 100)
+			lines = append(lines, fmt.Sprintf("  %s — %s", t.Name, desc))
+		}
 	}
 
 	// Add search hint at the end. It says what to DO with MCPSearchTools rather
@@ -135,6 +229,10 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 			len(all), len(all)-len(undiscovered))
 	}
 	lines = append(lines, "", "  "+totalHint)
+
+	if r.summarySources != "" {
+		rctx.Info(ctx, "systemreminder: deferred-tool summaries by source", "sources", r.summarySources)
+	}
 
 	rctx.Info(ctx,
 		"systemreminder: DeferredToolReminder fired",

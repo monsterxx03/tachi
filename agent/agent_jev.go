@@ -26,10 +26,7 @@ import (
 // resolves select: / exact and suffix names / mcp__server by lookup and never
 // sends them to the service (see mcp.JevSearcher).
 func (a *AIAgent) mcpSearcher(pool *mcp.DeferredPool) tools.MCPSearcher {
-	var m config.MCPToolSearchConfig
-	if cfg := a.Config.FullConfig; cfg != nil {
-		m = cfg.MCPToolSearch
-	}
+	m := a.mcpSearchConfig()
 	if pool == nil || m.Matcher == "bm25" {
 		return mcp.NewPoolSearcher(pool)
 	}
@@ -61,6 +58,44 @@ func (a *AIAgent) RefreshMCPSearch() {
 		return
 	}
 	a.RegisterTool(tools.NewMCPSearchToolsTool(a.mcpSearcher(pool), mgr))
+}
+
+// mcpSearchConfig is the live mcp_tool_search block (the settings object is
+// mutated in place by a save, so reading it here is what makes a pushed change
+// take effect).
+func (a *AIAgent) mcpSearchConfig() config.MCPToolSearchConfig {
+	if cfg := a.Config.FullConfig; cfg != nil {
+		return cfg.MCPToolSearch
+	}
+	return config.MCPToolSearchConfig{}
+}
+
+// mcpSearchUsesJev reports whether a prose query would be judged rather than
+// keyword-matched under the CURRENT config — the condition mcpSearcher acts on,
+// without building the client.
+//
+// The reminder asks this instead of caching the answer: a server summary guides
+// the reader to describe a SCENARIO, which only a matcher that reads sentences
+// can use, so the block's shape has to follow the same setting the search does
+// (and follow it mid-session, which is when the setting changes).
+func (a *AIAgent) mcpSearchUsesJev() bool {
+	m := a.mcpSearchConfig()
+	if m.Matcher == "bm25" {
+		return false
+	}
+	cfg := a.Config.FullConfig
+	return cfg != nil && cfg.Jev.Configured()
+}
+
+// mcpSummarizer builds the per-server summarizer for the reminder: the pool it
+// groups, plus the descriptions the servers gave about themselves at connect
+// time. A nil Manager (MCP off) leaves only the heuristic layer.
+func (a *AIAgent) mcpSummarizer(pool *mcp.DeferredPool) *mcp.ServerSummarizer {
+	sum := &mcp.ServerSummarizer{Pool: pool}
+	if mgr := a.Config.MCPManager; mgr != nil {
+		sum.Instructions = mgr.ServerInstructions
+	}
+	return sum
 }
 
 // newJevJudge builds the System One client, or nil when the integration cannot

@@ -24,6 +24,90 @@ func (s *stubDeferredTracker) Contains(name string) bool {
 	return s.discovered[name]
 }
 
+// stubSummarizingProvider is the per-server shape on top of the per-tool
+// provider: what agent.deferredToolProviderAdapter does under the Jev matcher.
+type stubSummarizingProvider struct {
+	stubDeferredProvider
+	summaries []DeferredToolSummary
+}
+
+func (s *stubSummarizingProvider) Summaries() []DeferredToolSummary { return s.summaries }
+
+// The per-server shape replaces the catalog: one line per server that still has
+// something to load, with the counts the reminder owns, and no tool names.
+func TestDeferredToolReminder_ServerSummaries(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubSummarizingProvider{
+			stubDeferredProvider: stubDeferredProvider{tools: []DeferredToolRecord{
+				{Name: "mcp__lixinger__get_index_constituents", Description: "指数成分股"},
+				{Name: "mcp__lixinger__list_companies", Description: "公司列表"},
+				{Name: "mcp__chrome-devtools__navigate_page", Description: "Go to a URL"},
+			}},
+			summaries: []DeferredToolSummary{
+				{Server: "lixinger", Text: "A股/港股/美股数据", Source: "instructions"},
+				{Server: "chrome-devtools", Text: "浏览器操作与页面调试", Source: "heuristic"},
+			},
+		},
+		Tracker: &stubDeferredTracker{discovered: map[string]bool{"mcp__lixinger__list_companies": true}},
+	}
+
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("expected one block, got %v", lines)
+	}
+	out := lines[0]
+	for _, want := range []string{
+		"mcp__lixinger — 2 个工具（1 个未加载）：A股/港股/美股数据",
+		"mcp__chrome-devtools — 1 个工具（1 个未加载）：浏览器操作与页面调试",
+		"MCPSearchTools",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("block missing %q:\n%s", want, out)
+		}
+	}
+	// The names are gone: that is the point of the shape (and what the Jev gate
+	// makes safe — it reads a sentence, not a tool name).
+	if strings.Contains(out, "mcp__lixinger__list_companies") {
+		t.Errorf("summary shape must not list tool names:\n%s", out)
+	}
+	if r.summarySources != "lixinger=instructions,chrome-devtools=heuristic" {
+		t.Errorf("sources = %q", r.summarySources)
+	}
+}
+
+// A server whose tools are all loaded is not worth a line, and when that
+// leaves nothing the whole reminder stays silent.
+func TestDeferredToolReminder_SummariesSkipLoadedServers(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubSummarizingProvider{
+			stubDeferredProvider: stubDeferredProvider{tools: []DeferredToolRecord{
+				{Name: "mcp__lixinger__list_companies"},
+			}},
+			summaries: []DeferredToolSummary{{Server: "lixinger", Text: "A股数据"}},
+		},
+		Tracker: &stubDeferredTracker{discovered: map[string]bool{"mcp__lixinger__list_companies": true}},
+	}
+	if lines := r.Generate(t.Context(), Context{IsFirstMessage: true}); lines != nil {
+		t.Errorf("expected nil when every server is fully loaded, got %v", lines)
+	}
+}
+
+// No summaries means the catalog: that is what the keyword matcher needs, and
+// what a provider with nothing to say gets.
+func TestDeferredToolReminder_FallsBackToTheCatalog(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubSummarizingProvider{
+			stubDeferredProvider: stubDeferredProvider{tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query database"},
+			}},
+		},
+	}
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) != 1 || !strings.Contains(lines[0], "mcp__pg__query — Query database") {
+		t.Fatalf("expected the per-tool catalog, got %v", lines)
+	}
+}
+
 func TestDeferredToolReminder_NoProvider(t *testing.T) {
 	r := DeferredToolReminder{Provider: nil}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
