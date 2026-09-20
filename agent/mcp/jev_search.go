@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp/jevsearch"
@@ -41,6 +42,19 @@ type JevSearcher struct {
 	threshold float64
 	budget    time.Duration
 	usage     *llm.UsageRecorder
+	// degraded is set once a search has fallen back to the keyword path and
+	// never cleared here: this searcher is replaced, not repaired (a settings
+	// change builds a new one). It decides the advice the tool gives the model
+	// — promising "describe it in a sentence" while a keyword search runs
+	// behind it is how a tool becomes unreachable.
+	degraded atomic.Bool
+	// OnDegrade is called when a prose search fell back to the keyword path.
+	// The caller uses it to stop telling the model to describe a scenario: the
+	// deferred-tools block offers per-server summaries (which only a matcher
+	// that reads sentences can use) while the gate is healthy, and the per-tool
+	// catalog — the names the keyword matcher actually matches on — once it is
+	// not. Optional.
+	OnDegrade func(error)
 }
 
 // Judge is the Jev call the searcher needs: what a client does, narrowed so a
@@ -69,9 +83,10 @@ const (
 )
 
 // NewJevSearcher builds the gate. threshold and budget come from
-// mcp_tool_search.jev_threshold / jev_budget; usage may be nil (no ledger row).
-func NewJevSearcher(pool *DeferredPool, judge Judge, threshold float64, budget time.Duration, usage *llm.UsageRecorder) *JevSearcher {
-	return &JevSearcher{pool: pool, judge: judge, threshold: threshold, budget: budget, usage: usage}
+// mcp_tool_search.jev_threshold / jev_budget; usage may be nil (no ledger row)
+// and onDegrade is the fallback notification (see JevSearcher.OnDegrade).
+func NewJevSearcher(pool *DeferredPool, judge Judge, threshold float64, budget time.Duration, usage *llm.UsageRecorder, onDegrade func(error)) *JevSearcher {
+	return &JevSearcher{pool: pool, judge: judge, threshold: threshold, budget: budget, usage: usage, OnDegrade: onDegrade}
 }
 
 // Search answers with the tools the query is about: the exact-name path as it
@@ -84,14 +99,25 @@ func (s *JevSearcher) Search(ctx context.Context, query string, maxResults int) 
 	if err != nil {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev tool search failed, using keyword search",
 			"err", err, "query", strutil.Truncate(query, 120))
+		s.degraded.Store(true)
+		if s.OnDegrade != nil {
+			s.OnDegrade(err)
+		}
 		return s.pool.Search(query, maxResults)
 	}
 	return results
 }
 
-// SearchAdvice tells the model it may write a sentence, in any language: the
-// judgment reads requests, not terms.
-func (s *JevSearcher) SearchAdvice() string { return tools.ProseSearchAdvice }
+// SearchAdvice tells the model how to write a query: a sentence while the
+// judgment is serving, the keywords a keyword search can match once it is not.
+// The advice is what the model reads before writing, so it has to describe the
+// matcher that will actually receive the query.
+func (s *JevSearcher) SearchAdvice() string {
+	if s.degraded.Load() {
+		return tools.KeywordSearchAdvice
+	}
+	return tools.ProseSearchAdvice
+}
 
 // judgeQuery asks the judgment for every candidate tool and returns the ones it
 // cleared the threshold on. An error means "no judgment available" — the caller

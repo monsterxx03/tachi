@@ -76,7 +76,7 @@ func jevTestPool(tools ...*DeferredTool) *DeferredPool {
 }
 
 func newTestSearcher(pool *DeferredPool, judge Judge, threshold float64) *JevSearcher {
-	return NewJevSearcher(pool, judge, threshold, time.Second, nil)
+	return NewJevSearcher(pool, judge, threshold, time.Second, nil, nil)
 }
 
 // A query that NAMES what it wants is a lookup: no judgment call, and the same
@@ -178,6 +178,29 @@ func TestJevSearcher_MissingAnswerIsNotSelected(t *testing.T) {
 
 // Any failure degrades to the keyword search rather than failing the tool call
 // or answering with a partial judgment.
+// A degraded search is announced: the caller has to know, because the shape it
+// promised the model (describe a scenario) is not what just ran.
+func TestJevSearcher_ReportsDegradation(t *testing.T) {
+	pool := jevTestPool(testDeferredTool("mcp__pg__query", "pg", "Query database"))
+
+	var degraded []error
+	judge := &fakeJudge{err: errors.New("503 overloaded")}
+	s := NewJevSearcher(pool, judge, 0.35, time.Second, nil, func(err error) { degraded = append(degraded, err) })
+	s.Search(context.Background(), "database query", 5)
+	require.Len(t, degraded, 1)
+	assert.ErrorContains(t, degraded[0], "503")
+	// The advice follows: the model is told to write keywords, because that is
+	// what the next search will match on.
+	assert.Equal(t, tools.KeywordSearchAdvice, s.SearchAdvice())
+
+	// A search that worked says nothing.
+	working := NewJevSearcher(pool, &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.9}},
+		0.35, time.Second, nil, func(error) { degraded = append(degraded, nil) })
+	working.Search(context.Background(), "database query", 5)
+	assert.Len(t, degraded, 1)
+	assert.Equal(t, tools.ProseSearchAdvice, working.SearchAdvice())
+}
+
 func TestJevSearcher_ErrorDegradesToKeywords(t *testing.T) {
 	pool := jevTestPool(
 		testDeferredTool("mcp__pg__query", "pg", "Query database"),
@@ -196,7 +219,7 @@ func TestJevSearcher_ErrorDegradesToKeywords(t *testing.T) {
 func TestJevSearcher_BudgetDegrades(t *testing.T) {
 	pool := jevTestPool(testDeferredTool("mcp__pg__query", "pg", "Query database"))
 	judge := &fakeJudge{block: true}
-	s := NewJevSearcher(pool, judge, 0.35, 20*time.Millisecond, nil)
+	s := NewJevSearcher(pool, judge, 0.35, 20*time.Millisecond, nil, nil)
 
 	start := time.Now()
 	got := s.Search(context.Background(), "database query", 5)
@@ -261,7 +284,7 @@ func TestJevSearcher_RecordsUsage(t *testing.T) {
 	pool := jevTestPool(testDeferredTool("mcp__pg__query", "pg", "Query database"))
 	judge := &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.9}, model: "jev-1.13.0"}
 	dir := t.TempDir()
-	s := NewJevSearcher(pool, judge, 0.35, time.Second, llm.NewUsageRecorder(dir))
+	s := NewJevSearcher(pool, judge, 0.35, time.Second, llm.NewUsageRecorder(dir), nil)
 
 	ctx := tools.WithSessionID(context.Background(), "session-1")
 	require.Len(t, s.Search(ctx, "database query", 5), 1)

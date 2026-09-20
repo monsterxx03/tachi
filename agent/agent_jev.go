@@ -26,6 +26,10 @@ import (
 // resolves select: / exact and suffix names / mcp__server by lookup and never
 // sends them to the service (see mcp.JevSearcher).
 func (a *AIAgent) mcpSearcher(pool *mcp.DeferredPool) tools.MCPSearcher {
+	// A searcher is built once per agent (Configure, and again on a pushed
+	// settings change), and a fresh one is a fresh attempt: the health flag
+	// below only describes the searcher it was set by.
+	a.jevSearchDegraded.Store(false)
 	m := a.mcpSearchConfig()
 	if pool == nil || m.Matcher == "bm25" {
 		return mcp.NewPoolSearcher(pool)
@@ -38,7 +42,22 @@ func (a *AIAgent) mcpSearcher(pool *mcp.DeferredPool) tools.MCPSearcher {
 		}
 		return mcp.NewPoolSearcher(pool)
 	}
-	return mcp.NewJevSearcher(pool, judge, m.JevThreshold, time.Duration(m.JevBudget), a.usageRecorder())
+	return mcp.NewJevSearcher(pool, judge, m.JevThreshold, time.Duration(m.JevBudget), a.usageRecorder(), a.markJevSearchDegraded)
+}
+
+// markJevSearchDegraded records that the gate answered with the keyword path,
+// and asks for the deferred-tools block to be rendered again — as the per-tool
+// catalog, because names are what a keyword search can match on.
+//
+// It deliberately does not clear itself on a later success: a service that
+// failed once may fail again on the next search, and the conservative shape is
+// the one that keeps the tools reachable. The flag is per agent, i.e. per
+// session, and a new searcher (a settings change, a new agent) starts clean.
+func (a *AIAgent) markJevSearchDegraded(err error) {
+	a.jevSearchDegraded.Store(true)
+	a.Config.Logger.Warn(context.Background(),
+		"MCP: tool search degraded to keywords; the reminder will list tools by name again", "err", err)
+	a.NotifyDeferredToolsAdded()
 }
 
 // RefreshMCPSearch re-registers this agent's MCP search tool so a settings
@@ -84,7 +103,10 @@ func (a *AIAgent) mcpSearchUsesJev() bool {
 		return false
 	}
 	cfg := a.Config.FullConfig
-	return cfg != nil && cfg.Jev.Configured()
+	// Configured is not the same as working: a gate that already degraded this
+	// session is a keyword search in everything but name, so the reminder goes
+	// back to the names it matches on (markJevSearchDegraded).
+	return cfg != nil && cfg.Jev.Configured() && !a.jevSearchDegraded.Load()
 }
 
 // mcpSummarizer builds the per-server summarizer for the reminder: the pool it

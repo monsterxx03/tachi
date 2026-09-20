@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -121,6 +122,38 @@ func TestMCPSummariesOnlyUnderTheJevMatcher(t *testing.T) {
 	cfg.MCPToolSearch.Matcher = "auto"
 	cfg.Jev.APIKey = ""
 	assert.Empty(t, adapter.Summaries())
+}
+
+// A gate that degraded is a keyword search in everything but name, so the
+// reminder goes back to listing tools by name — the block the keyword matcher
+// can actually use — and says so in the log. A fresh searcher (a settings save,
+// a new agent) starts clean.
+func TestMCPSummariesStopAfterADegradedSearch(t *testing.T) {
+	cfg := &config.Config{
+		MCPToolSearch: config.MCPToolSearchConfig{Matcher: "auto"},
+		Jev:           config.JevConfig{Enabled: true, APIKey: "k"},
+	}
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Resolved:      &llm.ResolvedProvider{},
+		SkipConfigure: true,
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
+		FullConfig:    cfg,
+	})
+	require.NoError(t, err)
+
+	pool := mcp.NewDeferredPool()
+	pool.Add(&mcp.DeferredTool{Name: "mcp__lixinger__list_companies", ServerName: "lixinger", Description: "公司列表"})
+	adapter := &deferredToolProviderAdapter{a: a, pool: pool}
+	require.NotEmpty(t, adapter.Summaries())
+
+	a.markJevSearchDegraded(errors.New("529 overloaded"))
+	assert.False(t, a.mcpSearchUsesJev())
+	assert.Empty(t, adapter.Summaries(), "a degraded gate gets the catalog, not summaries")
+
+	// Building the searcher again is a fresh attempt.
+	a.mcpSearcher(pool)
+	assert.True(t, a.mcpSearchUsesJev())
+	assert.NotEmpty(t, adapter.Summaries())
 }
 
 // Refreshing with MCP off is a no-op rather than a panic: there is no search

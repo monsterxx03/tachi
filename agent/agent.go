@@ -157,6 +157,11 @@ type AIAgent struct {
 	visionDelegateOnce sync.Once
 	visionDelegate     llm.Provider
 
+	// jevSearchDegraded is set when the MCP tool search fell back to keywords
+	// (agent_jev.go): the reminder's shape follows it, because per-server
+	// summaries only help a matcher that reads sentences.
+	jevSearchDegraded atomic.Bool
+
 	// MCP server summaries for the deferred-tools reminder (agent_jev.go): the
 	// generator holds the in-flight/given-up state for background generations,
 	// so it lives as long as the agent does.
