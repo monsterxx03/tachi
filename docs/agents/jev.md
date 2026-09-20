@@ -98,8 +98,15 @@ Four things every gate needs, in the order they matter:
    confidence to do it, so the threshold you sweep afterwards comes out systematically too high and
    the gate then misses exactly the cases it exists to catch.
 4. **Usage accounting.** The `llm` ledger is a `Provider` decorator, and Jev is not a provider, so
-   its calls do not appear in it. Deciding how they do is part of wiring the first gate, not
-   something that can be bolted on later by copying an existing pattern.
+   its calls do not appear in it. The seam for it exists and is two pieces:
+   `llm.UsageRecorder.Record(UsageRow)` takes a plain row (no `Provider` needed), and
+   `llm.ResolveModelPriceFrom(schedule, source, model, at)` prices one from a raw
+   `config.PricingConfig` — `config.JevConfig.Pricing` holds exactly that, because a price schedule
+   is not always a provider's. What is still missing is the assembly point and the `UsageKind`; both
+   belong to the first gate, not here.
+   **Do not add a fake provider entry to carry Jev's pricing.** `ProviderConfig` is not inert —
+   `BuildProvider` iterates it, so a `typesafe` entry becomes a real LLM provider that title, vision
+   and fallback resolution can select.
 
 **The input's shape belongs to code, not to the model.** Write the state as the fields the judgment
 actually needs, from named sources, rather than handing over whatever prose happens to be lying

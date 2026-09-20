@@ -9,6 +9,11 @@ import (
 // A list this file may grow: the three the settings page offers today, plus every other list of
 // structs. NOT on it: a slice of scalars (one leaf — a form adds to it by typing a line) and a
 // map (keyed by NAME, not by position).
+//
+// The walk stops at a list of structs and does not descend into its elements, so a nested list
+// (`providers.spec.pricing.bands`) is invisible while a list reached through a plain struct field
+// (`jev.pricing.bands`) is not. That asymmetry is why a new field of a struct-bearing pointer type
+// shows up here: add it to want, and the message below says so.
 func TestListItemPathsAreTheListsAFormCanGrow(t *testing.T) {
 	got := ListItemPaths()
 	want := map[string]bool{
@@ -16,10 +21,13 @@ func TestListItemPathsAreTheListsAFormCanGrow(t *testing.T) {
 		"web_search.providers": true,
 		"web_fetch.providers":  true,
 		"lsp.servers":          true,
+		"jev.pricing.bands":    true,
 	}
 	for _, p := range got {
 		if !want[p] {
-			t.Errorf("ListItemPaths() includes %q, which is not a list of structs the form can add to", p)
+			t.Errorf("ListItemPaths() includes %q. If you just added a list of structs to Config, "+
+				"add it to want — the settings page may then offer it. If not, this is not a list of "+
+				"items a form grows.", p)
 		}
 		delete(want, p)
 	}

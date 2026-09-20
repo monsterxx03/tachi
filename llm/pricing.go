@@ -216,33 +216,56 @@ func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 // applied, Bands consumed.
 //
 // Resolution order:
-//  1. Flat (平段) price: cfg's override fields when any is set (unset fields
-//     = 0/free, NOT built-in fallback); when the source provides bands but
-//     no flat fields, the flat price falls back to the built-in table so a
+//  1. Flat (平段) price: the schedule's override fields when any is set (unset
+//     fields = 0/free, NOT built-in fallback); when the schedule provides bands
+//     but no flat fields, the flat price falls back to the built-in table so a
 //     bands-only override keeps the built-in base price.
-//  2. Bands: source bands replace any built-in bands wholesale; a band's nil
+//  2. Bands: schedule bands replace any built-in bands wholesale; a band's nil
 //     price fields INHERIT the flat price (explicit 0 = free). Bands with
 //     unparseable times are skipped (flat price) with a warn — a typo'd band
 //     must not be silently ignored.
 //  3. The snapshot is pinned to at via ModelPrice.PriceAt.
+//
+// The schedule is the provider's — see ResolveModelPriceFrom for the raw form,
+// which is what a caller whose pricing does not live under a ProviderConfig
+// entry (the TypeSafe/Jev ledger rows) should use directly.
 func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time.Time) ResolvedPrice {
+	return ResolveModelPriceFrom(PricingSchedule(cfg, providerName), providerName, model, at)
+}
+
+// ResolveModelPriceFrom resolves a price snapshot from an explicit pricing
+// schedule, which may be nil.
+//
+// It exists because a price schedule is not always a provider's: the ledger
+// prices any call, and a call made through something that is not an
+// llm.Provider (Jev, see pkg/jev) has no ProviderConfig to hang a `pricing:`
+// block on. Taking the schedule directly keeps that caller out of the
+// provider list while sharing one resolution path — the schema stays
+// config.PricingConfig and the semantics stay the ones documented above.
+//
+// source names where the schedule came from, purely so a skipped band or an
+// unknown timezone is traceable in a config with several providers. It is a
+// label for the warnings only; nothing about resolution depends on it, and an
+// empty string is fine for a caller with nothing to name.
+//
+// A nil schedule means "built-in only": the model's versioned entry, or
+// ResolvedPrice{} (unpriced) when the model has none.
+func ResolveModelPriceFrom(schedule *config.PricingConfig, source, model string, at time.Time) ResolvedPrice {
 	var flat *ModelPrice
 	var bands []config.PriceBandSpec
 	tzName := ""
 
-	if cfg != nil {
-		if p := PricingSchedule(cfg, providerName); p != nil {
-			bands = p.Bands
-			tzName = p.Timezone
-			if p.HasAny() {
-				// Partial override: only the set fields count (0 = free).
-				flat = &ModelPrice{}
-				p.Apply(flat)
-			} else {
-				// Pricing block present but fully unset → built-in flat
-				// price (bands-only overrides inherit from it).
-				flat = GetBuiltinModelPriceAt(model, at)
-			}
+	if schedule != nil {
+		bands = schedule.Bands
+		tzName = schedule.Timezone
+		if schedule.HasAny() {
+			// Partial override: only the set fields count (0 = free).
+			flat = &ModelPrice{}
+			schedule.Apply(flat)
+		} else {
+			// Pricing block present but fully unset → built-in flat
+			// price (bands-only overrides inherit from it).
+			flat = GetBuiltinModelPriceAt(model, at)
 		}
 	}
 	if flat == nil {
@@ -269,7 +292,7 @@ func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time
 			band, err := buildPriceBand(bs, &resolved)
 			if err != nil {
 				logger.Default().Warn(context.Background(), "pricing: skipping invalid band (flat price applies)",
-					"provider", providerName, "model", model,
+					"source", source, "model", model,
 					"band", bs.Name, "start", bs.Start, "end", bs.End, "error", err)
 				continue
 			}
@@ -282,7 +305,7 @@ func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time
 				// Unknown IANA name: keep the current location (local or
 				// built-in) rather than failing the whole resolution.
 				logger.Default().Warn(context.Background(), "pricing: unknown timezone, using default",
-					"provider", providerName, "timezone", tzName, "error", err)
+					"source", source, "model", model, "timezone", tzName, "error", err)
 			}
 		}
 	}

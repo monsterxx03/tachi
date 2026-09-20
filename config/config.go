@@ -388,6 +388,23 @@ type JevConfig struct {
 	// Timeout bounds one HTTP attempt (empty = pkg/jev's DefaultTimeout).
 	// The client's retry loop can outlast this several times over.
 	Timeout time.Duration `yaml:"timeout"`
+	// Pricing describes how this service bills, for the usage ledger's price
+	// snapshot. It is config.PricingConfig — the same schema a provider's
+	// `pricing:` block uses — because Jev is not a provider and has no
+	// ProviderConfig to hang one on. Nil = the built-in table decides, and a
+	// Jev model is not in it, so the ledger counts those rows as unpriced
+	// (tokens tracked, cost 0).
+	//
+	// Note what a ledger row means here: this service bills INPUT only, so a
+	// priced row carries input_price > 0 and output_price = 0. That zero is
+	// "the output side is free", not "nobody filled it in" — UsageRow.Unpriced
+	// needs BOTH fields zero, so the row still counts as priced.
+	Pricing *PricingConfig `yaml:"pricing,omitempty"`
+	// CreditRate is the credit rate for Jev calls (see llm.ComputeCredit).
+	// nil = 0. It pairs with Pricing for the same reason ModelSpec pairs its
+	// two: the ledger always writes a credit snapshot, and a rate left unset
+	// would make every Jev row a silent 0 rather than a decision.
+	CreditRate *float64 `yaml:"credit_rate,omitempty"`
 }
 
 // Configured reports whether the integration can actually run: switched on
