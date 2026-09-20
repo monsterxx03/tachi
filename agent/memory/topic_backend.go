@@ -47,6 +47,11 @@ const (
 	// keywordLineBonus / recencyBonus: scoring bumps in the content matcher.
 	keywordLineBonus = 0.2
 	recencyBonus     = 0.1
+	// maxLiteralSearchWords / maxLiteralCJKRunes bound when a query is already
+	// a literal a whitespace-segmented or CJK text search can use as-is — see
+	// shouldSkipExtraction, which is the only reader.
+	maxLiteralSearchWords = 3
+	maxLiteralCJKRunes    = 10
 )
 
 // SessionProvider provides access to recent session metadata for temporal
@@ -338,25 +343,37 @@ func (t *TopicBackend) Store(ctx context.Context, content string) error {
 
 // --- Search implementation ---
 
-// shouldSkipExtraction reports whether a query is short enough to be used
-// directly as the search keyword, skipping the LLM keyword-extraction
-// round-trip. Queries of a few words are already keyword-like; extraction
-// mostly rephrases them while adding latency to every user message.
+// shouldSkipExtraction reports whether a query is ALREADY usable as a literal
+// search string, so the keyword-extraction round-trip can be skipped.
+//
+// The question is whether the query would match anything verbatim — ripgrep -F
+// takes it as one literal — and that turns on the writing system, not on a
+// word count:
+//
+//   - ASCII text is whitespace-segmented, so a short query is a term while a
+//     longer one is a sentence ("how do I rotate the api key" appears nowhere).
+//     Word count separates those two.
+//   - CJK text has NO whitespace boundaries, so word count says nothing about
+//     it. "client_id 长什么样" is two whitespace words and a Chinese question:
+//     counting words skipped the extraction that would have found "client_id",
+//     and the literal query matched nothing. The same count also paid for a
+//     round-trip on "domain_by_mi_ids" — one 16-rune token that is already the
+//     perfect literal.
+//
+// So a CJK query is judged by LENGTH instead: a CJK term is a few characters
+// and does match verbatim, while past maxLiteralCJKRunes the query is phrasing
+// a question whose wording a topic file will not happen to share. The bound is
+// a heuristic either way, and it errs toward extracting — an extra round-trip
+// costs latency, a missed one costs recall silently.
 func shouldSkipExtraction(query string) bool {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return true
 	}
-	words := strings.Fields(trimmed)
-	if len(words) > 3 {
-		return false
+	if !strutil.ContainsCJK(trimmed) {
+		return len(strings.Fields(trimmed)) <= maxLiteralSearchWords
 	}
-	// A single long CJK sentence contains no spaces and is not keyword-like —
-	// let the LLM break it down.
-	if len(words) == 1 && len([]rune(trimmed)) > 12 {
-		return false
-	}
-	return true
+	return len([]rune(trimmed)) <= maxLiteralCJKRunes
 }
 
 // searchDir searches all .md files in a directory for matching blocks.
@@ -697,15 +714,25 @@ func SplitByHR(content string) []string {
 	return blocks
 }
 
-// extractTitle returns the first ## or # line from a block.
+// extractTitle returns a block's entry heading, preferring "## " over "# ".
+//
+// The preference is by HEADING LEVEL, not by position, and that distinction is
+// the whole point: SplitByHR cuts on horizontal rules, and a topic file puts no
+// rule between its "# <file>" heading and its first "## <entry>", so the first
+// entry of every file shares a block with the file preamble. Scanning line by
+// line and returning whichever header came first gave that entry the FILE's
+// name — both as the Summary the model is shown and as the title the keyword
+// bonus scores against, so a keyword in the entry's own title earned nothing.
+//
+// The merged block itself is deliberately left alone: FactID hashes it,
+// dream/decay.go splits files with the same SplitByHR, and re-cutting the
+// boundary would re-key every existing fact's decay state.
 func extractTitle(block string) string {
-	for line := range strings.SplitSeq(block, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(trimmed, "## "); ok {
-			return after
-		}
-		if after, ok := strings.CutPrefix(trimmed, "# "); ok {
-			return after
+	for _, prefix := range []string{"## ", "# "} {
+		for line := range strings.SplitSeq(block, "\n") {
+			if after, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
+				return after
+			}
 		}
 	}
 	// No header found — use first non-empty line truncated.

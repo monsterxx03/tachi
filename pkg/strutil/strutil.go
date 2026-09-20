@@ -99,6 +99,21 @@ func IsCJK(r rune) bool {
 		(r >= 0xAC00 && r <= 0xD7AF) // Hangul Syllables
 }
 
+// ContainsCJK reports whether s holds at least one CJK character.
+//
+// It exists for callers that must branch on the writing system rather than on
+// length: CJK has no whitespace word boundaries, so anything that splits text
+// on spaces (or scores a literal match against it) behaves differently for a
+// CJK run than for an ASCII one of the same size.
+func ContainsCJK(s string) bool {
+	for _, r := range s {
+		if IsCJK(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // ShortUUID returns the first n characters of a random UUID v4 string with
 // hyphens removed. Used for collision-resistant short IDs (session IDs,
 // worktree names, etc).

@@ -361,6 +361,15 @@ func TestExtractTitle(t *testing.T) {
 		{"# Top Level\n\nContent", "Top Level"},
 		{"No header\njust text", "No header"},
 		{"", ""},
+
+		// A topic file has no horizontal rule between its "# <file>" heading
+		// and its first "## <entry>", so SplitByHR hands the first entry to
+		// extractTitle welded to the file preamble. The entry's heading must
+		// win on LEVEL even though the file's comes first — otherwise the
+		// first entry of every file is labelled with the file's name.
+		{"# MCP 规范\n\n## 2026-07-01: DCR 查询\n\n关键词: MCP\n\n正文", "2026-07-01: DCR 查询"},
+		// ...and with no H2 at all the file heading is the right answer.
+		{"# Only A File Heading\n\nSome prose", "Only A File Heading"},
 	}
 
 	for _, tt := range tests {
@@ -586,6 +595,43 @@ func TestTopicBackend_ReinforceFact_MissingFact(t *testing.T) {
 
 // --- Keyword extraction skip ---
 
+// TestTopicBackend_Recall_MixedCJKQueryUsesTheExtractor is the companion to
+// the short-query test: a mixed CJK/ASCII query is a phrase ripgrep cannot
+// match literally, so it MUST reach the extractor. The old word-count rule
+// skipped it — "client_id 长什么样" is two whitespace words — and the search
+// then ran on the whole phrase and found nothing.
+func TestTopicBackend_Recall_MixedCJKQueryUsesTheExtractor(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t)
+	ctx := t.Context()
+
+	topicsDir := filepath.Join(tmpDir, "memory", "topics")
+	os.MkdirAll(topicsDir, 0755)
+	os.WriteFile(filepath.Join(topicsDir, "iam.md"), []byte(`## client_id 格式
+
+关键词: client_id, 十六进制
+
+client_id 是 16 位十六进制字符串。
+
+---
+`), 0644)
+
+	// The extractor returns the term the phrase actually contains, which the
+	// literal query could never match.
+	ext := &countingExtractor{kws: []string{"client_id"}}
+	backend.SetKeywordExtractor(ext)
+
+	results, err := backend.Recall(ctx, "client_id 长什么样", 5)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if ext.calls != 1 {
+		t.Fatalf("extractor calls = %d, want 1 — a mixed CJK query is not a literal", ext.calls)
+	}
+	if len(results) == 0 {
+		t.Error("expected the entry the extracted keyword matches, got none")
+	}
+}
+
 // countingExtractor counts ExtractKeywords calls and returns fixed keywords.
 type countingExtractor struct {
 	calls int
@@ -617,10 +663,31 @@ func TestShouldSkipExtraction(t *testing.T) {
 	useLLM := []string{
 		"what database did we choose for the project", // more than 3 words
 		"我们之前讨论过的数据库连接池配置是什么",                         // long CJK sentence, no spaces
+
+		// Mixed CJK/ASCII phrases. These are the entries the old word-count
+		// rule got wrong in BOTH directions, so each one is pinned here:
+		// a query whose literal form cannot appear must reach the extractor,
+		// and an already-perfect literal must not spend a round-trip.
+		"client_id 长什么样",      // 2 whitespace words — the count said "term"
+		"域账号和 MI_ID 之间怎么互相查",  // 3 words
+		"MCP 服务重启之后工具列表怎么刷新",  // 2 words
+		"上次排查的那个踢登问题",         // 1 word, 11 runes — one past the bound
+		"怎么查某个人的登录记录",         // 1 word, 11 runes
+		"memory decay 是怎么实现的", // 3 words
+		"批量给用户开通 MCP 权限的脚本",   // 3 words
 	}
 	for _, q := range useLLM {
 		if shouldSkipExtraction(q) {
 			t.Errorf("expected LLM extraction for %q", q)
+		}
+	}
+
+	// The other direction: a long token with no CJK is a single literal, not a
+	// sentence — the old rule extracted for it purely because it exceeded 12
+	// runes, spending a call on a query that was already the ideal search term.
+	for _, q := range []string{"domain_by_mi_ids", "get_workspace_users", "notifications/tools/list_changed"} {
+		if !shouldSkipExtraction(q) {
+			t.Errorf("expected skip for %q: it is one literal, not a sentence", q)
 		}
 	}
 }

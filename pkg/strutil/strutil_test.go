@@ -315,3 +315,33 @@ func TestFormatMs(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsCJK(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"ascii only", "domain_by_mi_ids", false},
+		{"latin with punctuation", "notifications/tools/list_changed", false},
+		{"chinese", "连接池", true},
+		{"japanese kana", "ひらがな", true},
+		{"hangul", "한국어", true},
+		{"mixed, cjk first", "域账号 and MI_ID", true},
+		{"mixed, cjk last", "client_id 长什么样", true},
+		// CJK punctuation IS inside IsCJK's range: it runs contiguously from
+		// 0x2E80 through the Unified Ideographs, which spans the CJK Symbols
+		// and Punctuation block. Harmless for the callers — a query of nothing
+		// but punctuation still fails a length bound — but pinned so nobody
+		// "fixes" IsCJK's range on the assumption that it means word characters.
+		{"cjk punctuation is inside the range", "、。", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ContainsCJK(tt.in); got != tt.want {
+				t.Errorf("ContainsCJK(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
