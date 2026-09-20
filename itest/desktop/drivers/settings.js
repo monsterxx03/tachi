@@ -191,6 +191,31 @@
   // 什么都不写 —— 这正是「返回对话」暗示的语义，也是立刻写盘做不到的。
   smoke.click(catByName('模型'))
   if (!(await smoke.waitFor('.set-elem-head', '回到模型组'))) return smoke.finish()
+
+  // ── 标题只罩着它自己的行 ────────────────────────────────────────────────────
+  // 分块是按路径切的，所以"单键的行"（没有块可以归属）天生可能落在某个标题的后面 —— 而读页面的人只会
+  // 把最近的标题当成它的归属：`max_tokens` / `provider` 曾经就是这样看着变成了 jev 的叶子（jev 的块
+  // 排在它们前面，中间没有别的东西说这个块结束了）。页面把这类行统一排到所有块之前，这条断言钉住这个
+  // 顺序：一个标题之后，只允许再出现标题 —— 表单的直接子元素里，`.set-row` 不许跟在 `.set-section`
+  // 后面。（块内的行是 `.set-section` 的子孙，不是 `.settings-form` 的子元素，所以不在这条之内。）
+  const strays = []
+  const form = smoke.q('.settings-form')
+  if (form) {
+    let headSeen = false
+    for (const kid of Array.from(form.children)) {
+      if (kid.classList.contains('set-section')) {
+        headSeen = true
+        continue
+      }
+      if (headSeen && kid.classList.contains('set-row')) {
+        const k = kid.querySelector('.set-key')
+        strays.push(k ? smoke.text(k).replace(/⟳.*$/, '').trim() : '(无名行)')
+      }
+    }
+  }
+  smoke.check('单键的行排在所有块之前（标题后面只有标题，没有无家可归的行）',
+    !!form && strays.length === 0, strays.join(' / ') || (form ? '' : '没有 .settings-form'))
+
   const addBtn = smoke.qa('.set-add .btn')[0]
   if (!addBtn) return smoke.fail('模型组里有「＋ 添加一项」', smoke.text('.settings-form'))
   // 新卡片出现、展开着、定位是 providers[1]（不是 providers.1）
