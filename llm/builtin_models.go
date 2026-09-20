@@ -179,7 +179,30 @@ var builtinModels = []builtinModel{
 		match:  []string{"gemini"},
 		vision: true, // 全家族支持图像输入
 	},
+
+	// ---- TypeSafe System One（Jev）----
+	// Jev 不是 provider（不实现 llm.Provider），但它的调用会进同一个成本台账
+	// （agent/mcp/jev_search.go 自己写行），所以价格必须在这里有一条记录。
+	{
+		match: []string{"jev"},
+		// 一次请求 64k，其中 state + 最长问句 32k（pkg/jev 的包注释）。
+		context: 64_000,
+		// 输出不计费：计费只按 input（官方价目表：$0.042/M 输入，输出免费），
+		// 表格单位是 CNY/M，故按 usdToCNY 换算快照。
+		prices: []builtinPriceVersion{{Price: ModelPrice{InputPrice: 0.042 * usdToCNY}}},
+	},
 }
+
+// usdToCNY converts a vendor's USD price into this table's unit (CNY per 1M
+// tokens).
+//
+// The registry is written in CNY because the vendors it prices bill in CNY;
+// TypeSafe publishes Jev in USD, so that one record carries the conversion. The
+// rate is a SNAPSHOT (≈6.73, 2026-09) of a number that moves: it is here so the
+// ledger can show a cost at all, not because a call's cost is a fixed fact. A
+// row keeps the effective price it was written with, so changing this constant
+// reprices only the calls made after the change — it never rewrites history.
+const usdToCNY = 6.73
 
 // lookup 返回首个匹配 model 的内置记录；nil = 未知模型。
 func lookup(model string) *builtinModel {

@@ -186,20 +186,35 @@ func candidateOf(t *DeferredTool) jevsearch.Candidate {
 
 // recordUsage writes the ledger row for one judgment call. Jev is not a
 // provider, so the decorator that bills providers never sees it: the row is
-// written here, unpriced (0 prices read as "unpriced" in the ledger) with the
-// session the call belongs to. Jev's cost is input tokens only.
+// written here, with the session it belongs to and the price the built-in table
+// resolves for the model.
+//
+// The built-in table is the only source consulted: a per-provider price
+// override lives on a configured provider (`pricing:`), and Jev has none — it
+// is reached through the jev block, not through the provider list.
 func (s *JevSearcher) recordUsage(ctx context.Context, resp *jev.Response) {
 	if s.usage == nil || resp == nil {
 		return
 	}
+	now := time.Now()
 	row := llm.UsageRow{
-		TS:           time.Now(),
+		TS:           now,
 		SessionID:    tools.SessionIDFromCtx(ctx),
 		Kind:         llm.UsageKindJev,
 		Provider:     "typesafe",
 		Model:        s.judge.Model(),
 		InputTokens:  int64(resp.Usage.InputTokens),
 		OutputTokens: int64(resp.Usage.OutputTokens),
+		// Jev earns no 积分 (there is no credit_rate for it), and an explicit 0
+		// keeps the row out of the "written before credits existed" bucket that
+		// aggregators recompute from the current rate.
+		Credit: new(float64),
+	}
+	if price := llm.GetBuiltinModelPriceAt(row.Model, now); price != nil {
+		row.InputPrice = price.InputPrice
+		row.OutputPrice = price.OutputPrice
+		row.CacheReadPrice = price.CacheReadInputPrice
+		row.CacheCreationPrice = price.CacheCreationInputPrice
 	}
 	if err := s.usage.Record(row); err != nil {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev usage not recorded", "err", err)

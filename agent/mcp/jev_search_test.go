@@ -275,4 +275,19 @@ func TestJevSearcher_RecordsUsage(t *testing.T) {
 	assert.Equal(t, "session-1", row.SessionID)
 	assert.Equal(t, "jev-1.13.0", row.Model)
 	assert.Equal(t, int64(100), row.InputTokens)
+
+	// Priced, not "unpriced": the row is what /usage sums, so a 0 here would
+	// make the gate look free. Jev bills input only.
+	assert.Positive(t, row.InputPrice, "the built-in table must price jev")
+	assert.Zero(t, row.OutputPrice, "Jev output is free")
+	require.NotNil(t, row.Credit, "an explicit credit snapshot, not the pre-upgrade nil")
+	assert.Zero(t, *row.Credit)
+
+	// The number the reader ends up seeing: cost = tokens x price (input only).
+	cost := llm.CostForUsage(
+		&llm.Usage{InputTokens: row.InputTokens},
+		&llm.ModelPrice{InputPrice: row.InputPrice},
+		"anthropic",
+	)
+	assert.Positive(t, cost, "a 100-token judgment call must cost something")
 }

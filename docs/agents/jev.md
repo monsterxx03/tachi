@@ -114,7 +114,13 @@ Four things every gate needs, in the order they matter:
    the gate then misses exactly the cases it exists to catch.
 4. **Usage accounting.** The `llm` ledger is a `Provider` decorator, and Jev is not a provider, so
    its calls do not appear in it. Deciding how they do is part of wiring the first gate, not
-   something that can be bolted on later by copying an existing pattern.
+   something that can be bolted on later by copying an existing pattern. How tool search settled it:
+   the gate writes the row itself under `llm.UsageKindJev` (session, model, input/output tokens, an
+   explicit credit of 0 — Jev earns no 积分 but is not a pre-credit row either), and the price comes
+   from the built-in model table, where Jev has a record like any other model
+   (`llm/builtin_models.go`: the vendor publishes USD, the table's unit is CNY, so the record carries
+   a documented snapshot rate). A gate that skipped the price would log its calls as free, which is
+   how a side channel quietly becomes invisible in /usage.
 
 **The input's shape belongs to code, not to the model.** Write the state as the fields the judgment
 actually needs, from named sources, rather than handing over whatever prose happens to be lying
