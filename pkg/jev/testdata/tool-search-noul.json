@@ -18,12 +18,20 @@
       "instructions": "Tool mcp__postgres__list_tables (server: postgres; related terms: postgres, list, tables, schema, database): List every table in the PostgreSQL database\nCan this tool carry the request out directly?"
     },
     {
-      "id": "pg-list-tables-zh-postgres-query-false",
+      "id": "pg-list-tables-zh-postgres-query-true",
       "group": "zh-match",
-      "pair": "pg-list-tables-postgres-query-false",
-      "expect": "false",
+      "pair": "pg-list-tables-postgres-query-true",
+      "expect": "true",
       "state": "数据库里现在有哪些表？",
       "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+    },
+    {
+      "id": "pg-list-tables-zh-postgres-describe_table-false",
+      "group": "zh-match",
+      "pair": "pg-list-tables-postgres-describe_table-false",
+      "expect": "false",
+      "state": "数据库里现在有哪些表？",
+      "instructions": "Tool mcp__postgres__describe_table (server: postgres; related terms: postgres, describe, table, columns, schema, fields): Show the columns, types and indexes of one table\nCan this tool carry the request out directly?"
     },
     {
       "id": "pg-list-tables-zh-filesystem-list_dir-false",
@@ -42,12 +50,20 @@
       "instructions": "Tool mcp__postgres__list_tables (server: postgres; related terms: postgres, list, tables, schema, database): List every table in the PostgreSQL database\nCan this tool carry the request out directly?"
     },
     {
-      "id": "pg-list-tables-en-postgres-query-false",
+      "id": "pg-list-tables-en-postgres-query-true",
       "group": "en-match",
-      "pair": "pg-list-tables-postgres-query-false",
-      "expect": "false",
+      "pair": "pg-list-tables-postgres-query-true",
+      "expect": "true",
       "state": "what tables are in the database right now?",
       "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+    },
+    {
+      "id": "pg-list-tables-en-postgres-describe_table-false",
+      "group": "en-match",
+      "pair": "pg-list-tables-postgres-describe_table-false",
+      "expect": "false",
+      "state": "what tables are in the database right now?",
+      "instructions": "Tool mcp__postgres__describe_table (server: postgres; related terms: postgres, describe, table, columns, schema, fields): Show the columns, types and indexes of one table\nCan this tool carry the request out directly?"
     },
     {
       "id": "pg-list-tables-en-filesystem-list_dir-false",
@@ -66,6 +82,14 @@
       "instructions": "Tool mcp__postgres__describe_table (server: postgres; related terms: postgres, describe, table, columns, schema, fields): Show the columns, types and indexes of one table\nCan this tool carry the request out directly?"
     },
     {
+      "id": "pg-columns-zh-postgres-query-true",
+      "group": "zh-match",
+      "pair": "pg-columns-postgres-query-true",
+      "expect": "true",
+      "state": "users 表都有哪些字段？",
+      "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+    },
+    {
       "id": "pg-columns-zh-postgres-list_tables-false",
       "group": "zh-match",
       "pair": "pg-columns-postgres-list_tables-false",
@@ -74,12 +98,12 @@
       "instructions": "Tool mcp__postgres__list_tables (server: postgres; related terms: postgres, list, tables, schema, database): List every table in the PostgreSQL database\nCan this tool carry the request out directly?"
     },
     {
-      "id": "pg-columns-zh-postgres-query-false",
+      "id": "pg-columns-zh-filesystem-read_file-false",
       "group": "zh-match",
-      "pair": "pg-columns-postgres-query-false",
+      "pair": "pg-columns-filesystem-read_file-false",
       "expect": "false",
       "state": "users 表都有哪些字段？",
-      "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+      "instructions": "Tool mcp__filesystem__read_file (server: filesystem; related terms: filesystem, read, file, open, content): Read a file from the filesystem and return its contents\nCan this tool carry the request out directly?"
     },
     {
       "id": "pg-columns-en-postgres-describe_table-true",
@@ -90,6 +114,14 @@
       "instructions": "Tool mcp__postgres__describe_table (server: postgres; related terms: postgres, describe, table, columns, schema, fields): Show the columns, types and indexes of one table\nCan this tool carry the request out directly?"
     },
     {
+      "id": "pg-columns-en-postgres-query-true",
+      "group": "en-match",
+      "pair": "pg-columns-postgres-query-true",
+      "expect": "true",
+      "state": "what columns does the users table have?",
+      "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+    },
+    {
       "id": "pg-columns-en-postgres-list_tables-false",
       "group": "en-match",
       "pair": "pg-columns-postgres-list_tables-false",
@@ -98,12 +130,12 @@
       "instructions": "Tool mcp__postgres__list_tables (server: postgres; related terms: postgres, list, tables, schema, database): List every table in the PostgreSQL database\nCan this tool carry the request out directly?"
     },
     {
-      "id": "pg-columns-en-postgres-query-false",
+      "id": "pg-columns-en-filesystem-read_file-false",
       "group": "en-match",
-      "pair": "pg-columns-postgres-query-false",
+      "pair": "pg-columns-filesystem-read_file-false",
       "expect": "false",
       "state": "what columns does the users table have?",
-      "instructions": "Tool mcp__postgres__query (server: postgres; related terms: postgres, query, sql, table, database, select): Run a read-only SQL query against the PostgreSQL database\nCan this tool carry the request out directly?"
+      "instructions": "Tool mcp__filesystem__read_file (server: filesystem; related terms: filesystem, read, file, open, content): Read a file from the filesystem and return its contents\nCan this tool carry the request out directly?"
     },
     {
       "id": "pg-select-zh-postgres-query-true",
@@ -602,12 +634,12 @@
       "instructions": "Tool mcp__lixinger__get_stock_fundamentals (server: lixinger; related terms: lixinger, stock, fundamentals, financials, valuation, a-share): Fetch fundamentals for an A-share ticker (PE, PB, revenue, profit)\nCan this tool carry the request out directly?"
     },
     {
-      "id": "index-constituents-zh-exa-web_search_exa-false",
+      "id": "index-constituents-zh-lixinger-get_capital_flow-false",
       "group": "zh-match",
-      "pair": "index-constituents-exa-web_search_exa-false",
+      "pair": "index-constituents-lixinger-get_capital_flow-false",
       "expect": "false",
       "state": "沪深300 现在有哪些成分股",
-      "instructions": "Tool mcp__exa__web_search_exa (server: exa; related terms: exa, web, search, query, internet, links): Search the web and return titles, URLs and highlights\nCan this tool carry the request out directly?"
+      "instructions": "Tool mcp__lixinger__get_capital_flow (server: lixinger; related terms: lixinger, capital, flow, money, main, net, ticker): Fetch the capital (money) flow of an A-share ticker\nCan this tool carry the request out directly?"
     },
     {
       "id": "index-constituents-en-lixinger-get_index_constituents-true",
@@ -626,12 +658,12 @@
       "instructions": "Tool mcp__lixinger__get_stock_fundamentals (server: lixinger; related terms: lixinger, stock, fundamentals, financials, valuation, a-share): Fetch fundamentals for an A-share ticker (PE, PB, revenue, profit)\nCan this tool carry the request out directly?"
     },
     {
-      "id": "index-constituents-en-exa-web_search_exa-false",
+      "id": "index-constituents-en-lixinger-get_capital_flow-false",
       "group": "en-match",
-      "pair": "index-constituents-exa-web_search_exa-false",
+      "pair": "index-constituents-lixinger-get_capital_flow-false",
       "expect": "false",
       "state": "list the constituents of the CSI 300 index",
-      "instructions": "Tool mcp__exa__web_search_exa (server: exa; related terms: exa, web, search, query, internet, links): Search the web and return titles, URLs and highlights\nCan this tool carry the request out directly?"
+      "instructions": "Tool mcp__lixinger__get_capital_flow (server: lixinger; related terms: lixinger, capital, flow, money, main, net, ticker): Fetch the capital (money) flow of an A-share ticker\nCan this tool carry the request out directly?"
     },
     {
       "id": "chat-recap-zh-exa-web_search_exa-false",
