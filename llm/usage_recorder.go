@@ -46,6 +46,16 @@ const (
 	// agent.describeImages). Grouped separately so the fallback cost is
 	// visible in the ledger instead of inflating the conversation bucket.
 	UsageKindVision UsageKind = "vision"
+	// UsageKindJev marks TypeSafe Jev evaluation calls (System One): typed
+	// judgments, not generation, and not a provider — so nothing wraps them and
+	// the row is written by the gate itself (agent/mcp/jev_search.go). Grouped
+	// separately so "what does tool search cost" is answerable from the ledger.
+	UsageKindJev UsageKind = "jev"
+	// UsageKindMCPSummary marks the one-off call that describes an MCP server
+	// for the deferred-tools reminder (agent/mcp/mcp_summary_cache.go). It is a
+	// normal provider call — unlike Jev — so the wrapper bills it; the kind is
+	// what keeps a maintenance cost out of the session's conversation bucket.
+	UsageKindMCPSummary UsageKind = "mcp-summary"
 )
 
 // ctxKeyUsageKind is the context key for the per-call usage kind.

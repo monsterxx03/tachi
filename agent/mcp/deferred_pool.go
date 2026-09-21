@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"unicode"
@@ -112,29 +113,58 @@ func (p *DeferredPool) Remove(name string) *DeferredTool {
 // SearchResult is a single search result returned by Search.
 type SearchResult = tools.MCPSearchResultItem
 
+// PoolSearcher is the pool as tools.MCPSearcher needs it: that interface
+// carries a context because a searcher may reach a service (the Jev gate does —
+// see jev_search.go), while the pool only does local lookups and takes none.
+// This is the adapter, rather than a context parameter the pool would ignore.
+type PoolSearcher struct{ pool *DeferredPool }
+
+// NewPoolSearcher adapts the pool to the search tool's interface.
+func NewPoolSearcher(pool *DeferredPool) PoolSearcher { return PoolSearcher{pool: pool} }
+
+// Search runs the pool's own lookup (SearchExact, then keyword scoring). A nil
+// pool is "no MCP tools yet" — the search tool is registered before the servers
+// connect, so a search in that window answers with an empty list instead of
+// panicking.
+func (s PoolSearcher) Search(_ context.Context, query string, maxResults int) []SearchResult {
+	if s.pool == nil {
+		return nil
+	}
+	return s.pool.Search(query, maxResults)
+}
+
+// SearchAdvice tells the model to write terms the index can match.
+func (s PoolSearcher) SearchAdvice() string { return tools.KeywordSearchAdvice }
+
 // Search finds tools matching the query string.
 //
 // Query forms:
 //   - "select:Name1,Name2"     — fetch exact tools by name (comma-separated)
 //   - "keyword1 keyword2"      — keyword search, scored by relevance
 //   - "+mustHave term"         — "+" prefix means term is required in name/server
+//
+// It is SearchExact first (a query that NAMES what it wants) and then keyword
+// scoring, so a caller that has another way to rank — the Jev gate, see
+// jev_search.go — can take the exact half on its own and leave the prose to its
+// own judgment, while this stays the whole answer for every other caller.
 func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
-	if maxResults <= 0 {
-		maxResults = 5
+	if exact, ok := p.SearchExact(query, maxResults); ok {
+		return exact
 	}
-	if maxResults > 20 {
-		maxResults = 20
-	}
+	return p.keywordSearch(p.snapshot(), query, clampMaxResults(maxResults))
+}
 
-	allTools := make([]*DeferredTool, 0, p.tools.Len())
-	p.tools.Range(func(_ string, t *DeferredTool) bool {
-		allTools = append(allTools, t)
-		return true
-	})
+// SearchExact resolves a query that names what it wants: a `select:` list, an
+// exact or suffix tool NAME, an `mcp__server` prefix, or nothing at all (the
+// caller asked for the listing). ok is false for anything else — prose, which
+// is a judgment call rather than a lookup.
+func (p *DeferredPool) SearchExact(query string, maxResults int) ([]SearchResult, bool) {
+	maxResults = clampMaxResults(maxResults)
+	allTools := p.snapshot()
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return p.searchAll(allTools, maxResults)
+		return p.searchAll(allTools, maxResults), true
 	}
 
 	// 1. Direct selection via "select:" prefix.
@@ -173,7 +203,7 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 				}
 			}
 		}
-		return results
+		return results, true
 	}
 
 	// 3. Server prefix match: "mcp__server" → find all tools for that server
@@ -189,12 +219,34 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 			}
 		}
 		if len(results) > 0 {
-			return results
+			return results, true
 		}
 	}
 
-	// 4. Keyword search with scoring
-	return p.keywordSearch(allTools, query, maxResults)
+	return nil, false
+}
+
+// snapshot copies the pool's tools into a slice. Every search walks it once, so
+// the copy is what keeps a concurrent Add/Remove from racing the walk.
+func (p *DeferredPool) snapshot() []*DeferredTool {
+	all := make([]*DeferredTool, 0, p.tools.Len())
+	p.tools.Range(func(_ string, t *DeferredTool) bool {
+		all = append(all, t)
+		return true
+	})
+	return all
+}
+
+// clampMaxResults keeps a caller's max_results inside the range the pool scores
+// for: a zero means the default, and nothing fans out past the tool's own cap.
+func clampMaxResults(maxResults int) int {
+	if maxResults <= 0 {
+		return 5
+	}
+	if maxResults > 20 {
+		return 20
+	}
+	return maxResults
 }
 
 func (p *DeferredPool) searchAll(allTools []*DeferredTool, maxResults int) []SearchResult {

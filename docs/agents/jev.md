@@ -34,9 +34,14 @@ That is the whole boundary, and it is why `pkg/jev` deliberately does **not** im
 put two unrelated contracts behind one type and invite call sites that need one to reach for the
 other.
 
-**`pkg/jev` is a client with no production caller.** `config.JevConfig` exists and is read by
-nothing. Grep for `jev.NewClient` and you will find tests only — that is the current state, not a
-bug. The first gate to land is what turns this package into part of the running system.
+**There is one production caller: the MCP tool search** (`agent/mcp/jev_search.go`, matcher
+`mcp_tool_search.matcher: auto` with a usable `jev` block). It turns a prose request into one `noul`
+question per candidate tool and offers the ones over the cut-off; the question text lives in
+`agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
+the measurement cannot describe a question the gate no longer asks. Its calibration — τ = 0.35, the
+corridor it came from, and the case file it was swept on — is recorded in the design doc
+(`docs/2026-09-20-jev-tool-search-design.md` §六) and re-measurable with one command. Everything else
+in the repo still asks a generative model and parses the reply.
 
 ## When to use it — and when not to
 
@@ -89,7 +94,19 @@ Four things every gate needs, in the order they matter:
    call site's existing behaviour, and the fallback must err toward the conservative side of that
    gate's purpose — not toward "silently drop what the user should have seen". Config gates the whole
    thing: `config.JevConfig.Configured()` is enabled-AND-key, so a half-filled section keeps the old
-   path everywhere instead of failing per call.
+   path everywhere instead of failing per call. The desktop settings page already offers the block
+   (`desktop/settings.go`'s single `jev` row, under 模型). **Where a gate reads the config is what
+   decides that row's mode**: read it when it judges and the row stays `applyLazy`; build and keep a
+   client from it and the row is `applyPush` + an `Apply`, in the same commit — a cached client makes
+   the key a push-shaped fact, and the page would otherwise save a value that reaches nothing until
+   the agent is rebuilt. The tool-search gate is that second case on both rows it touches: its client
+   and its searcher are built per agent (`agent.mcpSearcher`, `agent/agent_jev.go`), so the `jev` row
+   and the `mcp_tool_search` row each call `a.RefreshMCPSearch()` on every save — without it,
+   `matcher` / `jev_threshold` / `jev_budget` / a key would read as live settings that only a new
+   agent ever sees. The ledger half is the exception in the other direction: a row's price and credit
+   rate are read where the row is written, so pricing needs no push. The bound
+   reaches the client through `WithHTTPClient(httpx.NewClient(cfg.Jev.Timeout, cfg.Jev.Proxy))`,
+   the way `web_search` does it — `pkg/jev` has no `WithTimeout` option.
 2. **A pinned model.** `pkg/jev`'s `DefaultModel` is a concrete version; leave a blank config field
    blank so the package default applies. The service's `jev-latest` alias moves, and a threshold
    swept against the old weights silently stops applying when it does.
@@ -98,12 +115,21 @@ Four things every gate needs, in the order they matter:
    confidence to do it, so the threshold you sweep afterwards comes out systematically too high and
    the gate then misses exactly the cases it exists to catch.
 4. **Usage accounting.** The `llm` ledger is a `Provider` decorator, and Jev is not a provider, so
-   its calls do not appear in it. The seam for it exists and is two pieces:
-   `llm.UsageRecorder.Record(UsageRow)` takes a plain row (no `Provider` needed), and
-   `llm.ResolveModelPriceFrom(schedule, source, model, at)` prices one from a raw
-   `config.PricingConfig` — `config.JevConfig.Pricing` holds exactly that, because a price schedule
-   is not always a provider's. What is still missing is the assembly point and the `UsageKind`; both
-   belong to the first gate, not here.
+   its calls do not appear in it. Deciding how they do is part of wiring the first gate, not
+   something that can be bolted on later by copying an existing pattern. How tool search settled it:
+   the gate writes the row itself under `llm.UsageKindJev` (session, model, input/output tokens, an
+   explicit credit of 0 — Jev earns no 积分 but is not a pre-credit row either), and the price comes
+   from the built-in model table, where Jev has a record like any other model
+   (`llm/builtin_models.go`: the vendor publishes USD, the table's unit is CNY, so the record carries
+   a documented snapshot rate). A gate that skipped the price would log its calls as free, which is
+   how a side channel quietly becomes invisible in /usage.
+   The config-side halves of the same seam are `config.JevConfig.Pricing` / `CreditRate` and
+   `llm.ResolveModelPriceFrom(schedule, source, model, at)`: `Record(UsageRow)` takes a plain row
+   (no `Provider` needed) and a raw `*config.PricingConfig` prices it, because a price schedule is
+   not always a provider's. That is what tool search resolves through — the block's override when it
+   sets one, the built-in table otherwise, the order a provider's own row resolves in — and its credit
+   is `ComputeCredit` over the call's tokens at the configured rate, written even when 0 (nil Credit
+   means "pre-credit row", not "cost nothing").
    **Do not add a fake provider entry to carry Jev's pricing.** `ProviderConfig` is not inert —
    `BuildProvider` iterates it, so a `typesafe` entry becomes a real LLM provider that title, vision
    and fallback resolution can select.
@@ -155,6 +181,14 @@ only on request errors and malformed case files.
 `TestEvalCaseFilesAreWellFormed` runs offline and checks the case files before anyone spends calls on
 them: a typo in a label otherwise shows up as "the gate never separated anything", which reads
 exactly like a model failure.
+
+**Where a swept threshold is recorded**: with the gate, as a comment on the config field it became —
+τ, the case file it was swept on, and the model version, because none of the three can move without
+invalidating the number. The tool search's is `mcp_tool_search.jev_threshold`, and its corridor,
+per-case table and cost are in `docs/2026-09-20-jev-tool-search-design.md` §六 (one command re-runs it:
+`JEV_EVAL_FILE=tool-search-noul.json`). A question whose text is per-case goes through the case-level
+`instructions` override, and the generator must build that text by calling the production function —
+otherwise the file measures a prompt the gate never sends.
 
 ## Traps
 

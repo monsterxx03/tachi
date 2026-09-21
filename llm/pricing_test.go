@@ -465,6 +465,40 @@ func TestGetBuiltinModelPrice_GLM(t *testing.T) {
 	}
 }
 
+// Jev is not a provider, but its calls land in the same ledger (agent/mcp
+// writes the row itself), so the built-in table is where its price has to be.
+//
+// Source: TypeSafe's published price — $0.042 per 1M input tokens, output free
+// (jev-1.13.0). The table's unit is CNY per 1M, so the record carries the
+// conversion through usdToCNY; a wrong rate here shows up as a wrong ¥ figure
+// in /usage, which is why the constant is documented where it is defined.
+func TestGetBuiltinModelPrice_Jev(t *testing.T) {
+	at := time.Date(2026, 9, 20, 12, 0, 0, 0, time.Local)
+
+	for _, model := range []string{"jev", "jev-1.13.0", "JEV-1.13.0"} {
+		got := GetBuiltinModelPriceAt(model, at)
+		if got == nil {
+			t.Fatalf("GetBuiltinModelPriceAt(%q) = nil, want the Jev price", model)
+		}
+		if want := 0.042 * usdToCNY; got.InputPrice != want {
+			t.Errorf("%s: InputPrice = %v, want %v ($0.042/M at usdToCNY)", model, got.InputPrice, want)
+		}
+		// Output is free: the price must stay 0, not "unknown".
+		if got.OutputPrice != 0 || got.CacheReadInputPrice != 0 || got.CacheCreationInputPrice != 0 {
+			t.Errorf("%s: output/cache charged: %+v", model, got)
+		}
+		if len(got.Bands) != 0 {
+			t.Errorf("%s: Jev has no time-of-use bands, got %+v", model, got.Bands)
+		}
+	}
+
+	// The response's own limit, not a guess: 64k per request, with state + the
+	// longest question inside 32k (pkg/jev's package doc).
+	if got := ModelContextWindow("jev-1.13.0"); got != 64_000 {
+		t.Errorf("ModelContextWindow(jev) = %d, want 64000", got)
+	}
+}
+
 func TestGetBuiltinModelPrice_MiniMax(t *testing.T) {
 	at := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local)
 	tests := []struct {

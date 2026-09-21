@@ -1,0 +1,137 @@
+{
+  "notes": "The tool texts the tool-search case file is generated from. They are hand-written but mirror real MCP servers: the names, servers and hints follow what agent/mcp builds from a server's ListTools (SearchHint = server + name parts + description keywords, summary = the description's first line). It is a FIXTURE, not the user's pool: a noul question is judged per (request, tool) pair, so what a calibration depends on is the STYLE of the two texts, not which pool they came from. Re-run the sweep against a real pool when one is configured — that is a one-command re-check, and it is the honest way to move the threshold afterwards.",
+  "tools": [
+    {
+      "name": "mcp__postgres__query",
+      "server": "postgres",
+      "hint": "postgres, query, sql, table, database, select",
+      "summary": "Run a read-only SQL query against the PostgreSQL database"
+    },
+    {
+      "name": "mcp__postgres__list_tables",
+      "server": "postgres",
+      "hint": "postgres, list, tables, schema, database",
+      "summary": "List every table in the PostgreSQL database"
+    },
+    {
+      "name": "mcp__postgres__describe_table",
+      "server": "postgres",
+      "hint": "postgres, describe, table, columns, schema, fields",
+      "summary": "Show the columns, types and indexes of one table"
+    },
+    {
+      "name": "mcp__filesystem__read_file",
+      "server": "filesystem",
+      "hint": "filesystem, read, file, open, content",
+      "summary": "Read a file from the filesystem and return its contents"
+    },
+    {
+      "name": "mcp__filesystem__write_file",
+      "server": "filesystem",
+      "hint": "filesystem, write, file, save, create",
+      "summary": "Write or overwrite a file on the filesystem"
+    },
+    {
+      "name": "mcp__filesystem__list_dir",
+      "server": "filesystem",
+      "hint": "filesystem, list, directory, folder, entries",
+      "summary": "List the entries of a directory"
+    },
+    {
+      "name": "mcp__filesystem__search_files",
+      "server": "filesystem",
+      "hint": "filesystem, search, grep, find, references, text",
+      "summary": "Search file contents for a pattern and return the matching lines"
+    },
+    {
+      "name": "mcp__github__create_pr",
+      "server": "github",
+      "hint": "github, create, pull, request, pr, branch",
+      "summary": "Open a pull request from a branch"
+    },
+    {
+      "name": "mcp__github__list_prs",
+      "server": "github",
+      "hint": "github, list, pull, requests, prs, open",
+      "summary": "List pull requests with their state, author and title"
+    },
+    {
+      "name": "mcp__github__get_pull_request",
+      "server": "github",
+      "hint": "github, pull, request, review, comments, diff, pr",
+      "summary": "Show one pull request: description, changed files and review comments"
+    },
+    {
+      "name": "mcp__github__comment_issue",
+      "server": "github",
+      "hint": "github, comment, issue, reply, discussion",
+      "summary": "Post a comment on an issue or pull request"
+    },
+    {
+      "name": "mcp__github__merge_pr",
+      "server": "github",
+      "hint": "github, merge, pull, request, pr, squash",
+      "summary": "Merge a pull request"
+    },
+    {
+      "name": "mcp__chrome_devtools__navigate_page",
+      "server": "chrome_devtools",
+      "hint": "chrome_devtools, navigate, page, open, url, browser",
+      "summary": "Open a URL in the browser and wait for the page to load"
+    },
+    {
+      "name": "mcp__chrome_devtools__take_snapshot",
+      "server": "chrome_devtools",
+      "hint": "chrome_devtools, snapshot, screenshot, dom, page, render",
+      "summary": "Take a snapshot of the current page, including its accessibility tree"
+    },
+    {
+      "name": "mcp__chrome_devtools__list_network_requests",
+      "server": "chrome_devtools",
+      "hint": "chrome_devtools, network, requests, http, xhr, fetch",
+      "summary": "List the network requests the current page has made"
+    },
+    {
+      "name": "mcp__chrome_devtools__evaluate_script",
+      "server": "chrome_devtools",
+      "hint": "chrome_devtools, evaluate, script, javascript, console, dom",
+      "summary": "Run a JavaScript expression in the page and return its result"
+    },
+    {
+      "name": "mcp__exa__web_search_exa",
+      "server": "exa",
+      "hint": "exa, web, search, query, internet, links",
+      "summary": "Search the web and return titles, URLs and highlights"
+    },
+    {
+      "name": "mcp__exa__company_research",
+      "server": "exa",
+      "hint": "exa, company, research, profile, funding, business",
+      "summary": "Research a company and return a structured profile"
+    },
+    {
+      "name": "mcp__exa__research_paper_search",
+      "server": "exa",
+      "hint": "exa, research, paper, arxiv, academic, citation",
+      "summary": "Search academic papers for a topic"
+    },
+    {
+      "name": "mcp__lixinger__get_stock_fundamentals",
+      "server": "lixinger",
+      "hint": "lixinger, stock, fundamentals, financials, valuation, a-share",
+      "summary": "Fetch fundamentals for an A-share ticker (PE, PB, revenue, profit)"
+    },
+    {
+      "name": "mcp__lixinger__get_capital_flow",
+      "server": "lixinger",
+      "hint": "lixinger, capital, flow, money, main, net, ticker",
+      "summary": "Fetch the capital (money) flow of an A-share ticker"
+    },
+    {
+      "name": "mcp__lixinger__get_index_constituents",
+      "server": "lixinger",
+      "hint": "lixinger, index, constituents, members, csi300, weights",
+      "summary": "List the constituents and weights of an index"
+    }
+  ]
+}

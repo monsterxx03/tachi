@@ -157,7 +157,7 @@ func TestReportSweepNamesTheSeparatingThresholds(t *testing.T) {
 	if !strings.Contains(out, "SHOULD-ACT") {
 		t.Errorf("sweep output is missing its header:\n%s", out)
 	}
-	if !strings.Contains(out, "separating thresholds: 0.50, 0.60, 0.70") {
+	if !strings.Contains(out, "separating thresholds: 0.30, 0.35, 0.40") {
 		t.Errorf("sweep output did not report the separating run:\n%s", out)
 	}
 }

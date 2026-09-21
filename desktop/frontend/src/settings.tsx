@@ -355,7 +355,10 @@ type Section = {
 /** sectionsOf groups one category into blocks, in the config's own path order (a string sort
  *  already keeps one top-level key's leaves together, so this is a single walk), and attaches
  *  each declared list to the block that draws it (or gives it a block of its own when it has no
- *  fields at all). */
+ *  fields at all).
+ *
+ *  The heading-less blocks are returned FIRST, ahead of the path order — see the partition at the
+ *  end, and the one rule it exists for: a heading covers its own rows and nothing else. */
 function sectionsOf(
   fields: SettingFieldVO[], valueOf: (f: SettingFieldVO) => unknown, lists: SettingListVO[], listPaths: Set<string>,
 ): Section[] {
@@ -387,7 +390,16 @@ function sectionsOf(
     if (host) host.list = list
     else out.push({ key: list.path, prefix: list.path, items: [], list })
   }
-  return out
+
+  // A heading must cover exactly its own rows. The walk above groups by path, which can leave a
+  // one-row block AFTER a headered one — and a bare row sitting under a heading reads as one of
+  // its leaves, which is how `max_tokens` came to look like a field of jev: nothing said the block
+  // had ended, and the heading was the nearest thing above it. Bare rows go first for that reason;
+  // they are the keys with no block to be headed by, and nothing below a heading is anything but
+  // its own rows. (They keep their full key — shorten() has no prefix to drop.)
+  const bare = out.filter((sec) => sec.prefix === '')
+  if (bare.length === 0) return out
+  return [...bare, ...out.filter((sec) => sec.prefix !== '')]
 }
 
 /** pendingText is the foot's count of what the save will carry. The three kinds are one

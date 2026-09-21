@@ -22,7 +22,7 @@ puts `cache_control` on the system prompt only (with a standing `FIXME`), yet lo
 and break exactly where the request's prefix diverges. The prefix is **tools → system → messages**, in that
 order.
 
-Two consequences drive everything below:
+Two consequences and one exception drive everything below:
 
 - **Any tool-list change invalidates the whole message history.** Tools come first, so inserting, removing
   or reordering one (MCP connect/disconnect, tool enable/disable, a new tool from an upgrade) makes
@@ -32,6 +32,15 @@ Two consequences drive everything below:
   stored message differently from how it went out (an extra newline at a reminder seam, a block in the
   wrong position) shifts the prefix from that point on. The invariant and its two shapes are in `.tachi.md`;
   `agent/session_convert_test.go` pins them.
+- **EXCEPT images: an image content part exists only in the live run.** The store keeps text — the
+  `[图片: <absolute path>]` an @-reference leaves behind, `[Image: <name>, …, <bytes>, <base64 chars>]` for a
+  ReadFile result — and `ConvertSessionToLLMMessages` expands nothing, so a history rebuilt for a restart
+  (`--resume`, a relaunch) has **zero** image parts where the live turn sent several. A pasted file does sit
+  in the session's own `pasted/` directory, so the reference still points at bytes on disk; nothing re-reads
+  them. To see it for any session, convert one and count the parts against the placeholders:
+  `agent.ConvertSessionToLLMMessages(store.LoadMessages(id), "anthropic")`. The cost is a miss from the FIRST
+  image in the conversation onward — and beyond the tokens, the resumed model can no longer see any image it
+  was sent earlier, only the path (recovering one means `ReadFile`-ing that path).
 
 ## Where the numbers are
 
@@ -60,7 +69,9 @@ Two more places, and one display trap:
    rate fell. Note the time of the bad call.
 2. **Compare `tools` and `system_prompt` byte for byte** between the last call before it and the bad one.
    Names-changed → tool-set change (above). `system_prompt` differs → the prompt changed (working
-   directory, session id, mode, capability declarations). Identical → the difference is in the messages.
+   directory, session id, mode, capability declarations). Identical → the difference is in the messages:
+   either a rebuild rendered one differently, or the conversation sent an image (the exception above — the
+   one cause a restart introduces that neither field can show).
 3. **Read the breakpoint level.** The bad call's `cache_read_input_tokens` is how far the prefix matched.
    Against the yardstick of *system + 16 tool schemas ≈ 7k tokens*:
 
@@ -70,6 +81,7 @@ Two more places, and one display trap:
 | ≈ 3.5k | mid tool array | a tool was inserted or removed in the middle |
 | ≈ 7k | the first message | a tool at the end of the array changed, or the **first message** did |
 | far above 7k, below the previous total | inside the messages | **turns that ran since the last reload** were rebuilt differently (this family's signature) |
+| the same, with the break at a message that attached an image | the FIRST image in the conversation | the history was rebuilt and the image parts are gone (the exception above) — a restart in a conversation that sent an image; the whole tail from that image re-reads |
 | the previous total | nowhere | nothing changed — the rate should be ~100% |
 
 A **single** low call followed by recovery is a re-warm (normal). **Consecutive** low calls mean every turn
@@ -78,7 +90,8 @@ is drifting — that is a new defect, not a re-warm.
 ## Baseline — compare against this instead of guessing
 
 - **Restart with an unchanged tool set**: the first call should hit almost everything; only this turn's own
-  reminder + message is new.
+  reminder + message is new. The exception is an image in the conversation — then the first call after the
+  restart re-reads everything from that image on.
 - **The restart right after a prefix-shaping fix**: one full re-read is the migration cost, not a regression
   — it recovers on the next call.
 - Cheap arithmetic for cost: `uncached × input_price` vs `cached × cache_read_price` from the ledger row

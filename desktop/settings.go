@@ -303,6 +303,27 @@ var settingsTable = []settingApply{
 	{Key: "provider_aliases", Category: catModel, Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
 	{Key: "max_tokens", Category: catModel, Mode: applyLazy},
 	{Key: "max_iterations", Mode: applyUnused, Note: "desktop 不传 MaxIterations（0 = 无限），只有 tachi -p 读它"},
+	// Jev is a judgment endpoint rather than a provider, but it is still "which model answers
+	// this", so it sits with the model keys. One row covers the whole block: a row per leaf would
+	// be five rows saying the same thing, and nothing reads the leaves one at a time.
+	//
+	// It is a PUSH because the gate's client is built once per agent (agent/agent_jev.go's
+	// newJevJudge, called from mcpSearcher) and keeps key, model, base_url, proxy and timeout from
+	// the block as it stood then — a saved value would otherwise wait for a rebuilt agent. The
+	// ledger half is the exception: a row's price and credit rate are resolved where the row is
+	// written (agent/mcp/jev_search.go reads the live block to price the call it just made), so
+	// pricing edits ride along without needing the push.
+	{
+		Key:      "jev",
+		Category: catModel,
+		Mode:     applyPush,
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			return pushError("Jev", d.applyToLiveAgents(func(a *agent.AIAgent) error {
+				a.RefreshMCPSearch()
+				return nil
+			}))
+		},
+	},
 
 	// --- sessions ---
 	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},
@@ -401,10 +422,12 @@ var settingsTable = []settingApply{
 			// No reconnect: the pool already holds every discovered tool, so the auto-load
 			// decision is re-derived from it (the manager also updates the live sessions'
 			// discovered sets). The registry half is per agent — the pool is per process.
+			//
+			// RefreshMCPSearch is the other half of this row: `matcher` and the jev_*
+			// leaves are read when an agent BUILDS its searcher, so without it a live
+			// session would keep matching the old way (and, for a matcher change, keep
+			// describing the old advice to the model).
 			added, removed := d.mcp.RecomputeAutoLoad(cfg)
-			if len(added) == 0 && len(removed) == 0 {
-				return nil
-			}
 			return pushError("MCP 工具搜索", d.applyToLiveAgents(func(a *agent.AIAgent) error {
 				for _, dt := range removed {
 					a.UnregisterTool(dt.Name)
@@ -412,6 +435,7 @@ var settingsTable = []settingApply{
 				for _, dt := range added {
 					a.RegisterTool(dt.Tool)
 				}
+				a.RefreshMCPSearch()
 				return nil
 			}))
 		},

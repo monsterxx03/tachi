@@ -12,7 +12,7 @@ type stubSearcher struct {
 	results []MCPSearchResultItem
 }
 
-func (s *stubSearcher) Search(query string, maxResults int) []MCPSearchResultItem {
+func (s *stubSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
 	return s.results
 }
 
@@ -288,7 +288,7 @@ type recordingSearcher struct {
 	results        []MCPSearchResultItem
 }
 
-func (s *recordingSearcher) Search(query string, maxResults int) []MCPSearchResultItem {
+func (s *recordingSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
 	s.lastMaxResults = maxResults
 	return s.results
 }
@@ -346,7 +346,7 @@ type queryFilterSearcher struct {
 	results []MCPSearchResultItem
 }
 
-func (s *queryFilterSearcher) Search(query string, maxResults int) []MCPSearchResultItem {
+func (s *queryFilterSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
 	sel, ok := strings.CutPrefix(query, "select:")
 	if !ok {
 		return s.results

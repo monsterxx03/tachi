@@ -99,7 +99,13 @@ const (
 
 // evalThresholds are the candidate gate cut-offs, swept in the report. They
 // span "act on almost everything" to "act only on near-certainty".
-var evalThresholds = []float64{0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99}
+//
+// The low end (0.30-0.45) is there for gates whose act/no-act split sits BELOW
+// half: a noul question that asks "can this tool do the job" answers a lot of
+// true cases in the 0.5-0.7 band, and tool search's cut-off lands at 0.35 (see
+// docs/2026-09-20-jev-tool-search-design.md §六). A sweep that started at 0.50
+// could not have shown the corridor it was chosen from.
+var evalThresholds = []float64{0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99}
 
 // evalQuestion is the JSON form of a question. jev.Question cannot be
 // decoded directly — its Criteria is a sealed interface — so a case file
@@ -152,6 +158,17 @@ type evalCase struct {
 	Expect string `json:"expect"`
 	// State is sent verbatim, so a case can be a bare string or structure.
 	State json.RawMessage `json:"state"`
+	// Instructions overrides the file-level question's TEXT for this case,
+	// keeping its type and criteria.
+	//
+	// A gate whose question is per-case cannot be measured with one shared
+	// text. Tool search is the case that forced this: it asks one question per
+	// candidate tool, so the tool's own name and description belong in the
+	// question — the file-level text would measure a prompt the gate never
+	// sends, and the threshold swept from it would belong to that other
+	// question. Empty means "use the file's", so every existing case file
+	// reads exactly as before.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 // evalCaseFile is one measurement case set.
@@ -265,6 +282,19 @@ func validateEvalFile(file evalCaseFile) error {
 		}
 		if len(c.State) == 0 || string(c.State) == "null" {
 			return fmt.Errorf("case %s has no state", c.ID)
+		}
+		if c.Instructions != "" {
+			// The override must still be a usable question. Checked HERE, in
+			// the offline half: a blank or malformed text would otherwise fail
+			// at the API during the run, where it reads like a model problem
+			// rather than an authoring one.
+			q, err := questionFor(file.Question, c)
+			if err != nil {
+				return fmt.Errorf("case %s: instructions override: %w", c.ID, err)
+			}
+			if err := q.Validate(); err != nil {
+				return fmt.Errorf("case %s: instructions override: %w", c.ID, err)
+			}
 		}
 		if c.Pair != "" {
 			pairMembers[c.Pair]++
@@ -390,10 +420,6 @@ func runEvalFile(t *testing.T, apiKey, path string) {
 	if err := validateEvalFile(file); err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	question, err := file.Question.build()
-	if err != nil {
-		t.Fatalf("%s: %v", path, err)
-	}
 
 	model := strings.TrimSpace(os.Getenv(evalModelEnv))
 	opts := []jev.Option{}
@@ -408,7 +434,11 @@ func runEvalFile(t *testing.T, apiKey, path string) {
 
 	results := make([]evalCaseResult, 0, len(file.Cases))
 	for _, c := range file.Cases {
-		res, err := measureCase(t, client, question, c, file.ActionLabel, repeats)
+		q, err := questionFor(file.Question, c)
+		if err != nil {
+			t.Fatalf("%s: case %s: %v", path, c.ID, err)
+		}
+		res, err := measureCase(t, client, q, c, file.ActionLabel, repeats)
 		if err != nil {
 			t.Fatalf("%v", err)
 		}
@@ -416,6 +446,72 @@ func runEvalFile(t *testing.T, apiKey, path string) {
 	}
 
 	t.Log(renderReport(file, path, client.Model(), repeats, results))
+}
+
+// questionFor returns the question a case asks: the file's, with the
+// instructions text replaced when the case carries its own.
+//
+// Only the TEXT varies — type and criteria stay the file's, so an override can
+// never turn a noul into a choice by accident. That is the whole point of
+// putting the per-case part in the instructions: the thing that differs
+// between two cases of one file is what they ask ABOUT, not what kind of
+// judgment it is.
+func questionFor(base evalQuestion, c evalCase) (jev.Question, error) {
+	if c.Instructions == "" {
+		return base.build()
+	}
+	withText := base
+	withText.Instructions = c.Instructions
+	return withText.build()
+}
+
+// countOverrides is how many cases carry their own instructions. It is printed
+// in the report so a table read later is not attributed to the file-level text.
+func countOverrides(cases []evalCase) int {
+	n := 0
+	for _, c := range cases {
+		if c.Instructions != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestEvalCaseInstructionsOverride pins the per-case text: the override
+// replaces the TEXT and nothing else, and an empty one keeps the file's.
+//
+// This is the property a per-case gate's calibration rests on — the tool-search
+// threshold is only meaningful if the question measured is the question the
+// gate sends, and "the type and criteria still come from the file" is what
+// makes the override safe to generate (a generator that also swapped the
+// criteria would silently turn a noul into a choice).
+func TestEvalCaseInstructionsOverride(t *testing.T) {
+	base := evalQuestion{Type: "noul", Instructions: "文件级：这条工具能不能完成请求？", Yes: "能", No: "不能"}
+
+	fromFile, err := questionFor(base, evalCase{ID: "c1"})
+	if err != nil {
+		t.Fatalf("file-level question: %v", err)
+	}
+	own, err := questionFor(base, evalCase{ID: "c2", Instructions: "工具 mcp__postgres__query（server: postgres）：查询数据库。能不能完成请求？"})
+	if err != nil {
+		t.Fatalf("override question: %v", err)
+	}
+
+	fromFileJSON, err := json.Marshal(fromFile)
+	if err != nil {
+		t.Fatalf("marshal file-level: %v", err)
+	}
+	ownJSON, err := json.Marshal(own)
+	if err != nil {
+		t.Fatalf("marshal override: %v", err)
+	}
+	want := strings.Replace(string(fromFileJSON), base.Instructions, "工具 mcp__postgres__query（server: postgres）：查询数据库。能不能完成请求？", 1)
+	if string(ownJSON) != want {
+		t.Errorf("override changed more than the instructions text:\n got %s\nwant %s", ownJSON, want)
+	}
+	if !strings.Contains(string(ownJSON), "mcp__postgres__query") {
+		t.Errorf("override text is not in the built question: %s", ownJSON)
+	}
 }
 
 // measureCase asks one case `repeats` times and collects the outcomes.
@@ -502,6 +598,9 @@ func renderReport(file evalCaseFile, path, model string, repeats int, results []
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "\n=== %s (%s) ===\n", file.Name, path)
 	fmt.Fprintf(&b, "model=%s cases=%d repeats=%d action_label=%q\n", model, len(results), repeats, file.ActionLabel)
+	if n := countOverrides(file.Cases); n > 0 {
+		fmt.Fprintf(&b, "instructions: %d/%d cases carry their own (the file-level text is their frame)\n", n, len(file.Cases))
+	}
 	if file.Notes != "" {
 		fmt.Fprintf(&b, "notes: %s\n", file.Notes)
 	}

@@ -19,8 +19,14 @@ import (
 const (
 	DefaultMaxTokens     = 128000
 	DefaultMaxIterations = 50
-	configDirName        = ".tachi"
-	configFileName       = "config.yaml"
+	// DefaultJevTimeout is the bound ONE Jev HTTP attempt gets when the file omits
+	// jev.timeout. The number lives twice by necessity — a struct tag cannot be a
+	// constant, which is the same reason DefaultMaxTokens appears in the MaxTokens tag
+	// too — so config_test pins the tag against this constant, and pkg/jev.DefaultTimeout
+	// holds the same value for a client built without a config.
+	DefaultJevTimeout = 10 * time.Second
+	configDirName     = ".tachi"
+	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
 	backupSuffix              = ".bak"
@@ -28,6 +34,7 @@ const (
 	sessionDirName            = "session"
 	logsDirName               = "logs"
 	mcpTokensDirName          = "mcp_tokens"
+	mcpSummariesDirName       = "mcp_summaries"
 	mcpDiscoveredFileName     = "mcp_discovered.json"
 	skillsDirName             = "skills"
 	weixinStateDirName        = "weixin"
@@ -385,15 +392,26 @@ type JevConfig struct {
 	Model string `yaml:"model"`
 	// BaseURL overrides the API host (empty = pkg/jev's DefaultBaseURL).
 	BaseURL string `yaml:"base_url"`
-	// Timeout bounds one HTTP attempt (empty = pkg/jev's DefaultTimeout).
-	// The client's retry loop can outlast this several times over.
-	Timeout time.Duration `yaml:"timeout"`
+	// Proxy routes the request through a local proxy (http://, https:// or
+	// socks5:// — e.g. a clash on 127.0.0.1:7890). The endpoint is overseas,
+	// so a machine without a system-wide proxy needs it. Empty leaves the
+	// choice to the environment: the plain client httpx builds still honours
+	// HTTP(S)_PROXY.
+	Proxy string `yaml:"proxy"`
+	// Timeout bounds one HTTP attempt. The tag carries DefaultJevTimeout, so the
+	// field is never left at zero by a load — the same number pkg/jev.DefaultTimeout
+	// gives a client built without a config. The client's retry loop can outlast
+	// this several times over.
+	Timeout time.Duration `yaml:"timeout" default:"10s"`
 	// Pricing describes how this service bills, for the usage ledger's price
 	// snapshot. It is config.PricingConfig — the same schema a provider's
 	// `pricing:` block uses — because Jev is not a provider and has no
-	// ProviderConfig to hang one on. Nil = the built-in table decides, and a
-	// Jev model is not in it, so the ledger counts those rows as unpriced
-	// (tokens tracked, cost 0).
+	// ProviderConfig to hang one on. Nil = the built-in table decides, which
+	// prices a Jev call on its own (llm/builtin_models.go carries a Jev record,
+	// snapshot rate and all), so this block is the override rather than the
+	// source. The reader is the tool-search gate, which resolves each ledger row
+	// through llm.ResolveModelPriceFrom as it writes it (agent/mcp/jev_search.go)
+	// — set a field here and the next call's row carries it.
 	//
 	// Note what a ledger row means here: this service bills INPUT only, so a
 	// priced row carries input_price > 0 and output_price = 0. That zero is
@@ -403,7 +421,8 @@ type JevConfig struct {
 	// CreditRate is the credit rate for Jev calls (see llm.ComputeCredit).
 	// nil = 0. It pairs with Pricing for the same reason ModelSpec pairs its
 	// two: the ledger always writes a credit snapshot, and a rate left unset
-	// would make every Jev row a silent 0 rather than a decision.
+	// would make every Jev row a silent 0 rather than a decision. The gate
+	// above reads it per row, the same way it reads Pricing.
 	CreditRate *float64 `yaml:"credit_rate,omitempty"`
 }
 
@@ -1047,6 +1066,17 @@ func MCPTokensDir() string {
 	return filepath.Join(BaseDir(), mcpTokensDirName)
 }
 
+// MCPSummariesDir returns the path to the generated MCP server summaries.
+//
+// One small JSON file per server, keyed by a hash of the tool set it was
+// generated from, so it survives restarts and is only rewritten when the
+// server's tools change (agent/mcp/mcp_summary_cache.go). It sits beside the
+// tokens rather than inside a session: a summary describes a SERVER, not a
+// conversation.
+func MCPSummariesDir() string {
+	return filepath.Join(BaseDir(), mcpSummariesDirName)
+}
+
 // MCPDiscoveredFile returns the path to the persisted MCP discovered-tools
 // file for the given session. Each session keeps its own record of which MCP
 // tools the LLM has loaded via MCPSearchTools, so a restart (or a resumed
@@ -1307,6 +1337,26 @@ type MCPToolSearchConfig struct {
 	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
 	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
 	MaxDeferredSchemaBytes int   `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
+
+	// Matcher picks how a prose query is matched against the deferred pool:
+	// "bm25" = the keyword search (the original behaviour), "jev" = the System
+	// One judgment gate, "auto" = the gate whenever Jev.Configured(), keyword
+	// search otherwise. A query that NAMES what it wants (a tool name, a
+	// select: list, an mcp__server prefix) is resolved by exact lookup under
+	// every setting — that is a lookup, not a judgment.
+	Matcher string `yaml:"matcher" default:"auto"`
+	// JevThreshold is the noul probability at which a tool is offered. It is
+	// NOT a fact: 0.35 is the middle of a corridor measured on 5 x 94 cases
+	// (should-not-act up to 0.215, should-act from 0.470) against
+	// pkg/jev/testdata/tool-search-noul.json with jev-1.13.0 — and it belongs to
+	// that prompt (docs/agents/jev.md, and §六 of the design doc for the table).
+	// Changing the question text, the case file or jev.model invalidates it:
+	// re-sweep, one command.
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.35"`
+	// JevBudget bounds one search (all its chunked calls), not one HTTP
+	// attempt: a search runs inside a model turn and degrades to the keyword
+	// search rather than making the turn wait out pkg/jev's retry loop.
+	JevBudget Duration `yaml:"jev_budget" default:"6s"`
 }
 
 // MCPToolRefreshConfig controls background tool list polling for HTTP MCP servers.

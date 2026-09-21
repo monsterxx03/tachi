@@ -19,7 +19,24 @@ import (
 // deferredToolProviderAdapter adapts mcp.DeferredPool to the
 // systemreminder.DeferredToolProvider interface.
 type deferredToolProviderAdapter struct {
+	a    *AIAgent
 	pool *mcp.DeferredPool
+}
+
+// Summaries is the per-server half of the reminder, offered only while the
+// search reads sentences (the Jev matcher). Under the keyword matcher a reader
+// needs the tool NAMES — they are what it matches on — so the reminder keeps
+// the per-tool catalog and this returns nil.
+func (a *deferredToolProviderAdapter) Summaries() []systemreminder.DeferredToolSummary {
+	if !a.a.mcpSearchUsesJev() {
+		return nil
+	}
+	summaries := a.a.mcpSummarizer(a.pool).Summaries()
+	out := make([]systemreminder.DeferredToolSummary, 0, len(summaries))
+	for _, s := range summaries {
+		out = append(out, systemreminder.DeferredToolSummary{Server: s.Server, Text: s.Text, Source: s.Source})
+	}
+	return out
 }
 
 func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord {
@@ -96,7 +113,7 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		// We still register the search tool and DeferredToolReminder so this
 		// agent can use the shared deferred pool for tool discovery.
 		a.attachSharedMCPReminder()
-		searchTool := tools.NewMCPSearchToolsTool(a.DeferredPool(), a.Config.MCPManager)
+		searchTool := tools.NewMCPSearchToolsTool(a.mcpSearcher(a.DeferredPool()), a.Config.MCPManager)
 		a.RegisterTool(searchTool)
 	} else if len(sysCfg.MCPServers) > 0 {
 		var err error
@@ -325,7 +342,7 @@ func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*
 	// Register MCPSearchTools immediately so the LLM can discover tools
 	// as they come in. The pool is empty initially, so search returns
 	// nothing until MCP servers finish connecting.
-	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr)
+	searchTool := tools.NewMCPSearchToolsTool(a.mcpSearcher(mgr.Pool()), mgr)
 	a.RegisterTool(searchTool)
 	a.Config.Logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
 

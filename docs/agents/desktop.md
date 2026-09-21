@@ -295,7 +295,12 @@ Fixtures, all because the real path needs something a driver cannot do:
   leaf in the left column, a top-level key's leaves go under one heading (`web_search`, `debug.pprof` — the
   longest prefix they share, and rows below it drop that prefix), and a config list's item collapses into a
   card (`providers.0` → `main · claude-x`). A heading is skipped for a block of one item, and a card's rows
-  keep their own path tails. Five things about it a change can silently break, each pinned by `desktop/settings_test.go`:
+  keep their own path tails. Those heading-less rows are drawn FIRST, ahead of the path order: with nothing
+  saying a block has ended, the nearest heading above a bare row is the only claim on it — `max_tokens`
+  directly under the `jev` block reads as a field of jev. The order is a rendering rule, so
+  `itest/desktop/drivers/settings.js` is what pins it, by walking `.settings-form`'s direct children (a
+  `.set-row` after a `.set-section` is the failure). Five things about it a change can
+  silently break, each pinned by `desktop/settings_test.go`:
   a `Category` per offered row (`settingsCategoryOrder` is the nav, and a category with no row is a page that
   cannot be filled); `settingChoices`, a SECOND table for leaves with a closed value set — keyed by the
   structural path (`providers.*.type`, `*` = one index or map key, the same character `config.YAMLPaths`
