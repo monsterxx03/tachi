@@ -794,6 +794,16 @@ export interface SessionInfo {
     "compactedParentId"?: string;
 
     /**
+     * CompactedParentTitle is that parent's title, recorded on the child when the chain was made.
+     * It travels because the FOLD cannot always happen: a parent can be deleted, or swept by
+     * session cleanup (max_keep) between one launch and the next, and the row then had nothing left
+     * to say the conversation had ever been compacted — `compactedParentId` names a session that
+     * is no longer in the list, so the sidebar dropped it in silence. With the title the row can
+     * still say what became of the other half.
+     */
+    "compactedParentTitle"?: string;
+
+    /**
      * ProjectID is the desktop project this session belongs to ("" = project-less). Only the ID
      * travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
      * project relabels every row without touching a single session (design §3.3).

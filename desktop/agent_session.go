@@ -29,6 +29,13 @@ type SessionInfo struct {
 	// launch can rebuild the same shape from meta.json — which the frontend's own memory of the
 	// live switch (agent:session_switched) could not do.
 	CompactedParentID string `json:"compactedParentId,omitempty"`
+	// CompactedParentTitle is that parent's title, recorded on the child when the chain was made.
+	// It travels because the FOLD cannot always happen: a parent can be deleted, or swept by
+	// session cleanup (max_keep) between one launch and the next, and the row then had nothing left
+	// to say the conversation had ever been compacted — `compactedParentId` names a session that
+	// is no longer in the list, so the sidebar dropped it in silence. With the title the row can
+	// still say what became of the other half.
+	CompactedParentTitle string `json:"compactedParentTitle,omitempty"`
 	// ProjectID is the desktop project this session belongs to ("" = project-less). Only the ID
 	// travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
 	// project relabels every row without touching a single session (design §3.3).
@@ -482,14 +489,15 @@ func (d *desktopApp) pageSessionMessages(r *sessionRun, id, before string, limit
 
 func toSessionInfo(ss *session.Session) SessionInfo {
 	return SessionInfo{
-		ID:                ss.ID,
-		Title:             ss.Title,
-		Provider:          ss.ProviderName,
-		CreatedAt:         ss.CreatedAt,
-		UpdatedAt:         ss.UpdatedAt,
-		CompactedParentID: ss.CompactedParentID,
-		ProjectID:         ss.ProjectID,
-		Pinned:            ss.Pinned,
+		ID:                   ss.ID,
+		Title:                ss.Title,
+		Provider:             ss.ProviderName,
+		CreatedAt:            ss.CreatedAt,
+		UpdatedAt:            ss.UpdatedAt,
+		CompactedParentID:    ss.CompactedParentID,
+		CompactedParentTitle: ss.CompactedParentTitle,
+		ProjectID:            ss.ProjectID,
+		Pinned:               ss.Pinned,
 	}
 }
 

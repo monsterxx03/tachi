@@ -76,6 +76,12 @@ type scenario struct {
 	// the load-on-first-visit path (the 加载会话… placeholder), which a session that is merely
 	// re-selected never takes: switching inside one process serves the in-memory copy.
 	seedSecond []session.Message
+	// orphanChain seeds a conversation that WAS compacted whose pre-compaction half is no longer in
+	// the list — the state a deleted (or max_keep-swept) parent leaves behind, and the one shape a
+	// driver cannot produce: a driver cannot write a session record, and deleting one is the other
+	// half of the same fixture (see sandbox.seedOrphanChain). The row must still say the
+	// conversation was compacted; it is the case that reads as "the chain is gone".
+	orphanChain bool
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -1003,6 +1009,81 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// auto-compact: the compaction nobody typed. The agent loop swaps the conversation into
+		// a child session ON ITS OWN, in the middle of a turn, and the sidebar has to fold the
+		// chain the same way /compact does. It is a scenario of its own because the two paths
+		// differ exactly where this one is hard: a typed command ends its own turn with the
+		// switch already recorded, while auto-compaction moves the session UNDER a running turn
+		// and only re-homes it when that turn ends — so the reader is looking at the new session
+		// while the sidebar row still belongs to the old one. Nothing else in the suite triggers
+		// auto-compaction at all, and the two ways it can fire are a scenario apart: this one
+		// waits for a call and a tool result to push the estimate over the threshold (the real
+		// shape — a conversation that grew), so the compaction lands between two iterations of a
+		// live turn rather than before its first call.
+		{
+			name: "auto-compact",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe auto-compact scenario's working directory\n",
+				// The tool output that moves the estimate: the floor of any prompt is a few percent
+				// of the mock's 128k window, so a result of this size is what carries the turn over
+				// the threshold — after a call has already been made with tools.
+				"big.txt": strings.Repeat("auto-compact filler line abcdefghijklmnopqrstuvwxyz\n", 8000),
+			},
+			config: "compact:\n  threshold: 0.3\ntool_result:\n  max_chars: 400000\n",
+			steps: []mockllm.Step{
+				// Iteration 1: an ordinary call that asks for a tool, whose output is what pushes
+				// the estimate over the threshold — so the compaction happens at the TOP OF THE
+				// NEXT ITERATION, i.e. in the middle of a live turn, exactly as it does for a
+				// reader whose conversation grew (the first call must therefore carry tools: see
+				// the assertion below). Its usage is deliberately large: the reported context size
+				// is anchored on what the provider billed, so a mock that always claims a
+				// two-thousand-token prompt would keep the meter near the floor however much the
+				// tool result adds.
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_big", "Bash", `{"command":"cat big.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(40000, 60, 20000, 20),
+					mockllm.Done(),
+				)},
+				// The summary the child session is built from. Auto-compaction asks for it through
+				// the compact strategy's own CreateChat — a NON-streaming call (unlike the typed
+				// /compact, which runs an ordinary streamed turn), so this step answers with a
+				// plain JSON body.
+				{Reply: mockllm.JSON("历史摘要：用户要求看一个文件，已经看过。", "")},
+				// …and the reply the turn continues into, in the NEW session.
+				{Reply: textStream("压缩之后我还能回答。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("工具调用、压缩、回复，共三次调用", len(c.requests) == 3, requestCount(c.requests))
+				if len(c.requests) > 0 {
+					c.check("第一次调用是带工具的普通调用（压缩发生在工具结果之后）",
+						len(c.requests[0].Tools) > 0, strconv.Itoa(len(c.requests[0].Tools))+" 个工具")
+				}
+				_, compacted := c.requestSeen("compress the above conversation")
+				c.check("自动压缩的 fork 收到了压缩指令", compacted, "")
+
+				// The disk half: the chain is linked BOTH ways, which is what lets a fresh
+				// launch rebuild the folded shape (the frontend only sees compacted_parent_id).
+				metas := c.sessionMetas()
+				c.check("自动压缩后有两个会话", len(metas) == 2, strconv.Itoa(len(metas)))
+				var child, parent map[string]any
+				for _, m := range metas {
+					if m["compacted_parent_id"] != nil {
+						child = m
+					} else {
+						parent = m
+					}
+				}
+				c.check("子会话记下了它的父会话", child != nil && parent != nil, fmt.Sprintf("metas=%v", metas))
+				if child != nil && parent != nil {
+					c.check("父子互相指向对方",
+						child["compacted_parent_id"] == parent["id"] && parent["compacted_child_id"] == child["id"],
+						fmt.Sprintf("child.parent=%v parent.child=%v", child["compacted_parent_id"], parent["compacted_child_id"]))
+				}
+			},
+		},
+		//
 		// ask-form: the parked AskUserQuestion form and the keystroke that finishes it. The form is
 		// inline in the transcript with option rows and a single-line free-text box; Enter in that
 		// box submits (the box cannot hold a newline, so the key has no other job), while ⌘↩ keeps
@@ -1038,6 +1119,42 @@ func scenarios() []scenario {
 				} else {
 					c.check("回答作为 tool result 到达模型", true, "出现在第 "+strconv.Itoa(n)+" 个请求")
 				}
+			},
+		},
+		//
+		// chain-orphan: a compacted conversation whose pre-compaction half is gone from the list.
+		// That is the state a deleted (or max_keep-swept) parent leaves behind, and it used to read
+		// as a session that had never been compacted at all: the fold follows a link into the list,
+		// and the link had nowhere to land. The child's own record carries the parent's TITLE, so
+		// the row can still say what became of the other half — as a note, since there is nothing
+		// left to unfold. The driver asserts the note; the Go half only proves the fixture really is
+		// orphaned, which is the premise the whole scenario rests on.
+		{
+			name:        "chain-orphan",
+			orphanChain: true,
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe chain-orphan scenario's working directory\n",
+			},
+			after: func(c *checkCtx) {
+				metas := c.sessionMetas()
+				ids := map[string]bool{}
+				for _, m := range metas {
+					if id, _ := m["id"].(string); id != "" {
+						ids[id] = true
+					}
+				}
+				var linked, dangling string
+				for _, m := range metas {
+					if par, _ := m["compacted_parent_id"].(string); par != "" {
+						linked = par
+						if !ids[par] {
+							dangling = par
+						}
+					}
+				}
+				c.check("会话记录里确实有一条压缩链接", linked != "", fmt.Sprintf("metas=%d", len(metas)))
+				c.check("链接的父会话确实不在列表里（fixture 的前提）", dangling == linked && dangling != "",
+					fmt.Sprintf("parent=%s 在列表里=%v", linked, ids[linked]))
 			},
 		},
 		//

@@ -365,25 +365,36 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* ── A folded compaction chain ─────────────────────────────────────────────── */
 /* A conversation that was compacted is ONE sidebar row: the newest link, with the sessions it
    came from under it, closed. The opener is a real button (the disclosure is a control, unlike
-   the row itself, which hosts a rename input and a context menu). */
-.session-chain {
+   the row itself, which hosts a rename input and a context menu).
+
+   `.session-chain-gone` is the same line when there is nothing to open: the pre-compaction
+   session is not in the list any more, so it is a NOTE — the box is shared with the opener on
+   purpose (the two describe the same relationship and belong in one visual language), while
+   the parts that make a control a control are not: no hover, no pointer, no caret. */
+.session-chain,
+.session-chain-gone {
   display: flex;
   align-items: center;
   gap: 5px;
   margin: 0 0 2px 10px;
   padding: 4px 8px;
-  border: none;
   border-left: 2px solid var(--border-2);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-  background: transparent;
   color: var(--text-faint);
   font-family: inherit;
   font-size: 12px;
+}
+.session-chain {
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  background: transparent;
   cursor: pointer;
 }
 .session-chain:hover { background: var(--hover); color: var(--text-dim); }
 .session-chain.is-open { color: var(--text-dim); }
 .session-chain-caret { display: inline-flex; align-items: center; line-height: 1; }
+
 /* A session kept only as the pre-compaction half of a chain: indented under its successor, and
    its own meta says so — the title alone cannot tell the two apart. */
 .session.is-compacted { margin-left: 12px; }

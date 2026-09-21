@@ -198,7 +198,12 @@ export function listNav(e: { key: string; ctrlKey: boolean }): -1 | 0 | 1 {
 }
 
 // SessionRow is one line of the sidebar: a conversation, plus the sessions it was compacted from.
-export type SessionRow<T> = { session: T; compactedFrom: T[] }
+//
+// compactedMissing describes the pre-compaction session the fold could NOT reach, and is what tells
+// the two cases apart that `compactedFrom` alone cannot: null means the chain ends in the list (the
+// normal case), while a string — possibly empty, when the record predates the field — is the title
+// recorded on the last link the walk could follow (see sessionRows).
+export type SessionRow<T> = { session: T; compactedFrom: T[]; compactedMissing: string | null }
 
 // sessionRows folds a session list into rows, one per conversation.
 //
@@ -211,7 +216,13 @@ export type SessionRow<T> = { session: T; compactedFrom: T[] }
 // The input's order is preserved (ListSessions sorts newest-first), so the newest link of a chain
 // is the row and its ancestors follow it newest-first. A parent whose child is no longer in the
 // list (deleted) is a row of its own — its history is still reachable.
-export function sessionRows<T extends { id: string; compactedParentId?: string }>(list: T[]): SessionRow<T>[] {
+//
+// A link whose PARENT is not in the list is the case the row must not swallow: the conversation was
+// still compacted, and the reader is owed that fact. `compactedParentTitle` (recorded on each child
+// when the chain was made) is what survives the parent's disappearance — a parent deleted by hand,
+// or swept by session cleanup's max_keep between two launches — so the row reports the half it
+// cannot show instead of looking like a session that was never compacted at all.
+export function sessionRows<T extends { id: string; compactedParentId?: string; compactedParentTitle?: string }>(list: T[]): SessionRow<T>[] {
   const byId = new Map(list.map((s) => [s.id, s]))
   const hasChild = new Set<string>()
   for (const s of list) {
@@ -221,15 +232,24 @@ export function sessionRows<T extends { id: string; compactedParentId?: string }
   for (const s of list) {
     if (hasChild.has(s.id)) continue // its child carries this conversation's row
     const compactedFrom: T[] = []
+    let missing: string | null = null
     const seen = new Set([s.id]) // a corrupted pair of links must not loop forever
-    let parentId = s.compactedParentId
-    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
-      const parent = byId.get(parentId) as T
-      seen.add(parentId)
+    // The walk follows links through the records it HAS, so it stops either at the end of the chain
+    // or at the first link that leaves the list — and that link's own record is the one that names
+    // the missing session (the child for a missing parent, a present ancestor for a missing
+    // grandparent).
+    let cur: T = s
+    while (cur.compactedParentId && !seen.has(cur.compactedParentId)) {
+      const parent = byId.get(cur.compactedParentId)
+      if (!parent) {
+        missing = cur.compactedParentTitle || ''
+        break
+      }
+      seen.add(parent.id)
       compactedFrom.push(parent)
-      parentId = parent.compactedParentId
+      cur = parent
     }
-    rows.push({ session: s, compactedFrom })
+    rows.push({ session: s, compactedFrom, compactedMissing: missing })
   }
   return rows
 }
@@ -281,7 +301,7 @@ export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[]
 // render of the app (during a turn, every streaming frame), and a per-project filter made it
 // O(projects × sessions) with a fresh Map and Set built per group — at a few thousand sessions
 // that is real work per frame, for a list whose shape is fixed until the next fetch.
-export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string; pinned?: boolean }>(
+export function sessionGroups<T extends { id: string; compactedParentId?: string; compactedParentTitle?: string; projectId?: string; pinned?: boolean }>(
   list: T[],
   projects: ProjectVO[],
 ): SessionGroup<T>[] {

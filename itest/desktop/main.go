@@ -140,6 +140,14 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "second session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
+	// A compacted conversation whose pre-compaction half is GONE, seeded before the session the app
+	// opens (see seedOrphanChain). Nothing a driver can do produces this shape: it needs a session
+	// record whose link points outside the list.
+	if sc.orphanChain {
+		if err := sb.seedOrphanChain(); err != nil {
+			return report(sc.name, nil, []Line{{Label: "orphan chain fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+	}
 	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
@@ -423,6 +431,34 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 		}
 	}
 	return nil
+}
+
+// orphanChainParentID is the id of the pre-compaction session the orphan-chain fixture points at —
+// never written to disk, so the fixture is exactly "a link whose other end is not in the list".
+const orphanChainParentID = "2026-01-01-000000-gone"
+
+// seedOrphanChain writes the one session shape a driver cannot reach: a conversation whose
+// pre-compaction half is no longer in the list. The link and the parent's TITLE are both on the
+// child's own record — that is what FinalizeCompact writes — so the fixture writes them through the
+// same store API and does NOT create the parent. Deleted-by-hand and swept-by-max_keep both end up
+// here, and the row has to keep saying the conversation was compacted either way.
+//
+// Seeded BEFORE the session the app opens (main.go's order), so the driver finds this row in the
+// sidebar rather than staring at it.
+func (sb *sandbox) seedOrphanChain() error {
+	store, err := session.NewFileStore(filepath.Join(sb.home, ".tachi", "session"))
+	if err != nil {
+		return err
+	}
+	mgr := session.NewManagerWithStore(store, nil)
+	if _, err := mgr.New("smoke", sb.work); err != nil {
+		return err
+	}
+	mgr.SetTitle("压缩过的会话")
+	cur := mgr.Current()
+	cur.CompactedParentID = orphanChainParentID
+	cur.CompactedParentTitle = "上一次对话"
+	return mgr.UpdateMeta(cur)
 }
 
 // projectRootDir is the directory the project fixture's primary root lives in, under the

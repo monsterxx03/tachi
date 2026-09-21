@@ -45,7 +45,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a message bubble's own layout (long links, wrapping) | `bubble-wrap` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
-| sidebar rows, grouping, titles, type scale, carets | `sessions`, `sidebar-text`, `switch-load` |
+| sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |
 | the sidebar's width (drag, clamp, the choice surviving a restart) | `sidebar-width` |
 | pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
@@ -57,7 +57,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the diff's 上下/左右 layout (pairing, blank cells, column scroll, the choice surviving) | `diff-layout`, `review-all` |
 | review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
 | rewind / checkpoints | `rewind`, `compact` |
-| context meter, usage numbers, auto-compaction | `ctx-ring`, `compact` |
+| context meter, usage numbers, auto-compaction (the loop compacts on its own, mid-turn) | `ctx-ring`, `compact`, `auto-compact` |
 | MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
@@ -107,6 +107,10 @@ Fixtures, all because the real path needs something a driver cannot do:
 - `seedMessages` / `seedSecond` — a transcript written before the app launches. A driver cannot produce a
   reload by itself (switching sessions serves the in-memory copy), so this is how a restart-shaped assertion
   is staged.
+- `orphanChain` — a session whose `compacted_parent_id` names a session that does **not** exist (and the
+  parent's title, as `FinalizeCompact` records it). A driver can neither write a session record nor delete
+  one, so this is the only way to stage "a compaction chain whose other end is gone" — the state a parent
+  deleted by hand, or swept by session cleanup's `max_keep`, leaves behind.
 - **A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
   so the session a driver asserts on has to be seeded LAST; seeding an unbound session after it made the
   driver assert on the wrong one, which reads exactly like "the project does not drive its member".
@@ -875,7 +879,12 @@ Each bullet is a rule a change must keep, with the bug it prevents.
 - **A session list is a list of CONVERSATIONS, not of session dirs** (`sessionRows` in `lib.ts`): a compaction
   chain shares one title, so rendering `ListSessions` raw shows the pre-compaction session as a second,
   identical-looking row. The shape is derived from `compactedParentId`, folded under the newest link and
-  closed; the ancestors stay clickable history.
+  closed; the ancestors stay clickable history. **A link whose parent is NOT in the list still gets a line**:
+  it is a note (`.session-chain-gone`, no caret, not a control — there is nothing to unfold) naming the
+  pre-compaction session from `compactedParentTitle`, which each child records when the chain is made. Without
+  it the row read as a conversation that had never been compacted at all, which is how a parent deleted by
+  hand — or swept by session cleanup's `max_keep`, which runs on every new session including a compaction's
+  child — silently erased the fact. The same holds for a chain whose LAST link is missing.
 - **The sidebar is GROUPED, and the grouping is a pure join** (`sessionGroups(sessions, projects)` in `lib.ts`):
   one header per project (name, member count, a `＋` that creates a session INSIDE it, a right-click menu) and
   one final 无项目 bucket. Grouping happens BEFORE `sessionRows`, so a compaction chain folds inside its own

@@ -1774,6 +1774,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         </button>
       ) : null}
       {openChains[row.session.id] ? row.compactedFrom.map((s) => sessionRow(s, true)) : null}
+      {/* A chain the fold could not reach the end of: its pre-compaction session is not in the list
+          any more (deleted by hand, or swept by session cleanup's max_keep). This is a NOTE and not
+          a control — there is nothing to unfold, and a button that cannot act is worse than a
+          sentence — and it is the whole reason the child's record carries the parent's title: the
+          link alone points at a session the row cannot show, and the row would otherwise look like
+          a conversation that had never been compacted. */}
+      {row.compactedMissing === null ? null : (
+        <div className="session-chain-gone"
+          title="这一段对话在压缩时被摘要取代；压缩前的那一节已经不在会话列表里（被删除或按 max_keep 清理掉了），无法回看">
+          {row.compactedFrom.length > 0 ? '更早的压缩前会话已不在列表' : '压缩前的会话已不在列表'}
+          {row.compactedMissing ? `：${row.compactedMissing}` : ''}
+        </div>
+      )}
     </Fragment>
   ))
 
