@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -81,6 +80,12 @@ func (p *OpenAIProvider) Model() string {
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(messages))
+
+	// Images from tool results are collected here and flushed onto the next
+	// message (see toolImageNote). The buffer holds the CURRENT tool block:
+	// consecutive tool messages accumulate, and a non-tool message flushes them.
+	var pendingToolImages []ContentPart
+
 	for _, msg := range messages {
 		role := msg.Role
 		if role == RoleSteer {
@@ -106,51 +111,31 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		}
 
 		// Multi-modal content: use MultiContent when ContentParts are present.
-		// Note: OpenAI "tool" role messages only support string content, not
-		// multi-modal arrays. For tool messages carrying image content parts,
-		// we fall back to a text-only representation with an embedded data URI
-		// reference. The model can at least acknowledge the image was read,
-		// though it cannot visually process it in the tool role.
-		if len(msg.ContentParts) > 0 && role != "tool" {
+		// Role "tool" is the exception — see toolImageNote for why its images
+		// are buffered rather than converted here.
+		switch {
+		case role == "tool" && len(msg.ContentParts) > 0:
+			m.Content = msg.Content
 			for _, part := range msg.ContentParts {
-				switch part.Type {
-				case ContentPartText:
-					m.MultiContent = append(m.MultiContent, openai.ChatMessagePart{
-						Type: openai.ChatMessagePartTypeText,
-						Text: part.Text,
-					})
-				case ContentPartImage:
-					// OpenAI expects data URIs: "data:<mediaType>;base64,<data>"
-					dataURI := "data:" + part.MediaType + ";base64," + part.Data
-					m.MultiContent = append(m.MultiContent, openai.ChatMessagePart{
-						Type: openai.ChatMessagePartTypeImageURL,
-						ImageURL: &openai.ChatMessageImageURL{
-							URL: dataURI,
-							// Detail is deliberately left unset (empty). OpenAI
-							// defaults it to "auto" anyway, so there is no
-							// behavior change on official models — while
-							// OpenAI-compatible gateways/providers (litellm →
-							// MiniMax, Kimi, etc.) reject the `detail` field
-							// outright (HTTP 400 "invalid image detail: auto").
-							// The omitempty tag keeps it out of the wire body.
-						},
-					})
+				if part.Type == ContentPartImage {
+					pendingToolImages = append(pendingToolImages, part)
 				}
 			}
-		} else {
+		case len(msg.ContentParts) > 0:
+			m.MultiContent = multiContentParts(msg.ContentParts)
+		default:
 			m.Content = msg.Content
 		}
 
-		// Tool messages with image content parts: append image data URI
-		// references to the text content so the model is aware of them.
-		if role == "tool" && len(msg.ContentParts) > 0 {
-			for _, part := range msg.ContentParts {
-				if part.Type == ContentPartImage {
-					ref := fmt.Sprintf("\n[Image data: data:%s;base64,%s...(%d chars)]",
-						part.MediaType, part.Data[:min(len(part.Data), 40)], len(part.Data))
-					m.Content += ref
-				}
-			}
+		// Images a tool returned cannot ride the tool message itself (OpenAI
+		// allows only text there), so they are buffered and emitted as a user
+		// message once the tool block is complete. Flushing BEFORE the next
+		// message keeps them directly behind the results they belong to; the
+		// tail flush after the loop covers the common case, where the history
+		// ends with the tool block that just ran.
+		if role != "tool" && len(pendingToolImages) > 0 {
+			out = append(out, toolImageMessage(pendingToolImages))
+			pendingToolImages = nil
 		}
 
 		for _, tc := range msg.ToolCalls {
@@ -170,6 +155,54 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			})
 		}
 		out = append(out, m)
+	}
+
+	if len(pendingToolImages) > 0 {
+		out = append(out, toolImageMessage(pendingToolImages))
+	}
+	return out
+}
+
+// toolImageNote introduces the images lifted out of a tool result, so the
+// model reads them as the output of the call above rather than as something
+// the user said.
+const toolImageNote = "Images returned by the tool call above:"
+
+// toolImageMessage wraps tool-returned images as a user message.
+func toolImageMessage(images []ContentPart) openai.ChatCompletionMessage {
+	parts := make([]ContentPart, 0, 1+len(images))
+	parts = append(parts, ContentPart{Type: ContentPartText, Text: toolImageNote})
+	parts = append(parts, images...)
+	return openai.ChatCompletionMessage{
+		Role:         "user",
+		MultiContent: multiContentParts(parts),
+	}
+}
+
+// multiContentParts converts content parts to the OpenAI wire form.
+//
+// An image becomes a data URI. `detail` is deliberately left unset (empty):
+// OpenAI defaults it to "auto" anyway, so omitting it changes nothing on
+// official models, while OpenAI-compatible gateways (litellm → MiniMax, Kimi,
+// ...) reject the field outright (HTTP 400 "invalid image detail: auto"). The
+// omitempty tag keeps it off the wire.
+func multiContentParts(parts []ContentPart) []openai.ChatMessagePart {
+	out := make([]openai.ChatMessagePart, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case ContentPartText:
+			out = append(out, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: part.Text,
+			})
+		case ContentPartImage:
+			out = append(out, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeImageURL,
+				ImageURL: &openai.ChatMessageImageURL{
+					URL: "data:" + part.MediaType + ";base64," + part.Data,
+				},
+			})
+		}
 	}
 	return out
 }

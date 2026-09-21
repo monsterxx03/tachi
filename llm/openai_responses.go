@@ -86,6 +86,44 @@ func roleForResponses(role string) responses.EasyInputMessageRole {
 	}
 }
 
+// functionCallOutput builds the output union for a function_call_output item.
+//
+// Unlike chat completions (whose tool role is text-only), the Responses API
+// takes an item ARRAY here and accepts images in it, so a tool's images ride
+// the result itself instead of needing the extra user message that
+// openai.go's toolImageMessage exists to provide. A text-only result keeps the
+// string shorthand.
+func functionCallOutput(output string, parts []ContentPart) responses.ResponseInputItemFunctionCallOutputOutputUnionParam {
+	var images []ContentPart
+	for _, part := range parts {
+		if part.Type == ContentPartImage {
+			images = append(images, part)
+		}
+	}
+	if len(images) == 0 {
+		return responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+			OfString: openai.String(output),
+		}
+	}
+
+	out := make([]responses.ResponseFunctionCallOutputItemUnionParam, 0, 1+len(images))
+	if output != "" {
+		out = append(out, responses.ResponseFunctionCallOutputItemUnionParam{
+			OfInputText: &responses.ResponseInputTextContentParam{Text: output},
+		})
+	}
+	for _, img := range images {
+		out = append(out, responses.ResponseFunctionCallOutputItemUnionParam{
+			OfInputImage: &responses.ResponseInputImageContentParam{
+				ImageURL: openai.String("data:" + img.MediaType + ";base64," + img.Data),
+			},
+		})
+	}
+	return responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
+		OfResponseFunctionCallOutputItemArray: out,
+	}
+}
+
 // responsesContent builds the content union for an input message. Plain text
 // uses the string shorthand; multi-modal messages use the content array form
 // (input_text / input_image).
@@ -152,9 +190,7 @@ func (p *OpenAIResponsesProvider) convertMessages(messages []Message) (instructi
 			items = append(items, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 					CallID: msg.ToolCallID,
-					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.String(output),
-					},
+					Output: functionCallOutput(output, msg.ContentParts),
 				},
 			})
 			continue
