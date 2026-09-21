@@ -4,10 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
+
+// mcpImageMaxCount bounds how many images one MCP result may attach. Images
+// bypass the text result limit — truncateToolOutput measures characters, and
+// image bytes are not characters — so this cap is what keeps a server from
+// pushing an unbounded number of them into a single request. A screenshot (the
+// common case) is one.
+const mcpImageMaxCount = 4
 
 // MCPTool wraps an MCP server tool as a Tachi Tool implementation.
 type MCPTool struct {
@@ -257,8 +267,83 @@ func (t MCPTool) ExecuteContext(ctx context.Context, args string) (string, error
 		return "", formatErr
 	}
 
+	// Images ride the same side channel the Read tool uses, so a screenshot
+	// reaches the model instead of being dropped (see extractMCPImages).
+	images, dropNote := extractMCPImages(result.Content)
+	tools.AddImageParts(ctx, images)
+	if dropNote != "" {
+		output += dropNote
+	}
+
 	// Apply result size limit: save oversized results to disk and return preview.
+	// Runs after image extraction: truncation replaces the text, and the images
+	// attached above are already out of its reach (it measures characters).
 	output = t.manager.truncateToolOutput(ctx, output, t.manager.ToolResultMaxChars(), t.manager.ToolResultFileDir(), t.Name())
 
 	return output, nil
+}
+
+// decodedImageSize returns the exact number of bytes a standard-base64 string
+// decodes to.
+//
+// base64.StdEncoding.DecodedLen returns an UPPER BOUND rather than the real
+// length — from the encoded length alone it cannot know the padding — and it
+// over-counts by one or two bytes whenever the last group is partial. An image
+// sitting exactly at llm.MaxImageSize is precisely the image worth keeping, so
+// the budget is measured against the true size.
+func decodedImageSize(data string) int64 {
+	padding := 0
+	for i := len(data) - 1; i >= 0 && data[i] == '='; i-- {
+		padding++
+	}
+	return int64(len(data)/4*3 - padding)
+}
+
+// extractMCPImages pulls image content out of an MCP tool result as LLM
+// content parts, plus a note naming whatever it had to leave behind.
+//
+// MCP servers declare images as a content item beside their text — a
+// screenshot tool answers "Took a screenshot" plus the PNG — but the text-only
+// result path drops every non-text item, so the bytes never reached the model.
+//
+// Images are sized by their DECODED length against llm.MaxImageSize, the single
+// budget shared with the Read tool and @-file expansion: base64 inflates by 4/3,
+// so measuring the encoded string would refuse an image those paths accept.
+// Dropped images are always reported, never silently swallowed — a model that
+// is told a screenshot arrived but cannot see it will otherwise invent one.
+func extractMCPImages(content []mcp.Content) (parts []llm.ContentPart, dropNote string) {
+	var dropped []string
+
+	for _, item := range content {
+		img, ok := item.(mcp.ImageContent)
+		if !ok || img.Data == "" {
+			continue
+		}
+		if len(parts) >= mcpImageMaxCount {
+			dropped = append(dropped, fmt.Sprintf("one %s image over the %d-image limit", img.MIMEType, mcpImageMaxCount))
+			continue
+		}
+
+		size := decodedImageSize(img.Data)
+		if size > llm.MaxImageSize {
+			dropped = append(dropped, fmt.Sprintf("one %s image (%s, over the %s limit)",
+				img.MIMEType, strutil.HumanBytes(size), strutil.HumanBytes(llm.MaxImageSize)))
+			continue
+		}
+
+		parts = append(parts, llm.ContentPart{
+			Type:      llm.ContentPartImage,
+			MediaType: img.MIMEType,
+			Data:      img.Data,
+		})
+	}
+
+	if len(dropped) > 0 {
+		var sb strings.Builder
+		sb.WriteString("\n[MCP returned images that were not attached: ")
+		sb.WriteString(strings.Join(dropped, ", "))
+		sb.WriteString("]")
+		dropNote = sb.String()
+	}
+	return parts, dropNote
 }

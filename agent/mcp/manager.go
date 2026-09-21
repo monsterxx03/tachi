@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // MCPClient is the interface for MCP client operations used by Manager.
@@ -1168,9 +1170,15 @@ func formatMCPResult(result *mcp.CallToolResult) (string, error) {
 func contentToString(content []mcp.Content) string {
 	var sb strings.Builder
 	for _, item := range content {
-		if textContent, ok := item.(mcp.TextContent); ok {
-			sb.WriteString(textContent.Text)
-		} else {
+		switch c := item.(type) {
+		case mcp.TextContent:
+			sb.WriteString(c.Text)
+		case mcp.ImageContent:
+			// Name the image instead of a bare "[non-text content]": an error
+			// whose detail lives in the image is otherwise unreadable.
+			fmt.Fprintf(&sb, "[image: %s, %s]", c.MIMEType,
+				strutil.HumanBytes(int64(base64.StdEncoding.DecodedLen(len(c.Data)))))
+		default:
 			sb.WriteString("[non-text content]")
 		}
 	}
