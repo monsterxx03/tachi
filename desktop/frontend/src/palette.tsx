@@ -148,7 +148,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
                 onClick={() => pick(p)}>
                 <div className="palette-main">
                   <div className="palette-name">{p.name}</div>
-                  <div className="palette-sub" title={p.workingDir}>{p.workingDir}</div>
+                  <div className="palette-path" title={p.workingDir}>{p.workingDir}</div>
                 </div>
                 <div className="palette-side">
                   <div className="palette-meta">{count > 0 ? `${count} 个会话` : '还没有会话'}</div>
@@ -174,8 +174,8 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
 //   • which rows there are — one per CONVERSATION (`sessionChoices`: a compaction chain folds under
 //     its newest link, exactly as the sidebar folds it), in the list's own order, with the query
 //     matched against the TITLE only (`sessionMatches`).
-//   • what a row says — the project it belongs to (the one fact about a conversation that its title
-//     cannot carry, and a project the list does not know reads as 无项目, the same bucket the
+//   • what a row says — the project it belongs to as a TAG (the one fact about a conversation that
+//     its title cannot carry; a project the list does not know reads as 无项目, the same bucket the
 //     sidebar puts such a row in) and when it was last written to, which is what makes the order
 //     legible instead of arbitrary.
 //   • which row is 「当前」 — the one the app is showing, marked so the list has an anchor.
@@ -212,10 +212,17 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
     el?.scrollIntoView({ block: 'nearest' })
   }, [idx, rows.length])
 
-  // The project a conversation belongs to, resolved the way the sidebar resolves it: only a project
-  // that still EXISTS names a group, so a dangling projectId reads as 无项目 rather than as a
-  // heading nothing renders.
-  const projectName = (id?: string) => projects.find((p) => p.id === id)?.name || '无项目'
+  // The tag says which PROJECT a conversation belongs to, and that it belongs to one AT ALL — the
+  // one fact about a row that its title cannot say. Only a project that still EXISTS names a group
+  // (the sidebar's own rule), so a dangling projectId reads as 无项目 rather than as a heading
+  // nothing renders. A conversation with no project gets plain text and NO chrome: the tag is what
+  // says 「belongs to a project」, so its absence is the distinction (see overlays.css).
+  const projectTag = (s: SessionItem) => {
+    const p = projects.find((x) => x.id === s.projectId)
+    return p
+      ? <span className="palette-proj" title={`项目：${p.name}`}>{p.name}</span>
+      : <span className="palette-loose" title="不属于任何项目：它用自己的工作区快照">无项目</span>
+  }
 
   // ↑↓ and Ctrl+N/Ctrl+P walk the list; navigation wraps, as it does in ⌘P. Enter opens the
   // highlighted conversation and Escape closes — and a composing IME owns all four (see
@@ -259,7 +266,7 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
               onClick={() => { onPick(s); onClose() }}>
               <div className="palette-main">
                 <div className="palette-name">{s.title || '未命名会话'}</div>
-                <div className="palette-sub">{projectName(s.projectId)}</div>
+                <div className="palette-sub">{projectTag(s)}</div>
               </div>
               <div className="palette-side">
                 <div className="palette-meta">{fmtTime(s.updatedAt)}</div>

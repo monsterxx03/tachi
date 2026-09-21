@@ -1982,7 +1982,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 {group.project && !expandedProjects[group.project.id] ? null : (
                   group.project
                     ? (
-                      <div className="proj-rows">
+                      // is-empty: an EMPTY group gets no rail (see .proj-rows in layout.css) — the
+                      // rail says 「the group's rows hang here」, and there are none to hang.
+                      <div className={`proj-rows${group.rows.length === 0 ? ' is-empty' : ''}`}>
                         {group.rows.length === 0
                           // A project with no sessions yet is a normal state (it was just made, or
                           // its last session was deleted): the header above is where its first

@@ -421,13 +421,54 @@
 .palette-row.is-sel { background: var(--veil); box-shadow: inset 2px 0 0 var(--accent); }
 .palette-main { min-width: 0; flex: 1 1 auto; }
 .palette-name { font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The row's second line: a path for ⌘P, the project a conversation belongs to for ⌘K — the one
-   thing about a row that its name cannot say. */
+/* The row's second line. Its HEIGHT is fixed here rather than by its content: the two palettes put
+   different things in it (⌘P a path, ⌘K a tag — a box taller than the plain word next to it), and a
+   line sized by its content would make one row taller than its neighbours — in a list walked and
+   scrolled by keyboard, that moves the whole list under the reader's eyes. */
 .palette-sub {
-  margin-top: 2px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  min-height: 17px;
+}
+/* ⌘P: the project's working directory. */
+.palette-path {
+  min-width: 0;
   font-family: var(--mono, monospace);
   font-size: 11px;
   color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ⌘K: WHICH PROJECT a conversation belongs to. A conversation that belongs to one wears a TAG;
+   one that belongs to none shows plain text, with no chrome at all — 「挂着 tag」 is itself what
+   says 「belongs to a project」, so the absence of the box is the distinction, and drawing a second,
+   dashed tag would say every row has a project (the wrong thing to teach, and at dash weight it
+   read as a rendering artifact in the light theme). Same second-line HEIGHT in both cases
+   (`min-height` on .palette-sub): a row must never differ in height from its neighbours.
+   Neutral tones on purpose — the accent belongs to STATE (the selection bar, 「当前会话」), not to
+   identity. */
+.palette-proj {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 6px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--wash-2);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-loose {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

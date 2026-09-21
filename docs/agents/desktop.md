@@ -903,6 +903,13 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   — the header carries the ＋ that makes the first session, so hiding empty groups made a freshly created
   project invisible. The chip and the workspace panel wear the project's NAME while a project drives the
   session, and the panel is READ-ONLY then (the three session-level writers are refused by the backend).
+  **A group's rows hang off a RAIL** (`.proj-rows`' `border-left`), because indent alone does not say which
+  group a row is in: 12px of extra left margin was the whole difference between a project's row and a 无项目
+  one, and at a glance that is one list drawn slightly narrower. The rail is 2px of `--border-2` — the weight
+  and colour of `.session-chain`'s bar, so 「a conversation hangs off its project」 reads the same way as 「its
+  压缩前 nodes hang off it」 — and the 无项目 bucket has none, which is what makes the two kinds of row
+  distinguishable at all. The indent is split around it (margin 6 + border 2 + padding 4 = the previous 12px),
+  so no row moved. `sidebar-text` pins it (rail present on a group's rows, absent on the bucket's).
 - **A project group is FOLDED by default, and the ONE exception is the project holding the session the app
   booted into** (`expandedProjects` in `App.tsx`; the empty map IS the default). With several projects the
   sidebar opens as a list of headers, and the rule 「the row that just became active must be visible」 still
@@ -965,12 +972,19 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   recently UPDATED first — taken from the list, like the sidebar takes it, so the app has one ordering rule
   rather than two that agree by accident; PINS are deliberately ignored, because a pin orders a row inside its
   own GROUP and a flat list has no group to lift it inside); **the query matches the TITLE only**
-  (`sessionMatches`) — the row still SHOWS the conversation's project (a dangling `projectId` reads as 无项目,
-  the bucket the sidebar files it under), but a project is its own search, so the empty state points at ⌘P
-  instead of matching rows the query is not in; and the row the app is showing is marked 「当前会话」, the only
-  anchor a flat list has. It issues **no fetch** (⌘P's contract, for the same reason: the list is re-ordered
-  under the reader's cursor if a keyboard shortcut re-reads it) and it is READ-ONLY — `session-palette` pins
-  that no request reaches the model and no session record is written.
+  (`sessionMatches`) — no project name because a project is its own search (⌘P, which the empty state points
+  at) and rows the query is not in would carry no highlight to explain themselves; **which project a row
+  belongs to is a TAG, not a second line of text** (`palette.tsx`'s `projectTag` → `.palette-proj`): the boxed
+  name is a row's only chrome, so 「belongs to a project」 reads at a glance, and a conversation belonging to
+  none shows the plain words 无项目 (`.palette-loose`) with no box at all. A second, DASHED tag was the first
+  attempt and is wrong twice over: it claims every row has a project, and at dash weight it read as a rendering
+  artifact in the light theme. A dangling `projectId` is 无项目 — the bucket the sidebar files such a row under
+  — and both second lines are the same HEIGHT (`.palette-sub`'s `min-height`), because ⌘K's rows are walked by
+  keyboard and a row that GREW would shift the list under the reader's eyes; `session-palette` asserts the tag's
+  border, the plain line's absence of one, and that all three rows measure equal. And the row the app is
+  showing is marked 「当前会话」, the only anchor a flat list has. It issues **no fetch** (⌘P's contract, for the
+  same reason: the list is re-ordered under the reader's cursor if a keyboard shortcut re-reads it) and it is
+  READ-ONLY — `session-palette` pins that no request reaches the model and no session record is written.
 - **A palette's input filters by the COMMITTED query, never by the field's live value** (`usePaletteInput` in
   `palette.tsx`; both palettes go through it). A controlled input re-renders on every keystroke of a Chinese
   IME composition — the pinyin of 你/ni/nihao — so filtering on `e.target.value` re-filters and re-highlights the

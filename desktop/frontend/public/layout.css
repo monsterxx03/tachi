@@ -352,8 +352,23 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--red);
 }
 /* A project's rows are indented one step, inside their own container: a header-relative
-   sibling selector would also indent the 无项目 bucket that follows every group. */
-.proj-rows { margin-left: 12px; }
+   sibling selector would also indent the 无项目 bucket that follows every group.
+
+   They also hang off a RAIL, because indentation alone does not say 「these rows are in that
+   group」: 12px of extra left margin is the only thing that separated a project's row from a
+   无项目 one, and at a glance that is just a slightly narrower row in the same list. The rail is
+   2px of --border-2 — the same weight as .session-chain's bar — so a conversation hangs off its
+   project exactly the way its 压缩前 nodes hang off it. The margin and the padding are split
+   around the border (6 + 2 + 4 = the 12px indent the rows had before), so nothing moved. */
+.proj-rows {
+  margin-left: 6px;
+  padding-left: 4px;
+  border-left: 2px solid var(--border-2);
+}
+/* An empty group keeps the indent but loses the rail: the rail says 「the group's rows hang
+   here」, and a bracket drawn around the 「还没有会话」 hint would say the group is holding
+   something after all. */
+.proj-rows.is-empty { border-left-color: transparent; }
 /* A project with no sessions yet: the header above is where the first one is created, so the
    group says so instead of looking broken (and instead of being hidden, which is worse). */
 .proj-empty {

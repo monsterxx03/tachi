@@ -73,9 +73,29 @@
   smoke.check('三个会话各一行（一行一个对话）', rowCount() === 3, names().join(' | '))
   smoke.check('最近更新的排第一（就是启动时打开的那个）', names()[0] === bootTitle,
     names()[0] + ' vs ' + bootTitle)
-  const subs = smoke.allText('.palette-sub')
-  smoke.check('成员行写着项目名，无项目的行写着「无项目」',
-    subs.filter((t) => t === '无项目').length === 2 && subs.indexOf(PROJECT) >= 0, subs.join(' | '))
+  // 项目会话与无项目会话必须一眼分得开：有项目的挂**实心标签**，无项目的是**裸文字**（有标签这件事
+  // 本身就是「属于某个项目」的信号），而且第二行必须一样高 —— 靠键盘走的列表里，一行比邻行高就会把
+  // 整个列表挪到读者眼皮底下。
+  const tagStyles = (sel) => smoke.qa(sel).map((el) => {
+    const cs = getComputedStyle(el)
+    return { border: cs.borderTopStyle, h: Math.round(el.getBoundingClientRect().height) }
+  })
+  const projTags = smoke.allText('.palette-proj')
+  const looseTags = smoke.allText('.palette-loose')
+  smoke.check('项目成员行挂着项目名的标签，无项目的行写着「无项目」',
+    projTags.length === 1 && projTags[0] === PROJECT && looseTags.length === 2 && looseTags.every((t) => t === '无项目'),
+    projTags.concat(looseTags).join(' | '))
+  const projStyle = tagStyles('.palette-proj')
+  const looseStyle = tagStyles('.palette-loose')
+  smoke.check('有项目的挂标签、没有的是裸文字（不是「两种标签换个颜色」）',
+    projStyle.every((s) => s.border === 'solid') && looseStyle.every((s) => s.border === 'none'),
+    projStyle.map((s) => s.border).join('/') + ' vs ' + looseStyle.map((s) => s.border).join('/'))
+  const heights = projStyle.concat(looseStyle).map((s) => s.h)
+  smoke.check('挂标签和没挂的第二行一样高（行高不随内容变）',
+    heights.length === 3 && new Set(heights).size === 1, heights.join(' | '))
+  const rowHeights = smoke.qa('.palette-row').map((r) => Math.round(r.getBoundingClientRect().height))
+  smoke.check('所有行一样高（键盘滚动时列表不会跳）',
+    new Set(rowHeights).size === 1, rowHeights.join(' | '))
   smoke.check('当前会话那行标着「当前会话」', smoke.qa('.palette-here').length === 1,
     smoke.allText('.palette-here').join(' | '))
   const times = smoke.allText('.palette-meta')

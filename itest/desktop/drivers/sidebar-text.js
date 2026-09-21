@@ -37,6 +37,29 @@
   smoke.check('组头严格大于行标题（层级看得出来）', sizes['组头 .proj-name'] > sizes['行标题 .session-title'],
     `组头 ${sizes['组头 .proj-name']}px vs 行标题 ${sizes['行标题 .session-title']}px`)
 
+  // Which group a row belongs to has to be visible, not inferred from a 12px difference in left
+  // margin ("项目里的会话和无项目的会话看不出区别"): the project's rows hang off a RAIL, the 无项目
+  // bucket's do not. Measured on the row's own parent, because that is where the rail lives — the
+  // rows themselves are the same box in both cases, which is exactly why the old shape was
+  // ambiguous. Intent, not a number: the rail only has to EXIST on one side.
+  const railOf = (el) => {
+    const p = el.parentElement
+    return p ? parseFloat(getComputedStyle(p).borderLeftWidth) : 0
+  }
+  const projRows = smoke.qa('.sidebar .proj-rows .session')
+  const looseRows = smoke.qa('.sidebar .session-list > .session')
+  smoke.check('项目组的行挂在一根竖线上', projRows.length > 0 && projRows.every((r) => railOf(r) > 0),
+    `${projRows.length} 行，竖线 ${projRows.map((r) => railOf(r)).join('/')}px`)
+  smoke.check('无项目的行没有竖线（差别不是「左边距窄一点」）',
+    looseRows.length > 0 && looseRows.every((r) => railOf(r) === 0),
+    `${looseRows.length} 行，竖线 ${looseRows.map((r) => railOf(r)).join('/')}px`)
+  smoke.check('竖线是实线、够粗（不是一根看不清的发丝线）',
+    projRows.length > 0 && (() => {
+      const rail = getComputedStyle(smoke.qa('.sidebar .proj-rows')[0])
+      return rail.borderLeftStyle === 'solid' && parseFloat(rail.borderLeftWidth) >= 2
+    })(),
+    projRows.length ? getComputedStyle(smoke.qa('.sidebar .proj-rows')[0]).borderLeftWidth : '没有项目组')
+
   // The carets: an SVG icon (not the ▸/▾ glyphs, whose size follows the font and draws a dot at
   // any size a sidebar can afford), every one of them the same box, and that box is big enough.
   const token = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--caret-size'))
@@ -60,6 +83,17 @@
     smoke.check(`${k} 画出来的箭头看得清`, drawnH >= 7,
       `${drawnH.toFixed(1)}px 高（盒 ${Math.round(boxPx)}px，占 viewBox ${(fill * 100).toFixed(0)}%）`)
   }
+
+  // The other half of the rail rule: an EMPTY group keeps the indent but has no rail to hang rows
+  // off. Its group is folded at boot (nothing was ever in it — only the boot session's project is
+  // revealed), so it has to be opened first.
+  const emptyHead = smoke.qa('.sidebar .proj-head')
+    .find((h) => smoke.text(h.querySelector('.proj-name')) === 'sidebar-empty')
+  if (emptyHead) emptyHead.querySelector('.proj-toggle').click()
+  const emptyHint = await smoke.waitFor('.sidebar .proj-rows .proj-empty', '空项目展开', 4000)
+  smoke.check('空项目的「还没有会话」旁边没有竖线（没有行可挂）',
+    !!emptyHint && getComputedStyle(emptyHint.parentElement).borderLeftColor.replace(/\s/g, '') === 'rgba(0,0,0,0)',
+    emptyHint ? getComputedStyle(emptyHint.parentElement).borderLeftColor : '(没展开)')
 
   smoke.finish()
 })()
