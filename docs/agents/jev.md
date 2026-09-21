@@ -38,10 +38,10 @@ other.
 `mcp_tool_search.matcher: auto` with a usable `jev` block). It turns a prose request into one `noul`
 question per candidate tool and offers the ones over the cut-off; the question text lives in
 `agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
-the measurement cannot describe a question the gate no longer asks. Its calibration — τ = 0.35, the
-corridor it came from, and the case file it was swept on — is recorded in the design doc
-(`docs/2026-09-20-jev-tool-search-design.md` §六) and re-measurable with one command. Everything else
-in the repo still asks a generative model and parses the reply.
+the measurement cannot describe a question the gate no longer asks. **Its cut-off is τ = 0.20, and
+that number belongs to a POOL, not to the gate** — read [Measuring a threshold](#measuring-a-threshold)
+before copying it anywhere, and re-sweep when the pool changes materially. Everything else in the
+repo still asks a generative model and parses the reply.
 
 ## When to use it — and when not to
 
@@ -191,12 +191,62 @@ them: a typo in a label otherwise shows up as "the gate never separated anything
 exactly like a model failure.
 
 **Where a swept threshold is recorded**: with the gate, as a comment on the config field it became —
-τ, the case file it was swept on, and the model version, because none of the three can move without
-invalidating the number. The tool search's is `mcp_tool_search.jev_threshold`, and its corridor,
-per-case table and cost are in `docs/2026-09-20-jev-tool-search-design.md` §六 (one command re-runs it:
-`JEV_EVAL_FILE=tool-search-noul.json`). A question whose text is per-case goes through the case-level
-`instructions` override, and the generator must build that text by calling the production function —
-otherwise the file measures a prompt the gate never sends.
+τ, the pool (or case file) it was swept on, and the model version, because none of the three can move
+without invalidating the number. The tool search's is `mcp_tool_search.jev_threshold`, and that gate
+is swept in the shape it RUNS in rather than through the case-file harness:
+
+```sh
+# 1. dump what this machine actually has (production path: whitelists, search hints, summaries)
+TOOL_SEARCH_POOL_OUT=$PWD/pkg/jev/testdata/tool-search/local/corpus.json \
+  go test ./agent/mcp/ -run TestDumpDeferredPool -v
+# 2. author the intents beside it (local/queries.json), then sweep every candidate for every request
+JEV_API_KEY=... TOOL_SEARCH_CORPUS=$PWD/pkg/jev/testdata/tool-search/local/corpus.json \
+  TOOL_SEARCH_QUERIES=$PWD/pkg/jev/testdata/tool-search/local/queries.json \
+  TOOL_SEARCH_SWEEP_RAW=/tmp/raw.json \
+  go test ./pkg/jev/ -run TestToolSearchPoolSweep -v
+# 3. argue with the stored run for free — no calls, any cut-off, any corrected label
+TOOL_SEARCH_SWEEP_RAW=/tmp/raw.json go test ./pkg/jev/ -run TestToolSearchRawAnalysis -v
+```
+
+`testdata/tool-search/local/` is gitignored: a pool names internal servers and their descriptions, so
+the corpus is local and only the cut-off it produced is recorded. A question whose text is per-case
+goes through the case-level `instructions` override, and the generator must build that text by calling
+the production function — otherwise the file measures a prompt the gate never sends.
+
+**A tool-search cut-off is a property of the POOL's tool TEXTS — τ = 0.20 on a 184-tool pool, and
+neither of the two things it is tempting to blame instead:**
+
+- **Not the request shape.** The same (query, tool) asked solo, against its own server, in one
+  184-question request, and in production's chunks scored within 0.02 of one another
+  (`TestToolSearchShapeProbe`). A fixture-swept threshold is shape-portable; the gate's own batching
+  is never why a number moved.
+- **It IS the tool texts.** Intents of the same style scored 0.70–0.94 against the 22-tool
+  hand-written fixture and a median of 0.36 against a real pool (per-request best expectation: p10
+  0.15, p90 0.74), and the fixture's clean corridor is gone. Real descriptions are written for
+  someone who already knows the product — preconditions ("使用前提：先调用 …"), required server
+  modes, product jargon — and the `No` criterion's "needs input the request does not provide" is read
+  against exactly that. A pool whose descriptions are rewritten is a pool whose cut-off is a
+  hypothesis again.
+
+Measuring per REQUEST is what picks the number, not per (query, tool) pair — an intent that names two
+or three legitimate answers is served by any one of them, so pair-level hit rates understate a search
+that worked. What the cut-off trades, on that 184-tool pool (jev-1.13.0, ~15k input tokens per
+search):
+
+| τ | recall | tools offered / search | precision | no-tool leak |
+| --- | --- | --- | --- | --- |
+| 0.15 | 0.89 | 3.3 | 0.29 | 3/10 |
+| **0.20** | **0.81** | **2.2** | **0.40** | **3/10** |
+| 0.25 | 0.70 | 1.6 | 0.47 | 2/10 |
+| 0.30 | 0.60 | 1.1 | 0.55 | 0/10 |
+| 0.35 | 0.51 | 0.9 | 0.63 | 0/10 |
+
+*recall* = share of searches where any expectation cleared τ; *offers* is the cost side (every offered
+tool is a schema registered and a tool-list change, which invalidates the prompt prefix);
+*no-tool leak* = requests nothing in the pool can serve that were answered with something anyway. The
+repo default sits at **0.20**, the point where a fifth of searches still fail; 0.30+ trades too much
+recall for quiet, and 0.15 doubles the unlabelled noise for 8 points of recall.
+
 
 ## Traps
 

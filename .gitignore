@@ -33,3 +33,6 @@ web/frontend/*.tsbuildinfo
 
 # go build . inside the desktop module writes the module-named binary here
 desktop/desktop
+
+# Real-pool tool-search corpus (dumped from a live MCP config; never commit)
+pkg/jev/testdata/tool-search/local/
