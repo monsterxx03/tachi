@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -82,6 +84,10 @@ const (
 	// jevSearchTokensPerQuestion is the chunking estimate per question (tool
 	// text + criteria). It is a budgeting slack, not a measurement.
 	jevSearchTokensPerQuestion = 80
+	// jevSearchQuestionsPerChunk is how many tools one request judges, derived
+	// from the two above rather than configured separately: they are what the
+	// budget is stated in, and a second knob could disagree with them.
+	jevSearchQuestionsPerChunk = jevSearchChunkTokens / jevSearchTokensPerQuestion
 	// jevSearchMaxQuestions caps how much of a pool one search judges. Past it
 	// the remaining tools are not judged at all and the log says so — a silent
 	// truncation would read as "the gate found nothing".
@@ -157,8 +163,9 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 	defer cancel()
 
 	probs := make(map[string]float64, len(all))
+	chunks := (len(all) + jevSearchQuestionsPerChunk - 1) / jevSearchQuestionsPerChunk
 	for start := 0; start < len(all); {
-		end := min(start+jevSearchChunkTokens/jevSearchTokensPerQuestion, len(all))
+		end := min(start+jevSearchQuestionsPerChunk, len(all))
 		questions := make(map[string]jev.Question, end-start)
 		for _, t := range all[start:end] {
 			questions[t.Name] = jevsearch.Question(candidateOf(t))
@@ -167,6 +174,7 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 		if err != nil {
 			return nil, err
 		}
+		s.logAnswers(ctx, query, all[start:end], resp, start/jevSearchQuestionsPerChunk+1, chunks)
 		s.recordUsage(ctx, resp)
 		for _, t := range all[start:end] {
 			// A question the service did not answer is NOT a zero: it is no
@@ -210,6 +218,76 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 		out = append(out, s.pool.toResult(h.tool))
 	}
 	return out, nil
+}
+
+// logAnswers writes what the judgment answered, one line per request, with
+// every question's probability in it.
+//
+// One line rather than a field per answer: the answer map is the whole point of
+// reading this log — who scored near the cut-off, and which question came back
+// empty — and a handler printing a 100-entry map would interleave it with the
+// metadata. The metadata goes first, the list last, so the tail can be as long
+// as the pool needs.
+func (s *JevSearcher) logAnswers(ctx context.Context, query string, judged []*DeferredTool, resp *jev.Response, chunk, chunks int) {
+	if resp == nil {
+		return
+	}
+	logger.FromContext(ctx).Info(ctx, "MCP: jev tool search judged tools",
+		"query", strutil.Truncate(query, 120),
+		"model", resp.Model,
+		"chunk", strconv.Itoa(chunk)+"/"+strconv.Itoa(chunks),
+		"questions", len(judged),
+		"threshold", s.threshold,
+		"input_tokens", resp.Usage.InputTokens,
+		"output_tokens", resp.Usage.OutputTokens,
+		"answers", answerList(judged, resp))
+}
+
+// answerList renders one request's answers as "name=0.912, name=0.044" in
+// probability order (ties by name), with "name=-" for a question the service
+// left unanswered.
+//
+// Order is the point: the top of the list is where the threshold decides, and
+// the "-" is the one reading that must never look like a zero — an unanswered
+// question is not judged, so it is not selected (see judgeQuery).
+func answerList(judged []*DeferredTool, resp *jev.Response) string {
+	type scored struct {
+		name string
+		p    float64
+		got  bool
+	}
+	entries := make([]scored, 0, len(judged))
+	for _, t := range judged {
+		e := scored{name: t.Name}
+		if a, ok := resp.Answers[t.Name]; ok && a.Noul != nil {
+			e.p, e.got = *a.Noul, true
+		}
+		entries = append(entries, e)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].got != entries[j].got {
+			return entries[i].got // answered before unanswered
+		}
+		if entries[i].p != entries[j].p {
+			return entries[i].p > entries[j].p
+		}
+		return entries[i].name < entries[j].name
+	})
+
+	var b strings.Builder
+	for i, e := range entries {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(e.name)
+		b.WriteString("=")
+		if !e.got {
+			b.WriteString("-")
+			continue
+		}
+		b.WriteString(strconv.FormatFloat(e.p, 'f', 3, 64))
+	}
+	return b.String()
 }
 
 // candidateOf is the tool as the question needs it: the fields the pool already

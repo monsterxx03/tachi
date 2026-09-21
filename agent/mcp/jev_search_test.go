@@ -15,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/jev"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -176,6 +177,68 @@ func TestJevSearcher_MissingAnswerIsNotSelected(t *testing.T) {
 	got := s.Search(context.Background(), "something to judge", 5)
 	require.Len(t, got, 1)
 	assert.Equal(t, "mcp__a__good", got[0].Name)
+}
+
+// The judgment's answers go on the record: one line per request, every
+// probability in it. A search that found nothing — or the wrong thing — is
+// otherwise unexplainable after the fact, since the scores exist nowhere else.
+func TestJevSearcher_LogsTheAnswers(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, logger.Init(dir, *logger.DefaultConfig()))
+	// The logger must be built AFTER Init and injected: a *Logger resolves its
+	// file at construction, and the package default may already have been built
+	// while no log directory was set (writing to nowhere).
+	ctx := logger.WithLogger(context.Background(), logger.New("mcp-test"))
+
+	pool := jevTestPool(
+		testDeferredTool("mcp__a__good", "a", "good"),
+		testDeferredTool("mcp__b__silent", "b", "silent"),
+		testDeferredTool("mcp__c__low", "c", "low"),
+	)
+	judge := &fakeJudge{
+		answers: map[string]float64{"mcp__a__good": 0.9, "mcp__c__low": 0.1},
+		missing: map[string]bool{"mcp__b__silent": true},
+		model:   "jev-1.13.0",
+	}
+	s := newTestSearcher(pool, judge, 0.35)
+	require.Len(t, s.Search(ctx, "something to judge", 5), 1)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "debug.log"))
+	require.NoError(t, err)
+	var line string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.Contains(l, "MCP: jev tool search judged tools") {
+			line = l
+		}
+	}
+	require.NotEmpty(t, line, "the judgment must leave a line behind")
+	assert.Contains(t, line, `query="something to judge"`, "the search is the context these numbers need")
+	assert.Contains(t, line, "model=jev-1.13.0")
+	assert.Contains(t, line, "chunk=1/1")
+	assert.Contains(t, line, "threshold=0.35")
+	assert.Contains(t, line, `answers="mcp__a__good=0.900, mcp__c__low=0.100, mcp__b__silent=-"`,
+		"probability order, and an unanswered question is not a zero")
+}
+
+// The line's content is the whole reading of a search: probability order (ties
+// by name), with the unanswered questions LAST — "-" is the one value that must
+// never be read as a low score and thereby as a near-miss.
+func TestAnswerList_OrderAndUnanswered(t *testing.T) {
+	judged := []*DeferredTool{
+		testDeferredTool("mcp__a__one", "a", "one"),
+		testDeferredTool("mcp__b__silent", "b", "silent"),
+		testDeferredTool("mcp__c__two", "c", "two"),
+	}
+	high, low := 0.9, 0.4
+	resp := &jev.Response{Answers: map[string]jev.Answer{
+		"mcp__c__two": {Type: jev.QuestionNoul, Noul: &low},
+		"mcp__a__one": {Type: jev.QuestionNoul, Noul: &high},
+		// mcp__b__silent is answered by nothing.
+	}}
+
+	assert.Equal(t,
+		"mcp__a__one=0.900, mcp__c__two=0.400, mcp__b__silent=-",
+		answerList(judged, resp))
 }
 
 // Any failure degrades to the keyword search rather than failing the tool call

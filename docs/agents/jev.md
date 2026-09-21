@@ -88,7 +88,7 @@ keyword, a file path or a summary — so anything open-ended is generation even 
 
 ## Wiring a call site
 
-Four things every gate needs, in the order they matter:
+Five things every gate needs, in the order they matter:
 
 1. **A degraded path.** Jev unreachable, over its limit, or answering an error must fall back to the
    call site's existing behaviour, and the fallback must err toward the conservative side of that
@@ -133,6 +133,14 @@ Four things every gate needs, in the order they matter:
    **Do not add a fake provider entry to carry Jev's pricing.** `ProviderConfig` is not inert —
    `BuildProvider` iterates it, so a `typesafe` entry becomes a real LLM provider that title, vision
    and fallback resolution can select.
+5. **A way to see what it decided.** The answers are the only record of why a gate took or missed
+   something — a probability exists nowhere else, and after the fact it cannot be reconstructed. One
+   **Info** line per request, metadata first and the scores last (a handler printing a 100-entry map
+   per field would interleave them): query, the model that ANSWERED, chunk i/n, threshold, tokens,
+   then `answers="name=0.912, name=0.044"` in probability order. A question the service left
+   unanswered is written `name=-`, never `0.000`: it was not judged, which is not the same as judged
+   low. `agent/mcp/jev_search.go`'s `logAnswers` is the shape to copy;
+   `TestJevSearcher_LogsTheAnswers` pins the line, `TestAnswerList_OrderAndUnanswered` the ordering.
 
 **The input's shape belongs to code, not to the model.** Write the state as the fields the judgment
 actually needs, from named sources, rather than handing over whatever prose happens to be lying
