@@ -79,6 +79,17 @@
   }
   const count0 = readCount()
   smoke.check('server 行给出「已加载/共」的工具数，未加载时为 0', !!count0 && count0.loaded === 0 && count0.total > 0, count0 ? count0.text : '找不到 .mcp-toolcount')
+  // 标题下的合计是各行之和：后台另给一个数字就会有两个说法，而它们迟早会不一样。
+  const readTotal = () => {
+    const el = smoke.q('.mcp-total')
+    const text = el ? smoke.text(el) : ''
+    const m = /^已加载 (\d+)\/(\d+) 工具$/.exec(text)
+    return m ? { loaded: Number(m[1]), total: Number(m[2]), text: text } : null
+  }
+  const head0 = readTotal()
+  smoke.check('标题下给出合计，且与各行之和一致',
+    !!head0 && !!count0 && head0.loaded === count0.loaded && head0.total === count0.total,
+    (head0 ? head0.text : '找不到 .mcp-total') + ' / 行：' + (count0 ? count0.text : '(无)'))
 
   // 工具列表要展开才看得到 —— 这正是默认折叠下的正常路径，driver 点一下行头即可。
   smoke.click(connected.querySelector('.mcp-server-row'))
@@ -154,6 +165,10 @@
   smoke.check('加载一个工具后行上的分子跟着动',
     !!count1 && !!count0 && count1.loaded === count0.loaded + 1 && count1.total === count0.total,
     (count0 ? count0.text : '(无)') + ' → ' + (count1 ? count1.text : '(无)'))
+  const head1 = readTotal()
+  smoke.check('标题合计跟着一起动',
+    !!head1 && !!head0 && head1.loaded === head0.loaded + 1 && head1.total === head0.total,
+    (head0 ? head0.text : '(无)') + ' → ' + (head1 ? head1.text : '(无)'))
 
   // ── 6. server 级开关写回 mcp.json ───────────────────────────────────────
   // 禁用这个 server：界面上是断开，磁盘上是它来自的那个 mcp.json 里多出 "enabled": false

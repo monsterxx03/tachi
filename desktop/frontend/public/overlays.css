@@ -53,7 +53,11 @@
 }
 
 .mcp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+/* The title block stacks the head's totals under the name: side by side they would not fit
+   beside the profile select and the close button in a 360px panel. */
+.mcp-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mcp-title { font-size: 13px; font-weight: 600; }
+.mcp-total { font-size: 11px; color: var(--text-faint); }
 .mcp-profile { display: inline-flex; align-items: center; gap: 6px; }
 .mcp-profile-label { font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .mcp-profile-select {

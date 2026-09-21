@@ -585,6 +585,11 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolDetail])
   const profileBusy = !!loading.__profile__
+  // The head's totals, summed from the very rows this panel renders — not from a separate
+  // backend number, so the two can never disagree. A server that is down contributes 0 to
+  // both, which is what its own row says (0 工具).
+  const totalTools = (servers || []).reduce((n, s) => n + ((s.tools || []).length), 0)
+  const totalLoaded = (servers || []).reduce((n, s) => n + ((s.tools || []).filter((t: any) => t.loaded).length), 0)
   const boxRef = useRef<HTMLDivElement>(null)
 
   // Click outside closes the popover (its natural behaviour). The toggle button
@@ -604,7 +609,20 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
     <>
       <div className="popover-panel mcp-panel" ref={boxRef}>
         <div className="mcp-head">
-          <span className="mcp-title">MCP Servers</span>
+          {/* The head carries the totals the rows below add up to: how much of everything this
+              session actually has. It is a subtitle under the title rather than a fourth item on
+              the row — the row already holds the profile select and the close button, and a
+              360px panel cannot fit a title, a count and both of them side by side. Hidden when
+              there is nothing to sum: a panel of unconnected servers would read 已加载 0/0 工具,
+              which says less than not being there. */}
+          <span className="mcp-head-text">
+            <span className="mcp-title">MCP Servers</span>
+            {totalTools > 0 && (
+              <span className="mcp-total" title={`所有 server 合计：已加载 ${totalLoaded} / 共 ${totalTools} 个工具`}>
+                已加载 {totalLoaded}/{totalTools} 工具
+              </span>
+            )}
+          </span>
           <div className="mcp-profile">
             <span className="mcp-profile-label">profile</span>
             <select className="mcp-profile-select" value={profile.active || ''} disabled={profileBusy} onChange={(e) => onToggleProfile(e.target.value)}>
