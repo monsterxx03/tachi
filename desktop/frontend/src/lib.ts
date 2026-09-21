@@ -358,6 +358,42 @@ export function latestSessionOf<T extends { id: string; updatedAt: string; proje
   return best
 }
 
+// nextSessionAfter returns the session that should take over when `id` is deleted: the row BELOW
+// it inside its OWN group — a project's members, or the 无项目 bucket — and the row ABOVE it when
+// it was that group's last one. The rule a browser uses for a closing tab, and for the same
+// reason: the reader's eye is already there, so the successor belongs next to the row that
+// vanished, not at the top of a list nobody was reading.
+//
+// Only a group left with NO rows falls out of the group: then the next group's first row, and ""
+// when nothing is left anywhere (the caller's reload makes a session in that case). "" is also the
+// answer for an `id` that is not a visible row of any group — already folded away inside a
+// compaction chain, or not in the list at all — so an unplaceable id keeps the caller's own
+// behaviour instead of moving the reader somewhere arbitrary.
+//
+// `id` must still be IN `list`: this is asked BEFORE the reload, which is the only moment the
+// deleted row is still there to be located.
+export function nextSessionAfter<T extends { id: string; compactedParentId?: string; compactedParentTitle?: string; projectId?: string; pinned?: boolean }>(
+  list: T[],
+  projects: ProjectVO[],
+  id: string,
+): string {
+  const before = sessionGroups(list, projects)
+  const gi = before.findIndex((g) => g.rows.some((r) => r.session.id === id))
+  if (gi < 0) return ''
+  const at = before[gi].rows.findIndex((r) => r.session.id === id)
+  // The same join on the list WITHOUT the deleted session: the row that stood below it now sits at
+  // the deleted one's index, and an index past the end means it was the last row — then the row
+  // above (the last one left) is the neighbour the reader was looking at.
+  const rest = sessionGroups(list.filter((s) => s.id !== id), projects)
+  const sameGroup = rest[gi]?.rows ?? []
+  if (sameGroup.length > 0) return sameGroup[Math.min(at, sameGroup.length - 1)].session.id
+  for (let i = gi + 1; i < rest.length; i++) {
+    const row = rest[i].rows[0]
+    if (row) return row.session.id
+  }
+  return ''
+}
+
 // projectMatches reports whether a project answers a palette query: a case-insensitive
 // substring of its NAME or of one of its directories. Substring rather than a subsequence
 // match — a project name is typed whole (「tachi」, 「支付」), not spelled letter by letter, and

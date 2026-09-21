@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, nextSessionAfter, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -463,8 +463,27 @@ function App() {
   } | null>(null)
   // Deleting a project DETACHES its members, so the box says how many sessions that is.
   const [confirmDelProject, setConfirmDelProject] = useState<{ id: string; name: string; count: number; error?: string } | null>(null)
-  // Which groups are collapsed. Memory only, like openChains: a reopened window shows them all.
-  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+  // Which groups are OPEN, by project id. EMPTY means every group is folded, and that is the
+  // startup state: with several projects the sidebar opens as a list of headers, and a project
+  // created later starts folded too — because the default IS the empty map, not a seeded one.
+  // Memory only, like openChains: a reopened window is folded again.
+  //
+  // The direction matters: a set of COLLAPSED ids would need every project pre-filled at load
+  // time, and the ones that arrive later (a new project, a list still loading) would leak open.
+  const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
+  // revealProject opens one group, for the paths that SWITCH or CREATE a session without a click
+  // on a row: the session the app boots into, and ＋ / ⌘P landing inside a folded group. A folded
+  // group answers with a header and nothing under it, so without this the row that just became
+  // active is hidden — the same as not having gone there. A click on a row cannot need it (a
+  // folded group has no rows to click), and it never closes anything: 收起你正坐着的那个组 stays
+  // the reader's call.
+  const revealProject = useCallback((id?: string) => {
+    if (!id) return
+    setExpandedProjects((p) => (p[id] ? p : { ...p, [id]: true }))
+  }, [])
+  // bootOpenedGroup makes the boot's exception a STARTUP fact: loadAll also runs after a delete,
+  // and re-applying it there would re-open a group the reader had just collapsed.
+  const bootOpenedGroup = useRef(false)
   // The turn whose 「完整 diff」 is open: the files that turn changed, with the session they
   // belong to. Owned here because the chip that opens it lives in the transcript, and closed on
   // every session switch (a diff is about the session it was taken in).
@@ -1304,11 +1323,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       }
     }
     setSessions(list.map((s) => ({ ...s, active: s.id === cur?.id })))
+    // The ONE group the boot opens: the one holding the session it just resumed. Every other
+    // project stays folded (the empty-map default) — this is the single exception the "the active
+    // row must be visible" rule needs, since at boot the reader has chosen nothing yet.
+    if (cur && !bootOpenedGroup.current) {
+      bootOpenedGroup.current = true
+      revealProject(cur.projectId)
+    }
     setLoading(false)
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput])
+  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput, revealProject])
   // openRewindMenu asks the backend where this session's turns begin and opens the
   // bubble's menu. The list is fetched per open rather than cached: a running turn keeps
   // adding boundaries, and a stale list would resolve a bubble to the wrong turn.
@@ -1364,19 +1390,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     setRewindCard((c) => (c ? { ...c, error: res } : c))
   }, [])
 
-  const confirmDelete = useCallback(async (id: string) => {
-    const res = await (AgentService as any).DeleteSession?.(id).catch(() => null)
-    // "ok" (or a missing binding) is the only success. Anything else — in practice the
-    // backend refusing because a turn is still running — keeps the box open with the
-    // reason in it, and does NOT reload the list (nothing changed).
-    if (res && res !== 'ok') {
-      setConfirmDel((prev) => (prev && prev.sid === id ? { ...prev, error: res } : prev))
-      return
-    }
-    setConfirmDel(null)
-    loadAll()
-  }, [loadAll])
-
   const clickSession = useCallback(async (id: string) => {
     setCurrentId(id)
     setCurrentTitle(sessions.find((s) => s.id === id)?.title || 'Tachi')
@@ -1401,6 +1414,33 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     refreshWorkspace(id)
   }, [sessions, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
 
+  // confirmDelete deletes for real and hands the reader to the NEXT session — the row below the
+  // deleted one inside its own group, or the row above when it was that group's last (nextSessionAfter).
+  // Two rules make that safe. The successor is computed BEFORE the reload, because `sessions` still
+  // holds the deleted row then and that is the only moment "the row below it" is computable at all.
+  // And the selection moves ONLY when the deleted session was the one on screen: deleting some other
+  // row must not yank the reader out of the conversation they are reading.
+  //
+  // An "" answer (nothing left to pick, or a row no group claims) keeps the old behaviour: whatever
+  // the reload selects, including the session it creates when the list has run empty.
+  //
+  // It sits AFTER clickSession because it now calls it — a useCallback's dependency array is read
+  // while the component renders, so naming a const declared below would be a TDZ error.
+  const confirmDelete = useCallback(async (id: string) => {
+    const res = await (AgentService as any).DeleteSession?.(id).catch(() => null)
+    // "ok" (or a missing binding) is the only success. Anything else — in practice the
+    // backend refusing because a turn is still running — keeps the box open with the
+    // reason in it, and does NOT reload the list (nothing changed).
+    if (res && res !== 'ok') {
+      setConfirmDel((prev) => (prev && prev.sid === id ? { ...prev, error: res } : prev))
+      return
+    }
+    setConfirmDel(null)
+    const successor = id === currentId ? nextSessionAfter(sessions, projects, id) : ''
+    await loadAll()
+    if (successor) void clickSession(successor)
+  }, [loadAll, clickSession, sessions, projects, currentId])
+
   // newChat creates a session. projectID is "" for the sidebar's own button; a project group's
   // ＋ passes its id, which is the only way a session is ever BOUND (design §6.1) — the backend
   // writes the snapshot and project_id, so nothing here needs to know about roots.
@@ -1408,6 +1448,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     const ns = await AgentService.NewSession(projectID).catch(() => null)
     if (ns) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
+      // The group it lands in opens, since the ＋ that made it lives on a header that may well be
+      // the only thing a folded group shows: the new row is the active one, and a group that stays
+      // folded after creating a session in it hides the very thing the click produced.
+      revealProject(projectID)
       openSession(ns.id)
       clearUsage(); resetTps()
       // The new session is an empty conversation, so the caret belongs in the composer and
@@ -1423,7 +1467,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput])
+  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, revealProject])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
@@ -1454,7 +1498,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // every path would make collapsing the one you are sitting in impossible. A refusal expands
   // nothing, since nothing was switched.
   const pickProject = useCallback((p: ProjectVO) => {
-    const reveal = () => setCollapsedProjects((c) => (c[p.id] ? { ...c, [p.id]: false } : c))
+    const reveal = () => revealProject(p.id)
     const latest = latestSessionOf(sessions, p.id)
     if (latest) {
       reveal()
@@ -1469,7 +1513,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     void newChat(p.id)
     focusAfterPalette()
     return ''
-  }, [sessions, clickSession, newChat, focusAfterPalette])
+  }, [sessions, clickSession, newChat, focusAfterPalette, revealProject])
 
   // The app body is INERT while the settings page is up: the page is fixed, opaque and covers the
   // window (settings.css), so what is behind it needs to leave the tab order and the accessibility
@@ -1867,12 +1911,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <Fragment key={group.project?.id || '__loose__'}>
                 {group.project ? (
                   <div className="proj-head" role="button" tabIndex={0}
-                    onKeyDown={actOnKey(() => setCollapsedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] })))}
+                    onKeyDown={actOnKey(() => setExpandedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] })))}
                     onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ id: group.project!.id, x: e.clientX, y: e.clientY }) }}>
-                    <button type="button" className="proj-toggle" aria-expanded={!collapsedProjects[group.project.id]}
-                      title={collapsedProjects[group.project.id] ? '展开该项目' : '收起该项目'}
-                      onClick={() => setCollapsedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] }))}>
-                      <Caret open={!collapsedProjects[group.project.id]} />
+                    <button type="button" className="proj-toggle" aria-expanded={!!expandedProjects[group.project.id]}
+                      title={expandedProjects[group.project.id] ? '收起该项目' : '展开该项目'}
+                      onClick={() => setExpandedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] }))}>
+                      <Caret open={!!expandedProjects[group.project.id]} />
                     </button>
                     {editingProject?.id === group.project.id ? (
                       <input className="project-rename" autoFocus value={editingProject.name}
@@ -1907,7 +1951,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 {projectNotice && projectNotice.id === group.project?.id ? (
                   <div className="proj-notice">⚠ {projectNotice.msg}</div>
                 ) : null}
-                {group.project && collapsedProjects[group.project.id] ? null : (
+                {group.project && !expandedProjects[group.project.id] ? null : (
                   group.project
                     ? (
                       <div className="proj-rows">

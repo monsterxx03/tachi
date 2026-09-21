@@ -11,9 +11,37 @@
   // ── 1. 侧栏按项目分组 ────────────────────────────────────────────────────
   const head = await smoke.waitFor('.proj-head', '侧栏出现项目组头', 10000)
   if (!head) return smoke.finish()
+  const heads = smoke.qa('.proj-head')
   const headText = smoke.text(head)
   smoke.check('组头显示项目名', headText.indexOf('smoke-proj') >= 0, headText)
   smoke.check('组头显示成员数', headText.indexOf('(1)') >= 0, headText)
+
+  // 启动的默认折叠：只有「启动时恢复的那个会话」所在的项目是展开的，其余（包括那个还没有会话的）
+  // 一律折叠。项目一多，侧栏先给一排组头；而「活动行必须看得见」这条规矩在启动这一刻仍然成立，
+  // 因为读者还没做过任何选择 —— 这是它唯一的例外，别的入口各自 reveal（见 App.tsx 的 revealProject）。
+  const expandedNames = () => heads
+    .filter((h) => h.querySelector('.proj-toggle') && h.querySelector('.proj-toggle').getAttribute('aria-expanded') === 'true')
+    .map((h) => smoke.text(h.querySelector('.proj-name')))
+  const bootOpen = expandedNames()
+  smoke.check('启动时只展开一个项目', bootOpen.length === 1, bootOpen.join(' | ') || '(全都折叠了)')
+  smoke.check('展开的就是当前会话所在的那一组（active 行在组里可见）',
+    smoke.qa('.proj-rows .session.active').length === 1,
+    bootOpen.join(' | ') + ' · 组内 active 行 ' + smoke.qa('.proj-rows .session.active').length)
+  smoke.check('还没有会话的项目启动时也是折叠的',
+    !bootOpen.some((n) => n.indexOf('smoke-empty') >= 0), bootOpen.join(' | '))
+
+  // 折叠是 DOM 层面的：收起的那一组把自己的行整个摘掉，所以下面凡是要读组内内容的断言，先自己
+  // 展开 —— 这正是读者在界面上的那一步（点组头），不是测试的捷径。
+  const openGroup = async (name) => {
+    const h = smoke.qa('.proj-head').find((x) => smoke.text(x).indexOf(name) >= 0)
+    if (!h) return null
+    const t = h.querySelector('.proj-toggle')
+    if (t.getAttribute('aria-expanded') !== 'true') t.click()
+    await smoke.waitFor(() => (t.getAttribute('aria-expanded') === 'true' ? true : null), '展开 ' + name, 4000)
+    return h
+  }
+  if (!(await openGroup('smoke-proj'))) return smoke.finish()
+
   const memberRows = smoke.qa('.proj-rows .session')
   smoke.check('成员会话挂在项目组下', memberRows.length === 1, memberRows.length + ' 行')
   const sections = smoke.allText('.session-section')
@@ -22,12 +50,12 @@
   // 空项目(刚建出来、还没有会话的那个)必须看得见:它是用户按下「保存」之后唯一能确认
   // 「项目建好了」的地方,也是它自己的 ＋ / 右键菜单的唯一入口。曾经被分组规则滤掉,
   // 症状就是「新建了项目,左边什么都没有」。
-  const heads = smoke.qa('.proj-head')
-  smoke.check('两个项目都占组头（含还没有会话的那个）', heads.length === 2,
-    heads.map((h) => smoke.text(h)).join(' | '))
-  const emptyHead = heads.find((h) => smoke.text(h).indexOf('smoke-empty') >= 0)
+  smoke.check('两个项目都占组头（含还没有会话的那个）', smoke.qa('.proj-head').length === 2,
+    smoke.allText('.proj-head').join(' | '))
+  const emptyHead = smoke.qa('.proj-head').find((h) => smoke.text(h).indexOf('smoke-empty') >= 0)
   smoke.check('空项目显示成员数 0', !!emptyHead && smoke.text(emptyHead).indexOf('(0)') >= 0,
     emptyHead ? smoke.text(emptyHead) : '(没有空项目的组头)')
+  if (!(await openGroup('smoke-empty'))) return smoke.finish()
   smoke.check('空项目说明还没有会话', smoke.text('.proj-empty').indexOf('还没有会话') >= 0,
     smoke.text('.proj-empty') || '(没有提示)')
 
@@ -40,7 +68,7 @@
     return smoke.fail('找到新建会话按钮与无项目标题',
       '按钮=' + (newBtn ? '有' : '无') + ' 无项目标题=' + (looseTitle ? '有' : '无'))
   }
-  smoke.check('新建会话在项目组之后', !!(heads[heads.length - 1].compareDocumentPosition(newBtn)
+  smoke.check('新建会话在项目组之后', !!(smoke.qa('.proj-head').slice(-1)[0].compareDocumentPosition(newBtn)
     & Node.DOCUMENT_POSITION_FOLLOWING),
     smoke.allText('.session-list > *').slice(0, 6).join(' | '))
   smoke.check('新建会话在无项目标题之上', !!(newBtn.compareDocumentPosition(looseTitle)
@@ -118,6 +146,75 @@
     pinnedMember ? pinnedMember.innerHTML.slice(0, 80) : '(没有行)')
   // 留着这个置顶跑到结尾：detach（第 6 步删项目）必须原样保留会话记录上的 pinned，Go 侧也断言
   // 它挂在被置顶的那条会话上。
+
+  // ── 2d. 删除会话之后选中谁：组内下一条 / 不是当前就不动 / 组里最后一条落到上一条 ──
+  // 四行（冒烟会话恒被置顶在第一行，⌘N 现造的没有置顶标记），一次覆盖三条规则 —— 每条都要让「错误
+  // 实现会选中的那一条」与正确答案**不同**，否则断言是空的：
+  //   ① 删掉一个「下面还有行」的当前会话 → 落到下面那一行（错误实现会落到上一条）；
+  //   ② 删掉一个不是当前的行 → 选中一步都不动（错误实现会落到它下面那一行）；
+  //   ③ 删掉组里最后一行的当前会话 → 落到上面那一行（错误实现会跨到别的组/回到默认）。
+  // 行的标题三行都一样，身份只能靠**下标 + 置顶标记**认。
+  const rowsNow = () => smoke.qa('.proj-rows .session')
+  const activeAt = () => rowsNow().findIndex((r) => r.classList.contains('active'))
+  smoke.key(document.body, 'n', { metaKey: true })
+  smoke.key(document.body, 'n', { metaKey: true })
+  const fourRows = await smoke.waitFor(
+    () => (rowsNow().length === 4 ? rowsNow() : null), '⌘N 两次，项目里 4 行', 10000)
+  if (!fourRows) return smoke.finish()
+  smoke.check('起手：置顶的冒烟会话在第一行，active 是第二行（下面还有两行）',
+    !!fourRows[0].querySelector('.session-pin') && activeAt() === 1,
+    activeAt() + ' / ' + fourRows.map((r) => (r.querySelector('.session-pin') ? '别' : '·')).join(''))
+
+  // 右键一行 → 删除 → 确认。和模拟器里读者的两步完全一样。
+  const deleteRow = async (row, label) => {
+    if (!row) return smoke.fail(label, '没有可删的行')
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+    if (!(await smoke.waitFor('.ctx-menu', label + '：行菜单', 4000))) return false
+    const del = smoke.qa('.ctx-item').find((b) => b.textContent.trim() === '删除')
+    if (!del) return smoke.fail(label + '：菜单里有「删除」', smoke.allText('.ctx-item').join(' | '))
+    del.click()
+    if (!(await smoke.waitFor('.confirm-box', label + '：删除确认框', 4000))) return false
+    const yes = smoke.qa('.confirm-box .btn').find((b) => b.textContent.trim() === '删除')
+    if (!yes) return smoke.fail(label + '：确认框里有「删除」', smoke.allText('.confirm-box .btn').join(' | '))
+    yes.click()
+    return true
+  }
+
+  // ① 先把 active 挪到「下面还有一行」的那一行（下标 2），再删它。
+  rowsNow()[2].click()
+  if (!(await smoke.waitFor(() => (activeAt() === 2 ? true : null), 'active 挪到下标 2', 10000))) return smoke.finish()
+  if (!(await deleteRow(rowsNow()[2], '删除下标 2 那一行（下面还有一行）'))) return smoke.finish()
+  const handedDown = await smoke.waitFor(
+    () => (rowsNow().length === 3 && activeAt() === 2 ? rowsNow() : null),
+    '删掉之后选中落到它下面那一行', 10000)
+  smoke.check('删掉中间那行：选中落到组内下一条', !!handedDown,
+    rowsNow().length + ' 行，active 下标 ' + activeAt())
+  smoke.check('落下来的是原来下面那一行，不是被置顶的冒烟会话（否则就是「上一条」实现）',
+    !!handedDown && !rowsNow()[2].querySelector('.session-pin'),
+    !!handedDown ? (rowsNow()[2].querySelector('.session-pin') ? '带置顶标记' : '没有置顶标记') : '(没有行)')
+
+  // ② 把自己挪到第一行（冒烟会话），再删**不是当前**的下标 1 —— 错误实现会选中它下面那一行。
+  rowsNow()[0].click()
+  if (!(await smoke.waitFor(() => (activeAt() === 0 ? true : null), 'active 挪到冒烟会话（第一行）', 10000))) return smoke.finish()
+  if (!(await deleteRow(rowsNow()[1], '删除下标 1 那一行（不是当前会话）'))) return smoke.finish()
+  const stayed = await smoke.waitFor(
+    () => (rowsNow().length === 2 && activeAt() === 0 ? true : null),
+    '删掉别的行之后当前会话没有换', 10000)
+  smoke.check('删的不是当前会话：选中一步都没有移动', !!stayed,
+    rowsNow().length + ' 行，active 下标 ' + activeAt())
+
+  // ③ 挪到最后一行（下面没有行了）再删它 —— 只能落到上面那一行，也就是被置顶的冒烟会话。
+  rowsNow()[1].click()
+  if (!(await smoke.waitFor(() => (activeAt() === 1 ? true : null), 'active 挪到最后一行', 10000))) return smoke.finish()
+  if (!(await deleteRow(rowsNow()[1], '删除组里最后一行'))) return smoke.finish()
+  const handedUp = await smoke.waitFor(
+    () => (rowsNow().length === 1 && !!rowsNow()[0].querySelector('.session-pin') ? rowsNow() : null),
+    '删掉最后一行之后选中落到上一条', 10000)
+  smoke.check('删掉组里最后一行：选中落到组内上一条（被置顶的冒烟会话）', !!handedUp,
+    rowsNow().length + ' 行，第一行' + (rowsNow()[0] && rowsNow()[0].querySelector('.session-pin') ? '带' : '不带') + '置顶标记')
+  smoke.check('组里只剩一行，且它是当前会话', !!handedUp && activeAt() === 0,
+    rowsNow().length + ' 行，active 下标 ' + activeAt())
+  smoke.check('跨组没有被动过：无项目那一组还在原处', !!smoke.q('.session-section'), smoke.text('.session-section'))
 
   // ── 3. 工作区面板只读,并指向项目 ────────────────────────────────────────
   smoke.click('.work-dir')

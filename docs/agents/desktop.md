@@ -902,6 +902,27 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   — the header carries the ＋ that makes the first session, so hiding empty groups made a freshly created
   project invisible. The chip and the workspace panel wear the project's NAME while a project drives the
   session, and the panel is READ-ONLY then (the three session-level writers are refused by the backend).
+- **A project group is FOLDED by default, and the ONE exception is the project holding the session the app
+  booted into** (`expandedProjects` in `App.tsx`; the empty map IS the default). With several projects the
+  sidebar opens as a list of headers, and the rule 「the row that just became active must be visible」 still
+  holds at boot — the reader has chosen nothing yet. The state therefore records the EXPANDED groups, not the
+  collapsed ones: an empty default needs no per-project seeding, and a project that appears later (just made,
+  or a list still loading) cannot leak open first. `revealProject` is the only thing that OPENS a group, called
+  by exactly three paths — the boot, ⌘P, and a project's `＋` (a new session landing in a folded group) — and it
+  never closes one: 收起你正坐着的那个组 stays the reader's own doing. The fold is DOM-level (a folded group's
+  `.proj-rows` is absent, not hidden), so anything reading inside a group — a driver included — must expand it
+  first; `projects` pins the boot default (one open group, and the active row inside it).
+- **Deleting a session hands the reader to the NEXT one — and only when the deleted session was the one on
+  screen** (`nextSessionAfter` in `lib.ts`, called by `App.tsx`'s `confirmDelete`): the row BELOW it inside
+  its own group (a project's members, or the 无项目 bucket), else the row ABOVE it when it was that group's
+  last one — the browser's closing-tab rule, so the successor sits next to the row that vanished instead of at
+  the top of a list nobody was reading. Only a group left with NO rows falls out of it (the next group's first
+  row), and "" does too — nothing left to place, or a row no group claims — which keeps the reload's own
+  choice, including the session it creates when the list has run empty. **Deleting any OTHER row moves
+  nothing**: it must not yank the reader out of the conversation they are reading. The successor is computed
+  BEFORE the reload, because `sessions` still holds the deleted row then, which is the only moment "the row
+  below it" is computable at all. `projects` pins all three branches (row below / selection unmoved / row
+  above), each in a shape where the wrong implementation would pick a different row.
 - **置顶 orders ONE group, and the mark explains the order** (`pinnedFirst` in `lib.ts`, applied to each
   group's bucket BEFORE `sessionRows`): a pinned session goes to the head of its OWN group — a project's
   members, or the 无项目 bucket — never above another project, and the groups keep the user's order. Sorting
@@ -930,9 +951,10 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   `onPick` RETURNS the refusal reason ("" = it acted) and the palette closes only on ""; a project whose
   primary directory is gone with NO members refuses to create one (the backend would bind NOTHING); the palette
   reads the list the sidebar already renders and issues no fetch; and it EXPANDS the target group — ⌘P means
-  「take me there」, and a collapsed group answers with a header and nothing under it. That expansion belongs to
-  THIS entry point alone (a collapse is the reader's own doing, and forcing groups open everywhere would make
-  collapsing the group you are sitting in impossible).
+  「take me there」, and a collapsed group answers with a header and nothing under it. The reveal is one of the
+  three `revealProject` paths (this one, the boot, a project's `＋` — see the fold bullet above), never a rule
+  applied on every path: forcing groups open everywhere would make collapsing the group you are sitting in
+  impossible.
 - **A project write re-reads the reader** (`agent:workspace_changed`, from `CreateProject` / `RenameProject` /
   `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend holds a session's
   workspace and the sidebar's groups BY VALUE, so a rename moved nothing on screen until the user switched
