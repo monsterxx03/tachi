@@ -1,0 +1,172 @@
+// session-palette — ⌘K 会话搜索：按标题在对话之间跳。
+//
+// 与 project-palette 是同一个位置上的第二个浮层（⌘P 搜项目、⌘K 搜会话），所以要钉的六件事都在这
+// 个浮层自己的契约上：
+//   1. 列的是「对话」——一行一个，顺序就是 ListSessions 的顺序（最近更新在前），项目名写在行里
+//      但不参与过滤（那是 ⌘P 的活，空态必须指向它，否则读者只会在同一个框里重打同一个词）；
+//   2. 中文输入法：组合中的拼音**不参与过滤**（列表与高亮都不动），组合里的 Enter/Esc 属于输入法
+//      —— 前者是选词、后者是取消候选，都不该切会话或关掉浮层；落字（compositionend）之后才搜；
+//   3. 回车真的切会话，并把焦点交回输入框（与 ⌘P 同一条规则：浮层的输入框一卸载，焦点就落到
+//      <body>，下一次敲键哪儿都不去）；
+//   4. 选中的会话在**折叠的项目组**里时，那个组自己展开（同 ⌘P 的理由：折叠的组只剩一个组头，
+//      刚变 active 的那一行藏在里面，等于没送到）；
+//   5. Esc 什么都不做（不切会话、不增删会话）；
+//   6. ⌘P 与 ⌘K 互斥：它们是同一个位置上的同一个框，不能同时挂在屏幕上。
+//
+// fixture 是三个会话：一个项目成员（冒烟会话）+ 两个无项目的（无项目会话、另一个会话）。启动时
+// 打开的是最新的那个（项目成员），所以它的组是展开的 —— 折叠那一步由 driver 自己按，因为「折叠」
+// 本身是读者自己的动作。
+;(async () => {
+  if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitFor('.session.active', '侧栏出现当前会话行', 10000))) return smoke.finish()
+
+  const PROJECT = 'smoke-sesspal'
+  // 会话浮层是按 aria-label 认的：两个浮层共用同一套 class（同一个框），问「哪一个开着」只能看这里。
+  const boxLabel = () => {
+    const b = smoke.q('.palette-box')
+    return b ? b.getAttribute('aria-label') : ''
+  }
+  const boxOpen = () => boxLabel() === '会话搜索'
+  const names = () => smoke.allText('.palette-name')
+  const rowCount = () => smoke.qa('.palette-row').length
+  const selected = () => smoke.text('.palette-row.is-sel .palette-name')
+  const sessionId = () => smoke.q('.app').getAttribute('data-session-id')
+  const activeTitle = () => smoke.text('.session.active .session-title')
+  const sidebarRows = () => smoke.qa('.session').length
+  const focusedComposer = () => document.activeElement === smoke.q('.composer-input')
+  const activeDesc = () => {
+    const a = document.activeElement
+    return a ? (a.className || a.tagName) : '(没有焦点)'
+  }
+  // 组头 → 它那一组的行。折叠的组会把 .proj-rows 整个从 DOM 里摘掉，所以往后找时必须在下一个
+  // .proj-head 处停下，否则会一路走到别的项目组的行里去（project-palette 里踩过这个）。
+  const headOf = (name) => smoke.qa('.proj-head').find((h) => {
+    const n = h.querySelector('.proj-name')
+    return !!n && n.textContent.trim() === name
+  })
+  const expandedOf = (name) => {
+    const h = headOf(name)
+    const t = h && h.querySelector('.proj-toggle')
+    return !!t && t.getAttribute('aria-expanded') === 'true'
+  }
+  const rowsOf = (name) => {
+    const h = headOf(name)
+    if (!h) return []
+    let el = h.nextElementSibling
+    while (el && !el.classList.contains('proj-rows')) {
+      if (el.classList.contains('proj-head')) return []
+      el = el.nextElementSibling
+    }
+    return el ? Array.from(el.querySelectorAll('.session')) : []
+  }
+  // 输入法：compositionstart / compositionend 是原生事件，React 在根上监听它们，driver 直接派发
+  // 即可。真实输入法的顺序是「先把落字后的文本写进输入框，再发 compositionend」，这里照抄。
+  const compose = (type, el) => el.dispatchEvent(new CompositionEvent(type, { bubbles: true }))
+
+  const boot = sessionId()
+  const bootTitle = activeTitle()
+  smoke.check('起手：打开的是最新的那个会话', boot !== '' && bootTitle !== '', boot + ' / ' + bootTitle)
+
+  // ── 1. ⌘K 打开：列的是对话，一行一个，顺序就是列表自身的顺序 ──────────────────
+  smoke.key(document.body, 'k', { metaKey: true })
+  if (!(await smoke.waitFor(() => (boxOpen() ? true : null), '⌘K 打开会话搜索浮层', 8000))) return smoke.finish()
+  smoke.check('三个会话各一行（一行一个对话）', rowCount() === 3, names().join(' | '))
+  smoke.check('最近更新的排第一（就是启动时打开的那个）', names()[0] === bootTitle,
+    names()[0] + ' vs ' + bootTitle)
+  const subs = smoke.allText('.palette-sub')
+  smoke.check('成员行写着项目名，无项目的行写着「无项目」',
+    subs.filter((t) => t === '无项目').length === 2 && subs.indexOf(PROJECT) >= 0, subs.join(' | '))
+  smoke.check('当前会话那行标着「当前会话」', smoke.qa('.palette-here').length === 1,
+    smoke.allText('.palette-here').join(' | '))
+  const times = smoke.allText('.palette-meta')
+  smoke.check('每行都写着上次更新的时间（顺序才不是凭空的）',
+    times.length === 3 && times.every((t) => t.length > 0), times.join(' | '))
+
+  // ── 2. 过滤的是**标题**；项目名不是标题 ────────────────────────────────────
+  smoke.type('.palette-input', '冒烟')
+  const hit = await smoke.waitFor(() => (rowCount() === 1 ? true : null), '按标题过滤到一个会话', 4000)
+  smoke.check('按标题过滤：只剩冒烟会话', !!hit && names()[0] === '冒烟会话', names().join(' | '))
+  smoke.type('.palette-input', PROJECT)
+  const none = await smoke.waitFor('.palette-empty', '项目名搜不到会话', 4000)
+  smoke.check('搜项目名没有结果，空态指向 ⌘P',
+    !!none && smoke.text('.palette-empty').indexOf('⌘P') >= 0, smoke.text('.palette-empty'))
+
+  // ── 3. 中文输入法：组合不参与过滤，落字才参与 ───────────────────────────────
+  // 这三条是「打字过程中不要有干扰」的全部内容：列表不动（拼音不是查询），输入框不动（不打断候选），
+  // 组合里的 Enter 不动（那是选词，不是打开会话）。
+  smoke.type('.palette-input', '')
+  if (!(await smoke.waitFor(() => (rowCount() === 3 ? true : null), '清空后回到全量', 4000))) return smoke.finish()
+  const box = smoke.q('.palette-input')
+  compose('compositionstart', box)
+  smoke.type('.palette-input', 'maoyan')
+  await smoke.sleep(150)
+  smoke.check('组合中的拼音不参与过滤（列表不动）', rowCount() === 3, names().join(' | '))
+  smoke.check('组合中的拼音照常留在输入框里（没有把候选打断）', box.value === 'maoyan', box.value)
+  smoke.key('.palette-input', 'Enter')
+  await smoke.sleep(150)
+  smoke.check('组合中的 Enter 不切会话、也不关浮层',
+    boxOpen() && sessionId() === boot, (boxOpen() ? '浮层还在' : '浮层被关了') + ' / ' + sessionId())
+  // 落字：真实输入法是先把提交后的文本写进输入框，再发 compositionend。
+  smoke.type('.palette-input', '冒烟')
+  compose('compositionend', box)
+  const landed = await smoke.waitFor(() => (rowCount() === 1 && names()[0] === '冒烟会话' ? true : null),
+    '落字之后才按它过滤', 4000)
+  smoke.check('落字（compositionend）之后才按它过滤', !!landed, names().join(' | '))
+
+  // ── 4. 回车切会话（Ctrl+N 走位），焦点交回输入框 ────────────────────────────
+  // Ctrl+N / Ctrl+P 是 TUI 那套键位（readline 的 next/previous），在带输入框的浮层里顶替 ↑↓。
+  smoke.type('.palette-input', '')
+  if (!(await smoke.waitFor(() => (rowCount() === 3 ? true : null), '清空后回到全量', 4000))) return smoke.finish()
+  smoke.key('.palette-input', 'n', { ctrlKey: true })
+  smoke.key('.palette-input', 'n', { ctrlKey: true })
+  const walked = await smoke.waitFor(() => (selected() === '无项目会话' ? true : null), 'Ctrl+N 走到最后一个会话', 4000)
+  smoke.check('Ctrl+N 下移高亮（不靠鼠标）', !!walked, selected() || '(没有高亮行)')
+  smoke.key('.palette-input', 'Enter')
+  const switched = await smoke.waitFor(() => (sessionId() !== boot ? true : null), '回车切到选中的会话', 10000)
+  smoke.check('回车切到选中的会话', !!switched, sessionId())
+  smoke.check('切到的正是高亮的那一个（无项目会话）', activeTitle() === '无项目会话', activeTitle())
+  await smoke.waitGone('.palette-box', '选完关掉浮层', 4000)
+  smoke.check('选完浮层就关掉，不留着挡路', !smoke.q('.palette-box'), boxLabel() || '(已关)')
+  const refocused = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框', 3000)
+  smoke.check('切完会话焦点落在输入框（可以直接打字）', !!refocused, activeDesc())
+  smoke.check('⌘K 全程没有增删会话', sidebarRows() === 3, sidebarRows() + ' 行')
+
+  // ── 5. 折叠的项目组：⌘K 进去之后它必须自己展开 ──────────────────────────────
+  const head = headOf(PROJECT)
+  if (!head) return smoke.fail('找到项目组头', smoke.allText('.proj-name').join(' | '))
+  head.querySelector('.proj-toggle').click()
+  const folded = await smoke.waitFor(() => (expandedOf(PROJECT) ? null : true), '手动折叠项目组', 4000)
+  smoke.check('先手动把项目组收起来（组头说自己收起了）', !!folded,
+    'aria-expanded=' + (folded ? 'false' : 'true'))
+  if (!folded) return smoke.finish()
+  smoke.check('收起后它的行不再留在 DOM 里', rowsOf(PROJECT).length === 0,
+    rowsOf(PROJECT).length + ' 行（折叠时容器被摘掉）')
+
+  smoke.key(document.body, 'k', { metaKey: true })
+  if (!(await smoke.waitFor(() => (boxOpen() ? true : null), '⌘K 再次打开', 8000))) return smoke.finish()
+  smoke.check('折叠的组里那一行照样在列表里（⌘K 读的是会话列表，不是 DOM）',
+    names().indexOf('冒烟会话') >= 0, names().join(' | '))
+  smoke.type('.palette-input', '冒烟')
+  if (!(await smoke.waitFor(() => (rowCount() === 1 ? true : null), '过滤到成员会话', 4000))) return smoke.finish()
+  smoke.key('.palette-input', 'Enter')
+  const revealed = await smoke.waitFor(() => (expandedOf(PROJECT) ? true : null), '⌘K 打开后项目组展开', 8000)
+  smoke.check('⌘K 选中的会话在折叠的组里，那个组自己展开', !!revealed, rowsOf(PROJECT).length + ' 行')
+  smoke.check('展开之后 active 就是那一行', activeTitle() === '冒烟会话', activeTitle())
+
+  // ── 6. ⌘P / ⌘K 互斥；Esc 什么都不做 ────────────────────────────────────────
+  smoke.key(document.body, 'p', { metaKey: true })
+  const projPalette = await smoke.waitFor(() => (boxLabel() === '项目搜索' ? true : null), '⌘P 打开项目搜索', 8000)
+  smoke.check('⌘P 打开的是项目搜索（同一个框，另一个面板）', !!projPalette, boxLabel())
+  smoke.key(document.body, 'k', { metaKey: true })
+  const swapped = await smoke.waitFor(() => (boxOpen() ? true : null), '⌘K 顶掉 ⌘P', 8000)
+  smoke.check('⌘K 打开时关掉 ⌘P：屏幕上只有一个框', !!swapped && smoke.qa('.palette-box').length === 1,
+    smoke.qa('.palette-box').map((b) => b.getAttribute('aria-label')).join(' | '))
+  const idBefore = sessionId()
+  smoke.key('.palette-input', 'Escape')
+  await smoke.waitGone('.palette-box', 'Esc 关闭浮层', 4000)
+  smoke.check('Esc 关掉了浮层', !smoke.q('.palette-box'), boxLabel() || '(已关)')
+  smoke.check('Esc 没有切会话', sessionId() === idBefore, sessionId())
+  smoke.check('Esc 没有增删会话', sidebarRows() === 3, sidebarRows() + ' 行')
+
+  smoke.finish()
+})()

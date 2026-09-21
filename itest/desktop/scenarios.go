@@ -2088,6 +2088,57 @@ permissions:
 		},
 		//
 		//
+		// session-palette: ⌘K 搜会话标题 —— ⌘P 的兄弟面板（同一个框，另一个面板）。它一个 token
+		// 都不该花（导航不碰模型），也不该改任何会话记录 —— 这两条界面上看不出来，只有 Go 侧读得到；
+		// 其余（列的是对话、按标题过滤、输入法组合不参与、回车落到哪、折叠的组要展开）由 driver 在
+		// 真机上验，见 drivers/session-palette.js。
+		//
+		// fixture 的三个会话：一个项目成员（冒烟会话）+ 两个无项目的（无项目会话、另一个会话，
+		// 后者带一段预置转写 —— 它同时把「从磁盘读一次」的那条路带上）。启动时打开的是最新的那个
+		// （项目成员），所以它的组默认是展开的，driver 后面自己把它折起来。
+		{
+			name: "session-palette",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-palette scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-sesspal",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe session-palette scenario's project directory\n",
+				},
+			},
+			seedSecond: []session.Message{
+				{Type: session.MessageTypeUser, Content: "另一个会话里说过的话。"},
+				{Type: session.MessageTypeAssistant, Content: "另一个会话里的回答。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("⌘K 全程没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 「一行一个对话」的另一半：⌘K 是只读的 —— 它没有建会话、没有删会话。三个 meta.json
+				// 的标题就是磁盘上的事实（driver 只看得到行数）。
+				metas := c.sessionMetas()
+				c.check("⌘K 从没建过也没有删过会话（磁盘上仍是三个）", len(metas) == 3,
+					fmt.Sprintf("%d 个", len(metas)))
+				titles := map[string]bool{}
+				bound := ""
+				for _, m := range metas {
+					if t, _ := m["title"].(string); t != "" {
+						titles[t] = true
+					}
+					// meta.json 里是 project_id（session.Session 的 json tag），不是绑定层那个
+					// camelCase 的 projectId —— 前者才是磁盘上的事实。
+					if m["project_id"] == "smoke-project" {
+						bound, _ = m["title"].(string)
+					}
+				}
+				c.check("三个会话还是它们自己（标题一个都没变）",
+					titles["冒烟会话"] && titles["无项目会话"] && titles["另一个会话"],
+					fmt.Sprintf("%d 个标题", len(titles)))
+				c.check("成员会话仍然绑在项目上（⌘K 没有动过绑定）", bound == "冒烟会话", bound)
+			},
+		},
+		//
+		//
 		// stream-fail: 一轮 turn 的流在**工具跑完之后**断掉时，那一轮已经执行的步骤必须留在对话
 		// 历史里（issue #38）。判据不是"界面还看得见那张卡"（那是页面自己的缓存），而是**出错之后的
 		// 下一次请求里带着那条工具结果** —— 只有 Go 侧读得到请求，而模型能不能看见它才是这件事的

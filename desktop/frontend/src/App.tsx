@@ -19,7 +19,7 @@ import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { RewindChainOverlay } from './rewindchain'
-import { ProjectPalette } from './palette'
+import { ProjectPalette, SessionPalette } from './palette'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
@@ -370,10 +370,14 @@ function App() {
   const [rewindMenu, setRewindMenu] = useState<{ x: number; y: number; msg: Message; sid: string; turns: RewindTurnVO[] | null } | null>(null)
   const [rewindCard, setRewindCard] = useState<{ sid: string; turn: number; preview: RewindPreviewVO; error?: string } | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
-  // ⌘P: the project palette. Unlike the other overlays here it is not about the session on
-  // screen — it is the way to GET to one, so it holds no per-opening state of its own (the
-  // palette owns its query, its highlight and its refusal notice; see palette.tsx).
+  // ⌘P / ⌘K: the two palettes. Neither is about the session on screen — they are the way to GET
+  // to one — so they hold no per-opening state here (each palette owns its query, its highlight
+  // and, for ⌘P, its refusal notice; see palette.tsx). Only ONE is ever open: they are the same
+  // box in the same place, so ⌘K closes ⌘P and vice versa.
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // ⌘K: the session palette. It reads the list the sidebar already renders — no fetch — and picks
+  // a conversation by TITLE; ⌘P is the project one.
+  const [sessionPaletteOpen, setSessionPaletteOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
   const [editTitle, setEditTitle] = useState('')
@@ -472,7 +476,7 @@ function App() {
   // time, and the ones that arrive later (a new project, a list still loading) would leak open.
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
   // revealProject opens one group, for the paths that SWITCH or CREATE a session without a click
-  // on a row: the session the app boots into, and ＋ / ⌘P landing inside a folded group. A folded
+  // on a row: the session the app boots into, and ＋ / ⌘P / ⌘K landing inside a folded group. A folded
   // group answers with a header and nothing under it, so without this the row that just became
   // active is hidden — the same as not having gone there. A click on a row cannot need it (a
   // folded group has no rows to click), and it never closes anything: 收起你正坐着的那个组 stays
@@ -1471,12 +1475,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
-  // focusAfterPalette puts the caret in the composer once the palette is gone — ⌘P is the one entry
-  // point that closes a dialog on its way to a session, and the box's own input is what holds focus
-  // while it is open, so a focus taken DURING the pick is dropped with the input when React removes it
-  // (focus falls back to <body> and the next keystroke goes nowhere). The timeout is what gets behind
-  // that commit: a discrete keydown flushes its state updates before the browser runs the callback, so
-  // this is ordered after the unmount rather than racing it.
+  // focusAfterPalette puts the caret in the composer once the palette is gone — the two palettes are
+  // the entry points that close a dialog on their way to a session, and the box's own input is what
+  // holds focus while it is open, so a focus taken DURING the pick is dropped with the input when React
+  // removes it (focus falls back to <body> and the next keystroke goes nowhere). The timeout is what
+  // gets behind that commit: a discrete keydown flushes its state updates before the browser runs the
+  // callback, so this is ordered after the unmount rather than racing it.
   const focusAfterPalette = useCallback(() => {
     window.setTimeout(() => composer.focusInput(), 0)
   }, [composer.focusInput])
@@ -1515,6 +1519,22 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return ''
   }, [sessions, clickSession, newChat, focusAfterPalette, revealProject])
 
+  // pickSession answers the ⌘K palette (see palette.tsx): switch to the chosen conversation.
+  // Nothing can refuse it — ⌘P's reason string exists for the projects that cannot be opened into
+  // anything — so the palette closes on the pick, and the caret goes to the composer for the same
+  // reason it does there.
+  //
+  // It expands the target's group when that group belongs to a live project, on the same argument
+  // ⌘P makes above: ⌘K means 「带我去那次对话」, and a folded group answers with a header and nothing
+  // under it, hiding the row that just became active. A conversation whose projectId names no live
+  // project has no group to open — the sidebar files such a row under 无项目 — so there is nothing
+  // to reveal and nothing to force open.
+  const pickSession = useCallback((s: SessionItem) => {
+    if (s.projectId && projects.some((p) => p.id === s.projectId)) revealProject(s.projectId)
+    void clickSession(s.id)
+    focusAfterPalette()
+  }, [projects, clickSession, focusAfterPalette, revealProject])
+
   // The app body is INERT while the settings page is up: the page is fixed, opaque and covers the
   // window (settings.css), so what is behind it needs to leave the tab order and the accessibility
   // tree — and nothing else. NOT `visibility: hidden`: WebKit does not paint a hidden subtree and
@@ -1528,8 +1548,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   }, [view])
 
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
-  // Cmd+N starts a new session, Cmd+P searches projects. (No native menu binds
-  // them, so the webview sees the key events.)
+  // Cmd+N starts a new session, Cmd+P searches projects, Cmd+K searches
+  // conversations. (No native menu binds them, so the webview sees the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The settings page has no conversation shortcuts. Gating here rather than leaving it to
@@ -1543,14 +1563,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         // as "somebody else used this key". An unconditional preventDefault would swallow every
         // Escape before the panel's handler could see it as unclaimed.
         if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain
-          || projectMenu || projectForm || confirmDelProject || editingProject || paletteOpen) e.preventDefault()
+          || projectMenu || projectForm || confirmDelProject || editingProject || paletteOpen
+          || sessionPaletteOpen) e.preventDefault()
         setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
         setRewindCard(null); setReminderModal(null); setChain(null)
         // The project surfaces dismiss with the same gesture. The rename editor is last: it is
         // the one the user is typing in, so a stray Escape there closes the editor, not the
         // window's other layers.
         setProjectMenu(null); setConfirmDelProject(null); setEditingProject(null)
-        setPaletteOpen(false)
+        setPaletteOpen(false); setSessionPaletteOpen(false)
         if (projectForm) setProjectForm(null)
         return
       }
@@ -1558,7 +1579,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key === ',') { e.preventDefault(); setView('settings') }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
-      else if (e.key.toLowerCase() === 'p' && !e.shiftKey) { e.preventDefault(); setPaletteOpen((v) => !v) }
+      // The two palettes are the same box in the same place, so opening one closes the other —
+      // and each is a toggle, so its own key closes it again.
+      else if (e.key.toLowerCase() === 'p' && !e.shiftKey) {
+        e.preventDefault(); setSessionPaletteOpen(false); setPaletteOpen((v) => !v)
+      }
+      else if (e.key.toLowerCase() === 'k' && !e.shiftKey) {
+        e.preventDefault(); setPaletteOpen(false); setSessionPaletteOpen((v) => !v)
+      }
       else if (e.key.toLowerCase() === 'n') {
         e.preventDefault()
         // ⌘N makes another conversation like the one on screen: if that session belongs to a
@@ -1584,7 +1612,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, view])
+    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -2403,6 +2431,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         <ProjectPalette projects={projects} sessions={sessions}
           onPick={pickProject} onClose={() => setPaletteOpen(false)} />
       )}
+      {sessionPaletteOpen && (
+        <SessionPalette sessions={sessions} projects={projects} activeId={currentId}
+          onPick={pickSession} onClose={() => setSessionPaletteOpen(false)} />
+      )}
       {shortcutsOpen && (
         <div className="confirm-overlay" onClick={() => setShortcutsOpen(false)}>
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
@@ -2412,6 +2444,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
+            <div className="shortcut-row"><kbd>⌘ K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>

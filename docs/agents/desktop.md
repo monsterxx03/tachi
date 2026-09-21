@@ -50,6 +50,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
+| 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
@@ -908,10 +909,11 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   holds at boot — the reader has chosen nothing yet. The state therefore records the EXPANDED groups, not the
   collapsed ones: an empty default needs no per-project seeding, and a project that appears later (just made,
   or a list still loading) cannot leak open first. `revealProject` is the only thing that OPENS a group, called
-  by exactly three paths — the boot, ⌘P, and a project's `＋` (a new session landing in a folded group) — and it
-  never closes one: 收起你正坐着的那个组 stays the reader's own doing. The fold is DOM-level (a folded group's
-  `.proj-rows` is absent, not hidden), so anything reading inside a group — a driver included — must expand it
-  first; `projects` pins the boot default (one open group, and the active row inside it).
+  by exactly four paths — the boot, ⌘P, ⌘K, and a project's `＋` (a session landing in a folded group without a
+  click on its row) — and it never closes one: 收起你正坐着的那个组 stays the reader's own doing. The fold is
+  DOM-level (a folded group's `.proj-rows` is absent, not hidden), so anything reading inside a group — a driver
+  included — must expand it first; `projects` pins the boot default (one open group, and the active row inside
+  it).
 - **Deleting a session hands the reader to the NEXT one — and only when the deleted session was the one on
   screen** (`nextSessionAfter` in `lib.ts`, called by `App.tsx`'s `confirmDelete`): the row BELOW it inside
   its own group (a project's members, or the 无项目 bucket), else the row ABOVE it when it was that group's
@@ -955,6 +957,30 @@ Each bullet is a rule a change must keep, with the bug it prevents.
   three `revealProject` paths (this one, the boot, a project's `＋` — see the fold bullet above), never a rule
   applied on every path: forcing groups open everywhere would make collapsing the group you are sitting in
   impossible.
+- **⌘K opens the session palette** (`palette.tsx`'s `SessionPalette`, `App.tsx`'s `pickSession`), the ⌘P box a
+  second time: same input, same ↑↓ / Ctrl+N·P, same Escape, same caret hand-back, same `revealProject` — and
+  only one of the two is ever on screen (each key closes the other; they occupy one place). What it decides
+  for itself: **the rows are conversations, one per conversation** (`sessionChoices` folds a compaction chain
+  under its newest link, exactly as the sidebar folds it) **in the list's own order** (`ListSessions` is most
+  recently UPDATED first — taken from the list, like the sidebar takes it, so the app has one ordering rule
+  rather than two that agree by accident; PINS are deliberately ignored, because a pin orders a row inside its
+  own GROUP and a flat list has no group to lift it inside); **the query matches the TITLE only**
+  (`sessionMatches`) — the row still SHOWS the conversation's project (a dangling `projectId` reads as 无项目,
+  the bucket the sidebar files it under), but a project is its own search, so the empty state points at ⌘P
+  instead of matching rows the query is not in; and the row the app is showing is marked 「当前会话」, the only
+  anchor a flat list has. It issues **no fetch** (⌘P's contract, for the same reason: the list is re-ordered
+  under the reader's cursor if a keyboard shortcut re-reads it) and it is READ-ONLY — `session-palette` pins
+  that no request reaches the model and no session record is written.
+- **A palette's input filters by the COMMITTED query, never by the field's live value** (`usePaletteInput` in
+  `palette.tsx`; both palettes go through it). A controlled input re-renders on every keystroke of a Chinese
+  IME composition — the pinyin of 你/ni/nihao — so filtering on `e.target.value` re-filters and re-highlights the
+  list on every candidate key, moving the row under the cursor; and the keys that END a composition are the
+  IME's own (Enter commits the candidate, Escape cancels it), so an unguarded picker opens a session on the way
+  past. So the box holds the raw value (writing to a composing field tears the candidate window), the list
+  filters on `committed`, and the keydown handler returns early on `composingRef.current || imeActive(e)` —
+  the composer's own pair, cleared on the next macrotask because some WebKit builds fire `compositionend`
+  BEFORE the committing Enter. `session-palette` drives the whole sequence (compositionstart → pinyin → Enter →
+  compositionend) and asserts the list, the box and the case of the open palette all stay put.
 - **A project write re-reads the reader** (`agent:workspace_changed`, from `CreateProject` / `RenameProject` /
   `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend holds a session's
   workspace and the sidebar's groups BY VALUE, so a rename moved nothing on screen until the user switched

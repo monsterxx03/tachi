@@ -408,6 +408,34 @@ export function projectMatches(p: ProjectVO, query: string): boolean {
   return (p.additionalDirs || []).some((r) => (r.path || '').toLowerCase().includes(q))
 }
 
+// sessionChoices returns the ⌘K palette's rows: ONE per conversation — a compaction chain is one
+// conversation, so its ancestors are folded away by the same rule the sidebar folds them with
+// (sessionRows) — in the order the list arrived in.
+//
+// That order is `ListSessions`' own (most recently UPDATED first), which is what a switcher wants
+// under an empty query, and taking it from the list is the sidebar's rule too: one ordering rule in
+// the app rather than two that agree by accident. Pins are deliberately NOT applied: a pin lifts a
+// row to the head of its own GROUP, and a flat list has no group to lift it inside — typing is the
+// way to bring a pinned conversation up here.
+export function sessionChoices<T extends { id: string; compactedParentId?: string; compactedParentTitle?: string }>(
+  list: T[],
+): T[] {
+  return sessionRows(list).map((r) => r.session)
+}
+
+// sessionMatches reports whether a conversation answers the ⌘K query: a case-insensitive
+// substring of its TITLE, and of nothing else.
+//
+// The title only, although the row also shows the conversation's project: this palette answers
+// 「说过那句话的那次对话在哪」, and what a reader remembers a conversation BY is its name. Listed
+// rows the query is not in would have no highlight to explain themselves, and a project already has
+// its own search (⌘P) — which is what the palette's empty state points at.
+export function sessionMatches(s: { title?: string }, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return (s.title || '').toLowerCase().includes(q)
+}
+
 // fmtBytes renders a byte count the way the agent's own confirmation message
 // does (pkg/strutil.HumanBytes), so "README.md · 12.4 KB" on the card and
 // "✅ 文件 README.md (12.4 KB) 已加入发送队列" in the transcript agree.

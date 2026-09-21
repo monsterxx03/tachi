@@ -156,7 +156,13 @@
   // 行的标题三行都一样，身份只能靠**下标 + 置顶标记**认。
   const rowsNow = () => smoke.qa('.proj-rows .session')
   const activeAt = () => rowsNow().findIndex((r) => r.classList.contains('active'))
+  // ⌘N 两次，**一次一等**。同一 tick 连按两次 ⌘N 会让两个 NewSession 同时起飞，而每一次完成都会
+  // 先 re-list 再 setSessions：行数先到 4、active 却可能还停在前一个上（实测随机复现：连按两次，
+  // active 落在下标 2 而不是 1 —— 因为先建的那个的 re-list 后落地，把 active 盖了回去）。真人按不了
+  // 这么快，driver 也不该：等那一行出现，再按第二次。
   smoke.key(document.body, 'n', { metaKey: true })
+  if (!(await smoke.waitFor(() => (rowsNow().length === 3 ? rowsNow() : null),
+    '⌘N 一次，项目里 3 行', 10000))) return smoke.finish()
   smoke.key(document.body, 'n', { metaKey: true })
   const fourRows = await smoke.waitFor(
     () => (rowsNow().length === 4 ? rowsNow() : null), '⌘N 两次，项目里 4 行', 10000)

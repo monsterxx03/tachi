@@ -370,10 +370,10 @@
   font-size: 12px;
 }
 
-/* ── ⌘P 项目搜索 ──────────────────────────────────────────────────────────
+/* ── ⌘P / ⌘K 搜索浮层（项目 / 会话） ──────────────────────────────────────
    Top-aligned, not centred like the confirm dialogs: this list grows with the
-   number of projects, and a centred box would move both of its edges on every
-   open/close as the height changes. */
+   number of rows, and a centred box would move both of its edges on every
+   open/close as the height changes. One box, two palettes (palette.tsx). */
 .palette-overlay {
   position: fixed;
   inset: 0;
@@ -421,7 +421,9 @@
 .palette-row.is-sel { background: var(--veil); box-shadow: inset 2px 0 0 var(--accent); }
 .palette-main { min-width: 0; flex: 1 1 auto; }
 .palette-name { font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.palette-dir {
+/* The row's second line: a path for ⌘P, the project a conversation belongs to for ⌘K — the one
+   thing about a row that its name cannot say. */
+.palette-sub {
   margin-top: 2px;
   font-family: var(--mono, monospace);
   font-size: 11px;
@@ -431,10 +433,13 @@
   white-space: nowrap;
 }
 .palette-side { flex: 0 0 auto; text-align: right; }
-.palette-count { font-size: 11px; color: var(--text-faint); }
+.palette-meta { font-size: 11px; color: var(--text-faint); }
 /* What Enter will do, said before it is pressed. */
 .palette-action { margin-top: 2px; font-size: 11.5px; color: var(--text-dim); }
 .palette-action.is-blocked { color: var(--amber); }
+/* Where the reader already is (⌘K's active conversation): an anchor for a list that has no other
+   way of saying which row is the one on screen. */
+.palette-here { margin-top: 2px; font-size: 11.5px; color: var(--accent); }
 .palette-notice {
   padding: 10px 16px;
   border-top: 1px solid var(--border);
