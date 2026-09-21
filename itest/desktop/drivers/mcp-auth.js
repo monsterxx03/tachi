@@ -67,7 +67,18 @@
   if (!connected) return smoke.finish()
 
   smoke.check('已连接后不再显示需要授权', smoke.text(connected).indexOf('需要授权') < 0, smoke.text(connected))
-  smoke.check('工具计数不为 0', smoke.text(connected).indexOf('0 工具') < 0, smoke.text(connected))
+  // 行上的计数是「已加载/共」：默认折叠的一行只报总数的话，看不出这个 server 有多少工具真的
+  // 进了本会话 —— 那正是展开后一格一格才能读到的信息。刚连上、一个都没加载，所以分子是 0。
+  // 每次都重新按名字取行：面板的这一次重取会换掉节点，攥着旧引用读的是上一版的 DOM。
+  const readCount = () => {
+    const row = smoke.qa('.mcp-server').find((s) => smoke.text(s).indexOf('oauth-fixture') >= 0)
+    const el = row ? row.querySelector('.mcp-toolcount') : null
+    const text = el ? smoke.text(el) : ''
+    const m = /^(\d+)\/(\d+) 工具$/.exec(text)
+    return m ? { loaded: Number(m[1]), total: Number(m[2]), text: text } : null
+  }
+  const count0 = readCount()
+  smoke.check('server 行给出「已加载/共」的工具数，未加载时为 0', !!count0 && count0.loaded === 0 && count0.total > 0, count0 ? count0.text : '找不到 .mcp-toolcount')
 
   // 工具列表要展开才看得到 —— 这正是默认折叠下的正常路径，driver 点一下行头即可。
   smoke.click(connected.querySelector('.mcp-server-row'))
@@ -137,6 +148,12 @@
   smoke.check('已加载的工具不再是灰的', !loaded.classList.contains('unloaded'), loaded.className)
   smoke.check('已加载的工具显示 ✓', smoke.text(loaded).indexOf('✓') >= 0, smoke.text(loaded))
   smoke.check('已加载的工具按钮变成「禁用」', smoke.text(loaded).indexOf('禁用') >= 0, smoke.text(loaded))
+  // 行上那个「已加载/共」必须跟着动 —— 它是折叠状态下唯一能看到这件事的地方，一个停在 0/N
+  // 的计数比没有计数更坏：它让加载看起来没发生。
+  const count1 = readCount()
+  smoke.check('加载一个工具后行上的分子跟着动',
+    !!count1 && !!count0 && count1.loaded === count0.loaded + 1 && count1.total === count0.total,
+    (count0 ? count0.text : '(无)') + ' → ' + (count1 ? count1.text : '(无)'))
 
   // ── 6. server 级开关写回 mcp.json ───────────────────────────────────────
   // 禁用这个 server：界面上是断开，磁盘上是它来自的那个 mcp.json 里多出 "enabled": false

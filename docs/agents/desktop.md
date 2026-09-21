@@ -540,6 +540,12 @@ Fixtures, all because the real path needs something a driver cannot do:
   Under MCP tool search a server auto-loads nothing, so "not loaded" is the normal state and a row that simply
   disappears reads as a missing tool: unloaded rows carry `.unloaded` while loaded ones stay at full strength.
   The action button is never greyed — it is the way out.
+- **The server row counts loaded out of offered (`n/m 工具`), because the row is FOLDED by default.** The total
+  alone does not say how much of that server this session actually has — the one fact a reader wants before
+  deciding whether to open the row. The numerator follows a tool toggle (the row is the only visible trace of
+  it while folded: a count stuck at `0/N` reads as "loading did nothing"), and a server with no tools — i.e.
+  not connected — keeps the plain `0 工具` instead of a hollow `0/0`. `mcp-auth` pins both ends (0/N before,
+  1/N after loading) — the text shape included, since the driver parses it.
 - **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving.**
   `Manager.SetRootsFunc` makes every connection declare the capability and answer `roots/list` on demand. The
   ANSWER differs by mode because the connection lifetime does: the desktop wires `desktopApp.mcpRoots` on its

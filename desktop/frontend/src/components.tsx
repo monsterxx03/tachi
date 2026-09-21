@@ -618,7 +618,13 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
           {servers.length === 0 && <div className="mcp-empty">未配置 MCP server（~/.tachi/mcp.json）</div>}
           {servers.map((s) => {
             const isOpen = !!expanded[s.name]
-            const toolCount = (s.tools || []).length
+            const tools: any[] = s.tools || []
+            const toolCount = tools.length
+            // Loaded out of total, because the row is folded by default and the total alone
+            // does not say how much of this server this session actually HAS. The two
+            // numbers are what the greyed tool rows below spell out one by one; a server
+            // with no tools (not connected) shows the plain 0 工具 instead of a hollow 0/0.
+            const loadedCount = tools.filter((t) => t.loaded).length
             const busy = !!loading[s.name]
             const state = auth[s.name] as MCPAuthState | undefined
             const authPhase = state?.phase || ''
@@ -666,7 +672,9 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
                   <span className={`mcp-server-state ${s.connected ? 'on' : (s.needsAuth ? 'auth' : 'off')}`}>
                     {s.connected ? '已连接' : (s.needsAuth ? '需要授权' : '未连接')}
                   </span>
-                  <span className="mcp-toolcount">{toolCount} 工具</span>
+                  <span className="mcp-toolcount" title={`已加载 ${loadedCount} / 共 ${toolCount} 个工具`}>
+                    {toolCount > 0 ? `${loadedCount}/${toolCount} 工具` : '0 工具'}
+                  </span>
                   {/* The authorize button belongs beside the toggle, not inside the
                       expanded body: it is what the row's own state is telling the user to
                       do, and the row is where they are looking. */}
