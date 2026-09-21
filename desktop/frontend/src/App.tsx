@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -34,7 +34,7 @@ import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } fr
 import { useSessionTranscript } from './useTranscript'
 
 import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady } from './agentEvents'
-import { useComposer, Composer, imeActive } from './composer'
+import { useComposer, Composer } from './composer'
 // CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
 // prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
 // the whole transcript is a search over file dumps (issue #35). Positive rather than a skip list, for

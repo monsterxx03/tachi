@@ -3,6 +3,18 @@ import type { KeyboardEvent } from 'react'
 import type { ProjectVO, SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AttachmentInfo, Message } from './types'
 
+// imeActive reports whether a key event belongs to an IME composition (Chinese / Japanese /
+// Korean candidate selection). Enter while composing confirms a candidate — treating it as
+// "submit" is the classic IME bug. keyCode 229 is the fallback some WebKit builds report
+// instead of setting isComposing.
+//
+// It lives here, next to listNav, because every key handler in the frontend needs it and a
+// copy per module is how one of them ends up missing the check (the type is structural, so it
+// takes React's synthetic event and a plain DOM KeyboardEvent alike).
+export function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: number }): boolean {
+  return !!e.nativeEvent?.isComposing || e.keyCode === 229
+}
+
 export function extractReminder(content: string): { reminder: string; text: string } {
   const re = /<system-reminder>([\s\S]*?)<\/system-reminder>/g
   const blocks: string[] = []; let m

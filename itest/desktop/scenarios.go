@@ -351,6 +351,19 @@ func textStreamPrompt(text string, cacheRead, prompt int) mockllm.ReplyFunc {
 	)
 }
 
+// askStream scripts the agent asking the user something: one AskUserQuestion call carrying a
+// question with two options and a free-text box. The turn parks on the answer, which is what
+// makes the form's own keystrokes observable at all.
+func askStream(id, question string) mockllm.ReplyFunc {
+	return mockllm.Stream(
+		mockllm.ToolCallStart(id, "AskUserQuestion",
+			`{"questions":[{"question":"`+question+`","header":"确认","options":[{"label":"方案 A"},{"label":"方案 B"}]}]}`),
+		mockllm.Finish("tool_calls"),
+		mockllm.Usage(1500, 40),
+		mockllm.Done(),
+	)
+}
+
 // bashStream makes the run do something: one tool call, then whatever comes next.
 func bashStream(cmd, id string) mockllm.ReplyFunc {
 	return mockllm.Stream(
@@ -986,6 +999,44 @@ func scenarios() []scenario {
 					c.check("被拒的回退没有截断任何会话（没有 rewound 侧车）", false, strings.Join(sides, ", "))
 				} else {
 					c.check("被拒的回退没有截断任何会话（没有 rewound 侧车）", true, "")
+				}
+			},
+		},
+		//
+		// ask-form: the parked AskUserQuestion form and the keystroke that finishes it. The form is
+		// inline in the transcript with option rows and a single-line free-text box; Enter in that
+		// box submits (the box cannot hold a newline, so the key has no other job), while ⌘↩ keeps
+		// working from anywhere. The assertion is on the BARE key: the driver types its own answer
+		// and presses Enter once, and the Go half checks the answer arrived at the model — a form
+		// that closed without answering would leave the same trace in the DOM.
+		{
+			name: "ask-form",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe ask-form scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: askStream("call_q1", "用哪个方案？")},
+				// The turn only reaches this step if the answer came back through
+				// AgentService.AnswerQuestion — the premise the driver's assertion rests on.
+				{
+					Require: func(req *mockllm.RecordedRequest) string {
+						if !requestHasText(req, "两个都不选，按我的来") {
+							return "自由输入框里的回答没有回到模型（tool result 里应当带着 answers）"
+						}
+						return ""
+					},
+					Reply: textStream("收到你的自由回答，继续。", 600),
+				},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("提问一轮加回复一轮，共两次调用", len(c.requests) == 2, requestCount(c.requests))
+				_, asked := c.requestSeen("用哪个方案")
+				c.check("模型确实问了那个问题", asked, "")
+				if n, seen := c.requestSeen("两个都不选，按我的来"); !seen {
+					c.check("回答作为 tool result 到达模型", false, "前 "+strconv.Itoa(n)+" 个请求里都没有")
+				} else {
+					c.check("回答作为 tool result 到达模型", true, "出现在第 "+strconv.Itoa(n)+" 个请求")
 				}
 			},
 		},

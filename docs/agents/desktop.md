@@ -51,6 +51,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
+| the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
 | the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
 | the diff's 上下/左右 layout (pairing, blank cells, column scroll, the choice surviving) | `diff-layout`, `review-all` |

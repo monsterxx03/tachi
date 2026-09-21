@@ -387,7 +387,3 @@ export function processStepLabel(s: ProcessSummary): string {
   return ''
 }
 
-// imeActive reports whether a key event belongs to an IME composition (Chinese
-// / Japanese / Korean candidate selection). Enter while composing confirms a
-// candidate — treating it as "submit" is the classic IME bug. keyCode 229 is
-// the fallback some WebKit builds report instead of setting isComposing.

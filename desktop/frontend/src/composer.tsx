@@ -23,18 +23,10 @@ import {
 } from './types'
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { atRefAt, countAtRefs, insertRefText, listNav, replaceRefText } from './lib'
+import { atRefAt, countAtRefs, imeActive, insertRefText, listNav, replaceRefText } from './lib'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
 import { oneOffDoneLabel } from './oneoff'
-
-// imeActive reports whether a key event belongs to an IME composition (Chinese / Japanese /
-// Korean candidate selection). Enter while composing confirms a candidate — treating it as
-// "submit" is the classic IME bug. keyCode 229 is the fallback some WebKit builds report
-// instead of setting isComposing.
-export function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: number }): boolean {
-  return !!e.nativeEvent?.isComposing || e.keyCode === 229
-}
 
 // The input box's height, when the reader drags its top edge.
 //

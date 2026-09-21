@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
-import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
+import { actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
@@ -1055,6 +1055,22 @@ function AskForm({ questions, onSubmit, onCancel }: {
     onSubmit(answers)
   }
 
+  // Enter IN A FREE-TEXT FIELD submits, and that is the field's own rule rather than the form's:
+  // the box is single-line, so Enter has no other job there, and the reader who has just typed
+  // their own answer is finished with the form (`⌘↩` remains the shortcut that works with the
+  // focus anywhere — including on an option row, where a bare Enter still toggles it).
+  //
+  // Two keys are deliberately not this: an Enter that belongs to an IME's candidate window
+  // (confirming 中文/日本語 input must never answer the question — the codebase's rule for every
+  // key handler), and a MODIFIED Enter, which is the window-level shortcut's and must not submit
+  // twice.
+  const onInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || imeActive(e)) return
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+    e.preventDefault()
+    submit()
+  }
+
   // Cmd/Ctrl+Enter submits. Esc deliberately does NOT decline: the form lives in
   // the transcript, where Esc is already "dismiss the @-picker / close a modal",
   // and silently dropping a question would be a nasty surprise.
@@ -1103,13 +1119,14 @@ function AskForm({ questions, onSubmit, onCancel }: {
                 </div>
               )}
               <input className="ask-input" value={text[qi] || ''} onChange={(e) => setText((p) => ({ ...p, [qi]: e.target.value }))}
+                onKeyDown={onInputKeyDown}
                 placeholder={options.length > 0 ? '其他回答（自由输入，可留空）' : '在此输入回答'} />
             </div>
           )
         })}
       </div>
       <div className="ask-actions">
-        <span className="ask-hint">⌘↩ 提交</span>
+        <span className="ask-hint">Enter / ⌘↩ 提交</span>
         <button className="btn ghost" onClick={onCancel}>跳过</button>
         <button className="btn" onClick={submit}>提交</button>
       </div>
