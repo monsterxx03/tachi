@@ -446,6 +446,25 @@ function MoonIcon() {
   )
 }
 
+// EyeIcon is the reveal control on a credential field, and it says the STATE the box is in — a
+// struck-through eye while the value is masked, an open one while it is in the clear — because that
+// is what a reader glancing at a row of inputs needs to know about it. The two readings ("currently
+// hidden" / "click to hide") are the same picture, so the button's title spells out the ACTION.
+//
+// Drawn, like the other icons here, rather than written as 👁: the emoji is whatever the system font
+// draws, in whatever colours it picked, and this one has to sit at the input's own size in
+// currentColor beside a monospace key.
+function EyeIcon({ open }: { open: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.2 12S5.9 5.6 12 5.6 21.8 12 21.8 12 18.1 18.4 12 18.4 2.2 12 2.2 12z" />
+      <circle cx="12" cy="12" r="2.7" />
+      {open ? null : <path d="M4.4 19.6 19.6 4.4" />}
+    </svg>
+  )
+}
+
 // ThemeToggle is the titlebar light/dark switch: a two-slot pill with a sliding
 // thumb, so the state reads as "which side is on" even before the icons are
 // parsed. The label states the ACTION (what a click does), matching how the
@@ -1203,4 +1222,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon }

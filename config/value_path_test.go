@@ -488,3 +488,107 @@ func TestDescribeLeafTellsAnUnsetLeafFromAnEmptyOne(t *testing.T) {
 		t.Errorf("language = %q after a refused Unset, want it untouched", cfg.Language)
 	}
 }
+
+// Secret is the fourth thing DescribeLeaf answers (after Kind, Optional and IsSet), and it is
+// derived from the leaf's own yaml name rather than declared anywhere: the same name is a credential
+// wherever it appears, so a new provider in a new block is masked without a form being told about it.
+//
+// The half that matters as much as the secrets is the PLAIN list: `keyword_provider` sits next to
+// the api_key in the same struct and is a provider NAME, and a name-based rule that matched by
+// substring would hide a value the reader came to this page to read.
+func TestDescribeLeafMarksCredentialLeaves(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{{Name: "main", APIKey: "sk-main"}},
+		Jev:       JevConfig{APIKey: "sk-jev"},
+		WebSearch: WebSearchConfig{Providers: []WebSearchProviderConfig{{Type: WebSearchProviderExa, Key: "exa-k"}}},
+		WebFetch:  WebFetchConfig{Providers: []WebFetchProviderConfig{{Type: WebFetchProviderFirecrawl, Key: "fc-k"}}},
+		Web:       WebConfig{APIKey: "web-k"},
+	}
+	secrets := []string{
+		"providers.0.api_key",
+		"jev.api_key",
+		"web_search.providers.0.key",
+		"web_fetch.providers.0.key",
+		"web.api_key",
+	}
+	for _, key := range secrets {
+		info, err := DescribeLeaf(cfg, key)
+		if err != nil {
+			t.Errorf("DescribeLeaf(%q): %v", key, err)
+			continue
+		}
+		if !info.Secret {
+			t.Errorf("DescribeLeaf(%q) says it is not a credential", key)
+		}
+	}
+	plain := []string{
+		"providers.0.name",
+		"providers.0.base_url",
+		"memory.keyword_provider",
+		"web_search.providers.0.base_url",
+		"web_fetch.providers.0.type",
+		"web.addr",
+	}
+	for _, key := range plain {
+		info, err := DescribeLeaf(cfg, key)
+		if err != nil {
+			t.Errorf("DescribeLeaf(%q): %v", key, err)
+			continue
+		}
+		if info.Secret {
+			t.Errorf("DescribeLeaf(%q) calls a plain leaf a credential", key)
+		}
+	}
+}
+
+// Every name in secretLeafNames must be a name this config actually uses. The set is written by
+// hand (see its comment), so an entry left behind by a renamed field is a rule that silently does
+// nothing — nothing else in the code can notice, because "no leaf has this name" is exactly what a
+// working rule looks like from here.
+func TestEverySecretLeafNameIsALeafOfTheConfig(t *testing.T) {
+	used := make(map[string]bool)
+	for _, path := range YAMLPaths() {
+		segs := strings.Split(path, ".")
+		used[segs[len(segs)-1]] = true
+	}
+	for name := range secretLeafNames {
+		if !used[name] {
+			t.Errorf("secretLeafNames holds %q, which is not a leaf of the config", name)
+		}
+	}
+}
+
+// The element template is the one description of a leaf that does not come from a value, and a
+// credential added ON THE PAGE (`providers` ＋) must be masked exactly like one read from the file.
+func TestElementFieldsCarrySecret(t *testing.T) {
+	for _, tc := range []struct {
+		list string
+		tail string
+		want bool
+	}{
+		{"providers", "api_key", true},
+		{"providers", "base_url", false},
+		{"web_search.providers", "key", true},
+		{"web_search.providers", "base_url", false},
+		{"web_fetch.providers", "key", true},
+	} {
+		fields, err := ElementFields(tc.list)
+		if err != nil {
+			t.Errorf("ElementFields(%q): %v", tc.list, err)
+			continue
+		}
+		found := false
+		for _, f := range fields {
+			if f.Tail != tc.tail {
+				continue
+			}
+			found = true
+			if f.Secret != tc.want {
+				t.Errorf("%s.%s: Secret = %v, want %v", tc.list, tc.tail, f.Secret, tc.want)
+			}
+		}
+		if !found {
+			t.Errorf("%s has no %q leaf in its template", tc.list, tc.tail)
+		}
+	}
+}

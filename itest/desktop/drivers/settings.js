@@ -8,6 +8,10 @@
 //   · 路径不当标签：`providers.0.model` 这种字符串不该出现在表单里（卡片头说"是哪个 provider"）；
 //   · 下拉的选项来自**这份配置**（`providers.*.name`），不是一张写死的表；
 //   · 「自动」= 未设置，落到文件里是那个键**不出现** —— 这是唯一一个"没有值"也有表达的状态。
+//
+// 还有一条落在"声明有没有送到界面"上，只是它管的是**怎么显示**而不是显示什么：密钥叶子（api_key、
+// provider 的 key）是掩码框 + 眼睛，而它旁边同层的 base_url 既没有眼睛也不是掩码框 —— 掩码与否是
+// 后端那份叶子名集合说了算，不是前端看名字猜的。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
@@ -17,6 +21,18 @@
       return !!k && smoke.text(k).replace(/⟳.*$/, '').trim() === key
     })
   const catByName = (name) => smoke.qa('.settings-cat').find((b) => smoke.text(b.firstElementChild) === name)
+  // 一张列表条目的卡片，按**卡片头里写着哪个条目**找（`providers[0]`）。卡片头是这张卡片唯一的身份：
+  // 页面上同时有别的卡片（jev 的 pricing 档位也是一张），按下标取会拿到别人。
+  const cardByHead = (want) =>
+    smoke.qa('.set-elem').find((c) => smoke.text(c.querySelector('.set-elem-head')).indexOf(want) >= 0)
+  // 一张卡片里的一行，按叶子尾段找（卡片里写的是尾段，前缀由卡片头说了）。**必须限定在卡片里**：
+  // 同一个尾段在页面上不止一处 —— `jev.api_key` 在自己的块里也叫 api_key，值却是空的。
+  const rowIn = (scope, key) => Array.prototype.slice.call(scope.querySelectorAll('.set-row')).find(
+    (r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === key)
+  // 一个块里的 ＋ 按钮，按它**自己写的名字**找（「＋ 添加 providers」）。不能按位置取：模型组里除了
+  // providers，jev 的 pricing.bands 也是一个声明过的列表，它的 ＋ 排在前面，`[0]` 拿到的是它 ——
+  // 点下去"什么都没发生"，跟着的每一条新卡片断言一起塌。
+  const addButton = (list) => smoke.qa('.set-add .btn').find((b) => smoke.text(b) === '＋ 添加 ' + list)
 
   // ── 进设置页 ──────────────────────────────────────────────────────────────
   const settingsBtn = smoke.qa('.footer-item').find((b) => smoke.text(b) === '设置')
@@ -69,6 +85,47 @@
     ['name', 'model', 'base_url', 'api_key'].every((k) => innerKeys.indexOf(k) >= 0), innerKeys.join(' / '))
   smoke.check('展开后仍然不出现 providers.0.*',
     smoke.text('.set-elem-body').indexOf('providers.0.') < 0, smoke.text('.set-elem-body').slice(0, 120))
+
+  // ── 密钥字段：默认掩码，眼睛才给明文 ──────────────────────────────────────
+  // 这一条钉的是"后端说了哪些叶子是密钥"一路走到界面：api_key 的框必须是掩码框，旁边一只眼睛。
+  // 掩码不是安全边界（值本来就在页面、DOM 和文件里），它挡的是共享屏幕/截图时的那一眼 —— 所以
+  // 断言的是"显示方式"，而框里的值始终是配置里那把真 key。
+  //
+  // 全部限定在 providers[0] 这张卡片里：同一个尾段在页面上不止一处，`jev.api_key` 也叫 api_key，
+  // 只是它的值是空的 —— 全局找会拿到那一行，然后"值装的是 smoke-key"这条就莫名其妙的挂了。
+  const providerCard = cardByHead('providers[0]')
+  const secretRow = providerCard ? rowIn(providerCard, 'api_key') : null
+  const secretBox = secretRow ? secretRow.querySelector('input') : null
+  const secretEye = secretRow ? secretRow.querySelector('.set-secret-eye') : null
+  smoke.check('api_key 默认是掩码框（type=password）', !!secretBox && secretBox.type === 'password',
+    secretBox ? secretBox.type : '(没有输入框)')
+  smoke.check('掩码框里装的就是配置里那把 key（掩码是显示，不是替换）',
+    !!secretBox && secretBox.value === 'smoke-key', secretBox ? secretBox.value : '')
+  smoke.check('掩码框旁边有一只眼睛', !!secretEye, secretEye ? secretEye.title : '(没有 .set-secret-eye)')
+  if (secretEye) {
+    smoke.click(secretEye)
+    const revealed = await smoke.waitFor(() => {
+      const box = rowIn(providerCard, 'api_key').querySelector('input')
+      return box && box.type === 'text' ? box : null
+    }, '点眼睛后变明文')
+    // 副带一条：看明文不是改值 —— 眼睛是显示状态，不进草稿，所以行还是干净的（保存不会因此多一项）。
+    smoke.check('点眼睛 = 明文（值还在，行也没变脏）',
+      !!revealed && revealed.value === 'smoke-key' && !rowIn(providerCard, 'api_key').classList.contains('is-dirty'),
+      revealed ? revealed.type + ' / dirty=' + rowIn(providerCard, 'api_key').classList.contains('is-dirty') : '(没变)')
+    smoke.click(secretEye)
+    const remasked = await smoke.waitFor(() => {
+      const box = rowIn(providerCard, 'api_key').querySelector('input')
+      return box && box.type === 'password' ? box : null
+    }, '再点一次变回掩码')
+    smoke.check('再点一次回到掩码（眼睛是切换，不是一次性）', !!remasked, '')
+  }
+  // 旁边不是密钥的字段一点不受影响。**名字里带 key 就掩码的规则会在这里翻车**：`api_key` 和
+  // `base_url` 是同一个 struct 的兄弟叶子，掩码与否只由后端那一份叶子名集合决定。
+  const plainRow = providerCard ? rowIn(providerCard, 'base_url') : null
+  const plainBox = plainRow ? plainRow.querySelector('input') : null
+  smoke.check('非密钥字段不受影响（base_url 是明文，也没有眼睛）',
+    !!plainBox && plainBox.type === 'text' && !plainRow.querySelector('.set-secret-eye'),
+    plainBox ? plainBox.type : '(没有行)')
 
   // ── 「自动」：*bool 且没有默认值的叶子是三态，不是复选框 ───────────────────
   // spec.vision 的 nil 有含义（按模型能力表自动判断），所以它必须有第三个位置。
@@ -216,32 +273,39 @@
   smoke.check('单键的行排在所有块之前（标题后面只有标题，没有无家可归的行）',
     !!form && strays.length === 0, strays.join(' / ') || (form ? '' : '没有 .settings-form'))
 
-  const addBtn = smoke.qa('.set-add .btn')[0]
-  if (!addBtn) return smoke.fail('模型组里有「＋ 添加一项」', smoke.text('.settings-form'))
+  const addBtn = addButton('providers')
+  if (!addBtn) return smoke.fail('模型组里有「＋ 添加 providers」', smoke.allText('.set-add .btn').join(' / '))
   // 新卡片出现、展开着、定位是 providers[1]（不是 providers.1）
   // 全新的条目没有名字，所以卡片头就是它的定位（providers[1]）—— 副标题此时是空的（head 里已经
   // 写了同一句话，重复一遍没有意义）。
-  const cardByHead = (want) =>
-    smoke.qa('.set-elem').find((c) => smoke.text(c.querySelector('.set-elem-head')).indexOf(want) >= 0)
   smoke.click(addBtn)
   const newCard = await smoke.waitFor(() => cardByHead('providers[1]'), '新条目的卡片')
   smoke.check('＋ 立刻画出新条目（不必问后端，也没有回执要等）', !!newCard,
     newCard ? smoke.text(newCard.querySelector('.set-elem-head')) : '')
+  // 没有卡片就停：后面每一条都要在这张卡片里找元素，硬走下去只会把一条失败变成一屏失败。
+  if (!newCard) return smoke.finish()
   // 等它展开（新增的条目就是拿来填的，不该还折着）
   const opened = await smoke.waitFor(
     () => (newCard.querySelector('.set-elem-body') ? true : null), '新条目自动展开')
   smoke.check('新条目是展开的（正是要填它）', !!opened, opened ? '' : '仍然折着')
   // 而且它**能填**：条目还不在配置里，所以它的叶子在 schema 里没有值可走 —— 字段来自后端给的
   // 「条目模板」（SettingListVO.element）。没有这一条，＋ 画出来的就是一张空卡片。
-  const newCardKeys = smoke.allText('.set-elem-body .set-key').map((t) => t.replace(/⟳.*$/, '').trim())
+  const newCardKeys = Array.prototype.slice.call(newCard.querySelectorAll('.set-key'))
+    .map((k) => smoke.text(k).replace(/⟳.*$/, '').trim())
   smoke.check('新条目有输入框（叶子来自条目模板，不靠配置里的值）',
     ['name', 'model', 'api_key'].every((k) => newCardKeys.indexOf(k) >= 0), newCardKeys.join(' / '))
+  // 模板带来的密钥叶子同样是掩码框：＋ 拉出来的卡片上那把 key 是从零敲进去的，它是这张卡片上最不
+  // 该明文的字段（ElementField.Secret → SettingListVO.element → 页面的 pendingFields）。
+  const newSecretRow = rowIn(newCard, 'api_key')
+  smoke.check('＋ 拉出来的卡片上，api_key 也是掩码框（模板带上了这一位）',
+    !!newSecretRow && newSecretRow.querySelector('input').type === 'password',
+    newSecretRow ? newSecretRow.querySelector('input').type : '(新卡片里没有 api_key 行)')
   // 页脚要把它算进"未保存"：它是这个页面持有、配置里还没有的东西。
   const footPending = smoke.text('.settings-dirty-count')
   smoke.check('页脚把待新增的条目也数进去', footPending.indexOf('待新增') >= 0, footPending)
   // 再按一次 ＋：两条待新增必须落在**两个不同的下标**上（页面的算术：列表长度 + 它已经持有的条数）。
   // 曾经这里两边都算成 providers.1 —— 保存时两个条目的字段互相踩，列表里还多出一条空元素。
-  smoke.click(smoke.qa('.set-add .btn')[0])
+  smoke.click(addButton('providers'))
   const secondNew = await smoke.waitFor(() => cardByHead('providers[2]'), '第二次 ＋ 的卡片')
   smoke.check('＋ 两次落在两个下标上（providers[1] / providers[2]）',
     !!secondNew && !!cardByHead('providers[1]'), smoke.allText('.set-elem-head').join(' / '))

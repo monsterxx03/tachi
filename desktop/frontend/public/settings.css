@@ -203,6 +203,34 @@
   resize: vertical;
   min-height: 62px;
 }
+
+/* A credential's box: the same input, masked, with the eye INSIDE its right edge. The button
+   overlays the input rather than sitting in a column of its own — a second grid column for a 26px
+   control would push every later field's left edge away from the ones above it, and this page is
+   read as a column of identical boxes. The input keeps room for it, so a long key scrolls under
+   the button instead of behind it. */
+.set-secret { position: relative; }
+.set-secret .set-input { padding-right: 34px; }
+.set-secret-eye {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.set-secret-eye:hover { color: var(--text); background: var(--hover); }
+.set-secret-eye:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+
 /* Changed but not saved: the row says so where the change is, because the footer's
    count only says how many there are. */
 .set-row.is-dirty { box-shadow: inset 2px 0 0 var(--accent); }

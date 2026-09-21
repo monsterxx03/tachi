@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { SettingFieldVO, SettingListVO, SettingsPreviewVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { Caret } from './components'
+import { Caret, EyeIcon } from './components'
 import { DiffLines } from './diff'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
@@ -203,6 +203,9 @@ function pendingFields(schema: SettingsSchemaVO | null, adds: PendingAdd[]): Set
         needsRestart: leaf.needsRestart,
         category: leaf.category,
         note: leaf.note,
+        // Masking travels with the template like everything else: a key typed into a card ＋ made
+        // is the same key as one read from the file (see SecretInput).
+        secret: leaf.secret,
       })
     }
   }
@@ -1040,6 +1043,35 @@ function autoControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => vo
   )
 }
 
+/** SecretInput is a credential's box: masked until the reader asks to see it.
+ *
+ *  The MASK is a display decision and not a secret — the value is in this page, the DOM and the file
+ *  either way, and nothing about it is access control. What it buys is that a key is not on screen
+ *  while its owner shares one, and that a screenshot of this page is not a screenshot of the key.
+ *
+ *  Which leaves these are is the backend's answer (`secret`, from config's own leaf names), so this
+ *  component never looks at a key. The reveal is this box's own state, not a prop: whether a reader
+ *  has opened one box is a fact about their screen, nothing outside the box wants it, and nothing in
+ *  the draft machinery should see it (a reveal is not an edit). It therefore resets with the page —
+ *  masked is the state to come back to.
+ *
+ *  The value is a STRING draft like every other control's, so a half-typed key behaves exactly like
+ *  a half-typed model name: dirty, savable, and put back untouched by a refused save. */
+function SecretInput({ value, onChange }: { value: string; onChange: (v: Draft) => void }) {
+  const [shown, setShown] = useState(false)
+  const label = shown ? '隐藏' : '显示明文'
+  return (
+    <div className="set-secret">
+      <input className="set-input" type={shown ? 'text' : 'password'} value={value} spellCheck={false}
+        autoComplete="off" onChange={(e) => onChange(e.target.value)} />
+      <button type="button" className="set-secret-eye" onClick={() => setShown(!shown)}
+        title={label} aria-label={label} aria-pressed={shown}>
+        <EyeIcon open={shown} />
+      </button>
+    </div>
+  )
+}
+
 function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void) {
   const text = typeof value === 'string' ? value : ''
   switch (f.kind) {
@@ -1075,6 +1107,10 @@ function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => v
       //     has been picked.
       const options = f.options ?? []
       if (options.length === 0) {
+        // A credential is a box of its own: same input, masked until the reader asks (see
+        // SecretInput). It can never be a dropdown — a key has no declared choice set — so the
+        // two branches cannot both apply.
+        if (f.secret) return <SecretInput value={text} onChange={onChange} />
         return <input className="set-input" type="text" value={text} spellCheck={false}
           onChange={(e) => onChange(e.target.value)} />
       }

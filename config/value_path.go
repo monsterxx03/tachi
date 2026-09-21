@@ -122,6 +122,14 @@ type LeafInfo struct {
 	// IsSet is whether the leaf currently holds a value. For a non-pointer leaf it is always
 	// true; `Optional && !IsSet` is the 自动 state.
 	IsSet bool
+	// Secret says this leaf holds a CREDENTIAL (`api_key`, a provider's `key`), so a form draws
+	// it masked instead of in the clear. It is a fact about the config's own vocabulary, taken
+	// from the leaf's yaml name (secretLeafNames) rather than declared per field on a form: the
+	// leaf name is the one thing the file, the path API and the form already agree on.
+	//
+	// Masking is a DISPLAY decision and nothing more — the value is in the page, the process and
+	// the file either way, and this flag is no kind of access control.
+	Secret bool
 }
 
 // DescribeLeaf reports how the leaf at key is declared — the half of a leaf's description that
@@ -138,7 +146,7 @@ func DescribeLeaf(cfg *Config, key string) (LeafInfo, error) {
 // the config walk and the element walk (resolveElementPath, in config_edits.go) describe a leaf the
 // same way.
 func describeLeafRef(leaf leafRef) LeafInfo {
-	info := LeafInfo{Kind: kindOfType(leaf.value.Type()), IsSet: true}
+	info := LeafInfo{Kind: kindOfType(leaf.value.Type()), IsSet: true, Secret: secretLeafName(yamlName(leaf.field))}
 	if leaf.value.Kind() == reflect.Pointer {
 		_, hasDefault := leaf.defaultValue()
 		info.Optional = !hasDefault
@@ -146,6 +154,30 @@ func describeLeafRef(leaf leafRef) LeafInfo {
 	}
 	return info
 }
+
+// secretLeafNames are the config's credential leaves, by yaml name.
+//
+// Written out rather than pattern-matched (`strings.Contains(name, "key")`), because a name is what
+// the config declares and the pattern's false positives are invisible: anything named `...key`
+// would silently lose its plaintext, and a form that hides a value nobody asked it to hide is a
+// value the reader cannot check. A new credential leaf is added here, deliberately.
+//
+// The set is over the yaml names of the WHOLE config, so it covers every place a leaf with that
+// name appears (`providers.N.api_key` and `jev.api_key` are the same name; `web_search` and
+// `web_fetch` providers both spell their credential `key`). A name in this set that no leaf of the
+// config uses is a rule that does nothing, which is why the test walks YAMLPaths and fails on one.
+//
+// Every leaf with one of these names is a plain STRING today, which is the one kind a form can mask:
+// a credential that turned into a `string_list` would need the page's masked branch widened, since
+// Secret alone would then reach a control that prints its value line by line.
+var secretLeafNames = map[string]bool{
+	"api_key": true, // ProviderConfig.APIKey, JevConfig.APIKey, WebConfig.APIKey
+	"key":     true, // WebSearchProviderConfig.Key, WebFetchProviderConfig.Key
+}
+
+// secretLeafName reports whether a leaf's yaml name is a credential's. An empty name — a path that
+// ended on a slice element or a map value, where there is no struct field to read — is not one.
+func secretLeafName(name string) bool { return secretLeafNames[name] }
 
 // KindOf names the input a value wants. Reflection rather than a switch on concrete types,
 // because the config has named scalar types (`config.Duration` is an int64 underneath) that are

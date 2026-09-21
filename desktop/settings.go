@@ -705,6 +705,11 @@ type SettingFieldVO struct {
 	// from the model, `max_retries: nil` = the path's default). The form draws 自动 for them, and
 	// they are the only fields it can clear back to it.
 	Optional bool `json:"optional,omitempty"`
+	// Secret is config.LeafInfo's: this leaf holds a credential (`api_key`, a provider's `key`),
+	// so the form draws it masked and puts a 眼睛 beside it. Derived from the leaf's yaml name
+	// (config's secretLeafNames) rather than declared here, for the same reason Kind is: the
+	// leaf name already fixes the field, and a second declaration is a second thing to get wrong.
+	Secret bool `json:"secret,omitempty"`
 	// IsSet says whether the leaf currently holds a value. `Optional && !IsSet` is the 自动
 	// state; a leaf that is not optional is always set. It cannot be read off Value: an unset
 	// pointer WITH a default reads as that default (see config.LeafInfo).
@@ -779,13 +784,14 @@ type SettingListVO struct {
 type SettingElementFieldVO struct {
 	// Tail is the leaf's path inside the element (`name`, `spec.proxy`).
 	Tail string `json:"tail"`
-	// Kind, Value, Optional, IsSet, NeedsRestart, Category, Options and Note are SettingFieldVO's
-	// own — see there for what each one means.
+	// Kind, Value, Optional, IsSet, Secret, NeedsRestart, Category, Options and Note are
+	// SettingFieldVO's own — see there for what each one means.
 	Kind         string   `json:"kind"`
 	Value        any      `json:"value"`
 	Options      []string `json:"options,omitempty"`
 	Optional     bool     `json:"optional,omitempty"`
 	IsSet        bool     `json:"isSet"`
+	Secret       bool     `json:"secret,omitempty"`
 	NeedsRestart bool     `json:"needsRestart"`
 	Category     string   `json:"category"`
 	Note         string   `json:"note,omitempty"`
@@ -821,7 +827,7 @@ func listElementTemplate(cfg *config.Config, listPath string) []SettingElementFi
 		}
 		out = append(out, SettingElementFieldVO{
 			Tail: leaf.Tail, Kind: leaf.Kind, Value: leaf.Value, Options: options,
-			Optional: leaf.Optional, IsSet: leaf.IsSet,
+			Optional: leaf.Optional, IsSet: leaf.IsSet, Secret: leaf.Secret,
 			NeedsRestart: row.needsRestart(), Category: row.Category, Note: row.Note,
 		})
 	}
@@ -899,6 +905,7 @@ func settingField(cfg *config.Config, key string, row settingApply) SettingField
 		Options:      options,
 		Optional:     info.Optional,
 		IsSet:        info.IsSet,
+		Secret:       info.Secret,
 		Note:         note,
 	}
 }

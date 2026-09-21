@@ -174,10 +174,14 @@ type ElementField struct {
 	// Tail is the leaf's path INSIDE the element (`name`, `spec.proxy`) — the shape a caller can
 	// address against an element whose index it names itself.
 	Tail string
-	// Kind, Optional and IsSet are LeafInfo's, read off the element's declared type.
+	// Kind, Optional, IsSet and Secret are LeafInfo's, read off the element's declared type.
 	Kind     string
 	Optional bool
 	IsSet    bool
+	// Secret is LeafInfo.Secret: a credential leaf (`api_key`, a provider's `key`), which a form
+	// draws masked. It rides here because a NEW item's card is drawn from this template, and an
+	// api_key added on the page must be masked like one read from the file.
+	Secret bool
 	// Value is what the element holds for this leaf before anyone edits it: the type's own default
 	// (a `web_search` provider starts at `type: exa`), or nil for a leaf with neither a default nor
 	// a value. It is what the form SHOWS, not a value the config has.
@@ -218,7 +222,7 @@ func ElementFields(listPath string) ([]ElementField, error) {
 		}
 		info := describeLeafRef(leaf)
 		out = append(out, ElementField{
-			Tail: tail, Kind: info.Kind, Optional: info.Optional, IsSet: info.IsSet,
+			Tail: tail, Kind: info.Kind, Optional: info.Optional, IsSet: info.IsSet, Secret: info.Secret,
 			Value: readLeafRef(leaf),
 		})
 	}

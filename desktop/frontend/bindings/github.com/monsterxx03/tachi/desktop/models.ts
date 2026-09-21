@@ -974,14 +974,15 @@ export interface SettingElementFieldVO {
     "tail": string;
 
     /**
-     * Kind, Value, Optional, IsSet, NeedsRestart, Category, Options and Note are SettingFieldVO's
-     * own — see there for what each one means.
+     * Kind, Value, Optional, IsSet, Secret, NeedsRestart, Category, Options and Note are
+     * SettingFieldVO's own — see there for what each one means.
      */
     "kind": string;
     "value": any;
     "options"?: string[] | null;
     "optional"?: boolean;
     "isSet": boolean;
+    "secret"?: boolean;
     "needsRestart": boolean;
     "category": string;
     "note"?: string;
@@ -1046,6 +1047,14 @@ export interface SettingFieldVO {
      * they are the only fields it can clear back to it.
      */
     "optional"?: boolean;
+
+    /**
+     * Secret is config.LeafInfo's: this leaf holds a credential (`api_key`, a provider's `key`),
+     * so the form draws it masked and puts a 眼睛 beside it. Derived from the leaf's yaml name
+     * (config's secretLeafNames) rather than declared here, for the same reason Kind is: the
+     * leaf name already fixes the field, and a second declaration is a second thing to get wrong.
+     */
+    "secret"?: boolean;
 
     /**
      * IsSet says whether the leaf currently holds a value. `Optional && !IsSet` is the 自动

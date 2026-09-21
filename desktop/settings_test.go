@@ -1037,6 +1037,72 @@ func fieldByKey(t *testing.T, leaves []SettingElementFieldVO, tail string) (Sett
 	return SettingElementFieldVO{}, false
 }
 
+// A credential leaf is drawn masked, and what makes it one is the config's own name for it — so the
+// flag has to reach the page through BOTH descriptions of a leaf: the schema (a value the config
+// holds) and the item template (a value it does not hold yet, because the page is about to add it).
+// A template that lost it would draw one plain box on the card ＋ makes, which is the one place a
+// key gets typed in from scratch.
+func TestSettingsSchemaMarksCredentialFields(t *testing.T) {
+	_, svc, _ := settingsFixture(t, `provider: main
+providers:
+  - name: main
+    type: openai
+    model: m
+    base_url: http://x/v1
+    api_key: secret-from-the-file
+web_search:
+  providers:
+    - type: exa
+      key: exa-key
+`)
+	schema := svc.GetSettingsSchema()
+	byKey := make(map[string]SettingFieldVO, len(schema.Fields))
+	for _, f := range schema.Fields {
+		byKey[f.Key] = f
+	}
+	// `web.api_key` is deliberately absent: `tachi web` is another entry mode, so its block is not
+	// offered here at all (an applyUnused row) — the classification is still config's, which is why
+	// the config package's own test covers it.
+	for _, key := range []string{"providers.0.api_key", "web_search.providers.0.key", "jev.api_key"} {
+		f, ok := byKey[key]
+		if !ok {
+			t.Errorf("%q is not in the schema at all", key)
+			continue
+		}
+		if !f.Secret {
+			t.Errorf("%q is not marked as a credential — the form would show it in the clear", key)
+		}
+	}
+	// The other half, and the one a name-matching rule gets wrong: a leaf beside the api_key that
+	// merely NAMES something is not a credential.
+	for _, key := range []string{"providers.0.base_url", "providers.0.model", "web_search.providers.0.type"} {
+		if f, ok := byKey[key]; ok && f.Secret {
+			t.Errorf("%q is marked as a credential — the form would hide a name the reader came to read", key)
+		}
+	}
+	// The template, for a list the config holds and for one it does not (`web_fetch` is absent
+	// here): a card made by ＋ is edited by the same machinery as a read row.
+	for _, tc := range []struct {
+		list   string
+		tail   string
+		secret bool
+	}{
+		{"providers", "api_key", true},
+		{"providers", "base_url", false},
+		{"web_fetch.providers", "key", true},
+		{"web_fetch.providers", "base_url", false},
+	} {
+		leaf, ok := fieldByKey(t, findList(t, schema, tc.list).Element, tc.tail)
+		if !ok {
+			t.Errorf("%s's template has no %q leaf", tc.list, tc.tail)
+			continue
+		}
+		if leaf.Secret != tc.secret {
+			t.Errorf("%s's template: %s.Secret = %v, want %v", tc.list, tc.tail, leaf.Secret, tc.secret)
+		}
+	}
+}
+
 // TestSaveSettingsCarriesTheAddTheValuesAndTheRemoval is one save the way the page sends one: the
 // item it is adding (named by the path it drew), the values typed into it, an edit on an item that
 // was already there, and the item it dropped — all four in ONE write of config.yaml.
