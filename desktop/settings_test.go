@@ -396,8 +396,8 @@ providers:
 	if f := byKey["max_tokens"]; f.Value != 4096 || f.Kind != "int" {
 		t.Errorf("max_tokens = %+v", f)
 	}
-	if f := byKey["lsp.enabled"]; f.Value != true || f.Kind != "bool" {
-		t.Errorf("lsp.enabled = %+v (an unset *bool must read as its default)", f)
+	if f := byKey["checkpoints.enabled"]; f.Value != true || f.Kind != "bool" {
+		t.Errorf("checkpoints.enabled = %+v (an unset *bool must read as its default)", f)
 	}
 	// One block, two fates: the level is hot (a shared LevelVar reaches every logger), the
 	// rotation limits are not (frozen in a rotatingWriter with an open fd) — and the ⟳ badge
@@ -565,7 +565,7 @@ func TestTheLikelyEditsStayHot(t *testing.T) {
 		"web_search.max_results", "web_fetch.timeout", "tool_result.max_chars",
 		"checkpoints.enabled", "checkpoints.max_files", "checkpoints.retain",
 		"system_reminder.git_reminder",
-		"lsp.enabled", "lsp.max_results", "memory.type", "memory.decay_half_life_days",
+		"memory.type", "memory.decay_half_life_days",
 		"subagent.worktree", "subagent.max_concurrency",
 		"active_mcp_profile", "mcp_tool_search.enabled", "mcp_tool_refresh.interval",
 		"compact.auto", "compact.threshold", "oneoff.enabled", "max_tokens",
@@ -642,8 +642,8 @@ func TestTheFormSeesAndSavesWhatTheFileHolds(t *testing.T) {
 	d, svc, path := settingsFixture(t, `permissions:
   bash:
     allow: ["ls"]
-lsp:
-  request_timeout: 15s
+mcp_tool_search:
+  jev_budget: 15s
 memory:
   timeout: 90s
 `)
@@ -656,8 +656,8 @@ memory:
 	// 30s` in config.yaml stays `timeout: 30s` after an edit. Both duration types are here,
 	// because they used to answer differently.
 	for key, want := range map[string]string{
-		"lsp.request_timeout": "15s",   // config.Duration, which marshals as a string
-		"memory.timeout":      "1m30s", // time.Duration, which has no marshaller of its own
+		"mcp_tool_search.jev_budget": "15s",   // config.Duration, which marshals as a string
+		"memory.timeout":             "1m30s", // time.Duration, which has no marshaller of its own
 	} {
 		if f := byKey[key]; f.Kind != "string" || f.Value != want {
 			t.Errorf("%s = %+v, want kind \"string\" and value %q", key, f, want)
@@ -668,14 +668,14 @@ memory:
 	}
 
 	res := svc.SaveSettings(map[string]any{
-		"permissions.bash.allow": []any{"ls", "pwd"}, // an array, as the bridge delivers one
-		"lsp.request_timeout":    "45s",              // the text the box held
+		"permissions.bash.allow":     []any{"ls", "pwd"}, // an array, as the bridge delivers one
+		"mcp_tool_search.jev_budget": "45s",              // the text the box held
 	}, nil, nil)
 	if !res.OK {
 		t.Fatalf("save: ok=%v summary=%s", res.OK, res.Summary)
 	}
-	if got := time.Duration(d.cfg.LSP.RequestTimeout); got != 45*time.Second {
-		t.Errorf("LSP.RequestTimeout = %v in memory, want 45s", got)
+	if got := time.Duration(d.cfg.MCPToolSearch.JevBudget); got != 45*time.Second {
+		t.Errorf("MCPToolSearch.JevBudget = %v in memory, want 45s", got)
 	}
 	file := readFileT(t, path)
 	if !strings.Contains(file, "45s") || !strings.Contains(file, "pwd") {
@@ -921,8 +921,8 @@ func TestSaveSettingsUnsetsAnOptionalLeaf(t *testing.T) {
 	}
 	// A pointer WITH a default is not optional in this sense: the default says what unset means,
 	// so there is no third state to draw.
-	if f := byKey()["lsp.enabled"]; f.Optional {
-		t.Error("lsp.enabled is `*bool default:\"true\"` — unset and true are one fact, not two states")
+	if f := byKey()["checkpoints.enabled"]; f.Optional {
+		t.Error("checkpoints.enabled is `*bool default:\"true\"` — unset and true are one fact, not two states")
 	}
 
 	res := svc.SaveSettings(map[string]any{"providers.0.spec.vision": nil, "providers.0.spec.max_retries": nil}, nil, nil)

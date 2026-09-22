@@ -35,8 +35,9 @@ type MemoryRecallReminder struct {
 
 // SetBackend points the reminder at a different backend, or at none (nil = memory off).
 //
-// Same reason as LSPDiagnosticsReminder.SetProvider: the collector holds this reminder for
-// the agent's life and cannot replace it, while the backend is rebuilt when memory.* changes.
+// The collector holds this reminder for the agent's life and cannot replace it, while the
+// backend is rebuilt when memory.* changes — so the swap happens on the OBJECT the reminder
+// points at, not on the reminder.
 func (r *MemoryRecallReminder) SetBackend(b memory.Backend) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

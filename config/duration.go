@@ -35,7 +35,7 @@ func (d Duration) MarshalYAML() (any, error) {
 
 // UnmarshalYAML implements yaml.Unmarshaler, accepting both string ("10s")
 // and numeric (nanoseconds) representations — matching UnmarshalJSON.
-// Without this, Duration fields tagged with yaml (e.g. lsp.request_timeout)
+// Without this, Duration fields tagged with yaml (e.g. mcp_tool_refresh.interval)
 // fail to load whenever a user writes a natural string like "15s".
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	var v any

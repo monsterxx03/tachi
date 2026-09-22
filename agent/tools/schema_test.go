@@ -31,18 +31,6 @@ func TestGrepToolSchemaConstraints(t *testing.T) {
 	assert.Equal(t, 1000.0, *mr.Maximum)
 }
 
-func TestLSPToolSchemaConstraints(t *testing.T) {
-	p := (&LSPTool{}).Properties()
-
-	op, ok := p["operation"]
-	require.True(t, ok, "operation property missing")
-	assert.Equal(t, []string{
-		"goToDefinition", "findReferences", "hover", "documentSymbol",
-		"workspaceSymbol", "goToImplementation", "prepareCallHierarchy",
-		"incomingCalls", "outgoingCalls",
-	}, op.Enum)
-}
-
 func TestCronToolSchemaConstraints(t *testing.T) {
 	p := (&CronTool{}).Properties()
 

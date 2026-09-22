@@ -116,7 +116,7 @@ type LeafInfo struct {
 	//
 	// Only a pointer with no `default:` tag qualifies. A pointer WITH a default is not optional
 	// in this sense: the default says what unset means, so a form shows that value as an ordinary
-	// checkbox and there is nothing for a third state to express (`lsp.enabled` is
+	// checkbox and there is nothing for a third state to express (`hooks.enabled` is
 	// `*bool default:"true"` — unset and true are the same fact).
 	Optional bool
 	// IsSet is whether the leaf currently holds a value. For a non-pointer leaf it is always
@@ -418,7 +418,7 @@ func resolvePath(cfg *Config, key string) (leafRef, error) {
 	return leafRef{value: cur, field: last}, nil
 }
 
-// pathSegments splits a dot path, refusing an empty segment ("lsp..enabled" is a typo, not a
+// pathSegments splits a dot path, refusing an empty segment ("hooks..enabled" is a typo, not a
 // request) and a leading/trailing dot.
 func pathSegments(key string) ([]string, error) {
 	if strings.TrimSpace(key) == "" {

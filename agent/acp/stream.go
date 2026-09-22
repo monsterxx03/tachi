@@ -409,8 +409,6 @@ func buildToolTitle(toolName, argsJSON string) string {
 		return "Search " + summary
 	case tools.ToolNameWebFetch:
 		return "Fetch " + summary
-	case tools.ToolNameLSP:
-		return "LSP " + summary
 	case tools.ToolNameSubAgent:
 		return "SubAgent: " + summary
 	}
@@ -437,7 +435,7 @@ func replayToolTitle(toolName string, args any) string {
 }
 
 // extractFileLocation attempts to extract a file path and optional line number
-// from the tool call arguments. Tools that have a `line` parameter (e.g. LSP)
+// from the tool call arguments. Tools that have a `line` parameter (e.g. ReadFile
 // or an `offset` parameter (e.g. ReadFile, 1-indexed) will provide line numbers
 // for precise navigation in the editor UI.
 func extractFileLocation(argsJSON string) (path string, line *int) {

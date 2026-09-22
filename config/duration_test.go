@@ -8,25 +8,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestDurationYAML verifies Duration fields tagged with yaml load from
-// natural duration strings — the LSP config (lsp.request_timeout: 15s) was
-// previously broken because Duration only implemented JSON serialization.
+// TestDurationYAML verifies Duration fields tagged with yaml load from natural duration strings
+// and marshal back as strings — Duration used to implement JSON only, so a hand-written
+// `15s` in config.yaml failed to load.
 func TestDurationYAML(t *testing.T) {
-	var lsp LSPConfig
-	if err := yaml.Unmarshal([]byte("request_timeout: 15s\nstartup_timeout: 20s"), &lsp); err != nil {
+	var ms MCPToolSearchConfig
+	if err := yaml.Unmarshal([]byte("jev_budget: 15s"), &ms); err != nil {
 		t.Fatalf("yaml.Unmarshal of Duration fields failed: %v", err)
 	}
-	if got := lsp.RequestTimeout.String(); got != "15s" {
-		t.Errorf("RequestTimeout = %s, want 15s", got)
-	}
-	if got := lsp.StartupTimeout.String(); got != "20s" {
-		t.Errorf("StartupTimeout = %s, want 20s", got)
+	if got := ms.JevBudget.String(); got != "15s" {
+		t.Errorf("JevBudget = %s, want 15s", got)
 	}
 
 	// Marshal round-trip: YAML output should be a string, not nanoseconds.
-	var server LSPServerConfig
-	server.StartupTimeout = Duration(10e9) // 10s
-	out, err := yaml.Marshal(server)
+	out, err := yaml.Marshal(MCPToolSearchConfig{JevBudget: Duration(10e9)}) // 10s
 	if err != nil {
 		t.Fatalf("yaml.Marshal: %v", err)
 	}

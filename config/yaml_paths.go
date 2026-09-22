@@ -30,14 +30,14 @@ func YAMLPaths() []string {
 }
 
 // PathsFor returns the leaf paths THIS config can be asked about, with every wildcard already
-// expanded into a concrete key: `providers.0.model`, `lsp.servers.1.command`,
+// expanded into a concrete key: `providers.0.model`, `web_search.providers.1.name`,
 // `hooks.events.pre_tool.0.command`.
 //
 // It is the shape a form needs — an input box cannot be labelled "*" — and its callers are
 // the desktop's settings schema (which enumerates the fields) and any test that wants to know
-// which keys a given config exposes. Empty collections contribute nothing: with no LSP servers
-// configured there is no `lsp.servers.N.*` to edit, and the block's own leaves (`lsp.enabled`)
-// are still there.
+// which keys a given config exposes. Empty collections contribute nothing: with no search
+// providers configured there is no `web_search.providers.N.*` to edit, and the block's own
+// leaves (`web_search.max_results`) are still there.
 func PathsFor(cfg *Config) []string {
 	var out []string
 	walkYAMLValue(reflect.ValueOf(cfg), "", &out)

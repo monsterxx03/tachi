@@ -34,7 +34,7 @@ func TestDisabledReminderCollector_NoOp(t *testing.T) {
 // TestConfigure_DisableSystemReminders ensures the agent configured with the
 // flag collects zero reminders on a first-message context (where DateReminder
 // / GitReminder / ProjectContextReminder would otherwise fire), while the
-// collector stays non-nil so later AddReminder calls (LSP diagnostics,
+// collector stays non-nil so later AddReminder calls (plan reminders,
 // deferred MCP tools) remain safe.
 func TestConfigure_DisableSystemReminders(t *testing.T) {
 	full := config.DefaultConfig()

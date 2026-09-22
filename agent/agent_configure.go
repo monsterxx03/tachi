@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
-	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -82,8 +81,8 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 	if a.Config.DisableSystemReminders {
 		// Non-interactive modes (e.g. `tachi -p`) want zero system reminders:
 		// no date/git/project context, no skills catalog, no memory recall.
-		// The no-op collector keeps later AddReminder calls (LSP diagnostics,
-		// deferred MCP tools) inert and safe.
+		// The no-op collector keeps later AddReminder calls (deferred MCP
+		// tools, plan reminders) inert and safe.
 		a.Config.Logger.Info(ctx, "System reminders: disabled (non-interactive mode)")
 		a.Config.ReminderCollector = disabledReminderCollector{}
 	} else {
@@ -147,9 +146,6 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		a.hooksInjected = true // the frontend's own dispatcher: not ours to replace
 	}
 
-	// --- LSP servers ---
-	a.initLSP(ctx, sysCfg.LSP)
-
 	return mgr, nil
 }
 
@@ -207,35 +203,6 @@ func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
 	if len(d.Events()) > 0 {
 		a.Config.HookDispatcher = d
 		a.Config.Logger.Info(ctx, "Hooks: dispatcher initialized", "events", len(d.Events()))
-	}
-}
-
-// convertLSPConfig converts from config.LSPConfig to lsp.Config.
-func convertLSPConfig(cfg *config.LSPConfig) *lsp.Config {
-	servers := make([]lsp.ServerConfig, len(cfg.Servers))
-	for i, s := range cfg.Servers {
-		servers[i] = lsp.ServerConfig{
-			Name:               s.Name,
-			Command:            s.Command,
-			Args:               s.Args,
-			Extensions:         s.Extensions,
-			Languages:          s.Languages,
-			InitializationOpts: s.InitializationOpts,
-			Settings:           s.Settings,
-			Env:                s.Env,
-			WorkspaceFolder:    s.WorkspaceFolder,
-			StartupTimeout:     time.Duration(s.StartupTimeout),
-			ConcurrencyLimit:   s.ConcurrencyLimit,
-		}
-	}
-	return &lsp.Config{
-		MaxRestarts:      cfg.MaxRestarts,
-		MaxFileSize:      cfg.MaxFileSize,
-		MaxResults:       cfg.MaxResults,
-		ConcurrencyLimit: cfg.ConcurrencyLimit,
-		RequestTimeout:   time.Duration(cfg.RequestTimeout),
-		StartupTimeout:   time.Duration(cfg.StartupTimeout),
-		Servers:          servers,
 	}
 }
 

@@ -144,50 +144,6 @@ func TestReloadFamilyIsIdempotent(t *testing.T) {
 	assert.NotNil(t, a.Config.ToolRegistry.GetTool(tools.ToolNameBash), "the built-ins are still there")
 }
 
-// TestReloadLSPRebuildsAndCleansUp: the manager is per agent and owns CHILD PROCESSES, so the
-// two half-measures are the interesting ones — leaving the old manager running, and leaving the
-// tools registered after the servers are gone.
-func TestReloadLSPRebuildsAndCleansUp(t *testing.T) {
-	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"})
-	ctx := context.Background()
-
-	on := &config.Config{}
-	on.LSP.Enabled = boolPtr(true)
-	on.LSP.Servers = []config.LSPServerConfig{{Name: "go", Command: "gopls", Extensions: []string{".go"}}}
-	require.NoError(t, a.ReloadLSP(ctx, on))
-	require.NotNil(t, a.Config.LSPManager, "an enabled LSP block must build a manager")
-	for _, name := range []string{tools.ToolNameLSP, tools.ToolNameLSPDiagnostics} {
-		if a.Config.ToolRegistry.GetTool(name) == nil {
-			t.Errorf("%s was not registered", name)
-		}
-	}
-	first := a.Config.LSPManager
-
-	// Rebuilding replaces the manager (the old one is shut down first), and the reminder follows
-	// the NEW one — it cannot be re-registered, only re-pointed.
-	on.LSP.MaxResults = 7
-	require.NoError(t, a.ReloadLSP(ctx, on))
-	if a.Config.LSPManager == first {
-		t.Error("the manager was not rebuilt")
-	}
-	require.NotNil(t, a.lspReminder, "the reminder is created on first use")
-	if a.lspReminder.Provider == nil {
-		t.Error("the diagnostics reminder still points at nothing")
-	}
-
-	// Off: no manager, no tools, and a reminder that stays quiet.
-	off := &config.Config{}
-	off.LSP.Enabled = boolPtr(false)
-	require.NoError(t, a.ReloadLSP(ctx, off))
-	assert.Nil(t, a.Config.LSPManager)
-	for _, name := range []string{tools.ToolNameLSP, tools.ToolNameLSPDiagnostics} {
-		if a.Config.ToolRegistry.GetTool(name) != nil {
-			t.Errorf("%s survived the LSP block being turned off", name)
-		}
-	}
-	assert.Nil(t, a.lspReminder.Provider, "the reminder must be pointed at nil, not at a shut-down manager")
-}
-
 // TestReloadMemorySwapsBackendAndReminder: the memory tools and the recall reminder both hold the
 // backend, so "memory off" has to unhook all three — a tool answering from a backend nobody
 // replaced is the failure mode this pins.

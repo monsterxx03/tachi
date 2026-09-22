@@ -276,7 +276,6 @@ func TestBuildToolTitle(t *testing.T) {
 		{tools.ToolNameGrep, `{"pattern": "TODO"}`, "Search `TODO`"},
 		{tools.ToolNameWebSearch, `{"query": "golang generics"}`, "Search golang generics"},
 		{tools.ToolNameWebFetch, `{"url": "https://example.com"}`, "Fetch https://example.com"},
-		{tools.ToolNameLSP, `{"operation": "goToDefinition", "path": "/tmp/x.go"}`, "LSP goToDefinition x.go"},
 		{tools.ToolNameSubAgent, `{"prompt": "analyze this code"}`, "SubAgent: analyze this code"},
 		// No args: returns tool name.
 		{tools.ToolNameBash, ``, tools.ToolNameBash},

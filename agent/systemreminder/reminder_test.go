@@ -349,7 +349,7 @@ func TestCollector_MergesAllRemindersIntoOneSystemReminderBlock(t *testing.T) {
 	// No legacy per-reminder tags may leak out.
 	for _, legacy := range []string{
 		"<relevant-memories>", "<available-skills>",
-		"<available-deferred-tools>", "<lsp-diagnostics>",
+		"<available-deferred-tools>",
 	} {
 		if strings.Contains(result, legacy) {
 			t.Errorf("legacy tag %q must not appear, got: %s", legacy, result)

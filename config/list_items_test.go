@@ -20,7 +20,6 @@ func TestListItemPathsAreTheListsAFormCanGrow(t *testing.T) {
 		"providers":            true,
 		"web_search.providers": true,
 		"web_fetch.providers":  true,
-		"lsp.servers":          true,
 		"jev.pricing.bands":    true,
 	}
 	for _, p := range got {

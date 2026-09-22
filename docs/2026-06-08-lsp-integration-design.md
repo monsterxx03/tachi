@@ -1,5 +1,10 @@
 # LSP 集成设计方案
 
+> ⚠️ **已废弃（2026-09-22）：LSP 集成已从代码中整体删除** —— `agent/lsp/` 包、`LSP` /
+> `LSPDiagnostics` 两个工具、诊断 reminder、`lsp.*` 配置段与桌面设置页的 `lsp` 行都不再存在。
+> 本文只作为当时的设计记录留存，其中描述的配置项、工具与文件路径均已失效；读取时请以代码为准。
+> 用户 config.yaml 里残留的 `lsp:` 段会被静默忽略（`yaml.Unmarshal` 非严格），不影响启动。
+
 ## 概述
 
 为 Tachi 接入 Language Server Protocol (LSP) 支持，使 LLM 能够通过工具调用获得代码智能（跳转定义、查找引用、悬停提示等）。LLM 只需要提供文件路径 + 行号 + 列号，不需要理解 LSP 协议细节。

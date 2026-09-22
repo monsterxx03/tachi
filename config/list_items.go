@@ -94,7 +94,7 @@ func ListItemLeaves(cfg *Config, elementPath string) (map[string]any, error) {
 }
 
 // ListItemPaths reports every list the settings page may add items to: a SLICE OF STRUCTS reached
-// through named fields only (`providers`, `web_search.providers`, `lsp.servers`).
+// through named fields only (`providers`, `web_search.providers`, `hooks.events.pre_tool`).
 //
 // Two kinds of collection are deliberately not on it. A slice of scalars is ONE leaf to this
 // package (the path API's own rule: `permissions.bash.allow` is edited as a list, and a form adds

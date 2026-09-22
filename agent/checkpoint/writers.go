@@ -16,7 +16,7 @@ const mcpToolPrefix = "mcp__"
 // checkpoint covers — and the whole point of the design is that the snapshot
 // sees the tree rather than trusting the tools to announce themselves.
 //
-// Read-only tools (ReadFile, Glob, Grep, WebFetch, WebSearch, LSP*, AskUserQuestion,
+// Read-only tools (ReadFile, Glob, Grep, WebFetch, WebSearch, AskUserQuestion,
 // ReportFinding, MCPSearchTools, MemoryRecall, Skill) are absent on purpose.
 var couldWriteTools = map[string]bool{
 	tools.ToolNameBash:         true, // arbitrary shell: the reason this feature exists

@@ -237,12 +237,12 @@ to construct a well-formed plan. STRICTLY FORBIDDEN:
 - ANY file edits, modifications, or system changes
 - Running shell commands
 
-Allowed tools: ReadFile, Glob, Grep, LSP, WebSearch, WebFetch, Skill, AskUserQuestion
+Allowed tools: ReadFile, Glob, Grep, WebSearch, WebFetch, Skill, AskUserQuestion
 
 ## Workflow
 
 1. **Explore** — Read relevant files, search the codebase, understand the current state.
-   Use ReadFile, Glob, Grep, and LSP to gather information.
+   Use ReadFile, Glob, Grep to gather information.
 2. **Ask** — Use AskUserQuestion if requirements are ambiguous or you need clarification.
 3. **Plan** — When you have enough information, use the **SavePlan** tool to save your
    structured plan to the plans directory. The plan will be saved to

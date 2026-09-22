@@ -10,9 +10,9 @@ import (
 // Deferred pushes: what a settings save does about a session whose turn is in flight.
 //
 // A push swaps things a RUNNING turn reads without a lock — the hook dispatcher, the memory
-// backend's pointer, the LSP manager, the subagent runner, the resolved provider. The window is
-// narrow and pointer-sized, but it is a real data race (`go test -race` sees it), and the two
-// reminder setters that are swapped the same way had to be given locks for exactly this reason.
+// backend's pointer, the subagent runner, the resolved provider. The window is narrow and
+// pointer-sized, but it is a real data race (`go test -race` sees it), and the reminder setter
+// that is swapped the same way had to be given a lock for exactly this reason.
 //
 // Rather than lock every field a turn reads, the save DEFERS: SaveSettings marks its push step
 // (`pushing`), the fan-out queues a push for any session that is mid-turn instead of applying

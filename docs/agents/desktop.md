@@ -258,9 +258,10 @@ Fixtures exist where the real path needs something a driver cannot do:
     `K 项等这一轮结束生效（…）` instead of claiming the key is live. Process-wide and shared-layer rows (log
     level, prompt-cache clear, the manager's own limits, a profile switch, the poller) are NOT deferred.
   - Two invariants the whole family shares: a REMINDER cannot be replaced (the collector only appends), so the
-    agent holds `LSPDiagnosticsReminder` / `MemoryRecallReminder` itself and re-points them; and a rebuild that
-    owns a child process or an external resource tears the old one down FIRST (`ReloadLSP` → `Shutdown`, or its
-    servers are orphaned). A rebuilt subsystem is not identical to a constructed one: `ReloadMemory` must
+    agent holds `MemoryRecallReminder` itself and re-points it (`SetBackend`); and a rebuild that owns an
+    external resource tears the old one down FIRST (`ReloadMemory` unhooks the old backend before building the
+    new one — a half-installed pair is worse than none). A rebuilt subsystem is not identical to a constructed
+    one: `ReloadMemory` must
     re-apply the wirings construction adds AFTER configure plus `MemoryState.SkipRecall` — losing them is
     silent degradation, not an error.
   - The two bound methods are `GetSettingsSchema` (the table filtered through the CONFIG's leaves —

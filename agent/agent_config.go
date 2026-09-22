@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
-	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/skill"
@@ -27,7 +26,6 @@ type AgentSystemConfig struct {
 	WebSearch      config.WebSearchConfig
 	WebFetch       config.WebFetchConfig
 	ToolResult     config.ToolResultConfig
-	LSP            config.LSPConfig
 	Hooks          config.HooksConfig
 	Herdr          config.HerdrConfig
 	Subagent       config.SubagentConfig
@@ -45,7 +43,6 @@ func SystemConfigFromConfig(cfg *config.Config) AgentSystemConfig {
 		WebSearch:      cfg.WebSearch,
 		WebFetch:       cfg.WebFetch,
 		ToolResult:     cfg.ToolResult,
-		LSP:            cfg.LSP,
 		Hooks:          cfg.Hooks,
 		Herdr:          cfg.Herdr,
 		Subagent:       cfg.Subagent,
@@ -141,7 +138,6 @@ type AgentConfig struct {
 	ReminderCollector ReminderCollector // 新增（Configure 回填）
 	MCPManager        *mcp.Manager      // 由 SharedMCP 更名；Configure 回填
 	ProcessManager    *tools.ProcessManager
-	LSPManager        *lsp.LSPManager      // 新增（Configure 回填）
 	SubagentRunner    tools.SubagentRunner // 新增（Configure 回填）
 	SkillStore        *skill.Store         // 新增
 	Memory            *MemoryState         // 新增（Configure 回填）
@@ -365,7 +361,7 @@ func (rs *RunState) seedReminders(pieces []systemreminder.Piece) {
 
 // freshReminders drops the pieces this turn has already injected — the model is still
 // carrying them in context, so repeating them costs tokens and says nothing new. What
-// remains (a reminder that changed, e.g. fresh LSP diagnostics) is recorded as injected
+// remains (a reminder that changed since it was last injected) is recorded as injected
 // and returned for the caller to append.
 func (rs *RunState) freshReminders(pieces []systemreminder.Piece) []systemreminder.Piece {
 	var fresh []systemreminder.Piece

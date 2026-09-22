@@ -43,7 +43,7 @@ func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 	want := map[string]any{
 		"language":                        "en",
 		"max_tokens":                      4096,
-		"lsp.request_timeout":             "45s",
+		"mcp_tool_search.jev_budget":       "45s",
 		"mcp_tool_refresh.interval":       "90s",
 		"checkpoints.retain":              7,
 		"web_search.proxy":                "http://127.0.0.1:7890",
@@ -67,9 +67,10 @@ func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 		t.Errorf("scalars = %q/%d, want en/4096", got.Language, got.MaxTokens)
 	}
 	// Both duration flavours, which are a string in the file and an int64 in memory:
-	// config.Duration (lsp.request_timeout) and a bare time.Duration (mcp_tool_refresh.interval).
-	if got.LSP.RequestTimeout.String() != "45s" {
-		t.Errorf("lsp.request_timeout = %v, want 45s", got.LSP.RequestTimeout)
+	// config.Duration (mcp_tool_search.jev_budget) and a bare time.Duration
+	// (mcp_tool_refresh.interval).
+	if got.MCPToolSearch.JevBudget.String() != "45s" {
+		t.Errorf("mcp_tool_search.jev_budget = %v, want 45s", got.MCPToolSearch.JevBudget)
 	}
 	if got.MCPToolRefresh.Interval != 90*time.Second {
 		t.Errorf("mcp_tool_refresh.interval = %v, want 90s", got.MCPToolRefresh.Interval)
@@ -95,7 +96,9 @@ func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 	// both halves use) handles both duration types as their String(), and the file has to stay
 	// readable by the person who owns it.
 	body, _ := os.ReadFile(path)
-	if !strings.Contains(string(body), "timeout: 45s") || !strings.Contains(string(body), "interval: 1m30s") {
+	// The two flavours by name: config.Duration (mcp_tool_search.jev_budget) and a bare
+	// time.Duration (mcp_tool_refresh.interval).
+	if !strings.Contains(string(body), "jev_budget: 45s") || !strings.Contains(string(body), "interval: 1m30s") {
 		t.Errorf("durations must be written as duration strings:\n%s", body)
 	}
 }

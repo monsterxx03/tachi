@@ -29,7 +29,7 @@ type ReminderCollector interface {
 // disabledReminderCollector is a no-op ReminderCollector used by
 // non-interactive modes (e.g. `tachi -p`) that want zero system reminders.
 // Collect always returns an empty string, and AddReminder is a no-op so
-// later registrations (LSP diagnostics, deferred MCP tools, background
+// later registrations (deferred MCP tools, background
 // tasks) stay inert without panicking on a nil collector.
 type disabledReminderCollector struct{}
 

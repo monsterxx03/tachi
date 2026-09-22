@@ -62,13 +62,6 @@ func ToolArgsSummary(name, argsJSON string) string {
 		if u, ok := args["url"].(string); ok {
 			return u
 		}
-	case ToolNameLSP:
-		if op, ok := args["operation"].(string); ok {
-			if p, ok := args["path"].(string); ok {
-				return fmt.Sprintf("%s %s", op, p)
-			}
-			return op
-		}
 	case ToolNameSubAgent:
 		if prompt, ok := args["prompt"].(string); ok {
 			if branch, ok := args["worktree_branch"].(string); ok && branch != "" {
@@ -130,13 +123,6 @@ func ToolArgsTitle(name, argsJSON string) string {
 	case ToolNameWebFetch:
 		if u, ok := args["url"].(string); ok {
 			return TruncateForTitle(u, 50)
-		}
-	case ToolNameLSP:
-		if op, ok := args["operation"].(string); ok {
-			if p, ok := args["path"].(string); ok {
-				return fmt.Sprintf("%s %s", op, path.Base(p))
-			}
-			return op
 		}
 	case ToolNameSubAgent:
 		if prompt, ok := args["prompt"].(string); ok {

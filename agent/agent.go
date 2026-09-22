@@ -109,10 +109,8 @@ type AIAgent struct {
 	titleModelProvider llm.Provider
 	titleGenEnabled    bool
 
-	// lspReminder / memoryReminder 是注册进 collector 的那两个 reminder 实例（见
-	// agent_reload.go）：collector 只能追加、不能替换，所以 lsp.*/memory.* 改了要换的是
-	// 它们各自指向的对象，而不是容器。
-	lspReminder    *systemreminder.LSPDiagnosticsReminder
+	// memoryReminder 是注册进 collector 的那个 reminder 实例（见 agent_reload.go）：
+	// collector 只能追加、不能替换，所以 memory.* 改了要换的是它指向的对象，而不是容器。
 	memoryReminder *systemreminder.MemoryRecallReminder
 
 	// subagentInjected 记录 SubagentRunner 是前端通过 AgentConfig 注入的（true）：重建
@@ -1301,8 +1299,5 @@ func (a *AIAgent) Close() {
 
 	if a.Config.ProcessManager != nil {
 		a.Config.ProcessManager.KillAll()
-	}
-	if a.Config.LSPManager != nil {
-		a.Config.LSPManager.Shutdown(context.Background())
 	}
 }

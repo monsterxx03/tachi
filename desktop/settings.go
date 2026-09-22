@@ -116,7 +116,7 @@ const (
 	// catSession is the machinery a turn runs through: compaction, review, the side-channel
 	// runs, checkpoints, and the reminders injected into the prompt.
 	catSession = "会话与上下文"
-	// catExtend is the subsystems an agent is BUILT with — LSP, memory, subagents, hooks.
+	// catExtend is the subsystems an agent is BUILT with — memory, subagents, hooks.
 	// They behave alike (a per-session object, rebuilt on the live sessions) and a reader
 	// looking for one looks for the others.
 	catExtend = "扩展能力"
@@ -461,18 +461,6 @@ var settingsTable = []settingApply{
 
 	// --- per-session subsystems built at construction ---
 	{
-		Key:      "lsp",
-		Category: catExtend,
-		Mode:     applyPush,
-		Apply: func(d *desktopApp, cfg *config.Config) error {
-			// Per session: the manager is built per agent, and ReloadLSP tears the old one down
-			// first (its child processes would otherwise be orphaned).
-			return pushError("LSP", d.applyToLiveAgents(func(a *agent.AIAgent) error {
-				return a.ReloadLSP(context.Background(), cfg)
-			}))
-		},
-	},
-	{
 		Key:      "subagent",
 		Category: catExtend,
 		Mode:     applyPush,
@@ -612,8 +600,8 @@ func providerTypes(*config.Config) []string { return config.ProviderTypes() }
 // size, and it exists because size is the wrong question for these two.
 //
 // The size rule's premise is that a folded item costs a click while an open one costs scrolling,
-// and that is true of a list a reader SCANS (`providers`, `lsp.servers`: pick the one you want and
-// open it). A web_search / web_fetch provider is not scanned — it is three leaves, and what the
+// and that is true of a list a reader SCANS (`providers`, `web_search.providers`: pick the one you
+// want and open it). A web_search / web_fetch provider is not scanned — it is three leaves, and what the
 // reader comes for is the block's own scalars (`proxy`, `timeout`, `max_results`) or the one
 // provider they already know they want. Three open items therefore bury the page's real content
 // under a wall of API keys, which is precisely the scrolling the size rule was invented to avoid.
@@ -838,8 +826,8 @@ func listElementTemplate(cfg *config.Config, listPath string) []SettingElementFi
 // live config.
 //
 // It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
-// is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
-// the block's mode and note. The two filters are the row's: a key no row covers cannot happen
+// is often a block — `memory` speaks for several leaves, and a form needs one input per leaf,
+// each with the block's mode and note. The two filters are the row's: a key no row covers cannot happen
 // (the guard test in settings_test.go fails the build first), and an applyUnused row is another
 // entry mode's key, so it is left out rather than offered as a switch that does nothing.
 //

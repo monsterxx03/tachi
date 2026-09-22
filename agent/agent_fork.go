@@ -78,7 +78,7 @@ func (f *ForkedAgent) Close() {
 // The child shares the parent's MCP Manager and ProcessManager
 // (Close on the child skips them), has its own tool registry
 // filtered by AllowedTools, and does NOT inherit session manager,
-// memory, LSP manager, or reminder collector.
+// memory or the reminder collector.
 func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	logger := cfg.Logger
 	if logger == nil {

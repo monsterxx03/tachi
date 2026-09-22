@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/subagent"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -29,17 +28,18 @@ import (
 // Four invariants the whole family shares — they are what to carry away from this file:
 //
 //  1. A REMINDER cannot be replaced (Collector.AddReminder only appends), so the agent holds
-//     LSPDiagnosticsReminder / MemoryRecallReminder itself and re-points them
-//     (SetProvider / SetBackend); nil means off. Those setters are synchronized — they are
-//     called from the settings goroutine while the turn goroutine generates.
+//     MemoryRecallReminder itself and re-points it (SetBackend); nil means off. That setter is
+//     synchronized — it is called from the settings goroutine while the turn goroutine
+//     generates.
 //  2. A frontend-injected object is not ours to replace (`hooksInjected` / `subagentInjected`).
-//  3. A rebuild that owns a child process or an external resource tears the old one down FIRST
-//     (ReloadLSP → Shutdown, or its servers are orphaned).
+//  3. A rebuild that owns a subprocess or another external resource tears the old one down FIRST,
+//     even though the build below may fail — a half-installed pair is worse than none
+//     (ReloadMemory unhooks the old backend before it builds the new one, for exactly this).
 //  4. Shared-layer facts (the MCP manager and its pool/refresher) are driven ONCE from the app,
 //     never per session.
 //
 // ⚠️ Reloads run on the settings-save goroutine while a turn may be in flight for the same
-// agent, and the fields they swap (Config.HookDispatcher, Memory, LSPManager, SubagentRunner,
+// agent, and the fields they swap (Config.HookDispatcher, Memory, SubagentRunner,
 // Config.Resolved) are read by that turn without a lock. Pointer and int fields do not tear in
 // practice; INTERFACE fields (SubagentRunner) and reminder internals are the sharp edges, and
 // the reminder setters above are guarded for exactly that reason. Closing the window entirely
@@ -109,28 +109,16 @@ func webSearchToolConfig(cfg *config.Config) tools.WebSearchToolConfig {
 
 // --- the per-subsystem rebuilds ---
 //
-// These three share a shape the collector forces on us: a reminder is registered for the agent's
-// whole life and CANNOT be replaced (AddReminder only appends), so the object a reminder POINTS
-// AT is what gets swapped. That is why the agent holds the two reminder instances itself
-// (lspReminder / memoryReminder) and why their setters exist.
+// They share a shape the collector forces on us: a reminder is registered for the agent's whole
+// life and CANNOT be replaced (AddReminder only appends), so the object a reminder POINTS AT is
+// what gets swapped. That is why the agent holds the reminder instance itself (memoryReminder)
+// and why its setter exists.
 
-// lspReminderFor returns the agent's diagnostics reminder, creating it on first use.
+// memoryReminderFor returns the agent's memory-recall reminder, creating it on first use.
 //
 // register is false only while configure() is assembling the collector from a slice (the
 // collector does not exist yet); everywhere else it is true, which is how a reminder that
-// appears LATER — the user just turned LSP on — reaches the live collector.
-func (a *AIAgent) lspReminderFor(register bool) *systemreminder.LSPDiagnosticsReminder {
-	if a.lspReminder != nil {
-		return a.lspReminder
-	}
-	a.lspReminder = &systemreminder.LSPDiagnosticsReminder{}
-	if register && a.Config.ReminderCollector != nil {
-		a.Config.ReminderCollector.AddReminder(a.lspReminder)
-	}
-	return a.lspReminder
-}
-
-// memoryReminderFor is lspReminderFor for the memory-recall reminder.
+// appears LATER — the user just turned memory on — reaches the live collector.
 func (a *AIAgent) memoryReminderFor(register bool) *systemreminder.MemoryRecallReminder {
 	if a.memoryReminder != nil {
 		return a.memoryReminder
@@ -140,47 +128,6 @@ func (a *AIAgent) memoryReminderFor(register bool) *systemreminder.MemoryRecallR
 		a.Config.ReminderCollector.AddReminder(a.memoryReminder)
 	}
 	return a.memoryReminder
-}
-
-// initLSP builds the language-server manager for cfg and points the two tools and the diagnostics
-// reminder at it. Shared by configure() and ReloadLSP: the reload's extra work is the TEARDOWN
-// (see ReloadLSP), not the build.
-func (a *AIAgent) initLSP(ctx context.Context, cfg config.LSPConfig) {
-	if !cfg.IsEnabled() || len(cfg.Servers) == 0 {
-		return
-	}
-	lspCfg := convertLSPConfig(&cfg)
-	a.Config.LSPManager = lsp.NewManager(lspCfg, a.Config.Logger)
-	a.RegisterTool(tools.NewLSPTool(a.Config.LSPManager))
-	a.RegisterTool(tools.NewLSPDiagnosticsTool(a.Config.LSPManager))
-	a.lspReminderFor(true).SetProvider(a.Config.LSPManager)
-	a.Config.Logger.Info(ctx, "LSP: initialized", "servers", len(lspCfg.Servers))
-}
-
-// ReloadLSP rebuilds the language servers from cfg.
-//
-// The teardown cannot be skipped: a manager left alive keeps its child processes running while
-// nothing talks to them, so Shutdown goes first. When the new config has no servers, the two
-// tools are unregistered and the reminder is pointed at nil (its Generate returns early) — the
-// reminder itself stays in the collector, which cannot remove it.
-func (a *AIAgent) ReloadLSP(ctx context.Context, cfg *config.Config) error {
-	if cfg == nil {
-		return errors.New("ReloadLSP: no config")
-	}
-	if old := a.Config.LSPManager; old != nil {
-		old.Shutdown(ctx)
-		a.Config.LSPManager = nil
-	}
-	a.UnregisterTool(tools.ToolNameLSP)
-	a.UnregisterTool(tools.ToolNameLSPDiagnostics)
-	if !cfg.LSP.IsEnabled() || len(cfg.LSP.Servers) == 0 {
-		if a.lspReminder != nil {
-			a.lspReminder.SetProvider(nil)
-		}
-		return nil
-	}
-	a.initLSP(ctx, cfg.LSP)
-	return nil
 }
 
 // initMemoryBackend builds the memory backend from cfg and wires the keyword extractor into it.

@@ -104,7 +104,7 @@ function readonlyText(f: SettingFieldVO): string {
 
 /** The leaf names that identify an item of a config list, in the order they are shown.
  *
- *  `name` where the item has one (`providers.N`, `lsp.servers.N`), `type` where it does not
+ *  `name` where the item has one (`providers.N`), `type` where it does not
  *  (`web_search.providers.N` is a backend kind rather than a named thing), and `model` as the
  *  second half of the label — it is not an identity on its own, but "main" alone would not say
  *  which model it points at, and that pair is how a reader tells two providers apart.

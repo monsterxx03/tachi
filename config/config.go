@@ -691,38 +691,6 @@ type MemoryConfig struct {
 	BaseDir           string        `yaml:"-"`                                // runtime-only: state base dir, injected by the agent (not serialized)
 }
 
-// LSPConfig holds configuration for all LSP servers.
-type LSPConfig struct {
-	Enabled          *bool             `yaml:"enabled" default:"true"` // Enable LSP integration
-	MaxRestarts      int               `yaml:"max_restarts" default:"3"`
-	MaxFileSize      int64             `yaml:"max_file_size" default:"10485760"` // 10 MB
-	MaxResults       int               `yaml:"max_results" default:"50"`         // per-operation result cap
-	RequestTimeout   Duration          `yaml:"request_timeout" default:"15s"`    // per-request timeout
-	ConcurrencyLimit int               `yaml:"concurrency_limit" default:"4"`    // per-server concurrency
-	StartupTimeout   Duration          `yaml:"startup_timeout" default:"10s"`
-	Servers          []LSPServerConfig `yaml:"servers"`
-}
-
-// IsEnabled returns whether LSP integration is enabled. Defaults to true.
-func (c *LSPConfig) IsEnabled() bool {
-	return c.Enabled == nil || *c.Enabled
-}
-
-// LSPServerConfig describes a single LSP server to manage.
-type LSPServerConfig struct {
-	Name               string            `yaml:"name"`
-	Command            string            `yaml:"command"`
-	Args               []string          `yaml:"args"`
-	Extensions         []string          `yaml:"extensions"`
-	Languages          []string          `yaml:"languages"`
-	InitializationOpts map[string]any    `yaml:"initialization_options"`
-	Settings           map[string]any    `yaml:"settings"`
-	Env                map[string]string `yaml:"env"`
-	WorkspaceFolder    string            `yaml:"workspace_folder"`
-	StartupTimeout     Duration          `yaml:"startup_timeout"`
-	ConcurrencyLimit   int               `yaml:"concurrency_limit"`
-}
-
 // Default prompts for DeepResearch (built-in fallbacks when YAML doesn't specify).
 const defaultQueryGeneratorPrompt = `You are a research query generator. Given a research topic and existing learnings, generate {breadth} specific, non-overlapping search engine queries. Each query should target a distinct aspect of the topic.
 
@@ -922,7 +890,6 @@ type Config struct {
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
 	Dream                  DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
-	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
 	Jev                    JevConfig            `yaml:"jev"`                             // TypeSafe Jev semantic judgments (optional)
 	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration

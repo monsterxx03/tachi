@@ -14,13 +14,13 @@ import (
 // Why it is one function: this join is the seam any change to "what a relative
 // path means" has to pass through. Today the working directory is the only root, so
 // the rule is short — but it was previously open-coded in every path-taking tool
-// (read / write / edit / rg / sendfile / lsp), which meant a rule change was a
-// hunt for copies. Callers keep their own follow-up steps (rg wants an absolute
-// path, the LSP tools clean before building a file:// URI).
+// (read / write / edit / rg / sendfile), which meant a rule change was a hunt for
+// copies. Callers keep their own follow-up steps (rg calls filepath.Abs on the result;
+// the file tools then put it through their root check).
 //
 // What is NOT this function's business: the working directory used as a ROOT rather
-// than as a base for a user-supplied path — bash's cwd, the LSP workspace root, the
-// plans directory, the ACP terminal cwd. Those stay primary-only by design; they
+// than as a base for a user-supplied path — bash's cwd, the plans directory, the
+// ACP terminal cwd. Those stay primary-only by design; they
 // read wdctx.Dir directly.
 func ResolvePath(ctx context.Context, p string) string {
 	if filepath.IsAbs(p) {

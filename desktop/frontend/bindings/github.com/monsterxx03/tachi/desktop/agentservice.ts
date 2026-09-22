@@ -247,8 +247,8 @@ export function GetSessionWorkingDir(id: string): $CancellablePromise<string> {
  * live config.
  * 
  * It walks the CONFIG's leaves (config.PathsFor) rather than the table's rows, because a row
- * is often a block — `lsp` speaks for eleven leaves, and a form needs eleven inputs, each with
- * the block's mode and note. The two filters are the row's: a key no row covers cannot happen
+ * is often a block — `memory` speaks for several leaves, and a form needs one input per leaf,
+ * each with the block's mode and note. The two filters are the row's: a key no row covers cannot happen
  * (the guard test in settings_test.go fails the build first), and an applyUnused row is another
  * entry mode's key, so it is left out rather than offered as a switch that does nothing.
  * 

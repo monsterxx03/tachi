@@ -41,9 +41,9 @@ func TestReadPathWalksTheDottedPathGrammar(t *testing.T) {
 		{"tui.input_history_limit", 7},
 		{"hooks.events.pre_tool.0.command", "echo hi"}, // map key, then index
 		// An unset pointer reads as its `default:` tag — the value the config's own accessors
-		// report. hooks.enabled and lsp.enabled are both `default:"true"`.
+		// report. hooks.enabled and checkpoints.enabled are both `default:"true"`.
 		{"hooks.enabled", true},
-		{"lsp.enabled", true},
+		{"checkpoints.enabled", true},
 		{"tui.notify_on_complete", true},
 	}
 	for _, tt := range tests {
@@ -71,7 +71,7 @@ func TestReadPathRefusesAPathThatNamesNothing(t *testing.T) {
 		{"mcp_servers", "没有"},                    // yaml:"-" — not a key of the file either
 		{"language.deeper", "已经到底"},              // walked past a leaf
 		{"review.adversarial.judge_model", "指针"}, // nil pointer in the middle of the path
-		{"lsp..enabled", "empty segment"},
+		{"hooks..enabled", "empty segment"},
 		{"", "empty path"},
 	}
 	for _, tt := range tests {
@@ -104,20 +104,20 @@ func TestSetPathWritesTheShapesABoundMethodReceives(t *testing.T) {
 	if cfg.MaxTokens != 2000 {
 		t.Errorf("MaxTokens = %d, want 2000", cfg.MaxTokens)
 	}
-	if err := SetPath(cfg, "lsp.max_file_size", float64(4096)); err != nil {
-		t.Fatalf("lsp.max_file_size: %v", err)
+	if err := SetPath(cfg, "checkpoints.max_bytes", float64(4096)); err != nil {
+		t.Fatalf("checkpoints.max_bytes: %v", err)
 	}
-	if cfg.LSP.MaxFileSize != 4096 {
-		t.Errorf("MaxFileSize = %d, want 4096", cfg.LSP.MaxFileSize)
+	if cfg.Checkpoints.MaxBytes != 4096 {
+		t.Errorf("MaxBytes = %d, want 4096", cfg.Checkpoints.MaxBytes)
 	}
 
 	// A nil POINTER field gets a fresh pointer, and an unset one allocates.
-	cfg.LSP.Enabled = nil
-	if err := SetPath(cfg, "lsp.enabled", false); err != nil {
-		t.Fatalf("lsp.enabled: %v", err)
+	cfg.Checkpoints.Enabled = nil
+	if err := SetPath(cfg, "checkpoints.enabled", false); err != nil {
+		t.Fatalf("checkpoints.enabled: %v", err)
 	}
-	if cfg.LSP.Enabled == nil || *cfg.LSP.Enabled {
-		t.Errorf("LSP.Enabled = %v, want a pointer to false", cfg.LSP.Enabled)
+	if cfg.Checkpoints.Enabled == nil || *cfg.Checkpoints.Enabled {
+		t.Errorf("Checkpoints.Enabled = %v, want a pointer to false", cfg.Checkpoints.Enabled)
 	}
 
 	// A list as JSON delivers it ([]any of string).
@@ -258,7 +258,7 @@ func TestYAMLPathsKeepsTheLeafRulesShape(t *testing.T) {
 	for _, want := range []string{
 		"language",
 		"providers.*.model", // a struct collection: one leaf per element
-		"lsp.servers.*.command",
+		"web_search.providers.*.key",
 		"hooks.events.*.*.command", // a map of collections of structs
 		"review.allowed_tools",     // a scalar collection: ONE leaf
 		"permissions.bash.allow",
@@ -302,7 +302,6 @@ func TestPathsForExpandsAgainstTheValue(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"providers.2.model",              // past the end
-		"lsp.servers.0.command",          // the fixture has no servers
 		"review.adversarial.judge_model", // a nil pointer hides everything under it
 	} {
 		if has(unwanted) {
@@ -371,12 +370,12 @@ func TestApplyUpdatesIsAllOrNothing(t *testing.T) {
 // API is the file's own view of the config, and `timeout: 30s` is what the file holds.
 func TestDurationLeavesReadAndWriteAsTheFileHolds(t *testing.T) {
 	cfg := &Config{}
-	cfg.LSP.RequestTimeout = Duration(45 * time.Second) // config.Duration
-	cfg.Memory.Timeout = 90 * time.Second               // time.Duration
-	cfg.MCPToolRefresh.Interval = 2 * time.Minute       // …and one under a block
+	cfg.MCPToolSearch.JevBudget = Duration(45 * time.Second) // config.Duration
+	cfg.Memory.Timeout = 90 * time.Second                    // time.Duration
+	cfg.MCPToolRefresh.Interval = 2 * time.Minute            // …and one under a block
 
 	for _, tt := range []struct{ key, want string }{
-		{"lsp.request_timeout", "45s"},
+		{"mcp_tool_search.jev_budget", "45s"},
 		{"memory.timeout", "1m30s"},
 		{"mcp_tool_refresh.interval", "2m0s"},
 	} {
@@ -390,13 +389,13 @@ func TestDurationLeavesReadAndWriteAsTheFileHolds(t *testing.T) {
 	}
 
 	// Writing takes the same form, and the struct holds a real duration afterwards.
-	if err := SetPath(cfg, "lsp.request_timeout", "1m30s"); err != nil {
+	if err := SetPath(cfg, "mcp_tool_search.jev_budget", "1m30s"); err != nil {
 		t.Fatalf("SetPath with a duration string: %v", err)
 	}
-	if cfg.LSP.RequestTimeout != Duration(90*time.Second) {
-		t.Errorf("LSP.RequestTimeout = %v, want 1m30s", time.Duration(cfg.LSP.RequestTimeout))
+	if cfg.MCPToolSearch.JevBudget != Duration(90*time.Second) {
+		t.Errorf("MCPToolSearch.JevBudget = %v, want 1m30s", time.Duration(cfg.MCPToolSearch.JevBudget))
 	}
-	if got, _ := ReadPath(cfg, "lsp.request_timeout"); got != "1m30s" {
+	if got, _ := ReadPath(cfg, "mcp_tool_search.jev_budget"); got != "1m30s" {
 		t.Errorf("round trip = %#v, want %q", got, "1m30s")
 	}
 	// A NUMBER is still accepted: nothing was removed, and that is what a caller holding the
@@ -411,15 +410,16 @@ func TestDurationLeavesReadAndWriteAsTheFileHolds(t *testing.T) {
 	// A string that is not a duration is refused BY NAME, and the refusal changes nothing: this
 	// is the mistake a text box makes (typing "45 seconds"), so the message has to be the one
 	// the reader needs.
-	err := SetPath(cfg, "lsp.request_timeout", "45 seconds")
+	err := SetPath(cfg, "mcp_tool_search.jev_budget", "45 seconds")
 	if err == nil {
 		t.Fatal("SetPath took a string that is not a duration")
 	}
-	if !strings.Contains(err.Error(), "lsp.request_timeout") || !strings.Contains(err.Error(), "时长") {
+	if !strings.Contains(err.Error(), "mcp_tool_search.jev_budget") || !strings.Contains(err.Error(), "时长") {
 		t.Errorf("err = %v, want the key and the word 时长", err)
 	}
-	if cfg.LSP.RequestTimeout != Duration(90*time.Second) {
-		t.Errorf("LSP.RequestTimeout = %v after the refusal, want it untouched", time.Duration(cfg.LSP.RequestTimeout))
+	if cfg.MCPToolSearch.JevBudget != Duration(90*time.Second) {
+		t.Errorf("MCPToolSearch.JevBudget = %v after the refusal, want it untouched",
+			time.Duration(cfg.MCPToolSearch.JevBudget))
 	}
 }
 
@@ -447,7 +447,7 @@ func TestDescribeLeafTellsAnUnsetLeafFromAnEmptyOne(t *testing.T) {
 		{"providers.0.spec.proxy", "string", false, true},
 		// A pointer WITH a `default:` tag is not "optional" in this sense: the default says what
 		// unset means, so unset and the default are one fact and the form shows a plain checkbox.
-		{"lsp.enabled", "bool", false, false},
+		{"checkpoints.enabled", "bool", false, false},
 		// And a list is the whole list as one value.
 		{"review.allowed_tools", "string_list", false, true},
 	}

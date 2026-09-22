@@ -195,17 +195,6 @@ var (
 	errParallelAskUserUnsupported = fmt.Errorf("tool requiring user input cannot run in parallel group")
 )
 
-// hasBashCall returns true if any tool call in the batch is Bash.
-// Used to trigger LSP file cleanup after destructive filesystem operations.
-func hasBashCall(calls []llm.ToolCall) bool {
-	for _, tc := range calls {
-		if tc.Function.Name == tools.ToolNameBash {
-			return true
-		}
-	}
-	return false
-}
-
 // usageToSession converts an llm.Usage to a session.Usage for persistence.
 func usageToSession(u *llm.Usage) *session.Usage {
 	if u == nil {
@@ -1014,8 +1003,8 @@ func (a *AIAgent) handleFinishReason(
 }
 
 // handleToolCallFinish orchestrates a tool-call response through its phases:
-// record the turn, execute tools, sync LSP, apply steer input, inject loop
-// reminders. Each phase is a named method below.
+// record the turn, execute tools, apply steer input, inject loop reminders.
+// Each phase is a named method below.
 func (a *AIAgent) handleToolCallFinish(
 	ctx context.Context,
 	acc *streamAccumulator,
@@ -1028,8 +1017,6 @@ func (a *AIAgent) handleToolCallFinish(
 	if outcome := a.executeAndAppendTools(ctx, acc, rs, ch); outcome == outcomeStop {
 		return outcomeStop
 	}
-
-	a.syncLSPAfterTools(ctx, acc)
 
 	if outcome := a.applySteer(ctx, rs, params, ch); outcome == outcomeStop {
 		return outcomeStop
@@ -1075,27 +1062,6 @@ func (a *AIAgent) executeAndAppendTools(
 	rs.append(toolMsgs...)
 	rs.LengthRetries = 0
 	return outcomeContinue
-}
-
-// syncLSPAfterTools syncs files touched by tool calls to LSP servers and
-// closes files that no longer exist on disk (deleted/renamed/moved by Bash),
-// keeping the LSP file index consistent with the actual filesystem.
-func (a *AIAgent) syncLSPAfterTools(ctx context.Context, acc *streamAccumulator) {
-	if a.Config.LSPManager == nil {
-		return
-	}
-	for _, tc := range acc.toolCalls {
-		if fp := tools.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
-			if syncErr := a.Config.LSPManager.SyncFile(ctx, fp); syncErr != nil {
-				a.Config.Logger.Error(ctx, "LSP: file sync error", syncErr, "file", fp)
-			}
-		}
-	}
-	if hasBashCall(acc.toolCalls) {
-		a.Config.LSPManager.CloseMissingFiles(ctx)
-	}
-	// Wait briefly for async diagnostics to arrive after file sync.
-	a.Config.LSPManager.WaitForDiagnostics(ctx, 2*time.Second)
 }
 
 // defaultSteerTimeout bounds how long applySteer waits for the frontend to
@@ -1174,7 +1140,7 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulator, rs *RunState) {
 	a.EstimateAndUpdateTokens(rs, rs.Messages)
 	rctx := a.buildReminderContext(false, true)
-	// Populate tool names so reminders (e.g. LSPDiagnostics) can filter by tool.
+	// Populate tool names so reminders can filter by tool.
 	rctx.ToolNames = make([]string, 0, len(acc.toolCalls))
 	for _, tc := range acc.toolCalls {
 		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
