@@ -356,7 +356,8 @@ export function ListMCPProfiles(): $CancellablePromise<{ [_ in string]?: any } |
  * ListMCPServers returns all configured MCP servers with their tools and, for
  * each tool, whether it is loaded (discovered/opt-in) in the CURRENT session.
  * Only connected servers expose their tools (the pool); disabled ones show
- * with no tools until connected.
+ * with no tools until connected. A server's tools are ordered loaded-first
+ * (see the sort below), because the panel renders the order it is given.
  */
 export function ListMCPServers(): $CancellablePromise<$models.MCPServerVO[] | null> {
     return $Call.ByID(2900398080);

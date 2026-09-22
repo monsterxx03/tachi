@@ -414,7 +414,12 @@ Fixtures exist where the real path needs something a driver cannot do:
   opens its own contract on demand (`GetMCPToolSchema`), never as part of the row list, and tools in the pool
   are LISTED whether or not this session has loaded them — under MCP tool search "not loaded" is the normal
   state, and a row that simply disappears reads as a missing tool. The server row counts loaded out of offered
-  (`n/m 工具`) and the panel head sums the rows it is rendering, never a separate backend number.
+  (`n/m 工具`) and the panel head sums the rows it is rendering, never a separate backend number. **Loaded
+  rows come FIRST, and the BACKEND does the sorting** (`ListMCPServers` sorts the VO loaded-first, stable, so
+  each half keeps the pool's alphabetical order): the row a reader opens the panel for is a loaded one, and a
+  stable sort is what stops a toggle from reshuffling the rows around their eyes. The panel renders the order
+  it is given — `TestListMCPServersOrdersLoadedToolsFirst` pins it, with the stub's two tools arranged so the
+  LOADED one is the one that sorts last (where "loaded first" cannot pass by accident).
 - **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving**
   (`Manager.SetRootsFunc`; the desktop wires `desktopApp.mcpRoots` on its shared manager, so the answer is the
   UNION of its live sessions' workspaces, while ACP wires it per session). The shape itself (file:// URIs, only

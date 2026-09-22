@@ -41,7 +41,8 @@ type MCPServerVO struct {
 // ListMCPServers returns all configured MCP servers with their tools and, for
 // each tool, whether it is loaded (discovered/opt-in) in the CURRENT session.
 // Only connected servers expose their tools (the pool); disabled ones show
-// with no tools until connected.
+// with no tools until connected. A server's tools are ordered loaded-first
+// (see the sort below), because the panel renders the order it is given.
 func (s *AgentService) ListMCPServers() []MCPServerVO {
 	d := s.desk
 	if d.config() == nil || d.mcp == nil {
@@ -76,6 +77,12 @@ func (s *AgentService) ListMCPServers() []MCPServerVO {
 				Loaded:      loaded,
 			})
 		}
+		// Loaded first, and stable otherwise. The pool lists a server's tools alphabetically; under
+		// tool search NOTHING is auto-loaded, so the loaded rows are the few this session can
+		// actually call — the ones a reader opens the panel for — and they must not be scattered
+		// through a list of everything the server offers. Stable, so the two halves keep the pool's
+		// own order: toggling one tool must not reshuffle the rows around it.
+		sort.SliceStable(vo.Tools, func(i, j int) bool { return vo.Tools[i].Loaded && !vo.Tools[j].Loaded })
 		out = append(out, vo)
 	}
 	return out

@@ -327,6 +327,47 @@ func TestAuthorizeMCPServerRefusesWhatItCannotDo(t *testing.T) {
 	}
 }
 
+// TestListMCPServersOrdersLoadedToolsFirst pins the panel's tool ordering. The pool lists a
+// server's tools alphabetically and, under tool search, auto-loads NONE of them — so the row a
+// reader opens the panel for is a loaded one, and it belongs at the top instead of somewhere in
+// a list of everything the server offers. Stable otherwise, which is what keeps a toggle from
+// reshuffling the rows around someone's eyes.
+func TestListMCPServersOrdersLoadedToolsFirst(t *testing.T) {
+	d, svc, sid := newMCPToggleApp(t)
+	d.mu.Lock()
+	d.activeID = sid
+	d.mu.Unlock()
+
+	if res := svc.SetMCPServerEnabled(stubServer, true); res != "ok" {
+		t.Fatalf("SetMCPServerEnabled: %s", res)
+	}
+	// The stub offers two tools and the pool sorts them ping < roots, so loading the one that
+	// sorts LAST is what tells "loaded first" apart from "already in that order".
+	loaded := "mcp__" + stubServer + "__" + stubRootsTool
+	if res := svc.SetMCPToolEnabled(loaded, true); res != "ok" {
+		t.Fatalf("SetMCPToolEnabled: %s", res)
+	}
+
+	servers := svc.ListMCPServers()
+	if len(servers) != 1 {
+		t.Fatalf("expected one server, got %d", len(servers))
+	}
+	got := make([]string, 0, len(servers[0].Tools))
+	for _, tool := range servers[0].Tools {
+		got = append(got, tool.ToolName)
+	}
+	if strings.Join(got, ",") != stubRootsTool+","+stubServerTool {
+		t.Errorf("tool order = %v, want [%s %s] (loaded first, the rest in the pool's order)",
+			got, stubRootsTool, stubServerTool)
+	}
+	for _, tool := range servers[0].Tools {
+		wantLoaded := tool.ToolName == stubRootsTool
+		if tool.Loaded != wantLoaded {
+			t.Errorf("%s: loaded = %v, want %v", tool.ToolName, tool.Loaded, wantLoaded)
+		}
+	}
+}
+
 // TestMCPServerNeedingAuthIsVisibleAndSaysSo covers the state this feature exists for:
 // a server that answers "authorize me first" MUST be distinguishable from one that is
 // simply down, and the enable that discovers it must say what to do about it.
