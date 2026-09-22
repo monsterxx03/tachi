@@ -16,8 +16,6 @@ var (
 	// ErrResearchUsage is returned when the topic argument is missing —
 	// frontends render their own usage line.
 	ErrResearchUsage = errors.New("research topic required")
-	// ErrResearchUnavailable is returned when the engine could not be built.
-	ErrResearchUnavailable = errors.New("deep research engine unavailable")
 )
 
 // RunDeepResearch executes /research end-to-end for a synchronous frontend
@@ -43,9 +41,6 @@ func (a *AIAgent) RunDeepResearch(ctx context.Context, cfg *config.Config, args 
 	engine, err := a.NewDeepResearch(cfg)
 	if err != nil {
 		return "", nil, fmt.Errorf("create research engine: %w", err)
-	}
-	if engine == nil {
-		return "", nil, ErrResearchUnavailable
 	}
 
 	onStart(parsed.Topic, parsed.Depth, parsed.Breadth)

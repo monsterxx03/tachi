@@ -1393,3 +1393,87 @@ title_provider: main
 		t.Errorf("dropping an unreferenced item = %+v, want OK with nothing to say", got)
 	}
 }
+
+// TestEveryOfferedLeafIsConsumed closes the hole that let a dead knob sit on the settings page
+// unnoticed: `mcp_tool_search.max_deferred_schema_bytes` was OFFERED (an input box, a mode, a save)
+// and referenced by NOTHING at all — not even inside config/. The two guards above ask whether a
+// leaf has a ROW; neither asks whether the row has an EFFECT.
+//
+// "Consumed" is a source-text search for the leaf's Go field name in non-test .go files OUTSIDE
+// config/ — somewhere other than the package that declares it. The map below is the EXHAUSTIVE
+// list of leaves whose only reader lives inside config/, each with that reader named: three are
+// read through an accessor (config exposes `MaxResultChars()`, not the field) and one is consumed
+// at LOAD time by config itself.
+//
+// Its limits, so nobody trusts it further than it goes: it is text, not types (an identically named
+// identifier elsewhere would pass), and it says nothing about whether the reader's effect is
+// CORRECT — only that something reads the knob at all. A leaf whose reader is a reflection walk
+// (`config.ReadPath` by string path) would be a false failure; none exists today.
+func TestEveryOfferedLeafIsConsumed(t *testing.T) {
+	// leaf → the reader inside config/ that makes the field name invisible to the search below.
+	readInsideConfig := map[string]string{
+		"mcp_tool_refresh.interval": "RefreshInterval()",
+		"tool_result.max_chars":     "MaxResultChars()",
+		"tool_result.file_dir":      "ResultFileDir()",
+		"provider_aliases":          "ExpandProviderAliases() (runs once, at the end of LoadFrom)",
+	}
+	src := goSourceOutsideConfig(t)
+	cfg := config.DefaultConfig()
+	_, svc, _ := settingsFixture(t, "language: en\n")
+	for _, f := range svc.GetSettingsSchema().Fields {
+		if reader, ok := readInsideConfig[f.Key]; ok {
+			if reader == "" {
+				t.Errorf("%s: the exception needs the name of the reader that justifies it", f.Key)
+			}
+			continue
+		}
+		field, ok := config.LeafFieldName(cfg, f.Key)
+		if !ok {
+			t.Errorf("%s is offered by the form but resolves to no Go field", f.Key)
+			continue
+		}
+		if !strings.Contains(src, "."+field) {
+			t.Errorf("the form offers %s (Go field %s), but no non-test Go code outside config/ reads\n"+
+				"it: an input box whose edits change nothing. Either drop the leaf or name its reader in\n"+
+				"readInsideConfig.", f.Key, field)
+		}
+	}
+}
+
+// goSourceOutsideConfig concatenates every non-test .go file under the repository root except
+// config/ itself. Vendored and generated trees are skipped: they are not readers of anything here.
+func goSourceOutsideConfig(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "dist", "vendor", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		if rel, relErr := filepath.Rel("..", path); relErr == nil && strings.HasPrefix(rel, "config/") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		b.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the repository for Go sources: %v", err)
+	}
+	if b.Len() == 0 {
+		t.Fatal("found no Go sources at all — the walk is looking in the wrong place")
+	}
+	return b.String()
+}

@@ -1,5 +1,5 @@
 // Package retry provides shared exponential-backoff and cancel-aware sleep
-// helpers used by provider wrappers, LSP calls, and channel retry loops.
+// helpers used by provider wrappers and channel retry loops.
 package retry
 
 import (

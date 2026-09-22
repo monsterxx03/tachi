@@ -20,18 +20,6 @@ const (
 	maxGrepMaxResults = 1000
 )
 
-// GrepResult holds structured grep output for internal formatting.
-type GrepResult struct {
-	DurationMs int64    `json:"durationMs"`
-	NumFiles   int      `json:"numFiles"`
-	NumLines   int      `json:"numLines,omitempty"`
-	NumMatches int      `json:"numMatches,omitempty"`
-	Filenames  []string `json:"filenames"`
-	Content    string   `json:"content,omitempty"`
-	Mode       string   `json:"mode"`
-	Truncated  bool     `json:"truncated"`
-}
-
 type grepArgs struct {
 	Pattern         string `json:"pattern"`
 	Path            string `json:"path"`

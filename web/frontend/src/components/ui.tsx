@@ -69,15 +69,6 @@ export function Badge({
   return <span className={map[color]}>{children}</span>
 }
 
-/** Section label used inside payload/event blocks. */
-export function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <div className="text-[10px] uppercase tracking-wider text-muted mb-1.5">
-      {children}
-    </div>
-  )
-}
-
 /** Page header (title + subtitle). */
 export function PageHead({ title, sub }: { title: string; sub?: ReactNode }) {
   return (

@@ -444,11 +444,6 @@ type ACPConfig struct {
 	MCPConflictPolicy string `yaml:"mcp_conflict_policy" default:"client_wins"`
 }
 
-// ShouldConnectConfiguredMCP returns whether to connect mcp.json MCP servers in ACP mode.
-func (c *ACPConfig) ShouldConnectConfiguredMCP() bool {
-	return c.ConnectConfiguredMCP == nil || *c.ConnectConfiguredMCP
-}
-
 // CompactConfig holds configuration for session compaction.
 // Used by both the /compact command and auto-compact (when enabled).
 type CompactConfig struct {
@@ -807,14 +802,6 @@ func (c *DeepResearchConfig) ResearcherTools() []string {
 		return c.Researcher.AllowedTools
 	}
 	return []string{"WebSearch", "WebFetch", "ReadFile", "Grep", "WriteFile"}
-}
-
-// ResearcherMaxIterations returns the max iterations per research sub-agent.
-func (c *DeepResearchConfig) ResearcherMaxIterations() int {
-	if c.Researcher != nil && c.Researcher.MaxIterations > 0 {
-		return c.Researcher.MaxIterations
-	}
-	return 5
 }
 
 type DeepResearchPrompts struct {
@@ -1303,7 +1290,6 @@ func (c *Config) LoadMCPServers(workDir string) error {
 type MCPToolSearchConfig struct {
 	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
 	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
-	MaxDeferredSchemaBytes int   `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
 
 	// Matcher picks how a prose query is matched against the deferred pool:
 	// "bm25" = the keyword search (the original behaviour), "jev" = the System

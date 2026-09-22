@@ -6,7 +6,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/deepresearch"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/llm"
 )
 
 // deepResearchRunnerAdapter adapts tools.SubagentRunner to deepresearch.SubagentRunner.
@@ -28,7 +27,8 @@ func (a *deepResearchRunnerAdapter) Run(ctx context.Context, prompt string, allo
 }
 
 // NewDeepResearch creates a DeepResearch engine from the agent's configuration
-// and sub-systems. Returns nil when deep research is not enabled in config.
+// and sub-systems. It never returns a nil engine — there is no config switch that
+// turns deep research off, so a construction ERROR is the only way to fail.
 //
 // The returned engine uses the agent's SubagentRunner for research sub-agents
 // and the agent's main provider (or a named provider from config) for query
@@ -50,23 +50,3 @@ func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearc
 	), nil
 }
 
-// NewDeepResearchWithProvider creates a DeepResearch engine using a specific
-// LLM provider instead of the agent's default. Use this when the caller has
-// a separate provider instance (e.g. channel mode's global provider).
-func (a *AIAgent) NewDeepResearchWithProvider(
-	cfg *config.Config,
-	provider llm.Provider,
-) (*deepresearch.DeepResearch, error) {
-	runner := &deepResearchRunnerAdapter{runner: a.Config.SubagentRunner}
-
-	lg := a.Config.Logger
-
-	return deepresearch.New(
-		&cfg.DeepResearch,
-		cfg.Providers,
-		provider,
-		runner,
-		lg,
-		cfg.MaxTokens,
-	), nil
-}

@@ -70,11 +70,6 @@ type MCPView struct {
 	needAction MCPAction
 }
 
-// NewMCPView creates an empty MCPView.
-func NewMCPView() MCPView {
-	return MCPView{}
-}
-
 // SetServers replaces the server data and resets all selection state.
 func (v *MCPView) SetServers(items []MCPServerItem) {
 	v.servers = items

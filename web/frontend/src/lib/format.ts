@@ -35,15 +35,6 @@ export function shortTime(iso?: string): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-/** "2026-08-17 21:06" fuller form. */
-export function fullTime(iso?: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (x: number) => String(x).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 /** Human-friendly duration from ms. */
 export function durMs(ms: number | undefined): string {
   if (ms === undefined || Number.isNaN(ms)) return ''
@@ -52,13 +43,4 @@ export function durMs(ms: number | undefined): string {
   if (s < 60) return `${s.toFixed(1)}s`
   const m = Math.floor(s / 60)
   return `${m}m ${Math.round(s % 60)}s`
-}
-
-let prevNow = Date.now()
-/** Ensure a strictly increasing second resolution for stable React keys. */
-export function nextKey(): number {
-  const now = Date.now()
-  if (now <= prevNow) prevNow += 1
-  else prevNow = now
-  return prevNow
 }

@@ -523,11 +523,6 @@ func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
 	a.PermState.AutoApprovePolicyAsks = v
 }
 
-// SetACPFileMode enables ACP file I/O for the EditFile tool.
-func (a *AIAgent) SetACPFileMode() {
-	a.Frontend.ACPFileMode = true
-}
-
 // EnablePlanTool enables registration of the SavePlan tool. Must be called
 // before Configure()/RegisterTools(). Currently only ACP sessions enable it,
 // since only ACP clients render the structured plan card UI.
@@ -992,31 +987,6 @@ func (a *AIAgent) ToolSchemas() []tools.Schema {
 // ToolNames returns registered tool names without triggering Description() calls.
 func (a *AIAgent) ToolNames() []string {
 	return a.Config.ToolRegistry.GetToolNames()
-}
-
-// SaveToolRegistry returns a snapshot of all currently registered tools.
-// Use RestoreToolRegistry to restore them later.
-func (a *AIAgent) SaveToolRegistry() map[string]tools.Tool {
-	saved := make(map[string]tools.Tool)
-	for _, name := range a.Config.ToolRegistry.GetToolNames() {
-		if tool := a.Config.ToolRegistry.GetTool(name); tool != nil {
-			saved[name] = tool
-		}
-	}
-	return saved
-}
-
-// RestoreToolRegistry clears the current tool registry and re-registers
-// the tools from the given snapshot (typically obtained from SaveToolRegistry).
-func (a *AIAgent) RestoreToolRegistry(saved map[string]tools.Tool) {
-	// Remove all currently registered tools
-	for _, name := range a.Config.ToolRegistry.GetToolNames() {
-		a.Config.ToolRegistry.Unregister(name)
-	}
-	// Re-register from saved snapshot
-	for _, tool := range saved {
-		a.Config.ToolRegistry.Register(tool)
-	}
 }
 
 // ClearToolRegistry removes all registered tools. Use when the LLM should

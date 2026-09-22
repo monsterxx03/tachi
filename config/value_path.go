@@ -142,6 +142,23 @@ func DescribeLeaf(cfg *Config, key string) (LeafInfo, error) {
 	return describeLeafRef(leaf), nil
 }
 
+// LeafFieldName reports the Go field name the leaf at key resolves to, or "" when the path does not
+// resolve to a struct field.
+//
+// It exists for ONE caller: the settings page's guard test, which holds every leaf the form OFFERS
+// against the Go source, because a leaf nothing consumes renders as an input box whose edits do
+// nothing (`mcp_tool_search.max_deferred_schema_bytes` was exactly that — 0 references anywhere,
+// offered on the page). It is deliberately NOT part of LeafInfo: that VO crosses the binding into
+// the frontend, and a field name is of no use there. A leaf read only through an ACCESSOR is a
+// false positive for that guard, which is why the test carries an explicit list of them.
+func LeafFieldName(cfg *Config, key string) (string, bool) {
+	leaf, err := resolvePath(cfg, key)
+	if err != nil || leaf.field.Name == "" {
+		return "", false
+	}
+	return leaf.field.Name, true
+}
+
 // describeLeafRef is DescribeLeaf for a leaf that has already been resolved — the shared half, so
 // the config walk and the element walk (resolveElementPath, in config_edits.go) describe a leaf the
 // same way.

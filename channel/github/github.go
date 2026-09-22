@@ -159,11 +159,6 @@ func (c *GitHubClient) Login() string {
 	return c.login
 }
 
-// IsBotUser returns true if the given login is the bot itself.
-func (c *GitHubClient) IsBotUser(login string) bool {
-	return login == c.login
-}
-
 // Client returns the underlying go-github client for direct API access.
 func (c *GitHubClient) Client() *github.Client {
 	return c.client

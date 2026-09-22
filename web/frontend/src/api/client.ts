@@ -7,12 +7,9 @@
 //     it and shows the key entry screen.
 
 import type {
-  APIRequest,
-  Message,
   OneOffEvents,
   SessionDetail,
   SessionListPage,
-  SessionMeta,
   UsageSummary,
 } from '../types/api'
 
@@ -42,10 +39,6 @@ export function getApiKey(): string {
 export function setApiKey(key: string): void {
   // Simple persistence; secure flag off since this is a localhost-only console.
   document.cookie = `${API_KEY_COOKIE}=${encodeURIComponent(key)}; path=/; max-age=31536000; SameSite=Lax`
-}
-
-export function clearApiKey(): void {
-  document.cookie = `${API_KEY_COOKIE}=; path=/; max-age=0`
 }
 
 interface RequestOptions {
@@ -108,21 +101,4 @@ export const api = {
   usage: () => request<UsageSummary>('/api/usage'),
 
   transcriptUrl: (id: string) => `/api/sessions/${encodeURIComponent(id)}/transcript`,
-}
-
-// Convenience: fetch a full session's message list alone (used by the
-// inspector timeline; meta arrives in the same payload).
-export async function fetchSessionMessages(id: string): Promise<{
-  meta: SessionMeta
-  messages: Message[]
-  apiRequests: APIRequest[]
-  oneoffs: import('../types/api').OneOffSummary[]
-}> {
-  const detail = await api.getSession(id)
-  return {
-    meta: detail.meta,
-    messages: detail.messages,
-    apiRequests: detail.api_requests,
-    oneoffs: detail.oneoffs,
-  }
 }

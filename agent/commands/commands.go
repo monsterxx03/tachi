@@ -90,23 +90,6 @@ func FindByPrefix(input string) *Def {
 	return nil
 }
 
-// MatchPrefix returns all commands whose name starts with the given prefix.
-// If prefix is empty, returns all commands.
-func MatchPrefix(prefix string) []Def {
-	if prefix == "" {
-		out := make([]Def, len(Registry))
-		copy(out, Registry)
-		return out
-	}
-	var out []Def
-	for _, d := range Registry {
-		if len(d.Name) >= len(prefix) && d.Name[:len(prefix)] == prefix {
-			out = append(out, d)
-		}
-	}
-	return out
-}
-
 // MatchPrefixForMode returns commands that start with prefix and are
 // available in the given mode. If prefix is empty, returns all for that mode.
 func MatchPrefixForMode(prefix string, mode Mode) []Def {

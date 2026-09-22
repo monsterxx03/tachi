@@ -4,17 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
-
-// MemoryBackend returns the configured memory backend, or nil if memory is disabled.
-func (a *AIAgent) MemoryBackend() memory.Backend {
-	if a.Config.Memory == nil {
-		return nil
-	}
-	return a.Config.Memory.Backend
-}
 
 // RecordMemory implements tools.MemoryRecorder. It persists an explicit
 // LLM-initiated memory to the backend's inbox (the only live write path —

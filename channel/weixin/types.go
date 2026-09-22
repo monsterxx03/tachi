@@ -84,14 +84,12 @@ const (
 
 // MessageType constants.
 const (
-	MessageTypeNone = 0
 	MessageTypeUser = 1
 	MessageTypeBot  = 2
 )
 
 // MessageItemType constants.
 const (
-	MessageItemTypeNone  = 0
 	MessageItemTypeText  = 1
 	MessageItemTypeImage = 2
 	MessageItemTypeVoice = 3
@@ -101,9 +99,7 @@ const (
 
 // MessageState constants.
 const (
-	MessageStateNew        = 0
-	MessageStateGenerating = 1
-	MessageStateCompleted  = 2
+	MessageStateCompleted = 2
 )
 
 // WeixinMessage is the full message structure received via getUpdates.
@@ -214,7 +210,6 @@ const (
 	MediaTypeImage = 1
 	MediaTypeVideo = 2
 	MediaTypeFile  = 3
-	MediaTypeVoice = 4
 )
 
 // GetUploadURLRequest is the body of POST /ilink/bot/getuploadurl.

@@ -990,7 +990,6 @@
   cursor: pointer;
 }
 .plan-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
-.plan-others { font-size: 10.5px; color: var(--text-faint); }
 /* The way out of plan mode: the same flat "go" recipe as the app's other primary
    buttons (see .pending-send in chat.css), because it is the one action the panel
    offers. */

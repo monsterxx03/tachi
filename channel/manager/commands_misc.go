@@ -209,9 +209,6 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	if errors.Is(err, agent.ErrResearchUsage) {
 		return "Usage: `/research <topic> [--depth N] [--breadth N]`", nil
 	}
-	if errors.Is(err, agent.ErrResearchUnavailable) {
-		return "Deep Research is not available (engine creation returned nil).", nil
-	}
 	if err != nil {
 		return "", err
 	}

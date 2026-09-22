@@ -67,7 +67,7 @@ type SystemReminderConfig struct {
 // 字段分类：
 //   - "构造输入"：构造时被消费，派生到运行时字段（titleGenEnabled /
 //     PermState / Frontend）。构造完成后这些字段不再被读取——改它们无效，
-//     要改运行时行为请用对应 Setter（SetACPFileMode 等）。
+//     要改运行时行为请用对应 Setter（SetAutoApprovePolicyAsks、EnablePlanTool 等）。
 //   - "只读配置"：构造后不变，通过 Config 引用
 //   - "回填"：由 Configure() 初始化后回填
 type AgentConfig struct {

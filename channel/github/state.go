@@ -79,14 +79,6 @@ func (sm *StateManager) Repo(name string) RepoState {
 	return *rs
 }
 
-// EnsureRepoSeeded marks a repo as seeded (first run handled).
-func (sm *StateManager) EnsureRepoSeeded(name string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	rs := sm.state.Repo(name)
-	rs.Seeded = true
-}
-
 // UpdateIssueState transitions an issue to a new state, with runtime
 // validation against the state machine defined in IssueState.Transition.
 // Invalid transitions are logged as warnings but still applied — the
@@ -122,20 +114,6 @@ func isValidTransition(old, new IssueState) bool {
 		}
 	}
 	return false
-}
-
-// UpdateIssueAfterPoll updates issue state after polling.
-func (sm *StateManager) UpdateIssueAfterPoll(repo, issueNum string, lastCommentID int64, lastCommentAt time.Time) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	rs := sm.state.Repo(repo)
-	ir := rs.Issue(issueNum)
-	if ir.State == "" {
-		ir.State = IssueStateNew
-		ir.FirstSeenAt = time.Now()
-	}
-	ir.LastProcessedCommentID = lastCommentID
-	ir.LastCommentAt = lastCommentAt
 }
 
 // GetIssueRecord returns a copy of the issue record.
@@ -235,19 +213,3 @@ func (sm *StateManager) SeedExistingIssues(repo string, issueNumbers []string) {
 	rs.Seeded = true
 }
 
-// AllSeeded returns true if all repos have been seeded.
-func (sm *StateManager) AllSeeded() bool {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	for _, rs := range sm.state.Repos {
-		if !rs.Seeded {
-			return false
-		}
-	}
-	return true
-}
-
-// StatePath returns the path to the state file.
-func (sm *StateManager) StatePath() string {
-	return sm.statePath
-}

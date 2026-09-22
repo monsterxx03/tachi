@@ -791,10 +791,6 @@ func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSid
 		sendTextUpdate(ctx, conn, sessionID, "Usage: `/research <topic> [--depth N] [--breadth N] [--format report|answer]`")
 		return acp.StopReasonEndTurn, nil
 	}
-	if errors.Is(err, agent.ErrResearchUnavailable) {
-		sendTextUpdate(ctx, conn, sessionID, "Deep Research is not available.")
-		return acp.StopReasonEndTurn, nil
-	}
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("❌ Research failed: %v", err))
 		return acp.StopReasonEndTurn, nil
