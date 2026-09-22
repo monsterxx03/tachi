@@ -206,6 +206,17 @@ Fixtures exist where the real path needs something a driver cannot do:
   attribution with the **responsible** process. `notifyTurnDone` is for the transcript lane only: a side-channel
   run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone`, raised from
   `commands.go`, where the outcome is known.
+- **A signature change STRANDS the TCC rows it replaces: reset, then re-add — per service, by hand.** TCC
+  stores the requirement it matched at grant time (an ad-hoc build's is `cdhash H"…"`, which is why sign-local
+  exists), so re-signing leaves an entry that still reads as granted in the pane and fails every request —
+  `Failed to match existing code requirement for subject <bundle-id>`, in
+  `log show --last 10m --predicate 'eventMessage CONTAINS "kTCCServiceScreenCapture"'`, which prints both the
+  stored requirement and the app's current one. `tccutil reset <service> <bundle-id>` followed by re-adding the
+  app (系统设置 → 隐私与安全性 → 屏幕录制 → `+`, Finder's ⌘⇧G for the path) is the fix; screen recording
+  **never prompts** (`does not allow prompting; returning denied`), so a missed pane visit looks like a broken
+  build. Grants are judged against the **responsible** process, which for `open bin/Tachi.app` (PPID 1) is
+  Tachi.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
+  terminal it was launched from.
 
 ## Desktop Backend (bindings & paths)
 

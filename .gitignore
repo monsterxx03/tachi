@@ -5,6 +5,7 @@
 /tachi
 /tachi-linux-amd64
 /tachi-linux-arm64
+.DS_Store
 
 # ginkgo -p compiles test binaries into the package dir (itest/run/run.test);
 # without ignoring them every ginkgo run dirties the worktree, which defeats
