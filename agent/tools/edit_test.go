@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -716,4 +717,88 @@ func TestEditTool_NotFound_NoRegionWhenNothingMatches(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "closest region")
 	assert.NotContains(t, err.Error(), "ARE in the file")
+}
+
+// ============================================================================
+// Diff body folding — the -/+ bodies are a second copy of the call's arguments
+// ============================================================================
+
+// bodyLines builds n numbered lines, so a test can name the one line it cares
+// about instead of asserting on a whole block. The padding is what pushes a
+// block past diffFoldMinBodyChars: folding is a size decision, so a test about
+// it must not accidentally sit below the threshold.
+func bodyLines(prefix string, from, to int) []string {
+	var out []string
+	for i := from; i <= to; i++ {
+		out = append(out, fmt.Sprintf("%s line %02d — padded so a block of sixteen crosses diffFoldMinBodyChars", prefix, i))
+	}
+	return out
+}
+
+func TestEditTool_LargeEditFoldsTheDiffBodies(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "big.txt")
+	content := strings.Join(bodyLines("context", 1, 30), "\n") + "\n"
+	require.NoError(t, os.WriteFile(filePath, []byte(content), 0o644))
+
+	// 16 old lines and 16 new ones: the old_string/new_string the call carries.
+	// Both are already in the tool_use arguments, so the result must not replay them.
+	oldStr := strings.Join(bodyLines("context", 11, 26), "\n")
+	newStr := strings.Join(bodyLines("replacement", 1, 16), "\n")
+
+	tool := &EditTool{}
+	args, _ := json.Marshal(map[string]any{"path": filePath, "old_string": oldStr, "new_string": newStr})
+	out, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "@@ -11,16 +11,16 @@")
+	assert.Contains(t, out, "-11-26 | [16 lines, identical to the old_string you sent — not repeated here]")
+	assert.Contains(t, out, "+11-26 | [16 lines, identical to the new_string you sent — not repeated here]")
+	assert.NotContains(t, out, "context line 11", "the removed body is a copy of the arguments: %q", out)
+	assert.NotContains(t, out, "replacement line 01", "the added body is a copy of the arguments: %q", out)
+	// The context around the hunk stays: it is what places the edit in the file.
+	assert.Contains(t, out, " 8 | context line 08")
+	assert.Contains(t, out, " 29 | context line 29")
+	assert.Less(t, len(out), len(oldStr)+len(newStr),
+		"a folded result must be smaller than the bodies it replaced: %d vs %d", len(out), len(oldStr)+len(newStr))
+	t.Logf("folded result:\n%s", out)
+}
+
+func TestEditTool_SmallEditKeepsTheDiffBodies(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "small.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("one\ntwo\nthree\n"), 0o644))
+
+	tool := &EditTool{}
+	args, _ := json.Marshal(map[string]any{"path": filePath, "old_string": "two", "new_string": "TWO"})
+	out, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.NoError(t, err)
+
+	// Under diffFoldMinBodyChars the whole change is the useful part — a count
+	// line here would hide it.
+	assert.Contains(t, out, "-2 | two")
+	assert.Contains(t, out, "+2 | TWO")
+	assert.NotContains(t, out, "not repeated here")
+}
+
+func TestEditTool_TolerantMatchKeepsTheDiffBodies(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "tolerant_big.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte(strings.Join(bodyLines("context", 1, 30), "\n")+"\n"), 0o644))
+
+	// The old_string the model sent ends in trailing whitespace the file does not
+	// have: a tolerant match, so the `-` body is the ONLY copy of the text that
+	// actually matched (the arguments hold the caller's version, not this one).
+	oldStr := strings.Join(bodyLines("context", 11, 26), "\n") + "   "
+	newStr := strings.Join(bodyLines("replacement", 1, 16), "\n")
+
+	tool := &EditTool{}
+	args, _ := json.Marshal(map[string]any{"path": filePath, "old_string": oldStr, "new_string": newStr})
+	out, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.NoError(t, err)
+
+	require.True(t, strings.HasPrefix(out, "Note:"), "the tolerant note must lead the result: %q", out)
+	assert.Contains(t, out, "tolerant match, line 11")
+	assert.Contains(t, out, "-11 | context line 11", "a tolerant match keeps the body it actually matched: %q", out)
+	assert.NotContains(t, out, "not repeated here")
 }

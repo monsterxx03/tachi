@@ -162,7 +162,8 @@ func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, erro
 		return "", notFoundError(filePath, content, a.OldString)
 	}
 
-	return generateDiffSnippet(content, actualOld, a.NewString), nil
+	// Not folded: this is the preview a human reads in the confirmation card.
+	return generateDiffSnippet(content, actualOld, a.NewString, false), nil
 }
 
 func (t *EditTool) ExecuteContext(ctx context.Context, args string) (string, error) {
@@ -235,7 +236,7 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 			if err != nil {
 				return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
 			}
-			snippet := generateDiffSnippet(resp.Content, actualOld, a.NewString)
+			snippet := generateDiffSnippet(resp.Content, actualOld, a.NewString, actualOld == a.OldString)
 			return fmt.Sprintf("Successfully edited via ACP %s\n%s", filePath, snippet), nil
 		}
 	}
@@ -306,7 +307,9 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	snippet := generateDiffSnippet(content, actualOld, newString)
+	// Fold the diff bodies unless the match was tolerant: then the `-` side is
+	// the only copy of the text that actually matched.
+	snippet := generateDiffSnippet(content, actualOld, newString, actualOld == oldString)
 	msg := ""
 	if actualOld != oldString {
 		// Tolerant match (quote normalization or trailing-whitespace fallback) hit a slightly
@@ -532,8 +535,29 @@ func normalizeQuotes(s string) string {
 	return curlyQuoteReplacer.Replace(s)
 }
 
-// generateDiffSnippet produces a unified diff with +/- markers for changes
-func generateDiffSnippet(oldContent, oldStr, newStr string) string {
+// diffFoldMinBodyChars is the size (old + new text, in characters) at which
+// generateDiffSnippet folds the -/+ bodies into a count line. Below it the diff
+// is short enough to read whole, and a count line would only cost the reader
+// the change itself. It is a readability threshold, never a limit: folding
+// loses nothing — see generateDiffSnippet.
+const diffFoldMinBodyChars = 800
+
+// generateDiffSnippet produces a unified diff with +/- markers for changes.
+//
+// The `-` and `+` bodies are old_str and new_str VERBATIM, and both of them are
+// already in the conversation: the tool_use arguments carry them, and the API
+// requires those to be sent with every request. So on a large edit the result
+// is a second copy of text the model itself just wrote — a 40-line function
+// replayed as 40 `-` lines and 40 `+` lines. With foldBody set and the bodies
+// over diffFoldMinBodyChars, each side collapses to one count line; what
+// remains is the part that carries the only signal an editor's diff has here:
+// the @@ header (did it land where I meant), the context lines, and the
+// caller's tolerant-match note.
+//
+// foldBody must be false whenever the matched text is not what the caller sent
+// (editExistingFile's tolerant match, GetDiff's preview): there the `-` body is
+// the only copy of what actually matched, or a human is reading the whole diff.
+func generateDiffSnippet(oldContent, oldStr, newStr string, foldBody bool) string {
 	const contextLines = 3
 
 	oldLines := strings.Split(oldContent, "\n")
@@ -559,16 +583,25 @@ func generateDiffSnippet(oldContent, oldStr, newStr string) string {
 		fmt.Fprintf(&b, " %d | %s\n", i+1, oldLines[i])
 	}
 
-	// Show old lines (deleted) - prefix with -
-	for i, line := range changedLines {
-		lineNum := editStart + i + 1
-		fmt.Fprintf(&b, "-%d | %s\n", lineNum, line)
-	}
+	if foldBody && len(oldStr)+len(newStr) >= diffFoldMinBodyChars {
+		// One line per side: range, count, and why the lines are not here.
+		// The range is what a reader needs to re-read the region in the file.
+		fmt.Fprintf(&b, "-%d-%d | [%d lines, identical to the old_string you sent — not repeated here]\n",
+			editStart+1, editStart+oldStrLines, oldStrLines)
+		fmt.Fprintf(&b, "+%d-%d | [%d lines, identical to the new_string you sent — not repeated here]\n",
+			editStart+1, editStart+newStrLines, newStrLines)
+	} else {
+		// Show old lines (deleted) - prefix with -
+		for i, line := range changedLines {
+			lineNum := editStart + i + 1
+			fmt.Fprintf(&b, "-%d | %s\n", lineNum, line)
+		}
 
-	// Show new lines (added) - prefix with +
-	for i, line := range newChangedLines {
-		lineNum := editStart + i + 1
-		fmt.Fprintf(&b, "+%d | %s\n", lineNum, line)
+		// Show new lines (added) - prefix with +
+		for i, line := range newChangedLines {
+			lineNum := editStart + i + 1
+			fmt.Fprintf(&b, "+%d | %s\n", lineNum, line)
+		}
 	}
 
 	// Show context after
