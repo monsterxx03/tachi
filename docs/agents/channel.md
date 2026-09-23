@@ -27,7 +27,11 @@ convention-not-history, split + index when a subject grows) apply to this split 
 - **One `Manager` serves every channel.** `main_channels.go` builds it (`channelmgr.New(cfg)`), adds each
   channel the config enables through the registry (`channel.Register` in `channel/discord`, `weixin`,
   `github`), and calls `mgr.Start(ctx)`. The manager hands each channel ONE handler — `buildHandler()`
-  (`agent_turn.go`) — so every routing decision in the product lives behind that closure.
+  (`agent_turn.go`) — so every routing decision in the product lives behind that closure. It is a short
+  sequence of four such decisions, each its own function: `routeGroupMessage` (ambient or dropped),
+  `classifyTurnInput` (which kind of turn, or a synchronous command), `activateDirectedTurn` +
+  `joinOrStartTurn` (claim the thread, then join a running turn or start one), `replyForTurnResult` (build
+  the reply, finalising `/compact`).
 - **The handler is synchronous per channel.** `channel.Channel.Run` calls it and waits for the
   `HandlerResult`; a channel that wants concurrency spawns its own goroutines, but the manager already
   runs the agent turn on a goroutine and blocks the handler on a result channel, so a slow turn does not
@@ -133,9 +137,9 @@ A new per-thread need goes INTO `threadState`; a fifth map is the moment to stop
 
 One feature, THREE entry points — a change to any of them has to consider the other two:
 
-1. **The guard in `buildHandler`** decides whether a message is ambient at all: non-directed + group chat +
-   whisper enabled → `handleAmbientMessage`; non-directed + group chat + whisper OFF → dropped silently
-   (never an agent turn).
+1. **`routeGroupMessage`**, called first by `buildHandler` (`agent_turn.go`), decides whether a message is
+   ambient at all: non-directed + group chat + whisper enabled → `handleAmbientMessage`; non-directed +
+   group chat + whisper OFF → dropped silently (never an agent turn).
 2. **`handleAmbientMessage`** (same file) buffers the message on the thread activation and (re)arms the
    batch timer; a directed message instead cancels the pending ambient turn, transfers the buffered messages
    as steer context, and resets the silence backoff.
@@ -153,8 +157,9 @@ Three places, and they must agree:
   the unknown-command help lists and what a frontend builds its autocomplete from.
 - **`executeSlashCommand` (`commands.go`) is the dispatch** — a switch, one case per command, all returning
   `(text, error)` through `textHandlerResult`.
-- **`/compact` is special**: `buildHandler` intercepts it and runs it as an AGENT TURN (it needs the live
-  session context to summarize), so it never reaches the switch. Skill activation takes the same road.
+- **`/compact` and skill activation are special**: `classifyTurnInput` — the second decision
+  `buildHandler` makes — sends them down the AGENT TURN road (they need the live session context), so they
+  never reach the switch; every other command is answered synchronously by `executeSlashCommand`.
 
 `TestEveryChannelCommandIsHandled` (`agent_pool_test.go`) holds the three together: a command declared for
 channel mode with neither a case nor a documented special path fails the build. It is a source check —
@@ -184,3 +189,4 @@ go test -race ./channel/manager/     # the package is written for -race; the fie
 | `compact_deadlock_test.go` | borrow-then-evict must release first; evict waits for a held agent |
 | `usage_race_test.go` | `/usage` reading an agent while its turn runs |
 | `agent_cache_test.go` | workDir precedence (cached agent wins over the persisted session) |
+| `askuser_regression_test.go` `TestHandler_AskUserAnswerRouting` | the three ways a message answers a parked AskUser wait (structured / raw fallback / cancel) reach the wait and never become a turn |

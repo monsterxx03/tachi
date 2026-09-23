@@ -88,65 +88,38 @@ func (m *Manager) cancelOneoff(threadID string) bool {
 
 // --- Handler build ---
 
-// buildHandler returns a MessageHandler. Each call processes one incoming
-// message. The first message for a thread starts a blocking agent turn;
-// subsequent messages while an agent turn is active are injected via steer
-// and return immediately with Steered=true.
+// buildHandler returns a MessageHandler. Each call processes one incoming message through the same
+// four decisions, in order — each its own function, so this reads as the sequence and not as the
+// detail:
+//
+//  1. routeGroupMessage — a non-directed group message is ambient (whisper on) or dropped (off).
+//  2. classifyTurnInput — which kind of agent turn this is, or a synchronous slash command that is
+//     answered right here and never reaches an agent.
+//  3. activateDirectedTurn, then joinOrStartTurn — claim the thread (absorbing its buffered ambient
+//     state), then either join the turn already running (steer text, an AskUser answer), replace it
+//     (/compact and skill activation), or let this call start it.
+//  4. replyForTurnResult — turn the finished turn into the reply, finalising /compact.
+//
+// The first message for a thread starts a blocking agent turn; subsequent messages while an agent turn
+// is active are injected via steer and return immediately with Steered=true.
 func (m *Manager) buildHandler() channel.MessageHandler {
 	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
 		m.logger.Info(ctx, "channel: recv", "thread", msg.ThreadID, "id", msg.MessageID, "len", len(msg.Content))
 
 		// ---- Channel Whisper guard ----
-		// Only non-directed messages in group chat mode with whisper enabled
-		// are routed through the ambient pipeline. Single-chat messages
-		// (even with Directed=false) never enter the ambient path.
-		if !msg.Directed && msg.GroupChat && m.cfg.Channel.Whisper.WhisperEnabled() {
-			return m.handleAmbientMessage(ctx, msg)
+		// Only non-directed messages in group chat mode enter the ambient pipeline; with whisper off
+		// they are dropped entirely. Single-chat messages (even with Directed=false) never take the
+		// ambient path.
+		if res, done := m.routeGroupMessage(ctx, msg); done {
+			return res
 		}
 
-		// ---- Whisper disabled: silently drop non-directed group messages ----
-		// When whisper is off, non-directed messages in group chats are ignored
-		// entirely — they don't trigger any agent turn or reply.
-		if !msg.Directed && msg.GroupChat && !m.cfg.Channel.Whisper.WhisperEnabled() {
-			m.logger.Info(ctx, "channel: drop (whisper disabled)", "thread", msg.ThreadID)
-			return channel.HandlerResult{Dropped: true}
-		}
-
-		// /compact goes through the agent turn (with session context) rather
-		// than the synchronous slash-command path, so the LLM can summarize
-		// using its existing context window without re-sending all history.
-		isCompactCmd := strings.HasPrefix(msg.Content, "/compact")
-
-		// Skill activation also goes through the agent turn so the LLM
-		// can read and apply the skill instructions as part of its context.
-		isSkillActivation := false
-		var skillActivationMsg string
-		if !isCompactCmd && strings.HasPrefix(msg.Content, "/") {
-			if skillName, extraArgs, ok := m.isSkillActivation(msg.Content); ok {
-				activationMsg, errMsg, err := m.prepareSkillActivation(skillName, extraArgs)
-				if err != nil {
-					return channel.HandlerResult{
-						Reply: channel.OutgoingMessage{
-							ThreadID: msg.ThreadID,
-							Content:  fmt.Sprintf("❌ %s", errMsg),
-							ReplyTo:  msg.MessageID,
-						},
-						Err: err,
-					}
-				}
-				isSkillActivation = true
-				skillActivationMsg = activationMsg
-			}
-		}
-
-		// Other slash commands are handled synchronously. Most are lightweight
-		// (no LLM invocation) — EXCEPT /commit and /review, which run one-off
-		// LLM turns that can take minutes. They still block here deliberately:
-		// the one-off path holds the cached-agent lock, so running them in a
-		// background goroutine would serialize on acquireAgent anyway. They
-		// register with registerOneoff so /stop and /new can cancel them.
-		if !isCompactCmd && !isSkillActivation && strings.HasPrefix(msg.Content, "/") {
-			return m.handleSlashCommand(ctx, msg)
+		// ---- What this message asks for ----
+		// Either an agent turn (plain, /compact, or a skill activation) or one of the synchronous
+		// slash commands, which never reach an agent.
+		req, res, handled := m.classifyTurnInput(ctx, msg)
+		if handled {
+			return res
 		}
 
 		// sendProgress pushes intermediate tool results in verbose mode.
@@ -154,132 +127,33 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			m.sendToThread(ctx, msg.ThreadID, text, msg.MessageID)
 		}
 
-		// Check if an agent is already running for this thread.
-		ta := m.activateThread(msg.ThreadID, ctx)
-		ta.isCompact = isCompactCmd
-		// A directed message resets the ambient silence backoff (design doc §7.3).
-		ta.silenceCount.Store(0)
+		ta := m.activateDirectedTurn(ctx, msg, req)
 
-		// Record group chat mode on first activation (immutable for session lifetime).
-		// Also cancel any pending ambient timer — directed messages take priority.
-		ta.mu.Lock()
-		if !ta.groupChat && msg.GroupChat {
-			ta.groupChat = true
+		// A message that lands while a turn is running either joins it (steer text, an AskUser answer)
+		// or replaces it: /compact and a skill activation need a fresh agent, because the LLM must see
+		// the rewritten instruction rather than the raw command.
+		next, joinedRes, joined := m.joinOrStartTurn(ctx, msg, ta, req)
+		if joined {
+			return joinedRes
 		}
-		if ta.ambientTimer != nil {
-			ta.ambientTimer.Stop()
-			ta.ambientTimer = nil
-		}
-		// Transfer buffered ambient messages to steer context for the directed turn.
-		var ambientSteer []ambientMsg
-		if len(ta.ambientPending) > 0 {
-			ambientSteer = ta.ambientPending
-			ta.ambientPending = nil
-			// Also record in ambient history so future ambient turns see these messages.
-			m.appendToAmbientHistory(ta, ambientSteer...)
-		}
-		ta.mu.Unlock()
+		ta = next
 
-		// If there are ambient messages buffered, prepend them as steer context.
-		if len(ambientSteer) > 0 {
-			ta.mu.Lock()
-			ta.pending = append([]pendingSteerMsg{{content: formatAmbientForSteer(ambientSteer)}}, ta.pending...)
-			ta.mu.Unlock()
-		}
-
-		ta.mu.Lock()
-		// A directed message preempts a running ambient turn: directed
-		// messages must always get a reply, while an ambient turn is
-		// best-effort and disposable. Cancelling unwinds the fork via ctx;
-		// its cleanup (endAmbientTurn) sees steerRespCh replaced/nil and
-		// leaves the new directed turn's state untouched.
-		if ta.ambientCancel != nil {
-			ta.ambientCancel()
-			ta.ambientCancel = nil
-			ta.steerRespCh = nil
-			m.logger.Info(ctx, "channel: preempted ambient turn for directed message", "thread", msg.ThreadID)
-		}
-		if ta.steerRespCh != nil {
-			// Agent already running — check if drainEvents is waiting for
-			// an AskUser answer. When askUserRespCh is non-nil and the
-			// message carries structured answers (set by the channel after
-			// receiving a UI callback), route them directly to the agent.
-			// Raw text messages during an AskUser wait are treated as a
-			// fallback answer (user typed directly instead of using UI).
-			if ta.askUserRespCh != nil && !isCompactCmd && !isSkillActivation {
-				answers := msg.AskUserAnswers
-				if msg.CancelAskUser {
-					// Explicit cancellation — route nil answers to signal the agent.
-					answers = nil
-				} else if answers == nil {
-					// Fallback: treat raw text as answer to the first question.
-					answers = map[string]string{"q0": msg.Content}
-				}
-				ta.mu.Unlock()
-				select {
-				case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
-					m.logger.Info(ctx, "channel: AskUser answer delivered", "thread", msg.ThreadID, "entries", len(answers))
-					m.acknowledgeAskUserSettled(msg.ThreadID)
-				default:
-					m.logger.Warn(ctx, "channel: AskUser answer dropped (channel full)", "thread", msg.ThreadID)
-				}
-				return channel.HandlerResult{Steered: true}
-			}
-
-			// /compact and /skill activation require a fresh agent turn with
-			// session context — they cannot be injected as steer text because
-			// the LLM would see the raw command string instead of the
-			// transformed instruction. Cancel the running turn and restart.
-			if isCompactCmd || isSkillActivation {
-				ta.mu.Unlock()
-				m.cancelThreadTurn(msg.ThreadID)
-				m.logger.Info(ctx, "channel: cancelled running turn, restarting with compact/skill", "thread", msg.ThreadID)
-				// Activate a fresh thread for the new turn.
-				ta = m.activateThread(msg.ThreadID, ctx)
-				ta.isCompact = isCompactCmd
-			} else {
-				// Agent already running — queue this message as steer input.
-				// Keep attachments: steer injection rebuilds image content
-				// parts from them so mid-turn screenshots/files still reach
-				// the vision pipeline (previously only msg.Content was
-				// queued and attachments were silently dropped).
-				ta.pending = append(ta.pending, pendingSteerMsg{content: msg.Content, attachments: msg.Attachments})
-				pendingLen := len(ta.pending)
-				ta.mu.Unlock()
-				m.logger.Info(ctx, "channel: steer queued", "thread", msg.ThreadID, "pending", pendingLen)
-				return channel.HandlerResult{Steered: true}
-			}
-		} else {
-			ta.mu.Unlock()
-		}
-
-		// First message for this thread (or fresh activation after cancel) —
+		// First message for this thread (or a fresh activation after a cancelled running turn) —
 		// start the agent.
 		ta.mu.Lock()
 		ta.steerRespCh = make(chan agent.SteerInput)
 		ta.resultCh = make(chan handlerResult, 1)
 		ta.mu.Unlock()
 
-		// Transform /compact to compact instruction for the LLM.
-		// The LLM will summarize based on its existing session context
-		// without re-sending all history as text.
-		if isCompactCmd {
-			msg.Content = cmds.BuildCompactInstruction()
-		}
-
-		// Transform skill activation to the skill's instruction message.
-		// The LLM will read the skill body and apply its instructions.
-		if isSkillActivation {
-			msg.Content = skillActivationMsg
-		}
+		// The LLM must see an instruction, not the raw command: /compact and a skill activation
+		// replace the content here.
+		msg.Content = req.rewrite(msg.Content)
 
 		// Run agent in a goroutine; handler blocks on the result channel.
-		// Extract streaming callback from context before activating the thread.
-		// Channel implementations (e.g., Discord) set this for real-time tool call
-		// progress display. Passed directly to runAgentTurn rather than going
-		// through context indirection.
-		onTextDelta := streamingCallbackFromCtx(ctx)
-		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta, onTextDelta)
+		// The streaming callback comes from the context (channel implementations such as Discord set
+		// it for real-time tool-call progress display) and is passed straight to runAgentTurn rather
+		// than going through context indirection.
+		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta, streamingCallbackFromCtx(ctx))
 
 		select {
 		case result := <-ta.resultCh:
@@ -288,88 +162,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				// Turn was cancelled by /stop or /new.
 				return channel.HandlerResult{Steered: true}
 			}
-			// Capture the thread's working directory, model, and provider for
-			// the channel to use (e.g., updating Discord channel topic). Read
-			// before eviction in the compact path below.
-			workDir := m.getThreadWorkDir(msg.ThreadID)
-			resolved := m.getProviderForThread(msg.ThreadID)
-			model := resolved.Model
-			provider := resolved.Name
-			if result.err != nil {
-				return channel.HandlerResult{
-					Reply: channel.OutgoingMessage{
-						ThreadID:    msg.ThreadID,
-						Content:     fmt.Sprintf("❌ %v", result.err),
-						ReplyTo:     msg.MessageID,
-						Attachments: result.attachments,
-					},
-					Err:      result.err,
-					WorkDir:  workDir,
-					Model:    model,
-					Provider: provider,
-				}
-			}
-
-			// If this was a /compact turn, finalize the compact by creating
-			// a new session with the summary and migrating the ThreadID.
-			if isCompactCmd {
-				// The compact turn ran on a throwaway agent that is already
-				// closed, so borrow the thread's cached agent to supply the
-				// memory backend for the pre-compaction write.
-				//
-				// The lock is released explicitly rather than by defer: the
-				// evictAgent call below takes ca.mu, so holding it until this
-				// function returns would deadlock.
-				reply, err := func() (string, error) {
-					var memAgent *agent.AIAgent
-					if ca, acqErr := m.acquireAgent(ctx, msg.ThreadID); acqErr == nil {
-						memAgent = ca.agent
-						defer m.releaseAgent(ca)
-					} else {
-						m.logger.Error(ctx, "channel: /compact acquire agent for memory write", acqErr, "thread", msg.ThreadID)
-					}
-					return m.finalizeCompactResult(msg.ThreadID, result.text, memAgent)
-				}()
-				if err != nil {
-					m.logger.Error(ctx, "channel: finalizeCompactResult", err, "thread", msg.ThreadID)
-					return channel.HandlerResult{
-						Reply: channel.OutgoingMessage{
-							ThreadID: msg.ThreadID,
-							Content:  fmt.Sprintf("❌ 压缩失败: %v", err),
-							ReplyTo:  msg.MessageID,
-						},
-						Err:      err,
-						WorkDir:  workDir,
-						Model:    model,
-						Provider: provider,
-					}
-				}
-				// Evict the cached agent so the next turn reloads history from
-				// the newly-created compacted session (via disk fallback).
-				m.evictAgent(msg.ThreadID)
-				return channel.HandlerResult{
-					Reply: channel.OutgoingMessage{
-						ThreadID: msg.ThreadID,
-						Content:  reply,
-						ReplyTo:  msg.MessageID,
-					},
-					WorkDir:  workDir,
-					Model:    model,
-					Provider: provider,
-				}
-			}
-
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID:    msg.ThreadID,
-					Content:     result.text,
-					ReplyTo:     msg.MessageID,
-					Attachments: result.attachments,
-				},
-				WorkDir:  workDir,
-				Model:    model,
-				Provider: provider,
-			}
+			return m.replyForTurnResult(ctx, msg, result, req)
 		case <-ta.ctx.Done():
 			m.deactivateThread(msg.ThreadID, ta)
 			if ta.cancelled.Load() {
@@ -386,6 +179,274 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				Err: ta.ctx.Err(),
 			}
 		}
+	}
+}
+
+// routeGroupMessage applies the whisper guard, the first decision on any message: in a group chat a
+// non-directed message either goes to the ambient pipeline (whisper on) or is dropped silently
+// (whisper off) — it never becomes an agent turn. done reports that the message is finished with.
+func (m *Manager) routeGroupMessage(ctx context.Context, msg channel.IncomingMessage) (channel.HandlerResult, bool) {
+	if msg.Directed || !msg.GroupChat {
+		return channel.HandlerResult{}, false
+	}
+	if m.cfg.Channel.Whisper.WhisperEnabled() {
+		return m.handleAmbientMessage(ctx, msg), true
+	}
+	m.logger.Info(ctx, "channel: drop (whisper disabled)", "thread", msg.ThreadID)
+	return channel.HandlerResult{Dropped: true}, true
+}
+
+// turnRequest is what a message asks the handler to run: a plain agent turn, a /compact turn, or a
+// skill activation. The last two run as agent turns because they need the live session context the
+// synchronous slash path has no access to, and both replace the raw command with an instruction the
+// LLM can act on.
+type turnRequest struct {
+	compact  bool
+	skillMsg string // the skill's activation message; non-empty for a skill activation
+}
+
+// rewrite returns the content the LLM should see for this request. A plain turn keeps the user's text.
+func (r turnRequest) rewrite(content string) string {
+	switch {
+	case r.compact:
+		return cmds.BuildCompactInstruction()
+	case r.skillMsg != "":
+		return r.skillMsg
+	}
+	return content
+}
+
+// needsFreshAgent reports that this request cannot be injected into a running turn as steer text: the
+// LLM would see the raw command string instead of the transformed instruction.
+func (r turnRequest) needsFreshAgent() bool { return r.compact || r.skillMsg != "" }
+
+// classifyTurnInput decides, before any thread state is touched, what the message runs. Most slash
+// commands are handled synchronously and never reach an agent — EXCEPT /commit and /review, which run
+// one-off LLM turns that can take minutes and still block here deliberately: the one-off path holds
+// the cached-agent lock, so running them in a background goroutine would serialize on acquireAgent
+// anyway. They register with registerOneoff so /stop and /new can cancel them.
+//
+// handled reports that the caller must return the result as-is.
+func (m *Manager) classifyTurnInput(ctx context.Context, msg channel.IncomingMessage) (turnRequest, channel.HandlerResult, bool) {
+	if !strings.HasPrefix(msg.Content, "/") {
+		return turnRequest{}, channel.HandlerResult{}, false
+	}
+
+	// /compact goes through the agent turn (with session context) rather than the synchronous
+	// slash-command path, so the LLM can summarize from its existing context window without
+	// re-sending all history as text.
+	if strings.HasPrefix(msg.Content, "/compact") {
+		return turnRequest{compact: true}, channel.HandlerResult{}, false
+	}
+
+	// Skill activation also goes through the agent turn so the LLM can read and apply the skill
+	// instructions as part of its context.
+	if skillName, extraArgs, ok := m.isSkillActivation(msg.Content); ok {
+		activationMsg, errMsg, err := m.prepareSkillActivation(skillName, extraArgs)
+		if err != nil {
+			return turnRequest{}, channel.HandlerResult{
+				Reply: channel.OutgoingMessage{
+					ThreadID: msg.ThreadID,
+					Content:  fmt.Sprintf("❌ %s", errMsg),
+					ReplyTo:  msg.MessageID,
+				},
+				Err: err,
+			}, true
+		}
+		return turnRequest{skillMsg: activationMsg}, channel.HandlerResult{}, false
+	}
+
+	return turnRequest{}, m.handleSlashCommand(ctx, msg), true
+}
+
+// activateDirectedTurn claims the thread for a directed message: it activates the thread (or joins the
+// live activation), marks the turn's mode, resets the ambient silence backoff, records group-chat mode,
+// drops the pending ambient timer, and moves any buffered ambient messages into this turn's steer
+// context so the directed turn still sees them.
+func (m *Manager) activateDirectedTurn(ctx context.Context, msg channel.IncomingMessage, req turnRequest) *threadActivation {
+	ta := m.activateThread(msg.ThreadID, ctx)
+	ta.isCompact = req.compact
+	// A directed message resets the ambient silence backoff (design doc §7.3).
+	ta.silenceCount.Store(0)
+
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	// Record group chat mode on first activation (immutable for session lifetime). Also cancel any
+	// pending ambient timer — directed messages take priority.
+	if !ta.groupChat && msg.GroupChat {
+		ta.groupChat = true
+	}
+	if ta.ambientTimer != nil {
+		ta.ambientTimer.Stop()
+		ta.ambientTimer = nil
+	}
+	// Transfer buffered ambient messages to steer context for the directed turn, and record them in
+	// ambient history so future ambient turns see them too.
+	if len(ta.ambientPending) > 0 {
+		steer := ta.ambientPending
+		ta.ambientPending = nil
+		m.appendToAmbientHistory(ta, steer...)
+		ta.pending = append([]pendingSteerMsg{{content: formatAmbientForSteer(steer)}}, ta.pending...)
+	}
+	return ta
+}
+
+// joinOrStartTurn decides what a message means for a thread that may already be running a turn: answer
+// an AskUser wait, cancel the running turn and start a fresh one (/compact and skill activation), queue
+// the text as steer input, or leave it to the caller to start a turn. handled reports that the message
+// is finished with and the result is the reply; otherwise the returned activation is the one to start
+// the turn on — which is NEW when a running turn had to be cancelled.
+//
+// The ambient preemption lives here because it must share the lock with the running-turn test:
+// cancelling an ambient fork clears steerRespCh, and that is what turns "join the running turn" into
+// "start one".
+func (m *Manager) joinOrStartTurn(ctx context.Context, msg channel.IncomingMessage, ta *threadActivation, req turnRequest) (*threadActivation, channel.HandlerResult, bool) {
+	ta.mu.Lock()
+	// A directed message preempts a running ambient turn: directed messages must always get a reply,
+	// while an ambient turn is best-effort and disposable. Cancelling unwinds the fork via ctx; its
+	// cleanup (endAmbientTurn) sees steerRespCh replaced/nil and leaves the new directed turn's state
+	// untouched.
+	if ta.ambientCancel != nil {
+		ta.ambientCancel()
+		ta.ambientCancel = nil
+		ta.steerRespCh = nil
+		m.logger.Info(ctx, "channel: preempted ambient turn for directed message", "thread", msg.ThreadID)
+	}
+	if ta.steerRespCh == nil {
+		ta.mu.Unlock()
+		return ta, channel.HandlerResult{}, false
+	}
+
+	// A turn is running. If drainEvents is parked on an AskUser question, this message is its answer:
+	// the structured answers when the channel delivered them from a UI callback, otherwise the raw
+	// text as a fallback answer to the first question.
+	if ta.askUserRespCh != nil && !req.needsFreshAgent() {
+		answers := msg.AskUserAnswers
+		if msg.CancelAskUser {
+			// Explicit cancellation — route nil answers to signal the agent.
+			answers = nil
+		} else if answers == nil {
+			// Fallback: treat raw text as answer to the first question.
+			answers = map[string]string{"q0": msg.Content}
+		}
+		ta.mu.Unlock()
+		select {
+		case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
+			m.logger.Info(ctx, "channel: AskUser answer delivered", "thread", msg.ThreadID, "entries", len(answers))
+			m.acknowledgeAskUserSettled(msg.ThreadID)
+		default:
+			m.logger.Warn(ctx, "channel: AskUser answer dropped (channel full)", "thread", msg.ThreadID)
+		}
+		return ta, channel.HandlerResult{Steered: true}, true
+	}
+
+	// /compact and a skill activation need a fresh agent turn with session context — they cannot be
+	// injected as steer text, because the LLM would see the raw command string instead of the
+	// transformed instruction. Cancel the running turn and restart on a fresh activation.
+	if req.needsFreshAgent() {
+		ta.mu.Unlock()
+		m.cancelThreadTurn(msg.ThreadID)
+		m.logger.Info(ctx, "channel: cancelled running turn, restarting with compact/skill", "thread", msg.ThreadID)
+		fresh := m.activateThread(msg.ThreadID, ctx)
+		fresh.isCompact = req.compact
+		return fresh, channel.HandlerResult{}, false
+	}
+
+	// Agent already running — queue this message as steer input. Attachments are kept: steer injection
+	// rebuilds image content parts from them so mid-turn screenshots/files still reach the vision
+	// pipeline (previously only msg.Content was queued and attachments were silently dropped).
+	ta.pending = append(ta.pending, pendingSteerMsg{content: msg.Content, attachments: msg.Attachments})
+	pendingLen := len(ta.pending)
+	ta.mu.Unlock()
+	m.logger.Info(ctx, "channel: steer queued", "thread", msg.ThreadID, "pending", pendingLen)
+	return ta, channel.HandlerResult{Steered: true}, true
+}
+
+// replyForTurnResult turns a finished agent turn into the handler's reply: the error reply, the
+// /compact finalisation, or the ordinary text reply. The thread's working directory, model and
+// provider are captured BEFORE any eviction so the channel can still use them (e.g. to update a
+// Discord channel topic).
+func (m *Manager) replyForTurnResult(ctx context.Context, msg channel.IncomingMessage, result handlerResult, req turnRequest) channel.HandlerResult {
+	workDir := m.getThreadWorkDir(msg.ThreadID)
+	resolved := m.getProviderForThread(msg.ThreadID)
+	model := resolved.Model
+	provider := resolved.Name
+
+	if result.err != nil {
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID:    msg.ThreadID,
+				Content:     fmt.Sprintf("❌ %v", result.err),
+				ReplyTo:     msg.MessageID,
+				Attachments: result.attachments,
+			},
+			Err:      result.err,
+			WorkDir:  workDir,
+			Model:    model,
+			Provider: provider,
+		}
+	}
+
+	// A /compact turn ends by creating a new session with the summary and migrating the ThreadID.
+	if req.compact {
+		return m.finalizeCompactReply(ctx, msg, result.text, workDir, model, provider)
+	}
+
+	return channel.HandlerResult{
+		Reply: channel.OutgoingMessage{
+			ThreadID:    msg.ThreadID,
+			Content:     result.text,
+			ReplyTo:     msg.MessageID,
+			Attachments: result.attachments,
+		},
+		WorkDir:  workDir,
+		Model:    model,
+		Provider: provider,
+	}
+}
+
+// finalizeCompactReply creates the compacted session from a finished /compact turn, then drops the
+// cached agent so the next turn reloads history from it (via disk fallback).
+func (m *Manager) finalizeCompactReply(ctx context.Context, msg channel.IncomingMessage, summary, workDir, model, provider string) channel.HandlerResult {
+	// The compact turn ran on a throwaway agent that is already closed, so borrow the thread's cached
+	// agent to supply the memory backend for the pre-compaction write.
+	//
+	// The lock is released explicitly rather than by defer: the evictAgent call below takes ca.mu, so
+	// holding it until this function returns would deadlock.
+	reply, err := func() (string, error) {
+		var memAgent *agent.AIAgent
+		if ca, acqErr := m.acquireAgent(ctx, msg.ThreadID); acqErr == nil {
+			memAgent = ca.agent
+			defer m.releaseAgent(ca)
+		} else {
+			m.logger.Error(ctx, "channel: /compact acquire agent for memory write", acqErr, "thread", msg.ThreadID)
+		}
+		return m.finalizeCompactResult(msg.ThreadID, summary, memAgent)
+	}()
+	if err != nil {
+		m.logger.Error(ctx, "channel: finalizeCompactResult", err, "thread", msg.ThreadID)
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  fmt.Sprintf("❌ 压缩失败: %v", err),
+				ReplyTo:  msg.MessageID,
+			},
+			Err:      err,
+			WorkDir:  workDir,
+			Model:    model,
+			Provider: provider,
+		}
+	}
+	m.evictAgent(msg.ThreadID)
+	return channel.HandlerResult{
+		Reply: channel.OutgoingMessage{
+			ThreadID: msg.ThreadID,
+			Content:  reply,
+			ReplyTo:  msg.MessageID,
+		},
+		WorkDir:  workDir,
+		Model:    model,
+		Provider: provider,
 	}
 }
 
