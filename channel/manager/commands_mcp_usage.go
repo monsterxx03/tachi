@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -12,6 +13,25 @@ import (
 )
 
 // --- /mcp ---
+
+// handleMCPCommand dispatches `/mcp [sub] [arg]` for channel mode: `auth <server>` starts an OAuth
+// flow, `profile` is refused (profile switching is TUI/ACP-only — channel mode shares ONE MCP manager
+// across threads, so a switch would hit every conversation at once), and anything else lists the
+// servers.
+func (m *Manager) handleMCPCommand(threadID, args string) (string, error) {
+	argParts := strings.Fields(args)
+	if len(argParts) > 0 && argParts[0] == "auth" {
+		serverName := ""
+		if len(argParts) > 1 {
+			serverName = argParts[1]
+		}
+		return m.handleMCPAuth(threadID, serverName)
+	}
+	if len(argParts) > 0 && argParts[0] == "profile" {
+		return "MCP profile switching is not supported in channel mode yet — it is available via `/mcp profile` in the TUI or ACP mode.", nil
+	}
+	return m.handleMCPList(threadID)
+}
 
 // handleMCPAuth starts the OAuth2 flow for an HTTP MCP server.
 //
