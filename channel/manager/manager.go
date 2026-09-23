@@ -16,7 +16,6 @@ import (
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/monsterxx03/tachi/session"
@@ -33,7 +32,8 @@ import (
 //
 // # Agent Lifecycle
 //
-// Each ThreadID maps to a long-lived *AIAgent stored in agentCache. The cached
+// Each ThreadID maps to a long-lived *AIAgent stored in the agent pool
+// (`m.agents`, see agent_pool.go). The cached
 // agent is reused for every subsequent message on the same thread, so state
 // that is meaningful to accumulate across turns — MCP discoveredSet, skill
 // activations, lastInputTokens for token-warning reminders, etc. — survives
@@ -114,11 +114,8 @@ type Manager struct {
 	// skillStore provides skill listing and activation for /skill command.
 	skillStore *skill.Store
 
-	// Per-thread agent activations for steer support.
-	threadActivations container.LockedMap[string, *threadActivation]
-
 	// Running one-off commands (/commit, /review) per thread, so /stop and
-	// /new can cancel them (they don't create threadActivations).
+	// /new can cancel them (they don't create a thread activation).
 	oneoffMu      sync.Mutex
 	oneoffCancels map[string]context.CancelFunc
 
@@ -135,32 +132,18 @@ type Manager struct {
 
 	// --- Per-thread AIAgent cache (B-full) ---
 	//
-	// Agent state that is meaningful to accumulate across turns of the same
-	// thread (skill activation, MCP discoveredSet, reminder cadence, etc.) is
-	// preserved by reusing the same *AIAgent for every message arriving on a
-	// given ThreadID. Cross-thread state isolation is preserved because each
-	// thread has its own cached agent.
-	agentCacheMu sync.Mutex
-	agentCache   map[string]*cachedAgent
+	// One long-lived *AIAgent per ThreadID, so the state worth keeping across a
+	// thread's turns (skill activation, MCP discoveredSet, reminder cadence)
+	// survives them while threads stay isolated. The pool owns its own locking
+	// and the ONE lock order it takes — see agent_pool.go before touching it.
+	agents *agentPool
 
-	// --- Thread → Channel mapping ---
+	// --- Per-thread state (channel, session defaults, the live turn) ---
 	//
-	// Tracks which channel a thread belongs to. Used by buildAgent to
-	// decide whether to unregister AskUserQuestion (non-interactive
-	// channels unregister it; InteractiveChannel implementations keep it).
-	// Populated on first message by the per-channel handler wrapper.
-	threadChannels  map[string]channel.Channel
-	threadChannelMu sync.RWMutex
-
-	// --- Per-thread defaults (workdir + provider) ---
-	//
-	// Optional defaults applied when a FRESH session is created for a
-	// thread (e.g. after /new). Set by channels via ThreadDefaultsChannel
-	// — typically parsed from user-editable platform metadata such as a
-	// group announcement. Empty workDir/providerName leave that dimension
-	// on the usual fallback (process CWD / global default provider).
-	threadDefaultsMu sync.Mutex
-	threadDefaults   map[string]threadDefaults
+	// One record per thread behind ONE lock — see thread_state.go for why three containers and
+	// three lock styles were one too many for one subject. Written on the thread's first message
+	// (the channel) and by /new (the defaults); the live turn is created and dropped per turn.
+	threads *threadTable
 
 	// --- Shared MCP backend ---
 	//
@@ -196,7 +179,7 @@ type threadActivation struct {
 	pending     []pendingSteerMsg     // queued steer messages
 	ctx         context.Context       // agent context for cancellation
 	cancel      context.CancelFunc    // cancels the agent turn
-	cancelled   bool                  // true when this turn was cancelled externally
+	cancelled   atomic.Bool           // true when this turn was cancelled externally
 	isCompact   bool                  // true when this turn is a /compact operation
 
 	// --- AskUser state ---
@@ -259,12 +242,11 @@ func New(cfg *config.Config) (*Manager, error) {
 		cfg:                     cfg,
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
-		agentCache:              make(map[string]*cachedAgent),
+		agents:                  newAgentPool(),
 		processManager:          tools.NewProcessManager(),
 		logger:                  logger.New("channel"),
 		group:                   syncx.NewGroup(),
-		threadChannels:          make(map[string]channel.Channel),
-		threadDefaults:          make(map[string]threadDefaults),
+		threads:                 newThreadTable(),
 		oneoffCancels:           make(map[string]context.CancelFunc),
 		oneoffSem:               syncx.NewSemaphore(maxOneoffConcurrency),
 	}, nil
@@ -465,14 +447,6 @@ func (m *Manager) newSessionManager() *session.Manager {
 
 // --- Thread defaults ---
 
-// threadDefaults holds per-thread default config applied when a fresh
-// session is created for the thread (e.g. after /new). Empty workDir /
-// providerName mean "leave that dimension on the usual fallback".
-type threadDefaults struct {
-	workDir      string
-	providerName string
-}
-
 // SetThreadDefaults sets the default workdir / provider for a thread,
 // applied when a new session is created for it. Empty workDir or
 // providerName leave that dimension unchanged. Implemented for
@@ -482,18 +456,13 @@ func (m *Manager) SetThreadDefaults(threadID, workDir, providerName string) {
 	if threadID == "" {
 		return
 	}
-	m.threadDefaultsMu.Lock()
-	m.threadDefaults[threadID] = threadDefaults{workDir: workDir, providerName: providerName}
-	m.threadDefaultsMu.Unlock()
+	m.threads.setDefaults(threadID, threadDefaults{workDir: workDir, providerName: providerName})
 	m.logger.Info(context.Background(), "channel: thread defaults set", "thread", threadID, "workdir", workDir, "provider", providerName)
 }
 
 // threadDefaultsFor returns the per-thread defaults, if any.
 func (m *Manager) threadDefaultsFor(threadID string) (threadDefaults, bool) {
-	m.threadDefaultsMu.Lock()
-	defer m.threadDefaultsMu.Unlock()
-	td, ok := m.threadDefaults[threadID]
-	return td, ok
+	return m.threads.defaults(threadID)
 }
 
 // resolveThreadDefaults returns the (providerName, workDir) pair to use
@@ -631,10 +600,7 @@ func (m *Manager) persistThreadWorkDir(threadID, workDir string) {
 // questions via PresentQuestions; non-interactive channels should never
 // reach this path (AskUser is unregistered for them).
 func (m *Manager) presentQuestionsToChannel(threadID, replyID string, questions []channel.Question) {
-	m.threadChannelMu.RLock()
-	ch, ok := m.threadChannels[threadID]
-	m.threadChannelMu.RUnlock()
-
+	ch, ok := m.threads.channelFor(threadID)
 	if !ok {
 		m.logger.Warn(context.Background(), "channel: presentQuestionsToChannel — no channel for thread", "thread", threadID)
 		return
@@ -658,9 +624,7 @@ func (m *Manager) presentQuestionsToChannel(threadID, replyID string, questions 
 // second turn. Interactive channels that don't implement AskUserAcknowledger
 // simply skip this.
 func (m *Manager) acknowledgeAskUserSettled(threadID string) {
-	m.threadChannelMu.RLock()
-	ch, ok := m.threadChannels[threadID]
-	m.threadChannelMu.RUnlock()
+	ch, ok := m.threads.channelFor(threadID)
 	if !ok {
 		return
 	}
@@ -721,9 +685,7 @@ func (m *Manager) buildHandlerForChannel(ch channel.Channel, base channel.Messag
 
 // setThreadChannel records the channel that owns a given thread.
 func (m *Manager) setThreadChannel(threadID string, ch channel.Channel) {
-	m.threadChannelMu.Lock()
-	m.threadChannels[threadID] = ch
-	m.threadChannelMu.Unlock()
+	m.threads.setChannel(threadID, ch)
 }
 
 // isThreadChannelInteractive checks whether the channel for the given
@@ -740,7 +702,6 @@ func (m *Manager) isThreadChannelInteractive(threadID string) bool {
 // channelForThread returns the channel that owns the given thread, or nil
 // when the mapping is unknown (e.g. a thread that never received a message).
 func (m *Manager) channelForThread(threadID string) channel.Channel {
-	m.threadChannelMu.RLock()
-	defer m.threadChannelMu.RUnlock()
-	return m.threadChannels[threadID]
+	ch, _ := m.threads.channelFor(threadID)
+	return ch
 }

@@ -72,8 +72,9 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}
 
 	// Bind the thread's working directory, matching runAgentTurn behavior.
-	if ca.workDir != "" {
-		ctx = wdctx.WithDir(ctx, ca.workDir)
+	workDir := ca.WorkDir()
+	if workDir != "" {
+		ctx = wdctx.WithDir(ctx, workDir)
 	}
 
 	sid := ""
@@ -82,7 +83,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 			sid = s.ID
 		}
 	}
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir, sid, m.cfg.ExtraSystemPrompt), llm.ChatOptions{
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, workDir, sid, m.cfg.ExtraSystemPrompt), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	}, agent.WithExtraTools(cronTool))
 

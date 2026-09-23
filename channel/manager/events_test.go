@@ -116,7 +116,7 @@ func TestSteer_ActiveTurnQueuesAttachments(t *testing.T) {
 		resultCh:    make(chan handlerResult, 1),
 	}
 	ta.ctx, ta.cancel = t.Context(), func() {}
-	mgr.threadActivations.Store("test:steer-img-attach", ta)
+	mgr.threads.beginTurn("test:steer-img-attach", func() *threadActivation { return ta })
 
 	imgBytes := []byte("\x89PNG\r\n\x1a\nfake-image-bytes")
 	handler := mgr.buildHandler()

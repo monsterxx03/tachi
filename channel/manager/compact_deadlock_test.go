@@ -56,10 +56,7 @@ func TestAcquireEvict_SequenceDoesNotDeadlock(t *testing.T) {
 		t.Fatal("acquire -> release -> evict deadlocked; evictAgent takes cachedAgent.mu and cannot proceed while the borrow still holds it")
 	}
 
-	mgr.agentCacheMu.Lock()
-	_, stillCached := mgr.agentCache[threadID]
-	mgr.agentCacheMu.Unlock()
-	assert.False(t, stillCached, "evictAgent should have dropped the cache entry")
+	assert.Nil(t, mgr.agents.slot(threadID), "evictAgent should have dropped the cache entry")
 }
 
 // TestEvictWhileAgentHeld_BlocksUntilReleased documents *why* the scope matters:

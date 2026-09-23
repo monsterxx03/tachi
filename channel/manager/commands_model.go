@@ -298,20 +298,16 @@ func (m *Manager) handleThinkingCommand(threadID, args string) (string, error) {
 // applyThinkingToCachedAgent updates the cached agent for a thread with the
 // session's effective thinking config. If no agent is cached yet, the next
 // turn's build picks the override up via getProviderForThread — no-op here.
+//
+// The agent is reached through the pool's withAgent rather than by taking
+// ca.mu here: a slash command that grabbed the pool's guards itself would have
+// to define its own lock order, which is the thing agent_pool.go exists to
+// avoid.
 func (m *Manager) applyThinkingToCachedAgent(threadID string, sess *session.Session) {
 	resolved := m.getProviderForThread(threadID)
 	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *resolved)
 
-	m.agentCacheMu.Lock()
-	ca, ok := m.agentCache[threadID]
-	m.agentCacheMu.Unlock()
-	if !ok {
-		return
-	}
-
-	ca.mu.Lock()
-	defer ca.mu.Unlock()
-	if ca.agent != nil {
-		ca.agent.SetThinking(thinking, effort)
-	}
+	m.agents.withAgent(threadID, func(a *agent.AIAgent) {
+		a.SetThinking(thinking, effort)
+	})
 }

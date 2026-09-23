@@ -154,7 +154,7 @@ func (m *Manager) ambientBatchWindow(ta *threadActivation) time.Duration {
 // thread is marked active atomically — no window in which a concurrent
 // directed or ambient turn could start.
 func (m *Manager) flushAmbientBatch(threadID string) {
-	ta, ok := m.threadActivations.Load(threadID)
+	ta, ok := m.threads.turn(threadID)
 	if !ok {
 		return
 	}
@@ -252,7 +252,7 @@ func (m *Manager) threadSessionID(threadID string) string {
 // the ambient turn via ta.ambientCancel. The turn-active marker (steerRespCh)
 // is always released on exit, unless a directed turn already replaced it.
 func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []ambientMsg, history []ambientMsg, steerCh chan agent.SteerInput) {
-	ta, ok := m.threadActivations.Load(threadID)
+	ta, ok := m.threads.turn(threadID)
 	if !ok {
 		return
 	}

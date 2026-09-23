@@ -336,8 +336,10 @@ func (m *Manager) effectiveThreadWorkDir(ca *cachedAgent, threadID string) strin
 			}
 		}
 	}
-	if ca != nil && ca.workDir != "" {
-		return ca.workDir
+	if ca != nil {
+		if wd := ca.WorkDir(); wd != "" {
+			return wd
+		}
 	}
 	return "."
 }

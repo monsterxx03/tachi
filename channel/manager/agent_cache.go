@@ -3,7 +3,6 @@ package manager
 import (
 	"context"
 	"os"
-	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -13,28 +12,6 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
-
-// cachedAgent wraps a per-thread AIAgent with serialization (so a single
-// thread never runs two turns concurrently against the same agent state)
-// and bookkeeping fields used to detect when the cached agent must be
-// rebuilt (e.g. after /model switches the active provider).
-type cachedAgent struct {
-	mu           sync.Mutex
-	agent        *agent.AIAgent
-	providerName string // currentProviderName when the agent was built
-
-	// workDir is the working directory for this thread. All tools (Bash,
-	// Read, Write, Edit, Glob, etc.) resolve relative paths against it.
-	// Initialized to os.Getwd() on first agent creation; updated by /cd.
-	workDir string
-
-	// history caches the full LLM message slice (system prompt + all prior
-	// turns) so each new turn can pass it directly to RunConversationStream
-	// without reloading from disk. Updated after every completed turn via
-	// agent.GetLastMessages(). Nil until the first turn completes (or after
-	// an eviction), at which point prepareThreadSession loads from disk once.
-	history []llm.Message
-}
 
 // initSharedMCP lazily creates the shared MCP manager and kicks off async
 // ConnectAll. Subsequent calls are no-ops (sync.Once). The returned manager
@@ -94,87 +71,21 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	}
 }
 
-// acquireAgent returns the cached AIAgent for the given threadID, creating
-// one if absent. The returned agent is locked — callers MUST call
-// releaseAgent(ca) (typically via defer) when they finish their turn.
+// acquireAgent returns the thread's cached agent with its turn lock held, building it on first
+// use. The caller MUST hand it back with releaseAgent.
 //
-// The agent is rebuilt if the active provider changes (detected via
-// currentProviderName / model fields under the providerMu).
-//
-// Concurrency model:
-//   - agentCacheMu is a SHORT lock used only for map read/write.
-//   - cachedAgent.mu is a LONG lock held for the duration of a turn.
-//   - We acquire cacheMu, find/create the slot, release cacheMu, THEN
-//     take ca.mu. After taking ca.mu we re-check that ca is still the
-//     current entry for threadID — otherwise it was evicted concurrently
-//     and we must retry.
+// The cache protocol (short lock, long lock, retry-on-eviction) lives in agent_pool.go; what stays
+// here is the Manager's half: which provider this thread resolves to, and how an agent is built.
 func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAgent, error) {
 	resolved := m.getProviderForThread(threadID)
-	curName := resolved.Name
-
-	for {
-		m.agentCacheMu.Lock()
-		if m.agentCache == nil {
-			m.agentCache = make(map[string]*cachedAgent)
-		}
-		ca, ok := m.agentCache[threadID]
-		if ok && ca.providerName != curName {
-			// Provider switched — request a rebuild. Note: we cannot
-			// Close() the agent here because it might still be in use
-			// by a turn that hasn't released ca.mu yet. evictAgent
-			// handles the safe-shutdown path (it takes ca.mu first).
-			delete(m.agentCache, threadID)
-			ok = false
-		}
-		if !ok {
-			ca = &cachedAgent{
-				providerName: curName,
-				workDir:      initialWorkDir(),
-			}
-			m.agentCache[threadID] = ca
-		}
-		m.agentCacheMu.Unlock()
-
-		// Take the long lock OUTSIDE cacheMu so other threads can
-		// acquire/evict their own agents concurrently while a long turn
-		// runs on this one.
-		ca.mu.Lock()
-
-		// Re-check that ca is still the current entry. If it was evicted
-		// (e.g. by /new) while we were waiting on ca.mu, retry from scratch.
-		m.agentCacheMu.Lock()
-		cur, stillThere := m.agentCache[threadID]
-		m.agentCacheMu.Unlock()
-		if !stillThere || cur != ca {
-			ca.mu.Unlock()
-			continue
-		}
-
-		if ca.agent == nil {
-			built, err := m.buildAgent(ctx, threadID, resolved)
-			if err != nil {
-				// Roll back: drop the empty slot so the next attempt
-				// starts fresh, and release the long lock.
-				m.agentCacheMu.Lock()
-				if m.agentCache[threadID] == ca {
-					delete(m.agentCache, threadID)
-				}
-				m.agentCacheMu.Unlock()
-				ca.mu.Unlock()
-				return nil, err
-			}
-			ca.agent = built
-		}
-		return ca, nil
-	}
+	return m.agents.acquire(ctx, threadID, resolved.Name, func() (*agent.AIAgent, error) {
+		return m.buildAgent(ctx, threadID, resolved)
+	})
 }
 
 // releaseAgent unlocks the cached agent slot.
 func (m *Manager) releaseAgent(ca *cachedAgent) {
-	if ca == nil {
-		return
-	}
-	ca.mu.Unlock()
+	m.agents.release(ca)
 }
 
 // buildAgent constructs a new AIAgent wired to the manager's shared MCP
@@ -274,40 +185,20 @@ func (r *threadReminder) Generate(ctx context.Context, rctx systemreminder.Conte
 	return []string{text}
 }
 
-// evictAgent removes the cached agent for a thread. Called by /new (the
-// thread's session is being ended, so any per-thread state should reset)
-// and by callers that want to force a rebuild on the next turn.
+// evictAgent removes the cached agent for a thread, closing it first. Called by /new (the thread's
+// session is being ended, so any per-thread state should reset) and by callers that want to force
+// a rebuild on the next turn.
 func (m *Manager) evictAgent(threadID string) {
-	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	if ca, ok := m.agentCache[threadID]; ok {
-		// Take the agent lock briefly to ensure we don't yank an agent
-		// from under a concurrent acquireAgent caller. If a turn is in
-		// flight, this blocks until it returns.
-		ca.mu.Lock()
-		if ca.agent != nil {
-			ca.agent.Close()
-		}
-		ca.mu.Unlock()
-		delete(m.agentCache, threadID)
+	if m.agents.evict(threadID) {
 		m.logger.Info(context.Background(), "channel: evicted cached agent", "thread", threadID)
 	}
 }
 
-// evictAllAgents drops every cached agent. Called when the active provider
-// changes via /model so the next message rebuilds against the new config.
+// evictAllAgents drops every cached agent. Called when the active provider changes via /model so
+// the next message rebuilds against the new config.
 func (m *Manager) evictAllAgents() {
-	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	for threadID, ca := range m.agentCache {
-		ca.mu.Lock()
-		if ca.agent != nil {
-			ca.agent.Close()
-		}
-		ca.mu.Unlock()
-		delete(m.agentCache, threadID)
-	}
-	m.logger.Info(context.Background(), "channel: evicted all cached agents (provider switch)")
+	m.logger.Info(context.Background(), "channel: evicted all cached agents (provider switch)",
+		"count", m.agents.evictAll())
 }
 
 // getAgentEstimateWithBreakdown returns the token estimate and its breakdown
@@ -318,10 +209,8 @@ func (m *Manager) evictAllAgents() {
 // is in flight on this thread. The agent's turn state carries its own lock, so
 // this observes a consistent snapshot without blocking the turn.
 func (m *Manager) getAgentEstimateWithBreakdown(threadID string) (int64, tokenbreakdown.Breakdown) {
-	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	ca, ok := m.agentCache[threadID]
-	if !ok || ca.agent == nil {
+	ca := m.agents.slot(threadID)
+	if ca == nil || ca.agent == nil {
 		return 0, tokenbreakdown.Breakdown{}
 	}
 	return ca.agent.LastInputEstimateWithBreakdown()
@@ -345,11 +234,8 @@ func initialWorkDir() string {
 // ...) and announcement updates observing the configured directory instead of
 // the process CWD. Returns "" when neither source has a directory.
 func (m *Manager) getThreadWorkDir(threadID string) string {
-	m.agentCacheMu.Lock()
-	ca, ok := m.agentCache[threadID]
-	m.agentCacheMu.Unlock()
-	if ok {
-		return ca.workDir
+	if wd, ok := m.agents.workDir(threadID); ok {
+		return wd
 	}
 
 	// Cache miss — consult the persisted session metadata. Only reached

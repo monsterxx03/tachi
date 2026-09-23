@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -24,12 +23,9 @@ func (c *mockMCPTokenChannel) MCPTokenKey(msg channel.IncomingMessage) (string, 
 }
 
 // newScopedManager returns a Manager with just enough state for
-// buildHandlerForChannel (thread-channel tracking map + lock).
+// buildHandlerForChannel: the per-thread table, so the wrapper can record the channel.
 func newScopedManager() *Manager {
-	return &Manager{
-		threadChannels:  make(map[string]channel.Channel),
-		threadChannelMu: sync.RWMutex{},
-	}
+	return &Manager{threads: newThreadTable()}
 }
 
 func TestBuildHandlerForChannel_InjectsUserTokenKey(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/cron"
@@ -130,24 +131,20 @@ func (m *Manager) handleSkillReload() (string, error) {
 	return fmt.Sprintf("Skills 已重新加载 — 发现 %d 个 skill(s)", len(metas)), nil
 }
 
-// reloadAgentSkills calls ReloadSkills on every cached AIAgent so the new
-// skill store is picked up, the SkillListReminder is marked dirty, and the
-// skill tool is re-registered with the updated store.
+// reloadAgentSkills calls ReloadSkills on every cached AIAgent so the new skill store is picked up,
+// the SkillListReminder is marked dirty, and the skill tool is re-registered with the updated store.
 //
-// Lock ordering: agentCacheMu → ca.mu (consistent with acquireAgent and
-// evictAllAgents). Each ca.mu is acquired and released individually so that
-// agents in use on other threads are naturally serialized.
+// each() snapshots the pool and calls out WITHOUT its lock, so a long reload never holds up another
+// thread's acquire — and the per-agent lock is taken by withAgent, one agent at a time, which is what
+// serializes an agent that happens to be mid-turn on another thread.
 func (m *Manager) reloadAgentSkills() {
-	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	for _, ca := range m.agentCache {
-		ca.mu.Lock()
-		if ca.agent != nil {
-			ca.agent.ReloadSkills()
+	var reloaded int
+	m.agents.each(func(_ string, ca *cachedAgent) {
+		if ca.withAgent(func(a *agent.AIAgent) { a.ReloadSkills() }) {
+			reloaded++
 		}
-		ca.mu.Unlock()
-	}
-	m.logger.Info(context.Background(), "channel: skill reload propagated", "count", len(m.agentCache))
+	})
+	m.logger.Info(context.Background(), "channel: skill reload propagated", "count", reloaded)
 }
 
 // prepareSkillActivation builds the user message content for skill activation.

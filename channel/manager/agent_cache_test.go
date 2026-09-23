@@ -48,9 +48,7 @@ func TestGetThreadWorkDir_SessionFallback(t *testing.T) {
 	assert.Equal(t, "/configured/dir", mgr.getThreadWorkDir(threadID))
 
 	// Once a cached agent exists, its workDir wins over the session.
-	mgr.agentCacheMu.Lock()
-	mgr.agentCache[threadID] = &cachedAgent{workDir: "/cached/dir"}
-	mgr.agentCacheMu.Unlock()
+	mgr.agents.ensure(threadID, func() *cachedAgent { return &cachedAgent{workDir: "/cached/dir"} })
 	assert.Equal(t, "/cached/dir", mgr.getThreadWorkDir(threadID))
 }
 

@@ -23,7 +23,7 @@ func TestWhisperGuard_NonDirectedGroupChat(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:group:gc_123",
+		ThreadID:  "test:group:gc_123",
 		MessageID: "msg-1",
 		Content:   "someone said something",
 		Sender:    "张三",
@@ -52,7 +52,7 @@ func TestWhisperGuard_DirectedGroupChat(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:group:gc_123",
+		ThreadID:  "test:group:gc_123",
 		MessageID: "msg-1",
 		Content:   "@bot help me",
 		Sender:    "张三",
@@ -84,7 +84,7 @@ func TestWhisperGuard_NonGroupChat(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:user:u_123",
+		ThreadID:  "test:user:u_123",
 		MessageID: "msg-1",
 		Content:   "hello",
 		Sender:    "张三",
@@ -115,7 +115,7 @@ func TestWhisperGuard_Disabled(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:group:gc_123",
+		ThreadID:  "test:group:gc_123",
 		MessageID: "msg-1",
 		Content:   "someone said something",
 		Sender:    "张三",
@@ -138,7 +138,7 @@ func TestAmbientBuffer_Batching(t *testing.T) {
 	// Send 3 non-directed messages
 	for i := range 3 {
 		result := handler(t.Context(), channel.IncomingMessage{
-			ThreadID:  "wave:group:gc_456",
+			ThreadID:  "test:group:gc_456",
 			MessageID: "msg-" + string(rune('a'+i)),
 			Content:   "message " + string(rune('a'+i)),
 			Sender:    "user" + string(rune('1'+i)),
@@ -149,7 +149,7 @@ func TestAmbientBuffer_Batching(t *testing.T) {
 	}
 
 	// Verify buffer has all 3 messages
-	ta, ok := mgr.threadActivations.Load("wave:group:gc_456")
+	ta, ok := mgr.threads.turn("test:group:gc_456")
 	require.True(t, ok)
 	require.NotNil(t, ta)
 
@@ -171,7 +171,7 @@ func TestAmbientBuffer_Cap(t *testing.T) {
 	// Send 5 messages (exceeds cap of 3)
 	for i := range 5 {
 		handler(t.Context(), channel.IncomingMessage{
-			ThreadID:  "wave:group:gc_cap",
+			ThreadID:  "test:group:gc_cap",
 			MessageID: "msg-" + string(rune('a'+i)),
 			Content:   "message " + string(rune('0'+i)),
 			Sender:    "user",
@@ -180,7 +180,7 @@ func TestAmbientBuffer_Cap(t *testing.T) {
 		})
 	}
 
-	ta, ok := mgr.threadActivations.Load("wave:group:gc_cap")
+	ta, ok := mgr.threads.turn("test:group:gc_cap")
 	require.True(t, ok)
 	require.NotNil(t, ta)
 
@@ -206,12 +206,12 @@ func TestAmbientSteer_ActiveTurn(t *testing.T) {
 		groupChat:   true,
 	}
 	ta.ctx, ta.cancel = t.Context(), func() {}
-	mgr.threadActivations.Store("wave:group:gc_active", ta)
+	mgr.threads.beginTurn("test:group:gc_active", func() *threadActivation { return ta })
 
 	handler := mgr.buildHandler()
 
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:group:gc_active",
+		ThreadID:  "test:group:gc_active",
 		MessageID: "msg-ambient",
 		Content:   "ambient message",
 		Sender:    "张三",
@@ -426,7 +426,7 @@ func TestFlushAmbientBatch_RecordsHistoryAndCleanup(t *testing.T) {
 	// would otherwise hit the network and hang the test).
 	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock", responses: []string{"[SILENT]"}}
 
-	ta := mgr.activateThread("wave:group:gc_flush", t.Context())
+	ta := mgr.activateThread("test:group:gc_flush", t.Context())
 	ta.mu.Lock()
 	ta.groupChat = true
 	ta.ambientPending = []ambientMsg{
@@ -435,7 +435,7 @@ func TestFlushAmbientBatch_RecordsHistoryAndCleanup(t *testing.T) {
 	}
 	ta.mu.Unlock()
 
-	mgr.flushAmbientBatch("wave:group:gc_flush")
+	mgr.flushAmbientBatch("test:group:gc_flush")
 
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
@@ -472,11 +472,11 @@ func TestAmbientPreempt_DirectedMessage(t *testing.T) {
 		ambientCancel: func() { preempted = true },
 	}
 	ta.ctx, ta.cancel = t.Context(), func() {}
-	mgr.threadActivations.Store("wave:group:gc_preempt", ta)
+	mgr.threads.beginTurn("test:group:gc_preempt", func() *threadActivation { return ta })
 
 	handler := mgr.buildHandler()
 	result := handler(t.Context(), channel.IncomingMessage{
-		ThreadID:  "wave:group:gc_preempt",
+		ThreadID:  "test:group:gc_preempt",
 		MessageID: "msg-1",
 		Content:   "@bot help me",
 		Sender:    "张三",

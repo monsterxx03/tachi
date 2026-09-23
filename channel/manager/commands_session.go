@@ -93,27 +93,17 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 	// message, no cache entry exists yet. We create a lightweight placeholder
 	// (agent == nil) to track the workDir; the AIAgent is lazily built by
 	// acquireAgent on the first message.
-	m.agentCacheMu.Lock()
-	if m.agentCache == nil {
-		m.agentCache = make(map[string]*cachedAgent)
-	}
-	ca, ok := m.agentCache[threadID]
-	if !ok {
-		// Fetch provider name outside the lock to avoid lock ordering
-		// issues with the agent cache.
-		m.agentCacheMu.Unlock()
+	//
+	// The provider name is resolved BEFORE the pool is touched: it takes the thread-defaults lock,
+	// and pool → anything-else is an order nothing defines. A slot created by a concurrent caller in
+	// the meantime simply wins, which is what ensure() returns.
+	if ca := m.agents.slot(threadID); ca == nil {
 		curName := m.getProviderForThread(threadID).Name
-		m.agentCacheMu.Lock()
-		if ca, ok = m.agentCache[threadID]; !ok {
-			ca = &cachedAgent{
-				providerName: curName,
-				workDir:      initialWorkDir(),
-			}
-			m.agentCache[threadID] = ca
-		}
+		m.agents.ensure(threadID, func() *cachedAgent {
+			return &cachedAgent{providerName: curName, workDir: initialWorkDir()}
+		})
 	}
-	curDir := ca.workDir
-	m.agentCacheMu.Unlock()
+	curDir, _ := m.agents.workDir(threadID)
 
 	// Resolve path relative to current workDir.
 	target := dir
@@ -131,12 +121,8 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 		return fmt.Sprintf("❌ %q is not a directory", target), nil
 	}
 
-	// Update the cached agent's workDir under lock.
-	m.agentCacheMu.Lock()
-	if ca, ok := m.agentCache[threadID]; ok {
-		ca.workDir = target
-	}
-	m.agentCacheMu.Unlock()
+	// Update the cached agent's workDir.
+	m.agents.setWorkDir(threadID, target)
 
 	// Persist the new working directory to the thread's session metadata
 	// so it survives restarts. This is best-effort; the in-memory cache has

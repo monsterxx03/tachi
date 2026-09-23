@@ -19,11 +19,10 @@ import (
 // if it doesn't exist. The caller MUST check ta.steerRespCh to determine
 // whether the thread is already active (steer case) or new (start case).
 func (m *Manager) activateThread(threadID string, parentCtx context.Context) *threadActivation {
-	ta, _ := m.threadActivations.LoadOrCompute(threadID, func() *threadActivation {
+	return m.threads.beginTurn(threadID, func() *threadActivation {
 		ctx, cancel := context.WithCancel(parentCtx)
 		return &threadActivation{ctx: ctx, cancel: cancel}
 	})
-	return ta
 }
 
 // deactivateThread removes the thread activation for threadID,
@@ -31,7 +30,7 @@ func (m *Manager) activateThread(threadID string, parentCtx context.Context) *th
 // the caller (pointer equality). This prevents a stale handler
 // goroutine from deleting a new activation created by /new or /stop.
 func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
-	m.threadActivations.CompareAndDelete(threadID, ta)
+	m.threads.endTurn(threadID, ta)
 }
 
 // cancelThreadTurn cancels the agent context for the given thread
@@ -39,10 +38,13 @@ func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
 // turn is active. Returns true if a turn was actually cancelled.
 // Called by /stop and /new to terminate a running LLM turn.
 func (m *Manager) cancelThreadTurn(threadID string) bool {
-	ta, ok := m.threadActivations.LoadAndDelete(threadID)
-	if ok && ta.cancel != nil {
-		ta.cancelled = true
-		ta.cancel()
+	ta, ok := m.threads.takeTurn(threadID)
+	if !ok {
+		return false
+	}
+	ta.cancelled.Store(true)
+	if ta.cancel != nil {
+		ta.cancel() // outside the table lock: this unwinds the turn goroutine
 		return true
 	}
 	return false
@@ -55,7 +57,7 @@ const maxOneoffConcurrency = 3
 
 // registerOneoff tracks a running one-off command (/commit, /review) for the
 // thread so /stop and /new can cancel it (one-off runs don't create
-// threadActivations). Returns a child ctx that cancels with the run, plus a
+// a thread activation). Returns a child ctx that cancels with the run, plus a
 // done func that cancels AND deregisters — the same pattern as
 // context.WithCancel's cancel func.
 func (m *Manager) registerOneoff(threadID string, parent context.Context) (context.Context, context.CancelFunc) {
@@ -282,7 +284,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		select {
 		case result := <-ta.resultCh:
 			m.deactivateThread(msg.ThreadID, ta)
-			if ta.cancelled {
+			if ta.cancelled.Load() {
 				// Turn was cancelled by /stop or /new.
 				return channel.HandlerResult{Steered: true}
 			}
@@ -370,7 +372,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			}
 		case <-ta.ctx.Done():
 			m.deactivateThread(msg.ThreadID, ta)
-			if ta.cancelled {
+			if ta.cancelled.Load() {
 				// Turn was cancelled by /stop or /new — suppress
 				// the "request cancelled" error reply.
 				return channel.HandlerResult{Steered: true}
@@ -429,9 +431,11 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// (Bash, Read, Write, Edit, Glob, etc.) resolve relative paths
 	// against it. Falls back to the process CWD on first turn.
 	workDir := "."
-	if ca != nil && ca.workDir != "" {
-		workDir = ca.workDir
-		ctx = wdctx.WithDir(ctx, ca.workDir)
+	if ca != nil {
+		if wd := ca.WorkDir(); wd != "" {
+			workDir = wd
+			ctx = wdctx.WithDir(ctx, wd)
+		}
 	}
 
 	// Per-thread session — always needed for session recording (JSONL).
@@ -450,17 +454,18 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		if ca != nil {
 			sess := sm.Current()
 			if sess != nil {
-				if sess.WorkingDir != "" && sess.WorkingDir != ca.workDir {
+				cachedWd := ca.WorkDir()
+				if sess.WorkingDir != "" && sess.WorkingDir != cachedWd {
 					// Session has a persisted workDir from a prior /cd
 					// (e.g. after restart when the cache was lost).
-					ca.workDir = sess.WorkingDir
+					ca.SetWorkDir(sess.WorkingDir)
 					workDir = sess.WorkingDir
 					ctx = wdctx.WithDir(ctx, sess.WorkingDir)
-				} else if sess.WorkingDir == "" && ca.workDir != "" && ca.workDir != "." {
+				} else if sess.WorkingDir == "" && cachedWd != "" && cachedWd != "." {
 					// First message after /cd on a fresh thread: persist
 					// the cached agent's workDir to the session so it
 					// survives restarts.
-					sess.WorkingDir = ca.workDir
+					sess.WorkingDir = cachedWd
 					if err := sm.UpdateMeta(sess); err != nil {
 						m.logger.Error(ctx, "channel: persist workDir", err, "thread", msg.ThreadID)
 					}
@@ -498,10 +503,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 
 	// Append channel-specific system prompt suffix (e.g., interactive
 	// channels telling the LLM to use AskUserQuestion proactively).
-	m.threadChannelMu.RLock()
-	threadCh := m.threadChannels[msg.ThreadID]
-	m.threadChannelMu.RUnlock()
-	if s, ok := threadCh.(channel.SystemPromptSuffixer); ok {
+	if s, ok := m.channelForThread(msg.ThreadID).(channel.SystemPromptSuffixer); ok {
 		if suffix := s.SystemPromptSuffix(); suffix != "" {
 			systemPrompt += "\n" + suffix
 		}
@@ -523,7 +525,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// this turn (history + wrapped user msg + assistant + tool results).
 	// On cancel (/stop, /new) we skip the update so the agent doesn't
 	// resume partial work from a cancelled turn on the next message.
-	if ca != nil && !ta.cancelled {
+	if ca != nil && !ta.cancelled.Load() {
 		if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {
 			ca.history = msgs
 			m.logger.Info(ctx, "channel: updated cached history", "thread", msg.ThreadID, "msgs", len(msgs))

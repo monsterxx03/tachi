@@ -20,7 +20,7 @@ func TestGetAgentEstimateWithBreakdown_ConcurrentTurn(t *testing.T) {
 
 	const threadID = "thread-usage-race"
 	ai := newTestAIAgent(t, nil, 10)
-	m.agentCache[threadID] = &cachedAgent{agent: ai}
+	m.agents.ensure(threadID, func() *cachedAgent { return &cachedAgent{agent: ai} })
 
 	msgs := []llm.Message{
 		{Role: "system", Content: "system prompt padding"},
