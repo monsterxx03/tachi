@@ -40,8 +40,7 @@ func setupTray(d *desktopApp) *application.SystemTray {
 		d.window.Focus()
 	})
 	menu.Add("新会话").OnClick(func(ctx *application.Context) {
-		d.window.Show()
-		d.window.Focus()
+		d.newSessionFromMenuBar()
 	})
 	menu.AddSeparator()
 	// Status readout — updated per state. Kept disabled so users can't
@@ -53,15 +52,37 @@ func setupTray(d *desktopApp) *application.SystemTray {
 	})
 
 	tray.SetMenu(menu)
-	// Left click shows the window, right click opens the menu (native macOS
-	// behaviour for a status-bar item).
+	// The LEFT button opens the menu too — it no longer shows the window, so
+	// 「打开主窗口」 is the item that brings the window back. The right button
+	// keeps the framework's default for a menu-bearing tray (same menu).
 	tray.OnClick(func() {
-		d.window.Show()
-		d.window.Focus()
-	})
-	tray.OnRightClick(func() {
 		tray.OpenMenu()
 	})
 
 	return tray
+}
+
+// uiNewSessionEventName is the shell asking the UI for a new conversation. The menu bar cannot
+// make one itself: creation is the frontend's `newChat`, which also reveals the group the session
+// lands in, resets the usage readouts and puts the caret in the composer — and it is the same call
+// the sidebar's ＋ and ⌘N make, so all three entry points behave alike. The name is mirrored by
+// App.tsx's listener (the two languages share no constant).
+//
+// It is NOT one of main.go's init registrations: a registered name makes Emit validate the payload
+// against the registered type, and this event carries none, so the emit would be cancelled and the
+// menu item would quietly do nothing.
+const uiNewSessionEventName = "ui:new_session"
+
+// newSessionFromMenuBar is the menu bar's 「新会话」: bring the window forward and let the frontend
+// create the session (see uiNewSessionEventName). The event reaches a HIDDEN window too — the
+// webview stays alive across a hide, which is what makes this work with the window closed.
+func (d *desktopApp) newSessionFromMenuBar() {
+	if d.window == nil {
+		return
+	}
+	d.window.Show()
+	d.window.Focus()
+	if d.app != nil {
+		d.app.Event.Emit(uiNewSessionEventName)
+	}
 }

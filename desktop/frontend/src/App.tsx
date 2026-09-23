@@ -1473,6 +1473,38 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     }
   }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, revealProject])
 
+  // newChatLikeCurrent makes another conversation like the one on screen: if that session belongs
+  // to a project, its successor starts INSIDE it — the project is what supplies the workspace, the
+  // extra roots and the skills, so a project-less successor would silently drop all three while
+  // looking like a fresh start.
+  //
+  // Membership is resolved exactly the way the sidebar groups it (sessionGroups): only a project
+  // that still exists counts, so a session the reader sees under 无项目 (its project was deleted,
+  // or lost out of projects.json) makes a session there too, instead of one bound to an id that no
+  // longer names anything.
+  //
+  // It is the ONE rule behind both 「再来一个」 entry points — ⌘N and the menu bar's 「新会话」.
+  const newChatLikeCurrent = useCallback(() => {
+    const pid = sessions.find((x) => x.id === currentId)?.projectId
+    void newChat(pid && projects.some((p) => p.id === pid) ? pid : '')
+  }, [sessions, projects, currentId, newChat])
+
+  // The menu bar's 「新会话」 arrives as ui:new_session (desktop/tray.go): the shell brings the
+  // window forward and asks, and the session is made HERE — one creation path, shared with the
+  // sidebar's ＋ and ⌘N.
+  //
+  // The settings page gets out of the way first, which ⌘N does not do (it is gated on that page
+  // instead): a tray click is an explicit 「我要新会话」, and taking the session behind an opaque
+  // page would leave the user looking at nothing having happened. Switching back to the chat is
+  // that page's own way out, which is why nothing here needs to ask.
+  useEffect(() => {
+    const off = Events.On('ui:new_session', () => {
+      setView('chat')
+      newChatLikeCurrent()
+    })
+    return () => off?.()
+  }, [newChatLikeCurrent])
+
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
   // focusAfterPalette puts the caret in the composer once the palette is gone — the two palettes are
@@ -1589,17 +1621,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       }
       else if (e.key.toLowerCase() === 'n') {
         e.preventDefault()
-        // ⌘N makes another conversation like the one on screen: if that session belongs to a
-        // project, its successor starts INSIDE it — the project is what supplies the workspace,
-        // the extra roots and the skills, so a project-less successor would silently drop all
-        // three while looking like a fresh start.
-        //
-        // Membership is resolved exactly the way the sidebar groups it (sessionGroups): only a
-        // project that still exists counts, so a session the reader sees under 无项目 (its
-        // project was deleted, or lost out of projects.json) makes a session there too, instead
-        // of one bound to an id that no longer names anything.
-        const pid = sessions.find((x) => x.id === currentId)?.projectId
-        newChat(pid && projects.some((p) => p.id === pid) ? pid : '')
+        newChatLikeCurrent()
       }
       // The chain. Shift is what keeps it off ⌘H (macOS hides the window on that one) — and
       // off anything the app already binds.
@@ -1611,8 +1633,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view])
+  }, [newChatLikeCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
+    projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only

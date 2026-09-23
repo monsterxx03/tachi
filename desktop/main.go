@@ -193,7 +193,7 @@ func main() {
 	// own unconditionally-registered listener then ran `impl.close` + `Window.Remove(id)`. Every
 	// handle to the window — `desk.window`, the notifier's, the theme controller's — pointed at
 	// nothing afterwards, and all three ways back to it went silent at once: the tray's
-	// 「打开主窗口」 and its click (Show on a destroyed window is a no-op: `Run` only creates an
+	// 「打开主窗口」 (Show on a destroyed window is a no-op: `Run` only creates an
 	// impl that is not nil), a notification click (same call), and a Dock click — Wails' own
 	// `applicationShouldHandleReopen` handler only shows windows that still EXIST and are
 	// invisible, so with the window gone there was nothing to show.

@@ -33,7 +33,7 @@ state, events or UI, and add a scenario when a fix deserves a regression test.
 
 ```sh
 make desktop-smoke ARGS="-run send-now,perm-allow -v"   # the scenarios your change touches (see below)
-make desktop-smoke                                      # everything (~45 scenarios, minutes)
+make desktop-smoke                                      # everything (~50 scenarios, minutes)
 make desktop-smoke ARGS="-keep"                         # keep the sandbox after a pass (artifacts)
 ```
 
@@ -56,6 +56,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the stop control / which session a status belongs to | `session-running` |
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
 | 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
+| the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
@@ -339,8 +340,9 @@ Fixtures exist where the real path needs something a driver cannot do:
   left open behind the opaque page.
 - **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`'s
   `WindowClosing` hook). On darwin a user-initiated close would DESTROY the window and leave every handle
-  pointing at nothing while the app kept running — all three ways back (tray, tray click, notification click)
-  going silent together. Hooks run synchronously before the framework's own listeners and `WindowEvent.Cancel`
+  pointing at nothing while the app kept running — all three ways back (the tray menu's 「打开主窗口」,
+  a notification click, a Dock click) going silent together. Hooks run synchronously before the
+  framework's own listeners and `WindowEvent.Cancel`
   stops the rest, which is the only lever that turns the close into a hide; the shutdown path passes through
   (`desktopApp.quitting`). The hide is load-bearing, not cosmetic: the notifier, the theme controller and the
   tray all hold the window pointer, which is only safe while nothing destroys it.
@@ -640,7 +642,11 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   (`TestFinalizeCompact_MovesThePin`).
 - **`＋ 新建会话` belongs to the 无项目 group** (it makes a project-less session, so it lives where it adds
   rows), and **⌘N follows the session on screen** — ⌘N means "another one of these", so it passes the current
-  session's `projectId` while that project is still in the list.
+  session's `projectId` while that project is still in the list. **The menu bar's 「新会话」 is that same call
+  reached from the shell**: `desktop/tray.go` emits `ui:new_session` and the FRONTEND makes the session, so all
+  three entry points run `newChatLikeCurrent` and cannot drift apart. It also leaves the settings page on its
+  way in, which ⌘N deliberately does not — that gate is for a stray keystroke, while an explicit click that
+  left the opaque page up would read as nothing having happened.
 - **`⌘P` and `⌘K` are one palette in two uses** (projects / conversations), each closing the other, each with
   the same input, list navigation, Escape and caret hand-back to the composer. Four contracts they share:
   filtering is on the COMMITTED query, never the field's live value (**a Chinese IME composition re-renders on

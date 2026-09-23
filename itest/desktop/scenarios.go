@@ -2566,6 +2566,41 @@ permissions:
 					!strings.Contains(string(raw), "# vision:"), string(raw)[:200])
 			},
 		},
+		//
+		//
+		// tray-new-session: 状态栏图标（菜单栏）的「新会话」。图标本身 driver 碰不到（Go 侧建的，
+		// 不在 DOM 里），所以两边各补一半：driver 发那条 `ui:new_session` 事件并断言界面上真的多了
+		// 一个会话，这里断言磁盘上真的多了一个、而且它和眼前那个一样**绑在项目上** —— NewSession
+		// 在项目不能驱动时会静默建一个不属于任何项目的会话，只数行数看不出来，meta.json 的
+		// project_id 才是判据。
+		{
+			name: "tray-new-session",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe tray-new-session scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-tray",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe tray-new-session scenario's project directory\n",
+				},
+			},
+			after: func(c *checkCtx) {
+				c.check("菜单栏那次新建没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				metas := c.sessionMetas()
+				c.check("磁盘上多了一个会话（fixture 的两个 + 菜单栏建的）", len(metas) == 3,
+					fmt.Sprintf("%d 个", len(metas)))
+				bound := 0
+				for _, m := range metas {
+					// meta.json 里这个字段是 project_id（session.Session 的 json tag），不是绑定层
+					// 那个 camelCase 的 projectId —— 前者才是磁盘上的事实。
+					if m["project_id"] == "smoke-project" {
+						bound++
+					}
+				}
+				c.check("新会话和眼前那个一样绑在项目上（meta.json 的 project_id）", bound == 2,
+					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", bound))
+			},
+		},
 	}
 }
 
