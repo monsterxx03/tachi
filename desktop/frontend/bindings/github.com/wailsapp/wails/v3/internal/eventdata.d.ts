@@ -13,6 +13,7 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "agent:ask": main$0.AskEvent;
+            "agent:ask_answered": main$0.AskAnsweredEvent;
             "agent:filedrop": main$0.FileDropEvent;
             "agent:state": main$0.AgentState;
             "ui:theme": string;

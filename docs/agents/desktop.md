@@ -410,6 +410,28 @@ Fixtures exist where the real path needs something a driver cannot do:
   run has no turn on screen, so `commands.go` marks its ctx and the handler refuses instead of parking a run
   nobody could answer; and 「本会话全部允许」 is a **session** decision, not a command memory. The switch sits
   BELOW the deny checks on purpose — "stop asking me" must never become "run what I forbade".
+- **The device link (AI Passport, `desktop/link/`) is a SECOND READER of that pending table, never a second
+  answer path**: every "a turn is parked on the user" record lives in ONE map (`d.asks`, `asks.go`) — a bash
+  ask and an AskUserQuestion alike — and the window, the device and the TUI all answer through the same two
+  functions (`answerPermission` / `answerAskUser`). Four things that buys, and that a second path would lose:
+  the row carries what to SHOW (the permission preview, the questions), because the waiting channel alone
+  could not say what was being waited for; the AskUser half has NO channel here (its wait lives on the agent's
+  own `AskUserResp`), so nothing unwinds it on a stopped turn and `endTurn` sweeps it by kind; the link
+  addresses an answer by a per-connection `ref` rather than the tool-call id, and refuses a stale one exactly
+  as the card path refuses a stale card; and the transport (serial / TCP today, BLE later) is chosen by the
+  `badge` config block, so the protocol and the answer path are transport-blind. It is OFF by default — the
+  serial port is a shared resource and `idf.py monitor` has as much claim to it as we do — and `TACHI_BADGE`
+  OVERRIDES the block rather than standing in for it: a debug channel that points the app at a fake device
+  must not be blocked by the file. Both routes land in ONE `startBadge`, which stops the old listener first —
+  two links in one process are two Servers racing for one serial port. **The session LIST is ordered, not
+  arbitrary**: the device takes the first entry as "the one on my screen", so the DISPLAYED session
+  (`activeID`) is sorted first while the rest keep their stable id order (the link's de-bounce compares
+  snapshots byte for byte, so the order must stay deterministic). **An answer that arrives from the
+  device must also be broadcast back to the frontend** (`agent:ask_answered`, emitted by the answer
+  path itself): the window's card is cleared by the FRONTEND when IT answers, so a device answer
+  leaves that card standing — still clickable, and clicking it now refuses with "no such pending
+  request". Any state two frontends share needs the same treatment: whoever changes it tells the
+  other one, or the second one keeps rendering a fact that expired.
 
 ## Desktop MCP
 

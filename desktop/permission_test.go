@@ -61,7 +61,7 @@ func waitAskRegistered(t *testing.T, d *desktopApp, sessionID, toolID string, wa
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		d.mu.Lock()
-		_, ok := d.perms[key]
+		_, ok := d.asks[key]
 		d.mu.Unlock()
 		if ok == want {
 			return
@@ -165,7 +165,7 @@ func TestAskPermissionAllowSessionFlipsTheSessionsPolicy(t *testing.T) {
 	}
 	// Nothing parked: the wait ended with the answer, not with a leftover row.
 	d.mu.Lock()
-	n := len(d.perms)
+	n := len(d.asks)
 	d.mu.Unlock()
 	if n != 0 {
 		t.Errorf("%d pending ask(s) left behind", n)
@@ -255,7 +255,7 @@ func TestAnsweredAskIsDropped(t *testing.T) {
 	awaitAsk(t, out)
 	waitAskRegistered(t, d, "s1", "call_1", false)
 	d.mu.Lock()
-	n := len(d.perms)
+	n := len(d.asks)
 	d.mu.Unlock()
 	if n != 0 {
 		t.Errorf("%d pending ask(s) left behind", n)
@@ -278,7 +278,7 @@ func TestAskPermissionInSideChannelRunRefusesInsteadOfParking(t *testing.T) {
 		t.Fatalf("side-channel ask = %+v, want a refusal carrying the reason", o)
 	}
 	d.mu.Lock()
-	n := len(d.perms)
+	n := len(d.asks)
 	d.mu.Unlock()
 	if n != 0 {
 		t.Errorf("a side-channel ask registered %d pending request(s)", n)

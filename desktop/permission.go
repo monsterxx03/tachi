@@ -50,13 +50,6 @@ const (
 	permDeny         = "deny"
 )
 
-// pendingPermission is one parked ask: the channel its answer arrives on. The session
-// and tool call it belongs to are in its key (permKey) — the row exists for the wait,
-// nothing else needs to be read back out of it.
-type pendingPermission struct {
-	answer chan string
-}
-
 // noAskKey marks a run whose conversation has no turn on screen.
 //
 // A side-channel run (/review, /commit) reports into the panel's lane, not into the
@@ -103,22 +96,17 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 			"but a side-channel run has no conversation turn to confirm it in — the command was NOT "+
 			"executed. Add an allow rule to permissions.bash to run it here (preview: %s)", preview)
 	}
-	key := permKey(sessionID, toolID)
 	answer := make(chan string, 1)
-
-	d.mu.Lock()
-	if d.perms == nil {
-		d.perms = make(map[string]*pendingPermission)
-	}
-	d.perms[key] = &pendingPermission{answer: answer}
-	d.mu.Unlock()
+	d.registerAsk(&pendingAsk{
+		kind:      askKindPermission,
+		sessionID: sessionID,
+		toolID:    toolID,
+		preview:   preview,
+		answer:    answer,
+	})
 	// Always drop the entry, whichever way the wait ends: a stale pending ask
 	// would let a late click approve a command that is no longer running.
-	defer func() {
-		d.mu.Lock()
-		delete(d.perms, key)
-		d.mu.Unlock()
-	}()
+	defer d.dropAsk(sessionID, toolID)
 
 	// The turn is parked on the user, so say so — the same status the parked
 	// AskUserQuestion uses (setSessionState only reaches the UI when this IS the
@@ -155,26 +143,38 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 // frontend answers with the id it was given, so a card left over from an earlier
 // call (or another conversation) is refused instead of approving something else.
 func (s *AgentService) AnswerPermission(sessionID, toolID, decision string) string {
-	d := s.desk
+	if err := s.desk.answerPermission(sessionID, toolID, decision); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
+// answerPermission is that answer path itself. Both the bound method above and the
+// device link (badge.go) go through it: one decision has one implementation, so a
+// click in the window and a button on the device cannot behave differently.
+func (d *desktopApp) answerPermission(sessionID, toolID, decision string) error {
 	if decision != permAllowOnce && decision != permAllowSession && decision != permDeny {
-		return "unknown decision"
+		return fmt.Errorf("unknown decision")
 	}
 
 	d.mu.Lock()
-	perm := d.perms[permKey(sessionID, toolID)]
+	ask := d.asks[permKey(sessionID, toolID)]
 	d.mu.Unlock()
-	if perm == nil {
-		return "no such pending request"
+	// A row of the other kind is refused exactly like an absent one: the answer was
+	// addressed to something that cannot take it.
+	if ask == nil || ask.kind != askKindPermission {
+		return fmt.Errorf("no such pending request")
 	}
 
 	select {
-	case perm.answer <- decision:
-		return "ok"
+	case ask.answer <- decision:
+		d.notifyAskAnswered(sessionID, toolID, askKindPermission)
+		return nil
 	default:
 		// Buffered with capacity 1 and deleted by the waiting goroutine, so this
 		// is unreachable unless the same ask is answered twice in the same
-		// instant — refused rather than blocking the frontend's call.
-		return "already answered"
+		// instant — refused rather than blocking the caller.
+		return fmt.Errorf("already answered")
 	}
 }
 

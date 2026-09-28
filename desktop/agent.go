@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -137,10 +138,21 @@ type desktopApp struct {
 	runs  map[string]*sessionRun // key: session ID
 	simCh chan struct{}          // simulated-turn stop signal
 
-	// perms holds the bash policy asks that are parked on a user decision, keyed
-	// by session + tool call (permKey). A parked turn waits on its own channel
-	// until the frontend answers via AgentService.AnswerPermission. Guarded by mu.
-	perms map[string]*pendingPermission
+	// asks holds every "a turn is parked on the user" record, keyed by session +
+	// tool call (permKey): a bash policy ask and an AskUserQuestion alike. It is
+	// both what the frontend answers through and what the device link reads (see
+	// asks.go for why it is ONE table). Guarded by mu.
+	asks map[string]*pendingAsk
+
+	// linkMu guards the device link's subscriber list AND its lifecycle — the running
+	// listener and the cancel that stops it (see badge.go). It is NOT mu: notifyLink is
+	// called from under mu in several places, and the callbacks must never wait behind
+	// the app-wide lock.
+	linkMu     sync.Mutex
+	linkSubs   map[int]func()
+	linkSubSeq int
+	linkStop   context.CancelFunc
+	linkLn     link.Listener
 
 	// settingsMu serializes SaveSettings end to end (snapshot → memory → file → pushes).
 	// Two saves landing at once — a double-clicked button, two windows — would otherwise

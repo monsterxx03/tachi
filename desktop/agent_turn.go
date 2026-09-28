@@ -367,6 +367,12 @@ func (d *desktopApp) endTurn(id, endReason string) {
 		r.turnDone = nil
 	}
 	d.mu.Unlock()
+	// An AskUserQuestion this turn parked on is gone the moment the turn is, however it
+	// ended. The permission half needs no such sweep — its waiting goroutine drops its own
+	// row through a defer — but an AskUser wait lives on the AGENT's channel, so a turn
+	// stopped before it was answered would otherwise leave the device holding a question
+	// nobody can answer any more.
+	d.dropAsks(id, askKindAskUser)
 	// The pushes a settings save deferred for this session run now: the turn is over, and this is
 	// the point where no turn of it can be in flight (see deferred_push.go). Before agent:idle, so
 	// the change is in place before the messages the user queued during the turn go out.
@@ -485,6 +491,15 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// RespondToAskUser).
 		d.tpsReset(id)
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
+		// Record it as a pending ask so the device link sees the same question the
+		// window does (asks.go). Registering BEFORE the emit is not important — both
+		// readers are told, and the link's snapshot is rebuilt from this table.
+		d.registerAsk(&pendingAsk{
+			kind:      askKindAskUser,
+			sessionID: id,
+			toolID:    ev.ToolID,
+			questions: ev.Questions,
+		})
 		if d.app != nil {
 			d.app.Event.Emit("agent:ask", AskEvent{
 				SessionID: id,
@@ -692,6 +707,10 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 	if isCurrent {
 		d.reflectTray(st)
 	}
+	// The device link shows the same state (badge.go), and this is the one road every
+	// state change travels — a turn's progress that the device missed would leave it
+	// reporting a session as idle while it is working.
+	d.notifyLink()
 }
 
 // emitState pushes one session's state to the frontend (see setSessionState).

@@ -12,6 +12,7 @@ export {
 
 export type {
     AgentState,
+    AskAnsweredEvent,
     AskEvent,
     CommandVO,
     ContextInfoVO,

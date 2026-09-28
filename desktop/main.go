@@ -54,6 +54,10 @@ func init() {
 	// AskUserQuestion forms: the payload carries the questions to render (see
 	// desktop/askuser.go).
 	application.RegisterEvent[AskEvent]("agent:ask")
+	// A parked ask that has been answered somewhere else — the device — so the window's
+	// card can be taken down (see desktop/ask_answered.go). Emitting an unregistered
+	// event is silently dropped, which would look exactly like "the card stays".
+	application.RegisterEvent[AskAnsweredEvent]("agent:ask_answered")
 	// Theme switches from the titlebar: the frontend sends the theme it just
 	// applied (see desktop/uitheme.go).
 	application.RegisterEvent[string](uiThemeEventName)
@@ -215,7 +219,12 @@ func main() {
 		window.Hide()
 		e.Cancel()
 	})
-	app.OnShutdown(func() { desk.quitting.Store(true) })
+	app.OnShutdown(func() {
+		desk.quitting.Store(true)
+		// The device link is stopped explicitly: its reconnect loop owns a goroutine that
+		// would otherwise keep waking up while the process is going away.
+		desk.stopBadge()
+	})
 
 	// Native notifications for the two moments the app waits on the user (a
 	// finished turn, a parked AskUserQuestion). They are posted only while the
@@ -263,6 +272,11 @@ func main() {
 		log.Printf("agent unavailable, falling back to simulated turns: %v", err)
 		desk.setSessionState("", AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
 	}
+
+	// The device link (badge.go): a screen the agent's questions can reach when nobody is
+	// looking at the window. It is off unless config or TACHI_BADGE names a transport.
+	// After initAgent, because the config it reads belongs to the app that just booted.
+	desk.startBadge(desk.config())
 
 	// Optional self-test driver (TACHI_DEMO): inject JS to type & send from
 	// within the webview, so we can exercise input + state transitions without

@@ -6,6 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/monsterxx03/tachi v0.0.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
+	go.bug.st/serial v1.8.0
 )
 
 require (

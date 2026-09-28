@@ -616,6 +616,19 @@ export function useComposer(deps: ComposerDeps) {
     return () => off?.()
   }, [currentId, scrollToBottom])
 
+  // 一条等待在别处被回答了——设备。前端自己回答时卡片是它自己清的，但设备走的是
+  // 后端那条路直接调回答函数，窗口这边毫不知情：卡片会一直挂着，而且还能再点。
+  // 回答成功后端就广播一次，这里按 kind 撤对应的那张。
+  useEffect(() => {
+    const off = Events.On('agent:ask_answered', (event) => {
+      const d = event.data as { sessionId?: string; kind?: string } | undefined
+      if (!d?.sessionId) return
+      if (d.kind === 'permission') clearPerm(d.sessionId)
+      else clearAsk(d.sessionId)
+    })
+    return () => off?.()
+  }, [clearAsk, clearPerm])
+
   // A permission request arrives while the turn is parked; same placement and same
   // follow-into-view rule as the questions above.
   useEffect(() => {

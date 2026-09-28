@@ -903,6 +903,7 @@ type Config struct {
 	Herdr                  HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
 	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
 	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
+	Badge                  BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
 }
 
 // WebConfig controls the local web console (`tachi web`): a read-only
@@ -917,6 +918,25 @@ type WebConfig struct {
 	// AllowedOrigins enables CORS for the listed origins (dev mode when the
 	// frontend runs on the Vite dev server; empty = same-origin only).
 	AllowedOrigins []string `yaml:"allowed_origins"`
+}
+
+// BadgeConfig controls the device link (see desktop/badge.go, and
+// docs/2026-09-28-agent-badge-link-design.md): a small screen — an AI Passport board, an
+// ESP32-C3 with three buttons — that shows what the agent is WAITING ON (a bash ask, an
+// AskUserQuestion) and answers it from the device.
+//
+// The key lives here because every frontend shares one config; only the desktop reads it.
+type BadgeConfig struct {
+	// Transport is how the device is reached: "off" (or empty), "serial", or "tcp".
+	//
+	// OFF is the default on purpose. The serial port is a shared resource, and an app that
+	// grabs it at startup makes `idf.py monitor` fail for reasons that have nothing to do
+	// with the board. The TACHI_BADGE environment variable overrides this key.
+	Transport string `yaml:"transport"`
+	// Address is the transport's own address. serial: the port path, empty meaning find
+	// the board by USB vendor id (the name — /dev/cu.usbmodem2101 — moves between
+	// plug-ins). tcp: the listen address, e.g. "127.0.0.1:8765".
+	Address string `yaml:"address"`
 }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files

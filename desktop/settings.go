@@ -269,6 +269,14 @@ var settingsTable = []settingApply{
 		},
 	},
 
+	// --- the device link (a screen for what the agent is waiting on) ---
+	{
+		Key:      "badge",
+		Category: catGeneral,
+		Mode:     applyPush,
+		Apply:    applyBadgeLink,
+	},
+
 	// --- model and providers ---
 	// Prices and credit rates are read lazily by the usage ledger, but resolving a
 	// provider is a per-session fact (SetResolvedProvider), so the row is a push.
@@ -566,6 +574,16 @@ var settingChoices = map[string]func(*config.Config) []string{
 	"review.provider":         providerNames,
 	"memory.keyword_provider": providerNames,
 	"providers.*.type":        providerTypes,
+	"badge.transport":         badgeTransports,
+}
+
+// badgeTransports is the device link's transport, as a closed set.
+//
+// `off` is listed rather than expressed as an empty value on purpose: the settings page draws
+// a dropdown from this list, and a reader needs a visible way to turn the link OFF — an empty
+// string would leave them guessing that clearing the box is how.
+func badgeTransports(*config.Config) []string {
+	return []string{"off", "serial", "tcp"}
 }
 
 // providerNames lists the providers this config defines, in file order — the choice list for
