@@ -52,8 +52,14 @@ func TestBuildSystemPromptFrontendCapabilities(t *testing.T) {
 	if !strings.Contains(withHint, "## Diagramming") {
 		t.Error("expected the Mermaid hint in the prompt")
 	}
-	if !strings.Contains(withHint, "sequenceDiagram") || !strings.Contains(withHint, "flowchart") {
-		t.Error("the hint should name the diagram kinds it wants")
+	// The hint has to carry the JUDGMENT, not the vocabulary: that this frontend
+	// renders the fence, and that a short answer is not worth a diagram. Naming
+	// the diagram kinds is deliberately not its job (see MermaidCapabilityPrompt).
+	if !strings.Contains(withHint, "```mermaid") {
+		t.Error("the hint should show the fence the client renders")
+	}
+	if !strings.Contains(withHint, "skip it for a single fact") {
+		t.Error("the hint should say when a diagram is not worth drawing")
 	}
 
 	withBoth := BuildSystemPrompt("en", "", "", "USER EXTRA PROMPT", WithFrontendCapabilities(MermaidCapabilityPrompt))
