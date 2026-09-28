@@ -46,18 +46,33 @@ func TestSubagentTool_Required(t *testing.T) {
 	}
 }
 
-func TestSubagentTool_Description_IncludesToolNames(t *testing.T) {
+// The tool names a sub-agent may be given reach the model through the
+// allowed_tools items.enum, and ONLY through it: the enum is what constrains the
+// value, so prose repeating the list is a fact stated twice. This test used to
+// require the names in Description() — that is exactly what was removed.
+func TestSubagentTool_ToolNamesReachTheSchema(t *testing.T) {
 	runner := &mockRunner{
 		toolNames: []string{"ReadFile", "Grep", "Glob", "Bash"},
 	}
 	tool := NewSubagentTool(runner)
-	desc := tool.Description()
 
-	if !strings.Contains(desc, "ReadFile, Grep, Glob, Bash") {
-		t.Errorf("Description() should contain available tool names, got:\n%s", desc)
+	items, ok := tool.Properties()["allowed_tools"].Items.(map[string]any)
+	if !ok {
+		t.Fatal("allowed_tools should carry a typed items schema")
 	}
-	if !strings.Contains(desc, "Available tools for allowed_tools:") {
-		t.Error("Description() should contain 'Available tools for allowed_tools:' header")
+	enum, ok := items["enum"].([]any)
+	if !ok {
+		t.Fatal("allowed_tools items should carry an enum of the tool names")
+	}
+	got := make([]string, 0, len(enum))
+	for _, v := range enum {
+		got = append(got, v.(string))
+	}
+	if strings.Join(got, ", ") != "ReadFile, Grep, Glob, Bash" {
+		t.Errorf("expected the runner's tool names in the enum, got %v", got)
+	}
+	if strings.Contains(tool.Description(), "ReadFile, Grep, Glob, Bash") {
+		t.Error("the names belong in the enum, not repeated in the description")
 	}
 }
 

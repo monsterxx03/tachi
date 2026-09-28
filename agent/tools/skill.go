@@ -113,30 +113,32 @@ func NewSkillTool(mgr SkillManager) *SkillTool {
 
 func (t *SkillTool) Name() string { return ToolNameSkill }
 
+// Description stays one line: the five operations are an enum on the `operation`
+// property, so they reach the model whether or not this prose spells them out.
 func (t *SkillTool) Description() string {
-	return "Manage skills: list, view, create, update, or delete skills. " +
-		"Use operation=\"list\" to browse, \"view\" to load instructions, " +
-		"\"create\" to add a new skill, \"update\" to modify, \"delete\" to remove."
+	return "Manage skills: list, view, create, update, or delete."
 }
 
 func (t *SkillTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"operation": {
 			Type:        "string",
-			Description: `Operation to perform: "list" (browse available skills), "view" (load skill content), "create" (create a new skill), "update" (modify an existing skill), or "delete" (delete a skill)`,
+			// The enum carries the five values; this only says what the two
+			// read-only ones DO, which an enum cannot express.
+			Description: `"list" to browse, "view" to load one skill's content, "create", "update", "delete".`,
 			Enum:        []string{"list", "view", "create", "update", "delete"},
 		},
 		"name": {
 			Type:        "string",
-			Description: "Skill name (≤64 characters). Required for view, create, update, and delete operations.",
+			Description: "Skill name (≤64 characters). Required for view, create, update, and delete.",
 		},
 		"description": {
 			Type:        "string",
-			Description: "One-line description of what this skill does (≤1024 characters). Required for create operation. Optional for update (omit to keep existing).",
+			Description: "One-line summary of what the skill does (≤1024 characters). Required for create; omit on update to keep the current one.",
 		},
 		"body": {
 			Type:        "string",
-			Description: "Skill instructions in Markdown. Required for create operation. Optional for update (omit to keep existing).",
+			Description: "Markdown instructions. Required for create; omit on update to keep the current one.",
 		},
 		"tag": {
 			Type:        "string",
@@ -144,21 +146,21 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 		},
 		"path": {
 			Type:        "string",
-			Description: "Optional: path to a supporting file within the skill directory (e.g., \"references/checklist.md\"). Only used with operation=\"view\".",
+			Description: "Optional: a supporting file inside the skill directory (e.g. \"references/checklist.md\"). Only used with operation=\"view\".",
 		},
 		"tags": {
 			Type:        "array",
-			Description: "Optional tags for categorization (e.g., [\"git\", \"review\"]). Used with create and update operations.",
+			Description: "Optional tags for categorization (e.g. [\"git\", \"review\"]). Used with create and update.",
 		},
 		"source": {
 			Type:        "string",
-			Description: `Where to operate: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete operations. For delete/update, narrows search scope. Note: listing/viewing also discovers skills from .claude/skills/ and .cursor/skills/ (read-only).`,
+			Description: `Where the skill lives: "project" (.tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete.`,
 			Enum:        []string{"project", "global"},
 			Default:     "project",
 		},
 		"overwrite": {
 			Type:        "boolean",
-			Description: "Whether to overwrite an existing skill with the same name (default: false). Only used with operation=\"create\".",
+			Description: "Overwrite an existing skill with the same name (default: false). Only used with operation=\"create\".",
 		},
 	}
 }

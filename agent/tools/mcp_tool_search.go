@@ -135,11 +135,15 @@ func NewMCPSearchToolsTool(searcher MCPSearcher, provider MCPSearchTrackerProvid
 
 func (t *MCPSearchToolsTool) Name() string { return ToolNameMCPSearchTools }
 
+// Description carries the how-to-ask advice ONCE (the `query` property points
+// back at it): the same sentence used to appear in both places, and the query
+// property is read at the moment the model writes the request, which is what
+// the sentence is about — but the description is what it reads while deciding
+// to call at all, and a description that omits it is how the keyword path gets
+// asked a question it cannot answer.
 func (t *MCPSearchToolsTool) Description() string {
 	return "Search for and load MCP tools. " +
-		"MCP tools provide access to external services and are not loaded by default — " +
-		"use this tool to find and load them. " +
-		"Pass `server` to search only one MCP server's tools. " +
+		"MCP tools provide access to external services and are not loaded by default. " +
 		t.advice() + " " +
 		ExactNameAdvice + " " +
 		"Once loaded, a tool can be called like any built-in tool."
@@ -156,15 +160,13 @@ func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"query": {
 			Type:        "string",
-			Description: t.advice() + " " + ExactNameAdvice,
+			Description: "What to look for, phrased the way the tool description explains.",
 		},
 		"server": {
 			Type: "string",
-			Description: "Optional. Search only this MCP server's tools, by the name the deferred-tools " +
-				"block lists (e.g. \"github\"; an \"mcp__\" prefix is accepted). Useful when you already know " +
-				"which server covers the subject: results can then only come from it. A tool you NAME " +
-				"(select:, or its exact name) is still found on every server, and an unknown name is " +
-				"answered with the servers that exist.",
+			Description: "Optional. Search only this server's tools, named as the deferred-tools " +
+				"block lists it (e.g. \"github\"; an \"mcp__\" prefix is accepted). A tool you NAME " +
+				"is still resolved against every server.",
 		},
 		"max_results": {
 			Type:        "integer",

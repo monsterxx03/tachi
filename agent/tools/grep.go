@@ -38,11 +38,11 @@ type GrepTool struct{}
 
 func (t GrepTool) Name() string { return ToolNameGrep }
 func (t GrepTool) Description() string {
+	// fixed_string and include_ignored are NOT described again here: each
+	// property says what it does, next to the field the model fills in.
 	return "Search file contents using ripgrep. " +
 		"Supports regex or fixed-string patterns, file type filtering, and glob filtering. " +
-		"Returns matching file paths by default, or matching lines with context in content mode. " +
-		"Use fixed_string=true when searching for literal text containing regex special characters. " +
-		"Use include_ignored=true to also search files excluded by .gitignore (node_modules, build output)."
+		"Returns matching file paths by default, or matching lines with context in content mode."
 }
 func (t GrepTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

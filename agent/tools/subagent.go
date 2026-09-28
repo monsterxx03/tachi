@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -32,23 +31,11 @@ type SubagentArgs struct {
 	WorktreeBranch string   `json:"worktree_branch"` // Optional: git branch for worktree isolation
 }
 
-const subagentBaseDescription = `Delegate a self-contained task to an isolated sub-agent with its own context window and tool set. The sub-agent works independently and returns a single summary result.
-
-When to use:
-- Complex multi-step tasks that would bloat the main conversation context
-- Self-contained research, analysis, or code exploration that doesn't need user interaction
-- Tasks that can run in PARALLEL with other SubAgent calls or tool calls
-- Refactoring or bulk operations across many files where intermediate thinking isn't valuable to the main conversation
-
-Do NOT use for:
-- Simple single-tool operations (just call the tool directly)
-- Tasks requiring user confirmation or input
-- Trivial questions answerable in a single sentence
-
-Tips for effective delegation:
-- Write detailed prompts — include file paths, patterns, specific questions
-- Use allowed_tools to restrict the sub-agent to only the tools it needs (e.g. ["ReadFile", "Grep", "Glob"] for search-only tasks)
-- Multiple SubAgent calls run in parallel when submitted together — partition large tasks into independent sub-tasks`
+// subagentBaseDescription is the whole description — deliberately no list of
+// tool names: allowed_tools carries them as an items.enum, and prose that
+// repeats an enum is a fact stated twice (this description used to end with the
+// runner's names spelled out).
+const subagentBaseDescription = `Delegate a self-contained, multi-step task to an isolated sub-agent with its own context window and tool set; it returns one summary. Give it a detailed prompt — file paths, patterns, specific questions — and restrict allowed_tools to what the task needs. Calls submitted together run in parallel, so split independent work into separate calls. Not for a single tool call, nor for anything needing the user.`
 
 // SubagentTool delegates tasks to isolated sub-agents.
 type SubagentTool struct {
@@ -67,14 +54,13 @@ func NewSubagentTool(runner SubagentRunner) *SubagentTool {
 func (t *SubagentTool) Name() string { return ToolNameSubAgent }
 
 func (t *SubagentTool) IsDestructive() bool { return true }
-func (t *SubagentTool) Description() string {
-	names := t.runner.AvailableToolNames()
-	return subagentBaseDescription + "\n\nAvailable tools for allowed_tools: " + strings.Join(names, ", ")
-}
+func (t *SubagentTool) Description() string { return subagentBaseDescription }
 
 func (t *SubagentTool) Properties() map[string]PropertySchema {
 	// Dynamic items.enum: the model gets the exact tool names it may pass in
-	// allowed_tools, so it cannot misspell them (e.g. "ReadFileTool").
+	// allowed_tools, so it cannot misspell them (e.g. "ReadFileTool"). The enum
+	// is also the ONLY place they are listed — the description no longer repeats
+	// them in prose.
 	// Only set when non-empty — an empty enum would be invalid JSON Schema
 	// (it means "no legal values").
 	toolNames := t.runner.AvailableToolNames()
@@ -90,20 +76,18 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"prompt": {
 			Type:        "string",
-			Description: "Detailed task description for the sub-agent. Include file paths, patterns, specific questions — the more detail, the better.",
+			Description: "Detailed task description: file paths, patterns, specific questions.",
 		},
 		"allowed_tools": {
 			Type:        "array",
-			Description: "Optional list of tool names the sub-agent is allowed to use. When empty, all available tools are inherited. Use this to restrict the sub-agent (e.g. [\"ReadFile\", \"Grep\", \"Glob\"] for read-only tasks).",
+			Description: "Optional. Tool names the sub-agent may use; empty inherits all available tools.",
 			Items:       items,
 		},
 		"worktree_branch": {
 			Type: "string",
-			Description: "Optional: git branch to checkout in the sub-agent's isolated worktree. " +
-				"When empty, the worktree starts at detached HEAD (current commit). " +
-				"Only meaningful when worktree mode is enabled. " +
-				"Use this when the sub-agent needs to work on a specific branch " +
-				"(e.g., cross-branch analysis, parallel PR development).",
+			Description: "Optional git branch to check out in the sub-agent's isolated worktree " +
+				"(default: detached HEAD at the current commit). Only meaningful when worktree mode " +
+				"is enabled.",
 		},
 	}
 }
