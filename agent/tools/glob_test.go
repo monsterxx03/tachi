@@ -233,9 +233,6 @@ func TestGlobFile_DurationAndTruncatedFields(t *testing.T) {
 		t.Fatalf("Failed to unmarshal result: %v", err)
 	}
 
-	if gr.DurationMs < 0 {
-		t.Errorf("DurationMs should be non-negative, got %d", gr.DurationMs)
-	}
 }
 
 func TestGlobFile_RelativePaths(t *testing.T) {

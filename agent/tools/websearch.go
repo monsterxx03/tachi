@@ -30,7 +30,6 @@ type WebSearchResult struct {
 	Query        string         `json:"query"`
 	NumResults   int            `json:"numResults"`
 	Results      []SearchResult `json:"results"`
-	DurationMs   int64          `json:"durationMs"`
 	Provider     string         `json:"provider"`
 	ErrorMessage string         `json:"error,omitempty"`
 }
@@ -275,7 +274,6 @@ func (t *WebSearchTool) searchWithProviders(ctx context.Context, query string, n
 				Query:      query,
 				NumResults: len(results),
 				Results:    results,
-				DurationMs: duration,
 				Provider:   p.Type(),
 			})
 		}

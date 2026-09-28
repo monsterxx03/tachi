@@ -13,10 +13,9 @@ import (
 
 // GlobResult is the result of the Glob tool
 type GlobResult struct {
-	DurationMs int64    `json:"durationMs"`
-	NumFiles   int      `json:"numFiles"`
-	Filenames  []string `json:"filenames"`
-	Truncated  bool     `json:"truncated"`
+	NumFiles  int      `json:"numFiles"`
+	Filenames []string `json:"filenames"`
+	Truncated bool     `json:"truncated"`
 }
 
 // GlobTool finds files matching a glob pattern using ripgrep
@@ -96,21 +95,15 @@ func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	}
 	defer cancelFn()
 
-	start := time.Now()
 	cmd := exec.CommandContext(execCtx, "rg", rgArgs...)
 	cmd.Dir = searchBaseDir
 	output, err := cmd.Output()
 	if err != nil {
 		if isRgNoMatch(err) {
-			return marshalResult(GlobResult{
-				DurationMs: time.Since(start).Milliseconds(),
-				Filenames:  []string{},
-			})
+			return marshalResult(GlobResult{Filenames: []string{}})
 		}
 		return "", fmt.Errorf("ripgrep failed: %w", err)
 	}
-	duration := time.Since(start).Milliseconds()
-
 	// Parse output - ripgrep returns relative paths from searchBaseDir
 	lines := strutil.SplitBy(string(output), "\n")
 	filenames := make([]string, 0, len(lines))
@@ -126,10 +119,9 @@ func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	}
 
 	return marshalResult(GlobResult{
-		DurationMs: duration,
-		NumFiles:   len(filenames),
-		Filenames:  filenames,
-		Truncated:  truncated,
+		NumFiles:  len(filenames),
+		Filenames: filenames,
+		Truncated: truncated,
 	})
 }
 

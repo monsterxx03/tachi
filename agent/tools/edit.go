@@ -536,11 +536,21 @@ func normalizeQuotes(s string) string {
 }
 
 // diffFoldMinBodyChars is the size (old + new text, in characters) at which
-// generateDiffSnippet folds the -/+ bodies into a count line. Below it the diff
-// is short enough to read whole, and a count line would only cost the reader
-// the change itself. It is a readability threshold, never a limit: folding
-// loses nothing — see generateDiffSnippet.
-const diffFoldMinBodyChars = 800
+// generateDiffSnippet folds the -/+ bodies into a count line.
+//
+// The two bodies are VERBATIM what the caller sent, and the API requires every
+// tool_use argument to be re-sent with each request — so reading them back tells
+// the reader nothing it does not already have, while the count lines that
+// replace them cost ~160 bytes together. That is the break-even, and this sits
+// just above it: a body under it is nearly free to include, and the inline form
+// is the more useful one there (a one-line change rendered as "1 lines,
+// identical to the old_string you sent" is noise about noise).
+//
+// It is a size decision only, never a limit, and never a safety net: the fold
+// loses nothing (see generateDiffSnippet), and every caller for which the `-`
+// side is NOT the text the caller sent passes foldBody=false and keeps both
+// bodies whatever their size.
+const diffFoldMinBodyChars = 300
 
 // generateDiffSnippet produces a unified diff with +/- markers for changes.
 //

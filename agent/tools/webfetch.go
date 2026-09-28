@@ -49,7 +49,6 @@ type webFetchOutput struct {
 	CodeText    string `json:"codeText"`
 	ContentType string `json:"contentType"`
 	Content     string `json:"content"`
-	DurationMs  int64  `json:"durationMs"`
 }
 
 // webFetchFetchResult is a backend-agnostic fetch outcome. Both the native
@@ -273,7 +272,7 @@ func (t *WebFetchTool) fetchWithBackends(ctx context.Context, args webFetchArgs,
 		if e, ok := webFetchCacheGet(cacheKey); ok {
 			logger.FromContext(ctx).Info(ctx, "WebFetch: provider served cache hit",
 				"provider", b.Type(), "url", u)
-			return t.shapeOutput(ctx, u, e, args.Prompt, 0)
+			return t.shapeOutput(ctx, u, e, args.Prompt)
 		}
 
 		start := time.Now()
@@ -300,7 +299,7 @@ func (t *WebFetchTool) fetchWithBackends(ctx context.Context, args webFetchArgs,
 				bytes:       res.bytes,
 				code:        res.code,
 				codeText:    res.codeText,
-			}, args.Prompt, time.Since(start).Milliseconds())
+			}, args.Prompt)
 		}
 
 		switch serr.kind {
@@ -590,7 +589,7 @@ func validateWebFetchURL(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
-func buildWebFetchOutput(rawURL string, e webFetchCacheEntry, durationMs int64) webFetchOutput {
+func buildWebFetchOutput(rawURL string, e webFetchCacheEntry) webFetchOutput {
 	codeText := e.codeText
 	// If the entry was stored with the full status line, extract just the text.
 	if idx := strings.Index(codeText, " "); idx != -1 {
@@ -603,7 +602,6 @@ func buildWebFetchOutput(rawURL string, e webFetchCacheEntry, durationMs int64) 
 		CodeText:    codeText,
 		ContentType: e.contentType,
 		Content:     e.content,
-		DurationMs:  durationMs,
 	}
 }
 
@@ -760,7 +758,7 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 // entry — truncation (file-based) + prompt prefix — and builds the final
 // marshaled output. Used by both the cache-hit and fresh-fetch paths so the
 // two can never drift.
-func (t *WebFetchTool) shapeOutput(ctx context.Context, u string, e webFetchCacheEntry, prompt string, durationMs int64) (string, error) {
+func (t *WebFetchTool) shapeOutput(ctx context.Context, u string, e webFetchCacheEntry, prompt string) (string, error) {
 	// Apply file-based truncation if content exceeds the limit.
 	content := t.truncateWebFetchOutput(ctx, e.content, u)
 
@@ -775,7 +773,7 @@ func (t *WebFetchTool) shapeOutput(ctx context.Context, u string, e webFetchCach
 		bytes:       e.bytes,
 		code:        e.code,
 		codeText:    e.codeText,
-	}, durationMs)
+	})
 	return marshalResult(out)
 }
 

@@ -37,7 +37,6 @@ type BashResult struct {
 	Stdout       string `json:"stdout,omitempty"`
 	Stderr       string `json:"stderr,omitempty"`
 	ExitCode     int    `json:"exitCode"`
-	DurationMs   int64  `json:"durationMs"`
 	Interrupted  bool   `json:"interrupted,omitempty"`
 	Truncated    bool   `json:"truncated,omitempty"`
 	Backgrounded bool   `json:"backgrounded,omitempty"`
@@ -318,8 +317,7 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 	// finish renders the completed-command result (shared by the exit branch
 	// and the boundary drains in the window/cancel branches).
 	finish := func(err error) (string, error) {
-		duration := time.Since(start).Milliseconds()
-		result := BashResult{DurationMs: duration}
+		result := BashResult{}
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				result.ExitCode = exitErr.ExitCode()
@@ -347,13 +345,11 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 	// interrupted renders the killed-command result (shared by the legacy
 	// timeout and cancel branches).
 	interrupted := func(reason string) (string, error) {
-		duration := time.Since(start).Milliseconds()
 		stdout, _ := formatRingOutput(stdoutBuf)
 		result := BashResult{
 			Stdout:      stdout,
 			Stderr:      reason,
 			ExitCode:    -1,
-			DurationMs:  duration,
 			Interrupted: true,
 		}
 		t.spillOversized(&result)
@@ -396,7 +392,6 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 				adopted.Store(mp)
 			}
 			stdout, _ := formatRingOutput(stdoutBuf)
-			duration := time.Since(start).Milliseconds()
 			result := BashResult{
 				Stdout: stdout,
 				Stderr: fmt.Sprintf("Command still running after %s — continuing in background as %q. "+
@@ -404,7 +399,6 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 				// Backgrounded commands have no exit code yet — 0 avoids
 				// -1 being read as a crash/failure.
 				ExitCode:     0,
-				DurationMs:   duration,
 				Backgrounded: true,
 				BgName:       bgName,
 			}
@@ -543,7 +537,6 @@ func (t BashTool) executeTerminal(ctx context.Context, conn terminalConn, a *bas
 		window = time.Duration(*a.Timeout) * time.Millisecond
 	}
 
-	start := time.Now()
 	// waitCtx bounds the wait_for_exit call: when the run context is
 	// cancelled or the timeout fires, waitCancel() releases the goroutine
 	// (and the SDK's pending entry) instead of leaving it hung until the
@@ -595,7 +588,6 @@ func (t BashTool) executeTerminal(ctx context.Context, conn terminalConn, a *bas
 			Stdout:      out,
 			Stderr:      reason,
 			ExitCode:    -1,
-			DurationMs:  time.Since(start).Milliseconds(),
 			Interrupted: true,
 			Truncated:   truncated,
 		})
@@ -615,10 +607,9 @@ func (t BashTool) executeTerminal(ctx context.Context, conn terminalConn, a *bas
 		}
 		out, truncated := fetchOutput(ctx)
 		result := BashResult{
-			Stdout:     out,
-			ExitCode:   exitCode,
-			DurationMs: time.Since(start).Milliseconds(),
-			Truncated:  truncated,
+			Stdout:    out,
+			ExitCode:  exitCode,
+			Truncated: truncated,
 		}
 		if resp.Signal != nil {
 			// Terminated by a signal — mirror local semantics where a

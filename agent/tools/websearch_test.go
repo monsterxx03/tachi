@@ -90,8 +90,7 @@ func TestWebSearchResult_Marshal(t *testing.T) {
 				Snippet: "Test snippet 2",
 			},
 		},
-		DurationMs: 100,
-		Provider:   config.WebSearchProviderBrave,
+		Provider: config.WebSearchProviderBrave,
 	}
 
 	data, err := json.Marshal(result)
