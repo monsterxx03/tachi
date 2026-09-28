@@ -146,6 +146,13 @@ Five things every gate needs, in the order they matter:
    unanswered is written `name=-`, never `0.000`: it was not judged, which is not the same as judged
    low. `agent/mcp/jev_search.go`'s `logAnswers` is the shape to copy;
    `TestJevSearcher_LogsTheAnswers` pins the line, `TestAnswerList_OrderAndUnanswered` the ordering.
+   **The probability now also reaches the MODEL**, because `MCPSearchTools` renders it on each
+   result as `score` + `matched_by` (`judgment` / `keywords` / `name`) — the pair, never a bare
+   number, since a noul probability and a BM25 score are different quantities. That makes the
+   framing load-bearing rather than cosmetic: a result is only ever returned because it cleared
+   the cut-off, so a low score means a weak match and not a wrong tool, and the tool description
+   says so in one clause (`tools.ScoreAdvice`) — a model that reads it as a verdict drops exactly
+   the marginal tool τ was swept to include, then spends a turn searching again.
 
 **The input's shape belongs to code, not to the model.** Write the state as the fields the judgment
 actually needs, from named sources, rather than handing over whatever prose happens to be lying

@@ -30,8 +30,18 @@ Two consequences and one exception drive everything below:
   them. This one is structural: expect one full re-read, and say so rather than hunting for a bug.
 - **The rebuilt history must equal the history that was SENT, byte for byte.** Anything that renders a
   stored message differently from how it went out (an extra newline at a reminder seam, a block in the
-  wrong position) shifts the prefix from that point on. The invariant and its two shapes are in `.tachi.md`;
-  `agent/session_convert_test.go` pins them.
+  wrong position) shifts the prefix from that point on. `agent/session_convert_test.go` pins it.
+  The reminder block is where this is easiest to get wrong, and it has two shapes, told apart only by
+  POSITION (both are `MessageTypeReminder`): a wrapper for the NEXT user message — its next non-reminder
+  record IS a user message (artifacts, the date block, continuation prompts) — and a block the loop injected
+  mid-turn, which is its own message and must stay where it was sent. Mid-turn injection renders the fresh
+  pieces once and both appends that text and records it (`agent_loop.go`), so the two paths go through one
+  render.
+  **A block is stored as the text that was SENT** (`RenderPieces` output, recorded verbatim, and
+  `CollectPieces` renders each piece alone as the dedup key). That is what makes a change to `RenderPieces`
+  itself — its separators, its layout — NOT structural: existing records keep their bytes, and only the block
+  being built now renders differently, at the tail. It is also what makes a piece's own leading blank line a
+  bug rather than a style choice: the renderer already separates the pieces.
 - **EXCEPT images: an image content part exists only in the live run.** The store keeps text — the
   `[图片: <absolute path>]` an @-reference leaves behind, `[Image: <name>, …, <bytes>, <base64 chars>]` for a
   ReadFile result — and `ConvertSessionToLLMMessages` expands nothing, so a history rebuilt for a restart
