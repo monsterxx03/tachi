@@ -47,7 +47,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | transcript rendering / turn folding / process strip | `transcript`, `transcript-fold`, `transcript-live` |
 | tool cards (their own args and result, several calls of one tool in a turn) | `parallel-tools`, `transcript-fold` |
 | the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
-| a message bubble's own layout (long links, wrapping) | `bubble-wrap` |
+| a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |
@@ -562,6 +562,10 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   typed, while `Content` holds the `@`-file expansion) — and **`Content` stays authoritative for the model**,
   because the next request is rebuilt from it: writing the raw text there would send a prefix the model never
   saw and retroactively rewrite what the history says it was told.
+- **A surface that shows RAW text owns its line breaks**: the user bubble renders the message as plain text
+  (`UserBubble`), so the newlines the composer's Shift+Enter and a pasted multi-line block produce get a line
+  box from `.msg-user .msg-content`'s own `white-space` and from nothing else — under the default `normal`
+  every one of them collapses into a space, and the message reads as one paragraph (`bubble-lines`).
 
 **A turn on screen**
 

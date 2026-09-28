@@ -176,6 +176,12 @@
      the room it has, because min-content is computed with the break opportunity included
      (same rule as the findings pane; see .finding-text). */
   overflow-wrap: anywhere;
+  /* The reader's own line breaks are theirs. A bubble renders the message as PLAIN TEXT
+     (App.tsx's UserBubble — the composer's Shift+Enter and a pasted multi-line block both
+     arrive as `\n`), so nothing else gives those newlines a line box: under the default
+     `normal` each one collapses into a space, and a two-line prompt reads as one long
+     paragraph. `pre-wrap` keeps the breaks and still wraps a line that is too long. */
+  white-space: pre-wrap;
 }
 /* Re-tint the bits that inherit dim/faint colours inside the tinted bubble. */
 .msg-user .msg-content .msg-ts,

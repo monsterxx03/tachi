@@ -583,6 +583,25 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// 用户气泡里的换行：Shift+Enter 敲出的换行在气泡里必须还在。数据从来没错过（模型收到
+		// 的就是带 \n 的原文，这里由 Go 侧那条请求断言钉住），丢的是渲染——气泡把消息当纯文本
+		// 显示，`white-space: normal` 把每个换行折成了一个空格。
+		//
+		{
+			name: "bubble-lines",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe bubble-lines scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("收到，两行都看到了。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				at, seen := c.requestSeen("第一行\n第二行")
+				c.check("模型收到的是带换行的原文", seen, fmt.Sprintf("命中第 %d 次请求", at))
+			},
+		},
+		//
 		// 上下文占用环（ContextMeter）：新会话跑完一轮之后它必须有数。
 		//
 		{
