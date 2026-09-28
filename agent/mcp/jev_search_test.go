@@ -82,6 +82,95 @@ func newTestSearcher(pool *DeferredPool, judge Judge, threshold float64) *JevSea
 	return NewJevSearcher(pool, judge, nil, threshold, time.Second, nil, nil)
 }
 
+// ask is one search request with no server narrowing — what every test in this
+// file made before narrowing existed. The tests about narrowing build their
+// MCPSearchOptions themselves.
+func ask(ctx context.Context, s *JevSearcher, query string, maxResults int) []tools.MCPSearchResultItem {
+	return s.Search(ctx, tools.MCPSearchOptions{Query: query, MaxResults: maxResults})
+}
+
+// A narrowed search judges that server's tools and nothing else. This is the
+// whole point of the parameter: a candidate is one question, and a full pool is
+// one request per hundred of them.
+func TestJevSearcher_NarrowsTheJudgmentToOneServer(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+	)
+	// Both tools would clear the cut-off on a full-pool search: the narrowing,
+	// not the scores, is what keeps gh out of the answer.
+	judge := &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.9, "mcp__gh__pr": 0.9}}
+	s := newTestSearcher(pool, judge, 0.35)
+
+	got := s.Search(context.Background(), tools.MCPSearchOptions{
+		Query: "database query", Server: "pg", MaxResults: 5,
+	})
+	require.Len(t, got, 1)
+	assert.Equal(t, "mcp__pg__query", got[0].Name)
+	require.Len(t, judge.calls, 1)
+	assert.Equal(t, []string{"mcp__pg__query"}, judge.calls[0], "only that server's tools are asked about")
+	assert.Equal(t, []any{"database query"}, judge.states, "the question itself is unchanged")
+
+	// The server's own spelling comes from config, so the match is
+	// case-insensitive (the tool normalized the model's input before this).
+	got = s.Search(context.Background(), tools.MCPSearchOptions{
+		Query: "database query", Server: "PG", MaxResults: 5,
+	})
+	assert.Len(t, got, 1)
+}
+
+// The exact-name half is NOT narrowed: a name is an identity, and a
+// mis-remembered server must not turn a hit into a miss.
+func TestJevSearcher_NarrowingDoesNotHideNamedTools(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+	)
+	judge := &fakeJudge{answers: map[string]float64{}}
+	s := newTestSearcher(pool, judge, 0.35)
+
+	for _, query := range []string{"select:mcp__gh__pr", "mcp__gh__pr", "mcp__gh"} {
+		got := s.Search(context.Background(), tools.MCPSearchOptions{
+			Query: query, Server: "pg", MaxResults: 5,
+		})
+		require.Len(t, got, 1, "query %q", query)
+		assert.Equal(t, "mcp__gh__pr", got[0].Name)
+	}
+	assert.Empty(t, judge.calls, "a name is a lookup, not a judgment")
+}
+
+// A degraded search stays narrowed: the fallback answers the same question, and
+// answering it from another server's tools would be a different one.
+func TestJevSearcher_DegradedSearchStaysNarrowed(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+	)
+	s := newTestSearcher(pool, &fakeJudge{err: errors.New("503 overloaded")}, 0.35)
+
+	got := s.Search(context.Background(), tools.MCPSearchOptions{
+		Query: "create pr", Server: "pg", MaxResults: 5,
+	})
+	assert.Empty(t, got, "the keyword hit belongs to another server")
+
+	got = s.Search(context.Background(), tools.MCPSearchOptions{
+		Query: "create pr", Server: "gh", MaxResults: 5,
+	})
+	require.Len(t, got, 1)
+	assert.Equal(t, "mcp__gh__pr", got[0].Name)
+}
+
+// The searcher can name its servers — that is what the search tool answers an
+// unknown `server` with (tools.MCPServerLister).
+func TestJevSearcher_Servers(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+		testDeferredTool("mcp__pg__list", "pg", "List tables"),
+	)
+	assert.Equal(t, []string{"gh", "pg"}, newTestSearcher(pool, &fakeJudge{}, 0.35).Servers())
+}
+
 // A query that NAMES what it wants is a lookup: no judgment call, and the same
 // answer the keyword path gave before this existed.
 func TestJevSearcher_NamesAreLookedUpNotJudged(t *testing.T) {
@@ -103,7 +192,7 @@ func TestJevSearcher_NamesAreLookedUpNotJudged(t *testing.T) {
 		{"mcp__pg", []string{"mcp__pg__query"}},
 		{"", []string{"mcp__gh__pr", "mcp__pg__query"}},
 	} {
-		got := s.Search(context.Background(), tc.query, 5)
+		got := ask(context.Background(), s, tc.query, 5)
 		names := make([]string, 0, len(got))
 		for _, r := range got {
 			names = append(names, r.Name)
@@ -115,7 +204,7 @@ func TestJevSearcher_NamesAreLookedUpNotJudged(t *testing.T) {
 
 	// A bare word is prose, not a name: it is the case the judgment exists for.
 	judge.answers = map[string]float64{"mcp__pg__query": 0.9}
-	assert.Len(t, s.Search(context.Background(), "query", 5), 1)
+	assert.Len(t, ask(context.Background(), s, "query", 5), 1)
 	assert.Len(t, judge.calls, 1)
 }
 
@@ -135,7 +224,7 @@ func TestJevSearcher_ThresholdAndRanking(t *testing.T) {
 	}}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "find me a can opener", 5)
+	got := ask(context.Background(), s, "find me a can opener", 5)
 	require.Len(t, got, 2)
 	assert.Equal(t, "mcp__b__two", got[0].Name)
 	assert.Equal(t, "mcp__c__three", got[1].Name)
@@ -154,7 +243,7 @@ func TestJevSearcher_TiesBreakByName(t *testing.T) {
 	judge := &fakeJudge{answers: map[string]float64{"mcp__z__tool": 0.8, "mcp__a__tool": 0.8}}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "anything", 5)
+	got := ask(context.Background(), s, "anything", 5)
 	require.Len(t, got, 2)
 	assert.Equal(t, "mcp__a__tool", got[0].Name)
 	assert.Equal(t, "mcp__z__tool", got[1].Name)
@@ -174,7 +263,7 @@ func TestJevSearcher_MissingAnswerIsNotSelected(t *testing.T) {
 	}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "something to judge", 5)
+	got := ask(context.Background(), s, "something to judge", 5)
 	require.Len(t, got, 1)
 	assert.Equal(t, "mcp__a__good", got[0].Name)
 }
@@ -201,23 +290,33 @@ func TestJevSearcher_LogsTheAnswers(t *testing.T) {
 		model:   "jev-1.13.0",
 	}
 	s := newTestSearcher(pool, judge, 0.35)
-	require.Len(t, s.Search(ctx, "something to judge", 5), 1)
+	require.Len(t, ask(ctx, s, "something to judge", 5), 1)
+	// A narrowed search, so the line can be read for the candidate set it came
+	// from: the same query over a different set is a different question.
+	require.Len(t, s.Search(ctx, tools.MCPSearchOptions{
+		Query: "something to judge", Server: "a", MaxResults: 5,
+	}), 1)
 
 	raw, err := os.ReadFile(filepath.Join(dir, "debug.log"))
 	require.NoError(t, err)
-	var line string
+	var lines []string
 	for _, l := range strings.Split(string(raw), "\n") {
 		if strings.Contains(l, "MCP: jev tool search judged tools") {
-			line = l
+			lines = append(lines, l)
 		}
 	}
-	require.NotEmpty(t, line, "the judgment must leave a line behind")
-	assert.Contains(t, line, `query="something to judge"`, "the search is the context these numbers need")
-	assert.Contains(t, line, "model=jev-1.13.0")
-	assert.Contains(t, line, "chunk=1/1")
-	assert.Contains(t, line, "threshold=0.35")
-	assert.Contains(t, line, `answers="mcp__a__good=0.900, mcp__c__low=0.100, mcp__b__silent=-"`,
+	require.Len(t, lines, 2, "one line per request")
+	whole, narrowed := lines[0], lines[1]
+	assert.Contains(t, whole, `query="something to judge"`, "the search is the context these numbers need")
+	assert.Contains(t, whole, "model=jev-1.13.0")
+	assert.Contains(t, whole, "chunk=1/1")
+	assert.Contains(t, whole, "threshold=0.35")
+	assert.Contains(t, whole, `answers="mcp__a__good=0.900, mcp__c__low=0.100, mcp__b__silent=-"`,
 		"probability order, and an unanswered question is not a zero")
+
+	assert.Contains(t, narrowed, "server=a", "the candidate set is part of the record")
+	assert.Contains(t, narrowed, `answers="mcp__a__good=0.900"`,
+		"only that server's tools were judged")
 }
 
 // The line's content is the whole reading of a search: probability order (ties
@@ -251,7 +350,7 @@ func TestJevSearcher_ReportsDegradation(t *testing.T) {
 	var degraded []error
 	judge := &fakeJudge{err: errors.New("503 overloaded")}
 	s := NewJevSearcher(pool, judge, nil, 0.35, time.Second, nil, func(err error) { degraded = append(degraded, err) })
-	s.Search(context.Background(), "database query", 5)
+	ask(context.Background(), s, "database query", 5)
 	require.Len(t, degraded, 1)
 	assert.ErrorContains(t, degraded[0], "503")
 	// The advice follows: the model is told to write keywords, because that is
@@ -261,7 +360,7 @@ func TestJevSearcher_ReportsDegradation(t *testing.T) {
 	// A search that worked says nothing.
 	working := NewJevSearcher(pool, &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.9}},
 		nil, 0.35, time.Second, nil, func(error) { degraded = append(degraded, nil) })
-	working.Search(context.Background(), "database query", 5)
+	working.Search(context.Background(), tools.MCPSearchOptions{Query: "database query", MaxResults: 5})
 	assert.Len(t, degraded, 1)
 	assert.Equal(t, tools.ProseSearchAdvice, working.SearchAdvice())
 }
@@ -274,7 +373,7 @@ func TestJevSearcher_ErrorDegradesToKeywords(t *testing.T) {
 	judge := &fakeJudge{err: errors.New("503 overloaded")}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "database query", 5)
+	got := ask(context.Background(), s, "database query", 5)
 	assert.Equal(t, pool.Search("database query", 5), got)
 	assert.NotEmpty(t, got, "the fixture must be one the keyword path can answer")
 }
@@ -287,7 +386,7 @@ func TestJevSearcher_BudgetDegrades(t *testing.T) {
 	s := NewJevSearcher(pool, judge, nil, 0.35, 20*time.Millisecond, nil, nil)
 
 	start := time.Now()
-	got := s.Search(context.Background(), "database query", 5)
+	got := ask(context.Background(), s, "database query", 5)
 	assert.Equal(t, pool.Search("database query", 5), got)
 	assert.Less(t, time.Since(start), 2*time.Second)
 }
@@ -306,7 +405,7 @@ func TestJevSearcher_ChunksThePool(t *testing.T) {
 	judge := &fakeJudge{answers: answers}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "find any of them", 5)
+	got := ask(context.Background(), s, "find any of them", 5)
 	assert.Len(t, judge.calls, 2, "the pool does not fit one request")
 	assert.Len(t, judge.calls[0], jevSearchChunkTokens/jevSearchTokensPerQuestion)
 	assert.Len(t, judge.calls[1], total-jevSearchChunkTokens/jevSearchTokensPerQuestion)
@@ -326,7 +425,7 @@ func TestJevSearcher_CapsThePool(t *testing.T) {
 	judge := &fakeJudge{answers: answers}
 	s := newTestSearcher(pool, judge, 0.35)
 
-	got := s.Search(context.Background(), "find any of them", 3)
+	got := ask(context.Background(), s, "find any of them", 3)
 	asked := 0
 	for _, c := range judge.calls {
 		asked += len(c)
@@ -339,7 +438,7 @@ func TestJevSearcher_EmptyPool(t *testing.T) {
 	judge := &fakeJudge{answers: map[string]float64{}}
 	s := newTestSearcher(NewDeferredPool(), judge, 0.35)
 
-	assert.Empty(t, s.Search(context.Background(), "anything at all", 5))
+	assert.Empty(t, ask(context.Background(), s, "anything at all", 5))
 	assert.Empty(t, judge.calls)
 }
 
@@ -370,7 +469,7 @@ func TestJevSearcher_RecordsUsage(t *testing.T) {
 	s := NewJevSearcher(pool, judge, nil, 0.35, time.Second, llm.NewUsageRecorder(dir), nil)
 
 	ctx := tools.WithSessionID(context.Background(), "session-1")
-	require.Len(t, s.Search(ctx, "database query", 5), 1)
+	require.Len(t, ask(ctx, s, "database query", 5), 1)
 
 	rows := ledgerRows(t, dir)
 	require.Len(t, rows, 1)
@@ -413,11 +512,11 @@ func TestJevSearcher_RecordsUsageFromTheJevBlock(t *testing.T) {
 	s := NewJevSearcher(pool, judge, cfg, 0.35, time.Second, llm.NewUsageRecorder(dir), nil)
 
 	ctx := tools.WithSessionID(context.Background(), "session-1")
-	require.Len(t, s.Search(ctx, "database query", 5), 1)
+	require.Len(t, ask(ctx, s, "database query", 5), 1)
 
 	// Same name as the searcher: the block is consulted per row, not per build.
 	cfg.Jev.Pricing = &config.PricingConfig{InputPrice: new(1.0)}
-	require.Len(t, s.Search(ctx, "database query", 5), 1)
+	require.Len(t, ask(ctx, s, "database query", 5), 1)
 
 	rows := ledgerRows(t, dir)
 	require.Len(t, rows, 2)

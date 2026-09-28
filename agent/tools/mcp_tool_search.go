@@ -24,6 +24,58 @@ type MCPSearchResult struct {
 	Description string `json:"description"`
 }
 
+// MCPSearchOptions is one search request: what is being asked, which candidates
+// it may be answered from, and how many results to cap at.
+//
+// It is a struct rather than more positional parameters because Server names a
+// SET while Query and MaxResults bound a LOOKUP — two adjacent strings at a call
+// site would be transposed silently, and a search answered from the wrong set
+// looks exactly like a search that found nothing.
+type MCPSearchOptions struct {
+	// Query is the request as the model wrote it. A query that NAMES what it
+	// wants (select:, an exact or suffix tool name, an mcp__server prefix) is
+	// resolved against every server whatever Server says — a name is an
+	// identity, and a mis-remembered server must not turn a hit into a miss.
+	Query string
+	// Server restricts the candidate set to one MCP server's tools, spelled the
+	// way the deferred-tools reminder lists it ("github"); NormalizeMCPServer
+	// has already been applied by the tool. Empty means every server.
+	Server string
+	// MaxResults caps the answer (the tool clamps it before it gets here).
+	MaxResults int
+}
+
+// MCPSearchResultItem is a raw search result from the pool.
+// Defined here to avoid circular dependency; the pool converts to this.
+type MCPSearchResultItem struct {
+	Name        string
+	Description string
+	Schema      Schema
+}
+
+// MCPServerLister is an optional MCPSearcher method: the MCP servers the
+// searcher's candidates belong to. The tool asks for it to reject an unknown
+// Server by naming the servers that do exist — searching nothing instead would
+// be indistinguishable from "no tool matches", which is the reading that makes
+// a model give up on the tool rather than correct the name.
+type MCPServerLister interface {
+	Servers() []string
+}
+
+// MCPServerPrefix is the segment every MCP tool name starts with.
+const MCPServerPrefix = "mcp__"
+
+// NormalizeMCPServer turns whatever the model wrote into the form the candidate
+// set is matched against: the forms it can produce from reading the reminder
+// block ("github", "mcp__github", " GITHUB ") all reduce to "github". An empty
+// input stays empty, which means "every server".
+//
+// It lowercases because the comparison is case-insensitive on the pool side
+// (the server's own spelling comes from config, not from the model).
+func NormalizeMCPServer(s string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), MCPServerPrefix)
+}
+
 // What the tool's description tells the model to write. One of these is picked
 // per searcher (see MCPSearchAdvice): the keyword path can only match terms
 // that appear in the tools' own text and has no answer for a sentence in
@@ -50,15 +102,7 @@ type MCPSearcher interface {
 	// Search takes a context because a searcher may reach a service (the Jev
 	// gate does): the call has to die with the turn that made it, and a search
 	// that overruns degrades inside the implementation rather than blocking.
-	Search(ctx context.Context, query string, maxResults int) []MCPSearchResultItem
-}
-
-// MCPSearchResultItem is a raw search result from the pool.
-// Defined here to avoid circular dependency; the pool converts to this.
-type MCPSearchResultItem struct {
-	Name        string
-	Description string
-	Schema      Schema
+	Search(ctx context.Context, opts MCPSearchOptions) []MCPSearchResultItem
 }
 
 // MCPSearchTracker tracks which MCP tools the LLM has discovered.
@@ -95,6 +139,7 @@ func (t *MCPSearchToolsTool) Description() string {
 	return "Search for and load MCP tools. " +
 		"MCP tools provide access to external services and are not loaded by default — " +
 		"use this tool to find and load them. " +
+		"Pass `server` to search only one MCP server's tools. " +
 		t.advice() + " " +
 		ExactNameAdvice + " " +
 		"Once loaded, a tool can be called like any built-in tool."
@@ -112,6 +157,14 @@ func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 		"query": {
 			Type:        "string",
 			Description: t.advice() + " " + ExactNameAdvice,
+		},
+		"server": {
+			Type: "string",
+			Description: "Optional. Search only this MCP server's tools, by the name the deferred-tools " +
+				"block lists (e.g. \"github\"; an \"mcp__\" prefix is accepted). Useful when you already know " +
+				"which server covers the subject: results can then only come from it. A tool you NAME " +
+				"(select:, or its exact name) is still found on every server, and an unknown name is " +
+				"answered with the servers that exist.",
 		},
 		"max_results": {
 			Type:        "integer",
@@ -139,6 +192,7 @@ type mcpSearchOutput struct {
 func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var params struct {
 		Query      string `json:"query"`
+		Server     string `json:"server"`
 		MaxResults int    `json:"max_results"`
 	}
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
@@ -155,8 +209,17 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	// not enforcement (see maxMCPSearchMaxResults).
 	params.MaxResults = min(params.MaxResults, maxMCPSearchMaxResults)
 
+	server := NormalizeMCPServer(params.Server)
+	if err := t.checkServer(server, params.Server); err != nil {
+		return "", err
+	}
+
 	// Search the deferred pool
-	results := t.searcher.Search(ctx, params.Query, params.MaxResults)
+	results := t.searcher.Search(ctx, MCPSearchOptions{
+		Query:      params.Query,
+		Server:     server,
+		MaxResults: params.MaxResults,
+	})
 
 	// Resolve the tracker for the session active in this tool call. The
 	// agent loop injects the session ID into the context (tools.WithSessionID);
@@ -206,6 +269,40 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	return string(b), nil
 }
 
+// checkServer rejects a `server` the searcher does not have, naming the ones it
+// does. server is the normalized name, asWritten the model's spelling (so the
+// message quotes back what it wrote).
+//
+// An empty answer is what this prevents: it is indistinguishable from "no tool
+// matches", and a model that reads it that way stops trying instead of fixing
+// the name. A searcher that cannot list its servers is not validated — the
+// search goes through and an unknown name simply matches nothing, which is the
+// behaviour every caller had before this parameter existed.
+//
+// It runs before the search, so it also covers a query that NAMES a tool: an
+// unusable `server` is a malformed argument, and the model is told to drop it
+// rather than served an answer about a candidate set it never asked for.
+func (t *MCPSearchToolsTool) checkServer(server, asWritten string) error {
+	if server == "" {
+		return nil
+	}
+	lister, ok := t.searcher.(MCPServerLister)
+	if !ok {
+		return nil
+	}
+	known := lister.Servers()
+	for _, name := range known {
+		if strings.EqualFold(name, server) {
+			return nil
+		}
+	}
+	if len(known) == 0 {
+		return fmt.Errorf("unknown MCP server %q: no MCP server is connected yet, so there is nothing to search; call this tool again without the server parameter", asWritten)
+	}
+	return fmt.Errorf("unknown MCP server %q; the connected MCP servers are: %s",
+		asWritten, strings.Join(known, ", "))
+}
+
 // schemaToPropsJSON converts PropertySchema map to JSON-compatible map.
 // A property with no usable type is emitted without the keyword — the tool
 // search result must describe the same schema the API request will carry, and
@@ -245,7 +342,7 @@ func schemaToPropsJSON(props map[string]PropertySchema) map[string]any {
 
 // IsMCPSchema returns true if the schema name is an MCP tool.
 func IsMCPSchema(name string) bool {
-	return strings.HasPrefix(name, "mcp__")
+	return strings.HasPrefix(name, MCPServerPrefix)
 }
 
 // IsMCPSearchTool returns true if the name is the MCP search tool itself.

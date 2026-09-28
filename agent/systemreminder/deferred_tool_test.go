@@ -92,6 +92,73 @@ func TestDeferredToolReminder_SummariesSkipLoadedServers(t *testing.T) {
 	}
 }
 
+// The catalog shape gains one roster line. The server rides inside every tool
+// name, and a reader that may narrow should not have to collect the names from
+// fifty of them.
+func TestDeferredToolReminder_CatalogNamesTheServers(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query the PostgreSQL database"},
+				{Name: "mcp__gh__pr", Description: "Create and manage pull requests"},
+			},
+		},
+	}
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("expected one block, got %v", lines)
+	}
+	full := lines[0]
+	if !strings.Contains(full, "可搜索的 MCP server：mcp__gh（1）、mcp__pg（1）") {
+		t.Errorf("expected the server roster, got: %s", full)
+	}
+	// The catalog itself is what the keyword matcher reads: unchanged.
+	if !strings.Contains(full, "mcp__pg__query — Query the PostgreSQL database") {
+		t.Errorf("expected the per-tool catalog to stay, got: %s", full)
+	}
+}
+
+// A roster of one is not a choice: narrowing to the only server there is buys
+// nothing, and the prefix is already visible in every tool name.
+func TestDeferredToolReminder_SingleServerHasNoRoster(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query the PostgreSQL database"},
+			},
+		},
+	}
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("expected one block, got %v", lines)
+	}
+	if strings.Contains(lines[0], "可搜索的 MCP server") {
+		t.Errorf("a single server is not a roster, got: %s", lines[0])
+	}
+}
+
+// The roster counts what is still undiscovered, like the per-server lines of
+// the other shape: a server with nothing left to load is not a hint.
+func TestDeferredToolReminder_RosterSkipsLoadedServers(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query the PostgreSQL database"},
+				{Name: "mcp__gh__pr", Description: "Create and manage pull requests"},
+				{Name: "mcp__gh__issue", Description: "Open an issue"},
+			},
+		},
+		Tracker: &stubDeferredTracker{discovered: map[string]bool{"mcp__gh__pr": true}},
+	}
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("expected one block, got %v", lines)
+	}
+	if !strings.Contains(lines[0], "可搜索的 MCP server：mcp__gh（1）、mcp__pg（1）") {
+		t.Errorf("expected counts of undiscovered tools per server, got: %s", lines[0])
+	}
+}
+
 // No summaries means the catalog: that is what the keyword matcher needs, and
 // what a provider with nothing to say gets.
 func TestDeferredToolReminder_FallsBackToTheCatalog(t *testing.T) {

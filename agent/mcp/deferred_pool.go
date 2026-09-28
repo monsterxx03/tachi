@@ -87,6 +87,23 @@ func (p *DeferredPool) All() []*DeferredTool {
 	return all
 }
 
+// Servers returns the distinct server names in the pool, sorted. The search
+// tool answers an unknown `server` with this list (tools.MCPServerLister), and
+// a caller that wants to offer the names as choices reads it the same way.
+func (p *DeferredPool) Servers() []string {
+	seen := container.NewSet[string]()
+	var out []string
+	p.tools.Range(func(_ string, t *DeferredTool) bool {
+		if !seen.Has(t.ServerName) {
+			seen.Add(t.ServerName)
+			out = append(out, t.ServerName)
+		}
+		return true
+	})
+	sort.Strings(out)
+	return out
+}
+
 // RemoveByServer removes all tools belonging to the given server from the pool.
 // Returns the number of tools removed.
 func (p *DeferredPool) RemoveByServer(serverName string) int {
@@ -122,15 +139,24 @@ type PoolSearcher struct{ pool *DeferredPool }
 // NewPoolSearcher adapts the pool to the search tool's interface.
 func NewPoolSearcher(pool *DeferredPool) PoolSearcher { return PoolSearcher{pool: pool} }
 
-// Search runs the pool's own lookup (SearchExact, then keyword scoring). A nil
-// pool is "no MCP tools yet" — the search tool is registered before the servers
-// connect, so a search in that window answers with an empty list instead of
-// panicking.
-func (s PoolSearcher) Search(_ context.Context, query string, maxResults int) []SearchResult {
+// Search runs the pool's own lookup (SearchExact, then keyword scoring), with
+// the candidate set narrowed to opts.Server. A nil pool is "no MCP tools yet" —
+// the search tool is registered before the servers connect, so a search in that
+// window answers with an empty list instead of panicking.
+func (s PoolSearcher) Search(_ context.Context, opts tools.MCPSearchOptions) []SearchResult {
 	if s.pool == nil {
 		return nil
 	}
-	return s.pool.Search(query, maxResults)
+	return s.pool.SearchIn(opts.Query, opts.Server, opts.MaxResults)
+}
+
+// Servers is the pool's server list (tools.MCPServerLister), so the search tool
+// can reject an unknown `server` by name. A nil pool has none.
+func (s PoolSearcher) Servers() []string {
+	if s.pool == nil {
+		return nil
+	}
+	return s.pool.Servers()
 }
 
 // SearchAdvice tells the model to write terms the index can match.
@@ -207,7 +233,7 @@ func (p *DeferredPool) SearchExact(query string, maxResults int) ([]SearchResult
 	}
 
 	// 3. Server prefix match: "mcp__server" → find all tools for that server
-	if strings.HasPrefix(query, "mcp__") {
+	if strings.HasPrefix(query, tools.MCPServerPrefix) {
 		prefix := strings.ToLower(query)
 		var results []SearchResult
 		for _, t := range allTools {
@@ -226,6 +252,37 @@ func (p *DeferredPool) SearchExact(query string, maxResults int) ([]SearchResult
 	return nil, false
 }
 
+// SearchIn is Search with the candidate set narrowed to one server's tools.
+// server == "" is Search itself.
+//
+// Two rules make the narrowing safe, and both come from what a narrowed search
+// is FOR — a cheaper judgment (the Jev gate pays per candidate tool) rather than
+// a different question:
+//
+//   - A query that NAMES what it wants is resolved against the WHOLE pool: a
+//     name is an identity, and a mis-remembered server must not turn a name that
+//     would have resolved into a miss.
+//   - An empty query is a listing, and a listing narrowed to a server is that
+//     server's tools, not the whole pool's first page.
+//
+// An unknown server yields whatever the empty candidate set scores (nothing).
+// The caller that knows the names rejects it first — see
+// tools.MCPSearchToolsTool.checkServer — so an empty answer is never read as
+// "there is no such tool".
+func (p *DeferredPool) SearchIn(query, server string, maxResults int) []SearchResult {
+	if server == "" {
+		return p.Search(query, maxResults)
+	}
+	maxResults = clampMaxResults(maxResults)
+	if strings.TrimSpace(query) == "" {
+		return p.searchAll(p.snapshotFor(server), maxResults)
+	}
+	if exact, ok := p.SearchExact(query, maxResults); ok {
+		return exact
+	}
+	return p.keywordSearch(p.snapshotFor(server), query, maxResults)
+}
+
 // snapshot copies the pool's tools into a slice. Every search walks it once, so
 // the copy is what keeps a concurrent Add/Remove from racing the walk.
 func (p *DeferredPool) snapshot() []*DeferredTool {
@@ -234,6 +291,23 @@ func (p *DeferredPool) snapshot() []*DeferredTool {
 		all = append(all, t)
 		return true
 	})
+	return all
+}
+
+// snapshotFor is snapshot narrowed to one server's tools ("" = the whole pool).
+// The comparison is case-insensitive because the name arrives normalized by the
+// search tool (tools.NormalizeMCPServer) while ServerName keeps the spelling the
+// config gave the server.
+func (p *DeferredPool) snapshotFor(server string) []*DeferredTool {
+	if server == "" {
+		return p.snapshot()
+	}
+	var all []*DeferredTool
+	for _, t := range p.snapshot() {
+		if strings.EqualFold(t.ServerName, server) {
+			all = append(all, t)
+		}
+	}
 	return all
 }
 
@@ -392,10 +466,11 @@ func matchesRequired(ix *bm25.Index, doc int, required []string) bool {
 // "mcp__postgres__query" → ["postgres", "query"]
 // "mcp__github__createPullRequest" → ["github", "create", "pull", "request"]
 func parseToolName(name string) []string {
-	if !strings.HasPrefix(name, "mcp__") {
+	rest, ok := strings.CutPrefix(name, tools.MCPServerPrefix)
+	if !ok {
 		return []string{strings.ToLower(name)}
 	}
-	rest := name[5:] // keep original case for CamelCase detection
+	// rest keeps the original case: splitOnUnderscoreOrCamel needs it.
 	var parts []string
 	for segment := range strings.SplitSeq(rest, "__") {
 		for _, word := range splitOnUnderscoreOrCamel(segment) {

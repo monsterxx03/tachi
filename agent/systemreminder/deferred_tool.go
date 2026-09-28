@@ -3,6 +3,7 @@ package systemreminder
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -112,6 +113,34 @@ func serverOf(toolName string) string {
 	return server
 }
 
+// serverRoster lists, on one line, the servers that still hold undiscovered
+// tools — in the spelling the search tool's `server` parameter takes
+// (mcp__<server>).
+//
+// A roster of ONE is not a choice, so it is not rendered: with a single server
+// the narrowing buys nothing and the prefix is already visible in every tool
+// name. The counts are of undiscovered tools, matching the per-server lines of
+// the other shape.
+func serverRoster(undiscovered []DeferredToolRecord) string {
+	counts := map[string]int{}
+	for _, t := range undiscovered {
+		counts[serverOf(t.Name)]++
+	}
+	if len(counts) < 2 {
+		return ""
+	}
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("mcp__%s（%d）", name, counts[name]))
+	}
+	return "可搜索的 MCP server：" + strings.Join(parts, "、")
+}
+
 // DeferredToolReminder injects a deferred-tools block showing
 // MCP tools that are available but not yet loaded. This lets the LLM know
 // what tools it can search for via MCPSearchTools. The block is merged into
@@ -212,6 +241,13 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 
 	var lines []string
 	if lines = r.summaryLines(all, undiscovered); lines == nil {
+		// The keyword shape keeps the per-tool catalog — the NAMES are what a
+		// keyword search matches on — and gains one roster line, because the
+		// server rides inside every tool name and a reader that may narrow
+		// should not have to collect the names from fifty of them.
+		if roster := serverRoster(undiscovered); roster != "" {
+			lines = append(lines, "  "+roster, "")
+		}
 		for _, t := range undiscovered {
 			desc := strutil.FirstLineOrTruncate(t.Description, 100)
 			lines = append(lines, fmt.Sprintf("  %s — %s", t.Name, desc))

@@ -186,5 +186,5 @@ func TestMCPSearcherNilPool(t *testing.T) {
 	got := a.mcpSearcher(nil)
 	_, isJev := got.(*mcp.JevSearcher)
 	assert.False(t, isJev, "no pool means nothing to judge")
-	assert.Empty(t, got.Search(context.Background(), "anything", 5))
+	assert.Empty(t, got.Search(context.Background(), tools.MCPSearchOptions{Query: "anything", MaxResults: 5}))
 }

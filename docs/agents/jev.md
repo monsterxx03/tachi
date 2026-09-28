@@ -219,7 +219,12 @@ neither of the two things it is tempting to blame instead:**
 - **Not the request shape.** The same (query, tool) asked solo, against its own server, in one
   184-question request, and in production's chunks scored within 0.02 of one another
   (`TestToolSearchShapeProbe`). A fixture-swept threshold is shape-portable; the gate's own batching
-  is never why a number moved.
+  is never why a number moved. **Narrowing a search to one server is that same case, not a
+  re-sweep**: the search tool's `server` argument removes candidates instead of rewording a
+  question — 「against its own server」 above is literally one of the four forms compared — so it is
+  a cost lever (one candidate is one question, and a full pool is one request per hundred of them)
+  rather than a different question. That is also why the narrowed search logs its scope
+  (`logAnswers` carries `server`) and answers nothing from outside it.
 - **It IS the tool texts.** Intents of the same style scored 0.70–0.94 against the 22-tool
   hand-written fixture and a median of 0.36 against a real pool (per-request best expectation: p10
   0.15, p90 0.74), and the fixture's clean corridor is gone. Real descriptions are written for

@@ -7,14 +7,25 @@ import (
 	"testing"
 )
 
-// stubSearcher implements MCPSearcher for testing.
+// stubSearcher implements MCPSearcher for testing. It deliberately does NOT
+// implement MCPServerLister: that is the "a searcher which cannot name its
+// servers" case, where a `server` argument is passed through unvalidated.
 type stubSearcher struct {
 	results []MCPSearchResultItem
 }
 
-func (s *stubSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
+func (s *stubSearcher) Search(_ context.Context, opts MCPSearchOptions) []MCPSearchResultItem {
 	return s.results
 }
+
+// listerSearcher is the shape both real searchers have: it can name its
+// servers, so the tool rejects an unknown `server` instead of searching nothing.
+type listerSearcher struct {
+	stubSearcher
+	servers []string
+}
+
+func (s *listerSearcher) Servers() []string { return s.servers }
 
 // stubTracker implements MCPSearchTracker for testing. It also implements
 // MCPSearchTrackerProvider, returning itself for any session ID — callers
@@ -55,6 +66,16 @@ func TestMCPSearchToolsTool_Properties(t *testing.T) {
 	}
 	if _, ok := props["max_results"]; !ok {
 		t.Error("expected max_results property")
+	}
+	// server is the narrowing argument; its values are dynamic (a server can
+	// connect mid-session), so it is a plain string and must never be required.
+	if _, ok := props["server"]; !ok {
+		t.Error("expected server property")
+	}
+	for _, name := range tool.Required() {
+		if name == "server" {
+			t.Error("server must stay optional: a search without it is the whole pool")
+		}
 	}
 }
 
@@ -282,14 +303,15 @@ func TestIsMCPSearchTool(t *testing.T) {
 	}
 }
 
-// recordingSearcher records the maxResults it was called with, for clamping tests.
+// recordingSearcher records the request it was called with, for clamping and
+// parameter-passing tests.
 type recordingSearcher struct {
-	lastMaxResults int
-	results        []MCPSearchResultItem
+	lastOpts MCPSearchOptions
+	results  []MCPSearchResultItem
 }
 
-func (s *recordingSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
-	s.lastMaxResults = maxResults
+func (s *recordingSearcher) Search(_ context.Context, opts MCPSearchOptions) []MCPSearchResultItem {
+	s.lastOpts = opts
 	return s.results
 }
 
@@ -301,24 +323,121 @@ func TestMCPSearchToolsTool_MaxResultsClamped(t *testing.T) {
 	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": 500}`); err != nil {
 		t.Fatalf("ExecuteContext failed: %v", err)
 	}
-	if searcher.lastMaxResults != 20 {
-		t.Errorf("expected max_results clamped to 20, got %d", searcher.lastMaxResults)
+	if searcher.lastOpts.MaxResults != 20 {
+		t.Errorf("expected max_results clamped to 20, got %d", searcher.lastOpts.MaxResults)
 	}
 
 	// <= 0 resets to the default 5.
 	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": -1}`); err != nil {
 		t.Fatalf("ExecuteContext failed: %v", err)
 	}
-	if searcher.lastMaxResults != 5 {
-		t.Errorf("expected max_results default 5 for <= 0, got %d", searcher.lastMaxResults)
+	if searcher.lastOpts.MaxResults != 5 {
+		t.Errorf("expected max_results default 5 for <= 0, got %d", searcher.lastOpts.MaxResults)
 	}
 
 	// In-range values pass through.
 	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": 7}`); err != nil {
 		t.Fatalf("ExecuteContext failed: %v", err)
 	}
-	if searcher.lastMaxResults != 7 {
-		t.Errorf("expected max_results 7 passed through, got %d", searcher.lastMaxResults)
+	if searcher.lastOpts.MaxResults != 7 {
+		t.Errorf("expected max_results 7 passed through, got %d", searcher.lastOpts.MaxResults)
+	}
+}
+
+// The server the model writes is normalized before it reaches the searcher —
+// "mcp__GITHUB" and " github " are the same server as "github" — because the
+// spelling in the reminder block and the spelling in a tool name are both things
+// it can copy.
+func TestMCPSearchToolsTool_ServerReachesTheSearcherNormalized(t *testing.T) {
+	searcher := &recordingSearcher{}
+	tool := NewMCPSearchToolsTool(searcher, &stubTracker{})
+
+	for _, written := range []string{"github", "mcp__github", " GITHUB ", "mcp__GITHUB"} {
+		args := `{"query": "find a story", "server": "` + written + `"}`
+		if _, err := tool.ExecuteContext(context.TODO(), args); err != nil {
+			t.Fatalf("server %q rejected: %v", written, err)
+		}
+		if searcher.lastOpts.Server != "github" {
+			t.Errorf("server %q normalized to %q, want github", written, searcher.lastOpts.Server)
+		}
+	}
+
+	// No server at all is not a server named "": the whole pool is searched.
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "find a story"}`); err != nil {
+		t.Fatalf("ExecuteContext failed: %v", err)
+	}
+	if searcher.lastOpts.Server != "" {
+		t.Errorf("expected an empty server, got %q", searcher.lastOpts.Server)
+	}
+}
+
+// An unknown server is an error naming the ones that exist. A search over an
+// empty candidate set would answer exactly like "no tool matches", and a model
+// that reads it that way stops trying instead of fixing the name.
+func TestMCPSearchToolsTool_UnknownServerIsRejectedWithTheList(t *testing.T) {
+	tool := NewMCPSearchToolsTool(
+		&listerSearcher{servers: []string{"alpha", "beta"}},
+		&stubTracker{},
+	)
+
+	output, err := tool.ExecuteContext(context.TODO(), `{"query": "find a story", "server": "jira"}`)
+	if err == nil {
+		t.Fatalf("expected an error, got output %s", output)
+	}
+	if !strings.Contains(err.Error(), `"jira"`) {
+		t.Errorf("the message must quote back what the model wrote, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "alpha, beta") {
+		t.Errorf("the message must carry the names that DO exist, got %q", err)
+	}
+
+	// A listed server (any casing, with or without the prefix) still goes through.
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "find a story", "server": "mcp__Beta"}`); err != nil {
+		t.Fatalf("a connected server must be accepted: %v", err)
+	}
+}
+
+// Nothing connected yet is its own answer: the name may well be right, there is
+// simply nothing to search, and the model should retry without the parameter.
+func TestMCPSearchToolsTool_ServerBeforeAnyConnection(t *testing.T) {
+	tool := NewMCPSearchToolsTool(&listerSearcher{}, &stubTracker{})
+
+	_, err := tool.ExecuteContext(context.TODO(), `{"query": "find a story", "server": "github"}`)
+	if err == nil {
+		t.Fatal("expected an error while no server is connected")
+	}
+	if !strings.Contains(err.Error(), "no MCP server is connected") {
+		t.Errorf("unexpected message: %v", err)
+	}
+}
+
+// A searcher that cannot name its servers does not validate: the search goes
+// through and an unknown name matches nothing, which is the behaviour every
+// caller had before the parameter existed.
+func TestMCPSearchToolsTool_ServerPassedThroughWithoutALister(t *testing.T) {
+	searcher := &recordingSearcher{}
+	tool := NewMCPSearchToolsTool(searcher, &stubTracker{})
+
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "find a story", "server": "jira"}`); err != nil {
+		t.Fatalf("an unlistable searcher must not reject a server: %v", err)
+	}
+	if searcher.lastOpts.Server != "jira" {
+		t.Errorf("expected the server passed through, got %q", searcher.lastOpts.Server)
+	}
+}
+
+func TestNormalizeMCPServer(t *testing.T) {
+	for written, want := range map[string]string{
+		"github":      "github",
+		"mcp__github": "github",
+		"  GITHUB  ":  "github",
+		"MCP__GitLab": "gitlab", // the prefix itself is matched case-insensitively
+		"":            "",
+		"   ":         "",
+	} {
+		if got := NormalizeMCPServer(written); got != want {
+			t.Errorf("NormalizeMCPServer(%q) = %q, want %q", written, got, want)
+		}
 	}
 }
 
@@ -346,8 +465,8 @@ type queryFilterSearcher struct {
 	results []MCPSearchResultItem
 }
 
-func (s *queryFilterSearcher) Search(_ context.Context, query string, maxResults int) []MCPSearchResultItem {
-	sel, ok := strings.CutPrefix(query, "select:")
+func (s *queryFilterSearcher) Search(_ context.Context, opts MCPSearchOptions) []MCPSearchResultItem {
+	sel, ok := strings.CutPrefix(opts.Query, "select:")
 	if !ok {
 		return s.results
 	}

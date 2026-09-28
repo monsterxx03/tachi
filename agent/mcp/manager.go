@@ -418,7 +418,7 @@ func (m *Manager) restoreDiscoveredFromDisk(ctx context.Context, set *Discovered
 // SetFor / backfillAutoLoadIntoSets).
 func (m *Manager) serverStillConfigured(toolName string) bool {
 	for server := range m.serverCfgs {
-		if strings.HasPrefix(toolName, "mcp__"+server+"__") {
+		if strings.HasPrefix(toolName, tools.MCPServerPrefix+server+"__") {
 			return true
 		}
 	}

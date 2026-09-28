@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -309,6 +311,87 @@ func TestSearch_MaxResultsRespected(t *testing.T) {
 
 	results := p.Search("mcp__pg", 1)
 	assert.Equal(t, 1, len(results))
+}
+
+// ---------------------------------------------------------------------------
+// DeferredPool — narrowing a search to one server (SearchIn / Servers)
+// ---------------------------------------------------------------------------
+
+func TestDeferredPool_Servers(t *testing.T) {
+	p := NewDeferredPool()
+	assert.Empty(t, p.Servers())
+
+	p.Add(testDeferredTool("mcp__pg__query", "pg", ""))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", ""))
+	p.Add(testDeferredTool("mcp__pg__list", "pg", ""))
+
+	assert.Equal(t, []string{"gh", "pg"}, p.Servers(), "distinct, sorted")
+}
+
+// The keyword half searches the named server's tools only — that narrowing is
+// what the parameter is for: whatever matcher sits behind it pays per candidate.
+func TestDeferredPool_SearchIn_NarrowsKeywords(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", "Execute SQL queries"))
+	p.Add(testDeferredTool("mcp__gh__query", "gh", "Query GitHub"))
+
+	// Both tools match the keyword on their own.
+	require.Len(t, p.Search("query", 5), 2)
+
+	results := p.SearchIn("query", "pg", 5)
+	require.Len(t, results, 1)
+	assert.Equal(t, "mcp__pg__query", results[0].Name)
+
+	// Case-insensitive: the name is the model's spelling, the ServerName the
+	// config's.
+	assert.Len(t, p.SearchIn("query", "PG", 5), 1)
+
+	// An unknown server has no candidates, and never another server's.
+	assert.Empty(t, p.SearchIn("query", "jira", 5))
+}
+
+// A query that NAMES what it wants is resolved against the whole pool: a name is
+// an identity, and a mis-remembered server must not turn a hit into a miss.
+func TestDeferredPool_SearchIn_NamesStayGlobal(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", ""))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", ""))
+
+	for _, query := range []string{"select:mcp__gh__pr", "mcp__gh__pr", "mcp__gh"} {
+		results := p.SearchIn(query, "pg", 5)
+		require.Len(t, results, 1, "query %q", query)
+		assert.Equal(t, "mcp__gh__pr", results[0].Name)
+	}
+}
+
+// An empty query is a listing, and a listing narrowed to a server is that
+// server's tools — not the whole pool's first page.
+func TestDeferredPool_SearchIn_EmptyQueryListsThatServer(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", ""))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", ""))
+
+	results := p.SearchIn("", "pg", 5)
+	require.Len(t, results, 1)
+	assert.Equal(t, "mcp__pg__query", results[0].Name)
+}
+
+// No server is the pool's own search, unchanged — which is the behaviour every
+// caller had before the parameter existed.
+func TestDeferredPool_SearchIn_NoServerIsSearch(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", "Execute SQL queries"))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", "Create pull requests"))
+
+	assert.Equal(t, p.Search("query", 5), p.SearchIn("query", "", 5))
+}
+
+// A nil pool is "no MCP tools yet" — the search tool is registered before the
+// servers connect, so this window must answer empty rather than panic.
+func TestPoolSearcher_NilPool(t *testing.T) {
+	s := NewPoolSearcher(nil)
+	assert.Nil(t, s.Servers())
+	assert.Empty(t, s.Search(context.Background(), tools.MCPSearchOptions{Query: "anything", MaxResults: 5}))
 }
 
 // TestSearch_AcronymQuery_Regression verifies that all-uppercase acronyms like "SQL"

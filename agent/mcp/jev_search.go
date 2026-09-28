@@ -30,7 +30,9 @@ import (
 //     noul question ("can this tool carry the request out directly?"), all
 //     sharing the query as the one state. The wording lives in
 //     agent/mcp/jevsearch, which is also what the case file that produced the
-//     threshold was generated from;
+//     threshold was generated from. The candidates are the tools of ONE server
+//     when the caller named one (opts.Server) and the whole pool otherwise —
+//     that is the cost lever, not a different question;
 //   - answers at or above the threshold are ranked by probability (ties by
 //     name, so a result is reproducible) and cut to max_results.
 //
@@ -111,22 +113,31 @@ func NewJevSearcher(pool *DeferredPool, judge Judge, cfg *config.Config, thresho
 
 // Search answers with the tools the query is about: the exact-name path as it
 // was, then the judgment, then (on any failure) the keyword path.
-func (s *JevSearcher) Search(ctx context.Context, query string, maxResults int) []tools.MCPSearchResultItem {
-	if exact, ok := s.pool.SearchExact(query, maxResults); ok {
+//
+// A narrowed request (opts.Server) costs less and asks a different question
+// than a full-pool one: the judgment only sees that server's tools, so its
+// answers are a verdict about THAT candidate set. The exact-name half is still
+// resolved against the whole pool (see DeferredPool.SearchIn).
+func (s *JevSearcher) Search(ctx context.Context, opts tools.MCPSearchOptions) []tools.MCPSearchResultItem {
+	if exact, ok := s.pool.SearchExact(opts.Query, opts.MaxResults); ok {
 		return exact
 	}
-	results, err := s.judgeQuery(ctx, query, clampMaxResults(maxResults))
+	results, err := s.judgeQuery(ctx, opts)
 	if err != nil {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev tool search failed, using keyword search",
-			"err", err, "query", strutil.Truncate(query, 120))
+			"err", err, "query", strutil.Truncate(opts.Query, 120), "server", opts.Server)
 		s.degraded.Store(true)
 		if s.OnDegrade != nil {
 			s.OnDegrade(err)
 		}
-		return s.pool.Search(query, maxResults)
+		return s.pool.SearchIn(opts.Query, opts.Server, opts.MaxResults)
 	}
 	return results
 }
+
+// Servers is the pool's server list (tools.MCPServerLister), so the search tool
+// can reject an unknown `server` by name before anything is judged.
+func (s *JevSearcher) Servers() []string { return s.pool.Servers() }
 
 // SearchAdvice tells the model how to write a query: a sentence while the
 // judgment is serving, the keywords a keyword search can match once it is not.
@@ -142,20 +153,20 @@ func (s *JevSearcher) SearchAdvice() string {
 // judgeQuery asks the judgment for every candidate tool and returns the ones it
 // cleared the threshold on. An error means "no judgment available" — the caller
 // degrades rather than passing a partial set off as an answer.
-func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults int) ([]SearchResult, error) {
+func (s *JevSearcher) judgeQuery(ctx context.Context, opts tools.MCPSearchOptions) ([]SearchResult, error) {
 	if s.judge == nil {
 		return nil, errors.New("jev: no judge configured")
 	}
 	// Sorted by name: the snapshot's order is a map's, and chunk boundaries and
 	// probability ties must not move between two searches of the same pool.
-	all := s.pool.snapshot()
+	all := s.pool.snapshotFor(opts.Server)
 	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
 	if len(all) == 0 {
 		return nil, nil
 	}
 	if extra := len(all) - jevSearchMaxQuestions; extra > 0 {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev tool search judged only part of the pool",
-			"judged", jevSearchMaxQuestions, "skipped", extra)
+			"server", opts.Server, "judged", jevSearchMaxQuestions, "skipped", extra)
 		all = all[:jevSearchMaxQuestions]
 	}
 
@@ -170,11 +181,11 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 		for _, t := range all[start:end] {
 			questions[t.Name] = jevsearch.Question(candidateOf(t))
 		}
-		resp, err := s.judge.Evaluate(ctx, query, questions)
+		resp, err := s.judge.Evaluate(ctx, opts.Query, questions)
 		if err != nil {
 			return nil, err
 		}
-		s.logAnswers(ctx, query, all[start:end], resp, start/jevSearchQuestionsPerChunk+1, chunks)
+		s.logAnswers(ctx, opts.Query, opts.Server, all[start:end], resp, start/jevSearchQuestionsPerChunk+1, chunks)
 		s.recordUsage(ctx, resp)
 		for _, t := range all[start:end] {
 			// A question the service did not answer is NOT a zero: it is no
@@ -212,7 +223,7 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 		}
 		return hits[i].tool.Name < hits[j].tool.Name
 	})
-	n := min(len(hits), maxResults)
+	n := min(len(hits), clampMaxResults(opts.MaxResults))
 	out := make([]SearchResult, 0, n)
 	for _, h := range hits[:n] {
 		out = append(out, s.pool.toResult(h.tool))
@@ -227,13 +238,16 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, query string, maxResults i
 // reading this log — who scored near the cut-off, and which question came back
 // empty — and a handler printing a 100-entry map would interleave it with the
 // metadata. The metadata goes first, the list last, so the tail can be as long
-// as the pool needs.
-func (s *JevSearcher) logAnswers(ctx context.Context, query string, judged []*DeferredTool, resp *jev.Response, chunk, chunks int) {
+// as the pool needs. server is logged because it is what the answer is ABOUT:
+// the same query judged against a narrowed candidate set is a different
+// question, and a probability without it cannot be compared to anything.
+func (s *JevSearcher) logAnswers(ctx context.Context, query, server string, judged []*DeferredTool, resp *jev.Response, chunk, chunks int) {
 	if resp == nil {
 		return
 	}
 	logger.FromContext(ctx).Info(ctx, "MCP: jev tool search judged tools",
 		"query", strutil.Truncate(query, 120),
+		"server", server,
 		"model", resp.Model,
 		"chunk", strconv.Itoa(chunk)+"/"+strconv.Itoa(chunks),
 		"questions", len(judged),
