@@ -217,7 +217,7 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, opts tools.MCPSearchOption
 	n := min(len(hits), clampMaxResults(opts.MaxResults))
 	out := make([]SearchResult, 0, n)
 	for _, h := range hits[:n] {
-		out = append(out, s.pool.toResult(h.tool))
+		out = append(out, s.pool.matchedResult(h.tool, tools.MatchByJudgment, h.p))
 	}
 	return out, nil
 }

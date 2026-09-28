@@ -98,14 +98,8 @@ func TestMCPSearchToolsTool_Execute_Success(t *testing.T) {
 	tool := NewMCPSearchToolsTool(
 		&stubSearcher{
 			results: []MCPSearchResultItem{
-				{
-					Name:        "mcp__pg__query",
-					Description: "Query a PostgreSQL database",
-				},
-				{
-					Name:        "mcp__pg__list_tables",
-					Description: "List all tables",
-				},
+				{Name: "mcp__pg__query"},
+				{Name: "mcp__pg__list_tables"},
 			},
 		},
 		&stubTracker{},
@@ -129,16 +123,21 @@ func TestMCPSearchToolsTool_Execute_Success(t *testing.T) {
 		t.Fatalf("expected 2 matches, got %d", len(matches))
 	}
 
-	// Check tool_definitions are included
-	toolDefs, ok := result["tool_definitions"].(map[string]any)
-	if !ok {
-		t.Fatal("expected tool_definitions map")
+	// The result is a MENU: names (and how they matched), nothing else. The
+	// description and the parameter schema would be a second copy of what the
+	// next request's tool list carries from the pool — pinned as an ABSENCE,
+	// because re-adding either is a payload doubling that looks harmless.
+	for _, m := range matches {
+		entry := m.(map[string]any)
+		if _, ok := entry["description"]; ok {
+			t.Errorf("result must not carry a description: %v", entry)
+		}
+		if _, ok := entry["schema"]; ok {
+			t.Errorf("result must not carry a schema: %v", entry)
+		}
 	}
-	if _, ok := toolDefs["mcp__pg__query"]; !ok {
-		t.Error("expected mcp__pg__query in tool_definitions")
-	}
-	if _, ok := toolDefs["mcp__pg__list_tables"]; !ok {
-		t.Error("expected mcp__pg__list_tables in tool_definitions")
+	if _, ok := result["tool_definitions"]; ok {
+		t.Error("tool_definitions must be gone: the schema arrives with the next request's tool list")
 	}
 }
 
@@ -147,7 +146,7 @@ func TestMCPSearchToolsTool_Execute_TrackerCalled(t *testing.T) {
 	tool := NewMCPSearchToolsTool(
 		&stubSearcher{
 			results: []MCPSearchResultItem{
-				{Name: "mcp__pg__query", Description: "Query DB"},
+				{Name: "mcp__pg__query"},
 			},
 		},
 		tracker,
@@ -184,9 +183,9 @@ func TestMCPSearchToolsTool_Execute_EmptyResults(t *testing.T) {
 		t.Errorf("expected 0 matches, got %d", len(matches))
 	}
 
-	total, _ := result["total_deferred_tools"].(float64)
-	if total != 0 {
-		t.Errorf("expected total_deferred_tools=0, got %v", total)
+	// Nothing but the match list: no echoed query, no count of the pool.
+	if len(result) != 1 {
+		t.Errorf("expected only `matches` in the output, got %v", result)
 	}
 }
 
@@ -231,51 +230,71 @@ func TestMCPSearchToolsTool_Execute_DefaultMaxResults(t *testing.T) {
 		t.Fatalf("failed to parse output JSON: %v", err)
 	}
 	// Just verify it doesn't crash — default max_results=5 is handled by searcher
-	if _, ok := result["query"]; !ok {
-		t.Error("expected query in output")
+	if _, ok := result["matches"]; !ok {
+		t.Error("expected matches in output")
 	}
 }
 
-func TestMCPSearchToolsTool_SchemaToPropsJSON(t *testing.T) {
-	props := map[string]PropertySchema{
-		"name": {
-			Type:        "string",
-			Description: "Name field",
-			Items:       nil,
-		},
-		"count": {
-			Type:        "integer",
-			Description: "Count field",
-			Items:       map[string]any{"type": "number"},
-		},
-		"untyped": {
-			Description: "no type keyword",
-		},
+// A result carries how it was found, and the score only where a matcher
+// produced one: a tool resolved BY NAME was not ranked, and a 0 next to it would
+// read as "matched terribly". The `matched_by` label is what makes the number
+// interpretable — a Jev probability and a BM25 score are different quantities.
+func TestMCPSearchToolsTool_ResultCarriesTheMatchProvenance(t *testing.T) {
+	tool := NewMCPSearchToolsTool(
+		&stubSearcher{results: []MCPSearchResultItem{
+			{Name: "mcp__pg__query", MatchedBy: MatchByJudgment, Score: 0.9123},
+			{Name: "mcp__pg__list", MatchedBy: MatchByKeywords, Score: 7.4182},
+			{Name: "mcp__gh__pr", MatchedBy: MatchByName},
+			// A searcher that reports nothing stays renderable: no label, no score.
+			{Name: "mcp__gh__issue"},
+		}},
+		&stubTracker{},
+	)
+
+	output, err := tool.ExecuteContext(t.Context(), `{"query": "database"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("failed to parse output JSON: %v", err)
+	}
+	if len(result.Matches) != 4 {
+		t.Fatalf("expected 4 matches, got %d", len(result.Matches))
 	}
 
-	result := schemaToPropsJSON(props)
-	if _, ok := result["name"]; !ok {
-		t.Error("expected name in result")
+	judged := result.Matches[0]
+	if judged["matched_by"] != MatchByJudgment {
+		t.Errorf("judgment result matched_by = %v", judged["matched_by"])
 	}
-	nameMap := result["name"].(map[string]any)
-	if nameMap["type"] != "string" {
-		t.Errorf("expected type string, got %v", nameMap["type"])
-	}
-	if nameMap["description"] != "Name field" {
-		t.Errorf("expected 'Name field', got %v", nameMap["description"])
+	if judged["score"] != 0.912 {
+		t.Errorf("judgment score = %v, want 0.912 (three decimals, like the judgment's own log line)", judged["score"])
 	}
 
-	// Items should be included when present
-	countMap := result["count"].(map[string]any)
-	if countMap["items"] == nil {
-		t.Error("expected items for count property")
+	keywords := result.Matches[1]
+	if keywords["matched_by"] != MatchByKeywords {
+		t.Errorf("keyword result matched_by = %v", keywords["matched_by"])
+	}
+	if keywords["score"] != 7.418 {
+		t.Errorf("keyword score = %v, want 7.418", keywords["score"])
 	}
 
-	// A typeless property must not report "type": "" — the schema shown to the
-	// model has to match what the API request will carry.
-	untypedMap := result["untyped"].(map[string]any)
-	if _, ok := untypedMap["type"]; ok {
-		t.Errorf("expected no type key for a typeless property, got %v", untypedMap)
+	byName := result.Matches[2]
+	if byName["matched_by"] != MatchByName {
+		t.Errorf("name result matched_by = %v", byName["matched_by"])
+	}
+	if _, ok := byName["score"]; ok {
+		t.Errorf("a lookup is not ranked: expected no score, got %v", byName["score"])
+	}
+
+	unreported := result.Matches[3]
+	if _, ok := unreported["score"]; ok {
+		t.Errorf("expected no score when the searcher reports none, got %v", unreported["score"])
+	}
+	if _, ok := unreported["matched_by"]; ok {
+		t.Errorf("expected no label when the searcher reports none, got %v", unreported["matched_by"])
 	}
 }
 
@@ -487,8 +506,8 @@ func TestMCPSearchToolsTool_Execute_SessionRouting(t *testing.T) {
 		"sess-b": {},
 	}}
 	searcher := &queryFilterSearcher{results: []MCPSearchResultItem{
-		{Name: "mcp__pg__query", Description: "Query DB"},
-		{Name: "mcp__pg__list", Description: "List tables"},
+		{Name: "mcp__pg__query"},
+		{Name: "mcp__pg__list"},
 	}}
 	tool := NewMCPSearchToolsTool(searcher, provider)
 

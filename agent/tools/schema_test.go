@@ -150,17 +150,3 @@ func TestSubagentToolSchemaAllowedToolsEmptyEnum(t *testing.T) {
 	_, hasEnum := items["enum"]
 	assert.False(t, hasEnum, "empty tool list must not produce an enum key")
 }
-
-func TestSchemaToPropsJSONPassthrough(t *testing.T) {
-	max := 42.0
-	props := map[string]PropertySchema{
-		"mode":  {Type: "string", Description: "mode", Enum: []string{"a", "b"}, Default: "a"},
-		"count": {Type: "integer", Description: "count", Minimum: new(1.0), Maximum: &max},
-	}
-
-	out := schemaToPropsJSON(props)
-	assert.Equal(t, []string{"a", "b"}, out["mode"].(map[string]any)["enum"])
-	assert.Equal(t, "a", out["mode"].(map[string]any)["default"])
-	assert.Equal(t, 1.0, out["count"].(map[string]any)["minimum"])
-	assert.Equal(t, 42.0, out["count"].(map[string]any)["maximum"])
-}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/monsterxx03/tachi/pkg/fileutil"
@@ -17,11 +18,25 @@ const ToolNameMCPSearchTools = "MCPSearchTools"
 // out-of-range value can never fan out an unbounded search.
 const maxMCPSearchMaxResults = 20
 
-// MCPSearchResult holds a single tool search result.
-// The Schema is serialized as JSON for the LLM to read.
+// MCPSearchResult holds a single tool search result, as the MODEL reads it.
+//
+// It is deliberately a MENU — the name of a tool that exists, and how strongly
+// it matched. It carries no description and no parameter schema, because
+// neither would be new information: the discovered tools are admitted into the
+// NEXT request's tool list with their full schema from the pool
+// (`filterActiveSchemas`), and a call resolves the tool from that same pool
+// (`lazyRegisterMCPTool`). Rendering the definitions here too put a verbatim
+// second copy of them in the transcript — measured at ~2.7 KB per search, half
+// the payload, paid again in every later request's history.
+//
+// Score and MatchedBy describe HOW the tool was found. They are a pair on
+// purpose: 0.21 (a Jev probability) and 3.7 (a BM25 score) are different
+// quantities, so a bare number would invite a comparison across searches that
+// means nothing. A tool found BY NAME carries neither — a lookup is not ranked.
 type MCPSearchResult struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name      string   `json:"name"`
+	MatchedBy string   `json:"matched_by,omitempty"`
+	Score     *float64 `json:"score,omitempty"`
 }
 
 // MCPSearchOptions is one search request: what is being asked, which candidates
@@ -45,12 +60,35 @@ type MCPSearchOptions struct {
 	MaxResults int
 }
 
+// What produced a result, i.e. what its Score MEANS. The searcher sets it, so a
+// search that degraded mid-way says "keywords" for the results it produced that
+// way — the label cannot drift from the matcher that actually ran.
+const (
+	// MatchByName: an exact/suffix name, a `select:` list, an `mcp__server`
+	// prefix or the empty-query listing. A lookup, never ranked: Score is unused.
+	MatchByName = "name"
+	// MatchByJudgment: the Jev gate. Score is a noul probability in [0,1], and
+	// every result already cleared the configured threshold.
+	MatchByJudgment = "judgment"
+	// MatchByKeywords: BM25. Score is an unbounded relevance number, comparable
+	// within one search and meaningless outside it.
+	MatchByKeywords = "keywords"
+)
+
 // MCPSearchResultItem is a raw search result from the pool.
 // Defined here to avoid circular dependency; the pool converts to this.
+//
+// It carries no Schema: the item used to feed a `tool_definitions` block in the
+// result, and that block is gone (see MCPSearchResult) — the schema a call needs
+// comes from the pool, on the next request's tool list and again at call time.
 type MCPSearchResultItem struct {
-	Name        string
-	Description string
-	Schema      Schema
+	Name string
+	// MatchedBy is one of the MatchBy* constants ("" from a searcher that does
+	// not report it, which renders as a result with no score at all).
+	MatchedBy string
+	// Score is the matcher's own number; meaningful only when MatchedBy says
+	// which matcher it came from (see MatchByName).
+	Score float64
 }
 
 // MCPServerLister is an optional MCPSearcher method: the MCP servers the
@@ -95,6 +133,14 @@ const (
 type MCPSearchAdvice interface {
 	SearchAdvice() string
 }
+
+// ScoreAdvice frames the numbers a result carries, in one clause: the tool
+// schemas ride on EVERY request (and were just trimmed for exactly that
+// reason), so it earns its tokens only if it stops the one misreading that
+// matters — the cut-off already said yes, so a low score is a weak match, not a
+// wrong tool, and a model that reads it as a verdict drops the marginal tool the
+// threshold was swept to include and spends a turn searching again.
+const ScoreAdvice = "A result's `score` (with `matched_by`) is relative strength, not a verdict — every result already passed the cut-off."
 
 // MCPSearcher is the interface for searching deferred MCP tools.
 // Implemented by mcp.PoolSearcher and mcp.JevSearcher.
@@ -164,8 +210,8 @@ func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 		},
 		"server": {
 			Type: "string",
-			Description: "Optional. Search only this server's tools, named as the deferred-tools " +
-				"block lists it (e.g. \"github\"; an \"mcp__\" prefix is accepted). A tool you NAME " +
+			Description: "Optional. Search only this server's tools, named exactly as the deferred-tools " +
+				"block lists them (the \"mcp__\" prefix is optional). A tool you NAME " +
 				"is still resolved against every server.",
 		},
 		"max_results": {
@@ -184,11 +230,18 @@ func (t *MCPSearchToolsTool) Required() []string {
 
 func (t *MCPSearchToolsTool) Parallel() bool { return true }
 
+// mcpSearchOutput is the whole result the model reads: a list of matches and
+// nothing else.
+//
+// It used to echo the caller's `query` back and carry a `total_deferred_tools`
+// count — both were dropped. The query is the model's OWN text from the previous
+// message (a parallel search is still unambiguous, since each result is attached
+// to its call by tool_call_id), and the count was `len(matches)` under a name
+// that claimed to describe the POOL — the array already says how many there are,
+// and how much the pool holds is the reminder block's line, which knows the
+// difference between total and still-undiscovered.
 type mcpSearchOutput struct {
-	Matches  []MCPSearchResult `json:"matches"`
-	Query    string            `json:"query"`
-	Total    int               `json:"total_deferred_tools"`
-	ToolDefs map[string]any    `json:"tool_definitions,omitempty"`
+	Matches []MCPSearchResult `json:"matches"`
 }
 
 func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (string, error) {
@@ -230,39 +283,34 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	sid := SessionIDFromCtx(ctx)
 	tracker := t.provider.TrackerFor(sid)
 
-	// Mark matched tools as discovered in the active session's set
-	toolDefs := make(map[string]any)
+	// Mark matched tools as discovered in the active session's set. That is what
+	// makes them appear — with their full schema, taken from the pool — in the
+	// NEXT request's tool list (see mcpSearchOutput), so this loop is the whole
+	// "loading" step: nothing is rendered here beyond the names.
 	for _, r := range results {
 		if tracker != nil {
 			tracker.Add(r.Name)
 		}
-
-		// Build a JSON-friendly tool definition for the LLM
-		toolDefs[r.Name] = map[string]any{
-			"description": r.Description,
-			"parameters": map[string]any{
-				"type":       r.Schema.Parameters.Type,
-				"properties": schemaToPropsJSON(r.Schema.Parameters.Properties),
-				"required":   r.Schema.Parameters.Required,
-			},
-		}
 	}
 
-	// Build search result metadata
+	// Build search result metadata. Score rides with its provenance: it is
+	// emitted only when a matcher produced the result (a tool found by NAME was
+	// not ranked, and a 0 there would read as "matched terribly"), and rounded
+	// to three decimals — the same precision the judgment's own log line uses,
+	// because anything finer is false precision on a probability.
 	meta := make([]MCPSearchResult, len(results))
 	for i, r := range results {
 		meta[i] = MCPSearchResult{
-			Name:        r.Name,
-			Description: r.Description,
+			Name:      r.Name,
+			MatchedBy: r.MatchedBy,
+		}
+		if r.MatchedBy != "" && r.MatchedBy != MatchByName {
+			score := math.Round(r.Score*1000) / 1000
+			meta[i].Score = &score
 		}
 	}
 
-	output := mcpSearchOutput{
-		Matches:  meta,
-		Query:    params.Query,
-		Total:    len(meta),
-		ToolDefs: toolDefs,
-	}
+	output := mcpSearchOutput{Matches: meta}
 
 	b, err := fileutil.MarshalJSON(output)
 	if err != nil {
@@ -303,43 +351,6 @@ func (t *MCPSearchToolsTool) checkServer(server, asWritten string) error {
 	}
 	return fmt.Errorf("unknown MCP server %q; the connected MCP servers are: %s",
 		asWritten, strings.Join(known, ", "))
-}
-
-// schemaToPropsJSON converts PropertySchema map to JSON-compatible map.
-// A property with no usable type is emitted without the keyword — the tool
-// search result must describe the same schema the API request will carry, and
-// "type": "" is not valid JSON Schema.
-func schemaToPropsJSON(props map[string]PropertySchema) map[string]any {
-	result := make(map[string]any, len(props))
-	for name, prop := range props {
-		p := map[string]any{}
-		if prop.Type != "" {
-			p["type"] = prop.Type
-		}
-		if prop.Description != "" {
-			p["description"] = prop.Description
-		}
-		if len(prop.Enum) > 0 {
-			p["enum"] = prop.Enum
-		}
-		if prop.Format != "" {
-			p["format"] = prop.Format
-		}
-		if prop.Minimum != nil {
-			p["minimum"] = *prop.Minimum
-		}
-		if prop.Maximum != nil {
-			p["maximum"] = *prop.Maximum
-		}
-		if prop.Default != nil {
-			p["default"] = prop.Default
-		}
-		if prop.Items != nil {
-			p["items"] = prop.Items
-		}
-		result[name] = p
-	}
-	return result
 }
 
 // IsMCPSchema returns true if the schema name is an MCP tool.

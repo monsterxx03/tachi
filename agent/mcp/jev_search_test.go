@@ -160,6 +160,30 @@ func TestJevSearcher_DegradedSearchStaysNarrowed(t *testing.T) {
 	assert.Equal(t, "mcp__gh__pr", got[0].Name)
 }
 
+// A hit from the judgment carries the probability it cleared the cut-off with,
+// labelled as the gate's — the tool renders that pair, so it must survive the
+// conversion rather than only reaching the log.
+func TestJevSearcher_ResultsCarryTheProbability(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+	)
+	judge := &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.8765}}
+	s := newTestSearcher(pool, judge, 0.35)
+
+	got := s.Search(context.Background(), tools.MCPSearchOptions{Query: "database query", MaxResults: 5})
+	require.Len(t, got, 1)
+	assert.Equal(t, tools.MatchByJudgment, got[0].MatchedBy)
+	assert.Equal(t, 0.8765, got[0].Score, "the raw probability; rounding is the tool's job")
+
+	// A degraded search is labelled by what actually ran, not by what was asked
+	// for: same seam as the advice and the reminder shape.
+	degraded := newTestSearcher(pool, &fakeJudge{err: errors.New("503 overloaded")}, 0.35)
+	got = degraded.Search(context.Background(), tools.MCPSearchOptions{Query: "database query", MaxResults: 5})
+	require.NotEmpty(t, got)
+	assert.Equal(t, tools.MatchByKeywords, got[0].MatchedBy)
+}
+
 // The searcher can name its servers — that is what the search tool answers an
 // unknown `server` with (tools.MCPServerLister).
 func TestJevSearcher_Servers(t *testing.T) {

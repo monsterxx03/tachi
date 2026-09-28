@@ -51,6 +51,16 @@ type DeferredToolTracker interface {
 	Contains(name string) bool
 }
 
+// serverLegend labels the lines that name a server, in both shapes of the block.
+//
+// It exists because those lines were read as anything but server names: a
+// per-server line ("mcp__github — 30 个工具（30 个未加载）：…") is indistinguishable
+// from a tool line, and the search tool's own description points here for its
+// `server` values — a pointer is useless if the thing it points at has no legend.
+// The legend names the parameter it feeds, because "server" alone could be about
+// anything in a block that also mentions MCP tools.
+const serverLegend = "可搜索的 MCP server（名字即 MCPSearchTools 的 server 参数，填上就只搜这一个）："
+
 // summaryLines renders the per-SERVER shape, or nil when the provider does not
 // offer one.
 //
@@ -75,7 +85,7 @@ func (r *DeferredToolReminder) summaryLines(all, undiscovered []DeferredToolReco
 	for _, t := range undiscovered {
 		remaining[serverOf(t.Name)]++
 	}
-	lines := make([]string, 0, len(summaries))
+	lines := []string{"  " + serverLegend}
 	var sources []string
 	for _, s := range summaries {
 		left := remaining[s.Server]
@@ -115,7 +125,8 @@ func serverOf(toolName string) string {
 
 // serverRoster lists, on one line, the servers that still hold undiscovered
 // tools — in the spelling the search tool's `server` parameter takes
-// (mcp__<server>).
+// (mcp__<server>). It is rendered UNDER serverLegend, like the per-server lines
+// of the other shape.
 //
 // A roster of ONE is not a choice, so it is not rendered: with a single server
 // the narrowing buys nothing and the prefix is already visible in every tool
@@ -138,7 +149,7 @@ func serverRoster(undiscovered []DeferredToolRecord) string {
 	for _, name := range names {
 		parts = append(parts, fmt.Sprintf("mcp__%s（%d）", name, counts[name]))
 	}
-	return "可搜索的 MCP server：" + strings.Join(parts, "、")
+	return strings.Join(parts, "、")
 }
 
 // DeferredToolReminder injects a deferred-tools block showing
@@ -242,11 +253,11 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	var lines []string
 	if lines = r.summaryLines(all, undiscovered); lines == nil {
 		// The keyword shape keeps the per-tool catalog — the NAMES are what a
-		// keyword search matches on — and gains one roster line, because the
+		// keyword search matches on — and gains the server roster, because the
 		// server rides inside every tool name and a reader that may narrow
 		// should not have to collect the names from fifty of them.
 		if roster := serverRoster(undiscovered); roster != "" {
-			lines = append(lines, "  "+roster, "")
+			lines = append(lines, "  "+serverLegend, "  "+roster, "")
 		}
 		for _, t := range undiscovered {
 			desc := strutil.FirstLineOrTruncate(t.Description, 100)

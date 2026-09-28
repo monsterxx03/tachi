@@ -367,6 +367,34 @@ func TestCollector_EmptyGenerate_NoBlock(t *testing.T) {
 	}
 }
 
+// The block's layout is the wire format the model and historyHasReminder read, so
+// the seams are pinned: one blank line BETWEEN contributions, none before the first
+// or after the last (a leading or trailing blank would be paid on every block for
+// nothing).
+func TestRenderPieces_SeparatesContributions(t *testing.T) {
+	got := RenderPieces([]Piece{
+		{Name: "a", Lines: []string{"Git status: clean"}},
+		{Name: "b", Lines: []string{"- Pprof debug server: http://x", "  更多"}},
+	})
+	want := "<system-reminder>\n" +
+		"Git status: clean\n" +
+		"\n" +
+		"- Pprof debug server: http://x\n" +
+		"  更多\n" +
+		"</system-reminder>\n"
+	if got != want {
+		t.Errorf("block layout changed\n got: %q\nwant: %q", got, want)
+	}
+
+	// A single piece is rendered exactly as before: the loop renders pieces ONE BY
+	// ONE to decide whether anything changed since its last injection
+	// (agent_config.go's injectedReminders), and that key must not grow a separator.
+	if got, want := RenderPieces([]Piece{{Name: "a", Lines: []string{"one"}}}),
+		"<system-reminder>\none\n</system-reminder>\n"; got != want {
+		t.Errorf("single piece changed\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestCollectPieces_RendersLikeCollect pins the two entry points together: the loop
 // uses the pieces (to tell what changed since its last injection), everyone else uses
 // the rendered string. If they ever disagree, the dedup would be comparing text the

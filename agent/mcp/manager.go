@@ -308,6 +308,17 @@ func (m *Manager) SetFor(sessionID string) *DiscoveredSet {
 // (the search tool then still returns results but does not persist them).
 // The explicit empty-ID check avoids boxing a typed nil into a non-nil
 // interface.
+//
+// A nil answer has a consequence beyond persistence, and it is worth knowing
+// about: the NEXT request's tool list is built from the same ID-keyed set
+// (AIAgent.filterActiveSchemas), so a run without a session ID — a
+// side-channel run: dream, /review, an ambient turn — never gets a found tool
+// into its tool list at all, while the search result carries names only (see
+// tools.MCPSearchResult). Such a run can still CALL the tool, because the
+// executor registers it from the pool on first use
+// (AIAgent.lazyRegisterMCPTool) — with no schema to check the arguments
+// against. Tool search inside a side-channel run is a known gap, not a
+// supported path.
 func (m *Manager) TrackerFor(sessionID string) tools.MCPSearchTracker {
 	if sessionID == "" {
 		return nil

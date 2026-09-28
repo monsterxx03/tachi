@@ -172,6 +172,14 @@ const (
 // RenderPieces wraps pieces into the single <system-reminder> block every consumer
 // expects. Empty input renders "", so "nothing to say" and "say nothing" stay the same
 // thing.
+//
+// Pieces are separated by one blank line. Without it the last line of one reminder
+// butts against the first line of the next — `Git status: clean` immediately followed
+// by `- Pprof debug server: …`, or a skill list followed by `Git branch: main` — and
+// two adjacent lists read as one block with a stray line in it. The separator is one
+// newline per reminder, and it costs nothing in cache terms: a block is stored as the
+// text that was SENT (session.MessageTypeReminder), so only the block being built now
+// renders differently, and that block is at the tail anyway.
 func RenderPieces(pieces []Piece) string {
 	if len(pieces) == 0 {
 		return ""
@@ -179,7 +187,10 @@ func RenderPieces(pieces []Piece) string {
 
 	var sb strings.Builder
 	sb.WriteString(ReminderBlockOpen + "\n")
-	for _, p := range pieces {
+	for i, p := range pieces {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
 		for _, line := range p.Lines {
 			sb.WriteString(line)
 			sb.WriteByte('\n')

@@ -314,6 +314,32 @@ func TestSearch_MaxResultsRespected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// DeferredPool — a result carries the matcher that produced it
+// ---------------------------------------------------------------------------
+
+// A keyword result carries the BM25 score that ranked it, labelled with the
+// matcher that produced it; a name lookup carries the label and no score.
+func TestDeferredPool_ResultsCarryTheirMatcher(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", "Execute SQL queries"))
+
+	keywords := p.Search("query", 5)
+	require.Len(t, keywords, 1)
+	assert.Equal(t, tools.MatchByKeywords, keywords[0].MatchedBy)
+	assert.Positive(t, keywords[0].Score, "the ranking score is what put it first")
+
+	byName := p.Search("select:mcp__pg__query", 5)
+	require.Len(t, byName, 1)
+	assert.Equal(t, tools.MatchByName, byName[0].MatchedBy)
+	assert.Zero(t, byName[0].Score, "a lookup is not ranked")
+
+	// The empty-query listing is a lookup too: nothing ranked it.
+	listed := p.Search("", 5)
+	require.Len(t, listed, 1)
+	assert.Equal(t, tools.MatchByName, listed[0].MatchedBy)
+}
+
+// ---------------------------------------------------------------------------
 // DeferredPool — narrowing a search to one server (SearchIn / Servers)
 // ---------------------------------------------------------------------------
 

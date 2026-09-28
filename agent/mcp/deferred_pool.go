@@ -333,10 +333,17 @@ func (p *DeferredPool) searchAll(allTools []*DeferredTool, maxResults int) []Sea
 }
 
 func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
+	return p.matchedResult(t, tools.MatchByName, 0)
+}
+
+// matchedResult is toResult plus HOW the tool was found — the pair the tool
+// renders as `matched_by` / `score`. Score is dropped for a name match on the
+// way out (a lookup is not ranked), so passing 0 here is not a lost number.
+func (p *DeferredPool) matchedResult(t *DeferredTool, matchedBy string, score float64) SearchResult {
 	return SearchResult{
-		Name:        t.Name,
-		Description: t.Description,
-		Schema:      t.Schema,
+		Name:      t.Name,
+		MatchedBy: matchedBy,
+		Score:     score,
 	}
 }
 
@@ -346,11 +353,15 @@ func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
 // to hundreds of short documents), so rebuild cost is negligible, and it
 // keeps Search free of shared mutable state — safe to call concurrently with
 // Add/Remove.
-func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxResults int) []SearchResult {
+//
+// Its parameter is `candidates` (the slice a server scope already narrowed),
+// named so that it does not shadow the tools PACKAGE this file needs for the
+// MatchBy* constants.
+func (p *DeferredPool) keywordSearch(candidates []*DeferredTool, query string, maxResults int) []SearchResult {
 	query = strings.TrimSpace(query)
 	required, scoring := parseSearchQuery(query)
 
-	ix := newSearchIndex(tools)
+	ix := newSearchIndex(candidates)
 	scores := ix.Scores(scoring)
 
 	type scored struct {
@@ -359,7 +370,7 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 		doc   int
 	}
 	var ranked []scored
-	for i, t := range tools {
+	for i, t := range candidates {
 		if scores[i] <= 0 {
 			continue
 		}
@@ -381,7 +392,7 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 	n := min(len(ranked), maxResults)
 	results := make([]SearchResult, n)
 	for i := range n {
-		results[i] = p.toResult(ranked[i].tool)
+		results[i] = p.matchedResult(ranked[i].tool, tools.MatchByKeywords, ranked[i].score)
 	}
 	return results
 }

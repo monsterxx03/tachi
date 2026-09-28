@@ -57,6 +57,7 @@ func TestDeferredToolReminder_ServerSummaries(t *testing.T) {
 	}
 	out := lines[0]
 	for _, want := range []string{
+		serverLegend,
 		"mcp__lixinger — 2 个工具（1 个未加载）：A股/港股/美股数据",
 		"mcp__chrome-devtools — 1 个工具（1 个未加载）：浏览器操作与页面调试",
 		"MCPSearchTools",
@@ -109,7 +110,13 @@ func TestDeferredToolReminder_CatalogNamesTheServers(t *testing.T) {
 		t.Fatalf("expected one block, got %v", lines)
 	}
 	full := lines[0]
-	if !strings.Contains(full, "可搜索的 MCP server：mcp__gh（1）、mcp__pg（1）") {
+	// The legend first, then the names: the lines must say what they ARE — the
+	// values of the search tool's `server` parameter — or a reader has no way to
+	// tell a server list from a tool list.
+	if !strings.Contains(full, serverLegend) {
+		t.Errorf("expected the legend above the roster, got: %s", full)
+	}
+	if !strings.Contains(full, "mcp__gh（1）、mcp__pg（1）") {
 		t.Errorf("expected the server roster, got: %s", full)
 	}
 	// The catalog itself is what the keyword matcher reads: unchanged.
@@ -132,7 +139,7 @@ func TestDeferredToolReminder_SingleServerHasNoRoster(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected one block, got %v", lines)
 	}
-	if strings.Contains(lines[0], "可搜索的 MCP server") {
+	if strings.Contains(lines[0], serverLegend) {
 		t.Errorf("a single server is not a roster, got: %s", lines[0])
 	}
 }
@@ -154,7 +161,7 @@ func TestDeferredToolReminder_RosterSkipsLoadedServers(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected one block, got %v", lines)
 	}
-	if !strings.Contains(lines[0], "可搜索的 MCP server：mcp__gh（1）、mcp__pg（1）") {
+	if !strings.Contains(lines[0], "mcp__gh（1）、mcp__pg（1）") {
 		t.Errorf("expected counts of undiscovered tools per server, got: %s", lines[0])
 	}
 }
