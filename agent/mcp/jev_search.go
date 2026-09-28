@@ -67,14 +67,11 @@ type JevSearcher struct {
 	OnDegrade func(error)
 }
 
-// Judge is the Jev call the searcher needs: what a client does, narrowed so a
-// test can answer without a service. *jev.Client satisfies it as it stands.
-type Judge interface {
-	Evaluate(ctx context.Context, state any, questions map[string]jev.Question) (*jev.Response, error)
-	// Model is the version the answers came from: recorded with the cost, so a
-	// calibration can be traced to the weights that produced it.
-	Model() string
-}
+// Judge is the Jev call a gate needs: what a client does, narrowed so a test can
+// answer without a service. The shape lives in pkg/jev (jev.Judge) because the
+// channel's cron notify gate needs exactly the same seam, and *jev.Client
+// satisfies it as it stands.
+type Judge = jev.Judge
 
 const (
 	// jevSearchChunkTokens bounds one REQUEST's question text. A pool large
@@ -95,12 +92,6 @@ const (
 	// truncation would read as "the gate found nothing".
 	jevSearchMaxQuestions = 400
 )
-
-// jevProviderName is the service written on every Jev ledger row. Jev is not a
-// provider and has no ProviderConfig, so there is no config name to write — and
-// a type name would be an implementation detail rather than an identity (see
-// RecordingProvider.record). The vendor is what a reader groups these rows by.
-const jevProviderName = "typesafe"
 
 // NewJevSearcher builds the gate. threshold and budget come from
 // mcp_tool_search.jev_threshold / jev_budget; usage may be nil (no ledger row)
@@ -316,56 +307,21 @@ func candidateOf(t *DeferredTool) jevsearch.Candidate {
 	}
 }
 
-// recordUsage writes the ledger row for one judgment call. Jev is not a
-// provider, so the decorator that bills providers never sees it: the row is
-// written here, priced through the same resolution a provider's row goes
-// through — the jev block's `pricing:` override when it sets one, the built-in
-// table's Jev record otherwise. llm.ResolveModelPriceFrom owns that order; a
-// provider reaches it by way of its ProviderConfig, and Jev has none.
+// recordUsage writes the ledger row for one judgment call through the shared
+// llm.RecordJevUsage, which owns the pricing order and the credit arithmetic
+// (the channel's notify gate writes the same row through it).
 //
-// The block is read HERE rather than captured when the searcher was built: the
-// row carries a price snapshot, and that snapshot has to be the price in force
-// when the call was made. The searcher's other settings (threshold, budget, the
-// client) are build-time because they shape the SEARCH.
+// The jev block is read HERE rather than captured when the searcher was built:
+// the row carries a price snapshot, and that snapshot has to be the price in
+// force when the call was made. The searcher's other settings (threshold,
+// budget, the client) are build-time because they shape the SEARCH.
 func (s *JevSearcher) recordUsage(ctx context.Context, resp *jev.Response) {
 	if s.usage == nil || resp == nil {
 		return
 	}
-	now := time.Now()
-	jevCfg := s.jevConfig()
-	model := s.judge.Model()
-	rp := llm.ResolveModelPriceFrom(jevCfg.Pricing, jevProviderName, model, now)
-	cacheReadPrice, cacheCreationPrice := llm.CacheReadCreationPrice(&rp.Price)
-
-	// Jev reports no cache tokens and bills input only; the output count is
-	// recorded because a reader expects a whole row, not because it costs
-	// anything.
-	input := int64(resp.Usage.InputTokens)
-	output := int64(resp.Usage.OutputTokens)
-	var creditRate float64
-	if jevCfg.CreditRate != nil {
-		creditRate = *jevCfg.CreditRate
-	}
-	credit := llm.ComputeCredit(input+output, creditRate)
-
-	row := llm.UsageRow{
-		TS:                 now,
-		SessionID:          tools.SessionIDFromCtx(ctx),
-		Kind:               llm.UsageKindJev,
-		Provider:           jevProviderName,
-		Model:              model,
-		InputTokens:        input,
-		OutputTokens:       output,
-		InputPrice:         rp.Price.InputPrice,
-		OutputPrice:        rp.Price.OutputPrice,
-		CacheReadPrice:     cacheReadPrice,
-		CacheCreationPrice: cacheCreationPrice,
-		Band:               rp.Band,
-		// Always a snapshot, 0 included: nil Credit only ever means "written
-		// before credits existed", which these rows are not (see UsageRow.Credit).
-		Credit: &credit,
-	}
-	if err := s.usage.Record(row); err != nil {
+	err := llm.RecordJevUsage(s.usage, s.jevConfig(), s.judge.Model(),
+		tools.SessionIDFromCtx(ctx), resp.Usage.InputTokens, resp.Usage.OutputTokens, time.Now())
+	if err != nil {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev usage not recorded", "err", err)
 	}
 }

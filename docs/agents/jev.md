@@ -34,14 +34,18 @@ That is the whole boundary, and it is why `pkg/jev` deliberately does **not** im
 put two unrelated contracts behind one type and invite call sites that need one to reach for the
 other.
 
-**There is one production caller: the MCP tool search** (`agent/mcp/jev_search.go`, matcher
-`mcp_tool_search.matcher: auto` with a usable `jev` block). It turns a prose request into one `noul`
+**There are two production callers.** The MCP tool search (`agent/mcp/jev_search.go`, matcher
+`mcp_tool_search.matcher: auto` with a usable `jev` block) turns a prose request into one `noul`
 question per candidate tool and offers the ones over the cut-off; the question text lives in
 `agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
-the measurement cannot describe a question the gate no longer asks. **Its cut-off is τ = 0.20, and
-that number belongs to a POOL, not to the gate** — read [Measuring a threshold](#measuring-a-threshold)
-before copying it anywhere, and re-sweep when the pool changes materially. Everything else in the
-repo still asks a generative model and parses the reply.
+the measurement cannot describe a question the gate no longer asks. The cron notify gate
+(`channel/manager/notify_gate.go`, matcher `cron.notify_matcher: auto` with the same block) judges a
+finished `notify=when_relevant` run, with the question and state in `channel/manager/notifygate`; its
+counterpart to that file is `cron.jev_threshold`. **Neither cut-off is a fact, and neither belongs to
+its gate**: the tool search's τ = 0.20 belongs to a POOL, the notify gate's to its own case set. Read
+[Measuring a threshold](#measuring-a-threshold) before copying either anywhere, and re-sweep when the
+thing it was measured on changes materially. Everything else in the repo still asks a generative model
+and parses the reply.
 
 ## When to use it — and when not to
 
@@ -60,10 +64,11 @@ keyword, a file path or a summary — so anything open-ended is generation even 
 
 - A marker protocol: the caller asks a model for short free text and then string-matches it. In Tachi
   today that is the GitHub channel's `[NO_REPLY]` / `[READY_FOR_PR]` control markers
-  (`channel/github/security.go`) and the channel's `[SILENT]` silence marker for ambient turns and
-  cron notifications. Every one of these is a generative call wearing a judgment's clothes — the
-  reason to move it is that the marker can be faked by the input, mis-typed by the model, or land in
-  the text that gets published.
+  (`channel/github/security.go`) and the channel's `[SILENT]` silence marker for ambient turns — cron
+  notifications, the other `[SILENT]` site, moved to the notify gate below (the marker survives there
+  as the fallback, which is not the same thing as being the decision). Every one of these is a
+  generative call wearing a judgment's clothes — the reason to move it is that the marker can be faked
+  by the input, mis-typed by the model, or land in the text that gets published.
 - A binary or small-set gate the prompt already describes in prose: "is this worth interrupting the
   user for", "does this comment need a reply", "which team owns this".
 - Reranking a candidate list that **code** produced — the MCP deferred-tool search (BM25 over tool
@@ -212,6 +217,52 @@ TOOL_SEARCH_SWEEP_RAW=/tmp/raw.json go test ./pkg/jev/ -run TestToolSearchRawAna
 the corpus is local and only the cut-off it produced is recorded. A question whose text is per-case
 goes through the case-level `instructions` override, and the generator must build that text by calling
 the production function — otherwise the file measures a prompt the gate never sends.
+
+**The channel's cron notify gate: its case files are GENERATED, and its cut-off is `cron.jev_threshold`.**
+The question, the state and the two shapes the state was allowed to take live in
+`channel/manager/notifygate`; the decision rules (what a failure of the service means, what a report
+that is only the marker means, what a failed run means) live in
+`channel/manager/notify_gate.go`. The case files are generated because a hand-written one measures a
+state nobody sends: one authored scenario in `pkg/jev/testdata/notify/source.json` renders three times,
+through those production assemblers, so all three share ids, labels and header —
+
+- `notify-gate-prompt.json` — the **candidate**: the job's own words ride in the state (任务原话), asked
+  with `Question()`. The criterion is per-job ("开市了就总结" vs "有到期单就说"), which is the point: no
+  single generic reading of "worth interrupting" can serve both.
+- `notify-gate.json` — the **control**: outcome + report as prose, asked with `GenericQuestion()`, i.e.
+  what a judge that never saw the job's words answers. It prices the criterion block.
+- `notify-gate-template.json` — a **variant**: the report cut into two pinned fields, for the case where
+  free prose alone turns out unsweepable. A follow-on, not a peer.
+
+The candidate and the control differ in the state AND the question at once, deliberately: a criterion
+the question does not tell the model to read is dead weight, so the pair answers "is the design better",
+not "is the block worth 30 tokens":
+
+```sh
+NOTIFY_CASES_SRC=$PWD/pkg/jev/testdata/notify/source.json \
+NOTIFY_CASES_OUT=$PWD/pkg/jev/testdata \
+go test ./channel/manager/notifygate/ -run TestGenerateNotifyCases -v
+```
+
+Editing the generated files is lost work. Question, labels and state text are Chinese because the
+deployment's jobs are — a translated gate needs its own sweep, not this one's threshold. Its
+`existence-*` groups are the deployment's own jobs (扫 A 股 / 查菜单 / 查到期单 / 盯 blog 更新) and are
+a different judgment from the rest: "did anything come back at all", where a fetch failure and a
+genuinely empty result must not be told apart by prose alone. A deployment that reaches the service
+through a gateway must set `JEV_BASE_URL` (and `JEV_PROXY` if it needs one) or every case fails
+against a host it cannot see.
+
+**Measured on that set (jev-1.13.0, 5 repeats, labels held every repeat): the criterion block is what
+makes the gate work.** The control (no criterion, generic question) disagreed with the labels on 7 of 37
+and had no corridor at all — its lowest should-act case scored 0.10, below its highest should-not-act.
+The candidate disagreed on 2, and both of those are members the case set labels by what the user wants
+rather than by a literal reading of the job's words (see its notes); on the strict reading it is 37/37,
+with should-act ≥ 0.60 and should-not-act ≤ 0.21, i.e. a corridor wide enough to place a gate. The
+decisive members are the job-specific ones: a job whose own words say "开市了就总结" scored 0.73 under
+the candidate and 0.10 under the control, and the fetch-failed/menu-closed pair — the "job quietly
+broke" fork — came out far apart and correctly ordered under the candidate (0.14 vs 0.62), while the
+control put the closed day at 0.79: above any threshold that still keeps the act side, and only 0.08
+below the genuine failure it must not be confused with (0.87).
 
 **A tool-search cut-off is a property of the POOL's tool TEXTS — τ = 0.20 on a 184-tool pool, and
 neither of the two things it is tempting to blame instead:**

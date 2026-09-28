@@ -107,6 +107,10 @@ type Manager struct {
 	// Cron scheduler (only active in channel mode when enabled).
 	scheduler *cron.Scheduler
 
+	// notifyGate judges a when_relevant cron result; nil = the agent's [SILENT]
+	// marker decides alone. Built once in initCron (see notify_gate.go).
+	notifyGate *notifyGate
+
 	// System-level scheduler for background tasks (AutoDream, etc.).
 	// Completely isolated from the user-facing cron scheduler.
 	systemScheduler *cron.SystemScheduler

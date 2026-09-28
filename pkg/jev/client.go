@@ -349,6 +349,18 @@ type request struct {
 	Questions map[string]Question `json:"questions"`
 }
 
+// Judge is the slice of a Client that a gate needs: one evaluation, plus the
+// model that answered. Callers depend on this rather than on *Client, so a test
+// can answer a gate without a service; *Client satisfies it as it stands.
+//
+// Model is part of the seam because a ledger row and a log line both have to
+// name the weights that produced an answer — a calibration is only traceable to
+// a version.
+type Judge interface {
+	Evaluate(ctx context.Context, state any, questions map[string]Question) (*Response, error)
+	Model() string
+}
+
 // Client evaluates states against typed questions. It is safe for concurrent
 // use.
 type Client struct {

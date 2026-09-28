@@ -349,6 +349,23 @@ type CronConfig struct {
 	StorePath        string        `yaml:"store_path"`             // custom store path (default: ~/.tachi/crons.json)
 	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`
 	ExecutionTimeout time.Duration `yaml:"execution_timeout" default:"5m"`
+
+	// NotifyMatcher picks how a notify=when_relevant job's result is judged:
+	// "marker" = the agent's [SILENT] marker, matched by
+	// cron.Job.ShouldSuppressResult (the original behaviour), "jev" = the System
+	// One judgment gate, "auto" = the gate whenever Jev.Configured(), the marker
+	// otherwise. The marker instruction STAYS in the prompt under every setting:
+	// it is the gate's fallback when the service cannot be reached.
+	NotifyMatcher string `yaml:"notify_matcher" default:"auto"`
+	// JevThreshold is the noul probability at or above which a when_relevant
+	// result is DELIVERED. It is not a fact about the gate and must not be
+	// copied: p(action) is relative to the question and the case set it was
+	// swept against. 0.45 sits in the middle of the corridor measured on
+	// pkg/jev/testdata/notify-gate-prompt.json (37 scenarios, jev-1.13.0):
+	// should-act ≥ 0.60, should-not-act ≤ 0.21. That case set's labels are one
+	// person's judgement — re-sweep before trusting this number, and read
+	// docs/agents/jev.md (Measuring a threshold) first.
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.45"`
 }
 
 // IsEnabled returns whether the cron scheduler is enabled. Defaults to true.

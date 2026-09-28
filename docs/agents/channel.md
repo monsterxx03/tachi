@@ -21,6 +21,7 @@ convention-not-history, split + index when a subject grows) apply to this split 
 | **Ambient (whisper) routing** | you touch group-chat handling, silence, or the batch window |
 | **Slash commands** | you add a command, change dispatch, or touch `/compact` |
 | **One-off commands (`/commit`, `/review`)** | you touch the side-channel runs or their cancellation |
+| **Cron notifications (`when_relevant`)** | you touch what a finished cron job delivers, or the `[SILENT]` marker |
 
 ## Wiring: who builds what
 
@@ -173,6 +174,48 @@ in `oneoffCancels` so `/stop` and `/new` can cancel them. `oneoffSem` caps how m
 (a burst of `/review N` would otherwise saturate provider quotas — a full fork per run), and a command that
 cannot get a slot is REFUSED with a hint rather than queued silently.
 
+## Cron notifications (`when_relevant`)
+
+**A finished job's result reaches the channel through ONE decision, in `judgeNotify`
+(`notify_gate.go`) — not through the branch that happens to deliver.** Every cron run goes through it,
+`notify=always` included, so the policy has exactly one home. What it decides:
+
+| Situation | Outcome | Decider |
+| --- | --- | --- |
+| `notify=always` | deliver the report (nothing when the turn failed) | `always` |
+| `when_relevant`, nothing reported | suppress, no call | `none` |
+| `when_relevant`, the report IS `[SILENT]` | suppress, no call | `marker` |
+| `when_relevant`, judged p ≥ `cron.jev_threshold` | deliver, leading marker stripped | `jev` |
+| `when_relevant`, judged p < threshold | suppress | `jev` |
+| no gate (matcher `marker`, or no usable `jev` block), or no judgment (error, timeout, unanswered) | `cron.Job.ShouldSuppressResult` — the marker | `marker` |
+
+Four things about it are easy to undo by accident:
+
+- **The appended prompt policy follows the DECIDER, and `buildCronPrompt` owns both wordings.** While the
+  gate answers, the agent is told to REPORT (`gateNotificationPolicy`) — an agent that has already judged
+  a finding unworthy hands the gate nothing to judge, and that pre-filtering is exactly what a job like
+  "开市了就总结" cannot survive (`market-open-flat` in the case set is that job). While the gate is absent
+  or has stopped answering (`degraded`, recomputed per judgment), the agent gets its ORIGINAL instruction
+  back (`markerNotificationPolicy`), because the fallback is a marker and a marker has to be asked for.
+  Do not merge the two texts, and do not drop the second one: an installation without a `jev` block has to
+  behave exactly as it did before the gate existed.
+- **The fast path is deliberately tighter than the fallback.** `isMarkerOnly` asks whether the report
+  *is* the marker; the fallback still uses `ShouldSuppressResult`'s loose `strings.Contains`. Do not
+  "unify" them: the loose reading is the behaviour the gate exists to replace, and the fallback has to
+  be the old one or a degraded service would silently change what "suppressed" means.
+- **"No judgment" means the marker, never "deliver".** The opposite of the MCP tool-search gate, whose
+  missing answer means "do not offer" — a cluttered tool list is the cost there, a swallowed
+  notification is the cost here.
+- **A failed turn is judged like any other**, and the state carries the failure, because the turn error
+  is what the user asked to hear about. The fallback stays silent on it (that is the pre-gate
+  behaviour, and the scheduler owns a failed run: it records the status and retries). So the gate
+  changes what a failed run does, which is why it is opt-in behind the `jev` block.
+
+Every call is one Info line (`channel: cron notify judged`, probability last) and one `llm.UsageKindJev`
+ledger row through `llm.RecordJevUsage` — the same writer the tool search uses, so a gate cannot make
+its cost invisible. The question, the state and the threshold's provenance belong to
+`channel/manager/notifygate` and `docs/agents/jev.md`; read the latter before touching the question.
+
 ## Tests
 
 ```sh
@@ -190,3 +233,4 @@ go test -race ./channel/manager/     # the package is written for -race; the fie
 | `usage_race_test.go` | `/usage` reading an agent while its turn runs |
 | `agent_cache_test.go` | workDir precedence (cached agent wins over the persisted session) |
 | `askuser_regression_test.go` `TestHandler_AskUserAnswerRouting` | the three ways a message answers a parked AskUser wait (structured / raw fallback / cancel) reach the wait and never become a turn |
+| `notify_gate_test.go` | the notify decision's order and direction: always-jobs never judged, the tight fast path, "no judgment" meaning the marker, a leading marker stripped before delivery |

@@ -33,6 +33,12 @@ package jev_test
 //	JEV_EVAL_MODEL    Model override. Record which version produced a
 //	                  calibration — the default is a pinned version, and a
 //	                  threshold does not survive a change of weights.
+//	JEV_BASE_URL      Endpoint override; unset uses jev.DefaultBaseURL. A
+//	                  deployment that reaches the service through a gateway
+//	                  needs it — without it every case fails against a host it
+//	                  cannot see, which reads like a service outage.
+//	JEV_PROXY         Proxy for the requests (http://, https://, socks5://) —
+//	                  the same knob the jev config block's `proxy:` leaf is.
 //
 // A caveat the skill that seeded this file insists on: repeats try to bypass
 // response caching and cannot force it. Identical labels AND identical
@@ -54,6 +60,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/jev"
 )
 
@@ -68,6 +75,13 @@ const (
 	// evalModelEnv overrides the model version, for re-measuring a calibration
 	// against a new one.
 	evalModelEnv = "JEV_EVAL_MODEL"
+	// evalBaseURLEnv points the harness at another endpoint. Unset keeps
+	// pkg/jev's DefaultBaseURL; set, it is what a deployment behind a gateway
+	// needs to be measurable at all.
+	evalBaseURLEnv = "JEV_BASE_URL"
+	// evalProxyEnv routes the requests through a local proxy, the same value
+	// the jev config block's `proxy:` leaf takes.
+	evalProxyEnv = "JEV_PROXY"
 
 	// defaultEvalRepeats is the repeat count when unset. Five is the floor
 	// that makes a drift measurement meaningful.
@@ -426,10 +440,27 @@ func runEvalFile(t *testing.T, apiKey, path string) {
 	if model != "" {
 		opts = append(opts, jev.WithModel(model))
 	}
+	baseURL := strings.TrimSpace(os.Getenv(evalBaseURLEnv))
+	if baseURL != "" {
+		opts = append(opts, jev.WithBaseURL(baseURL))
+	}
+	// The transport is always httpx's, so JEV_PROXY is the same knob the jev
+	// config block's `proxy:` leaf is. Passing it explicitly is not a
+	// behaviour change when it is empty: it builds exactly the client
+	// NewClient would have built on its own.
+	opts = append(opts, jev.WithHTTPClient(httpx.NewClient(jev.DefaultTimeout, strings.TrimSpace(os.Getenv(evalProxyEnv)))))
 	client, err := jev.NewClient(apiKey, opts...)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+	// Which endpoint and which weights produced these numbers is part of the
+	// measurement — a calibration taken through a gateway is not the same
+	// record as one taken against the vendor's own host.
+	endpoint := baseURL
+	if endpoint == "" {
+		endpoint = jev.DefaultBaseURL
+	}
+	t.Logf("endpoint=%s model=%s", endpoint, client.Model())
 	repeats := evalRepeats(t)
 
 	results := make([]evalCaseResult, 0, len(file.Cases))

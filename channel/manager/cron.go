@@ -31,6 +31,7 @@ func (m *Manager) initCron(ctx context.Context) error {
 	})
 
 	m.scheduler = scheduler
+	m.initNotifyGate(ctx)
 	m.logger.Info(ctx, "channel: cron initialized", "path", storePath, "max_concurrent", m.cfg.Cron.MaxConcurrent, "timeout", m.cfg.Cron.ExecutionTimeout)
 	return nil
 }
@@ -101,26 +102,30 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 
 	if err != nil {
 		m.logger.Error(ctx, "channel: cron job drain error", err, "job", job.ID)
+	}
+
+	// Decide whether this run reaches the user. The judgment happens BEFORE the
+	// error return: a run that failed after writing a partial report is
+	// information the user asked to hear about, and the state carries the
+	// failure for exactly that reason.
+	decision := m.judgeNotify(ctx, job, result, sid, err)
+
+	if !decision.Deliver {
+		m.logger.Info(ctx, "channel: cron job suppressed",
+			"job", job.ID, "decider", decision.Decider)
 		return err
 	}
 
-	// Check suppress policy: if the job uses when_relevant and the agent
-	// determined there's nothing actionable, skip delivery.
-	if job.ShouldSuppressResult(result) {
-		m.logger.Info(ctx, "channel: cron job suppressed (notify=when_relevant)", "job", job.ID)
-		return nil
-	}
-
 	// Deliver the response to the target thread's channel.
-	if result != "" {
+	if decision.Content != "" {
 		m.deliverCronResponse(ctx, channel.OutgoingMessage{
 			ThreadID: job.TargetThreadID,
-			Content:  result,
+			Content:  decision.Content,
 			ReplyTo:  fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()),
 		})
 	}
 
-	return nil
+	return err
 }
 
 // deliverCronResponse sends a cron-triggered response to the channel
@@ -148,18 +153,52 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 	m.logger.Warn(ctx, "channel: cron response not delivered — no channel accepted thread", "thread", msg.ThreadID)
 }
 
-// buildCronPrompt constructs the effective prompt for a cron job execution.
-// If the job uses notify=when_relevant, a suppression instruction is appended
-// so the agent can reply with [SILENT] when there's nothing meaningful.
-func (m *Manager) buildCronPrompt(job *cron.Job) string {
-	if job.EffectiveNotify() != cron.NotifyWhenRelevant {
-		return job.Prompt
-	}
-
-	return job.Prompt + "\n\n" +
-		"[Notification policy: when_relevant]\n" +
+// The notification policy appended to a when_relevant job's prompt. Which one is
+// used depends on who decides whether the result is delivered, because the
+// instruction and the decider have to AGREE: an instruction that tells the agent
+// to judge worth makes the agent drop findings before the decider ever sees
+// them — invisibly, and with no way to recover them afterwards.
+const (
+	// markerNotificationPolicy asks the agent to make the call, because under the
+	// marker nothing else does. The wording is unchanged from before the gate
+	// existed, so an installation without a usable jev block behaves exactly as
+	// it did, and a gate that has stopped answering falls back to the behaviour
+	// its fallback can actually read.
+	markerNotificationPolicy = "[Notification policy: when_relevant]\n" +
 		"After completing the task, evaluate whether the result contains meaningful or actionable information for the user. " +
 		"If there is nothing new, no changes detected, or nothing worth reporting, respond with ONLY the text `[SILENT]` — " +
 		"do not include any other content. The notification will be suppressed and the user will not be disturbed. " +
 		"Only send actual content when there IS something noteworthy to report."
+
+	// gateNotificationPolicy asks the agent to REPORT and leaves the judgment to
+	// the gate. The difference is not stylistic: a job whose own words say
+	// "开市了就总结" loses its summary if the agent is invited to decide that a
+	// flat market is not worth mentioning — which is exactly the case the gate
+	// reads off the job's words and gets right. The marker survives here only for
+	// the run that produced nothing at all, which is the one reading it was ever
+	// right about.
+	gateNotificationPolicy = "[Notification policy: when_relevant]\n" +
+		"Report what this run produced, as it is. Do not judge whether it is worth the user's attention — that is decided " +
+		"after you finish, from this report, so anything you leave out cannot be recovered. " +
+		"Reply with ONLY the text `[SILENT]` when the run produced nothing at all (no data, no result, nothing to report " +
+		"about the task itself). Otherwise say what happened, including when nothing changed: \"没有变化\" is a result, " +
+		"and it is what the decision needs."
+)
+
+// buildCronPrompt constructs the effective prompt for a cron job execution: the
+// job's own words, plus the notification policy the decider needs.
+//
+// The policy follows the DECIDER rather than the job, so it changes when the
+// gate is present (and healthy) and when it is not. That also means it is part
+// of what a running thread's history holds: flipping notify_matcher, or a
+// judgment failing once, re-reads the prompt prefix from that point on the next
+// cron run of that thread — a one-off cost per thread, not a recurring miss.
+func (m *Manager) buildCronPrompt(job *cron.Job) string {
+	if job.EffectiveNotify() != cron.NotifyWhenRelevant {
+		return job.Prompt
+	}
+	if m.notifyGate != nil && !m.notifyGate.degraded.Load() {
+		return job.Prompt + "\n\n" + gateNotificationPolicy
+	}
+	return job.Prompt + "\n\n" + markerNotificationPolicy
 }
