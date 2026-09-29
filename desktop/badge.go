@@ -164,8 +164,17 @@ func openBadgeLink(transport, address string) (link.Listener, string) {
 			return nil, ""
 		}
 		return ln, "tcp " + address
+	case "ble":
+		// address 这里是广播名字，不是地址：macOS 上 CoreBluetooth 给的是它自己那套
+		// 标识（一个 UUID），而设备每次重连都不保证不变——按名字找才是稳定的，
+		// 也正是用户能在系统设置里看到的那个名字。
+		where := address
+		if where == "" {
+			where = link.DefaultBadgeName
+		}
+		return link.NewBLEListener(address), "bluetooth " + where
 	}
-	log.Printf("badge link: unknown transport %q (want off, serial or tcp)", transport)
+	log.Printf("badge link: unknown transport %q (want off, serial, tcp or ble)", transport)
 	return nil, ""
 }
 

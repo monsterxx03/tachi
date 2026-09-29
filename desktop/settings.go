@@ -583,7 +583,9 @@ var settingChoices = map[string]func(*config.Config) []string{
 // a dropdown from this list, and a reader needs a visible way to turn the link OFF — an empty
 // string would leave them guessing that clearing the box is how.
 func badgeTransports(*config.Config) []string {
-	return []string{"off", "serial", "tcp"}
+	// `ble` 排最后：它不需要线，但第一次要在电脑上输一次 6 位配对码（设备屏幕上有），
+	// 所以它不是「插上就能用」的那一类。
+	return []string{"off", "serial", "tcp", "ble"}
 }
 
 // providerNames lists the providers this config defines, in file order — the choice list for

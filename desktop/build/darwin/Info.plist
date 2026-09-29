@@ -24,6 +24,11 @@
 		<string>12.0.0</string>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
+		<!-- 蓝牙链路（settings 里 badge.transport=ble）要连设备。这个键不是可选的：
+		     缺了它，macOS 会在第一次碰 CoreBluetooth 时**直接杀掉进程**——连授权
+		     弹窗都不会出现，日志里也只是一次莫名的退出。 -->
+		<key>NSBluetoothAlwaysUsageDescription</key>
+		<string>Tachi connects to the Tachi badge over Bluetooth.</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, Tachi</string>
 	</dict>

@@ -29,6 +29,9 @@
 		</dict>
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
+		<!-- 与 Info.plist 同理：没有这个键，蓝牙链路一启用就会被系统杀掉。 -->
+		<key>NSBluetoothAlwaysUsageDescription</key>
+		<string>Tachi connects to the Tachi badge over Bluetooth.</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, Tachi</string>
 	</dict>

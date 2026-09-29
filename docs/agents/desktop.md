@@ -18,6 +18,7 @@ gets its own handbook beside this one rather than growing here.
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
+| **Badge Link over BLE** | you touch `desktop/link/ble.go`, the badge transport setting, or its Info.plist key |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
@@ -224,6 +225,36 @@ Fixtures exist where the real path needs something a driver cannot do:
   build. Grants are judged against the **responsible** process, which for `open bin/Tachi.app` (PPID 1) is
   Tachi.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
   terminal it was launched from.
+
+## Badge Link over BLE (device link)
+
+- **`NSBluetoothAlwaysUsageDescription` is needed by anything that LINKS the package, and tccd judges the
+  RESPONSIBLE process — the threshold is far lower than "when you actually use Bluetooth".** `tinygo.org/x/bluetooth`'s
+  darwin adapter builds a `CBCentralManager` in a **package-level variable** (`adapter_darwin.go`'s `DefaultAdapter`),
+  so importing it is enough to touch CoreBluetooth — no call required. A responsible bundle without the key gets
+  `Refusing authorization request for service kTCCServiceBluetoothAlways … without NSBluetoothAlwaysUsageDescription
+  key` and `This app has crashed because it attempted to access privacy-sensitive data without a usage description`,
+  i.e. SIGABRT with no Go stack, arriving **asynchronously** (the CentralManager's callback thread), so it looks like
+  "the first test passed, the second one aborted". Both `build/darwin/Info.plist` and `Info.dev.plist` carry the key.
+  A `bin/Tachi.app` built before that line will abort `go test ./desktop/...` launched from it, because the test
+  binary inherits Tachi.app as its responsible process — rebuild the app and restart it before believing a desktop
+  test failure. Embedding an `__TEXT,__info_plist` section in the test binary does **not** help: tccd never looks at
+  the requesting process here (find the reason with
+  `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`).
+- **CoreBluetooth caps a `without-response` write at ~182 bytes and fails SILENTLY above it.** The cap is
+  `maximumWriteValueLength(for:.withoutResponse)`, which the library does not expose; `bleChunks` slices at
+  `bleWriteChunk` (180) and the badge reassembles at the newline. Short messages never reveal this — an 854-byte
+  state vanished whole while 131-byte ones looked perfectly healthy.
+- **`WriteWithoutResponse` on an authenticated characteristic is dropped with no error and no pairing prompt** — it
+  says nothing about whether the link is secure. `waitSecure` therefore forces the question with one **with-response**
+  write of a bare `\n` (the badge discards an empty line, so no protocol row is invented): that write blocks while
+  macOS runs pairing — the 6-digit code is on the badge screen, and it must be typed on the computer — and fails with
+  `Encryption is insufficient` while the link is still plaintext.
+- **macOS does not re-pair because the device forgot.** The badge stores one bond in NVS (`BLE_MAX_BONDS=1`); when its
+  key is gone but the Mac's row remains, the Mac encrypts with the stale key and drops the connection instead of
+  prompting — the device logs `断开 reason=531`. Only 系统设置 → 蓝牙 → Forget that device (or a fresh name/address)
+  gets past it; the device side is 长按确定 twice on the status screen (`badge_ble_forget`), which also tells the user
+  the computer has to be dealt with separately.
 
 ## Desktop Backend (bindings & paths)
 
