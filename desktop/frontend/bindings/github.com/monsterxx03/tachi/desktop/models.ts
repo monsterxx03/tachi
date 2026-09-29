@@ -1320,4 +1320,10 @@ export interface UIStateVO {
      * SidebarWidth is the session list's width in CSS pixels; 0 means "never dragged".
      */
     "sidebarWidth"?: number;
+
+    /**
+     * ReadingFontScale is the reading surfaces' size as a percent of the stylesheet's own (100);
+     * 0 means "never changed".
+     */
+    "readingFontScale"?: number;
 }

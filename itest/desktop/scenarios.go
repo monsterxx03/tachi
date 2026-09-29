@@ -2405,6 +2405,41 @@ permissions:
 			},
 		},
 		//
+		// font-size: 消息区的阅读字号（⌘= / ⌘- / ⌘0）。
+		//
+		// 一半在 driver 里（键真的改字号、标题按比例跟着、时间戳不动、localStorage 落值），另一半是
+		// Go 侧读 desktop_ui.json —— 键与文件是两份存储，各读各的才叫都验过。
+		//
+		// driver 证明不了「原生菜单不再抢这三个键」：合成 KeyboardEvent 直接进页面，不经过菜单栏，
+		// 那条守卫是 desktop/menu_test.go。
+		{
+			name: "font-size",
+			files: map[string]string{
+				"README.md": "# smoke\n\nfont-size scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 正文 + 一个标题：标题要能按 em 跟着正文走（固定 px 的标题会在放大后沉到正文下面）。
+				{Reply: textStream("字号标尺：正文一行。\n\n## 字号标尺小标题\n\n再来一行正文。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("只有驱动发的那一条消息惊动了模型", len(c.requests) == 1, requestCount(c.requests))
+				raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "desktop_ui.json"))
+				c.check("desktop_ui.json 可读", err == nil, errText(err))
+				if err == nil {
+					var st struct {
+						ReadingFontScale int `json:"readingFontScale"`
+					}
+					if err := json.Unmarshal(raw, &st); err != nil {
+						c.check("desktop_ui.json 可解析", false, errText(err))
+					} else {
+						c.check("字号落盘了（readingFontScale=120）", st.ReadingFontScale == 120,
+							fmt.Sprintf("readingFontScale=%d；%s", st.ReadingFontScale, string(raw)))
+					}
+				}
+			},
+		},
+		//
 		//
 		// form-text: the 新建项目 / 编辑项目 dialog's type scale. Its labels and paths used to sit at
 		// 10.5–11px — the compact roots popover's sizes, which the form inherits because it renders

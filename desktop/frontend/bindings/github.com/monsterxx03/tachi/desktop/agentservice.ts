@@ -815,6 +815,15 @@ export function SetProjectRoots(id: string, primary: string, additional: string[
 }
 
 /**
+ * SetReadingFontScale records the reader's font-size step for the reading surfaces (⌘= / ⌘- / ⌘0).
+ * It refuses a value outside the bounds above: same bargain as the widths — the file is editable by
+ * hand, and a size no stylesheet could honour is worse than the default.
+ */
+export function SetReadingFontScale(pct: number): $CancellablePromise<void> {
+    return $Call.ByID(1085776649, pct);
+}
+
+/**
  * SetSessionPinned pins or unpins a session (the sidebar's 置顶 / 取消置顶 action).
  * 
  * The flag is written through updateSessionMeta, so it lands on the SAME snapshot a running

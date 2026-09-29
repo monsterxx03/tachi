@@ -172,3 +172,39 @@ func TestSidebarWidthBounds(t *testing.T) {
 		t.Errorf("state = %+v, want all three kept", st)
 	}
 }
+
+// TestReadingFontScaleBounds: the reading size is the same bargain as the widths — the file is
+// hand-editable, so a step the stylesheet could not honour is refused rather than stored, and it
+// shares the file with the other preferences without clobbering them.
+func TestReadingFontScaleBounds(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	svc := &AgentService{}
+
+	svc.SetReadingFontScale(120)
+	if got := svc.GetUIState().ReadingFontScale; got != 120 {
+		t.Errorf("scale = %d, want 120", got)
+	}
+	for _, bad := range []int{0, 10, readingScaleMinPercent - 10, readingScaleMaxPercent + 10, 100000, -400} {
+		svc.SetReadingFontScale(bad)
+		if got := svc.GetUIState().ReadingFontScale; got != 120 {
+			t.Errorf("scale after %d = %d, want the previous 120 (out of bounds is not stored)", bad, got)
+		}
+	}
+	// Both bounds are inclusive: they are what the keys clamp to.
+	for _, ok := range []int{readingScaleMinPercent, readingScaleMaxPercent} {
+		svc.SetReadingFontScale(ok)
+		if got := svc.GetUIState().ReadingFontScale; got != ok {
+			t.Errorf("scale = %d, want %d", got, ok)
+		}
+	}
+	// 100 is an ordinary value, not "unset": ⌘0 must be able to store the return to the default.
+	svc.SetReadingFontScale(100)
+	if got := svc.GetUIState().ReadingFontScale; got != 100 {
+		t.Errorf("scale = %d, want 100 stored like any other step", got)
+	}
+	// The widths share the file with it.
+	svc.SetSidebarWidth(320)
+	if st := svc.GetUIState(); st.ReadingFontScale != 100 || st.SidebarWidth != 320 {
+		t.Errorf("state = %+v, want both fields kept", st)
+	}
+}

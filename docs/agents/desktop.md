@@ -48,6 +48,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | tool cards (their own args and result, several calls of one tool in a turn) | `parallel-tools`, `transcript-fold` |
 | the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
 | a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
+| the reading size (⌘= / ⌘- / ⌘0, and the two stores it lands in) | `font-size`, `bubble-lines` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |
@@ -147,6 +148,11 @@ Fixtures exist where the real path needs something a driver cannot do:
   there, their box is right, their styles are right. Do not read "no spec fails" as "it renders correctly"; a
   driver's job is to pin the MECHANISM that causes such a bug (see the `settings` scenario's
   `.app-body[inert]` + sidebar-`visibility` pair).
+- **A driver dispatches a synthetic key INTO THE PAGE, so it can never say whether the menu bar claims that
+  key** (`smoke.key` fires a `KeyboardEvent` on an element; the native menu is not in that path at all). A key
+  equivalent a menu ITEM owns is handled before the webview sees the event — which is why the reading size's
+  ⌘= / ⌘- / ⌘0 needed Wails' `View`→zoom items removed (`desktop/menu.go`) and why that half is pinned by
+  `desktop/menu_test.go` (asserting on ACCELERATORS, not on labels). `font-size` asserts what the keys DO.
 - **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the real
   Finder. Assert the control on screen and pin the argument off screen (`TestOpenSessionDirOpensTheSessionDirectory`
   stubs `openFile` and reads the argv). Any "open in …" action has this shape.
@@ -739,8 +745,11 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   bottom), and the mark is a bar AND a wash AND `aria-current`, never colour alone.
 - **A drag writes the element directly and commits once** (never React state per pointermove, which lays the
   whole pane out again), and the reader's width is clamped to the room left, never to the pane's own box. **A
-  layout the reader CHOSE is remembered (`localStorage`), a width the pane DERIVES is not** — `desktop_ui.json`
-  holds only what Go has to honour before the window exists.
+  layout the reader CHOSE is remembered (`localStorage`), a width the pane DERIVES is not** — and the two
+  stores split by what has to read them: `desktop_ui.json` is the DURABLE side Go writes and `GetUIState`
+  answers (a width, the panel's open flag, the reading size — hand-editable, and it survives a cleared webview
+  store), while a preference only the page reads can be `localStorage` alone (the diff layout). The theme is in
+  both, because the boot frame needs it before the first paint and Go needs it before the window exists.
 - **The lightbox's fit() measures the WINDOW and only ever SHRINKS** (the stage hugs its content, and "as large
   as it fits" in both directions opens the same gesture at wildly different sizes).
 - **⌘F searches a SURFACE, not the page** — each viewer searches its OWN subtree, the key owner is installed
@@ -791,7 +800,10 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **The reading surfaces take their sizes from ONE place** (`base.css`'s `--fs-prose` / `--fs-bubble` /
   `--fs-finding`, and `--reading-width` for the column — the same measure a previewed document gets): "the text
   is too small" is an edit there, not a hunt through four files. The scale is deliberately NOT a blanket
-  multiplier — labels, badges and metadata are chrome and keep their own sizes.
+  multiplier — labels, badges and metadata are chrome and keep their own sizes. What the READER adds on top is
+  a multiplier on the two message sizes and nothing else (`--fs-scale`, ⌘= / ⌘- / ⌘0 in `fontsize.ts`), and a
+  message's own markdown follows in em (`widgets.css`), so a bigger body keeps its hierarchy instead of growing
+  past a heading fixed in px.
 - **What bounds the palette is `--text-faint`'s contrast floor, not the main ink's** (it lands on the LIGHTEST
   plane, so it pins both the ink and the top of the ladder): any "make it lighter" edit trades against that,
   and a WCAG ratio check across every plane is how to verify it, not the eye. The pre-paint window colour

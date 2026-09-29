@@ -501,6 +501,9 @@ type UIStateVO struct {
 	OneOffPanelWidth int `json:"oneOffPanelWidth,omitempty"`
 	// SidebarWidth is the session list's width in CSS pixels; 0 means "never dragged".
 	SidebarWidth int `json:"sidebarWidth,omitempty"`
+	// ReadingFontScale is the reading surfaces' size as a percent of the stylesheet's own (100);
+	// 0 means "never changed".
+	ReadingFontScale int `json:"readingFontScale,omitempty"`
 }
 
 func (s *AgentService) GetUIState() UIStateVO {
@@ -509,6 +512,7 @@ func (s *AgentService) GetUIState() UIStateVO {
 		OneOffPanelOpen:  st.OneOffPanelOpen,
 		OneOffPanelWidth: st.OneOffPanelWidth,
 		SidebarWidth:     st.SidebarWidth,
+		ReadingFontScale: st.ReadingFontScale,
 	}
 }
 

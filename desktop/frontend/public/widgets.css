@@ -37,14 +37,19 @@
 .welcome-title { font-size: 19px; color: var(--text); font-weight: 620; letter-spacing: 0.01em; }
 .welcome-sub { font-size: 13.5px; color: var(--text-dim); max-width: 420px; line-height: 1.65; }
 
-/* Markdown rendering inside assistant messages */
+/* Markdown rendering inside assistant messages.
+   The sizes inside a message are em off the message's own size (--fs-prose), never fixed px, so
+   the reader's step (--fs-scale) carries the whole block: a heading or a code block that stood
+   still would sink below the body text it introduces the moment prose grew past it (at the 160%
+   ceiling a 19px h1 would be smaller than a 24.8px paragraph). The numbers are exactly the px
+   they used to be over 15.5px — 19/16.5/15, 12.5 for block code, 13 for a table. */
 .assistant-text > *:first-child { margin-top: 0; }
 .assistant-text > *:last-child { margin-bottom: 0; }
 .assistant-text p { margin: 0.65em 0; }
 .assistant-text h1, .assistant-text h2, .assistant-text h3 { margin: 1.1em 0 0.45em; line-height: 1.35; color: var(--text); font-weight: 640; letter-spacing: -0.01em; }
-.assistant-text h1 { font-size: 19px; }
-.assistant-text h2 { font-size: 16.5px; }
-.assistant-text h3 { font-size: 15px; }
+.assistant-text h1 { font-size: 1.226em; }
+.assistant-text h2 { font-size: 1.065em; }
+.assistant-text h3 { font-size: 0.968em; }
 .assistant-text ul, .assistant-text ol { margin: 0.65em 0; padding-left: 1.35em; }
 .assistant-text li { margin: 0.3em 0; }
 .assistant-text li::marker { color: var(--accent); }
@@ -65,7 +70,7 @@
   margin: 0.8em 0;
   box-shadow: inset 0 1px 3px var(--wash);
 }
-.assistant-text pre code { background: none; padding: 0; color: var(--text); font-size: 12.5px; line-height: 1.6; }
+.assistant-text pre code { background: none; padding: 0; color: var(--text); font-size: 0.806em; line-height: 1.6; }
 .assistant-text blockquote {
   border-left: 3px solid var(--accent);
   border-radius: 0 6px 6px 0;
@@ -95,7 +100,8 @@
   border-spacing: 0;
   margin: 0;
   width: 100%;
-  font-size: 13px;
+  /* em off --fs-prose, like the headings: a table belongs to the message's own size. */
+  font-size: 0.839em;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
   overflow: hidden;

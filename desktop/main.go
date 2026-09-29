@@ -148,6 +148,10 @@ func main() {
 		background = windowBgDark
 	}
 
+	// Menu bar: Wails' default minus the WebKit zoom items, so ⌘= / ⌘- / ⌘0 reach the page
+	// instead of magnifying the whole window (see menu.go).
+	app.Menu.SetApplicationMenu(applicationMenu())
+
 	// Main conversational window.
 	// Native macOS title bar is hidden but its traffic-light buttons remain
 	// (like Zed): MacTitleBarHidden keeps the standard red/yellow/green controls

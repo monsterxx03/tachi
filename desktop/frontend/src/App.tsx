@@ -26,6 +26,7 @@ import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
 import { FindBar, FindButton, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
+import { bumpFontScale, reconcileFontScale, resetFontScale } from './fontsize'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
@@ -1610,6 +1611,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key === ',') { e.preventDefault(); setView('settings') }
+      // The reading size. ⌘= / ⌘⇧= and ⌘- / ⌘⇧- are the same press on a US layout (the shifted
+      // forms type + and _), and ⌘0 returns to the stylesheet's own size. The keys reach the page
+      // only because the app menu no longer carries Wails' View → Zoom items, which magnified the
+      // WHOLE window (see desktop/menu.go).
+      else if (e.key === '=' || e.key === '+') { e.preventDefault(); bumpFontScale(1) }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); bumpFontScale(-1) }
+      else if (e.key === '0') { e.preventDefault(); resetFontScale() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
       // The two palettes are the same box in the same place, so opening one closes the other —
       // and each is a toggle, so its own key closes it again.
@@ -1655,6 +1663,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [menu, rewindMenu, projectMenu])
+
+  // The reading size's two stores are settled once, at mount: the boot script has already painted
+  // the step this webview remembers, and the file takes over when it has none (see fontsize.ts).
+  useEffect(() => {
+    reconcileFontScale()
+  }, [])
 
   useEffect(() => {
     const loadProv = async () => {
@@ -2465,6 +2479,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="confirm-msg">快捷键</div>
             <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
+            <div className="shortcut-row"><kbd>⌘ = / ⌘ -</kbd><span>放大 / 缩小阅读字号（⌘ 0 复位；消息区、评审报告与预览一起变）</span></div>
             <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>

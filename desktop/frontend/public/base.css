@@ -212,9 +212,16 @@
      "the text is too small" is an edit here rather than a hunt through four
      files. The type scale is deliberately not a blanket multiplier — labels,
      badges and metadata are chrome and keep their own sizes. Code inside prose
-     follows its parent (0.88em), so it moves with these. */
-  --fs-prose: 15.5px;   /* assistant markdown: replies, a review's report, file previews */
-  --fs-bubble: 15px;    /* the reader's own message */
+     follows its parent (0.88em), so it moves with these.
+
+     --fs-scale is the READER's own step (⌘= / ⌘- / ⌘0, src/fontsize.ts): 1
+     until they touch it, and it multiplies the two message sizes and nothing
+     else. A message's own markdown — headings, code, tables — is sized in em
+     off --fs-prose (widgets.css), so a bigger body keeps its hierarchy instead
+     of growing past a heading fixed at 19px. */
+  --fs-scale: 1;
+  --fs-prose: calc(15.5px * var(--fs-scale));   /* assistant markdown: replies, a review's report, file previews */
+  --fs-bubble: calc(15px * var(--fs-scale));    /* the reader's own message */
   --fs-finding: 13px;   /* one review finding, in the side panel */
 
   --ease: cubic-bezier(0.32, 0.72, 0, 1);

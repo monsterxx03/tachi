@@ -73,6 +73,13 @@ type uiState struct {
 	// SHOW is a separate number the frontend derives from the room there is, and the setter refuses
 	// a hand-edited value the layout could not honour.
 	SidebarWidth int `json:"sidebarWidth,omitempty"`
+	// ReadingFontScale is the reading surfaces' size as a percent of the stylesheet's own (100),
+	// the reader's step from ⌘= / ⌘- / ⌘0 (frontend/src/fontsize.ts). Like the theme this is a
+	// preference about READING rather than geometry, so the webview owns the live value (and the
+	// boot script applies it before the first paint); this side keeps the durable record — what a
+	// support question reads, what a hand edit changes, and what answers GetUIState when the
+	// webview's own storage is gone. 0 = never touched.
+	ReadingFontScale int `json:"readingFontScale,omitempty"`
 }
 
 // The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it
@@ -114,6 +121,33 @@ func (s *AgentService) SetSidebarWidth(px int) {
 		return
 	}
 	st.SidebarWidth = px
+	saveUIState(st)
+}
+
+// The reading scale's bounds, mirrored by the frontend (desktop/frontend/src/fontsize.ts) — the
+// steps it can produce, and the guard against a hand-edited file. At the floor prose stops being
+// comfortable; above the ceiling a message is a wall of type.
+const (
+	readingScaleMinPercent = 80
+	readingScaleMaxPercent = 160
+)
+
+func validReadingFontScale(pct int) bool {
+	return pct >= readingScaleMinPercent && pct <= readingScaleMaxPercent
+}
+
+// SetReadingFontScale records the reader's font-size step for the reading surfaces (⌘= / ⌘- / ⌘0).
+// It refuses a value outside the bounds above: same bargain as the widths — the file is editable by
+// hand, and a size no stylesheet could honour is worse than the default.
+func (s *AgentService) SetReadingFontScale(pct int) {
+	if !validReadingFontScale(pct) {
+		return
+	}
+	st := loadUIState()
+	if st.ReadingFontScale == pct {
+		return
+	}
+	st.ReadingFontScale = pct
 	saveUIState(st)
 }
 
