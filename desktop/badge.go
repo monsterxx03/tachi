@@ -328,6 +328,9 @@ func deviceDetail(s string) string {
 //
 // 只发非空闲的会话：设备要回答的问题是「谁在等我」，而一个桌面上躺着的几十个空闲
 // 会话只是噪声。会话按 ID 排序——同一份内容每次都要长得一样，link 层的去抖才有意义。
+//
+// 跳过空闲会话顺带把 Tools 的含义钉死了：计数在 endTurn 归零、在 beginTurn 重开，所以
+// 只要一个会话出现在这份快照里，它的 Tools > 0 就意味着**这一轮真的跑过工具**。
 func (d *desktopApp) Snapshot() link.Snapshot {
 	d.mu.Lock()
 	sessions := make([]link.Session, 0, len(d.runs))
@@ -340,6 +343,7 @@ func (d *desktopApp) Snapshot() link.Snapshot {
 			Status: string(r.state.Status),
 			Label:  r.state.Label,
 			Detail: deviceDetail(r.state.Detail),
+			Tools:  r.toolCalls,
 		})
 	}
 	d.mu.Unlock()

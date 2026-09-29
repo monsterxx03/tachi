@@ -302,6 +302,8 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 	// incremental cost/credit when it completes.
 	r.turnStartCost = r.cost
 	r.turnStartCredit = r.credit
+	// The tool-call count is per TURN, so it starts here (see countToolCall).
+	r.toolCalls = 0
 
 	ctx, cancel = context.WithCancel(context.Background())
 	// The session's tree-derived state is re-pointed here, BEFORE the turn goroutine
@@ -380,6 +382,10 @@ func (d *desktopApp) endTurn(id, endReason string) {
 		r.running = false
 		r.steerCh = nil
 		r.turnDone = nil
+		// The turn is over, so its tool-call count is too (see countToolCall): the device's
+		// line about it is about a turn IN FLIGHT, and a number left standing after the turn
+		// would read as progress on something that already finished.
+		r.toolCalls = 0
 	}
 	d.mu.Unlock()
 	// An AskUserQuestion this turn parked on is gone the moment the turn is, however it
@@ -472,6 +478,9 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		}
 	case agent.AgentEventToolCallStart, agent.AgentEventToolCallArgs:
 		d.tpsReset(id)
+		if ev.Type == agent.AgentEventToolCallArgs {
+			d.countToolCall(id)
+		}
 		d.setSessionState(id, AgentState{Status: StatusToolRunning, Label: "执行",
 			Detail: toolDetail(ev.ToolName, ev.ToolArgs)})
 		// Push a lightweight tool event carrying the human-readable args summary
@@ -735,6 +744,26 @@ func toolDetail(name, argsJSON string) string {
 	return "调用 " + name + "：" + summary
 }
 
+// countToolCall 记下这一轮又多了一个**开始执行**的工具调用——设备那一行「第 N 个工具
+// 调用」读的就是它（见 badge.go 的 Snapshot）。
+//
+// 只有 AgentEventToolCallArgs 走这里，不是 ToolCallStart：start 是模型流式吐出一个
+// tool_call block 时发的，一次响应里的几个调用会在**任何东西跑起来之前**全部到达，按它
+// 计数数字一步就跳满了——而设备要看的正是「它在推进」。代价是并行工具组：executor 会把
+// 一组的 Args 一次性发完（agent/tool_executor.go 的 executeToolCallsParallel 第一阶段），
+// 那一组会让数字跳几格。那是事实（那几个调用确实同时在跑），不是需要抹平的偏差。
+//
+// 计数记在 sessionRun 上而不是 AgentState 里：AgentState 的每个 setSessionState 调用点
+// 都是整份重建的，放进去就要求每一处都记着把计数带过来——十几处里漏一处，数字就归零。
+// 起止由 beginTurn / endTurn 两个共同的出入口管住（runTurn 与 startCommand 都走它们）。
+func (d *desktopApp) countToolCall(id string) {
+	d.mu.Lock()
+	if r := d.getRun(id); r != nil {
+		r.toolCalls++
+	}
+	d.mu.Unlock()
+}
+
 func (d *desktopApp) setSessionState(id string, st AgentState) {
 	st.SessionID = id
 	d.mu.Lock()
@@ -963,6 +992,15 @@ type sessionRun struct {
 	turnCtx    context.Context
 	turnCancel context.CancelFunc
 	state      AgentState
+
+	// toolCalls is how many tool calls THIS TURN has started executing — the number
+	// the device shows for the session (「第 N 个工具调用」). Guarded by d.mu, zeroed
+	// by beginTurn and endTurn, and never touched by a state change (see countToolCall).
+	//
+	// It lives here rather than in AgentState because every setSessionState call site
+	// builds a whole AgentState from scratch: a field there would have to be carried
+	// across a dozen of them, and one miss would silently zero the number.
+	toolCalls int
 
 	// steerCh is this session's current-turn steer channel (buffered, cap 1):
 	// the frontend writes agent.SteerInput into it at steer points so the

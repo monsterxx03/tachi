@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
@@ -65,6 +66,69 @@ func TestSnapshotPutsTheDisplayedSessionFirst(t *testing.T) {
 	// 其余仍按 ID 排，好让两次快照可以逐字节比较（link 层的去抖依赖这个）。
 	if snap.Sessions[1].ID != "2026-09-01-aaa" {
 		t.Errorf("second session = %s", snap.Sessions[1].ID)
+	}
+}
+
+// 设备那行「第 N 个工具调用」读的是会话本轮的计数，快照要把它带上。
+func TestSnapshotCarriesTheTurnsToolCallCount(t *testing.T) {
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+	d.setSessionState("s1", AgentState{Status: StatusToolRunning, Label: "执行", Detail: "调用 Bash"})
+	for i := 0; i < 3; i++ {
+		d.countToolCall("s1")
+	}
+
+	snap := d.Snapshot()
+	if len(snap.Sessions) != 1 {
+		t.Fatalf("sessions = %+v, want one", snap.Sessions)
+	}
+	if got := snap.Sessions[0].Tools; got != 3 {
+		t.Errorf("tools = %d, want 3", got)
+	}
+}
+
+// 一轮的计数不跨轮：beginTurn 重开，endTurn 归零。少了任何一头，设备上那行数字都会停在
+// 上一个回合的读数上——而它要回答的正是「这一轮做到哪了」。
+func TestToolCallCountIsScopedToItsTurn(t *testing.T) {
+	d := newDesktopApp()
+	r := d.getRun("s1")
+	d.countToolCall("s1")
+	d.countToolCall("s1")
+
+	if _, _, _, _, ok := d.beginTurn("s1", r); !ok {
+		t.Fatal("beginTurn refused a run that was not running")
+	}
+	if r.toolCalls != 0 {
+		t.Errorf("toolCalls after beginTurn = %d, want 0 (a new turn starts at zero)", r.toolCalls)
+	}
+
+	d.countToolCall("s1")
+	d.endTurn("s1", "complete")
+	if r.toolCalls != 0 {
+		t.Errorf("toolCalls after endTurn = %d, want 0 (a finished turn has no progress)", r.toolCalls)
+	}
+}
+
+// 只有「真的要跑」的那个事件算数。ToolCallStart 是模型流式吐出一个 tool_call block 时发
+// 的，一次响应里的几个调用会在任何东西跑起来之前全部到达——按它计数，数字一步就跳满，
+// 而这行数字要看的正是「它在推进」。
+func TestOnlyTheToolCallArgsEventCounts(t *testing.T) {
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventToolCallStart, ToolName: "Bash",
+	}, laneTranscript)
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventToolCallArgs, ToolName: "Bash", ToolArgs: `{"command":"ls"}`,
+	}, laneTranscript)
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventToolCallArgs, ToolName: "Read", ToolArgs: `{"file_path":"a"}`,
+	}, laneTranscript)
+
+	snap := d.Snapshot()
+	if len(snap.Sessions) != 1 {
+		t.Fatalf("sessions = %+v, want one", snap.Sessions)
+	}
+	if got := snap.Sessions[0].Tools; got != 2 {
+		t.Errorf("tools = %d, want 2 (the two args events; the start is not a tool call yet)", got)
 	}
 }
 

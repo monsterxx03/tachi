@@ -93,6 +93,14 @@ type Session struct {
 	Status string `json:"status"`
 	Label  string `json:"label,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// Tools is how many tool calls this session's CURRENT TURN has started executing
+	// (0 = none yet, or nothing running). The device shows it on its own line —
+	// 「第 N 个工具调用」— and treats 0 as "draw nothing": a turn that has not touched a
+	// tool has no progress to report, and a stale number would read as progress on
+	// something that already finished.
+	//
+	// Omitted when zero, so it also costs nothing on the wire for idle sessions.
+	Tools int `json:"tools,omitempty"`
 }
 
 // Ask 是一条待答项。

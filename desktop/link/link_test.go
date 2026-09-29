@@ -244,6 +244,28 @@ func TestConnectingBringsTheWholePicture(t *testing.T) {
 	}
 }
 
+// 「本轮第几个工具调用」要真的上得了线。0 则不发：设备把「0」和「没这个字段」当成同一
+// 件事（不画那一行），所以空着它只是白占每 10 秒一趟的字节。
+func TestTheToolCallCountTravelsAndZeroIsNotSent(t *testing.T) {
+	src := newFakeSource()
+	snap := askFixture()
+	snap.Sessions[0].Tools = 3
+	src.snap = snap
+	p := newPeer(t, src)
+
+	first := p.readOf("state")["sessions"].([]any)[0].(map[string]any)
+	if got, ok := first["tools"].(float64); !ok || got != 3 {
+		t.Errorf("tools = %v, want 3", first["tools"])
+	}
+
+	// 回合结束、计数归零：这一项就该从线上消失，而不是发一个 0。
+	src.update(func(s *Snapshot) { s.Sessions[0].Tools = 0 })
+	after := p.readOf("state")["sessions"].([]any)[0].(map[string]any)
+	if got, present := after["tools"]; present {
+		t.Errorf("tools = %v, want the field omitted once the turn is over", got)
+	}
+}
+
 // 每条连接都是一个全新的 ref 空间（Server 是每条连接一个，nextSeq 从 0 开始），所以
 // 设备手里的旧等待项必须先被清空：不清的话，同一条等待会以新 ref 再入队一次——屏幕上
 // 出现两条，而旧的那条按下去没有任何反应（它在主机的 ref 表里已经不存在了）。
