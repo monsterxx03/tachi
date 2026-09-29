@@ -1,8 +1,8 @@
 // Package link 把 desktop 的「等一下」搬到一台小屏设备上：会话在干什么、谁在等一个
 // 回答、以及把回答送回去。
 //
-// 走行分隔 JSON 而不是某个设备的私有二进制：同一份载荷要能过串口、过 BLE、过 TCP，
-// 而这三条链路以后还会换（见 docs/2026-09-28-agent-badge-link-design.md）。协议与
+// 走行分隔 JSON 而不是某个设备的私有二进制：同一份载荷要能过串口、过 BLE，
+// 而这两条链路以后还会换（见 docs/2026-09-28-agent-badge-link-design.md）。协议与
 // 传输解耦，是这里唯一要紧的结构决定。
 //
 // 每一行以 "@@" 开头。这不是洁癖：设备与控制台日志共用同一条 USB-Serial-JTAG，
@@ -124,7 +124,7 @@ type Transport interface {
 }
 
 // Listener 提供 Transport：串口上「打开设备」就是 Accept（独占资源，一次一条），
-// TCP 上是等一个连接。两者都以 error 表示「现在没有设备」，由调用方退避重试。
+// BLE 上是等一个连接。两者都以 error 表示「现在没有设备」，由调用方退避重试。
 type Listener interface {
 	Accept(ctx context.Context) (Transport, error)
 	Close() error

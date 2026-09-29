@@ -165,8 +165,8 @@ type desktopApp struct {
 	linkStop   context.CancelFunc
 	linkLn     link.Listener
 	// linkGate serializes startBadge/stopBadge, so that "at most one link is live" holds
-	// by OUR bookkeeping rather than by the operating system refusing a second open. Serial
-	// and TCP do refuse it; BLE will not — two centrals can connect to the same peripheral —
+	// by OUR bookkeeping rather than by the operating system refusing a second open. BLE
+	// will not refuse it — two centrals can connect to the same peripheral —
 	// and two live links mean two ref ledgers, where the same waiting item gets registered
 	// twice and neither copy can be answered. linkMu keeps guarding the fields; this one
 	// keeps two whole switches from interleaving.

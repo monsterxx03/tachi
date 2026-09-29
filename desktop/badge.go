@@ -29,7 +29,6 @@ const (
 	//
 	//	serial             打开自动找到的 Espressif 串口设备
 	//	serial:/dev/cu.…   打开指定串口
-	//	tcp:127.0.0.1:8765 监听一个本地端口，等设备或脚本连上来
 	//
 	// 未设置即走 config；两边都是空 = 关闭。
 	envBadge = "TACHI_BADGE"
@@ -88,7 +87,7 @@ func applyBadgeLink(d *desktopApp, cfg *config.Config) error {
 //
 // 它做的第一件事是撤掉上一条——一个进程里同时开两条链路，就是两个 Server 抢同一个
 // 串口，而串口只有一个赢家。**这条不变量由我们自己守**（linkGate + 先换后关），不是
-// 靠操作系统拒绝第二次打开：串口和 TCP 会拒绝，BLE 不会，而两个 Server 就是两本 ref
+// 靠操作系统拒绝第二次打开：BLE 不会（两个 central 能同时连上同一个 peripheral），而两个 Server 就是两本 ref
 // 账——同一条等待会被登记两次，两条都发出去，其中一条按下去没有任何反应。
 func (d *desktopApp) startBadge(cfg *config.Config) {
 	// openBadgeLink 放在锁外：串口的 open 可能阻塞，不该占着这把锁（startBadge 只在
@@ -184,19 +183,6 @@ func openBadgeLink(transport, address string) (link.Listener, string) {
 			where = "（自动查找）"
 		}
 		return link.NewSerialListener(address, badgeBaud()), "serial " + where
-	case "tcp":
-		if address == "" {
-			badgeLog().Warn(context.Background(),
-				"badge link: tcp needs an address (e.g. 127.0.0.1:8765)")
-			return nil, ""
-		}
-		ln, err := link.ListenTCP(address)
-		if err != nil {
-			badgeLog().Error(context.Background(), "badge link: cannot listen", err,
-				"address", address)
-			return nil, ""
-		}
-		return ln, "tcp " + address
 	case "ble":
 		// address 这里是广播名字，不是地址：macOS 上 CoreBluetooth 给的是它自己那套
 		// 标识（一个 UUID），而设备每次重连都不保证不变——按名字找才是稳定的，
@@ -208,7 +194,7 @@ func openBadgeLink(transport, address string) (link.Listener, string) {
 		return link.NewBLEListener(address), "bluetooth " + where
 	}
 	badgeLog().Warn(context.Background(),
-		"badge link: unknown transport (want off, serial, tcp or ble)", "transport", transport)
+		"badge link: unknown transport (want off, serial or ble)", "transport", transport)
 	return nil, ""
 }
 

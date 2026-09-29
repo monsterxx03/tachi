@@ -585,7 +585,10 @@ var settingChoices = map[string]func(*config.Config) []string{
 func badgeTransports(*config.Config) []string {
 	// `ble` 排最后：它不需要线，但第一次要在电脑上输一次 6 位配对码（设备屏幕上有），
 	// 所以它不是「插上就能用」的那一类。
-	return []string{"off", "serial", "tcp", "ble"}
+	//
+	// 曾经还有一个 `tcp`（tachi 监听一个端口、脚本冒充设备连上来），那是链路刚起步时
+	// 的脚手架——设备已经能连了，它就没有存在的理由了。
+	return []string{"off", "serial", "ble"}
 }
 
 // providerNames lists the providers this config defines, in file order — the choice list for

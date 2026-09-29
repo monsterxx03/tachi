@@ -77,12 +77,12 @@ flowchart LR
 
 ### 3.3 传输层
 
-协议与传输解耦：一个 `link.Listener` 接口，三个实现（`serial` / `tcp` / `ble`），外加一个关闭档，
+协议与传输解耦：一个 `link.Listener` 接口，两个实现（`serial` / `ble`），外加一个关闭档，
 协议对传输完全无感知。
 
 - **`serial`（有线那条）**：设备的 USB-Serial-JTAG。插上就有，不需要配网、不需要共享密钥、
   不用算电池。代价是拖着线。
-- **`tcp`（开发用）**：tachi 监听一个地址，一个脚本冒充设备连上来。它是不动 ESP-IDF、不烧固件
+- **`tcp`（开发用，后来去掉了）**：tachi 监听一个地址，一个脚本冒充设备连上来。它是不动 ESP-IDF、不烧固件
   就能把协议跑通的那条路，也是设备将来走 Wi-Fi 时的形状。**默认绑回环**：这条链路上的一个回答
   就是在批准一条要执行的命令，代码不强制回环，所以地址不要写 `0.0.0.0`。
 - **`ble`（P4，已落地）**：设备做 GATT peripheral，desktop 直接用 `tinygo.org/x/bluetooth`
@@ -102,7 +102,7 @@ flowchart LR
 
 **同一时刻只有一条链路，而且这条不变量由我们自己守。** `startBadge` / `stopBadge` 用一把锁
 （`linkGate`）串行化，换链路时先摘掉旧的、装上新的、再停旧的。以前它其实是被操作系统兜着的
-——串口和 TCP 的第二次打开会失败；**BLE 不会**（两个 central 可以同时连上同一个 peripheral）。
+——串口和 TCP 的第二次打开会失败；**BLE 不会**（两个 central 可以同时连上同一个 peripheral）。（tcp 那档当然也会拒绝，但它已经不在了。）
 而两条活链路就是**两本 ref 账**：同一条等待会被登记两次、各发一份，其中一份按下去没有任何反应
 （它在另一条的 ref 表里）。设备侧不需要配合，它一次只接一条连接就够（BLE 侧
 `MAX_CONNECTIONS=1`）。
@@ -241,7 +241,7 @@ flowchart LR
 | `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构（状态副标题在这里裁到设备收得下的**字节数**——设备那个字段是按字节截断的），`Answer()` 分发到两个现成入口，`TakeAlerts()` 交出攒下的提示音（事件不能被去抖吞掉）；按配置开关链路 |
 | `desktop/link/link.go` | `Listener` / `Transport` 接口、`Server` 会话循环、去抖、ref 分配、`hello`/`sync`/`answer` 处理 |
 | `desktop/link/serial.go` | 串口实现；端口为空时按 Espressif USB VID 每次 Accept 重新查找（端口名随插拔漂移） |
-| `desktop/link/tcp.go` | 监听式实现（开发用，见 §3.3） |
+| `desktop/link/tcp.go` | 监听式实现（开发用，见 §3.3）——**已删除；这一档不做了** |
 | `desktop/link/ble.go` | BLE 实现（central 侧）：按广播名字扫描、把 GATT 连接包装成字节流、切片写、**等到链路已认证加密才交出去**（见 §3.3） |
 | `desktop/ask_answered.go` | 把「这次回答来自设备」广播给前端（`agent:ask_answered`） |
 | `desktop/settings.go`、`config/config.go` | `badge.transport` / `badge.address` / `badge.alert`（提示音开关，默认开）设置项与持久配置 |

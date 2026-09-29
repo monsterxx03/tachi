@@ -1,9 +1,7 @@
 package main
 
 import (
-	"net"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -209,108 +207,56 @@ func drain(ch chan struct{}) {
 	}
 }
 
-// 设备链路可以在运行时改：设置页保存后停旧起新。测的是「端口真的开了又真的关了」，
-// 而不是「config 对象里的字符串变了」——一个只改了字段的 Apply 就是这样骗过自己的。
+// 设备链路可以在运行时改：设置页保存后停旧起新。
+//
+// 它曾经用 tcp 来验：起一个监听、从外面连一下、关掉之后再连不上——那是当时唯一
+// 「看得见、摸得着」的假设备。tcp 那一档去掉之后，这里只能看链路对象本身起来没起来，
+// 比连一下弱，但仍然抓得住「apply 改了字段却没真动链路」这类错。
 func TestTheBadgeConfigCanBeSwitchedAtRuntime(t *testing.T) {
 	t.Setenv(envBadge, "") // 这条测的是 config，别让环境变量抢答
 	d := &desktopApp{runs: map[string]*sessionRun{}}
 
-	// 先听上再放开，拿到一个空闲端口。有一点竞态，换来的是不必把端口写死在测试里。
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close()
-
 	cfg := &config.Config{}
-	cfg.Badge.Transport = "tcp"
-	cfg.Badge.Address = addr
+	cfg.Badge.Transport = "serial"
+	cfg.Badge.Address = "" // 自动查找：不给具体设备，只验证链路被建起来了
 
 	if err := applyBadgeLink(d, cfg); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	t.Cleanup(d.stopBadge)
 
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatalf("the link did not come up on %s: %v", addr, err)
+	if !badgeLinkUp(d) {
+		t.Fatal("the link did not come up")
 	}
-	_ = conn.Close()
 
 	cfg.Badge.Transport = "off"
 	if err := applyBadgeLink(d, cfg); err != nil {
 		t.Fatalf("apply off: %v", err)
 	}
-
-	if c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond); err == nil {
-		_ = c.Close()
-		t.Error("the link is still listening after being turned off")
+	if badgeLinkUp(d) {
+		t.Error("the link is still up after being turned off")
 	}
 }
 
-// 单链路是**我们自己的**不变量，不是「操作系统会拒绝第二次打开」。
-//
-// 串口与 TCP 恰好会拒绝（第二次 bind/open 失败），BLE 不会：两个 central 可以同时连上
-// 同一个 peripheral。而两条活链路就是两本 ref 账——同一条等待会被登记两次、各发一份，
-// 其中一份按下去没有任何反应。
-//
-// 这条用例把 8 次「换链路」挤在一起：每个地址都能被打开，所以任何一条被漏掉的 listener
-// 都会一直听着、并且在结束时能连上（这正是「漏了」的样子）。收尾必须恰好剩一条。
-func TestOnlyOneBadgeLinkSurvivesConcurrentSwitches(t *testing.T) {
-	t.Setenv(envBadge, "") // 这条测的是 config，别让环境变量抢答
-	d := &desktopApp{runs: map[string]*sessionRun{}}
-
-	const switches = 8
-	addrs := make([]string, 0, switches)
-	for i := 0; i < switches; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		addrs = append(addrs, l.Addr().String())
-		_ = l.Close()
-	}
-
-	var wg sync.WaitGroup
-	for _, addr := range addrs {
-		wg.Add(1)
-		go func(addr string) {
-			defer wg.Done()
-			cfg := &config.Config{}
-			cfg.Badge.Transport = "tcp"
-			cfg.Badge.Address = addr
-			_ = applyBadgeLink(d, cfg)
-		}(addr)
-	}
-	wg.Wait()
-	t.Cleanup(d.stopBadge)
-
-	live := 0
-	for _, addr := range addrs {
-		c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
-		if err != nil {
-			continue
-		}
-		live++
-		_ = c.Close()
-	}
-	if live != 1 {
-		t.Errorf("%d links are live after %d concurrent switches, want exactly 1", live, switches)
-	}
+// badgeLinkUp 说链路此刻建起来没有。读 linkLn 必须持那把锁——它保护的是这条链路的
+// 整个生命周期（见 agent.go 里 linkMu 的注释）。
+func badgeLinkUp(d *desktopApp) bool {
+	d.linkMu.Lock()
+	defer d.linkMu.Unlock()
+	return d.linkLn != nil
 }
 
 // 环境变量是覆盖，不是回退：它必须能盖住文件里的持久设置（这正是它作为调试通道的
 // 用途——临时把 app 指到一台假设备上）。
 func TestTheEnvironmentOverridesTheBadgeConfig(t *testing.T) {
-	t.Setenv(envBadge, "tcp:127.0.0.1:9")
+	t.Setenv(envBadge, "serial:/dev/nope")
 	cfg := &config.Config{}
 	cfg.Badge.Transport = "serial"
 	cfg.Badge.Address = "/dev/nope"
 
 	transport, address := badgeTarget(cfg)
-	if transport != "tcp" || address != "127.0.0.1:9" {
-		t.Errorf("target = %q/%q, want the environment's tcp:127.0.0.1:9", transport, address)
+	if transport != "serial" || address != "/dev/nope" {
+		t.Errorf("target = %q/%q, want the environment's serial:/dev/nope", transport, address)
 	}
 }
 
@@ -325,8 +271,6 @@ func TestTheBadgeIsOffByDefault(t *testing.T) {
 // 既不该让 desktop 起不来，也不该让一次设置保存失败。
 func TestAMisconfiguredBadgeLinkIsRefusedQuietly(t *testing.T) {
 	for _, tc := range []struct{ transport, address, why string }{
-		{"tcp", "", "a missing address"},
-		{"tcp", "not an address", "an address that is not one"},
 		{"bluetooth", "whatever", "a transport that does not exist yet"},
 	} {
 		if ln, desc := openBadgeLink(tc.transport, tc.address); ln != nil {
