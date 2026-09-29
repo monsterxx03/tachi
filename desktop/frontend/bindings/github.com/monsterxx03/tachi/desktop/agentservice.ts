@@ -629,6 +629,15 @@ export function RunCommand(text: string): $CancellablePromise<string> {
  * `transcript-fold`. The state is set BEFORE the event is emitted (`setSessionState` runs while
  * handling that same event), so this answer can never contradict what the frontend was just
  * told. The three statuses are the same ones the frontend counts as busy.
+ * 
+ * A run that has compacted answers with BOTH ids: the key it is filed under (the turn's stream
+ * is still landing in that session's transcript, which is the row the reader is watching) and the
+ * child the conversation has moved into. Both, because the sidebar renders whichever of the two
+ * its own session list happens to hold — nothing refreshes that list mid-turn, so the child's row
+ * may not exist yet, and reporting the child ALONE would leave the only row on screen unmarked
+ * while a turn is running. They are two rows of ONE conversation (the child's row carries the
+ * parent as 「压缩前」, collapsed), which is why this is a marker on a chain and not "two sessions
+ * running".
  */
 export function RunningSessions(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3792694786);
@@ -895,6 +904,11 @@ export function SettingsRemovalWarning(elementPath: string): $CancellablePromise
  * The channel is drained before writing so a reply that races a timed-out or
  * already-answered steer point can neither wedge the loop nor leave a stale
  * value behind for the next steer point to consume.
+ * 
+ * The session id is resolved through getRun, so a steer aimed at the child of a compaction
+ * that is still in flight reaches the turn that is producing into it. Read off the map by the
+ * child's id alone it would find no steer channel and answer "not running" — the frontend shows
+ * the text in the transcript, the agent's steer_check times out, and the message is gone.
  */
 export function Steer(sessionID: string, text: string): $CancellablePromise<string> {
     return $Call.ByID(2451555629, sessionID, text);

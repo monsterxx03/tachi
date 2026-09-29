@@ -211,7 +211,9 @@ func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, pri
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, sess := range members {
-		if r := d.runs[sess.ID]; r != nil && r.running {
+		// ownerOfLocked, not d.runs[...]: a member that a compaction moved the conversation
+		// INTO mid-turn is being written by that turn, so detaching it is refused the same way.
+		if r := d.ownerOfLocked(sess.ID); r != nil && r.running {
 			return refuseDeleteProjectRunning
 		}
 	}
@@ -230,7 +232,7 @@ func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, pri
 		// A live member's agent must not keep serving the tree it was pointed at while the
 		// project owned it (design §4.1/§6.2). The paths are normally identical, and the mark
 		// is what keeps that from being silently assumed.
-		if r := d.runs[sess.ID]; r != nil && r.agent != nil {
+		if r := d.ownerOfLocked(sess.ID); r != nil && r.agent != nil {
 			r.treeStale = true
 		}
 	}

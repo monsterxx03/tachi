@@ -385,6 +385,9 @@ func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewed
 		d.mu.Unlock()
 		return refuseNoSession
 	}
+	// getRun resolves the child of a compaction that is still in flight to the run producing
+	// into it, so a command typed while that child is on screen meets the same busy check below
+	// rather than starting a second run over one conversation (see ownerOfLocked).
 	r := d.getRun(id)
 	d.mu.Unlock()
 	if r.agent == nil {
@@ -549,7 +552,9 @@ func runCompactCommand(c *commandRun) error {
 	c.desk.setRunHistory(c.id, newHistory)
 	// Hand the move to the post-turn machinery: the compacted child session is
 	// the conversation from here on, and followCompaction re-homes the run (and
-	// the frontend) once the command's turn ends.
+	// the frontend) once the command's turn ends. Until then the record is also what owns the
+	// child (ownerOfLocked), so a message sent in it meets 「会话正在运行」 instead of starting a
+	// second turn on a conversation this one is still writing.
 	if cur := r.sm.Current(); cur != nil {
 		d := c.desk
 		d.mu.Lock()

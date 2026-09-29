@@ -302,10 +302,12 @@ func (d *desktopApp) updateSessionMeta(id string, mutate func(*session.Session))
 // between would have its session rewritten underneath it (design §6.2). The file write
 // therefore happens under d.mu, exactly as DeleteSession's does.
 //
-// Callers must hold d.mu. It reads the run map directly rather than through getRun: a meta
-// update is not a place to CREATE a run for an unknown id.
+// Callers must hold d.mu. It resolves through ownerOfLocked rather than getRun: a meta update
+// is not a place to CREATE a run for an unknown id, while the child of a live compaction IS
+// owned by the run producing into it (its manager's current session is that child, which is the
+// copy a running turn is mutating — the one this read-modify-write must land on).
 func (d *desktopApp) updateSessionMetaLocked(id string, mutate func(*session.Session)) error {
-	r := d.runs[id]
+	r := d.ownerOfLocked(id)
 	if r != nil && r.sm != nil {
 		if cur := r.sm.Current(); cur != nil {
 			mutate(cur)

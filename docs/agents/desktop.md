@@ -23,6 +23,7 @@ gets its own handbook beside this one rather than growing here.
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
+| **Desktop Compaction** | you touch the compaction path (`agent/compact.go`, `desktop/compaction.go`, the `AgentEventAutoCompactDone` case), `RunningSessions`, or anything that resolves **which run owns a session** |
 | **Desktop UI State** | you change the frontend: which module owns what, and the rule each convention keeps |
 | **Desktop Themes** | you touch colours |
 
@@ -67,6 +68,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
 | rewind / checkpoints | `rewind`, `compact` |
 | context meter, usage numbers, auto-compaction (the loop compacts on its own, mid-turn) | `ctx-ring`, `compact`, `auto-compact` |
+| the compaction WINDOW (the child exists while the turn is still running: which row shows 运行中, what a send in the child does) | `compact-window` |
 | MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
@@ -644,6 +646,44 @@ Fixtures exist where the real path needs something a driver cannot do:
   session reopened after the reply was never recorded — which is why no smoke scenario covers it, and why
   `desktop/agent_turn_test.go` builds its fixture through the REAL conversion.
 
+## Desktop Compaction (the window between the child's creation and the turn's end)
+
+- **A run's session KEY moves at the end of the turn, but the CONVERSATION moves at the
+  compaction** — `agent.FinalizeCompact` runs in the middle of the loop, so until `endTurn`
+  reaches `followCompaction` a turn is appending to the child while the bookkeeping still calls
+  it the parent's. ONE resolver owns that fact: `ownerOfLocked` (reached through `getRun` /
+  `runOf`) answers "which run is this session's?", and for that child it answers the run
+  producing into it. **Anything addressed by a session id goes through the resolver, never
+  through `d.runs[id]`** — `startTurn`, `RunCommand`/`startCommand`, `Steer`, `StopAndSend`,
+  `stopTurn`, `prepareSession`, `sessionRunning`, the delete/project guards, `sessionTitle`,
+  `updateSessionMetaLocked`. Reading the map by the child's id is what made a message sent there
+  start a SECOND turn on the same conversation instead of meeting `refuseTurnRunning`: two turns
+  appending to one `messages.jsonl` (interleaved records, a rebuilt history whose tool calls are
+  unpaired), a steer answering "not running" while the loop's `steer_check` timed out, and two
+  sidebar rows spinning.
+- **`RunningSessions` names BOTH rows of a pending compaction** — the key the run is filed under
+  (the turn's stream lands in that session's transcript, which is the row the reader is watching)
+  and the child it is producing into. Both, because the sidebar renders whichever of the two its
+  own session list holds and **nothing refreshes that list mid-turn**: reporting the child alone
+  leaves the only row on screen unmarked while a turn is running. They are two rows of ONE
+  conversation (the parent hangs under the child as 「压缩前」, collapsed), which is why a marker
+  on the chain is not the same thing as two sessions running.
+- **`followCompaction` refuses to take the child's key from a run that is USING it** (a live
+  turn of its own — the double-write above). It logs and leaves both runs alone, rather than
+  dropping the run whose turn is in flight (its state, steer channel and busy guard all live on
+  that entry); an IDLE entry on that key is stale bookkeeping from a load that raced the
+  compaction, and is replaced with its agent closed.
+- **The alias needs no clearing and no second table**: it is read off `sessionRun.compaction`,
+  which `followCompaction` consumes — a map of its own would be a copy of one fact, and the copy
+  is what goes stale. The manual `/compact` path sets that same record, so it needs no extra
+  wiring: it only differs in who decided to compact.
+- **The window's frontend half is pinned by `compact-window`**, and it is not only about the
+  spinner: the message the reader sends in the child queues, and the switch that ends the turn
+  re-reads that child from disk WHILE the flush is in the air — so the transcript store has to
+  keep the bubbles the composer placed (see the `holdLocal` bullet under Desktop UI State). The
+  order of the two requests is the Go half's assertion: the line has to reach the model in the
+  request that already carries the reply it was queued behind.
+
 ## Desktop UI State
 
 Each bullet is a rule a change must keep. The mechanism behind one lives in the module it names.
@@ -654,6 +694,15 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the one funnel
   — so "this belongs to a conversation" is enforced by the signature. App.tsx must not declare its own
   per-session state; a new per-session need is a new op in that hook.
+- **A page that lands from disk must not swallow a message the frontend placed on its own**
+  (`holdLocal`/`releaseLocal`, called by whichever code puts a bubble in optimistically — the composer's send,
+  `/command` and 立即发送 paths). A reload REPLACES the window (a rewind depends on that), but the page may have
+  been READ before those bubbles existed: an auto-compaction switches the conversation into its child while the
+  queue it is about to flush is still in the air, so the switch's own re-read of the child is a snapshot without
+  the message the reader just sent — replacing the window with it left a transcript that answered a question it
+  never showed (the reply arrives over the live stream, so nothing else is visibly missing). The held messages
+  are re-attached by ID and the hold is consumed by that first landing; `releaseLocal` (on the session's
+  `agent:idle`) is the backstop for a hold no page ever lands on. `compact-window` pins it.
 - **The composer is `composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker, the
   "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share one
   decision — `route`: send now, queue for the next steer point, or dispatch as a slash command.
@@ -729,7 +778,8 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **A session's "running" answer and the event that says its turn is over must not disagree**
   (`TestAFinishedTurnIsNotReportedAsRunning`): answer from the per-session STATE, never from
   `sessionRun.running`, because a turn publishes its own `turn_complete` and only THEN exits to `endTurn` — the
-  state is set before the event, so it can never contradict it.
+  state is set before the event, so it can never contradict it. WHICH session the answer names is a
+  second rule, and the compaction window is the one case where they differ (see Desktop Compaction).
 - **A turn that fails MID-STREAM keeps the history it already produced** (the partial messages are adopted on
   EVERY error exit that carries them): it has already EXECUTED tool calls by then, and dropping them is how the
   next request comes to be missing work the model did (issue #38). What arrives is complete pairs, so the

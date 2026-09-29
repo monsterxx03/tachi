@@ -40,6 +40,34 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
     })
   }, [])
 
+  // ── Locally placed messages ────────────────────────────────────────────────
+  // holdLocal registers messages the frontend places on its OWN: the composer's optimistic user
+  // bubble and the running placeholder that comes with it, put in the transcript before the
+  // backend has written anything.
+  //
+  // A page that lands later REPLACES the window — that is what a reload means, and a rewind
+  // depends on it — but the page may have been READ before these arrived, and then it is a
+  // snapshot without the message the reader just sent. That is not hypothetical: an
+  // auto-compaction moves the conversation into its child session while the queue it is about to
+  // flush is still in the air, so the switch's own re-read of the child races the flush, and
+  // replacing the window with that page lost the reader's own bubble — while the reply arrived
+  // over the live stream, leaving a transcript that answers a question it never showed.
+  //
+  // The held messages are re-attached to the page by ID, and the hold is consumed by that first
+  // landing (once the message is on disk, the next page carries it by itself). releaseLocal is
+  // the safety net for a hold nothing ever lands on — the composer calls it when the turn it
+  // started is over, i.e. when the page would have to be re-read anyway.
+  const localTail = useRef<Record<string, Message[]>>({})
+
+  const holdLocal = useCallback((sid: string, messages: Message[]) => {
+    if (!sid || messages.length === 0) return
+    localTail.current[sid] = [...(localTail.current[sid] || []), ...messages]
+  }, [])
+
+  const releaseLocal = useCallback((sid: string) => {
+    delete localTail.current[sid]
+  }, [])
+
   // patchMessage rewrites ONE message of the current session, by id: the shape a
   // transcript-local interaction needs (expanding a diff card), so the message map
   // stays the single source of truth for what is open.
@@ -208,9 +236,17 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
     setEarliestTs((p) => ({ ...p, [sid]: page.earliestTs }))
   }, [])
 
-  // setSessionPage replaces a session's loaded window (first load, or a re-read).
+  // setSessionPage replaces a session's loaded window (first load, or a re-read) — keeping,
+  // however, whatever the frontend placed on its own while this page was in flight (see
+  // holdLocal: the reader's own bubbles must not be swallowed by a snapshot read before them).
   const setSessionPage = useCallback((sid: string, page: SessionPage) => {
-    setMsgCache((prev) => ({ ...prev, [sid]: page.messages }))
+    const tail = localTail.current[sid]
+    const have = new Set(page.messages.map((m) => m.id))
+    const keep = (tail || []).filter((m) => !have.has(m.id))
+    // Consumed by this landing whether or not anything had to be re-attached (the tail is read
+    // and cleared OUTSIDE the state updater: React may run an updater more than once).
+    delete localTail.current[sid]
+    setMsgCache((prev) => ({ ...prev, [sid]: keep.length ? [...page.messages, ...keep] : page.messages }))
     setCursor(sid, page)
   }, [setCursor])
 
@@ -282,6 +318,7 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
     msgCache, runningSet, hasMore, earliestTs,
     // transcript mutation
     updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual,
+    holdLocal, releaseLocal,
     // history window
     setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,
     // running set

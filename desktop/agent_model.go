@@ -23,7 +23,7 @@ func (s *AgentService) SetMode(mode string) string {
 	id := d.currentID()
 
 	d.mu.Lock()
-	r := d.runs[id]
+	r := d.ownerOfLocked(id)
 	running := false
 	if r != nil {
 		running = r.running

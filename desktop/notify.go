@@ -231,7 +231,7 @@ func askBody(questions int) string {
 // the notification subtitle so a background session is identifiable.
 func (d *desktopApp) sessionTitle(id string) string {
 	d.mu.Lock()
-	r := d.runs[id]
+	r := d.ownerOfLocked(id)
 	d.mu.Unlock()
 	if r == nil || r.sm == nil {
 		return ""

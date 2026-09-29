@@ -1103,6 +1103,84 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// compact-window: the stretch BETWEEN an auto-compaction and the end of the turn that
+		// caused it. The conversation has already moved into the child session, while the run and
+		// the turn's event stream are still keyed to the parent — so the child must not behave
+		// like an ordinary idle session: what is sent there has to queue and go out AFTERWARDS,
+		// never as a second turn appending to the same messages.jsonl beside the one still writing
+		// (the report: two sessions spinning, one history with two turns' records interleaved).
+		//
+		// The window is held open with pauses in the child's reply — without them there is nothing
+		// to send INTO and the scenario would measure the ordinary case. The reader's half is the
+		// driver's (the conversation's own row carries the marker, the send button reads 排队, the
+		// message lands in the pending queue); the Go half owns the fact the DOM cannot show — the
+		// order the two requests were actually made in.
+		{
+			name: "compact-window",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe compact-window scenario's working directory\n",
+				// What pushes the estimate over the threshold: the floor of any prompt is a few
+				// percent of the mock's 128k window, so the tool result is what carries it there.
+				"big.txt": strings.Repeat("compact-window filler line abcdefghijklmnopqrstuvwxyz\n", 8000),
+			},
+			config: "compact:\n  threshold: 0.3\ntool_result:\n  max_chars: 400000\n",
+			steps: []mockllm.Step{
+				// Iteration 1: an ordinary call that asks for a tool whose output crosses the
+				// threshold, so the compaction lands at the top of the NEXT iteration — mid-turn,
+				// the shape a conversation that grew actually takes.
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_big", "Bash", `{"command":"cat big.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(40000, 60, 20000, 20),
+					mockllm.Done(),
+				)},
+				// The summary the child is built from: auto-compaction asks through the compact
+				// strategy's own CreateChat, a NON-streaming call, so this step is a plain JSON body.
+				{Reply: mockllm.JSON("历史摘要：用户要求看一个文件，已经看过。", "")},
+				// …and the turn continuing IN THE CHILD, held open long enough for the driver to do
+				// its work inside the window.
+				{Reply: mockllm.Stream(
+					mockllm.Text("压缩之后我接着跑："),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第一步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第二步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第三步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第四步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第五步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第六步，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("窗口收尾标记。"),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 120, 900, 20),
+					mockllm.Done(),
+				)},
+				// The line the driver queued during the window. It reaches the model only once the
+				// turn above has ended — which is exactly what the assertion below reads.
+				{Reply: textStream("排队那条我收到了。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("工具调用、压缩、续跑、排队那条，共四次调用", len(c.requests) == 4, requestCount(c.requests))
+				at, seen := c.requestSeen("窗口期这句先排着")
+				c.check("窗口期排的那句最终发出去了", seen, "在 "+requestCount(c.requests)+" 里找「窗口期这句先排着」")
+				if seen {
+					// The whole point, and the one thing the DOM cannot say: that request has to
+					// carry the reply the line was queued BEHIND. Sent from inside the window
+					// instead, it would precede that reply — two turns writing one session file.
+					c.check("它是在那一轮回复之后才发出去的（不是并发的第二个回合）",
+						requestHasText(c.requests[at-1], "窗口收尾标记"), requestTail(c.requests[at-1]))
+				}
+				// The fixture, the child the compaction made, and the session the driver created to
+				// get the child's row onto the screen (nothing refreshes the list mid-turn).
+				c.check("会话数：fixture、子会话、驱动新建的那个", c.sessionCount() == 3, strconv.Itoa(c.sessionCount()))
+			},
+		},
+		//
 		// ask-form: the parked AskUserQuestion form and the keystroke that finishes it. The form is
 		// inline in the transcript with option rows and a single-line free-text box; Enter in that
 		// box submits (the box cannot hold a newline, so the key has no other job), while ⌘↩ keeps

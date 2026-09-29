@@ -77,7 +77,7 @@ type promptKey struct {
 // carries the mode it was left in).
 func (d *desktopApp) sessionMode(id string) string {
 	d.mu.Lock()
-	r := d.runs[id]
+	r := d.ownerOfLocked(id)
 	if r == nil {
 		d.mu.Unlock()
 		return agent.ModeAuto

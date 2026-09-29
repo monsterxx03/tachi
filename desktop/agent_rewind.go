@@ -233,7 +233,9 @@ func (s *AgentService) ApplyRewind(id string, turn int) string {
 func (d *desktopApp) sessionRunning(id string) (bool, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r := d.runs[id]; r != nil && r.running {
+	// ownerOfLocked, not d.runs[id]: a rewind of the child a live turn is producing into would
+	// truncate the file under that turn.
+	if r := d.ownerOfLocked(id); r != nil && r.running {
 		return true, "对话正在运行，请先停止这一轮再回退"
 	}
 	return false, ""

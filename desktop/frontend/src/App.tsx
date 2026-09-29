@@ -425,6 +425,7 @@ function App() {
   const {
     msgCache, runningSet, hasMore, earliestTs,
     updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual,
+    holdLocal, releaseLocal,
     setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,
     refreshRunning, markRunning, enqueueDelta, flushDeltas,
   } = useSessionTranscript(currentId, scrollToBottom)
@@ -799,7 +800,7 @@ function App() {
   const composer = useComposer({
     currentId,
     running: isCurrentRunning,
-    transcript: { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning },
+    transcript: { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning, holdLocal, releaseLocal },
     scrollToBottom,
     chatRef,
   })

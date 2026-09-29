@@ -136,8 +136,11 @@ func (s *AgentService) DeleteSession(id string) string {
 	}
 	// Read the flag and remove the run in ONE critical section: a turn starting
 	// between the two would otherwise be cancelled out of the map mid-flight.
+	// ownerOfLocked, not d.runs[id]: the child of a compaction that is still in flight IS the
+	// conversation the running turn is writing to, and deleting it under that turn is exactly
+	// the loss this guard exists to prevent.
 	d.mu.Lock()
-	if r := d.runs[id]; r != nil && r.running {
+	if r := d.ownerOfLocked(id); r != nil && r.running {
 		d.mu.Unlock()
 		return refuseDeleteRunning
 	}

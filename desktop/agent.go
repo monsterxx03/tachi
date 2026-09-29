@@ -70,6 +70,15 @@ func (s *AgentService) GetState() AgentState {
 // `transcript-fold`. The state is set BEFORE the event is emitted (`setSessionState` runs while
 // handling that same event), so this answer can never contradict what the frontend was just
 // told. The three statuses are the same ones the frontend counts as busy.
+//
+// A run that has compacted answers with BOTH ids: the key it is filed under (the turn's stream
+// is still landing in that session's transcript, which is the row the reader is watching) and the
+// child the conversation has moved into. Both, because the sidebar renders whichever of the two
+// its own session list happens to hold — nothing refreshes that list mid-turn, so the child's row
+// may not exist yet, and reporting the child ALONE would leave the only row on screen unmarked
+// while a turn is running. They are two rows of ONE conversation (the child's row carries the
+// parent as 「压缩前」, collapsed), which is why this is a marker on a chain and not "two sessions
+// running".
 func (s *AgentService) RunningSessions() []string {
 	s.desk.mu.Lock()
 	defer s.desk.mu.Unlock()
@@ -78,6 +87,9 @@ func (s *AgentService) RunningSessions() []string {
 		switch r.state.Status {
 		case StatusThinking, StatusToolRunning, StatusBusy:
 			out = append(out, id)
+			if r.compaction != nil && r.compaction.SessionID != "" {
+				out = append(out, r.compaction.SessionID)
+			}
 		}
 	}
 	return out
@@ -297,11 +309,11 @@ func (d *desktopApp) getRun(id string) *sessionRun {
 	if d.runs == nil {
 		d.runs = make(map[string]*sessionRun)
 	}
-	r := d.runs[id]
-	if r == nil {
-		r = &sessionRun{state: AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}}
-		d.runs[id] = r
+	if r := d.ownerOfLocked(id); r != nil {
+		return r
 	}
+	r := &sessionRun{state: AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}}
+	d.runs[id] = r
 	return r
 }
 
@@ -313,7 +325,34 @@ func (d *desktopApp) getRun(id string) *sessionRun {
 func (d *desktopApp) runOf(id string) *sessionRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.runs[id]
+	return d.ownerOfLocked(id)
+}
+
+// ownerOfLocked is the ONE answer to "which run is this session's?" — the exit getRun and
+// runOf both resolve through. Callers must hold d.mu.
+//
+// It answers nil for a session nothing has prepared. The one alias it resolves is the CHILD
+// a compaction created while the turn that compacted is still in flight: the agent loop has
+// already moved the conversation into that child (agent.FinalizeCompact) and keeps appending
+// to it, while the run stays keyed to the parent until the turn settles (followCompaction).
+// Without the alias the child is an ORDINARY session to every reader — it resolves to no run
+// (so RunningSessions does not report it, and prepareSession would build a SECOND agent for
+// one conversation), and it is not busy (so a send starts a second turn whose records
+// interleave with the first one's in a single session file, under two spinning sidebar rows).
+//
+// The alias is read off the run's own pending record rather than kept in a table of its own —
+// one fact, one place, and it is what makes the alias need no clearing: followCompaction
+// consumes r.compaction, and the alias goes with it.
+func (d *desktopApp) ownerOfLocked(id string) *sessionRun {
+	if r := d.runs[id]; r != nil {
+		return r
+	}
+	for _, r := range d.runs {
+		if r.compaction != nil && r.compaction.SessionID == id {
+			return r
+		}
+	}
+	return nil
 }
 
 // refuseNoSession is the single refusal for "this needs a session with a live agent and
@@ -466,17 +505,23 @@ func (d *desktopApp) sessionThinkingLevel(id string) string {
 
 // activeRun returns the run for the currently displayed session (nil when no
 // session is active). It is the per-session source of truth for provider/agent
-// reading in the UI.
+// reading in the UI. It resolves through ownerOfLocked, so the displayed session being the
+// child of a compaction still in flight reads the run that is producing into it.
 func (d *desktopApp) activeRun() *sessionRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.runs[d.activeID]
+	return d.ownerOfLocked(d.activeID)
 }
 
 // prepareSession lazily builds (or returns) the per-session agent + manager for
 // id, mirroring channel's prepareThreadSession. Each session owns its own
 // AIAgent and Manager, so concurrent turns never share agent turn state.
 // Callers must NOT hold d.mu.
+//
+// It resolves through getRun, so opening the child of a compaction that is still in flight
+// returns the run that is producing into it — one agent per conversation, not one per link of
+// the chain. Its manager's Current() is that child already, which is what makes the loaded
+// history and the file it reads agree.
 //
 // When no config is available (bootstrap failed) the run is returned with a nil
 // agent, and the UI falls back to simulated turns. On a lost build race the

@@ -10,6 +10,18 @@ package main
 // the parent — so the desktop records the move while the turn runs (see the
 // AgentEventAutoCompactDone case in handleEvent) and re-homes the run here, once
 // the stream has settled.
+//
+// Between those two moments the conversation is the CHILD while the run is still keyed to the
+// parent, and that window is not purely a presentation matter: the child must not be treated as
+// an ordinary session, or a message sent in it starts a SECOND turn appending to the same
+// session file (two rows spinning, one interleaved history). The record kept here is what the
+// bookkeeping reads to prevent that — see ownerOfLocked, which resolves the child to this run.
+
+import (
+	"context"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
+)
 
 // compactionRecord is one auto-compaction: the session the conversation moved
 // into, and what the summary replaced.
@@ -45,12 +57,43 @@ func (d *desktopApp) followCompaction(id string) string {
 		d.mu.Unlock()
 		return id
 	}
+	// The child's key may not be TAKEN from a run that is using it. An entry here means a
+	// second run owns the child — which ownerOfLocked exists to prevent, and which is how one
+	// conversation comes to be written by two turns at once (see the note at the top). While
+	// that run is mid-turn the move is refused outright: clobbering it would drop the run whose
+	// turn is in flight (its state updates, its steer channel and its busy guard all live on
+	// that entry) and leave the conversation looking idle under a turn that is still running.
+	// Nothing else can reach here — a session that has just been created has no run of its own
+	// — so this is the loud floor under that invariant, not a case with a friendly outcome.
+	var loser *sessionRun
+	if other := d.runs[next]; other != nil && other != r {
+		if other.running {
+			d.mu.Unlock()
+			logger.New("desktop").Warn(context.Background(),
+				"followCompaction: 子会话上挂着一个正在跑的 run，不搬（同一条对话被两个回合同时写）",
+				"from", id, "to", next)
+			return id
+		}
+		loser = other
+	}
 	delete(d.runs, id)
 	d.runs[next] = r
 	if d.activeID == id {
 		d.activeID = next
 	}
 	d.mu.Unlock()
+
+	if loser != nil {
+		// An idle entry for a session created moments ago is stale bookkeeping (a LoadSession
+		// that raced the compaction). The conversation's own run must hold the key; the loser's
+		// agent — built for a session it never ran in — is closed rather than left to leak, the
+		// same way prepareSession closes the agent that lost its build race.
+		logger.New("desktop").Warn(context.Background(),
+			"followCompaction: 子会话上原有的空 run 被替换，其 agent 已关闭", "from", id, "to", next)
+		if loser.agent != nil {
+			loser.agent.Close()
+		}
+	}
 
 	if d.app != nil {
 		d.app.Event.Emit("agent:session_switched", map[string]any{

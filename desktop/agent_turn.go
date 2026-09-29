@@ -102,6 +102,11 @@ func (s *AgentService) StopAndSend(sessionID, text string) string {
 // The channel is drained before writing so a reply that races a timed-out or
 // already-answered steer point can neither wedge the loop nor leave a stale
 // value behind for the next steer point to consume.
+//
+// The session id is resolved through getRun, so a steer aimed at the child of a compaction
+// that is still in flight reaches the turn that is producing into it. Read off the map by the
+// child's id alone it would find no steer channel and answer "not running" — the frontend shows
+// the text in the transcript, the agent's steer_check times out, and the message is gone.
 func (s *AgentService) Steer(sessionID, text string) string {
 	d := s.desk
 	d.mu.Lock()
@@ -147,6 +152,10 @@ func (d *desktopApp) startTurn(id, text string) string {
 	// turn in flight), and building an agent is exactly what must not happen for a turn that is
 	// about to be refused. beginTurn re-checks it under the lock it needs anyway, so this is the
 	// early answer, not the authoritative one.
+	//
+	// getRun resolves the CHILD of a compaction that is still in flight to the run producing
+	// into it, so a message sent in that child answers with this refusal instead of starting a
+	// second turn on the same conversation (see ownerOfLocked).
 	busy := r.running
 	d.mu.Unlock()
 	if busy {
@@ -260,7 +269,10 @@ func (d *desktopApp) stopTurn() {
 	d.mu.Lock()
 	var c context.CancelFunc
 	if id := d.activeID; id != "" {
-		if r := d.runs[id]; r != nil {
+		// ownerOfLocked, not d.runs[id]: with the child of an in-flight compaction on screen,
+		// the turn to stop is the run that is producing into it — reading the map by the child's
+		// id would find nothing and Stop would answer "ok" having cancelled nothing.
+		if r := d.ownerOfLocked(id); r != nil {
 			c = r.turnCancel
 		}
 	}
@@ -347,10 +359,12 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 // of its next turn (see sessionRun.treeStale). Called from the UI goroutine — the writers are
 // a folder change and a project edit — so it takes d.mu and nothing else; an unknown session
 // or one with no run at all is a no-op, since an agent built later reads the new tree anyway.
+// Resolved through ownerOfLocked, so a folder change made while the child of a live compaction
+// is on screen marks the run that will actually reload its tree.
 func (d *desktopApp) markTreeStale(id string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r := d.runs[id]; r != nil {
+	if r := d.ownerOfLocked(id); r != nil {
 		r.treeStale = true
 	}
 }
@@ -552,7 +566,11 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			break
 		}
 		// Success: the agent swapped the conversation into a child session. The
-		// run keeps its current key until the turn ends (see followCompaction).
+		// run keeps its current key until the turn ends (see followCompaction) —
+		// and from this moment the child IS this conversation, which is why the
+		// record below is also what the rest of the desktop resolves the child
+		// through (ownerOfLocked): a turn cannot start on it, and the sidebar's
+		// spinner names it rather than the parent's key.
 		d.mu.Lock()
 		moved := ""
 		if r := d.getRun(id); r != nil && r.sm != nil {
@@ -771,7 +789,7 @@ func (d *desktopApp) reflectActive(id string) {
 func (d *desktopApp) stateFor(id string) AgentState {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r := d.runs[id]; r != nil {
+	if r := d.ownerOfLocked(id); r != nil {
 		return r.state
 	}
 	return AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}
@@ -784,7 +802,7 @@ func (d *desktopApp) currentState() AgentState {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	st := AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}
-	if r := d.runs[d.activeID]; r != nil {
+	if r := d.ownerOfLocked(d.activeID); r != nil {
 		st = r.state
 	}
 	st.SessionID = d.activeID
@@ -901,11 +919,13 @@ func mergeTrailingUserMessage(history []llm.Message, text string) ([]llm.Message
 }
 
 // runHistory returns the session's in-memory conversation history (nil when the
-// session is unknown).
+// session is unknown). Resolved through ownerOfLocked: the child of a live compaction is the
+// conversation the run holds, so asking for it by the child's id answers with the history the
+// agent is actually sending (the compacted one), not with nil.
 func (d *desktopApp) runHistory(id string) []llm.Message {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r := d.runs[id]; r != nil {
+	if r := d.ownerOfLocked(id); r != nil {
 		return r.history
 	}
 	return nil
@@ -916,7 +936,7 @@ func (d *desktopApp) runHistory(id string) []llm.Message {
 func (d *desktopApp) setRunHistory(id string, history []llm.Message) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if r := d.runs[id]; r != nil {
+	if r := d.ownerOfLocked(id); r != nil {
 		r.history = history
 	}
 }
@@ -1001,5 +1021,10 @@ type sessionRun struct {
 	// agent.FinalizeCompact), so the result is held here and the run is re-homed
 	// once the turn settles — the stream must keep its original key until then,
 	// or the running message would be re-keyed under the frontend's feet.
+	//
+	// It is read for more than the move: while it is set, the child it names is owned by THIS
+	// run (see ownerOfLocked), which is what keeps a second turn from starting on a
+	// conversation this one is still writing. followCompaction consumes it, and the ownership
+	// goes with it.
 	compaction *compactionRecord
 }

@@ -60,6 +60,12 @@ export type ComposerDeps = {
     sealRunningSegment: (sid: string) => void
     markRunning: (sid: string, running: boolean) => void
     refreshRunning: () => void
+    // holdLocal/releaseLocal: the bubbles this composer places on its own, held against a page
+    // that was read before them (see useTranscript's comment) — a send that races a compaction
+    // switch's re-read must not lose the reader's own message. releaseLocal runs when the turn the
+    // send started is over.
+    holdLocal: (sid: string, messages: Message[]) => void
+    releaseLocal: (sid: string) => void
   }
   scrollToBottom: (force?: boolean) => void
   // Esc in the composer hands focus to the message area (the Vim-like keys live there).
@@ -68,7 +74,8 @@ export type ComposerDeps = {
 
 export function useComposer(deps: ComposerDeps) {
   const { currentId, running, transcript, scrollToBottom, chatRef } = deps
-  const { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning } = transcript
+  const { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning,
+    holdLocal, releaseLocal } = transcript
 
   const [input, setInput] = useState('')
   const [sendingNow, setSendingNow] = useState(false)
@@ -384,10 +391,12 @@ export function useComposer(deps: ComposerDeps) {
     const ts = Date.now()
     const tsStr = new Date().toISOString()
     const placeholder = `a-${ts}`
-    updateSession(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: placeholder, role: 'assistant', running: true, parts: [], ts: tsStr },
-    ])
+    const bubble: Message = { id: `u-${ts}`, role: 'user', text, ts: tsStr }
+    const waiting: Message = { id: placeholder, role: 'assistant', running: true, parts: [], ts: tsStr }
+    updateSession(sid, (prev) => [...prev, bubble, waiting])
+    // Held against a page that is already in flight: a compaction switch re-reads the conversation
+    // from disk, and this send can land in that window (see useTranscript's holdLocal).
+    holdLocal(sid, [bubble, waiting])
     markRunning(sid, true)
     scrollToBottom(true)
     // The backend is told WHICH session this belongs to and answers with a reason when no turn
@@ -423,10 +432,11 @@ export function useComposer(deps: ComposerDeps) {
     // bubble has to become one line saying where its output went (see noticeCommandResult).
     // Addressing it by the id remembered here beats "the newest running assistant".
     commandRef.current = { sid, id: `a-${ts}` }
-    updateSession(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
-    ])
+    const bubble: Message = { id: `u-${ts}`, role: 'user', text, ts: tsStr }
+    const waiting: Message = { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr }
+    updateSession(sid, (prev) => [...prev, bubble, waiting])
+    // Held for the same reason a send is: /compact switches the conversation to its child mid-command
+    holdLocal(sid, [bubble, waiting])
     markRunning(sid, true)
     scrollToBottom(true)
     const refuse = (label: string) => {
@@ -536,9 +546,9 @@ export function useComposer(deps: ComposerDeps) {
 
     sealRunningSegment(sid)
     const ts = Date.now()
-    updateSession(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: new Date(ts).toISOString() },
-    ])
+    const bubble: Message = { id: `u-${ts}`, role: 'user', text, ts: new Date(ts).toISOString() }
+    updateSession(sid, (prev) => [...prev, bubble])
+    holdLocal(sid, [bubble])
     markRunning(sid, true)
     scrollToBottom(true)
 
@@ -665,6 +675,10 @@ export function useComposer(deps: ComposerDeps) {
       const d = event.data as { sessionId: string; reason: string; current?: boolean }
       clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
       clearPerm(d.sessionId) // same fact for a parked permission
+      // The read that the switch performed for the COMPACTION window is over by now — anything held
+      // for this session either made it into the window or never had a page to land on (see
+      // holdLocal). Dropping it here is what keeps the hold from outliving the send it was made for.
+      releaseLocal(d.sessionId)
       // `current` comes from the backend (was this the displayed session?) rather than being
       // compared against this closure's currentId: an auto-compaction switch can move the
       // session between the two events, and React state read through a stale closure would
@@ -675,7 +689,7 @@ export function useComposer(deps: ComposerDeps) {
       sendText(takePending(d.sessionId))
     })
     return () => off?.()
-  }, [sendText, takePending, clearAsk, clearPerm])
+  }, [sendText, takePending, clearAsk, clearPerm, releaseLocal])
 
   // ── Height (the reader drags the box's top edge) ───────────────────────────
   // null = the stylesheet's default. One number serves both the height and the ceiling: the
