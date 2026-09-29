@@ -56,20 +56,36 @@ func applyBadgeLink(d *desktopApp, cfg *config.Config) error {
 // startBadge 起（或重起）设备链路：启动时一次，设置页保存后一次。
 //
 // 它做的第一件事是撤掉上一条——一个进程里同时开两条链路，就是两个 Server 抢同一个
-// 串口，而串口只有一个赢家。
+// 串口，而串口只有一个赢家。**这条不变量由我们自己守**（linkGate + 先换后关），不是
+// 靠操作系统拒绝第二次打开：串口和 TCP 会拒绝，BLE 不会，而两个 Server 就是两本 ref
+// 账——同一条等待会被登记两次，两条都发出去，其中一条按下去没有任何反应。
 func (d *desktopApp) startBadge(cfg *config.Config) {
-	d.stopBadge()
-
+	// openBadgeLink 放在锁外：串口的 open 可能阻塞，不该占着这把锁（startBadge 只在
+	// 启动和保存设置时调用，本来也不需要抢时间）。
 	ln, desc := openBadgeLink(badgeTarget(cfg))
 	if ln == nil {
+		// 配置成 off / 写错了：这也是一次「换链路」，所以照样要停掉旧的并串行化
+		// ——否则「关掉」会和一个并发的「打开」互相覆盖。
+		d.linkGate.Lock()
+		cancel, old := d.detachBadgeLink()
+		d.linkGate.Unlock()
+
+		stopBadgeLink(cancel, old)
 		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	d.linkGate.Lock()
+	oldCancel, oldLn := d.detachBadgeLink()
 	d.linkMu.Lock()
-	d.linkStop = cancel
-	d.linkLn = ln
+	d.linkStop, d.linkLn = cancel, ln
 	d.linkMu.Unlock()
+	d.linkGate.Unlock()
+
+	// 停旧的放在换完之后：谁需要被停由这一次写入决定。反过来的话，两个并发调用会各自
+	// 看到「半换」的状态，于是两条都被认为要停、或者两条都不被认为要停。
+	stopBadgeLink(oldCancel, oldLn)
 
 	log.Printf("badge link: serving on %s", desc)
 	go func() {
@@ -79,16 +95,30 @@ func (d *desktopApp) startBadge(cfg *config.Config) {
 }
 
 // stopBadge 撤掉当前链路；没在跑时是个空操作，所以设置页可以无条件调用它。
+func (d *desktopApp) stopBadge() {
+	d.linkGate.Lock()
+	cancel, ln := d.detachBadgeLink()
+	d.linkGate.Unlock()
+
+	stopBadgeLink(cancel, ln)
+}
+
+// detachBadgeLink 摘掉当前链路并返回它，调用方负责停。必须在 linkGate 里调用。
+func (d *desktopApp) detachBadgeLink() (context.CancelFunc, link.Listener) {
+	d.linkMu.Lock()
+	defer d.linkMu.Unlock()
+
+	cancel, ln := d.linkStop, d.linkLn
+	d.linkStop, d.linkLn = nil, nil
+	return cancel, ln
+}
+
+// stopBadgeLink 停掉一条已经摘下来的链路。
 //
 // 先 cancel 再 Close：cancel 是让服务循环知道「该走了」，Close 是把阻塞在 Accept 里的
 // listener 叫醒。反过来做的话，那个循环会先看到一次「设备连不上」的错误日志——而真相
 // 是我们要它停，日志会把下一次排查引到错的地方。
-func (d *desktopApp) stopBadge() {
-	d.linkMu.Lock()
-	cancel, ln := d.linkStop, d.linkLn
-	d.linkStop, d.linkLn = nil, nil
-	d.linkMu.Unlock()
-
+func stopBadgeLink(cancel context.CancelFunc, ln link.Listener) {
 	if cancel != nil {
 		cancel()
 	}

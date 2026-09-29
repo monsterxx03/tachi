@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,6 +244,57 @@ func TestTheBadgeConfigCanBeSwitchedAtRuntime(t *testing.T) {
 	if c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond); err == nil {
 		_ = c.Close()
 		t.Error("the link is still listening after being turned off")
+	}
+}
+
+// 单链路是**我们自己的**不变量，不是「操作系统会拒绝第二次打开」。
+//
+// 串口与 TCP 恰好会拒绝（第二次 bind/open 失败），BLE 不会：两个 central 可以同时连上
+// 同一个 peripheral。而两条活链路就是两本 ref 账——同一条等待会被登记两次、各发一份，
+// 其中一份按下去没有任何反应。
+//
+// 这条用例把 8 次「换链路」挤在一起：每个地址都能被打开，所以任何一条被漏掉的 listener
+// 都会一直听着、并且在结束时能连上（这正是「漏了」的样子）。收尾必须恰好剩一条。
+func TestOnlyOneBadgeLinkSurvivesConcurrentSwitches(t *testing.T) {
+	t.Setenv(envBadge, "") // 这条测的是 config，别让环境变量抢答
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+
+	const switches = 8
+	addrs := make([]string, 0, switches)
+	for i := 0; i < switches; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		addrs = append(addrs, l.Addr().String())
+		_ = l.Close()
+	}
+
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			cfg := &config.Config{}
+			cfg.Badge.Transport = "tcp"
+			cfg.Badge.Address = addr
+			_ = applyBadgeLink(d, cfg)
+		}(addr)
+	}
+	wg.Wait()
+	t.Cleanup(d.stopBadge)
+
+	live := 0
+	for _, addr := range addrs {
+		c, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		live++
+		_ = c.Close()
+	}
+	if live != 1 {
+		t.Errorf("%d links are live after %d concurrent switches, want exactly 1", live, switches)
 	}
 }
 
