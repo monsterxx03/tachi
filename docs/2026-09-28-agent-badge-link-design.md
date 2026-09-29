@@ -16,11 +16,12 @@
 1. **状态**：屏幕上显示当前会话在干什么（空闲 / 思考 / 执行工具 / 等你确认），带会话名。
 2. **权限确认**：命中 `ask` 规则的 Bash 命令推到设备，三键回答「允许一次 / 本会话允许 / 拒绝」。
 3. **AskUserQuestion**：模型提的问题和选项推到设备，上下键滚动、确定键提交（含多选）。
-4. **提示音**：出现待答项时响一声。这是「人不在工位」这个场景的全部意义——屏幕你未必在看。
-   判据在**主机**侧（见 §5 的 `askAlert`）：窗口不在前台、**或者**等的不是当前活跃会话。
-   「你正看着那个会话」就不出声——那样的一声只是噪音。判一次，在登记等待的那一刻：
-   之后你走开了也不补响（补响要记住「已提醒过」并能在之后主动推一条信号，而那会把一条
-   已经看过的等待再说一遍）。
+4. **提示音**：**出现待答项**时响一声，**一个回合跑完**时响另一声。这是「人不在工位」这个
+   场景的全部意义——屏幕你未必在看，声音不用看。判据在**主机**侧（见 §5 的 `alertWanted`）：
+   窗口不在前台、**或者**这件事不属于当前活跃会话。「你正看着那件事」就不出声——那样的一声
+   只是噪音。判一次，在事件发生的那一刻：之后你走开了也不补响（补响要记住「已提醒过」并能在
+   之后主动推一条信号，而那会把一件已经看过的事再说一遍）。**响的同时点亮屏幕**：听见了却
+   看不见，用户还得再按一下才看得到状态，那一声就白响了。设置页有开关（`badge.alert`，默认开）。
 
 ### 明确不做
 
@@ -137,7 +138,7 @@ flowchart LR
 ```json
 {"t":"state","seq":42,"sessions":[{"id":"ab12","title":"修 lint","status":"tool_running",
   "label":"执行","detail":"调用 Bash"}]}
-{"t":"ask","seq":43,"ref":43,"kind":"permission","session":"ab12","toolId":"call_1","alert":true,
+{"t":"ask","seq":43,"ref":43,"kind":"permission","session":"ab12","toolId":"call_1",
   "title":"Bash 确认","body":"$ rm -rf build/\n\n命中 ask 规则: \"rm-*\"",
   "options":[{"label":"允许一次","value":"allow_once"},
              {"label":"本会话允许","value":"allow_session"},
@@ -145,9 +146,11 @@ flowchart LR
 {"t":"ask","seq":44,"ref":44,"kind":"ask_user","session":"ab12","toolId":"call_2","title":"方向",
   "questions":[{"header":"方向","question":"先用哪条路验证？","multi_select":false,
                 "options":[{"label":"先做设备","description":"需要板子"}]}]}
-{"t":"ask_gone","seq":45,"ref":43}
-{"t":"reset","seq":46}
-{"t":"error","seq":47,"ref":43,"message":"……"}
+{"t":"alert","seq":45,"kind":"ask"}
+{"t":"alert","seq":46,"kind":"done"}
+{"t":"ask_gone","seq":47,"ref":43}
+{"t":"reset","seq":48}
+{"t":"error","seq":49,"ref":43,"message":"……"}
 ```
 
 设备 → 主机：
@@ -170,9 +173,10 @@ flowchart LR
   主机的 ref 表里已经不存在了）。这条也让「设备漏了某条 `ask_gone`」这类漂移在每次重连时自愈。
 - **同一条待答项内容变了就用同一个 `ref` 重发**（模型的提问在流式阶段可能被改写）：设备上那一项
   原地更新，游标不跳。重新分配 ref 等于让它换个身份重新排队，而旧的那条在 ref 表里再也等不到
-- **`alert` 是「这条等待值得响一声」**，由主机在登记等待的那一刻判定（窗口不在前台，或者等的不是
-  当前活跃会话，见 §1 第 4 条）：设备只在**新出现的**等待上照做一次——同一条 ask 每 10 秒会被心跳
-  重发，跟着重发走就成了每 10 秒响一次。字段缺省即「不响」，所以老主机/老设备各自都对。
+- **`alert` 是一条独立的、一次性的消息**（`kind` = `ask` / `done`），而不是挂在 ask 上的字段：
+  「有事等你」与「回合完成」是两件事，而后者根本不属于任何一条 ask。它也因此不能被去抖吞掉——
+  一次回合完成与下一次之间可能什么都没变，而「什么都没变」正是它要说的那件事。设备每收到一条就
+  放对应的一段音频（两种含义、两段声音）。
   自己的 `ask_gone`。
 - `answers` 的 key 是**问题全文**、value 是选中项标签（多选按 `, ` 拼），与 TUI/desktop 现有约定
   一致，模型看到的是同一个形状。题面被截断的题设备直接不上屏：键错了模型会收到一个它不认识的答案。
@@ -231,14 +235,14 @@ flowchart LR
 
 | 文件 | 职责 |
 | --- | --- |
-| `desktop/asks.go` | `pendingAsk` 表：`kind`（permission / ask_user）、`sessionID`、`toolID`、渲染所需的 `preview` 或 `questions`、权限等待的唤醒 `answer` channel。键是 `session + tool call id`——工具调用 id 由模型生成，两个会话完全可能生成同一个。`askAlert` 在这里判「要不要让设备响一声」（失焦或非活跃会话），判一次、在登记那一刻 |
-| `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构，`Answer()` 分发到两个现成入口；按配置开关链路 |
+| `desktop/asks.go` | `pendingAsk` 表：`kind`（permission / ask_user）、`sessionID`、`toolID`、渲染所需的 `preview` 或 `questions`、权限等待的唤醒 `answer` channel。键是 `session + tool call id`——工具调用 id 由模型生成，两个会话完全可能生成同一个。另有两条与提示音有关的：`alertWanted`（要不要响的那条纯判据）与 `alertIfUnwatched`（把它接到「一条等待」与「一个回合完成」两处，见 agent_turn.go） |
+| `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构，`Answer()` 分发到两个现成入口，`TakeAlerts()` 交出攒下的提示音（事件不能被去抖吞掉）；按配置开关链路 |
 | `desktop/link/link.go` | `Listener` / `Transport` 接口、`Server` 会话循环、去抖、ref 分配、`hello`/`sync`/`answer` 处理 |
 | `desktop/link/serial.go` | 串口实现；端口为空时按 Espressif USB VID 每次 Accept 重新查找（端口名随插拔漂移） |
 | `desktop/link/tcp.go` | 监听式实现（开发用，见 §3.3） |
 | `desktop/link/ble.go` | BLE 实现（central 侧）：按广播名字扫描、把 GATT 连接包装成字节流、切片写、**等到链路已认证加密才交出去**（见 §3.3） |
 | `desktop/ask_answered.go` | 把「这次回答来自设备」广播给前端（`agent:ask_answered`） |
-| `desktop/settings.go`、`config/config.go` | `badge.transport` / `badge.address` 设置项与持久配置 |
+| `desktop/settings.go`、`config/config.go` | `badge.transport` / `badge.address` / `badge.alert`（提示音开关，默认开）设置项与持久配置 |
 | `scripts/badge_sim.py` | 冒充设备的假设备：把收到的东西画成那块屏的窄幅样子，把按键当数字收 |
 
 一张表管两类等待，是因为**唤醒方式本来就不同**：权限的那条挂在自己新建的 channel 上，等待方用
@@ -277,10 +281,12 @@ flowchart LR
   多次写），**非阻塞写不能假定「一次写完一行」**——半行到不了设备，它只会一直等换行，而且一声
   不吭（屏幕停在上一屏，谁都看不出发生了什么）。这条对 BLE 尤其要紧：GATT 一次只能写几十到
   两百多字节，分包是这个传输自己的责任。
-- **提示音（`main/badge_sound.c`）**：一声短铃，只在新出现的、被主机标了 `alert` 的等待上响一次
-  （见 §1 第 4 条与 §4 的约定）。PCM 是生成物（`tools/gen_badge_sound.py` → `main/badge_sound_16k.c`，
+- **提示音（`main/badge_sound.c`）**：主机说响一声，这里按它的 `kind` 放对应的那一段——**两种
+  含义两段音频**（「有事等你」上行短铃 / 「回合完成」下行两声），人不用看屏幕就能分开。PCM 是
+  生成物（`tools/gen_badge_sound.py` → `main/badge_sound_ask_16k.c` 与 `badge_sound_done_16k.c`，
   16 kHz 单声道，随仓库分发），播放走 BSP 的 `bsp_audio_*`：codec 平时睡着，唤醒 → 分块写完 →
-  再睡回去——这块板子上「平时不占电流」比「响得快一点」要紧。播放在自己的任务里，不阻塞按键与 LVGL。
+  再睡回去——这块板上「平时不占电流」比「响得快一点」要紧。播放在自己的任务里，不阻塞按键与
+  LVGL；而收到提示音时主循环顺手算一次「有活动」，于是屏幕也跟着亮（见 §6 的息屏那三条）。
 - **BLE 链路（`main/badge_ble.c`，P4）**：与串口并列的第二条传输，NimBLE 做 GATT peripheral。
   **状态机不知道自己在跟谁说话**：两条路各自把「一行」交给同一个回调、各自接受同一个「发一行」，
   出方向由 `main.c` 按「链路是否已认证加密」路由——加密了走 BLE，否则走串口。链路状态分四态

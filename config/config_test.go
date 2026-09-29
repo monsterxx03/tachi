@@ -1167,3 +1167,13 @@ func TestToggleSurvivesAProfileRoundTrip(t *testing.T) {
 	require.Len(t, servers, 1)
 	assert.Equal(t, "plain", servers[0].Name)
 }
+
+// 提示音开关的默认值：没设 = 开。和其它 nil 即默认的读法一致——一个没写这一行的配置
+// 不该因此把提示音关掉。
+func TestBadgeAlertsDefaultToOn(t *testing.T) {
+	on, off := true, false
+
+	assert.True(t, BadgeConfig{}.AlertsEnabled(), "未设置时应当默认开")
+	assert.True(t, BadgeConfig{Alert: &on}.AlertsEnabled(), "显式 true 是开")
+	assert.False(t, BadgeConfig{Alert: &off}.AlertsEnabled(), "显式 false 是关")
+}

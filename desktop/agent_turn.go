@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
@@ -614,6 +615,9 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// announcing 「回合完成」 for a run with no turn on screen says nothing useful.
 		if lane == laneTranscript && ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
 			d.notify.notifyTurnDone(d.sessionTitle(id), ev.Result.IterationsUsed, ev.Result.Duration)
+			// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
+			// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
+			d.alertIfUnwatched(id, link.AlertKindDone)
 		}
 	case agent.AgentEventError:
 		d.tpsReset(id)

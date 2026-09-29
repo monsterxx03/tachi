@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/desktop/link"
 )
 
 // pendingAskKind 区分两类等待，它同时就是发给设备的 kind 字段。
@@ -30,12 +31,6 @@ type pendingAsk struct {
 	sessionID string
 	toolID    string
 
-	// alert 记录「这条等待值得让设备响一声」——由 registerAsk 在**登记那一刻**判定：
-	// 你正看着这个会话、而窗口也在前台，就没必要出声（见 askAlert）。判一次而不是
-	// 盯着窗口，是因为提示音要说的是「有事在等你」，而那一刻你不知道 = 该响；之后
-	// 你切走了再补响，反而会把一条已经看过的等待再说一遍。
-	alert bool
-
 	// preview 是权限等待的展示内容：agent 自己渲染的「$ 命令 + 命中的规则」
 	// （bashAskPreview）。原样透传给设备，不在这里二次解析——那份格式的第二个
 	// 解析器早晚会和写它的那个漂移。
@@ -50,27 +45,49 @@ type pendingAsk struct {
 	answer chan string
 }
 
-// askAlert 说出「这条等待要不要让设备响一声」。
+// alertWanted 说出「这件事要不要让设备响一声」。
 //
-// 一个条件而已，两个来源的「你大概不在看」：窗口不在前台，或者等的不是你正开着的
-// 那个会话。写成纯函数是为了能在主机上试——它决定的是「会不会吵到人」，而真机上
-// 试这个的代价是每次都去按一下手机（设备）那边。
-func askAlert(focused bool, activeSessionID, askSessionID string) bool {
-	return !focused || askSessionID != activeSessionID
+// 一个条件而已，两个来源的「你大概不在看」：窗口不在前台，或者这件事不属于你正开着的
+// 那个会话。写成纯函数是为了能在主机上试——它决定的是「会不会吵到人」，而真机上试这些
+// 组合的代价是每次都跑到设备跟前按一下。
+func alertWanted(focused bool, activeSessionID, eventSessionID string) bool {
+	return !focused || eventSessionID != activeSessionID
 }
 
 // registerAsk 登记一条等待，并叫醒 link 层。
 func (d *desktopApp) registerAsk(a *pendingAsk) {
-	// 在登记这一刻判一次「要不要响」：判据见 askAlert。
-	a.alert = askAlert(d.windowFocused(), d.activeID, a.sessionID)
-
 	d.mu.Lock()
 	if d.asks == nil {
 		d.asks = make(map[string]*pendingAsk)
 	}
 	d.asks[permKey(a.sessionID, a.toolID)] = a
 	d.mu.Unlock()
+	// 提示音在**登记这一刻**判一次（见 alertWanted）：你正看着这个会话、窗口也在前台就
+	// 不出声。之后你切走了也不补响——那会把一条已经看过的等待再说一遍。
+	d.alertIfUnwatched(a.sessionID, link.AlertKindAsk)
 	d.notifyLink()
+}
+
+// alertIfUnwatched 在「你大概不在看」时攒下一次提示音请求。
+//
+// 两件事共用它：出现了一条等待（权限 / 提问），以及一个回合跑完了。判据与 macOS 通知
+// 同源（失焦），但更宽一点——通知只在失焦时发，而提示音还认「不是当前活跃会话」那种
+// 「你在看别处」。用哪个由用户决定：它决定的是「会不会吵到人」。
+func (d *desktopApp) alertIfUnwatched(sessionID, kind string) {
+	if !d.alertsEnabled() {
+		return
+	}
+	if !alertWanted(d.windowFocused(), d.activeID, sessionID) {
+		return
+	}
+	d.enqueueAlert(kind)
+}
+
+// alertsEnabled 读设置页那个开关（`badge.alert`，默认开）。配置读不到时按开：一个读不到
+// 配置的时刻不该顺手把提示音关掉。
+func (d *desktopApp) alertsEnabled() bool {
+	cfg := d.config()
+	return cfg == nil || cfg.Badge.AlertsEnabled()
 }
 
 // windowFocused 说窗口现在有没有焦点——设备的提示音与 macOS 通知共用这一个判据。

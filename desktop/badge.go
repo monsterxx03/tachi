@@ -240,6 +240,38 @@ func (d *desktopApp) badgeLoop(ctx context.Context, ln link.Listener) {
 	}
 }
 
+// badgeAlertBacklog 是攒着的提示音请求的上限。
+//
+// 有上限是为了「一条迟到的通报没有意义」：链路断了又回来时，攒了一小时的十声提示音
+// 只是把用户吵十次。满了就丢最旧的——最新那条才是此刻的事。
+const badgeAlertBacklog = 4
+
+// enqueueAlert 攒下一次提示音请求，并叫醒 link 层去取（TakeAlerts）。
+func (d *desktopApp) enqueueAlert(kind string) {
+	d.mu.Lock()
+	if len(d.alerts) >= badgeAlertBacklog {
+		d.alerts = d.alerts[1:]
+	}
+	d.alerts = append(d.alerts, link.Alert{Kind: kind})
+	d.mu.Unlock()
+	d.notifyLink()
+}
+
+// TakeAlerts 实现 link.Source：把攒下的提示音请求交给 link 层并清空。
+//
+// 由 link 层的 Server 调用（每轮推送前一次，连上时还会丢掉一批陈的），所以它必须
+// 假定自己随时被另一个 goroutine 调用。
+func (d *desktopApp) TakeAlerts() []link.Alert {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.alerts) == 0 {
+		return nil
+	}
+	out := d.alerts
+	d.alerts = nil
+	return out
+}
+
 // Snapshot 实现 link.Source。
 //
 // 只发非空闲的会话：设备要回答的问题是「谁在等我」，而一个桌面上躺着的几十个空闲
@@ -291,7 +323,6 @@ func askFor(a *pendingAsk) link.Ask {
 		Kind:      string(a.kind),
 		SessionID: a.sessionID,
 		ToolID:    a.toolID,
-		Alert:     a.alert,
 	}
 	switch a.kind {
 	case askKindPermission:

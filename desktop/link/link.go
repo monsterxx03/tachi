@@ -38,7 +38,27 @@ type Source interface {
 	// Subscribe 注册变化回调，返回注销函数。回调可能从任意 goroutine 触发，实现
 	// 要假定它随时会来；它只用来叫醒服务循环，不做别的事。
 	Subscribe(fn func()) (cancel func())
+
+	// TakeAlerts 交出自上次调用以来攒下的提示音请求并清空。
+	//
+	// 它和 Snapshot 分开，是因为提示音是**事件**（响一次）而不是状态：一次回合完成与
+	// 下一次之间可能什么都没变，挂在快照的去抖上就会被吞掉。Server 在每次收到变化
+	// 通知时取一次，并在每条连接开始时把攒下的丢掉——连上之前那一声，现在响已经晚了。
+	TakeAlerts() []Alert
 }
+
+// Alert 是一次提示音请求：Kind 决定设备放哪一段音频（它自己不认识这些含义，只是照做）。
+//
+// 谁该响（前台/活跃会话）由宿主判断——它才知道这两件事，而设备一条都不知道。
+type Alert struct {
+	Kind string `json:"kind"`
+}
+
+// 提示音的两种含义，与设备侧 badge_proto.h 的 badge_alert_kind_t 一一对应。
+const (
+	AlertKindAsk  = "ask"  // 出现了一条等你回答的等待（权限确认 / 提问）
+	AlertKindDone = "done" // 一个回合跑完了
+)
 
 // Snapshot 是要同步给设备的全部内容。
 type Snapshot struct {
@@ -72,10 +92,6 @@ type Ask struct {
 	Options   []Option         `json:"options,omitempty"`
 	Questions []tools.Question `json:"questions,omitempty"`
 	Hint      string           `json:"hint,omitempty"`
-
-	// Alert 说这条等待值得让设备**响一声**。判据在宿主侧（它才知道自己在不在前台、
-	// 用户正在看哪个会话），设备只照做——见 desktop/asks.go 的 askAlert。
-	Alert bool `json:"alert,omitempty"`
 }
 
 // Option 是设备上可选的一项，Value 是回传的机器值。设备只负责把它送回来，不知道
@@ -179,6 +195,9 @@ func (s *Server) Run(ctx context.Context) error {
 	// 等待项谁也答不了——先让它清空，再收下面这份全量。不清的话，同一条等待会以新
 	// ref 再入队一次：屏幕上出现两条，而旧的那条按下去没有任何反应。
 	s.writeReset()
+	// 这条连接开始之前的提示音请求就地丢掉：那一声是为「刚才」响的，现在响已经晚了
+	// ——而连上之后的第一件事是上面那次全量推送，用户看到的是最新的屏幕。
+	_ = s.src.TakeAlerts()
 	// 先推一份全量：设备可能在主机这边推送过之后才连上，而它需要的一切都在快照里。
 	s.push(true)
 
@@ -189,10 +208,26 @@ func (s *Server) Run(ctx context.Context) error {
 		case err := <-errs:
 			return err
 		case <-changes:
+			// 提示音先发：它是事件，不能被下面那次去抖吞掉（内容没变时 push 一个字
+			// 都不写）。
+			s.flushAlerts()
 			s.push(false)
 		case line := <-lines:
 			s.handle(line)
 		}
+	}
+}
+
+// flushAlerts 把宿主攒下的提示音请求发给设备。
+//
+// 不参与 push 的去抖：一次回合完成与下一次之间可能什么都没变，而「什么都没变」正是
+// 提示音要说的那件事（「你不在看的时候，事情做完了」）。
+func (s *Server) flushAlerts() {
+	for _, a := range s.src.TakeAlerts() {
+		if a.Kind == "" {
+			continue
+		}
+		s.write(map[string]any{"t": "alert", "seq": s.nextSeq(), "kind": a.Kind})
 	}
 }
 
@@ -385,11 +420,6 @@ func askMessage(ref uint64, a Ask) map[string]any {
 	}
 	if a.Hint != "" {
 		msg["hint"] = a.Hint
-	}
-	// 只有该响的时候才发这个字段：老设备忽略不认识的字段，而「没有这个字段」在设备
-	// 那边就是「不响」——这正是我们想要的默认值。
-	if a.Alert {
-		msg["alert"] = true
 	}
 	if len(a.Options) > 0 {
 		msg["options"] = a.Options

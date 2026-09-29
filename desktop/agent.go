@@ -144,6 +144,11 @@ type desktopApp struct {
 	// asks.go for why it is ONE table). Guarded by mu.
 	asks map[string]*pendingAsk
 
+	// alerts holds the device's pending notification sounds, oldest first. They wait here
+	// until the link's Server takes them (see TakeAlerts) — a beep is an EVENT, not part of
+	// the snapshot, so it must not be swallowed by the snapshot's debounce. Guarded by mu.
+	alerts []link.Alert
+
 	// linkMu guards the device link's subscriber list AND its lifecycle — the running
 	// listener and the cancel that stops it (see badge.go). It is NOT mu: notifyLink is
 	// called from under mu in several places, and the callbacks must never wait behind

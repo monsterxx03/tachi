@@ -334,47 +334,66 @@ func TestAMisconfiguredBadgeLinkIsRefusedQuietly(t *testing.T) {
 	}
 }
 
-// 提示音的判据：窗口不在前台，或者等的不是你正开着的那个会话。
+// 提示音的判据：窗口不在前台，或者这件事不属于你正开着的那个会话。
 //
 // 它决定的是「会不会吵到人」，所以每种组合都值得在主机上钉住——真机上试这些的代价是
 // 每次都跑到设备跟前按一下。
-func TestAskAlertFollowsFocusAndTheActiveSession(t *testing.T) {
+func TestAlertWantedFollowsFocusAndTheActiveSession(t *testing.T) {
 	cases := []struct {
 		name      string
 		focused   bool
 		active    string
-		ask       string
+		event     string
 		wantAlert bool
 	}{
-		{"前台 + 就是这个会话", true, "s1", "s1", false},
+		{"前台 + 就是当前会话", true, "s1", "s1", false},
 		{"前台但是别的会话", true, "s1", "s2", true},
 		{"不在前台", false, "s1", "s1", true},
 		{"不在前台 + 别的会话", false, "s1", "s2", true},
 		{"前台但没开着任何会话", true, "", "s1", true},
 	}
 	for _, c := range cases {
-		if got := askAlert(c.focused, c.active, c.ask); got != c.wantAlert {
-			t.Errorf("%s: askAlert(%v, %q, %q) = %v, want %v",
-				c.name, c.focused, c.active, c.ask, got, c.wantAlert)
+		if got := alertWanted(c.focused, c.active, c.event); got != c.wantAlert {
+			t.Errorf("%s: alertWanted(%v, %q, %q) = %v, want %v",
+				c.name, c.focused, c.active, c.event, got, c.wantAlert)
 		}
 	}
 }
 
-// 判出来的那个值必须真的走到设备：registerAsk 记下它，快照把它带出去。
-func TestRegisterAskCarriesTheAlertDecision(t *testing.T) {
+// 两件事共用同一条判据：出现了一条等待，以及一个回合跑完了。判出来的结果必须真的进
+// 到那条队列里——link 层从那里取（见 badge.go 的 TakeAlerts）。
+func TestBothEventsQueueAnAlert(t *testing.T) {
 	d := &desktopApp{runs: map[string]*sessionRun{}}
-	// 没有窗口句柄时 windowFocused() 是 false（当作「没在看」），所以这条会被标记。
+	// 没有窗口句柄时 windowFocused() 是 false（当作「没在看」），所以两条都会被攒下。
+
 	d.registerAsk(&pendingAsk{
 		kind: askKindPermission, sessionID: "s1", toolID: "call_1",
 		preview: "$ ls", answer: make(chan string, 1),
 	})
+	d.alertIfUnwatched("s1", link.AlertKindDone)
 
-	snap := d.Snapshot()
-
-	if len(snap.Asks) != 1 {
-		t.Fatalf("asks = %+v, want one", snap.Asks)
+	alerts := d.TakeAlerts()
+	if len(alerts) != 2 {
+		t.Fatalf("alerts = %+v, want two (ask + done)", alerts)
 	}
-	if !snap.Asks[0].Alert {
-		t.Error("这条等待没有被标记：设备上不会响一声")
+	if alerts[0].Kind != link.AlertKindAsk || alerts[1].Kind != link.AlertKindDone {
+		t.Errorf("alerts = %+v, want ask then done", alerts)
+	}
+	if again := d.TakeAlerts(); len(again) != 0 {
+		t.Errorf("取过之后应当为空，实际 %+v", again)
+	}
+}
+
+// 设置页那个开关（`badge.alert`）关掉就一条都不攒——包括「已经攒下的还没发出去」那一种：
+// 用户刚刚说不要提示音，链路那边不该还放出一声来。
+func TestAlertsEnabledSwitchesTheQueueOff(t *testing.T) {
+	off := false
+	d := &desktopApp{runs: map[string]*sessionRun{}, cfg: &config.Config{}}
+	d.cfg.Badge.Alert = &off
+
+	d.alertIfUnwatched("s1", link.AlertKindDone)
+
+	if alerts := d.TakeAlerts(); len(alerts) != 0 {
+		t.Errorf("开关关着仍然攒了 %+v", alerts)
 	}
 }

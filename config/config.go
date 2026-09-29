@@ -937,7 +937,17 @@ type BadgeConfig struct {
 	// the board by USB vendor id (the name — /dev/cu.usbmodem2101 — moves between
 	// plug-ins). tcp: the listen address, e.g. "127.0.0.1:8765".
 	Address string `yaml:"address"`
+	// Alert tells the device to play a sound when something starts waiting for you
+	// (a permission or a question) or when a turn finishes — but only while you are NOT
+	// watching it (the window is in the background, or the session is not the active one;
+	// see desktop/asks.go's alertWanted). nil is the default, which is ON.
+	Alert *bool `yaml:"alert"`
 }
+
+// AlertsEnabled reports whether the device should be told to play its notification sound.
+// An unset value reads as the default (on) — the same nil-means-default rule the rest of
+// the config uses.
+func (b BadgeConfig) AlertsEnabled() bool { return b.Alert == nil || *b.Alert }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files
 // capturing the full execution of side-channel LLM runs (/commit, /review,

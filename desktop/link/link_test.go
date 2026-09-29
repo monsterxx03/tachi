@@ -11,16 +11,33 @@ import (
 	"time"
 )
 
-// fakeSource 是一台最小的宿主：一份随时可改的快照，和一条收到的回答的记录。
+// fakeSource 是一台最小的宿主：一份随时可改的快照、一条攒着的提示音队列，和一条收到的回答的记录。
 type fakeSource struct {
 	mu       sync.Mutex
 	snap     Snapshot
+	alerts   []Alert
 	subs     map[int]func()
 	nextSub  int
 	answered []Answer
 }
 
 func newFakeSource() *fakeSource { return &fakeSource{subs: map[int]func(){}} }
+
+// alert 攒一条提示音并通知——和 desktop 那边 enqueueAlert 做的事一样。
+func (f *fakeSource) alert(kind string) {
+	f.mu.Lock()
+	f.alerts = append(f.alerts, Alert{Kind: kind})
+	f.mu.Unlock()
+	f.notify()
+}
+
+func (f *fakeSource) TakeAlerts() []Alert {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.alerts
+	f.alerts = nil
+	return out
+}
 
 func (f *fakeSource) Snapshot() Snapshot {
 	f.mu.Lock()
@@ -52,6 +69,13 @@ func (f *fakeSource) Subscribe(fn func()) func() {
 func (f *fakeSource) update(fn func(*Snapshot)) {
 	f.mu.Lock()
 	fn(&f.snap)
+	f.mu.Unlock()
+	f.notify()
+}
+
+// notify 叫醒服务循环（不动快照）。
+func (f *fakeSource) notify() {
+	f.mu.Lock()
 	subs := make([]func(), 0, len(f.subs))
 	for _, s := range f.subs {
 		subs = append(subs, s)
@@ -360,22 +384,28 @@ func TestSyncResendsEverything(t *testing.T) {
 	}
 }
 
-// 「该响一声」是宿主的判断（见 desktop/asks.go 的 askAlert），设备只照做。所以线上
-// 只在这条等待被标了 alert 时才出现那个字段——**缺字段就是不响**，这样老设备（不认识
-// 这个字段）与「宿主认为不该响」得到的是同一个结果。
-func TestOnlyAnAlertingAskCarriesTheFlag(t *testing.T) {
-	quiet := newFakeSource()
-	quiet.snap = askFixture()
-	p := newPeer(t, quiet)
-	if _, ok := p.readOf("ask")["alert"]; ok {
-		t.Error("没标 alert 的等待带上了这个字段：设备那边会把它当成「该响」")
-	}
 
-	loud := newFakeSource()
-	loud.snap = askFixture()
-	loud.snap.Asks[0].Alert = true
-	q := newPeer(t, loud)
-	if got := q.readOf("ask")["alert"]; got != true {
-		t.Errorf("alert = %v, want true", got)
+// 提示音是事件，不是状态：它必须在**内容什么都没变**时也能发出去。
+//
+// 这正是它与快照分开的原因——push 会去抖（每个 delta 都会 setSessionState，内容却常常
+// 一个字都没变），把一声「好了」挂在去抖上就会被吞掉。
+func TestAnAlertReachesTheDeviceEvenWithoutAnyChange(t *testing.T) {
+	src := newFakeSource()
+	src.snap = askFixture()
+	p := newPeer(t, src)
+
+	// 先把它连上时要发的东西读掉：reset + 全量。
+	p.readOf("reset")
+	p.readOf("state")
+	p.readOf("ask")
+
+	src.alert(AlertKindDone)
+
+	alert := p.readOf("alert")
+	if alert["kind"] != AlertKindDone {
+		t.Errorf("alert kind = %v, want %q", alert["kind"], AlertKindDone)
+	}
+	if alert["seq"] == nil {
+		t.Error("alert carries no seq")
 	}
 }
