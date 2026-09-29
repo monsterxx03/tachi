@@ -3,6 +3,7 @@ package strutil
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTruncate(t *testing.T) {
@@ -343,5 +344,30 @@ func TestContainsCJK(t *testing.T) {
 				t.Errorf("ContainsCJK(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// 按字节裁：给那些「上限是字节数」的地方用（协议字段、文件名）——按字符数裁会在那里
+// 悄悄溢出，而按字节硬切会把一个汉字切成两半。
+func TestTruncateBytesNeverSplitsAMultiByteCharacter(t *testing.T) {
+	// 每个「汉」是 3 字节。上限 8 字节，省略号自己也占 3：2 个汉字 + 省略号 = 9 字节，
+	// 超了，所以要退到 1 个汉字 + 省略号（6 字节）。
+	got := TruncateBytes("汉汉汉汉", 8)
+	if len(got) > 8 {
+		t.Errorf("TruncateBytes(…, 8) = %q（%d 字节），超过了上限", got, len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("TruncateBytes 切出了半个字符：%q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("截断后应当有省略号，实际 %q", got)
+	}
+
+	// 放得下就原样返回（不补省略号）。
+	if got := TruncateBytes("abc", 8); got != "abc" {
+		t.Errorf("放得下时应当原样返回，实际 %q", got)
+	}
+	if got := TruncateBytes("anything", 0); got != "" {
+		t.Errorf("上限 <= 0 应当返回空串，实际 %q", got)
 	}
 }

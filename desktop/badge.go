@@ -11,6 +11,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -272,6 +273,18 @@ func (d *desktopApp) TakeAlerts() []link.Alert {
 	return out
 }
 
+// deviceDetailLimit 是设备那条副标题能收下的字节数。
+//
+// 设备侧是 `BADGE_DETAIL_MAX = 96`（ai-passport 的 main/badge_proto.h：状态副标题、
+// 主机报错文本），而它按**字节**截断——贴着上限写就是等着切出半个汉字，屏幕上是一串
+// 乱码。这里留几个字节余量，并且在自己的边界上按字符切，超出那部分本来也没人看得见。
+const deviceDetailLimit = 88
+
+// deviceDetail 把一条状态副标题裁到设备收得下的长度。
+func deviceDetail(s string) string {
+	return strutil.TruncateBytes(s, deviceDetailLimit)
+}
+
 // Snapshot 实现 link.Source。
 //
 // 只发非空闲的会话：设备要回答的问题是「谁在等我」，而一个桌面上躺着的几十个空闲
@@ -287,7 +300,7 @@ func (d *desktopApp) Snapshot() link.Snapshot {
 			ID:     id,
 			Status: string(r.state.Status),
 			Label:  r.state.Label,
-			Detail: r.state.Detail,
+			Detail: deviceDetail(r.state.Detail),
 		})
 	}
 	d.mu.Unlock()

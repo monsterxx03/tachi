@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -71,6 +72,33 @@ func TruncateFitted(s string, max int) string {
 		return s
 	}
 	return string(runes[:max-1]) + "…"
+}
+
+// TruncateBytes caps s at max BYTES, never splitting a multi-byte character
+// mid-sequence. It exists for limits that are byte counts rather than rune
+// counts — a protocol field, a filesystem name — where a rune budget would
+// silently overflow. When s is longer, an ellipsis is appended inside the same
+// budget, so the result is at most max bytes.
+//
+// max <= 0 yields "".
+func TruncateBytes(s string, max int) string {
+	const ellipsis = "…"
+
+	if max <= 0 {
+		return ""
+	}
+	if len(s) <= max {
+		return s
+	}
+	cut := max - len(ellipsis) // 省略号也占预算
+	if cut < 0 {
+		cut = 0
+	}
+	// 退到最近的字符边界：UTF-8 的续字节长这样 10xxxxxx，切在它前面就是一个半个汉字。
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
 }
 
 // FirstLine returns the first line of s — everything up to (and excluding)

@@ -458,7 +458,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		}
 	case agent.AgentEventToolCallStart, agent.AgentEventToolCallArgs:
 		d.tpsReset(id)
-		d.setSessionState(id, AgentState{Status: StatusToolRunning, Label: "执行", Detail: "调用 " + ev.ToolName})
+		d.setSessionState(id, AgentState{Status: StatusToolRunning, Label: "执行",
+			Detail: toolDetail(ev.ToolName, ev.ToolArgs)})
 		// Push a lightweight tool event carrying the human-readable args summary
 		// (reuses tools.ToolArgsSummary) so the frontend can render the title
 		// and full args.
@@ -700,6 +701,22 @@ func (d *desktopApp) emitIdle(id, reason string) {
 //
 // The menu bar is the one surface that is NOT per session — it describes the displayed
 // session — so only that one reflects there.
+// toolDetail 是状态屏那一行的内容：哪个工具、拿的什么参数。
+//
+// 参数摘要复用前端标题用的同一个函数（tools.ToolArgsSummary）：只写工具名说不出「它在
+// 干什么」，而这块屏存在的意义正是回答那个问题。
+//
+// 长度不在这里收：设备那条副标题有自己的字节上限，由 Snapshot 那道边界统一裁
+// （见 badge.go 的 deviceDetail）——状态里存原样的说法，别的消费者不必跟着窄。
+func toolDetail(name, argsJSON string) string {
+	summary := tools.ToolArgsSummary(name, argsJSON)
+
+	if summary == "" {
+		return "调用 " + name
+	}
+	return "调用 " + name + "：" + summary
+}
+
 func (d *desktopApp) setSessionState(id string, st AgentState) {
 	st.SessionID = id
 	d.mu.Lock()

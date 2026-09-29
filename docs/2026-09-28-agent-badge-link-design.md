@@ -236,7 +236,7 @@ flowchart LR
 | 文件 | 职责 |
 | --- | --- |
 | `desktop/asks.go` | `pendingAsk` 表：`kind`（permission / ask_user）、`sessionID`、`toolID`、渲染所需的 `preview` 或 `questions`、权限等待的唤醒 `answer` channel。键是 `session + tool call id`——工具调用 id 由模型生成，两个会话完全可能生成同一个。另有两条与提示音有关的：`alertWanted`（要不要响的那条纯判据）与 `alertIfUnwatched`（把它接到「一条等待」与「一个回合完成」两处，见 agent_turn.go） |
-| `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构，`Answer()` 分发到两个现成入口，`TakeAlerts()` 交出攒下的提示音（事件不能被去抖吞掉）；按配置开关链路 |
+| `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构（状态副标题在这里裁到设备收得下的**字节数**——设备那个字段是按字节截断的），`Answer()` 分发到两个现成入口，`TakeAlerts()` 交出攒下的提示音（事件不能被去抖吞掉）；按配置开关链路 |
 | `desktop/link/link.go` | `Listener` / `Transport` 接口、`Server` 会话循环、去抖、ref 分配、`hello`/`sync`/`answer` 处理 |
 | `desktop/link/serial.go` | 串口实现；端口为空时按 Espressif USB VID 每次 Accept 重新查找（端口名随插拔漂移） |
 | `desktop/link/tcp.go` | 监听式实现（开发用，见 §3.3） |
@@ -260,7 +260,8 @@ flowchart LR
 ## 6. 设备侧实现（`FoloToy/ai-passport`）
 
 - **新应用，UI 自己重画**（仓库硬性规范：不得沿用 demo 菜单/页面外壳），复用 BSP。四块屏：
-  状态屏（头像 + 会话名 + 状态 + 副标题 + 电量）、确认屏（命令预览 + 三个选项）、问答屏
+  状态屏（头像 + 会话名 + 状态 + 副标题 + 电量；副标题在工具执行中是**工具名 + 参数摘要**，
+  复用前端的 `tools.ToolArgsSummary`，所以「在拿它干什么」一眼可见——长的那行自己跑马灯）、确认屏（命令预览 + 三个选项）、问答屏
   （题面 + 选项列表 + `第 n/m 题`）、配对屏（那 6 位码，48px 拆成 3+3 —— 用户要把它念到、抄进
   另一台设备，是这块屏上唯一需要「隔着一米也看得清」的东西）。**配对屏压过其它三块**：码在屏上
   的时候，用户唯一的任务就是把它敲进电脑，会话列表和电量都是干扰。

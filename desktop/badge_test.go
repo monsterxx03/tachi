@@ -2,9 +2,11 @@ package main
 
 import (
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -395,5 +397,33 @@ func TestAlertsEnabledSwitchesTheQueueOff(t *testing.T) {
 
 	if alerts := d.TakeAlerts(); len(alerts) != 0 {
 		t.Errorf("开关关着仍然攒了 %+v", alerts)
+	}
+}
+
+// 状态屏那一行要说的是「在拿它干什么」，而不只是「在用哪个工具」——参数摘要复用前端
+// 标题用的同一个函数（tools.ToolArgsSummary）。
+func TestToolDetailCarriesTheArguments(t *testing.T) {
+	got := toolDetail("Bash", `{"command":"rm -rf build/"}`)
+	if !strings.Contains(got, "Bash") || !strings.Contains(got, "rm -rf build/") {
+		t.Errorf("detail = %q，应当同时带上工具名与参数", got)
+	}
+	if bare := toolDetail("SomeTool", ""); bare != "调用 SomeTool" {
+		t.Errorf("没有参数时 detail = %q", bare)
+	}
+}
+
+// 设备那条副标题的字段只有 96 字节，而设备是按**字节**截断的：主机必须自己按字符边界
+// 裁到上限以内，否则屏幕上是一串乱码（切出半个汉字）。
+func TestDeviceDetailFitsTheDeviceField(t *testing.T) {
+	got := deviceDetail(strings.Repeat("汉", 200))
+
+	if len(got) > deviceDetailLimit {
+		t.Errorf("裁完 %d 字节，超过上限 %d", len(got), deviceDetailLimit)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("裁出了半个字符：%q", got)
+	}
+	if short := "调用 Bash"; deviceDetail(short) != short {
+		t.Errorf("放得下时不该动它，实际 %q", deviceDetail(short))
 	}
 }
