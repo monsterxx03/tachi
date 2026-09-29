@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -271,4 +274,126 @@ func TestProcessManager_CloseCalledFromAgent(t *testing.T) {
 	// and KillAll() cleans up tracked background processes.
 	pm := NewProcessManager()
 	pm.KillAll() // should not panic when no processes are tracked
+}
+
+// Wait is the alternative to polling with a shell sleep (issue #45): it blocks
+// on the process's own terminal-state signal, so waiting costs no process.
+func TestProcessManager_Wait(t *testing.T) {
+	t.Run("finished within the bound", func(t *testing.T) {
+		pm := NewProcessManager()
+		if _, err := pm.Start(t.Context(), "quick", "echo done; exit 7"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		info, stillRunning, err := pm.Wait(t.Context(), "quick", 10*time.Second)
+		if err != nil {
+			t.Fatalf("Wait failed: %v", err)
+		}
+		if stillRunning {
+			t.Errorf("expected the wait to end on exit, got stillRunning")
+		}
+		if info.Status != ProcessExited {
+			t.Errorf("expected status exited, got %s", info.Status)
+		}
+		// The exit code is stored before the waiter is woken — a wake-up must
+		// never observe a half-written terminal state.
+		if info.ExitCode != 7 {
+			t.Errorf("expected exit code 7, got %d", info.ExitCode)
+		}
+		if !strings.Contains(info.RecentStdout, "done") {
+			t.Errorf("expected recent stdout to carry the output, got %q", info.RecentStdout)
+		}
+
+		// A second wait on an already-finished (not yet drained) process
+		// returns the same final snapshot instead of blocking.
+		again, stillRunning, err := pm.Wait(t.Context(), "quick", 10*time.Second)
+		if err != nil || stillRunning || again.Status != ProcessExited {
+			t.Errorf("second Wait = (%v, %v, %v), want the same exited snapshot", again, stillRunning, err)
+		}
+	})
+
+	t.Run("bound elapses while running", func(t *testing.T) {
+		pm := NewProcessManager()
+		if _, err := pm.Start(t.Context(), "slow", "sleep 30"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+		defer pm.Stop("slow")
+
+		start := time.Now()
+		info, stillRunning, err := pm.Wait(t.Context(), "slow", 100*time.Millisecond)
+		if err != nil {
+			t.Fatalf("Wait failed: %v", err)
+		}
+		if !stillRunning {
+			t.Errorf("expected stillRunning after the bound elapsed, got %+v", info)
+		}
+		if info.Status != ProcessRunning {
+			t.Errorf("expected status running, got %s", info.Status)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("Wait overran its bound: %s", elapsed)
+		}
+	})
+
+	t.Run("killed is terminal", func(t *testing.T) {
+		pm := NewProcessManager()
+		if _, err := pm.Start(t.Context(), "killme", "sleep 30"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		done := make(chan *ManagedProcessInfo, 1)
+		go func() {
+			info, _, _ := pm.Wait(t.Context(), "killme", 10*time.Second)
+			done <- info
+		}()
+
+		// Give the waiter a moment to actually block, then stop the process.
+		time.Sleep(50 * time.Millisecond)
+		if _, err := pm.Stop("killme"); err != nil {
+			t.Fatalf("Stop failed: %v", err)
+		}
+
+		select {
+		case info := <-done:
+			if info == nil || info.Status != ProcessKilled {
+				t.Errorf("expected the waiter to wake on the kill, got %+v", info)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("waiter did not wake when the process was stopped")
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		pm := NewProcessManager()
+		if _, err := pm.Start(t.Context(), "cancelme", "sleep 30"); err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+		defer pm.Stop("cancelme")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}()
+
+		info, stillRunning, err := pm.Wait(ctx, "cancelme", 10*time.Second)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+		// The snapshot still comes back so the caller can report what it saw.
+		if info == nil || !stillRunning {
+			t.Errorf("expected a running snapshot alongside the error, got %+v (stillRunning=%v)", info, stillRunning)
+		}
+	})
+
+	t.Run("unknown name", func(t *testing.T) {
+		pm := NewProcessManager()
+		info, _, err := pm.Wait(t.Context(), "no-such-process", time.Second)
+		if err == nil {
+			t.Fatal("expected an error for an untracked process")
+		}
+		if info != nil {
+			t.Errorf("expected no snapshot for an untracked process, got %+v", info)
+		}
+	})
 }

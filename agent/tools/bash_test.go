@@ -210,6 +210,46 @@ func TestBashTool_AutoBackground(t *testing.T) {
 	}
 }
 
+// TestBashTool_WaitName_OnAdoptedProcess covers the issue #45 flow end to end:
+// a slow foreground command is adopted at the window, and the agent then WAITS
+// for it by name instead of shell-sleeping. It also pins the Adopt rendezvous —
+// an adopted process is waited on by the tool call's own goroutine, so a waiter
+// must still wake when that goroutine records the exit.
+func TestBashTool_WaitName_OnAdoptedProcess(t *testing.T) {
+	pm := NewProcessManager()
+	tool := BashTool{processManager: pm, foregroundWindow: 200 * time.Millisecond}
+
+	result, err := tool.ExecuteContext(t.Context(), `{"command": "sleep 0.6; echo finished"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var started BashResult
+	if err := json.Unmarshal([]byte(result), &started); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+	if !started.Backgrounded || started.BgName == "" {
+		t.Fatalf("expected the slow command to be adopted, got %+v", started)
+	}
+	if !strings.Contains(started.Stderr, "wait_name") {
+		t.Errorf("the background hint must point at wait_name, got: %s", started.Stderr)
+	}
+
+	waited, err := tool.ExecuteContext(t.Context(), `{"wait_name": "`+started.BgName+`", "timeout": 10000}`)
+	if err != nil {
+		t.Fatalf("wait_name failed: %v", err)
+	}
+	var r bashWaitResult
+	if err := json.Unmarshal([]byte(waited), &r); err != nil {
+		t.Fatalf("failed to parse wait result: %v", err)
+	}
+	if r.Status != ProcessExited || r.ExitCode != 0 || r.StillRunning {
+		t.Errorf("expected the adopted process to finish cleanly, got %+v", r)
+	}
+	if !strings.Contains(r.RecentStdout, "finished") {
+		t.Errorf("expected the process output in the wait result, got %q", r.RecentStdout)
+	}
+}
+
 func TestBashTool_AutoBackgroundDisabledWithoutManager(t *testing.T) {
 	// No ProcessManager: legacy timeout behavior (kill + interrupted).
 	tool := BashTool{foregroundWindow: 200 * time.Millisecond}
@@ -259,7 +299,7 @@ func TestBashTool_FastCommandNotBackgrounded(t *testing.T) {
 func TestBashTool_RequiredFor(t *testing.T) {
 	tool := NewBashTool(BashToolConfig{ProcessManager: NewProcessManager()})
 
-	for _, args := range []string{`{"list_bg": true}`, `{"stop_name": "dev-server"}`} {
+	for _, args := range []string{`{"list_bg": true}`, `{"stop_name": "dev-server"}`, `{"wait_name": "dev-server"}`} {
 		if err := validateArgs(tool, args); err != nil {
 			t.Fatalf("expected the control call %s to validate, got %v", args, err)
 		}
@@ -295,4 +335,71 @@ func TestBashTool_ListBgThroughRegistry(t *testing.T) {
 	if tr.Status != ToolResultSuccess {
 		t.Fatalf("expected list_bg to succeed, got %v (%v)", tr.Status, tr.Err)
 	}
+}
+
+// TestBashTool_WaitName pins the answer to issue #45: an agent that must wait
+// for a slow background command blocks HERE instead of running a shell `sleep`
+// — a sleep is itself a foreground command, so it too would be backgrounded at
+// the window, leaving one stray process behind per poll.
+func TestBashTool_WaitName(t *testing.T) {
+	pm := NewProcessManager()
+	tool := NewBashTool(BashToolConfig{ProcessManager: pm})
+
+	t.Run("returns the final state", func(t *testing.T) {
+		if _, err := tool.ExecuteContext(t.Context(),
+			`{"background": true, "bg_name": "job", "command": "echo hi; exit 3"}`); err != nil {
+			t.Fatalf("failed to start background job: %v", err)
+		}
+		before := len(pm.List())
+
+		out, err := tool.ExecuteContext(t.Context(), `{"wait_name": "job", "timeout": 10000}`)
+		if err != nil {
+			t.Fatalf("wait_name failed: %v", err)
+		}
+		var r bashWaitResult
+		if err := json.Unmarshal([]byte(out), &r); err != nil {
+			t.Fatalf("failed to parse wait result: %v", err)
+		}
+		if r.Status != ProcessExited || r.ExitCode != 3 {
+			t.Errorf("expected exited with code 3, got %s/%d", r.Status, r.ExitCode)
+		}
+		if r.StillRunning || r.Note != "" {
+			t.Errorf("a wait that ended on exit needs no note: stillRunning=%v note=%q", r.StillRunning, r.Note)
+		}
+		if !strings.Contains(r.RecentStdout, "hi") {
+			t.Errorf("expected the job's output in the result, got %q", r.RecentStdout)
+		}
+		// The whole point: waiting added no process of its own.
+		if after := len(pm.List()); after != before {
+			t.Errorf("wait_name changed the tracked process count: %d → %d", before, after)
+		}
+	})
+
+	t.Run("bound elapses while still running", func(t *testing.T) {
+		if _, err := tool.ExecuteContext(t.Context(),
+			`{"background": true, "bg_name": "slow", "command": "sleep 30"}`); err != nil {
+			t.Fatalf("failed to start background job: %v", err)
+		}
+		defer pm.Stop("slow")
+
+		out, err := tool.ExecuteContext(t.Context(), `{"wait_name": "slow", "timeout": 200}`)
+		if err != nil {
+			t.Fatalf("wait_name failed: %v", err)
+		}
+		var r bashWaitResult
+		json.Unmarshal([]byte(out), &r)
+		if !r.StillRunning || r.Status != ProcessRunning {
+			t.Errorf("expected a still-running result, got %+v", r)
+		}
+		if r.Note == "" {
+			t.Error("a wait that timed out must tell the model what to do next")
+		}
+	})
+
+	t.Run("unknown name", func(t *testing.T) {
+		_, err := tool.ExecuteContext(t.Context(), `{"wait_name": "nope"}`)
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("expected a not-found error, got %v", err)
+		}
+	})
 }

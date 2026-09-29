@@ -27,6 +27,16 @@ const (
 	// it is automatically moved to the background (see BashTool).
 	defaultForegroundWindow = 15 * time.Second
 
+	// defaultWaitWindow bounds a `wait_name` call when the model sets no
+	// `timeout`: long enough that waiting for a slow command (a big clone)
+	// takes a couple of calls rather than many, short enough that a mistaken
+	// wait does not stall the turn for minutes.
+	defaultWaitWindow = 60 * time.Second
+
+	// maxWindowMs is the largest `timeout` value the schema accepts, shared by
+	// the foreground window and the wait bound.
+	maxWindowMs = 600_000
+
 	// drainTimeout bounds waiting for a killed process to exit. SIGKILL
 	// cannot terminate D-state (uninterruptible sleep) processes, so an
 	// unbounded wait could hang the tool call forever.
@@ -50,6 +60,17 @@ type bashArgs struct {
 	BgName     string `json:"bg_name,omitempty"`
 	StopName   string `json:"stop_name,omitempty"`
 	ListBg     bool   `json:"list_bg,omitempty"`
+	WaitName   string `json:"wait_name,omitempty"`
+}
+
+// bashWaitResult is the `wait_name` payload: the waited-on process's snapshot
+// plus WHY the wait returned. The snapshot alone cannot say it — a wait can end
+// with the process still running (bound elapsed, or the turn was cancelled).
+type bashWaitResult struct {
+	ManagedProcessInfo
+	WaitedMs     int64  `json:"waitedMs"`
+	StillRunning bool   `json:"stillRunning,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
 
 type BashTool struct {
@@ -111,7 +132,8 @@ func (t *BashTool) Description() string {
 			"are automatically moved to the background. To manage them, call this tool again with the " +
 			"`list_bg` parameter set to true (lists running background processes) or the `stop_name` parameter " +
 			"set to the process name (stops one). `list_bg` and `stop_name` are JSON parameters of this tool — " +
-			"not shell commands."
+			"not shell commands. To WAIT for one, pass its name as `wait_name` — never wait with a shell " +
+			"`sleep`, which is itself a foreground command and gets backgrounded too."
 	}
 	return desc
 }
@@ -123,40 +145,45 @@ func (t *BashTool) Properties() map[string]PropertySchema {
 	// params are dropped entirely.
 	timeoutDesc := "Hard kill deadline in milliseconds — the command is killed after this duration (default 15000, max 600000). Set it explicitly for long-running builds/tests."
 	if !t.acpMode {
-		timeoutDesc = "Foreground window in milliseconds — commands still running after it are moved to the background (default 15000, max 600000)"
+		timeoutDesc = fmt.Sprintf("Foreground window in milliseconds — commands still running after it are moved to the background (default %d, max %d). With wait_name it bounds the wait instead (default %d)",
+			defaultForegroundWindow.Milliseconds(), maxWindowMs, defaultWaitWindow.Milliseconds())
 		if t.processManager == nil {
-			timeoutDesc = "Optional timeout in milliseconds before the command is killed (max 600000)"
+			timeoutDesc = fmt.Sprintf("Optional timeout in milliseconds before the command is killed (max %d)", maxWindowMs)
 		}
 	}
 	props := map[string]PropertySchema{
 		"command": {Type: "string", Description: "The bash command to execute"},
-		"timeout": {Type: "integer", Description: timeoutDesc, Minimum: new(1.0), Maximum: new(600000.0), Default: 15000},
+		"timeout": {Type: "integer", Description: timeoutDesc, Minimum: new(1.0), Maximum: new(float64(maxWindowMs)), Default: int(defaultForegroundWindow.Milliseconds())},
 	}
 	if !t.acpMode {
 		props["background"] = PropertySchema{Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."}
 		props["bg_name"] = PropertySchema{Type: "string", Description: "A unique name for this background process. Required when background=true. Reference this name later via the stop_name parameter."}
 		props["stop_name"] = PropertySchema{Type: "string", Description: "When set, stops the background process with this bg_name instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
 		props["list_bg"] = PropertySchema{Type: "boolean", Description: "When set to true, lists all running background processes instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
+		props["wait_name"] = PropertySchema{Type: "string", Description: fmt.Sprintf("When set, blocks until the background process with this bg_name finishes, then returns its final status and recent output — the way to wait for a long background command (the `timeout` parameter bounds the wait here, default %dms). Do NOT wait with a shell `sleep`: it is a foreground command of its own and gets backgrounded too.", defaultWaitWindow.Milliseconds())}
 	}
 	return props
 }
 func (t BashTool) Required() []string { return []string{"command"} }
 
-// RequiredFor implements ArgRequirements: `list_bg` and `stop_name` are CONTROL calls that
-// carry no command at all — executeLocal answers them before it ever reads a.Command — so the
-// flat required list would refuse the very calls the description invites ("call this tool
-// again with the list_bg parameter set to true"). Everything else, `background: true`
-// included (it is the shape that STARTS a process), still needs a command.
+// RequiredFor implements ArgRequirements: `list_bg`, `stop_name` and `wait_name` are
+// CONTROL calls that carry no command at all — executeLocal answers them before it ever reads
+// a.Command — so the flat required list would refuse the very calls the description invites
+// ("call this tool again with the list_bg parameter set to true"). Everything else,
+// `background: true` included (it is the shape that STARTS a process), still needs a command.
 //
 // Required() above deliberately keeps advertising `command` to the model: the schema rides in
 // every request, and a tool-list change invalidates each session's prompt prefix, so the
 // relaxation belongs to the validator alone. A model that sends a command next to list_bg /
-// stop_name is served exactly the same way it always was.
+// stop_name / wait_name is served exactly the same way it always was.
 func (t BashTool) RequiredFor(argMap map[string]any) []string {
 	if listBg, _ := argMap["list_bg"].(bool); listBg {
 		return nil
 	}
 	if stopName, _ := argMap["stop_name"].(string); stopName != "" {
+		return nil
+	}
+	if waitName, _ := argMap["wait_name"].(string); waitName != "" {
 		return nil
 	}
 	return t.Required()
@@ -180,7 +207,7 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		// lifecycle — so reject these params explicitly instead of silently
 		// ignoring them (the schema already omits them, but models may reuse
 		// local-mode habits from other sessions).
-		if a.Background || a.ListBg || a.StopName != "" || a.BgName != "" {
+		if a.Background || a.ListBg || a.StopName != "" || a.BgName != "" || a.WaitName != "" {
 			return "", fmt.Errorf("background process management is not supported in ACP terminal mode")
 		}
 		if conn := acpctx.Conn(ctx); conn != nil {
@@ -197,6 +224,13 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error) {
 	pm := t.processManager
 
+	// Resolved once for every branch: the control calls below (list_bg,
+	// stop_name, wait_name) do not need it, but Start/Wait and the foreground
+	// path do, and a nil context there would be a latent panic.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// list_bg: list all background processes
 	if a.ListBg {
 		if pm == nil {
@@ -204,6 +238,40 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		}
 		list := pm.List()
 		return marshalResult(list)
+	}
+
+	// wait_name: block until a background process finishes (or the bound
+	// elapses). This is the alternative to a shell `sleep`: a sleep is itself a
+	// foreground command, so it too gets backgrounded at the window — leaving a
+	// stray process behind on every poll.
+	if a.WaitName != "" {
+		if pm == nil {
+			return "", fmt.Errorf("background process management is not available (no ProcessManager configured)")
+		}
+		bound := defaultWaitWindow
+		if a.Timeout != nil && *a.Timeout > 0 {
+			bound = time.Duration(*a.Timeout) * time.Millisecond
+		}
+		start := time.Now()
+		info, stillRunning, err := pm.Wait(ctx, a.WaitName, bound)
+		if info == nil {
+			// No snapshot means the name is not tracked — Wait pairs that with
+			// its own "not found" error, which is widened here with what the
+			// model should do about it.
+			return "", fmt.Errorf("%v — it may have finished already (finished background tasks are reported to you automatically) or been stopped; list_bg shows what is still running", err)
+		}
+		result := bashWaitResult{
+			ManagedProcessInfo: *info,
+			WaitedMs:           time.Since(start).Milliseconds(),
+			StillRunning:       stillRunning,
+		}
+		switch {
+		case err != nil: // cancelled mid-wait — report the snapshot, not an error
+			result.Note = fmt.Sprintf("Wait cancelled: %v", err)
+		case stillRunning:
+			result.Note = fmt.Sprintf("Still running after %s — call wait_name again to keep waiting, list_bg to inspect its output, or stop_name to terminate.", bound)
+		}
+		return marshalResult(result)
 	}
 
 	// stop_name: stop a background process by name
@@ -254,10 +322,6 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		if d := time.Duration(*a.Timeout) * time.Millisecond; d > 0 && d < window {
 			window = d
 		}
-	}
-
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	// Command runs detached from any tool-call deadline: cancellation is
@@ -395,7 +459,7 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 			result := BashResult{
 				Stdout: stdout,
 				Stderr: fmt.Sprintf("Command still running after %s — continuing in background as %q. "+
-					"Use list_bg to check progress or stop_name to terminate.", window, bgName),
+					"Use wait_name to block until it finishes, list_bg to check progress, or stop_name to terminate.", window, bgName),
 				// Backgrounded commands have no exit code yet — 0 avoids
 				// -1 being read as a crash/failure.
 				ExitCode:     0,

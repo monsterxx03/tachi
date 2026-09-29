@@ -78,7 +78,13 @@ type ManagedProcess struct {
 
 	stdoutBuf *container.RingBuf
 	stderrBuf *container.RingBuf
+
+	// done is closed exactly once, by setTerminal, when the process reaches a
+	// terminal state. Wait blocks on it — waiting for a process is a pure
+	// observation, so it must not cost a process of its own.
+	done chan struct{}
 }
+
 
 // toInfo returns a snapshot of the process for external consumption. Lock-free.
 func (mp *ManagedProcess) toInfo() *ManagedProcessInfo {
@@ -180,6 +186,7 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 		StartedAt: time.Now(),
 		stdoutBuf: stdoutBuf,
 		stderrBuf: stderrBuf,
+		done:      make(chan struct{}),
 	}
 	if !pm.register(mp, true) {
 		// Concurrent Start with the same name won the race — kill this one.
@@ -207,6 +214,7 @@ func (pm *ProcessManager) Adopt(name, command string, cmd *exec.Cmd, startedAt t
 		StartedAt: startedAt,
 		stdoutBuf: stdoutBuf,
 		stderrBuf: stderrBuf,
+		done:      make(chan struct{}),
 	}
 	if !pm.register(mp, false) {
 		return nil, fmt.Errorf("background process '%s' already exists; stop it first or use a different name", name)
@@ -248,11 +256,26 @@ func (mp *ManagedProcess) recordExit(err error) {
 			to = int32(_psError)
 		}
 	}
-	if !mp.status.CompareAndSwap(_psRunning, to) {
-		return // already recorded or killed by stopProcess
-	}
-	mp.exitCode.Store(ec)
+	mp.setTerminal(to, ec)
 }
+
+// setTerminal moves the process from running to a terminal state and wakes any
+// waiter. It returns false when a terminal state was already recorded (this is
+// the CAS loser of a race, e.g. the exit goroutine reporting after Stop).
+//
+// Both terminal transitions — natural exit (recordExit) and kill (stopProcess)
+// — go through here, which is what makes the single close(mp.done) safe: only
+// the CAS winner reaches it. The exit code is stored BEFORE the close so a
+// waiter that wakes on done already sees the final status and code.
+func (mp *ManagedProcess) setTerminal(to, exitCode int32) bool {
+	if !mp.status.CompareAndSwap(_psRunning, to) {
+		return false
+	}
+	mp.exitCode.Store(exitCode)
+	close(mp.done)
+	return true
+}
+
 
 // Stop terminates a background process by name. Sends SIGTERM to the process
 // group first, then SIGKILL after a 5-second grace period. Removes from the
@@ -278,8 +301,7 @@ func (pm *ProcessManager) Stop(name string) (*ManagedProcessInfo, error) {
 func stopProcess(mp *ManagedProcess) {
 	pgid := mp.Cmd.Process.Pid
 
-	mp.exitCode.Store(-1)
-	if !mp.status.CompareAndSwap(_psRunning, _psKilled) {
+	if !mp.setTerminal(_psKilled, -1) {
 		return // already exited naturally — don't send signals
 	}
 
@@ -291,6 +313,43 @@ func stopProcess(mp *ManagedProcess) {
 		time.Sleep(5 * time.Second)
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	}()
+}
+
+// Wait blocks until the named background process reaches a terminal state
+// (exited / killed / error) or bound elapses, whichever comes first.
+//
+// Returns (info, stillRunning, err):
+//   - info is the process snapshot at return time. It is nil — with a
+//     "not found" error — only when no process of that name is tracked, which
+//     also happens after DrainCompleted consumed a finished one.
+//   - stillRunning reports that the wait ended while the process was still
+//     running: bound elapsed, or ctx was cancelled.
+//   - err carries ctx.Err() on cancellation; the snapshot is still returned so
+//     the caller can report what it saw.
+//
+// Waiting is a pure observation — it spawns nothing and holds no lock, so a
+// caller that wants to wait for a slow command should block here instead of
+// starting a sleeper of its own.
+func (pm *ProcessManager) Wait(ctx context.Context, name string, bound time.Duration) (*ManagedProcessInfo, bool, error) {
+	v, ok := pm.processes.Load(name)
+	if !ok {
+		return nil, false, fmt.Errorf("background process '%s' not found", name)
+	}
+	mp := v.(*ManagedProcess)
+
+	// A process that is already terminal has its done channel closed, so this
+	// select returns its final state immediately.
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+
+	select {
+	case <-mp.done:
+		return mp.toInfo(), false, nil
+	case <-timer.C:
+		return mp.toInfo(), true, nil
+	case <-ctx.Done():
+		return mp.toInfo(), true, ctx.Err()
+	}
 }
 
 // List returns a snapshot of all tracked background processes.

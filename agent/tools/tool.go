@@ -379,8 +379,8 @@ func (r *Registry) ExecuteConfirmed(ctx context.Context, name string, args strin
 
 // ArgRequirements is the optional, argument-dependent half of a tool's schema: it lets a
 // tool decide which fields are required from the ARGUMENTS THEMSELVES rather than from the
-// tool alone. Bash is the only implementer today — its `list_bg` and `stop_name` control
-// calls REPLACE `command` instead of accompanying it, so a flat Required() list refuses
+// tool alone. Bash is the only implementer today — its `list_bg`, `stop_name` and `wait_name`
+// control calls REPLACE `command` instead of accompanying it, so a flat Required() list refuses
 // exactly the calls its own description invites the model to make.
 //
 // Required() still describes the MODEL-FACING schema (see ToSchema), which is why a tool

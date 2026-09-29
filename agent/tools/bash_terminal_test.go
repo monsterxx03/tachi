@@ -267,6 +267,7 @@ func TestBashTool_ACPTerminal_RejectsBackgroundParams(t *testing.T) {
 		`{"command": "echo hi", "background": true, "bg_name": "x"}`,
 		`{"command": "echo hi", "list_bg": true}`,
 		`{"command": "echo hi", "stop_name": "x"}`,
+		`{"command": "echo hi", "wait_name": "x"}`,
 	} {
 		_, err := tool.ExecuteContext(context.Background(), args)
 		require.ErrorContains(t, err, "background process management is not supported in ACP terminal mode")
