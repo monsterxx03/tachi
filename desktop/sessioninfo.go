@@ -80,14 +80,18 @@ func trimZero(v float64) string {
 	return s
 }
 
-// formatCost 排成 "$0.42"；拿不到就不显示（空字符串），而不是画一个 "$0"——那看起来像
+// formatCost 排成 "¥0.420"；拿不到就不显示（空字符串），而不是画一个 "¥0"——那看起来像
 // 「这次没花钱」，而真相是「还没算」。
+//
+// 单位和位数**跟着桌面端已有的那份来**（App.tsx 的 `¥{cost.toFixed(3)}`）：这个 cost 是
+// 人民币，而单次调用可能只有几厘，所以是三位小数而不是两位。两处显示同一个数却长得不一样，
+// 是比「尾随的零不好看」更糟的问题。
 func formatCost(v any) string {
 	f := toFloat(v)
 	if f <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("$%.2f", f)
+	return fmt.Sprintf("¥%.3f", f)
 }
 
 // toInt64 / toFloat 是给 map[string]any 用的：那两个数据源（GetProviderInfo /

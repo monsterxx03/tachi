@@ -42,13 +42,14 @@ func TestFormatContext(t *testing.T) {
 }
 
 func TestFormatCost(t *testing.T) {
-	if got := formatCost(0.42); got != "$0.42" {
+	// 单位与位数与桌面端一致（人民币、三位——单次调用可能只有几厘）。
+	if got := formatCost(0.42); got != "¥0.420" {
 		t.Errorf("formatCost = %q", got)
 	}
-	if got := formatCost(12.5); got != "$12.50" {
+	if got := formatCost(12.5); got != "¥12.500" {
 		t.Errorf("formatCost = %q", got)
 	}
-	// 拿不到就别画 "$0"——那看起来像「这次没花钱」，而真相是「还没算」。
+	// 拿不到就别画 "¥0"——那看起来像「这次没花钱」，而真相是「还没算」。
 	for _, v := range []any{nil, 0.0, "0.42"} {
 		if got := formatCost(v); got != "" {
 			t.Errorf("formatCost(%v) = %q, want empty", v, got)
