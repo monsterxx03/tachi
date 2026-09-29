@@ -211,6 +211,32 @@ func TestConnectingBringsTheWholePicture(t *testing.T) {
 	}
 }
 
+// 每条连接都是一个全新的 ref 空间（Server 是每条连接一个，nextSeq 从 0 开始），所以
+// 设备手里的旧等待项必须先被清空：不清的话，同一条等待会以新 ref 再入队一次——屏幕上
+// 出现两条，而旧的那条按下去没有任何反应（它在主机的 ref 表里已经不存在了）。
+func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
+	src := newFakeSource()
+	src.snap = askFixture()
+	p := newPeer(t, src)
+
+	if first := p.read(); first["t"] != "reset" {
+		t.Fatalf("first message on a new connection = %v, want reset", first["t"])
+	}
+	// 清空之后必须立刻跟上全量：只发 reset 而后面没有东西，设备会停在一个空屏上。
+	if second := p.read(); second["t"] != "state" {
+		t.Fatalf("second message = %v, want state", second["t"])
+	}
+	if third := p.read(); third["t"] != "ask" {
+		t.Fatalf("third message = %v, want ask", third["t"])
+	}
+
+	// reset 属于「连接」而不是「每次推送」：一次变化之后只该有推送。
+	src.update(func(s *Snapshot) { s.Sessions[0].Label = "思考" })
+	if m := p.read(); m["t"] != "state" {
+		t.Fatalf("after an update the server sent %v, want state", m["t"])
+	}
+}
+
 func TestAnswerReachesTheSource(t *testing.T) {
 	src := newFakeSource()
 	src.snap = askFixture()

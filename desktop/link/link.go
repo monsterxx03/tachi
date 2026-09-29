@@ -170,6 +170,11 @@ func (s *Server) Run(ctx context.Context) error {
 	errs := make(chan error, 1)
 	go func() { errs <- s.readLoop(ctx, lines) }()
 
+	// 每条连接都是一个全新的 ref 空间：Server 是每条连接一个（见 NewServer），
+	// nextSeq 从 0 开始。设备上次拿到的那套 ref 在这条连接上不再有意义，它手里那些
+	// 等待项谁也答不了——先让它清空，再收下面这份全量。不清的话，同一条等待会以新
+	// ref 再入队一次：屏幕上出现两条，而旧的那条按下去没有任何反应。
+	s.writeReset()
 	// 先推一份全量：设备可能在主机这边推送过之后才连上，而它需要的一切都在快照里。
 	s.push(true)
 
@@ -411,6 +416,11 @@ const (
 func (s *Server) nextSeq() uint64 {
 	s.seq++
 	return s.seq
+}
+
+// writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。
+func (s *Server) writeReset() {
+	s.write(map[string]any{"t": "reset", "seq": s.nextSeq()})
 }
 
 func (s *Server) write(v any) {
