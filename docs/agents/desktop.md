@@ -316,15 +316,20 @@ Fixtures exist where the real path needs something a driver cannot do:
   - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
     (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
     which is why the Makefile targets carry the step rather than a comment telling you to remember it.
-  - **The static library ALONE does not link: the Swift back-deployment libraries its auto-link directives
-    name live in the TOOLCHAIN, not the SDK.** At deployment target 12.0 the shim records `-lswiftCompatibility56`
-    / `-lswiftCompatibilityPacks`, and `xcrun` keeps those under `<toolchain>/usr/lib/swift/macosx/` (CLT and
-    Xcode each ship their own copy) — a directory clang does not search, so the link dies with
-    `Undefined symbols: __swift_FORCE_LOAD_$_swiftCompatibility56`. `stt/build_shim.sh` derives that directory
-    from `xcrun --find swiftc` and symlinks the two libraries into `stt/` (gitignored — they are toolchain
-    pieces), and `stt_darwin.go`'s LDFLAGS carry `-L${SRCDIR}` so the linker finds them. ⚠ **`go build ./stt`
-    catches NONE of the above**: a library package compiles without linking, so a broken stt link only surfaces
-    in `go test` or in a build of the app.
+  - **The static library ALONE does not link, and it does not RUN either: a rpath is needed once
+    the shim uses Swift concurrency.** The link half: the Swift back-deployment libraries its
+    auto-link directives name live in the TOOLCHAIN, not the SDK — `stt/build_shim.sh` derives that
+    directory from `xcrun --find swiftc` and symlinks the libraries into `stt/`, and `stt_darwin.go`'s
+    LDFLAGS carry `-L${SRCDIR}`. The run half: `libswift_Concurrency.dylib` is found through
+    `@rpath`, which an app bundle has and a Go test binary does not — without
+    `-Wl,-rpath,/usr/lib/swift` the test binary aborts with
+    `Library not loaded: @rpath/libswift_Concurrency.dylib`, while the app itself is fine.
+  - **Do not conclude anything from `go test ./stt/ ./link/`.** An app-level regression that only
+    shows up when the whole binary is linked and RUN (the rpath above is exactly one) is invisible
+    to per-package tests. After touching `desktop/`, run `cd desktop && make test` — it builds the
+    shim first and then does `go test ./...`, which is the only command that links the real thing.
+    ⚠ **`go build ./stt` catches NONE of the above**: a library package compiles without linking, so a
+    broken stt link only surfaces in `go test` or in a build of the app.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
   root code imports: a package the root starts importing builds fine there while `desktop/` fails with
