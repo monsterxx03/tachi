@@ -477,9 +477,9 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // 链路那一步（攒字节）已经做完（link/voice.go），这里接手的是**语义**：把 8 KB/s 的
 // IMA ADPCM 还原成 16 kHz 的样本，再让 macOS 自己的识别引擎转成文字（本机、不联网）。
 //
-// 现在只写到日志：这句话该怎么**落到那个会话里**是下一步（设计文档 §7：走前端那条路，
-// 空闲就发、在跑就排队等 steer 点）。先能看见文字，才知道采集那头的声学到底行不行——
-// 那是这套方案在真机上最后一个没验过的东西。
+// 转成了就交给**前端**（「badge:voice」事件），由它决定立刻发还是排队；没转成就把原因回给
+// 设备（设计文档 §5：屏幕上有字，胜过「按了半天没反应」）。两条路都得落到屏幕上——这里
+// 没有第三种「悄悄失败」。
 func (d *desktopApp) transcribeVoice(ctx context.Context, u link.VoiceUpload) {
 	hz := u.Hz
 	if hz <= 0 {
@@ -487,17 +487,29 @@ func (d *desktopApp) transcribeVoice(ctx context.Context, u link.VoiceUpload) {
 	}
 	pcm := audio.DecodeADPCM(u.Payload)
 	if len(pcm) == 0 {
+		// 按了、也说了，却一条样本都没解出来：屏幕上也得有句话。
 		badgeLog().Warn(ctx, "badge voice: nothing to transcribe", "bytes", len(u.Payload))
+		d.voiceError(ctx, u.ID, "转写失败：这段音频没能解出来")
 		return
 	}
 	started := time.Now()
-	text, err := stt.Transcribe(pcm, hz)
+	got, err := stt.Transcribe(pcm, hz)
 	if err != nil {
-		// 「这台机器做不了」要能被看见（设计文档 §7：没能力不能装死）。P1 接上会话
-		// 之后，这里还会变成设备屏幕上的一个 error。
-		badgeLog().Warn(ctx, "badge voice: transcription failed", "err", err)
+		// 原因原文进日志——「哪门语言缺离线资产」和「引擎坏了」在 err 里是分得开的；
+		// 屏幕上那句人话由 voiceFailureText 决定。
+		badgeLog().Warn(ctx, "badge voice: transcription failed",
+			"err", err, "missing", strings.Join(got.Missing, ","))
+		d.voiceError(ctx, u.ID, voiceFailureText(got.Installing))
 		return
 	}
+	if len(got.Missing) > 0 {
+		// 降级：少的那门语言这次没跑成（多半是它的离线资产不在，垫片已经在后台装）。
+		// 这件事不进日志，就等于悄悄给出一句质量更差的文本。
+		badgeLog().Warn(ctx, "badge voice: 有语言没跑成，这次只用剩下的那门转写",
+			"missing", strings.Join(got.Missing, ","),
+			"installing", strings.Join(got.Installing, ","))
+	}
+	text := got.Text
 	// 空文本不是错误：那多半是「按下了但没说话」，而识别如实回答了。
 	badgeLog().Info(ctx, "badge voice: transcribed",
 		"samples", len(pcm), "ms", time.Since(started).Milliseconds(), "chars", len([]rune(text)),
@@ -537,4 +549,50 @@ func (d *desktopApp) transcribeVoice(ctx context.Context, u link.VoiceUpload) {
 	}
 	sender.VoiceText(u.ID, text, state)
 	badgeLog().Info(ctx, "badge voice: 回执已发", "state", state, "chars", len([]rune(text)))
+}
+
+// voiceError 把「这句话为什么没成」回给设备（设计文档 §5）。
+//
+// 与 voice_text 那条回执同一个道理：设备上按下的那一下不能没有结果。链路在转写期间断了
+// 就无处可回——那种情况下设备自己会先看到「发送失败」。
+func (d *desktopApp) voiceError(ctx context.Context, id uint64, message string) {
+	d.mu.Lock()
+	sender := d.badgeLink
+	d.mu.Unlock()
+	if sender == nil {
+		badgeLog().Warn(ctx, "badge voice: 链路已断，失败原因没发出去", "message", message)
+		return
+	}
+	sender.VoiceError(id, message)
+	badgeLog().Info(ctx, "badge voice: 失败原因已回给设备", "message", message)
+}
+
+// voiceFailureText 是设备屏幕上那一句「这句话为什么没了」。
+//
+// 缺离线资产和别的失败必须是两句话：前者是这台机器的一次性状态（垫片已经在后台下载它，
+// 下一次说话可能就好了），后者才是「这里坏了」。framework 的原文（英文、带错误码）只进
+// 日志——那是给排查用的，屏幕上要的是人话（设计文档 §5）。
+func voiceFailureText(installing []string) string {
+	if len(installing) == 0 {
+		return "转写失败：本机语音识别不可用"
+	}
+	names := make([]string, 0, len(installing))
+	for _, locale := range installing {
+		names = append(names, voiceLanguageName(locale))
+	}
+	return "转写失败：还没有 " + strings.Join(names, "、") + " 的离线识别资产（正在下载）"
+}
+
+// voiceLanguageName 把垫片报回来的 locale 变成屏幕上念得出的那个词。
+//
+// 认不出就原样显示：看不认识的字，比看一个编错的名字强——垫片那边多一门语言时，这里不
+// 改也能跑（只是那个词难看一点）。
+func voiceLanguageName(locale string) string {
+	switch locale {
+	case "zh-CN":
+		return "中文"
+	case "en-US":
+		return "英文"
+	}
+	return locale
 }

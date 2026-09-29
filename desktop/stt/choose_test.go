@@ -1,6 +1,10 @@
 package stt
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // 这 18 条不是编出来的：它们是探针第 5 轮
 // （ai-passport tools/stt-probe/round5_language_choice.swift，日志 logs/round5.log）
@@ -202,6 +206,70 @@ func TestParseTranscription(t *testing.T) {
 
 // 汉字判据的边界：标点、全角字母、假名都不算汉字。把它们当汉字会让 zh-CN 的垃圾输出
 // （比如一整串音译）被选中。
+// ParseTranscription 的**结果形状**：正常、降级（少了一门，但话还能用）、整次失败带原文。
+// 字段名与坏 JSON 那两条属于上一个测试（TestParseTranscription）的事，这里不重复。
+//
+// 第二条最容易写错：降级**不是** error。把它当 error，一句能用的转写就被丢掉了——而那
+// 句话恰恰是垫片逐门兜底才换回来的（见 shim.swift 的 transcribe）。
+func TestParseTranscriptionOutcomes(t *testing.T) {
+	cases := []struct {
+		name     string
+		raw      string
+		wantText string
+		wantMiss []string
+		wantInst []string
+		wantErr  string // 空串表示期望没有错误
+	}{
+		{
+			name:     "两个模块都跑成",
+			raw:      `{"zh":"提交一下","zhConf":0.9,"en":"commit","enConf":0.2,"missing":[],"installing":[]}`,
+			wantText: "提交一下",
+		},
+		{
+			name:     "降级：英文那门没跑成，中文的话照旧能用",
+			raw:      `{"zh":"提交一下","zhConf":0.9,"en":"","enConf":0,"missing":["en-US"],"installing":["en-US"]}`,
+			wantText: "提交一下",
+			wantMiss: []string{"en-US"},
+			wantInst: []string{"en-US"},
+		},
+		{
+			name:     "听清了但没人说话：空文本不是错误",
+			raw:      `{"zh":"","zhConf":0,"en":"","enConf":0,"missing":[],"installing":[]}`,
+			wantText: "",
+		},
+		{
+			name: "整次失败：原文原样带出来，同时留着「哪几门没跑成」",
+			raw: `{"zh":"","zhConf":0,"en":"","enConf":0,"missing":["zh-CN","en-US"],` +
+				`"installing":["en-US"],"error":"SFSpeechErrorDomain 4: No GeneralASR asset for language en"}`,
+			wantErr:  "No GeneralASR asset for language en",
+			wantMiss: []string{"zh-CN", "en-US"},
+			wantInst: []string{"en-US"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseTranscription(tc.raw)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("不该有错误: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v，期望包含 %q", err, tc.wantErr)
+			}
+			if text := Choose(got); text != tc.wantText {
+				t.Errorf("Choose = %q，期望 %q", text, tc.wantText)
+			}
+			if !slices.Equal(got.Missing, tc.wantMiss) {
+				t.Errorf("Missing = %v，期望 %v", got.Missing, tc.wantMiss)
+			}
+			if !slices.Equal(got.Installing, tc.wantInst) {
+				t.Errorf("Installing = %v，期望 %v", got.Installing, tc.wantInst)
+			}
+		})
+	}
+}
+
 func TestHasHan(t *testing.T) {
 	yes := []string{"中文", "commit 提交", "汉字"}
 	no := []string{"", "hello", "！？。，", "ＡＢＣ", "ひらがな", "please revert that commit"}

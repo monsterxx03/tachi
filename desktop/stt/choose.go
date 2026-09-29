@@ -16,6 +16,31 @@ type Transcription struct {
 	ZHConf float64 `json:"zhConf"`
 	EN     string  `json:"en"`
 	ENConf float64 `json:"enConf"`
+
+	// Missing 列的是这一次**没跑成**的模块（按 locale 报，例如 "en-US"），不管什么原因。
+	Missing []string `json:"missing"`
+	// Installing 是 Missing 里那些**系统说缺离线资产**的（子集），垫片已经发起安装。
+	// 与 Missing 分开是必须的：缺资产会自己好，别的不会——屏幕上要对用户说的是不同的话。
+	Installing []string `json:"installing"`
+	// Error 是「一门都没跑成」时垫片带回来的原因原文，例如
+	// `SFSpeechErrorDomain 4: No GeneralASR asset for language en`。
+	Error string `json:"error"`
+}
+
+// Result 是一次转写的结果。
+//
+// 文本和「哪几门没用上」是两件事，所以不压进一个字符串：缺资产的降级必须能被看见
+// （desktop/badge.go 会把它写进日志、并据此决定跟用户说什么），而不能悄悄给一句
+// 质量更差的文本。
+type Result struct {
+	// Text 是转写出来的那句话。空文本不是错误——那多半是「按下了但没说话」。
+	Text string
+	// Missing 列的是这一次没用上的模块（按 locale 报）：它们没跑成。非空时 Text 只
+	// 来自剩下的那门语言。
+	Missing []string
+	// Installing 是 Missing 里那些缺离线资产的——它们已经在后台装，下一次说话可能
+	// 就好了。它决定屏幕上那句「为什么没了」怎么说（见 desktop/badge.go）。
+	Installing []string
 }
 
 // Choose 是设计文档 §10 那条判据：**zh-CN 的结果里有汉字就用它**（覆盖绝大多数输入），
@@ -52,10 +77,18 @@ func hasHan(s string) bool {
 }
 
 // ParseTranscription 解析垫片交回来的那行 JSON（见 desktop/stt/shim.swift）。
+//
+// 垫片认得两种「没成」：整次失败（error 非空）和降级（少了一门，见 Missing）。前者在这里
+// 变成 error，后者不是——降级的结果照样能用，只是得让调用方知道。
 func ParseTranscription(raw string) (Transcription, error) {
 	var t Transcription
 	if err := json.Unmarshal([]byte(raw), &t); err != nil {
 		return Transcription{}, fmt.Errorf("stt: 解析转写结果: %w", err)
+	}
+	if t.Error != "" {
+		// 原文照搬，不再压成一句「转写失败」：这句话的用处就是让「哪门语言缺资产」和
+		// 「引擎坏了」分得开（后者不会自己好）。
+		return t, fmt.Errorf("stt: %s", t.Error)
 	}
 	return t, nil
 }

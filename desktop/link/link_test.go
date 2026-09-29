@@ -108,6 +108,9 @@ type peer struct {
 	t    *testing.T
 	conn net.Conn
 	r    *bufio.Reader
+	// srv 是这条连接那头的 Server。VoiceText / VoiceError 这类「从链路自己的 goroutine
+	// 之外写出去」的消息只有拿着它才测得到，而它们恰恰是最容易漏的那两条。
+	srv *Server
 }
 
 func newPeer(t *testing.T, src Source) *peer {
@@ -130,9 +133,10 @@ func newPeer(t *testing.T, src Source) *peer {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	srv := NewServer(src, srvConn)
 	go func() {
 		defer close(done)
-		_ = NewServer(src, srvConn).Run(ctx)
+		_ = srv.Run(ctx)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -140,7 +144,7 @@ func newPeer(t *testing.T, src Source) *peer {
 		<-done
 	})
 
-	return &peer{t: t, conn: conn, r: bufio.NewReader(conn)}
+	return &peer{t: t, conn: conn, r: bufio.NewReader(conn), srv: srv}
 }
 
 func (p *peer) read() map[string]any {

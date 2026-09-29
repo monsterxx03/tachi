@@ -45,7 +45,7 @@ func newVoicePeer(t *testing.T, src Source, sink chan VoiceUpload) *peer {
 		<-done
 	})
 
-	return &peer{t: t, conn: conn, r: bufio.NewReader(conn)}
+	return &peer{t: t, conn: conn, r: bufio.NewReader(conn), srv: srv}
 }
 
 func waitVoice(t *testing.T, sink chan VoiceUpload) VoiceUpload {
@@ -227,5 +227,23 @@ func TestChunksFromAnotherUploadAreIgnored(t *testing.T) {
 	if u.GotParts != 1 || !bytes.Equal(u.Payload, raw) {
 		t.Errorf("payload = %d bytes in %d part(s), want exactly the one chunk that belonged here",
 			len(u.Payload), u.GotParts)
+	}
+}
+
+// 转写失败也得在设备屏幕上有个结果。VoiceError 走的是与 voice_text 同一条回执路（转写
+// 跑在链路自己的 goroutine 之外，所以两条都用 emit 自己算 seq），而它比 voice_text 更
+// 容易漏——「没成」这条路上什么都不发，和设备坏了看起来一模一样。
+func TestVoiceErrorReachesTheDevice(t *testing.T) {
+	p := newVoicePeer(t, newFakeSource(), make(chan VoiceUpload, 1))
+
+	const want = "转写失败：还没有 英文 的离线识别资产（正在下载）"
+	p.srv.VoiceError(7, want)
+
+	m := p.readOf("error")
+	if got := m["message"]; got != want {
+		t.Errorf("message = %v，期望 %q", got, want)
+	}
+	if got := m["id"]; got != float64(7) {
+		t.Errorf("id = %v，期望 7——设备用它把这条回执对回那次录音", got)
 	}
 }

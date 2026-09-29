@@ -88,6 +88,9 @@ public func tachiSTTFree(_ pointer: UnsafeMutablePointer<CChar>?) {
 private final class TranscriberBox: @unchecked Sendable {
     var text = ""
     var confidence: Double = 0
+    // failure 是结果流自己报的错。它非空就说明这一门这次没读成——即使 text 里已经攒下了
+    // 半句（那半句仍然有用，但没有资格算「这一门跑成了」）。
+    var failure: String?
 
     func collect(_ module: SpeechTranscriber) -> Task<Void, Never> {
         Task {
@@ -101,8 +104,11 @@ private final class TranscriberBox: @unchecked Sendable {
                     }
                 }
             } catch {
-                // 结果流出错时**不**改成空串：已经转出来的部分仍然是有用的信息，而
-                // 长度为零的返回会让调用方以为「说的是静音」。
+                // 出错时**不**把 text 清成空串：已经转出来的部分仍然是有用的信息，而
+                // 长度为零的返回会让调用方以为「说的是静音」。但这件事要记下来——「这一
+                // 门没读成」和「这一门听见了但没人说话」必须分得开（后者 text 空、
+                // failure 也空）。
+                failure = speechErrorText(error)
             }
         }
     }
@@ -118,27 +124,62 @@ private func makeTranscriber(_ locale: String) -> SpeechTranscriber {
                       attributeOptions: [.transcriptionConfidence])
 }
 
-// transcribePair 用两个模块各自转写整段音频，交出一段 JSON。
+// speechErrorText 把 Speech.framework 的错误铺成一行能进日志的话。
+//
+// 带上域名和错误码不是啰嗦：这条链上最容易发生的一件事是「某门语言的离线识别资产不在」，
+// 而它的原文是 `SFSpeechErrorDomain 4: No GeneralASR asset for language en`——只有原文
+// 说得清是哪一门。把它压成一句「转写失败」，排查就得回到系统日志里去捞（那正是这一次
+// 发生的事）。
+private func speechErrorText(_ error: Error) -> String {
+    let ns = error as NSError
+    return "\(ns.domain) \(ns.code): \(ns.localizedDescription)"
+}
+
+// Module 是一个转写模块：key 是它在结果 JSON 里的名字（Go 侧的 Choose 认这两个键），
+// locale 是交给 Speech 的语言标识。
+private struct Module {
+    var key: String
+    var locale: String
+}
+
+// sttModules 是设计定的那两个模块，两门缺一门都不算完。
 //
 // 为什么是两个模块而不是一个：「中文句子里嵌的英文词」只有 zh-CN 能读出来（en-US 读中文
 // 是垃圾），而「纯英文的句子」zh-CN 会给出音译垃圾——两边各自跑，然后选一个，比任何单
 // 模块都好。判据不在这里：这里只如实报出原文与置信度，选哪一个由 Go 侧决定（它是纯逻辑，
 // 在主机上就能测）。
-@available(macOS 26.0, *)
-private func transcribePair(_ samples: [Int16], rate: Double) async -> String? {
-    let zh = makeTranscriber("zh-CN")
-    let en = makeTranscriber("en-US")
-    let analyzer = SpeechAnalyzer(modules: [zh, en])
-    let zhBox = TranscriberBox()
-    let enBox = TranscriberBox()
-    let zhTask = zhBox.collect(zh)
-    let enTask = enBox.collect(en)
+private let sttModules = [Module(key: "zh", locale: "zh-CN"), Module(key: "en", locale: "en-US")]
 
-    // 喂 PCM 走流式入口，不写临时文件（探针第 6 轮验过：与文件模式逐字一致）。
-    // 分块大小随便挑——512 与 1600 个样本的结果一模一样。
+// Said 是一个模块这一次说的话。
+private struct Said {
+    var text: String
+    var conf: Double
+}
+
+// Attempt 是一次尝试的结果：跑成了的模块各自的原文（键是 Module.key），或者整次失败的
+// 原因。
+//
+// 「跑成了」不等于「有话」：跑成的模块可以交出空串（按下了但没说话），那是正常输入。
+// 没跑成的模块不出现在 said 里——这个区别就是 missing 那个字段的全部依据。
+private struct Attempt {
+    var said: [String: Said] = [:]
+    var error: String?
+}
+
+// transcribeOnce 用一个 analyzer 跑给定的这几个模块，交回各自的原文与置信度。
+//
+// 喂 PCM 走流式入口，不写临时文件（探针第 6 轮验过：与文件模式逐字一致，§8 承诺了音频
+// 不落盘）。分块大小随便挑——512 与 1600 个样本的结果一模一样。
+@available(macOS 26.0, *)
+private func transcribeOnce(_ samples: [Int16], rate: Double, modules wanted: [Module]) async -> Attempt {
+    let transcribers = wanted.map { makeTranscriber($0.locale) }
+    let boxes = wanted.map { _ in TranscriberBox() }
+    let analyzer = SpeechAnalyzer(modules: transcribers)
+    let collectors = zip(boxes, transcribers).map { $0.0.collect($0.1) }
+
     guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: rate,
                                      channels: 1, interleaved: false) else {
-        return nil
+        return Attempt(error: "no Int16 format for \(rate) Hz")
     }
     let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
     let starter = Task { try await analyzer.start(inputSequence: stream) }
@@ -148,7 +189,10 @@ private func transcribePair(_ samples: [Int16], rate: Double) async -> String? {
     while index < samples.count {
         let count = min(chunk, samples.count - index)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
-                                            frameCapacity: AVAudioFrameCount(count)) else { break }
+                                            frameCapacity: AVAudioFrameCount(count)) else {
+            continuation.finish()
+            return Attempt(error: "no PCM buffer for \(count) samples")
+        }
         buffer.frameLength = AVAudioFrameCount(count)
         samples.withUnsafeBufferPointer { source in
             buffer.int16ChannelData![0].update(from: source.baseAddress! + index, count: count)
@@ -162,20 +206,156 @@ private func transcribePair(_ samples: [Int16], rate: Double) async -> String? {
         try await starter.value
         try await analyzer.finalizeAndFinishThroughEndOfInput()
     } catch {
-        return nil
+        return Attempt(error: speechErrorText(error))
     }
-    _ = await zhTask.value
-    _ = await enTask.value
+    for collector in collectors {
+        _ = await collector.value
+    }
 
-    return "{\"zh\":\"" + jsonEscaped(zhBox.text) + "\",\"zhConf\":" + String(zhBox.confidence)
-        + ",\"en\":\"" + jsonEscaped(enBox.text) + "\",\"enConf\":" + String(enBox.confidence) + "}"
+    var said: [String: Said] = [:]
+    for (box, module) in zip(boxes, wanted) where box.failure == nil {
+        said[module.key] = Said(text: box.text, conf: box.confidence)
+    }
+    if said.isEmpty {
+        // 一门都没跑成：原因来自各模块的结果流。不能因为 analyzer 说自己收尾干净就当成
+        // 一次成功的转写——那正是「静默失败」最容易被放过去的地方。
+        let reasons = zip(boxes, wanted).compactMap { $0.0.failure }
+        return Attempt(error: reasons.isEmpty ? "no module produced a result" : reasons.joined(separator: "; "))
+    }
+    return Attempt(said: said)
+}
+
+// transcribe 是 tachi_stt_transcribe 的实体：跑那两个模块，交回一行 JSON。
+//
+// 为什么要逐门兜底：两个模块**共用一个 analyzer**，而任何一门语言的离线资产不在，整条
+// input loop 就带着另一门一起死——实测过一次（缺 en 的资产，于是连纯中文的那句话也一起
+// 没了）。所以整对失败时逐门再试一遍：能用的那门的话仍然交得出去，缺资产那门进 missing。
+@available(macOS 26.0, *)
+private func transcribe(_ samples: [Int16], rate: Double) async -> String {
+    var attempt = await transcribeOnce(samples, rate: rate, modules: sttModules)
+    var reason = attempt.error ?? ""
+
+    if attempt.said.isEmpty {
+        // 逐门问一遍。这里拿到的是**每一门各自**的原因，比整对那句准（整对那句只报第一
+        // 个倒下的语言）。
+        var reasons: [String] = []
+        for module in sttModules {
+            let one = await transcribeOnce(samples, rate: rate, modules: [module])
+            if let said = one.said[module.key] {
+                attempt.said[module.key] = said
+            } else if let why = one.error {
+                reasons.append(why)
+            }
+        }
+        if !reasons.isEmpty {
+            reason = reasons.joined(separator: "; ")
+        }
+    }
+
+    let missing = sttModules.filter { attempt.said[$0.key] == nil }
+    var installing: [String] = []
+    for module in missing {
+        // 问一次系统「这门语言的资产要不要装」。答案要进 JSON：屏幕上那句话（和日志）得
+        // 分辨「缺资产，正在下载」与「这里坏了」——这两件事对用户的意义完全不同。
+        if await installNeeded(module) {
+            installing.append(module.locale)
+        }
+    }
+    if attempt.said.isEmpty && reason.isEmpty {
+        reason = "no module produced a result"
+    }
+    return transcriptionJSON(said: attempt.said, missing: missing.map(\.locale),
+                             installing: installing, error: attempt.said.isEmpty ? reason : nil)
+}
+
+// transcriptionJSON 拼出交回 Go 的那行 JSON。
+//
+// 形状固定（四个结果键一直在，没跑成的模块给空串和 0）：Go 侧一次 unmarshal 就能拿到全部。
+// `missing` / `installing` / `error` 是这一次转写的**账**——给人看的原因，不是解码用的数据：
+//   - missing：这次没跑成的模块（按 locale 报），不管是什么原因；
+//   - installing：其中系统确认「缺离线资产」、已经发起安装的那些（missing 的子集）。
+//     两件事必须分得开：缺资产会自己好，别的不会，而屏幕上要对用户说的是不一样的话。
+//   - error：一门都没跑成时的原因原文。
+@available(macOS 26.0, *)
+private func transcriptionJSON(said: [String: Said], missing: [String], installing: [String],
+                               error: String?) -> String {
+    var out = "{"
+    for module in sttModules {
+        let got = said[module.key] ?? Said(text: "", conf: 0)
+        out += "\"\(module.key)\":\"" + jsonEscaped(got.text) + "\","
+        out += "\"\(module.key)Conf\":" + String(got.conf) + ","
+    }
+    out += "\"missing\":" + jsonArray(missing)
+    out += ",\"installing\":" + jsonArray(installing)
+    if let error = error {
+        out += ",\"error\":\"" + jsonEscaped(error) + "\""
+    }
+    return out + "}"
+}
+
+// jsonArray 拼一个字符串数组。元素是 locale 标识或模块名，转义照旧走 jsonEscaped——
+// 手写 JSON 的规矩是「每一处字符串都过同一道口子」，不给例外。
+private func jsonArray(_ items: [String]) -> String {
+    "[" + items.map { "\"" + jsonEscaped($0) + "\"" }.joined(separator: ",") + "]"
+}
+
+// installNeeded 回答「这门语言的离线资产，系统说要不要装」，要装就顺手在后台装上。
+//
+// 为什么不能等系统自己发现：这台机器上的资产是**按需**的，没有订阅者时会被系统清掉。
+// 实测过一次——English 的资产不在，转写整条失败，而系统两秒之后才开始下载它。也就是说
+// 用户的第一句话注定赶不上；而说话这件事本身就是「需要」的证明。
+//
+// 为什么不等它装完：一次下载上百 MB，把它压在「按住说话」这条路上，比「这次只用能用的
+// 那门语言」更糟。请求发出去就走，下一次说话它可能就已经在了。
+//
+// 答案记在 installAsked 里：缺资产的失败每次说话都会复现，既没必要每次都去问系统，也
+// 不能每次都给同一个资产起一个下载任务。
+@available(macOS 26.0, *)
+private func installNeeded(_ module: Module) async -> Bool {
+    if let known = askedBefore(module.key) {
+        return known
+    }
+
+    var needed = false
+    do {
+        if let request = try await AssetInventory.assetInstallationRequest(
+            supporting: [makeTranscriber(module.locale)]) {
+            needed = true
+            Task.detached(priority: .background) {
+                // 装不上就是装不上（没网、没磁盘）：这一次已经降级跑完了，不把这条路变成错误。
+                try? await request.downloadAndInstall()
+            }
+        }
+    } catch {
+        // 问不出来就当「不用装」：这一次已经降级跑完了，这个判断只影响屏幕上那句话。
+    }
+    rememberAsked(module.key, needed)
+    return needed
+}
+
+// installAsked 是上面那个问题的答案（键是 Module.key）。
+//
+// 用锁而不是 actor：这段代码从 cgo 调进来的线程上跑，没有 actor 上下文可以 await。
+nonisolated(unsafe) private var installAsked: [String: Bool] = [:]
+private let installAskedLock = NSLock()
+
+private func askedBefore(_ key: String) -> Bool? {
+    installAskedLock.lock()
+    defer { installAskedLock.unlock() }
+    return installAsked[key]
+}
+
+private func rememberAsked(_ key: String, _ needed: Bool) {
+    installAskedLock.lock()
+    defer { installAskedLock.unlock() }
+    installAsked[key] = needed
 }
 
 // jsonEscaped 转义一个字符串，好把它塞进上面那行 JSON 里。
 //
-// 手写而不是用 JSONEncoder：要编码的是「两个字符串 + 两个数」，为此定义一个 Codable
-// 结构体比自己转义更容易出错（真正的坑只有控制字符和引号，都在下面）。这段文本是识别
-// 结果，里面的引号来自人说「引号」两个字，不是没有可能。
+// 手写而不是用 JSONEncoder：要编码的是「两个字符串 + 两个数 + 两个数组」，为此定义一个
+// Codable 结构体比自己转义更容易出错（真正的坑只有控制字符和引号，都在下面）。这段文本是
+// 识别结果，里面的引号来自人说「引号」两个字，不是没有可能。
 private func jsonEscaped(_ text: String) -> String {
     var out = ""
     for scalar in text.unicodeScalars {
@@ -199,8 +379,12 @@ private func jsonEscaped(_ text: String) -> String {
 // tachi_stt_transcribe 把一段 16 kHz 单声道 PCM 转成一句话。
 //
 // 入参是**裸 Int16 样本 + 采样率**：链路那头解出来的就是这个，全程不碰磁盘（设计文档 §8）。
-// 返回值是一段 JSON（两个模块各自的结果），由 tachi_stt_free 释放；失败返回 NULL——
-// 「做不到」必须能被调用方分辨出来，而不是给一个空串（那看起来像「人没说话」）。
+// 返回值是一行 JSON（见 transcriptionJSON），由 tachi_stt_free 释放。
+//
+// ⚠ 失败**不**用 NULL 表示：哪几门语言没跑成、为什么没跑成，都在 JSON 的 missing / error
+// 里。NULL 只剩「垫片压根没跑起来」这一种意思（系统太老、参数没法用）。之前那种写法把
+// 原因吞掉了——调用方只能拿到一句「转写失败」，而「缺资产」和「引擎坏了」是两件要分开
+// 处理的事（前者会自己好，后者不会）。
 //
 // ⚠ 这一步需要「语音识别」权限（NSSpeechRecognitionUsageDescription）。与前几次一样，
 // TCC 把授权归因给 **responsible process**，而且判定发生在第一次调用时——所以 app 的
@@ -213,9 +397,9 @@ public func tachiSTTTranscribe(_ samples: UnsafePointer<Int16>?,
     guard let samples = samples, count > 0, sampleRate > 0 else { return nil }
 
     let pcm = Array(UnsafeBufferPointer(start: samples, count: count))
-    let json = syncWait { () async -> String? in
-        await transcribePair(pcm, rate: sampleRate)
+    // 注意这里的类型：不再是可选——转写失败也有话要带回去（见上面那段）。
+    let json = syncWait { () async -> String in
+        await transcribe(pcm, rate: sampleRate)
     }
-    guard let json = json else { return nil }
     return strdup(json)
 }

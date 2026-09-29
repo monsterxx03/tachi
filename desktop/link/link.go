@@ -538,6 +538,16 @@ func (s *Server) VoiceText(id uint64, text, state string) {
 	s.emit(map[string]any{"t": "voice_text", "id": id, "text": text, "state": state})
 }
 
+// VoiceError 把「这句话没能变成文本」回给设备：它按了、也说了，屏幕上就得有个结果，
+// 否则看起来像是设备坏了（设计文档 §5：屏幕上有字，胜过「按了半天没反应」）。
+//
+// 与 VoiceText 同一条路（emit），理由也一样：转写跑在链路自己的 goroutine 之外。
+// id 是设备给的那次录音的号——设备侧现在不看它（一次只录一段，回执必然是给最近那次的），
+// 但协议里有它，这里就别省。
+func (s *Server) VoiceError(id uint64, message string) {
+	s.emit(map[string]any{"t": "error", "id": id, "message": message})
+}
+
 // emit 是 write 的「连 seq 一起算」版本：递增与写出在**同一把锁**里完成，所以跨 goroutine
 // 调用不会得到两条顺序颠倒的 seq（谁先加的不一定谁先写出去）。
 //

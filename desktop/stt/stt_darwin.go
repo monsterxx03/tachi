@@ -40,7 +40,6 @@ import "C"
 
 import (
 	"errors"
-	"fmt"
 	"unsafe"
 )
 
@@ -73,27 +72,31 @@ func EngineNote() string {
 // 两个模块的结果都拿回来了（垫片交回一行 JSON），由 Choose 选一个——判据放在 Go 侧是因为
 // 它是纯逻辑，能在主机上被真机数据测（choose_test.go 里那 18 条）。
 //
-// 返回 ("", nil) 表示「听清了，但没人说话」；拿不到能力或垫片失败才是 error。两者必须
-// 分得开：前者是正常输入（用户按错了），后者要变成用户看得见的一句话。
-func Transcribe(samples []int16, sampleRate int) (string, error) {
+// Result.Text 为空表示「听清了，但没人说话」；拿不到能力或转写本身失败才是 error。两者
+// 必须分得开：前者是正常输入（用户按错了），后者要变成用户看得见的一句话。
+//
+// ⚠ 失败时也把 Result 交出去（带 Missing）：一门语言缺离线资产**不是**「这台机器做不了」
+// ——另一门还能用，垫片也已经在后台装它了。调用方据此决定跟用户说什么（desktop/badge.go）。
+func Transcribe(samples []int16, sampleRate int) (Result, error) {
 	if len(samples) == 0 || sampleRate <= 0 {
-		return "", nil
+		return Result{}, nil
 	}
 	if !Available() {
-		return "", ErrUnavailable
+		return Result{}, ErrUnavailable
 	}
 	raw := C.tachi_stt_transcribe((*C.int16_t)(unsafe.Pointer(&samples[0])),
 		C.size_t(len(samples)), C.double(sampleRate))
 	if raw == nil {
-		// 垫片返回 NULL = 走不到识别（系统太老、模块起不来、结果流出错）。它不会给
-		// 空串——空串是「人没说话」，是另一件事。
-		return "", fmt.Errorf("stt: 转写失败")
+		// NULL 只剩「垫片压根没跑起来」这一种意思（系统太老、参数没法用）——转写失败的
+		// **原因**不走这条路，它在 JSON 的 error 里，见 shim.swift。
+		return Result{}, errors.New("stt: 垫片没有给出结果")
 	}
 	defer C.tachi_stt_free(raw)
 
 	got, err := ParseTranscription(C.GoString(raw))
 	if err != nil {
-		return "", err
+		// 连原因一起交出去：调用方要能分辨「缺资产」（会自己好）和别的失败。
+		return Result{Missing: got.Missing, Installing: got.Installing}, err
 	}
-	return Choose(got), nil
+	return Result{Text: Choose(got), Missing: got.Missing, Installing: got.Installing}, nil
 }
