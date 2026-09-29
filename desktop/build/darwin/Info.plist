@@ -29,6 +29,11 @@
 		     弹窗都不会出现，日志里也只是一次莫名的退出。 -->
 		<key>NSBluetoothAlwaysUsageDescription</key>
 		<string>Tachi connects to the Tachi badge over Bluetooth.</string>
+		<!-- 语音识别（badge 的语音输入靠它把整段音频转成文字）。与上面蓝牙那条同一个
+		     道理：TCC 把授权归因给 responsible process，而且判定发生在**第一次调用**时，
+		     没有这个键就是直接崩——不是返回一个错误，也不是弹窗。 -->
+		<key>NSSpeechRecognitionUsageDescription</key>
+		<string>Tachi transcribes what you say to the badge into text (on this Mac, no upload).</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, Tachi</string>
 	</dict>

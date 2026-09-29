@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -11,8 +12,10 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
-	"github.com/monsterxx03/tachi/pkg/strutil"
+	"github.com/monsterxx03/tachi/desktop/stt"
+	"github.com/monsterxx03/tachi/pkg/audio"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // badge 是「把 desktop 的等待搬到一块小屏上」的这一半：它既是 link.Source 的实现
@@ -44,6 +47,22 @@ const (
 // ——那时还没有日志目录，`New` 会把行静默丢进 io.Discard（它的文档就写着 Init 必须先
 // 调用）。每次现取很便宜：writer 按路径缓存。
 func badgeLog() *logger.Logger { return logger.New("desktop") }
+
+// setBadgeLink 记住（或忘掉）当前那条链路。
+//
+// 它存在的理由只有一条：转写完成后要把回执写回设备，而转写跑在链路自己的 goroutine
+// 之外——那条 goroutine 里局部变量的 Server 从别处拿不到。
+func (d *desktopApp) setBadgeLink(s *link.Server) {
+	d.mu.Lock()
+	d.badgeLink = s
+	d.mu.Unlock()
+}
+
+func (d *desktopApp) badgeSender() *link.Server {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.badgeLink
+}
 
 // badgeRetry 是两次重连之间的间隔。设备不在线是常态（线拔了、设备正在跑别的固件），
 // 所以这个循环必须便宜且安静。
@@ -220,7 +239,41 @@ func (d *desktopApp) badgeLoop(ctx context.Context, ln link.Listener) {
 		lastErr = ""
 		badgeLog().Info(ctx, "badge link: device connected")
 		connectedAt := time.Now()
-		err = link.NewServer(d, tr).Run(ctx)
+		srv := link.NewServer(d, tr)
+		d.setBadgeLink(srv)
+		// P0-①：量链路的可持续吞吐。**原始**字节/秒才是决定采样率常量的那个数——
+		// 线路上的字节（base64 涨 4/3，再加 JSON 骨架）是它的 1.4 倍还多，两个数混在
+		// 一起读会把人误导到「链路撑不住」上去。
+		srv.OnVoice = func(u link.VoiceUpload) {
+			secs := u.Duration.Seconds()
+			kbps := 0.0
+			if secs > 0 {
+				kbps = math.Round(float64(len(u.Payload))/secs/1024*10) / 10
+			}
+			fields := []any{
+				"id", u.ID,
+				"codec", u.Codec,
+				"hz", u.Hz,
+				"bytes", len(u.Payload),
+				"declared", u.Declared,
+				"parts", u.GotParts,
+				"parts_reported", u.Parts,
+				"ms", u.Duration.Milliseconds(),
+				"kbps", kbps,
+			}
+			if u.Err != nil {
+				// 失败也要打全：半截上传的字节数与耗时同样是「链路能跑多快」的证据
+				// （它多半就是跑到一半被追上/丢掉的那一次）。
+				badgeLog().Warn(ctx, "badge voice: upload FAILED", append(fields, "err", u.Err)...)
+				return
+			}
+			badgeLog().Info(ctx, "badge voice: upload measured", fields...)
+			// 转写放另一个 goroutine：这里跑在链路那条 goroutine 上（link 的 handle），
+			// 而识别要几百毫秒——挡住它，这条链路上同时到的 ask 也得跟着等。
+			go d.transcribeVoice(ctx, u)
+		}
+		err = srv.Run(ctx)
+		d.setBadgeLink(nil) // 这条链路已经没了：回执不该再往它上面写
 		_ = tr.Close()
 		if ctx.Err() != nil {
 			return
@@ -427,4 +480,71 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// transcribeVoice 把一次语音上传解成样本、转成一句话。这是 P1 的主机侧那一半。
+//
+// 链路那一步（攒字节）已经做完（link/voice.go），这里接手的是**语义**：把 8 KB/s 的
+// IMA ADPCM 还原成 16 kHz 的样本，再让 macOS 自己的识别引擎转成文字（本机、不联网）。
+//
+// 现在只写到日志：这句话该怎么**落到那个会话里**是下一步（设计文档 §7：走前端那条路，
+// 空闲就发、在跑就排队等 steer 点）。先能看见文字，才知道采集那头的声学到底行不行——
+// 那是这套方案在真机上最后一个没验过的东西。
+func (d *desktopApp) transcribeVoice(ctx context.Context, u link.VoiceUpload) {
+	hz := u.Hz
+	if hz <= 0 {
+		hz = 16000 // 设备没报就用设计里那一档，而不是让识别拿到 0 采样率
+	}
+	pcm := audio.DecodeADPCM(u.Payload)
+	if len(pcm) == 0 {
+		badgeLog().Warn(ctx, "badge voice: nothing to transcribe", "bytes", len(u.Payload))
+		return
+	}
+	started := time.Now()
+	text, err := stt.Transcribe(pcm, hz)
+	if err != nil {
+		// 「这台机器做不了」要能被看见（设计文档 §7：没能力不能装死）。P1 接上会话
+		// 之后，这里还会变成设备屏幕上的一个 error。
+		badgeLog().Warn(ctx, "badge voice: transcription failed", "err", err)
+		return
+	}
+	// 空文本不是错误：那多半是「按下了但没说话」，而识别如实回答了。
+	badgeLog().Info(ctx, "badge voice: transcribed",
+		"samples", len(pcm), "ms", time.Since(started).Milliseconds(), "chars", len([]rune(text)),
+		"text", text)
+
+	// 投递：交给**前端**，因为它才知道哪个会话是「当前」的（设计文档 §2：设备手上没有
+	// 这个信息，所以协议里也刻意没有会话 id）。前端把它送进 composer 那条既有的路
+	// ——空闲时开一个 turn、在跑时进队列等 steer 点——所以「按住说话」和「敲回车」在
+	// 后端眼里是同一件事，没有第二条投递路径要维护。
+	if strings.TrimSpace(text) == "" {
+		// 不投一句空话进会话：那只会让人以为设备发错了东西。
+		badgeLog().Info(ctx, "badge voice: 没有可投递的文本（按下了但没说话？）")
+		return
+	}
+	d.app.Event.Emit("badge:voice", map[string]any{"text": text})
+
+	// 回执：设备屏幕上要显示「这句话是什么、到哪了」（设计文档 §5 的 voice_text）。
+	// state 由这里算——「会话在不在跑」是后端知道的事实，而「哪个会话是当前的」是前端的
+	// 选择（它通过 ActivateSession 同步到 d.activeID），两样都在这里。
+	//
+	// 注意这只是**屏幕上的那句话**：真正的投递已经发出去了（上面那条事件），而前端那边
+	// 的 route() 才是决定「立刻发还是排队」的地方。这里算出来的 state 与它一致，因为
+	// 两边看的是同一个 running。
+	state := "sent"
+	active := ""
+	d.mu.Lock()
+	active = d.activeID
+	if r := d.getRun(active); r != nil && r.running {
+		state = "queued"
+	}
+	sender := d.badgeLink
+	d.mu.Unlock()
+	if sender == nil {
+		// 链路在转写期间断了：没什么可回的，而设备那边会先看到「发送失败」那类提示。
+		badgeLog().Warn(ctx, "badge voice: 链路已断，回执没发出去", "state", state)
+		return
+	}
+	sender.VoiceText(u.ID, text, state)
+	badgeLog().Info(ctx, "badge voice: 回执已发", "state", state, "chars", len([]rune(text)))
 }

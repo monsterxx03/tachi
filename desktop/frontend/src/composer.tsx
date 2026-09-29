@@ -477,6 +477,20 @@ export function useComposer(deps: ComposerDeps) {
     if (t) route(t)
   }, [route])
 
+  // 设备上说的那句话。它和 diff 面板的「发给 agent」是同一种东西——一句「用户没说出口
+  // 但已经定下来」的文本——所以走同一个 submit，也就自动继承了 route：空闲时开一个
+  // turn，在跑时进队列等 steer 点（设计文档 §7）。
+  //
+  // 后端送来的 payload 只有文本、**没有会话 id**，这是有意的：哪个会话是「当前」的
+  // 只有这里知道，所以也由这里决定它归谁（route 用的是 currentId）。
+  useEffect(() => {
+    const off = Events.On('badge:voice', (event) => {
+      const text = (event.data as { text?: string } | undefined)?.text
+      if (text) submit(text)
+    })
+    return () => off()
+  }, [submit])
+
   // send is the composer's own entry point: it owns the text box, so it clears it first.
   const send = useCallback(() => {
     const text = input.trim()

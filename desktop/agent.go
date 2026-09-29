@@ -134,6 +134,12 @@ type desktopApp struct {
 	// caller already holds mu.
 	activeID string
 
+	// badgeLink is the link server of the connection that is up right now (nil when the
+	// device is away). It exists for the one message that has to be written from
+	// OUTSIDE the link's own goroutine: the voice receipt, which is produced after
+	// transcription finishes. Guarded by mu.
+	badgeLink *link.Server
+
 	mu    sync.Mutex
 	runs  map[string]*sessionRun // key: session ID
 	simCh chan struct{}          // simulated-turn stop signal

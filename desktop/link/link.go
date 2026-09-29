@@ -152,6 +152,13 @@ type Server struct {
 	src Source
 	tr  Transport
 
+	// OnVoice 在设备完成（或放弃）一次语音上传时被调用。nil 时那次上传只被丢掉——
+	// 攒字节是链路层的事，拿这段音频干什么由宿主决定（P0-① 是量吞吐，P1 是转写）。
+	//
+	// 它在 handle 的那条 goroutine 上被调用（和 Answer 一样），实现要当自己随时
+	// 会被叫到，并且不要阻塞太久——那会挡住这条链路上其余的消息。
+	OnVoice func(VoiceUpload)
+
 	wmu sync.Mutex
 
 	seq          uint64
@@ -159,6 +166,7 @@ type Server struct {
 	byRef        map[uint64]Ask    // ref → ask
 	sentBody     map[uint64]string // ref → 上次发的正文，用于去抖
 	lastSessions string
+	voice        *voiceUpload // 正在收的那一次语音上传（同时只有一段，见 voice.go）
 }
 
 func NewServer(src Source, tr Transport) *Server {
@@ -294,6 +302,15 @@ type inbound struct {
 	Decision    string            `json:"decision,omitempty"`
 	Answers     map[string]string `json:"answers,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// 语音上传（见 voice.go）。id 由**设备**给（不是主机的 ref）：一次上传不属于
+	// 任何一条等待，它只是要送一段音频上来。
+	ID    uint64 `json:"id,omitempty"`
+	Codec string `json:"codec,omitempty"`
+	Hz    int    `json:"hz,omitempty"`
+	Bytes int    `json:"bytes,omitempty"`
+	Data  string `json:"data,omitempty"`
+	Parts int    `json:"parts,omitempty"`
 }
 
 func (s *Server) handle(line []byte) {
@@ -301,6 +318,10 @@ func (s *Server) handle(line []byte) {
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return // 看不懂的协议行：忽略这一行，不因为一行坏数据断掉连接
 	}
+
+	// 任何一条消息都是检查「半截语音上传是不是已经死了」的时机——设备每 10 秒一条
+	// heartbeat，所以一段没有下文的上传不会一直挂在内存里（voice.go 的 touchVoice）。
+	s.touchVoice()
 
 	switch msg.T {
 	case "hello":
@@ -317,6 +338,12 @@ func (s *Server) handle(line []byte) {
 		s.push(true)
 	case "answer":
 		s.answer(msg)
+	case "voice_begin":
+		s.voiceBegin(msg)
+	case "voice_chunk":
+		s.voiceChunk(msg)
+	case "voice_end":
+		s.voiceEnd(msg)
 	}
 }
 
@@ -460,6 +487,32 @@ func (s *Server) nextSeq() uint64 {
 // writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。
 func (s *Server) writeReset() {
 	s.write(map[string]any{"t": "reset", "seq": s.nextSeq()})
+}
+
+// VoiceText 把一次语音转写的结果回给设备：它说了什么，以及那句话到哪了。
+//
+// 这是唯一一条**从链路自己的 goroutine 之外**写出去的消息（转写要几百毫秒，跑在另一条
+// goroutine 上），所以它用 emit 自己算 seq。
+func (s *Server) VoiceText(id uint64, text, state string) {
+	s.emit(map[string]any{"t": "voice_text", "id": id, "text": text, "state": state})
+}
+
+// emit 是 write 的「连 seq 一起算」版本：递增与写出在**同一把锁**里完成，所以跨 goroutine
+// 调用不会得到两条顺序颠倒的 seq（谁先加的不一定谁先写出去）。
+//
+// write 的调用方全在 Run 那条 goroutine 里，自己拿 nextSeq 是安全的——两套写法不是冗余，
+// 而是「谁在写」这件事的差别。
+func (s *Server) emit(body map[string]any) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+
+	s.seq++
+	body["seq"] = s.seq
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return
+	}
+	_, _ = s.tr.Write(append(append([]byte(prefix), raw...), '\n'))
 }
 
 func (s *Server) write(v any) {
