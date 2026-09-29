@@ -302,6 +302,20 @@ Fixtures exist where the real path needs something a driver cannot do:
   command for it runs with `GOWORK=off`. **The root `go test ./...` does NOT compile `desktop/`'s test
   package**, and the root `make lint` does not cover it either: after touching `desktop/`, run
   `cd desktop && GOWORK=off go test ./...` too.
+- **`desktop/stt` is half Swift, and the Swift half is a BUILD STEP** (`stt/build_shim.sh` →
+  `stt/libtachi_stt.a`, NOT committed — `desktop/Makefile`'s `build`/`test` targets run it, and
+  `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the
+  repo's usual cgo pattern: macOS 26's transcriber API (`SpeechAnalyzer` / `SpeechTranscriber` /
+  `AssetInventory`) exists ONLY in Swift's module interface — the ObjC headers carry nothing but the old
+  `SFSpeechRecognizer` — so `webview_awake_darwin.go`'s inline-ObjC approach cannot express it. Two
+  consequences that are easy to get wrong:
+  - **Compile the shim for the app's deployment target (12.0), not for 26.0.** `swiftc -target …-macosx26.0`
+    makes the whole binary require 26.0 symbols, so the app stops LAUNCHING on macOS 15 rather than merely
+    losing the feature. At 12.0 the 26-only symbols come out weakly linked (`nm -m` shows `weak external`)
+    and every use is behind `#available(macOS 26.0, *)` — `stt.Available()` then answers false instead.
+  - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
+    (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
+    which is why the Makefile targets carry the step rather than a comment telling you to remember it.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
   root code imports: a package the root starts importing builds fine there while `desktop/` fails with

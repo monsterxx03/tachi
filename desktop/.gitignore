@@ -11,3 +11,5 @@ build/android/overlay.json
 build/android/gen/
 # Generated bindings (wails3 generate bindings) — e.g. Go stdlib `time`
 frontend/bindings/time
+# STT 垫片的编译产物（stt/build_shim.sh 生），和 bin/ 同类：改了 shim.swift 就重编。
+stt/libtachi_stt.a

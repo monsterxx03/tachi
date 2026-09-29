@@ -2,6 +2,7 @@
 #
 # Usage:
 #   make build    → wails3 package → bin/Tachi.app (frontend + go + codesign)
+#   make test     → go test ./...（这个模块自己的，根 go.work 看不见它）
 #   make run      → build then `open -n bin/Tachi.app`
 #   make dev      → wails3 dev (hot reload)
 #   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源）
@@ -37,11 +38,22 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build dev appicon frontend tidy clean run sign-local
+.PHONY: all build dev appicon frontend tidy clean run sign-local stt-shim
 
 all: build
 
-build:
+# stt-shim 把 Swift 垫片（stt/shim.swift）编成静态库给 cgo 链。
+#
+# 它是 build 的前置而不是独立步骤：产物不入库（是编译结果），漏掉它的表现是链接期
+# 报一句找不到 stt/libtachi_stt.a——而 cgo 会把那句话埋在一整行 clang 命令后面，
+# 看着像天书。所以让构建自己去跑，别指望人记得。
+#
+# 为什么这里会有 Swift：macOS 26 的转写 API 只在 Swift 的模块接口里存在（ObjC 头里
+# 只有老的 SFSpeechRecognizer），见 docs/2026-09-29-badge-voice-answers-design.md §7。
+stt-shim:
+	@stt/build_shim.sh
+
+build: stt-shim
 	$(WAILS) package
 
 dev:
@@ -55,6 +67,12 @@ appicon:
 
 frontend:
 	cd frontend && $(NPM) run build
+
+# test 跑这个模块的测试。前置 stt-shim 是必需的，而不是顺手：desktop/stt 要链接那个
+# 静态库，缺了它是**整个包编译不过**（不是个别用例失败），而报错藏在 cgo 的一长串
+# 命令行里。所以走这个目标比手敲 go test 稳。
+test: stt-shim
+	$(GO) test ./...
 
 tidy:
 	$(GO) mod tidy
