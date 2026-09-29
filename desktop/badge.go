@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // badge 是「把 desktop 的等待搬到一块小屏上」的这一半：它既是 link.Source 的实现
@@ -32,6 +32,17 @@ const (
 	// envBadgeBaud 只在真实 UART 上有意义（USB-Serial-JTAG 是 USB CDC，忽略它）。
 	envBadgeBaud = "TACHI_BADGE_BAUD"
 )
+
+// badgeLog 是这条链路的日志出口。
+//
+// 走 pkg/logger 而不是标准库的 log：标准库那几行只进 stderr，而 app 是（从 Finder 或
+// 从 .app）启动的——那里没有看客，于是「链路什么时候连上、什么时候断」不留任何痕迹，
+// 一次真机故障就只剩猜（这条链路的第一起「屏幕停在最后一帧」就是这么变成悬案的）。
+//
+// 是函数而不是包级变量：`logger.Init` 在 main 里才调，而包级变量在那之前就构造完了
+// ——那时还没有日志目录，`New` 会把行静默丢进 io.Discard（它的文档就写着 Init 必须先
+// 调用）。每次现取很便宜：writer 按路径缓存。
+func badgeLog() *logger.Logger { return logger.New("desktop") }
 
 // badgeRetry 是两次重连之间的间隔。设备不在线是常态（线拔了、设备正在跑别的固件），
 // 所以这个循环必须便宜且安静。
@@ -87,7 +98,7 @@ func (d *desktopApp) startBadge(cfg *config.Config) {
 	// 看到「半换」的状态，于是两条都被认为要停、或者两条都不被认为要停。
 	stopBadgeLink(oldCancel, oldLn)
 
-	log.Printf("badge link: serving on %s", desc)
+	badgeLog().Info(ctx, "badge link: serving", "target", desc)
 	go func() {
 		defer ln.Close()
 		d.badgeLoop(ctx, ln)
@@ -155,12 +166,14 @@ func openBadgeLink(transport, address string) (link.Listener, string) {
 		return link.NewSerialListener(address, badgeBaud()), "serial " + where
 	case "tcp":
 		if address == "" {
-			log.Printf("badge link: tcp needs an address, e.g. 127.0.0.1:8765")
+			badgeLog().Warn(context.Background(),
+				"badge link: tcp needs an address (e.g. 127.0.0.1:8765)")
 			return nil, ""
 		}
 		ln, err := link.ListenTCP(address)
 		if err != nil {
-			log.Printf("badge link: cannot listen on %s: %v", address, err)
+			badgeLog().Error(context.Background(), "badge link: cannot listen", err,
+				"address", address)
 			return nil, ""
 		}
 		return ln, "tcp " + address
@@ -174,7 +187,8 @@ func openBadgeLink(transport, address string) (link.Listener, string) {
 		}
 		return link.NewBLEListener(address), "bluetooth " + where
 	}
-	log.Printf("badge link: unknown transport %q (want off, serial, tcp or ble)", transport)
+	badgeLog().Warn(context.Background(),
+		"badge link: unknown transport (want off, serial, tcp or ble)", "transport", transport)
 	return nil, ""
 }
 
@@ -194,7 +208,7 @@ func (d *desktopApp) badgeLoop(ctx context.Context, ln link.Listener) {
 			// 同一个原因只打一次：设备不在线是常态，逐次重试都打日志会刷屏。
 			if msg := err.Error(); msg != lastErr {
 				lastErr = msg
-				log.Printf("badge link: waiting for device: %v", err)
+				badgeLog().Info(ctx, "badge link: waiting for device", "err", err)
 			}
 			if !sleepCtx(ctx, badgeRetry) {
 				return
@@ -203,7 +217,7 @@ func (d *desktopApp) badgeLoop(ctx context.Context, ln link.Listener) {
 		}
 
 		lastErr = ""
-		log.Printf("badge link: device connected")
+		badgeLog().Info(ctx, "badge link: device connected")
 		connectedAt := time.Now()
 		err = link.NewServer(d, tr).Run(ctx)
 		_ = tr.Close()
@@ -214,11 +228,11 @@ func (d *desktopApp) badgeLoop(ctx context.Context, ln link.Listener) {
 		wait := badgeRetry
 		if time.Since(connectedAt) < badgeFlapWindow {
 			wait = badgeFlapBackoff
-			log.Printf("badge link: device reset right after connecting (%v) — "+
-				"likely the open itself pulsed DTR/RTS; backing off %v",
-				time.Since(connectedAt).Round(time.Millisecond), wait)
+			badgeLog().Warn(ctx, "badge link: device reset right after connecting — "+
+				"likely the open itself pulsed DTR/RTS; backing off",
+				"since", time.Since(connectedAt).Round(time.Millisecond), "backoff", wait)
 		} else {
-			log.Printf("badge link: device disconnected: %v", err)
+			badgeLog().Info(ctx, "badge link: device disconnected", "err", err)
 		}
 		if !sleepCtx(ctx, wait) {
 			return

@@ -18,7 +18,7 @@ gets its own handbook beside this one rather than growing here.
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
-| **Badge Link over BLE** | you touch `desktop/link/ble.go`, the badge transport setting, or its Info.plist key |
+| **Badge Link over BLE** | you touch `desktop/link/ble.go`, the badge transport setting, or its Info.plist key — **or the link died and the badge screen stopped updating** |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
@@ -228,6 +228,39 @@ Fixtures exist where the real path needs something a driver cannot do:
 
 ## Badge Link over BLE (device link)
 
+- **A connected-but-SILENT badge is the badge's own doing, and its serial log says which.** Two device-side
+  traps produce the exact symptom "the link is up, nothing arrives", both found only by capturing the badge's
+  console: (1) the badge must FRAME what it sends — `@@` + body + `\n` — or the host discards every line as
+  console noise, because GATT gives the sender message boundaries and the host a byte stream; (2) the badge
+  must not clear its `s_subscribed` flag on the CONNECT event, because on a bonded reconnect NimBLE announces
+  the NVS-restored subscription (`reason=RESTORE`) *before* that event, and the wipe mutes the badge for the
+  whole connection — its own guard log then reads `secured=1 subscribed=0`, every send is silently refused,
+  and the badge's "the host went quiet" rule tears the link down 30 seconds later. Take a capture of the badge
+  before theorising about which side is at fault (`main/badge_ble.c` in the ai-passport repo carries the
+  mechanisms).
+- **NOTHING tells the host the peer is gone, so the transport must ASK.** tinygo's darwin adapter keeps
+  `DidDisconnectPeripheral` to itself (it only feeds `Connect`'s own waiting channel), and `bleTransport.Read`
+  has no exit but `Close()` — so a peer-initiated disconnect (the badge's own "host went silent" rule firing, a
+  board reset, the radio going out of range) leaves `link.Server.Run` blocked forever: `badgeLoop` never Accepts
+  again, every later state push goes nowhere, and the badge screen freezes on its last frame with nothing
+  logged on either side. `Read` therefore polls `device.Connected()` (`bleLivenessEvery`) and returns
+  `errLinkGone` — that error's only job is to travel back through `Server.Run` to `badgeLoop`, which is what
+  makes a reconnect happen — and `Write` asks the same question FIRST, because a `without-response` write to a
+  gone peer polls for 10 seconds *per chunk* instead of failing. Do **not** re-implement this as a "no data for
+  N seconds" timeout: the badge's 10s `sync` is what makes silence readable, and that number belongs to the
+  firmware.
+- **A zero `bluetooth.Device` panics on EVERY method — `Disconnect` included.** A failed `Connect` returns a
+  zero Device *with a nil error*, so "did it connect" is the `Address == bluetooth.Address{}` check, not `err`;
+  disconnecting goes through the `disconnect()` helper for the same reason (`Close()` on a transport that never
+  got a device would otherwise take the app down). The unit test for the liveness watchdog is what caught this —
+  a fake `alive` is enough to exercise it, since that verdict is the one part of this layer that does not need
+  hardware.
+- **The desktop app logs through `pkg/logger`, never the std `log` package.** Std `log` writes to stderr, and an
+  app launched as a bundle has no reader there: those lines exist only in a terminal you may not have open. This
+  is what turned the first real "screen froze on its last frame" failure into a guess — `badge link: device
+  connected` / `device disconnected` / `waiting for device` are the only record of when the link came and went
+  (they land in `~/.tachi/logs/debug.log`), and they were going to stderr while it happened. `desktop/badge.go`
+  is migrated; the rest of `desktop/` still has ~13 std `log` call sites.
 - **`NSBluetoothAlwaysUsageDescription` is needed by anything that LINKS the package, and tccd judges the
   RESPONSIBLE process — the threshold is far lower than "when you actually use Bluetooth".** `tinygo.org/x/bluetooth`'s
   darwin adapter builds a `CBCentralManager` in a **package-level variable** (`adapter_darwin.go`'s `DefaultAdapter`),

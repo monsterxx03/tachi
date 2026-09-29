@@ -50,7 +50,23 @@ const (
 	// 库自己的写超时**短于**「读码 + 敲码」那段时间，所以一次失败绝不足以判定配对
 	// 失败：配对是在 CoreBluetooth 那边继续跑的，隔一会儿再写一次就能看见它已经生效。
 	blePairRetry = 2 * time.Second
+
+	// bleLivenessEvery 是「它还在吗」的检查间隔。
+	//
+	// 这一问是必须的，因为**库不会把断开告诉调用方**：darwin 侧的
+	// DidDisconnectPeripheral 只喂给 Connect 自己那个等待通道，而 Read 除了 Close
+	// 之外没有任何返回路径。于是对端消失时这条链路会原地静默：Server 读不到东西、
+	// 因而永不退出，badgeLoop 也就永远不会 Accept 下一条连接——症状是「设备屏幕停在
+	// 最后一帧，之后的会话再也刷不上去」，而两侧都不报错。
+	bleLivenessEvery = 2 * time.Second
 )
+
+// errLinkGone 表示对端已经不在了。
+//
+// 它必须让 Read 返回，而不是只在某处记一行日志：Server.Run 靠 readLoop 的返回值退出、
+// badgeLoop 靠 Server.Run 的返回值重新 Accept——链路死掉的信号只有走完这条路，
+// 重连才会发生。
+var errLinkGone = errors.New("bluetooth link is gone")
 
 // 适配器是进程级的单例，Enable 只能成功调一次，所以用 Once 记住结果。
 var (
@@ -66,6 +82,18 @@ func bleAdapter() (*bluetooth.Adapter, error) {
 		return nil, fmt.Errorf("bluetooth unavailable: %w", bleAdapterErr)
 	}
 	return bluetooth.DefaultAdapter, nil
+}
+
+// disconnect 关掉一条连接——只在真有连接的时候。
+//
+// 零值 Device 上的 Disconnect 是 nil 解引用 panic（库在连接失败时返回的正是「零值
+// Device + nil error」，所以这条路径真的会走到），而「地址是零」恰好就是连接没建立
+// 的判据，Accept 里判的也是它。
+func disconnect(device bluetooth.Device) {
+	if device.Address == (bluetooth.Address{}) {
+		return
+	}
+	_ = device.Disconnect()
 }
 
 // BLEListener 按广播名字找一个 badge，连上它，并等到链路**已认证加密**才交出去。
@@ -102,9 +130,10 @@ func (l *BLEListener) Accept(ctx context.Context) (Transport, error) {
 	device, err := adapter.Connect(found.Address, bluetooth.ConnectionParams{})
 	// ⚠️ 这里的零值检查不是多余的：库在连接失败时会返回**零值 Device 加 nil error**，
 	// 之后任何一次方法调用都是 nil 解引用 panic（实测崩过两次）。也就是说，单看 err
-	// 判断连接成功与否会直接让 desktop 挂掉。
+	// 判断连接成功与否会直接让 desktop 挂掉——而下面这个分支里连 Disconnect 都不能
+	// 调，它也是那些方法之一。
 	if err != nil || device.Address == (bluetooth.Address{}) {
-		_ = device.Disconnect()
+		disconnect(device)
 		if err == nil {
 			err = errors.New("connect failed")
 		}
@@ -113,7 +142,7 @@ func (l *BLEListener) Accept(ctx context.Context) (Transport, error) {
 
 	rx, tx, err := findBadgeCharacteristics(device)
 	if err != nil {
-		_ = device.Disconnect()
+		disconnect(device)
 		return nil, err
 	}
 	tr := newBLETransport(device, rx)
@@ -205,6 +234,11 @@ type bleTransport struct {
 	device bluetooth.Device
 	rx     bluetooth.DeviceCharacteristic
 
+	// alive 回答「对端还在吗」。默认直接问 CoreBluetooth（peripheral 的 state 是它
+	// 自己维护的事实，不是我们猜的阈值）；测试里换成一个假的——这条判据是这一层
+	// 唯一能在主机上验的部分。
+	alive func() bool
+
 	mu       sync.Mutex
 	pending  []byte      // 通知收进来、还没交给 Read 的字节
 	incoming chan []byte // 通知回调 → Read
@@ -218,6 +252,10 @@ func newBLETransport(device bluetooth.Device, rx bluetooth.DeviceCharacteristic)
 		rx:       rx,
 		incoming: make(chan []byte, 64),
 		closed:   make(chan struct{}),
+		alive: func() bool {
+			connected, err := device.Connected()
+			return err == nil && connected
+		},
 	}
 }
 
@@ -281,6 +319,9 @@ func (t *bleTransport) waitSecure(ctx context.Context) error {
 }
 
 func (t *bleTransport) Read(p []byte) (int, error) {
+	liveness := time.NewTicker(bleLivenessEvery)
+	defer liveness.Stop()
+
 	for {
 		t.mu.Lock()
 		if len(t.pending) > 0 {
@@ -298,11 +339,25 @@ func (t *bleTransport) Read(p []byte) (int, error) {
 			t.mu.Unlock()
 		case <-t.closed:
 			return 0, io.EOF
+		case <-liveness.C:
+			// 对端消失时这里是唯一的出口：CoreBluetooth 会自己把连接收掉，而
+			// 库不通知我们，incoming 也从此再不会有东西。
+			if !t.alive() {
+				_ = t.Close()
+				return 0, errLinkGone
+			}
 		}
 	}
 }
 
 func (t *bleTransport) Write(p []byte) (int, error) {
+	// 已经不在的链路就别往里写了：without-response 的写在发不出去时会一次轮询
+	// 10 秒，而它轮询的正是同一件事——先问一句，把一次卡住主循环的写变成立刻返回。
+	if !t.alive() {
+		_ = t.Close()
+		return 0, errLinkGone
+	}
+
 	written := 0
 
 	for _, chunk := range bleChunks(p) {
@@ -340,7 +395,7 @@ func bleChunks(p []byte) [][]byte {
 func (t *bleTransport) Close() error {
 	t.once.Do(func() {
 		close(t.closed)
-		_ = t.device.Disconnect()
+		disconnect(t.device)
 	})
 	return nil
 }
