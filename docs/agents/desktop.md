@@ -18,7 +18,7 @@ gets its own handbook beside this one rather than growing here.
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
-| **Badge Link over BLE** | you touch `desktop/link/ble.go`, the badge transport setting, or its Info.plist key — **or the link died and the badge screen stopped updating** |
+| **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
@@ -228,68 +228,10 @@ Fixtures exist where the real path needs something a driver cannot do:
   Tachi.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
   terminal it was launched from.
 
-## Badge Link over BLE (device link)
+## Badge (device link & voice)
 
-- **A connected-but-SILENT badge is the badge's own doing, and its serial log says which.** Two device-side
-  traps produce the exact symptom "the link is up, nothing arrives", both found only by capturing the badge's
-  console: (1) the badge must FRAME what it sends — `@@` + body + `\n` — or the host discards every line as
-  console noise, because GATT gives the sender message boundaries and the host a byte stream; (2) the badge
-  must not clear its `s_subscribed` flag on the CONNECT event, because on a bonded reconnect NimBLE announces
-  the NVS-restored subscription (`reason=RESTORE`) *before* that event, and the wipe mutes the badge for the
-  whole connection — its own guard log then reads `secured=1 subscribed=0`, every send is silently refused,
-  and the badge's "the host went quiet" rule tears the link down 30 seconds later. Take a capture of the badge
-  before theorising about which side is at fault (`main/badge_ble.c` in the ai-passport repo carries the
-  mechanisms).
-- **NOTHING tells the host the peer is gone, so the transport must ASK.** tinygo's darwin adapter keeps
-  `DidDisconnectPeripheral` to itself (it only feeds `Connect`'s own waiting channel), and `bleTransport.Read`
-  has no exit but `Close()` — so a peer-initiated disconnect (the badge's own "host went silent" rule firing, a
-  board reset, the radio going out of range) leaves `link.Server.Run` blocked forever: `badgeLoop` never Accepts
-  again, every later state push goes nowhere, and the badge screen freezes on its last frame with nothing
-  logged on either side. `Read` therefore polls `device.Connected()` (`bleLivenessEvery`) and returns
-  `errLinkGone` — that error's only job is to travel back through `Server.Run` to `badgeLoop`, which is what
-  makes a reconnect happen — and `Write` asks the same question FIRST, because a `without-response` write to a
-  gone peer polls for 10 seconds *per chunk* instead of failing. Do **not** re-implement this as a "no data for
-  N seconds" timeout: the badge's 10s `sync` is what makes silence readable, and that number belongs to the
-  firmware.
-- **A zero `bluetooth.Device` panics on EVERY method — `Disconnect` included.** A failed `Connect` returns a
-  zero Device *with a nil error*, so "did it connect" is the `Address == bluetooth.Address{}` check, not `err`;
-  disconnecting goes through the `disconnect()` helper for the same reason (`Close()` on a transport that never
-  got a device would otherwise take the app down). The unit test for the liveness watchdog is what caught this —
-  a fake `alive` is enough to exercise it, since that verdict is the one part of this layer that does not need
-  hardware.
-- **The desktop app logs through `pkg/logger`, never the std `log` package.** Std `log` writes to stderr, and an
-  app launched as a bundle has no reader there: those lines exist only in a terminal you may not have open. This
-  is what turned the first real "screen froze on its last frame" failure into a guess — `badge link: device
-  connected` / `device disconnected` / `waiting for device` are the only record of when the link came and went
-  (they land in `~/.tachi/logs/debug.log`), and they were going to stderr while it happened. `desktop/badge.go`
-  is migrated; the rest of `desktop/` still has ~13 std `log` call sites.
-- **`NSBluetoothAlwaysUsageDescription` is needed by anything that LINKS the package, and tccd judges the
-  RESPONSIBLE process — the threshold is far lower than "when you actually use Bluetooth".** `tinygo.org/x/bluetooth`'s
-  darwin adapter builds a `CBCentralManager` in a **package-level variable** (`adapter_darwin.go`'s `DefaultAdapter`),
-  so importing it is enough to touch CoreBluetooth — no call required. A responsible bundle without the key gets
-  `Refusing authorization request for service kTCCServiceBluetoothAlways … without NSBluetoothAlwaysUsageDescription
-  key` and `This app has crashed because it attempted to access privacy-sensitive data without a usage description`,
-  i.e. SIGABRT with no Go stack, arriving **asynchronously** (the CentralManager's callback thread), so it looks like
-  "the first test passed, the second one aborted". Both `build/darwin/Info.plist` and `Info.dev.plist` carry the key.
-  A `bin/Tachi.app` built before that line will abort `go test ./desktop/...` launched from it, because the test
-  binary inherits Tachi.app as its responsible process — rebuild the app and restart it before believing a desktop
-  test failure. Embedding an `__TEXT,__info_plist` section in the test binary does **not** help: tccd never looks at
-  the requesting process here (find the reason with
-  `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`).
-- **CoreBluetooth caps a `without-response` write at ~182 bytes and fails SILENTLY above it.** The cap is
-  `maximumWriteValueLength(for:.withoutResponse)`, which the library does not expose; `bleChunks` slices at
-  `bleWriteChunk` (180) and the badge reassembles at the newline. Short messages never reveal this — an 854-byte
-  state vanished whole while 131-byte ones looked perfectly healthy.
-- **`WriteWithoutResponse` on an authenticated characteristic is dropped with no error and no pairing prompt** — it
-  says nothing about whether the link is secure. `waitSecure` therefore forces the question with one **with-response**
-  write of a bare `\n` (the badge discards an empty line, so no protocol row is invented): that write blocks while
-  macOS runs pairing — the 6-digit code is on the badge screen, and it must be typed on the computer — and fails with
-  `Encryption is insufficient` while the link is still plaintext.
-- **macOS does not re-pair because the device forgot.** The badge stores one bond in NVS (`BLE_MAX_BONDS=1`); when its
-  key is gone but the Mac's row remains, the Mac encrypts with the stale key and drops the connection instead of
-  prompting — the device logs `断开 reason=531`. Only 系统设置 → 蓝牙 → Forget that device (or a fresh name/address)
-  gets past it; the device side is 长按确定 twice on the status screen (`badge_ble_forget`), which also tells the user
-  the computer has to be dealt with separately.
+- **Split out — read `docs/agents/badge.md`**: the BLE transport traps (framing, the liveness poll, the write
+  cap, TCC), the voice/STT path, and how the device side is built and flashed.
 
 ## Desktop Backend (bindings & paths)
 
@@ -304,34 +246,6 @@ Fixtures exist where the real path needs something a driver cannot do:
   command for it runs with `GOWORK=off`. **The root `go test ./...` does NOT compile `desktop/`'s test
   package**, and the root `make lint` does not cover it either: after touching `desktop/`, run
   `cd desktop && GOWORK=off go test ./...` too.
-- **`desktop/stt` is half Swift, and the Swift half is a BUILD STEP** (`stt/build_shim.sh` →
-  `stt/libtachi_stt.a`, NOT committed — `desktop/Makefile`'s `build`/`test` targets run it, and
-  `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the
-  repo's usual cgo pattern: macOS 26's transcriber API (`SpeechAnalyzer` / `SpeechTranscriber` /
-  `AssetInventory`) exists ONLY in Swift's module interface — the ObjC headers carry nothing but the old
-  `SFSpeechRecognizer` — so `webview_awake_darwin.go`'s inline-ObjC approach cannot express it. Three
-  consequences that are easy to get wrong:
-  - **Compile the shim for the app's deployment target (12.0), not for 26.0.** `swiftc -target …-macosx26.0`
-    makes the whole binary require 26.0 symbols, so the app stops LAUNCHING on macOS 15 rather than merely
-    losing the feature. At 12.0 the 26-only symbols come out weakly linked (`nm -m` shows `weak external`)
-    and every use is behind `#available(macOS 26.0, *)` — `stt.Available()` then answers false instead.
-  - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
-    (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
-    which is why the Makefile targets carry the step rather than a comment telling you to remember it.
-  - **The static library ALONE does not link, and it does not RUN either: a rpath is needed once
-    the shim uses Swift concurrency.** The link half: the Swift back-deployment libraries its
-    auto-link directives name live in the TOOLCHAIN, not the SDK — `stt/build_shim.sh` derives that
-    directory from `xcrun --find swiftc` and symlinks the libraries into `stt/`, and `stt_darwin.go`'s
-    LDFLAGS carry `-L${SRCDIR}`. The run half: `libswift_Concurrency.dylib` is found through
-    `@rpath`, which an app bundle has and a Go test binary does not — without
-    `-Wl,-rpath,/usr/lib/swift` the test binary aborts with
-    `Library not loaded: @rpath/libswift_Concurrency.dylib`, while the app itself is fine.
-  - **Do not conclude anything from `go test ./stt/ ./link/`.** An app-level regression that only
-    shows up when the whole binary is linked and RUN (the rpath above is exactly one) is invisible
-    to per-package tests. After touching `desktop/`, run `cd desktop && make test` — it builds the
-    shim first and then does `go test ./...`, which is the only command that links the real thing.
-    ⚠ **`go build ./stt` catches NONE of the above**: a library package compiles without linking, so a
-    broken stt link only surfaces in `go test` or in a build of the app.
 - **The packaged app must be signed with the LOCAL CERTIFICATE, not ad-hoc.** `wails3 package`
   leaves `bin/Tachi.app` ad-hoc signed, and an ad-hoc identity is a content hash — it changes on
   every rebuild, so macOS re-asks every TCC permission (bluetooth, speech recognition) and may

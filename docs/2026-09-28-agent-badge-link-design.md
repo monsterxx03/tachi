@@ -396,7 +396,7 @@ P0 先做的理由仍然成立：协议和 tachi 侧逻辑在一台假设备上�
    bond 必须 Forget；GATT 连接与特征读写也在真机上连过、读过。**「在 Wails 进程内跑 BLE」同样
    不再是未知**——P4 用的就是 §3.3 那个骨架（`desktop/link/ble.go`），真机跑通。随之而来的三条
    陷阱（Info.plist 缺键即 SIGABRT、超过 ~182 字节的写静默丢、`WriteWithoutResponse` 在需要认证
-   的特征上什么也不说）记在 `docs/agents/desktop.md` 的「Badge Link over BLE」一节，不在这里重复。
+   的特征上什么也不说）记在 `docs/agents/badge.md` 的「Badge Link over BLE」一节，不在这里重复。
 3. **功耗**：520 mAh + 无线常连撑不住整天。佩戴场景需要「主机侧才是长连方」或低频策略——
    P4 落地时没动它，仍然待办。串口阶段不涉及。
 4. **多会话显示哪个**：已定——**有待答项者优先，否则显示中的那个（`activeID`），再否则按 id 稳定排序**。

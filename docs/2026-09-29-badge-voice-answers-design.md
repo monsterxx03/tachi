@@ -280,7 +280,7 @@ notify 提交受**两个**缓冲约束，而且它们是不同的东西：
   `available=1 installed=…（十一种）supported=30`。所以主机侧代码的前置不再存在，剩下的是
   §4 那个带宽数字（P0-①）和协议那一条链（P1）。三个坑——部署目标必须是 12.0、`swiftc` 的
   产物是一个**构建步骤**、以及链接要多一条搜索路径（back-deployment 兼容库在 toolchain 里、
-  不在 SDK 里）——都记在 `docs/agents/desktop.md` 里。
+  不在 SDK 里）——都记在 `docs/agents/badge.md` 里。
 - **不动的东西**：协议其余部分、状态机、设备 UI 的其余屏、提示音。
 
 ## 8. 边界与失败
