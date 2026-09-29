@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -238,4 +239,62 @@ func TestSendMessageNamesItsSessionAndRefusesInsteadOfDropping(t *testing.T) {
 		t.Errorf("SendMessage = %q, want ok", got)
 	}
 	d.stopSimulatedTurn()
+}
+
+// 菜单栏的文字：今日花费 + 上下文占用，两个都量不出来时退回状态词（那一格不该空着）。
+func TestTrayLabelJoinsWhatIsMeasured(t *testing.T) {
+	st := AgentState{Status: StatusThinking, Label: "思考"}
+
+	if got := trayLabel(st, "¥0.420", "62%"); got != "¥0.420 · 62%" {
+		t.Errorf("trayLabel = %q", got)
+	}
+	if got := trayLabel(st, "", "62%"); got != "62%" {
+		t.Errorf("trayLabel = %q，只有上下文时不该留一个空的分隔符", got)
+	}
+	if got := trayLabel(st, "¥0.420", ""); got != "¥0.420" {
+		t.Errorf("trayLabel = %q", got)
+	}
+	if got := trayLabel(st, "", ""); got != "思考" {
+		t.Errorf("trayLabel = %q，应当退回状态词", got)
+	}
+}
+
+// 上下文那格画百分比，量不出来就不画——不编一个数出来（与 formatContext 对「窗口未知」是
+// 同一个态度）。
+func TestTrayContextIsAPercentageOrNothing(t *testing.T) {
+	if got := trayContext(42000, 100000); got != "42%" {
+		t.Errorf("trayContext = %q，期望 42%%", got)
+	}
+	if got := trayContext(99500, 100000); got != "100%" {
+		t.Errorf("trayContext = %q，四舍五入到 100%%", got)
+	}
+	for _, tc := range [][2]int64{{42000, 0}, {0, 100000}, {0, 0}} {
+		if got := trayContext(tc[0], tc[1]); got != "" {
+			t.Errorf("trayContext(%d, %d) = %q，应当为空", tc[0], tc[1], got)
+		}
+	}
+}
+
+// 今日花费只算今天：台账是**按天一个文件**的，所以「今天」就等于从今天那个文件开始扫——昨天
+// 那几行在另一个文件里，不该被算进来。
+func TestTrayTodayCostOnlyCountsToday(t *testing.T) {
+	rec := llm.NewUsageRecorder(t.TempDir())
+	now := time.Now()
+	today := llm.UsageRow{TS: now, SessionID: "s1", Model: "test", InputTokens: 1000, InputPrice: 3000}
+	yesterday := llm.UsageRow{TS: now.AddDate(0, 0, -1), SessionID: "s1", Model: "test",
+		InputTokens: 1_000_000, InputPrice: 3000}
+	for _, row := range []llm.UsageRow{today, yesterday} {
+		if err := rec.Record(row); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	// 只加一行，所以这里是精确相等（没有累加的浮点误差）。
+	if got, want := trayTodayCost(rec, now), today.Cost(); got != want {
+		t.Errorf("trayTodayCost = %v，期望 %v（昨天那一行在另一个文件里）", got, want)
+	}
+	// 还没初始化台账时给 0，而不是崩。
+	if got := trayTodayCost(nil, now); got != 0 {
+		t.Errorf("trayTodayCost(nil) = %v", got)
+	}
 }

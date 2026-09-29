@@ -28,6 +28,18 @@ const (
 	StatusError       AgentStatus = "error"
 )
 
+// busy reports whether a status means "a turn is in flight here". It is the ONE definition of
+// that question: RunningSessions (which the frontend's spinner, stop control and composer queue
+// all read) and the menu bar's count of running turns both ask it, and the frontend counts these
+// same three statuses as busy.
+func (s AgentStatus) busy() bool {
+	switch s {
+	case StatusThinking, StatusToolRunning, StatusBusy:
+		return true
+	}
+	return false
+}
+
 // AgentState is the payload pushed to the frontend (and shown in the menu bar).
 //
 // SessionID names the session this state is about, and it is what makes the payload
@@ -84,12 +96,12 @@ func (s *AgentService) RunningSessions() []string {
 	defer s.desk.mu.Unlock()
 	var out []string
 	for id, r := range s.desk.runs {
-		switch r.state.Status {
-		case StatusThinking, StatusToolRunning, StatusBusy:
-			out = append(out, id)
-			if r.compaction != nil && r.compaction.SessionID != "" {
-				out = append(out, r.compaction.SessionID)
-			}
+		if !r.state.Status.busy() {
+			continue
+		}
+		out = append(out, id)
+		if r.compaction != nil && r.compaction.SessionID != "" {
+			out = append(out, r.compaction.SessionID)
 		}
 	}
 	return out
@@ -154,6 +166,9 @@ type desktopApp struct {
 
 	mu    sync.Mutex
 	runs  map[string]*sessionRun // key: session ID
+	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every
+	// state change, and the ledger read is a file scan.
+	trayCost trayCostCache
 	simCh chan struct{}          // simulated-turn stop signal
 
 	// asks holds every "a turn is parked on the user" record, keyed by session +

@@ -52,17 +52,17 @@ func contextParts(tb tokenbreakdown.Breakdown) []ContextPartVO {
 	return parts
 }
 
-// GetContextInfo returns the context-usage breakdown for the session the ring
-// belongs to. An unknown session (or one whose agent is not built yet) yields
-// the zero value, which the frontend renders as "not measured yet".
-func (s *AgentService) GetContextInfo(id string) ContextInfoVO {
-	d := s.desk
+// contextUsage 读一个会话的上下文估算、分项与模型窗口，**一次快照**读出来（理由见下面那段
+// 注释：分开读会跨在这次 turn 的更新上，把两个估算混起来）。
+//
+// 两个读者共用这一份定义：ring 弹层（GetContextInfo）和菜单栏（只画百分比）。
+func (d *desktopApp) contextUsage(id string) (int64, tokenbreakdown.Breakdown, int64) {
 	r := d.runOf(id)
 	if r == nil || r.agent == nil {
-		return ContextInfoVO{}
+		return 0, tokenbreakdown.Breakdown{}, 0
 	}
 
-	info := ContextInfoVO{ContextWindow: r.agent.ContextWindow()}
+	window := r.agent.ContextWindow()
 	// Total and breakdown must come from ONE snapshot: reading them separately
 	// can straddle a concurrent turn's update and mix two estimates.
 	est, tb := r.agent.LastInputEstimateWithBreakdown()
@@ -72,7 +72,13 @@ func (s *AgentService) GetContextInfo(id string) ContextInfoVO {
 		// falls back to as well.
 		est = d.estimateFromMessages(r)
 	}
-	info.Estimate = est
-	info.Parts = contextParts(tb)
-	return info
+	return est, tb, window
+}
+
+// GetContextInfo returns the context-usage breakdown for the session the ring
+// belongs to. An unknown session (or one whose agent is not built yet) yields
+// the zero value, which the frontend renders as "not measured yet".
+func (s *AgentService) GetContextInfo(id string) ContextInfoVO {
+	est, tb, window := s.desk.contextUsage(id)
+	return ContextInfoVO{Estimate: est, ContextWindow: window, Parts: contextParts(tb)}
 }

@@ -52,8 +52,31 @@ func formatContext(estimate, window int64) string {
 	if window <= 0 {
 		return formatTokens(estimate)
 	}
-	percent := int(float64(estimate)/float64(window)*100 + 0.5)
-	return fmt.Sprintf("%s / %s (%d%%)", formatTokens(estimate), formatTokens(window), percent)
+	return fmt.Sprintf("%s / %s (%d%%)", formatTokens(estimate), formatTokens(window),
+		contextPercent(estimate, window))
+}
+
+// contextPercent 是「这段上下文占模型窗口的百分之几」（四舍五入）。
+//
+// 量不出来时返回 -1（没测到，或者窗口未知），由调用方决定改成画什么——菜单栏只画一个百分数，
+// 设备那一屏画 "12.3k / 32k (42%)"，两者对「窗口未知」的做法不同，所以这个判断不能塞在这里。
+func contextPercent(estimate, window int64) int {
+	if estimate <= 0 || window <= 0 {
+		return -1
+	}
+	return int(float64(estimate)/float64(window)*100 + 0.5)
+}
+
+// trayContext 是菜单栏那一格的上下文读数：只画百分比。
+//
+// 为什么不复用 formatContext：那串 "12.3k / 32k (42%)" 是设备和 ring 弹层的写法，而菜单栏一
+// 格放不下（旁边还挨着今日花费）。量不出来就不画——这也是 formatContext 对「窗口未知」的
+// 同一个态度：不编一个百分比出来。
+func trayContext(estimate, window int64) string {
+	if percent := contextPercent(estimate, window); percent >= 0 {
+		return fmt.Sprintf("%d%%", percent)
+	}
+	return ""
 }
 
 // formatTokens 把 token 数缩到三四个字符：12345 → "12.3k"，1234567 → "1.2M"。

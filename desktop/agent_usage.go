@@ -70,6 +70,60 @@ func (s *AgentService) GetSessionUsage(id string) map[string]any {
 	return map[string]any{"cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit}
 }
 
+// trayTodayCost sums today's ledger rows across EVERY session — the menu bar's spend figure.
+//
+// The ledger is one file per calendar day (llm.UsageRecorder.fileFor), so "today" is exactly the
+// file RowsAll picks up from the start of today: no timestamp filtering needed, and no scan of
+// older days. Takes the recorder and the clock as arguments so a test can point it at a temp dir.
+func trayTodayCost(rec *llm.UsageRecorder, now time.Time) float64 {
+	if rec == nil {
+		return 0
+	}
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	rows, err := rec.RowsAll(start)
+	if err != nil {
+		return 0 // best-effort: the menu bar shows nothing rather than a wrong number
+	}
+	total := 0.0
+	for i := range rows {
+		total += rows[i].Cost()
+	}
+	return total
+}
+
+// trayCostTTL bounds how often the menu bar re-reads the ledger. refreshTray runs on every state
+// change (a turn moves through several), while today's file can hold thousands of rows by evening —
+// and ten seconds is far below what a person can notice on a spend figure.
+const trayCostTTL = 10 * time.Second
+
+// trayCostCache is todayCost's memo. day is part of it so a midnight rollover invalidates the
+// entry even while the TTL is still running.
+type trayCostCache struct {
+	amount float64
+	at     time.Time
+	day    string
+}
+
+// todayCost is the memoized trayTodayCost for the menu bar.
+func (d *desktopApp) todayCost() float64 {
+	now := time.Now()
+	day := now.Format("2006-01-02")
+
+	d.mu.Lock()
+	cached := d.trayCost
+	d.mu.Unlock()
+	if cached.day == day && now.Sub(cached.at) < trayCostTTL {
+		return cached.amount
+	}
+
+	amount := trayTodayCost(agent.GlobalUsageRecorder(), now)
+
+	d.mu.Lock()
+	d.trayCost = trayCostCache{amount: amount, at: now, day: day}
+	d.mu.Unlock()
+	return amount
+}
+
 // tpsAdd accumulates the estimated output-token count for a live tokens/sec
 // display and pushes the rate to the frontend ("agent:tps"). It mirrors TUI
 // StatusBar's AddStreamedOutput + currentTPS semantics (text + thinking

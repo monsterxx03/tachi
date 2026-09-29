@@ -769,12 +769,12 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 	d.mu.Lock()
 	r := d.getRun(id)
 	r.state = st
-	isCurrent := d.activeID == id
 	d.mu.Unlock()
 	d.emitState(st)
-	if isCurrent {
-		d.reflectTray(st)
-	}
+	// The menu bar follows the DISPLAYED session's state and, on top of it, how many turns are in
+	// flight — so it has to be repainted for a state change in ANY session, not just the current
+	// one: a background session starting or finishing is exactly what changes that number.
+	d.refreshTray()
 	// The device link shows the same state (badge.go), and this is the one road every
 	// state change travels — a turn's progress that the device missed would leave it
 	// reporting a session as idle while it is working.
@@ -788,13 +788,36 @@ func (d *desktopApp) emitState(st AgentState) {
 	}
 }
 
-// reflectTray repaints the menu bar for the DISPLAYED session — the only surface where a
-// state is not per session.
-func (d *desktopApp) reflectTray(st AgentState) {
+// trayLabel is the menu bar's text: today's spend and how full the displayed session's context is,
+// joined with " · ".
+//
+// Either half can be missing (nothing spent yet, nothing measured), and when BOTH are the label
+// falls back to the session's short state — the bar must keep saying something rather than flipping
+// to an empty box next to the icon.
+func trayLabel(st AgentState, cost, context string) string {
+	parts := make([]string, 0, 2)
+	if cost != "" {
+		parts = append(parts, cost)
+	}
+	if context != "" {
+		parts = append(parts, context)
+	}
+	if len(parts) == 0 {
+		return st.Label
+	}
+	return strings.Join(parts, " · ")
+}
+
+// refreshTray repaints the menu bar for the DISPLAYED session — the only surface where a state is
+// not per session. The icon carries the state; the two numbers are what the window cannot tell you
+// while it is hidden.
+func (d *desktopApp) refreshTray() {
 	if d.tray == nil {
 		return
 	}
-	d.tray.SetLabel(st.Label)
+	st := d.currentState()
+	estimate, _, window := d.contextUsage(st.SessionID)
+	d.tray.SetLabel(trayLabel(st, formatCost(d.todayCost()), trayContext(estimate, window)))
 	if icon := trayIcon(st.Status); icon != nil {
 		d.tray.SetTemplateIcon(icon)
 	}
@@ -812,7 +835,7 @@ func (d *desktopApp) reflectActive(id string) {
 	st := d.stateFor(id)
 	st.SessionID = id
 	d.emitState(st)
-	d.reflectTray(st)
+	d.refreshTray()
 }
 
 func (d *desktopApp) stateFor(id string) AgentState {
