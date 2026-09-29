@@ -10,10 +10,14 @@
 //     ObjC 一样写在 cgo 的注释块里。
 //  2. **它挡在同步与异步之间。** Swift 那边的 API 全是 async，而 cgo 只能调同步函数；
 //     垫片自己用信号量把结果收回来（见 shim.swift 的 syncWait）。
-//  3. **链接要多一条搜索路径。** 部署目标 12.0 的 Swift 产物里带了一条
+//  3. **链接要多一条搜索路径，运行时还要一条 rpath。** 部署目标 12.0 的 Swift 产物里带了一条
 //     `-lswiftCompatibility56` 的 auto-link 指令，而那个库只在 toolchain 里、不在 SDK 里
 //     （见 build_shim.sh），所以下面 LDFLAGS 里的 `-L${SRCDIR}` 不是多余的：少了它整个包
 //     链接失败，报的是 `__swift_FORCE_LOAD_$_swiftCompatibility56` 未定义。
+//     而 `-Wl,-rpath,/usr/lib/swift` 管的是**跑起来之后**：识别那半用了 Swift 并发，产物因此
+//     依赖 `libswift_Concurrency.dylib`，dyld 按 `@rpath` 找它——app 的 bundle 自带那条
+//     搜索路径，**Go 链接出来的测试二进制没有**，少了它就是一句
+//     `Library not loaded: @rpath/libswift_Concurrency.dylib` 加一个 abort。
 //
 // 没能力的时候要说出来，不能装死：Available 为 false 时调用方应当把这件事讲给用户
 // （设备屏幕上要看得见），而不是静默失败。
@@ -23,6 +27,7 @@ package stt
 
 /*
 #cgo LDFLAGS: -L${SRCDIR} ${SRCDIR}/libtachi_stt.a -framework Speech -framework AVFoundation -framework Foundation
+#cgo LDFLAGS: -Wl,-rpath,/usr/lib/swift
 #include <stdint.h>
 #include <stdlib.h>
 
