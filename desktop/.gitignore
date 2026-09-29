@@ -13,3 +13,6 @@ build/android/gen/
 frontend/bindings/time
 # STT 垫片的编译产物（stt/build_shim.sh 生），和 bin/ 同类：改了 shim.swift 就重编。
 stt/libtachi_stt.a
+# …以及它需要的 Swift back-deployment 兼容库：脚本把它们链到 stt/ 好让 cgo 的 -L 找得到，
+# 库本体是 toolchain 的一部分，这里入库只会留下一份会过期的拷贝。
+stt/libswift*.a

@@ -17,3 +17,8 @@ func Available() bool { return false }
 
 // EngineNote 返回空串——没有引擎可问。
 func EngineNote() string { return "" }
+
+// Transcribe 在这个平台上永远做不了：调用方该把 ErrUnavailable 变成用户看得见的一句话。
+func Transcribe(samples []int16, sampleRate int) (string, error) {
+	return "", ErrUnavailable
+}

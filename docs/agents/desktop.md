@@ -307,7 +307,7 @@ Fixtures exist where the real path needs something a driver cannot do:
   `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the
   repo's usual cgo pattern: macOS 26's transcriber API (`SpeechAnalyzer` / `SpeechTranscriber` /
   `AssetInventory`) exists ONLY in Swift's module interface — the ObjC headers carry nothing but the old
-  `SFSpeechRecognizer` — so `webview_awake_darwin.go`'s inline-ObjC approach cannot express it. Two
+  `SFSpeechRecognizer` — so `webview_awake_darwin.go`'s inline-ObjC approach cannot express it. Three
   consequences that are easy to get wrong:
   - **Compile the shim for the app's deployment target (12.0), not for 26.0.** `swiftc -target …-macosx26.0`
     makes the whole binary require 26.0 symbols, so the app stops LAUNCHING on macOS 15 rather than merely
@@ -316,6 +316,15 @@ Fixtures exist where the real path needs something a driver cannot do:
   - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
     (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
     which is why the Makefile targets carry the step rather than a comment telling you to remember it.
+  - **The static library ALONE does not link: the Swift back-deployment libraries its auto-link directives
+    name live in the TOOLCHAIN, not the SDK.** At deployment target 12.0 the shim records `-lswiftCompatibility56`
+    / `-lswiftCompatibilityPacks`, and `xcrun` keeps those under `<toolchain>/usr/lib/swift/macosx/` (CLT and
+    Xcode each ship their own copy) — a directory clang does not search, so the link dies with
+    `Undefined symbols: __swift_FORCE_LOAD_$_swiftCompatibility56`. `stt/build_shim.sh` derives that directory
+    from `xcrun --find swiftc` and symlinks the two libraries into `stt/` (gitignored — they are toolchain
+    pieces), and `stt_darwin.go`'s LDFLAGS carry `-L${SRCDIR}` so the linker finds them. ⚠ **`go build ./stt`
+    catches NONE of the above**: a library package compiles without linking, so a broken stt link only surfaces
+    in `go test` or in a build of the app.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
   root code imports: a package the root starts importing builds fine there while `desktop/` fails with

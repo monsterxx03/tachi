@@ -13,6 +13,7 @@
 // 而我们也永远不会去调。这是这套东西「没能力不能装死」那条规矩在编译期的样子。
 import Foundation
 import Speech
+import AVFoundation
 
 // 同步等待一个 async 工作的结果。
 //
@@ -77,4 +78,144 @@ public func tachiSTTEngineNote() -> UnsafeMutablePointer<CChar>? {
 @_cdecl("tachi_stt_free")
 public func tachiSTTFree(_ pointer: UnsafeMutablePointer<CChar>?) {
     free(pointer)
+}
+
+// --- 转写 --------------------------------------------------------------------
+
+// 一个模块的转写结果。置信度取各 run 的**最小值**：一句话里有一段没把握，整句就不能
+// 算有把握（探针第 5 轮就是这么取的，两边的数要能对上）。
+@available(macOS 26.0, *)
+private final class TranscriberBox: @unchecked Sendable {
+    var text = ""
+    var confidence: Double = 0
+
+    func collect(_ module: SpeechTranscriber) -> Task<Void, Never> {
+        Task {
+            do {
+                for try await result in module.results {
+                    text += String(result.text.characters)
+                    let runs = result.text.runs
+                        .compactMap { $0[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self] }
+                    if let min = runs.min() {
+                        confidence = min
+                    }
+                }
+            } catch {
+                // 结果流出错时**不**改成空串：已经转出来的部分仍然是有用的信息，而
+                // 长度为零的返回会让调用方以为「说的是静音」。
+            }
+        }
+    }
+}
+
+// transcriber 造一个模块：preset.transcription 的选项本来就是空的，我们只需要额外
+// 要那一个置信度属性——判据的第二层靠它（见 Go 侧 Choose）。
+@available(macOS 26.0, *)
+private func makeTranscriber(_ locale: String) -> SpeechTranscriber {
+    SpeechTranscriber(locale: Locale(identifier: locale),
+                      transcriptionOptions: [],
+                      reportingOptions: [],
+                      attributeOptions: [.transcriptionConfidence])
+}
+
+// transcribePair 用两个模块各自转写整段音频，交出一段 JSON。
+//
+// 为什么是两个模块而不是一个：「中文句子里嵌的英文词」只有 zh-CN 能读出来（en-US 读中文
+// 是垃圾），而「纯英文的句子」zh-CN 会给出音译垃圾——两边各自跑，然后选一个，比任何单
+// 模块都好。判据不在这里：这里只如实报出原文与置信度，选哪一个由 Go 侧决定（它是纯逻辑，
+// 在主机上就能测）。
+@available(macOS 26.0, *)
+private func transcribePair(_ samples: [Int16], rate: Double) async -> String? {
+    let zh = makeTranscriber("zh-CN")
+    let en = makeTranscriber("en-US")
+    let analyzer = SpeechAnalyzer(modules: [zh, en])
+    let zhBox = TranscriberBox()
+    let enBox = TranscriberBox()
+    let zhTask = zhBox.collect(zh)
+    let enTask = enBox.collect(en)
+
+    // 喂 PCM 走流式入口，不写临时文件（探针第 6 轮验过：与文件模式逐字一致）。
+    // 分块大小随便挑——512 与 1600 个样本的结果一模一样。
+    guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: rate,
+                                     channels: 1, interleaved: false) else {
+        return nil
+    }
+    let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+    let starter = Task { try await analyzer.start(inputSequence: stream) }
+
+    let chunk = 1600
+    var index = 0
+    while index < samples.count {
+        let count = min(chunk, samples.count - index)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(count)) else { break }
+        buffer.frameLength = AVAudioFrameCount(count)
+        samples.withUnsafeBufferPointer { source in
+            buffer.int16ChannelData![0].update(from: source.baseAddress! + index, count: count)
+        }
+        continuation.yield(AnalyzerInput(buffer: buffer))
+        index += count
+    }
+    continuation.finish()
+
+    do {
+        try await starter.value
+        try await analyzer.finalizeAndFinishThroughEndOfInput()
+    } catch {
+        return nil
+    }
+    _ = await zhTask.value
+    _ = await enTask.value
+
+    return "{\"zh\":\"" + jsonEscaped(zhBox.text) + "\",\"zhConf\":" + String(zhBox.confidence)
+        + ",\"en\":\"" + jsonEscaped(enBox.text) + "\",\"enConf\":" + String(enBox.confidence) + "}"
+}
+
+// jsonEscaped 转义一个字符串，好把它塞进上面那行 JSON 里。
+//
+// 手写而不是用 JSONEncoder：要编码的是「两个字符串 + 两个数」，为此定义一个 Codable
+// 结构体比自己转义更容易出错（真正的坑只有控制字符和引号，都在下面）。这段文本是识别
+// 结果，里面的引号来自人说「引号」两个字，不是没有可能。
+private func jsonEscaped(_ text: String) -> String {
+    var out = ""
+    for scalar in text.unicodeScalars {
+        switch scalar {
+        case "\"": out += "\\\""
+        case "\\": out += "\\\\"
+        case "\n": out += "\\n"
+        case "\r": out += "\\r"
+        case "\t": out += "\\t"
+        default:
+            if scalar.value < 0x20 {
+                out += String(format: "\\u%04x", scalar.value)
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+    }
+    return out
+}
+
+// tachi_stt_transcribe 把一段 16 kHz 单声道 PCM 转成一句话。
+//
+// 入参是**裸 Int16 样本 + 采样率**：链路那头解出来的就是这个，全程不碰磁盘（设计文档 §8）。
+// 返回值是一段 JSON（两个模块各自的结果），由 tachi_stt_free 释放；失败返回 NULL——
+// 「做不到」必须能被调用方分辨出来，而不是给一个空串（那看起来像「人没说话」）。
+//
+// ⚠ 这一步需要「语音识别」权限（NSSpeechRecognitionUsageDescription）。与前几次一样，
+// TCC 把授权归因给 **responsible process**，而且判定发生在第一次调用时——所以 app 的
+// Info.plist 里必须有那个键，否则这里是**直接崩**，不是返回 NULL。
+@_cdecl("tachi_stt_transcribe")
+public func tachiSTTTranscribe(_ samples: UnsafePointer<Int16>?,
+                               _ count: Int,
+                               _ sampleRate: Double) -> UnsafeMutablePointer<CChar>? {
+    guard #available(macOS 26.0, *) else { return nil }
+    guard let samples = samples, count > 0, sampleRate > 0 else { return nil }
+
+    let pcm = Array(UnsafeBufferPointer(start: samples, count: count))
+    let json = syncWait { () async -> String? in
+        await transcribePair(pcm, rate: sampleRate)
+    }
+    guard let json = json else { return nil }
+    return strdup(json)
 }
