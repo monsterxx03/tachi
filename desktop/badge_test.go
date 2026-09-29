@@ -333,3 +333,48 @@ func TestAMisconfiguredBadgeLinkIsRefusedQuietly(t *testing.T) {
 		}
 	}
 }
+
+// 提示音的判据：窗口不在前台，或者等的不是你正开着的那个会话。
+//
+// 它决定的是「会不会吵到人」，所以每种组合都值得在主机上钉住——真机上试这些的代价是
+// 每次都跑到设备跟前按一下。
+func TestAskAlertFollowsFocusAndTheActiveSession(t *testing.T) {
+	cases := []struct {
+		name      string
+		focused   bool
+		active    string
+		ask       string
+		wantAlert bool
+	}{
+		{"前台 + 就是这个会话", true, "s1", "s1", false},
+		{"前台但是别的会话", true, "s1", "s2", true},
+		{"不在前台", false, "s1", "s1", true},
+		{"不在前台 + 别的会话", false, "s1", "s2", true},
+		{"前台但没开着任何会话", true, "", "s1", true},
+	}
+	for _, c := range cases {
+		if got := askAlert(c.focused, c.active, c.ask); got != c.wantAlert {
+			t.Errorf("%s: askAlert(%v, %q, %q) = %v, want %v",
+				c.name, c.focused, c.active, c.ask, got, c.wantAlert)
+		}
+	}
+}
+
+// 判出来的那个值必须真的走到设备：registerAsk 记下它，快照把它带出去。
+func TestRegisterAskCarriesTheAlertDecision(t *testing.T) {
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+	// 没有窗口句柄时 windowFocused() 是 false（当作「没在看」），所以这条会被标记。
+	d.registerAsk(&pendingAsk{
+		kind: askKindPermission, sessionID: "s1", toolID: "call_1",
+		preview: "$ ls", answer: make(chan string, 1),
+	})
+
+	snap := d.Snapshot()
+
+	if len(snap.Asks) != 1 {
+		t.Fatalf("asks = %+v, want one", snap.Asks)
+	}
+	if !snap.Asks[0].Alert {
+		t.Error("这条等待没有被标记：设备上不会响一声")
+	}
+}

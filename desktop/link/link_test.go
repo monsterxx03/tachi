@@ -359,3 +359,23 @@ func TestSyncResendsEverything(t *testing.T) {
 		t.Errorf("re-sent ask ref = %v, want the original %v", again["ref"], ask["ref"])
 	}
 }
+
+// 「该响一声」是宿主的判断（见 desktop/asks.go 的 askAlert），设备只照做。所以线上
+// 只在这条等待被标了 alert 时才出现那个字段——**缺字段就是不响**，这样老设备（不认识
+// 这个字段）与「宿主认为不该响」得到的是同一个结果。
+func TestOnlyAnAlertingAskCarriesTheFlag(t *testing.T) {
+	quiet := newFakeSource()
+	quiet.snap = askFixture()
+	p := newPeer(t, quiet)
+	if _, ok := p.readOf("ask")["alert"]; ok {
+		t.Error("没标 alert 的等待带上了这个字段：设备那边会把它当成「该响」")
+	}
+
+	loud := newFakeSource()
+	loud.snap = askFixture()
+	loud.snap.Asks[0].Alert = true
+	q := newPeer(t, loud)
+	if got := q.readOf("ask")["alert"]; got != true {
+		t.Errorf("alert = %v, want true", got)
+	}
+}

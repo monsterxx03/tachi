@@ -72,6 +72,10 @@ type Ask struct {
 	Options   []Option         `json:"options,omitempty"`
 	Questions []tools.Question `json:"questions,omitempty"`
 	Hint      string           `json:"hint,omitempty"`
+
+	// Alert 说这条等待值得让设备**响一声**。判据在宿主侧（它才知道自己在不在前台、
+	// 用户正在看哪个会话），设备只照做——见 desktop/asks.go 的 askAlert。
+	Alert bool `json:"alert,omitempty"`
 }
 
 // Option 是设备上可选的一项，Value 是回传的机器值。设备只负责把它送回来，不知道
@@ -381,6 +385,11 @@ func askMessage(ref uint64, a Ask) map[string]any {
 	}
 	if a.Hint != "" {
 		msg["hint"] = a.Hint
+	}
+	// 只有该响的时候才发这个字段：老设备忽略不认识的字段，而「没有这个字段」在设备
+	// 那边就是「不响」——这正是我们想要的默认值。
+	if a.Alert {
+		msg["alert"] = true
 	}
 	if len(a.Options) > 0 {
 		msg["options"] = a.Options

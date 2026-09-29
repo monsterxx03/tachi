@@ -30,6 +30,12 @@ type pendingAsk struct {
 	sessionID string
 	toolID    string
 
+	// alert 记录「这条等待值得让设备响一声」——由 registerAsk 在**登记那一刻**判定：
+	// 你正看着这个会话、而窗口也在前台，就没必要出声（见 askAlert）。判一次而不是
+	// 盯着窗口，是因为提示音要说的是「有事在等你」，而那一刻你不知道 = 该响；之后
+	// 你切走了再补响，反而会把一条已经看过的等待再说一遍。
+	alert bool
+
 	// preview 是权限等待的展示内容：agent 自己渲染的「$ 命令 + 命中的规则」
 	// （bashAskPreview）。原样透传给设备，不在这里二次解析——那份格式的第二个
 	// 解析器早晚会和写它的那个漂移。
@@ -44,8 +50,20 @@ type pendingAsk struct {
 	answer chan string
 }
 
+// askAlert 说出「这条等待要不要让设备响一声」。
+//
+// 一个条件而已，两个来源的「你大概不在看」：窗口不在前台，或者等的不是你正开着的
+// 那个会话。写成纯函数是为了能在主机上试——它决定的是「会不会吵到人」，而真机上
+// 试这个的代价是每次都去按一下手机（设备）那边。
+func askAlert(focused bool, activeSessionID, askSessionID string) bool {
+	return !focused || askSessionID != activeSessionID
+}
+
 // registerAsk 登记一条等待，并叫醒 link 层。
 func (d *desktopApp) registerAsk(a *pendingAsk) {
+	// 在登记这一刻判一次「要不要响」：判据见 askAlert。
+	a.alert = askAlert(d.windowFocused(), d.activeID, a.sessionID)
+
 	d.mu.Lock()
 	if d.asks == nil {
 		d.asks = make(map[string]*pendingAsk)
@@ -53,6 +71,17 @@ func (d *desktopApp) registerAsk(a *pendingAsk) {
 	d.asks[permKey(a.sessionID, a.toolID)] = a
 	d.mu.Unlock()
 	d.notifyLink()
+}
+
+// windowFocused 说窗口现在有没有焦点——设备的提示音与 macOS 通知共用这一个判据。
+//
+// 拿不到窗口句柄时返回 false（当作「没在看」）：一块提示音的代价是被多响一声，而
+// 猜错的另一个方向是「人在别处、什么都没发生」——那正是这个功能要消灭的情况。
+func (d *desktopApp) windowFocused() bool {
+	if d.notify == nil || d.notify.window == nil {
+		return false
+	}
+	return d.notify.window.IsFocused()
 }
 
 // dropAsk 注销一条等待。调用方不必先确认真有一条：这条路径的重入是正常的

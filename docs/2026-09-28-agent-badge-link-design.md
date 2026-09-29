@@ -1,7 +1,6 @@
 # Agent Badge：把 Tachi 的对话框搬到一块 240×320 的小屏上
 
-> 状态: P0–P4 已落地，真机闭环已验证（发 ask → 屏上中文 → 按键 → 主机收到正确答案；BLE 链路上同样跑通）。
->       **未实现**：提示音。逐条见 §8。
+> 状态: P0–P4 与提示音已落地，真机闭环已验证（发 ask → 屏上中文 → 按键 → 主机收到正确答案；BLE 链路上同样跑通）。
 > 关联: [desktop/link](../desktop/link/)、[desktop/badge.go](../desktop/badge.go)、
 >       [desktop/asks.go](../desktop/asks.go)、[desktop/ask_answered.go](../desktop/ask_answered.go)、
 >       [desktop/permission.go](../desktop/permission.go)、[desktop/askuser.go](../desktop/askuser.go)、
@@ -18,7 +17,10 @@
 2. **权限确认**：命中 `ask` 规则的 Bash 命令推到设备，三键回答「允许一次 / 本会话允许 / 拒绝」。
 3. **AskUserQuestion**：模型提的问题和选项推到设备，上下键滚动、确定键提交（含多选）。
 4. **提示音**：出现待答项时响一声。这是「人不在工位」这个场景的全部意义——屏幕你未必在看。
-   **未实现**（见 §8）。
+   判据在**主机**侧（见 §5 的 `askAlert`）：窗口不在前台、**或者**等的不是当前活跃会话。
+   「你正看着那个会话」就不出声——那样的一声只是噪音。判一次，在登记等待的那一刻：
+   之后你走开了也不补响（补响要记住「已提醒过」并能在之后主动推一条信号，而那会把一条
+   已经看过的等待再说一遍）。
 
 ### 明确不做
 
@@ -135,7 +137,7 @@ flowchart LR
 ```json
 {"t":"state","seq":42,"sessions":[{"id":"ab12","title":"修 lint","status":"tool_running",
   "label":"执行","detail":"调用 Bash"}]}
-{"t":"ask","seq":43,"ref":43,"kind":"permission","session":"ab12","toolId":"call_1",
+{"t":"ask","seq":43,"ref":43,"kind":"permission","session":"ab12","toolId":"call_1","alert":true,
   "title":"Bash 确认","body":"$ rm -rf build/\n\n命中 ask 规则: \"rm-*\"",
   "options":[{"label":"允许一次","value":"allow_once"},
              {"label":"本会话允许","value":"allow_session"},
@@ -168,6 +170,9 @@ flowchart LR
   主机的 ref 表里已经不存在了）。这条也让「设备漏了某条 `ask_gone`」这类漂移在每次重连时自愈。
 - **同一条待答项内容变了就用同一个 `ref` 重发**（模型的提问在流式阶段可能被改写）：设备上那一项
   原地更新，游标不跳。重新分配 ref 等于让它换个身份重新排队，而旧的那条在 ref 表里再也等不到
+- **`alert` 是「这条等待值得响一声」**，由主机在登记等待的那一刻判定（窗口不在前台，或者等的不是
+  当前活跃会话，见 §1 第 4 条）：设备只在**新出现的**等待上照做一次——同一条 ask 每 10 秒会被心跳
+  重发，跟着重发走就成了每 10 秒响一次。字段缺省即「不响」，所以老主机/老设备各自都对。
   自己的 `ask_gone`。
 - `answers` 的 key 是**问题全文**、value 是选中项标签（多选按 `, ` 拼），与 TUI/desktop 现有约定
   一致，模型看到的是同一个形状。题面被截断的题设备直接不上屏：键错了模型会收到一个它不认识的答案。
@@ -226,7 +231,7 @@ flowchart LR
 
 | 文件 | 职责 |
 | --- | --- |
-| `desktop/asks.go` | `pendingAsk` 表：`kind`（permission / ask_user）、`sessionID`、`toolID`、渲染所需的 `preview` 或 `questions`、权限等待的唤醒 `answer` channel。键是 `session + tool call id`——工具调用 id 由模型生成，两个会话完全可能生成同一个 |
+| `desktop/asks.go` | `pendingAsk` 表：`kind`（permission / ask_user）、`sessionID`、`toolID`、渲染所需的 `preview` 或 `questions`、权限等待的唤醒 `answer` channel。键是 `session + tool call id`——工具调用 id 由模型生成，两个会话完全可能生成同一个。`askAlert` 在这里判「要不要让设备响一声」（失焦或非活跃会话），判一次、在登记那一刻 |
 | `desktop/badge.go` | 实现 `link.Source`：`Snapshot()` 把 run map 与待答表翻成协议结构，`Answer()` 分发到两个现成入口；按配置开关链路 |
 | `desktop/link/link.go` | `Listener` / `Transport` 接口、`Server` 会话循环、去抖、ref 分配、`hello`/`sync`/`answer` 处理 |
 | `desktop/link/serial.go` | 串口实现；端口为空时按 Espressif USB VID 每次 Accept 重新查找（端口名随插拔漂移） |
@@ -272,6 +277,10 @@ flowchart LR
   多次写），**非阻塞写不能假定「一次写完一行」**——半行到不了设备，它只会一直等换行，而且一声
   不吭（屏幕停在上一屏，谁都看不出发生了什么）。这条对 BLE 尤其要紧：GATT 一次只能写几十到
   两百多字节，分包是这个传输自己的责任。
+- **提示音（`main/badge_sound.c`）**：一声短铃，只在新出现的、被主机标了 `alert` 的等待上响一次
+  （见 §1 第 4 条与 §4 的约定）。PCM 是生成物（`tools/gen_badge_sound.py` → `main/badge_sound_16k.c`，
+  16 kHz 单声道，随仓库分发），播放走 BSP 的 `bsp_audio_*`：codec 平时睡着，唤醒 → 分块写完 →
+  再睡回去——这块板子上「平时不占电流」比「响得快一点」要紧。播放在自己的任务里，不阻塞按键与 LVGL。
 - **BLE 链路（`main/badge_ble.c`，P4）**：与串口并列的第二条传输，NimBLE 做 GATT peripheral。
   **状态机不知道自己在跟谁说话**：两条路各自把「一行」交给同一个回调、各自接受同一个「发一行」，
   出方向由 `main.c` 按「链路是否已认证加密」路由——加密了走 BLE，否则走串口。链路状态分四态
@@ -323,7 +332,7 @@ flowchart LR
   但不认识这个字」从外面看和「屏幕坏了」一模一样。它只探测这两个字符，所以**接不住别的缺字**。
 - **状态机的纯逻辑（`badge_state.c` / `badge_proto.c`）与 ESP-IDF/LVGL 无关**，由主机测试覆盖：
   这块板上最贵的两类 bug 是「按键按下去没反应」和「答回去的答案对不上题」，两者都能在主机上试出来。
-- **未做**：提示音（走 ES8311），见 §8。
+- **未做**：无（提示音已落地，见 §1 与 §6）。
 
 ## 7. 真机上会被咬的地方
 
@@ -348,7 +357,7 @@ flowchart LR
 | P1 | 设备侧串口 + 状态屏 | 已落地，真机验证 |
 | P2 | 确认屏（权限三键） | 已落地，真机验证 |
 | P3 | 问答屏 + 中文字库 | 已落地，真机验证 |
-| P3' | **提示音**（出现待答项时响一声） | **未实现** |
+| P3' | **提示音**（出现待答项时响一声；判据在主机：失焦或非活跃会话） | 已落地，真机验证 |
 | — | **空闲息屏**（只关背光；判据与约束见 §6） | 已落地 |
 | P4 | BLE（传输层换实现，协议不动） | 已落地，真机验证 |
 

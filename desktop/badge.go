@@ -291,6 +291,7 @@ func askFor(a *pendingAsk) link.Ask {
 		Kind:      string(a.kind),
 		SessionID: a.sessionID,
 		ToolID:    a.toolID,
+		Alert:     a.alert,
 	}
 	switch a.kind {
 	case askKindPermission:
