@@ -39,12 +39,31 @@ type Source interface {
 	// 要假定它随时会来；它只用来叫醒服务循环，不做别的事。
 	Subscribe(fn func()) (cancel func())
 
+	// SessionInfo 是设备双击确定时要看的那几行（见 Info）。
+	//
+	// 它和 Snapshot 分开：那是一份**要同步的状态**（定期推、推过去就一直在设备上），
+	// 而这是一次**请求的答案**（设备问一次、看一眼、几秒后自己消失）。混在一起，每条
+	// state 就都得带上几个大部分时候没人读的字段。
+	SessionInfo() Info
+
 	// TakeAlerts 交出自上次调用以来攒下的提示音请求并清空。
 	//
 	// 它和 Snapshot 分开，是因为提示音是**事件**（响一次）而不是状态：一次回合完成与
 	// 下一次之间可能什么都没变，挂在快照的去抖上就会被吞掉。Server 在每次收到变化
 	// 通知时取一次，并在每条连接开始时把攒下的丢掉——连上之前那一声，现在响已经晚了。
 	TakeAlerts() []Alert
+}
+
+// Info 是「看一眼这个会话的账」那几行：谁的、用什么模型、上下文占了多少、花了多少。
+//
+// 每个字段都是**已经格式化好的字符串**（"12.3k / 32k (42%)"、"$0.42"）：排版是语义，
+// 而语义留在主机（设计文档 §2）。设备只负责把它们画出来——它不必知道 k 是什么、货币
+// 怎么写、窗口未知时该不该显示百分比。空字符串表示「这一项没有」，设备那一行不画。
+type Info struct {
+	Title   string
+	Model   string
+	Context string
+	Cost    string
 }
 
 // Alert 是一次提示音请求：Kind 决定设备放哪一段音频（它自己不认识这些含义，只是照做）。
@@ -344,6 +363,8 @@ func (s *Server) handle(line []byte) {
 		s.voiceChunk(msg)
 	case "voice_end":
 		s.voiceEnd(msg)
+	case "info":
+		s.writeInfo()
 	}
 }
 
@@ -482,6 +503,18 @@ const (
 func (s *Server) nextSeq() uint64 {
 	s.seq++
 	return s.seq
+}
+
+// writeInfo 回一次「这个会话的账」。设备双击确定时问一次，所以它是一次问答——不是一条
+// 要同步的状态（见 Source.SessionInfo）。
+func (s *Server) writeInfo() {
+	info := s.src.SessionInfo()
+
+	s.write(map[string]any{
+		"t": "info", "seq": s.nextSeq(),
+		"title": info.Title, "model": info.Model,
+		"context": info.Context, "cost": info.Cost,
+	})
 }
 
 // writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。

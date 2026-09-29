@@ -15,6 +15,7 @@ import (
 type fakeSource struct {
 	mu       sync.Mutex
 	snap     Snapshot
+	info     Info
 	alerts   []Alert
 	subs     map[int]func()
 	nextSub  int
@@ -29,6 +30,14 @@ func (f *fakeSource) alert(kind string) {
 	f.alerts = append(f.alerts, Alert{Kind: kind})
 	f.mu.Unlock()
 	f.notify()
+}
+
+// SessionInfo 是「双击确定看一眼」的答案。测试里只有当用例真的问它时才有意义，所以
+// 默认给一份固定值，需要的话用例自己改 f.info。
+func (f *fakeSource) SessionInfo() Info {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.info
 }
 
 func (f *fakeSource) TakeAlerts() []Alert {
@@ -261,6 +270,27 @@ func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
 	}
 }
 
+// 「看一眼这个会话的账」是一次问答：设备问一次，主机答一次。它刻意不走推送那条路——
+// 每 10 秒的 state 里塞几个大部分时候没人读的字段，是白占带宽。
+func TestSessionInfoIsAnsweredOnDemand(t *testing.T) {
+	src := newFakeSource()
+	src.info = Info{Title: "修 lint", Model: "gpt-5", Context: "12.3k / 32k (39%)", Cost: "$0.42"}
+	p := newPeer(t, src)
+
+	p.write(map[string]any{"t": "info"})
+
+	m := p.readOf("info")
+	if m["title"] != "修 lint" || m["model"] != "gpt-5" {
+		t.Errorf("这一屏说的是谁的账？m = %v", m)
+	}
+	if m["context"] != "12.3k / 32k (39%)" || m["cost"] != "$0.42" {
+		t.Errorf("那两行格式化好的字没原样过去：%v", m)
+	}
+	if m["seq"] == nil {
+		t.Error("回执没有 seq：设备那边对不上是哪一次问的")
+	}
+}
+
 func TestAnswerReachesTheSource(t *testing.T) {
 	src := newFakeSource()
 	src.snap = askFixture()
@@ -383,7 +413,6 @@ func TestSyncResendsEverything(t *testing.T) {
 		t.Errorf("re-sent ask ref = %v, want the original %v", again["ref"], ask["ref"])
 	}
 }
-
 
 // 提示音是事件，不是状态：它必须在**内容什么都没变**时也能发出去。
 //
