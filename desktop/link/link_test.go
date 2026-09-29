@@ -15,11 +15,12 @@ import (
 type fakeSource struct {
 	mu       sync.Mutex
 	snap     Snapshot
-	info     Info
 	alerts   []Alert
 	subs     map[int]func()
 	nextSub  int
 	answered []Answer
+	// keys 记下设备送回来的手势，顺序即收到的顺序（见 TestDeviceKeysReachTheSource）。
+	keys []Key
 }
 
 func newFakeSource() *fakeSource { return &fakeSource{subs: map[int]func(){}} }
@@ -32,12 +33,19 @@ func (f *fakeSource) alert(kind string) {
 	f.notify()
 }
 
-// SessionInfo 是「双击确定看一眼」的答案。测试里只有当用例真的问它时才有意义，所以
-// 默认给一份固定值，需要的话用例自己改 f.info。
-func (f *fakeSource) SessionInfo() Info {
+// Key 收下设备的一个手势。含义由宿主决定，所以这里只记录、不解释（那是 desktop 的 Key）。
+func (f *fakeSource) Key(k Key) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.info
+	f.keys = append(f.keys, k)
+	return nil
+}
+
+// keysSeen 是收到的手势（拷贝一份，调用方不该碰内部切片）。
+func (f *fakeSource) keysSeen() []Key {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Key(nil), f.keys...)
 }
 
 func (f *fakeSource) TakeAlerts() []Alert {
@@ -288,6 +296,10 @@ func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
 	if third := p.read(); third["t"] != "ask" {
 		t.Fatalf("third message = %v, want ask", third["t"])
 	}
+	// 小窗状态也属于这一次全量（它排在最后，见 push 的末尾）。
+	if fourth := p.read(); fourth["t"] != "hud" {
+		t.Fatalf("fourth message = %v, want hud", fourth["t"])
+	}
 
 	// reset 属于「连接」而不是「每次推送」：一次变化之后只该有推送。
 	src.update(func(s *Snapshot) { s.Sessions[0].Label = "思考" })
@@ -296,24 +308,49 @@ func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
 	}
 }
 
-// 「看一眼这个会话的账」是一次问答：设备问一次，主机答一次。它刻意不走推送那条路——
-// 每 10 秒的 state 里塞几个大部分时候没人读的字段，是白占带宽。
-func TestSessionInfoIsAnsweredOnDemand(t *testing.T) {
+// 小窗的状态是一条**要同步的状态**：它挂在 Snapshot 上，只在真的变了的时候占一行。
+//
+// 它决定设备底栏写什么、以及上下键要不要发上来——所以「开着」与「关了」这两条都必须真的
+// 过去，而不能靠设备猜。
+func TestHudStateIsPushedWhenItChanges(t *testing.T) {
 	src := newFakeSource()
-	src.info = Info{Title: "修 lint", Model: "gpt-5", Context: "12.3k / 32k (39%)", Cost: "$0.42"}
 	p := newPeer(t, src)
 
-	p.write(map[string]any{"t": "info"})
+	// 刚连上（hello 后的第一次全量推送）就该说清它关着：设备不能靠「还没收到」当默认。
+	if m := p.readOf("hud"); m["open"] != false {
+		t.Errorf("第一次推送里 open = %v, want false", m["open"])
+	}
 
-	m := p.readOf("info")
-	if m["title"] != "修 lint" || m["model"] != "gpt-5" {
-		t.Errorf("这一屏说的是谁的账？m = %v", m)
+	src.update(func(s *Snapshot) { s.Hud = Hud{Open: true} })
+	if m := p.readOf("hud"); m["open"] != true {
+		t.Errorf("小窗开了，设备收到的却是 open = %v", m["open"])
 	}
-	if m["context"] != "12.3k / 32k (39%)" || m["cost"] != "$0.42" {
-		t.Errorf("那两行格式化好的字没原样过去：%v", m)
+
+	// 内容没变就不该重复发（这条链路每 10 秒一轮，去抖是它安静的原因）。
+	src.notify()
+	p.expectSilence(150 * time.Millisecond)
+
+	src.update(func(s *Snapshot) { s.Hud = Hud{Open: false} })
+	if m := p.readOf("hud"); m["open"] != false {
+		t.Errorf("小窗关了，设备收到的却是 open = %v", m["open"])
 	}
-	if m["seq"] == nil {
-		t.Error("回执没有 seq：设备那边对不上是哪一次问的")
+}
+
+// 设备的手势原样送到宿主：四个动作一个都不能在路上被解释（语义在 desktop 的 Key 里）。
+func TestDeviceKeysReachTheSource(t *testing.T) {
+	src := newFakeSource()
+	p := newPeer(t, src)
+
+	for _, action := range []string{KeyUp, KeyDown, KeyOK, KeyOKDouble} {
+		p.write(map[string]any{"t": "key", "key": action})
+	}
+
+	waitFor(t, "the keys to reach the source", func() bool { return len(src.keysSeen()) == 4 })
+	got := src.keysSeen()
+	for i, want := range []string{KeyUp, KeyDown, KeyOK, KeyOKDouble} {
+		if got[i].Action != want {
+			t.Errorf("第 %d 个手势 = %q, want %q", i+1, got[i].Action, want)
+		}
 	}
 }
 
@@ -374,6 +411,7 @@ func TestAnUnchangedPictureIsNotReSent(t *testing.T) {
 	p := newPeer(t, src)
 	p.readOf("state")
 	p.readOf("ask")
+	p.readOf("hud") // 这一次全量的最后一条（见 push 的末尾）
 
 	src.update(func(*Snapshot) {}) // 通知了，但什么都没变
 

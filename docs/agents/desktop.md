@@ -23,6 +23,7 @@ gets its own handbook beside this one rather than growing here.
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
+| **Desktop HUD** | you touch `desktop/hud.go` or `frontend/src/hud.tsx` (the always-on-top reply panel), or a turn finishes without one appearing |
 | **Desktop Compaction** | you touch the compaction path (`agent/compact.go`, `desktop/compaction.go`, the `AgentEventAutoCompactDone` case), `RunningSessions`, or anything that resolves **which run owns a session** |
 | **Desktop UI State** | you change the frontend: which module owns what, and the rule each convention keeps |
 | **Desktop Themes** | you touch colours |
@@ -608,6 +609,57 @@ Fixtures exist where the real path needs something a driver cannot do:
   keep the bubbles the composer placed (see the `holdLocal` bullet under Desktop UI State). The
   order of the two requests is the Go half's assertion: the line has to reach the model in the
   request that already carries the reply it was queued behind.
+
+## Desktop HUD (the always-on-top reply panel)
+
+The panel that shows a finished turn's reply to someone who is NOT looking at the window
+(`desktop/hud.go` + `frontend/src/hud.tsx`; design: `docs/2026-09-29-desktop-hud-design.md`).
+
+- **It is a SECOND WINDOW on the SAME page, and it has to stay that way.** One `index.html`, one theme, one
+  set of stylesheets — the routing is a query string (`?hud=1`, read in `main.tsx`), so a second HTML entry
+  is never needed and would let the two windows drift apart. The two windows talk over four event names and
+  nothing else.
+- **The window must stay a NON-ACTIVATING NSPanel** (`Mac.WindowClass = MacWindowClassPanel` +
+  `PanelPreferences.NonActivating`, with `CanJoinAllSpaces|FullScreenAuxiliary` in `CollectionBehavior`).
+  It appears exactly when the user is watching something else full-screen, and Wails' plain `Show()` is
+  `makeKeyAndOrderFront` — which would take the foreground away and drop their video out of full screen.
+  A regression here LOOKS like a working panel, and is felt as "it keeps interrupting me", so
+  `hud_test.go` pins the window options instead of the pixels.
+- **The panel renders markdown through the SAME pipeline as the transcript** (`MarkdownBlock`, so a
+  ```mermaid fence becomes a diagram and code is highlighted), and resolves image paths through the same
+  binding the transcript uses (`GetSessionWorkingDir(payload.sessionId)`) — a second renderer or a second
+  path resolution is how the same reply comes to look like two different things. `hud.css` only tightens
+  the line/paragraph spacing for the panel's size; the reader's own font scale is NOT overridden. It passes
+  `zoomDiagrams={false}`: the diagram's 「点击全屏」 overlay would open INSIDE the 560×300 panel, so the
+  gesture is dropped there (the diagram itself still renders).
+- **Only the host decides whether it opens** (`hudWanted`: the BADGE CONNECTED, not a scripted run, not
+  focused, the ACTIVE session, a non-empty reply), and the host owns `open`/`content` — the frontend's close button only emits
+  `hud:close` and never hides the window itself. The device half of the feature reads that state.
+  The device condition is the point of the feature, not a nicety: the panel is that device's remote screen
+  (its keys scroll and close it), so with no badge attached it is a float nobody can operate.
+- **What 「叫出小窗」 shows: the active session's last reply from its history, falling back to the last one
+  DISPLAYED** (`hudSummon`). History first, because a panel left showing R1 while a later turn R2 ran with the
+  window focused would otherwise come back as R1 — a bug quiet enough to be mistaken for your own memory. The
+  displayed one is the fallback for a session this process has not loaded yet (then `r.history` is empty and it
+  is all there is). Nothing at all → the gesture does nothing and logs one line (that line is what tells a
+  host-side reaction from a link that never arrived).
+- **The reply is bounded to the LAST TURN** (`lastTurnReply` walks back only to the last `user` message):
+  the event's `Messages` is the WHOLE session history, so an unbounded walk re-shows the previous turn's
+  answer whenever a turn ends without text — which reads as a bug, not as a missing panel.
+- **Two things about PLACING it are traps, and both were measured**: `WebviewWindow.SetPosition` returns
+  early while the window's native impl is nil (it is built by the first `Show()` — so place AFTER showing,
+  or the panel just sits at AppKit's default, dead centre), and `GetScreen()`'s `Screen` carries **physical
+  pixels** while `SetPosition` takes points (that path skips Wails' `applyDPIScaling`; skipping the division
+  put the panel at x=3384 on a 1920-wide screen and macOS clamped it to the edge). `hudPlacement` is the one
+  place that arithmetic lives, and `hud_test.go` pins both unit conversions. Do NOT mix in
+  `app.Screen.GetPrimary()`: that cache is only filled by a screen-parameter change (it is nil on the first
+  turn after launch) and it is in POINTS, so the two sources disagree by the scale factor.
+- **`TACHI_HUD_PREVIEW=1` shows it once at launch with a canned reply** — the only way to look at this panel
+  without running a real turn (the smoke suite cannot reach it, see above). It goes through `showHUD`, so it
+  exercises the product path rather than a side door.
+- **No smoke scenario covers it, and none can**: a driver reads the MAIN window's DOM and this is another
+  window's page. Its Go half is unit-tested (`hud_test.go`); what a human has to check by hand is that it
+  appears over a full-screen video WITHOUT taking the foreground.
 
 ## Desktop UI State
 

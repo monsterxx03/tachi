@@ -1,0 +1,82 @@
+/* 小窗（HUD）——一轮跑完、人不在窗口前时出现在屏幕角上的那块面板。
+ *
+ * 只有主窗口那个页面够用的规则不在这里重复（base.css 已经被 index.html 一起加载了，主题变量、
+ * 字体、滚动条都在那儿），而**正文的 markdown 排版也不在这里**——那是 widgets.css 的
+ * .assistant-text，和窗口里那份 transcript 共用一套（见文件末尾那几条收紧的规则）。这里写的只是
+ * 这块面板自己的骨架：一行会话名、一块可滚动的正文。 */
+
+.hud {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  background: var(--chrome-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.hud-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hud-close:hover {
+  background: var(--hover-2);
+  color: var(--text);
+}
+
+.hud-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 12px;
+}
+
+/* 正文：和 transcript 共用同一套 markdown 排版（widgets.css 的 .assistant-text——正文、代码、
+ * 表格、```mermaid 都在那儿），这里只按面板的尺寸收一档行距与段距：300px 高的框里多放下两行，
+ * 而它是**扫一眼**的地方，不是读全文的地方（读全文回窗口，那里仍是原样的 1.76）。
+ *
+ * 字号**不动**：--fs-prose 是阅读者自己调的正文字号（⌘= / ⌘- / ⌘0，见 fontsize.ts），同一条回复
+ * 没有理由在两处长得不一样大。 */
+.hud .assistant-text {
+  line-height: 1.62;
+}
+
+.hud .assistant-text p {
+  margin: 0.5em 0;
+}
+
+.hud .assistant-text ul,
+.hud .assistant-text ol {
+  margin: 0.5em 0;
+}
+
+.hud-empty {
+  font-size: 13px;
+  color: var(--text-faint);
+}

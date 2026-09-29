@@ -614,6 +614,10 @@
 
 /* Diagrams are clickable ("show me this bigger"). */
 .mermaid { cursor: zoom-in; }
+/* The static variant: the diagram is there, the zoom gesture is not (the overlay it would open
+   lives inside whatever container the diagram is in, and in the small HUD panel there is no room
+   for it). See MarkdownBlock's zoomDiagrams. */
+.mermaid.is-static { cursor: default; }
 
 /* ── Preview lightbox (full-viewport) ─────────────────────────────────────── */
 /* One shell for every "show me this bigger": mermaid diagrams, attachment

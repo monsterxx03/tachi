@@ -368,7 +368,38 @@ func (d *desktopApp) Snapshot() link.Snapshot {
 	for _, a := range pendings {
 		asks = append(asks, askFor(a))
 	}
-	return link.Snapshot{Sessions: sessions, Asks: asks}
+	return link.Snapshot{Sessions: sessions, Asks: asks, Hud: d.hudView()}
+}
+
+// hudView 是小窗此刻的状态，给设备看（它据此决定底栏写什么、以及上下键要不要发上来）。
+//
+// 和设备上别的东西一样，这是一份**读到的**状态：唯一的所有者是 hudState（见 desktop/hud.go），
+// 这里只是把它翻译成协议里的形状。
+func (d *desktopApp) hudView() link.Hud {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return link.Hud{Open: d.hud.open}
+}
+
+// Key 实现 link.Source：设备送回来的一个手势。
+//
+// 四个动作的含义全部在这里决定，设备不知道小窗是什么——这是整条链路的分工（语义留在主机）：
+//
+//	up / down   小窗开着时翻内容，关着时什么都不做（那种情况下设备压根不发，见设备侧的按键路由）
+//	ok          关掉小窗（「确定」在小窗开着时的意思）
+//	ok_double   把小窗叫回来（关掉了、或者手滑关早了，重看最近那一条）
+func (d *desktopApp) Key(k link.Key) error {
+	switch k.Action {
+	case link.KeyUp:
+		d.scrollHUD(-1)
+	case link.KeyDown:
+		d.scrollHUD(1)
+	case link.KeyOK:
+		d.hideHUD()
+	case link.KeyOKDouble:
+		d.summonHUD()
+	}
+	return nil
 }
 
 // askFor 把一条待答项翻译成设备看得懂的形状。翻译只在这一处发生：设备不该知道

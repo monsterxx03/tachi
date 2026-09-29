@@ -194,6 +194,12 @@ func main() {
 	desk.app = app
 	desk.window = window
 
+	// The always-on-top panel for a reply nobody is at the window to read (desktop/hud.go).
+	// It is created here, with the main window, but stays HIDDEN until a turn finishes while
+	// the window is in the background — an earlier creation is what lets its page be mounted
+	// and listening before the first reply can arrive.
+	desk.initHUD(app, background, appearance)
+
 	// ⌘W and the red button HIDE the main window; only 退出 Tachi Desktop closes the app.
 	//
 	// The reason is not taste. On darwin a user-initiated close ALWAYS destroyed this window:
@@ -295,6 +301,13 @@ func main() {
 	if demoEnabled() {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationDidFinishLaunching,
 			func(*application.ApplicationEvent) { go runJsDemo(window) })
+	}
+
+	// HUD preview (TACHI_HUD_PREVIEW): 把置顶小窗叫出来一次看版式。与 demo 同一个挂钩时机、
+	// 同一条理由——dispatch 必须发生在 App.Run() 之后（见上面那段注释）。
+	if os.Getenv(hudPreviewEnv) != "" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidFinishLaunching,
+			func(*application.ApplicationEvent) { go desk.previewHUD() })
 	}
 
 	// Run the application.

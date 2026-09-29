@@ -11,6 +11,7 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
 | --- | --- |
 | **Badge Link over BLE** | you touch `desktop/link/`, the badge transport setting, or the Bluetooth Info.plist key — **or the link died and the badge screen stopped updating** |
 | **Badge Voice (speech → text)** | you touch `desktop/stt` or the voice path in `desktop/badge.go` — **or a transcription fails and you need to know why** |
+| **Badge → the small panel (HUD)** | you touch the `hud`/`key` protocol messages, the device's status-screen keys, or the host's `Key` mapping |
 | **Building `desktop/stt` (the Swift shim)** | you touch `shim.swift`, the shim fails to link, or a change to it does nothing — **the library is rebuilt by a build step, not by the compiler** |
 | **The Device Side** | you are about to change, build or flash the firmware — **or the host and the device disagree about the protocol** |
 
@@ -107,11 +108,41 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
   an `error`'s `message` as a 5-second notice and ignores its `id` (one recording at a time), so the host only has to
   fit `BADGE_DETAIL_MAX` (96 bytes) — which is why `voiceFailureText` composes whole Chinese sentences rather than
   passing the framework's English text through.
-- **`voice: chunk count mismatch` in the host log is often the device DROPPING a tap, not a broken link.** The badge's
-  gesture is hold-to-talk, so every press starts an upload — including the two short presses of 双击确定 (the device's
-  "show me the session's cost" screen). Holds shorter than the firmware's minimum end with `voice_end` reporting 0
-  parts, which voids the whole upload (`link/voice.go`'s parts check) and logs that discard. One line per stray tap,
-  no transcription attempted, nothing to fix.
+- **`voice: chunk count mismatch` in the host log means an upload STARTED and then came apart, not a broken
+  link.** The firmware already discards a hold shorter than `BADGE_VOICE_MIN_MS` (400 ms) *before* `voice_begin`
+  goes out, so the two presses of a double-press never reach the wire; a line in the host log therefore means the
+  upload really did start (a real hold) and then lost chunks — `link/voice.go`'s parts check voids it and logs
+  the discard. Nothing to fix on the host side; look at the link (BLE retries, a serial port contention) if it
+  becomes frequent.
+
+## Badge → the small panel (HUD) on the desktop
+
+The badge drives the desktop's always-on-top reply panel (`desktop/hud.go`; design:
+`docs/2026-09-29-desktop-hud-design.md`). The device knows NOTHING about the panel — it reports gestures and
+the host decides what they mean.
+
+- **Two protocol messages carry the whole feature, and they are the reason `Proto` is 2** (the removed
+  `info`/`badge_info` pair is what made it a breaking change): host → device `{"t":"hud","open":bool}` (a
+  SYNCED state, riding `Snapshot.Hud` through the same push de-dup as the session list) and device → host
+  `{"t":"key","key":"up|down|ok|ok_double"}` (`link.Source.Key`). The host maps them in `desktop/badge.go`'s
+  `Key`: up/down scroll the panel, `ok` closes it, `ok_double` brings it back with the last reply.
+- **The version is checked in TWO places and nothing checks them against each other**: `link.Proto`
+  (host) and `BADGE_PROTO_VERSION` (`main/badge_proto.h`, written into `hello`) must move together. Bumping
+  one alone is silent on the host side (the mismatch is answered to the DEVICE as an `error` message and
+  never logged here) and shows on the badge as a 5-second notice — so the symptom is 「badge 连上了但什么
+  都不动」. Both were 1 while `info` was still in the protocol; changing only the host while flashing a
+  device is exactly how the two ends get out of step mid-upgrade, and the fix is the same on both sides.
+- **The panel only appears while a badge is CONNECTED** (`hudWanted`'s `deviceConnected`): it is the
+  device's remote screen, so without one it would be a float nobody can operate. Same one-shot judgement at
+  turn end as the other conditions — unplugging the badge does not close a panel that is already up.
+- **The device's keys change meaning only while the panel is OPEN, and the device is told which** — that is
+  what the `hud` state is for: with it, the status screen's footer line becomes 「上下翻 · 确定关小窗」 and the
+  short up/down become the only two gestures it sends. While the panel is closed those keys stay dead on the
+  device (nothing to scroll, and the host would ignore them anyway).
+- **A tap is not a recording, which is what lets one button mean two things** — and that rule is the firmware's
+  OWN, older one (`badge_voice.h`'s `BADGE_VOICE_MIN_MS`, 400 ms: a shorter hold never even sends `voice_begin`).
+  So press-and-hold still talks whether or not the panel is open, while a tap is free to be a key: with the panel
+  open it is 「确定 = 关窗」, and nothing stray goes on the wire for it.
 
 ## Building `desktop/stt` (the Swift shim)
 

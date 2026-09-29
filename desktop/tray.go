@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -84,5 +85,58 @@ func (d *desktopApp) newSessionFromMenuBar() {
 	d.window.Focus()
 	if d.app != nil {
 		d.app.Event.Emit(uiNewSessionEventName)
+	}
+}
+
+// 菜单栏那一格的读数：上下文百分比与今日花费。
+//
+// 这两样（以及它们用到的 toFloat / contextPercent）原先住在 sessioninfo.go —— 那个文件是给
+// 设备双击确定看会话账用的，而那条路已经没了（协议 v2，见 desktop/link/link.go 的 Proto）。
+// 留下来的这几个是**菜单栏自己的**：refreshTray 拿它们拼 trayLabel。
+//
+// 为什么不复用（已经删掉的）设备那套排版：那串 "12.3k / 32k (42%)" 是给 240 像素的小屏写的，
+// 菜单栏一格放不下（旁边还挨着今日花费）。量不出来就不画——同一个态度：不编一个百分比出来。
+func trayContext(estimate, window int64) string {
+	if percent := contextPercent(estimate, window); percent >= 0 {
+		return fmt.Sprintf("%d%%", percent)
+	}
+	return ""
+}
+
+// contextPercent 是「这段上下文占模型窗口的百分之几」（四舍五入）；量不出来返回 -1。
+func contextPercent(estimate, window int64) int {
+	if estimate <= 0 || window <= 0 {
+		return -1
+	}
+	return int(float64(estimate)/float64(window)*100 + 0.5)
+}
+
+// formatCost 排成 "¥0.420"；拿不到就不显示（空字符串），而不是画一个 "¥0"——那看起来像
+// 「这次没花钱」，而真相是「还没算」。
+//
+// 单位和位数**跟着桌面端已有的那份来**（App.tsx 的 `¥{cost.toFixed(3)}`）：这个 cost 是
+// 人民币，而单次调用可能只有几厘，所以是三位小数而不是两位。两处显示同一个数却长得不一样，
+// 是比「尾随的零不好看」更糟的问题。
+func formatCost(v any) string {
+	f := toFloat(v)
+	if f <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("¥%.3f", f)
+}
+
+// toFloat 是给 map[string]any 用的：费用数据装在 any 里，而 JSON 之外没人保证它是哪个宽度。
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float32:
+		return float64(n)
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
 	}
 }

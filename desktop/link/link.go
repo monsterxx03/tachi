@@ -39,12 +39,11 @@ type Source interface {
 	// 要假定它随时会来；它只用来叫醒服务循环，不做别的事。
 	Subscribe(fn func()) (cancel func())
 
-	// SessionInfo 是设备双击确定时要看的那几行（见 Info）。
+	// Key 是设备送回来的一个手势（短上/短下/短按确定/双击确定）。
 	//
-	// 它和 Snapshot 分开：那是一份**要同步的状态**（定期推、推过去就一直在设备上），
-	// 而这是一次**请求的答案**（设备问一次、看一眼、几秒后自己消失）。混在一起，每条
-	// state 就都得带上几个大部分时候没人读的字段。
-	SessionInfo() Info
+	// 设备只说「哪一下」，含义由宿主决定——这是同一套分工的延续：它不知道小窗是什么，
+	// 也不知道该翻谁，那边的事全在 desktop/hud.go。
+	Key(k Key) error
 
 	// TakeAlerts 交出自上次调用以来攒下的提示音请求并清空。
 	//
@@ -54,17 +53,30 @@ type Source interface {
 	TakeAlerts() []Alert
 }
 
-// Info 是「看一眼这个会话的账」那几行：谁的、用什么模型、上下文占了多少、花了多少。
+// Hud 是小窗（HUD）此刻的状态。
 //
-// 每个字段都是**已经格式化好的字符串**（"12.3k / 32k (42%)"、"$0.42"）：排版是语义，
-// 而语义留在主机（设计文档 §2）。设备只负责把它们画出来——它不必知道 k 是什么、货币
-// 怎么写、窗口未知时该不该显示百分比。空字符串表示「这一项没有」，设备那一行不画。
-type Info struct {
-	Title   string
-	Model   string
-	Context string
-	Cost    string
+// 它是**状态**而不是事件，所以跟着 Snapshot 走：设备据此决定底栏写什么、以及上下键该
+// 不该发上来（小窗关着时那两个键在设备上什么也不做）。和设备上其它状态一样，它靠 push
+// 的去抖发送——same 值不会重复写一行。
+type Hud struct {
+	Open bool `json:"open"`
 }
+
+// Key 是设备送回来的一个手势。
+//
+// Action 是**手势**而不是动作：设备说「你按了短上」，宿主决定那意味着什么（小窗开着时
+// 翻页，关着时什么都不做）。动作名留给设备去猜，就是让两端的语义各长一半。
+type Key struct {
+	Action string `json:"key"`
+}
+
+// 四个手势，与设备侧 main.c 的按键路由一一对应。
+const (
+	KeyUp       = "up"        // 短按上
+	KeyDown     = "down"      // 短按下
+	KeyOK       = "ok"        // 短按确定（小窗开着 = 关掉）
+	KeyOKDouble = "ok_double" // 双击确定（小窗关着 = 叫出来）
+)
 
 // Alert 是一次提示音请求：Kind 决定设备放哪一段音频（它自己不认识这些含义，只是照做）。
 //
@@ -83,6 +95,7 @@ const (
 type Snapshot struct {
 	Sessions []Session
 	Asks     []Ask
+	Hud      Hud
 }
 
 // Session 是一个会话此刻的状态。形状照抄 desktop 的 AgentState（同样的值域），
@@ -167,7 +180,11 @@ const (
 	maxLine = 256 * 1024
 
 	// Proto 是协议版本，设备在 hello 里报，不匹配就断开而不是猜。
-	Proto = 1
+	//
+	// 2：删掉 `info`/`info_request`（设备上那张会话账目屏没了），加上 `hud` 与 `key`
+	// （小窗状态、设备手势）。旧固件配上新 app 会在这里得到一句明确的 mismatch——
+	// 比让它继续跑、而上下键在屏幕上什么也不发生要强。
+	Proto = 2
 )
 
 // Server 服务一条连接：把 Source 的变化推出去，把设备的回答送回来。
@@ -193,6 +210,8 @@ type Server struct {
 	byRef        map[uint64]Ask    // ref → ask
 	sentBody     map[uint64]string // ref → 上次发的正文，用于去抖
 	lastSessions string
+	// lastHud 是上一条发出去的 hud 状态（见 push），去抖用。
+	lastHud string
 	voice        *voiceUpload // 正在收的那一次语音上传（同时只有一段，见 voice.go）
 }
 
@@ -338,6 +357,9 @@ type inbound struct {
 	Bytes int    `json:"bytes,omitempty"`
 	Data  string `json:"data,omitempty"`
 	Parts int    `json:"parts,omitempty"`
+
+	// Key 是设备送回来的一个手势（见 Key 与 Source.Key）。
+	Key string `json:"key,omitempty"`
 }
 
 func (s *Server) handle(line []byte) {
@@ -371,8 +393,11 @@ func (s *Server) handle(line []byte) {
 		s.voiceChunk(msg)
 	case "voice_end":
 		s.voiceEnd(msg)
-	case "info":
-		s.writeInfo()
+	case "key":
+		// 设备的按键：语义在宿主那边（见 Source.Key）。这里不校验取值——设备的手势
+		// 将来可能多一个，而一个不认识的动作用户按下去什么也不发生，
+		// 比让整条链路变得脆弱要好。
+		_ = s.src.Key(Key{Action: msg.Key})
 	}
 }
 
@@ -414,6 +439,7 @@ func (s *Server) push(force bool) {
 		// 旧的那条在这个 ref 表里永远等不到 ask_gone。
 		s.sentBody = make(map[uint64]string)
 		s.lastSessions = ""
+		s.lastHud = ""
 	}
 
 	if body, err := json.Marshal(snap.Sessions); err == nil {
@@ -460,6 +486,15 @@ func (s *Server) push(force bool) {
 		delete(s.byRef, ref)
 		delete(s.sentBody, ref)
 		s.write(map[string]any{"t": "ask_gone", "seq": s.nextSeq(), "ref": ref})
+	}
+
+	// 小窗的状态最后发：它和会话状态用同一套去抖（也是状态，只在真的变了的时候占一行），
+	// 而顺序上排在「谁在跑、谁在等」之后——新连接的头三条（reset / state / ask）是设备
+	// 起来的第一步，不为了让位给这块面板去动它们。
+	body, err := json.Marshal(snap.Hud)
+	if err == nil && string(body) != s.lastHud {
+		s.lastHud = string(body)
+		s.write(map[string]any{"t": "hud", "seq": s.nextSeq(), "open": snap.Hud.Open})
 	}
 }
 
@@ -513,17 +548,6 @@ func (s *Server) nextSeq() uint64 {
 	return s.seq
 }
 
-// writeInfo 回一次「这个会话的账」。设备双击确定时问一次，所以它是一次问答——不是一条
-// 要同步的状态（见 Source.SessionInfo）。
-func (s *Server) writeInfo() {
-	info := s.src.SessionInfo()
-
-	s.write(map[string]any{
-		"t": "info", "seq": s.nextSeq(),
-		"title": info.Title, "model": info.Model,
-		"context": info.Context, "cost": info.Cost,
-	})
-}
 
 // writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。
 func (s *Server) writeReset() {
