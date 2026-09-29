@@ -332,6 +332,17 @@ Fixtures exist where the real path needs something a driver cannot do:
     shim first and then does `go test ./...`, which is the only command that links the real thing.
     ⚠ **`go build ./stt` catches NONE of the above**: a library package compiles without linking, so a
     broken stt link only surfaces in `go test` or in a build of the app.
+- **The packaged app must be signed with the LOCAL CERTIFICATE, not ad-hoc.** `wails3 package`
+  leaves `bin/Tachi.app` ad-hoc signed, and an ad-hoc identity is a content hash — it changes on
+  every rebuild, so macOS re-asks every TCC permission (bluetooth, speech recognition) and may
+  deny notifications permanently. `desktop/Makefile`'s `build` target re-signs automatically
+  **when the identity exists** (`Tachi Local Code Signing`, `LOCAL_SIGN_ID`); without it the build
+  prints a warning and leaves the ad-hoc signature, which is exactly the state that causes the
+  repeated prompts. Create it once with `desktop/scripts/dev-cert.sh` (⚠ that script must use
+  `/usr/bin/openssl` and a NON-empty p12 password — OpenSSL 3's default p12 encryption and an
+  empty password each produce `MAC verification failed during PKCS12 import`). Verify with
+  `codesign -dv --verbose=2 bin/Tachi.app | grep -E "Authority|flags"`: `flags=0x0` plus an
+  `Authority=` line means it worked; `flags=0x2(adhoc)` means it did not.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
   root code imports: a package the root starts importing builds fine there while `desktop/` fails with

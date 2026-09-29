@@ -17,15 +17,19 @@ WAILS     ?= wails3
 NPM       ?= npm
 APPDIR     = bin/Tachi.app
 
-# LOCAL_SIGN_ID is the local, self-signed code-signing identity used by
-# `make sign-local`. macOS ties TCC grants — notification permission included —
-# to an app's code identity, and `wails3 package` leaves the bundle AD-HOC
-# signed, whose identity is a content hash: it changes on every rebuild, so the
-# permission the user granted is forgotten and the app can end up with
-# notifications denied for good ("Notifications are not allowed for this
-# application"). Re-signing with a certificate keeps the identity stable across
-# rebuilds. Create it once (Keychain Access → Certificate Assistant, or a
-# self-signed cert trusted for code signing) and it lives in the login keychain.
+# LOCAL_SIGN_ID is the local, self-signed code-signing identity the build signs with (see the
+# `build` target: it does this whenever the identity exists). macOS ties TCC grants — bluetooth,
+# speech recognition, notifications — to an app's code identity, and `wails3 package` leaves the
+# bundle AD-HOC signed, whose identity is a content hash: it changes on every rebuild, so every
+# permission the user ever granted is forgotten and asked again (and notifications can end up
+# denied for good: "Notifications are not allowed for this application"). A certificate makes the
+# identity survive rebuilds.
+#
+# Create it once with ./scripts/dev-cert.sh (it generates the cert, trusts it for code signing
+# and keeps an exportable identity.p12 under ~/.tachi/dev-signing/). **On another machine**, copy
+# that identity.p12 over and run the two `security import` / `security add-trusted-cert` lines the
+# script prints — same certificate, same app identity. (Re-creating a certificate there instead is
+# fine too; the only cost is that machine asking once, because TCC's records are per-machine.)
 LOCAL_SIGN_ID ?= Tachi Local Code Signing
 
 export PATH := $(HOME)/go/bin:$(PATH)
@@ -55,6 +59,13 @@ stt-shim:
 
 build: stt-shim
 	$(WAILS) package
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$(LOCAL_SIGN_ID)"; then \
+		$(MAKE) --no-print-directory sign-local; \
+	else \
+		echo "⚠ 没有本地签名证书（$(LOCAL_SIGN_ID)）：这个包是 ad-hoc 签名的，而 ad-hoc 的身份"; \
+		echo "  是内容哈希——重建一次就换一个身份，macOS 于是把蓝牙/语音/通知的权限再问一遍。"; \
+		echo "  建一张：./scripts/dev-cert.sh（一次就够，之后重建多少次都还是同一个 app）。"; \
+	fi
 
 dev:
 	$(WAILS) dev
