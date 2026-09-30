@@ -117,8 +117,7 @@ func NewBashTool(cfg BashToolConfig) *BashTool {
 	}
 }
 
-func (t BashTool) Name() string        { return ToolNameBash }
-func (t BashTool) IsDestructive() bool { return true }
+func (t BashTool) Name() string { return ToolNameBash }
 func (t *BashTool) Description() string {
 	desc := "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +

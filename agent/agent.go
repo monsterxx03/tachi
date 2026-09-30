@@ -102,9 +102,6 @@ type AIAgent struct {
 	Channels  RuntimeChannels  // 通信通道（agent 生命周期，只读）
 	PermState *PermissionState // 可变权限（session 级）
 
-	// 运行时可变字段
-	mode string // "auto" / "chat" / "plan"
-
 	// 构造结果（Setup 解析后只读）
 	titleModelProvider llm.Provider
 	titleGenEnabled    bool
@@ -140,7 +137,7 @@ type AIAgent struct {
 
 	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
 	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）
-	mu         sync.RWMutex // 保护 currentRun + mode
+	mu         sync.RWMutex // 保护 currentRun
 
 	// ckpt 是当前会话的检查点管理器（见 agent_checkpoint.go）。它按「会话 +
 	// 根集合」惰性构建、变更时重建；ckptMu 只保护这次替换，快照本身由管理器
@@ -215,7 +212,6 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		PermState:       &PermissionState{},
 		conv:            newConvState(),
 		titleGenEnabled: true,
-		mode:            ModeAuto,
 	}
 
 	// Usage billing: wrap every provider so all LLM calls are recorded into

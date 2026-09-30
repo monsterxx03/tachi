@@ -199,23 +199,18 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		})
 		// Also advertise model and mode config options so clients can switch.
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		modeOpt := buildModeConfigOption(agent.ModeAuto)
 		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
 	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session created id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, aiAgent.Provider().ProviderName())
-	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
-	}
-	if modeOpt != nil {
-		configOpts = append(configOpts, *modeOpt)
 	}
 	if thinkingOpt != nil {
 		configOpts = append(configOpts, *thinkingOpt)
@@ -223,7 +218,6 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	return acp.NewSessionResponse{
 		SessionId:     acp.SessionId(sess.ID),
 		ConfigOptions: configOpts,
-		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -304,7 +298,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	}
 
 	// Build system prompt (use session cwd and current mode for environment info)
-	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.agent.Mode(), sess.ID)
+	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
@@ -565,30 +559,24 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 			},
 		})
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		modeOpt := buildModeConfigOption(agent.ModeAuto)
 		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
 	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
-	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
-	}
-	if modeOpt != nil {
-		configOpts = append(configOpts, *modeOpt)
 	}
 	if thinkingOpt != nil {
 		configOpts = append(configOpts, *thinkingOpt)
 	}
 	return acp.ResumeSessionResponse{
 		ConfigOptions: configOpts,
-		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -777,30 +765,24 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		})
 		// Also advertise model and mode config options so clients can switch.
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		modeOpt := buildModeConfigOption(agent.ModeAuto)
 		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
 	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session loaded id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
-	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
-	}
-	if modeOpt != nil {
-		configOpts = append(configOpts, *modeOpt)
 	}
 	if thinkingOpt != nil {
 		configOpts = append(configOpts, *thinkingOpt)
 	}
 	return acp.LoadSessionResponse{
 		ConfigOptions: configOpts,
-		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -919,77 +901,38 @@ func (t *TachiAgent) SetSessionConfigOption(ctx context.Context, req acp.SetSess
 		if err := switchSessionThinkingEffort(ctx, sess, configValue, t.logger); err != nil {
 			return acp.SetSessionConfigOptionResponse{}, err
 		}
-	case "mode":
-		if err := sess.agent.SetMode(configValue); err != nil {
-			return acp.SetSessionConfigOptionResponse{}, err
-		}
-		// Notify client about mode change.
-		if t.conn != nil {
-			_ = t.conn.SessionUpdate(ctx, acp.SessionNotification{
-				SessionId: acp.SessionId(sess.ID),
-				Update: acp.SessionUpdate{
-					CurrentModeUpdate: &acp.SessionCurrentModeUpdate{
-						CurrentModeId: acp.SessionModeId(sess.agent.Mode()),
-					},
-				},
-			})
-		}
 	default:
 		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("unsupported config option: %s", configID)
 	}
 
 	// Build both config options and return them so the client can update its UI.
 	sessConfigOption, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-	modeOpt := buildModeConfigOption(sess.agent.Mode())
 	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
 	configOptions := []acp.SessionConfigOption{}
 	if sessConfigOption != nil {
 		configOptions = append(configOptions, *sessConfigOption)
 	}
-	if modeOpt != nil {
-		configOptions = append(configOptions, *modeOpt)
-	}
 	if thinkingOpt != nil {
 		configOptions = append(configOptions, *thinkingOpt)
 	}
-	sendConfigOptionsUpdate(ctx, t.conn, sess.ID, sessConfigOption, modeOpt, thinkingOpt)
+	sendConfigOptionsUpdate(ctx, t.conn, sess.ID, sessConfigOption, thinkingOpt)
 
 	return acp.SetSessionConfigOptionResponse{
 		ConfigOptions: configOptions,
 	}, nil
 }
 
-// SetSessionMode changes the current session mode.
-// Delegates to AIAgent.SetMode which manages tool visibility:
-//   - "auto" (default): full tool access
-//   - "chat": read-only tools only, destructive tools hidden
+// SetSessionMode is part of the ACP Agent interface, but Tachi has no session
+// modes: every session runs with full tool access, and no modes are advertised
+// in NewSession/ResumeSession/LoadSession. The method is refused rather than
+// silently accepted, so a client that still offers a mode picker is told the
+// truth instead of appearing to switch something.
 func (t *TachiAgent) SetSessionMode(ctx context.Context, req acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
-	sess, ok := t.sessions.Get(string(req.SessionId))
-	if !ok {
+	if _, ok := t.sessions.Get(string(req.SessionId)); !ok {
 		return acp.SetSessionModeResponse{}, fmt.Errorf("session not found: %s", req.SessionId)
 	}
-
-	modeID := string(req.ModeId)
-	t.logger.Info(ctx, fmt.Sprintf("ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID))
-
-	// Delegate to the agent — it handles tool save/restore internally.
-	if err := sess.agent.SetMode(modeID); err != nil {
-		return acp.SetSessionModeResponse{}, err
-	}
-
-	// Notify the client about the mode change via a session/update notification.
-	if t.conn != nil {
-		_ = t.conn.SessionUpdate(ctx, acp.SessionNotification{
-			SessionId: acp.SessionId(sess.ID),
-			Update: acp.SessionUpdate{
-				CurrentModeUpdate: &acp.SessionCurrentModeUpdate{
-					CurrentModeId: acp.SessionModeId(sess.agent.Mode()),
-				},
-			},
-		})
-	}
-
-	return acp.SetSessionModeResponse{}, nil
+	t.logger.Info(ctx, fmt.Sprintf("ACP: SetSessionMode rejected for session %s, mode=%s", req.SessionId, req.ModeId))
+	return acp.SetSessionModeResponse{}, fmt.Errorf("session modes are not supported")
 }
 
 // CloseAll closes all sessions. Called on process exit.

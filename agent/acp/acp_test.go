@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -156,9 +155,7 @@ func TestLoadSession_CreatesNewSession(t *testing.T) {
 		Cwd: "/tmp/test-project",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Modes)
-	assert.Equal(t, acp.SessionModeId(agent.ModeAuto), resp.Modes.CurrentModeId)
-	assert.Len(t, resp.Modes.AvailableModes, 3)
+	assert.Nil(t, resp.Modes, "no session modes are advertised")
 }
 
 func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
@@ -191,9 +188,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 		Cwd: "/existing/project",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Modes)
-	assert.Equal(t, acp.SessionModeId(agent.ModeAuto), resp.Modes.CurrentModeId)
-	assert.Len(t, resp.Modes.AvailableModes, 3)
+	assert.Nil(t, resp.Modes, "no session modes are advertised")
 
 	// Verify the ACP session was created with the same disk session ID
 	acpSess, ok := ta.sessions.Get(sessID)

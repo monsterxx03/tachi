@@ -137,7 +137,7 @@ func TestSavePlan_InvalidStepStatus(t *testing.T) {
 // character in half. The slug then is not valid UTF-8, so the plan file cannot be
 // created at all — the tool returns "illegal byte sequence" and nothing is saved.
 func TestPlanSlug_LongCJKTitleStaysWritable(t *testing.T) {
-	title := "Desktop plan 面板（P1 显示 + P2 plan 模式 + 提醒会话化）以及更多中文标题字符用来越过截断长度"
+	title := "Desktop plan 面板（P1 显示 + 步骤提醒）以及更多中文标题字符用来越过截断长度"
 
 	slug := planSlug(title)
 	if !utf8.ValidString(slug) {

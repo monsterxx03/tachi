@@ -341,15 +341,6 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   )
 })
 
-// MODE_META labels the three session modes. Each one changes what the model can do —
-// chat and plan drop the destructive tools from its schema, plan additionally appends the
-// plan-mode rules — so the label says the capability, not just the name.
-const MODE_META: Record<string, { label: string; hint: string }> = {
-  auto: { label: '自动', hint: '完整权限：可以改文件、执行命令' },
-  chat: { label: '只读', hint: '只读问答：破坏性工具对模型不可见' },
-  plan: { label: '计划', hint: '规划模式：只读探索 + SavePlan 产出计划，之后切回自动执行' },
-}
-
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
@@ -553,28 +544,6 @@ function App() {
     void refreshPlan()
   }, [currentId, refreshPlan])
 
-  // The session's mode (P2). It is not a label but a capability switch: chat and plan hide
-  // the destructive tools from the model, and plan appends the plan-mode rules to the
-  // system prompt — so the select sits next to the model, and a rejected switch says why
-  // instead of silently springing back.
-  const [mode, setMode] = useState('auto')
-  const [modeNotice, setModeNotice] = useState('')
-  const refreshMode = useCallback(async () => {
-    try {
-      setMode((await AgentService.GetMode()) || 'auto')
-    } catch { /* keep the last known mode */ }
-  }, [])
-  useEffect(() => { setModeNotice(''); void refreshMode() }, [currentId, refreshMode])
-  const changeMode = useCallback(async (next: string) => {
-    const res = await AgentService.SetMode(next)
-    if (res && res !== 'ok') {
-      setModeNotice(res)
-      void refreshMode() // show what it actually is, not what was clicked
-      return
-    }
-    setModeNotice('')
-    setMode(next)
-  }, [refreshMode])
   // A review run started from a turn's footer. Local to the app (not persisted) and keyed by
   // THE TURN WHOSE BUTTON WAS CLICKED (its message id) — and by WHICH of that turn's two entries
   // it was (ReviewSlot.whole): one footer now carries 「评审本轮改动」 and 「评审所有改动」, and state
@@ -2236,9 +2205,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   ignore it. */}
               {plan?.steps?.length ? (
                 <div className="plan-wrap popover-anchor">
-                  {planOpen ? <PlanPanel plan={plan} workDir={workDir} mode={mode}
+                  {planOpen ? <PlanPanel plan={plan} workDir={workDir}
                     onSelect={(p) => void refreshPlan(p)} onDelete={deletePlan}
-                    onSwitchMode={changeMode} onClose={() => setPlanOpen(false)} /> : null}
+                    onClose={() => setPlanOpen(false)} /> : null}
                   <PlanChip plan={plan} open={planOpen} onToggle={() => setPlanOpen((v) => !v)} />
                 </div>
               ) : null}
@@ -2246,15 +2215,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
                 : null}
               <div className="provider-picker">
-                {/* Mode: what this session may do. It sits with the model because the two
-                    together describe the turn about to run. */}
-                <select className="provider-select mode-select" value={mode}
-                  title={MODE_META[mode]?.hint}
-                  onChange={(e) => void changeMode(e.target.value)}>
-                  {(['auto', 'chat', 'plan'] as const).map((m) =>
-                    <option key={m} value={m}>{MODE_META[m].label}</option>)}
-                </select>
-                {modeNotice ? <span className="mode-notice" title={modeNotice}>⚠</span> : null}
                 <select className="provider-select" value={providerName}
                   title={currentProviderModel ? `模型：${currentProviderModel}` : undefined}
                   onChange={async (e) => {

@@ -47,7 +47,6 @@ func (t ReportFindingTool) Description() string {
 		"located by file and line. Call it once per finding (a review usually reports several). " +
 		"Recording a finding does not change any code."
 }
-func (t ReportFindingTool) IsDestructive() bool { return false }
 func (t ReportFindingTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path": {

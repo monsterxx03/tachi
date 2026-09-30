@@ -243,7 +243,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	aiAgent := sess.agent
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 
 	eventCh := aiAgent.RunCommitOneOff(ctx, systemPrompt, acpOneoffSessionID(sess), config.DefaultMaxTokens, "")
 
@@ -280,7 +280,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	thinking, effort := cmds.ResolveReviewThinking(ropts,
 		aiAgent.Config.Resolved.Thinking, aiAgent.Config.Resolved.ThinkingEffort)
 
-	systemPrompt := buildSystemPromptForCwd(cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 	opts := llm.ChatOptions{
 		MaxTokens:      config.DefaultMaxTokens,
 		Thinking:       thinking,
@@ -388,7 +388,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	// Build history from session
 	history := loadSessionHistory(ctx, sess)
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
@@ -423,7 +423,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		return acp.StopReasonEndTurn, nil
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 
 	// Disk-loaded history has no system message; prepend it so the compact
 	// LLM call sees the same environment context as the live conversation
@@ -700,7 +700,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	// Run as normal conversation turn with skill activation message
 	history := loadSessionHistory(ctx, sess)
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.ID)
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 

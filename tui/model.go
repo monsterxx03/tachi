@@ -111,11 +111,9 @@ type Model struct {
 	height int
 
 	agent        *agent.AIAgent
-	systemPrompt string // effective system prompt (base + mode supplement)
+	systemPrompt string // system prompt sent with every turn
 	chatOpts     llm.ChatOptions
 	history      []llm.Message
-
-	baseSystemPrompt string // base prompt without mode supplement, used to rebuild systemPrompt
 
 	state        state
 	thinkingMode bool
@@ -213,7 +211,6 @@ func NewModel(cfg ModelConfig) *Model {
 		input:            NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath(), cfg.Agent.Logger()),
 		agent:            cfg.Agent,
 		systemPrompt:     cfg.SystemPrompt,
-		baseSystemPrompt: cfg.SystemPrompt,
 		chatOpts:         cfg.ChatOpts,
 		state:            stateIdle,
 		cfg:              cfg.Config,
@@ -257,9 +254,6 @@ func NewModel(cfg ModelConfig) *Model {
 	m.waitForMCP()
 
 	m.refreshSkillCompletions()
-
-	// Sync initial mode to statusbar.
-	m.statusbar.SetMode(m.agent.Mode())
 
 	return m
 }
@@ -324,54 +318,6 @@ func (m *Model) currentThinkingLevel() string {
 		}
 	}
 	return "default"
-}
-
-// effectiveSystemPrompt returns the system prompt including mode-specific
-// supplements. In plan mode, the plan mode instructions are appended.
-func (m *Model) effectiveSystemPrompt() string {
-	if m.agent.Mode() == agent.ModePlan && m.baseSystemPrompt != "" {
-		return m.baseSystemPrompt + "\n\n" + agent.BuildPlanModePrompt()
-	}
-	return m.baseSystemPrompt
-}
-
-// rebuildSystemPrompt refreshes m.systemPrompt to reflect the current mode.
-// Called after switching modes so subsequent turns use the correct prompt.
-func (m *Model) rebuildSystemPrompt() {
-	m.systemPrompt = m.effectiveSystemPrompt()
-}
-
-// modeCycle returns the next mode in the rotation: auto → chat → auto.
-// Plan mode is excluded from the TUI cycle — it's only available via ACP.
-func modeCycle(current string) string {
-	switch current {
-	case agent.ModeAuto:
-		return agent.ModeChat
-	case agent.ModeChat:
-		return agent.ModeAuto
-	default:
-		return agent.ModeAuto
-	}
-}
-
-// cycleMode switches to the next session mode in the rotation and updates
-// the UI: statusbar badge, system prompt, and session metadata.
-func (m *Model) cycleMode() {
-	current := m.agent.Mode()
-	next := modeCycle(current)
-	if next == current {
-		return // shouldn't happen, but guard
-	}
-
-	// The agent handles tool save/restore internally.
-	if err := m.agent.SetMode(next); err != nil {
-		m.logger.Error(context.Background(), "TUI: failed to switch mode", err, "model", next)
-		return
-	}
-
-	// Update UI.
-	m.rebuildSystemPrompt()
-	m.statusbar.SetMode(next)
 }
 
 // startTurn prepares the Model for a new agent stream and returns the context
@@ -976,11 +922,6 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+m":
 		return m, m.enterMCPOverlay()
-	case "shift+tab":
-		if m.state == stateIdle {
-			m.cycleMode()
-		}
-		return m, nil
 	case "esc":
 		if m.copyMode {
 			m.copyMode = false

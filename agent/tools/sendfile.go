@@ -39,8 +39,7 @@ func (t *SendFileTool) SetCallback(cb SendFileCallback) {
 	t.callback = cb
 }
 
-func (t *SendFileTool) Name() string        { return ToolNameSendFile }
-func (t *SendFileTool) IsDestructive() bool { return true }
+func (t *SendFileTool) Name() string { return ToolNameSendFile }
 func (t *SendFileTool) Description() string {
 	return "Send a file to the user via the chat channel. " +
 		"Use when the user asks for a file (report, screenshot, document, etc.)."

@@ -47,7 +47,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 		ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 	}
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.effectiveSystemPrompt(), m.chatOpts, ropts...)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.systemPrompt, m.chatOpts, ropts...)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

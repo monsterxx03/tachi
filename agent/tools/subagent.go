@@ -51,9 +51,7 @@ func NewSubagentTool(runner SubagentRunner) *SubagentTool {
 	return &SubagentTool{runner: runner}
 }
 
-func (t *SubagentTool) Name() string { return ToolNameSubAgent }
-
-func (t *SubagentTool) IsDestructive() bool { return true }
+func (t *SubagentTool) Name() string        { return ToolNameSubAgent }
 func (t *SubagentTool) Description() string { return subagentBaseDescription }
 
 func (t *SubagentTool) Properties() map[string]PropertySchema {

@@ -6,42 +6,6 @@ import (
 	"github.com/monsterxx03/tachi/config"
 )
 
-// GetMode returns the active session's mode: auto, chat or plan.
-func (s *AgentService) GetMode() string {
-	return s.desk.sessionMode(s.desk.currentID())
-}
-
-// SetMode switches the active session's mode and returns "ok", or a sentence saying why
-// it could not (no agent yet, unknown mode, a turn in flight).
-//
-// A mode is not just a label: chat and plan hide the destructive tools from the schema
-// the model sees, and plan additionally appends the plan-mode rules to the system prompt.
-// That filter runs every iteration, so switching mid-turn would pull tools out from under
-// a running agent — a running session has to wait.
-func (s *AgentService) SetMode(mode string) string {
-	d := s.desk
-	id := d.currentID()
-
-	d.mu.Lock()
-	r := d.ownerOfLocked(id)
-	running := false
-	if r != nil {
-		running = r.running
-	}
-	d.mu.Unlock()
-
-	if r == nil || r.agent == nil {
-		return refuseNoSession
-	}
-	if running {
-		return "会话正在运行中，等这一轮结束再切模式"
-	}
-	if err := r.agent.SetMode(mode); err != nil {
-		return err.Error()
-	}
-	return "ok"
-}
-
 // ListProviders returns the configured providers (priority-ordered).
 func (s *AgentService) ListProviders() []config.ProviderConfig {
 	cfg := s.desk.config()

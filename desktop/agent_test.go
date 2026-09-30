@@ -25,15 +25,12 @@ func TestRunLookupDoesNotCreate(t *testing.T) {
 }
 
 // Every binding that needs the current session's agent refuses with the SAME string, and
-// it is Chinese: the desktop shows it verbatim (the mode selector renders it as a notice).
+// it is Chinese: the desktop shows it verbatim.
 func TestBindingsRefuseWithOneMessage(t *testing.T) {
 	// A config is present on purpose: the cfg-less branch is a different refusal
 	// ("the app has no provider at all"), and this test is about the session one.
 	s := &AgentService{desk: &desktopApp{runs: make(map[string]*sessionRun), cfg: &config.Config{}}}
 
-	if got := s.SetMode("chat"); got != refuseNoSession {
-		t.Errorf("SetMode without a session = %q, want %q", got, refuseNoSession)
-	}
 	if got := s.SetThinkingLevel("high"); got != refuseNoSession {
 		t.Errorf("SetThinkingLevel without a session = %q, want %q", got, refuseNoSession)
 	}

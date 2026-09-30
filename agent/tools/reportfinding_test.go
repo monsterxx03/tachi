@@ -94,9 +94,6 @@ func TestReportFindingTool(t *testing.T) {
 // the tool call IS the record, and the review's report file is written separately.
 func TestReportFindingToolIsDeclarative(t *testing.T) {
 	tool := ReportFindingTool{}
-	if tool.IsDestructive() {
-		t.Error("recording a finding is not a destructive act")
-	}
 	if tool.Parallel() {
 		t.Error("findings should be recorded in order, not concurrently")
 	}

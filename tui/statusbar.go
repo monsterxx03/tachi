@@ -30,7 +30,6 @@ type StatusBar struct {
 	mcpEnabled    bool   // true when MCP servers are configured
 	mcpError      string // non-empty when MCP async init had errors
 	compacting    bool   // true when auto-compaction is in progress
-	modeBadge     string // current mode badge text (e.g. "[auto]")
 	reviewBadge   string // multi-round /review indicator (e.g. "⚔️ 挑战者 2/5"); empty when not reviewing
 	thinkingLevel string // current thinking level ("none"/"low"/.../"max"/"default"); empty = not shown
 	// Live output-rate tracking (tokens per second). tpsTokens accumulates
@@ -138,7 +137,6 @@ func (s *StatusBar) SetMCPReady(v bool)   { s.mcpReady = v }
 func (s *StatusBar) SetMCPEnabled(v bool) { s.mcpEnabled = v }
 func (s *StatusBar) SetMCPError(v string) { s.mcpError = v }
 func (s *StatusBar) SetCompacting(v bool) { s.compacting = v }
-func (s *StatusBar) SetMode(mode string)  { s.modeBadge = modeBadgeFor(mode) }
 func (s *StatusBar) SetReviewBadge(b string) {
 	s.reviewBadge = b
 }
@@ -190,9 +188,6 @@ func (s StatusBar) View() string {
 	}
 
 	left += " | " + s.providerInfo
-	if s.modeBadge != "" {
-		left += " " + modeBadgeStyleFor(s.modeBadge).Render(s.modeBadge)
-	}
 	if s.thinkingLevel != "" {
 		left += " " + thinkingBadgeStyle.Render("think:"+s.thinkingLevel)
 	}
@@ -312,28 +307,3 @@ func formatPercent(pct float64) string {
 	return fmt.Sprintf("%.0f%%", pct)
 }
 
-// modeBadgeFor returns the display text for a session mode badge.
-func modeBadgeFor(mode string) string {
-	switch mode {
-	case agent.ModeAuto:
-		return "[auto]"
-	case agent.ModePlan:
-		return "[plan]"
-	case agent.ModeChat:
-		return "[chat]"
-	default:
-		return ""
-	}
-}
-
-// modeBadgeStyleFor returns the lipgloss style for a mode badge.
-func modeBadgeStyleFor(badge string) lipgloss.Style {
-	switch badge {
-	case "[plan]":
-		return modePlanStyle
-	case "[chat]":
-		return modeChatStyle
-	default:
-		return modeAutoStyle
-	}
-}

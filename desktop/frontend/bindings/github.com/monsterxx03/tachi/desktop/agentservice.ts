@@ -194,13 +194,6 @@ export function GetMCPToolSchema(name: string): $CancellablePromise<$models.MCPT
 }
 
 /**
- * GetMode returns the active session's mode: auto, chat or plan.
- */
-export function GetMode(): $CancellablePromise<string> {
-    return $Call.ByID(2005017131);
-}
-
-/**
  * GetPlan returns one of this session's plans — the newest when path is empty, otherwise
  * the plan at path (which must be one of this session's own plan files).
  * 
@@ -786,19 +779,6 @@ export function SetMCPServerEnabled(name: string, enabled: boolean): $Cancellabl
  */
 export function SetMCPToolEnabled(name: string, enabled: boolean): $CancellablePromise<string> {
     return $Call.ByID(2404192207, name, enabled);
-}
-
-/**
- * SetMode switches the active session's mode and returns "ok", or a sentence saying why
- * it could not (no agent yet, unknown mode, a turn in flight).
- * 
- * A mode is not just a label: chat and plan hide the destructive tools from the schema
- * the model sees, and plan additionally appends the plan-mode rules to the system prompt.
- * That filter runs every iteration, so switching mid-turn would pull tools out from under
- * a running agent — a running session has to wait.
- */
-export function SetMode(mode: string): $CancellablePromise<string> {
-    return $Call.ByID(4069889863, mode);
 }
 
 /**

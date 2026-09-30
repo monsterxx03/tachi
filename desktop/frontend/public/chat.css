@@ -722,12 +722,6 @@ button.work-dir {
   font-variant-numeric: tabular-nums;
 }
 
-/* The mode select sits with the model select (the two together describe the turn), and
-   the ⚠ appears only when a switch was refused — e.g. a turn in flight — carrying the
-   reason as its title. */
-.mode-select { max-width: 82px; }
-.mode-notice { color: var(--amber); font-size: 12px; cursor: help; flex-shrink: 0; }
-
 /* ── @-file completion picker ─────────────────────────────────────────────── */
 /* Floats above the composer while a reference is being typed, listing the
    files the backend fuzzy-matched under the session's working directory. */

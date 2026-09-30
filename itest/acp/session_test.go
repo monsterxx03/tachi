@@ -4,8 +4,8 @@ package acp_test
 
 // L2 — session state over the real ACP wire: model switch via
 // SetSessionConfigOption, resume from disk after close, permission denial,
-// list-by-cwd, and session mode switch. These exercise the editor-facing
-// session-management surface on top of the working conversation core.
+// and list-by-cwd. These exercise the editor-facing session-management
+// surface on top of the working conversation core.
 
 import (
 	"context"

@@ -58,8 +58,6 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 // dropped wholesale and rebuilt on demand.
 const systemPromptCacheMax = 64
 
-// promptKey identifies a built system prompt. Both parts are build inputs, so a
-// miss and a change are the same event.
 // promptKey identifies a built system prompt. Every part is a build input, so a
 // miss and a change are the same event. roots is the joined filtered root set
 // (order-sensitive: reordering the list is a different prompt).
@@ -67,37 +65,6 @@ type promptKey struct {
 	cwd   string
 	id    string
 	roots string
-	// mode changes the prompt (plan mode appends its own rules), so it is a key input
-	// like any other — see the comment on the key's construction.
-	mode string
-}
-
-// sessionMode reports the mode this session is in: the bound agent's runtime value when
-// there is one, else the persisted meta (a session that has not been built yet still
-// carries the mode it was left in).
-func (d *desktopApp) sessionMode(id string) string {
-	d.mu.Lock()
-	r := d.ownerOfLocked(id)
-	if r == nil {
-		d.mu.Unlock()
-		return agent.ModeAuto
-	}
-	a, sm := r.agent, r.sm
-	d.mu.Unlock()
-
-	// Read the agent OUTSIDE d.mu: Mode() takes the agent's own lock, and no caller
-	// should be able to hold both.
-	if a != nil {
-		if mode := a.Mode(); mode != "" {
-			return mode
-		}
-	}
-	if sm != nil {
-		if cur := sm.Current(); cur != nil && cur.Mode != "" {
-			return cur.Mode
-		}
-	}
-	return agent.ModeAuto
 }
 
 // systemPromptFor returns the system prompt to send for session id, built from
@@ -138,16 +105,11 @@ func (d *desktopApp) systemPromptFor(id string) string {
 	// the empty string into a statement instead of "go find a project root".
 	cwd := d.sessionWorkDir(id)
 	roots := d.promptRoots(id)
-	mode := d.sessionMode(id)
 	opts := []agent.PromptOption{agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt)}
 	if cwd == "" {
 		opts = append(opts, agent.WithoutWorkingDir())
 	}
-	// mode is part of the key because it is part of the prompt: plan mode APPENDS the
-	// plan-mode rules below, so a cached auto-mode prompt handed to a plan-mode turn
-	// would tell the model it may edit files right after it was put on a leash. Same
-	// trap as roots: a build input that is not in the key is a stale prompt.
-	key := promptKey{cwd: cwd, id: id, roots: strings.Join(roots, "\x00"), mode: mode}
+	key := promptKey{cwd: cwd, id: id, roots: strings.Join(roots, "\x00")}
 
 	d.promptMu.Lock()
 	cached, ok := d.promptCache[key]
@@ -157,12 +119,6 @@ func (d *desktopApp) systemPromptFor(id string) string {
 	}
 
 	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, roots, id, cfg.ExtraSystemPrompt, opts...)
-	// Plan mode is a property of the TURN (the mode can change between turns), so the
-	// supplement is appended here rather than baked into the session prompt — the same
-	// shape the TUI uses (effectiveSystemPrompt) and ACP applies per prompt.
-	if mode == agent.ModePlan {
-		prompt += "\n\n" + agent.BuildPlanModePrompt()
-	}
 
 	d.promptMu.Lock()
 	defer d.promptMu.Unlock()
@@ -177,7 +133,7 @@ func (d *desktopApp) systemPromptFor(id string) string {
 //
 // It exists for the two config keys that are part of the prompt but NOT part of the cache
 // key — `language` and `extra_system_prompt`: the key holds per-session facts
-// (cwd / roots / mode / session id), so without this a saved language is served the prompt
+// (cwd / roots / session id), so without this a saved language is served the prompt
 // that was built under the old one, until the cache happens to fill up and drop itself
 // (the only invalidation there used to be).
 //

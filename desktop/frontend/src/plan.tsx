@@ -59,17 +59,13 @@ export const PlanChip = memo(function PlanChip({ plan, open, onToggle }: {
   )
 })
 
-export const PlanPanel = memo(function PlanPanel({ plan, workDir, mode, onSelect, onDelete, onSwitchMode, onClose }: {
+export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDelete, onClose }: {
   plan: PlanVO | null
   workDir: string
-  // The session's mode. In plan mode the panel is also the way OUT of it: a plan you
-  // have just read is a plan you want executed, and that means auto.
-  mode?: string
   // Switch which plan is shown. The list is already in the payload; App re-reads the
   // chosen file so the panel never renders a plan it has not loaded.
   onSelect?: (path: string) => void
   onDelete?: (path: string) => void
-  onSwitchMode?: (mode: string) => void
   onClose: () => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
@@ -164,13 +160,6 @@ export const PlanPanel = memo(function PlanPanel({ plan, workDir, mode, onSelect
           <button type="button" className="plan-btn"
             onClick={() => { AgentService.OpenPath(path).catch(() => {}) }}>打开</button>
         </div>
-      ) : null}
-      {/* In plan mode this panel is also the way out: reading the plan is the point at
-          which you want it executed, and executing means leaving plan mode. */}
-      {mode === 'plan' && onSwitchMode ? (
-        <button type="button" className="plan-start" onClick={() => onSwitchMode('auto')}>
-          开始执行（切到 auto 模式）
-        </button>
       ) : null}
       {peek && path ? (
         <FilePreviewOverlay path={path} name={path.split('/').pop()} onClose={() => setPeek(false)} />

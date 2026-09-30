@@ -42,10 +42,6 @@ type Session struct {
 	Pinned    bool `json:"pinned,omitempty"`
 	SkipDream bool `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
-	// Session mode: "auto" (default), "chat", or "plan".
-	// Controls tool visibility: auto = full access, chat/plan = read-only.
-	Mode string `json:"mode,omitempty"`
-
 	// ThinkingLevel is the per-session thinking override, set via /thinking.
 	// One of "", "none", "low", "medium", "high", "xhigh", "max".
 	// Empty = use the provider/model default from config. Only affects

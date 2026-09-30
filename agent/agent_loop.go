@@ -1356,30 +1356,16 @@ func (a *AIAgent) handleStopFinish(
 }
 
 // filterActiveSchemas filters tool schemas for the LLM API call.
-// Two layers of filtering are applied:
 //
-//  1. Mode-based: in chat/plan mode, destructive tools are excluded so the
-//     LLM cannot see or call them. This replaces the old savedTools approach
-//     that mutated the registry at mode-change time — instead the registry
-//     is never touched, and the filter runs every iteration.
+// MCP ToolSearch: when the deferred MCP pool is non-empty, only
+// discovered MCP tools for the given session (plus all built-ins) are
+// included. Each session has its own discovered-tool set, so sessions
+// don't leak tool selections into each other.
 //
-//  2. MCP ToolSearch: when the deferred MCP pool is non-empty, only
-//     discovered MCP tools for the given session (plus all built-ins) are
-//     included. Each session has its own discovered-tool set, so sessions
-//     don't leak tool selections into each other.
-//
-// When ToolSearch is not active (no MCP manager, e.g. no MCP servers):
-//   - Only mode filtering applies
+// When ToolSearch is not active (no MCP manager, e.g. no MCP servers),
+// every schema is returned unchanged.
 func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) []tools.Schema {
-	// Layer 1: mode-based destructive tool filtering
-	if a.Mode() != ModeAuto {
-		schemas = filterDestructiveSchemas(schemas, a.Config.ToolRegistry)
-		if len(schemas) == 0 {
-			return nil
-		}
-	}
-
-	// Layer 2: MCP ToolSearch filtering (existing logic)
+	// MCP ToolSearch filtering
 	pool := a.DeferredPool()
 	set := a.discoveredSetFor(sessionID)
 	if pool == nil || pool.Len() == 0 {
@@ -1419,27 +1405,6 @@ func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) 
 	}
 
 	return active
-}
-
-// filterDestructiveSchemas removes schemas for tools that implement
-// DestructiveDetector and return true. Non-destructive tools and tools
-// that don't implement DestructiveDetector are kept.
-func filterDestructiveSchemas(schemas []tools.Schema, reg *tools.Registry) []tools.Schema {
-	filtered := make([]tools.Schema, 0, len(schemas))
-	for _, s := range schemas {
-		tool := reg.GetTool(s.Name)
-		if tool == nil {
-			// Unknown tools (e.g. MCP tools not yet registered) are kept
-			// so the user can still discover them via MCPSearchTools.
-			filtered = append(filtered, s)
-			continue
-		}
-		if dd, ok := tool.(tools.DestructiveDetector); ok && dd.IsDestructive() {
-			continue
-		}
-		filtered = append(filtered, s)
-	}
-	return filtered
 }
 
 // buildLLMTools converts tool schemas from the agent's registry into the

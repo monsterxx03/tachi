@@ -3,11 +3,9 @@
 package acp_test
 
 // L3 — edge cases over the real ACP wire: the provider request timeout
-// (spec.timeout) aborts a hanging upstream fast instead of wedging the
-// editor, and SetSessionMode round-trips the mode-change notification.
+// (spec.timeout) aborts a hanging upstream fast instead of wedging the editor.
 
 import (
-	"context"
 	"time"
 
 	acpapi "github.com/coder/acp-go-sdk"
@@ -44,41 +42,4 @@ var _ = ginkgo.Describe("ACP edge cases (triple protocol)", func() {
 		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses, ginkgo.SpecTimeout(15*time.Second)),
 	)
 
-	ginkgo.DescribeTable("set_session_mode: mode 切换通知回传",
-		func(p mockllm.Protocol) {
-			client, mock, sid, _ := startACPTurn(p, []mockllm.Step{{
-				Reply: mockllm.Stream(
-					mockllm.Text("ok"),
-					mockllm.Usage(10, 5),
-					mockllm.Finish("stop"),
-					mockllm.Done(),
-				),
-			}}, nil, nil)
-
-			_, err := client.Conn().SetSessionMode(context.Background(), acpapi.SetSessionModeRequest{
-				SessionId: sid,
-				ModeId:    acpapi.SessionModeId("plan"),
-			})
-			gomega.Expect(err).NotTo(gomega.HaveOccurred())
-
-			// CurrentModeUpdate 通知到达 client
-			var gotMode acpapi.SessionModeId
-			gomega.Eventually(func() string {
-				for _, n := range client.Rec.ForSession(sid) {
-					if u := n.Update.CurrentModeUpdate; u != nil {
-						gotMode = u.CurrentModeId
-						return string(gotMode)
-					}
-				}
-				return ""
-			}, 5*time.Second).Should(gomega.Equal("plan"))
-
-			// 模式切换后 turn 仍正常
-			gomega.Expect(prompt(client, sid, "hi").StopReason).To(gomega.Equal(acpapi.StopReasonEndTurn))
-			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
-		},
-		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
-		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
-		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
-	)
 })

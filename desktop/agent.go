@@ -580,13 +580,6 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 			}
 		}
 		applyThinking(a, sess.ThinkingLevel)
-		// Honour the mode the session was left in. meta.json is the record (an editor or
-		// an earlier desktop turn may have written it), so starting in auto regardless
-		// would make the recorded mode and the live one disagree — and the system prompt
-		// would drop the plan-mode rules the session is supposed to be running under.
-		if sess.Mode != "" && sess.Mode != agent.ModeAuto {
-			_ = a.SetMode(sess.Mode)
-		}
 	}
 
 	d.mu.Lock()

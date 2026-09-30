@@ -194,9 +194,7 @@ type AgentConfig struct {
 // It is set once at construction time and is read-only afterwards.
 //
 // Fields are derived from construct inputs in AgentConfig (ACPFileMode,
-// PlanToolEnabled) and stored here for streamlined access. The mode
-// itself (auto/chat/plan) is not part of FrontendConfig — it is a
-// runtime-mutable field on AIAgent, changed via SetMode().
+// PlanToolEnabled) and stored here for streamlined access.
 type FrontendConfig struct {
 	// ACPFileMode routes EditFile/WriteFile writes through
 	// conn.WriteTextFile for Zed's inline diff UI. Edits never require
@@ -215,9 +213,9 @@ type FrontendConfig struct {
 	// sessions; other frontends never set it and keep the local Bash.
 	ACPTerminalBash bool
 
-	// PlanToolEnabled gates registration of the SavePlan tool. Only ACP
-	// sessions enable it — ACP clients (e.g. Zed) render a structured plan
-	// card from SavePlan calls, while the TUI and channel frontends have no
+	// PlanToolEnabled gates registration of the SavePlan tool. Only
+	// frontends with a plan card UI enable it (ACP clients such as Zed,
+	// and the desktop app), while the TUI and channel frontends have no
 	// corresponding plan card UI.
 	PlanToolEnabled bool
 }

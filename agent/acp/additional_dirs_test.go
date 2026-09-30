@@ -117,13 +117,12 @@ func TestLoadSession_WithAdditionalDirectories(t *testing.T) {
 
 	// No existing disk session for /project → LoadSession creates a fresh
 	// one, carrying the requested roots.
-	resp, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
+	_, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
 		Cwd:                   "/project",
 		AdditionalDirectories: []string{"/shared-lib"},
 		McpServers:            []acp.McpServer{},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Modes)
 
 	sessions := ta.sessions.List()
 	require.Len(t, sessions, 1)
@@ -177,6 +176,6 @@ func TestBuildSystemPromptWithRoots(t *testing.T) {
 // additional roots flow into the model's system prompt.
 func TestBuildSystemPromptForCwd_WithRoots(t *testing.T) {
 	cfg := &config.Config{Language: "en"}
-	prompt := buildSystemPromptForCwd(cfg, "/project", []string{"/shared-lib"}, agent.ModeAuto, "sess-1")
+	prompt := buildSystemPromptForCwd(cfg, "/project", []string{"/shared-lib"}, "sess-1")
 	assert.Contains(t, prompt, "- Additional workspace roots: /shared-lib")
 }

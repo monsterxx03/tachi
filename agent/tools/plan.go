@@ -26,7 +26,6 @@ func (t SavePlanTool) Description() string {
 		"Use this when you have developed a clear plan and want to record it. " +
 		"Call multiple times to update the plan as it evolves."
 }
-func (t SavePlanTool) IsDestructive() bool { return false }
 func (t SavePlanTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"title": {

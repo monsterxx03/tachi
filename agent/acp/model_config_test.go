@@ -297,7 +297,7 @@ func TestSetSessionConfigOption(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.Len(t, resp.ConfigOptions, 3) // model + mode + reasoning_effort
+	assert.Len(t, resp.ConfigOptions, 2) // model + reasoning_effort
 	assert.Equal(t, "anthropic", sess.resolveProviderName())
 	assert.Equal(t, "claude-3-5-sonnet", sess.agent.Model())
 }
@@ -327,7 +327,7 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, sess.agent.Config.Resolved.Thinking)
 	assert.Equal(t, "high", sess.agent.Config.Resolved.ThinkingEffort)
-	assert.Len(t, resp.ConfigOptions, 3) // model + mode + reasoning_effort
+	assert.Len(t, resp.ConfigOptions, 2) // model + reasoning_effort
 
 	// max → 原样透传（API 自己映射，flash 支持 max）
 	_, err = ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{

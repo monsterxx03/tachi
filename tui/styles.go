@@ -199,13 +199,4 @@ var (
 				Foreground(lipgloss.Color("#8BD5CA")).
 				Italic(true).
 				PaddingLeft(1)
-
-	modeAutoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A6DA95")) // green
-
-	modePlanStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#EED49F")) // yellow/warn
-
-	modeChatStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7DC4E4")) // cyan/blue
 )

@@ -58,14 +58,9 @@ func extractPathFromURI(uri string) string {
 }
 
 // buildSystemPromptForCwd constructs the system prompt for ACP mode with a
-// specific working directory, additional workspace roots, and session mode.
-// In plan mode, the plan mode prompt is appended.
-func buildSystemPromptForCwd(cfg *config.Config, cwd string, additionalDirs []string, mode string, sessionID string) string {
-	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, additionalDirs, sessionID, cfg.ExtraSystemPrompt)
-	if mode == agent.ModePlan {
-		prompt += "\n\n" + agent.BuildPlanModePrompt()
-	}
-	return prompt
+// specific working directory and additional workspace roots.
+func buildSystemPromptForCwd(cfg *config.Config, cwd string, additionalDirs []string, sessionID string) string {
+	return agent.BuildSystemPromptWithRoots(cfg.Language, cwd, additionalDirs, sessionID, cfg.ExtraSystemPrompt)
 }
 
 // convertMCPServers converts editor-provided ACP MCP servers to Tachi's MCPServerConfig format.

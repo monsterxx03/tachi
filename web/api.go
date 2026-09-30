@@ -164,7 +164,6 @@ type sessionsListItem struct {
 	ID             string    `json:"id"`
 	Title          string    `json:"title"`
 	Provider       string    `json:"provider,omitempty"`
-	Mode           string    `json:"mode,omitempty"`
 	WorkingDir     string    `json:"working_dir,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -267,7 +266,6 @@ func (s *Server) buildSessionsListItems(sessions []*session.Session, usageBySess
 			ID:             sess.ID,
 			Title:          sess.Title,
 			Provider:       sess.ProviderName,
-			Mode:           sess.Mode,
 			WorkingDir:     sess.WorkingDir,
 			CreatedAt:      sess.CreatedAt,
 			UpdatedAt:      sess.UpdatedAt,

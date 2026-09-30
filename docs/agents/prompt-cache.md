@@ -80,7 +80,7 @@ Two more places, and one display trap:
    rate fell. Note the time of the bad call.
 2. **Compare `tools` and `system_prompt` byte for byte** between the last call before it and the bad one.
    Names-changed → tool-set change (above). `system_prompt` differs → the prompt changed (working
-   directory, session id, mode, capability declarations). Identical → the difference is in the messages:
+   directory, session id, capability declarations). Identical → the difference is in the messages:
    a rebuild rendered one differently, or a record's image part could not be resolved (a session directory
    whose `images/` blob is gone, or a record written before images were persisted — see above).
 3. **Read the breakpoint level.** The bad call's `cache_read_input_tokens` is how far the prefix matched.

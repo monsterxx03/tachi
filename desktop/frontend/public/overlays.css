@@ -990,23 +990,6 @@
   cursor: pointer;
 }
 .plan-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
-/* The way out of plan mode: the same flat "go" recipe as the app's other primary
-   buttons (see .pending-send in chat.css), because it is the one action the panel
-   offers. */
-.plan-start {
-  border: none;
-  background: var(--accent-strong);
-  color: var(--on-accent);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 560;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: filter 0.15s var(--ease);
-}
-.plan-start:hover { filter: brightness(1.06); }
-
 /* ── Rewind chain ──────────────────────────────────────────────────────────── */
 /* The session's rewind points, newest first. It is a CHOOSER: what a rewind would
    restore, what it would delete and the irreversible marks all live in the
