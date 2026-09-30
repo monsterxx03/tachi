@@ -592,8 +592,16 @@ Fixtures exist where the real path needs something a driver cannot do:
 - **A new call site that resolves a tree is a bug of this shape unless it goes through the session**: skills
   (`sessionSkillStore`, injected as `AgentConfig.SkillStore` — the DEFAULT path is the trap, since
   `skill.NewStore(config.FindProjectRoot())` scans `/.tachi/skills`), permissions
-  (`AIAgent.SetPermissionRoot`), MCP profile scope (`desktopApp.mcpProjectRoot`), and MCP server LOAD
+  (`AIAgent.SetPermissionTrees`), MCP profile scope (`desktopApp.mcpProjectRoot`), and MCP server LOAD
   (`reloadMCPForActiveTree`, called from every place the DISPLAYED tree can move).
+- **A session works in SEVERAL trees, and the permission policy reads ALL of them**:
+  `SetPermissionTrees(primary, additional)` resolves each through `config.ProjectRootsFrom` (walk up to the
+  nearest `.git`, de-duplicate in order) and unions every `<tree>/.tachi/permissions.yaml`'s deny/ask rules.
+  Passing only the primary is the gap this closed — the second repository's tripwires were silently absent, and
+  the direction of that failure is the bad one (a rule the user wrote simply did not fire). `allow` is still
+  global-only, and permission-tree scope follows skills' rule: additional roots are extra places to WORK, and a
+  tree's own `.tachi/` file is what makes it a rule home — a root inside the primary's repository resolves to
+  the primary's file, not a second one.
 - **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes; this frontend has a human in
   front of it. The scope is the session's git root plus `config.GlobalSkillsDir()` (note NOT
   `<base>/.tachi/skills` — a fixture written for one is invisible to the other), and **additional roots are
@@ -608,22 +616,22 @@ Fixtures exist where the real path needs something a driver cannot do:
   goroutine, which cannot prove the session is not mid-turn, and re-pointing rewrites state under whatever is
   reading it. `beginTurn` is the one place that can prove no turn of this session is in flight.
 - **The flag is ONE, and its members move together**: `ReloadSkillsIn(sessionTree)` and
-  `SetPermissionRoot(ctx, sessionTree)`, fed from the same resolved `sessionRootsFrom` value in the same block.
+  `SetPermissionTrees(ctx, sessionTree, sessionAdditional)`, fed from the same resolved `sessionRootsFrom` value
+  in the same block (which returns both halves — the additional roots are part of the permission half, not a
+  second lookup).
   A second, parallel "stale" flag is how one member ends up describing the tree the other just left; a third
-  tree-derived member goes THERE, not into a new flag. `SetPermissionRoot` exists because `configure` resolves
+  tree-derived member goes THERE, not into a new flag. `SetPermissionTrees` exists because `configure` resolves
   its project from the process cwd, so the project half of `permissions.bash` (`<tree>/.tachi/permissions.yaml`)
   was never found while global rules kept working — invisible loss.
 - **A rebuilt policy inherits the session's approvals** (`Policy.InheritSessionApprovals`): 「本会话全部允许」 is
   a user answer and MUST survive a re-point, or a folder change re-asks a question they already answered. The
   RULES do not carry over — that is the point — and deny is decided before any ask, so an inherited approval
-  can never resurrect a forbidden command (`TestSetPermissionRoot_*`, `TestSessionTreeMove*`).
-- **A bash `ask` has TWO causes, and nothing may conflate them** (`AskNoRule`): a command either matched an
-  `ask` rule, or the policy could not PARSE it (an unclosed quote, a trailing `&&`) — and in the second case no
-  rule was consulted at all. Rendering the second through the first one's sentence sends the reader hunting for
-  a rule they never wrote, and makes a MALFORMED command look like a TRUNCATED one (issue #40). The rule slot
-  therefore carries a machine value (`permission.AskNoRule`) that each surface words for its own reader: the
-  prompt says what is wrong and what fixes it, the non-interactive refusal says the same in the LLM's language,
-  and the card's subtitle states only the CONSEQUENCE. Smoke: `perm-unparseable`.
+  can never resurrect a forbidden command (`TestSetPermissionTrees_*`, `TestSessionTreeMove*`).
+- **The card's subtitle is one of THREE renderings of why a command is being asked about** (a matched rule, the
+  unparseable sentinel, or a judgment that raised it): the wording is the agent's (`bashAskCause`), and the card
+  shows it verbatim — a second renderer would be free to drift, and a wrong reason sends the reader hunting for a
+  rule they never wrote (issue #40). `docs/agents/permission.md` owns the three; the desktop owns the card, the
+  session-wide 「本会话全部允许」 button, and what the device link forwards. Smoke: `perm-unparseable`.
 
 ## Desktop Turn History (the interrupted-turn merge)
 
