@@ -202,10 +202,15 @@ Fixtures exist where the real path needs something a driver cannot do:
 - **A control run proves nothing until the build is PROVEN to carry it** (`make frontend && go build -o bin/Tachi .`):
   `npm run build` is `tsc && vite build`, so an edit that does not type-check skips the Go build via `&&` and
   the run measures the PREVIOUS binary. Check `[ bin/Tachi -nt <the edited source> ]`.
-- **A capture is not part of the suite**: the window-capture APIs are gone on this OS (`-R` fails on macOS 26)
-  and the window would have to be on the visible Space anyway. The suite keeps `dom.html` + the assertion
-  lines; a "screenshot" that silently returns the desktop is worse than none. To SEE a palette change, render
-  the tokens into an HTML page instead (see Themes).
+- **A capture is not part of the suite** (the suite keeps `dom.html` + the assertion lines; a screenshot nobody
+  diffs rots). It IS possible BY HAND where the terminal holds the Screen Recording grant:
+  `screencapture -x -o -l <window id>` — the id via `CGWindowListCopyWindowInfo` — and `-R <x,y,w,h>` works too on
+  macOS 26. What a hand-run needs is its own HOME and a REAL bundle: the bare `bin/Tachi` aborts in
+  `UserNotifications` (`bundleProxyForCurrentProcess is nil`), so refresh the bundle (`make build`) and launch
+  `open -n --env HOME=<a clone of ~/.tachi> bin/Tachi.app` — an APFS clone (`cp -Rc`) so the user's own instance,
+  its session store and its TCC grants stay out of the loop. Leave `TACHI_DEMO_NO_ACTIVATE` unset (the window
+  comes to the front) and point `TACHI_DEMO_JS` at a script that clicks the app into the state to look at; env
+  reaches the app only through `open`'s own `--env`, which is why the launch goes through LaunchServices.
 - **The demo bootstrap and the page-awake switch are load-bearing; leave them alone unless you are fixing
   them.** `TACHI_DEMO_LOAD_MS` (`demo.go`) is the driver's head start, the payload is re-issued for a 10s
   window because a script injected into a loading document is dropped, and the repeats are safe because the
@@ -220,6 +225,11 @@ Fixtures exist where the real path needs something a driver cannot do:
   hung*; the run's `页面节流已解除` line says whether the switch was lifted (`keepPageAwake`,
   `webview_awake_darwin.go`). The harness asserts the outcome on EVERY scenario, so a Wails/WebKit update that
   drops the SPI fails on one readable line.
+- **The smoke window does not ANIMATE: WebKit collapses transition durations to ~0 while the window is
+  occluded** (measured: the toolbar's own `transition` reads `padding-left 0.00001s cubic-bezier(…)` in the
+  sandbox, and a value sampled ~40ms after the click is already the end state). `keepPageAwake` lifts the TIMER
+  throttling, not this. So a driver may assert an animation's two ENDS and that the property is transitioned,
+  never a middle frame — and "the sidebar slid open" is not assertable here at all.
 - **The console is part of the report**: the driver's `console.error` lines ride in `Result.Console`, printed
   for passing runs too.
 
@@ -950,7 +960,8 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **One definition per mode, in `frontend/public/base.css`**: the dark block, resolved by the boot script +
   `src/theme.ts`. No frontend rule reads `prefers-color-scheme`, and no other file carries dark colours — the
   highlighter's tokens map onto the semantic ones, so a palette edit covers code blocks for free.
-- **To SEE a palette change, render the tokens instead of capturing the app window** (window capture is dead on
-  this OS): extract both blocks from base.css (next to `git show HEAD:desktop/frontend/public/base.css` for the
+- **To SEE a palette change, render the tokens instead of capturing the app window** — a token page puts the
+  two variants side by side in one image (a window capture CAN be taken here: see the capture bullet under the
+  smoke suite's rules and traps): extract both blocks from base.css (next to `git show HEAD:desktop/frontend/public/base.css` for the
   before) into a small HTML page whose swatches read `var(--token)`, one scope per variant, and screenshot
   that.

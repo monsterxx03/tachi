@@ -2661,6 +2661,19 @@ permissions:
 				emptyName: "sidebar-empty",
 			},
 		},
+		// titlebar: 窗口顶部的结构 —— 侧栏通高（红绿灯压在它顶部的空带上），工具栏归内容列，
+		// 中间写着当前会话的名字。
+		//
+		// 让位分两个状态、各由一方出，且只出一份：展开时是侧栏的 padding-top（灯压在侧栏上，
+		// 竖着让），折叠时是工具栏的 padding-left（内容列滑到窗口最左，横着让）。设置页则要求
+		// 盖满窗口、左栏第一条控件同样让开。交接动画的中间帧断言不了：smoke 的窗口被盖住，
+		// WebKit 在不做过渡的窗口里会把两个值直接落到终点（见 driver 的说明）。
+		{
+			name: "titlebar",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe titlebar scenario's working directory\n",
+			},
+		},
 		//
 		// font-size: 消息区的阅读字号（⌘= / ⌘- / ⌘0）。
 		//
