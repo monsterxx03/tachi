@@ -212,7 +212,8 @@ Matched ask rule: "git push --force *"
 1. **Info 日志一行**：`rule`、`command`（截断）、`answer`、`threshold`、`model`、`input_tokens`、
    `verdict`（`allow` / `ask` / `memo` / `degraded`）。metadata 在前、分数在后，未回答写 `-` 不写
    `0.000`——形状照 `agent/mcp/jev_search.go` 的 `logAnswers`（`TestJevSearcher_LogsTheAnswers` 是 pin 的样板）。
-2. **用户可见的痕迹**。
+2. **用户可见的痕迹**（**只给人，不给模型**：模型那侧一行既不参与决策、又会在后续每个请求的 history 里
+   被重发，还会被读成"这类都被允许了"）。
    - 自动放行：TUI 插一条 dim 行；desktop 复用 permission 卡片的位置渲染成"已放行"态，例如
      `自动放行：git push --force origin main（判定 0.18 < 0.62）`。
    - **判定抬起的确认必须说清是判定抬的**。今天的预览只有两种措辞：`命中 ask 规则: %q` 和

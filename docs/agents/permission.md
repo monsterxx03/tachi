@@ -21,7 +21,7 @@ re-checking.
 | **Threshold discipline** | you change the state/question/criteria, the model, or want to trust a τ |
 | **Session-scoped approvals** | you rebuild a policy, end a session, or touch 「本会话全部允许」 |
 | **Which trees contribute rules** | you touch "which tree is this session in" (desktop, ACP, `SetPermissionTrees`) |
-| **The `[permission]` line on a Bash result** | you change tool-result rendering or the Bash description |
+| **The `[permission]` line on a Bash result** | you change tool-result rendering, or wonder why the model cannot see a score |
 
 Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permission cards),
 [`jev.md`](jev.md) (the gate's service contract — read it before wiring a new judgment anywhere),
@@ -158,13 +158,16 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 ## The `[permission]` line on a Bash result
 
-- **How one command was decided rides on its result** (`agent.askNote`, appended to the tool message outside the
-  untrusted-content wrapper, also for a FAILED command — it ran either way):
-  `[permission] decided_by=judgment score=0.180 threshold=0.700`, or `decided_by=approval` for a command that was
-  asked about and approved. **The pair, never a bare number**: under `judgment` the score is the probability that
-  let it run, under `approval` it is the probability that made the gate ask. No judgment and no ask → no line, so
-  the result of an unremarkable command is byte-for-byte what it was before the gate existed.
-- **The Bash description carries the one clause that frames it** (`tools.PermissionNoteAdvice`), because the
-  misreading that matters is a model generalising one auto-allowed command into a standing permission. It rides
-  on every request, like the other tools' advice — a change to it changes the tool list, which is a structural
-  prompt-prefix change (see [`prompt-cache.md`](prompt-cache.md)).
+- **How one command was decided goes to the EVENT ONLY — the transcript — and never into the model's message**
+  (`agent.askNote`): `[permission] decided_by=judgment score=0.180 threshold=0.700`, or `decided_by=approval` for a
+  command that was asked about and approved. It is appended for a FAILED command too (it ran either way), and no
+  judgment and no ask means no line at all, so an unremarkable command's result is byte-for-byte what it was
+  before the gate existed.
+- **The model deliberately does not get it.** Two costs on that side: a line the model does not act on is re-sent
+  in the history of every LATER request (the event is not in the history), and "this one was allowed" in front of
+  the model invites reading it as a standing permission for commands like it. The Bash tool description therefore
+  carries no clause about it either — a description sentence would ride on every request for a number the model
+  never sees. The human's other exit is the debug log (`Agent: bash ask judged`, one line per judgment, with the
+  probability, the threshold and the verdict).
+- **The pair, never a bare number**: under `judgment` the score is the probability that let it run, under
+  `approval` it is the probability that made the gate ask.

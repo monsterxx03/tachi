@@ -341,9 +341,12 @@ func TestCheckBashPermissionNote(t *testing.T) {
 	})
 }
 
-// TestBashResultCarriesTheNote is the end-to-end half: the line has to reach the
-// MESSAGE the model reads (and that the session records), not just the decision.
-func TestBashResultCarriesTheNote(t *testing.T) {
+// TestBashResultDoesNotCarryTheNoteToTheModel: the decision line is for the human
+// reading the transcript and for NOBODY else. In the model's message it would be
+// re-sent in the history of every later request and would read as a standing
+// permission for commands like it — so the message must be exactly what it was
+// before the gate existed.
+func TestBashResultDoesNotCarryTheNoteToTheModel(t *testing.T) {
 	judge := &fakeAskJudge{p: 0.18}
 	a := askGateAgent(t, judge, nil)
 	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"go test ./..."}`}}
@@ -361,9 +364,9 @@ func TestBashResultCarriesTheNote(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.Contains(t, msgs[0].Content, "ran: go test ./...")
-	// 0.700, not the config default: askGateAgent pins it so these tests do not
-	// move when a re-sweep changes the default threshold.
-	assert.Contains(t, msgs[0].Content, "[permission] decided_by=judgment score=0.180 threshold=0.700")
+	assert.NotContains(t, msgs[0].Content, "[permission]",
+		"the model must not be told how the call was decided")
+	assert.NotContains(t, msgs[0].Content, "0.180")
 }
 
 // TestBashResultWithoutTheGateCarriesNothing: with the gate off, a Bash result is
@@ -388,4 +391,30 @@ func TestBashResultWithoutTheGateCarriesNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.NotContains(t, msgs[0].Content, "[permission]")
+}
+
+// TestBashResultEventCarriesTheNote: the transcript IS the reader. The event is
+// what the desktop renders (and the message is wrapped for the model), so the
+// note has to be here — assertively, in the unwrapped copy.
+func TestBashResultEventCarriesTheNote(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.18}
+	a := askGateAgent(t, judge, nil)
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"go test ./..."}`}}
+	ch := make(chan AgentEvent, 64)
+
+	_, err := a.executeToolCallsSequential(t.Context(), &RunState{}, []llm.ToolCall{tc}, ch)
+	require.NoError(t, err)
+	close(ch)
+
+	var results []string
+	for e := range ch {
+		if e.Type == AgentEventToolResult {
+			results = append(results, e.ToolResult)
+		}
+	}
+	require.Len(t, results, 1, "one tool result event per call")
+	assert.Contains(t, results[0], "ran: go test ./...")
+	assert.Contains(t, results[0], "[permission] decided_by=judgment score=0.180 threshold=0.700")
+	assert.NotContains(t, results[0], "BEGIN TOOL OUTPUT",
+		"the event is what the transcript shows — the untrusted-content wrapper is for the model")
 }

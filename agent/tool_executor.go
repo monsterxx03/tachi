@@ -513,13 +513,25 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 
 		a.Config.Logger.Info(ctx, "Tool: executed (sequential)", "tool", tc.Function.Name, "duration", tr.Duration, "err", tr.Err)
 
+		// The permission note goes to the EVENT ONLY — the transcript — and never
+		// into the model's message. Two reasons, both on the model's side: a line
+		// the model does not act on is re-sent in the history of every later
+		// request, and "this one was allowed" in front of the model invites reading
+		// it as a standing permission. It is for the human, and the human is looking
+		// at the transcript. Appended for a FAILED command too: that command still
+		// ran, and how it was decided is still a fact about it.
+		note := ""
+		if noteLine != "" {
+			note = "\n\n" + noteLine
+		}
+
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
 		if tr.Status == tools.ToolResultError {
 			toolMsg.Content = "Error: " + tr.Err.Error()
 			toolMsg.IsError = true
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
+				ToolID: tc.ID, ToolResult: toolMsg.Content + note, ToolIsError: true,
 				ToolDuration: tr.Duration,
 			}
 		} else {
@@ -530,16 +542,9 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			}
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: tr.Output,
+				ToolID: tc.ID, ToolResult: strings.TrimRight(tr.Output, "\n") + note,
 				ToolDuration: tr.Duration,
 			}
-		}
-
-		// Outside the wrapper on purpose: the note is the harness's own line, not
-		// content the command produced, and it is appended for a FAILED command
-		// too — that command still ran, and how it was decided is still the fact.
-		if noteLine != "" {
-			toolMsg.Content += "\n\n" + noteLine
 		}
 
 		// Record tool result in session. An image this tool returned rides the SAME slice the
