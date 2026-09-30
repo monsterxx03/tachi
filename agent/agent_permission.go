@@ -89,42 +89,93 @@ func bashCommand(args string) string {
 //     a ToolResultError fed back to the LLM
 //   - (_, _, errCancelled) — user explicitly denied at the TUI prompt;
 //     aborts the turn, consistent with EditFile confirmation denial
-func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
+//
+// It returns a note as well as the decision: how the call was decided travels
+// with the result, so the model sees the judgment's number the way it sees the
+// MCP search's (agent/tools/bash.go's PermissionNoteAdvice frames it).
+func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch chan<- AgentEvent) (tools.ToolResult, bool, *askNote, error) {
 	if tc.Function.Name != tools.ToolNameBash {
-		return tools.ToolResult{}, false, nil
-	}
-	p := a.Config.PermissionPolicy
-	if p == nil || p.Empty() {
-		return tools.ToolResult{}, false, nil
+		return tools.ToolResult{}, false, nil, nil
 	}
 	cmd := bashCommand(tc.Function.Arguments)
 	if cmd == "" {
-		return tools.ToolResult{}, false, nil
+		return tools.ToolResult{}, false, nil, nil
 	}
 
-	decision, rule := p.CheckBash(cmd)
-	switch decision {
-	case permission.DecisionAllow:
-		return tools.ToolResult{}, false, nil
+	// The policy is consulted even when it is absent (bashRuleDecision): "no
+	// rules at all" is exactly the installation the judgment gate exists for, so
+	// the gate must not be skipped along with the policy.
+	decision, rule := a.bashRuleDecision(cmd)
 
-	case permission.DecisionDeny:
+	if decision == permission.DecisionDeny {
 		a.Config.Logger.Info(ctx, "Agent: bash blocked by permission rule", "rule", rule, "command", cmd)
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("blocked by permission rule %q (deny) — the command was NOT executed. "+
 				"If this should be allowed, ask the user to adjust permissions.bash rules in ~/.tachi/config.yaml or .tachi/permissions.yaml", rule),
-		}, true, nil
-
-	default: // permission.DecisionAsk
-		return a.resolveBashAsk(ctx, tc, cmd, rule, ch)
+		}, true, nil, nil
 	}
+
+	// Judgment gate (agent_permission_jev.go): every command a rule did not DENY is
+	// judged, and one the judgment says a human should see is raised through the
+	// same path a rule-matched ask uses. judged == false means there is no answer
+	// to act on — then the rules decide, which is this command's behaviour today.
+	v := a.judgeBashAsk(ctx, cmd, rule)
+	if v.judged && v.need {
+		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, bashAskCause{
+			rule: rule, judged: true, score: v.p, threshold: v.threshold,
+		}, ch)
+		if handled || err != nil {
+			return res, handled, nil, err
+		}
+		// Approved: the judgment's number is why a human was asked at all.
+		return tools.ToolResult{}, false, &askNote{
+			By: noteByApproval, Score: v.p, Threshold: v.threshold, HasScore: true,
+		}, nil
+	}
+
+	if v.judged {
+		// The judgment read it as routine, so it runs unasked. This is the line
+		// that says the decision was made by a judgment rather than by a rule.
+		return tools.ToolResult{}, false, &askNote{
+			By: noteByJudgment, Score: v.p, Threshold: v.threshold, HasScore: true,
+		}, nil
+	}
+
+	if decision == permission.DecisionAsk {
+		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, bashAskCause{rule: rule}, ch)
+		if handled || err != nil {
+			return res, handled, nil, err
+		}
+		// A rule asked and it was approved. No judgment number exists here (the
+		// gate was off, or answered nothing), so the note carries none.
+		return tools.ToolResult{}, false, &askNote{By: noteByApproval}, nil
+	}
+	return tools.ToolResult{}, false, nil, nil
+}
+
+// bashAskCause is why a human is being asked. The three kinds must render
+// DIFFERENTLY: a preview that names a rule that did not match (issue #40) sends
+// the reader looking for something they never wrote, and an ask raised by the
+// judgment is a third kind again.
+type bashAskCause struct {
+	// rule is the ask rule the policy matched, permission.AskNoRule when the
+	// command could not be parsed, or "" when nothing matched.
+	rule string
+	// judged marks an ask the judgment gate raised (as opposed to one a rule did).
+	judged bool
+	// score and threshold are quoted to the human when the judgment is the reason
+	// they are being interrupted.
+	score     float64
+	threshold float64
 }
 
 // resolveBashAsk dispatches a policy "ask" decision according to the agent's
 // permission mode: interactive prompt (TUI), external handler (ACP), or a
 // non-interactive fallback (Skip: deny unless the user chose "allow all").
-func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule string, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
-	preview := bashAskPreview(cmd, rule)
+func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd string, cause bashAskCause, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
+	rule := cause.rule
+	preview := bashAskPreview(cmd, cause)
 
 	switch a.Config.PermissionMode {
 	case PermissionModeSkip:
@@ -211,17 +262,32 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 // card claim a rule that does not exist, and made a malformed command look like a truncated one
 // (issue #40): the reader saw `… | head &&` hanging in the air and a rule name they had never
 // written.
-func bashAskPreview(cmd, rule string) string {
-	return fmt.Sprintf("$ %s\n\n%s", cmd, askReasonLine(rule))
+func bashAskPreview(cmd string, cause bashAskCause) string {
+	return fmt.Sprintf("$ %s\n\n%s", cmd, askReasonLine(cause))
 }
 
 // askReasonLine words one ask's cause for a HUMAN. AskNoRule gets a sentence that says what is
 // actually wrong and what fixes it, because that case is the one a reader has to act on (a rule
 // they wrote is a rule they can recognise).
-func askReasonLine(rule string) string {
-	if rule == permission.AskNoRule {
+func askReasonLine(cause bashAskCause) string {
+	switch {
+	case cause.rule != "" && cause.rule != permission.AskNoRule:
+		// A rule the user wrote: their own words are the recognisable reason, so
+		// name it even when a judgment agreed.
+		return fmt.Sprintf("命中 ask 规则: %q", cause.rule)
+
+	case cause.judged:
+		// No rule matched, and the judgment is why they are being interrupted.
+		// Saying so is the point: otherwise the reader goes looking in the config
+		// for a rule that does not exist.
+		line := fmt.Sprintf("没有任何 ask 规则命中，是判定（jev）认为这条需要你先看一眼（%.2f ≥ %.2f）", cause.score, cause.threshold)
+		if cause.rule == permission.AskNoRule {
+			line += "；另外这条命令本身也没能解析出来"
+		}
+		return line
+
+	default:
 		return "这条命令没能解析出来（引号/括号没闭合、末尾挂着 && 之类），没有命中任何规则 —— " +
 			"保守起见先问你一次；把语法写对就不会再问"
 	}
-	return fmt.Sprintf("命中 ask 规则: %q", rule)
 }

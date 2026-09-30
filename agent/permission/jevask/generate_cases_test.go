@@ -41,6 +41,13 @@ const (
 	// caseFileName is the generated file, and what a sweep command passes to
 	// JEV_EVAL_FILE.
 	caseFileName = "bash-ask.json"
+	// contextFileName is the PAIRED experiment — does carrying the user's request
+	// for this turn move the judgment? Same generator, different authored file
+	// (bash-ask/context-source.json); each case becomes a base/`-ctx` pair so the
+	// harness can compare the two forms head to head.
+	contextFileName = "bash-ask-context.json"
+	// contextArmSuffix marks the arm whose state carries the request line.
+	contextArmSuffix = "-ctx"
 )
 
 // sourceCase is one authored command: the ONLY authored part is the command, its
@@ -57,6 +64,10 @@ type sourceCase struct {
 	// Note is carried into the generated file's per-case comment... which JSON
 	// has no room for, so it documents the source and the review, not the file.
 	Note string `json:"note,omitempty"`
+	// Request, when set, turns this case into a PAIR: the command is judged twice,
+	// once as it would be without the user's turn (base) and once with it carried
+	// (the `-ctx` arm). Empty means an ordinary single case.
+	Request string `json:"request,omitempty"`
 }
 
 type sourceFile struct {
@@ -86,17 +97,21 @@ type genCase struct {
 	// Group is DERIVED, not authored: parsed or unparsed comes from the same
 	// parser the policy uses, so a case cannot be filed under a population it is
 	// not in. The per-case table then shows whether failures cluster on one half.
-	Group  string `json:"group"`
+	Group string `json:"group"`
+	// Pair names the other arm(s) of one judgment, for the harness's head-to-head
+	// comparison. Only the context experiment sets it.
+	Pair   string `json:"pair,omitempty"`
 	Expect string `json:"expect"`
 	State  string `json:"state"`
 }
 
 // Fixed session facts for every case. Constant on purpose: the only variables the
-// sweep should see are the command and the rule.
+// sweep should see are the command and the rule. CWD and Root differ on purpose —
+// a command that cd'd elsewhere is ordinary, and the two facts are not the same
+// field rendered twice.
 const (
-	caseCWD   = "/Users/dev/projects/app"
-	caseRoot1 = "/Users/dev/projects/app"
-	caseRoot2 = "/Users/dev/projects/shared-lib"
+	caseCWD  = "/Users/dev/projects/app/src"
+	caseRoot = "/Users/dev/projects/app"
 )
 
 func TestGenerateBashAskCases(t *testing.T) {
@@ -146,18 +161,22 @@ func TestGenerateBashAskCases(t *testing.T) {
 			// can learn anything from: the rule is the user's own words.
 			t.Fatalf("case %q: a rule matched, so the label is the rule's and must be true", c.ID)
 		}
-		state := State(Cmd{
-			Command: c.Command,
-			Rule:    c.Rule,
-			CWD:     caseCWD,
-			Roots:   []string{caseRoot1, caseRoot2},
-		})
-		out.Cases = append(out.Cases, genCase{
-			ID:     c.ID,
-			Group:  groupOf(c.Command, c.Expect),
-			Expect: c.Expect,
-			State:  state,
-		})
+		group := groupOf(c.Command, c.Expect)
+		base := Cmd{Command: c.Command, Rule: c.Rule, CWD: caseCWD, Root: caseRoot}
+		if c.Request == "" {
+			out.Cases = append(out.Cases, genCase{
+				ID: c.ID, Group: group, Expect: c.Expect, State: State(base),
+			})
+			continue
+		}
+		// Paired: the SAME label on both arms (see the generated notes), so the
+		// only variable between them is the request line.
+		withRequest := base
+		withRequest.Request = c.Request
+		out.Cases = append(out.Cases,
+			genCase{ID: c.ID, Group: group, Pair: c.ID, Expect: c.Expect, State: State(base)},
+			genCase{ID: c.ID + contextArmSuffix, Group: group, Pair: c.ID, Expect: c.Expect, State: State(withRequest)},
+		)
 	}
 	sort.Slice(out.Cases, func(i, j int) bool { return out.Cases[i].ID < out.Cases[j].ID })
 
@@ -165,7 +184,11 @@ func TestGenerateBashAskCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	dst := filepath.Join(outDir, caseFileName)
+	name := caseFileName
+	if base := filepath.Base(srcPath); filepath.Base(base) == "context-source.json" {
+		name = contextFileName
+	}
+	dst := filepath.Join(outDir, name)
 	if err := os.WriteFile(dst, append(encoded, '\n'), 0o644); err != nil {
 		t.Fatalf("write %s: %v", dst, err)
 	}

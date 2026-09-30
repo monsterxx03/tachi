@@ -25,7 +25,13 @@ const (
 	// too — so config_test pins the tag against this constant, and pkg/jev.DefaultTimeout
 	// holds the same value for a client built without a config.
 	DefaultJevTimeout = 10 * time.Second
-	configDirName     = ".tachi"
+	// DefaultJevAskBudget is the bound one bash-ask judgment waits — the same
+	// tag/constant duplication as DefaultJevTimeout. It is deliberately shorter
+	// than a Jev call's own timeout: this judgment sits in front of EVERY
+	// non-denied command, so a slow answer is a slow turn, and an unanswered
+	// judgment falls back to the rules (agent/agent_permission_jev.go).
+	DefaultJevAskBudget = 3 * time.Second
+	configDirName       = ".tachi"
 	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
@@ -1011,7 +1017,55 @@ type BashPermissions struct {
 	// config — the same key in a project .tachi/permissions.yaml is ignored,
 	// so a cloned repo cannot weaken the user's safety defaults.
 	DisableBuiltinDeny bool `yaml:"disable_builtin_deny"`
+
+	// Jev turns the judgment gate on: every command that is not DENIED is
+	// judged, and one the judgment says a human should see is sent to the
+	// frontend's ask path instead of being run. "auto" (the default, and the
+	// same shape as mcp_tool_search.matcher / cron.notify_matcher: the gate runs
+	// whenever the top-level `jev:` block is usable) or "off" (rules decide
+	// alone, and a command nothing matched just runs).
+	// See docs/2026-09-30-bash-ask-jev-design.md.
+	//
+	// It never widens what may run: deny is decided before the gate is reached,
+	// and the judgment's only two outcomes are "run" and "ask the human".
+	Jev string `yaml:"jev" default:"auto"`
+
+	// JevThreshold is the noul probability at or above which the judgment is
+	// read as "a human should see this". It belongs to the case set it was
+	// swept on, NOT to this field: τ = 0.72 was measured on
+	// pkg/jev/testdata/bash-ask.json — 68 authored commands, 5 repeats, state
+	// rendered by agent/permission/jevask — with jev-1.13.0. Separating
+	// thresholds were 0.70 and 0.75, the highest ROUTINE command scored 0.69
+	// (`rm -rf ./node_modules && npm ci`) and the lowest needs-a-look command
+	// 0.76 (`cat ~/.tachi/config.yaml`); 0.72 is the middle of that run, so
+	// drift in either direction has ~0.03 to move before a verdict flips.
+	//
+	// Re-sweep when the model version moves, when that case set CHANGES, or when
+	// the STATE SHAPE does (a sentence in jevask is part of the question a
+	// probability was measured against), or when the log shows auto-allowed
+	// commands the user later wrote a deny rule for. A number copied from
+	// anywhere else is not a measurement of THIS question.
+	//
+	// A value of 1.0 is the shadow setting: the gate judges and logs every
+	// command but can never act (a noul answer is at most 1.0), so the
+	// distribution can be watched on real traffic before anything changes.
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.72"`
+
+	// JevBudget bounds one judgment's wait. 3s is shorter than the MCP
+	// search's 6s on purpose: that gate is a search the model asked for and is
+	// worth waiting on, while this one sits in front of EVERY command, so a
+	// slow answer is a slow turn. Exceeding it falls back to the rules.
+	JevBudget time.Duration `yaml:"jev_budget" default:"3s"`
 }
+
+// The values BashPermissions.Jev accepts.
+const (
+	// BashJevOff is the default: rules alone decide.
+	BashJevOff = "off"
+	// BashJevAuto runs the judgment gate whenever the top-level jev block is
+	// usable (config.JevConfig.Configured: enabled AND holding a key).
+	BashJevAuto = "auto"
+)
 
 // PermissionsConfig groups tool permission rule sets.
 type PermissionsConfig struct {

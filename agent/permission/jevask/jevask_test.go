@@ -11,8 +11,8 @@ func TestStateParsedCommand(t *testing.T) {
 	got := State(Cmd{
 		Command: "cd /tmp && git branch -D feature",
 		Rule:    "git branch -D *",
-		CWD:     "/Users/dev/projects/app",
-		Roots:   []string{"/Users/dev/projects/app", "/Users/dev/projects/shared-lib"},
+		CWD:     "/Users/dev/projects/app/src",
+		Root:    "/Users/dev/projects/app",
 	})
 
 	// The segments are the PARSER's canonical output, not the raw text: the
@@ -21,8 +21,8 @@ func TestStateParsedCommand(t *testing.T) {
 		"Command (canonical segments, one per line):",
 		"  1. cd /tmp",
 		"  2. git branch -D feature",
-		"Working directory: /Users/dev/projects/app",
-		"Workspace roots: /Users/dev/projects/app, /Users/dev/projects/shared-lib",
+		"Working directory: /Users/dev/projects/app/src",
+		"Project root (the tree the rules are built against): /Users/dev/projects/app",
 		`Matched ask rule: "git branch -D *"`,
 	} {
 		if !strings.Contains(got, want) {
@@ -70,9 +70,24 @@ func TestStateTruncatesHugeCommands(t *testing.T) {
 	}
 }
 
+// TestStateRendersTheRequestLine: the request field is empty in production (the
+// paired experiment in pkg/jev/testdata/bash-ask-context.json rejected carrying
+// it), and the line is rendered only when a case sets it.
+func TestStateRendersTheRequestLine(t *testing.T) {
+	without := State(Cmd{Command: "git status", CWD: "/w", Root: "/w"})
+	if strings.Contains(without, "request in this turn") {
+		t.Errorf("an empty request must render nothing, got:\n%s", without)
+	}
+	with := State(Cmd{Command: "git status", CWD: "/w", Root: "/w", Request: "看看改了啥\n\n再跑测试"})
+	if !strings.Contains(with, "The user's request in this turn was: 看看改了啥 再跑测试") {
+		t.Errorf("the request must be rendered on one line, got:\n%s", with)
+	}
+}
+
 func TestStateMissingFacts(t *testing.T) {
 	got := State(Cmd{Command: "ls"})
-	if !strings.Contains(got, "Working directory: (not set)") || !strings.Contains(got, "Workspace roots: (none)") {
+	if !strings.Contains(got, "Working directory: (not set)") ||
+		!strings.Contains(got, "(unknown — treat the working directory above as the tree)") {
 		t.Errorf("absent facts must be explicit, got:\n%s", got)
 	}
 }

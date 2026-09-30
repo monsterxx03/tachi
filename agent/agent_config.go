@@ -131,6 +131,11 @@ type AgentConfig struct {
 
 	// --- 权限策略 ---
 	PermissionPolicy *permission.Policy
+	// PermissionRoot 是这份策略所依据的那棵树（FindProjectRootFrom 的结果）：
+	// 项目级规则从 <root>/.tachi/permissions.yaml 读，判定闸门的 state 也要
+	// 告诉模型"多外面才算外面"。空 = 没有项目（只有全局规则）。
+	// 由 Configure（进程 cwd）或 SetPermissionRoot（会话自己的树）写入。
+	PermissionRoot string
 
 	// --- 工具与基础设施 ---
 	ToolRegistry      *tools.Registry   // 由 NewAIAgent 创建
@@ -286,6 +291,16 @@ type PermissionState struct {
 	// keystroke meant for its neighbour. Bash never needed this (its tool is
 	// non-parallel, so its asks are already serial); MCPSearchTools is parallel.
 	askMu sync.Mutex
+
+	// askVerdicts memoizes the judgment gate's answer per (canonical command,
+	// matched rule) for this session (agent_permission_jev.go). It exists for
+	// cost, not for policy: a judgment is ~600 input tokens and ~0.5s, and a
+	// build loop runs the SAME command text dozens of times — an agent's
+	// commands rarely repeat ACROSS a session, but `go test ./...` repeats
+	// within one. The key is the command text, so nothing is inferred about a
+	// command that was not itself judged: this is not "this class is allowed".
+	askVerdicts   map[string]askVerdict
+	askVerdictsMu sync.Mutex
 }
 
 // ---------------------------------------------------------------------------

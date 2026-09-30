@@ -19,6 +19,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/jev"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -156,6 +157,19 @@ type AIAgent struct {
 	// (agent_jev.go): the reminder's shape follows it, because per-server
 	// summaries only help a matcher that reads sentences.
 	jevSearchDegraded atomic.Bool
+
+	// askJudgeMu guards the permission gate's evaluation client
+	// (agent_permission_jev.go). It is built lazily and KEPT across commands: the
+	// client owns an http.Client, and rebuilding it per command would drop
+	// connection pooling and pay a fresh handshake every time — most of the
+	// latency this gate costs. askJudgeKey is the block it was built from, so a
+	// settings change rebuilds it without a push.
+	askJudgeMu  sync.Mutex
+	askJudge    jev.Judge
+	askJudgeKey string
+	// askJudgeOverride（仅测试）replaces the client entirely, so a judgment can be
+	// answered without a service.
+	askJudgeOverride jev.Judge
 
 	// MCP server summaries for the deferred-tools reminder (agent_jev.go): the
 	// generator holds the in-flight/given-up state for background generations,
@@ -504,6 +518,7 @@ func (a *AIAgent) SetPermissionRoot(ctx context.Context, dir string) {
 	built := NewPermissionPolicyFromConfig(a.Config.FullConfig, root, a.Config.Logger)
 	built.InheritSessionApprovals(a.Config.PermissionPolicy)
 	a.Config.PermissionPolicy = built
+	a.Config.PermissionRoot = root
 	a.Config.Logger.Debug(ctx, "Agent: permission policy rebuilt", "dir", dir, "project_root", root)
 }
 
@@ -674,6 +689,9 @@ func (a *AIAgent) ClearSession() {
 	// these per call, so clearing them IS the reset: nothing cached it.
 	a.PermState.MCPSearchBlocked = false
 	a.PermState.MCPSearchAllowed = false
+	// And the judgment gate's memo, for the same reason: it is a per-session
+	// shortcut, and a new conversation is not the one whose commands were judged.
+	a.ResetAskVerdicts()
 }
 
 // GetTool retrieves a tool from the agent's registry by name.

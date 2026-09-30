@@ -117,6 +117,16 @@ func NewBashTool(cfg BashToolConfig) *BashTool {
 	}
 }
 
+// PermissionNoteAdvice frames the `[permission]` line a Bash result may carry
+// (see agent.askNote): how THAT call was decided, in one clause. It earns its
+// tokens only if it stops the one misreading that matters — a model that reads
+// "this one was allowed" as "commands like this are allowed" has turned a
+// per-command decision into a standing permission, which is exactly what the
+// gate does not grant. It rides on every request, like the other tools' advice.
+const PermissionNoteAdvice = "A `[permission]` line at the end of the output records how THAT command was decided " +
+	"(`decided_by=judgment` with a `score`: a judgment read it as routine; `decided_by=approval`: it was approved " +
+	"first) — it is not permission for the next command."
+
 func (t BashTool) Name() string { return ToolNameBash }
 func (t *BashTool) Description() string {
 	desc := "Executes a shell command and returns its output. " +
@@ -125,7 +135,8 @@ func (t *BashTool) Description() string {
 		// Only the rule that is Bash's own; WHY ReadFile is better (paging,
 		// images) is stated once, in ReadFile's own description.
 		"To read a file, prefer " + ToolNameRead + " — reach for a shell reader only when the " +
-		"content has to be transformed in a pipeline, or when many files are read at once. "
+		"content has to be transformed in a pipeline, or when many files are read at once. " +
+		PermissionNoteAdvice + " "
 	if t.processManager != nil && !t.acpMode {
 		desc += "Commands still running after the foreground window (~15s, or the timeout value if shorter) " +
 			"are automatically moved to the background. To manage them, call this tool again with the " +

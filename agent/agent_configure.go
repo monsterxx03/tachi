@@ -74,7 +74,8 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 	// --- Bash permission policy (global config + project .tachi/permissions.yaml) ---
 	// Caller should set permission policy via AgentConfig or SetPermissionPolicy before Configure.
 	if a.Config.PermissionPolicy == nil && a.Config.FullConfig != nil {
-		a.SetPermissionPolicy(NewPermissionPolicyFromConfig(a.Config.FullConfig, config.FindProjectRoot(), a.Config.Logger))
+		a.Config.PermissionRoot = config.FindProjectRoot()
+		a.SetPermissionPolicy(NewPermissionPolicyFromConfig(a.Config.FullConfig, a.Config.PermissionRoot, a.Config.Logger))
 	}
 
 	// --- Reminder collector (after memory + skills, before MCP) ---

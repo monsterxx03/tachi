@@ -297,6 +297,11 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 	var toolMsgs []llm.Message
 
 	for _, tc := range toolCalls {
+		// noteLine is how this call's permission decision was made, when a
+		// decision happened beyond the rules (agent.askNote). It rides on the
+		// result the model reads, after any wrapping — it is our line, not
+		// output the command produced.
+		var noteLine string
 		ch <- AgentEvent{
 			Type:     AgentEventToolCallArgs,
 			ToolName: tc.Function.Name,
@@ -360,9 +365,16 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			// non-interactive denial). A user denial at the TUI prompt aborts the
 			// turn with errCancelled, consistent with EditFile confirmation.
 			var policyErr error
-			tr, handled, policyErr = a.checkBashPermission(subCtx, tc, ch)
+			var note *askNote
+			tr, handled, note, policyErr = a.checkBashPermission(subCtx, tc, ch)
 			if policyErr != nil {
 				return nil, policyErr
+			}
+			// The decision travels with the result (nil when neither a judgment
+			// nor an approval was involved): the model sees the judgment's number
+			// the way it sees the MCP search's.
+			if !handled {
+				noteLine = note.Line()
 			}
 		}
 		if !handled {
@@ -521,6 +533,13 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 				ToolID: tc.ID, ToolResult: tr.Output,
 				ToolDuration: tr.Duration,
 			}
+		}
+
+		// Outside the wrapper on purpose: the note is the harness's own line, not
+		// content the command produced, and it is appended for a FAILED command
+		// too — that command still ran, and how it was decided is still the fact.
+		if noteLine != "" {
+			toolMsg.Content += "\n\n" + noteLine
 		}
 
 		// Record tool result in session. An image this tool returned rides the SAME slice the
