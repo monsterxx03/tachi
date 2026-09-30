@@ -164,6 +164,11 @@ type desktopApp struct {
 	// transcription finishes. Guarded by mu.
 	badgeLink *link.Server
 
+	// voice is the desktop's own microphone state (the composer's voice button). It carries
+	// its OWN lock — a recording runs for tens of seconds and a transcription for hundreds of
+	// milliseconds, neither of which may ever wait behind the app-wide lock (see voice.go).
+	voice voiceInput
+
 	mu    sync.Mutex
 	runs  map[string]*sessionRun // key: session ID
 	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every

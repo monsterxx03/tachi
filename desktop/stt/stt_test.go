@@ -52,3 +52,21 @@ func TestAvailableAgreesWithEngineNote(t *testing.T) {
 		t.Errorf("Available()=%v 但引擎说 %q", Available(), note)
 	}
 }
+
+// TestMicStatusCrossesEveryLayer 钉的是采集那半的第一段：Go → cgo → Swift → AVFoundation。
+//
+// 和 EngineNote 那条一样，它断言的是「跑到了」，不是某个特定值——授权状态是**这台机器**的状态
+// （没问过、给了、拒了都对），不是代码对错。
+//
+// ⚠ 这里**不**调 StartRecording：没授权时它会去弹一次系统授权窗，而有授权时它会真的开麦克风。
+// 一个测试两样都不能干（跑单测的人不会盯着屏幕等弹窗，而开着的麦克风也没人去关它）。真正的采集
+// ——引擎起不起来、录到的样本形状对不对——只能在装了 app 的机器上按一次按钮手测，`make test`
+// 覆盖不到那一段，别读成它覆盖了。
+func TestMicStatusCrossesEveryLayer(t *testing.T) {
+	switch got := micStatus(); got {
+	case micUnasked, micGranted, micDenied:
+		t.Logf("麦克风授权状态: %d（0 没问过 / 1 有 / 2 被拒）", got)
+	default:
+		t.Errorf("micStatus 返回了垫片不会给的值 %d：新符号没链上，或者返回值读错了", got)
+	}
+}

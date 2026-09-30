@@ -403,3 +403,218 @@ public func tachiSTTTranscribe(_ samples: UnsafePointer<Int16>?,
     }
     return strdup(json)
 }
+
+// --- 采集（麦克风）--------------------------------------------------------------
+
+// 采集是这条链的**前一半**，而它以前不存在：转写那半吃的是「一段 16 kHz 单声道 Int16」，
+// 而那段样本一直由 badge 那条路送进来（设备 8 KB/s 的 IMA ADPCM 走 BLE，desktop/badge.go
+// 解成样本）。桌面自己的麦克风按钮要的就是同一句话——所以这里把它录成**同一个形状**，
+// 好让 desktop 那边两个调用方喂给 Transcribe 的东西逐字相同。
+//
+// 为什么不用 AVAudioRecorder 写个文件再读回来：识别那半承诺过音频不落盘（设计文档 §8），
+// 而这里连临时文件都不需要——AVAudioEngine 的 tap 交回来的就是内存里的 buffer。中间那次
+// 重采样也在内存里，走 AVAudioConverter（硬件给的是 44.1/48 kHz 的浮点，而引擎要 16 k）。
+//
+// ⚠ 这一段**不**要求 macOS 26，所以它不关在 #available 里：AVAudioEngine 老得多，真正
+// 要求 26 的是转写那半（availability 由 tachi_stt_available 一个人回答，见 stt_darwin.go）。
+// ⚠ 但麦克风要**另一个** TCC 权限，和语音识别不是同一个（NSMicrophoneUsageDescription）：
+// 少了那个键，第一次真的去开会崩，不是返回错误——和蓝牙那次同一个坑（docs/agents/badge.md）。
+
+// recordSampleRate 是交回给 Go 的采样率。
+//
+// 16 k 不是随便挑的：转写那半的输入一直是这个数（badge 那条路的目标采样率也是它），所以
+// 两个调用方在引擎眼里没有区别——判据、资产、降级那一整套都在同一种输入上被验过。
+private let recordSampleRate: Double = 16000
+
+// recordMaxSamples 是垫片自己的硬上限（120 秒），**不是**「一次录多久」的策略。
+//
+// 那个策略在 Go 侧（voiceMaxRecord，60 秒的看门狗）：录多久要能被上层的状态机和界面看见，
+// 而这是采集层的自卫——万一没人来 Stop，这个数组不能一直涨下去把内存吃掉。
+private let recordMaxSamples = Int(recordSampleRate) * 120
+
+// tapBufferFrames 是 tap 每次交回来的帧数。随便挑的：转换是逐块做的，块大小不影响结果
+// （转写那半的 512/1600 也是一样的道理）。
+private let tapBufferFrames: AVAudioFrameCount = 4096
+
+// 采集状态。用锁而不是 actor：这些函数都从 cgo 调进来的线程上跑，没有 actor 上下文可以
+// await（和 installAsked 同一处境），而 tap 那边是另一条线程——两边都要看同一份数据。
+private let recordLock = NSLock()
+nonisolated(unsafe) private var recordEngine: AVAudioEngine?
+nonisolated(unsafe) private var recordSamples: [Int16] = []
+
+// tachi_stt_mic_status 回答麦克风的授权状态。
+//
+// 三个值，而它们要分成三句不同的话讲给用户听，所以不压成 bool：
+//   1 = 有权限   0 = 还没问过（该弹一次窗）   2 = 被拒了/被系统策略挡住（只能去系统设置里改）
+// 采集和转写是**两个**权限：有语音识别权限不等于能开麦克风，反之亦然。
+@_cdecl("tachi_stt_mic_status")
+public func tachiSTTMicStatus() -> Int32 {
+    if #available(macOS 14.0, *) {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted: return 1
+        case .denied: return 2
+        case .undetermined: return 0
+        @unknown default: return 2
+        }
+    }
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized: return 1
+    case .notDetermined: return 0
+    default: return 2
+    }
+}
+
+// tachi_stt_mic_ask 弹一次权限询问（系统弹窗）并**等用户点完**，返回拿到的状态。
+//
+// 为什么是「问出答案」而不是「发起一次询问就返回」：调用它的是用户点麦克风的那一下。
+// 不等的话，第一次使用就变成「点一下 → 请去授权 → 再点一下」，而用户刚才明明就是在按
+// 「开始说话」。等它，那次点击的直接后果就是开始录音。
+//
+// 为什么还要超时：弹窗没人点就永远不会有人 signal（用户可能就把它晾在那儿）。超时返回
+// 0（还没问出结果）而不是一直挂着——调用方据此说一句「授权窗口还开着」，而那个还在等的
+// 询问会在用户点完之后自己完成（信号量由闭包持有，超时后 signal 也不会出事）。
+@_cdecl("tachi_stt_mic_ask")
+public func tachiSTTMicAsk(_ timeoutSeconds: Double) -> Int32 {
+    let semaphore = DispatchSemaphore(value: 0)
+    if #available(macOS 14.0, *) {
+        AVAudioApplication.requestRecordPermission { _ in semaphore.signal() }
+    } else {
+        AVCaptureDevice.requestAccess(for: .audio) { _ in semaphore.signal() }
+    }
+    if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+        return 0
+    }
+    return tachiSTTMicStatus()
+}
+
+// tachi_stt_record_start 开始采集。返回 1 表示真的在录，0 表示没起来（原因进不了 C ABI
+// 的正经通道，所以调用方先自己查权限/可用性，见 stt_darwin.go）。
+//
+// 幂等：已经在录时重复调用返回 1，不重建引擎——上层那次重复点击（界面还没收到状态）不该
+// 把正在录的东西冲掉。
+@_cdecl("tachi_stt_record_start")
+public func tachiSTTRecordStart() -> Int32 {
+    recordLock.lock()
+    let already = recordEngine != nil
+    recordLock.unlock()
+    if already { return 1 }
+
+    // 没授权就**不**碰引擎：硬开会崩（少 Info.plist 键）或者立刻抛（被拒），而调用方要的是
+    // 一句能讲给用户听的话，不是这里的一声闷响。
+    if tachiSTTMicStatus() != 1 { return 0 }
+
+    let engine = AVAudioEngine()
+    let input = engine.inputNode
+    let inputFormat = input.outputFormat(forBus: 0)
+    // 没有输入设备时（一台没接麦克风的机器）这两项是 0：那不是「静音」，是「录不了」。
+    guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else { return 0 }
+    guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                     sampleRate: recordSampleRate,
+                                     channels: 1,
+                                     interleaved: true),
+          let converter = AVAudioConverter(from: inputFormat, to: target) else { return 0 }
+
+    recordLock.lock()
+    recordSamples = []
+    recordLock.unlock()
+
+    input.installTap(onBus: 0, bufferSize: tapBufferFrames, format: inputFormat) { buffer, _ in
+        appendConverted(buffer, converter: converter, target: target)
+    }
+    engine.prepare()
+    do {
+        try engine.start()
+    } catch {
+        // 起不来就把 tap 撤掉：留在那儿的 tap 会让下一次 start 直接抛异常。
+        input.removeTap(onBus: 0)
+        return 0
+    }
+
+    recordLock.lock()
+    recordEngine = engine
+    recordLock.unlock()
+    return 1
+}
+
+// tachi_stt_record_stop 结束采集，把攒下的样本交出去。
+//
+// 返回 1 表示这一次采集结束了（count 可能是 0——那是「按下了但没说话」，正常输入）；
+// 返回 0 表示当前没有在采（重复点击、或者本来就没起来）。两种都不是错误，调用方分得开
+// 就够——所以没有第三态。
+//
+// ⚠ 交出去的样本由调用方用 tachi_stt_free_samples 释放。
+@_cdecl("tachi_stt_record_stop")
+public func tachiSTTRecordStop(_ samples: UnsafeMutablePointer<UnsafeMutablePointer<Int16>?>?,
+                               _ count: UnsafeMutablePointer<Int>?,
+                               _ rate: UnsafeMutablePointer<Double>?) -> Int32 {
+    recordLock.lock()
+    let engine = recordEngine
+    recordEngine = nil
+    recordLock.unlock()
+    guard let engine = engine else { return 0 }
+
+    // tap 先撤、引擎再停：反过来的话，停下那一刻还可能进来一块。
+    engine.inputNode.removeTap(onBus: 0)
+    engine.stop()
+
+    recordLock.lock()
+    let got = recordSamples
+    recordSamples = []
+    recordLock.unlock()
+
+    count?.pointee = got.count
+    rate?.pointee = recordSampleRate
+    guard !got.isEmpty else {
+        samples?.pointee = nil
+        return 1
+    }
+    let buffer = UnsafeMutablePointer<Int16>.allocate(capacity: got.count)
+    buffer.initialize(from: got, count: got.count)
+    samples?.pointee = buffer
+    return 1
+}
+
+// tachi_stt_free_samples 释放 tachi_stt_record_stop 交出去的样本。
+//
+// 单独一个函数而不是复用 tachi_stt_free：那两个 buffer 是不同方式分配的（strdup 出来的
+// 字符串 vs Int16 的 allocate），配对错了就是堆损坏——而这种错**不会**在这里报，它会
+// 在后面某次分配时炸掉。
+@_cdecl("tachi_stt_free_samples")
+public func tachiSTTFreeSamples(_ samples: UnsafeMutablePointer<Int16>?) {
+    samples?.deallocate()
+}
+
+// appendConverted 把一块 tap 交来的音频转成 16 k 单声道 Int16，接在记录后面。
+//
+// 跑在 tap 自己的音频线程上，所以只做两件事：转换，然后在锁里追加。取不到数据就**安静地
+// 丢掉这一块**——这里的失败没有更好的去处（识别引擎要的是连续样本，往里塞缺口只会得到
+// 更差的文本），而真的什么都录不到时，上层看到的是 count 为 0 的那一下。
+private func appendConverted(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter, target: AVAudioFormat) {
+    let ratio = target.sampleRate / buffer.format.sampleRate
+    // 容量留一点余量：降采样的输出帧数会因块的边界有±几帧的出入，紧贴着算会丢掉尾巴。
+    let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+    guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+
+    // 转换器要求「按需供料」：给它一块，然后告诉它没有了（noDataNow）——它会把这一块
+    // 转出来的帧数如实写在 out.frameLength 里（可能少于容量，也可能跨块带尾巴）。
+    var supplied = false
+    var conversionError: NSError?
+    converter.convert(to: out, error: &conversionError) { _, status in
+        if supplied {
+            status.pointee = .noDataNow
+            return nil
+        }
+        supplied = true
+        status.pointee = .haveData
+        return buffer
+    }
+    guard conversionError == nil, out.frameLength > 0, let channel = out.int16ChannelData else { return }
+
+    recordLock.lock()
+    defer { recordLock.unlock() }
+    // 单声道 interleaved：第 0 个通道就是全部样本。
+    let frames = Int(out.frameLength)
+    if recordSamples.count >= recordMaxSamples { return }
+    let room = min(frames, recordMaxSamples - recordSamples.count)
+    recordSamples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: room))
+}

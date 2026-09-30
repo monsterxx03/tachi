@@ -942,3 +942,31 @@ export function StopAndSend(sessionID: string, text: string): $CancellablePromis
 export function SwitchProvider(name: string): $CancellablePromise<string> {
     return $Call.ByID(1503034677, name);
 }
+
+/**
+ * ToggleVoiceInput 是麦克风那一下：**在录就结束，不在录就开始**。
+ * 
+ * 为什么是「切换」而不是两个方法（开始/停止）：方向只有一个地方知道——后端（它持有录音位）。
+ * 让调用方各判一次，就多了一处会和它分叉的地方：按钮看的是一个由事件推来的状态，而那个事件
+ * 可能还在路上（首次授权、识别收尾），按下去就反了。所以按钮和快捷键都调这一个方法。界面当然
+ * 还是要读状态——那是为了**画样子**（红脉冲、禁用），不是为了让路。
+ * 
+ * **首次使用时它会先弹一次授权窗并等用户点完**（stt 那半负责，最多 30 秒）。等，是因为调用
+ * 它的就是「用户按了麦克风」那一下：不等的话第一次使用要按两下，而用户按的正是「开始说话」。
+ * 
+ * 「这台机器做不做得了」这一关在这里，不在切换里：它是个 UI 前提（转写要在 26 之上），而切换
+ * 那部分与系统版本无关，所以单测直接测下面那个 toggleVoice。
+ */
+export function ToggleVoiceInput(): $CancellablePromise<void> {
+    return $Call.ByID(4078637766);
+}
+
+/**
+ * VoiceInputAvailable 回答「这个按钮在这台机器上有没有意义」。
+ * 
+ * 界面据此决定显不显示它。macOS 26 之前转写那半根本不存在（stt.Available 为 false），
+ * 放一个按了只能报错的按钮不如不放。
+ */
+export function VoiceInputAvailable(): $CancellablePromise<boolean> {
+    return $Call.ByID(2876796569);
+}

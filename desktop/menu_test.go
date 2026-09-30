@@ -76,3 +76,30 @@ func walkMenuItems(menu *application.Menu, visit func(*application.MenuItem)) {
 		walkMenuItems(item.GetSubmenu(), visit)
 	}
 }
+
+// TestApplicationMenuFreesTheVoiceKey pins the same claim for ⌘⇧M (the microphone shortcut): a key
+// equivalent is handled BEFORE the webview sees the event, so a menu item carrying this one would
+// make the shortcut dead — and no frontend test can notice, because a synthetic key dispatched into
+// the page bypasses the menu bar entirely.
+//
+// The accelerator goes through Wails' own parser (SetAccelerator → GetAccelerator) rather than being
+// written as a literal: what is asserted is "this key is free", not a spelling of it. A misspelling
+// parses to the empty string, which the guard below turns into a failure instead of a test that
+// quietly compares "" against nothing.
+func TestApplicationMenuFreesTheVoiceKey(t *testing.T) {
+	application.New(application.Options{Name: "Tachi"})
+
+	probe := application.NewMenuItem("probe").SetAccelerator("Cmd+Shift+M")
+	voiceKey := probe.GetAccelerator()
+	if voiceKey == "" {
+		t.Fatal("Wails 认不出 Cmd+Shift+M：拼写变了，这条测试就再也证明不了什么（见 frontend/src/App.tsx 的 ⌘⇧M）")
+	}
+
+	menu := applicationMenu()
+	walkMenuItems(menu, func(item *application.MenuItem) {
+		if acc := item.GetAccelerator(); acc == voiceKey {
+			t.Errorf("菜单项 %q 占用了 %s —— 语音输入的快捷键会变成死键（frontend/src/App.tsx 的 ⌘⇧M）",
+				item.Label(), voiceKey)
+		}
+	})
+}

@@ -64,6 +64,13 @@ type scenario struct {
 	// The scenario's `after` reads the fixture (`c.mcp`) for what the client actually did:
 	// registered for a client_id, asked for PKCE, exchanged the code for a token.
 	mcpOAuth bool
+	// voiceText stands in for the microphone: the app is told to answer a finished recording
+	// with this text instead of opening the mic and running the recognizer (TACHI_DEMO_VOICE_TEXT,
+	// read in desktop/voice.go). It exists for the same reason browserFetch does — a run must not
+	// touch the machine it is running on, and a real recording would raise a TCC prompt and capture
+	// whatever is happening in the room. What the scenario asserts is the button's half of the
+	// feature (start/stop, and where the text lands), which does not depend on where audio comes from.
+	voiceText string
 	// project seeds a desktop project (design §6.1) and BINDS the seeded session to it. Seeded
 	// for the same reason extraRoots are: the project form can only pick directories through a
 	// native picker. The seeded session's own WorkingDir stays the sandbox work dir, i.e. a
@@ -987,6 +994,29 @@ func scenarios() []scenario {
 			},
 			after: func(c *checkCtx) {
 				c.check("拖动输入框高度不发任何请求", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		//
+		// 桌面自己的语音输入（composer 上的麦克风按钮）。它和 badge 那条路共用**转写**那一半
+		// （desktop/stt），不共用投递：设备没有键盘，所以它转出来的字直接成为一条消息；桌面有
+		// 键盘，所以这里给的是草稿——填进输入框，由人改完再回车。这一条断的就是后半句：字落到框
+		// 里、且**一个请求都没有发出去**（Go 侧在这里，UI 侧在 driver 里）。
+		//
+		// 麦克风被 TACHI_DEMO_VOICE_TEXT 替掉（见 scenario 的 voiceText 字段）：真开麦会在跑
+		// 测试的**这台机器**上弹一次权限窗，并录进房间里正在发生的事。
+		{
+			name: "voice-input",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe voice-input scenario's working directory\n",
+			},
+			voiceText: "帮我看一下这个报错",
+			steps: []mockllm.Step{
+				// Never used: 语音转出来的字只进输入框。它存在只是为了让 mock 是一个完整的
+				// 脚本，而不是空的。
+				{Reply: textStream("不应该被调用。", 300)},
+			},
+			after: func(c *checkCtx) {
+				c.check("语音转出来的字没有被发出去", len(c.requests) == 0, requestCount(c.requests))
 			},
 		},
 		//

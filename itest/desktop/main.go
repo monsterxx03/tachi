@@ -177,6 +177,9 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		}
 		sb.browserFetch = true
 	}
+	if sc.voiceText != "" {
+		sb.voiceText = sc.voiceText
+	}
 
 	snk, err := newSink()
 	if err != nil {

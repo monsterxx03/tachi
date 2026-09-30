@@ -35,11 +35,18 @@ int32_t tachi_stt_available(void);
 char *tachi_stt_engine_note(void);
 char *tachi_stt_transcribe(const int16_t *samples, size_t count, double sample_rate);
 void tachi_stt_free(char *pointer);
+
+int32_t tachi_stt_mic_status(void);
+int32_t tachi_stt_mic_ask(double timeout_seconds);
+int32_t tachi_stt_record_start(void);
+int32_t tachi_stt_record_stop(int16_t **samples, size_t *count, double *rate);
+void tachi_stt_free_samples(int16_t *samples);
 */
 import "C"
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 )
 
@@ -99,4 +106,96 @@ func Transcribe(samples []int16, sampleRate int) (Result, error) {
 		return Result{Missing: got.Missing, Installing: got.Installing}, err
 	}
 	return Result{Text: Choose(got), Missing: got.Missing, Installing: got.Installing}, nil
+}
+
+// --- 采集（麦克风）--------------------------------------------------------------
+
+// 采集与转写是这条链的两半，权限也是两个：麦克风那条问的是「能不能听」（
+// NSMicrophoneUsageDescription），转写那条问的是「能不能识别」（NSSpeechRecognitionUsage
+// Description）。有其中一个不等于有另一个，所以下面这几个 error 要分得开——调用方要把它们
+// 变成三句不同的话，而那句「缺离线资产」跟它们都不是一回事。
+var (
+	// ErrMicUnasked 表示授权窗弹出来了但还没有结果（用户没点，或者点了之后没等到）。
+	// 这不是拒绝：下一次调用会重新问一遍状态，多半就好了。
+	ErrMicUnasked = errors.New("麦克风授权还没有结果")
+	// ErrMicDenied 表示用户拒过（或系统策略挡着）。这条路只会一直拒下去，得去系统设置里改。
+	ErrMicDenied = errors.New("麦克风权限被拒绝")
+	// ErrMicUnavailable 表示问下来有权限、引擎却起不来：没有输入设备，或者被别的程序独占。
+	ErrMicUnavailable = errors.New("麦克风起不来")
+	// ErrNotRecording 表示当前没有在采集（重复点了停止，或者本来就没起来）。
+	ErrNotRecording = errors.New("当前没有在录音")
+)
+
+// micAskTimeout 是「等用户回答授权窗」的上限。等的是人，所以给得宽；超时只是让调用方
+// 能说一句「那个窗口还开着」，而不是把它变成一次永远不返回的点击。
+const micAskTimeout = 30 * time.Second
+
+// micPermission 是垫片对授权状态的回答，和 tachi_stt_mic_status 的三个返回值一一对应。
+type micPermission int32
+
+const (
+	micUnasked micPermission = 0
+	micGranted micPermission = 1
+	micDenied  micPermission = 2
+)
+
+// StartRecording 开始采集，拿到的样本与 badge 那条路的输入同形（16 kHz 单声道 Int16）。
+//
+// **首次使用时它会先弹一次授权窗并等用户点完**（最多 micAskTimeout）。等，是因为调用它的
+// 就是「用户按了麦克风」那一下：不等的话第一次使用要按两下，而用户按的正是「开始说话」。
+// 等出来的三种结果各是一句话，所以是三个 error 而不是一个。
+//
+// 这里不检查 Available()：采集本身在 macOS 26 之前就有（AVAudioEngine 老得多），要求 26 的
+// 是转写那一半。整个功能能不能用由调用方按 Available() 决定。
+func StartRecording() error {
+	switch micStatus() {
+	case micUnasked:
+		if status := micPermission(C.tachi_stt_mic_ask(C.double(micAskTimeout.Seconds()))); status != micGranted {
+			return micAskError(status)
+		}
+	case micDenied:
+		return ErrMicDenied
+	}
+	if C.tachi_stt_record_start() != 1 {
+		return ErrMicUnavailable
+	}
+	return nil
+}
+
+// StopRecording 结束采集并交回样本与它们的采样率。
+//
+// 样本为空**不是**错误：那是「按下了但没说话」，识别会如实回答一句空文本。所以调用方拿到
+// 的是 (nil, rate, nil)——采样率照样有意义，用它去转写空样本才是错的（Transcribe 对空输入
+// 直接返回空结果）。
+func StopRecording() ([]int16, int, error) {
+	var samples *C.int16_t
+	var count C.size_t
+	var rate C.double
+	if C.tachi_stt_record_stop(&samples, &count, &rate) != 1 {
+		return nil, 0, ErrNotRecording
+	}
+	hz := int(rate)
+	if samples == nil || count == 0 {
+		return nil, hz, nil
+	}
+	// 所有权：这一段是垫片 allocate 出来的，必须由 tachi_stt_free_samples 释放——它和
+	// tachi_stt_free 那一对（strdup 出来的字符串）不是同一次分配，配错了就是堆损坏。
+	defer C.tachi_stt_free_samples(samples)
+	out := make([]int16, int(count))
+	copy(out, unsafe.Slice((*int16)(unsafe.Pointer(samples)), int(count)))
+	return out, hz, nil
+}
+
+// micStatus 问一次当前的授权状态。
+func micStatus() micPermission {
+	return micPermission(C.tachi_stt_mic_status())
+}
+
+// micAskError 把「等授权窗」的结果变成 error：还没点、被拒、或者刚刚拿到了权限（无事发生）。
+func micAskError(status micPermission) error {
+	if status == micDenied {
+		return ErrMicDenied
+	}
+	// 剩下的是「窗口还开着」：不把它说成拒绝——用户多半会点允许，只是我们没等到。
+	return ErrMicUnasked
 }

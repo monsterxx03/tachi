@@ -1,9 +1,11 @@
 # Tachi — Badge Handbook (the AI Passport device link, split out of desktop.md)
 
 The badge is a SECOND FRONTEND for the same sessions: a BLE (or serial) link, a small screen for asks, and a
-voice path that turns speech into a message. Its host half lives in `desktop/` (`link/`, `badge.go`, `stt/`);
-its device half is a different repository — `ai-passport` (this machine: `~/repos/ai-passport`, ESP-IDF at
-`~/esp/esp-idf-v5.5.3`) — which carries its own `AGENTS.md`, its own skills and its own gate.
+voice path that turns speech into a message. Its host half lives in `desktop/` (`link/`, `badge.go`, and the
+Swift shim in `stt/` — which the desktop's OWN microphone button also records through; that consumer's rules
+are in `docs/agents/desktop.md`); its device half is a different repository — `ai-passport` (this machine:
+`~/repos/ai-passport`, ESP-IDF at `~/esp/esp-idf-v5.5.3`) — which carries its own `AGENTS.md`, its own skills
+and its own gate.
 
 ## Contents — read the section you need, not the file
 
@@ -11,6 +13,7 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
 | --- | --- |
 | **Badge Link over BLE** | you touch `desktop/link/`, the badge transport setting, or the Bluetooth Info.plist key — **or the link died and the badge screen stopped updating** |
 | **Badge Voice (speech → text)** | you touch `desktop/stt` or the voice path in `desktop/badge.go` — **or a transcription fails and you need to know why** |
+| **Mic capture (the shim's other half)** | you touch the RECORDING side of `desktop/stt` — the desktop's microphone button (`desktop/voice.go`) — **or that button says the mic will not start**. Its own rules (events, the state machine, the smoke stand-in) are in `docs/agents/desktop.md` |
 | **Badge → the desktop window (its keys)** | you touch the `key` protocol message, the device's status-screen keys, or the host's `Key` mapping |
 | **Building `desktop/stt` (the Swift shim)** | you touch `shim.swift`, the shim fails to link, or a change to it does nothing — **the library is rebuilt by a build step, not by the compiler** |
 | **The Device Side** | you are about to change, build or flash the firmware — **or the host and the device disagree about the protocol** |
@@ -146,6 +149,20 @@ knows NOTHING about the window — it reports gestures and the host decides what
 
 ## Building `desktop/stt` (the Swift shim)
 
+- **The package has TWO halves that answer to two different permissions, and the shim carries both.**
+  Transcription (`tachi_stt_transcribe`) needs the speech-recognition grant; capture
+  (`tachi_stt_record_start/stop`) needs the MICROPHONE one, `NSMicrophoneUsageDescription` — a second plist
+  key, in both `build/darwin/Info.plist` and `Info.dev.plist`, whose absence kills the app the moment the mic
+  is opened (the Bluetooth trap above, same class). **A HARDENED-RUNTIME build needs an ENTITLEMENT on top of the
+  key**, and neither the plists nor `build/darwin/Taskfile.yml` carries one today — so the locally signed
+  `make build` works while a notarized one (`wails3 tool sign --notarize`, whose default is
+  `-hardened-runtime`) would fail to open the mic (and to use Bluetooth) until
+  `com.apple.security.device.audio-input` / `com.apple.security.device.bluetooth` are signed in. Both callers of
+  `Transcribe` feed it the same shape — 16 kHz
+  mono Int16 — the device half by DECODING the uplink's ADPCM (`desktop/badge.go`), this half by resampling the
+  hardware's own buffers in the shim; that sameness is what lets the two consumers share every judgement above
+  it (`Choose`, the missing-asset degradation, the failure sentences). Capture is deliberately NOT gated on
+  macOS 26 (`AVAudioEngine` is far older) — the version gate belongs to transcribe, i.e. to `Available()`.
 - **`desktop/stt` is half Swift, and the Swift half is a BUILD STEP** (`stt/build_shim.sh` →
   `stt/libtachi_stt.a`, NOT committed — `desktop/Makefile`'s `build`/`test` targets run it, and
   `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the

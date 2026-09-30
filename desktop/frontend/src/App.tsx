@@ -1660,12 +1660,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         e.preventDefault()
         void openChain(currentId, sessions.find((x) => x.id === currentId)?.title || '会话')
       }
+      // Voice input: the same toggle the microphone button calls, so the two entry points cannot
+      // disagree about what a press means. `repeat` is checked on this one and nowhere else because
+      // this key STARTS AND STOPS a recording: holding it down would flip the microphone on and off
+      // for as long as the key is held (⌘B repeating just toggles a sidebar).
+      else if (e.shiftKey && !e.repeat && e.key.toLowerCase() === 'm') {
+        if (!composer.voiceAvailable) return
+        e.preventDefault()
+        composer.toggleVoice()
+      }
       else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); setShortcutsOpen((v) => !v) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChatLikeCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view])
+    projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view,
+    // Listed because it is captured by value: availability arrives once, after mount, and a closure
+    // from the first render would hold `false` forever (⌘⇧M would be a dead key). `composer` itself
+    // is deliberately absent — every method this handler calls is a stable useCallback.
+    composer.voiceAvailable])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -2509,6 +2522,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="shortcut-row"><kbd>⌘ K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
+            <div className="shortcut-row"><kbd>⌘ ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
             <div className="shortcut-section">旁路面板 / diff / 文件预览</div>

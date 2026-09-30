@@ -19,6 +19,7 @@ gets its own handbook beside this one rather than growing here.
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
+| **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
@@ -52,6 +53,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
 | the reading size (⌘= / ⌘- / ⌘0, and the two stores it lands in) | `font-size`, `bubble-lines` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
+| the microphone button / the `voice:*` events (states, where the text lands) | `voice-input` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |
 | the sidebar's width (drag, clamp, the choice surviving a restart) | `sidebar-width` |
@@ -256,6 +258,38 @@ Fixtures exist where the real path needs something a driver cannot do:
 
 - **Split out — read `docs/agents/badge.md`**: the BLE transport traps (framing, the liveness poll, the write
   cap, TCC), the voice/STT path, and how the device side is built and flashed.
+
+## Desktop Voice Input (the composer's microphone button)
+
+- **It reuses the badge path's transcription HALF and none of its delivery.** The transcription is the same
+  call (`stt.Transcribe`, same zh-CN/en-US modules, same `Choose`, same "why it failed" sentences — `voiceFailureText`
+  serves both callers); what differs is where the text goes: the device has no keyboard, so its voice becomes a
+  message (`badge:voice` → the frontend's `submit`), while the desktop has one, so this voice becomes a DRAFT
+  spliced into the composer at the caret (`voice:text`). Two events, on purpose — collapsing them into one
+  would make "send" and "fill the box" the same word.
+- **The BACKEND owns the state machine, including the 60s watchdog** (`desktop/voice.go`: idle → preparing →
+  recording → transcribing → idle). The button draws `voice:state` and the click only asks for a transition —
+  a local boolean diverges from the microphone at exactly the wrong moment (the first-ever authorization
+  window, where a second click would "stop" a recording that has not started). The watchdog is what keeps an
+  abandoned recording from holding the microphone open with nothing on screen saying so.
+- **The button and the ⌘⇧M shortcut are ONE call** (`ToggleVoiceInput`, not start/stop): the direction
+  depends on whether the microphone is open, which only Go knows, so the decision cannot live in two callers
+  that read a lagging event. The state the button reads is for DRAWING (the red pulse, the disabled wait) —
+  never for deciding. **It is an app-local key on purpose**: a system-wide one (`app.GlobalShortcut`, Carbon
+  hotkeys) takes the combination away from every other app and only pays off once the window can be recalled —
+  a separate step, not a bigger version of this one. Its key is chosen to be unclaimed by the menu bar
+  (`TestApplicationMenuFreesTheVoiceKey`): a menu accelerator is handled BEFORE the page sees the event, so a
+  collision is a dead key that no frontend test can observe.
+- **The microphone is a SECOND TCC permission, with its own plist key**, beside the speech one: a bundle
+  without `NSMicrophoneUsageDescription` does not get an error when it opens the mic — it is killed (the
+  Bluetooth trap in `docs/agents/badge.md`, same class of failure). It is also granted to the APP BUNDLE, so
+  the button can only be exercised in one (`make -C desktop run`); a bare binary, or `go test`, cannot be
+  granted it — that is why `desktop/stt`'s own test only reads the authorization STATUS and never records.
+- **A smoke run must never touch the microphone**: `TACHI_DEMO_VOICE_TEXT` stands in for capture and
+  recognition (the env var name is duplicated in `itest/desktop/sandbox.go`, which cannot import the app's
+  package). A real recording would raise a TCC prompt on the machine running the suite and capture the room —
+  the same reason the MCP OAuth flow gets a headless fetch. The stand-in replaces the audio, never the states
+  or the events, so what `voice-input` asserts is the half that has nothing to do with where audio comes from.
 
 ## Desktop Backend (bindings & paths)
 
@@ -654,7 +688,9 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   `agent:idle`) is the backstop for a hold no page ever lands on. `compact-window` pins it.
 - **The composer is `composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker, the
   "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share one
-  decision — `route`: send now, queue for the next steer point, or dispatch as a slash command.
+  decision — `route`: send now, queue for the next steer point, or dispatch as a slash command. The microphone
+  button lives here too, but its STATE does not: it draws `voice:state` (the backend owns the microphone and the
+  watchdog, see Desktop Voice Input), and the click only asks for a transition.
 - **Backend events are subscribed in `agentEvents.ts`.** Each payload names its session; compare it against
   `currentId` only where the UI genuinely means "on screen", never to address storage.
 - **A parked permission is composer state too, matched by tool CALL ID** (keyed by session, NOT cleared on

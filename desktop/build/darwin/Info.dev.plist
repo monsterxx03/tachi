@@ -32,11 +32,15 @@
 		<!-- 与 Info.plist 同理：没有这个键，蓝牙链路一启用就会被系统杀掉。 -->
 		<key>NSBluetoothAlwaysUsageDescription</key>
 		<string>Tachi connects to the Tachi badge over Bluetooth.</string>
-		<!-- 语音识别（badge 的语音输入靠它把整段音频转成文字）。与上面蓝牙那条同一个
-		     道理：TCC 把授权归因给 responsible process，而且判定发生在**第一次调用**时，
-		     没有这个键就是直接崩——不是返回一个错误，也不是弹窗。 -->
+		<!-- 语音识别（badge 的语音输入和桌面的麦克风按钮都靠它把整段音频转成文字）。与上面
+		     蓝牙那条同一个道理：TCC 把授权归因给 responsible process，而且判定发生在**第一次
+		     调用**时，没有这个键就是直接崩——不是返回一个错误，也不是弹窗。 -->
 		<key>NSSpeechRecognitionUsageDescription</key>
-		<string>Tachi transcribes what you say to the badge into text (on this Mac, no upload).</string>
+		<string>Tachi turns the voice you record into text (on this Mac, no upload).</string>
+		<!-- 麦克风。和上面那条是**两个**权限：识别问的是「能不能转写」，这里问的是「能不能
+		     听」，有其中一个不等于有另一个。键少了的后果同样不是报错，是崩。 -->
+		<key>NSMicrophoneUsageDescription</key>
+		<string>Tachi records from your microphone while the voice input button is on (on this Mac, no upload).</string>
 		<key>NSHumanReadableCopyright</key>
 		<string>(c) 2026, Tachi</string>
 	</dict>

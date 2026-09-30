@@ -578,6 +578,45 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   filter: saturate(0.6);
 }
 
+/* ── Voice input (the microphone button) ─────────────────────────────────────── */
+/* One button, four states, and the states are drawn from what the BACKEND says (desktop/voice.go):
+   the page cannot know whether the microphone is actually open. It sits next to the send button
+   because the text it produces lands in the box above — the two are two halves of one gesture.
+   Only rendered on a machine that can transcribe at all. */
+.mic-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-right: 8px;
+  padding: 0;
+  border: 1px solid var(--border-2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.mic-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.mic-btn:active { transform: scale(0.95); }
+/* Preparing and transcribing are WAITS, not actions: the click is ignored (the app is either
+   asking for a system permission or running the recognizer), so the button reads as inert. */
+.mic-btn:disabled { opacity: 0.5; cursor: default; }
+.mic-btn:disabled:hover { color: var(--text-dim); border-color: var(--border-2); }
+/* Recording is the one state that has to be readable without looking closely: a filled red disc
+   with a slow pulse — the only way to notice an open microphone you forgot about. */
+.mic-btn.is-recording {
+  background: var(--red-strong);
+  border-color: var(--red-strong);
+  color: var(--on-accent);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* One row, always — the bits that must never be cut (rings, throughput, the
    MCP button) keep their size, and the flexible labels (working dir, provider
    selection) clip instead. Wrapping here would push the status row into two or

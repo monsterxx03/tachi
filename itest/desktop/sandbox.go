@@ -36,6 +36,9 @@ type sandbox struct {
 	// (see launch): set by scenarios that authorize an MCP server, because a run must not
 	// open a window on the machine it is running on.
 	browserFetch bool
+	// voiceText, when set, is what a finished recording answers with — the microphone's
+	// stand-in (see the scenario field of the same name, and desktop/voice.go).
+	voiceText string
 
 	// mcpConfig is the mcp.json exactly as it was seeded. The scenario's Go half compares the
 	// file AFTER the run against it: "the panel wrote back exactly one line and left the rest
@@ -300,6 +303,12 @@ func (sb *sandbox) launch() error {
 		// desktop/demo.go, and the runner cannot import the app's own package. Same reason
 		// smokeExecName is duplicated (see the bundle rules).
 		env = append(env, "--env", "TACHI_DEMO_BROWSER_FETCH=1")
+	}
+	if sb.voiceText != "" {
+		// The microphone's stand-in, for the same class of reason: a real recording would
+		// raise a TCC prompt on the machine running the suite and capture the room. The name
+		// is duplicated from desktop/voice.go (voiceDemoTextEnv) — see above.
+		env = append(env, "--env", "TACHI_DEMO_VOICE_TEXT="+sb.voiceText)
 	}
 	args := append([]string{"open", "-g", sb.appPath}, env...)
 	return run(args[0], args[1:]...)

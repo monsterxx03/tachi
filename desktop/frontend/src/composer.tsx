@@ -83,6 +83,15 @@ export function useComposer(deps: ComposerDeps) {
   // A paste failure has no bubble to land in — unlike a refused message, nothing was sent — so it
   // gets a line of its own above the box rather than being swallowed.
   const [pasteError, setPasteError] = useState('')
+  // The voice button's own four states, and the one line it may need to say.
+  //
+  // The state is NOT computed here: whether the microphone is actually open is a fact only the
+  // backend has (it owns the engine and the watchdog), so the button DRAWS what `voice:state`
+  // pushes. A click only asks for a change (see toggleVoice). voiceAvailable is asked once —
+  // whether this machine can transcribe at all does not change while the app runs.
+  const [voiceState, setVoiceState] = useState<VoiceUiState>('idle')
+  const [voiceAvailable, setVoiceAvailable] = useState(false)
+  const [voiceNotice, setVoiceNotice] = useState('')
   // IME composition state. Some WebKit builds fire compositionend BEFORE the Enter keydown
   // that commits the candidate, so the ref is cleared on the next macrotask — that keeps the
   // guard active for the committing Enter without swallowing a later, genuine Enter-to-send.
@@ -501,6 +510,55 @@ export function useComposer(deps: ComposerDeps) {
     return () => off()
   }, [submit])
 
+  // ── Voice input (the microphone button) ───────────────────────────────────
+  //
+  // The SAME transcription half as the badge's voice, a different delivery: the device has no
+  // keyboard, so its text becomes a message on the spot (`badge:voice` → submit above); the desktop
+  // has one, so this text becomes a DRAFT — spliced into the box at the caret, sent only when the
+  // reader presses Enter. A misheard word is cheaper to fix than a sent message is to unsend.
+  //
+  // Three events, because the three do different things here: state redraws the button, text goes
+  // into the box, notice says one line above it. The backend owns the state machine (it owns the
+  // microphone and the 60s watchdog that closes an abandoned recording), so a click never guesses.
+  useEffect(() => {
+    AgentService.VoiceInputAvailable().then(setVoiceAvailable).catch(() => setVoiceAvailable(false))
+  }, [])
+
+  useEffect(() => {
+    const offState = Events.On('voice:state', (event) => {
+      const state = (event.data as { state?: string } | undefined)?.state
+      if (state) setVoiceState(state as VoiceUiState)
+    })
+    const offText = Events.On('voice:text', (event) => {
+      const text = (event.data as { text?: string } | undefined)?.text
+      // Trail space: dictation is almost always continued by typing (or by starting to type).
+      if (text) insertAtCaret(text, true, false)
+    })
+    const offNotice = Events.On('voice:notice', (event) => {
+      const message = (event.data as { message?: string } | undefined)?.message
+      if (message) setVoiceNotice(message)
+    })
+    return () => { offState(); offText(); offNotice() }
+  }, [insertAtCaret])
+
+  // toggleVoice is the whole gesture — the button's click and the ⌘⇧M shortcut call the same one.
+  // It asks the BACKEND to flip, and the backend decides which way that is: the direction depends on
+  // whether the microphone is open, and that is a fact only Go has (the state this component draws
+  // arrives over events, which lag by exactly the moment that matters — the first authorization
+  // window). A local boolean here would make a second press stop a recording that never started.
+  const toggleVoice = useCallback(() => {
+    AgentService.ToggleVoiceInput()
+      .catch((err: unknown) => setVoiceNotice(err instanceof Error ? err.message : String(err)))
+  }, [])
+
+  // A voice notice is transient like the paste one: it reports something about the recording that
+  // just ended, and the reader either retries or moves on.
+  useEffect(() => {
+    if (!voiceNotice) return
+    const t = window.setTimeout(() => setVoiceNotice(''), VOICE_NOTICE_MS)
+    return () => window.clearTimeout(t)
+  }, [voiceNotice])
+
   // send is the composer's own entry point: it owns the text box, so it clears it first.
   const send = useCallback(() => {
     const text = input.trim()
@@ -800,12 +858,38 @@ export function useComposer(deps: ComposerDeps) {
     send, submit, answerSteer, noticeCommandResult,
     // pasted images
     onPaste, pasteError,
+    // voice input (the microphone button; the backend owns the state, this reads it)
+    voiceState, voiceAvailable, voiceNotice, toggleVoice,
   }
 }
 
 // PASTE_NOTICE_MS is how long a failed paste stays on screen: long enough to read one line, short
 // enough that the box is clean again by the time the reader has retried the paste.
 const PASTE_NOTICE_MS = 5000
+
+// VOICE_NOTICE_MS is the same idea for what a recording has to say ("没有听到内容", "麦克风权限被
+// 拒绝…"). Longer than a paste's: the remedy is sometimes "go and change a system setting", so the
+// line has to survive being read twice.
+const VOICE_NOTICE_MS = 8000
+
+// VoiceUiState 是后端推给按钮的四个状态（desktop/voice.go 的 voiceState）。
+//
+// idle 什么都没发生；preparing 正在准备（首次使用多半是在等那个授权窗）；recording 麦克风开着，
+// 再点一下结束；transcribing 音频到手、识别在跑。
+type VoiceUiState = 'idle' | 'preparing' | 'recording' | 'transcribing'
+
+// voiceButtonLabel 是按钮悬停时那一句话（也是它的 aria-label）。
+//
+// 它随状态变，因为每一步用户要做的动作都不一样——而「首次使用要先去弹窗里点允许」这件事尤其
+// 说不出口就没有第二次机会：那个弹窗在系统那一层，页面上没有任何别的地方能提示它。
+function voiceButtonLabel(state: VoiceUiState): string {
+  switch (state) {
+    case 'recording': return '正在录音，再点一下结束（语音输入）'
+    case 'preparing': return '正在准备…首次使用请在系统弹窗里点「允许」'
+    case 'transcribing': return '正在识别…'
+    default: return '语音输入：点一下开始录音'
+  }
+}
 
 // readAsDataURL reads a clipboard File — a pasted image exists only as bytes, so this is the only
 // way to reach them from the page.
@@ -825,7 +909,12 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
 export function Composer({ api, running, onStop }: { api: ComposerApi; running: boolean; onStop: () => void }) {
-  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError } = api
+  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError, voiceState, voiceAvailable, voiceNotice, toggleVoice } = api
+
+  // ONE line above the box, because a paste failure and a recording's complaint can never both be
+  // news at the same moment — and two stacked notices would push the conversation up twice.
+  const notice = pasteError ? `⚠ ${pasteError}` : voiceNotice
+  const voiceLabel = voiceButtonLabel(voiceState)
 
   return (
     <>
@@ -860,7 +949,7 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
           aria-orientation="horizontal" aria-label="调整输入框高度" tabIndex={0}
           title="向上拖动加高输入框（↑ ↓ 也可以）"
           onPointerDown={startHeightDrag} onKeyDown={onHeightKey} />
-        {pasteError && <div className="paste-notice">⚠ {pasteError}</div>}
+        {notice && <div className="paste-notice">{notice}</div>}
         {cmdOpen && (
           <CommandPicker
             items={cmdMatches}
@@ -957,6 +1046,21 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
           )}
         </div>
         <div className="composer-actions">
+          {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，
+              因为它产出的东西就落在上面那个输入框里——两件事是同一个动作的两半。 */}
+          {voiceAvailable && (
+            <button
+              className={`mic-btn${voiceState === 'recording' ? ' is-recording' : ''}`}
+              onClick={toggleVoice}
+              disabled={voiceState === 'preparing' || voiceState === 'transcribing'}
+              title={voiceLabel} aria-label={voiceLabel}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="3" width="6" height="11" rx="3" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <line x1="12" y1="18" x2="12" y2="21" />
+              </svg>
+            </button>
+          )}
           <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
             <span>{running ? '排队' : '发送'}</span>
