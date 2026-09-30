@@ -301,6 +301,20 @@ func matchAny(patterns []string, s string) string {
 	return ""
 }
 
+// Segments returns the canonical command segments CheckBash matches rules
+// against: every command invocation in pipelines, lists and command
+// substitutions, plus redirects as their own pseudo-segments, printed in
+// canonical form (quoting normalised, a heredoc's body absent).
+//
+// It is exported for the ONE other reader that must agree with the policy about
+// what a command is: a judgment gate's state has to describe the command the
+// rules were matched against, and a second parser there would be free to drift
+// from this one. An error means the command could not be parsed at all — the
+// same condition that makes CheckBash answer conservatively.
+func Segments(command string) ([]string, error) {
+	return splitShellCommands(command)
+}
+
 // splitShellCommands parses a shell command line into simple command
 // segments: every command invocation in pipelines, lists, and command
 // substitutions, plus redirects as their own pseudo-segments.
