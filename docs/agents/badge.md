@@ -13,7 +13,7 @@ and its own gate.
 | --- | --- |
 | **Badge Link over BLE** | you touch `desktop/link/`, the badge transport setting, or the Bluetooth Info.plist key — **or the link died and the badge screen stopped updating** |
 | **Badge Voice (speech → text)** | you touch `desktop/stt` or the voice path in `desktop/badge.go` — **or a transcription fails and you need to know why** |
-| **Mic capture (the shim's other half)** | you touch the RECORDING side of `desktop/stt` — the desktop's microphone button (`desktop/voice.go`) — **or that button says the mic will not start**. Its own rules (events, the state machine, the smoke stand-in) are in `docs/agents/desktop.md` |
+| **Mic capture (the shim's other half)** | you touch the RECORDING side of `desktop/stt` (`tachi_stt_record_start/stop`, i.e. the desktop's microphone button `desktop/voice.go`) — **especially when that button says 「没有听到内容」**: the capture traps are in the `Building desktop/stt` section below. Its own rules (events, the state machine, the smoke stand-in) are in `docs/agents/desktop.md` |
 | **Badge → the desktop window (its keys)** | you touch the `key` protocol message, the device's status-screen keys, or the host's `Key` mapping |
 | **Building `desktop/stt` (the Swift shim)** | you touch `shim.swift`, the shim fails to link, or a change to it does nothing — **the library is rebuilt by a build step, not by the compiler** |
 | **The Device Side** | you are about to change, build or flash the firmware — **or the host and the device disagree about the protocol** |
@@ -162,7 +162,21 @@ knows NOTHING about the window — it reports gestures and the host decides what
   mono Int16 — the device half by DECODING the uplink's ADPCM (`desktop/badge.go`), this half by resampling the
   hardware's own buffers in the shim; that sameness is what lets the two consumers share every judgement above
   it (`Choose`, the missing-asset degradation, the failure sentences). Capture is deliberately NOT gated on
-  macOS 26 (`AVAudioEngine` is far older) — the version gate belongs to transcribe, i.e. to `Available()`.
+  macOS 26 (`AVCaptureSession` is far older) — the version gate belongs to transcribe, i.e. to `Available()`.
+- **Mic capture is `AVCaptureSession`, and that is a Bluetooth fact, not a preference — switching it back to
+  `AVAudioEngine` fails SILENTLY and only intermittently.** `AVAudioEngine`'s IO cycle takes its sample rate from
+  the OUTPUT device, while one headset can be 44.1 kHz out and 16 kHz in — so `inputNode.outputFormat` reports a
+  rate the input hardware does not have. The old shape ("read the format, install the tap with it, then start")
+  froze that rate *before* the headset left A2DP (idle: no usable input at all) for HFP, and that switch happens
+  only during `start()`: it returns without error, `isRunning` flips false, and the tap is **never called** —
+  zero samples, which the user sees as 「没有听到内容」. `AVCaptureSession.startRunning` instead WAITS for the
+  profile switch (measured ~57 ms) and every buffer carries its own format, so the shim resamples per buffer
+  (`RecordSink`) instead of committing up front. What makes this hard to catch by hand: it works whenever some
+  other app has already pulled the headset into HFP, so the same build is broken, then fine, with nothing
+  changed — the device's state is system-wide, not per-process. The one line that separates the two causes is
+  `desktop voice: transcribed`: a captured-but-empty take still logs it (`chars=0`), a take with no samples does
+  not. Also, the delegate is held WEAKLY by `setSampleBufferDelegate` — lose the strong `recordSink` reference
+  and the callbacks stop silently, with exactly the same symptom.
 - **`desktop/stt` is half Swift, and the Swift half is a BUILD STEP** (`stt/build_shim.sh` →
   `stt/libtachi_stt.a`, NOT committed — `desktop/Makefile`'s `build`/`test` targets run it, and
   `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the
@@ -177,6 +191,17 @@ knows NOTHING about the window — it reports gestures and the host decides what
   - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
     (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
     which is why the Makefile targets carry the step rather than a comment telling you to remember it.
+  - **The Go build cache does NOT see `libtachi_stt.a` change, so a rebuilt shim can be silently left out —
+    the build succeeds and the app runs the OLD code.** cgo names the library only inside the LDFLAGS string
+    (a constant `-L` path), so its contents are not part of the build action's ID: rewrite `shim.swift`, rebuild
+    the `.a`, run `make build` — and if those exact build flags ran before the change, the previous LINK result
+    is reused. Zero warnings, and it looks exactly like "my fix does not work". **Ask the binary, not the build
+    log**: `nm -u bin/Tachi | grep AVCapture` (an ObjC class reference is an undefined symbol, so it survives
+    `-ldflags="-w -s"`; `strings` does NOT show it). Pick a symbol that only the change under test could have
+    introduced — `AVCaptureSession` for the capture rewrite, while `AVCaptureDevice` proves nothing (the old
+    code referenced it too). The cure is `cd desktop && GOWORK=off go clean -cache`, then `make build`; a new
+    `go run ./something` package is built fresh and will therefore look fine while the app does not, which is
+    the trap's most misleading face.
   - **The static library ALONE does not link, and it does not RUN either: a rpath is needed once
     the shim uses Swift concurrency.** The link half: the Swift back-deployment libraries its
     auto-link directives name live in the TOOLCHAIN, not the SDK — `stt/build_shim.sh` derives that

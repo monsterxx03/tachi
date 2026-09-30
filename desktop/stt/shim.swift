@@ -412,10 +412,21 @@ public func tachiSTTTranscribe(_ samples: UnsafePointer<Int16>?,
 // 好让 desktop 那边两个调用方喂给 Transcribe 的东西逐字相同。
 //
 // 为什么不用 AVAudioRecorder 写个文件再读回来：识别那半承诺过音频不落盘（设计文档 §8），
-// 而这里连临时文件都不需要——AVAudioEngine 的 tap 交回来的就是内存里的 buffer。中间那次
-// 重采样也在内存里，走 AVAudioConverter（硬件给的是 44.1/48 kHz 的浮点，而引擎要 16 k）。
+// 而这里连临时文件都不需要——采样回调交回来的就是内存里的 buffer。中间那次重采样也在内存
+// 里，走 AVAudioConverter（硬件给的是 16/44.1/48 kHz 的浮点，而引擎要 16 k）。
 //
-// ⚠ 这一段**不**要求 macOS 26，所以它不关在 #available 里：AVAudioEngine 老得多，真正
+// ⚠ **为什么是 AVCaptureSession 而不是 AVAudioEngine**（这一条是踩出来的，别再换回去）：
+// AVAudioEngine 的 IO 周期采样率取自**输出设备**，而它的 inputNode 必须服从同一条时钟——
+// 同一副蓝牙耳机输入是 16 k、输出是 44.1 k，于是 inputNode 报出来的格式（44.1 k）在输入
+// 硬件上根本不存在。它的采集形状又是「读格式 → 按这个格式装 tap → start」，格式在装 tap
+// 那一刻定死；而蓝牙耳机空闲时停在 A2DP（没有可用输入），按下麦克风才切到 HFP，这一切都
+// 发生在 start 之后。结果是 start() 不抛错、isRunning 随后翻 false、**tap 一次都不回调**，
+// 上层看到的就是「按下了但没听到内容」——一个样本都没有，而不是转写为空。
+// AVCaptureSession 反过来：它管设备，startRunning 会**等** profile 切换完成（实测 ~57 ms），
+// 每块的格式随后由 CMSampleBuffer 如实带来，没有任何地方需要提前猜。它不做音频图，所以也
+// 没有「大家必须同一条时钟」这条约束。
+//
+// ⚠ 这一段**不**要求 macOS 26，所以它不关在 #available 里：AVCaptureSession 老得多，真正
 // 要求 26 的是转写那半（availability 由 tachi_stt_available 一个人回答，见 stt_darwin.go）。
 // ⚠ 但麦克风要**另一个** TCC 权限，和语音识别不是同一个（NSMicrophoneUsageDescription）：
 // 少了那个键，第一次真的去开会崩，不是返回错误——和蓝牙那次同一个坑（docs/agents/badge.md）。
@@ -432,15 +443,26 @@ private let recordSampleRate: Double = 16000
 // 而这是采集层的自卫——万一没人来 Stop，这个数组不能一直涨下去把内存吃掉。
 private let recordMaxSamples = Int(recordSampleRate) * 120
 
-// tapBufferFrames 是 tap 每次交回来的帧数。随便挑的：转换是逐块做的，块大小不影响结果
-// （转写那半的 512/1600 也是一样的道理）。
-private let tapBufferFrames: AVAudioFrameCount = 4096
+// recordTarget 是交给识别引擎的格式，全局只建一次（转写那半要的就是 16 k 单声道 Int16）。
+private let recordTarget = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                        sampleRate: recordSampleRate,
+                                        channels: 1,
+                                        interleaved: true)
+
+// recordQueue 是采样回调跑的那条队列。
+//
+// **串行**是有意的：转换器是有状态的（重采样会跨块带尾巴），它只在这条队列上被碰，所以
+// RecordSink 里那个 converter 不必再加一把锁。
+private let recordQueue = DispatchQueue(label: "tachi.stt.record")
 
 // 采集状态。用锁而不是 actor：这些函数都从 cgo 调进来的线程上跑，没有 actor 上下文可以
-// await（和 installAsked 同一处境），而 tap 那边是另一条线程——两边都要看同一份数据。
+// await（和 installAsked 同一处境），而回调那边是另一条队列——两边都要看同一份数据。
 private let recordLock = NSLock()
-nonisolated(unsafe) private var recordEngine: AVAudioEngine?
+nonisolated(unsafe) private var recordSession: AVCaptureSession?
 nonisolated(unsafe) private var recordSamples: [Int16] = []
+// recordSink 必须是**强引用**：setSampleBufferDelegate 存的是 weak，这个字段一没，回调就
+// 静默停止——症状和「设备格式对不上」一模一样（会话在跑，一个样本都不来）。
+nonisolated(unsafe) private var recordSink: RecordSink?
 
 // tachi_stt_mic_status 回答麦克风的授权状态。
 //
@@ -490,48 +512,46 @@ public func tachiSTTMicAsk(_ timeoutSeconds: Double) -> Int32 {
 // tachi_stt_record_start 开始采集。返回 1 表示真的在录，0 表示没起来（原因进不了 C ABI
 // 的正经通道，所以调用方先自己查权限/可用性，见 stt_darwin.go）。
 //
-// 幂等：已经在录时重复调用返回 1，不重建引擎——上层那次重复点击（界面还没收到状态）不该
+// 幂等：已经在录时重复调用返回 1，不重建会话——上层那次重复点击（界面还没收到状态）不该
 // 把正在录的东西冲掉。
+//
+// ⚠ startRunning 是**阻塞**的，而这里要的正是它阻塞：蓝牙耳机从 A2DP 切到 HFP 就发生在这
+// 几百毫秒里（实测 ~57 ms），切完才可能有数据。调用它的是 cgo 出来的线程（不是主线程），
+// 所以等在这里不会卡住界面。
 @_cdecl("tachi_stt_record_start")
 public func tachiSTTRecordStart() -> Int32 {
     recordLock.lock()
-    let already = recordEngine != nil
+    let already = recordSession != nil
     recordLock.unlock()
     if already { return 1 }
 
-    // 没授权就**不**碰引擎：硬开会崩（少 Info.plist 键）或者立刻抛（被拒），而调用方要的是
+    // 没授权就**不**碰设备：硬开会崩（少 Info.plist 键）或者立刻抛（被拒），而调用方要的是
     // 一句能讲给用户听的话，不是这里的一声闷响。
     if tachiSTTMicStatus() != 1 { return 0 }
 
-    let engine = AVAudioEngine()
-    let input = engine.inputNode
-    let inputFormat = input.outputFormat(forBus: 0)
-    // 没有输入设备时（一台没接麦克风的机器）这两项是 0：那不是「静音」，是「录不了」。
-    guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else { return 0 }
-    guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                     sampleRate: recordSampleRate,
-                                     channels: 1,
-                                     interleaved: true),
-          let converter = AVAudioConverter(from: inputFormat, to: target) else { return 0 }
+    // 没有输入设备时 AVCaptureDevice.default 给 nil：那不是「静音」，是「录不了」。
+    guard let device = AVCaptureDevice.default(for: .audio),
+          let input = try? AVCaptureDeviceInput(device: device) else { return 0 }
+    let session = AVCaptureSession()
+    guard session.canAddInput(input) else { return 0 }
+    session.addInput(input)
+
+    let sink = RecordSink()
+    let output = AVCaptureAudioDataOutput()
+    output.setSampleBufferDelegate(sink, queue: recordQueue)
+    guard session.canAddOutput(output) else { return 0 }
+    session.addOutput(output)
 
     recordLock.lock()
     recordSamples = []
     recordLock.unlock()
 
-    input.installTap(onBus: 0, bufferSize: tapBufferFrames, format: inputFormat) { buffer, _ in
-        appendConverted(buffer, converter: converter, target: target)
-    }
-    engine.prepare()
-    do {
-        try engine.start()
-    } catch {
-        // 起不来就把 tap 撤掉：留在那儿的 tap 会让下一次 start 直接抛异常。
-        input.removeTap(onBus: 0)
-        return 0
-    }
+    session.startRunning()
+    guard session.isRunning else { return 0 }
 
     recordLock.lock()
-    recordEngine = engine
+    recordSession = session
+    recordSink = sink
     recordLock.unlock()
     return 1
 }
@@ -548,19 +568,22 @@ public func tachiSTTRecordStop(_ samples: UnsafeMutablePointer<UnsafeMutablePoin
                                _ count: UnsafeMutablePointer<Int>?,
                                _ rate: UnsafeMutablePointer<Double>?) -> Int32 {
     recordLock.lock()
-    let engine = recordEngine
-    recordEngine = nil
+    let session = recordSession
+    let sink = recordSink
+    recordSession = nil
     recordLock.unlock()
-    guard let engine = engine else { return 0 }
+    guard let session = session else { return 0 }
 
-    // tap 先撤、引擎再停：反过来的话，停下那一刻还可能进来一块。
-    engine.inputNode.removeTap(onBus: 0)
-    engine.stop()
+    // 会话先停，再等回调把队排空：停会话不等于已经在跑的那一块回调结束了，不等它，最后
+    // 几十毫秒的语音会被丢掉——而那正好是用户松手前说的最后半句。
+    session.stopRunning()
+    recordQueue.sync {}
 
     recordLock.lock()
     let got = recordSamples
     recordSamples = []
     recordLock.unlock()
+    _ = sink // 会话停之前一直持有（回调正是靠它活着），到这里就不再有回调了
 
     count?.pointee = got.count
     rate?.pointee = recordSampleRate
@@ -584,37 +607,67 @@ public func tachiSTTFreeSamples(_ samples: UnsafeMutablePointer<Int16>?) {
     samples?.deallocate()
 }
 
-// appendConverted 把一块 tap 交来的音频转成 16 k 单声道 Int16，接在记录后面。
+// RecordSink 把会话交来的每一块音频转成 16 k 单声道 Int16，接在记录后面。
 //
-// 跑在 tap 自己的音频线程上，所以只做两件事：转换，然后在锁里追加。取不到数据就**安静地
-// 丢掉这一块**——这里的失败没有更好的去处（识别引擎要的是连续样本，往里塞缺口只会得到
-// 更差的文本），而真的什么都录不到时，上层看到的是 count 为 0 的那一下。
-private func appendConverted(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter, target: AVAudioFormat) {
-    let ratio = target.sampleRate / buffer.format.sampleRate
-    // 容量留一点余量：降采样的输出帧数会因块的边界有±几帧的出入，紧贴着算会丢掉尾巴。
-    let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-    guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+// ⚠ 这个类的**格式不再提前假定**：采样率从每块自己的格式描述里读（内置麦 48 k、蓝牙 HFP
+// 16 k 都走同一份代码），转换器因此按源格式建、格式变了就重建。采集那一半过去栽在
+// 「start 之前先问一次格式、然后把它定死」上——那时问到的其实是**输出设备**的采样率。
+//
+// 它只跑在 recordQueue 上（串行），所以 converter 不需要锁；取不到数据就**安静地丢掉这
+// 一块**——识别引擎要的是连续样本，往里塞缺口只会得到更差的文本，而真的什么都录不到时，
+// 上层看到的是 count 为 0 的那一下。
+private final class RecordSink: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    private var converter: AVAudioConverter?
+    private var converterRate: Double = 0
 
-    // 转换器要求「按需供料」：给它一块，然后告诉它没有了（noDataNow）——它会把这一块
-    // 转出来的帧数如实写在 out.frameLength 里（可能少于容量，也可能跨块带尾巴）。
-    var supplied = false
-    var conversionError: NSError?
-    converter.convert(to: out, error: &conversionError) { _, status in
-        if supplied {
-            status.pointee = .noDataNow
-            return nil
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard let target = recordTarget else { return }
+        let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frames > 0,
+              let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+              let source = AVAudioFormat(streamDescription: asbd),
+              let input = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(frames))
+        else { return }
+        input.frameLength = AVAudioFrameCount(frames)
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0,
+                                                          frameCount: Int32(frames),
+                                                          into: input.mutableAudioBufferList) == noErr else { return }
+
+        if converter == nil || converterRate != source.sampleRate {
+            converter = AVAudioConverter(from: source, to: target)
+            converterRate = source.sampleRate
         }
-        supplied = true
-        status.pointee = .haveData
-        return buffer
-    }
-    guard conversionError == nil, out.frameLength > 0, let channel = out.int16ChannelData else { return }
+        guard let converter = converter else { return }
 
-    recordLock.lock()
-    defer { recordLock.unlock() }
-    // 单声道 interleaved：第 0 个通道就是全部样本。
-    let frames = Int(out.frameLength)
-    if recordSamples.count >= recordMaxSamples { return }
-    let room = min(frames, recordMaxSamples - recordSamples.count)
-    recordSamples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: room))
+        let ratio = recordSampleRate / source.sampleRate
+        // 容量留一点余量：降采样的输出帧数会因块的边界有±几帧的出入，紧贴着算会丢掉尾巴。
+        let capacity = AVAudioFrameCount(Double(frames) * ratio) + 32
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+
+        // 转换器要求「按需供料」：给它一块，然后告诉它没有了（noDataNow）——它会把这一块
+        // 转出来的帧数如实写在 out.frameLength 里（可能少于容量，也可能跨块带尾巴）。
+        var supplied = false
+        var conversionError: NSError?
+        converter.convert(to: out, error: &conversionError) { _, status in
+            if supplied {
+                status.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            status.pointee = .haveData
+            return input
+        }
+        guard conversionError == nil, out.frameLength > 0, let channel = out.int16ChannelData else { return }
+
+        recordLock.lock()
+        defer { recordLock.unlock() }
+        // 单声道 interleaved：第 0 个通道就是全部样本。
+        let converted = Int(out.frameLength)
+        if recordSamples.count >= recordMaxSamples { return }
+        let room = min(converted, recordMaxSamples - recordSamples.count)
+        recordSamples.append(contentsOf: UnsafeBufferPointer(start: channel[0], count: room))
+    }
 }
