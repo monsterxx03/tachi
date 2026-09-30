@@ -13,7 +13,13 @@
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 14px 12px 12px;
+  /* The column runs the window's FULL height, so the traffic lights are painted onto it and the
+     top strip has to be theirs. Its height is --titlebar-h — the same one the toolbar beside it
+     is — and it is deliberately EMPTY: no brand, no controls. The window is dragged from there
+     (Wails' InvisibleTitleBarHeight makes the window's top strip a drag handle), and the 14px
+     below it is what the old sidebar's own padding-top used to be, so the list starts at the very
+     same y it did when the toolbar took that room instead. */
+  padding: var(--titlebar-h) 12px 12px;
   overflow: hidden;
   transition: width 0.22s var(--ease), min-width 0.22s var(--ease), padding 0.22s var(--ease);
 }
@@ -490,15 +496,16 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    tree — which is what `visibility` was there for in the first place, and what it did only by
    disabling the paint WebKit cannot undo. */
 
-/* Titlebar: flat chrome matching the sidebar, with a hairline along the bottom
-   edge so the chrome/content boundary reads as a fold rather than a drawn line.
-   No blur, no compositing-layer tricks — the 1px inset highlight along the top
-   edge is what keeps the bar looking lit rather than pasted on. */
+/* Toolbar: the CONTENT column's own bar (the sidebar runs the window's full height beside it, and
+   carries the traffic lights — see .sidebar-brand). Flat chrome matching the sidebar, with a
+   hairline along the bottom edge so the chrome/content boundary reads as a fold rather than a
+   drawn line. No blur, no compositing-layer tricks — the 1px inset highlight along the top edge is
+   what keeps the bar looking lit rather than pasted on. */
 .titlebar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 16px 0 78px; /* left pad leaves room for native traffic lights */
+  gap: 12px;
+  padding: 0 16px;
   height: var(--titlebar-h);
   border-bottom: 1px solid var(--border);
   background: var(--chrome-2);
@@ -506,6 +513,29 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   position: relative;
   z-index: 2;
+  /* The lights' room belongs to the sidebar while it is open. Fold it away and the whole content
+     column, this bar included, slides under them — so the left padding has to become their
+     clearance, on the sidebar's own curve and duration. The two animate together, which is what
+     keeps the first control from passing under a light on the way (the padding only ever grows as
+     the column's left edge moves left, so the control's x is monotonically >= the lights' edge). */
+  transition: padding-left 0.22s var(--ease);
+}
+.app-body.sidebar-folded .titlebar { padding-left: 78px; }
+
+/* Which conversation this is. With the sidebar folded there was otherwise nothing on screen saying
+   so; here it is the one thing in the bar that can be long, so it takes the room and yields it
+   back with an ellipsis (`min-width: 0`: a flex item refuses to shrink below its content). The
+   full name stays reachable as the tooltip. It is NOT no-drag — the bar is the window's handle,
+   and the title is the widest part of it to grab. */
+.titlebar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 560;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Right-hand cluster: the side-panel toggle and the theme switch sit at the far

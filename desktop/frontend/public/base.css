@@ -29,9 +29,11 @@
     radial-gradient(880px 620px at 104% 112%, var(--app-tint-b), transparent 58%),
     linear-gradient(180deg, var(--bg-top), var(--bg) 46%);
 
-  /* The titlebar's height, named once because two rules need it: .titlebar itself, and the
-     settings view, which fills the window BELOW the bar (the design keeps the titlebar visible
-     — see docs/2026-09-14-desktop-settings-design.md §三). */
+  /* The window's top strip — one height for every column's first row: the content column's
+     toolbar (.titlebar), the sidebar's brand strip (.sidebar-brand, which the traffic lights sit
+     on), and the settings rail's clearance above its first control. It also has to stay equal to
+     Wails' InvisibleTitleBarHeight (desktop/main.go): that is what makes the strip a native drag
+     handle, and the two are the same 44px of the same window. */
   --titlebar-h: 44px;
 
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses

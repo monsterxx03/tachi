@@ -902,11 +902,20 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **Do not reintroduce an "activity row" above the composer** (it appeared and vanished once per step and
   shoved the message area up and down), and **do not compensate a layout change from a
   `requestAnimationFrame`** — a covered window stops the page's frames. Compensate in a LAYOUT effect.
-- **The titlebar holds its controls in one cluster** (`titlebar-right`, held at the far edge), the agent state
-  is NOT echoed there (the sidebar row and the reply already say 运行中), and the displayed session id is
-  readable as `data-session-id` on the app root while the copy gesture lives in the session row's menu — the
-  smoke drivers read that attribute to tell "switched session" from "still the same one" (a title cannot:
-  未命名会话 repeats).
+- **The window's columns are the sidebar's, not the bar's**: the sidebar runs the FULL height with the traffic
+  lights painted onto its empty top strip (`--titlebar-h`, the same 44px Wails' `InvisibleTitleBarHeight` makes a
+  native drag handle — keep the two equal), and the toolbar belongs to the content column beside it. So
+  `.titlebar` is a SIBLING of the sidebar, not a window-wide row, and the traffic-light clearance moves with the
+  fold: 78px on the sidebar's strip while it is open, on `.titlebar` itself under `.app-body.sidebar-folded`, on
+  the same curve so the first control never slides under a light. The settings page covers the WHOLE window for
+  the same reason (it would otherwise leave a strip of the conversation's own chrome above it) and pays for its
+  rail's top clearance with the rail's own padding.
+- **The toolbar holds its controls in one cluster** (`titlebar-right`, held at the far edge) plus the session's
+  TITLE (from `sessions`, the sidebar's own 未命名会话 fallback — empty while the session has not reached the
+  list, so a launch does not flash a name it is about to correct), while the agent state is NOT echoed there
+  (the sidebar row and the reply already say 运行中). The displayed session id is readable as
+  `data-session-id` on the app root — the copy gesture lives in the session row's menu, and the smoke drivers
+  read that attribute to tell "switched session" from "still the same one" (a title cannot: 未命名会话 repeats).
 - **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate** (the
   estimate is character-class based and under-counts mixed CJK + JSON), the breakdown is scaled to that total
   because the parts must add up to the number above them, and the correction is a RATIO of the estimate's

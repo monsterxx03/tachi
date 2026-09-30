@@ -1939,6 +1939,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   const currentProvider = providers.find((p) => (p.name ?? p.Name) === providerName)
   const currentProviderModel = currentProvider?.model ?? currentProvider?.Model ?? ''
 
+  // What the titlebar names: the session on screen, in the sidebar's own words. Two cases are
+  // deliberately NOT the same. A session that is not in the list yet (a launch, or the moment
+  // between clicking a row and the list coming back) leaves the bar EMPTY rather than showing
+  // 未命名会话, which would flash a name that is about to be replaced by the real one. A session
+  // that IS listed with no title yet shows 未命名会话 — the same words its row carries, because a
+  // conversation's name is one fact and two surfaces must not spell it differently.
+  const currentSessionItem = sessions.find((s) => s.id === currentId)
+  const sessionTitle = currentSessionItem ? currentSessionItem.title || '未命名会话' : ''
+
   // The sidebar's grouping, built once: the list renders the project groups, then the plain
   // 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
   const groups = sessionGroups(sessions, projects)
@@ -1970,28 +1979,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     // from "still on the same one" — a title cannot do that, because 未命名会话 repeats as soon as a
     // second session exists.
     <div className="app" data-session-id={currentId}>
-      <header className="titlebar drag-region">
-        <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg>
-        </button>
-        {/* The titlebar used to name the session by its ID here (click to copy). It does not any more:
-            the id is an implementation handle, not something to read all day, and the one gesture it
-            offered now lives in the session's context menu (「复制 session id」). The DIVIDER went with
-            it — it existed to separate the id from the toggle beside it. */}
-        <div className="titlebar-right no-drag">
-          <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
-            onClick={() => setOneOffOpen(!oneoffOpen)}
-            title={oneoffOpen ? '收起旁路面板' : '展开旁路面板（评审 / 提交的过程）'}>
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="10" y1="2.5" x2="10" y2="13.5"/></svg>
-          </button>
-          <ThemeToggle theme={theme} onToggle={toggleTheme} />
-        </div>
-      </header>
-
-      <div className="app-body" ref={appBodyRef}>
+      {/* sidebar-folded exists for ONE reason: with the sidebar folded away, the content column
+          slides under the window's own traffic lights, and the titlebar has to buy their room back
+          (see the .titlebar rules in layout.css). */}
+      <div className={`app-body${sidebarCollapsed ? ' sidebar-folded' : ''}`} ref={appBodyRef}>
         <aside ref={sidebarW.ref as React.RefObject<HTMLElement>}
           className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}${sidebarW.resizing ? ' is-resizing' : ''}`}
           style={sidebarW.width === null ? undefined : { width: sidebarW.width, minWidth: sidebarW.width }}>
+          {/* No top strip element: the sidebar's own padding-top IS it (the height of the window's
+              controls — see .sidebar in layout.css). It stays empty on purpose: the traffic lights
+              are painted onto the sidebar's background there, and the window is dragged from it. */}
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
               rather than hiding the feature until a session happens to be bound. This is the
@@ -2097,6 +2094,29 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         </aside>
 
         <main className="main">
+          {/* The toolbar belongs to the CONTENT COLUMN, not to the window: the sidebar runs the
+              window's full height beside it (see docs/agents/desktop.md). What it carries is
+              therefore the content column's own facts — which conversation this is, and the two
+              toggles that change how the column is laid out. The session ID used to sit here and
+              does not any more: it is an implementation handle, and the one gesture it offered now
+              lives in the session row's context menu (「复制 session id」). The TITLE is different —
+              it is what the reader calls this conversation, and with the sidebar folded there was
+              otherwise nothing on screen saying which one was open. */}
+          <header className="titlebar drag-region">
+            <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg>
+            </button>
+            <div className="titlebar-title" title={sessionTitle || undefined}>{sessionTitle}</div>
+            <div className="titlebar-right no-drag">
+              <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
+                onClick={() => setOneOffOpen(!oneoffOpen)}
+                title={oneoffOpen ? '收起旁路面板' : '展开旁路面板（评审 / 提交的过程）'}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="10" y1="2.5" x2="10" y2="13.5"/></svg>
+              </button>
+              <ThemeToggle theme={theme} onToggle={toggleTheme} />
+            </div>
+          </header>
+
           <div className="chat-wrap">
             {/* The bar floats over the transcript (its own position: .find-bar.is-chat) rather than
                 taking a row: it appears on a keypress, and a row appearing would shift every message

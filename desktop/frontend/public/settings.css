@@ -11,6 +11,16 @@
      body does not hide them; covering them is what makes "the settings page is
      what is on screen" true regardless of what was open a moment ago.
 
+   • It covers the WHOLE window, the toolbar included. The toolbar belongs to the
+     content column (the sidebar runs the window's full height), so leaving it
+     visible would have left a strip of the conversation's own chrome — its title
+     and its toggles — above this page, next to a rail that is not the sidebar.
+     Nothing is lost by covering it: this page has its own way out (左栏的返回),
+     and the window's top strip is a native drag handle whatever is painted there
+     (Wails' InvisibleTitleBarHeight — desktop/main.go), so it stays draggable.
+     The rail's own top clearance is what keeps its first control out from under
+     the traffic lights.
+
    • The chat view stays MOUNTED and is only made INERT (.app-body[inert],
      layout.css). Its local state — collapsed project groups, the composer's
      draft, the transcript's scroll position — is not worth rebuilding just to
@@ -21,7 +31,7 @@
 
 .settings-view {
   position: fixed;
-  top: var(--titlebar-h);
+  top: 0;
   left: 0;
   right: 0;
   bottom: 0;
@@ -40,7 +50,10 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 12px 10px;
+  /* The top clearance is the traffic lights': this rail is the page's left column, and they sit
+     over it exactly as they sit over the sidebar. Their strip is empty here (the page's own
+     heading is in the pane), and it is a drag area — see .settings-view above. */
+  padding: var(--titlebar-h) 10px 12px;
   overflow-y: auto;
   /* The recessed plane, like the sidebar: the form next to it is the page. */
   background: var(--chrome);
