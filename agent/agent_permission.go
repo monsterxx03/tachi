@@ -15,13 +15,18 @@ import (
 )
 
 // NewPermissionPolicyFromConfig builds a permission.Policy from the global
-// config permissions plus project-level rules (.tachi/permissions.yaml under
-// projectRoot). Built-in absolutely-dangerous deny rules are always included
-// unless disabled via permissions.bash.disable_builtin_deny in the GLOBAL
-// config (the project file cannot disable them). Project-level allow rules
+// config permissions plus the project-level rules of EVERY tree in projectRoots
+// (.tachi/permissions.yaml under each; config.ProjectRootsFrom resolves and
+// de-duplicates them). Built-in absolutely-dangerous deny rules are always
+// included unless disabled via permissions.bash.disable_builtin_deny in the
+// GLOBAL config (a project file cannot disable them). Project-level allow rules
 // are ignored — projects can only tighten, never exempt (see NewPolicy).
 // Returns nil only when no rules exist at all AND builtins are disabled.
-func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoot string, lg *logger.Logger) *permission.Policy {
+//
+// Every tree contributes: a session spanning two repositories has to honour
+// both repositories' tripwires, and taking only the first one silently dropped
+// the rest (see ProjectRootsFrom).
+func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoots []string, lg *logger.Logger) *permission.Policy {
 	if cfg == nil {
 		return nil
 	}
@@ -35,22 +40,25 @@ func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoot string, lg *l
 		Ask:   cfg.Permissions.Bash.Ask,
 		Allow: cfg.Permissions.Bash.Allow,
 	}
+	// The trees' rules are UNIONED into one project Rules: deny and ask can only
+	// be added to (NewPolicy takes one project side), which is exactly the
+	// "projects can only tighten" rule, now applied per tree instead of to one.
 	var project permission.Rules
-	pp, err := config.LoadProjectPermissions(projectRoot)
-	if err != nil {
-		if lg != nil {
-			lg.Warn(context.Background(), "agent: ignoring invalid project permissions file", "error", err)
+	for _, root := range projectRoots {
+		pp, err := config.LoadProjectPermissions(root)
+		if err != nil {
+			if lg != nil {
+				lg.Warn(context.Background(), "agent: ignoring invalid project permissions file", "error", err)
+			}
+			continue
 		}
-	} else {
 		if len(pp.Bash.Allow) > 0 && lg != nil {
 			lg.Warn(context.Background(), "agent: ignoring project-level allow rules (allow is global-only)",
-				"count", len(pp.Bash.Allow))
+				"tree", root, "count", len(pp.Bash.Allow))
 		}
-		project = permission.Rules{
-			Deny: pp.Bash.Deny,
-			Ask:  pp.Bash.Ask,
-			// Allow intentionally omitted — dropped by NewPolicy anyway.
-		}
+		project.Deny = append(project.Deny, pp.Bash.Deny...)
+		project.Ask = append(project.Ask, pp.Bash.Ask...)
+		// Allow intentionally omitted — dropped by NewPolicy anyway.
 	}
 	if cfg.Permissions.Bash.DisableBuiltinDeny {
 		// User opted out of ALL built-in protection: neither the disk/shutdown

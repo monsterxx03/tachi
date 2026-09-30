@@ -311,16 +311,19 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 	// doing it from the UI goroutine could rewrite the store under a running turn. This
 	// is the one point where no turn of this session can be in flight.
 	var sessionTree string
+	var sessionAdditional []string
 	if r.sm != nil {
 		// The turn's working directory comes from the ONE root-set resolver
 		// (sessionRootsFrom), not from the record directly: the prompt, the @-file
 		// search and the skill store are all fed from there, and reading WorkingDir
 		// here is how bash ended up running in the new tree while the prompt still
-		// advertised the old one.
+		// advertised the old one. The ADDITIONAL roots ride along because the
+		// permission policy reads every tree's .tachi/permissions.yaml.
 		if cur := r.sm.Current(); cur != nil {
-			if primary, _ := d.sessionRootsFrom(cur); primary != "" {
+			if primary, additional := d.sessionRootsFrom(cur); primary != "" {
 				ctx = wdctx.WithDir(ctx, primary)
 				sessionTree = primary
+				sessionAdditional = additional
 			}
 		}
 	}
@@ -352,7 +355,9 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 		// purpose: holding it is what keeps another turn of this session from starting
 		// while they are being swapped.
 		r.agent.ReloadSkillsIn(sessionTree)
-		r.agent.SetPermissionRoot(ctx, sessionTree)
+		// ...and every tree's rules, not just the one the session just moved to:
+		// the additional roots keep their own .tachi/permissions.yaml.
+		r.agent.SetPermissionTrees(ctx, sessionTree, sessionAdditional)
 	}
 	return ctx, cancel, steerCh, turnDone, true
 }

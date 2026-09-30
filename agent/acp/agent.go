@@ -134,6 +134,13 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		return acp.NewSessionResponse{}, fmt.Errorf("configure agent: %w", err)
 	}
 
+	// The session's trees, not the process cwd: configure resolves the project from
+	// the agent process's working directory, which for an editor-spawned agent is
+	// whatever the editor chose — not necessarily the workspace this session was
+	// opened in. Every tree's .tachi/permissions.yaml is read (a session may span
+	// several), and the judgment gate's state reports the same set.
+	aiAgent.SetPermissionTrees(configureCtx, roots.Cwd(), roots.Dirs())
+
 	// Connect editor-provided MCP servers (if any)
 	if len(req.McpServers) > 0 && mcpMgr != nil {
 		editorServers := convertMCPServers(req.McpServers, t.cfg.ACP.MCPConflictPolicy, t.cfg.MCPServers)
@@ -450,6 +457,12 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 			return acp.ResumeSessionResponse{}, err
 		}
 		sess.roots.Set(sess.roots.Cwd(), dirs)
+		// The workspace just changed, so the permission policy follows it: the rules
+		// are per tree, and a tree the editor just dropped must stop contributing
+		// them (and the judgment gate's state must report the new set).
+		if sess.agent != nil {
+			sess.agent.SetPermissionTrees(ctx, sess.roots.Cwd(), sess.roots.Dirs())
+		}
 		// The workspace just changed, and this session's MCP connections answer the roots
 		// capability with it: a roots-aware server has to be told, or it keeps confining file
 		// access to the directories the editor has just dropped.
@@ -518,6 +531,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	if err != nil {
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: resume configure warning: %v", err))
 	}
+	aiAgent.SetPermissionTrees(ctx, roots.Cwd(), roots.Dirs())
 	// Restore the session's per-session thinking override (set via the
 	// Reasoning Effort config option or /thinking), if any.
 	applySessionThinking(aiAgent, t.cfg, loaded)
@@ -683,6 +697,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	if err != nil {
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: LoadSession configure warning: %v", err))
 	}
+	aiAgent.SetPermissionTrees(ctx, roots.Cwd(), roots.Dirs())
 	// Restore the loaded session's per-session thinking override (set via
 	// the Reasoning Effort config option or /thinking), if any.
 	applySessionThinking(aiAgent, t.cfg, loaded)

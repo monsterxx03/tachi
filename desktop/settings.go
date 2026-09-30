@@ -382,11 +382,13 @@ var settingsTable = []settingApply{
 		Mode:     applyPush,
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			return pushError("权限策略", d.applyToLiveRuns(func(r liveRun) error {
-				// SetPermissionRoot is the same rebuild a tree change already goes through: it
-				// compiles a fresh policy from the LIVE config against this session's own tree
-				// (project-level rules live there) and inherits the session's approvals. The
-				// engine needs no new path — only the trigger was missing.
-				r.Agent.SetPermissionRoot(context.Background(), d.sessionWorkDir(r.ID))
+				// SetPermissionTrees is the same rebuild a tree change already goes through: it
+				// compiles a fresh policy from the LIVE config against every tree this session
+				// works in (each one's project-level rules live there) and inherits the
+				// session's approvals. The engine needs no new path — only the trigger was
+				// missing.
+				primary, additional := d.sessionRoots(r.ID)
+				r.Agent.SetPermissionTrees(context.Background(), primary, additional)
 				return nil
 			}))
 		},

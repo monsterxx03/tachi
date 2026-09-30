@@ -131,6 +131,11 @@ type AgentConfig struct {
 
 	// --- 权限策略 ---
 	PermissionPolicy *permission.Policy
+	// PermissionTrees 是这份策略读过的**所有**工作树（config.ProjectRootsFrom
+	// 解析并去重，第一棵 = 主目录那棵）。多 workspace 会话（desktop 的额外 root、
+	// ACP 的 additionalDirectories）里每棵树各带一份 .tachi/permissions.yaml，
+	// 全部并集——只读主树会让第二棵树的绊线静默失效。
+	PermissionTrees []string
 	// PermissionRoot 是这份策略所依据的那棵树（FindProjectRootFrom 的结果）：
 	// 项目级规则从 <root>/.tachi/permissions.yaml 读，判定闸门的 state 也要
 	// 告诉模型"多外面才算外面"。空 = 没有项目（只有全局规则）。

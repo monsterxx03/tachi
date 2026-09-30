@@ -1,6 +1,8 @@
 package acp
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -8,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -178,4 +181,48 @@ func TestBuildSystemPromptForCwd_WithRoots(t *testing.T) {
 	cfg := &config.Config{Language: "en"}
 	prompt := buildSystemPromptForCwd(cfg, "/project", []string{"/shared-lib"}, "sess-1")
 	assert.Contains(t, prompt, "- Additional workspace roots: /shared-lib")
+}
+
+// TestNewSession_PermissionTreesComeFromTheSession covers the ACP half of the
+// permission scope: the policy used to be built from the AGENT PROCESS's working
+// directory (configure's default), which is whatever the editor chose when it
+// spawned the agent — not necessarily the workspace this session was opened in.
+// Both trees the session names must contribute their own
+// .tachi/permissions.yaml, since the rules are per tree.
+func TestNewSession_PermissionTreesComeFromTheSession(t *testing.T) {
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	primary, extra := t.TempDir(), t.TempDir()
+	for tree, rule := range map[string]string{
+		primary: "permissions:\n  bash:\n    deny: [\"terraform destroy*\"]\n",
+		extra:   "permissions:\n  bash:\n    deny: [\"kubectl delete*\"]\n",
+	} {
+		dir := filepath.Join(tree, ".tachi")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "permissions.yaml"), []byte(rule), 0o644))
+	}
+
+	ta := NewTachiAgent(testACPConfig(t), "test")
+	resp, err := ta.NewSession(t.Context(), acp.NewSessionRequest{
+		Cwd:                   primary,
+		AdditionalDirectories: []string{extra},
+		McpServers:            []acp.McpServer{},
+	})
+	require.NoError(t, err)
+
+	sess, ok := ta.sessions.Get(string(resp.SessionId))
+	require.True(t, ok)
+	policy := sess.agent.PermissionPolicy()
+	require.NotNil(t, policy)
+	for _, cmd := range []string{"terraform destroy -auto-approve", "kubectl delete pod x"} {
+		if d, _ := policy.CheckBash(cmd); d != permission.DecisionDeny {
+			t.Errorf("%q -> %v, want deny: both of the session's trees must contribute their rules", cmd, d)
+		}
+	}
+	// And the trees are recorded, which is what the judgment gate's state reports.
+	if got := sess.agent.Config.PermissionTrees; len(got) != 2 {
+		t.Errorf("PermissionTrees = %v, want both trees", got)
+	}
 }

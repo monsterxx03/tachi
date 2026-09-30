@@ -12,7 +12,7 @@ func TestStateParsedCommand(t *testing.T) {
 		Command: "cd /tmp && git branch -D feature",
 		Rule:    "git branch -D *",
 		CWD:     "/Users/dev/projects/app/src",
-		Root:    "/Users/dev/projects/app",
+		Trees:   []string{"/Users/dev/projects/app", "/Users/dev/projects/shared-lib"},
 	})
 
 	// The segments are the PARSER's canonical output, not the raw text: the
@@ -22,7 +22,7 @@ func TestStateParsedCommand(t *testing.T) {
 		"  1. cd /tmp",
 		"  2. git branch -D feature",
 		"Working directory: /Users/dev/projects/app/src",
-		"Project root (the tree the rules are built against): /Users/dev/projects/app",
+		"Trees this session works in (the rules were read from each): /Users/dev/projects/app, /Users/dev/projects/shared-lib",
 		`Matched ask rule: "git branch -D *"`,
 	} {
 		if !strings.Contains(got, want) {
@@ -74,11 +74,11 @@ func TestStateTruncatesHugeCommands(t *testing.T) {
 // paired experiment in pkg/jev/testdata/bash-ask-context.json rejected carrying
 // it), and the line is rendered only when a case sets it.
 func TestStateRendersTheRequestLine(t *testing.T) {
-	without := State(Cmd{Command: "git status", CWD: "/w", Root: "/w"})
+	without := State(Cmd{Command: "git status", CWD: "/w", Trees: []string{"/w"}})
 	if strings.Contains(without, "request in this turn") {
 		t.Errorf("an empty request must render nothing, got:\n%s", without)
 	}
-	with := State(Cmd{Command: "git status", CWD: "/w", Root: "/w", Request: "看看改了啥\n\n再跑测试"})
+	with := State(Cmd{Command: "git status", CWD: "/w", Trees: []string{"/w"}, Request: "看看改了啥\n\n再跑测试"})
 	if !strings.Contains(with, "The user's request in this turn was: 看看改了啥 再跑测试") {
 		t.Errorf("the request must be rendered on one line, got:\n%s", with)
 	}

@@ -64,7 +64,7 @@ func permissionTestAgent(t *testing.T, tree string) *agent.AIAgent {
 	if err != nil {
 		t.Fatalf("NewAIAgentWithConfig: %v", err)
 	}
-	a.SetPermissionRoot(t.Context(), tree)
+	a.SetPermissionTrees(t.Context(), tree, nil)
 	return a
 }
 

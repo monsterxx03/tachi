@@ -314,7 +314,11 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 	// Also re-applied at the start of every turn whose tree moved
 	// (beginTurn's stale flag), because a store's and a policy's inputs are fixed
 	// when they are built: changing the folder has to re-point both.
-	a.SetPermissionRoot(ctx, d.sessionPrimaryDir(sm))
+	// Every tree the session works in, not just the primary: the permission policy
+	// reads <tree>/.tachi/permissions.yaml from EACH of them (a session spanning
+	// two repositories has to honour both repositories' tripwires).
+	permPrimary, permAdditional := d.sessionRootsFrom(sm.Current())
+	a.SetPermissionTrees(ctx, permPrimary, permAdditional)
 	// The ask decision belongs to this session's user. Installed after construction
 	// because the handler reaches back into the agent for 「本会话全部允许」 (which
 	// flips the session-wide switch on this agent's own policy).

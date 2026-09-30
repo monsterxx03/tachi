@@ -85,17 +85,18 @@ func Question() jev.Question {
 // are different states and the text distinguishes them, because "why is this
 // command at the gate at all" is exactly what the judgment needs.
 //
-// Root is the permission root: the tree the RULES were built against
-// (agent.AIAgent.Config.PermissionRoot, i.e. what config.FindProjectRootFrom
-// resolved for this session). It is deliberately one path and not a list of the
-// session's workspace roots — the policy works from this single root, so it is
-// the tree a rule's "outside" was measured against, and a fabricated list would
-// be a wrong fact of exactly the kind this state must not carry.
+// Trees are the trees this session works in — agent.AIAgent.Config.PermissionTrees,
+// i.e. config.ProjectRootsFrom of the session's working directory plus its
+// additional workspace roots, which is also the set the RULES were read from.
+// It is a list because a desktop session can span several repositories, and a
+// single path would make a command in the second one read as "outside the tree"
+// — over-asking there, and stating a fact that is not the session's shape.
+// Empty means no tree is known, which the state says rather than inventing one.
 type Cmd struct {
 	Command string
 	Rule    string
 	CWD     string
-	Root    string
+	Trees   []string
 	// Request is what the user asked for in THIS turn ("把 feature/login 删了").
 	//
 	// MEASURED, and the gate therefore leaves it EMPTY
@@ -144,7 +145,7 @@ func State(c Cmd) string {
 	}
 
 	fmt.Fprintf(&b, "\nWorking directory: %s\n", orPlaceholder(c.CWD))
-	fmt.Fprintf(&b, "Project root (the tree the rules are built against): %s\n", rootLine(c.Root))
+	fmt.Fprintf(&b, "Trees this session works in (the rules were read from each): %s\n", treesLine(c.Trees))
 	b.WriteString("Matched ask rule: " + ruleLine(c.Rule, unparsed))
 	return b.String()
 }
@@ -172,14 +173,20 @@ func ruleLine(rule string, unparsed bool) string {
 	}
 }
 
-// rootLine names the permission root, and says so when there is none: a session
-// with no project (or a bare agent) has no tree to be outside OF, and inventing
-// one would make the judgment wrong in the direction that matters.
-func rootLine(root string) string {
-	if strings.TrimSpace(root) == "" {
+// treesLine names the session's trees, and says so when there are none: a
+// session with no workspace (or a bare agent) has no tree to be outside OF, and
+// inventing one would make the judgment wrong in the direction that matters.
+func treesLine(trees []string) string {
+	live := make([]string, 0, len(trees))
+	for _, t := range trees {
+		if s := strings.TrimSpace(t); s != "" {
+			live = append(live, s)
+		}
+	}
+	if len(live) == 0 {
 		return "(unknown — treat the working directory above as the tree)"
 	}
-	return root
+	return strings.Join(live, ", ")
 }
 
 // oneLine collapses the request to one line: the field is a sentence, and a

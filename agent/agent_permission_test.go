@@ -397,11 +397,11 @@ func TestAgentLoop_BashPolicyNoRules_Unaffected(t *testing.T) {
 }
 
 func TestNewPermissionPolicyFromConfig(t *testing.T) {
-	assert.Nil(t, NewPermissionPolicyFromConfig(nil, "", nil), "nil config → nil policy")
+	assert.Nil(t, NewPermissionPolicyFromConfig(nil, nil, nil), "nil config → nil policy")
 
 	// Default config (no user rules) still gets the built-in deny rules.
 	cfg := config.DefaultConfig()
-	p := NewPermissionPolicyFromConfig(cfg, "", nil)
+	p := NewPermissionPolicyFromConfig(cfg, nil, nil)
 	require.NotNil(t, p, "built-in deny rules should produce a non-nil policy")
 	d, _ := p.CheckBash("rm -rf /")
 	assert.Equal(t, permission.DecisionDeny, d, "built-in rules should deny root deletion")
@@ -410,7 +410,7 @@ func TestNewPermissionPolicyFromConfig(t *testing.T) {
 
 	// User rules stack on top of built-ins.
 	cfg.Permissions.Bash.Deny = []string{"git clone *"}
-	p = NewPermissionPolicyFromConfig(cfg, "", nil)
+	p = NewPermissionPolicyFromConfig(cfg, nil, nil)
 	require.NotNil(t, p)
 	d, rule := p.CheckBash("git clone https://example.com/r.git")
 	assert.Equal(t, permission.DecisionDeny, d)
@@ -429,11 +429,11 @@ func TestNewPermissionPolicyFromConfig(t *testing.T) {
 	// disable_builtin_deny (global) → no built-ins; nil policy when no user rules.
 	cfg2 := config.DefaultConfig()
 	cfg2.Permissions.Bash.DisableBuiltinDeny = true
-	assert.Nil(t, NewPermissionPolicyFromConfig(cfg2, "", nil))
+	assert.Nil(t, NewPermissionPolicyFromConfig(cfg2, nil, nil))
 
 	// With builtins disabled, the previously-denied command is allowed.
 	cfg2.Permissions.Bash.Deny = []string{"example *"}
-	p2 := NewPermissionPolicyFromConfig(cfg2, "", nil)
+	p2 := NewPermissionPolicyFromConfig(cfg2, nil, nil)
 	require.NotNil(t, p2)
 	d, _ = p2.CheckBash("rm -rf /")
 	assert.Equal(t, permission.DecisionAllow, d, "builtins disabled → root deletion allowed")
@@ -454,7 +454,7 @@ func TestNewPermissionPolicyFromConfig_ProjectAllowIgnored(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Permissions.Bash.Ask = []string{"git *"}
-	p := NewPermissionPolicyFromConfig(cfg, root, nil)
+	p := NewPermissionPolicyFromConfig(cfg, []string{root}, nil)
 	require.NotNil(t, p)
 
 	// Project ask is honored (tightening works).

@@ -487,20 +487,24 @@ func (a *AIAgent) SetPermissionPolicy(p *permission.Policy) {
 	a.Config.PermissionPolicy = p
 }
 
-// SetPermissionRoot rebuilds the permission policy for the project containing
-// dir, and installs it.
+// SetPermissionTrees rebuilds the permission policy for EVERY tree this session
+// works in, and installs it.
 //
-// dir is any directory inside the project — normally the session's working
-// directory, which is exactly what ReloadSkillsIn takes, so a caller that
-// re-points one re-points the other with the same value. The root is resolved
-// the same way there (config.FindProjectRootFrom); an empty dir means "no
-// project", i.e. the global rules alone.
+// primary is the session's own working directory (what ReloadSkillsIn takes, so
+// a caller that re-points one re-points the other with the same value);
+// additional are the other workspace roots the session may work in — the
+// desktop's extra roots, ACP's additionalDirectories. Each is resolved to its
+// own project root and its .tachi/permissions.yaml is read, because a session
+// that spans two repositories has to honour BOTH repositories' tripwires: with
+// only the primary's file loaded, the second repository's deny/ask rules were
+// silently absent. An empty primary means "no project", i.e. the global rules
+// alone.
 //
 // It exists because the project half of the rules is per TREE while one process
 // can host several trees: the default build (configure) resolves the root from
 // the PROCESS working directory, which for a GUI app is "/" — so the file it
 // looked for was /.tachi/permissions.yaml, and a project's own rules were
-// silently absent. Frontends that know which tree a conversation is in call
+// silently absent. Frontends that know which trees a conversation is in call
 // this instead of relying on that default.
 //
 // The session-scoped approvals carry over (InheritSessionApprovals): a user who
@@ -510,16 +514,25 @@ func (a *AIAgent) SetPermissionPolicy(p *permission.Policy) {
 // ask, so the inherited approval can never resurrect a forbidden command.
 //
 // No FullConfig (bare agents, sub-agents) leaves the policy untouched.
-func (a *AIAgent) SetPermissionRoot(ctx context.Context, dir string) {
+func (a *AIAgent) SetPermissionTrees(ctx context.Context, primary string, additional []string) {
 	if a.Config.FullConfig == nil {
 		return
 	}
-	root := config.FindProjectRootFrom(dir)
-	built := NewPermissionPolicyFromConfig(a.Config.FullConfig, root, a.Config.Logger)
+	trees := config.ProjectRootsFrom(primary, additional)
+	built := NewPermissionPolicyFromConfig(a.Config.FullConfig, trees, a.Config.Logger)
 	built.InheritSessionApprovals(a.Config.PermissionPolicy)
 	a.Config.PermissionPolicy = built
-	a.Config.PermissionRoot = root
-	a.Config.Logger.Debug(ctx, "Agent: permission policy rebuilt", "dir", dir, "project_root", root)
+	a.Config.PermissionTrees = trees
+	// PermissionRoot keeps naming the tree the session's own working directory is
+	// in (trees[0]) — the primary one, which is what the judgment gate's state
+	// reports. Every tree in the list contributed rules.
+	if len(trees) > 0 {
+		a.Config.PermissionRoot = trees[0]
+	} else {
+		a.Config.PermissionRoot = ""
+	}
+	a.Config.Logger.Debug(ctx, "Agent: permission policy rebuilt",
+		"dir", primary, "trees", strings.Join(trees, ","))
 }
 
 // PermissionPolicy returns the installed policy, or nil.

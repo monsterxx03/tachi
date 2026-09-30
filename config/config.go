@@ -115,6 +115,31 @@ func FindProjectRootFrom(dir string) string {
 	return dir
 }
 
+// ProjectRootsFrom resolves the trees one session works in: the primary
+// directory first, then every additional workspace root, each walked up to its
+// own project root (FindProjectRootFrom) and de-duplicated in order.
+//
+// The rule this exists for: a session can span SEVERAL repositories (the
+// desktop's extra workspace roots, ACP's additionalDirectories), and each of
+// them may carry its own .tachi/permissions.yaml. Reading only the primary's
+// file meant the second repository's deny/ask rules silently did not apply —
+// a tripwire the user had written that simply was not there. One tree that
+// resolves onto another (a root inside the primary's own repository) is listed
+// once, so its file is not read twice.
+func ProjectRootsFrom(primary string, additional []string) []string {
+	seen := make(map[string]bool, 1+len(additional))
+	roots := make([]string, 0, 1+len(additional))
+	for _, dir := range append([]string{primary}, additional...) {
+		root := FindProjectRootFrom(dir)
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots
+}
+
 // ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。
 // 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
 type ModelSpec struct {
@@ -1032,13 +1057,15 @@ type BashPermissions struct {
 
 	// JevThreshold is the noul probability at or above which the judgment is
 	// read as "a human should see this". It belongs to the case set it was
-	// swept on, NOT to this field: τ = 0.72 was measured on
+	// swept on, NOT to this field: τ = 0.70 was measured on
 	// pkg/jev/testdata/bash-ask.json — 68 authored commands, 5 repeats, state
-	// rendered by agent/permission/jevask — with jev-1.13.0. Separating
-	// thresholds were 0.70 and 0.75, the highest ROUTINE command scored 0.69
-	// (`rm -rf ./node_modules && npm ci`) and the lowest needs-a-look command
-	// 0.76 (`cat ~/.tachi/config.yaml`); 0.72 is the middle of that run, so
-	// drift in either direction has ~0.03 to move before a verdict flips.
+	// rendered by agent/permission/jevask — with jev-1.13.0. The corridor is
+	// (0.66, 0.75): the highest ROUTINE command scored 0.66
+	// (`npm ci` — it runs the registry's postinstall scripts, so the criteria
+	// read it as touching the network) and the lowest needs-a-look command 0.75
+	// (`docker compose down -v`). 0.70 is that corridor's middle and is biased to
+	// the SAFE side of it: a threshold that drifts too high is the direction that
+	// misses an ask, while drifting low only costs an interruption.
 	//
 	// Re-sweep when the model version moves, when that case set CHANGES, or when
 	// the STATE SHAPE does (a sentence in jevask is part of the question a
@@ -1049,7 +1076,7 @@ type BashPermissions struct {
 	// A value of 1.0 is the shadow setting: the gate judges and logs every
 	// command but can never act (a noul answer is at most 1.0), so the
 	// distribution can be watched on real traffic before anything changes.
-	JevThreshold float64 `yaml:"jev_threshold" default:"0.72"`
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.70"`
 
 	// JevBudget bounds one judgment's wait. 3s is shorter than the MCP
 	// search's 6s on purpose: that gate is a search the model asked for and is

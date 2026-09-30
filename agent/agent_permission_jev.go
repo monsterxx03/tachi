@@ -84,7 +84,7 @@ func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) bashAskJud
 	evalCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	resp, err := judge.Evaluate(evalCtx,
-		jevask.State(jevask.Cmd{Command: cmd, Rule: rule, CWD: wdctx.Dir(ctx), Root: a.Config.PermissionRoot}),
+		jevask.State(jevask.Cmd{Command: cmd, Rule: rule, CWD: wdctx.Dir(ctx), Trees: a.Config.PermissionTrees}),
 		map[string]jev.Question{jevask.QuestionID: jevask.Question()})
 	if err != nil {
 		// No answer: the rules decide for this command (rules-degraded), and the
