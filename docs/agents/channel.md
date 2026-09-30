@@ -42,8 +42,8 @@ convention-not-history, split + index when a subject grows) apply to this split 
   from the manager's choice:
   - `AskUserQuestion` is unregistered for a non-interactive channel and **re-registered** in `buildAgent`
     for one whose channel implements `InteractiveChannel` with `Interactive() == true`. `NewAIAgentWithConfig`
-    unregisters it unconditionally under `PermissionModeSkip`, so the re-registration is what makes the
-    tool exist — not a formality.
+    drops it when `PermissionModeSkip` is set and `AskUserEnabled` is false, so the re-registration is
+    what makes the tool exist — not a formality.
   - A channel implementing `ToolProvider` / `ThreadReminderChannel` injects its own tools and a per-thread
     reminder into the cached agent at build time (`buildAgent`), so both are per-thread by construction.
 
@@ -62,13 +62,11 @@ is evicted (`/new`, `/model`, a compact's finalize).
 | `cachedAgent.mu` | that thread's turns (serializes them; `release` ends the turn) | a whole turn |
 | `cachedAgent.evicted` (atomic) | "this slot is dead" | set before the agent is closed, read by a waiter |
 
-An earlier version nested the first two — eviction took the map lock and then the slot lock, while
-`acquireAgent` took the slot lock and then went BACK for the map lock to re-check its slot — and that is
-an ABBA deadlock: a thread acquiring thread T while another evicts T hangs both. It was latent for as long
-as the cache existed, because every test ran acquire and evict one after the other instead of against each
-other. The atomic `evicted` flag is what lets a waiter refuse a doomed slot without touching the map, so
-neither direction is needed. `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` pins it: it fails within
-seconds if the nesting comes back (verified by restoring the old shape).
+**No guard may be taken while another is held.** Nesting these two is an ABBA deadlock: a thread
+  acquiring thread T while another evicts T hangs both. The atomic `evicted` flag is what lets a waiter
+  refuse a doomed slot without touching the map, so neither direction is needed.
+  `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` pins it — it fails within seconds if the nesting
+  comes back.
 
 **The rest follows from that:**
 
@@ -94,8 +92,8 @@ seconds if the nesting comes back (verified by restoring the old shape).
 - **`workDir` is the one field two lifecycles write**, so it carries its own LEAF lock (`cachedAgent.WorkDir`/
   `SetWorkDir`) rather than the turn lock: a turn reads it at the start and may write it back from the
   session's persisted value, while `/cd` — a stateless command that must not wait out a turn — writes it
-  directly. Guarding it with the turn lock would make `/cd` block for a whole turn; guarding it with the map
-  lock was the old code's accident (that lock protects the map).
+  directly. Guarding it with the turn lock would make `/cd` block for a whole turn, and with the map lock it
+  would be guarded by a lock that exists to protect the map.
 
 ## Per-thread state besides the agent
 
@@ -110,9 +108,7 @@ seconds if the nesting comes back (verified by restoring the old shape).
   on, cancel func, `isCompact`, Ask User state, and the whisper ambient state. Created by `beginTurn`,
   dropped by `endTurn`.
 
-Three containers with three lock styles used to stand here (an RWMutex map, a Mutex map, a
-`container.LockedMap`), reached from four files — the largest source of "which lock am I holding" in the
-package. What matters now:
+**One record, one LEAF lock, and its methods never call out:**
 
 - **The table lock is a LEAF**: nothing is taken while holding it, and its methods never call out.
   `beginTurn`'s `make` callback only allocates for that reason — a provider lookup inside it would nest
@@ -224,7 +220,7 @@ go test -race ./channel/manager/     # the package is written for -race; the fie
 
 | Test | Pins |
 | --- | --- |
-| `agent_pool_test.go` `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` | the pool nests no guards (fails in seconds on the old shape) |
+| `agent_pool_test.go` `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` | the pool nests no guards (fails in seconds if the nesting returns) |
 | `agent_pool_test.go` `TestAgentPool_EachDoesNotHoldThePoolLock` | `each` calls out with the map lock released |
 | `agent_pool_test.go` `TestAgentPool_TombstonesAreInvisible` | a dead slot reads as absent, so `/cd` lands on a live one |
 | `agent_pool_test.go` `TestAgentPool_ReplacedSlotClosesItsAgent` | a slot acquire replaces is still closed (it left the map) |

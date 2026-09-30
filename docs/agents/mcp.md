@@ -68,8 +68,8 @@ split + index when a subject grows) apply to this split too.
   ` github ` → `github`), and the searcher receives `tools.MCPSearchOptions`. An unknown `server` is an ERROR
   naming the servers that exist (`tools.MCPServerLister`, implemented by both real searchers), never a
   silently empty result that reads as 「没有这个工具」.
-- **Do not try to talk the model into passing `server`.** It has not once passed it in practice, under two
-  different wordings (a sentence in the tool description, then a legend in the reminder block), while `select:`
+- **Do not try to talk the model into passing `server`.** It does not pass it in practice — narrowing only
+  shrinks its OWN search space, and it has no reason to want that — while `select:`
   is in routine use — because `server` only RESTRICTS the model's own search space and the payoff (the Jev
   bill) is not one it can perceive. A narrower search has to be inferred in CODE, not requested in prose.
 - **Narrowing does not invalidate the swept cut-off** (it removes candidates, it does not reword a question):

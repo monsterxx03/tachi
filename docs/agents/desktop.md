@@ -107,19 +107,18 @@ exactly one of the two, so write both. A new scenario is a `drivers/<name>.js` a
 `steps`, the work-dir `files`, an `after` func), added to the routing table above. Keep both halves small: one
 behaviour per scenario, asserting what the user would notice.
 
-Three traps in the driver half, each of which cost a debugging session:
+Three traps in the driver half, each of which fails a run that looks green:
 
 - **Read a computed style only for the frame AFTER the one that changed it.** A scripted key changes
   `--fs-scale` synchronously, but `getComputedStyle` keeps answering with the PREVIOUS frame's value until
   WebKit's style recalc runs — so measuring right after the key reads the size from before it, and the next
-  `waitFor` compares against a baseline that is already the target (the `font-size` scenario did exactly this:
-  `⌘0`, measure, then "⌘= made it bigger" waited forever). Wait for what you want to SEE — `waitFor` polling
-  the computed size — never for a sleep.
+  `waitFor` compares against a baseline that is already the target. Wait for what you want to SEE — `waitFor`
+  polling the computed size — never for a sleep.
 - **A scenario whose LAST step is fire-and-forget must let the write land** (`smoke.sleep` before `finish()`).
   The runner kills the app as soon as the driver reports, so a bound call still in flight — `⌘=`, a panel width,
   a theme — is a file write that never happens, and the scenario's Go half reads the value from one step back.
   This is the one legitimate fixed wait in a driver, because there is no state to wait for: the UI is already
-  correct, and what is owed is a side effect (`font-size` needed 500 ms after a 200 ms debounce).
+  correct, and what is owed is a side effect.
 - **The smoke bundle is signed with the LOCAL CERTIFICATE, not ad-hoc** (`smokeSignID` in `sandbox.go`), and it
   has to be: desktop links the BLE package, whose adapter builds a `CBCentralManager` at package INIT, so this
   bundle asks for Bluetooth permission whether or not a scenario goes near the badge. An ad-hoc signature's
@@ -144,8 +143,8 @@ Fixtures exist where the real path needs something a driver cannot do:
   neither write a session record nor delete one, so this is the only way to stage "a compaction chain whose
   other end is gone" — what a parent deleted by hand, or swept by session cleanup's `max_keep`, leaves behind.
 - **A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
-  so the session a driver asserts on has to be seeded LAST; seeding an unbound session after it made the
-  driver assert on the wrong one, which reads exactly like "the project does not drive its member".
+  so the session a driver asserts on has to be seeded LAST — otherwise the driver asserts on the wrong one,
+  which reads exactly like "the project does not drive its member".
 
 ### Rules and traps
 
@@ -226,8 +225,8 @@ Fixtures exist where the real path needs something a driver cannot do:
   `webview_awake_darwin.go`). The harness asserts the outcome on EVERY scenario, so a Wails/WebKit update that
   drops the SPI fails on one readable line.
 - **The smoke window does not ANIMATE: WebKit collapses transition durations to ~0 while the window is
-  occluded** (measured: the toolbar's own `transition` reads `padding-left 0.00001s cubic-bezier(…)` in the
-  sandbox, and a value sampled ~40ms after the click is already the end state). `keepPageAwake` lifts the TIMER
+  occluded** (in the sandbox the toolbar's own `transition` reads `padding-left 0.00001s`, so a value read right
+  after the click is already the end state). `keepPageAwake` lifts the TIMER
   throttling, not this. So a driver may assert an animation's two ENDS and that the property is transitioned,
   never a middle frame — and "the sidebar slid open" is not assertable here at all.
 - **The console is part of the report**: the driver's `console.error` lines ride in `Result.Console`, printed
@@ -235,14 +234,16 @@ Fixtures exist where the real path needs something a driver cannot do:
 
 ## Desktop Build & Signing (macOS)
 
-- **`make build` leaves the app ad-hoc signed; run `make sign-local` after it.** macOS ties TCC grants
+- **`make build` re-signs with the local certificate itself when one exists, and warns (leaving the bundle
+ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle built without one.** macOS ties TCC grants
   (notification permission included) to the bundle's code identity, and an ad-hoc identity is a content hash —
   it changes on every rebuild, so a granted permission is forgotten and the native notification path can end up
   refused for good (`Notifications are not allowed for this application`). `sign-local` re-signs with the local
   self-signed identity `Tachi Local Code Signing` (login keychain, trusted for code signing), which is stable
   across rebuilds. Build that cert once — `security find-identity -v -p codesigning` says whether one exists —
-  with `security` + OpenSSL, exporting the PKCS#12 with **`-legacy`** (macOS cannot verify OpenSSL 3's default
-  algorithms), and trust it for code signing.
+  with `security` and **the system's own `/usr/bin/openssl`** — Homebrew's OpenSSL 3 writes a PKCS#12 whose
+  default algorithms macOS refuses to verify, so a script that reaches for `openssl` from `PATH` produces an
+  identity that will not import — and trust it for code signing.
 - **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in
   front proves nothing. The TUI's notifications are a different mechanism (`terminal-notifier` / `osascript`),
   **but they can still be the desktop's fault**: the app is often launched from a herdr pane, inherits
@@ -630,7 +631,7 @@ Fixtures exist where the real path needs something a driver cannot do:
 - **The card's subtitle is one of THREE renderings of why a command is being asked about** (a matched rule, the
   unparseable sentinel, or a judgment that raised it): the wording is the agent's (`bashAskCause`), and the card
   shows it verbatim — a second renderer would be free to drift, and a wrong reason sends the reader hunting for a
-  rule they never wrote (issue #40). `docs/agents/permission.md` owns the three; the desktop owns the card, the
+  rule they never wrote. `docs/agents/permission.md` owns the three; the desktop owns the card, the
   session-wide 「本会话全部允许」 button, and what the device link forwards. Smoke: `perm-unparseable`.
 
 ## Desktop Turn History (the interrupted-turn merge)
@@ -788,7 +789,7 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   second rule, and the compaction window is the one case where they differ (see Desktop Compaction).
 - **A turn that fails MID-STREAM keeps the history it already produced** (the partial messages are adopted on
   EVERY error exit that carries them): it has already EXECUTED tool calls by then, and dropping them is how the
-  next request comes to be missing work the model did (issue #38). What arrives is complete pairs, so the
+  next request comes to be missing work the model did. What arrives is complete pairs, so the
   adopted history is always a legal request — and the STATE still says 出错, because keeping the history is not
   calling the turn a success. The guard also stays held for a moment after the error event (the checkpoint is
   being finalized), so a send landing in that window is refused by name.
@@ -904,7 +905,7 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   once at module load, the bar is mounted only while open, and `findable` is opt-in per viewer. **The
   transcript's search uses an explicit, POSITIVE scope** (the reader's own words + the model's prose): most of
   a session's text is tool arguments and results, and a search over the whole subtree is a search over file
-  dumps (issue #35). The chat's host is the LOWEST in the stack, so a preview or the panel keeps ⌘F while it is
+  dumps. The chat's host is the LOWEST in the stack, so a preview or the panel keeps ⌘F while it is
   up — and the find bar is off while the settings page is up, because that view COVERS the chat.
 - **The one-off panel's × promises Esc, and who owns the FIRST press is decided by focus**: the global handler
   must not claim every Escape unconditionally, and the panel refuses only an ALREADY-CLAIMED key.
@@ -917,8 +918,8 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **Path tries are byte-keyed: iterate strings by BYTE, not `for i := range s`** (`for i := range s` walks rune
   boundaries, so `s[i]` yields only the first byte of each multi-byte character) — otherwise Chinese file names
   come back mangled from the @-file index. `pkg/container/pathtrie.go`.
-- **Do not reintroduce an "activity row" above the composer** (it appeared and vanished once per step and
-  shoved the message area up and down), and **do not compensate a layout change from a
+- **Do not reintroduce an "activity row" above the composer** (a row that appears and vanishes per step
+  shoves the message area up and down), and **do not compensate a layout change from a
   `requestAnimationFrame`** — a covered window stops the page's frames. Compensate in a LAYOUT effect.
 - **The window's columns are the sidebar's, not the bar's**: the sidebar runs the FULL height with the traffic
   lights painted onto its empty top strip (`--titlebar-h`, the same 44px Wails' `InvisibleTitleBarHeight` makes a

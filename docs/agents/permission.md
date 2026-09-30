@@ -2,10 +2,9 @@
 
 Read this **before touching `agent/permission/`, `agent/agent_permission.go`, `agent/agent_permission_jev.go`,
 `agent/permission/jevask/`, or `permissions.bash`**, before adding a tool that raises an ask, and before
-believing any threshold. It is the authority for rule semantics, the ask path, the judgment gate, the sessionscope
-of approvals, and which trees contribute rules — the dated design (`docs/2026-09-30-bash-ask-jev-design.md`)
-holds the narratives and measurements and is allowed to go stale; nothing here may be copied FROM it without
-re-checking.
+believing any threshold. It is the authority for rule semantics, the ask path, the judgment gate, the
+session-scope of approvals, and which trees contribute rules; the narratives behind a number live in the dated
+design doc (`docs/2026-09-30-bash-ask-jev-design.md`, allowed to go stale — never copy a fact FROM it).
 
 `.tachi.md` is injected WHOLE into every session, so it keeps one line per subject and points here for the rest.
 **New permission lessons belong in THIS file, not back in `.tachi.md`** — and the rules that ride with that file
@@ -39,11 +38,11 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   a heredoc's BODY is data and never a segment, and a leading `sudo ` is stripped per segment so `sudo rm -rf /`
   matches rules written for `rm`. A rule only ever sees the canonical printed form — that is why the same output
   feeds the judgment gate's state (see below), and why a second parser anywhere is a bug.
-- **A command that cannot be parsed is an `ask` with the sentinel `permission.AskNoRule`**, not a rule match.
-  Measured (18 commands through both our parser and `bash -n`): the two common shapes — a trailing `&&`, an
-  unclosed quote — are refused by bash too, so nothing runs and asking is pure noise; the one shape that matters
-  is an **unclosed heredoc**, which bash RUNS (ending the body at end-of-input) while we cannot see what it acts
-  on. Whatever a caller does with this population, it must not claim a rule matched.
+- **A command that cannot be parsed is an `ask` with the sentinel `permission.AskNoRule`**, not a rule match —
+  and whatever a caller does with this population, it must not claim a rule matched. The shape to keep in mind is
+  the **unclosed heredoc**: bash RUNS it (ending the body at end-of-input) while our parser sees nothing of what
+  it acts on. A trailing `&&` or an unclosed quote — the two most common — are refused by bash too, so `ask`
+  there is only noise.
 - **Built-in protection** is two different mechanisms and `disable_builtin_deny` (GLOBAL config only — a project
   file cannot weaken it) turns off both: `permission.BuiltinDenyRules` (disk overwrite, shutdown/reboot globs,
   prepended to the user's deny list by the caller) and the **structured `rm` guard** inside the Policy, which
@@ -55,7 +54,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **Three causes, three wordings, and nothing may conflate them** (`bashAskCause`, `askReasonLine`): a command
   either matched an `ask` rule, could not be parsed (`AskNoRule`), or was raised by the judgment gate because
   NOTHING matched. Rendering the second or third through the first one's sentence sends the reader hunting in
-  their config for a rule they never wrote (issue #40 — the desktop card did exactly that). A real rule wins the
+  their config for a rule they never wrote. A real rule wins the
   wording when the judgment agrees, because the user's own words are what they recognise.
 - **Four answers, chosen by the per-agent `PermissionMode`**: `TUI` prompts (`y` allow once / `a` allow for the
   session / `n` deny, which ABORTS the turn); `External` delegates to a `PermissionHandler` (the desktop's card,
@@ -65,6 +64,12 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **The ask's preview is written by the agent, not by the frontend** (`bashAskPreview`: the command, then why).
   The desktop shows it verbatim — a second renderer of that format would be free to drift, and the reason line is
   the part a human acts on.
+- **A refusal's text is shaped to STOP the model, not to explain the configuration to it**: fact (not executed),
+  the rule, who can change it (the user), and an explicit "do not attempt the same thing in another form, do not
+  go reading the permission files". **No refusal may name a config path**, and none is written as an invitation
+  to look something up — naming the file is what sends a helpful model off to read it
+  (`TestBashRefusalsDoNotInviteInvestigation`). The one exception is the unparseable
+  command, whose fix IS in the model's hands: it says to correct the syntax and re-issue.
 - **A `deny` is decided before any ask is raised**, so nothing on the ask path can reach it: not a session-wide
   approval, not a permission handler, not the judgment gate. That property is the call graph's, not a convention
   to be remembered — keep it that way when adding a step.
@@ -79,8 +84,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   escalated to a human, which is the point.
 - **Only where a human can answer**: `PermissionModeSkip` is excluded, so a channel bot, a subagent or `-p` never
   has a probability approve something. Letting it would be a product decision, not this gate's.
-- **When the service cannot answer, the RULES decide — i.e. this command's behaviour before the gate existed**:
-  a rule-matched command asks, an unmatched one runs. That is why an outage cannot make anything worse, and why
+- **When the service cannot answer, the RULES decide**: a rule-matched command asks, an unmatched one runs. That is why an outage cannot make anything worse, and why
   a failure is never latched for the session (the next command tries again).
 - **It cannot widen a rule either**: with the gate on, a rule-matched command IS judged, and a verdict of "run"
   lets it through — that is what "auto approval" means, and it is the one behaviour a user has to know about
@@ -91,7 +95,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   (canonical command, matched rule) — nothing is inferred about a command that was not itself judged, and
   `ClearSession` drops the map.
 - **The client is built lazily but KEPT** (`agent_permission_jev.go`): rebuilding it per command would drop
-  connection pooling and pay a fresh handshake every time, which is most of the measured latency. The cache is
+  connection pooling and pay a fresh handshake every time, which is most of the latency this gate costs. The cache is
   keyed by the block it was built from, so a settings save rebuilds it without any push plumbing.
 - **A judgment is not a provider call**, so the billing decorator never sees it: the gate writes its own ledger
   row (`llm.RecordJevUsage`, `UsageKindJev`, credit snapshot included). Skipping it makes these calls look free
@@ -103,22 +107,20 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   caller supplied", so the question, the criteria, the STATE SHAPE and the model version all belong to any τ.
   It is recorded in `config.BashPermissions.JevThreshold`'s comment **with the case set and the model version**,
   and re-sweeping is the only way to move it.
-- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Current τ = 0.70
-  was swept on a state whose only facts are: the canonical segments, the working directory, **the trees the
-  session works in**, and the matched rule (or why there is none). Three revisions got here — a single
-  `Project root` was wrong because a desktop session can span several trees, and a command in the second one read
-  as "outside the tree". Corridors: (0.67,0.72) → (0.69,0.76) → **(0.66,0.75)**. **Change any sentence the state
-  renders and the number is void.**
+- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Current τ = 0.70,
+  corridor (0.66, 0.75), was swept on a state whose only facts are: the canonical segments, the working
+  directory, **the trees the session works in**, and the matched rule (or why there is none). A single tree is not
+  enough — a session can span several, and a command in the second one would read as "outside the tree".
+  **Change any sentence the state renders and the number is void.**
 - **Facts only, never a derived verdict.** "outside the working tree: no" would be consumed as a fact, and a wrong
   fact here is asymmetric (it can talk a command under the threshold). Listing the trees is a fact; comparing is
   the model's job. An empty fact says "(unknown …)" rather than inventing one.
-- **A label has to be decidable from what the gate sees.** One case was filed "run" because the shell would
-  refuse an unparseable command — irrelevant to the gate, which only has the text, and it scored in the ask band
-  and emptied the corridor. Labels are about the command as written.
-- **Do not put the user's turn message in the state**: measured on 25 pairs (with/without the request, labels
-  held), the mean |Δ| was 0.011 and the sign was mixed — the judgment answers what the COMMAND is, and a request
-  is context rather than permission. It would also break the session memo's key and put uncontrolled prose (the
-  register trap in jev.md) into a probability.
+- **A label has to be decidable from what the gate sees** — the command as WRITTEN, never what would happen if
+  the shell rejected it. (A case filed the other way empties the corridor.)
+- **Do not put the user's turn message in the state.** The judgment answers what the COMMAND is; a request is
+  context rather than permission, and free text is the register variable jev.md warns about. It would also break
+  the session memo's key. (`bash-ask-context.json` is the paired measurement that settled this — the deltas are
+  within noise.)
 - **What a re-sweep is**: regenerate the case file from `agent/permission/jevask` (its generator; the state text
   must come from the production assembler, never be hand-written), then
   `JEV_EVAL_FILE=bash-ask.json go test ./pkg/jev/ -run TestJevEval -v`. The corpus is
@@ -144,8 +146,8 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **Rules are per tree and EVERY tree the session works in contributes**: `AIAgent.SetPermissionTrees(primary,
   additional)` → `config.ProjectRootsFrom` (each directory walked up to its nearest `.git`, de-duplicated in
   order) → every `<tree>/.tachi/permissions.yaml` read and unioned. `allow` stays global-only, so a project can
-  only tighten. Reading only the primary's file was a silent hole in the WORST direction: a rule the user wrote
-  in their second repository simply did not fire.
+  only tighten. Reading only the primary's file is a hole in the WORST direction: a rule the user wrote in their
+  second repository silently does not fire.
 - **`PermissionRoot` names the primary's tree; `PermissionTrees` is the whole set** — the latter is what the
   judgment gate's state reports, because "outside the tree" is meaningless without all of them.
 - **The frontends own the resolver, and it must be the SAME one their prompt uses**: the desktop's
@@ -154,7 +156,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   `additionalDirectories`). A new call site that resolves a tree by itself is the bug desktop.md's Session Tree
   section describes.
 - **`configure` builds from the PROCESS cwd**, which for a GUI app is `/` — so a frontend that knows better
-  re-points it before the first turn. ACP did not, and got whatever repository the editor spawned the agent in.
+  re-points it before the first turn (the desktop and ACP both do).
 
 ## The `[permission]` line on a Bash result
 

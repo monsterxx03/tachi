@@ -34,18 +34,23 @@ That is the whole boundary, and it is why `pkg/jev` deliberately does **not** im
 put two unrelated contracts behind one type and invite call sites that need one to reach for the
 other.
 
-**There are two production callers.** The MCP tool search (`agent/mcp/jev_search.go`, matcher
+**There are three production callers.** The MCP tool search (`agent/mcp/jev_search.go`, matcher
 `mcp_tool_search.matcher: auto` with a usable `jev` block) turns a prose request into one `noul`
 question per candidate tool and offers the ones over the cut-off; the question text lives in
 `agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
 the measurement cannot describe a question the gate no longer asks. The cron notify gate
 (`channel/manager/notify_gate.go`, matcher `cron.notify_matcher: auto` with the same block) judges a
 finished `notify=when_relevant` run, with the question and state in `channel/manager/notifygate`; its
-counterpart to that file is `cron.jev_threshold`. **Neither cut-off is a fact, and neither belongs to
-its gate**: the tool search's τ = 0.20 belongs to a POOL, the notify gate's to its own case set. Read
-[Measuring a threshold](#measuring-a-threshold) before copying either anywhere, and re-sweep when the
-thing it was measured on changes materially. Everything else in the repo still asks a generative model
-and parses the reply.
+counterpart to that file is `cron.jev_threshold`. The Bash judgment gate
+(`agent/agent_permission_jev.go`, `permissions.bash.jev: auto`) asks whether a command a rule did not
+deny should be shown to the human first — it is the one caller whose answer can only escalate, never
+block — with the question and state in `agent/permission/jevask` and the threshold in
+`permissions.bash.jev_threshold`; which facts belong in that state, and why, is
+[`permission.md`](permission.md). **No cut-off is a fact, and none belongs to its gate**: the tool
+search's τ = 0.20 belongs to a POOL, the notify gate's and the bash gate's to their own case sets.
+Read [Measuring a threshold](#measuring-a-threshold) before copying any of them anywhere, and re-sweep
+when the thing it was measured on changes materially. Everything else in the repo still asks a
+generative model and parses the reply.
 
 ## When to use it — and when not to
 
@@ -187,7 +192,7 @@ straddles a candidate cut-off, and a comparison across the forms of a `pair`. It
 about the numbers — a harness that fails on poor calibration teaches people to ignore it — and fails
 only on request errors and malformed case files.
 
-**Two rules for using it, both learned the expensive way:**
+**Two rules for using it:**
 
 - **To separate N dimensions you need the full grid, and repeats are not a substitute.** Two arms
   that share a confounded variable will agree, and they will keep agreeing no matter how many times
@@ -259,17 +264,12 @@ genuinely empty result must not be told apart by prose alone. A deployment that 
 through a gateway must set `JEV_BASE_URL` (and `JEV_PROXY` if it needs one) or every case fails
 against a host it cannot see.
 
-**Measured on that set (jev-1.13.0, 5 repeats, labels held every repeat): the criterion block is what
-makes the gate work.** The control (no criterion, generic question) disagreed with the labels on 7 of 37
-and had no corridor at all — its lowest should-act case scored 0.10, below its highest should-not-act.
-The candidate disagreed on 2, and both of those are members the case set labels by what the user wants
-rather than by a literal reading of the job's words (see its notes); on the strict reading it is 37/37,
-with should-act ≥ 0.60 and should-not-act ≤ 0.21, i.e. a corridor wide enough to place a gate. The
-decisive members are the job-specific ones: a job whose own words say "开市了就总结" scored 0.73 under
-the candidate and 0.10 under the control, and the fetch-failed/menu-closed pair — the "job quietly
-broke" fork — came out far apart and correctly ordered under the candidate (0.14 vs 0.62), while the
-control put the closed day at 0.79: above any threshold that still keeps the act side, and only 0.08
-below the genuine failure it must not be confused with (0.87).
+**The job's own words in the state are what make this gate work**: a job that says "开市了就总结" and a
+job that says "有到期单就说" want different things from the same report, so a state without the criterion
+leaves the judgment no rule to apply and the corridor disappears (the control arm — outcome plus report,
+generic question — has none). The deployed cut-off is **`cron.jev_threshold` = 0.45**, the middle of the
+corridor measured on `pkg/jev/testdata/notify-gate-prompt.json`; the case set's labels are one person's
+judgement, so re-sweep before moving it.
 
 **A tool-search cut-off is a property of the POOL's tool TEXTS — τ = 0.20 on a 184-tool pool, and
 neither of the two things it is tempting to blame instead:**
@@ -283,12 +283,10 @@ neither of the two things it is tempting to blame instead:**
   a cost lever (one candidate is one question, and a full pool is one request per hundred of them)
   rather than a different question. That is also why the narrowed search logs its scope
   (`logAnswers` carries `server`) and answers nothing from outside it.
-- **It IS the tool texts.** Intents of the same style scored 0.70–0.94 against the 22-tool
-  hand-written fixture and a median of 0.36 against a real pool (per-request best expectation: p10
-  0.15, p90 0.74), and the fixture's clean corridor is gone. Real descriptions are written for
-  someone who already knows the product — preconditions ("使用前提：先调用 …"), required server
-  modes, product jargon — and the `No` criterion's "needs input the request does not provide" is read
-  against exactly that. A pool whose descriptions are rewritten is a pool whose cut-off is a
+- **It IS the tool texts.** The same intents separate cleanly against a small hand-written fixture
+  and do not against a real pool: real descriptions are written for someone who already knows the
+  product — preconditions ("使用前提：先调用 …"), required server modes, product jargon — and the `No`
+  criterion's "needs input the request does not provide" is read against exactly that. A pool whose descriptions are rewritten is a pool whose cut-off is a
   hypothesis again.
 
 Measuring per REQUEST is what picks the number, not per (query, tool) pair — an intent that names two
@@ -322,8 +320,8 @@ trustworthy signals; a 200 with a high confidence is not evidence of a correct a
 budget and a smaller `state`-plus-longest-question budget, and it is the smaller one a large request
 hits first — well before the total is anywhere near its cap. Keep `state` plus the LONGEST single
 question under it, and prefer many short questions over one enormous one; read `Response.Usage` for
-what a request actually cost rather than estimating. For the gates Tachi has measured, requests run
-to hundreds of tokens, so this binds only when `state` grows into real document text.
+what a request actually cost rather than estimating. Tachi's gates send hundreds of tokens per request, so this binds only
+when `state` grows into real document text.
 
 **Register beats language, by a lot.** The same judgment written as a job report and as a colleague's
 note moves the probability far more than translating it does — the language gap stays inside the

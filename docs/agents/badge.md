@@ -166,10 +166,10 @@ knows NOTHING about the window — it reports gestures and the host decides what
 - **Mic capture is `AVCaptureSession`, and that is a Bluetooth fact, not a preference — switching it back to
   `AVAudioEngine` fails SILENTLY and only intermittently.** `AVAudioEngine`'s IO cycle takes its sample rate from
   the OUTPUT device, while one headset can be 44.1 kHz out and 16 kHz in — so `inputNode.outputFormat` reports a
-  rate the input hardware does not have. The old shape ("read the format, install the tap with it, then start")
-  froze that rate *before* the headset left A2DP (idle: no usable input at all) for HFP, and that switch happens
-  only during `start()`: it returns without error, `isRunning` flips false, and the tap is **never called** —
-  zero samples, which the user sees as 「没有听到内容」. `AVCaptureSession.startRunning` instead WAITS for the
+  rate the input hardware does not have. Reading the format and installing the tap with it freezes that rate
+  *before* the headset leaves A2DP (idle: no usable input at all) for HFP, and that switch happens only during
+  `start()`: it returns without error, `isRunning` flips false, and the tap is **never called** — zero samples,
+  which the user sees as 「没有听到内容」. `AVCaptureSession.startRunning` instead WAITS for the
   profile switch (measured ~57 ms) and every buffer carries its own format, so the shim resamples per buffer
   (`RecordSink`) instead of committing up front. What makes this hard to catch by hand: it works whenever some
   other app has already pulled the headset into HFP, so the same build is broken, then fine, with nothing
@@ -192,7 +192,7 @@ knows NOTHING about the window — it reports gestures and the host decides what
     (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
     which is why the Makefile targets carry the step rather than a comment telling you to remember it.
   - **The Go build cache does NOT see `libtachi_stt.a` change, so a rebuilt shim can be silently left out —
-    the build succeeds and the app runs the OLD code.** cgo names the library only inside the LDFLAGS string
+    the build succeeds and the app runs the shim from before it.** cgo names the library only inside the LDFLAGS string
     (a constant `-L` path), so its contents are not part of the build action's ID: rewrite `shim.swift`, rebuild
     the `.a`, run `make build` — and if those exact build flags ran before the change, the previous LINK result
     is reused. Zero warnings, and it looks exactly like "my fix does not work". **Ask the binary, not the build
