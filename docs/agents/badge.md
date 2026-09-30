@@ -11,7 +11,7 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
 | --- | --- |
 | **Badge Link over BLE** | you touch `desktop/link/`, the badge transport setting, or the Bluetooth Info.plist key — **or the link died and the badge screen stopped updating** |
 | **Badge Voice (speech → text)** | you touch `desktop/stt` or the voice path in `desktop/badge.go` — **or a transcription fails and you need to know why** |
-| **Badge → the small panel (HUD)** | you touch the `hud`/`key` protocol messages, the device's status-screen keys, or the host's `Key` mapping |
+| **Badge → the desktop window (its keys)** | you touch the `key` protocol message, the device's status-screen keys, or the host's `Key` mapping |
 | **Building `desktop/stt` (the Swift shim)** | you touch `shim.swift`, the shim fails to link, or a change to it does nothing — **the library is rebuilt by a build step, not by the compiler** |
 | **The Device Side** | you are about to change, build or flash the firmware — **or the host and the device disagree about the protocol** |
 
@@ -62,7 +62,9 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
   binary inherits Tachi.app as its responsible process — rebuild the app and restart it before believing a desktop
   test failure. Embedding an `__TEXT,__info_plist` section in the test binary does **not** help: tccd never looks at
   the requesting process here (find the reason with
-  `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`).
+  `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`). The same mechanism is why
+  the smoke bundle is signed with the local certificate instead of ad-hoc: a fresh identity is a fresh app to
+  macOS, and it gets asked again on every run (see the smoke section in `docs/agents/desktop.md`).
 - **CoreBluetooth caps a `without-response` write at ~182 bytes and fails SILENTLY above it.** The cap is
   `maximumWriteValueLength(for:.withoutResponse)`, which the library does not expose; `bleChunks` slices at
   `bleWriteChunk` (180) and the badge reassembles at the newline. Short messages never reveal this — an 854-byte
@@ -115,34 +117,32 @@ its device half is a different repository — `ai-passport` (this machine: `~/re
   the discard. Nothing to fix on the host side; look at the link (BLE retries, a serial port contention) if it
   becomes frequent.
 
-## Badge → the small panel (HUD) on the desktop
+## Badge → the desktop window (its keys)
 
-The badge drives the desktop's always-on-top reply panel (`desktop/hud.go`; design:
-`docs/2026-09-29-desktop-hud-design.md`). The device knows NOTHING about the panel — it reports gestures and
-the host decides what they mean.
+The badge drives the desktop WINDOW: the short up/down press turns the conversation half a page (the same
+action as Ctrl+U/Ctrl+D inside it) and a double press on 确定 brings the window to the front. The device
+knows NOTHING about the window — it reports gestures and the host decides what they mean
+(`desktop/remote.go`; the device side is `main.c`'s key routing).
 
-- **Two protocol messages carry the whole feature, and they are the reason `Proto` is 2** (the removed
-  `info`/`badge_info` pair is what made it a breaking change): host → device `{"t":"hud","open":bool}` (a
-  SYNCED state, riding `Snapshot.Hud` through the same push de-dup as the session list) and device → host
-  `{"t":"key","key":"up|down|ok|ok_double"}` (`link.Source.Key`). The host maps them in `desktop/badge.go`'s
-  `Key`: up/down scroll the panel, `ok` closes it, `ok_double` brings it back with the last reply.
+- **One protocol message carries the whole feature, and it is why `Proto` is 3** (the removed `hud` state is
+  what made it a breaking change): device → host `{"t":"key","key":"up|down|activate"}` (`link.Source.Key`),
+  mapped in `desktop/remote.go`'s `Key`. up/down emit `chat:scroll` at the main window and the FRONTEND does
+  the scrolling — `App.tsx`'s `scrollByHalfPage`, which Ctrl+U/Ctrl+D call as well, so 「翻页」 cannot mean
+  two things depending on where the finger is (how far a page is, and where the reader is, are DOM facts).
+  `activate` is `Show()` + `Focus()`, the same pair the tray's 「打开主窗口」 and a clicked notification use.
 - **The version is checked in TWO places and nothing checks them against each other**: `link.Proto`
   (host) and `BADGE_PROTO_VERSION` (`main/badge_proto.h`, written into `hello`) must move together. Bumping
   one alone is silent on the host side (the mismatch is answered to the DEVICE as an `error` message and
   never logged here) and shows on the badge as a 5-second notice — so the symptom is 「badge 连上了但什么
   都不动」. Both were 1 while `info` was still in the protocol; changing only the host while flashing a
   device is exactly how the two ends get out of step mid-upgrade, and the fix is the same on both sides.
-- **The panel only appears while a badge is CONNECTED** (`hudWanted`'s `deviceConnected`): it is the
-  device's remote screen, so without one it would be a float nobody can operate. Same one-shot judgement at
-  turn end as the other conditions — unplugging the badge does not close a panel that is already up.
-- **The device's keys change meaning only while the panel is OPEN, and the device is told which** — that is
-  what the `hud` state is for: with it, the status screen's footer line becomes 「上下翻 · 确定关小窗」 and the
-  short up/down become the only two gestures it sends. While the panel is closed those keys stay dead on the
-  device (nothing to scroll, and the host would ignore them anyway).
+- **The device reports those gestures on the STATUS screen only** (no pending ask): on the ask screen the
+  same keys are the ANSWER (up/down move the cursor, 确定 submits — `badge_state_key`), and a window being
+  open on the computer is no reason to change what a key means while someone is waiting for an answer.
 - **A tap is not a recording, which is what lets one button mean two things** — and that rule is the firmware's
   OWN, older one (`badge_voice.h`'s `BADGE_VOICE_MIN_MS`, 400 ms: a shorter hold never even sends `voice_begin`).
-  So press-and-hold still talks whether or not the panel is open, while a tap is free to be a key: with the panel
-  open it is 「确定 = 关窗」, and nothing stray goes on the wire for it.
+  So press-and-hold still talks, while the two taps of a double press are free to be a key (「切到电脑」); nothing
+  stray goes on the wire for either.
 
 ## Building `desktop/stt` (the Swift shim)
 

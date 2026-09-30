@@ -39,10 +39,10 @@ type Source interface {
 	// 要假定它随时会来；它只用来叫醒服务循环，不做别的事。
 	Subscribe(fn func()) (cancel func())
 
-	// Key 是设备送回来的一个手势（短上/短下/短按确定/双击确定）。
+	// Key 是设备送回来的一个手势（短上/短下/双击确定）。
 	//
-	// 设备只说「哪一下」，含义由宿主决定——这是同一套分工的延续：它不知道小窗是什么，
-	// 也不知道该翻谁，那边的事全在 desktop/hud.go。
+	// 设备只说「哪一下」，含义由宿主决定——它不知道主窗口在哪里、也不懂「翻一屏」是多大，
+	// 那些事全在 desktop/badge.go 的 Key。
 	Key(k Key) error
 
 	// TakeAlerts 交出自上次调用以来攒下的提示音请求并清空。
@@ -53,29 +53,19 @@ type Source interface {
 	TakeAlerts() []Alert
 }
 
-// Hud 是小窗（HUD）此刻的状态。
-//
-// 它是**状态**而不是事件，所以跟着 Snapshot 走：设备据此决定底栏写什么、以及上下键该
-// 不该发上来（小窗关着时那两个键在设备上什么也不做）。和设备上其它状态一样，它靠 push
-// 的去抖发送——same 值不会重复写一行。
-type Hud struct {
-	Open bool `json:"open"`
-}
-
 // Key 是设备送回来的一个手势。
 //
-// Action 是**手势**而不是动作：设备说「你按了短上」，宿主决定那意味着什么（小窗开着时
-// 翻页，关着时什么都不做）。动作名留给设备去猜，就是让两端的语义各长一半。
+// Action 是**手势**而不是动作：设备说「你按了短上」，宿主决定那意味着什么（在窗口的会话
+// 里往上翻半屏）。动作名留给设备去猜，就是让两端的语义各长一半。
 type Key struct {
 	Action string `json:"key"`
 }
 
-// 四个手势，与设备侧 main.c 的按键路由一一对应。
+// 三个手势，与设备侧 main.c 的按键路由一一对应。
 const (
-	KeyUp       = "up"        // 短按上
-	KeyDown     = "down"      // 短按下
-	KeyOK       = "ok"        // 短按确定（小窗开着 = 关掉）
-	KeyOKDouble = "ok_double" // 双击确定（小窗关着 = 叫出来）
+	KeyUp       = "up"       // 短按上：会话往上翻半屏（与窗口里的 Ctrl+U 同一个动作）
+	KeyDown     = "down"     // 短按下：往下翻半屏（Ctrl+D）
+	KeyActivate = "activate" // 双击确定：把主窗口换到前台
 )
 
 // Alert 是一次提示音请求：Kind 决定设备放哪一段音频（它自己不认识这些含义，只是照做）。
@@ -95,7 +85,6 @@ const (
 type Snapshot struct {
 	Sessions []Session
 	Asks     []Ask
-	Hud      Hud
 }
 
 // Session 是一个会话此刻的状态。形状照抄 desktop 的 AgentState（同样的值域），
@@ -181,10 +170,10 @@ const (
 
 	// Proto 是协议版本，设备在 hello 里报，不匹配就断开而不是猜。
 	//
-	// 2：删掉 `info`/`info_request`（设备上那张会话账目屏没了），加上 `hud` 与 `key`
-	// （小窗状态、设备手势）。旧固件配上新 app 会在这里得到一句明确的 mismatch——
-	// 比让它继续跑、而上下键在屏幕上什么也不发生要强。
-	Proto = 2
+	// 3：删掉 `hud`（桌面上那块置顶小窗没了，设备也不再需要据此改底栏），设备的按键手势
+	// 从上下/确定/双击变成 上下/双击（`activate`，换主窗口到前台）。旧固件配上新 app 会在
+	// 这里得到一句明确的 mismatch——比让它继续跑、而双击确定在屏幕上什么也不发生要强。
+	Proto = 3
 )
 
 // Server 服务一条连接：把 Source 的变化推出去，把设备的回答送回来。
@@ -210,8 +199,6 @@ type Server struct {
 	byRef        map[uint64]Ask    // ref → ask
 	sentBody     map[uint64]string // ref → 上次发的正文，用于去抖
 	lastSessions string
-	// lastHud 是上一条发出去的 hud 状态（见 push），去抖用。
-	lastHud string
 	voice        *voiceUpload // 正在收的那一次语音上传（同时只有一段，见 voice.go）
 }
 
@@ -439,7 +426,6 @@ func (s *Server) push(force bool) {
 		// 旧的那条在这个 ref 表里永远等不到 ask_gone。
 		s.sentBody = make(map[uint64]string)
 		s.lastSessions = ""
-		s.lastHud = ""
 	}
 
 	if body, err := json.Marshal(snap.Sessions); err == nil {
@@ -486,15 +472,6 @@ func (s *Server) push(force bool) {
 		delete(s.byRef, ref)
 		delete(s.sentBody, ref)
 		s.write(map[string]any{"t": "ask_gone", "seq": s.nextSeq(), "ref": ref})
-	}
-
-	// 小窗的状态最后发：它和会话状态用同一套去抖（也是状态，只在真的变了的时候占一行），
-	// 而顺序上排在「谁在跑、谁在等」之后——新连接的头三条（reset / state / ask）是设备
-	// 起来的第一步，不为了让位给这块面板去动它们。
-	body, err := json.Marshal(snap.Hud)
-	if err == nil && string(body) != s.lastHud {
-		s.lastHud = string(body)
-		s.write(map[string]any{"t": "hud", "seq": s.nextSeq(), "open": snap.Hud.Open})
 	}
 }
 

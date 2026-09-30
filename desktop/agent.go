@@ -164,12 +164,6 @@ type desktopApp struct {
 	// transcription finishes. Guarded by mu.
 	badgeLink *link.Server
 
-	// hud is the always-on-top panel that shows a finished turn's reply to someone who is
-	// NOT looking at the window (desktop/hud.go). Its window is created at startup and stays
-	// hidden; `open`/`content` move as it is shown, replaced and closed, so the struct is
-	// guarded by mu.
-	hud hudState
-
 	mu    sync.Mutex
 	runs  map[string]*sessionRun // key: session ID
 	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every

@@ -419,6 +419,28 @@ function App() {
     }
     if (followBottomRef.current) pinBottom()
   }, [pinBottom])
+
+  // scrollByHalfPage is THE page-turn: Ctrl+U/Ctrl+D in the conversation, and the badge's short
+  // up/down press (desktop/remote.go turns that gesture into a chat:scroll event) — one function,
+  // so "翻页" cannot mean two different things depending on where the finger is.
+  const scrollByHalfPage = useCallback((delta: number) => {
+    const el = chatRef.current
+    if (!el) return
+    el.scrollTop += delta * el.clientHeight * 0.5
+  }, [])
+
+  // …and this is the device's end of it: the badge reports a gesture, the host (remote.go) says
+  // which way, and the scrolling itself is the same half page as above. A scroll the reader did
+  // not perform is still a scroll AWAY from the bottom, so handleScroll ends following here too —
+  // which is what "翻回去读上文" should do.
+  useEffect(() => {
+    const off = Events.On('chat:scroll', (event) => {
+      const delta = Number((event.data as { delta?: number } | undefined)?.delta ?? 0)
+      if (delta !== 0) scrollByHalfPage(Math.sign(delta))
+    })
+    return () => off?.()
+  }, [scrollByHalfPage])
+
   // Per-session transcript state — messages, running flags, the loaded window, the delta
   // buffer — has exactly one owner (useTranscript.ts), so "belongs to a session" is a
   // property of the type rather than a convention to remember.
@@ -645,7 +667,7 @@ function App() {
 
     if (e.ctrlKey && (e.key === 'u' || e.key === 'd')) {
       e.preventDefault()
-      el.scrollTop += (e.key === 'd' ? 1 : -1) * el.clientHeight * 0.5
+      scrollByHalfPage(e.key === 'd' ? 1 : -1)
       return
     }
     if (e.ctrlKey) return
@@ -660,7 +682,7 @@ function App() {
         window.setTimeout(() => { ggPendingRef.current = false }, 600)
       }
     }
-  }, [scrollToBottom])
+  }, [scrollToBottom, scrollByHalfPage])
 
   // ── Frame-batched deltas ───────────────────────────────────────────────────
   // (enqueueDelta / flushDeltas live in useTranscript.ts — the batcher buffers the

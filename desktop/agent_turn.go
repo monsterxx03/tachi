@@ -646,10 +646,6 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
 			// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
 			d.alertIfUnwatched(id, link.AlertKindDone)
-			// 窗口不在前台时，这条回复还摆到屏幕角上的一块置顶面板上（desktop/hud.go）：
-			// 提示音说的是「跑完了」，小窗说的是「它说了什么」。三个条件比这里更严——
-			// 只对当前会话、只在脚本运行之外，见 hudWanted。
-			d.hudTurnDone(id, isCurrent, ev)
 		}
 	case agent.AgentEventError:
 		d.tpsReset(id)

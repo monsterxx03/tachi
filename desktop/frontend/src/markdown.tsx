@@ -26,7 +26,7 @@ function TableScroller(props: { children?: ReactNode }) {
 // MarkdownBlock renders one markdown document. Memoized on (text, workDir),
 // which is what keeps a streaming turn from re-parsing every earlier reply on
 // each animation frame.
-export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir, zoomDiagrams = true }: { text: string; workDir: string; zoomDiagrams?: boolean }) {
+export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: string; workDir: string }) {
   const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
     <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
   ), [workDir])
@@ -37,24 +37,12 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir, zoomDi
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
-        components={{ img: MdImg, table: TableScroller, pre: zoomDiagrams ? PreZoomable : PreStatic }}>
+        components={{ img: MdImg, table: TableScroller, pre: PreBlock }}>
         {text}
       </ReactMarkdown>
     </div>
   )
 })
-
-// react-markdown 按组件**身份**判断要不要重挂，所以这两个包装必须是模块级的常量，而不是
-// 每次渲染新建的箭头函数（那样整块 markdown 会被重挂，图的 svg 会重来一遍）。
-//
-// 只有小窗（HUD）会取用不可点的那一个：它是一块 560×300 的面板，而「点击全屏查看」开出来的
-// 覆盖层就长在这个面板里——挤得没法看，不如没有这个手势（见 docs/2026-09-29-desktop-hud-design.md）。
-function PreZoomable(props: ComponentPropsWithoutRef<'pre'>) {
-  return <PreBlock {...props} zoom />
-}
-function PreStatic(props: ComponentPropsWithoutRef<'pre'>) {
-  return <PreBlock {...props} zoom={false} />
-}
 
 // ── Inline markdown ─────────────────────────────────────────────────────────
 // InlineMd renders the inline markdown ONE PIECE OF PROSE is written in: `code`, **bold**,
@@ -106,9 +94,7 @@ export const InlineMd = memo(function InlineMd({ text }: { text: string }) {
 // re-layout the diagram ~60x/s. Anything that does not parse (still incomplete,
 // or genuinely invalid) falls back to showing the raw code instead of an empty
 // box.
-export const MermaidDiagram = memo(function MermaidDiagram({ code, zoom }: { code: string; zoom?: boolean }) {
-  // 默认可以放大（transcript 与预览里的图都该能点开看），只有小窗传 false。
-  const canZoom = zoom !== false
+export const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) {
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
   const [open, setOpen] = useState(false)
@@ -148,20 +134,16 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, zoom }: { cod
     <div className="mermaid-wrap">
       <div className="code-actions">
         <CopyButton title="复制 mermaid 源码" getText={() => code} />
-        {canZoom ? (
-          <button className="code-copy" title="全屏查看" aria-label="全屏查看" onClick={() => setOpen(true)}>⤢</button>
-        ) : null}
+        <button className="code-copy" title="全屏查看" aria-label="全屏查看" onClick={() => setOpen(true)}>⤢</button>
       </div>
-      {/* Clicking the diagram is the obvious gesture for "show me this bigger" — where there is
-          room for it (canZoom). The static variant keeps the diagram and drops the affordance,
-          cursor included (see .mermaid.is-static). */}
+      {/* Clicking the diagram is the obvious gesture for "show me this bigger". */}
       <div
-        className={`mermaid${canZoom ? '' : ' is-static'}`}
-        title={canZoom ? '点击全屏查看' : undefined}
-        onClick={canZoom ? () => setOpen(true) : undefined}
+        className="mermaid"
+        title="点击全屏查看"
+        onClick={() => setOpen(true)}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      {canZoom && open ? <MermaidViewer svg={svg} code={code} onClose={() => setOpen(false)} /> : null}
+      {open ? <MermaidViewer svg={svg} code={code} onClose={() => setOpen(false)} /> : null}
     </div>
   )
 })
@@ -186,12 +168,12 @@ function CopyButton({ getText, title = '复制' }: { getText: () => string; titl
 // other block stays a normal <pre> (already tokenised by rehype-highlight).
 // Either way the block gets a copy button — the code itself, or for a diagram
 // its mermaid source.
-export function PreBlock(props: ComponentPropsWithoutRef<'pre'> & { zoom?: boolean }) {
+export function PreBlock(props: ComponentPropsWithoutRef<'pre'>) {
   const ref = useRef<HTMLPreElement>(null)
   const child = Array.isArray(props.children) ? props.children[0] : props.children
   const el = child as { props?: { className?: string; children?: ReactNode } } | null
   if ((el?.props?.className || '').includes('language-mermaid')) {
-    return <MermaidDiagram code={String(el?.props?.children ?? '').replace(/\n$/, '')} zoom={props.zoom} />
+    return <MermaidDiagram code={String(el?.props?.children ?? '').replace(/\n$/, '')} />
   }
   return (
     <div className="code-wrap">

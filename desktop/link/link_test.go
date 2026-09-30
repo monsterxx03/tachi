@@ -296,10 +296,6 @@ func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
 	if third := p.read(); third["t"] != "ask" {
 		t.Fatalf("third message = %v, want ask", third["t"])
 	}
-	// 小窗状态也属于这一次全量（它排在最后，见 push 的末尾）。
-	if fourth := p.read(); fourth["t"] != "hud" {
-		t.Fatalf("fourth message = %v, want hud", fourth["t"])
-	}
 
 	// reset 属于「连接」而不是「每次推送」：一次变化之后只该有推送。
 	src.update(func(s *Snapshot) { s.Sessions[0].Label = "思考" })
@@ -308,48 +304,21 @@ func TestANewConnectionClearsTheDevicesAsksFirst(t *testing.T) {
 	}
 }
 
-// 小窗的状态是一条**要同步的状态**：它挂在 Snapshot 上，只在真的变了的时候占一行。
-//
-// 它决定设备底栏写什么、以及上下键要不要发上来——所以「开着」与「关了」这两条都必须真的
-// 过去，而不能靠设备猜。
-func TestHudStateIsPushedWhenItChanges(t *testing.T) {
-	src := newFakeSource()
-	p := newPeer(t, src)
-
-	// 刚连上（hello 后的第一次全量推送）就该说清它关着：设备不能靠「还没收到」当默认。
-	if m := p.readOf("hud"); m["open"] != false {
-		t.Errorf("第一次推送里 open = %v, want false", m["open"])
-	}
-
-	src.update(func(s *Snapshot) { s.Hud = Hud{Open: true} })
-	if m := p.readOf("hud"); m["open"] != true {
-		t.Errorf("小窗开了，设备收到的却是 open = %v", m["open"])
-	}
-
-	// 内容没变就不该重复发（这条链路每 10 秒一轮，去抖是它安静的原因）。
-	src.notify()
-	p.expectSilence(150 * time.Millisecond)
-
-	src.update(func(s *Snapshot) { s.Hud = Hud{Open: false} })
-	if m := p.readOf("hud"); m["open"] != false {
-		t.Errorf("小窗关了，设备收到的却是 open = %v", m["open"])
-	}
-}
-
-// 设备的手势原样送到宿主：四个动作一个都不能在路上被解释（语义在 desktop 的 Key 里）。
+// 设备的手势原样送到宿主：三个动作一个都不能在路上被解释（语义在 desktop 的 Key 里）。
 func TestDeviceKeysReachTheSource(t *testing.T) {
 	src := newFakeSource()
 	p := newPeer(t, src)
 
-	for _, action := range []string{KeyUp, KeyDown, KeyOK, KeyOKDouble} {
+	want := []string{KeyUp, KeyDown, KeyActivate}
+	for _, action := range want {
 		p.write(map[string]any{"t": "key", "key": action})
 	}
 
-	waitFor(t, "the keys to reach the source", func() bool { return len(src.keysSeen()) == 4 })
+	waitFor(t, "the keys to reach the source", func() bool { return len(src.keysSeen()) == len(want) })
 	got := src.keysSeen()
-	for i, want := range []string{KeyUp, KeyDown, KeyOK, KeyOKDouble} {
-		if got[i].Action != want {
-			t.Errorf("第 %d 个手势 = %q, want %q", i+1, got[i].Action, want)
+	for i, w := range want {
+		if got[i].Action != w {
+			t.Errorf("第 %d 个手势 = %q, want %q", i+1, got[i].Action, w)
 		}
 	}
 }
@@ -411,7 +380,6 @@ func TestAnUnchangedPictureIsNotReSent(t *testing.T) {
 	p := newPeer(t, src)
 	p.readOf("state")
 	p.readOf("ask")
-	p.readOf("hud") // 这一次全量的最后一条（见 push 的末尾）
 
 	src.update(func(*Snapshot) {}) // 通知了，但什么都没变
 
