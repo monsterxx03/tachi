@@ -520,12 +520,13 @@ func (s *AgentService) GetUIState() UIStateVO {
 // and best effort, like the rest of uiState: a failure costs the next launch the panel's
 // position and nothing else.
 func (s *AgentService) SetOneOffPanelOpen(open bool) {
-	st := loadUIState()
-	if st.OneOffPanelOpen == open {
-		return
-	}
-	st.OneOffPanelOpen = open
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.OneOffPanelOpen == open {
+			return false
+		}
+		st.OneOffPanelOpen = open
+		return true
+	})
 }
 
 // SetOneOffPanelWidth records how wide the reader made the panel. The value is refused when it
@@ -535,10 +536,11 @@ func (s *AgentService) SetOneOffPanelWidth(px int) {
 	if !validOneOffPanelWidth(px) {
 		return
 	}
-	st := loadUIState()
-	if st.OneOffPanelWidth == px {
-		return
-	}
-	st.OneOffPanelWidth = px
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.OneOffPanelWidth == px {
+			return false
+		}
+		st.OneOffPanelWidth = px
+		return true
+	})
 }

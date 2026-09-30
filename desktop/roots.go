@@ -397,12 +397,13 @@ func (d *desktopApp) defaultWorkspaceFor() string {
 // rememberWorkspace records the user's explicit choice, so the next new session
 // starts where the last one was pointed.
 func rememberWorkspace(dir string) {
-	st := loadUIState()
-	if st.LastWorkspace == dir {
-		return
-	}
-	st.LastWorkspace = dir
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.LastWorkspace == dir {
+			return false
+		}
+		st.LastWorkspace = dir
+		return true
+	})
 }
 
 // validateRootPaths applies the desktop-only rules to the paths a user picked and

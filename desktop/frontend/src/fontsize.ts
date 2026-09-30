@@ -63,7 +63,27 @@ function apply(percent: number, remember: boolean) {
       /* storage blocked: this session still resizes, it just will not persist */
     }
   }
-  AgentService.SetReadingFontScale(percent).catch(() => {})
+  mirrorToGo(percent)
+}
+
+/** How long the Go mirror waits for the presses to stop (ms).
+ *
+ *  The webview paints every press, but the FILE only needs the size the reader stopped at — and
+ *  sending one call per press is wrong twice over: the bound calls run concurrently on the Go side
+ *  (each one reads, changes its own field and writes the whole file back, so what survives is
+ *  whichever finishes LAST, not whichever was sent last — two presses left 110 in the file while
+ *  the window showed 120, and the next launch came back one step short), and a burst of presses is
+ *  one preference, not eight. One request per burst, sent after the last press. */
+const MIRROR_DEBOUNCE_MS = 200
+
+let mirrorTimer: number | undefined
+
+function mirrorToGo(percent: number) {
+  if (mirrorTimer !== undefined) window.clearTimeout(mirrorTimer)
+  mirrorTimer = window.setTimeout(() => {
+    mirrorTimer = undefined
+    AgentService.SetReadingFontScale(percent).catch(() => {})
+  }, MIRROR_DEBOUNCE_MS)
 }
 
 /** One press of ⌘= (steps > 0) or ⌘- (steps < 0). Stops at the bounds, and does nothing there —

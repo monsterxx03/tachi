@@ -105,9 +105,36 @@ func (sb *sandbox) prepareApp(srcApp string) error {
 			return fmt.Errorf("plutil %s: %w", kv[0], err)
 		}
 	}
-	// Ad-hoc signing is enough here: the smoke app never asks for TCC permissions
-	// (notifications are only exercised by hand — see docs/agents/desktop.md).
-	return run("codesign", "--force", "--deep", "--sign", "-", sb.appPath)
+	// Sign with the local certificate, NOT ad-hoc — see smokeSignID.
+	return run("codesign", "--force", "--deep", "--sign", smokeSignID(), sb.appPath)
+}
+
+// smokeSignIDDefault is the certificate desktop/Makefile's LOCAL_SIGN_ID names (created once by
+// `desktop/scripts/dev-cert.sh`). Kept in sync by hand: itest is its own module and cannot read
+// that Makefile.
+const smokeSignIDDefault = "Tachi Local Code Signing"
+
+// smokeSignID is the identity the smoke bundle is signed with, or "-" (ad-hoc) when the local
+// certificate is not there.
+//
+// The certificate is the point, not a nicety: an ad-hoc signature's identity IS the content hash,
+// so every rebuild is a DIFFERENT app to macOS — and this bundle does ask for a TCC permission,
+// on every launch, because desktop links the BLE package and that package builds a CBCentralManager
+// in a package-level variable (importing it is enough; nothing has to touch the badge — see
+// docs/agents/badge.md). With a stable identity macOS records the answer once (allow OR deny) and
+// stops asking; ad-hoc makes the Bluetooth prompt come back on every smoke run.
+//
+// A machine without the certificate still runs the suite — it just gets asked every time.
+func smokeSignID() string {
+	id := smokeSignIDDefault
+	if override := os.Getenv("TACHI_SMOKE_SIGN_ID"); override != "" {
+		id = override
+	}
+	out, err := exec.Command("security", "find-identity", "-v", "-p", "codesigning").Output()
+	if err != nil || !strings.Contains(string(out), "\""+id+"\"") {
+		return "-"
+	}
+	return id
 }
 
 func fileExists(p string) bool {

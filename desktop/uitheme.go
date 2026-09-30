@@ -116,12 +116,13 @@ func (s *AgentService) SetSidebarWidth(px int) {
 	if !validSidebarWidth(px) {
 		return
 	}
-	st := loadUIState()
-	if st.SidebarWidth == px {
-		return
-	}
-	st.SidebarWidth = px
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.SidebarWidth == px {
+			return false
+		}
+		st.SidebarWidth = px
+		return true
+	})
 }
 
 // The reading scale's bounds, mirrored by the frontend (desktop/frontend/src/fontsize.ts) — the
@@ -143,17 +144,41 @@ func (s *AgentService) SetReadingFontScale(pct int) {
 	if !validReadingFontScale(pct) {
 		return
 	}
-	st := loadUIState()
-	if st.ReadingFontScale == pct {
-		return
-	}
-	st.ReadingFontScale = pct
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.ReadingFontScale == pct {
+			return false
+		}
+		st.ReadingFontScale = pct
+		return true
+	})
 }
 
 func uiStatePath() string { return filepath.Join(config.BaseDir(), uiStateFile) }
 
 func validTheme(theme string) bool { return theme == themeLight || theme == themeDark }
+
+// uiStateMu serializes every READ-MODIFY-WRITE of desktop_ui.json. It guards the sequence, not
+// the file: saveUIState is an atomic write, so the file can never be torn — but Wails runs each
+// bound call on its own goroutine, and every field here is written by "read the whole struct,
+// change my field, write it back" so the other fields survive. Two concurrent writers each read
+// the OLD struct and the later write erases the earlier one's field. Measured: pressing ⌘= twice
+// in a row left 110 in the file while the window showed 120 (the font-size scenario reads that
+// file). Every mutation therefore goes through updateUIState — not its own load → change → save.
+var uiStateMu sync.Mutex
+
+// updateUIState performs one read-modify-write under uiStateMu. mutate returns false when the
+// value was already what it wanted to store, which skips the write: desktop_ui.json is written on
+// every real change, so a no-op repaint should not cost one.
+func updateUIState(mutate func(st *uiState) bool) {
+	uiStateMu.Lock()
+	defer uiStateMu.Unlock()
+
+	st := loadUIState()
+	if !mutate(&st) {
+		return
+	}
+	saveUIState(st)
+}
 
 // loadUIState reads the persisted UI state. A missing, unreadable or malformed
 // file is not an error — every one of those cases degrades to "no manual
@@ -268,12 +293,13 @@ func (c *themeController) setFromFrontend(choice string) {
 // (the remembered workspace lives there too), so each writer has to preserve the
 // other's fields.
 func persistTheme(choice string) {
-	st := loadUIState()
-	if st.Theme == choice {
-		return
-	}
-	st.Theme = choice
-	saveUIState(st)
+	updateUIState(func(st *uiState) bool {
+		if st.Theme == choice {
+			return false
+		}
+		st.Theme = choice
+		return true
+	})
 }
 
 // onSystemChange repaints the frame when the OS appearance changes, unless a

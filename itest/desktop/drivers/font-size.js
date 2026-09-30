@@ -29,6 +29,16 @@
   const stamp = () => px('.msg-assistant .msg-ts')
   const apply = (key) => smoke.key(document.body, key, { metaKey: true })
 
+  // 归零，再量起点。开屏那一帧读的是 localStorage，而它是**这个 webview** 的存储——不随场景的
+  // HOME 沙箱隔离（bundle id 每次都一样），所以上一次运行留下的档位会出现在这里（实测过起点
+  // 18.6px = 120%，于是后面每一条断言都在跟错的东西比）。
+  //
+  // 键是同步的，渲染不是：--fs-scale 的新值要到下一帧才出现在 getComputedStyle 里。不等这一帧
+  // 就量 base，量到的是归零**之前**那一帧的字号，而 ⌘= 之后那句「正文变大」就永远等不到（它比的
+  // 是同一个数）。所以等的是「页面已经画成样式表自己的大小」。
+  apply('0')
+  if (!(await smoke.waitFor(() => (Math.abs(prose() - 15.5) < 0.01 ? true : null), '⌘0 已经画到样式表自己的大小', 3000))) return smoke.finish()
+
   const base = { prose: prose(), heading: heading(), stamp: stamp() }
   smoke.log('起始', JSON.stringify(base))
   smoke.check('起始就是样式表自己的大小（--fs-scale: 1）', Math.abs(base.prose - 15.5) < 0.01, base.prose + 'px')
@@ -75,6 +85,12 @@
   const settled = await smoke.waitFor(() => (Math.abs(prose() / base.prose - 1.2) < 0.005 ? prose() : null),
     '终值 120%', 3000)
   smoke.check('两档之后停在 120%', !!settled, prose() + 'px')
+
+  // 让最后一笔落盘走完再收场。apply 不等 Go（那是一次 fire-and-forget 的绑定调用），而场景
+  // 一结束 app 就被杀——不等的话最后一次 ⌘= 只落在 webview 里，Go 侧读到的文件停在上一档
+  // （实测过：界面 120%、文件 110%，只在套件满载时出现）。等的不是一个 UI 状态，而是一个
+  // 已经在路上的副作用；界面此时已经对了，所以没有别的可等。
+  await smoke.sleep(500)
 
   smoke.finish()
 })()
