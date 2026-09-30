@@ -112,20 +112,31 @@ export interface AgentEvent {
   Title?: string
 }
 
-// PermissionRequest is a bash command parked on the user's decision (a policy
-// `ask` rule matched). It arrives as `agent:permission` while the turn waits, and
-// is answered through AgentService.AnswerPermission with the SAME toolId — the
-// backend refuses an answer that does not name the ask that is actually waiting.
+// PermissionRequest is a turn parked on the user's decision: a bash command that
+// matched a policy `ask` rule, or an MCP search whose prompt-cache cost exceeds
+// the configured budget. It arrives as `agent:permission` while the turn waits,
+// and is answered through AgentService.AnswerPermission with the SAME toolId —
+// the backend refuses an answer that does not name the ask that is actually
+// waiting.
 //
-// preview is the agent's own rendering of what is being asked ("$ command" plus
-// the matched rule) and is displayed verbatim: parsing it here would be a second
-// definition of a format the backend already owns.
+// preview is the agent's own rendering of what is being asked (a command plus
+// the matched rule, or a cost estimate) and is displayed verbatim: parsing it
+// here would be a second definition of a format the backend already owns.
+//
+// kind is the backend's own name for WHICH of those two this is, and it exists so
+// the static chrome around the preview (headline, sub-line, button hint) can be
+// right for both without this component re-deriving it from the tool name —
+// the tool name is already the backend's answer, and the headline about money
+// must not read like a headline about a command.
 export interface PermissionRequest {
   sessionId: string
   toolId: string
   toolName: string
+  kind: PermissionKind
   preview: string
 }
+
+export type PermissionKind = 'bash' | 'mcp_search'
 
 // The three answers a permission card can send. The values are the wire contract
 // with AnswerPermission (see desktop/permission.go): `allow_session` stops this

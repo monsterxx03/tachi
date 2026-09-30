@@ -21,21 +21,49 @@ import (
 	"fmt"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
-// PermissionEvent is emitted to the frontend when a bash command matched an
-// `ask` rule and the turn is parked on the user's decision. The answer goes back
-// through AgentService.AnswerPermission.
+// PermissionEvent is emitted to the frontend when a turn is parked on a user
+// decision: a bash command that matched an `ask` rule, or an MCP search whose
+// cache cost exceeds the configured budget. The answer goes back through
+// AgentService.AnswerPermission.
 //
 // Preview is the agent's own rendering of what is being asked ($ command + the
 // matched rule, see bashAskPreview on the agent side) and is shown verbatim: a
 // second parser of that format here would be free to drift from the one that
 // writes it.
+//
+// Kind is the one thing the frontend does own: the STATIC chrome around the
+// preview (title, the line under it, the button hints). It is not a license to
+// re-explain the question — the reason is in Preview, and a card that paraphrased
+// it would be the same drift the preview rule exists to prevent.
 type PermissionEvent struct {
 	SessionID string `json:"sessionId"`
 	ToolID    string `json:"toolId"`
 	ToolName  string `json:"toolName"`
+	Kind      string `json:"kind"`
 	Preview   string `json:"preview"`
+}
+
+// The kinds of ask that reach the confirm card. `kindBash` is the policy ask
+// (agent_permission.go); `kindMCPSearch` is the MCP search cost card
+// (agent/mcp_budget.go), whose preview is a cost estimate rather than a command —
+// the two want different headlines, because the reader is being asked for
+// different things (approve THIS command vs accept THIS spend).
+const (
+	kindBash      = "bash"
+	kindMCPSearch = "mcp_search"
+)
+
+// permEventKind maps a tool name to the card kind. The tool is the identity the
+// agent already uses to decide which gate raised the ask, so the card cannot
+// disagree with the gate about what is being asked.
+func permEventKind(toolName string) string {
+	if toolName == tools.ToolNameMCPSearchTools {
+		return kindMCPSearch
+	}
+	return kindBash
 }
 
 // The decisions the confirm card can send. `allow_session` is the frontends'
@@ -117,6 +145,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 			SessionID: sessionID,
 			ToolID:    toolID,
 			ToolName:  toolName,
+			Kind:      permEventKind(toolName),
 			Preview:   preview,
 		})
 	}
@@ -124,12 +153,19 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 
 	select {
 	case decision := <-answer:
-		if decision == permAllowSession {
+		switch decision {
+		case permAllowSession:
 			// 「本会话全部允许」: hand the fact to the policy, which is where the
 			// session's ask rules are evaluated — so every later ask skips this
 			// handler (no card, no notification) instead of parking again.
 			if p := a.PermissionPolicy(); p != nil {
 				p.AllowAllAsksForSession()
+			}
+			// The search cost gate is not part of that policy (it answers a
+			// different question — money, not rules) and reads only a bool from
+			// this handler, so its own session switch has to be flipped here.
+			if permEventKind(toolName) == kindMCPSearch {
+				a.AllowMCPSearchForSession()
 			}
 		}
 		return decision != permDeny, nil

@@ -1361,6 +1361,15 @@ type MCPToolSearchConfig struct {
 	// attempt: a search runs inside a model turn and degrades to the keyword
 	// search rather than making the turn wait out pkg/jev's retry loop.
 	JevBudget Duration `yaml:"jev_budget" default:"6s"`
+	// CacheBudget is the CNY of cache invalidation ONE search may cause before
+	// the user is asked to confirm it (人民币元/次, ≥0; 0 turns the confirmation
+	// off). Loading a tool inserts its schema at the FRONT of the request
+	// (tools → system → messages), which re-reads the whole prompt once — the
+	// arithmetic and the reasoning are in docs/agents/mcp.md.
+	//
+	// It is a per-search threshold, not a session total: each prompt says what
+	// THAT search costs, and 「本会话允许」 is how a user stops the asking.
+	CacheBudget float64 `yaml:"cache_budget" default:"1"`
 }
 
 // MCPToolRefreshConfig controls background tool list polling for HTTP MCP servers.

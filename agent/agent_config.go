@@ -266,6 +266,28 @@ type PermissionState struct {
 	// explicitly chose "allow all" (ACP); channel/subagent/one-off
 	// runs leave it false.
 	AutoApprovePolicyAsks bool
+
+	// MCPSearchAllowed / MCPSearchBlocked are the MCP search cost card's
+	// session-wide answers (see mcp_budget.go). They are one-shot answers
+	// recorded on the agent because that is what a session IS here: one agent
+	// serves one conversation (channel caches one agent per thread, the desktop
+	// builds one per session), and the bash policy's AllowAllAsksForSession is
+	// scoped the same way.
+	//
+	//   - MCPSearchAllowed: the user chose 「本会话允许」 — no further cards.
+	//   - MCPSearchBlocked: the user refused — the tool is not asked about again
+	//     and not run again either, because a refusal that kept loading tools
+	//     would be a button that cannot deliver.
+	MCPSearchAllowed bool
+	MCPSearchBlocked bool
+
+	// askMu serializes interactive asks on this agent. Tool calls inside one
+	// parallel group run concurrently and the TUI answers all of them through
+	// ONE channel (Channels.ConfirmResp, capacity 1), so two cards waiting at
+	// once would race for the same answer — a search could be approved by a
+	// keystroke meant for its neighbour. Bash never needed this (its tool is
+	// non-parallel, so its asks are already serial); MCPSearchTools is parallel.
+	askMu sync.Mutex
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
@@ -149,7 +152,16 @@ func fileExists(p string) bool {
 // extra is the scenario's own YAML block (see scenario.config) — appended verbatim so a
 // scenario that needs settings the shared config does not carry (permissions.bash.ask, for
 // instance) does not have to widen this function's signature with one field per feature.
-func (sb *sandbox) writeConfig(baseURL, extra string) error {
+//
+// pricing is the one thing that CANNOT arrive through `extra`: it lives INSIDE the provider
+// entry, and a second `providers:` key is a duplicate mapping key. nil — every scenario but
+// perm-mcp-budget — leaves the model unpriced, which is what keeps the other scenarios' ¥/积分
+// numbers at zero and out of their assertions.
+func (sb *sandbox) writeConfig(baseURL string, pricing *config.PricingConfig, extra string) error {
+	spec, err := providerSpec(pricing)
+	if err != nil {
+		return err
+	}
 	cfg := fmt.Sprintf(`provider: smoke
 providers:
   - name: smoke
@@ -164,12 +176,31 @@ providers:
       # behaviour but leaves the image routes untestable. Scenarios that never send an image are
       # unaffected: the flag only decides whether image parts are passed on as parts.
       vision: true
-title_generation: false
+%stitle_generation: false
 language: zh
 herdr:
   enabled: false
-%s`, baseURL, extra)
+%s`, baseURL, spec, extra)
 	return os.WriteFile(filepath.Join(sb.home, ".tachi", "config.yaml"), []byte(cfg), 0o600)
+}
+
+// providerSpec renders the mock provider's extra `spec:` YAML — today only `pricing:` —
+// indented to sit under the `spec:` key above. It goes through the SAME type the app loads
+// (config.PricingConfig), so a scenario cannot hand-write a price table that the loader would
+// then read differently.
+func providerSpec(p *config.PricingConfig) (string, error) {
+	if p == nil {
+		return "", nil
+	}
+	raw, err := yaml.Marshal(map[string]any{"pricing": p})
+	if err != nil {
+		return "", fmt.Errorf("marshal provider pricing: %w", err)
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		b.WriteString("      " + line + "\n")
+	}
+	return b.String(), nil
 }
 
 // writeMCPConfig points the app at the scenario's OAuth-protected MCP server.

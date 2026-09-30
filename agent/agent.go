@@ -670,6 +670,14 @@ func (a *AIAgent) ClearSession() {
 	if a.Config.PermissionPolicy != nil {
 		a.Config.PermissionPolicy.ResetSessionApprovals()
 	}
+	// The MCP search cost gate's session answers, for exactly the same reason: a refusal
+	// recorded while answering THIS conversation must not silence the gate in the next one,
+	// and neither must an 「本会话允许」. Without this the gate would be the one piece of
+	// session state that outlives the session it belongs to — and a user who denied a search
+	// and then changed their mind would have no way back short of a restart. The gate reads
+	// these per call, so clearing them IS the reset: nothing cached it.
+	a.PermState.MCPSearchBlocked = false
+	a.PermState.MCPSearchAllowed = false
 }
 
 // GetTool retrieves a tool from the agent's registry by name.

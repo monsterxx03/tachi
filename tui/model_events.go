@@ -77,8 +77,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.setState(stateAwaitingConfirmation)
 		// Show diff as a message in chatview
 		confirmTitle := "Edit File Confirmation"
-		if event.ToolName == tools.ToolNameBash {
+		switch event.ToolName {
+		case tools.ToolNameBash:
 			confirmTitle = "Bash Command Confirmation"
+		case tools.ToolNameMCPSearchTools:
+			// The body below is the agent's cost estimate, not a diff: this card
+			// asks about money (a prompt-cache re-read), and the title must not
+			// send the reader looking for an edit that is not there.
+			confirmTitle = "MCP Tool Load Confirmation"
 		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "tool_confirmation",

@@ -18,6 +18,7 @@ split + index when a subject grows) apply to this split too.
 | **The search** | you touch `MCPSearchTools`, either searcher, or the `server` narrowing |
 | **The result the model reads** | you change what a search returns |
 | **The schema the provider sees** | you touch how an MCP tool becomes an `llm.Tool` |
+| **What loading costs, and the budget card** | you touch the cost gate (`agent/mcp_budget.go`), `mcp_tool_search.cache_budget`, or the confirm card's copy |
 
 ## The pool, and the reminder that advertises it
 
@@ -34,6 +35,11 @@ split + index when a subject grows) apply to this split too.
   emptiness, so it is registered unconditionally and stays silent until it has something to hint about.
   `desktop/agent_mcp_test.go` (a stub stdio server run by the test binary itself) and
   `agent/agent_deferred_test.go` pin the enable, disable and late-arrival paths.
+- **`min_tools_for_search` cannot be written as 0** — `defaults.Set` runs after the YAML and fills every
+  ZERO value from the tag, so an explicit `0` comes back as the default `5`. The auto-load test is
+  `len(pool) > threshold`, so the value meaning "never auto-load" is a NEGATIVE one; a fixture that needs a
+  tool to STAY in the pool (the smoke suite's `perm-mcp-budget`, which is about the cost card in front of a
+  search that could load something) sets `-1` for exactly that reason.
 - **Toggling a server is a GLOBAL fact** — one pool and one connection serve every session — so the desktop
   notifies all live agents (`applyToLiveAgents()`), not just the displayed one; and disabling runs
   `UnregisterMCPServer` (registry + every session's discovered set), not a bare pool removal.
@@ -106,6 +112,52 @@ split + index when a subject grows) apply to this split too.
   Schema — one such property makes the provider reject the ENTIRE request, so every tool in the list dies with
   it, not just the offending one (`TestBuildLLMTools_EmptyTypeNeverReachesTheProvider`,
   `TestMCPToolProperties_ComposedSchemaType`).
+
+## What loading costs, and the budget card
+
+- **Loading a tool is the one change that re-reads the WHOLE prompt once.** Tools are the first segment of
+  the prefix (tools → system → messages), so a tool that was not in the previous request turns everything
+  after its position into a miss — and the messages are behind the tools. `mcp_tool_search.cache_budget`
+  (CNY per search, 0 = off) is what the user accepts: over it, the call is confirmed first, on the TUI, ACP
+  and desktop paths (`agent/mcp_budget.go`, called from both executor paths).
+- **The estimate is `tokens × (input + cache-creation − cache-read)` per 1M**, with `tokens` from
+  `convState.contextEstimate()` — the REAL-anchored number, not the raw character estimate, because a budget
+  decision is where that estimate's known bias would show up as a wrong yuan figure — and the price pinned
+  with `ResolveModelPriceAt(now)` (time-of-use bands included). An unpriced model, or a delta ≤ 0 (cache read
+  at least as expensive as a miss), raises NO card: there is no number to put on it, and inventing one is
+  worse than not asking.
+- **It asks only when a search could actually move the tool list**: zero undiscovered pool tools (the pool
+  minus the session's discovered set, keyed by the SAME session ID that builds the next request's list,
+  `tools.SessionIDFromCtx`) means a search can only return names already in it. Whether a SPECIFIC query
+  would load anything is the search's own answer, so the card says 「可能加载」.
+- **It is a COST gate, not a safety one, and three properties follow.** `PermissionModeSkip` never gates —
+  nobody is at the console in channel / `tachi -p` / a subagent, and a spend question with no one to answer
+  is a hang, not a question. A refusal returns a tool RESULT and the turn continues (the bash ask instead
+  aborts with `errCancelled`), because the model is the reader that has to learn why the tools are gone. And
+  the refusal is remembered for the session (`PermissionState.MCPSearchBlocked`): a refusal the next call
+  could undo by asking again would be a button that cannot deliver. 「本会话允许」 is its counterpart — the
+  TUI reaches the agent as `ConfirmAllowSession`, while the ACP/desktop handlers answer only a bool and call
+  `AllowMCPSearchForSession()` themselves. **Both are cleared by `ClearSession` (`/new`), beside the bash
+  policy's own session approvals**: an answer belongs to the conversation that gave it, and a refusal that
+  outlived its conversation left a user who changed their mind with no way back short of a restart. The
+  desktop builds one agent per session, so it gets a fresh gate without that call.
+- **Asks are serialized per agent (`PermissionState.askMu`).** Bash never needed this (its tool is
+  non-parallel, so its asks are already one at a time); MCPSearchTools IS parallel, so two searches in one
+  group can be parked at once — and the TUI answers every card through ONE channel
+  (`Channels.ConfirmResp`, capacity 1), where the second card would otherwise consume the first one's answer.
+- **Every call leaves one log line, card or no card**: `Agent: MCP search cost gate` with
+  `decision` (proceed/ask/refuse) + `reason` + `tokens` + `cost` + `budget` + `undiscovered` +
+  `priced`, and an ask leaves a second one (`... gate answered`) carrying the user's choice. The
+  facts it needs are therefore gathered BEFORE the early returns. This is what makes the gate
+  auditable: "it didn't ask" and "nothing left to load" and "no price table for this model" are
+  otherwise the same non-event from the outside, and the estimate — the number the whole feature
+  is about — exists nowhere else.
+- **The card's chrome is per kind, its body never is.** `desktop.PermissionEvent.Kind` (`bash` /
+  `mcp_search`, derived from the tool name) selects the headline and button hints; the preview stays the
+  agent's own rendering, shown verbatim — the same rule that keeps `bashAskPreview` the only writer of its
+  format. The TUI branches on the tool name for the same two strings. The whole card (copy, the numbers on
+  it, a refusal sticking across a second call) is pinned end-to-end by the desktop smoke scenario
+  `perm-mcp-budget`.
 
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (MCP client, OAuth, the panel),
 [jev.md](jev.md) (the gate and its threshold discipline), [prompt-cache.md](prompt-cache.md) (the reminder

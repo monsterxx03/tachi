@@ -228,6 +228,26 @@ func TestClearSessionResetsSessionApprovals(t *testing.T) {
 	}
 }
 
+// The MCP search cost gate's session answers are state of the same kind, and they need the same
+// ending. A refusal that outlived its conversation was the one way a user could deny a search,
+// change their mind, and find no way back short of a restart — and an 「本会话允许」 that leaked
+// forward would keep the asking switched off in a conversation it was never given for.
+func TestClearSessionResetsMCPSearchSessionAnswers(t *testing.T) {
+	a := newBareTestAgent(t, &mockStreamProvider{name: "mock"}, 5)
+
+	a.BlockMCPSearchForSession()
+	a.ClearSession()
+	if a.PermState.MCPSearchBlocked {
+		t.Error("a refusal must not silence the gate in the NEXT conversation")
+	}
+
+	a.AllowMCPSearchForSession()
+	a.ClearSession()
+	if a.PermState.MCPSearchAllowed {
+		t.Error("「本会话允许」 must not carry into the next conversation either")
+	}
+}
+
 func TestAgentLoop_BashPolicyAsk_TUIDenyCancelsTurn(t *testing.T) {
 	mp := &mockStreamProvider{
 		name: "mock",

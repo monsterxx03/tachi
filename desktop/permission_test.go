@@ -9,6 +9,9 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/permission"
+	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // askCmd + askArgs are one Bash call the way the agent sees it: the tool args as
@@ -33,6 +36,26 @@ func newAskTest(t *testing.T) (*desktopApp, *AgentService, *agent.AIAgent, *perm
 	a := &agent.AIAgent{}
 	a.SetPermissionPolicy(p)
 	return d, &AgentService{desk: d}, a, p
+}
+
+// newPermissionTestAgent builds a REAL agent (a zero-value one has no
+// PermissionState, which is where the session-wide switches live) without any
+// provider traffic: llm.NewProvider only constructs a client, it never dials.
+func newPermissionTestAgent(t *testing.T) *agent.AIAgent {
+	t.Helper()
+	prov, err := llm.NewProvider("openai", "k", "https://api.test/v1", "m")
+	if err != nil {
+		t.Fatalf("llm.NewProvider: %v", err)
+	}
+	a, _, err := agent.NewAIAgentWithConfig(t.Context(), agent.AgentConfig{
+		Resolved:      &llm.ResolvedProvider{Provider: prov},
+		Logger:        logger.Default(),
+		SkipConfigure: true,
+	})
+	if err != nil {
+		t.Fatalf("agent.NewAIAgentWithConfig: %v", err)
+	}
+	return a
 }
 
 // startAsk runs askPermission in the background and returns the channel its
@@ -305,9 +328,10 @@ func TestAskPermissionIsAskableWithoutTheMark(t *testing.T) {
 
 // The event the card is built from must survive JSON to the webview with the
 // fields the frontend matches on — sessionId/toolId are the pair that addresses
-// the answer, and a renamed field would silently break the answer path.
+// the answer, kind is what picks the card's copy, and a renamed field would
+// silently break one of the two.
 func TestPermissionEventJSONShape(t *testing.T) {
-	b, err := json.Marshal(PermissionEvent{SessionID: "s1", ToolID: "c1", ToolName: "Bash", Preview: askPrev})
+	b, err := json.Marshal(PermissionEvent{SessionID: "s1", ToolID: "c1", ToolName: "Bash", Kind: kindBash, Preview: askPrev})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -315,10 +339,67 @@ func TestPermissionEventJSONShape(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, k := range []string{"sessionId", "toolId", "toolName", "preview"} {
+	for _, k := range []string{"sessionId", "toolId", "toolName", "kind", "preview"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("event is missing %q: %s", k, b)
 		}
+	}
+}
+
+// The card's kind comes from the TOOL, which is the same identity the agent's
+// gate uses to decide whether it is asking about a command or about a spend.
+func TestPermEventKind(t *testing.T) {
+	if got := permEventKind(tools.ToolNameMCPSearchTools); got != kindMCPSearch {
+		t.Errorf("search tool kind = %q, want %q", got, kindMCPSearch)
+	}
+	if got := permEventKind("Bash"); got != kindBash {
+		t.Errorf("other tools keep the bash card: got %q", got)
+	}
+}
+
+// 「本会话全部允许」 on a search cost card has to reach the GATE, not only the bash
+// policy: the gate reads a bool from this handler (its own question is money, not
+// rules), so a card that flipped only the policy would ask again on the next
+// search.
+func TestAskPermissionSessionAllowFlipsTheSearchSwitch(t *testing.T) {
+	d := newDesktopApp()
+	a := newPermissionTestAgent(t)
+
+	out := make(chan askOutcome, 1)
+	go func() {
+		ok, err := d.askPermission(context.Background(), "s1", a, tools.ToolNameMCPSearchTools, "call_1", askPrev, askArgs)
+		out <- askOutcome{approved: ok, err: err}
+	}()
+	waitAskRegistered(t, d, "s1", "call_1", true)
+
+	if got := (&AgentService{desk: d}).AnswerPermission("s1", "call_1", permAllowSession); got != "ok" {
+		t.Fatalf("AnswerPermission = %q", got)
+	}
+	if o := awaitAsk(t, out); !o.approved || o.err != nil {
+		t.Fatalf("session-allowed ask = %+v, want approved", o)
+	}
+	if !a.PermState.MCPSearchAllowed {
+		t.Error("「本会话全部允许」 did not stop the MCP search cost card")
+	}
+}
+
+// A bash ask must NOT flip that switch: the two are different questions, and
+// approving a command says nothing about accepting a cache re-read.
+func TestAskPermissionBashSessionAllowLeavesTheSearchSwitchAlone(t *testing.T) {
+	d := newDesktopApp()
+	a := newPermissionTestAgent(t)
+
+	out := make(chan askOutcome, 1)
+	go func() {
+		ok, err := d.askPermission(context.Background(), "s1", a, "Bash", "call_1", askPrev, askArgs)
+		out <- askOutcome{approved: ok, err: err}
+	}()
+	waitAskRegistered(t, d, "s1", "call_1", true)
+	(&AgentService{desk: d}).AnswerPermission("s1", "call_1", permAllowSession)
+	awaitAsk(t, out)
+
+	if a.PermState.MCPSearchAllowed {
+		t.Error("a bash approval must not silence the MCP search cost card")
 	}
 }
 

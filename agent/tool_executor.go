@@ -173,6 +173,20 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 				subCtx = tools.WithSubagentEventSink(subCtx, sink)
 			}
 
+			// MCP search cost gate, sequential by construction (PermissionState.askMu):
+			// MCPSearchTools is parallel, so a search can share a group with other
+			// calls, and a parked card must not race another one for the single
+			// answer channel. Placed before the hook and the snapshot so a refused
+			// call leaves the same trace a policy-refused one does on the
+			// sequential path.
+			if r, handled, err := a.checkMCPSearchBudget(subCtx, tc, ch); err != nil {
+				results[i] = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+				return
+			} else if handled {
+				results[i] = r
+				return
+			}
+
 			// Fire tool_call hook before parallel invocation
 			a.dispatchEvent(ctx, hooks.EventToolCall, hooks.Payload{
 				ToolName: tc.Function.Name,
@@ -326,16 +340,29 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			subCtx = tools.WithSubagentEventSink(subCtx, sink)
 		}
 
-		// Bash permission policy check (allow/ask/deny rules). Runs before the
-		// normal Invoke: deny produces an error result fed back to the LLM;
-		// ask is resolved per permission mode (TUI prompt / external handler /
-		// non-interactive denial). A user denial at the TUI prompt aborts the
-		// turn with errCancelled, consistent with EditFile confirmation.
-		tr, policyHandled, policyErr := a.checkBashPermission(subCtx, tc, ch)
-		if policyErr != nil {
-			return nil, policyErr
+		// MCP search cost gate. It runs HERE, next to the bash policy check and
+		// for the same reason: a refusal is a tool result fed back to the LLM, so
+		// the call must not reach the registry. The two never overlap (each
+		// matches its own tool name). Unlike the bash ask, a refusal here does
+		// NOT end the turn — the model needs to hear why the tools are gone.
+		tr, handled, gateErr := a.checkMCPSearchBudget(subCtx, tc, ch)
+		if gateErr != nil {
+			return nil, gateErr
 		}
-		if !policyHandled {
+
+		if !handled {
+			// Bash permission policy check (allow/ask/deny rules). Runs before the
+			// normal Invoke: deny produces an error result fed back to the LLM;
+			// ask is resolved per permission mode (TUI prompt / external handler /
+			// non-interactive denial). A user denial at the TUI prompt aborts the
+			// turn with errCancelled, consistent with EditFile confirmation.
+			var policyErr error
+			tr, handled, policyErr = a.checkBashPermission(subCtx, tc, ch)
+			if policyErr != nil {
+				return nil, policyErr
+			}
+		}
+		if !handled {
 			// Fire tool_call hook after permission check but before execution,
 			// so every tool_call is paired with a tool_result.
 			a.dispatchEvent(ctx, hooks.EventToolCall, hooks.Payload{
@@ -346,7 +373,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			// See the parallel path: the snapshot has to exist before the write.
 			if err := a.snapshotBeforeWrite(ctx, rs, tc.Function.Name); err != nil {
 				tr = checkpointRefusal(tc, err)
-				policyHandled = true
+				handled = true
 			} else {
 				tr = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 			}
@@ -508,7 +535,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 
 		// Fire tool_result hook only if tool_call was dispatched, so every
 		// tool_result is paired with a preceding tool_call.
-		if !policyHandled {
+		if !handled {
 			a.dispatchEvent(ctx, hooks.EventToolResult, hooks.Payload{
 				ToolName:   tc.Function.Name,
 				ToolID:     tc.ID,

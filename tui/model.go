@@ -1055,9 +1055,14 @@ func (m *Model) setState(st state) {
 
 func (m *Model) renderConfirmPrompt() string {
 	var b strings.Builder
-	if m.pendingConfirm != nil && m.pendingConfirm.toolName == tools.ToolNameBash {
+	switch {
+	case m.pendingConfirm != nil && m.pendingConfirm.toolName == tools.ToolNameBash:
 		b.WriteString(confirmStyle.Render("Run this command? [y]once [a]lways(session) [n]deny: "))
-	} else {
+	case m.pendingConfirm != nil && m.pendingConfirm.toolName == tools.ToolNameMCPSearchTools:
+		// [a]lways is the 「本会话允许」 this card's own gate honours (see
+		// agent/mcp_budget.go): no further cost card in this session.
+		b.WriteString(confirmStyle.Render("Load MCP tools? [y]once [a]lways(session) [n]deny: "))
+	default:
 		b.WriteString(confirmStyle.Render("Apply this edit? [y]es [a]lways(session) [n]o: "))
 	}
 	return b.String()

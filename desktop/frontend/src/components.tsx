@@ -6,7 +6,7 @@ import { actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
-import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
+import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
@@ -1195,25 +1195,48 @@ function AskForm({ questions, onSubmit, onCancel }: {
 // No Esc and no default-on-Enter: Esc already means "dismiss the picker / close a
 // viewer" everywhere else in this UI, and the decision here can be a destructive
 // command — it should not be one habitual keypress away.
+// The chrome per kind of ask. Everything that differs between the two cards is
+// here, and everything that does NOT differ (the preview, the three buttons,
+// their wire values) is shared — the preview is the agent's own text and stays
+// verbatim in both.
+//
+// The bash copy exists to avoid claiming a rule that may not exist (see the note
+// below); the search copy exists because the reader is being asked to accept a
+// SPEND, and 「确认这条命令」 on a card with no command in it sends them looking
+// for one.
+const permCopy: Record<PermissionKind, { title: string; sub: string; hint: string }> = {
+  bash: {
+    title: '需要你确认这条命令',
+    sub: '允许后本轮继续；deny 规则不受影响',
+    hint: '仅这一条；或本会话不再询问 bash（deny 规则仍然生效）',
+  },
+  mcp_search: {
+    title: '加载 MCP 工具会花掉一笔钱',
+    sub: '新工具会让整段 prompt 缓存失效，重读一次；拒绝后本会话不再加载',
+    hint: '仅这一次；或本会话不再询问 MCP 工具加载花费',
+  },
+}
+
 function PermissionForm({ perm, onAnswer }: {
   perm: { req: PermissionRequest; busy?: boolean; err?: string }
   onAnswer: (decision: PermissionDecision) => void
 }) {
   const busy = !!perm.busy
+  const copy = permCopy[perm.req.kind] ?? permCopy.bash
   return (
     <div className="perm-form" aria-label="等待授权">
       <div className="perm-head">
-        <span className="perm-title">需要你确认这条命令</span>
+        <span className="perm-title">{copy.title}</span>
         {/* Not 「命中 ask 规则」: that was hard-coded and FALSE for the other way an ask is
             raised — a command the policy could not parse, where no rule was consulted at all (and
             the card then sent the reader looking for a rule they never wrote). What the preview
             below says is the reason; this line only states the consequence. */}
-        <span className="perm-sub">允许后本轮继续；deny 规则不受影响</span>
+        <span className="perm-sub">{copy.sub}</span>
       </div>
       <pre className="perm-preview">{perm.req.preview}</pre>
       {perm.err ? <div className="perm-err">{perm.err}</div> : null}
       <div className="perm-actions">
-        <span className="perm-hint">仅这一条；或本会话不再询问 bash（deny 规则仍然生效）</span>
+        <span className="perm-hint">{copy.hint}</span>
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('deny')}>拒绝</button>
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_session')}>本会话全部允许</button>
         <button className="btn" disabled={busy} onClick={() => onAnswer('allow_once')}>{busy ? '已发送…' : '允许一次'}</button>

@@ -40,6 +40,12 @@ type scenario struct {
 	// config is a YAML block appended to the sandbox config.yaml (see sandbox.writeConfig).
 	// Empty for scenarios that need no settings beyond the shared provider/mock wiring.
 	config string
+	// pricing is the mock provider's own price table, for the scenarios that make an assertion
+	// about MONEY. The shared provider entry has no prices (an unpriced model bills nothing,
+	// which keeps every other scenario's ¥/积分 figures at zero), so a scenario that needs a
+	// real number supplies one here — and it cannot come in through `config`, because
+	// `providers:` is already a key in the sandbox's own YAML and a second one would not load.
+	pricing *config.PricingConfig
 	// extraRoots are ADDITIONAL workspace roots for the session, each entry a directory the
 	// runner creates under the sandbox holding that entry's files. They are seeded rather than
 	// added in the UI because the UI's only way in is a native directory picker, which a driver
@@ -379,6 +385,27 @@ func bashStream(cmd, id string) mockllm.ReplyFunc {
 		mockllm.Done(),
 	)
 }
+
+// searchStream makes the run ask for an MCP tool. The call never reaches the tool: what the
+// scenario is about is the agent's own gate in front of it (see perm-mcp-budget).
+//
+// promptTokens is what the provider REPORTS for the request, and that report is what the
+// context meter — and therefore the cost estimate on the card — is anchored on (see
+// llm.PromptTokens / convState.setPromptAnchor). A scenario that wants the card to appear
+// therefore has to report a prompt big enough to be worth more than the budget; the small
+// literal sizes every other scenario uses would ask for nothing.
+func searchStream(id string, promptTokens int) mockllm.ReplyFunc {
+	return mockllm.Stream(
+		mockllm.ToolCallStart(id, "MCPSearchTools", `{"query":"echo from the fixture"}`),
+		mockllm.Finish("tool_calls"),
+		mockllm.UsageWithCache(promptTokens, 40, promptTokens/2, 0),
+		mockllm.Done(),
+	)
+}
+
+// ptrFloat is what every config price field needs: nil means "not set" (fall back to the
+// built-in table), an explicit 0 means free.
+func ptrFloat(v float64) *float64 { return &v }
 
 // diffLayoutLine is one line of the diff-layout scenario's file: a tag the driver recognises,
 // then enough filler that HALF of the pane cannot show the line whole. Every line needs it, not
@@ -1815,6 +1842,69 @@ permissions:
 				c.check("拒绝后命令没有执行（工具结果里没有文件内容）", !ran, requestCount(c.requests))
 				_, told := c.requestSeen("denied")
 				c.check("模型被告知这条命令被拒绝", told, "")
+			},
+		},
+		//
+		// 权限确认（MCP 工具加载的花费）: 加载一个新工具会把整段 prompt 缓存作废，超过
+		// mcp_tool_search.cache_budget 就先问一次。这张卡的问题是**钱**，不是危险 —— 所以它和
+		// bash 那三张有三处不同，都要在这条场景里成立：拒绝**不中止回合**（模型被告知原因后接着
+		// 干），拒绝**记在本会话**上（模型再调一次不再弹卡，而是直接收到同一个拒绝），以及
+		// **无人值守模式不拦**（那是单测的事，进程里看不到区别）。
+		//
+		// 这个 fixture 有真实的池子：OAuth server 连上后池里有一个**未加载**的工具，一次搜索才
+		// 可能改变工具列表（池里没有未发现的工具时，搜也搜不出新东西，缓存根本不会坏 —— 那时不
+		// 该问）。这也是 mcpOAuth 唯一被两个场景共用的原因。
+		//
+		// min_tools_for_search 为什么是 **-1** 而不是 0：这个字段的默认标签是 5，而
+		// creasty/defaults 把"显式写 0"当成"没写"（零值）再填回 5 —— 于是 0 在这个字段上写不出来。
+		// 判据是 `len(pool) > 阈值`，-1 就是"永远不自动加载"，即这个场景要的那一件事。
+		//
+		// 价格必须由场景自己给（scenario.pricing）：沙箱那个 smoke-model 没有内置价格表，而估不出
+		// 钱的卡不该弹 —— 这是产品行为，不是这里可以绕过的东西。
+		{
+			name:     "perm-mcp-budget",
+			mcpOAuth: true,
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe perm-mcp-budget scenario's working directory\n",
+			},
+			config: `
+compact:
+  auto: false
+mcp_tool_search:
+  min_tools_for_search: -1
+  cache_budget: 1
+`,
+			// ¥100/M 输入、¥10/M 缓存命中 → 一次整段重读 90 元/百万 token。下面那两轮各报
+			// 30000 个 prompt token，于是预估 ¥2.700 > 预算 ¥1.000（¥100/M 那套数字是编的，
+			// 但算术是真的，卡片上印的就是这一套）。
+			pricing: &config.PricingConfig{
+				InputPrice:          ptrFloat(100),
+				OutputPrice:         ptrFloat(100),
+				CacheReadInputPrice: ptrFloat(10),
+			},
+			steps: []mockllm.Step{
+				// 第一轮：模型去搜工具 → 卡片 → 用户点拒绝 → 模型被告知，继续干活。
+				{Reply: searchStream("call_mb1", 30_000)},
+				{Reply: textStream("那用现有工具继续。", 1500)},
+				// 第二轮：同一个模型再搜一次 → 本会话已拒，直接收到同一个拒绝，不再弹卡。
+				{Reply: searchStream("call_mb2", 30_000)},
+				{Reply: textStream("明白了，不搜了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 池里那个工具是「未加载」的：提醒只报名字，而这件事决定了这次搜索**可能**改变
+				// 工具列表 —— 缓存失效的前提。
+				_, announced := c.requestSeen("mcp__oauth-fixture__echo")
+				c.check("未加载的 MCP 工具已被告知模型（池子非空）", announced, requestCount(c.requests))
+				// 拒绝真的到了模型手里，而且带着"别再调"的指令：只回一句"被拒绝"会让它再试一次。
+				_, refused := c.requestSeen("不要再调用 MCPSearchTools")
+				c.check("拒绝写进了工具结果，且带上「不要再调用」", refused, "")
+				// 第二次调用同样被拒 —— 这一次没有卡片，所以它必须**已经**被记在会话上。
+				if at, again := c.requestSeen("用户拒绝了本次 MCP 工具加载"); again {
+					c.check("会话级的拒绝在第二次调用时仍然生效", at >= 2, "第一次出现在第 "+strconv.Itoa(at)+" 条请求")
+				} else {
+					c.check("会话级的拒绝在第二次调用时仍然生效", false, "工具结果里没有拒绝")
+				}
 			},
 		},
 		//

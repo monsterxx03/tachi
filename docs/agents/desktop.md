@@ -61,6 +61,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
 | the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
+| the MCP search cost card (its copy, and a refusal sticking for the session) | `perm-mcp-budget` |
 | the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
 | the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
@@ -129,6 +130,10 @@ Fixtures exist where the real path needs something a driver cannot do:
   directory picker no driver can click. Reach a seeded root from the work dir as `../<name>/…`.
 - `config` — a YAML block appended to the generated `config.yaml` (how a parked-permission scenario gets its
   `permissions.bash.ask` rule).
+- `pricing` — the mock provider's own price table, for a scenario that asserts on MONEY (`perm-mcp-budget`'s
+  cost card). It cannot ride in `config`: prices live INSIDE the provider entry, and a second `providers:` key
+  would not load. Nil everywhere else — an unpriced model bills nothing, which keeps the other scenarios'
+  ¥/积分 figures at zero and out of their assertions.
 - `project` — a desktop project: `projects.json` and the session's `project_id` are seeded, same reason.
 - `seedMessages` / `seedSecond` — a transcript written before the app launches. A driver cannot produce a
   reload by itself (switching sessions serves the in-memory copy), so this is how a restart-shaped assertion
