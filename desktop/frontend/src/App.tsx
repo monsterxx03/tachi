@@ -1827,6 +1827,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return () => { off?.() }
   }, [updateSession, setSessionPage, composer])
 
+  // toggleProject opens/closes a project group. The header owns the click; the caret button
+  // keeps its own handler (stopping propagation) so a pointer already aimed at the caret still
+  // toggles exactly once, while a click meant for ＋ or the rename box never toggles at all.
+  const toggleProject = useCallback((id: string) => {
+    setExpandedProjects((p) => ({ ...p, [id]: !p[id] }))
+  }, [])
+
+  // activeInGroup returns the session the CURRENT conversation is, when it hangs in this group —
+  // a pre-compaction link counts, since a folded chain hides it exactly like the group does. It
+  // is what the collapsed header's marker names; nothing else reads it.
+  const activeInGroup = (g: { rows: SessionRow<SessionItem>[] }): SessionItem | null => {
+    for (const row of g.rows) {
+      if (row.session.active) return row.session
+      const inChain = row.compactedFrom.find((s) => s.active)
+      if (inChain) return inChain
+    }
+    return null
+  }
+
   // stopChat aborts the running turn in the current session (backend cancels
   // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
   const stopChat = useCallback(() => {
@@ -1847,6 +1866,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         <input className="session-rename" autoFocus value={editTitle}
           onChange={(e) => setEditTitle(e.target.value)}
           onClick={(e) => e.stopPropagation()}
+          /* Losing focus ends the rename: clicking anywhere else is the same decision as Enter
+             ("done"), while Escape already means "never mind". A box that waits for a key kept
+             the row in edit mode after the reader had moved on, so the NEXT click landed in a
+             text box instead of on whatever it aimed at. An empty box is just an exit. */
+          onBlur={() => commitRename(s.id)}
           onKeyDown={(e) => {
             // Enter/Escape during IME composition belong to the
             // candidate window, not to rename/commit.
@@ -1975,35 +1999,51 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 compaction chain INSIDE its group, because a chain shares its project). */}
             {groups.map((group) => (
               <Fragment key={group.project?.id || '__loose__'}>
+                {/* The WHOLE header toggles (the caret is one way to say it, not the only one):
+                    role=button already covered the row for the keyboard, and a header whose only
+                    live spot is a 16px caret reads as a label. The controls inside stopPropagation,
+                    or ＋ would collapse the group it creates a session in. */}
                 {group.project ? (
                   <div className="proj-head" role="button" tabIndex={0}
-                    onKeyDown={actOnKey(() => setExpandedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] })))}
+                    onClick={() => toggleProject(group.project!.id)}
+                    onKeyDown={actOnKey(() => toggleProject(group.project!.id))}
                     onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ id: group.project!.id, x: e.clientX, y: e.clientY }) }}>
                     <button type="button" className="proj-toggle" aria-expanded={!!expandedProjects[group.project.id]}
                       title={expandedProjects[group.project.id] ? '收起该项目' : '展开该项目'}
-                      onClick={() => setExpandedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] }))}>
+                      onClick={(e) => { e.stopPropagation(); toggleProject(group.project!.id) }}>
                       <Caret open={!!expandedProjects[group.project.id]} />
                     </button>
                     {editingProject?.id === group.project.id ? (
                       <input className="project-rename" autoFocus value={editingProject.name}
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setEditingProject({ id: group.project!.id, name: e.target.value })}
+                        onBlur={() => { if (editingProject) void commitProjectRename(group.project!.id, editingProject.name) }}
                         onKeyDown={(e) => {
                           if (imeActive(e)) return
                           if (e.key === 'Enter') { e.stopPropagation(); void commitProjectRename(group.project!.id, editingProject.name) }
                           else if (e.key === 'Escape') { e.stopPropagation(); setEditingProject(null); setProjectNotice(null) }
                         }} />
                     ) : (
-                      <span className="proj-name" title={`主目录：${group.project.workingDir}`}
-                        onDoubleClick={() => { setEditingProject({ id: group.project!.id, name: group.project!.name }); setProjectNotice(null) }}>
+                      /* No rename on double-click: the header's click toggles the group, so a
+                         double-click would toggle twice, and the context menu already offers
+                         重命名 (with the refusal notice next to the box). */
+                      <span className="proj-name" title={`主目录：${group.project.workingDir}`}>
                         {group.project.name}
                       </span>
                     )}
                     <span className="proj-count" title={`${group.project.sessionCount} 个会话`}>({group.project.sessionCount})</span>
+                    {/* A COLLAPSED group hides its rows, so a reader whose conversation is in
+                        there cannot see where they are — the marker says so and names the session
+                        (a bare dot would say "something here", not "you are here"). Collapsed
+                        only: expanded, the row's own highlight says it. */}
+                    {!expandedProjects[group.project.id] && activeInGroup(group)
+                      ? <span className="proj-current" title={`当前会话「${activeInGroup(group)!.title || '未命名会话'}」在这个项目里`}>●</span>
+                      : null}
                     {group.project.rootsUsable ? null : (
                       <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>
                     )}
                     <button type="button" className="proj-add" title="在该项目里新建会话"
-                      onClick={() => void newChat(group.project!.id)}>＋</button>
+                      onClick={(e) => { e.stopPropagation(); void newChat(group.project!.id) }}>＋</button>
                   </div>
                 ) : (
                   <>

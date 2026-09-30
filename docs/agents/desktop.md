@@ -715,6 +715,15 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   watchdog, see Desktop Voice Input), and the click only asks for a transition.
 - **Backend events are subscribed in `agentEvents.ts`.** Each payload names its session; compare it against
   `currentId` only where the UI genuinely means "on screen", never to address storage.
+- **The sidebar's groups have one interaction contract** (`App.tsx`'s `groups.map`): the whole
+  project HEADER toggles the group (the caret is one way to say it, not the only one — a header whose only
+  live spot is a 16px caret reads as a label), so everything inside it that is a control stops propagation
+  (＋, the rename box) or it would collapse the group it acts on; **a collapsed group whose rows include the
+  current session says so** (`.proj-current`, with the session's title in its tooltip — a bare dot would say
+  "something here", not "you are here"), because a collapsed group takes its rows out of the DOM; **renaming
+  ends on BLUR**, not only on Enter/Escape, since a box that waits for a key stays over the row and the next
+  click lands in a text box instead of on what it aimed at; and **project rename is the context menu's**
+  (double-click would toggle twice on the same gesture).
 - **A parked permission is composer state too, matched by tool CALL ID** (keyed by session, NOT cleared on
   session switch — the agent is still parked — moved on auto-compaction, cleared on `agent:idle`). Matching by
   tool NAME is the trap: a model emits a whole batch of calls before any of them runs.

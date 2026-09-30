@@ -98,6 +98,59 @@
   smoke.check('chip 显示项目名', !!chipProject, smoke.text('.work-dir'))
   smoke.check('chip 不是会话记录里的旧快照', smoke.text('.work-dir').indexOf('work') < 0, smoke.text('.work-dir'))
 
+  // ── 组头这一块的三种手势（收起时的位置提示 / 点组头即折叠 / 双击不再改名 / 会话改名失焦即退）──
+  const headFor = (name) => smoke.qa('.proj-head').find((h) => smoke.text(h.querySelector('.proj-name')) === name)
+  const isOpen = (h) => h.querySelector('.proj-toggle').getAttribute('aria-expanded') === 'true'
+
+  // 点组头本身（不是那个 16px 的箭头）就要折叠 —— 组头本来就 role=button，只让箭头活等于把
+  // 一整行做成标签。顺便钉住收起时的位置提示：组一收行就整批从 DOM 里摘掉，此时读者唯一能知道
+  // 「我的会话在这一组里」的地方就是组头自己。
+  const memberHead = headFor('smoke-proj')
+  if (!memberHead) return smoke.fail('找到 smoke-proj 的组头', smoke.allText('.proj-name').join(' | '))
+  memberHead.click()
+  const collapsed = await smoke.waitFor(
+    () => (isOpen(memberHead) ? null : true), '点组头折叠', 4000)
+  smoke.check('点组头（非箭头）即折叠', !!collapsed, 'aria-expanded=' + memberHead.querySelector('.proj-toggle').getAttribute('aria-expanded'))
+  smoke.check('折叠时组内的行确实不在 DOM 里', smoke.qa('.proj-rows .session').length === 0,
+    smoke.qa('.proj-rows .session').length + ' 行还在')
+  const hint = memberHead.querySelector('.proj-current')
+  smoke.check('折叠后组头标出「当前会话在这一组里」', !!hint,
+    hint ? hint.getAttribute('title') : smoke.text(memberHead))
+  smoke.check('提示点名了那个会话', !!hint && (hint.getAttribute('title') || '').indexOf('冒烟会话') >= 0,
+    hint ? hint.getAttribute('title') : '(没有提示)')
+
+  // 再点一次展开：提示就不该再出现（那是展开时 active 行的活），行也要回来 —— 后面几步都要读组内。
+  memberHead.click()
+  const reopened = await smoke.waitFor(() => (isOpen(memberHead) ? true : null), '再点组头展开', 4000)
+  smoke.check('再点组头即展开', !!reopened, smoke.qa('.proj-rows .session').length + ' 行回来了')
+  smoke.check('展开后不再显示折叠提示', !memberHead.querySelector('.proj-current'),
+    memberHead.querySelector('.proj-current') ? '提示还在' : '(没有提示)')
+
+  // 双击项目名不再进重命名：改名只从右键菜单走。
+  memberHead.querySelector('.proj-name').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  await smoke.sleep(300)
+  smoke.check('双击项目名不进重命名', !smoke.q('.project-rename'),
+    smoke.q('.project-rename') ? '编辑框出现了' : '(没有编辑框)')
+
+  // 会话重命名：双击进编辑，点别处（失焦）就退出 —— 以前只有 Enter/Esc 能退，编辑框会一直占着
+  // 那一行，下一次点击落在文本框里而不是它瞄准的那一行。这里什么都不改，只断言「框没了」。
+  const memberRow = smoke.qa('.proj-rows .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
+  if (!memberRow) return smoke.fail('找到成员行', smoke.allText('.proj-rows .session').join(' | '))
+  memberRow.querySelector('.session-title').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  if (!(await smoke.waitFor('.session-rename', '双击进入会话重命名', 3000))) return smoke.finish()
+  const elsewhere = smoke.qa('.session-list .session').find((r) => !r.closest('.proj-rows'))
+  if (!elsewhere) return smoke.fail('找到无项目里的另一行（用来点走焦点）', smoke.allText('.session').join(' | '))
+  elsewhere.click()
+  await smoke.sleep(300)
+  smoke.check('点别处即退出重命名（不需要 Enter/Esc）', !smoke.q('.session-rename'),
+    smoke.q('.session-rename') ? '编辑框还在' : '(编辑框已退出)')
+  smoke.check('改名框退出后行还在', smoke.qa('.proj-rows .session').length >= 1,
+    smoke.qa('.proj-rows .session').length + ' 行')
+  // 把当前会话点回项目里的那一行：后面 2b 的判据是「⌘N 的新行落在项目组里」，前提是当前会话属于项目。
+  memberRow.click()
+  await smoke.waitFor(() => (smoke.qa('.proj-rows .session.active').length === 1 ? true : null),
+    '当前会话回到项目里', 5000)
+
   // ── 2b. ⌘N：当前会话属于项目，就在项目里新建 ─────────────────────────────
   // ⌘N 的语义是「再来一个跟眼前这个一样的」。项目供的是工作区、附加根和技能，掉到项目外等于
   // 静默换掉一整套环境，所以判据是「新行落在项目组里 + 新会话是当前会话」——只数行数看不出它

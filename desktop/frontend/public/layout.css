@@ -315,6 +315,15 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   white-space: nowrap;
 }
 .proj-count { flex-shrink: 0; font-size: 12.5px; color: var(--text-faint); }
+/* "Your conversation is in this (collapsed) group": a compact tick, because the group's rows are
+   not on screen to carry the highlight. It takes the active row's own accent pair, so the marker
+   and the row it stands for read as one thing. */
+.proj-current {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--accent-2);
+}
 /* A project whose PRIMARY directory is gone drives nothing, so its members are editable
    again; the header says so instead of hiding the group (design §8.6). */
 .proj-bad {
