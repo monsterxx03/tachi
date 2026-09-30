@@ -528,3 +528,53 @@ func TestCheckBashUnparseableIsItsOwnValue(t *testing.T) {
 		t.Errorf("matched rule = (%v, %q), want (ask, \"git push*\")", d, rule)
 	}
 }
+
+// TestBashRefusalsDoNotInviteInvestigation pins the SHAPE of the text a refusal
+// feeds back to the model, because the previous wording was an invitation: it named
+// the two config file paths and framed the block as "a fix exists, ask for it",
+// and a model being helpful went and read the permission files to explain them —
+// burning turns on a decision that is the user's. So: no paths, and an explicit
+// "only the user can change this, do not go looking".
+func TestBashRefusalsDoNotInviteInvestigation(t *testing.T) {
+	args := `{"command":"terraform destroy -auto-approve"}`
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{Name: "Bash", Arguments: args}}
+
+	deny := newTestAgent(t, &mockStreamProvider{name: "mock"})
+	deny.RegisterTool(bashStub())
+	deny.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Deny: []string{"terraform destroy*"}}, permission.Rules{}))
+	res, handled, _, err := deny.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	require.True(t, handled, "a deny is handled: the command never reaches the tool")
+	require.Error(t, res.Err)
+	denyText := res.Err.Error()
+
+	ask := newTestAgent(t, &mockStreamProvider{name: "mock"})
+	ask.RegisterTool(bashStub())
+	ask.SetPermissionMode(PermissionModeSkip) // nobody to ask → the refusal is the answer
+	ask.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Ask: []string{"terraform destroy*"}}, permission.Rules{}))
+	res, handled, _, err = ask.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Error(t, res.Err)
+	askText := res.Err.Error()
+
+	for name, text := range map[string]string{"deny": denyText, "non-interactive ask": askText} {
+		for _, path := range []string{"~/.tachi/config.yaml", ".tachi/permissions.yaml", "permissions.bash"} {
+			if strings.Contains(text, path) {
+				t.Errorf("%s refusal names %q — naming the file is what sent the model reading it:\n%s",
+					name, path, text)
+			}
+		}
+		if !strings.Contains(text, "Only the user can") {
+			t.Errorf("%s refusal must say who can change it:\n%s", name, text)
+		}
+		if !strings.Contains(text, "the command was NOT executed") {
+			t.Errorf("%s refusal must state the command did not run:\n%s", name, text)
+		}
+	}
+	if !strings.Contains(denyText, "do not attempt the same thing in another form") {
+		t.Errorf("deny refusal must close the workaround loop:\n%s", denyText)
+	}
+}

@@ -99,8 +99,8 @@ func bashCommand(args string) string {
 //     aborts the turn, consistent with EditFile confirmation denial
 //
 // It returns a note as well as the decision: how the call was decided travels
-// with the result, so the model sees the judgment's number the way it sees the
-// MCP search's (agent/tools/bash.go's PermissionNoteAdvice frames it).
+// with the result — to the EVENT only (the transcript), never into the model's
+// message (see askNote).
 func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch chan<- AgentEvent) (tools.ToolResult, bool, *askNote, error) {
 	if tc.Function.Name != tools.ToolNameBash {
 		return tools.ToolResult{}, false, nil, nil
@@ -120,7 +120,9 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("blocked by permission rule %q (deny) — the command was NOT executed. "+
-				"If this should be allowed, ask the user to adjust permissions.bash rules in ~/.tachi/config.yaml or .tachi/permissions.yaml", rule),
+				"Only the user can change this rule, so tell them what was blocked and which rule blocked it, "+
+				"then carry on without that command: do not attempt the same thing in another form, and do not "+
+				"read the permission configuration looking for a way around it", rule),
 		}, true, nil, nil
 	}
 
@@ -201,14 +203,15 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd strin
 				Status: tools.ToolResultError,
 				Err: fmt.Errorf("the command could not be parsed, so it needs approval that is unavailable " +
 					"in this non-interactive context — the command was NOT executed. Fix the syntax (an " +
-					"unclosed quote/bracket, or a trailing &&)"),
+					"unclosed quote/bracket, or a trailing &&) and re-issue it"),
 			}, true, nil
 		}
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("command requires interactive approval (matched ask rule %q), which is unavailable "+
-				"in this non-interactive context — the command was NOT executed. "+
-				"Ask the user to add an allow rule to permissions.bash", rule),
+				"in this non-interactive context — the command was NOT executed. Only the user can allow it "+
+				"(an allow rule of theirs, not something to work around), so say what was blocked and carry on "+
+				"without that command", rule),
 		}, true, nil
 
 	case PermissionModeExternal:

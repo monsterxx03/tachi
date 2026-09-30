@@ -122,7 +122,8 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 	if !askable(ctx) {
 		return false, fmt.Errorf("command requires interactive approval (matched an ask rule), "+
 			"but a side-channel run has no conversation turn to confirm it in — the command was NOT "+
-			"executed. Add an allow rule to permissions.bash to run it here (preview: %s)", preview)
+			"executed. Only the user can allow it, so say what was blocked and carry on without it "+
+			"(preview: %s)", preview)
 	}
 	answer := make(chan string, 1)
 	d.registerAsk(&pendingAsk{
