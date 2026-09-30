@@ -18,7 +18,7 @@ import (
 // with, so a test cannot hand-write a history shape the product never produces.
 func convertedHistory(t *testing.T, msgs []session.Message) []llm.Message {
 	t.Helper()
-	out, err := agent.ConvertSessionToLLMMessages(msgs, config.ProviderTypeOpenAI)
+	out, err := agent.ConvertSessionToLLMMessages(msgs, config.ProviderTypeOpenAI, nil)
 	if err != nil {
 		t.Fatalf("ConvertSessionToLLMMessages: %v", err)
 	}

@@ -80,7 +80,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a turn whose stream dies mid-flight (what it keeps, what the next turn sends) | `stream-fail` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
-| sending/receiving files or images | `paste-image` |
+| sending/receiving files or images | `paste-image`, `image-reload` |
 | deleting sessions, running-session guards | `delete-running` |
 | whatever else — the transcript itself, session rows | `transcript`, `sessions` |
 
@@ -466,9 +466,12 @@ Fixtures exist where the real path needs something a driver cannot do:
   (`SavePastedImage`): a screenshot is BYTES with no path, so it is written under the SESSION's own directory
   (`pasted/`, so the file dies with the conversation and never appears in the user's workspace diff) and the
   binding answers with an ABSOLUTE `@`-reference. The answer is a VO, not "ok"/reason — a paste that silently
-  does nothing is the same class of bug as a message that silently goes nowhere. **Nothing is re-expanded on
-  RELOAD**: the image reaches the model for the turn it was sent with, and a later turn sees only the
-  placeholder (true of every `@`-image). `paste-image` asserts the pasted BYTES at the LLM boundary.
+  does nothing is the same class of bug as a message that silently goes nowhere. **The `@`-reference is
+  expanded ONCE, for the turn it is sent with**, and what a later turn sees comes from the record instead:
+  the image part is persisted with its bytes (`session.Message.Parts` + the session's `images/` blob — see
+  session-store.md), so a reloaded history rebuilds the image rather than the placeholder. `paste-image`
+  asserts the pasted BYTES at the LLM boundary; `image-reload` asserts them again after a seeded record is
+  loaded from disk, which is what a restart does.
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`). The
   id comes from the CALLER, and every refusal is a returned string — never a bare `"ok"` for a message that
   started no turn, because the frontend draws the user's bubble and a running placeholder BEFORE the call: a

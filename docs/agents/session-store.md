@@ -35,6 +35,16 @@ convention-not-history, split + index when a subject grows) apply to this split 
   per-run manager, and only a shared store lets that write drop the snapshot the sidebar's next read would
   otherwise be served from. `session.NewManager(nil)` under `desktop/` is the mistake —
   [desktop.md](desktop.md) (Desktop Backend) has the reasoning.
+- **Image bytes leave the record inside `AppendMessage`, and that is what makes them safe.** A multi-modal
+  message's parts are persisted on the record (`Message.Parts`), but their bytes are not: `AppendMessage` —
+  the ONE writer a session record has — moves each image into the session's `images/` directory as a
+  content-addressed blob (the SHA-256 of the decoded bytes, so an image sent twice costs one file) and leaves
+  the reference behind. Two rules ride on that: nothing else may write a session record (the subagent and
+  one-off recorders own their files and call `DropUnstoredImageParts` — a reference they cannot resolve is
+  worse than no part), and a record on disk never carries base64, which is what keeps a conversation full of
+  screenshots a readable JSONL file inside `LoadMessages`' scanner buffer. The read half is `LoadImage`,
+  reached through the manager as `agent.ImageResolver`; a blob that is gone degrades that one part, it never
+  fails the conversion ([prompt-cache.md](prompt-cache.md) explains why the rebuild has to be byte-exact).
 
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (Desktop Backend, the sidebar's reads),
 [checkpoints.md](checkpoints.md) (the sidecar files a turn writes under a session).

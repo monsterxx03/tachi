@@ -319,6 +319,20 @@ func (m *Manager) LoadSessionMessages(sessionID string) ([]Message, error) {
 	return m.store.LoadMessages(sessionID)
 }
 
+// LoadImage reads an image blob the current session's records refer to. Scoped to the current
+// session exactly as LoadMessages is, because that is how every caller converts a history: the
+// records it is holding are the current session's, and a record is only meaningful next to the
+// directory its references live in.
+func (m *Manager) LoadImage(ref string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+	return m.store.LoadImage(m.current.ID, ref)
+}
+
 // LoadSubagentMessages loads all subagent messages for a session.
 // Returns a map of subagentID → messages. Returns empty map if no subagents exist.
 func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, error) {

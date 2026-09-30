@@ -261,7 +261,9 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			}
 		}
 
-		// Record tool result in session
+		// Record tool result in session. An image this tool returned rides the SAME slice the
+		// request carried (toolMsg.ContentParts) — a record keeping only the text would send a
+		// different request after a reload, and the model would lose the image.
 		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolResult,
 			Name:       tc.Function.Name,
@@ -269,6 +271,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			Parts:      RecordParts(toolMsg.ContentParts),
 			DurationMs: tr.Duration.Milliseconds(),
 			Iteration:  rs.APICalls, // the API call that produced this tool request
 			Seq:        rs.Seq,      // session-wide request number (same as api_requests record)
@@ -520,7 +523,9 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			}
 		}
 
-		// Record tool result in session
+		// Record tool result in session. An image this tool returned rides the SAME slice the
+		// request carried (toolMsg.ContentParts) — a record keeping only the text would send a
+		// different request after a reload, and the model would lose the image.
 		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolResult,
 			Name:       tc.Function.Name,
@@ -528,6 +533,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			Parts:      RecordParts(toolMsg.ContentParts),
 			DurationMs: tr.Duration.Milliseconds(),
 			Iteration:  rs.APICalls, // the API call that produced this tool request
 			Seq:        rs.Seq,      // session-wide request number (same as api_requests record)

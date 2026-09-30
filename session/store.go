@@ -23,6 +23,10 @@ type Store interface {
 	LoadMeta(id string) (*Session, error)
 	AppendMessage(id string, msg *Message) error
 	LoadMessages(id string) ([]Message, error)
+	// LoadImage reads an image blob a record refers to (see Part.Ref). Appends store their
+	// blobs, so this is the read half of that bargain; a missing blob is an error the caller
+	// degrades from, not a silent empty image.
+	LoadImage(id, ref string) ([]byte, error)
 	ReplaceLastMessage(id string, msg *Message) error
 	UpdateMeta(session *Session) error
 	ListSessions() ([]*Session, error)
@@ -154,8 +158,15 @@ func (s *FileStore) LoadMeta(id string) (*Session, error) {
 	return &session, nil
 }
 
-// AppendMessage appends a message to the session's messages.jsonl
+// AppendMessage appends a message to the session's messages.jsonl.
+//
+// Image parts are moved out of the record here, into the session's images/ directory (see
+// materializeImages): this is the ONE write path a session record has, so a record on disk
+// either carries a reference to bytes that exist, or carries no image part at all — never
+// base64 inline, and never a reference nobody can resolve.
 func (s *FileStore) AppendMessage(id string, msg *Message) error {
+	s.materializeImages(id, msg)
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal message: %w", err)

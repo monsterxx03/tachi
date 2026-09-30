@@ -67,6 +67,11 @@ type SessionManager interface {
 	// LoadMessages loads all messages for the current session.
 	LoadMessages() ([]session.Message, error)
 
+	// LoadImage reads an image blob the current session's records refer to. Scoped to the
+	// current session like LoadMessages, because that is how a history is converted: the
+	// records in hand are the current session's. See ImageResolver.
+	LoadImage(ref string) ([]byte, error)
+
 	// LoadSessionMessages loads messages for a specific session by ID.
 	LoadSessionMessages(sessionID string) ([]session.Message, error)
 

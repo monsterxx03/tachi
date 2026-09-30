@@ -294,7 +294,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	} else if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType(), sess.sessMgr)
 			if convErr == nil {
 				history = llmMsgs
 			} else {

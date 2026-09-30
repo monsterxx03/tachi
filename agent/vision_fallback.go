@@ -33,10 +33,13 @@ const visionDescribeTemplate = `You are an image description assistant. Describe
 // It runs on the loop goroutine right before the LLM call. Because the
 // replacement is in-place, each image is described at most once per turn —
 // later iterations find text parts instead of image parts and pass through
-// untouched. The vision delegate is the first configured provider that
-// supports images and is not the current provider; when none exists the
-// image parts degrade to a text placeholder and the turn continues with the
-// surrounding text (a warning is logged).
+// untouched. A history reloaded from disk is the exception that proves the
+// rule: its image parts are fresh objects, so the first turn after a restart
+// describes them again (one vision call per image per reload — the price of
+// the model being able to see them at all). The vision delegate is the first
+// configured provider that supports images and is not the current provider;
+// when none exists the image parts degrade to a text placeholder and the turn
+// continues with the surrounding text (a warning is logged).
 //
 // Concurrency: rs.Messages is only ever written by the loop goroutine, so
 // phase 1 (scan) needs no lock; the delegate API calls (phase 2, slow) run

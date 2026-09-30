@@ -392,8 +392,10 @@ func (a *AIAgent) RunOneOffStream(
 		// Record the user turn to the sidecar (no-op without a recorder —
 		// rs.SkipSessionWrites is always true here, so this never touches
 		// the main session history). A one-off prompt is a command's own template,
-		// never an @-reference the user typed, so there is nothing to display-ify.
-		a.recordUserTurn(rs, userMessage, "", reminderBlock)
+		// never an @-reference the user typed, so there is nothing to display-ify
+		// and nothing multi-modal to keep either (a one-off run takes no pending
+		// images; the ambient path that does goes through RunConversationStream).
+		a.recordUserTurn(rs, userMessage, "", reminderBlock, nil)
 
 		// Fire turn_start hook (paired with turn_complete/turn_truncated in runLoop)
 		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
@@ -435,6 +437,10 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// Attach pending images from params as multi-modal content parts
 		// on the trailing user message, so providers can format them correctly (e.g.
 		// Anthropic image blocks, OpenAI multi-content arrays).
+		//
+		// The trailing message's parts are ALSO what this turn's user record keeps (below): they
+		// are what the model was given, text part included, so a history reloaded from disk
+		// rebuilds this request rather than a text-only shadow of it.
 		if params != nil && len(params.pendingImages) > 0 {
 			userMsg := &messages[len(messages)-1]
 			parts := make([]llm.ContentPart, 0, 1+len(params.pendingImages))
@@ -445,6 +451,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			parts = append(parts, params.pendingImages...)
 			userMsg.ContentParts = parts
 		}
+		userRecordParts := RecordParts(messages[len(messages)-1].ContentParts)
 
 		rs := &RunState{
 			Budget: NewIterationBudget(a.Config.MaxIterations),
@@ -496,7 +503,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		if params != nil {
 			displayUserMessage = params.displayUserMessage
 		}
-		boundary := a.ensureSessionAndRecordUser(ctx, rs, userMessage, displayUserMessage, reminderBlock, ch)
+		boundary := a.ensureSessionAndRecordUser(ctx, rs, userMessage, displayUserMessage, reminderBlock, userRecordParts, ch)
 		rs.Seq = boundary.Seq
 		a.beginCheckpointTurn(ctx, rs, userMessage, boundary)
 
@@ -616,7 +623,11 @@ func (a *AIAgent) prepareTurnMessages(
 // over (@-file expansion); it is recorded only when it differs from what was sent, so a
 // reloaded transcript shows `@path` rather than the inlined file. Empty display = the
 // message went out as typed, and the two are the same thing.
-func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, display, reminderBlock string) {
+//
+// parts are the multi-modal parts the prompt was SENT with (nil for the ordinary turn with no
+// image): they carry the text part this record's Content also holds, prefix and all, because
+// they are a copy of what went on the wire rather than a re-derivation of it.
+func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, display, reminderBlock string, parts []session.Part) {
 	if reminderBlock != "" {
 		a.recordSession(rs, &session.Message{
 			Type:    session.MessageTypeReminder,
@@ -626,6 +637,7 @@ func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, display, reminderBlo
 	msg := &session.Message{
 		Type:    session.MessageTypeUser,
 		Content: userMessage,
+		Parts:   parts,
 	}
 	if display != "" && display != userMessage {
 		msg.DisplayContent = display
@@ -652,6 +664,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	userMessage string,
 	displayUserMessage string,
 	reminderBlock string,
+	userParts []session.Part,
 	ch chan<- AgentEvent,
 ) turnBoundary {
 	if a.Config.SessionManager == nil {
@@ -699,7 +712,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	// checkpoint stores and the Seq base the turn's requests continue from.
 	boundary := a.sessionBoundary()
 
-	a.recordUserTurn(rs, userMessage, displayUserMessage, reminderBlock)
+	a.recordUserTurn(rs, userMessage, displayUserMessage, reminderBlock, userParts)
 
 	// Set title from first user message (LLM-generated or truncated)
 	if curr := a.Config.SessionManager.Current(); curr != nil && curr.Title == "" {
@@ -1108,6 +1121,7 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 			steerMsg := &session.Message{
 				Type:      session.MessageTypeUser,
 				Content:   steerInput.Text,
+				Parts:     RecordParts(msg.ContentParts),
 				Iteration: rs.APICalls + 1,
 				Seq:       rs.Seq + 1,
 			}

@@ -70,6 +70,41 @@ const (
 	MessageTypeReminder   MessageType = "reminder"
 )
 
+// PartType names the pieces a multi-modal message can be built from.
+type PartType string
+
+const (
+	PartTypeText  PartType = "text"
+	PartTypeImage PartType = "image"
+)
+
+// Part is one piece of a multi-modal message, kept so a reloaded history can rebuild the very
+// request it was sent in. That verbatim-ness is the point: the provider caches by prefix, so an
+// image part that disappears on a reload (a restart, `--resume`, a session switch) misses from
+// that image to the end of the conversation, and the model also stops being able to see an
+// image it was in fact given.
+//
+// The struct has two shapes. On the way INTO the store an image part carries its bytes in Data;
+// the store moves them into the session's images/ directory and fills Ref (see FileStore.
+// AppendMessage, the only writer). On the way OUT of it, a part carries only Ref. Data is never
+// serialized — a record holding a megabyte of base64 is exactly what this design avoids.
+type Part struct {
+	Type PartType `json:"type"`
+	// Text is a text part's text, verbatim as sent. Stored rather than re-derived from the
+	// message's Content on reload: the parts array is the thing that went on the wire, and a
+	// rebuild that re-derives one of its pieces is a second source of truth that can drift.
+	Text      string `json:"text,omitempty"`
+	MediaType string `json:"media_type,omitempty"` // image parts: "image/png", …
+	// Ref names an image blob under the session's images/ directory: the SHA-256 of the
+	// decoded bytes, so identical images are stored once however many times they are sent.
+	Ref string `json:"ref,omitempty"`
+	// Data is base64 image data on the way in, empty on the way out. Deliberately not
+	// persisted, and deliberately not a second read path: a record that reaches the disk
+	// through a writer other than FileStore (the subagent and one-off transcripts) cannot
+	// carry bytes, so it drops such parts rather than claiming an image it cannot produce.
+	Data string `json:"-"`
+}
+
 // Usage records token usage from a single LLM API response.
 type Usage struct {
 	InputTokens              int64 `json:"input_tokens,omitempty"`
@@ -103,6 +138,16 @@ type Message struct {
 	// reminder) or legacy data written before Seq existed.
 	Seq       int       `json:"seq,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
+
+	// Parts is the multi-modal content this message was SENT with — present only when there
+	// was an image in it: text parts verbatim, image parts as a reference to a blob under the
+	// session's images/ directory. Empty for every text-only message (nearly all of them), so
+	// those records read back exactly as before, and empty for records written before images
+	// were persisted at all — which is why a conversion must keep working with no parts.
+	//
+	// It is the persisted mirror of llm.Message.ContentParts, and it exists for one reason:
+	// rebuilding a history from the store must reproduce the request byte for byte.
+	Parts []Part `json:"parts,omitempty"`
 
 	// DisplayContent is the user's OWN text for a `user` record, kept only when it differs
 	// from Content. Today exactly one thing makes them differ: @-file expansion

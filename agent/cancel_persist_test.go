@@ -86,7 +86,7 @@ func TestAgentLoop_CancelPersistsPartialTurnToDisk(t *testing.T) {
 
 	// ... and must be convertible back to a usable LLM conversation (the ACP
 	// disk fallback path used after a mid-turn cancel).
-	llmMsgs, err := ConvertSessionToLLMMessages(msgs, "mock")
+	llmMsgs, err := ConvertSessionToLLMMessages(msgs, "mock", nil)
 	require.NoError(t, err)
 	require.Len(t, llmMsgs, 5, "expected user + 2×(assistant-with-tool-call + tool result)")
 	assert.Equal(t, "user", llmMsgs[0].Role)

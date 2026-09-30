@@ -39,6 +39,13 @@ type fakeSessionManager struct {
 	// session as its parent (and may be the only side of that link that exists —
 	// compact.go writes the predecessor's side best-effort).
 	others []*session.Session
+
+	// images answers LoadImage, keyed by blob reference. The fake holds records in memory, so
+	// a record it wrote still carries its image inline (Part.Data) and a conversion never
+	// reaches here; a test that wants the RELOAD shape — refs, and their bytes only in the
+	// store — strips Data and fills this map. Leaving it nil is the other interesting case: a
+	// reference whose blob is gone.
+	images map[string][]byte
 }
 
 func (f *fakeSessionManager) HasCurrent() bool {
@@ -185,6 +192,19 @@ func (f *fakeSessionManager) LoadMessages() ([]session.Message, error) {
 
 func (f *fakeSessionManager) LoadSessionMessages(sessionID string) ([]session.Message, error) {
 	return f.LoadMessages()
+}
+
+// LoadImage answers a stored image blob (see the images field).
+func (f *fakeSessionManager) LoadImage(ref string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
+	if data, ok := f.images[ref]; ok {
+		return data, nil
+	}
+	return nil, fmt.Errorf("fakeSessionManager: no image blob %q", ref)
 }
 
 func (f *fakeSessionManager) List() ([]*session.Session, error) {

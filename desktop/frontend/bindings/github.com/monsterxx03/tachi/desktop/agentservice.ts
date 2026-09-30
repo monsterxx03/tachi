@@ -657,10 +657,15 @@ export function RunningSessions(): $CancellablePromise<string[] | null> {
  * session directory, which is never inside a workspace root — Tachi's own state is refused as a
  * root), and an absolute reference resolves as-is. That is also why nothing has to be re-scanned on
  * RELOAD: a session's stored records are converted as they are (ConvertSessionToLLMMessages never
- * expands anything), so the image is attached for the turn it was sent with and the transcript
- * afterwards shows the reference the user typed. The price is on the PROMPT CACHE and not on the
- * transcript: the live turn sent image parts and a rebuilt history has only this text, so a restart
- * in a conversation with images re-reads everything from the first image on (docs/agents/prompt-cache.md).
+ * expands anything), so the transcript afterwards shows the reference the user typed.
+ * 
+ * The IMAGE, though, does survive the reload — from the record rather than from this file:
+ * expansion is a per-turn thing, and the part it produced is persisted with its bytes by the
+ * session store (session.Message.Parts + the session's images/ blobs). So a later turn, in this
+ * process or after a restart, rebuilds a request that still carries the image
+ * (docs/agents/prompt-cache.md). This pasted file is what the @-reference keeps pointing at — a
+ * copy of the bytes, deliberately, since the record must not depend on a file the reader can
+ * edit or delete.
  */
 export function SavePastedImage(sessionID: string, mediaType: string, data: string): $CancellablePromise<$models.PastedImageVO> {
     return $Call.ByID(871218941, sessionID, mediaType, data);

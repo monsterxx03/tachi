@@ -195,7 +195,7 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 			providerType = pCfg.Type
 		}
 	}
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, providerType)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, providerType, sm)
 	if err != nil {
 		m.exitSessionSelect(fmt.Sprintf("Failed to convert session: %v", err))
 		return m, nil

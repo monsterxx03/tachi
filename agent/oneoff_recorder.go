@@ -243,6 +243,10 @@ func newOneoffRecorder(
 // agent wiring logs close-time stats, and creation failures are Warn'ed).
 func (r *oneoffRecorder) record(msg *session.Message) {
 	msg.Timestamp = time.Now()
+	// This file is a display-only transcript and owns its own JSONL writer, so it never went
+	// through the store that puts image bytes in a session's images/ directory — an image part
+	// here would name bytes nobody can produce. The record's text still says an image was there.
+	session.DropUnstoredImageParts(msg)
 	_ = r.writeLine(msg)
 }
 

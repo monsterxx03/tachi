@@ -47,6 +47,10 @@ func newRecorder(sessionID, shortID string, l *logger.Logger) (*recorder, error)
 // record appends a session.Message as a JSON line to the sub-agent's file.
 func (r *recorder) record(msg *session.Message) error {
 	msg.Timestamp = time.Now()
+	// A sub-agent transcript is display-only, and this writer owns its own file instead of going
+	// through the session store that stores image bytes — an image part here would reference
+	// bytes that do not exist. Its text already says an image was returned.
+	session.DropUnstoredImageParts(msg)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err

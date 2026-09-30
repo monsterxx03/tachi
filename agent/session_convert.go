@@ -10,6 +10,18 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// ImageResolver yields the bytes of an image blob an image part refers to (session.Part.Ref).
+// *session.Manager implements it, scoped to its current session exactly as LoadMessages is —
+// a record is only meaningful next to the directory its references live in.
+//
+// It is a parameter rather than something this package looks up because where the bytes live is
+// the CALLER's knowledge, and because a conversion that forgot to resolve would silently send a
+// history whose images are gone, which is the failure this whole path exists to end. nil is a
+// deliberate choice to convert text only (token estimates; records that carry their own bytes).
+type ImageResolver interface {
+	LoadImage(ref string) ([]byte, error)
+}
+
 // ConvertSessionToLLMMessages converts a flat list of session messages back into
 // the provider-specific llm.Message format suitable for reloading a conversation.
 //
@@ -27,13 +39,24 @@ import (
 // loaded history, which agent_loop.go's historyHasReminder() relies on to avoid
 // re-injecting first-message-only reminders (project context, git status) on
 // subsequent turns after the history was reloaded from disk (e.g. after /commit).
-func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType string) ([]llm.Message, error) {
+//
+// Image parts are restored too, through images: a record keeps the parts a message was SENT with
+// (session.Message.Parts) and their bytes as a blob reference, so the rebuilt request is the
+// request that was sent — an image missing here would break the provider's prefix cache from
+// that image to the end of the conversation, and would leave the model unable to see an image it
+// was in fact given. A part whose blob is gone is dropped (the record's text still says an image
+// was there) rather than failing the conversion.
+func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType string, images ImageResolver) ([]llm.Message, error) {
 	var result []llm.Message
 
 	// Buffered state for grouping related messages into a single assistant message.
 	var thinkingBlocks []llm.ThinkingBlock
 	var assistantText string
 	var toolCalls []llm.ToolCall
+
+	// One loader for the whole conversion, so an image sent twice is read (and base64-encoded)
+	// once.
+	parts := newPartImages(images)
 
 	// Tool results are buffered so they appear after the assistant message
 	// that contains their tool_calls — which is what the LLM API expects.
@@ -99,8 +122,9 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 				pendingReminders = nil
 			}
 			result = append(result, llm.Message{
-				Role:    "user",
-				Content: content,
+				Role:         "user",
+				Content:      content,
+				ContentParts: rebuildParts(msg.Parts, parts),
 			})
 
 		case session.MessageTypeThinking:
@@ -143,11 +167,12 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			// Buffer tool results — they'll be flushed after the assistant
 			// message that contains their tool_calls.
 			pendingToolResults = append(pendingToolResults, llm.Message{
-				Role:       "tool",
-				Content:    msg.Result,
-				ToolCallID: msg.ToolCallID,
-				Name:       msg.Name,
-				IsError:    msg.IsError,
+				Role:         "tool",
+				Content:      msg.Result,
+				ToolCallID:   msg.ToolCallID,
+				Name:         msg.Name,
+				IsError:      msg.IsError,
+				ContentParts: rebuildParts(msg.Parts, parts),
 			})
 
 		case session.MessageTypeConfirm:

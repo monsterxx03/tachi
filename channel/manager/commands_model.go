@@ -177,7 +177,7 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 	oldProvider = agent.WrapProviderForUsage(oldProvider, m.cfg)
 
 	// Convert session messages to LLM messages for the provider API.
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldProvider.Name())
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldProvider.Name(), sm)
 	if err != nil {
 		return "", fmt.Errorf("convert messages: %w", err)
 	}

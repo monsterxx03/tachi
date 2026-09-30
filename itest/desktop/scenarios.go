@@ -174,7 +174,7 @@ func (c *checkCtx) requestSeen(want string) (int, bool) {
 // rawSeen looks for a substring in the requests' RAW bodies. It is the only way to assert on an
 // IMAGE part: the normalized view keeps text only (mockllm's normalize concatenates the text parts
 // and drops the rest), so a pasted image is invisible to requestSeen by construction — which is
-// exactly why the assertion has to reach for the bytes.
+// exactly why the assertion has to reach for the bytes (paste-image and image-reload both do).
 func (c *checkCtx) rawSeen(want string) (int, bool) {
 	for i, r := range c.requests {
 		if strings.Contains(string(r.RawBody), want) {
@@ -2519,6 +2519,65 @@ permissions:
 				c.check("粘贴的图存在会话目录的 pasted/ 下", len(pasted) == 1, fmt.Sprintf("%v", pasted))
 				inWork, _ := filepath.Glob(filepath.Join(c.work, "*", "pasted"))
 				c.check("粘贴的图没有落在用户工作区里", len(inWork) == 0, fmt.Sprintf("%v", inWork))
+			},
+		},
+		//
+		//
+		// image-reload: 重启后重建的历史里，那条带图的消息必须还是带图的。图片 part 从前只活在内存里的
+		// llm.Message 上，落盘的记录只剩一行占位文本，于是任何一次从磁盘重建（重启、--resume、切会话）
+		// 都会把图丢掉：provider 的前缀缓存从会话里第一张图起整段失效，模型也再看不见那张图。
+		//
+		// 现场由 fixture 预置 —— 这正是"重启"的等价物（driver 无法真的重启 app，见 scenario.seedMessages）：
+		// 会话记录里躺着一条带 image part 的用户消息，字节内联在记录上、走 store.AppendMessage 落盘，
+		// 也就是真实写入的同一条路（图片会被搬进会话目录的 images/，记录只留引用）。driver 再发一句话，
+		// 于是这一段重建出来的历史连同新消息一起发给模型。
+		//
+		// 断言打在**原始 body** 上：归一化视图只保留文本（mockllm 的 normalize 丢掉其余 part），
+		// 而这里要证的恰恰是"线路上那张图的字节就是当初发出的那份"。
+		{
+			name: "image-reload",
+			files: map[string]string{
+				"README.md": "# smoke\n\nimage-reload scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("图还在。", 800)},
+			},
+			seedMessages: []session.Message{
+				{
+					Type:    session.MessageTypeUser,
+					Content: "这张图是什么",
+					Parts: []session.Part{
+						{Type: session.PartTypeText, Text: "这张图是什么"},
+						{Type: session.PartTypeImage, MediaType: "image/png", Data: pasteImageB64},
+					},
+				},
+				{Type: session.MessageTypeAssistant, Content: "我看看。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("这一轮只有一次请求", len(c.requests) == 1, requestCount(c.requests))
+				idx, seen := c.rawSeen("data:image/png;base64")
+				c.check("重启后重建的历史里仍带着图片 part", seen && idx == 1,
+					fmt.Sprintf("第 %d 次请求的原始 body 里没有 data:image/png;base64", idx))
+				_, exact := c.rawSeen(pasteImageB64[:48])
+				c.check("带上线的正是预置的那张图（base64 原样）", exact,
+					"请求的原始 body 里没有预置图片的 base64 片段")
+				// "images" is session/blobs.go's imagesDirName — the session package IS a dependency
+				// here, but the blob directory is an implementation detail it does not export.
+				blobs, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "images", "*"))
+				c.check("图片以 blob 落在会话目录的 images/ 下", len(blobs) == 1, fmt.Sprintf("%v", blobs))
+				inline := 0
+				for _, f := range sessionFiles(c.home) {
+					b, err := os.ReadFile(f)
+					if err != nil {
+						continue
+					}
+					if strings.Contains(string(b), pasteImageB64) {
+						inline++
+					}
+				}
+				c.check("会话记录里没有内联的 base64（记录只留引用）", inline == 0,
+					fmt.Sprintf("%d 个消息文件里有内联 base64", inline))
 			},
 		},
 		//

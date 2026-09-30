@@ -92,8 +92,13 @@ func EstimateTokenCount(s string) int64 {
 // correct provider-specific message regrouping. When providerName is empty the
 // conversion falls back to a best-effort mapping, which is sufficient for
 // threshold checks.
+//
+// Images are deliberately NOT resolved (nil resolver): an estimate is a threshold check, the
+// records' own inline bytes still count when a record carries them, and reading every blob of a
+// long conversation to refine a number would cost more than the number is worth. A caller that
+// needs an exact count has the live request to measure.
 func EstimateContentTokens(msgs []session.Message, providerName string) int64 {
-	llmMsgs, err := ConvertSessionToLLMMessages(msgs, providerName)
+	llmMsgs, err := ConvertSessionToLLMMessages(msgs, providerName, nil)
 	if err != nil {
 		// If conversion fails, fall back to a rough chars/4 estimate.
 		// This is acceptable for pre-compaction threshold checks.

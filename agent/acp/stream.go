@@ -676,7 +676,7 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 
 	// Cache the converted LLM history so the first Prompt call
 	// reuses it instead of re-reading messages.jsonl from disk.
-	if llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType()); convErr == nil {
+	if llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType(), sess.sessMgr); convErr == nil {
 		sess.history = llmMsgs
 	} else {
 		logger.FromContext(ctx).Error(ctx, "ACP: replaySessionHistory ConvertSessionToLLMMessages failed", convErr)

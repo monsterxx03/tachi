@@ -958,6 +958,14 @@ func (d *desktopApp) endSimulatedTurn(stop chan struct{}) {
 // still reach the model after a restart). There is no marker that separates them, and
 // dropping the message would silently break the second to tidy up the first, so the
 // no-user-text case keeps the behaviour it had.
+//
+// The trailing message's IMAGE parts are left behind too — this merge rebuilds a prompt
+// from text, and only this turn's own @-references contribute images. An image attached
+// to an interrupted prompt is therefore not re-sent by the turn that merges it; its
+// record keeps the bytes, so a later reload (where the message is no longer trailing, and
+// nothing merges) brings it back into the request. Carrying it here instead would mean
+// rebuilding the parts array for a merged message — a behaviour for the interrupted-turn
+// path, not a detail of the merge.
 func mergeTrailingUserMessage(history []llm.Message, text string) ([]llm.Message, string) {
 	n := len(history)
 	if n == 0 || history[n-1].Role != "user" {

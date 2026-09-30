@@ -42,7 +42,7 @@ func TestConvertSessionToLLMMessages_TrailingArtifactReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMessages: %v", err)
 	}
-	result, err := ConvertSessionToLLMMessages(msgs, "anthropic")
+	result, err := ConvertSessionToLLMMessages(msgs, "anthropic", nil)
 	if err != nil {
 		t.Fatalf("ConvertSessionToLLMMessages: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestConvertSessionToLLMMessages_ConsecutiveRemindersNotOverwritten(t *testi
 		{Type: session.MessageTypeUser, Content: "追问"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
 	if err != nil {
 		t.Fatalf("ConvertSessionToLLMMessages: %v", err)
 	}

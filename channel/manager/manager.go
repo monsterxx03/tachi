@@ -541,7 +541,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *llm.ResolvedProvi
 		return sm, nil, nil
 	}
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Type)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Type, sm)
 	if err != nil {
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}
