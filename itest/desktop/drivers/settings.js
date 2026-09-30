@@ -232,14 +232,35 @@
   smoke.click(catByName('工具与权限'))
   if (!(await smoke.waitFor(() => smoke.text('.settings-title') === '工具与权限', '切到工具与权限'))) return smoke.finish()
   const heads = smoke.allText('.set-section-head')
-  smoke.check('每个块一条标题（web_fetch / web_search / tool_result / permissions.bash）',
-    ['web_fetch', 'web_search', 'tool_result', 'permissions.bash'].every((h) => heads.indexOf(h) >= 0),
+  // `permissions` 是一个块里装着**两半**（bash 的命令规则与 files 的路径规则），所以块头是
+  // 共同前缀，块内的行写 `bash.*` / `files.*` —— 两半本来就是一个 Policy（见 docs/agents/permission.md）。
+  smoke.check('每个块一条标题（web_fetch / web_search / tool_result / permissions）',
+    ['web_fetch', 'web_search', 'tool_result', 'permissions'].every((h) => heads.indexOf(h) >= 0),
     heads.join(' | '))
   const blockKeys = smoke.allText('.settings-form .set-key').map((t) => t.replace(/⟳.*$/, '').trim())
   smoke.check('块内的行只写余下的路径（web_search.proxy → proxy）',
     blockKeys.indexOf('proxy') >= 0 && blockKeys.indexOf('max_results') >= 0 &&
       blockKeys.indexOf('web_search.proxy') < 0 && blockKeys.indexOf('web_fetch.timeout') < 0,
     blockKeys.join(' / '))
+
+  // ── 列表空框里的示例：跟着「哪一行」走，不跟着控件走 ──────────────────────────
+  // `permissions.bash.ask` 与 `permissions.files.read.ask` 渲染的是同一个 string_list 控件，但前者
+  // 填的是命令、后者填的是路径。示例曾经是前端写死的 bash 示例，于是文件权限的空框教人去填命令
+  // （类型就错了）。现在示例由后端按「哪一行」给出（settingApply.ListExample），这里在页面上读
+  // 两个框真正的 placeholder。
+  const boxFor = (head, key) => {
+    const secs = smoke.qa('.set-section').filter((s) => smoke.text(s.querySelector('.set-section-head')) === head)
+    if (secs.length !== 1) return null
+    const row = Array.prototype.slice.call(secs[0].querySelectorAll('.set-row'))
+      .find((r) => smoke.text(r.querySelector('.set-key')).replace(/⟳.*$/, '').trim() === key)
+    return row ? row.querySelector('textarea') : null
+  }
+  const bashBox = boxFor('permissions', 'bash.ask')
+  const filesBox = boxFor('permissions', 'files.read.ask')
+  smoke.check('bash 的列表示例还是命令', !!bashBox && /git \*/.test(bashBox.placeholder),
+    bashBox ? bashBox.placeholder : '(没有这个框)')
+  smoke.check('文件权限的列表示例是路径', !!filesBox && /~\/.ssh\/\*/.test(filesBox.placeholder) && !/git /.test(filesBox.placeholder),
+    filesBox ? filesBox.placeholder : '(没有这个框)')
 
   // ── 列表能加条目、能删条目（都在页面上，保存时一次写盘） ────────────────────
   // 一条列表此前必须"先在文件里"，它的字段才存得进去（更新路径不认不存在的路径），所以 ＋ 原来是

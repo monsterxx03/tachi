@@ -81,6 +81,15 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
 	// written twice (a tag cannot name a constant), and this is what notices the day one of
 	// them moves. A config that never mentions the block still gets the bound.
 	assert.Equal(t, DefaultJevTimeout, cfg.Jev.Timeout)
+	// The file gate's three leaves live two structs deep (permissions.files.*),
+	// which is one level deeper than anything else defaults.Set reaches: without
+	// this the gate could arrive with τ = 0 (every call asks) and a zero budget
+	// (no judgment ever completes) on a config that never mentioned the block.
+	// The threshold's tag is pinned against its constant for the same reason the
+	// timeout's is — a tag cannot name one.
+	assert.Equal(t, FilesJevAuto, cfg.Permissions.Files.Jev)
+	assert.Equal(t, FilesJevThreshold, cfg.Permissions.Files.JevThreshold)
+	assert.Equal(t, DefaultFilesJevBudget, cfg.Permissions.Files.JevBudget)
 }
 
 func TestSaveAndLoad(t *testing.T) {

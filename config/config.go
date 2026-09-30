@@ -31,7 +31,23 @@ const (
 	// non-denied command, so a slow answer is a slow turn, and an unanswered
 	// judgment falls back to the rules (agent/agent_permission_jev.go).
 	DefaultJevAskBudget = 3 * time.Second
-	configDirName       = ".tachi"
+	// DefaultFilesJevBudget is the bound one FILE-ask judgment waits (see
+	// FilesPermissions.JevBudget): shorter than the bash one because a file call
+	// happens several times per turn, and shorter is still the safe direction —
+	// an unanswered judgment falls back to the rules.
+	DefaultFilesJevBudget = 2 * time.Second
+	// FilesJevShadowThreshold is the τ that can never act: a noul answer is at most
+	// 1.0, so a gate running at this threshold judges and logs every call without
+	// ever asking. It is not the default (FilesJevThreshold is), and it is kept as
+	// the setting to shadow a future question with: watch the distribution on real
+	// traffic before letting it act.
+	FilesJevShadowThreshold = 1.0
+	// FilesJevThreshold is the shipped τ for permissions.files.jev_threshold —
+	// the same tag/constant duplication as the other defaults. It was swept on
+	// pkg/jev/testdata/files-ask.json; the field's own comment carries the
+	// corridor, what it misses, and when to re-sweep.
+	FilesJevThreshold = 0.55
+	configDirName     = ".tachi"
 	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
@@ -1085,18 +1101,130 @@ type BashPermissions struct {
 	JevBudget time.Duration `yaml:"jev_budget" default:"3s"`
 }
 
-// The values BashPermissions.Jev accepts.
+// PathPermissions holds glob rules classifying the TARGET PATH of one file
+// tool (ReadFile / WriteFile / EditFile). The three decisions and their
+// precedence are the bash ones: deny > allow (an exemption from the ask rules,
+// never a whitelist) > ask > default(allow).
+//
+// A pattern is matched against the target's CANONICAL absolute path — cleaned,
+// and symlinks resolved as far as the path exists — never against the argument
+// as written, so `../x/../.ssh/id_rsa` and `/home/me/.ssh/id_rsa` are one path.
+//
+// A leading `~` expands to the user's home directory, and a pattern that is not
+// absolute is anchored to the tree the rules came from: `$HOME` for the global
+// config, the repository root for a `<tree>/.tachi/permissions.yaml`. That is
+// what makes `ask: ["secrets/**"]` mean "inside this repository" in a project
+// file, while the same line in the global config reads home-relative.
+//
+// Only the '*' wildcard is supported, and it spans '/' — so `~/.ssh/*` already
+// covers every file below that directory. A LITERAL path (one with no wildcard)
+// covers everything below it too: `deny: ["/home/me/.ssh"]` reads as the
+// directory, not as a file that cannot exist without a trailing name.
+type PathPermissions struct {
+	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
+	Ask   []string `yaml:"ask"`   // requires interactive approval (refused where nobody can answer)
+	Allow []string `yaml:"allow"` // exempts matching paths from ask rules (GLOBAL config only)
+}
+
+// FilesPermissions holds the file tools' rule sets and the ONE judgment gate
+// over all three of them.
+//
+// The gate is shared rather than per-tool on purpose: a threshold belongs to
+// the QUESTION it was measured on, and ReadFile / WriteFile / EditFile are put
+// to one question ("does the user want to see this first?") with the tool name
+// among the facts it is asked about. Three switches over one measured number
+// would invite three numbers where there is one.
+//
+// The rules are per tool, because the same path is not the same risk: reading a
+// key is a leak, overwriting it is a loss of work.
+type FilesPermissions struct {
+	Read  PathPermissions `yaml:"read"`
+	Write PathPermissions `yaml:"write"`
+	Edit  PathPermissions `yaml:"edit"`
+
+	// Jev turns the file judgment gate on: every ReadFile / WriteFile / EditFile
+	// call that is not DENIED is judged, and one the judgment says a human
+	// should see is sent to the frontend's ask path instead of running. "auto"
+	// (the default, the same shape as permissions.bash.jev and
+	// mcp_tool_search.matcher: the gate runs whenever the top-level `jev:` block
+	// is usable) or "off" (the rules decide alone). See
+	// docs/2026-09-30-files-ask-jev-design.md.
+	//
+	// It never widens what may run — deny is decided before the gate is reached,
+	// and the judgment's only two outcomes are "run" and "ask the human" — and it
+	// is off wherever nobody can answer (PermissionModeSkip: channel, `tachi -p`,
+	// subagents, dream), where only the RULES decide.
+	Jev string `yaml:"jev" default:"auto"`
+
+	// JevThreshold is the noul probability at or above which the judgment is read
+	// as "a human should see this". It belongs to the case set it was swept on,
+	// NOT to this field: τ = 0.55 was measured on
+	// pkg/jev/testdata/files-ask.json — 64 authored calls across read/write/edit,
+	// 5 repeats, state rendered by agent/permission/jevfiles — with jev-1.13.0
+	// (the same model version as the bash gate's number, which is coincidence:
+	// the QUESTION is different, so neither number means anything about the other).
+	//
+	// The corridor is (0.49, 0.62): the highest ROUTINE call scored 0.49 (an export
+	// written to ~/Downloads — outside the trees, produced for the user, and the
+	// criteria call that routine) and the next needs-a-look call 0.62 (a private
+	// key committed inside the tree). 0.55 is that corridor's middle, and both
+	// neighbours were measured: at 0.50 AND at 0.60 the gate raised 0 of the 155
+	// routine calls, so the band is flat rather than knife-edge — which is what the
+	// harness's stability warning asks for, since a threshold 0.01 above a routine
+	// case would flap.
+	//
+	// WHAT IT DELIBERATELY MISSES: three of the 33 needs-a-look calls stayed below
+	// it — writing and editing `.tachi/permissions.yaml` (0.43, 0.48) and a
+	// wholesale replacement of a 200 KB in-tree data file (0.30). The first two are
+	// the interesting ones: a JUDGMENT should not be the thing that stops an agent
+	// from rewriting the rules it is judged by, and with a path-only state that
+	// path does not read as alarming on its own (with the content in the state it
+	// scored 0.87 — the payload was removed on purpose). The deterministic answer
+	// is a rule, and it is worth writing:
+	//
+	//	permissions:
+	//	  files:
+	//	    write: {deny: ["**/.tachi/permissions.yaml"]}
+	//	    edit:  {deny: ["**/.tachi/permissions.yaml"]}
+	//
+	// Re-sweep when the model version moves, when that case set CHANGES, or when
+	// the STATE SHAPE does (a sentence in jevfiles is part of the question a
+	// probability was measured against), or when the log shows auto-allowed writes
+	// the user later wrote a deny rule for. A number copied from anywhere else —
+	// including from permissions.bash.jev_threshold, which answers a different
+	// question — is not a measurement of THIS question.
+	//
+	// A value of 1.0 is the shadow setting: the gate judges and logs every call but
+	// can never act (a noul answer is at most 1.0), so the distribution can be
+	// watched on real traffic before anything changes.
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.55"`
+
+	// JevBudget bounds one judgment's wait. 2s is shorter than the bash gate's 3s
+	// on purpose: a file call happens several times per turn and is often the
+	// cheapest thing in it, so a slow judgment is a slow turn. Exceeding it falls
+	// back to the rules.
+	JevBudget time.Duration `yaml:"jev_budget" default:"2s"`
+}
+
+// The values BashPermissions.Jev and FilesPermissions.Jev accept.
 const (
-	// BashJevOff is the default: rules alone decide.
+	// BashJevOff / FilesJevOff: rules alone decide.
 	BashJevOff = "off"
-	// BashJevAuto runs the judgment gate whenever the top-level jev block is
-	// usable (config.JevConfig.Configured: enabled AND holding a key).
+	// BashJevAuto / FilesJevAuto runs the judgment gate whenever the top-level
+	// jev block is usable (config.JevConfig.Configured: enabled AND holding a key).
 	BashJevAuto = "auto"
+
+	// FilesJevOff / FilesJevAuto are the file gate's two values, spelled
+	// separately so neither gate's switch can be edited by accident through the
+	// other's name.
+	FilesJevOff  = "off"
+	FilesJevAuto = "auto"
 )
 
 // PermissionsConfig groups tool permission rule sets.
 type PermissionsConfig struct {
-	Bash BashPermissions `yaml:"bash"`
+	Bash  BashPermissions  `yaml:"bash"`
+	Files FilesPermissions `yaml:"files"`
 }
 
 func DefaultConfig() *Config {

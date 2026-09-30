@@ -34,7 +34,7 @@ That is the whole boundary, and it is why `pkg/jev` deliberately does **not** im
 put two unrelated contracts behind one type and invite call sites that need one to reach for the
 other.
 
-**There are three production callers.** The MCP tool search (`agent/mcp/jev_search.go`, matcher
+**There are four production callers.** The MCP tool search (`agent/mcp/jev_search.go`, matcher
 `mcp_tool_search.matcher: auto` with a usable `jev` block) turns a prose request into one `noul`
 question per candidate tool and offers the ones over the cut-off; the question text lives in
 `agent/mcp/jevsearch` because the eval case file that produced the cut-off is generated from it, so
@@ -43,11 +43,19 @@ the measurement cannot describe a question the gate no longer asks. The cron not
 finished `notify=when_relevant` run, with the question and state in `channel/manager/notifygate`; its
 counterpart to that file is `cron.jev_threshold`. The Bash judgment gate
 (`agent/agent_permission_jev.go`, `permissions.bash.jev: auto`) asks whether a command a rule did not
-deny should be shown to the human first — it is the one caller whose answer can only escalate, never
-block — with the question and state in `agent/permission/jevask` and the threshold in
-`permissions.bash.jev_threshold`; which facts belong in that state, and why, is
-[`permission.md`](permission.md). **No cut-off is a fact, and none belongs to its gate**: the tool
-search's τ = 0.20 belongs to a POOL, the notify gate's and the bash gate's to their own case sets.
+deny should be shown to the human first — with the question and state in `agent/permission/jevask` and
+the threshold in `permissions.bash.jev_threshold`. The FILE gate
+(`agent/agent_permission_files.go`, `permissions.files.jev: auto`) asks the same question about one
+`ReadFile` / `WriteFile` / `EditFile` call, with its question and state in `agent/permission/jevfiles`,
+its threshold in `permissions.files.jev_threshold`, and its own case set
+(`pkg/jev/testdata/files-ask.json`). Those two are the callers whose answer can only escalate to a
+human and never block — a deny is not theirs to make — and the two question packages are SIBLINGS
+rather than one shared package on purpose: a shared renderer would let a reworded sentence void both
+thresholds at once. Which facts belong in either state, and why, is [`permission.md`](permission.md).
+**No cut-off is a fact, and none belongs to its gate**: the tool search's τ = 0.20 belongs to a POOL,
+the notify gate's, the bash gate's and the file gate's to their own case sets — and the bash and file
+numbers are independent even though both were swept against `jev-1.13.0`: they answer different
+questions.
 Read [Measuring a threshold](#measuring-a-threshold) before copying any of them anywhere, and re-sweep
 when the thing it was measured on changes materially. Everything else in the repo still asks a
 generative model and parses the reply.

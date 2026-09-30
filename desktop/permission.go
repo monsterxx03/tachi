@@ -30,7 +30,7 @@ import (
 // AgentService.AnswerPermission.
 //
 // Preview is the agent's own rendering of what is being asked ($ command + the
-// matched rule, see bashAskPreview on the agent side) and is shown verbatim: a
+// matched rule, see askPreview on the agent side) and is shown verbatim: a
 // second parser of that format here would be free to drift from the one that
 // writes it.
 //
@@ -50,18 +50,25 @@ type PermissionEvent struct {
 // (agent_permission.go); `kindMCPSearch` is the MCP search cost card
 // (agent/mcp_budget.go), whose preview is a cost estimate rather than a command —
 // the two want different headlines, because the reader is being asked for
-// different things (approve THIS command vs accept THIS spend).
+// different things (approve THIS command vs accept THIS spend). `kindFiles` is
+// the file tools' ask (agent_permission_files.go): its preview names the tool and
+// the path it would touch, so 「确认这条命令」 would send the reader looking for a
+// command that is not there.
 const (
 	kindBash      = "bash"
 	kindMCPSearch = "mcp_search"
+	kindFiles     = "files"
 )
 
 // permEventKind maps a tool name to the card kind. The tool is the identity the
 // agent already uses to decide which gate raised the ask, so the card cannot
 // disagree with the gate about what is being asked.
 func permEventKind(toolName string) string {
-	if toolName == tools.ToolNameMCPSearchTools {
+	switch toolName {
+	case tools.ToolNameMCPSearchTools:
 		return kindMCPSearch
+	case tools.ToolNameRead, tools.ToolNameWrite, tools.ToolNameEdit:
+		return kindFiles
 	}
 	return kindBash
 }
@@ -150,7 +157,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 			Preview:   preview,
 		})
 	}
-	d.notify.notifyPermission(d.sessionTitle(sessionID), bashCommandOf(args))
+	d.notify.notifyPermission(d.sessionTitle(sessionID), askSubjectOf(toolName, args))
 
 	select {
 	case decision := <-answer:
@@ -215,11 +222,32 @@ func (d *desktopApp) answerPermission(sessionID, toolID, decision string) error 
 	}
 }
 
+// askSubjectOf is the one line a permission notification names: the command for a
+// Bash ask, the target path for a file tool's ask, and "" for anything else (the
+// notification then falls back to the bare waiting phrase).
+//
+// It parses the TOOL's own arguments — the same JSON the tool and the agent's
+// policy check read, never a rendering of them — which is also why this is not a
+// second parser of a preview: the preview is the agent's text and stays verbatim
+// (see PermissionEvent), while this is one field out of the call itself.
+func askSubjectOf(toolName, args string) string {
+	switch toolName {
+	case tools.ToolNameRead, tools.ToolNameWrite, tools.ToolNameEdit:
+		var a struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil {
+			return ""
+		}
+		return a.Path
+	}
+	return bashCommandOf(args)
+}
+
 // bashCommandOf extracts the "command" field of a Bash tool call's arguments — the
-// one line a permission notification names (see notifyPermission). It parses the
-// TOOL's own arguments, the same JSON the tool and the agent's policy check read,
-// never a rendering of them; a parse failure is simply "no command", and the
-// notification then falls back to the bare waiting phrase.
+// one line a permission notification names (see notifyPermission). A parse failure
+// is simply "no command", and the notification then falls back to the bare waiting
+// phrase.
 func bashCommandOf(args string) string {
 	var a struct {
 		Command string `json:"command"`

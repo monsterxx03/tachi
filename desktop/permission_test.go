@@ -416,3 +416,27 @@ func TestPermBody(t *testing.T) {
 		t.Errorf("body is not bounded: %d runes", got)
 	}
 }
+
+// The permission NOTIFICATION names what is being asked, and a file ask has no
+// command in it: the line is the target path. Without that branch every file ask
+// popped a notification with nothing in it (permBody's bare waiting phrase).
+func TestAskSubjectOf(t *testing.T) {
+	if got := askSubjectOf("Bash", `{"command":"git push --force"}`); got != "git push --force" {
+		t.Errorf("bash subject = %q", got)
+	}
+	for _, tool := range []string{"ReadFile", "WriteFile", "EditFile"} {
+		if got := askSubjectOf(tool, `{"path":"/etc/hosts"}`); got != "/etc/hosts" {
+			t.Errorf("%s subject = %q, want the path", tool, got)
+		}
+	}
+	// Junk and the wrong shape both mean "no subject": permBody then falls back to
+	// the bare phrase rather than showing a field that is not there.
+	for _, tc := range []struct{ tool, args string }{
+		{"ReadFile", ""}, {"ReadFile", "not json"}, {"ReadFile", `{"command":"x"}`},
+		{"Bash", `{"path":"/etc/hosts"}`}, {"MCPSearchTools", `{"query":"x"}`},
+	} {
+		if got := askSubjectOf(tc.tool, tc.args); got != "" {
+			t.Errorf("askSubjectOf(%q, %q) = %q, want empty", tc.tool, tc.args, got)
+		}
+	}
+}

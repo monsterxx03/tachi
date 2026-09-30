@@ -70,21 +70,18 @@ func (t *EditTool) NeedsConfirmation() bool { return false }
 // func. Different paths proceed concurrently — the read-modify-write cycle
 // per path is atomic.
 //
-// Symlink normalization: EvalSymlinks fails when the leaf doesn't exist yet
-// (createNewFile path), so fall back to resolving the nearest existing
-// ancestor and re-attaching the basename — two aliases of a to-be-created
-// file must share a key. Hard-link aliases of the same inode are NOT
-// serialized (known limitation, last-writer-wins).
+// The key is fileutil.CanonicalPath's: absolute, cleaned, and with symlinks
+// resolved as far as the path exists — which is what makes two aliases of a
+// to-be-created file share a key, the case the resolution exists for. Hard-link
+// aliases of the same inode are NOT serialized (known limitation,
+// last-writer-wins).
 func (t *EditTool) lockFile(p string) func() {
-	real := p
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		real = r
-	} else if dir, base := filepath.Split(p); dir != "" {
-		if r, err := filepath.EvalSymlinks(filepath.Clean(dir)); err == nil {
-			real = filepath.Join(r, base)
-		}
+	real, err := fileutil.CanonicalPath(p)
+	if err != nil {
+		// Nothing to resolve it against (no working directory): the raw path is
+		// then the only key there is, and it is still a stable one for this call.
+		real = filepath.Clean(p)
 	}
-	real = filepath.Clean(real)
 	// The lock table grows with the number of distinct paths edited in a
 	// session (accepted upper bound: hundreds to low thousands of entries).
 	if mu, ok := t.fileLocks.Load(real); ok {

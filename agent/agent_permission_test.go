@@ -481,17 +481,17 @@ func TestNewPermissionPolicyFromConfig_ProjectAllowIgnored(t *testing.T) {
 // rendering bug. A command that could not be parsed is also the case a reader has to ACT on, so the
 // sentence says what is wrong and what fixes it.
 func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
-	matched := bashAskPreview("git push origin main", bashAskCause{rule: "git push*"})
+	matched := askPreview("$ "+"git push origin main", askCause{rule: "git push*"})
 	assert.Contains(t, matched, "$ git push origin main")
 	assert.Contains(t, matched, "git push*")
 
 	// A rule the user wrote wins over a judgment that agreed: their own words are
 	// what they recognise, and "no rule matched" would be a lie here.
-	both := bashAskPreview("git push origin main", bashAskCause{rule: "git push*", judged: true, score: 0.9, threshold: 0.7})
+	both := askPreview("$ "+"git push origin main", askCause{rule: "git push*", judged: true, score: 0.9, threshold: 0.7})
 	assert.Contains(t, both, `命中 ask 规则: "git push*"`)
 	assert.NotContains(t, both, "没有任何 ask 规则命中")
 
-	malformed := bashAskPreview(`cd /tmp && grep -rn "x" . | head && `, bashAskCause{rule: permission.AskNoRule})
+	malformed := askPreview("$ "+`cd /tmp && grep -rn "x" . | head && `, askCause{rule: permission.AskNoRule})
 	assert.Contains(t, malformed, "$ cd /tmp && grep -rn \"x\" . | head && ")
 	assert.NotContains(t, malformed, "命中 ask 规则",
 		"a command that hit no rule must not be presented as one that did")
@@ -503,7 +503,7 @@ func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
 	// The judgment's own third wording: nothing matched, and the reason is the
 	// verdict. Without it the reader goes hunting in the config for a rule they
 	// never wrote — the same failure issue #40 was.
-	judged := bashAskPreview("grep -rn password /", bashAskCause{judged: true, score: 0.91, threshold: 0.7})
+	judged := askPreview("$ "+"grep -rn password /", askCause{judged: true, score: 0.91, threshold: 0.7})
 	assert.Contains(t, judged, "没有任何 ask 规则命中")
 	assert.Contains(t, judged, "判定")
 	assert.NotContains(t, judged, "命中 ask 规则:",
@@ -511,7 +511,7 @@ func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
 
 	// ...and when the command was ALSO unparseable, say both: the reader's action
 	// (fix the syntax) is still the syntax.
-	unparsedJudged := bashAskPreview("rm -rf ~/x && ", bashAskCause{rule: permission.AskNoRule, judged: true, score: 0.88, threshold: 0.7})
+	unparsedJudged := askPreview("$ "+"rm -rf ~/x && ", askCause{rule: permission.AskNoRule, judged: true, score: 0.88, threshold: 0.7})
 	assert.Contains(t, unparsedJudged, "没能解析出来")
 	assert.Contains(t, unparsedJudged, "判定")
 }

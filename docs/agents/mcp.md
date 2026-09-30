@@ -154,7 +154,7 @@ split + index when a subject grows) apply to this split too.
   is about — exists nowhere else.
 - **The card's chrome is per kind, its body never is.** `desktop.PermissionEvent.Kind` (`bash` /
   `mcp_search`, derived from the tool name) selects the headline and button hints; the preview stays the
-  agent's own rendering, shown verbatim — the same rule that keeps `bashAskPreview` the only writer of its
+  agent's own rendering, shown verbatim — the same rule that keeps `askPreview` the only writer of its
   format. The TUI branches on the tool name for the same two strings. The whole card (copy, the numbers on
   it, a refusal sticking across a second call) is pinned end-to-end by the desktop smoke scenario
   `perm-mcp-budget`.

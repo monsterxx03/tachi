@@ -85,6 +85,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			// asks about money (a prompt-cache re-read), and the title must not
 			// send the reader looking for an edit that is not there.
 			confirmTitle = "MCP Tool Load Confirmation"
+		case tools.ToolNameRead, tools.ToolNameWrite, tools.ToolNameEdit:
+			// A file ask: the body is the path and WHY, never a diff — the tool
+			// has not run yet, so there is nothing to diff.
+			confirmTitle = "File Access Confirmation"
 		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "tool_confirmation",

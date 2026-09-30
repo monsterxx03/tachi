@@ -1477,3 +1477,41 @@ func goSourceOutsideConfig(t *testing.T) string {
 	}
 	return b.String()
 }
+
+// TestSettingsSchemaListExampleFollowsTheRow: the hint in an empty list box is per ROW, not per
+// control kind. `permissions.bash.ask` and `permissions.files.read.ask` render the same
+// `string_list` control, and only the row knows whether the values are shell globs or paths —
+// which is why the example rides on the row. The bug this pins: the frontend hardcoded the
+// command example for EVERY list, so an empty file-permission box showed `git *` / `npm *` and
+// invited the reader to type a command into a field that wants a path.
+func TestSettingsSchemaListExampleFollowsTheRow(t *testing.T) {
+	_, svc, _ := settingsFixture(t, "language: zh\n")
+	schema := svc.GetSettingsSchema()
+
+	byKey := make(map[string]SettingFieldVO, len(schema.Fields))
+	for _, f := range schema.Fields {
+		byKey[f.Key] = f
+	}
+	// The command half keeps the command example.
+	if got := byKey["permissions.bash.ask"].ListExample; got != "git *\nnpm *" {
+		t.Errorf("permissions.bash.ask example = %q, want the command examples", got)
+	}
+	// The file half shows PATHS, for all three tools — deny included, since that is where a
+	// reader is most likely to be typing a path for the first time.
+	for _, key := range []string{
+		"permissions.files.read.ask", "permissions.files.write.deny", "permissions.files.edit.ask",
+	} {
+		f, ok := byKey[key]
+		if !ok {
+			t.Errorf("%q is not in the schema at all", key)
+			continue
+		}
+		if f.Kind != "string_list" {
+			t.Errorf("%q kind = %q, want string_list", key, f.Kind)
+			continue
+		}
+		if !strings.Contains(f.ListExample, "~/.ssh/*") || strings.Contains(f.ListExample, "git ") {
+			t.Errorf("%q example = %q, want a path example", key, f.ListExample)
+		}
+	}
+}

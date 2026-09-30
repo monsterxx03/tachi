@@ -143,6 +143,9 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 
 	// Phase 2: Execute all tools in parallel
 	results := make([]tools.ToolResult, len(toolCalls))
+	// notes carries each call's permission note back out of its goroutine (see
+	// askNote): index i is written only by the goroutine that owns call i.
+	notes := make([]*askNote, len(toolCalls))
 	var wg sync.WaitGroup
 
 	// Emit SubagentStart events for sub-agent calls before execution (TUI indicator).
@@ -185,6 +188,26 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			} else if handled {
 				results[i] = r
 				return
+			}
+
+			// File permission policy + judgment gate (ReadFile / WriteFile /
+			// EditFile), in the same place and for the same reason as the two
+			// above: a refusal or an ask must land before the tool runs. The ask
+			// path is safe on this goroutine because it serializes its park on
+			// PermissionState.askMu. Read and Edit ARE parallel tools, so this is
+			// the path most file calls take — the sequential one is for Write.
+			// The note is how the call was decided, and it rides the result the
+			// same way it does on the sequential path (each goroutine writes only
+			// its own index).
+			if r, handled, n, err := a.checkFilePermission(subCtx, tc, ch); err != nil {
+				results[i] = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+				return
+			} else if handled {
+				results[i] = r
+				notes[i] = n
+				return
+			} else {
+				notes[i] = n
 			}
 
 			// Fire tool_call hook before parallel invocation
@@ -240,12 +263,19 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 		}
 
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
+		// The permission note goes to the EVENT ONLY, never into the model's
+		// message — the same rule and the same reasons the sequential path gives.
+		note := ""
+		if notes[i] != nil {
+			note = "\n\n" + notes[i].Line()
+		}
+
 		if tr.Status == tools.ToolResultError {
 			toolMsg.Content = "Error: " + tr.Err.Error()
 			toolMsg.IsError = true
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
+				ToolID: tc.ID, ToolResult: toolMsg.Content + note, ToolIsError: true,
 				ToolDuration: tr.Duration,
 			}
 		} else {
@@ -256,7 +286,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			}
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: tr.Output,
+				ToolID: tc.ID, ToolResult: tr.Output + note,
 				ToolDuration: tr.Duration,
 			}
 		}
@@ -374,6 +404,26 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			// nor an approval was involved): the model sees the judgment's number
 			// the way it sees the MCP search's.
 			if !handled {
+				noteLine = note.Line()
+			}
+		}
+		if !handled {
+			// File permission policy + judgment gate (ReadFile / WriteFile /
+			// EditFile): the same two checks the parallel path runs, in the same
+			// position — a refusal or an ask has to land before the tool does.
+			// WriteFile is the non-parallel one, which is why this path sees it;
+			// a refusal here refuses the CALL and lets the turn continue, unlike
+			// the bash ask's errCancelled.
+			var policyErr error
+			var note *askNote
+			tr, handled, note, policyErr = a.checkFilePermission(subCtx, tc, ch)
+			if policyErr != nil {
+				return nil, policyErr
+			}
+			// Only a note this gate actually made is written: the block above
+			// already put the BASH gate's note in noteLine, and the two gates watch
+			// disjoint tool names, so a nil here means "this call was not mine".
+			if !handled && note != nil {
 				noteLine = note.Line()
 			}
 		}

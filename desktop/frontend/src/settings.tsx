@@ -1083,10 +1083,14 @@ function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => v
         </label>
       )
     case 'string_list':
+      // The EXAMPLES come from the row that owns the key (f.listExample): a list of shell globs
+      // and a list of paths are both string_list, and only the backend knows which one this box
+      // is. A box that showed `git *` for `permissions.files.read.ask` was teaching the wrong
+      // shape of value — the reader would type a command into a field that wants a path.
       return (
         <textarea className="set-textarea" rows={3} value={text} spellCheck={false}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="每行一项，例如：&#10;git *&#10;npm *" />
+          placeholder={f.listExample ? `每行一项，例如：\n${f.listExample}` : '每行一项'} />
       )
     case 'int':
       return <input className="set-input" type="text" inputMode="numeric" value={text} spellCheck={false}

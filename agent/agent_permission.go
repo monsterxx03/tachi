@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
-	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -40,10 +40,21 @@ func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoots []string, lg
 		Ask:   cfg.Permissions.Bash.Ask,
 		Allow: cfg.Permissions.Bash.Allow,
 	}
+	// The file tools' path rules of the same layer. The GLOBAL layer's relative
+	// patterns are anchored to the user's home, which is what makes
+	// `ask: ["secrets/*"]` there read as "$HOME/secrets/*" rather than as a rule
+	// about wherever the process happens to have been started.
+	home := homeDir(lg)
+	globalFiles := expandFileRules(cfg.Permissions.Files, home, home)
+
 	// The trees' rules are UNIONED into one project Rules: deny and ask can only
 	// be added to (NewPolicy takes one project side), which is exactly the
 	// "projects can only tighten" rule, now applied per tree instead of to one.
+	// Every tree is expanded against ITSELF, so a relative pattern in a project
+	// file means "inside this repository" rather than "inside whichever tree
+	// happened to be read first".
 	var project permission.Rules
+	var projectFiles permission.FileRules
 	for _, root := range projectRoots {
 		pp, err := config.LoadProjectPermissions(root)
 		if err != nil {
@@ -52,28 +63,90 @@ func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoots []string, lg
 			}
 			continue
 		}
-		if len(pp.Bash.Allow) > 0 && lg != nil {
+		if (len(pp.Bash.Allow) > 0 || projectFileAllowCount(pp) > 0) && lg != nil {
 			lg.Warn(context.Background(), "agent: ignoring project-level allow rules (allow is global-only)",
-				"tree", root, "count", len(pp.Bash.Allow))
+				"tree", root, "count", len(pp.Bash.Allow)+projectFileAllowCount(pp))
 		}
 		project.Deny = append(project.Deny, pp.Bash.Deny...)
 		project.Ask = append(project.Ask, pp.Bash.Ask...)
 		// Allow intentionally omitted — dropped by NewPolicy anyway.
+		projectFiles = unionFileRules(projectFiles, expandFileRules(pp.Files, root, home))
 	}
 	if cfg.Permissions.Bash.DisableBuiltinDeny {
 		// User opted out of ALL built-in protection: neither the disk/shutdown
-		// glob rules (BuiltinDenyRules) nor the structured rm guard apply.
-		pol := permission.NewPolicyNoBuiltins(global, project)
+		// glob rules (BuiltinDenyRules) nor the structured rm guard apply. There
+		// are no built-in PATH denials to opt out of — the file rules are the
+		// user's alone (see docs/2026-09-30-files-ask-jev-design.md).
+		pol := permission.NewPolicyNoBuiltins(global, project, permission.WithFileRules(globalFiles, projectFiles))
 		if pol.Empty() {
 			return nil
 		}
 		return pol
 	}
-	pol := permission.NewPolicy(global, project)
+	pol := permission.NewPolicy(global, project, permission.WithFileRules(globalFiles, projectFiles))
 	if pol.Empty() {
 		return nil
 	}
 	return pol
+}
+
+// homeDir resolves the anchor for the global config's relative path patterns.
+// An unresolvable home (no $HOME, no passwd entry) leaves `~` and relative
+// patterns as written — i.e. matching nothing — which is why it is warned about
+// rather than papered over with a guess: a deny rule silently pointed at the wrong
+// directory is worse than one that does not fire.
+func homeDir(lg *logger.Logger) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if lg != nil {
+			lg.Warn(context.Background(),
+				"agent: cannot resolve the home directory; path rules written with ~ or relative to it will not match",
+				"error", err)
+		}
+		return ""
+	}
+	return home
+}
+
+// expandFileRules reads one layer's path rules into the rules the policy matches:
+// every pattern anchored (home for the global layer, the tree for a project file)
+// and cleaned, so that matching is a plain string comparison against a canonical
+// path.
+func expandFileRules(f config.FilesPermissions, anchor, home string) permission.FileRules {
+	return permission.FileRules{
+		Read:  permission.ExpandPathRules(pathRules(f.Read), anchor, home),
+		Write: permission.ExpandPathRules(pathRules(f.Write), anchor, home),
+		Edit:  permission.ExpandPathRules(pathRules(f.Edit), anchor, home),
+	}
+}
+
+func pathRules(p config.PathPermissions) permission.Rules {
+	return permission.Rules{Deny: p.Deny, Ask: p.Ask, Allow: p.Allow}
+}
+
+// unionFileRules adds one layer's file rules to another: the per-tree project
+// files accumulate, since every tree the session works in contributes.
+func unionFileRules(dst, src permission.FileRules) permission.FileRules {
+	return permission.FileRules{
+		Read:  unionPathRules(dst.Read, src.Read),
+		Write: unionPathRules(dst.Write, src.Write),
+		Edit:  unionPathRules(dst.Edit, src.Edit),
+	}
+}
+
+func unionPathRules(dst, src permission.PathRules) permission.PathRules {
+	return permission.PathRules{
+		Deny:  append(dst.Deny, src.Deny...),
+		Ask:   append(dst.Ask, src.Ask...),
+		Allow: append(dst.Allow, src.Allow...),
+	}
+}
+
+// projectFileAllowCount counts the path-allow rules a project file declares —
+// they are dropped (allow is global-only), and the caller warns about them the
+// way it does for the bash half.
+func projectFileAllowCount(pp config.PermissionsConfig) int {
+	return len(pp.Files.Read.Allow) + len(pp.Files.Write.Allow) + len(pp.Files.Edit.Allow)
 }
 
 // bashCommand extracts the "command" field from Bash tool args JSON.
@@ -132,7 +205,7 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 	// to act on — then the rules decide, which is this command's behaviour today.
 	v := a.judgeBashAsk(ctx, cmd, rule)
 	if v.judged && v.need {
-		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, bashAskCause{
+		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, askCause{
 			rule: rule, judged: true, score: v.p, threshold: v.threshold,
 		}, ch)
 		if handled || err != nil {
@@ -153,7 +226,7 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 	}
 
 	if decision == permission.DecisionAsk {
-		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, bashAskCause{rule: rule}, ch)
+		res, handled, err := a.resolveBashAsk(ctx, tc, cmd, askCause{rule: rule}, ch)
 		if handled || err != nil {
 			return res, handled, nil, err
 		}
@@ -164,11 +237,16 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 	return tools.ToolResult{}, false, nil, nil
 }
 
-// bashAskCause is why a human is being asked. The three kinds must render
-// DIFFERENTLY: a preview that names a rule that did not match (issue #40) sends
-// the reader looking for something they never wrote, and an ask raised by the
-// judgment is a third kind again.
-type bashAskCause struct {
+// askCause is why a human is being asked. The kinds must render DIFFERENTLY: a
+// preview that names a rule that did not match (issue #40) sends the reader
+// looking for something they never wrote, and an ask raised by the judgment is a
+// third kind again.
+//
+// It is shared by both gates — the Bash one and the file tools' — because the
+// reason a human is interrupted is the same fact in both, and the previews are
+// built from it by one renderer (askPreview). The unparseable sentinel is the
+// bash gate's alone: a path always parses, so no file-side ask ever carries it.
+type askCause struct {
 	// rule is the ask rule the policy matched, permission.AskNoRule when the
 	// command could not be parsed, or "" when nothing matched.
 	rule string
@@ -183,9 +261,9 @@ type bashAskCause struct {
 // resolveBashAsk dispatches a policy "ask" decision according to the agent's
 // permission mode: interactive prompt (TUI), external handler (ACP), or a
 // non-interactive fallback (Skip: deny unless the user chose "allow all").
-func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd string, cause bashAskCause, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
+func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd string, cause askCause, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
 	rule := cause.rule
-	preview := bashAskPreview(cmd, cause)
+	preview := askPreview("$ "+cmd, cause)
 
 	switch a.Config.PermissionMode {
 	case PermissionModeSkip:
@@ -229,43 +307,30 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd strin
 
 	default: // PermissionModeTUI
 		a.Config.Logger.Info(ctx, "Agent: bash ask requesting user confirmation", "rule", rule)
-		a.dispatchEvent(ctx, hooks.EventPermissionRequest, hooks.Payload{
-			ToolName: tc.Function.Name,
-			ToolID:   tc.ID,
-			ToolArgs: tc.Function.Arguments,
-		})
-		ch <- AgentEvent{
-			Type:     AgentEventToolConfirmation,
-			ToolName: tc.Function.Name,
-			ToolID:   tc.ID,
-			ToolArgs: tc.Function.Arguments,
-			ToolDiff: preview,
+		resp, err := a.askFrontend(ctx, tc, preview, ch)
+		if err != nil {
+			return tools.ToolResult{Status: tools.ToolResultError, Err: err}, true, nil
 		}
-
-		select {
-		case resp := <-a.Channels.ConfirmResp:
-			switch resp {
-			case ConfirmAllowSession, ConfirmAllowOnce:
-				if resp == ConfirmAllowSession {
-					// 「本会话全部允许」: stop asking about this session's ask
-					// rules. Deny rules are checked before an ask is raised, so
-					// this cannot widen into "run what the rules forbid".
-					a.Config.PermissionPolicy.AllowAllAsksForSession()
-				}
-				a.dispatchPermissionResult(ctx, tc, true)
-				return tools.ToolResult{}, false, nil
-			default: // ConfirmDeny
-				a.dispatchPermissionResult(ctx, tc, false)
-				return tools.ToolResult{}, true, errCancelled
+		switch resp {
+		case ConfirmAllowSession, ConfirmAllowOnce:
+			if resp == ConfirmAllowSession {
+				// 「本会话全部允许」: stop asking about this session's ask
+				// rules. Deny rules are checked before an ask is raised, so
+				// this cannot widen into "run what the rules forbid".
+				a.Config.PermissionPolicy.AllowAllAsksForSession()
 			}
-		case <-ctx.Done():
-			return tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}, true, nil
+			a.dispatchPermissionResult(ctx, tc, true)
+			return tools.ToolResult{}, false, nil
+		default: // ConfirmDeny
+			a.dispatchPermissionResult(ctx, tc, false)
+			return tools.ToolResult{}, true, errCancelled
 		}
 	}
 }
 
-// bashAskPreview renders the confirmation prompt content for a bash ask: the command, a blank
-// line, then WHY it is being asked about.
+// askPreview renders the confirmation prompt content for one ask: the subject
+// (the command, or the tool and the path it would touch), a blank line, then WHY
+// it is being asked about.
 //
 // The reason is worded from the rule slot, and the slot has two different kinds of content — a rule
 // that matched, or permission.AskNoRule for a command the policy could not parse (nothing matched;
@@ -273,14 +338,17 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd strin
 // card claim a rule that does not exist, and made a malformed command look like a truncated one
 // (issue #40): the reader saw `… | head &&` hanging in the air and a rule name they had never
 // written.
-func bashAskPreview(cmd string, cause bashAskCause) string {
-	return fmt.Sprintf("$ %s\n\n%s", cmd, askReasonLine(cause))
+//
+// `subject` is written by the AGENT, not by the frontend: the desktop shows this text verbatim, and
+// a second renderer of it would be free to drift from the reason line a human acts on.
+func askPreview(subject string, cause askCause) string {
+	return fmt.Sprintf("%s\n\n%s", subject, askReasonLine(cause))
 }
 
 // askReasonLine words one ask's cause for a HUMAN. AskNoRule gets a sentence that says what is
 // actually wrong and what fixes it, because that case is the one a reader has to act on (a rule
 // they wrote is a rule they can recognise).
-func askReasonLine(cause bashAskCause) string {
+func askReasonLine(cause askCause) string {
 	switch {
 	case cause.rule != "" && cause.rule != permission.AskNoRule:
 		// A rule the user wrote: their own words are the recognisable reason, so

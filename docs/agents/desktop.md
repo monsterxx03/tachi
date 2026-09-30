@@ -63,6 +63,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
 | the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
+| a FILE tool's ask (its own `files` kind and copy, and that a refusal refuses the call, not the turn) | `perm-files` |
 | the MCP search cost card (its copy, and a refusal sticking for the session) | `perm-mcp-budget` |
 | the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
 | a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
@@ -130,7 +131,7 @@ Fixtures exist where the real path needs something a driver cannot do:
 - `extraRoots` — additional workspace roots; seeded into the session, because the UI's only way in is a NATIVE
   directory picker no driver can click. Reach a seeded root from the work dir as `../<name>/…`.
 - `config` — a YAML block appended to the generated `config.yaml` (how a parked-permission scenario gets its
-  `permissions.bash.ask` rule).
+  `permissions.bash.ask` / `permissions.files.read.ask` rule).
 - `pricing` — the mock provider's own price table, for a scenario that asserts on MONEY (`perm-mcp-budget`'s
   cost card). It cannot ride in `config`: prices live INSIDE the provider entry, and a second `providers:` key
   would not load. Nil everywhere else — an unpriced model bills nothing, which keeps the other scenarios'
@@ -351,6 +352,13 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   fails the build until it gets a row**; `settingApply.needsRestart()` is DERIVED (`Apply == nil` and not
   lazy/unused), never a flag to remember. `TestTheLikelyEditsStayHot` fences the keys users edit most: if a
   refactor makes one of them need a restart again, that test — not a confused user — is what fails.
+  - **A row also answers the two things the VALUE cannot say about the FORM**: which group it is drawn in
+    (`Category`) and what an empty `string_list` box teaches as its example (`ListExample`, one example value
+    per line). Both ride on the row rather than on the control kind, because the same control is asked two
+    different questions — `permissions.bash.ask` takes shell globs and `permissions.files.read.ask` takes
+    paths, and only the row knows which. The frontend therefore renders the example the backend sent (and
+    nothing at all when a list's shape has none); a hardcoded example in the frontend is what taught readers
+    to type a command into a path field.
   - A row's `Apply` does only the PUSH half — the value itself is written into `d.cfg` by the caller — and
     anything that has to reach every session goes through `d.applyToLiveAgents(fn)` (`agent.go`), which returns
     failures labelled with the session's title (or its id). A push is a reload method from
@@ -629,10 +637,16 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   RULES do not carry over — that is the point — and deny is decided before any ask, so an inherited approval
   can never resurrect a forbidden command (`TestSetPermissionTrees_*`, `TestSessionTreeMove*`).
 - **The card's subtitle is one of THREE renderings of why a command is being asked about** (a matched rule, the
-  unparseable sentinel, or a judgment that raised it): the wording is the agent's (`bashAskCause`), and the card
+  unparseable sentinel, or a judgment that raised it): the wording is the agent's (`askCause`), and the card
   shows it verbatim — a second renderer would be free to drift, and a wrong reason sends the reader hunting for a
-  rule they never wrote. `docs/agents/permission.md` owns the three; the desktop owns the card, the
-  session-wide 「本会话全部允许」 button, and what the device link forwards. Smoke: `perm-unparseable`.
+  rule they never wrote. `docs/agents/permission.md` owns the three (a FILE ask has two of them — a path always
+  parses, so the sentinel is the command half's alone); the desktop owns the card, the session-wide
+  「本会话全部允许」 button, and what the device link forwards. Smoke: `perm-unparseable`, `perm-files`.
+- **Card CONTENT is always the agent's preview string**, never a rendering the desktop builds, and the `kind`
+  only picks the static chrome (title/sub/hint). A file ask arrives with `kind: files` — without that kind it
+  renders as a bash card whose copy asks the reader to approve a command that is not on the card
+  (`permEventKind`, `permCopy`). The one field the desktop DOES parse out of the call is the notification's
+  subject line (`askSubjectOf`: the command for Bash, the path for a file tool).
 
 ## Desktop Turn History (the interrupted-turn merge)
 

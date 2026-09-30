@@ -40,14 +40,27 @@ func (d Decision) String() string {
 	}
 }
 
-// Rules holds glob patterns for Bash command classification.
-// Only the '*' wildcard is supported (any, possibly empty, byte sequence).
+// Rules holds glob patterns classifying one subject of a check: a Bash command
+// segment, or the target path of a file tool. Only the '*' wildcard is
+// supported (any, possibly empty, byte sequence) and it spans '/' — so a
+// pattern like "~/.ssh/*" or "git push*" covers everything after the star.
 // Matching is case-sensitive.
+//
+// Which text a rule is matched against is the check's business: CheckBash
+// matches canonical command segments, CheckPath a canonical absolute path (see
+// paths.go). The three lists mean the same thing in both: deny blocks, allow
+// exempts from ask rules, ask raises the question.
 type Rules struct {
 	Deny  []string
 	Ask   []string
 	Allow []string
 }
+
+// PolicyOption configures a Policy as it is built. Options exist so a caller
+// that has more rule sets to hand over (the agent: the file tools' path rules)
+// adds them to the SAME policy object — one session switch, one reset, one
+// inherit — without every command-only caller and test growing an argument.
+type PolicyOption func(*Policy)
 
 // BuiltinDenyRules are deny rules for absolutely dangerous commands — things
 // an agent should never run: raw disk overwrite, and system shutdown. They
@@ -89,13 +102,21 @@ var BuiltinDenyRules = []string{
 	"init 0", "init 6", "sudo init 0", "sudo init 6",
 }
 
-// Policy evaluates Bash commands against allow/ask/deny rules, plus the
-// built-in structured rm guard and a session-scoped "stop asking" switch
-// (the frontends' 「本会话全部允许」). Safe for concurrent use.
+// Policy evaluates Bash commands (CheckBash) and file tools' target paths
+// (CheckPath) against allow/ask/deny rules, plus the built-in structured rm
+// guard and a session-scoped "stop asking" switch (the frontends' 「本会话全部
+// 允许」). Safe for concurrent use.
 type Policy struct {
 	deny  []string
 	ask   []string
 	allow []string
+
+	// read, write, edit are the file tools' path rules, attached by
+	// WithFileRules (see paths.go). Zero means nothing watches those calls, which
+	// is the default: no file rules exist in a stock config.
+	read  PathRules
+	write PathRules
+	edit  PathRules
 
 	// builtinRm enables the structured root/home deletion guard for `rm`
 	// invocations (see checkBuiltinRmDangerous). Default on; disabled via
@@ -115,8 +136,12 @@ type Policy struct {
 // so a cloned repository can never loosen the user's ask tripwires
 // (deny stays absolute; ask can only be added, never exempted, by projects).
 // The built-in structured rm guard (root/home deletion) is enabled.
-func NewPolicy(global, project Rules) *Policy {
-	return newPolicy(global, project, true)
+//
+// The file tools' path rules are attached by passing WithFileRules; a policy
+// built without it watches commands only, which is what a caller that has no
+// file rules (or a command-only test) wants.
+func NewPolicy(global, project Rules, opts ...PolicyOption) *Policy {
+	return newPolicy(global, project, true, opts...)
 }
 
 // NewPolicyNoBuiltins is NewPolicy with the built-in structured rm guard
@@ -124,34 +149,67 @@ func NewPolicy(global, project Rules) *Policy {
 // via permissions.bash.disable_builtin_deny in the GLOBAL config — note that
 // BuiltinDenyRules (disk/shutdown globs) are prepended by the caller, so this
 // only disables the rm argument check.
-func NewPolicyNoBuiltins(global, project Rules) *Policy {
-	return newPolicy(global, project, false)
+func NewPolicyNoBuiltins(global, project Rules, opts ...PolicyOption) *Policy {
+	return newPolicy(global, project, false, opts...)
 }
 
-func newPolicy(global, project Rules, builtinRm bool) *Policy {
+func newPolicy(global, project Rules, builtinRm bool, opts ...PolicyOption) *Policy {
 	p := &Policy{builtinRm: builtinRm}
-	p.deny = append(append([]string{}, global.Deny...), project.Deny...)
-	p.ask = append(append([]string{}, global.Ask...), project.Ask...)
-	p.allow = append([]string{}, global.Allow...) // project allow intentionally dropped
+	merged := mergeLayer(global, project)
+	p.deny, p.ask, p.allow = merged.Deny, merged.Ask, merged.Allow
+	for _, opt := range opts {
+		opt(p)
+	}
 	return p
 }
 
+// mergeLayer unions one rule set across the global and project layers: deny and
+// ask come from both (a project can only tighten), allow from the GLOBAL layer
+// only. Both halves of the policy go through it, so "what a project may do to
+// the user's rules" is answered once.
+func mergeLayer(global, project Rules) Rules {
+	return Rules{
+		Deny:  append(append([]string{}, global.Deny...), project.Deny...),
+		Ask:   append(append([]string{}, global.Ask...), project.Ask...),
+		Allow: append([]string{}, global.Allow...),
+	}
+}
+
 // Empty reports whether the policy has no rules at all — including the
-// built-in rm guard. Callers can use this as a fast path to skip policy
-// checks entirely (default behavior: allow). A policy built with NewPolicy
-// (built-in guard enabled) is never Empty.
+// built-in rm guard, and including the file tools' path rules: a policy that
+// only watches file calls is not empty, and a caller using this as "nothing
+// watches anything" would otherwise skip the half the user did configure.
+// A policy built with NewPolicy (built-in guard enabled) is never Empty.
 func (p *Policy) Empty() bool {
-	return len(p.deny) == 0 && len(p.ask) == 0 && len(p.allow) == 0 && !p.builtinRm
+	return len(p.deny) == 0 && len(p.ask) == 0 && len(p.allow) == 0 && !p.builtinRm &&
+		pathRuleSetEmpty(p.read) && pathRuleSetEmpty(p.write) && pathRuleSetEmpty(p.edit)
+}
+
+// pathRuleSetEmpty reports whether one tool's path rules hold nothing.
+func pathRuleSetEmpty(r PathRules) bool {
+	return len(r.Deny) == 0 && len(r.Ask) == 0 && len(r.Allow) == 0
+}
+
+// sessionApproved reports the session-scoped 「本会话全部允许」 switch. It is
+// read by both halves of the policy at the point where it may act — after every
+// deny check of theirs has run — so that "stop asking me" can never become "do
+// what I forbade".
+func (p *Policy) sessionApproved() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.allowAllAsks
 }
 
 // AllowAllAsksForSession stops this session's ask rules from asking: every command
-// they would have sent to the user is allowed instead. This is the frontends'
-// 「本会话全部允许」 (the TUI's `a`), and it is deliberately SESSION-scoped — the
-// policy is built per agent, so it dies with the conversation.
+// they would have sent to the user is allowed instead, and so is every matching
+// path of the file tools' ask rules. This is the frontends' 「本会话全部允许」
+// (the TUI's `a`), and it is deliberately SESSION-scoped — the policy is built
+// per agent, so it dies with the conversation.
 //
-// It does NOT disable deny rules. CheckBash decides deny while it walks the command
-// and returns before an ask is ever raised, so the switch cannot be reached for a
-// forbidden command: "stop asking me" never becomes "run what I forbade".
+// It does NOT disable deny rules, of either half. Both checks decide deny while
+// they walk their subject and return before an ask is ever raised, so the switch
+// cannot be reached for a forbidden command or path: "stop asking me" never
+// becomes "run what I forbade".
 func (p *Policy) AllowAllAsksForSession() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -265,10 +323,7 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 		// The session-wide approval is applied HERE and not at the top of the
 		// function on purpose: every deny check above has already run, so an
 		// allowed session can never run a command the rules forbid.
-		p.mu.Lock()
-		allowed := p.allowAllAsks
-		p.mu.Unlock()
-		if allowed {
+		if p.sessionApproved() {
 			return DecisionAllow, ""
 		}
 		return DecisionAsk, askRule

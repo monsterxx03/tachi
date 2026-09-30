@@ -163,6 +163,17 @@ type settingApply struct {
 	// that does not exist. The two states therefore mean one thing each, which is what lets the
 	// guard test check both directions.
 	Category string
+
+	// ListExample is one example VALUE PER LINE for the `string_list` fields under this row,
+	// which the form shows as the box's hint (SettingFieldVO.ListExample).
+	//
+	// It belongs to the row because the page cannot derive it: a list of shell globs and a list
+	// of paths have the same Kind, and only the row knows which one it is. A list that teaches
+	// the wrong shape of value is worse than one that teaches nothing — `git *` in an empty path
+	// box reads as "type a command here".
+	//
+	// Empty means the form shows its plain hint, with no example.
+	ListExample string
 }
 
 // needsRestart reports whether a value saved now can only take effect after a restart.
@@ -380,6 +391,9 @@ var settingsTable = []settingApply{
 		Key:      "permissions.bash",
 		Category: catTools,
 		Mode:     applyPush,
+		// The examples are COMMANDS: this block classifies shell commands, and the list boxes
+		// under it are where a rule is written.
+		ListExample: "git *\nnpm *",
 		Apply: func(d *desktopApp, _ *config.Config) error {
 			return pushError("权限策略", d.applyToLiveRuns(func(r liveRun) error {
 				// SetPermissionTrees is the same rebuild a tree change already goes through: it
@@ -387,6 +401,26 @@ var settingsTable = []settingApply{
 				// works in (each one's project-level rules live there) and inherits the
 				// session's approvals. The engine needs no new path — only the trigger was
 				// missing.
+				primary, additional := d.sessionRoots(r.ID)
+				r.Agent.SetPermissionTrees(context.Background(), primary, additional)
+				return nil
+			}))
+		},
+	},
+	{
+		// The file tools' rules are on the SAME policy object as the command rules
+		// (permission.Policy carries both halves), so the push is the same rebuild —
+		// and the gate's own threshold/budget need no push at all: they are read
+		// live on every call.
+		Key:      "permissions.files",
+		Category: catTools,
+		Mode:     applyPush,
+		// PATHS, not commands: these lists classify a call's target file. The seed examples
+		// are the two shapes worth knowing — `~` for the user's home, and a leading `*` for
+		// "anywhere" (a pattern that starts with a wildcard is deliberately not anchored).
+		ListExample: "~/.ssh/*\n*/.env",
+		Apply: func(d *desktopApp, _ *config.Config) error {
+			return pushError("文件权限策略", d.applyToLiveRuns(func(r liveRun) error {
 				primary, additional := d.sessionRoots(r.ID)
 				r.Agent.SetPermissionTrees(context.Background(), primary, additional)
 				return nil
@@ -514,7 +548,10 @@ var settingsTable = []settingApply{
 	{Key: "checkpoints.retain", Category: catSession, Mode: applyLazy, Note: "同 checkpoints.max_files"},
 	{Key: "oneoff", Category: catSession, Mode: applyLazy},
 	{Key: "compact", Category: catSession, Mode: applyLazy},
-	{Key: "review", Category: catSession, Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读"},
+	{Key: "review", Category: catSession, Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读",
+		// Its one list is TOOL NAMES (config.AllowedTools), so it gets its own example rather
+		// than the plain hint: a list box is where a reader meets the value's shape.
+		ListExample: "ReadFile\nGrep"},
 	// Registered unconditionally, reading the config on every generation (see GitReminder):
 	// nothing has to be pushed, and nothing has to be rebuilt — which is the point, since the
 	// collector cannot remove a reminder without taking every other reminder's state with it.
@@ -729,6 +766,10 @@ type SettingFieldVO struct {
 	IsSet bool `json:"isSet"`
 	// Note is why: the reason a restart is needed, or which entry mode owns the key instead.
 	Note string `json:"note,omitempty"`
+	// ListExample is the row's own answer (settingApply.ListExample): the example values a
+	// `string_list` box shows under its "每行一项" hint, one per line. Empty means no example,
+	// which is what a list whose shape the page cannot guess gets.
+	ListExample string `json:"listExample,omitempty"`
 }
 
 // SettingsSchemaVO is everything the settings page needs to draw itself, in one answer: the
@@ -920,6 +961,7 @@ func settingField(cfg *config.Config, key string, row settingApply) SettingField
 		IsSet:        info.IsSet,
 		Secret:       info.Secret,
 		Note:         note,
+		ListExample:  row.ListExample,
 	}
 }
 

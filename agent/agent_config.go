@@ -263,10 +263,13 @@ type RuntimeChannels struct {
 // Initial values come from AgentConfig construct inputs.
 type PermissionState struct {
 	// PermissionHandler is called by PermissionModeExternal to decide
-	// tool execution. It receives the tool name, tool call ID, diff
-	// preview, and raw args. Returns (approved, error).
-	// NOTE: EditFile is outside this contract — edits never require
-	// confirmation, so the handler is not invoked for them.
+	// tool execution. It receives the tool name, tool call ID, preview,
+	// and raw args. Returns (approved, error).
+	//
+	// It is reached for a Bash `ask` (agent_permission.go) and for a file
+	// tool's ask (agent_permission_files.go) — the latter is the file gate's
+	// whole interactive path, and its refusal refuses THAT CALL rather than
+	// the turn.
 	PermissionHandler PermissionHandler
 
 	// AutoApprovePolicyAsks makes PermissionModeSkip approve policy

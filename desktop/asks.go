@@ -32,7 +32,7 @@ type pendingAsk struct {
 	toolID    string
 
 	// preview 是权限等待的展示内容：agent 自己渲染的「$ 命令 + 命中的规则」
-	// （bashAskPreview）。原样透传给设备，不在这里二次解析——那份格式的第二个
+	// （askPreview）。原样透传给设备，不在这里二次解析——那份格式的第二个
 	// 解析器早晚会和写它的那个漂移。
 	preview string
 

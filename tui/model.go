@@ -1003,6 +1003,14 @@ func (m *Model) renderConfirmPrompt() string {
 		// [a]lways is the 「本会话允许」 this card's own gate honours (see
 		// agent/mcp_budget.go): no further cost card in this session.
 		b.WriteString(confirmStyle.Render("Load MCP tools? [y]once [a]lways(session) [n]deny: "))
+	case m.pendingConfirm != nil && (m.pendingConfirm.toolName == tools.ToolNameRead ||
+		m.pendingConfirm.toolName == tools.ToolNameWrite ||
+		m.pendingConfirm.toolName == tools.ToolNameEdit):
+		// A file ask (agent_permission_files.go). [a]lways is this session's
+		// 「本会话全部允许」 for the file RULES — a judgment-raised ask still runs
+		// the judgment, exactly as it does for bash. Deny refuses THIS call and
+		// the turn carries on, so the hint says so rather than 「deny」.
+		b.WriteString(confirmStyle.Render("Allow this file access? [y]once [a]lways(session) [n]refuse: "))
 	default:
 		b.WriteString(confirmStyle.Render("Apply this edit? [y]es [a]lways(session) [n]o: "))
 	}

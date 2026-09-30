@@ -46,8 +46,9 @@ type askVerdict struct {
 	p float64
 }
 
-// bashAskJudged is one command's trip through the gate.
-type bashAskJudged struct {
+// askJudged is one judgment's trip through a gate — the bash gate's or the file
+// gate's; both ask one question about one subject and get one probability back.
+type askJudged struct {
 	// judged is false when there is nothing to act on: the gate is off, the
 	// frontend has nobody to ask, the service failed, or the question came back
 	// unanswered. The caller must then behave exactly as it did before this
@@ -64,21 +65,21 @@ type bashAskJudged struct {
 // judgeBashAsk runs the gate for one command. It never blocks longer than the
 // configured budget, and never returns judged=true on anything it did not get
 // an answer for.
-func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) bashAskJudged {
+func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) askJudged {
 	threshold, budget, on := a.bashAskGate()
 	if !on {
-		return bashAskJudged{}
+		return askJudged{}
 	}
 
 	key := cmd + "\x00" + rule
 	if p, ok := a.lookupAskVerdict(key); ok {
 		a.logAskJudgment(ctx, cmd, rule, p, threshold, "memo", nil)
-		return bashAskJudged{judged: true, need: p >= threshold, p: p, threshold: threshold}
+		return askJudged{judged: true, need: p >= threshold, p: p, threshold: threshold}
 	}
 
 	judge := a.askJudgeClient()
 	if judge == nil {
-		return bashAskJudged{}
+		return askJudged{}
 	}
 
 	evalCtx, cancel := context.WithTimeout(ctx, budget)
@@ -92,7 +93,7 @@ func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) bashAskJud
 		// "the rest of the session is unjudged".
 		a.Config.Logger.Warn(ctx, "Agent: bash ask judgment unavailable; rules decide",
 			"rule", ruleOrNone(rule), "command", strutil.Truncate(cmd, 200), "err", err)
-		return bashAskJudged{}
+		return askJudged{}
 	}
 
 	answer, ok := resp.Answers[jevask.QuestionID]
@@ -101,14 +102,14 @@ func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) bashAskJud
 		// not an answer to act on either (and the log must not show it as 0.000).
 		a.Config.Logger.Warn(ctx, "Agent: bash ask judgment returned no answer; rules decide",
 			"rule", ruleOrNone(rule), "command", strutil.Truncate(cmd, 200), "model", resp.Model)
-		return bashAskJudged{}
+		return askJudged{}
 	}
 
 	a.recordAskJudgmentUsage(ctx, resp)
 	p := *answer.Noul
 	a.storeAskVerdict(key, p)
 	a.logAskJudgment(ctx, cmd, rule, p, threshold, "judged", resp)
-	return bashAskJudged{judged: true, need: p >= threshold, p: p, threshold: threshold}
+	return askJudged{judged: true, need: p >= threshold, p: p, threshold: threshold}
 }
 
 // bashAskGate reports the live gate settings: the threshold, the wait budget, and

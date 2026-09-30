@@ -118,6 +118,42 @@ func AtomicWriteJSONShared(path string, v any) error {
 	return AtomicWriteJSON(path, v, 0o755, 0o644)
 }
 
+// CanonicalPath returns the form of path every rule and every caller can agree
+// on: absolute, cleaned, and with symlinks resolved as far as the path exists.
+//
+// Resolving the existing PREFIX is the whole point. A path whose leaf does not
+// exist yet — a write that is about to create a file — still has an identity: the
+// directory it will live in, which may itself be reached through a symlink. So the
+// nearest existing ancestor is resolved and the remainder re-attached, and two
+// aliases of the same to-be-created file agree instead of looking like two files.
+//
+// Callers use it to compare a path against a rule, or to key a path: what matters
+// is that the same file always produces the same string, never that the file is
+// there.
+func CanonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(real), nil
+	}
+	dir, rest := filepath.Clean(abs), ""
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Walked up to the root without finding an existing ancestor: nothing
+			// left to resolve, so the cleaned absolute path is the answer.
+			return filepath.Clean(abs), nil
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Clean(filepath.Join(real, rest)), nil
+		}
+	}
+}
+
 // Exists reports whether a file or directory exists at path.
 func Exists(path string) bool {
 	_, err := os.Stat(path)

@@ -1215,6 +1215,13 @@ const permCopy: Record<PermissionKind, { title: string; sub: string; hint: strin
     sub: '新工具会让整段 prompt 缓存失效，重读一次；拒绝后本会话不再加载',
     hint: '仅这一次；或本会话不再询问 MCP 工具加载花费',
   },
+  files: {
+    // The preview below names the tool and the path, so this copy must not read
+    // like a bash card: 「拒绝」 here refuses THIS call only — the turn carries on.
+    title: '需要你确认这次文件操作',
+    sub: '允许后本轮继续；deny 规则不受影响',
+    hint: '仅这一次；或本会话不再询问文件规则（判定仍然会跑）',
+  },
 }
 
 function PermissionForm({ perm, onAnswer }: {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	cmds "github.com/monsterxx03/tachi/agent/commands"
-	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -256,35 +255,21 @@ func (a *AIAgent) checkMCPSearchBudget(ctx context.Context, tc llm.ToolCall, ch 
 		a.BlockMCPSearchForSession()
 
 	default: // PermissionModeTUI
-		a.dispatchEvent(ctx, hooks.EventPermissionRequest, hooks.Payload{
-			ToolName: tc.Function.Name,
-			ToolID:   tc.ID,
-			ToolArgs: tc.Function.Arguments,
-		})
-		ch <- AgentEvent{
-			Type:     AgentEventToolConfirmation,
-			ToolName: tc.Function.Name,
-			ToolID:   tc.ID,
-			ToolArgs: tc.Function.Arguments,
-			ToolDiff: preview,
-		}
-
-		select {
-		case resp := <-a.Channels.ConfirmResp:
-			a.dispatchPermissionResult(ctx, tc, resp != ConfirmDeny)
-			switch resp {
-			case ConfirmDeny:
-				a.BlockMCPSearchForSession()
-			case ConfirmAllowSession:
-				a.AllowMCPSearchForSession()
-			}
-			answer(mcpSearchConfirmName(resp))
-			if resp != ConfirmDeny {
-				return tools.ToolResult{}, false, nil
-			}
-		case <-ctx.Done():
+		resp, err := a.askFrontend(ctx, tc, preview, ch)
+		if err != nil {
 			answer("cancelled")
-			return tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}, true, nil
+			return tools.ToolResult{Status: tools.ToolResultError, Err: err}, true, nil
+		}
+		a.dispatchPermissionResult(ctx, tc, resp != ConfirmDeny)
+		switch resp {
+		case ConfirmDeny:
+			a.BlockMCPSearchForSession()
+		case ConfirmAllowSession:
+			a.AllowMCPSearchForSession()
+		}
+		answer(mcpSearchConfirmName(resp))
+		if resp != ConfirmDeny {
+			return tools.ToolResult{}, false, nil
 		}
 	}
 

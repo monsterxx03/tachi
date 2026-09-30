@@ -17,10 +17,11 @@ design doc (`docs/2026-09-30-bash-ask-jev-design.md`, allowed to go stale — ne
 | **Rules: the three decisions** | you write/edit rules, or change `agent/permission/` |
 | **The ask path: three causes, four answers** | you touch the ask, its wording, or add a tool that raises one |
 | **The judgment gate (Jev)** | you touch `permissions.bash.jev`, `jevask`, or anything on the ask path |
+| **The file tools: path rules + their gate** | you touch `permissions.files`, `agent/agent_permission_files.go`, `agent/permission/paths.go`, `agent/permission/jevfiles/`, or add a tool that touches a path |
 | **Threshold discipline** | you change the state/question/criteria, the model, or want to trust a τ |
 | **Session-scoped approvals** | you rebuild a policy, end a session, or touch 「本会话全部允许」 |
 | **Which trees contribute rules** | you touch "which tree is this session in" (desktop, ACP, `SetPermissionTrees`) |
-| **The `[permission]` line on a Bash result** | you change tool-result rendering, or wonder why the model cannot see a score |
+| **The `[permission]` line on a result** | you change tool-result rendering, or wonder why the model cannot see a score |
 
 Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permission cards),
 [`jev.md`](jev.md) (the gate's service contract — read it before wiring a new judgment anywhere),
@@ -51,17 +52,20 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 ## The ask path: three causes, four answers
 
-- **Three causes, three wordings, and nothing may conflate them** (`bashAskCause`, `askReasonLine`): a command
+- **Three causes, three wordings, and nothing may conflate them** (`askCause`, `askReasonLine`): a command
   either matched an `ask` rule, could not be parsed (`AskNoRule`), or was raised by the judgment gate because
   NOTHING matched. Rendering the second or third through the first one's sentence sends the reader hunting in
   their config for a rule they never wrote. A real rule wins the
   wording when the judgment agrees, because the user's own words are what they recognise.
+  **A file tool's ask has the first and the third of those and never the second** — a path always parses — so
+  `AskNoRule` belongs to the command half alone and must never be written into a path cause.
 - **Four answers, chosen by the per-agent `PermissionMode`**: `TUI` prompts (`y` allow once / `a` allow for the
-  session / `n` deny, which ABORTS the turn); `External` delegates to a `PermissionHandler` (the desktop's card,
+  session / `n` deny, which ABORTS the turn — a FILE tool's refusal refuses that call and the turn continues,
+  see its section); `External` delegates to a `PermissionHandler` (the desktop's card,
   ACP's `session/request_permission`); `Skip` REFUSES the command with an explanation, and is every entry mode
   with nobody to ask — channel, `tachi -p`, subagents, dream, the one-off commands. `Skip` + a user's explicit
   ACP 「allow all」 is the only thing that auto-approves there.
-- **The ask's preview is written by the agent, not by the frontend** (`bashAskPreview`: the command, then why).
+- **The ask's preview is written by the agent, not by the frontend** (`askPreview`: the subject, then why — the subject is the command for a Bash ask and the tool plus the path a caller wrote for a file ask).
   The desktop shows it verbatim — a second renderer of that format would be free to drift, and the reason line is
   the part a human acts on.
 - **A refusal's text is shaped to STOP the model, not to explain the configuration to it**: fact (not executed),
@@ -101,7 +105,59 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   row (`llm.RecordJevUsage`, `UsageKindJev`, credit snapshot included). Skipping it makes these calls look free
   in `/usage`.
 
-## Threshold discipline
+## The file tools: path rules + their gate
+
+- **The three file tools (`ReadFile` / `WriteFile` / `EditFile`) have their own rule sets and share ONE
+  gate.** `permissions.files.read|write|edit` are path globs (`deny`/`ask`/`allow`, same precedence as
+  the command rules); `permissions.files.jev` is one `auto|off` switch over all three, with one τ — the
+  tool name is a FACT in the state, and a threshold belongs to the question, so three switches over one
+  measured number would be three numbers where there is one.
+- **A rule has two forms, and both are load-bearing** (`permission.PathPattern`): `Text` is the
+  pattern VERBATIM as the user wrote it — `~/.ssh/*` stays `~/.ssh/*`, a project's `secrets/*` stays
+  `secrets/*` — and it is what an ask preview, a refusal and the judgment's state quote back;
+  `Canonical` is the anchored form with its literal prefix resolved, and it is what the matcher
+  compares. Matching only the text silently never fires on a machine that reaches a directory through a
+  symlink (macOS `/etc` → `/private/etc`); naming only the canonical form quotes a rule the user cannot
+  find in their own config — issue #40's failure again, which is why `Text` is not the expansion either.
+  Both sides go through `permission.CanonicalizePath`, which is why there is one function for it.
+- **`canonicalPattern` builds its result from strings, never with `filepath.Join`** — and that is a
+  TRAP, not a style choice: `Join` cleans, so `Join("/a", "")+"*"` comes out `/a*`, a rule that no
+  longer covers the directory but every SIBLING whose name starts the same way (`/a-backup`, `/a2`). A
+  matcher-only test cannot see it (a `*` spans `/`, so the widened pattern still matches the file the
+  rule was written for) — the direction differs by list: a deny over-blocks, an `allow` over-exempts.
+  `TestCanonicalPatternKeepsTheSeparator` asserts both the string and the sibling behaviour.
+- **Anchoring, and the layering rule**: `~` (and any relative global pattern) is home-anchored for the
+  global config, and a relative pattern in `<tree>/.tachi/permissions.yaml` is anchored to THAT tree;
+  `allow` is global-only, so a project can only tighten. The path half lives on the SAME `Policy` as the
+  command half (`WithFileRules`): one rebuild, one session switch, one reset.
+- **Reading is judged too.** The criteria are not "does this write anything" — `~/.ssh/id_rsa` and a
+  project's `.env` are the clearest needs-a-look cases, and they are reads. So is the one boundary the
+  state can state as a fact: whether the target is inside the trees the session works in.
+- **The state describes the TARGET and never the payload.** The path (canonical), what a stat says about
+  it, the session's working directory and trees, and the matched rule — never the content a write would
+  put in the file, nor an edit's two halves. A payload is model-generated free text, which is the register
+  trap `jev.md` warns about, and it made the state grow with whatever was being written. The cost is
+  measured and named in `config.FilesPermissions.JevThreshold`'s own comment: with the content in the
+  state a write to `.tachi/permissions.yaml` scored 0.87, without it 0.43 — so **the rules, not the
+  judgment, are what stops an agent from rewriting the rules it is judged by**.
+- **A refusal refuses the CALL and never the turn** (`resolveFileAsk`), unlike the bash ask's
+  `errCancelled`; a `deny` is still decided before the gate is reached. Under `PermissionModeSkip` the
+  gate is off entirely and a matched ask rule REFUSES the call (the same "the rule means no" reading the
+  command half has) — no stock config has file rules, so the default behaviour is unchanged.
+- **`Read` and `Edit` are PARALLEL tools** (`Write` is not): the gate runs on both executors, and a
+  parked ask serializes on `PermissionState.askMu` — one `ConfirmResp` channel serves the whole agent.
+  The `[permission]` note travels out of a parallel group through the `notes[i]` slice, one index per
+  goroutine.
+- **Its τ belongs to `pkg/jev/testdata/files-ask.json`** and to nothing else — not to
+  `permissions.bash.jev_threshold`, which answers a different question. Shipped τ = 0.55, corridor
+  (0.49, 0.62), swept on that case set (64 calls × 5, `jev-1.13.0`); what it deliberately misses and
+  when to re-sweep live in `config.FilesPermissions.JevThreshold`'s own comment, and the sweep history
+  is in `docs/2026-09-30-files-ask-jev-design.md` (allowed to go stale). The few renderers it shares in
+  SHAPE with `jevask` (the trees line, the unknown-value placeholder) are duplicated on purpose: one
+  shared function would let a reworded sentence void both thresholds at once. Re-generate the case file
+  with `agent/permission/jevfiles/generate_cases_test.go`.
+
+
 
 - **No threshold is a fact.** `confidence` means "how concentrated the distribution is over the options THIS
   caller supplied", so the question, the criteria, the STATE SHAPE and the model version all belong to any τ.
@@ -158,18 +214,20 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **`configure` builds from the PROCESS cwd**, which for a GUI app is `/` — so a frontend that knows better
   re-points it before the first turn (the desktop and ACP both do).
 
-## The `[permission]` line on a Bash result
+## The `[permission]` line on a result
 
-- **How one command was decided goes to the EVENT ONLY — the transcript — and never into the model's message**
-  (`agent.askNote`): `[permission] decided_by=judgment score=0.180 threshold=0.700`, or `decided_by=approval` for a
-  command that was asked about and approved. It is appended for a FAILED command too (it ran either way), and no
-  judgment and no ask means no line at all, so an unremarkable command's result is byte-for-byte what it was
+- **Both gates write the same line, and it goes to the EVENT ONLY — the transcript — and never into the model's message**
+  (`agent.askNote`, written by `checkBashPermission` and `checkFilePermission` alike):
+  `[permission] decided_by=judgment score=0.180 threshold=0.700`, or `decided_by=approval` for a call that was
+  asked about and approved. It is appended for a FAILED call too (the call ran, or was refused, either way), and no
+  judgment and no ask means no line at all, so an unremarkable call's result is byte-for-byte what it was
   before the gate existed.
 - **The model deliberately does not get it.** Two costs on that side: a line the model does not act on is re-sent
   in the history of every LATER request (the event is not in the history), and "this one was allowed" in front of
   the model invites reading it as a standing permission for commands like it. The Bash tool description therefore
   carries no clause about it either — a description sentence would ride on every request for a number the model
-  never sees. The human's other exit is the debug log (`Agent: bash ask judged`, one line per judgment, with the
-  probability, the threshold and the verdict).
+  never sees, and the file tools' descriptions carry none either. The human's other exit is the debug log
+  (`Agent: bash ask judged` / `Agent: file ask judged`, one line per judgment, with the probability, the threshold
+  and the verdict).
 - **The pair, never a bare number**: under `judgment` the score is the probability that let it run, under
   `approval` it is the probability that made the gate ask.

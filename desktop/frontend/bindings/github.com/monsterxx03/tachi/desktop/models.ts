@@ -1088,6 +1088,13 @@ export interface SettingFieldVO {
      * Note is why: the reason a restart is needed, or which entry mode owns the key instead.
      */
     "note"?: string;
+
+    /**
+     * ListExample is the row's own answer (settingApply.ListExample): the example values a
+     * `string_list` box shows under its "每行一项" hint, one per line. Empty means no example,
+     * which is what a list whose shape the page cannot guess gets.
+     */
+    "listExample"?: string;
 }
 
 /**

@@ -1813,6 +1813,49 @@ permissions:
 			},
 		},
 		//
+		// 权限确认（文件工具）: the FILE rules' one ask path — a ReadFile that
+		// matched an ask rule the frontend must show before anything is read.
+		//
+		// 与 perm-allow 的三点不同，正是这半边要单独有场景的理由：
+		//   * 卡片内容不是命令 + 规则，而是「工具 + canonical 路径」+ 规则（agent 渲染的预览），
+		//     而 kind 是 files —— 前端文案随之不同（permCopy.files）。
+		//   * 规则是**路径** glob，模式匹配的是 canonical 绝对路径。这里用 "*/perm-fixture*"：
+		//     config 写的是**全局**层，而全局层里的相对模式锚定在 $HOME 上（沙箱的 work 目录
+		//     又没开 gitInit，于是它不是一棵树）—— 在沙箱里唯一稳定的写法是匹配"任何目录下的
+		//     这个名字"。树锚定的相对模式由 agent/permission 的单测覆盖。
+		//   * 拒绝只拒这一次调用、回合继续（不像 bash ask 会中止回合）——这一条由 Go 侧的
+		//     after 断言：模型收到了工具结果，并且回合走到了下一条回复。
+		{
+			name: "perm-files",
+			files: map[string]string{
+				"README.md":        "# smoke\n\nthe perm-files scenario's working directory\n",
+				"perm-fixture.txt": "PERM-FILE-FIXTURE-CONTENT\n",
+			},
+			config: `
+permissions:
+  files:
+    read:
+      ask:
+        - "*/perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_pf1", "ReadFile", `{"path":"perm-fixture.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("读过那份文件了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// The file's CONTENT reaching the model is what proves the read
+				// happened — an approved ask lets the call through.
+				_, ran := c.requestSeen("PERM-FILE-FIXTURE-CONTENT")
+				c.check("允许后读文件真的执行了（内容回喂给了模型）", ran, requestCount(c.requests))
+			},
+		},
+		//
 		// 权限确认（拒绝）: the same rule and the same command, but the driver clicks 拒绝.
 		// The command must NOT run, and the model must be told the user refused it.
 		//

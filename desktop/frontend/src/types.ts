@@ -136,7 +136,7 @@ export interface PermissionRequest {
   preview: string
 }
 
-export type PermissionKind = 'bash' | 'mcp_search'
+export type PermissionKind = 'bash' | 'mcp_search' | 'files'
 
 // The three answers a permission card can send. The values are the wire contract
 // with AnswerPermission (see desktop/permission.go): `allow_session` stops this

@@ -38,9 +38,12 @@ func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string, aiA
 			ToolCall: acp.ToolCallUpdate{
 				ToolCallId: acp.ToolCallId(toolID),
 				Title:      &toolName,
-				Kind:       acp.Ptr(acp.ToolKindEdit),
-				Status:     acp.Ptr(acp.ToolCallStatusPending),
-				Content:    content,
+				// The SAME derivation the tool-call stream uses, so a card raised
+				// for a Read is not announced as an edit (which is what a
+				// hard-coded kind did, and what a client uses to pick its chrome).
+				Kind:    acp.Ptr(mapToolKind(toolName)),
+				Status:  acp.Ptr(acp.ToolCallStatusPending),
+				Content: content,
 			},
 			Options: []acp.PermissionOption{
 				{
