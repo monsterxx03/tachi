@@ -22,7 +22,7 @@ gets its own handbook beside this one rather than growing here.
 | **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
-| **Desktop Session Tree** | you touch skill discovery, permissions, MCP profile scope, or anything else that resolves "which tree does this session work in" |
+| **Desktop Session Tree** | you touch skill discovery, permissions, or anything else that resolves "which tree does this session work in" |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
 | **Desktop Compaction** | you touch the compaction path (`agent/compact.go`, `desktop/compaction.go`, the `AgentEventAutoCompactDone` case), `RunningSessions`, or anything that resolves **which run owns a session** |
 | **Desktop UI State** | you change the frontend: which module owns what, and the rule each convention keeps |
@@ -540,6 +540,13 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 
 ## Desktop MCP
 
+- **MCP server config has exactly ONE scope: the global one.** `config.LoadMCPConfig` reads
+  `~/.tachi/mcp.json` plus `~/.tachi/mcp.<profile>.json`, and nothing else — a `<tree>/.tachi/mcp.json`
+  is not read, and there is no per-tree reload to call. It cannot be otherwise: one shared pool and one
+  connection per server serve every session, so "which tree is on screen" has no answer that could
+  decide a global set (a project scope could only ever be resolved by picking one tree to win). The set
+  is loaded once, at bootstrap (`agent.Bootstrap` → `cfg.LoadMCPServers()`), and a profile switch is the
+  only thing that changes it afterwards — `switchMCPProfileTo` is that path.
 - **`enableMCPServer` is the ONE enable path** (the panel's toggle and the end of an authorization both go
   through it), so an authorized server ends up exactly as connected as a toggled one: tools into the shared
   pool AND `NotifyDeferredToolsAdded` for every live agent. That reminder fires at most once per session, so a
@@ -600,9 +607,9 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   returns "" ("no project") — the correct answer for a session with no folder yet.
 - **A new call site that resolves a tree is a bug of this shape unless it goes through the session**: skills
   (`sessionSkillStore`, injected as `AgentConfig.SkillStore` — the DEFAULT path is the trap, since
-  `skill.NewStore(config.FindProjectRoot())` scans `/.tachi/skills`), permissions
-  (`AIAgent.SetPermissionTrees`), MCP profile scope (`desktopApp.mcpProjectRoot`), and MCP server LOAD
-  (`reloadMCPForActiveTree`, called from every place the DISPLAYED tree can move).
+  `skill.NewStore(config.FindProjectRoot())` scans `/.tachi/skills`) and permissions
+  (`AIAgent.SetPermissionTrees`). MCP is deliberately NOT on this list: its servers come from the global
+  mcp.json only (see Desktop MCP), so there is no tree to resolve for them.
 - **A session works in SEVERAL trees, and the permission policy reads ALL of them**:
   `SetPermissionTrees(primary, additional)` resolves each through `config.ProjectRootsFrom` (walk up to the
   nearest `.git`, de-duplicate in order) and unions every `<tree>/.tachi/permissions.yaml`'s deny/ask rules.

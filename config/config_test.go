@@ -258,7 +258,7 @@ func TestLoadMCPConfig_NoFiles(t *testing.T) {
 	defer SetBaseDir(oldBase)
 	SetBaseDir(t.TempDir())
 
-	servers, err := LoadMCPConfig("", t.TempDir())
+	servers, err := LoadMCPConfig("")
 	require.NoError(t, err)
 	assert.Nil(t, servers)
 }
@@ -274,8 +274,7 @@ func TestLoadMCPConfig_GlobalOnly(t *testing.T) {
 		{Name: "global-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
 	})
 
-	// workDir = "" → skip project-level
-	servers, err := LoadMCPConfig("", "")
+	servers, err := LoadMCPConfig("")
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 	assert.Equal(t, "global-svc", servers[0].Name)
@@ -283,33 +282,28 @@ func TestLoadMCPConfig_GlobalOnly(t *testing.T) {
 	assert.True(t, servers[0].IsEnabled()) // defaults applied
 }
 
-func TestLoadMCPConfig_ProjectOverridesGlobal(t *testing.T) {
+// TestLoadMCPConfig_IgnoresProjectScope pins the removed scope: a .tachi/mcp.json in a working
+// tree is not read at all, from any tree.
+func TestLoadMCPConfig_IgnoresProjectScope(t *testing.T) {
 	oldBase := BaseDir()
 	defer SetBaseDir(oldBase)
 	globalDir := t.TempDir()
 	SetBaseDir(globalDir)
 
+	tree := t.TempDir()
+	t.Chdir(tree) // the tree the process thinks it is in
+
 	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
-		{Name: "shared-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
-		{Name: "global-only", Type: MCPTransportStdio, Command: "/bin/global"},
+		{Name: "global-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
+	})
+	writeMCPJSON(t, filepath.Join(tree, ".tachi", mcpConfigFileName), []MCPServerConfig{
+		{Name: "project-svc", Type: MCPTransportStdio, Command: "/bin/project"},
 	})
 
-	projectDir := t.TempDir()
-	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpConfigFileName), []MCPServerConfig{
-		{Name: "shared-svc", Type: MCPTransportHTTP, URL: "https://project.example.com"},
-		{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"},
-	})
-
-	servers, err := LoadMCPConfig("", projectDir)
+	servers, err := LoadMCPConfig("")
 	require.NoError(t, err)
-	require.Len(t, servers, 3)
-
-	// shared-svc: project overrides global
-	assert.Equal(t, "https://project.example.com", servers[0].URL)
-	// global-only: preserved
-	assert.Equal(t, "global-only", servers[1].Name)
-	// project-only: appended
-	assert.Equal(t, "project-only", servers[2].Name)
+	require.Len(t, servers, 1)
+	assert.Equal(t, "global-svc", servers[0].Name)
 }
 
 func TestLoadMCPConfig_WithProfile(t *testing.T) {
@@ -325,7 +319,7 @@ func TestLoadMCPConfig_WithProfile(t *testing.T) {
 		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://prod.example.com/mcp"},
 	})
 
-	servers, err := LoadMCPConfig("prod", "")
+	servers, err := LoadMCPConfig("prod")
 	require.NoError(t, err)
 	require.Len(t, servers, 2)
 
@@ -352,7 +346,7 @@ func TestLoadMCPConfig_ProfileOverrideBase(t *testing.T) {
 		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://prod.example.com"},
 	})
 
-	servers, err := LoadMCPConfig("prod", "")
+	servers, err := LoadMCPConfig("prod")
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 
@@ -372,39 +366,11 @@ func TestLoadMCPConfig_ProfileNotFound(t *testing.T) {
 	})
 	// No mcp.prod.json — should NOT be an error.
 
-	servers, err := LoadMCPConfig("prod", "")
+	servers, err := LoadMCPConfig("prod")
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 	assert.Equal(t, "base-only", servers[0].Name)
 	assert.Empty(t, servers[0].Profile)
-}
-
-func TestLoadMCPConfig_ProjectProfile(t *testing.T) {
-	oldBase := BaseDir()
-	defer SetBaseDir(oldBase)
-	globalDir := t.TempDir()
-	SetBaseDir(globalDir)
-
-	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
-		{Name: "base-svc", Type: MCPTransportHTTP, URL: "https://base.example.com"},
-	})
-	writeMCPJSON(t, filepath.Join(globalDir, mcpProfileFileName("prod")), []MCPServerConfig{
-		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://global-prod.example.com"},
-	})
-
-	projectDir := t.TempDir()
-	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod")), []MCPServerConfig{
-		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://project-prod.example.com"},
-	})
-
-	servers, err := LoadMCPConfig("prod", projectDir)
-	require.NoError(t, err)
-	require.Len(t, servers, 2)
-
-	// platform-svc: project profile overrides global profile
-	assert.Equal(t, "platform-svc", servers[1].Name)
-	assert.Equal(t, "prod", servers[1].Profile)
-	assert.Equal(t, "https://project-prod.example.com", servers[1].URL)
 }
 
 func TestLoadMCPConfig_DuplicateInFile(t *testing.T) {
@@ -418,7 +384,7 @@ func TestLoadMCPConfig_DuplicateInFile(t *testing.T) {
 		{Name: "dup", Type: MCPTransportHTTP, URL: "https://b.example.com"},
 	})
 
-	_, err := LoadMCPConfig("", "")
+	_, err := LoadMCPConfig("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate mcp server name")
 }
@@ -433,7 +399,7 @@ func TestLoadMCPConfig_EmptyName(t *testing.T) {
 		{Type: MCPTransportHTTP, URL: "https://no-name.example.com"},
 	})
 
-	_, err := LoadMCPConfig("", "")
+	_, err := LoadMCPConfig("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has no name")
 }
@@ -448,7 +414,7 @@ func TestLoadMCPConfig_DefaultsApplied(t *testing.T) {
 		{Name: "svc", Type: MCPTransportHTTP, URL: "https://example.com"},
 	})
 
-	servers, err := LoadMCPConfig("", "")
+	servers, err := LoadMCPConfig("")
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 	assert.True(t, servers[0].IsEnabled()) // Enabled defaults to true
@@ -465,7 +431,7 @@ func TestLoadMCPServers_Integration(t *testing.T) {
 	})
 
 	cfg := &Config{}
-	err := cfg.LoadMCPServers("") // no project dir
+	err := cfg.LoadMCPServers()
 	require.NoError(t, err)
 	require.Len(t, cfg.MCPServers, 1)
 	assert.Equal(t, "global-svc", cfg.MCPServers[0].Name)
@@ -479,7 +445,7 @@ func TestLoadMCPServers_NoFilesEmpty(t *testing.T) {
 	// No mcp.json files at all.
 
 	cfg := &Config{}
-	err := cfg.LoadMCPServers("")
+	err := cfg.LoadMCPServers()
 	require.NoError(t, err)
 	// MCPServers stays empty when no JSON files exist
 	assert.Empty(t, cfg.MCPServers)
@@ -502,7 +468,7 @@ func TestLoadMCPServers_ReplacesExisting(t *testing.T) {
 			{Name: "stale-svc", Type: MCPTransportHTTP, URL: "https://stale.example.com"},
 		},
 	}
-	err := cfg.LoadMCPServers("")
+	err := cfg.LoadMCPServers()
 	require.NoError(t, err)
 	require.Len(t, cfg.MCPServers, 1)
 	assert.Equal(t, "json-svc", cfg.MCPServers[0].Name)
@@ -530,15 +496,7 @@ func TestListMCPProfiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(globalDir, mcpProfileFileName("prod")), []byte("{}"), 0600))
 	require.NoError(t, os.WriteFile(filepath.Join(globalDir, mcpProfileFileName("dev")), []byte("{}"), 0600))
 
-	// No workDir: only global profiles.
-	assert.Equal(t, []string{"dev", "prod"}, ListMCPProfiles(""))
-
-	// Project profiles are merged in and deduplicated.
-	projectDir := t.TempDir()
-	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("ci")), nil)
-	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod")), nil)
-
-	assert.Equal(t, []string{"ci", "dev", "prod"}, ListMCPProfiles(projectDir))
+	assert.Equal(t, []string{"dev", "prod"}, ListMCPProfiles())
 }
 
 func TestListMCPProfiles_None(t *testing.T) {
@@ -546,8 +504,7 @@ func TestListMCPProfiles_None(t *testing.T) {
 	defer SetBaseDir(oldBase)
 	SetBaseDir(t.TempDir())
 
-	assert.Empty(t, ListMCPProfiles(""))
-	assert.Empty(t, ListMCPProfiles(t.TempDir()))
+	assert.Empty(t, ListMCPProfiles())
 }
 
 func TestTokenStorageName(t *testing.T) {
@@ -1093,8 +1050,8 @@ func TestSetServerEnabledInFileRefusesOtherFilesAndBadJSON(t *testing.T) {
 }
 
 // TestSourceFileIsTheFileThatWon pins the routing rule the write-back depends on: a server's
-// SourceFile names the mcp.json it was READ from, with the winner of a name clash (profile
-// over base, project over global) being the one that answers.
+// SourceFile names the mcp.json it was READ from, with the winner of a name clash (profile over
+// base) being the one that answers.
 func TestSourceFileIsTheFileThatWon(t *testing.T) {
 	oldBase := BaseDir()
 	defer SetBaseDir(oldBase)
@@ -1103,33 +1060,25 @@ func TestSourceFileIsTheFileThatWon(t *testing.T) {
 
 	globalBase := filepath.Join(globalDir, mcpConfigFileName)
 	globalProfile := filepath.Join(globalDir, mcpProfileFileName("prod"))
-	projectDir := t.TempDir()
-	projectBase := filepath.Join(projectDir, ".tachi", mcpConfigFileName)
-	projectProfile := filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod"))
 
-	writeMCPJSON(t, globalBase, []MCPServerConfig{{Name: "base-only", Type: MCPTransportStdio, Command: "/bin/base"}})
-	writeMCPJSON(t, globalProfile, []MCPServerConfig{{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/profile"}})
-	writeMCPJSON(t, projectBase, []MCPServerConfig{{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"}})
-	writeMCPJSON(t, projectProfile, []MCPServerConfig{
-		{Name: "both", Type: MCPTransportStdio, Command: "/bin/project-profile"},
-		{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/project-profile-2"},
+	writeMCPJSON(t, globalBase, []MCPServerConfig{
+		{Name: "base-only", Type: MCPTransportStdio, Command: "/bin/base"},
+		{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/shadowed"},
 	})
-	// "base-only" is overridden by the PROJECT base file, so that is where a write must land.
-	writeMCPJSON(t, projectBase, []MCPServerConfig{
-		{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"},
-		{Name: "base-only", Type: MCPTransportStdio, Command: "/bin/project-wins"},
+	writeMCPJSON(t, globalProfile, []MCPServerConfig{
+		{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/profile"},
+		{Name: "both", Type: MCPTransportStdio, Command: "/bin/profile-only-in-profile"},
 	})
 
-	servers, err := LoadMCPConfig("prod", projectDir)
+	servers, err := LoadMCPConfig("prod")
 	require.NoError(t, err)
 	byName := map[string]string{}
 	for _, s := range servers {
 		byName[s.Name] = s.SourceFile
 	}
-	assert.Equal(t, projectBase, byName["base-only"], "the overriding file wins, not the base one")
-	assert.Equal(t, projectProfile, byName["profile-only"], "a profile file's entry belongs to the profile file")
-	assert.Equal(t, projectBase, byName["project-only"])
-	assert.Equal(t, projectProfile, byName["both"])
+	assert.Equal(t, globalBase, byName["base-only"], "a base entry belongs to the base file")
+	assert.Equal(t, globalProfile, byName["profile-only"], "the overriding file wins, not the base one")
+	assert.Equal(t, globalProfile, byName["both"])
 }
 
 // TestToggleSurvivesAProfileRoundTrip is the whole point in one test: what the panel writes
@@ -1156,7 +1105,7 @@ func TestToggleSurvivesAProfileRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(baseRaw), "profiled")
 
-	servers, err := LoadMCPConfig("prod", "")
+	servers, err := LoadMCPConfig("prod")
 	require.NoError(t, err)
 	require.Len(t, servers, 2)
 	for _, s := range servers {
@@ -1171,7 +1120,7 @@ func TestToggleSurvivesAProfileRoundTrip(t *testing.T) {
 	}
 
 	// Switching back to the default profile: that server is simply not part of it.
-	servers, err = LoadMCPConfig("", "")
+	servers, err = LoadMCPConfig("")
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 	assert.Equal(t, "plain", servers[0].Name)

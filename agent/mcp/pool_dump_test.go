@@ -44,9 +44,6 @@ const (
 	// dumpPoolHomeEnv overrides the tachi home the servers are read from, for a
 	// dump against a non-default config.
 	dumpPoolHomeEnv = "TOOL_SEARCH_HOME"
-	// dumpPoolWorkDirEnv adds a project scope to the mcp.json search
-	// (`.tachi/mcp.json` under this directory). Empty uses the global files only.
-	dumpPoolWorkDirEnv = "TOOL_SEARCH_WORKDIR"
 )
 
 // dumpedTool mirrors the corpus record. Kept in step with pkg/jev's `toolRecord`
@@ -70,18 +67,17 @@ func TestDumpDeferredPool(t *testing.T) {
 	if home := os.Getenv(dumpPoolHomeEnv); home != "" {
 		config.SetBaseDir(home)
 	}
-	workDir := os.Getenv(dumpPoolWorkDirEnv)
 	ctx := t.Context()
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if err := cfg.LoadMCPServers(workDir); err != nil {
+	if err := cfg.LoadMCPServers(); err != nil {
 		t.Fatalf("load mcp servers: %v", err)
 	}
 	if len(cfg.MCPServers) == 0 {
-		t.Fatalf("no MCP servers configured (home=%s workdir=%q)", config.BaseDir(), workDir)
+		t.Fatalf("no MCP servers configured (home=%s)", config.BaseDir())
 	}
 
 	mgr := NewManager(ctx, cfg, logger.FromContext(ctx))

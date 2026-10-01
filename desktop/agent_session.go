@@ -320,9 +320,6 @@ func (s *AgentService) LoadSession(id string, limit int) SessionPage {
 	d.mu.Lock()
 	d.activeID = id
 	d.mu.Unlock()
-	// The displayed tree decides which MCP servers this process runs (the manager is shared), so
-	// opening a session re-reads its own .tachi/mcp.json. See reloadMCPForActiveTree.
-	d.reloadMCPForActiveTree()
 
 	// Restore the session's LLM history from its own manager (per-session).
 	var msgs []llm.Message
@@ -378,8 +375,6 @@ func (s *AgentService) ActivateSession(id string) string {
 	// the frontend never heard about (this session has not changed since the window
 	// loaded) is not left as "whatever was on screen before".
 	d.reflectActive(id)
-	// Same reason as LoadSession: the displayed tree decides the shared MCP server set.
-	d.reloadMCPForActiveTree()
 	return "ok"
 }
 
@@ -575,8 +570,5 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	// The session's tree moved: a roots-aware MCP server has to be told, or it keeps confining
 	// file access to the directory the user just left.
 	d.notifyMCPRootsChanged()
-	// …and the shared server set is resolved from that same tree, so it is re-read (a no-op when
-	// the moved session is not the displayed one, or when its tree has no MCP config).
-	d.reloadMCPForActiveTree()
 	return "ok"
 }

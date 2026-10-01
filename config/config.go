@@ -1528,19 +1528,17 @@ func (c *Config) MCPEnabled() bool {
 	return len(c.MCPServers) > 0
 }
 
-// LoadMCPServers loads MCP server config from JSON files (mcp.json).
-// workDir is the project root directory (usually cwd); set to "" to skip
-// project-level files and only load global.
+// LoadMCPServers loads MCP server config from the global JSON files (mcp.json).
 //
 // If JSON files are found, their servers replace whatever is currently in
 // c.MCPServers. If no JSON files exist, c.MCPServers is left unchanged
 // (typically empty, since YAML mcp_servers is no longer supported).
 //
 // Profile origin is tracked via the Profile field on each server:
-// servers from base files (mcp.json) get empty string, servers from
-// profile files (mcp.{profile}.json) get the profile name.
-func (c *Config) LoadMCPServers(workDir string) error {
-	servers, err := LoadMCPConfig(c.ActiveMCPProfile, workDir)
+// servers from the base file (mcp.json) get empty string, servers from the
+// profile file (mcp.{profile}.json) get the profile name.
+func (c *Config) LoadMCPServers() error {
+	servers, err := LoadMCPConfig(c.ActiveMCPProfile)
 	if err != nil {
 		return err
 	}

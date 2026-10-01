@@ -54,9 +54,9 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 }
 
 // mcpProfile handles `/mcp profile [name]`. Without a name it lists the
-// available profiles (mcp.<name>.json in global + project scope) and marks
-// the active one. With a name it switches the active profile at runtime —
-// in-memory only, reverts on restart (same semantics as /model).
+// available profiles (mcp.<name>.json in ~/.tachi) and marks the active one.
+// With a name it switches the active profile at runtime — in-memory only,
+// reverts on restart (same semantics as /model).
 func (m *Model) mcpProfile(name string) tea.Cmd {
 	if m.mcpSwitching {
 		m.chatview.AddMessage(chatMessage{
@@ -66,8 +66,7 @@ func (m *Model) mcpProfile(name string) tea.Cmd {
 		return nil
 	}
 
-	workDir := config.FindProjectRoot()
-	available := config.ListMCPProfiles(workDir)
+	available := config.ListMCPProfiles()
 
 	if name == "" {
 		m.chatview.AddMessage(chatMessage{
@@ -115,7 +114,7 @@ func (m *Model) mcpProfile(name string) tea.Cmd {
 
 		// No outer deadline here — SwitchMCPProfile derives the batch
 		// budget from the servers' own per-server timeouts (mcp.json).
-		res, err := m.agent.SwitchMCPProfile(context.Background(), name, workDir)
+		res, err := m.agent.SwitchMCPProfile(context.Background(), name)
 		if err != nil {
 			m.logger.Error(context.Background(), "MCP: profile switch failed", err, "profile", name)
 			ch <- fmt.Sprintf("Failed to switch MCP profile to **%s**: %v", name, err)

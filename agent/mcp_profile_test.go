@@ -86,7 +86,7 @@ func TestSwitchMCPProfile_RefusesWhileInitializing(t *testing.T) {
 	a := newMCPTestAgent(t, cfg)
 	// Manager's InitDone is never marked → switch must refuse.
 
-	_, err := a.SwitchMCPProfile(t.Context(), "prod", "")
+	_, err := a.SwitchMCPProfile(t.Context(), "prod")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "initialization")
 }
@@ -96,7 +96,7 @@ func TestSwitchMCPProfile_RefusesWithoutManager(t *testing.T) {
 	a.Config.FullConfig = config.DefaultConfig()
 	a.Config.MCPManager = nil
 
-	_, err := a.SwitchMCPProfile(t.Context(), "prod", "")
+	_, err := a.SwitchMCPProfile(t.Context(), "prod")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not configured")
 }
@@ -115,13 +115,13 @@ func TestSwitchMCPProfile_LoadFailureRollsBack(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.ActiveMCPProfile = ""
-	require.NoError(t, cfg.LoadMCPServers(""))
+	require.NoError(t, cfg.LoadMCPServers())
 	require.Len(t, cfg.MCPServers, 1)
 
 	a := newMCPTestAgent(t, cfg)
 	a.Config.MCPManager.MarkInitDone()
 
-	_, err := a.SwitchMCPProfile(t.Context(), "bad", "")
+	_, err := a.SwitchMCPProfile(t.Context(), "bad")
 	require.Error(t, err)
 
 	// State rolled back: profile unchanged, server list untouched.
@@ -150,7 +150,7 @@ func TestSwitchMCPProfile_Reconciles(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.ActiveMCPProfile = "dev"
-	require.NoError(t, cfg.LoadMCPServers(""))
+	require.NoError(t, cfg.LoadMCPServers())
 	require.Len(t, cfg.MCPServers, 3)
 
 	a := newMCPTestAgent(t, cfg)
@@ -166,7 +166,7 @@ func TestSwitchMCPProfile_Reconciles(t *testing.T) {
 		}
 	}
 
-	res, err := a.SwitchMCPProfile(t.Context(), "empty", "")
+	res, err := a.SwitchMCPProfile(t.Context(), "empty")
 	require.NoError(t, err)
 
 	assert.Equal(t, "empty", cfg.ActiveMCPProfile)
@@ -199,7 +199,7 @@ func TestSwitchMCPProfile_DuplicateInProgress(t *testing.T) {
 	a.mcpSwitchMu.Lock()
 	defer a.mcpSwitchMu.Unlock()
 
-	_, err := a.SwitchMCPProfile(t.Context(), "prod", "")
+	_, err := a.SwitchMCPProfile(t.Context(), "prod")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already in progress")
 }
@@ -215,14 +215,14 @@ func TestSwitchMCPProfile_UnknownProfile(t *testing.T) {
 	})
 
 	cfg := config.DefaultConfig()
-	require.NoError(t, cfg.LoadMCPServers(""))
+	require.NoError(t, cfg.LoadMCPServers())
 
 	a := newMCPTestAgent(t, cfg)
 	a.Config.MCPManager.MarkInitDone()
 
 	// No mcp.ghost.json anywhere — the switch must refuse instead of
 	// "succeeding" as a silent no-op (LoadMCPConfig skips missing files).
-	_, err := a.SwitchMCPProfile(t.Context(), "ghost", "")
+	_, err := a.SwitchMCPProfile(t.Context(), "ghost")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 
@@ -262,12 +262,12 @@ func TestSwitchMCPProfile_ChangedServerConnectError(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.ActiveMCPProfile = ""
-	require.NoError(t, cfg.LoadMCPServers(""))
+	require.NoError(t, cfg.LoadMCPServers())
 
 	a := newMCPTestAgent(t, cfg)
 	a.Config.MCPManager.MarkInitDone()
 
-	res, err := a.SwitchMCPProfile(t.Context(), "move", "")
+	res, err := a.SwitchMCPProfile(t.Context(), "move")
 	require.NoError(t, err) // switch itself succeeds; per-server error reported
 
 	require.Len(t, res.Errors, 1)

@@ -143,9 +143,6 @@ func (s *AgentService) SetProjectRoots(id, primary string, additional []string) 
 	d.invalidateMemberSkills(id)
 	// Every member's workspace just moved, and the frontend holds that state by value.
 	d.notifyMCPRootsChanged()
-	// …and so did the tree the shared MCP server set is resolved from (a no-op when no member
-	// is on screen, or when the new tree has no MCP config).
-	d.reloadMCPForActiveTree()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
@@ -194,9 +191,6 @@ func (s *AgentService) DeleteProject(id string) string {
 		return fmt.Sprintf("删除项目失败：%v", err)
 	}
 	d.notifyMCPRootsChanged()
-	// The detached members' trees reverted to their own records, and one of them may be the
-	// session on screen — so the shared MCP server set is re-resolved (a no-op otherwise).
-	d.reloadMCPForActiveTree()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }

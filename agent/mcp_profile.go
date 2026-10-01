@@ -93,15 +93,15 @@ func sameMCPConfig(a, b config.MCPServerConfig) bool {
 // config.yaml and reverts on restart (same semantics as /model, /thinking).
 //
 // Returns an error (without touching any runtime state) if a switch is
-// already running, MCP is still initializing, the profile does not exist in
-// any scope, or the new profile's config fails to load.
+// already running, MCP is still initializing, the profile does not exist, or
+// the new profile's config fails to load.
 //
 // This entry point owns the CONFIG write as well as the connections, because the frontends that
 // use it (tui / acp / channel) have no app-wide config lock to write under. The desktop must NOT
 // use it: its config has one guarded writer, so it loads the profile itself and calls
 // ReconcileMCPServers (see desktop.switchMCPProfileTo) — passing the same profile name through
 // this function would write cfg.MCPServers and cfg.ActiveMCPProfile twice, unguarded.
-func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string) (MCPSwitchResult, error) {
+func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile string) (MCPSwitchResult, error) {
 	// The guards come first and in this order (refusing before anything is written), which is what
 	// the locked variant below preserves.
 	if !a.mcpSwitchMu.TryLock() {
@@ -111,7 +111,7 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 	if err := a.mcpReadyForSwitch(); err != nil {
 		return MCPSwitchResult{}, err
 	}
-	if err := ValidateMCPProfile(profile, workDir); err != nil {
+	if err := ValidateMCPProfile(profile); err != nil {
 		return MCPSwitchResult{}, err
 	}
 
@@ -123,7 +123,7 @@ func (a *AIAgent) SwitchMCPProfile(ctx context.Context, profile, workDir string)
 	// untouched on error).
 	prevProfile := cfg.ActiveMCPProfile
 	cfg.ActiveMCPProfile = profile
-	if err := cfg.LoadMCPServers(workDir); err != nil {
+	if err := cfg.LoadMCPServers(); err != nil {
 		cfg.ActiveMCPProfile = prevProfile
 		return MCPSwitchResult{}, fmt.Errorf("loading profile %q: %w", profile, err)
 	}
@@ -155,18 +155,18 @@ func (a *AIAgent) mcpReadyForSwitch() error {
 	}
 }
 
-// ValidateMCPProfile rejects a profile name that no mcp.<name>.json provides, in either scope.
+// ValidateMCPProfile rejects a profile name that no mcp.<name>.json provides.
 //
 // It exists because LoadMCPConfig SILENTLY skips a missing profile file: without this check a typo
 // would "succeed" as a no-op and stamp a nonexistent profile as active. Exported because the
 // desktop's locked path (which loads the profile itself, to keep the config write on one side of
 // its own lock) needs the same guard BEFORE it loads anything.
-func ValidateMCPProfile(profile, workDir string) error {
+func ValidateMCPProfile(profile string) error {
 	if profile == "" {
 		return nil
 	}
-	if !slices.Contains(config.ListMCPProfiles(workDir), profile) {
-		return fmt.Errorf("MCP profile %q not found (no mcp.%s.json in global or project scope)", profile, profile)
+	if !slices.Contains(config.ListMCPProfiles(), profile) {
+		return fmt.Errorf("MCP profile %q not found (no mcp.%s.json in %s)", profile, profile, config.BaseDir())
 	}
 	return nil
 }

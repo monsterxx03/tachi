@@ -536,9 +536,9 @@ func handleACPMCP(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConn
 }
 
 // handleACPMCPProfile handles `/mcp profile [name]`. Without a name it lists
-// the available profiles (mcp.<name>.json in global + project scope) and
-// marks the active one. With a name it switches the active profile at
-// runtime — in-memory only, reverts on restart.
+// the available profiles (mcp.<name>.json in ~/.tachi) and marks the active
+// one. With a name it switches the active profile at runtime — in-memory only,
+// reverts on restart.
 //
 // The switch runs synchronously in the prompt goroutine (like /commit): it
 // blocks until the reconcile finishes, bounded by the per-server connect
@@ -548,10 +548,7 @@ func handleACPMCP(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConn
 func handleACPMCPProfile(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, name string) (acp.StopReason, error) {
 	sessionID := acp.SessionId(sess.ID)
 
-	// The session's cwd scopes the project-level .tachi/mcp.<name>.json
-	// lookup (empty cwd → global scope only, same as LoadMCPServers).
-	workDir := sess.roots.Cwd()
-	available := config.ListMCPProfiles(workDir)
+	available := config.ListMCPProfiles()
 
 	if name == "" {
 		sendTextUpdate(ctx, conn, sessionID, agent.FormatMCPProfileList(available, sess.cfg.ActiveMCPProfile))
@@ -579,7 +576,7 @@ func handleACPMCPProfile(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 	// sess.agent's manager and cfg are the same objects SwitchMCPProfile
 	// mutates (both come from NewAIAgentWithConfig / t.cfg), so subsequent
 	// /mcp list calls reflect the new server set.
-	res, err := sess.agent.SwitchMCPProfile(ctx, name, workDir)
+	res, err := sess.agent.SwitchMCPProfile(ctx, name)
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to switch MCP profile to **%s**: %v", name, err))
 		return acp.StopReasonEndTurn, nil

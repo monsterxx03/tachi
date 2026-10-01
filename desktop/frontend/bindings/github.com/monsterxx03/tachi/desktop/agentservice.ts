@@ -336,10 +336,7 @@ export function ListCommands(): $CancellablePromise<$models.CommandVO[] | null> 
 
 /**
  * ListMCPProfiles returns the active MCP profile and all available profiles
- * (mcp.<name>.json in global/project scope).
- * 
- * The project scope is the ACTIVE SESSION's tree, not the process cwd — see
- * mcpProjectRoot for why that distinction is the whole point of this call.
+ * (mcp.<name>.json in ~/.tachi).
  */
 export function ListMCPProfiles(): $CancellablePromise<{ [_ in string]?: any } | null> {
     return $Call.ByID(3487132922);
@@ -750,13 +747,6 @@ export function SendMessage(sessionID: string, text: string): $CancellablePromis
  * SetMCPProfile switches the active MCP profile at runtime (reverts on restart).
  * It uses the current session's agent (whose manager is the shared one) and
  * reconciles the connected servers via SwitchMCPProfile.
- * 
- * The workDir is the active session's tree for the same reason as
- * ListMCPProfiles: a profile switch has to read the project's own
- * mcp.<profile>.json, and reading it from the process cwd found nothing.
- * SwitchMCPProfile validates the name against the very directory it is given,
- * so passing one root for the check and another for the load would let a name
- * that exists only globally pass as a project profile.
  */
 export function SetMCPProfile(name: string): $CancellablePromise<string> {
     return $Call.ByID(1957064157, name);

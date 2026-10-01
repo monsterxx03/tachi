@@ -34,7 +34,7 @@ func Bootstrap(ctx context.Context) (*BootstrapResult, error) {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
-	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+	if err := cfg.LoadMCPServers(); err != nil {
 		return nil, fmt.Errorf("failed to load MCP servers: %w", err)
 	}
 	return &BootstrapResult{Config: cfg}, nil

@@ -45,21 +45,25 @@ type mcpConfigFileEntry struct {
 	Profile string // empty for base, profile name for profile-specific files
 }
 
-// LoadMCPConfig loads MCP server configuration from JSON files.
+// LoadMCPConfig loads MCP server configuration from the global JSON files.
 //
-// Resolution order (later files override same-named servers from earlier):
-//  1. ~/.tachi/mcp.json                  (global base)
-//  2. ~/.tachi/mcp.{profile}.json        (global profile, if profile set)
-//  3. .tachi/mcp.json                    (project base, if workDir set)
-//  4. .tachi/mcp.{profile}.json          (project profile, if profile set)
+// Resolution order (the profile file overrides same-named servers from the base):
+//  1. ~/.tachi/mcp.json                  (base)
+//  2. ~/.tachi/mcp.{profile}.json        (profile, if profile set)
 //
-// Profile JSON files that don't exist are silently skipped.
+// There is no project scope: <tree>/.tachi/mcp.json is NOT read. One process — the
+// desktop — serves several sessions in different trees over ONE shared connection
+// layer (one pool, one connection per server), so "which tree am I in" cannot decide
+// a global set: the old project scope could only ever be resolved by picking one tree
+// to win. A server set belongs to the machine.
+//
+// A profile JSON file that doesn't exist is silently skipped.
 // If no JSON files exist at all, returns nil, nil.
 //
-// Every server gets its Profile field stamped: servers from base files get
-// empty string, servers from profile files get the activeProfile name.
-func LoadMCPConfig(activeProfile string, workDir string) ([]MCPServerConfig, error) {
-	entries := mcpConfigEntries(workDir, activeProfile)
+// Every server gets its Profile field stamped: servers from the base file get
+// empty string, servers from the profile file get the activeProfile name.
+func LoadMCPConfig(activeProfile string) ([]MCPServerConfig, error) {
+	entries := mcpConfigEntries(activeProfile)
 
 	var merged []mcpServerWithOrigin
 	anyLoaded := false
@@ -89,44 +93,19 @@ func LoadMCPConfig(activeProfile string, workDir string) ([]MCPServerConfig, err
 	return finalizeMCPServers(merged)
 }
 
-// mcpConfigEntries returns the ordered list of MCP JSON config files.
-func mcpConfigEntries(workDir, profile string) []mcpConfigFileEntry {
-	var entries []mcpConfigFileEntry
-
-	globalDir := BaseDir()
-
-	// 1. Global base
-	entries = append(entries, mcpConfigFileEntry{
-		Path:    filepath.Join(globalDir, mcpConfigFileName),
-		Profile: "",
-	})
-
-	// 2. Global profile
+// mcpConfigEntries returns the ordered list of MCP JSON config files: the global
+// base, then the global profile file when a profile is named.
+func mcpConfigEntries(profile string) []mcpConfigFileEntry {
+	dir := BaseDir()
+	entries := []mcpConfigFileEntry{
+		{Path: filepath.Join(dir, mcpConfigFileName), Profile: ""},
+	}
 	if profile != "" {
 		entries = append(entries, mcpConfigFileEntry{
-			Path:    filepath.Join(globalDir, mcpProfileFileName(profile)),
+			Path:    filepath.Join(dir, mcpProfileFileName(profile)),
 			Profile: profile,
 		})
 	}
-
-	if workDir == "" {
-		return entries
-	}
-
-	// 3. Project base
-	entries = append(entries, mcpConfigFileEntry{
-		Path:    filepath.Join(workDir, ".tachi", mcpConfigFileName),
-		Profile: "",
-	})
-
-	// 4. Project profile
-	if profile != "" {
-		entries = append(entries, mcpConfigFileEntry{
-			Path:    filepath.Join(workDir, ".tachi", mcpProfileFileName(profile)),
-			Profile: profile,
-		})
-	}
-
 	return entries
 }
 
@@ -139,32 +118,24 @@ func mcpProfileFileName(profile string) string {
 // file (mcp.json — the "*" requires at least one character).
 const mcpProfileGlob = "mcp.*.json"
 
-// ListMCPProfiles returns the names of available MCP profiles: the <name>
-// part of every mcp.<name>.json found in the global base dir and, when
-// workDir is non-empty, the project's .tachi dir. The result is deduplicated
-// (a profile may exist in both scopes) and sorted. Returns nil when no
+// ListMCPProfiles returns the names of available MCP profiles: the <name> part
+// of every mcp.<name>.json in the global base dir, sorted. Returns nil when no
 // profile files exist.
-func ListMCPProfiles(workDir string) []string {
-	dirs := []string{BaseDir()}
-	if workDir != "" {
-		dirs = append(dirs, filepath.Join(workDir, ".tachi"))
+func ListMCPProfiles() []string {
+	matches, err := filepath.Glob(filepath.Join(BaseDir(), mcpProfileGlob))
+	if err != nil {
+		return nil // malformed pattern — impossible with the constant above
 	}
 
 	seen := container.NewSet[string]()
-	var names []string
-	for _, dir := range dirs {
-		matches, err := filepath.Glob(filepath.Join(dir, mcpProfileGlob))
-		if err != nil {
-			continue // malformed pattern — impossible with the constant above
+	names := make([]string, 0, len(matches))
+	for _, path := range matches {
+		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "mcp."), ".json")
+		if name == "" || seen.Has(name) {
+			continue
 		}
-		for _, path := range matches {
-			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "mcp."), ".json")
-			if name == "" || seen.Has(name) {
-				continue
-			}
-			seen.Add(name)
-			names = append(names, name)
-		}
+		seen.Add(name)
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names

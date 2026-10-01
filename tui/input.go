@@ -586,7 +586,7 @@ func (i *InputArea) appendMCPCompletions(val string) {
 	case trimmed == "profile" || strings.HasPrefix(trimmed, "profile "):
 		// Typing the profile name → suggest available profiles.
 		partial := strings.TrimSpace(strings.TrimPrefix(trimmed, "profile"))
-		for _, p := range config.ListMCPProfiles(config.FindProjectRoot()) {
+		for _, p := range config.ListMCPProfiles() {
 			if strings.HasPrefix(p, partial) {
 				i.completions = append(i.completions, Command{
 					Name:        "/mcp profile " + p,

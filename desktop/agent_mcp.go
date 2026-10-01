@@ -13,7 +13,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // MCPToolVO describes one tool under an MCP server for the status-bar panel.
@@ -277,27 +276,9 @@ func (s *AgentService) SetMCPToolEnabled(name string, enabled bool) string {
 	return "ok"
 }
 
-// mcpProjectRoot returns the project directory whose mcp.json /
-// mcp.<profile>.json apply to the ACTIVE session, or "" when there is none.
-//
-// MCP's project scope is per TREE (config.LoadMCPConfig reads
-// <workDir>/.tachi/mcp.json), but this process hosts several sessions in
-// different trees, so the answer has to come from the session rather than from
-// config.FindProjectRoot — that one is the PROCESS cwd, which for a
-// Finder-launched app is "/", i.e. /.tachi/mcp.json: a file that never exists.
-// The effect was silent: project-scoped servers and profiles simply never
-// appeared, with the global scope still working, so nothing looked broken.
-//
-// Resolved through sessionRoots (the same exit the prompt, the @-file search,
-// the checkpoint roots and the skill store use) so no two of them can describe
-// different trees.
-func (d *desktopApp) mcpProjectRoot() string {
-	return d.sessionPrimaryDir(d.runManager(d.currentID()))
-}
-
-// switchMCPProfileTo switches the shared MCP manager to the named profile for the ACTIVE session's
-// tree: it loads that profile's config, reconciles the connections, and only THEN writes the two
-// config fields — under cfgMu, and nowhere else.
+// switchMCPProfileTo switches the shared MCP manager to the named profile: it loads that
+// profile's config, reconciles the connections, and only THEN writes the two config fields —
+// under cfgMu, and nowhere else.
 //
 // It is the desktop's own path for what AIAgent.SwitchMCPProfile does for the frontends that have
 // no app-wide config lock (tui / acp / channel). The split matters twice over:
@@ -320,13 +301,12 @@ func (d *desktopApp) switchMCPProfileTo(profile string) error {
 	if a == nil {
 		return errors.New(note)
 	}
-	tree := d.mcpProjectRoot()
-	if err := agent.ValidateMCPProfile(profile, tree); err != nil {
+	if err := agent.ValidateMCPProfile(profile); err != nil {
 		return err
 	}
 	// The load is a pure read of the JSON files: it does not touch the config, so a profile that
 	// cannot even be read leaves everything as it was.
-	next, err := config.LoadMCPConfig(profile, tree)
+	next, err := config.LoadMCPConfig(profile)
 	if err != nil {
 		return fmt.Errorf("loading profile %q: %w", profile, err)
 	}
@@ -344,62 +324,8 @@ func (d *desktopApp) switchMCPProfileTo(profile string) error {
 	return nil
 }
 
-// reloadMCPForActiveTree reconciles the shared MCP server set with the ACTIVE session's tree.
-//
-// The query side has always resolved the tree per session (mcpProjectRoot): the panel, the
-// profile dropdown and every mcp.json lookup ask which tree the displayed session is in. The LOAD
-// side could not — bootstrap calls cfg.LoadMCPServers(process root) before any session exists, and
-// for a Finder-launched app that root is "/", so a project's .tachi/mcp.json was never read and
-// the servers the session should have were missing from the very list the panel showed.
-//
-// It reuses SwitchMCPProfile: that loads mcp.<profile>.json over the base files for the given tree
-// and DIFFS the result against what is connected, so servers that did not change keep their live
-// connection — moving between two sessions with the same MCP config costs no reconnect. It is
-// idempotent for the same reason (an unchanged tree diffs to nothing), which is what makes it
-// affordable to call from every place the displayed tree can move: session activation, a folder
-// change, a project's roots, and the end of the bootstrap connect.
-//
-// The tree that WINS is the displayed session's, exactly like the query side: one shared manager
-// holds one server set, so a background session in another tree does not keep its own project
-// servers while a different session is on screen. Splitting that per project is
-// docs/2026-09-14-desktop-project-design.md §P4's job.
-//
-// Best-effort: a failure is logged, not reported. The gesture that triggered it (opening a
-// session, moving a folder, finishing the bootstrap connect) has already succeeded, and the
-// panel's own switch path is where the user is told about the errors they can act on.
-func (d *desktopApp) reloadMCPForActiveTree() {
-	if d.mcp == nil {
-		return
-	}
-	cfg := d.config()
-	if cfg == nil {
-		return
-	}
-	if _, note := d.appAgentForMCP(); note != "" {
-		return // nothing built yet — the next activation (or the bootstrap itself) reconciles
-	}
-	if err := d.switchMCPProfileTo(cfg.ActiveMCPProfile); err != nil {
-		logger.New("desktop").Info(context.Background(),
-			"MCP: could not load the active tree's servers", "err", err)
-	}
-}
-
-// runManager returns a session's own manager, or nil when the session has no
-// run yet. Read-only accessors like the MCP panel need the manager to resolve
-// a tree; turns and agent construction already hold theirs.
-func (d *desktopApp) runManager(id string) *session.Manager {
-	r := d.runOf(id)
-	if r == nil {
-		return nil
-	}
-	return r.sm
-}
-
 // ListMCPProfiles returns the active MCP profile and all available profiles
-// (mcp.<name>.json in global/project scope).
-//
-// The project scope is the ACTIVE SESSION's tree, not the process cwd — see
-// mcpProjectRoot for why that distinction is the whole point of this call.
+// (mcp.<name>.json in ~/.tachi).
 func (s *AgentService) ListMCPProfiles() map[string]any {
 	d := s.desk
 	cfg := d.config()
@@ -408,20 +334,13 @@ func (s *AgentService) ListMCPProfiles() map[string]any {
 	}
 	return map[string]any{
 		"active":    cfg.ActiveMCPProfile,
-		"available": config.ListMCPProfiles(d.mcpProjectRoot()),
+		"available": config.ListMCPProfiles(),
 	}
 }
 
 // SetMCPProfile switches the active MCP profile at runtime (reverts on restart).
 // It uses the current session's agent (whose manager is the shared one) and
 // reconciles the connected servers via SwitchMCPProfile.
-//
-// The workDir is the active session's tree for the same reason as
-// ListMCPProfiles: a profile switch has to read the project's own
-// mcp.<profile>.json, and reading it from the process cwd found nothing.
-// SwitchMCPProfile validates the name against the very directory it is given,
-// so passing one root for the check and another for the load would let a name
-// that exists only globally pass as a project profile.
 func (s *AgentService) SetMCPProfile(name string) string {
 	d := s.desk
 	if d.config() == nil || d.mcp == nil {
