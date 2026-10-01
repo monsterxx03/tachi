@@ -12,8 +12,12 @@ build:
 	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .
 
 # Build the frontend into web/frontend/dist so it's embedded into the Go binary.
+# `npm ci`, not `install`: it installs strictly from package-lock.json, so it can
+# never rewrite a tracked file. `install` does — under node 20's npm it drops the
+# `libc` fields a newer npm wrote into the lock, dirtying the tree. CI's
+# .github/actions/web-build does the same.
 web-build:
-	$(NPM) install && $(NPM) run build
+	$(NPM) ci && $(NPM) run build
 
 # The module embeds web/frontend/dist (web/frontend/embed.go), so any Go
 # compile needs it to exist first. Check instead of unconditionally building:
