@@ -177,6 +177,15 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		}
 		sb.browserFetch = true
 	}
+	// A plain mcp.json for the scenarios that drive the settings page's MCP editor. Written here
+	// rather than in sandbox.go because it is the scenario's own fixture text, and recorded on the
+	// sandbox so the Go half can compare against what was seeded.
+	if sc.mcpServersJSON != "" {
+		sb.mcpConfig = []byte(sc.mcpServersJSON)
+		if err := os.WriteFile(filepath.Join(sb.home, ".tachi", "mcp.json"), sb.mcpConfig, 0o600); err != nil {
+			return report(sc.name, nil, []Line{{Label: "mcp.json", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+	}
 	if sc.voiceText != "" {
 		sb.voiceText = sc.voiceText
 	}

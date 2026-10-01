@@ -3,6 +3,7 @@ import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { SettingFieldVO, SettingListVO, SettingsPreviewVO, SettingsSchemaVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { Caret, EyeIcon } from './components'
 import { DiffLines } from './diff'
+import { MCPServersEditor } from './mcpeditor'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
 //
@@ -818,6 +819,13 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                 )
             })
           )}
+
+          {/* The MCP servers editor: the one block on this page that is not a config leaf, drawn
+              in the group the BACKEND names (schema.mcpServerEditor) rather than matched here by a
+              name — which group a thing belongs to is a claim about the config, and this file
+              knows no keys (see the file's opening comment). It writes mcp.json, not config.yaml,
+              so it stays out of the batch below. */}
+          {!loadError && schema && shown === schema.mcpServerEditor ? <MCPServersEditor /> : null}
         </div>
 
         {/* The preview: what 保存 would write, as a diff of the generated config.yaml. It sits

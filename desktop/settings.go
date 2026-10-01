@@ -793,6 +793,14 @@ type SettingsSchemaVO struct {
 	// no fields: without this the page could not offer the first item of a list, which is exactly
 	// when someone wants it.
 	Lists []SettingListVO `json:"lists"`
+	// MCPServerEditor is the CATEGORY the page draws the MCP servers editor in.
+	//
+	// That editor is not a row: MCP servers live in mcp.json, not config.yaml (`MCPServers` is
+	// `yaml:"-"`), so it has no leaf to hang off and does not go through SaveSettings — it writes
+	// its own file the moment the user saves an entry. Which GROUP it belongs to is still a claim
+	// about the group, and the groups are declared here (settingsCategoryOrder), so the page is
+	// told rather than left to match on a name.
+	MCPServerEditor string `json:"mcpServerEditor"`
 }
 
 // ListEdits is config's own vocabulary for the structural half of a save, aliased here so this file
@@ -922,9 +930,10 @@ func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 	// A fresh slice rather than settingsCategoryOrder itself: the binding serializes this, and
 	// a caller that appended to it would be mutating the package's own list.
 	return &SettingsSchemaVO{
-		Categories: append([]string(nil), settingsCategoryOrder...),
-		Fields:     fields,
-		Lists:      settingLists(cfg),
+		Categories:      append([]string(nil), settingsCategoryOrder...),
+		Fields:          fields,
+		Lists:           settingLists(cfg),
+		MCPServerEditor: catMCP,
 	}
 }
 

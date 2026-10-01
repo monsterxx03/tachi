@@ -210,6 +210,15 @@ type desktopApp struct {
 	// snapshot taken around the first one's writes.
 	settingsMu sync.Mutex
 
+	// mcpFileMu serializes every read-modify-write of an mcp.json. Three paths write that file —
+	// the settings editor (upsert/delete an entry), the panel's toggle (one "enabled" flag) and a
+	// profile switch through the editor's own re-read — and each of them reads the whole file,
+	// changes it and writes it back. Atomic writes keep the FILE intact without this, but not the
+	// CHANGE: two of them landing together would let the second one's read predate the first one's
+	// write, and that edit would disappear with nothing to report it. It is NOT cfgMu: the lock
+	// covers file I/O, and callers below take cfgMu only for the config swap that follows.
+	mcpFileMu sync.Mutex
+
 	// pushing, deferredThisSave and savingUpdates belong to the saving goroutine only (settingsMu
 	// serializes saves): `pushing` marks the push step, which is what makes the fan-outs queue a
 	// push for a session that is mid-turn instead of applying it; deferredThisSave collects those

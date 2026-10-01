@@ -1035,7 +1035,7 @@ func TestSetServerEnabledInFileRefusesOtherFilesAndBadJSON(t *testing.T) {
 	// A name this file does not define: a normal outcome (it may live in another file), and
 	// reported as such rather than as a parse error.
 	err := SetServerEnabledInFile(path, "elsewhere", false)
-	require.ErrorIs(t, err, errServerNotInFile)
+	require.ErrorIs(t, err, ErrServerNotInFile)
 	after, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	assert.Contains(t, string(after), `"enabled": true`, "a refused write must not touch the file")

@@ -6,6 +6,120 @@
 import * as time$0 from "../../../../time/models.js";
 
 /**
+ * Duration is a time.Duration that marshals/unmarshals as a human-readable
+ * string (e.g. "10s", "1m", "500ms") in JSON and YAML. This allows config
+ * files to use natural duration strings instead of raw nanosecond integers.
+ */
+export type Duration = any;
+
+/**
+ * MCPOAuthConfig holds OAuth2 configuration for HTTP MCP servers.
+ * If ClientID is empty, dynamic client registration (DCR) is attempted
+ * automatically on the first OAuth flow.
+ */
+export interface MCPOAuthConfig {
+    "client_id"?: string;
+    "client_secret"?: string;
+    "client_uri"?: string;
+    "scopes"?: string[] | null;
+
+    /**
+     * Override auto-discovery
+     */
+    "auth_server_metadata_url"?: string;
+
+    /**
+     * OAuth callback host
+     */
+    "callback_host"?: string;
+
+    /**
+     * OAuth callback port (default: auto)
+     */
+    "callback_port"?: number;
+}
+
+/**
+ * MCPServerConfig represents a single MCP server connection configuration.
+ * Loaded from JSON files (mcp.json).
+ */
+export interface MCPServerConfig {
+    "name": string;
+
+    /**
+     * "stdio" or "http"
+     */
+    "type": MCPTransportType;
+    "command"?: string;
+    "args"?: string[] | null;
+    "env"?: { [_ in string]?: string } | null;
+
+    /**
+     * For http transport
+     */
+    "url"?: string;
+
+    /**
+     * For http transport
+     */
+    "headers"?: { [_ in string]?: string } | null;
+
+    /**
+     * Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
+     */
+    "proxy"?: string;
+
+    /**
+     * Connect timeout (default: 10s)
+     */
+    "timeout"?: Duration;
+
+    /**
+     * Whether to load this server
+     */
+    "enabled"?: boolean | null;
+
+    /**
+     * OAuth2 configuration (http transport only)
+     */
+    "oauth"?: MCPOAuthConfig | null;
+
+    /**
+     * ToolSearch-specific options
+     * Tool names to always load (skip ToolSearch)
+     */
+    "always_load_tools"?: string[] | null;
+
+    /**
+     * Override search hints: tool_name -> hint
+     */
+    "search_hints"?: { [_ in string]?: string } | null;
+
+    /**
+     * If set, only these tools are loaded from the server; all others are ignored
+     */
+    "whitelist"?: string[] | null;
+
+    /**
+     * Tools to exclude. When both whitelist and blacklist are configured, blacklist filters from the whitelisted set (whitelist ∩ ¬blacklist)
+     */
+    "blacklist"?: string[] | null;
+}
+
+/**
+ * MCPTransportType represents the type of MCP transport protocol
+ */
+export enum MCPTransportType {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    MCPTransportStdio = "stdio",
+    MCPTransportHTTP = "http",
+};
+
+/**
  * ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。
  * 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
  */

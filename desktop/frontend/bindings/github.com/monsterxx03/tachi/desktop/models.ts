@@ -6,6 +6,9 @@
 import * as tools$0 from "../agent/tools/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as config$0 from "../config/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as linediff$0 from "../pkg/linediff/models.js";
 
 /**
@@ -310,6 +313,28 @@ export interface FindingVO {
     "category"?: string;
     "text": string;
     "suggestion"?: string;
+}
+
+/**
+ * MCPServerEntryVO is one server as the editor handles it: the RAW contents of the file
+ * (config.LoadMCPConfigRaw — an absent field stays absent, so pressing save on an entry the user
+ * only looked at does not write this process's defaults into a file he wrote by hand) plus the
+ * profile whose file defines it.
+ */
+export interface MCPServerEntryVO {
+    "server": config$0.MCPServerConfig;
+
+    /**
+     * Profile is "" for the base mcp.json, else the profile whose mcp.<profile>.json holds this
+     * entry. An edit goes back to that same file.
+     */
+    "profile"?: string;
+
+    /**
+     * PreviousName is write-only, and only for a rename: the name this entry had before the edit,
+     * so the old one can be removed rather than left behind as a SECOND definition of one server.
+     */
+    "previousName"?: string;
 }
 
 /**
@@ -1224,6 +1249,17 @@ export interface SettingsSchemaVO {
      * when someone wants it.
      */
     "lists": SettingListVO[] | null;
+
+    /**
+     * MCPServerEditor is the CATEGORY the page draws the MCP servers editor in.
+     * 
+     * That editor is not a row: MCP servers live in mcp.json, not config.yaml (`MCPServers` is
+     * `yaml:"-"`), so it has no leaf to hang off and does not go through SaveSettings — it writes
+     * its own file the moment the user saves an entry. Which GROUP it belongs to is still a claim
+     * about the group, and the groups are declared here (settingsCategoryOrder), so the page is
+     * told rather than left to match on a name.
+     */
+    "mcpServerEditor": string;
 }
 
 /**

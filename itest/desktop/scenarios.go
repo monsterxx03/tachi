@@ -64,6 +64,13 @@ type scenario struct {
 	// The scenario's `after` reads the fixture (`c.mcp`) for what the client actually did:
 	// registered for a client_id, asked for PKCE, exchanged the code for a token.
 	mcpOAuth bool
+	// mcpServersJSON is the sandbox's mcp.json written VERBATIM, for the scenarios that drive the
+	// settings page's MCP server editor. Empty means the sandbox has no mcp.json at all — which is
+	// a different scenario (no shared manager, so nothing to install into), not the default shape.
+	//
+	// Every server in it must be DISABLED (`"enabled": false`): a smoke run happens on a real
+	// machine, and an enabled stdio server is a process the app really spawns.
+	mcpServersJSON string
 	// voiceText stands in for the microphone: the app is told to answer a finished recording
 	// with this text instead of opening the mic and running the recognizer (TACHI_DEMO_VOICE_TEXT,
 	// read in desktop/voice.go). It exists for the same reason browserFetch does — a run must not
@@ -2968,8 +2975,103 @@ permissions:
 					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", bound))
 			},
 		},
+		//
+		//
+		// mcp-edit: 设置页里的 MCP server 编辑器 —— 这一页唯一一个**不是 config.yaml 叶子**的区块。
+		//
+		// 行为上和页面其余部分**不一样**，正是这一点值得端到端跑：它不经过 SaveSettings，每条自己的
+		// 「保存」直接写 mcp.json 并立即装进运行中的进程。单测能钉住「写文件 + 装 config」，看不到的是
+		// **声明有没有送到界面**：区块画没画在 MCP 分组里、列表是不是文件里那几条、来源标签写的是哪个
+		// 文件、以及那句「这一块立即生效」在不在。
+		//
+		// 判据按 settings 那条的规矩分两边：driver 只看界面（新条目出现在列表里、来源标签对），Go 侧
+		// 只读磁盘（fixture 那条逐字节没动、新条目在、这份文件是装载器认得的形状）。
+		{
+			name: "mcp-edit",
+			files: map[string]string{
+				"README.md": "# smoke\n\nmcp-edit scenario's working directory\n",
+			},
+			// DISABLED on purpose: a smoke run happens on a real machine, and an enabled stdio
+			// server is a process the app really spawns (`/bin/echo` would not hurt, but the rule
+			// is the rule). The editor still has a shared manager to install into, because the
+			// config was non-empty at startup — which is the branch worth exercising.
+			mcpServersJSON: mcpEditSeed,
+			after: func(c *checkCtx) {
+				c.check("设置页不该惊动任何会话：mock 没有收到请求", len(c.requests) == 0, requestCount(c.requests))
+
+				raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "mcp.json"))
+				c.check("mcp.json 可读", err == nil, errText(err))
+				if err != nil {
+					return
+				}
+				// 原有那条**逐字节没动**：编辑器只重写它改的那一条，文件其余部分是用户写的。
+				c.check("fixture 里那条 server 逐字节没动", strings.Contains(string(raw), mcpEditSeedEntry),
+					string(raw))
+				// 而且写出来的必须是**装载器读得回来的**形状（不是"能被这个包恰好吃下"）。
+				var parsed struct {
+					Servers []config.MCPServerConfig `json:"servers"`
+				}
+				if err := json.Unmarshal(raw, &parsed); err != nil {
+					c.check("mcp.json 能被解析成 config 的 server 列表", false, errText(err))
+					return
+				}
+				c.check("mcp.json 能被解析成 config 的 server 列表", true, "")
+				byName := map[string]config.MCPServerConfig{}
+				for _, s := range parsed.Servers {
+					byName[s.Name] = s
+				}
+				names := make([]string, 0, len(byName))
+				for name := range byName {
+					names = append(names, name)
+				}
+				slices.Sort(names)
+				c.check("原有那条还在（没有被新条目顶掉）", len(byName) == 2, fileList(names))
+				added, ok := byName["smoke-added"]
+				c.check("界面上加的那条写进了文件", ok, fileList(names))
+				if ok {
+					c.check("带上了界面上填的 command", added.Command == "/bin/true", added.Command)
+					// 界面上取消勾选必须落成 `enabled: false` —— 这个键**不出现**才是启用，所以「不启用」
+					// 只有写下来才表达得出来（和面板开关写回文件的道理一样）。
+					enabled := "<nil>（没写下来 = 启用）"
+					if added.Enabled != nil {
+						enabled = strconv.FormatBool(*added.Enabled)
+					}
+					c.check("界面上取消勾选落成了 enabled: false", added.Enabled != nil && !*added.Enabled, enabled)
+				}
+			},
+		},
 	}
 }
+
+// mcpEditSeed is the mcp.json the mcp-edit scenario starts from. The server is DISABLED: a smoke
+// run happens on a real machine, and an enabled stdio server is a process the app really spawns.
+const mcpEditSeed = `{
+  "servers": [
+    {
+      "name": "echo-fixture",
+      "type": "stdio",
+      "command": "/bin/echo",
+      "args": ["smoke"],
+      "enabled": false
+    }
+  ]
+}
+`
+
+// mcpEditSeedEntry is the part of that file an unrelated edit must leave alone, byte for byte —
+// and a substring of mcpEditSeed by construction, so reformatting the fixture above makes the
+// assertion below fail loudly instead of passing against a stale copy.
+//
+// It is the ENTRY rather than the whole file on purpose: appending a server writes a comma and a
+// new entry into the array, so "the file is unchanged" is false by definition. What the file-format
+// promise actually says is that the bytes of the entries nobody named come back untouched.
+const mcpEditSeedEntry = `    {
+      "name": "echo-fixture",
+      "type": "stdio",
+      "command": "/bin/echo",
+      "args": ["smoke"],
+      "enabled": false
+    }`
 
 // pasteImageB64 is the 1x1 PNG the paste-image driver pastes, as the webview sends it (a data URL's
 // payload). It is duplicated in drivers/paste-image.js — a driver cannot read a Go constant — so the

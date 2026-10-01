@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -216,11 +218,18 @@ func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 // A server with no SourceFile (a config assembled in code rather than read from disk) has no
 // file to disagree with, so the change simply stays runtime-only — the behavior every caller
 // had before this existed.
+//
+// mcpFileMu is held across the write because this is a read-modify-write of the whole file, and
+// the settings editor does the same to the same file: two of them landing together would let the
+// second one's read predate the first one's write (see the field's comment).
 func (d *desktopApp) persistMCPServerEnabled(srv *config.MCPServerConfig, enabled bool) string {
 	if srv.SourceFile == "" {
 		return ""
 	}
-	if err := config.SetServerEnabledInFile(srv.SourceFile, srv.Name, enabled); err != nil {
+	d.mcpFileMu.Lock()
+	err := config.SetServerEnabledInFile(srv.SourceFile, srv.Name, enabled)
+	d.mcpFileMu.Unlock()
+	if err != nil {
 		return fmt.Sprintf("没能写回 %s：%v", srv.SourceFile, err)
 	}
 	// Keep the in-memory copy in step with the file, so the panel and the next profile
@@ -293,8 +302,7 @@ func (s *AgentService) SetMCPToolEnabled(name string, enabled bool) string {
 // operation (one connection serves every session) and the user asked for it now — see
 // deferred_push.go for the split.
 func (d *desktopApp) switchMCPProfileTo(profile string) error {
-	cfg := d.config()
-	if cfg == nil {
+	if d.config() == nil {
 		return errors.New("no config")
 	}
 	a, note := d.appAgentForMCP()
@@ -304,24 +312,41 @@ func (d *desktopApp) switchMCPProfileTo(profile string) error {
 	if err := agent.ValidateMCPProfile(profile); err != nil {
 		return err
 	}
-	// The load is a pure read of the JSON files: it does not touch the config, so a profile that
+	_, err := d.installMCPConfig(a, profile)
+	return err
+}
+
+// installMCPConfig loads profile's files, reconciles the live connections with what they say, and
+// only THEN writes the two config fields — under cfgMu, and nowhere else.
+//
+// It is the one path that turns "what the files hold" into "what this process runs", shared by the
+// profile switch and by the settings editor's save/delete (both of which change a FILE and owe the
+// running process the same follow-up). Reconciling is diff-based, so calling it when nothing moved
+// costs nothing and changes nothing.
+func (d *desktopApp) installMCPConfig(a *agent.AIAgent, profile string) (agent.MCPSwitchResult, error) {
+	cfg := d.config()
+	if cfg == nil {
+		return agent.MCPSwitchResult{}, errors.New("no config")
+	}
+	// The load is a pure read of the JSON files: it does not touch the config, so a file that
 	// cannot even be read leaves everything as it was.
 	next, err := config.LoadMCPConfig(profile)
 	if err != nil {
-		return fmt.Errorf("loading profile %q: %w", profile, err)
+		return agent.MCPSwitchResult{}, fmt.Errorf("loading profile %q: %w", profile, err)
 	}
 	result, final, err := a.ReconcileMCPServers(context.Background(), profile, cfg.MCPServers, next)
 	if err != nil {
-		return err
+		return agent.MCPSwitchResult{}, err
 	}
 	d.withConfig(func(c *config.Config) {
 		c.ActiveMCPProfile = profile
 		c.MCPServers = final
 	})
-	logger.New("desktop").Info(context.Background(), "MCP: profile switched",
-		"profile", profile, "added", len(result.Added), "removed", len(result.Removed),
-		"reconnected", len(result.Reconned), "errors", len(result.Errors))
-	return nil
+	logger.New("desktop").Info(context.Background(), "MCP: config installed",
+		"profile", profile, "kept", len(result.Kept), "added", len(result.Added),
+		"removed", len(result.Removed), "reconnected", len(result.Reconned),
+		"errors", len(result.Errors))
+	return result, nil
 }
 
 // ListMCPProfiles returns the active MCP profile and all available profiles
@@ -357,6 +382,195 @@ func (s *AgentService) SetMCPProfile(name string) string {
 		return err.Error()
 	}
 	return "ok"
+}
+
+// --- the settings editor's view of mcp.json --------------------------------
+//
+// The status-bar PANEL is a shortcut for the session's own concerns: toggle a server, authorize
+// it, load one of its tools. The settings EDITOR is where the FILE is authored — add a server,
+// change its command, drop it. They overlap on purpose; what they cannot overlap on is the write,
+// which is why every edit here goes through mcpFileMu and is followed by the same install the
+// profile switch runs.
+
+// MCPServerEntryVO is one server as the editor handles it: the RAW contents of the file
+// (config.LoadMCPConfigRaw — an absent field stays absent, so pressing save on an entry the user
+// only looked at does not write this process's defaults into a file he wrote by hand) plus the
+// profile whose file defines it.
+type MCPServerEntryVO struct {
+	Server config.MCPServerConfig `json:"server"`
+	// Profile is "" for the base mcp.json, else the profile whose mcp.<profile>.json holds this
+	// entry. An edit goes back to that same file.
+	Profile string `json:"profile,omitempty"`
+	// PreviousName is write-only, and only for a rename: the name this entry had before the edit,
+	// so the old one can be removed rather than left behind as a SECOND definition of one server.
+	PreviousName string `json:"previousName,omitempty"`
+}
+
+// ListMCPServerEntries returns every server the editor can edit: the merged view of the base file
+// and the ACTIVE profile's file.
+//
+// The merged view is the only set a save can reach (it is what the loader builds, and what the
+// next launch reads), so an entry the user cannot see here is not one he can edit — which is why
+// nothing lists the inactive profiles' files.
+func (s *AgentService) ListMCPServerEntries() []MCPServerEntryVO {
+	d := s.desk
+	cfg := d.config()
+	if cfg == nil {
+		return nil
+	}
+	servers, err := config.LoadMCPConfigRaw(cfg.ActiveMCPProfile)
+	if err != nil {
+		// A file this process cannot parse is exactly what the editor is for, but a list is the
+		// wrong place to report it: the settings page has its own error surface, and an empty
+		// list plus a log line keeps the rest of the page usable.
+		logger.New("desktop").Error(context.Background(), "MCP: reading config files failed", err)
+		return nil
+	}
+	out := make([]MCPServerEntryVO, 0, len(servers))
+	for _, srv := range servers {
+		out = append(out, MCPServerEntryVO{Server: srv, Profile: srv.Profile})
+	}
+	return out
+}
+
+// SaveMCPServerEntry writes entry into the file its Profile names ("" = the base mcp.json) and
+// installs the result into the running process. It returns "" on success, or what to tell the
+// user.
+//
+// The write is the one step that cannot be skipped and cannot be rolled back by what follows: a
+// server that fails to CONNECT is reported, not undone — the file the user asked for is on disk
+// either way, and undoing it would have to guess whether he meant the file or the connection.
+func (s *AgentService) SaveMCPServerEntry(entry MCPServerEntryVO) string {
+	d := s.desk
+	if d.config() == nil {
+		return "no config"
+	}
+	if err := validateMCPEntry(entry.Server); err != nil {
+		return err.Error()
+	}
+	if err := validateMCPEntryProfile(entry.Profile); err != nil {
+		return err.Error()
+	}
+	path := config.MCPConfigPath(entry.Profile)
+
+	d.mcpFileMu.Lock()
+	err := config.UpsertServerInFile(path, entry.Server)
+	if err == nil && entry.PreviousName != "" && entry.PreviousName != entry.Server.Name {
+		err = config.DeleteServerInFile(path, entry.PreviousName)
+	}
+	d.mcpFileMu.Unlock()
+	if err != nil {
+		return fmt.Sprintf("写入 %s 失败：%v", filepath.Base(path), err)
+	}
+	return withNote("ok", d.applySavedMCPConfig())
+}
+
+// DeleteMCPServerEntry removes name from the file its Profile names and installs the result.
+//
+// Deleting reveals, rather than deletes, when the other file also defines the name: the base file
+// and the profile file are merged by name, so dropping the profile's copy brings the base's back.
+// That is what the merge means, and the editor's list shows it on the next read.
+func (s *AgentService) DeleteMCPServerEntry(name, profile string) string {
+	d := s.desk
+	if d.config() == nil {
+		return "no config"
+	}
+	if name == "" {
+		return "没有指定要删除的 server"
+	}
+	if err := validateMCPEntryProfile(profile); err != nil {
+		return err.Error()
+	}
+	path := config.MCPConfigPath(profile)
+
+	d.mcpFileMu.Lock()
+	err := config.DeleteServerInFile(path, name)
+	d.mcpFileMu.Unlock()
+	if err != nil {
+		if errors.Is(err, config.ErrServerNotInFile) {
+			return fmt.Sprintf("%s 里没有 %q —— 它可能在另一个文件里", filepath.Base(path), name)
+		}
+		return fmt.Sprintf("写入 %s 失败：%v", filepath.Base(path), err)
+	}
+	return withNote("ok", d.applySavedMCPConfig())
+}
+
+// applySavedMCPConfig hands the files' new contents to the running process, and returns "" when
+// that worked or the reason to show when it did not.
+//
+// The "no MCP layer yet" case is a real one and not a failure: the shared manager is built at
+// startup only when the config was non-empty (desktop/agent_driver.go), so a FIRST server added
+// here has nothing to connect to until the next launch. The file is still the thing that matters
+// — it is what the next launch reads — so the save says so rather than refusing.
+func (d *desktopApp) applySavedMCPConfig() string {
+	a, note := d.appAgentForMCP()
+	if a == nil {
+		return fmt.Sprintf("%s（这个 server 已写入配置，重启后生效）", note)
+	}
+	profile := ""
+	if cfg := d.config(); cfg != nil {
+		profile = cfg.ActiveMCPProfile
+	}
+	result, err := d.installMCPConfig(a, profile)
+	if err != nil {
+		return fmt.Sprintf("已写入配置，但应用到运行中的连接失败：%v", err)
+	}
+	if len(result.Errors) > 0 {
+		msgs := make([]string, 0, len(result.Errors))
+		for _, e := range result.Errors {
+			msgs = append(msgs, e.Error())
+		}
+		return "已写入配置，但有 server 没连上：" + strings.Join(msgs, "；")
+	}
+	return ""
+}
+
+// validateMCPEntry rejects what the editor can see before it reaches the file.
+//
+// The name is the one check that matters beyond politeness: the loader treats a nameless entry as
+// a broken FILE (finalizeMCPServers errors → LoadMCPServers fails → Bootstrap fails), so writing
+// one would leave an mcp.json nobody can start from. config.UpsertServerInFile asserts the same
+// invariant at the door; this one exists to say it in the user's words.
+func validateMCPEntry(srv config.MCPServerConfig) error {
+	if strings.TrimSpace(srv.Name) == "" {
+		return errors.New("server 名字不能为空")
+	}
+	switch srv.Type {
+	case config.MCPTransportStdio:
+		if strings.TrimSpace(srv.Command) == "" {
+			return fmt.Errorf("stdio 类型要填 command（%q）", srv.Name)
+		}
+	case config.MCPTransportHTTP:
+		if strings.TrimSpace(srv.URL) == "" {
+			return fmt.Errorf("http 类型要填 url（%q）", srv.Name)
+		}
+	default:
+		return fmt.Errorf("type 只能是 %q 或 %q", config.MCPTransportStdio, config.MCPTransportHTTP)
+	}
+	if srv.Timeout < 0 {
+		return errors.New("timeout 不能是负数")
+	}
+	if srv.OAuth != nil && srv.Type != config.MCPTransportHTTP {
+		return errors.New("oauth 只对 http 类型有效")
+	}
+	return nil
+}
+
+// validateMCPEntryProfile rejects a profile the loader would never read: "" (the base file) or a
+// name that an mcp.<name>.json already provides. Both are resolved through config.MCPConfigPath,
+// so the file written is by construction the file read.
+func validateMCPEntryProfile(profile string) error {
+	if profile == "" {
+		return nil
+	}
+	if !slices.Contains(config.ListMCPProfiles(), profile) {
+		existing := config.ListMCPProfiles()
+		if len(existing) == 0 {
+			return fmt.Errorf("没有 mcp.%s.json（当前一个 profile 文件都没有）", profile)
+		}
+		return fmt.Errorf("没有 mcp.%s.json（现有的 profile：%s）", profile, strings.Join(existing, ", "))
+	}
+	return nil
 }
 
 // --- MCP OAuth authorization ---

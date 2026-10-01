@@ -126,6 +126,17 @@ export function CurrentSession(): $CancellablePromise<$models.SessionInfo | null
 }
 
 /**
+ * DeleteMCPServerEntry removes name from the file its Profile names and installs the result.
+ * 
+ * Deleting reveals, rather than deletes, when the other file also defines the name: the base file
+ * and the profile file are merged by name, so dropping the profile's copy brings the base's back.
+ * That is what the merge means, and the editor's list shows it on the next read.
+ */
+export function DeleteMCPServerEntry(name: string, profile: string): $CancellablePromise<string> {
+    return $Call.ByID(681428426, name, profile);
+}
+
+/**
  * DeletePlan removes one of this session's plan files and returns "ok".
  * 
  * The path comes from the frontend, so it is validated against this session's own plan
@@ -340,6 +351,18 @@ export function ListCommands(): $CancellablePromise<$models.CommandVO[] | null> 
  */
 export function ListMCPProfiles(): $CancellablePromise<{ [_ in string]?: any } | null> {
     return $Call.ByID(3487132922);
+}
+
+/**
+ * ListMCPServerEntries returns every server the editor can edit: the merged view of the base file
+ * and the ACTIVE profile's file.
+ * 
+ * The merged view is the only set a save can reach (it is what the loader builds, and what the
+ * next launch reads), so an entry the user cannot see here is not one he can edit — which is why
+ * nothing lists the inactive profiles' files.
+ */
+export function ListMCPServerEntries(): $CancellablePromise<$models.MCPServerEntryVO[] | null> {
+    return $Call.ByID(3480777505);
 }
 
 /**
@@ -631,6 +654,19 @@ export function RunCommand(text: string): $CancellablePromise<string> {
  */
 export function RunningSessions(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3792694786);
+}
+
+/**
+ * SaveMCPServerEntry writes entry into the file its Profile names ("" = the base mcp.json) and
+ * installs the result into the running process. It returns "" on success, or what to tell the
+ * user.
+ * 
+ * The write is the one step that cannot be skipped and cannot be rolled back by what follows: a
+ * server that fails to CONNECT is reported, not undone — the file the user asked for is on disk
+ * either way, and undoing it would have to guess whether he meant the file or the connection.
+ */
+export function SaveMCPServerEntry(entry: $models.MCPServerEntryVO): $CancellablePromise<string> {
+    return $Call.ByID(768438624, entry);
 }
 
 /**

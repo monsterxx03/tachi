@@ -21,7 +21,7 @@ gets its own handbook beside this one rather than growing here.
 | **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
 | **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
-| **Desktop MCP** | you touch MCP authorization, the MCP panel, or the deferred-tools pool/reminder path |
+| **Desktop MCP** | you touch MCP authorization, the MCP panel, the settings page's MCP server editor, or the deferred-tools pool/reminder path |
 | **Desktop Session Tree** | you touch skill discovery, permissions, or anything else that resolves "which tree does this session work in" |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
 | **Desktop Compaction** | you touch the compaction path (`agent/compact.go`, `desktop/compaction.go`, the `AgentEventAutoCompactDone` case), `RunningSessions`, or anything that resolves **which run owns a session** |
@@ -81,6 +81,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a turn whose stream dies mid-flight (what it keeps, what the next turn sends) | `stream-fail` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
+| the settings page's MCP server editor (the one block that writes mcp.json instead of config.yaml) | `mcp-edit` |
 | sending/receiving files or images | `paste-image`, `image-reload` |
 | deleting sessions, running-session guards | `delete-running` |
 | whatever else — the transcript itself, session rows | `transcript`, `sessions` |
@@ -547,6 +548,48 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   decide a global set (a project scope could only ever be resolved by picking one tree to win). The set
   is loaded once, at bootstrap (`agent.Bootstrap` → `cfg.LoadMCPServers()`), and a profile switch is the
   only thing that changes it afterwards — `switchMCPProfileTo` is that path.
+- **The mcp.json files have ONE writer lock (`desktopApp.mcpFileMu`), and every path that touches them
+  takes it.** Three do: the settings editor's save/delete, the panel's `enabled` toggle, and the config
+  re-read a profile switch performs. Each is a read-modify-write of a whole file, and atomic writes keep
+  the FILE intact without the lock — but not the CHANGE: two of them landing together let the second
+  one's read predate the first one's write, and that edit disappears with nothing to report it.
+- **Writing a server and installing it are two steps, in that order and with no rollback between them.**
+  `AgentService.SaveMCPServerEntry` / `DeleteMCPServerEntry` write the file, then call
+  `installMCPConfig(a, profile)` — the same "load the files → `ReconcileMCPServers` → write the config
+  under cfgMu" that a profile switch runs, which is why an edit reconnects only what changed. A server
+  that then fails to CONNECT is reported, never undone: the file the user asked for is on disk either
+  way, and rolling it back would have to guess whether he meant the file or the connection.
+- **The editor reads the RAW config (`config.LoadMCPConfigRaw`), never the finalized one.** The loader
+  fills in the 10s timeout, `enabled: true` and the OAuth callback host; a form that read those would
+  write this process's DEFAULTS into a hand-written file the moment someone pressed save on an entry
+  they had only looked at. "Absent" has to stay absent through the round trip.
+- **A nameless server is a broken FILE, not a broken server.** `finalizeMCPServers` errors on one, so
+  `LoadMCPServers` fails, so `agent.Bootstrap` fails — no TUI, and a desktop with no config at all,
+  repairable only by hand. `config.UpsertServerInFile` therefore refuses a nameless entry at the door
+  (the desktop says the same thing in the user's words first, for a message they can act on). Any new
+  writer of that file owes the same refusal.
+- **An entry named in both files is ONE server, and deleting the profile's copy REVEALS the base's.**
+  That is what merging by name means; the editor's list shows it. Do not "fix" it by deleting from both
+  — that would make the merge unrepresentable.
+- **The editor's block is declared by the schema, not matched by name in the frontend.**
+  `SettingsSchemaVO.MCPServerEditor` names the category it is drawn in (`catMCP`), because which group a
+  thing belongs to is a claim the settings table owns — the page knows no config keys, and a frontend
+  constant would be a second list to keep in step. It is also not a row: MCP servers are not config.yaml
+  leaves (`MCPServers` is `yaml:"-"`), so it saves per entry and immediately instead of through
+  `SaveSettings`.
+- **A first server does not connect until the next launch, and the editor says so.** The shared manager
+  is built at startup only when the config was non-empty (`desktop/agent_driver.go`), and every agent
+  built before it captured `DisableMCP: d.mcp == nil`; nothing attaches a manager to an agent that
+  already ran `configure`. So `applySavedMCPConfig` reports "已写入配置，重启后生效" instead of refusing.
+  Closing this means building the manager lazily AND giving the live agents the shared-MCP half of
+  `configure` (the search tool + the reminder), not just a `SetSharedMCP` call.
+- **The editor is pinned end-to-end by the smoke scenario `mcp-edit`** (look it up in the smoke
+  section's routing table). It adds a server through the form, and the Go half reads the sandbox's
+  `mcp.json` back: the entry that was already there byte for byte, the new one installed, and the
+  file parsed into `config.MCPServerConfig` — "the UI wrote a file the loader reads" is the claim
+  that needs both halves. Its fixture comes from the scenario field `mcpServersJSON`, and every
+  server in it is DISABLED: a smoke run happens on a real machine, and an enabled stdio server is a
+  process the app really spawns (the same reason the driver unchecks 启用 before it saves).
 - **`enableMCPServer` is the ONE enable path** (the panel's toggle and the end of an authorization both go
   through it), so an authorized server ends up exactly as connected as a toggled one: tools into the shared
   pool AND `NotifyDeferredToolsAdded` for every live agent. That reminder fires at most once per session, so a

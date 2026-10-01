@@ -12,6 +12,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -35,12 +36,15 @@ func mcpConfigFixture(t *testing.T) (*desktopApp, *AgentService, string) {
 
 	r := d.getRun(sid)
 	r.sm = sm
-	// A bare agent carrying the two things the reconcile needs. It is enough because the switch
-	// only reads them to reach the code under test — no turn runs.
+	// A bare agent carrying what the reconcile reaches for: the config, the shared manager, a
+	// logger, and a tool REGISTRY — removing a server walks the registry by prefix
+	// (UnregisterMCPServer), and a nil one would panic rather than fail. It is enough because the
+	// reconcile only reads these to do its bookkeeping — no turn runs.
 	r.agent = &agent.AIAgent{Config: agent.AgentConfig{
-		FullConfig: d.cfg,
-		MCPManager: d.mcp,
-		Logger:     logger.New("settings-test"),
+		FullConfig:   d.cfg,
+		MCPManager:   d.mcp,
+		Logger:       logger.New("settings-test"),
+		ToolRegistry: tools.NewRegistry(),
 	}}
 	return d, svc, sid
 }
