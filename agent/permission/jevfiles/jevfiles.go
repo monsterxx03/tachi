@@ -6,7 +6,7 @@
 // the four small renderers they have in common (the trees line, the working
 // directory, the unknown-value placeholder, the cap) are duplicated on purpose:
 // a threshold belongs to the exact text it was swept on, so one shared renderer
-// would let a reworded file-gate sentence void the bash gate's τ = 0.70 at the
+// would let a reworded file-gate sentence void the bash gate's τ = 0.85 at the
 // same time. Two questions, two case sets, two measurements.
 //
 // The state is assembled from named fields, never from prose, and it describes the

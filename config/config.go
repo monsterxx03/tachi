@@ -46,7 +46,7 @@ const (
 	// the same tag/constant duplication as the other defaults. It was swept on
 	// pkg/jev/testdata/files-ask.json; the field's own comment carries the
 	// corridor, what it misses, and when to re-sweep.
-	FilesJevThreshold = 0.55
+	FilesJevThreshold = 0.60
 	configDirName     = ".tachi"
 	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
@@ -1073,15 +1073,21 @@ type BashPermissions struct {
 
 	// JevThreshold is the noul probability at or above which the judgment is
 	// read as "a human should see this". It belongs to the case set it was
-	// swept on, NOT to this field: τ = 0.70 was measured on
+	// swept on, NOT to this field: the corridor below was measured on
 	// pkg/jev/testdata/bash-ask.json — 68 authored commands, 5 repeats, state
 	// rendered by agent/permission/jevask — with jev-1.13.0. The corridor is
 	// (0.66, 0.75): the highest ROUTINE command scored 0.66
 	// (`npm ci` — it runs the registry's postinstall scripts, so the criteria
 	// read it as touching the network) and the lowest needs-a-look command 0.75
-	// (`docker compose down -v`). 0.70 is that corridor's middle and is biased to
-	// the SAFE side of it: a threshold that drifts too high is the direction that
-	// misses an ask, while drifting low only costs an interruption.
+	// (`docker compose down -v`).
+	//
+	// τ = 0.85 sits ABOVE that corridor on purpose: it is the "interrupt rarely"
+	// setting, where a command is only shown to a human when the model is near
+	// certain it should be. What that buys is quiet on everything a rule left
+	// unmatched; what it costs is the corridor's top — `docker compose down -v`
+	// (0.75), the lowest needs-a-look command measured, now runs unasked. Drifting
+	// higher is the direction that MISSES an ask, so the debug log's judged lines
+	// are where that gets checked, not this number.
 	//
 	// Re-sweep when the model version moves, when that case set CHANGES, or when
 	// the STATE SHAPE does (a sentence in jevask is part of the question a
@@ -1092,7 +1098,7 @@ type BashPermissions struct {
 	// A value of 1.0 is the shadow setting: the gate judges and logs every
 	// command but can never act (a noul answer is at most 1.0), so the
 	// distribution can be watched on real traffic before anything changes.
-	JevThreshold float64 `yaml:"jev_threshold" default:"0.70"`
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.85"`
 
 	// JevBudget bounds one judgment's wait. 3s is shorter than the MCP
 	// search's 6s on purpose: that gate is a search the model asked for and is
@@ -1167,11 +1173,13 @@ type FilesPermissions struct {
 	// The corridor is (0.49, 0.62): the highest ROUTINE call scored 0.49 (an export
 	// written to ~/Downloads — outside the trees, produced for the user, and the
 	// criteria call that routine) and the next needs-a-look call 0.62 (a private
-	// key committed inside the tree). 0.55 is that corridor's middle, and both
-	// neighbours were measured: at 0.50 AND at 0.60 the gate raised 0 of the 155
-	// routine calls, so the band is flat rather than knife-edge — which is what the
-	// harness's stability warning asks for, since a threshold 0.01 above a routine
-	// case would flap.
+	// key committed inside the tree). τ = 0.60 is the top of that corridor, and
+	// both neighbours were measured: at 0.50 AND at 0.60 the gate raised 0 of the
+	// 155 routine calls, so the band is flat rather than knife-edge — which is
+	// what the harness's stability warning asks for, since a threshold 0.01 above
+	// a routine case would flap. What it leaves is 0.02 of headroom under the
+	// nearest needs-a-look case (0.62): the same case is the one a re-run of the
+	// harness can walk across, so it is the line to watch in the sweep.
 	//
 	// WHAT IT DELIBERATELY MISSES: three of the 33 needs-a-look calls stayed below
 	// it — writing and editing `.tachi/permissions.yaml` (0.43, 0.48) and a
@@ -1197,7 +1205,7 @@ type FilesPermissions struct {
 	// A value of 1.0 is the shadow setting: the gate judges and logs every call but
 	// can never act (a noul answer is at most 1.0), so the distribution can be
 	// watched on real traffic before anything changes.
-	JevThreshold float64 `yaml:"jev_threshold" default:"0.55"`
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.60"`
 
 	// JevBudget bounds one judgment's wait. 2s is shorter than the bash gate's 3s
 	// on purpose: a file call happens several times per turn and is often the
@@ -1556,16 +1564,22 @@ type MCPToolSearchConfig struct {
 	Matcher string `yaml:"matcher" default:"auto"`
 	// JevThreshold is the noul probability at which a tool is offered. It is
 	// NOT a fact, and not a property of the gate: it belongs to the POOL whose
-	// tool texts the questions carry. 0.20 is measured on a real 184-tool pool
-	// (94 requests, jev-1.13.0) at recall 0.81 / 2.2 tools offered per search;
-	// the same gate swept against the 22-tool hand-written fixture gives 0.35,
+	// tool texts the questions carry, and the value picked on it is a point on
+	// that pool's recall/cost curve, not a natural constant. τ = 0.30 is measured
+	// on a real 184-tool pool (94 requests, jev-1.13.0) at recall 0.60 / 1.1 tools
+	// offered per search / precision 0.55, and with nothing offered for a request
+	// the pool cannot serve; the same curve gives recall 0.81 / 2.2 tools at 0.20
+	// and 0.51 / 0.9 at 0.35. Quiet is what costs here: at 0.30 two searches in
+	// five come back with nothing, against one in five at 0.20.
+	//
+	// The same gate swept against the 22-tool hand-written fixture gives 0.35,
 	// where only half those searches would find anything. Pool SIZE is not the
 	// difference — solo, one-shot and chunked requests score within 0.02 of one
 	// another (agent/mcp's jevSearchQuestionsPerChunk is the shape that matters
 	// for cost, not for the numbers); the descriptions are. Adding a server or
 	// rewriting a tool description makes this a hypothesis again: re-sweep
 	// (docs/agents/jev.md, Measuring a threshold).
-	JevThreshold float64 `yaml:"jev_threshold" default:"0.20"`
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.30"`
 	// JevBudget bounds one search (all its chunked calls), not one HTTP
 	// attempt: a search runs inside a model turn and degrades to the keyword
 	// search rather than making the turn wait out pkg/jev's retry loop.

@@ -149,8 +149,9 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   The `[permission]` note travels out of a parallel group through the `notes[i]` slice, one index per
   goroutine.
 - **Its τ belongs to `pkg/jev/testdata/files-ask.json`** and to nothing else — not to
-  `permissions.bash.jev_threshold`, which answers a different question. Shipped τ = 0.55, corridor
-  (0.49, 0.62), swept on that case set (64 calls × 5, `jev-1.13.0`); what it deliberately misses and
+  `permissions.bash.jev_threshold`, which answers a different question. Shipped τ = 0.60 — the TOP of
+  the corridor (0.49, 0.62), so it reads every routine call the same way but sits 0.02 under the
+  nearest needs-a-look case — swept on that case set (64 calls × 5, `jev-1.13.0`); what it deliberately misses and
   when to re-sweep live in `config.FilesPermissions.JevThreshold`'s own comment, and the sweep history
   is in `docs/2026-09-30-files-ask-jev-design.md` (allowed to go stale). The few renderers it shares in
   SHAPE with `jevask` (the trees line, the unknown-value placeholder) are duplicated on purpose: one
@@ -163,8 +164,9 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   caller supplied", so the question, the criteria, the STATE SHAPE and the model version all belong to any τ.
   It is recorded in `config.BashPermissions.JevThreshold`'s comment **with the case set and the model version**,
   and re-sweeping is the only way to move it.
-- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Current τ = 0.70,
-  corridor (0.66, 0.75), was swept on a state whose only facts are: the canonical segments, the working
+- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Shipped τ = 0.85 —
+  deliberately ABOVE the measured corridor (0.66, 0.75), i.e. the gate only asks on near-certainty and a
+  borderline command is not interrupted — was swept on a state whose only facts are: the canonical segments, the working
   directory, **the trees the session works in**, and the matched rule (or why there is none). A single tree is not
   enough — a session can span several, and a command in the second one would read as "outside the tree".
   **Change any sentence the state renders and the number is void.**
@@ -218,7 +220,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 - **Both gates write the same line, and it goes to the EVENT ONLY — the transcript — and never into the model's message**
   (`agent.askNote`, written by `checkBashPermission` and `checkFilePermission` alike):
-  `[permission] decided_by=judgment score=0.180 threshold=0.700`, or `decided_by=approval` for a call that was
+  `[permission] decided_by=judgment score=0.180 threshold=0.850`, or `decided_by=approval` for a call that was
   asked about and approved. It is appended for a FAILED call too (the call ran, or was refused, either way), and no
   judgment and no ask means no line at all, so an unremarkable call's result is byte-for-byte what it was
   before the gate existed.

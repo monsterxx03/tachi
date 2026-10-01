@@ -52,7 +52,7 @@ its threshold in `permissions.files.jev_threshold`, and its own case set
 human and never block — a deny is not theirs to make — and the two question packages are SIBLINGS
 rather than one shared package on purpose: a shared renderer would let a reworded sentence void both
 thresholds at once. Which facts belong in either state, and why, is [`permission.md`](permission.md).
-**No cut-off is a fact, and none belongs to its gate**: the tool search's τ = 0.20 belongs to a POOL,
+**No cut-off is a fact, and none belongs to its gate**: the tool search's τ = 0.30 belongs to a POOL,
 the notify gate's, the bash gate's and the file gate's to their own case sets — and the bash and file
 numbers are independent even though both were swept against `jev-1.13.0`: they answer different
 questions.
@@ -279,7 +279,7 @@ generic question — has none). The deployed cut-off is **`cron.jev_threshold` =
 corridor measured on `pkg/jev/testdata/notify-gate-prompt.json`; the case set's labels are one person's
 judgement, so re-sweep before moving it.
 
-**A tool-search cut-off is a property of the POOL's tool TEXTS — τ = 0.20 on a 184-tool pool, and
+**A tool-search cut-off is a property of the POOL's tool TEXTS — τ = 0.30 on a 184-tool pool, and
 neither of the two things it is tempting to blame instead:**
 
 - **Not the request shape.** The same (query, tool) asked solo, against its own server, in one
@@ -305,16 +305,18 @@ search):
 | τ | recall | tools offered / search | precision | no-tool leak |
 | --- | --- | --- | --- | --- |
 | 0.15 | 0.89 | 3.3 | 0.29 | 3/10 |
-| **0.20** | **0.81** | **2.2** | **0.40** | **3/10** |
+| 0.20 | 0.81 | 2.2 | 0.40 | 3/10 |
 | 0.25 | 0.70 | 1.6 | 0.47 | 2/10 |
-| 0.30 | 0.60 | 1.1 | 0.55 | 0/10 |
+| **0.30** | **0.60** | **1.1** | **0.55** | **0/10** |
 | 0.35 | 0.51 | 0.9 | 0.63 | 0/10 |
 
 *recall* = share of searches where any expectation cleared τ; *offers* is the cost side (every offered
 tool is a schema registered and a tool-list change, which invalidates the prompt prefix);
 *no-tool leak* = requests nothing in the pool can serve that were answered with something anyway. The
-repo default sits at **0.20**, the point where a fifth of searches still fail; 0.30+ trades too much
-recall for quiet, and 0.15 doubles the unlabelled noise for 8 points of recall.
+repo default sits at **0.30**: about one tool offered per search and no unlabelled answer leaking
+through, paid for with two searches in five coming back empty. One row down buys 21 points of recall
+for twice the offers and 3/10 leaks; one row up trades another 9 points of recall for a fifth of the
+cost in tools.
 
 
 ## Traps
