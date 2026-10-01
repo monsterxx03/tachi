@@ -602,14 +602,26 @@ func TestFileResultDoesNotCarryTheNoteToTheModel(t *testing.T) {
 // file agree on — while the ask and the refusal name the path the call actually
 // used. A card showing `/private/var/...` for a call that said `./fixture.txt` is
 // issue #40 wearing a different hat: the reader is shown something they never
-// wrote. (On macOS /var is a symlink to /private/var, so the two really differ.)
+// wrote.
 func TestFileAskNamesThePathTheCallerWrote(t *testing.T) {
 	dir := t.TempDir()
+	// The alias is MADE here rather than borrowed from the platform. What this test needs is a
+	// spelling whose canonical form differs, and the temp path only provides that on macOS — where
+	// /tmp and /var are symlinks into /private, so the two strings differ by accident. On a runner
+	// where /tmp is a real directory the temp path IS its own canonical form, and the NotContains
+	// assertions below would be checking that a string differs from itself: green on the author's
+	// machine, red on Linux, about nothing either way.
+	real := filepath.Join(dir, "real")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(real, link))
+
 	// Spelled with a traversal, so the lexical form is visibly the caller's spelling
 	// resolved — and not the canonical one either (see the doc comment).
-	spelled := dir + "/sub/../fixture.txt"
+	spelled := link + "/sub/../fixture.txt"
 	lexical, canonical := filePaths(t.Context(), spelled)
-	require.Equal(t, filepath.Join(dir, "fixture.txt"), lexical)
+	require.Equal(t, filepath.Join(link, "fixture.txt"), lexical)
+	require.NotEqual(t, lexical, canonical, "fixture: the two spellings must differ")
 
 	a := fileGateAgent(t, &fakeAskJudge{p: 0.95}, nil)
 	var preview string
@@ -618,9 +630,12 @@ func TestFileAskNamesThePathTheCallerWrote(t *testing.T) {
 		preview = diff
 		return false, nil
 	})
+	// The rule names the RESOLVED directory, which is the one the file is really in: a rule's
+	// literal prefix is canonicalised, and `*` does not cross a separator, so a prefix above the
+	// link would sit one directory too high to match anything.
 	a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
 		permission.WithFileRules(permission.FileRules{
-			Read: testPathRules(nil, []string{filepath.Join(dir, "*")}, nil),
+			Read: testPathRules(nil, []string{filepath.Join(real, "*")}, nil),
 		}, permission.FileRules{})))
 
 	res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, spelled, ""))
