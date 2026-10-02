@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, type SessionRow, type SessionGroup } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -51,10 +51,14 @@ const CHAT_FIND_SCOPE = '.msg-user .msg-content, .assistant-text'
 // than a prop or a setting: the point is to paint the newest screenful and nothing beyond it, and a
 // number a reader could tune would only be a way to make the sidebar slow again.
 const SIDEBAR_WINDOW_ROWS = 30
-// LOOSE_GROUP_KEY is the group key of the 无项目 bucket, which has no project id of its own. One
-// spelling: the Fragment key of the bucket's group, and the key its row window and (were it ever
-// foldable) its fold state would live under.
-const LOOSE_GROUP_KEY = '__loose__'
+
+// groupKey is the sidebar's key for ONE group: the project's own id, or LOOSE_GROUP_KEY for the
+// bucket. Module-level because it is pure AND because the row window's grow callback is memoized on
+// it: a per-render closure here would re-create that callback, and the reveal effect — which lists
+// it as a dependency — would then run on every render.
+function groupKey(g: SessionGroup<SessionItem>): string {
+  return g.project?.id || LOOSE_GROUP_KEY
+}
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
 // Streaming replaces only the message being written (its siblings keep the
@@ -556,21 +560,23 @@ function App() {
   // its DOM query) on every render — during a turn, on every streamed frame.
   const groups = useMemo(() => sessionGroups(sessions, projects), [sessions, projects])
   const [rowWindow, setRowWindow] = useState<Record<string, number>>({})
-  const groupKey = (g: SessionGroup<SessionItem>) => g.project?.id || LOOSE_GROUP_KEY
   const shownRows = (g: SessionGroup<SessionItem>) => {
     const n = rowWindow[groupKey(g)] ?? SIDEBAR_WINDOW_ROWS
     return g.rows.length > n ? g.rows.slice(0, n) : g.rows
   }
   const growRows = useCallback((g: SessionGroup<SessionItem>) => {
     setRowWindow((w) => {
-      const key = g.project?.id || LOOSE_GROUP_KEY
+      const key = groupKey(g)
       return { ...w, [key]: (w[key] ?? SIDEBAR_WINDOW_ROWS) + SIDEBAR_WINDOW_ROWS }
     })
   }, [])
 
-  // The scroll itself. `expandedProjects` is a dependency because opening the group holding the row
-  // is what MAKES it: without it, a switch into a folded group would find no row, and the pending
-  // request would sit there until something else happened to change the list.
+  // The scroll itself. `groups` and `expandedProjects` are dependencies because between them they
+  // are what makes the row EXIST (the list arrives inside `groups`; opening the group is the other
+  // half) and `rowWindow` is the third, for the same reason one layer down. Without them a switch
+  // into a folded group, or past its window, would find no row — and the pending request would sit
+  // there until something unrelated happened to change the list. `growRows` is memoized on nothing,
+  // so it never asks for a run of its own.
   useEffect(() => {
     if (!revealRow) return
     const row = Array.from(sessionListRef.current?.querySelectorAll<HTMLElement>('.session') || [])
@@ -592,7 +598,7 @@ function App() {
     // 'nearest' and not 'center': a row already on screen must not move the list at all, and the
     // reader's own scroll position is not this feature's to take.
     row.scrollIntoView({ block: 'nearest' })
-  }, [revealRow, sessions, groups, expandedProjects, rowWindow, growRows])
+  }, [revealRow, groups, expandedProjects, rowWindow, growRows])
 
   // bootOpenedGroup makes the boot's exception a STARTUP fact: loadAll also runs after a delete,
   // and re-applying it there would re-open a group the reader had just collapsed.

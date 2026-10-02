@@ -25,19 +25,26 @@ import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRo
 // are hidden (App.tsx), so the two readings can never disagree with the list above it.
 function MoreRows({ hidden, onGrow }: { hidden: number; onGrow: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
+  // The action lives in a ref, and the observer is created ONCE per mounted line. `onGrow` is a
+  // fresh closure on every render of its parent (App maps the groups inline), so a dependency on it
+  // would tear the observer down and build a new one on each of them — during a turn, once per
+  // streamed frame. That is not merely wasteful: a brand-new observer reports the CURRENT
+  // intersection immediately, so a line already on screen would grow the window again and again.
+  const grow = useRef(onGrow)
+  useEffect(() => { grow.current = onGrow })
   useEffect(() => {
     const el = ref.current
     // No IntersectionObserver (an old runtime, or a test harness): the click still works, and the
     // line stops being an affordance that promises nothing.
     if (!el || typeof IntersectionObserver === 'undefined') return
     const obs = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) onGrow()
+      if (entries.some((e) => e.isIntersecting)) grow.current()
     }, { rootMargin: '160px 0px' })
     obs.observe(el)
     return () => obs.disconnect()
-  }, [hidden, onGrow])
+  }, [])
   return (
-    <button type="button" className="session-more" ref={ref} onClick={onGrow}
+    <button type="button" className="session-more" ref={ref} onClick={() => grow.current()}
       title="展开更早的会话（滚到这里也会自动展开）">
       还有 {hidden} 条 ▾
     </button>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, LOOSE_LABEL, LOOSE_LABEL_HINT } from './lib'
+import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, LOOSE_LABEL, LOOSE_LABEL_HINT, LOOSE_GROUP_KEY } from './lib'
 import type { SessionItem } from './types'
 
 // usePaletteInput owns a palette's filter box: what it HOLDS and what the LIST filters by are two
@@ -134,8 +134,8 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
       : blocked ? '主目录不可用，无法新建会话'
         : '→ 新建会话'
     return {
-      // '__loose__' is the same key the sidebar gives the bucket's group: one bucket, one key.
-      key: p ? p.id : '__loose__',
+      // The sidebar gives the bucket's group this same key: one bucket, one key.
+      key: p ? p.id : LOOSE_GROUP_KEY,
       name: p ? p.name : LOOSE_LABEL,
       where: p ? p.workingDir : LOOSE_LABEL_HINT,
       whereTitle: p ? p.workingDir : `不属于任何项目：${LOOSE_LABEL_HINT}`,

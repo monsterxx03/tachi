@@ -927,11 +927,12 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   the list, a delete hands the reader to a neighbour, compaction moves the conversation to a new row. The trigger
   is `currentId` (App.tsx: the `revealRow` request, set by an effect watching it) and NOT the gesture — the
   sidebar has to know only one rule. **The request is cleared when the row is FOUND, and it survives the renders
-  in between** (`sessions` and `expandedProjects` are its other two dependencies, and `rowWindow` the third:
-  opening the group and growing the window are what make the row exist — a switch into a folded group or past the
-  window would otherwise find no row at all, and the pending request would sit there until something unrelated
-  changed the list): an ordinary re-render — a streamed delta, a title arriving, a refresh — must never move the
-  list under the reader's hands. The scroll is `block: 'nearest'`, never centre: a row already on screen must not
+  in between** (`groups`, `expandedProjects` and `rowWindow` are its other dependencies, and they are exactly
+  the three things that make the row EXIST: the list itself, opening a folded group, and growing a group's
+  window — a switch into a folded group, or past its window, would otherwise find no row at all, and the
+  pending request would sit there until something unrelated changed the list): an ordinary re-render — a
+  streamed delta, a title arriving, a refresh — must never move the list under the reader's hands, so the
+  callback that grows a window is memoized on nothing and cannot ask for a run of its own. The scroll is `block: 'nearest'`, never centre: a row already on screen must not
   move at all. Regression: `sidebar-window` (the window's half) and `session-keys` (the fold's).
 - **`⌘⇧⌫` opens the delete confirmation for the session on screen and never deletes on its own** — the row's
   right-click 「删除」 in keyboard form, through the same backend call, so a running session's refusal lands in

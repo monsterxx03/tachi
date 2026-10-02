@@ -447,6 +447,12 @@ export function projectMatches(p: ProjectVO, query: string): boolean {
 // ended up in it.
 export const LOOSE_LABEL = '无项目'
 
+// LOOSE_GROUP_KEY is the group key of that bucket, where a project id would otherwise go: the
+// sidebar's Fragment key AND its row window are keyed by it (both through `groupKey`, App.tsx), and
+// ⌘P's row for the bucket rides on the same key. One spelling, because the two palettes and the
+// sidebar are three surfaces identifying one bucket.
+export const LOOSE_GROUP_KEY = '__loose__'
+
 // LOOSE_LABEL_HINT is the bucket's stand-in for a working directory, which is what a ⌘P row would
 // otherwise show there: the bucket has no directory of its own — each of its sessions carries the
 // workspace snapshot it was made with (see the backend resolver) — so the row says that instead.
