@@ -140,6 +140,26 @@ func TestFileGateRunsWhatTheJudgmentReadAsRoutine(t *testing.T) {
 	assert.Equal(t, 0.05, note.Score)
 }
 
+// TestFileGateStopsAskingAfterSessionAllowAll: 「本会话全部允许」 covers the FILE half's judgment
+// too, and by the same rule — the approval is read after deny and before the judgment, so the gate
+// is never consulted (the call is not even judged, let alone raised). Reading a key is the case a
+// user is most likely to have just waved through, and it is the one that would otherwise keep
+// producing cards in a session that already said stop.
+func TestFileGateStopsAskingAfterSessionAllowAll(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.94} // over this agent's 0.70 threshold
+	a := fileGateAgent(t, judge, nil)
+	a.AllowAllAsksForSession()
+	// Answered before the call, so a REGRESSION fails on the assertions below instead of parking
+	// the ask and hanging the run until the test timeout.
+	a.ConfirmTool(ConfirmAllowOnce)
+
+	_, handled, note, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/Users/someone/.ssh/id_rsa", ""))
+	require.NoError(t, err)
+	assert.False(t, handled, "an approved session runs the call")
+	assert.Nil(t, note, "no ask was raised, so there is no decision to report")
+	assert.Equal(t, 0, judge.callCount(), "the gate must not even be asked")
+}
+
 // TestFileGateOffIsTodaysBehaviour: with jev off (or the block unusable), nothing
 // is judged and the service is never called — the state of the world before this
 // feature existed.
@@ -422,12 +442,12 @@ func TestFileAskApprovedRuns(t *testing.T) {
 	assert.True(t, note.HasScore)
 }
 
-// TestFileAskAllowSessionSilencesRulesButNotTheJudgmentOrDeny: 「本会话全部允许」 is
-// the same switch the bash rules honour. It stops rule-matched calls from asking,
-// it does NOT stop the judgment (which is what keeps bash's auto-approval
-// semantics — a judged call still runs unasked when the judgment reads it as
-// routine), and it can never reach a deny.
-func TestFileAskAllowSessionSilencesRulesButNotTheJudgmentOrDeny(t *testing.T) {
+// TestFileAskAllowSessionSilencesRulesAndTheJudgmentButNeverDeny: 「本会话全部允许」 is ONE answer with TWO
+// readers. The policy's copy stops a rule-matched call from asking; the agent's copy stops the judgment gate —
+// and stops it BEFORE the judgment, so the gate is not consulted again (a verdict nobody can act on is not
+// worth a call) and the call carries no note at all. Deny is the exception: it is decided before either reader
+// is reached, so the switch can never widen into "write what the rules forbid".
+func TestFileAskAllowSessionSilencesRulesAndTheJudgmentButNeverDeny(t *testing.T) {
 	judge := &fakeAskJudge{p: 0.95}
 	a := fileGateAgent(t, judge, nil)
 	a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
@@ -447,27 +467,15 @@ func TestFileAskAllowSessionSilencesRulesButNotTheJudgmentOrDeny(t *testing.T) {
 	assert.Equal(t, noteByApproval, note.By)
 	assert.Equal(t, 1, judge.callCount())
 
-	// The same call again: the RULE is silenced for this session, so the policy
-	// reports no rule for it — and the judgment is asked about a slightly different
-	// call (the rule slot is part of its state and of the memo key, exactly as the
-	// bash gate keys on command + rule). It is judged afresh, which is the point:
-	// 「本会话全部允许」 silences the RULES, not the gate.
+	// The same call again: the rule AND the gate are both answered for this session, so the call simply
+	// runs and there is nothing to report. Pre-answered as elsewhere: a regression then fails on the
+	// assertions below instead of parking the ask until the test timeout.
 	a.ConfirmTool(ConfirmAllowOnce)
 	_, handled, note, err = callForCheck(t, a, call)
 	require.NoError(t, err)
 	assert.False(t, handled)
-	require.NotNil(t, note)
-	assert.Equal(t, noteByApproval, note.By)
-	assert.Equal(t, 2, judge.callCount(), "a silenced rule is a different question, so the verdict is not reused")
-
-	// With the judgment OFF, the silenced rule and the absent judgment leave
-	// nothing to ask about: the call simply runs, and carries no note at all.
-	a.Config.FullConfig.Permissions.Files.Jev = config.FilesJevOff
-	a.ResetAskVerdicts()
-	_, handled, note, err = callForCheck(t, a, call)
-	require.NoError(t, err)
-	assert.False(t, handled)
-	assert.Nil(t, note, "an approved session silences the ask rules, so there is no decision to note")
+	assert.Nil(t, note, "nothing asked, so there is no decision to note")
+	assert.Equal(t, 1, judge.callCount(), "the gate must not be consulted again")
 
 	// The deny rule survives the switch, on the same policy.
 	res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameWrite, "/etc/hosts", "x"))

@@ -27,13 +27,17 @@ const (
 // *application.App the event emit is skipped, which is exactly what lets this run
 // without a window server) and an agent carrying a policy whose only rule is an
 // `ask` on git push.
+//
+// The agent is a REAL one (see newPermissionTestAgent) rather than a zero-value
+// construct: answering 「本会话全部允许」 lands on the session's PermissionState as
+// well as on the policy — one answer, two readers, and the judgment gates read the
+// former — so an agent without session state is no longer enough to answer a card.
+// No provider traffic either way: the agent is built with SkipConfigure.
 func newAskTest(t *testing.T) (*desktopApp, *AgentService, *agent.AIAgent, *permission.Policy) {
 	t.Helper()
 	d := newDesktopApp()
 	p := permission.NewPolicy(permission.Rules{Ask: []string{"git push*"}}, permission.Rules{})
-	// A zero-value agent is enough: the ask path only reaches Config through
-	// PermissionPolicy. No provider, no Configure, no network.
-	a := &agent.AIAgent{}
+	a := newPermissionTestAgent(t)
 	a.SetPermissionPolicy(p)
 	return d, &AgentService{desk: d}, a, p
 }
@@ -186,6 +190,13 @@ func TestAskPermissionAllowSessionFlipsTheSessionsPolicy(t *testing.T) {
 	if dec, _ := p.CheckBash("git push origin dev"); dec != permission.DecisionAllow {
 		t.Errorf("the session switch was not flipped: decision = %v", dec)
 	}
+	// And the GATES' half of the same answer (PermState.AllowAllAsks). One answer, two readers: the
+	// gates ask a different question than the rules do and run after every rule has spoken, so a
+	// switch only the policy holds is exactly the button that kept asking about commands no rule
+	// covered (TestSessionAllowAllReachesTheJudgmentGate in the agent package pins that half).
+	if !a.PermState.AllowAllAsks {
+		t.Error("「本会话全部允许」 did not reach the judgment gates' half of the session state")
+	}
 	// Nothing parked: the wait ended with the answer, not with a leftover row.
 	d.mu.Lock()
 	n := len(d.asks)
@@ -210,6 +221,9 @@ func TestAskPermissionAllowSessionIsScopedToItsSession(t *testing.T) {
 	awaitAsk(t, out)
 	if dec, _ := p1.CheckBash(askCmd); dec != permission.DecisionAllow {
 		t.Fatalf("first session's switch was not flipped: %v", dec)
+	}
+	if !a1.PermState.AllowAllAsks {
+		t.Fatal("first session's gates half was not flipped")
 	}
 
 	// Another session's policy is untouched, so its ask still parks here.

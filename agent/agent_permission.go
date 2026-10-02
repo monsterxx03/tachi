@@ -199,6 +199,24 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 		}, true, nil, nil
 	}
 
+	// 「本会话全部允许」 (the session-scoped approval): the user has already answered every ask this
+	// session can raise, so nothing below has anyone left to ask. It sits AFTER the deny branch for
+	// the reason the policy's own copy does — deny is the one decision the approval must never reach
+	// — and BEFORE the judgment on purpose: a verdict nobody can act on is not worth a call, and the
+	// card it would raise is the one the user just dismissed. That covers all three causes at once:
+	// a matched ask rule (already turned into an allow by the policy's copy), a command the parser
+	// could not read (`AskNoRule`), and the judgment's own ask.
+	//
+	// The unparseable cause is worth naming, because it is the one ask that stops being a JUDGMENT
+	// about risk: nothing was parsed, so no rule — deny included — could be evaluated, and the
+	// command runs on the strength of the user's blanket answer alone. That is deliberate and
+	// matches the other frontends' 「allow all」 (PermissionModeSkip's AutoApprovePolicyAsks
+	// approves a policy ask of either kind), and the population is benign in practice: an unclosed
+	// quote or a trailing `&&` — both of which bash refuses too.
+	if a.PermState.AllowAllAsks {
+		return tools.ToolResult{}, false, nil, nil
+	}
+
 	// Judgment gate (agent_permission_jev.go): every command a rule did not DENY is
 	// judged, and one the judgment says a human should see is raised through the
 	// same path a rule-matched ask uses. judged == false means there is no answer
@@ -314,10 +332,11 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd strin
 		switch resp {
 		case ConfirmAllowSession, ConfirmAllowOnce:
 			if resp == ConfirmAllowSession {
-				// 「本会话全部允许」: stop asking about this session's ask
-				// rules. Deny rules are checked before an ask is raised, so
-				// this cannot widen into "run what the rules forbid".
-				a.Config.PermissionPolicy.AllowAllAsksForSession()
+				// 「本会话全部允许」: stop asking about this session's rules AND its
+				// judgments (one setter flips both readers). Deny rules are checked
+				// before an ask is raised, so this cannot widen into "run what the
+				// rules forbid".
+				a.AllowAllAsksForSession()
 			}
 			a.dispatchPermissionResult(ctx, tc, true)
 			return tools.ToolResult{}, false, nil

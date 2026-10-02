@@ -163,12 +163,11 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 	case decision := <-answer:
 		switch decision {
 		case permAllowSession:
-			// 「本会话全部允许」: hand the fact to the policy, which is where the
-			// session's ask rules are evaluated — so every later ask skips this
-			// handler (no card, no notification) instead of parking again.
-			if p := a.PermissionPolicy(); p != nil {
-				p.AllowAllAsksForSession()
-			}
+			// 「本会话全部允许」: one setter flips both readers on this session's own agent —
+			// the ask rules (evaluated inside the policy) and both judgment gates — so every
+			// later ask skips this handler entirely (no card, no notification) instead of
+			// parking again.
+			a.AllowAllAsksForSession()
 			// The search cost gate is not part of that policy (it answers a
 			// different question — money, not rules) and reads only a bool from
 			// this handler, so its own session switch has to be flipped here.

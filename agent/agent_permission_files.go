@@ -221,6 +221,16 @@ func (a *AIAgent) checkFilePermission(ctx context.Context, tc llm.ToolCall, ch c
 		}, true, nil, nil
 	}
 
+	// 「本会话全部允许」: the session-scoped approval, read at the same point the bash half reads it
+	// — after deny, before the judgment. See agent_permission.go for why it is here rather than
+	// inside the policy (the gates ask a different question than the rules do) and why the judgment
+	// is skipped rather than filtered. A path always parses, so this half has no `AskNoRule` case:
+	// what it covers is a matched ask rule (silenced by the policy's own copy of the flag) and the
+	// judgment's ask.
+	if a.PermState.AllowAllAsks {
+		return tools.ToolResult{}, false, nil, nil
+	}
+
 	// Judgment gate: every file call a rule did not DENY is judged, and one the
 	// judgment says a human should see is raised through the same path a
 	// rule-matched ask uses. judged == false means there is no answer to act on —
@@ -316,13 +326,11 @@ func (a *AIAgent) resolveFileAsk(ctx context.Context, tc llm.ToolCall, call file
 			return tools.ToolResult{Status: tools.ToolResultError, Err: fileAskDenied(cause, call)}, true, nil
 		}
 		if resp == ConfirmAllowSession {
-			// 「本会话全部允许」: hand the fact to the policy, which is where this
-			// session's ask rules are evaluated — so every later rule-matched call
-			// skips the card. Deny rules were decided above, so this cannot widen
-			// into "write what the rules forbid", and the judgment still runs.
-			if p := a.Config.PermissionPolicy; p != nil {
-				p.AllowAllAsksForSession()
-			}
+			// 「本会话全部允许」: one setter flips both readers — this session's ask rules
+			// (evaluated inside the policy) and both judgment gates, so every later call
+			// skips the card. Deny rules were decided above, so this cannot widen into
+			// "write what the rules forbid".
+			a.AllowAllAsksForSession()
 		}
 		a.dispatchPermissionResult(ctx, tc, true)
 		return tools.ToolResult{}, false, nil

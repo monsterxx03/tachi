@@ -680,6 +680,23 @@ func (a *AIAgent) SessionManager() SessionManager {
 	return a.Config.SessionManager
 }
 
+// AllowAllAsksForSession records 「本会话全部允许」: from here this session is not asked about
+// another command or file call — not by an ask rule, and not by either judgment gate.
+//
+// It is the ONE setter, because the answer has two readers: the policy (which owns the rules half,
+// and is the copy a forked child shares with its parent) and PermState (which owns the gates half,
+// and is the only place that exists when a session has no policy at all). Flipping just one of them
+// is exactly how the button came to keep asking.
+//
+// Deny rules are untouched, and are still decided before either reader is reached: "stop asking me"
+// can never become "run what my rules forbid".
+func (a *AIAgent) AllowAllAsksForSession() {
+	if a.Config.PermissionPolicy != nil {
+		a.Config.PermissionPolicy.AllowAllAsksForSession()
+	}
+	a.PermState.AllowAllAsks = true
+}
+
 // ClearSession ends the current session so a new one will be created on the next message.
 // Used by /new command to start a fresh session.
 func (a *AIAgent) ClearSession() {
@@ -688,12 +705,13 @@ func (a *AIAgent) ClearSession() {
 	}
 	// Clear skill activation state so the same skills can be re-activated.
 	a.activeSkills = nil
-	// And the session-scoped permission approvals: this conversation is over, so a
-	// new one asks again. (The rules themselves are not state — they still describe
-	// the same commands.)
+	// And the session-scoped permission approvals (both copies of the one answer): this
+	// conversation is over, so a new one asks again. (The rules themselves are not state —
+	// they still describe the same commands.)
 	if a.Config.PermissionPolicy != nil {
 		a.Config.PermissionPolicy.ResetSessionApprovals()
 	}
+	a.PermState.AllowAllAsks = false
 	// The MCP search cost gate's session answers, for exactly the same reason: a refusal
 	// recorded while answering THIS conversation must not silence the gate in the next one,
 	// and neither must an 「本会话允许」. Without this the gate would be the one piece of

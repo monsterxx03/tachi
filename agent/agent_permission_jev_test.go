@@ -341,6 +341,83 @@ func TestCheckBashPermissionNote(t *testing.T) {
 	})
 }
 
+// TestSessionAllowAllReachesTheJudgmentGate — 「本会话全部允许」 has to stop BOTH halves from asking.
+//
+// The policy's copy of the answer silences a matched ask rule, which is all a policy can do: the
+// judgment gate asks about commands no rule covered, and it runs AFTER every rule has spoken, so a
+// switch the rules own cannot reach it. The button therefore promised 「本会话全部允许」 while the
+// user kept answering cards — the ones the gate raised. This pins the half that was missing,
+// including that the gate is not merely filtered but never consulted: a verdict nobody can act on
+// is not worth a call (each one is ~600 input tokens), and the card it would raise is the one the
+// user just dismissed.
+func TestSessionAllowAllReachesTheJudgmentGate(t *testing.T) {
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{
+		Name: "Bash", Arguments: `{"command":"git push origin +main"}`,
+	}}
+
+	t.Run("judgment ask", func(t *testing.T) {
+		judge := &fakeAskJudge{p: 0.94} // over this agent's 0.70 threshold
+		a := askGateAgent(t, judge, nil)
+		a.AllowAllAsksForSession()
+		// Answered before the call, so a REGRESSION fails on the assertions below instead of
+		// parking the ask and hanging the run until the test timeout.
+		a.ConfirmTool(ConfirmAllowOnce)
+
+		_, handled, note, err := a.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+		require.NoError(t, err)
+		require.False(t, handled)
+		assert.Nil(t, note, "no ask was raised, so there is no decision to report")
+		assert.Equal(t, 0, judge.callCount(), "the gate must not even be asked")
+	})
+
+	t.Run("unparseable command", func(t *testing.T) {
+		// The conservative ask (`AskNoRule`) is covered too — it is a policy ask like any other, and
+		// the other frontends' 「allow all」 approves it as well (PermissionModeSkip's
+		// AutoApprovePolicyAsks checks before it special-cases the sentinel). Worth pinning because
+		// it is the one ask where NOTHING could be evaluated: the command did not parse, so no rule —
+		// deny included — sees any part of it, and the user's blanket answer is the only thing
+		// carrying the command. The population is benign in practice: an unclosed quote, or the
+		// trailing `&&` — both refused by bash itself.
+		bad := llm.ToolCall{ID: "c2", Function: llm.ToolCallFunction{
+			Name: "Bash", Arguments: `{"command":"echo \"unclosed"}`,
+		}}
+		judge := &fakeAskJudge{p: 0.94}
+		a := askGateAgent(t, judge, nil)
+		a.SetPermissionPolicy(permission.NewPolicy(
+			permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
+		a.AllowAllAsksForSession()
+		a.ConfirmTool(ConfirmAllowOnce) // see above: fail fast, never park
+
+		_, handled, _, err := a.checkBashPermission(t.Context(), bad, make(chan AgentEvent, 4))
+		require.NoError(t, err)
+		require.False(t, handled, "an approved session does not ask about a command it cannot parse")
+		assert.Equal(t, 0, judge.callCount())
+	})
+}
+
+// The approval is state of the SESSION on both halves: a new conversation asks again — for the
+// rules (the policy's copy) and for the gates (the agent's). Without the second reset, 「/new」
+// would keep running every risky command unjudged in a conversation that never gave that answer.
+func TestClearSessionDropsTheGateApproval(t *testing.T) {
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{
+		Name: "Bash", Arguments: `{"command":"git push origin +main"}`,
+	}}
+	judge := &fakeAskJudge{p: 0.94}
+	a := askGateAgent(t, judge, nil)
+	a.AllowAllAsksForSession()
+	a.ClearSession()
+
+	// Answered before the call: the ask parks, and ConfirmResp is buffered with capacity 1, so it
+	// picks the decision up as soon as it waits.
+	a.ConfirmTool(ConfirmAllowOnce)
+	_, handled, note, err := a.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	require.False(t, handled)
+	require.NotNil(t, note)
+	assert.Equal(t, noteByApproval, note.By)
+	assert.Equal(t, 1, judge.callCount(), "the next conversation must judge — and ask — again")
+}
+
 // TestBashResultDoesNotCarryTheNoteToTheModel: the decision line is for the human
 // reading the transcript and for NOBODY else. In the model's message it would be
 // re-sent in the history of every later request and would read as a standing

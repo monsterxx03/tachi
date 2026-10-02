@@ -85,7 +85,8 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **It judges EVERY command that is not denied, and it can only do two things**: run it, or raise the ask a rule
   would have raised. It never produces a `deny` — a probability is not a guarantee, and a `deny` that is right
   99% of the time is broken (jev.md). A catastrophic command judged at the top of the scale is still only
-  escalated to a human, which is the point.
+  escalated to a human, which is the point. The one thing that switches it off per SESSION is
+  「本会话全部允许」 (see Session-scoped approvals below): a verdict nobody can act on is not worth the call.
 - **Only where a human can answer**: `PermissionModeSkip` is excluded, so a channel bot, a subagent or `-p` never
   has a probability approve something. Letting it would be a product decision, not this gate's.
 - **When the service cannot answer, the RULES decide**: a rule-matched command asks, an unmatched one runs. That is why an outage cannot make anything worse, and why
@@ -189,15 +190,30 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 ## Session-scoped approvals
 
-- **「本会话全部允许」 is one switch on the policy and it only silences ASK rules** (`AllowAllAsksForSession`):
-  deny is decided before an ask is reached, so "stop asking me" can never become "run what I forbade".
-- **Rebuilding a policy must INHERIT it** (`InheritSessionApprovals`), or a folder change re-asks a question the
-  user already answered — a regression they cannot see coming. The RULES must not carry over: they are exactly
-  what changed.
-- **Ending a session drops it** (`ResetSessionApprovals`, from `ClearSession`) — together with the gate's memo,
-  because a new conversation is not the one whose commands were judged or allowed.
+- **「本会话全部允许」 is ONE answer with TWO readers — and flipping only one of them is the bug the shape
+  exists to prevent.** The policy's copy (`Policy.AllowAllAsksForSession`) silences a matched ASK rule; the
+  agent's copy (`PermState.AllowAllAsks`) silences the two JUDGMENT GATES, which both read it after their deny
+  branch and BEFORE judging — so the gate is not consulted at all (a verdict nobody can act on is not worth a
+  call, and the card it would raise is the one the user just dismissed). Two readers are not redundancy: the
+  policy's copy is what a forked child shares with its parent (`agent_fork.go`), and the PermState copy is the
+  only one that exists when a session has no policy at all (rules absent AND built-ins disabled — its gates
+  still ask, and its button used to do nothing). One setter flips both: `AIAgent.AllowAllAsksForSession`.
+- **deny is decided before EITHER reader is reached**, so "stop asking me" can never become "run what I
+  forbade". The one ask it does widen into is the UNPARSEABLE command (`AskNoRule`): nothing was parsed, so no
+  rule — deny included — saw any part of it, and the command runs on the blanket answer alone. That is
+  deliberate and matches the other frontends' 「allow all」 (PermissionModeSkip's `AutoApprovePolicyAsks`
+  approves either kind of policy ask), and the population is benign: an unclosed quote, or a trailing `&&`.
+- **Rebuilding a policy must INHERIT the policy's half** (`InheritSessionApprovals`), or a folder change re-asks
+  a question the user already answered — a regression they cannot see coming. The PermState half needs no
+  inheritance (a tree change rebuilds the policy, not the agent). The RULES must not carry over: they are
+  exactly what changed.
+- **Ending a session drops both halves** (`ResetSessionApprovals` + `PermState.AllowAllAsks`, from
+  `ClearSession`) — together with the gate's memo, because a new conversation is not the one whose commands were
+  judged or allowed.
 - The MCP search cost card's session answers (`MCPSearchAllowed/Blocked`) live beside these for the same reason,
-  but they answer a different question (money, not rules).
+  but they answer a different question (money, not rules) — and its own switch is what made THAT card's
+  「本会话全部允许」 work in the first place, which is where this shape was copied from: the permission card was
+  the inconsistent one, not the search card.
 
 ## Which trees contribute rules
 

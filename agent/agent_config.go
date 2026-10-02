@@ -278,6 +278,22 @@ type PermissionState struct {
 	// runs leave it false.
 	AutoApprovePolicyAsks bool
 
+	// AllowAllAsks is 「本会话全部允许」 — the answer the interactive frontends give to a permission
+	// card (the TUI's `a`, the desktop's 本会话全部允许 button). The policy keeps its own copy of this
+	// flag (Policy.AllowAllAsksForSession), because the rules half is the policy's business and a
+	// forked child shares the parent's policy; THIS copy is what the JUDGMENT GATES read, for two
+	// reasons that have nothing to do with rules:
+	//
+	//   - the gates answer a different question ("should a human see this?") and run AFTER every
+	//     rule has spoken, so a switch the rules own cannot reach them — the button said
+	//     「本会话全部允许」 and the gate kept asking (the bug this field exists for);
+	//   - a session with no policy at all (rules absent AND built-ins disabled) still has gates,
+	//     and the approval has to have somewhere to live there too.
+	//
+	// Both flags are set together by AIAgent.AllowAllAsksForSession, and both are dropped when the
+	// conversation ends — one answer, two readers.
+	AllowAllAsks bool
+
 	// MCPSearchAllowed / MCPSearchBlocked are the MCP search cost card's
 	// session-wide answers (see mcp_budget.go). They are one-shot answers
 	// recorded on the agent because that is what a session IS here: one agent
