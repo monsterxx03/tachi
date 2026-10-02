@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { fmtTime, imeActive, latestSessionOf, listNav, projectMatches, sessionChoices, sessionMatches } from './lib'
+import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, LOOSE_LABEL, LOOSE_LABEL_HINT } from './lib'
 import type { SessionItem } from './types'
 
 // usePaletteInput owns a palette's filter box: what it HOLDS and what the LIST filters by are two
@@ -44,14 +44,23 @@ function usePaletteInput() {
   }
 }
 
-// ProjectPalette is ⌘P: type to filter the desktop's projects, Enter to open the chosen
-// one. "Open" is the only decision it makes — switch to that project's most recent
-// conversation, or make the first one — and it makes it by delegating: `onPick` returns the
-// refusal REASON (or "" when the choice was handled), so the rule about what a project can
-// be opened into lives in App.tsx with the two actions it picks between.
+// ProjectChoice is one ⌘P row: a project, or the project-less bucket (无项目). The bucket is a row
+// because it is a GROUP on the other side of the same gesture — the sidebar keeps it at the foot of
+// its list, and it is where a session no live project owns lives (⌘⇧N and the sidebar's own ＋ make
+// those), so a palette that could only name projects would be unable to take the reader back to one.
+//
+// The bucket is not a ProjectVO on purpose: it has no id, no name of its own to rename and no
+// directory to drive, and a fake one would be a row the project machinery could be handed.
+export type ProjectChoice = { kind: 'project'; project: ProjectVO } | { kind: 'loose' }
+
+// ProjectPalette is ⌘P: type to filter the desktop's projects and the 无项目 bucket, Enter to open
+// the chosen one. "Open" is the only decision it makes — switch to that row's most recent
+// conversation, or make one — and it makes it by delegating: `onPick` returns the refusal REASON (or
+// "" when the choice was handled), so the rule about what a row can be opened into lives in App.tsx
+// with the two actions it picks between.
 //
 // Every row therefore says what Enter will do before it is pressed: the title of the
-// conversation that will open, 「新建会话」 for a project with none, or the reason it can do
+// conversation that will open, 「新建会话」 for a row with none, or the reason it can do
 // neither. A palette that only listed names would make Enter a guess, and the guess would be
 // wrong exactly where it matters — a project whose directory is gone, where the backend
 // would otherwise create an UNBOUND session (NewSession falls back to the last used
@@ -59,9 +68,9 @@ function usePaletteInput() {
 export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   projects: ProjectVO[]
   sessions: SessionItem[]
-  // onPick handles the chosen project. It returns "" when the palette should close, or the
+  // onPick handles the chosen row. It returns "" when the palette should close, or the
   // reason to show IN PLACE of closing (a refusal must not look like success).
-  onPick: (p: ProjectVO) => string
+  onPick: (c: ProjectChoice) => string
   onClose: () => void
 }) {
   const [idx, setIdx] = useState(0)
@@ -70,7 +79,20 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   const listRef = useRef<HTMLDivElement>(null)
   const { committed: query, composingRef, inputProps } = usePaletteInput()
 
-  const rows = useMemo(() => projects.filter((p) => projectMatches(p, query)), [projects, query])
+  // The bucket's members, by the SIDEBAR's own membership rule (looseMembers): the row shows how
+  // many there are and which one Enter opens, so the two surfaces cannot disagree about which
+  // sessions belong to it.
+  const loose = useMemo(() => looseMembers(sessions, projects), [sessions, projects])
+
+  // The bucket is LAST, as it is in the sidebar, and a query reaches it by its own name only
+  // (looseMatches): typing a project's name or directory asked for that project, not for this.
+  const rows = useMemo<ProjectChoice[]>(() => {
+    const out: ProjectChoice[] = projects
+      .filter((p) => projectMatches(p, query))
+      .map((p) => ({ kind: 'project', project: p }))
+    if (looseMatches(query)) out.push({ kind: 'loose' })
+    return out
+  }, [projects, query])
 
   // Focus the box on mount: moving this dialog with the keyboard without a text field in
   // front of it would make typing filter nothing.
@@ -92,10 +114,35 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   // (the project cannot be opened into anything right now) is shown where the reader is
   // looking instead: dismissing the box on it would read as "done", and the next ⌘P would
   // present the same project with the same problem.
-  const pick = (p: ProjectVO) => {
-    const reason = onPick(p)
+  const pick = (c: ProjectChoice) => {
+    const reason = onPick(c)
     if (reason) setNotice(reason)
     else onClose()
+  }
+
+  // facts is what a row SHOWS and what Enter will DO, derived per row because both kinds answer in
+  // one shape. The three action cases are mutually exclusive and exhaustive, and the third is the
+  // one the backend cannot say out loud: an unusable project refuses to CREATE (a session made here
+  // would land unbound). It is ⌘P's only refusal — a bucket session is always openable, and making
+  // one needs no workspace of anyone's — so the bucket row never blocks.
+  const facts = (c: ProjectChoice) => {
+    const p = c.kind === 'project' ? c.project : null
+    const members = p ? sessions.filter((s) => s.projectId === p.id) : loose
+    const latest = p ? latestSessionOf(sessions, p.id) : newestOf(loose)
+    const blocked = !latest && !!p && !p.rootsUsable
+    const action = latest ? `→ ${latest.title || '未命名会话'}`
+      : blocked ? '主目录不可用，无法新建会话'
+        : '→ 新建会话'
+    return {
+      // '__loose__' is the same key the sidebar gives the bucket's group: one bucket, one key.
+      key: p ? p.id : '__loose__',
+      name: p ? p.name : LOOSE_LABEL,
+      where: p ? p.workingDir : LOOSE_LABEL_HINT,
+      whereTitle: p ? p.workingDir : `不属于任何项目：${LOOSE_LABEL_HINT}`,
+      count: members.length,
+      action,
+      blocked,
+    }
   }
 
   // ↑↓ and Ctrl+N/Ctrl+P both walk the list (`listNav` — the same pair the composer's pickers
@@ -114,8 +161,8 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
     }
     if (e.key === 'Enter') {
       e.preventDefault()
-      const p = rows[Math.min(idx, rows.length - 1)]
-      if (p) pick(p)
+      const c = rows[Math.min(idx, rows.length - 1)]
+      if (c) pick(c)
       return
     }
     if (e.key === 'Escape') {
@@ -132,34 +179,27 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
         <div className="palette-list" ref={listRef} role="listbox" aria-label="项目">
           {rows.length === 0 ? (
             <div className="palette-empty">没有匹配的项目</div>
-          ) : rows.map((p, i) => {
-            const latest = latestSessionOf(sessions, p.id)
-            const count = sessions.filter((s) => s.projectId === p.id).length
-            // What Enter does, in the row itself. The three cases are mutually exclusive and
-            // exhaustive, and the third is the one the backend cannot say out loud: an
-            // unusable project refuses to CREATE (a session made here would land unbound).
-            const action = latest
-              ? `→ ${latest.title || '未命名会话'}`
-              : p.rootsUsable ? '→ 新建会话' : '主目录不可用，无法新建会话'
+          ) : rows.map((choice, i) => {
+            const f = facts(choice)
             return (
-              <div key={p.id} className={`palette-row${i === idx ? ' is-sel' : ''}`}
+              <div key={f.key} className={`palette-row${i === idx ? ' is-sel' : ''}`}
                 role="option" aria-selected={i === idx}
                 onMouseMove={() => setIdx(i)}
-                onClick={() => pick(p)}>
+                onClick={() => pick(choice)}>
                 <div className="palette-main">
-                  <div className="palette-name">{p.name}</div>
-                  <div className="palette-path" title={p.workingDir}>{p.workingDir}</div>
+                  <div className="palette-name">{f.name}</div>
+                  <div className="palette-path" title={f.whereTitle}>{f.where}</div>
                 </div>
                 <div className="palette-side">
-                  <div className="palette-meta">{count > 0 ? `${count} 个会话` : '还没有会话'}</div>
-                  <div className={`palette-action${!latest && !p.rootsUsable ? ' is-blocked' : ''}`}>{action}</div>
+                  <div className="palette-meta">{f.count > 0 ? `${f.count} 个会话` : '还没有会话'}</div>
+                  <div className={`palette-action${f.blocked ? ' is-blocked' : ''}`}>{f.action}</div>
                 </div>
               </div>
             )
           })}
         </div>
         {notice ? <div className="palette-notice">{notice}</div> : null}
-        <div className="palette-hint">↑↓ 选择 · Enter 打开（该项目最近的会话，没有就新建）· Esc 关闭</div>
+        <div className="palette-hint">↑↓ 选择 · Enter 打开（该组最近的会话，没有就新建）· Esc 关闭</div>
       </div>
     </div>
   )
@@ -221,7 +261,7 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
     const p = projects.find((x) => x.id === s.projectId)
     return p
       ? <span className="palette-proj" title={`项目：${p.name}`}>{p.name}</span>
-      : <span className="palette-loose" title="不属于任何项目：它用自己的工作区快照">无项目</span>
+      : <span className="palette-loose" title="不属于任何项目：它用自己的工作区快照">{LOOSE_LABEL}</span>
   }
 
   // ↑↓ and Ctrl+N/Ctrl+P walk the list; navigation wraps, as it does in ⌘P. Enter opens the

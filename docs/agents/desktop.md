@@ -936,7 +936,12 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   caret goes back to the composer, because ⌘P is the only entry point that closes a dialog ON THE WAY to a
   session. What ⌘K decides for itself: the rows are conversations in the list's own order (pins are ignored —
   a pin orders a row inside its GROUP), the query matches the TITLE only, and which project a row belongs to is
-  a TAG rather than a second line of text.
+  a TAG rather than a second line of text. What ⌘P decides for itself: **its rows are the GROUPS a reader can
+  land in, so the 无项目 bucket is one of them** (`ProjectChoice`, last, as it is in the sidebar) — the palette
+  is reached from the keyboard, and ⌘⇧N creates sessions that belong to no project, so a list of projects only
+  would leave those unreachable; which sessions belong to the bucket is the SIDEBAR's own membership rule
+  (`looseMembers`, which is `liveProjectId` — no `projectId`, or one no live project answers to, the same
+  dangling-id case the grouping resolves), and the query reaches the bucket by its own name alone.
 - **A project write re-reads the reader** (`agent:workspace_changed`): the frontend holds workspaces and groups
   BY VALUE, so a rename moves nothing on screen until the user switches sessions.
 - **Deleting a session with a turn in flight is REFUSED, by the backend** (the turn owns a goroutine whose

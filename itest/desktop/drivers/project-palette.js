@@ -54,6 +54,14 @@
     const a = document.activeElement
     return a ? (a.className || a.tagName) : '(没有焦点)'
   }
+  // 当前显示的是哪个会话：标题栏不显示 id，读 app 根上的 data-session-id（唯一稳定的把手）。
+  // 「换没换会话」只能靠它——标题会重复（未命名会话），而 active 行所在的组会变。
+  const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
+  // 当前会话那一行的标题：侧栏里只有一行 active，所以它是唯一的。
+  const activeTitle = () => {
+    const t = smoke.q('.session.active .session-title')
+    return t ? smoke.text(t) : ''
+  }
 
   // ── 1. 起手：显式进项目会话（谁被启动时选中是 fixture 的顺序细节），再 ⌘N 添一个成员 ──
   const seeded = rowsOf('smoke-pal')[0]
@@ -77,8 +85,10 @@
   smoke.key(document.body, 'p', { metaKey: true })
   if (!(await smoke.waitFor('.palette-box', '项目搜索浮层打开', 8000))) return smoke.finish()
   const names = smoke.allText('.palette-name')
-  smoke.check('两个项目都在列表里', names.length === 2, names.join(' | '))
+  // 两个项目 + 无项目那个桶。桶排在最后，跟侧栏里它是最后一组是同一个位置。
+  smoke.check('两个项目和无项目都在列表里', names.length === 3, names.join(' | '))
   smoke.check('有会话的项目在前（后端按创建时间倒序）', names[0] === 'smoke-pal', names.join(' | '))
+  smoke.check('无项目那一行排在最后（与侧栏同序）', names[2] === '无项目', names.join(' | '))
   const rows = smoke.qa('.palette-row')
   const act0 = rows[0] ? smoke.text(rows[0].querySelector('.palette-action')) : ''
   const act1 = rows[1] ? smoke.text(rows[1].querySelector('.palette-action')) : ''
@@ -94,9 +104,69 @@
   const refocused = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框', 3000)
   smoke.check('切完会话焦点落在输入框（可以直接打字）', !!refocused, activeDesc())
 
-  // ── 3. 过滤；Esc 什么都不做 ─────────────────────────────────────────────
+  // ── 3. 无项目那一行：同一个契约，另一种组 ────────────────────────────────
+  // ⌘P 列的是「人落得进去的组」：项目，以及无项目那个桶（侧栏的最后一组，⌘⇧N 和侧栏自己的 ＋
+  // 造出来的会话都在那儿）。桶不是一个项目，所以它的行同样要先说清回车会打开哪个 —— 而这一步
+  // 就是上面那一步对项目说的同一句话，加上「落到的那一个就是行上写的那个」。
+  //
+  // 用名字过滤到它：两个项目的名字与目录里都不含「无项目」，所以这一下之后列表里应该只剩一行。
+  // 这也顺带钉住匹配规则本身（桶只按自己的名字被搜到，项目的名字不会把桶捞出来）。
   smoke.key(document.body, 'p', { metaKey: true })
-  if (!(await smoke.waitFor('.palette-box', '浮层再次打开', 8000))) return smoke.finish()
+  if (!(await smoke.waitFor('.palette-box', '浮层第二次打开', 8000))) return smoke.finish()
+  smoke.type('.palette-input', '无项目')
+  const onlyBucket = await smoke.waitFor(() => (smoke.qa('.palette-row').length === 1 ? true : null),
+    '按「无项目」过滤到那一行', 4000)
+  smoke.check('「无项目」按名字就能搜到（只剩它一行）', !!onlyBucket, smoke.allText('.palette-name').join(' | '))
+  const bucket = smoke.qa('.palette-row')[0]
+  const promised = bucket ? smoke.text(bucket.querySelector('.palette-action')) : ''
+  // 桶里的成员数按侧栏那套归属算（不属于任何在线项目的会话）——fixture 里就一个（无项目会话）。
+  smoke.check('无项目那一行数的是桶里的会话', !!bucket && smoke.text(bucket).indexOf('1 个会话') >= 0,
+    bucket ? smoke.text(bucket) : '(没有这一行)')
+  smoke.check('无项目那一行也写着会打开哪个会话', promised.indexOf('→ ') === 0 && promised.indexOf('新建') < 0, promised)
+  const beforeBucket = sessionId()
+  smoke.key('.palette-input', 'Enter')
+  const switched = await smoke.waitFor(() => (sessionId() !== beforeBucket ? true : null), '回车进到桶里那个会话', 10000)
+  smoke.check('无项目那一行回车真的换了会话', !!switched, 'session-id ' + sessionId())
+  smoke.check('落到的就是那一行承诺的会话', promised.indexOf('→ ' + activeTitle()) === 0,
+    '行上写 ' + promised + ' · 实际 ' + activeTitle())
+
+  // ── 3b. 桶空着的那一半：那一行写「新建会话」，回车真的建一个不属于任何项目的 ─────────
+  // 桶里 fixture 就一个会话，把它删掉（⌘⇧⌫ → 确认框里 Enter），那一行就从「→ 某个会话」变成
+  // 「→ 新建会话」：两种状态各说各的，回车也得各自做到。这一行没有 refusal 可言 —— 无项目的
+  // 会话不借任何人的工作区，所以它永远不写「不可用」那种话。
+  smoke.key(document.body, 'Backspace', { metaKey: true, shiftKey: true })
+  const del = await smoke.waitFor('.confirm-box', '⌘⇧⌫ 开出删除确认框', 5000)
+  if (!del) return smoke.finish()
+  smoke.key(del, 'Enter')
+  const emptied = await smoke.waitFor(() => (smoke.qa('.session-list > .session').length === 0 ? true : null),
+    '桶里那个会话被删掉（无项目组空了）', 8000)
+  smoke.check('删掉之后桶空了', !!emptied, smoke.qa('.session-list > .session').length + ' 行')
+
+  smoke.key(document.body, 'p', { metaKey: true })
+  if (!(await smoke.waitFor('.palette-box', '浮层第三次打开（桶空）', 8000))) return smoke.finish()
+  smoke.type('.palette-input', '无项目')
+  const stillThere = await smoke.waitFor(() => (smoke.qa('.palette-row').length === 1 ? true : null), '过滤到桶那一行', 4000)
+  smoke.check('桶空了那一行还在（⌘P 仍然到得了）', !!stillThere, smoke.allText('.palette-name').join(' | '))
+  const emptyBucket = smoke.qa('.palette-row')[0]
+  const emptyAction = emptyBucket ? smoke.text(emptyBucket.querySelector('.palette-action')) : ''
+  smoke.check('桶空时那一行写的是新建会话', emptyAction.indexOf('→ 新建会话') === 0, emptyAction)
+  smoke.check('桶空时那一行说自己还没有会话',
+    !!emptyBucket && smoke.text(emptyBucket).indexOf('还没有会话') >= 0,
+    emptyBucket ? smoke.text(emptyBucket) : '(没有这一行)')
+  const beforeCreate = sessionId()
+  smoke.key('.palette-input', 'Enter')
+  const made = await smoke.waitFor(() => (smoke.qa('.session-list > .session').length === 1 ? true : null),
+    '桶里建出新会话', 10000)
+  smoke.check('桶空时回车建出一个会话', !!made, smoke.qa('.session-list > .session').length + ' 行')
+  smoke.check('新建的会话就是当前会话（未命名）',
+    sessionId() !== beforeCreate && activeTitle() === '未命名会话',
+    'session-id ' + sessionId() + ' · 标题 ' + activeTitle())
+  await smoke.waitGone('.palette-box', '建完关掉浮层', 4000)
+
+  // ── 4. 过滤；Esc 什么都不做 ─────────────────────────────────────────────
+  const beforeEsc = sessionId()
+  smoke.key(document.body, 'p', { metaKey: true })
+  if (!(await smoke.waitFor('.palette-box', '浮层第四次打开', 8000))) return smoke.finish()
   smoke.type('.palette-input', 'zzz')
   const none = await smoke.waitFor('.palette-empty', '说明没有匹配的项目', 4000)
   smoke.check('没有匹配就说没有，而不是一片空白', !!none, smoke.text('.palette-empty'))
@@ -106,14 +176,14 @@
   smoke.key('.palette-input', 'Escape')
   await smoke.waitGone('.palette-box', 'Esc 关闭浮层', 4000)
   smoke.check('Esc 没有建会话', rowsOf('smoke-pal-empty').length === 0, rowsOf('smoke-pal-empty').length + ' 行')
-  smoke.check('Esc 没有切会话', activeIndex('smoke-pal') === 0, 'active 下标 ' + activeIndex('smoke-pal'))
+  smoke.check('Esc 没有切会话', sessionId() === beforeEsc, 'session-id ' + sessionId())
 
-  // ── 4. 空项目：回车建出它的第一个会话（高亮靠 Ctrl+N / Ctrl+P 走） ────────────
+  // ── 5. 空项目：回车建出它的第一个会话（高亮靠 Ctrl+N / Ctrl+P 走） ────────────
   // Ctrl+N / Ctrl+P 是 TUI 那套键位（readline 的 next/previous），在有输入框的浮层里顶替 ↑↓。
   // Cocoa 默认把这两个键当成光标上下移动，所以 handler 必须自己 preventDefault——驱动只能证明
   // 高亮动了，够钉住「这两个键确实被这一步接管了」；键盘焦点之外的效果看不到。
   smoke.key(document.body, 'p', { metaKey: true })
-  if (!(await smoke.waitFor('.palette-box', '浮层第三次打开', 8000))) return smoke.finish()
+  if (!(await smoke.waitFor('.palette-box', '浮层第五次打开', 8000))) return smoke.finish()
   smoke.key('.palette-input', 'n', { ctrlKey: true })
   const moved = await smoke.waitFor(() => (selectedName() === 'smoke-pal-empty' ? true : null), 'Ctrl+N 把高亮下移', 4000)
   smoke.check('Ctrl+N 下移高亮（不靠鼠标）', !!moved, selectedName() || '(没有高亮行)')
@@ -138,7 +208,7 @@
   const refocusedNew = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框（新建那一路）', 3000)
   smoke.check('新建出来的会话焦点也在输入框', !!refocusedNew, activeDesc())
 
-  // ── 5. 折叠的项目组：⌘P 进去之后它必须自己展开 ──────────────────────────
+  // ── 6. 折叠的项目组：⌘P 进去之后它必须自己展开 ──────────────────────────
   // ⌘P 的意思是「带我去那个项目」，而读者的下一个动作是看侧栏：折叠的组只剩一个组头，刚变 active
   // 的那一行藏在里面，等于没送到。但折叠是读者自己按出来的，所以这条规则只属于 ⌘P 这条入口——别的
   // 路径进来不该替他展开，否则「把正在用的项目收起来」就永远做不到。
@@ -153,7 +223,7 @@
     rowsOf('smoke-pal').length + ' 行（折叠时容器被摘掉）')
 
   smoke.key(document.body, 'p', { metaKey: true })
-  if (!(await smoke.waitFor('.palette-box', '浮层第四次打开', 8000))) return smoke.finish()
+  if (!(await smoke.waitFor('.palette-box', '浮层第六次打开', 8000))) return smoke.finish()
   if (selectedName() !== 'smoke-pal') return smoke.fail('高亮在 smoke-pal 上（回车才会打开它）', selectedName())
   smoke.key('.palette-input', 'Enter')
   const revealed = await smoke.waitFor(() => (expandedOf('smoke-pal') ? true : null), '⌘P 打开后项目展开', 8000)

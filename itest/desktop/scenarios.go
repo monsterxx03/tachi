@@ -2338,15 +2338,18 @@ permissions:
 		},
 		//
 		//
-		// project-palette: ⌘P 是进项目的那条键盘路径 —— 在项目之间选，回车打开该项目**最近用过**
-		// 的会话，还没有会话就建第一个。三件断言都是界面上看不出来的：
+		// project-palette: ⌘P 是进项目的那条键盘路径 —— 在「组」之间选，回车打开该组**最近用过**
+		// 的会话，还没有会话就建第一个。四件断言都是界面上看不出来的：
 		// (1) 打开的是「最近」而不是碰巧当前的那个 —— driver 先用 ⌘N 现造一个成员（它同时是
 		// createdAt 与 updatedAt 最新的，两种「最新」在这里重合），再切回旧成员，然后 ⌘P 回车，
 		// 断言 active 回到项目组的第一行；
 		// (2) 空项目回车真的建出会话，且**绑在该项目上** —— 前端只看得见行数变了，绑定关系只有
 		// 磁盘上的 meta.json 说得清（NewSession 在项目不能驱动时会静默建一个不属于任何项目的
 		// 会话，这条就是防它的）；
-		// (3) 整个过程不碰模型 —— 一次键盘导航不该花掉任何 token。
+		// (3) ⌘P 列的是「人落得进去的组」，所以无项目那个桶也在列表里（侧栏的最后一组）。它的成
+		// 员数、回车落到哪个会话由 driver 在真机上验；这里钉的是它**没有凭空建** —— 那一行回车打
+		// 开的是已有的无项目会话，磁盘上仍然只有一个不带 project_id 的会话；
+		// (4) 整个过程不碰模型 —— 一次键盘导航不该花掉任何 token。
 		{
 			name: "project-palette",
 			files: map[string]string{
@@ -2372,6 +2375,16 @@ permissions:
 				}
 				c.check("⌘P 在空项目里建的会话绑在该项目上（meta.json 的 project_id）", bound == 1,
 					fmt.Sprintf("project_id=smoke-project-empty 的会话有 %d 个", bound))
+				// 无项目那一行是「打开」不是「新建」：会话的 project_id 带 omitempty，所以无项目的
+				// 会话在 meta.json 里根本没有这个键——两种写法都算。
+				loose := 0
+				for _, m := range c.sessionMetas() {
+					if pid, ok := m["project_id"]; !ok || pid == "" {
+						loose++
+					}
+				}
+				c.check("无项目那一行打开的是已有的无项目会话（没有凭空建一个）", loose == 1,
+					fmt.Sprintf("不带 project_id 的会话有 %d 个", loose))
 				members := 0
 				for _, m := range c.sessionMetas() {
 					if m["project_id"] == "smoke-project" {

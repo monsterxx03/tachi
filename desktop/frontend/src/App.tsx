@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, nextSessionAfter, type SessionRow } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -19,7 +19,7 @@ import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { RewindChainOverlay } from './rewindchain'
-import { ProjectPalette, SessionPalette } from './palette'
+import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
@@ -1573,23 +1573,40 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     window.setTimeout(() => composer.focusInput(), 0)
   }, [composer.focusInput])
 
-  // pickProject answers the ⌘P palette (see palette.tsx): open the chosen project's most recent
-  // conversation, or make its first one. It returns "" when it acted — the palette then closes —
-  // or the reason to show IN the palette instead of closing it, because a refusal that dismisses
-  // the box reads as success.
+  // pickProject answers the ⌘P palette (see palette.tsx): open the chosen row's most recent
+  // conversation, or make one. It returns "" when it acted — the palette then closes — or the
+  // reason to show IN the palette instead of closing it, because a refusal that dismisses the box
+  // reads as success.
   //
-  // Creating is refused for a project that cannot drive its sessions (its primary directory is
-  // gone): the backend's NewSession falls back to the last used workspace and binds nothing when
-  // a project does not drive, so Enter on 「新建会话」 would quietly produce a 无项目 session. Its
-  // EXISTING sessions are opened as usual — those fall back to their own snapshot by design.
+  // Two kinds of row, and each has its own rule about creating:
+  //   • a PROJECT opens its existing sessions as usual (those fall back to their own snapshot by
+  //     design), and refuses to create when its primary directory is gone: the backend's NewSession
+  //     falls back to the last used workspace and binds nothing when a project does not drive, so
+  //     Enter on 「新建会话」 would quietly produce a 无项目 session — i.e. the row below it.
+  //   • the 无项目 BUCKET can refuse nothing: its newest session is opened, and when it has none the
+  //     session made is the project-less one (newChat('')), the same one the sidebar's ＋ and ⌘⇧N
+  //     make. Nothing about it can be unusable, since it needs no workspace of anyone's.
   //
   // The way IN also opens the group it lands in. ⌘P means 「带我去那个项目」, and the reader's next
   // move is to look at the sidebar — a collapsed group answers with a header and nothing under it,
   // hiding the row that just became active, which is the same as not having gone there. The rule is
   // this entry point's own: a collapse is the reader's own doing, and forcing the group open from
   // every path would make collapsing the one you are sitting in impossible. A refusal expands
-  // nothing, since nothing was switched.
-  const pickProject = useCallback((p: ProjectVO) => {
+  // nothing, since nothing was switched — and the bucket has no fold to open (the sidebar never
+  // folds it), so there is nothing to reveal for it.
+  const pickProject = useCallback((c: ProjectChoice) => {
+    if (c.kind === 'loose') {
+      const latest = newestOf(looseMembers(sessions, projects))
+      if (latest) {
+        void clickSession(latest.id)
+        focusAfterPalette()
+        return ''
+      }
+      void newChat()
+      focusAfterPalette()
+      return ''
+    }
+    const p = c.project
     const reveal = () => revealProject(p.id)
     const latest = latestSessionOf(sessions, p.id)
     if (latest) {
@@ -1605,7 +1622,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     void newChat(p.id)
     focusAfterPalette()
     return ''
-  }, [sessions, clickSession, newChat, focusAfterPalette, revealProject])
+  }, [sessions, projects, clickSession, newChat, focusAfterPalette, revealProject])
 
   // pickSession answers the ⌘K palette (see palette.tsx): switch to the chosen conversation.
   // Nothing can refuse it — ⌘P's reason string exists for the projects that cannot be opened into
@@ -2133,7 +2150,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                         it is the 无项目 group's own ＋, spelled out — the written-out mirror of
                         the small ＋ a project keeps at the end of its header. */}
                     {newSessionButton}
-                    <div className="session-section">无项目</div>
+                    <div className="session-section">{LOOSE_LABEL}</div>
                   </>
                 )}
                 {projectNotice && projectNotice.id === group.project?.id ? (

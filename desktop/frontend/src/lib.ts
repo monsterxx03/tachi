@@ -278,6 +278,20 @@ function pinnedFirst<T extends { pinned?: boolean }>(list: T[]): T[] {
 // grouping happens BEFORE folding, so a compaction chain folds inside its own group.
 export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[] }
 
+// liveProjectId answers which group a session belongs to: its `projectId` when a project in the
+// list answers to it, and "" (the 无项目 bucket) otherwise — no id at all, or one naming a project
+// that is gone (a deleted project, a lost projects.json). A dangling id lands in the bucket on
+// purpose: the backend resolves such a session that way (project first when it DRIVES the session,
+// else the session's own snapshot), and a row must not claim a group the resolver does not honour.
+//
+// It is ONE definition because two callers ask this question: the sidebar's grouping below, and
+// ⌘P's own 无项目 row (`looseMembers`). A second copy is how that row comes to open a session the
+// sidebar files under a project.
+function liveProjectId(s: { projectId?: string }, known: Set<string>): string {
+  const pid = s.projectId
+  return pid && known.has(pid) ? pid : ''
+}
+
 // sessionGroups renders the sidebar's grouping (design §7.1): one group per project, plus a
 // final bucket for the sessions no live project owns.
 //
@@ -309,8 +323,8 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
   const byProject = new Map<string, T[]>()
   const loose: T[] = []
   for (const s of list) {
-    const pid = s.projectId
-    if (!pid || !known.has(pid)) {
+    const pid = liveProjectId(s, known)
+    if (!pid) {
       loose.push(s)
       continue
     }
@@ -327,8 +341,30 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
   return groups
 }
 
+// looseMembers returns the sessions of the 无项目 bucket — the same membership `sessionGroups`
+// gives the sidebar, asked for by ⌘P's own 无项目 row (how many sessions it holds, and which one
+// Enter opens). It reads the same two facts, so it needs no session lookup of its own.
+export function looseMembers<T extends { projectId?: string }>(list: T[], projects: ProjectVO[]): T[] {
+  const known = new Set(projects.map((p) => p.id))
+  return list.filter((s) => !liveProjectId(s, known))
+}
+
 // latestSessionOf returns the session of a project that its reader most recently used, or
 // undefined when the project has no members yet — the question ⌘P answers with Enter.
+//
+// It is the project-shaped half of the rule; `newestOf` below holds the rule itself, because ⌘P's
+// 无项目 row asks the same question of a bucket that is not a project (the palette shows which
+// title Enter will open either way, so the two rows must not disagree about "newest").
+export function latestSessionOf<T extends { id: string; updatedAt: string; projectId?: string; compactedParentId?: string }>(
+  list: T[],
+  projectID: string,
+): T | undefined {
+  if (!projectID) return undefined
+  return newestOf(list.filter((s) => s.projectId === projectID))
+}
+
+// newestOf returns the session its reader most recently used among `members`, or undefined when
+// there are none.
 //
 // "Newest" is `updatedAt`, not `createdAt`: that is what the backend means by a project's
 // newest session (`memberSessions` in `desktop/projects.go` sorts by it), and it keeps Enter
@@ -340,12 +376,9 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
 // A session another member was compacted FROM is skipped: compaction leaves the predecessor in
 // the list as a folded-away 「压缩前」 row (`sessionRows` folds exactly these, by the same
 // `compactedParentId` link), and a conversation's newest link is the one to open.
-export function latestSessionOf<T extends { id: string; updatedAt: string; projectId?: string; compactedParentId?: string }>(
-  list: T[],
-  projectID: string,
+export function newestOf<T extends { id: string; updatedAt: string; compactedParentId?: string }>(
+  members: T[],
 ): T | undefined {
-  if (!projectID) return undefined
-  const members = list.filter((s) => s.projectId === projectID)
   const hasChild = new Set<string>()
   for (const s of members) {
     if (s.compactedParentId && members.some((p) => p.id === s.compactedParentId)) hasChild.add(s.compactedParentId)
@@ -406,6 +439,24 @@ export function projectMatches(p: ProjectVO, query: string): boolean {
   if ((p.name || '').toLowerCase().includes(q)) return true
   if ((p.workingDir || '').toLowerCase().includes(q)) return true
   return (p.additionalDirs || []).some((r) => (r.path || '').toLowerCase().includes(q))
+}
+
+// LOOSE_LABEL is the app's word for the project-less bucket — the sidebar's last group, ⌘K's tag on
+// such a conversation, and ⌘P's row for the bucket. One spelling, because ⌘P's row is also what a
+// reader TYPES to reach the bucket (see looseMatches) and ⌘K's tag is what tells them a conversation
+// ended up in it.
+export const LOOSE_LABEL = '无项目'
+
+// LOOSE_LABEL_HINT is the bucket's stand-in for a working directory, which is what a ⌘P row would
+// otherwise show there: the bucket has no directory of its own — each of its sessions carries the
+// workspace snapshot it was made with (see the backend resolver) — so the row says that instead.
+export const LOOSE_LABEL_HINT = '各自用自己的工作区快照'
+
+// looseMatches reports whether ⌘P's bucket row answers the query: by its own name, and by nothing
+// else — a project's name or directory asked for that project, not for the bucket.
+export function looseMatches(query: string): boolean {
+  const q = query.trim().toLowerCase()
+  return !q || LOOSE_LABEL.toLowerCase().includes(q)
 }
 
 // sessionChoices returns the ⌘K palette's rows: ONE per conversation — a compaction chain is one
