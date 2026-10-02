@@ -2977,6 +2977,75 @@ permissions:
 		},
 		//
 		//
+		// shortcut-sheet: ⌘? 那张快捷键表。键位一路加进来，表长到一屏放不下之后，唯一还要紧的
+		// 布局事实是「行能滚、标题和关闭键不跟着滚走」—— 判据全是几何（框在窗口里、行区自己有
+		// 滚动条、滚到底最后一行看得见而关闭键不动），driver 里量。Go 侧只断一件事：看表不该
+		// 惊动模型（这条场景一个请求都不该有）。
+		{
+			name: "shortcut-sheet",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe shortcut-sheet scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 不会被调用：driver 只开表、滚表、关表，一个字都没发。它的存在只是让 mock
+				// 是一份完整的脚本，而不是空脚本。
+				{Reply: textStream("不应该被调用。", 300)},
+			},
+			after: func(c *checkCtx) {
+				c.check("看快捷键表没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		//
+		//
+		// session-keys: 作用于「眼前那个会话」的键位 —— ⌘N / ⌘⇧N（新建）与 ⌘⇧⌫（删除）。前两个
+		// 只差一个 shift，界面上的差别是新行落在哪个组，磁盘上的差别是 project_id —— 组是前端
+		// 算的，绑没绑项目要读文件，所以两头都验。第三件事是「定位」：新建的行必须滚到眼前，
+		// driver 先把列表撑过一屏再滚到底部，这一条才不是白给的。⌘⇧⌫ 只开确认框（Esc 取消什么
+		// 都不少，Enter 才真删），所以 Go 侧看到的是删完之后的终态：⌘N 建的那个绑着项目的会话
+		// 没了，只剩 fixture 那一个（见 drivers/session-keys.js）。
+		{
+			name: "session-keys",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-keys scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-keys",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe session-keys scenario's project directory\n",
+				},
+			},
+			after: func(c *checkCtx) {
+				// 建会话、删会话都不惊动模型：这条场景里没有一条消息，任何请求都说明键位自己发了东西。
+				c.check("建会话/删会话都没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				metas := c.sessionMetas()
+				bound := 0
+				var newestAt time.Time
+				newestBound := ""
+				for _, m := range metas {
+					// 磁盘上的字段名是 project_id（session.Session 的 json tag）；没绑项目时
+					// omitempty 让它整个不出现。
+					pid, _ := m["project_id"].(string)
+					if pid == "smoke-project" {
+						bound++
+					}
+					if ts, ok := m["created_at"].(string); ok {
+						if t, err := time.Parse(time.RFC3339, ts); err == nil && t.After(newestAt) {
+							newestAt, newestBound = t, pid
+						}
+					}
+				}
+				// 只剩 fixture 那个绑在项目上：driver 全程建的会话（侧栏 ＋ 与 ⌘⇧N）都不该绑，而
+				// ⌘N 建的那个（唯一该绑的）被 ⌘⇧⌫ 删掉了 —— 数字还多一个，说明删除没落到磁盘上。
+				c.check("⌘N 建的那个已被删掉、只剩 fixture 的一个绑在项目上",
+					bound == 1, fmt.Sprintf("project_id=smoke-project 的会话有 %d 个（共 %d 个会话）", bound, len(metas)))
+				// 最新的那个现在是 ⌘⇧N 建的（无项目）：⌘N 建的那个曾经是最新且绑着项目的，它若还
+				// 在，这里就是 "smoke-project"。
+				c.check("磁盘上最新的会话不是 ⌘N 建的那个（它被删了）", newestBound != "smoke-project",
+					"最新会话的 project_id="+strconv.Quote(newestBound))
+			},
+		},
+		//
+		//
 		// mcp-edit: 设置页里的 MCP server 编辑器 —— 这一页唯一一个**不是 config.yaml 叶子**的区块。
 		//
 		// 行为上和页面其余部分**不一样**，正是这一点值得端到端跑：它不经过 SaveSettings，每条自己的

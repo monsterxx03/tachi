@@ -77,29 +77,51 @@ func walkMenuItems(menu *application.Menu, visit func(*application.MenuItem)) {
 	}
 }
 
-// TestApplicationMenuFreesTheVoiceKey pins the same claim for ⌘⇧M (the microphone shortcut): a key
-// equivalent is handled BEFORE the webview sees the event, so a menu item carrying this one would
-// make the shortcut dead — and no frontend test can notice, because a synthetic key dispatched into
-// the page bypasses the menu bar entirely.
+// TestApplicationMenuFreesTheFrontendKeys pins "every key the page binds is free in the menu bar": a
+// key equivalent is handled BEFORE the webview sees the event, so a menu item carrying one of them
+// makes that shortcut dead — and no frontend test can notice, because a synthetic key dispatched into
+// the page bypasses the menu bar entirely. Wails' default does claim Cmd+M (Minimize) and Cmd+H
+// (Hide), which is why the app's own bindings step around those two: the voice toggle is ⌘⇧M and the
+// rewind chain is ⌘⇧H.
 //
-// The accelerator goes through Wails' own parser (SetAccelerator → GetAccelerator) rather than being
-// written as a literal: what is asserted is "this key is free", not a spelling of it. A misspelling
+// The accelerators go through Wails' own parser (SetAccelerator → GetAccelerator) rather than being
+// written as literals: what is asserted is "this key is free", not a spelling of it. A misspelling
 // parses to the empty string, which the guard below turns into a failure instead of a test that
 // quietly compares "" against nothing.
-func TestApplicationMenuFreesTheVoiceKey(t *testing.T) {
+//
+// The composer's own ⌘⇧↑/↓ and ⌘↩ are deliberately absent: they only mean anything inside the input
+// box, and an arrow or a Return is not something the menu bar binds.
+func TestApplicationMenuFreesTheFrontendKeys(t *testing.T) {
 	application.New(application.Options{Name: "Tachi"})
 
-	probe := application.NewMenuItem("probe").SetAccelerator("Cmd+Shift+M")
-	voiceKey := probe.GetAccelerator()
-	if voiceKey == "" {
-		t.Fatal("Wails 认不出 Cmd+Shift+M：拼写变了，这条测试就再也证明不了什么（见 frontend/src/App.tsx 的 ⌘⇧M）")
+	// One entry per binding in frontend/src/App.tsx's keydown handler, spelled in Wails' own syntax.
+	bindings := []struct{ accel, what string }{
+		{"Cmd+N", "⌘N 新建会话（跟眼前这个一样）"},
+		{"Cmd+Shift+N", "⌘⇧N 新建会话（不属于任何项目）"},
+		{"Cmd+Shift+Backspace", "⌘⇧⌫ 删除当前会话"},
+		{"Cmd+P", "⌘P 项目搜索"},
+		{"Cmd+K", "⌘K 会话搜索"},
+		{"Cmd+B", "⌘B 折叠侧栏"},
+		{"Cmd+/", "⌘/ 聚焦输入框"},
+		{"Cmd+,", "⌘, 打开设置"},
+		{"Cmd+Shift+H", "⌘⇧H 回退链"},
+		{"Cmd+Shift+M", "⌘⇧M 语音输入"},
+	}
+	keys := map[string]string{}
+	for _, b := range bindings {
+		acc := application.NewMenuItem("probe").SetAccelerator(b.accel).GetAccelerator()
+		if acc == "" {
+			t.Fatalf("Wails 认不出 %s：拼写变了，这条测试就再也证明不了什么（frontend/src/App.tsx 的 %s）",
+				b.accel, b.what)
+		}
+		keys[acc] = b.what
 	}
 
 	menu := applicationMenu()
 	walkMenuItems(menu, func(item *application.MenuItem) {
-		if acc := item.GetAccelerator(); acc == voiceKey {
-			t.Errorf("菜单项 %q 占用了 %s —— 语音输入的快捷键会变成死键（frontend/src/App.tsx 的 ⌘⇧M）",
-				item.Label(), voiceKey)
+		if what, bound := keys[item.GetAccelerator()]; bound {
+			t.Errorf("菜单项 %q 占用了 %s —— %s 会变成死键（frontend/src/App.tsx）",
+				item.Label(), item.GetAccelerator(), what)
 		}
 	})
 }

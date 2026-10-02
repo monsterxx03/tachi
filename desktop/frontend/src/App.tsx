@@ -344,11 +344,25 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
+  // The session whose row the sidebar has to bring into view, for the one render that needs it (see
+  // the two effects below). '' = nothing pending. It is the session ON SCREEN, set by the effect
+  // that watches `currentId` — not by whoever happened to switch it.
+  const [revealRow, setRevealRow] = useState('')
+  // The scrolling box the rows live in, so the reveal can find them without asking the document
+  // (the transcript has rows of its own — see .session-list in layout.css).
+  const sessionListRef = useRef<HTMLElement | null>(null)
   const [menu, setMenu] = useState<{ sid: string; x: number; y: number } | null>(null)
   // The delete confirmation. `error` holds the backend's refusal (a session with a turn
   // in flight cannot be deleted) so it lands in the box that asked the question, next to
   // the button that was just pressed — a console-only failure would read as a no-op.
   const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; error?: string } | null>(null)
+  // The delete box's element. Focus is TAKEN here explicitly rather than with `autoFocus`: that is an
+  // attribute, and WebKit honours it on form controls — on a div it does nothing, which is exactly the
+  // trap this box has to avoid (its Enter means 确认; left in the composer, the same key sends a message).
+  const confirmBoxRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (confirmDel) confirmBoxRef.current?.focus()
+  }, [confirmDel])
   // The rewind chain: this session's rewind points, from the checkpoint manifest. It is a
   // second ENTRY to the same card (the bubble's menu is the first), not a second rewind path —
   // hence `turns` here is only what the list renders, and a row's click goes through
@@ -500,6 +514,37 @@ function App() {
     if (!id) return
     setExpandedProjects((p) => (p[id] ? p : { ...p, [id]: true }))
   }, [])
+  // Bringing the row of the session ON SCREEN into view is the sidebar's own job: "the active row"
+  // and "a row the reader can see" are two different things, and every way of switching sessions can
+  // land on the second one — ⌘K / ⌘P pick a conversation wherever it sits, a creation puts the new
+  // row at the HEAD of its group while the 无项目 bucket is at the FOOT of the list, a delete hands
+  // the reader to a neighbour, and compaction moves the conversation to a brand-new row. A click on a
+  // row never needs it (the pointer is already there) and still gets the same call, because the rule
+  // is one rule: the switch is what asks, not the gesture that caused it.
+  //
+  // It is a REQUEST rather than a scroll at the moment of the switch (the row may not exist yet — the
+  // list is fetched a beat later, and a folded group has to open first): `revealRow` holds the id
+  // until a render actually HAS that row, then the effect below scrolls and clears it. Clearing on
+  // the FOUND row is what keeps this honest — an ordinary re-render (a streamed delta, a title
+  // arriving, a list refresh) must never move the list under the reader's hands.
+  useEffect(() => {
+    if (currentId) setRevealRow(currentId)
+  }, [currentId])
+
+  // The scroll itself. `expandedProjects` is a dependency because opening the group holding the row
+  // is what MAKES it: without it, a switch into a folded group would find no row, and the pending
+  // request would sit there until something else happened to change the list.
+  useEffect(() => {
+    if (!revealRow) return
+    const row = Array.from(sessionListRef.current?.querySelectorAll<HTMLElement>('.session') || [])
+      .find((el) => el.dataset.sid === revealRow)
+    if (!row) return
+    setRevealRow('')
+    // 'nearest' and not 'center': a row already on screen must not move the list at all, and the
+    // reader's own scroll position is not this feature's to take.
+    row.scrollIntoView({ block: 'nearest' })
+  }, [revealRow, sessions, expandedProjects])
+
   // bootOpenedGroup makes the boot's exception a STARTUP fact: loadAll also runs after a delete,
   // and re-applying it there would re-open a group the reader had just collapsed.
   const bootOpenedGroup = useRef(false)
@@ -1482,6 +1527,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     void newChat(pid && projects.some((p) => p.id === pid) ? pid : '')
   }, [sessions, projects, currentId, newChat])
 
+  // askDeleteCurrent opens the delete confirmation for the session ON SCREEN — the keyboard form of
+  // the row's right-click 「删除」. It never deletes anything itself: the box that comes up is the
+  // same one the row opens, so the backend's refusal (a session with a turn in flight) lands in the
+  // same place, and the reader's answer is the same button.
+  //
+  // The title comes from the LIST rather than from the titlebar's own derivation further down (that
+  // const is declared after this in the body, and reading it from here would be a TDZ error): a
+  // session not listed yet shows 未命名会话, which is the words its row would carry too.
+  const askDeleteCurrent = useCallback(() => {
+    if (!currentId) return
+    setConfirmDel({ sid: currentId, title: sessions.find((s) => s.id === currentId)?.title || '未命名会话' })
+  }, [currentId, sessions])
+
   // The menu bar's 「新会话」 arrives as ui:new_session (desktop/tray.go): the shell brings the
   // window forward and asks, and the session is made HERE — one creation path, shared with the
   // sidebar's ＋ and ⌘N.
@@ -1573,8 +1631,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   }, [view])
 
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
-  // Cmd+N starts a new session, Cmd+P searches projects, Cmd+K searches
-  // conversations. (No native menu binds them, so the webview sees the key events.)
+  // Cmd+N starts a new session like the one on screen, Cmd+Shift+N one that belongs to no
+  // project, Cmd+P searches projects, Cmd+K searches conversations. (No native menu binds
+  // them, so the webview sees the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The settings page has no conversation shortcuts. Gating here rather than leaving it to
@@ -1619,9 +1678,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       else if (e.key.toLowerCase() === 'k' && !e.shiftKey) {
         e.preventDefault(); setPaletteOpen(false); setSessionPaletteOpen((v) => !v)
       }
-      else if (e.key.toLowerCase() === 'n') {
+      else if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
         e.preventDefault()
         newChatLikeCurrent()
+      }
+      // ⌘⇧N is the other half of ⌘N: 「随便开一个新的」, with NO project — the session behind it may
+      // supply a workspace that is not what this conversation is about, and until now the only way
+      // to get a project-less session was the sidebar's own ＋ (which is at the foot of the list,
+      // and that is not a keyboard gesture). Shift is what makes it a different command rather than
+      // a spelling of ⌘N; the two are the same key on purpose, so the pair reads as one idea.
+      else if (e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        void newChat()
+      }
+      // ⌘⇧⌫ deletes the session on screen — through its confirmation, always (see askDeleteCurrent).
+      // Delete is accepted beside Backspace for the keyboards that have a forward-delete key: it is
+      // the same gesture on those, and nothing else in the app binds it.
+      else if (e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+        e.preventDefault()
+        askDeleteCurrent()
       }
       // The chain. Shift is what keeps it off ⌘H (macOS hides the window on that one) — and
       // off anything the app already binds.
@@ -1642,7 +1717,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChatLikeCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
+  }, [newChat, newChatLikeCurrent, askDeleteCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
     projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view,
     // Listed because it is captured by value: availability arrives once, after mount, and a closure
     // from the first render would hold `false` forever (⌘⇧M would be a dead key). `composer` itself
@@ -1854,11 +1929,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
   // sessionRow renders one session's line in the sidebar. It is a function rather than an inline
   // map body because the chain folding needs it twice: once for the conversation's newest link and
-  // once per session it was compacted from (see sessionRows).
+  // once per session it was compacted from (see sessionRows). `data-sid` is the row's own handle,
+  // the only way to find one row among rows that carry the same classes (see the revealRow effect).
   const sessionRow = (s: SessionItem, compacted: boolean) => (
     /* Row (not a <button>): it hosts a rename <input> and a context
        menu, so it takes role/tabIndex + Enter/Space instead. */
     <div key={s.id} className={`session ${s.active ? 'active' : ''}${compacted ? ' is-compacted' : ''}`}
+      data-sid={s.id}
       onClick={() => clickSession(s.id)}
       role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
       onContextMenu={(e) => { e.preventDefault(); setMenu({ sid: s.id, x: e.clientX, y: e.clientY }) }}>
@@ -1991,7 +2068,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             title="新建项目：一组会话共用工作区的容器">
             <span className="new-chat-plus">＋</span> 新建项目
           </button>
-          <nav className="session-list">
+          <nav className="session-list" ref={sessionListRef}>
             {/* Groups, not one flat list (design §7.1): a project's sessions hang under its
                 header, and everything no live project owns — including a session whose
                 project_id points at a project that is gone — is the 无项目 bucket. The rows
@@ -2510,7 +2587,17 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       )}
       {confirmDel && (
         <div className="confirm-overlay" onClick={() => setConfirmDel(null)}>
-          <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+          {/* The box TAKES FOCUS (see confirmBoxRef): Enter has to mean 「确认」 here, and a box that
+              leaves the caret in the composer would send a message instead — which is exactly where
+              the caret is when ⌘⇧⌫ is pressed. tabIndex={-1} makes a div focusable without putting it
+              in the Tab order. */}
+          <div className="confirm-box" role="dialog" aria-label="删除会话" tabIndex={-1} ref={confirmBoxRef}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // IME composition keys belong to the candidate window, as everywhere else in the app.
+              if (imeActive(e)) return
+              if (e.key === 'Enter') { e.preventDefault(); confirmDelete(confirmDel.sid) }
+            }}>
             <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
             <div className="confirm-sub">此操作不可恢复。</div>
             {confirmDel.error ? <div className="confirm-error">⚠ {confirmDel.error}</div> : null}
@@ -2533,24 +2620,31 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         <div className="confirm-overlay" onClick={() => setShortcutsOpen(false)}>
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-msg">快捷键</div>
-            <div className="shortcut-section">全局</div>
-            <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
-            <div className="shortcut-row"><kbd>⌘ = / ⌘ -</kbd><span>放大 / 缩小阅读字号（⌘ 0 复位；消息区、评审报告与预览一起变）</span></div>
-            <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
-            <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
-            <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
-            <div className="shortcut-row"><kbd>⌘ K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
-            <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
-            <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
-            <div className="shortcut-row"><kbd>⌘ ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
-            <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
-            <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
-            <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
-            <div className="shortcut-row"><kbd>⌘ F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>
-            <div className="shortcut-section">消息区（聚焦时）</div>
-            <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
-            <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>
-            <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页</span></div>
+            {/* The rows scroll, the title and the 关闭 button do not: every binding in the app is in
+                here, so the sheet outgrows a short window — and a 关闭 that has scrolled away is the
+                one control the reader needs to leave. */}
+            <div className="shortcut-body">
+              <div className="shortcut-section">全局</div>
+              <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
+              <div className="shortcut-row"><kbd>⌘ = / ⌘ -</kbd><span>放大 / 缩小阅读字号（⌘ 0 复位；消息区、评审报告与预览一起变）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
+              <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ⇧ N</kbd><span>新建会话（不属于任何项目，侧栏停在新建的那一行）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ⇧ ⌫</kbd><span>删除当前会话（先弹确认框，按 Enter 确认）</span></div>
+              <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
+              <div className="shortcut-row"><kbd>⌘ K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
+              <div className="shortcut-row"><kbd>⌘ ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
+              <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
+              <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
+              <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
+              <div className="shortcut-row"><kbd>⌘ F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>
+              <div className="shortcut-section">消息区（聚焦时）</div>
+              <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
+              <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>
+              <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页</span></div>
+            </div>
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setShortcutsOpen(false)}>关闭（Esc）</button>
             </div>

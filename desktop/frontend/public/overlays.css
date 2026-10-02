@@ -341,7 +341,12 @@
    :disabled had no style) are indistinguishable from broken ones. */
 .btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
 .btn:disabled:hover { background: transparent; color: var(--text-dim); border-color: var(--border-2); }
-.shortcuts-box { min-width: 260px; }
+/* The shortcut sheet. Every binding in the app is listed here, so the sheet outgrows a short window:
+   the ROWS scroll while the title and the 关闭 button stay put — a 关闭 that has scrolled away is the
+   one control the reader needs to leave. Capped in vh as well as px so a short window keeps the box
+   inside itself (the overlay centres it, and a box taller than the window loses both its edges). */
+.shortcuts-box { min-width: 260px; display: flex; flex-direction: column; }
+.shortcut-body { max-height: min(60vh, 480px); overflow-y: auto; }
 /* Section label inside the shortcut sheet: shortcuts that only work in one
    place (e.g. the message area) get their own block. */
 .shortcut-section {

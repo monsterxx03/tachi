@@ -62,6 +62,9 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
 | 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
 | the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
+| ⌘N / ⌘⇧N / ⌘⇧⌫ (which group a new session lands in, the delete confirmation) | `session-keys` |
+| the sidebar following the session on screen — a creation, ⌘K, ⌘P (the row scrolled into view, and the state it had to be in for that to mean anything) | `session-keys` |
+| the ⌘? sheet (its rows scrolling while the title and 关闭 stay put, which bindings it lists) | `shortcut-sheet` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | a FILE tool's ask (its own `files` kind and copy, and that a refusal refuses the call, not the turn) | `perm-files` |
 | the MCP search cost card (its copy, and a refusal sticking for the session) | `perm-mcp-budget` |
@@ -291,7 +294,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   never for deciding. **It is an app-local key on purpose**: a system-wide one (`app.GlobalShortcut`, Carbon
   hotkeys) takes the combination away from every other app and only pays off once the window can be recalled —
   a separate step, not a bigger version of this one. Its key is chosen to be unclaimed by the menu bar
-  (`TestApplicationMenuFreesTheVoiceKey`): a menu accelerator is handled BEFORE the page sees the event, so a
+  (`TestApplicationMenuFreesTheFrontendKeys`): a menu accelerator is handled BEFORE the page sees the event, so a
   collision is a dead key that no frontend test can observe.
 - **The microphone is a SECOND TCC permission, with its own plist key**, beside the speech one: a bundle
   without `NSMicrophoneUsageDescription` does not get an error when it opens the mic — it is killed (the
@@ -894,13 +897,31 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   the child it hangs under. The flag is the session RECORD's, which is what makes the order survive a restart,
   exempts the session from cleanup, and lets compaction TRANSFER it to the child
   (`TestFinalizeCompact_MovesThePin`).
-- **`＋ 新建会话` belongs to the 无项目 group** (it makes a project-less session, so it lives where it adds
-  rows), and **⌘N follows the session on screen** — ⌘N means "another one of these", so it passes the current
-  session's `projectId` while that project is still in the list. **The menu bar's 「新会话」 is that same call
-  reached from the shell**: `desktop/tray.go` emits `ui:new_session` and the FRONTEND makes the session, so all
-  three entry points run `newChatLikeCurrent` and cannot drift apart. It also leaves the settings page on its
-  way in, which ⌘N deliberately does not — that gate is for a stray keystroke, while an explicit click that
-  left the opaque page up would read as nothing having happened.
+- **Every way in goes through `newChat(projectId)`, and WHICH id decides the group**: the sidebar's `＋ 新建会话`
+  and **⌘⇧N** pass `''` (a project-less session — that is why the button lives at the foot of the 无项目 bucket
+  it adds rows to), a project header's `＋` passes that project, and **⌘N follows the session on screen** —
+  "another one of these" — passing the current session's `projectId` while that project is still in the list
+  (a project supplies the workspace, the extra roots and the skills, so 「随便开一个新的」 must be a separate
+  command rather than ⌘N's own rule). **The menu bar's 「新会话」 is the ⌘N call reached from the shell**:
+  `desktop/tray.go` emits `ui:new_session` and the FRONTEND makes the session, so those two cannot drift apart.
+  It also leaves the settings page on its way in, which ⌘N deliberately does not — that gate is for a stray
+  keystroke, while an explicit click that left the opaque page up would read as nothing having happened.
+- **The row of the session ON SCREEN is scrolled into view, whoever switched it** — ⌘K / ⌘P pick a conversation
+  wherever it sits, a creation puts the new row at the HEAD of its group while the 无项目 bucket is at the FOOT of
+  the list, a delete hands the reader to a neighbour, compaction moves the conversation to a new row. The trigger
+  is `currentId` (App.tsx: the `revealRow` request, set by an effect watching it) and NOT the gesture — the
+  sidebar has to know only one rule. **The request is cleared when the row is FOUND, and it survives the renders
+  in between** (`sessions` and `expandedProjects` are its other two dependencies, because opening the group is
+  what makes the row exist and the list is fetched a beat after the switch): an ordinary re-render — a streamed
+  delta, a title arriving, a refresh — must never move the list under the reader's hands. The scroll is
+  `block: 'nearest'`, never centre: a row already on screen must not move at all.
+- **`⌘⇧⌫` opens the delete confirmation for the session on screen and never deletes on its own** — the row's
+  right-click 「删除」 in keyboard form, through the same backend call, so a running session's refusal lands in
+  the same box. **The box TAKES focus, by calling `focus()` on a ref — `autoFocus` does nothing on a div** (it is
+  an attribute WebKit honours on form controls only): the caret is usually in the composer when the key is
+  pressed, and an Enter left there SENDS A MESSAGE instead of confirming, which is the whole reason the focus is
+  taken. Enter is handled on the box itself (`tabIndex={-1}` + `onKeyDown`), so the key that confirms is the one
+  the box owns.
 - **`⌘P` and `⌘K` are one palette in two uses** (projects / conversations), each closing the other, each with
   the same input, list navigation, Escape and caret hand-back to the composer. Four contracts they share:
   filtering is on the COMMITTED query, never the field's live value (**a Chinese IME composition re-renders on
