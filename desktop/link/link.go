@@ -63,9 +63,11 @@ type Key struct {
 
 // 三个手势，与设备侧 main.c 的按键路由一一对应。
 const (
-	KeyUp       = "up"       // 短按上：会话往上翻半屏（与窗口里的 Ctrl+U 同一个动作）
-	KeyDown     = "down"     // 短按下：往下翻半屏（Ctrl+D）
-	KeyActivate = "activate" // 双击确定：把主窗口换到前台
+	KeyUp   = "up"   // 短按上：会话往上翻半屏（与窗口里的 Ctrl+U 同一个动作）
+	KeyDown = "down" // 短按下：往下翻半屏（Ctrl+D）
+	// 双击确定：主窗口在前台/后台之间翻一下——第一下把它叫到眼前，第二下让开（见
+	// desktop/remote.go 的 toggleWindowFront）。
+	KeyActivate = "activate"
 )
 
 // Alert 是一次提示音请求：Kind 决定设备放哪一段音频（它自己不认识这些含义，只是照做）。

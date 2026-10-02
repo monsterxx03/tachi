@@ -5,9 +5,10 @@ import (
 
 	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// 设备（badge）对主窗口的两个遥控动作：翻页，和把它换到前台。
+// 设备（badge）对主窗口的两个遥控动作：翻页，和把它在前后台之间翻一下。
 //
 // 设备不知道窗口在哪里、也不知道「翻一屏」是多大——它只报手势（见 link.Key），而这两个动作
 // 一个属于窗口的排版（滚动位置在 DOM 里），一个属于 AppKit。所以它们是这个文件唯一的住户。
@@ -32,18 +33,35 @@ func (d *desktopApp) scrollWindow(direction int) {
 	d.app.Event.Emit(chatScrollEventName, map[string]any{"delta": direction})
 }
 
-// activateWindow 把主窗口换到前台。
+// toggleWindowFront 把主窗口在「前台」和「后台」之间翻一下。
 //
-// 设备上双击确定问的是「它刚才说了什么」，而那句话现在只在窗口里——所以这一下要做的就是把人
-// 送回去。Show + Focus 与托盘菜单的「打开主窗口」、通知被点开时是同一对调用（窗口被 ⌘W 收起
-// 来时 Show 让它重新出现，见 main.go 的 WindowClosing 钩子）。
+// 设备上双击确定问的是「它刚才说了什么」，而那句话现在只在窗口里——所以这一下要先把人送回
+// 去（Show + Focus 与托盘菜单的「打开主窗口」、被点开的通知是同一对调用；窗口被 ⌘W 收起时
+// Show 让它重新出现，见 main.go 的 WindowClosing 钩子）。
 //
-// 它**不**看窗口现在是不是已经在前台：那会让「按了没反应」变成一种需要解释的状态，而一次
-// 多余的 Show/Focus 是无害的。
-func (d *desktopApp) activateWindow() {
-	if d.window == nil {
+// 但**看完还得回得来**：人常常是一边放着视频一边等这一轮跑完，看完想的是「再按一下就回到
+// 视频」。于是第二下不能只是重复第一下（那样只有一个结局），而是把自己收起来——Hide 就是
+// macOS 的 ⌘H，系统会把下一个应用（多半正是那个视频）重新激活。两个方向走同一条规则，按几次
+// 都是在两个状态之间翻。
+//
+// 「现在在前台吗」问的是这个窗口是不是 key window。这个判断只会漏报（已经是前台却答否，那时
+// 多一次 Show/Focus，无害），不会误报——非活动应用的窗口不可能是 key window，所以不会出现
+// 「把正在前台的东西藏起来」。
+func (d *desktopApp) toggleWindowFront() {
+	if d.app == nil || d.window == nil {
 		return
 	}
+	if d.window.IsFocused() {
+		// 这条链路跑在 link 自己的 goroutine 上，而 Hide 是**不做派发**的 AppKit 调用
+		// （窗口那几个调用 Wails 自己会回到主线程）：跨线程碰 AppKit 是未定义行为，所以
+		// 这一下自己派发。
+		application.InvokeSync(d.app.Hide)
+		remoteLog().Info(context.Background(), "badge: 主窗口切到后台")
+		return
+	}
+	// Show 是「把藏起来的窗口放回来，并激活自己」（[NSApp unhide:]）——上一按如果把它藏
+	// 了，这里就原样回来；窗口也可能是被 ⌘W 单独收起来的，所以那两句照旧。
+	application.InvokeSync(d.app.Show)
 	d.window.Show()
 	d.window.Focus()
 	remoteLog().Info(context.Background(), "badge: 主窗口切到前台")
@@ -55,13 +73,13 @@ func (d *desktopApp) activateWindow() {
 // 语义留在主机。
 //
 //	up / down   窗口里的会话往上/下翻半屏（Ctrl+U / Ctrl+D）
-//	activate    主窗口换到前台
+//	activate    主窗口在前台/后台之间翻一下（第一下把它叫到眼前，第二下让开）
 //
 // 不认识的 action 直接忽略：设备的手势将来可能多一个，而一个没实现的动作用户按下去什么都
 // 不发生，比让链路变得脆弱要好（见 link.Server.handle 的 key 分支）。
 func (d *desktopApp) Key(k link.Key) error {
 	if k.Action == link.KeyActivate {
-		d.activateWindow()
+		d.toggleWindowFront()
 		return nil
 	}
 	if delta, ok := scrollDirection(k.Action); ok {

@@ -123,16 +123,27 @@ and its own gate.
 ## Badge → the desktop window (its keys)
 
 The badge drives the desktop WINDOW: the short up/down press turns the conversation half a page (the same
-action as Ctrl+U/Ctrl+D inside it) and a double press on 确定 brings the window to the front. The device
-knows NOTHING about the window — it reports gestures and the host decides what they mean
-(`desktop/remote.go`; the device side is `main.c`'s key routing).
+action as Ctrl+U/Ctrl+D inside it) and a double press on 确定 flips the window between front and back — the
+first press answers "what did it just say" (the words are only in the window), the second one puts the app
+away so whatever was on screen before (usually a video) comes back. The device knows NOTHING about the
+window — it reports gestures and the host decides what they mean (`desktop/remote.go`; the device side is
+`main.c`'s key routing, and its footer hint still reads 「双击确定：切到电脑」).
 
 - **One protocol message carries the whole feature, and it is why `Proto` is 3** (the removed `hud` state is
   what made it a breaking change): device → host `{"t":"key","key":"up|down|activate"}` (`link.Source.Key`),
   mapped in `desktop/remote.go`'s `Key`. up/down emit `chat:scroll` at the main window and the FRONTEND does
   the scrolling — `App.tsx`'s `scrollByHalfPage`, which Ctrl+U/Ctrl+D call as well, so 「翻页」 cannot mean
   two things depending on where the finger is (how far a page is, and where the reader is, are DOM facts).
-  `activate` is `Show()` + `Focus()`, the same pair the tray's 「打开主窗口」 and a clicked notification use.
+  `activate` is a TOGGLE between front and back. The front test is `window.IsFocused()` (is the window key),
+  picked because its failure direction is safe: a key window implies an active app, so a wrong "no" costs one
+  redundant `Show()`/`Focus()`, while a wrong "yes" would hide what the user is looking at. Forward is
+  `App.Show()` + `Show()` + `Focus()` (the first is `[NSApp unhide:]`: hidden windows back, and activate);
+  back is `App.Hide()` (`[NSApp hide:]`, i.e. ⌘H: it hands the front to the previous app, usually the video
+  the user was watching). **The hidden state is nobody else's business**: `windowFocus` activates whenever
+  the app is not active, and activating a hidden app unhides it, so the tray's 「打开主窗口」 / a clicked
+  notification / a Dock click recover it unchanged. **`App.Hide`/`App.Show` are the two calls Wails does NOT
+  dispatch to the main thread itself, and this path runs on the link's goroutine** — they are therefore
+  wrapped in `application.InvokeSync` in `remote.go`.
 - **The version is checked in TWO places and nothing checks them against each other**: `link.Proto`
   (host) and `BADGE_PROTO_VERSION` (`main/badge_proto.h`, written into `hello`) must move together. Bumping
   one alone is silent on the host side (the mismatch is answered to the DEVICE as an `error` message and
@@ -144,8 +155,8 @@ knows NOTHING about the window — it reports gestures and the host decides what
   open on the computer is no reason to change what a key means while someone is waiting for an answer.
 - **A tap is not a recording, which is what lets one button mean two things** — and that rule is the firmware's
   OWN, older one (`badge_voice.h`'s `BADGE_VOICE_MIN_MS`, 400 ms: a shorter hold never even sends `voice_begin`).
-  So press-and-hold still talks, while the two taps of a double press are free to be a key (「切到电脑」); nothing
-  stray goes on the wire for either.
+  So press-and-hold still talks, while the two taps of a double press are free to be a key (the window toggle);
+  nothing stray goes on the wire for either.
 
 ## Building `desktop/stt` (the Swift shim)
 
