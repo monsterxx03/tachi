@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialogs, Events } from '@wailsio/runtime'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import {
@@ -9,11 +9,11 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, type SessionRow } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
-  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret,
+  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -45,6 +45,16 @@ import { useComposer, Composer } from './composer'
 // content, and MarkdownBlock's root (every text part and every turn conclusion). Thinking rows,
 // notices, process strips, tool cards, file cards and forms all live outside them.
 const CHAT_FIND_SCOPE = '.msg-user .msg-content, .assistant-text'
+
+// How many rows of ONE sidebar group are rendered at first, and how much each arrival at that
+// group's tail adds (see the window state in App, and MoreRows in components.tsx). A constant rather
+// than a prop or a setting: the point is to paint the newest screenful and nothing beyond it, and a
+// number a reader could tune would only be a way to make the sidebar slow again.
+const SIDEBAR_WINDOW_ROWS = 30
+// LOOSE_GROUP_KEY is the group key of the 无项目 bucket, which has no project id of its own. One
+// spelling: the Fragment key of the bucket's group, and the key its row window and (were it ever
+// foldable) its fold state would live under.
+const LOOSE_GROUP_KEY = '__loose__'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
 // Streaming replaces only the message being written (its siblings keep the
@@ -533,6 +543,31 @@ function App() {
     if (currentId) setRevealRow(currentId)
   }, [currentId])
 
+  // The sidebar renders a WINDOW of each group rather than the whole group: a conversation list
+  // grows without bound (this machine's own is 100+ project-less sessions), and the reader is
+  // looking at the newest handful — the rest is scroll nobody asked to paint. `rowWindow` is how
+  // many rows of ONE group are shown, keyed the way the groups are (project id, or the bucket's own
+  // key), memory only, and it only ever GROWS within a session: folding is expandedProjects'
+  // business (see toggleProject), and a reader who has scrolled to the end of a group did not ask
+  // for it to be re-hidden. `MoreRows` (components.tsx) is the line that grows it.
+  //
+  // The grouping is memoized because the reveal effect below reads it: `sessionGroups` builds a
+  // fresh array every call, and a dependency that changes on every render would run that effect (and
+  // its DOM query) on every render — during a turn, on every streamed frame.
+  const groups = useMemo(() => sessionGroups(sessions, projects), [sessions, projects])
+  const [rowWindow, setRowWindow] = useState<Record<string, number>>({})
+  const groupKey = (g: SessionGroup<SessionItem>) => g.project?.id || LOOSE_GROUP_KEY
+  const shownRows = (g: SessionGroup<SessionItem>) => {
+    const n = rowWindow[groupKey(g)] ?? SIDEBAR_WINDOW_ROWS
+    return g.rows.length > n ? g.rows.slice(0, n) : g.rows
+  }
+  const growRows = useCallback((g: SessionGroup<SessionItem>) => {
+    setRowWindow((w) => {
+      const key = g.project?.id || LOOSE_GROUP_KEY
+      return { ...w, [key]: (w[key] ?? SIDEBAR_WINDOW_ROWS) + SIDEBAR_WINDOW_ROWS }
+    })
+  }, [])
+
   // The scroll itself. `expandedProjects` is a dependency because opening the group holding the row
   // is what MAKES it: without it, a switch into a folded group would find no row, and the pending
   // request would sit there until something else happened to change the list.
@@ -540,12 +575,24 @@ function App() {
     if (!revealRow) return
     const row = Array.from(sessionListRef.current?.querySelectorAll<HTMLElement>('.session') || [])
       .find((el) => el.dataset.sid === revealRow)
-    if (!row) return
+    if (!row) {
+      // Not rendered YET, and there are two reasons — both answered here, or the request sits until
+      // something unrelated changes the list:
+      //   • the group is FOLDED. Growing cannot help (a folded group renders no rows at all), so
+      //     nothing happens and the reader has the header's ● marker, which names the session.
+      //   • the row is beyond its group's WINDOW. A row that was never rendered is not a row this
+      //     effect can scroll to, so the window grows — the same rule as opening the group, one
+      //     layer down. Every way of switching lands here: ⌘K / ⌘P pick the OLDEST conversation in
+      //     the list, a delete hands over to a neighbour, compaction makes a brand-new row.
+      const owner = groups.find((g) => g.rows.some((r) => r.session.id === revealRow))
+      if (owner && (!owner.project || expandedProjects[owner.project.id])) growRows(owner)
+      return
+    }
     setRevealRow('')
     // 'nearest' and not 'center': a row already on screen must not move the list at all, and the
     // reader's own scroll position is not this feature's to take.
     row.scrollIntoView({ block: 'nearest' })
-  }, [revealRow, sessions, expandedProjects])
+  }, [revealRow, sessions, groups, expandedProjects, rowWindow, growRows])
 
   // bootOpenedGroup makes the boot's exception a STARTUP fact: loadAll also runs after a delete,
   // and re-applying it there would re-open a group the reader had just collapsed.
@@ -2040,9 +2087,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   const currentSessionItem = sessions.find((s) => s.id === currentId)
   const sessionTitle = currentSessionItem ? currentSessionItem.title || '未命名会话' : ''
 
-  // The sidebar's grouping, built once: the list renders the project groups, then the plain
-  // 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
-  const groups = sessionGroups(sessions, projects)
+  // The sidebar's grouping (see the memo above): the list renders the project groups, then the
+  // plain 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
 
   // The row the context menu is open on, resolved once: both the 置顶 item's label (置顶 /
   // 取消置顶) and its target read from it. Undefined when the row is gone (deleted while the
@@ -2096,8 +2142,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 project_id points at a project that is gone — is the 无项目 bucket. The rows
                 themselves are the same conversation rows as before (sessionRows folds a
                 compaction chain INSIDE its group, because a chain shares its project). */}
-            {groups.map((group) => (
-              <Fragment key={group.project?.id || '__loose__'}>
+            {groups.map((group) => {
+              // What THIS group's window shows, and what it does not (see rowWindow above). The
+              // window is per group, so a short group (a project with three sessions) is never held
+              // back by the hundred-row bucket beside it.
+              const shown = shownRows(group)
+              const hidden = group.rows.length - shown.length
+              return (
+              <Fragment key={groupKey(group)}>
                 {/* The WHOLE header toggles (the caret is one way to say it, not the only one):
                     role=button already covered the row for the keyboard, and a header whose only
                     live spot is a 16px caret reads as a label. The controls inside stopPropagation,
@@ -2168,13 +2220,22 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                           // session is created, and this line says why the group is empty rather
                           // than leaving the reader wondering whether the project even exists.
                           ? <div className="proj-empty">还没有会话，点上面的 ＋ 在这个项目里新建</div>
-                          : groupRows(group.rows)}
+                          : groupRows(shown)}
+                        {hidden > 0 ? <MoreRows hidden={hidden} onGrow={() => growRows(group)} /> : null}
                       </div>
                     )
-                    : groupRows(group.rows)
+                    : (
+                      // The bucket has no container of its own (its label and button hang directly
+                      // on the nav), so its window's tail is a sibling of its rows.
+                      <>
+                        {groupRows(shown)}
+                        {hidden > 0 ? <MoreRows hidden={hidden} onGrow={() => growRows(group)} /> : null}
+                      </>
+                    )
                 )}
               </Fragment>
-            ))}
+              )
+            })}
             {/* No loose bucket yet (nothing project-less, or no sessions at all) — the button
                 still has to be there, and it still belongs at the foot of the list: the rows it
                 makes will land right below it the moment they exist. */}

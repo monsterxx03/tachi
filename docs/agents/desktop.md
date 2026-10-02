@@ -65,6 +65,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
 | ⌘N / ⌘⇧N / ⌘⇧⌫ (which group a new session lands in, the delete confirmation) | `session-keys` |
 | the sidebar following the session on screen — a creation, ⌘K, ⌘P (the row scrolled into view, and the state it had to be in for that to mean anything) | `session-keys` |
+| the sidebar's row window (a group truncated, growing by scroll/click, and the reveal growing it to reach a row that was never rendered) | `sidebar-window` |
 | the ⌘? sheet (its rows scrolling while the title and 关闭 stay put, which bindings it lists) | `shortcut-sheet` |
 | permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
 | a FILE tool's ask (its own `files` kind and copy, and that a refusal refuses the call, not the turn) | `perm-files` |
@@ -892,6 +893,17 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   project that appears later cannot leak open first; `revealProject` is the only thing that OPENS a group
   (boot, ⌘P, ⌘K, a project's `＋`) and it never closes one. The fold is DOM-level, so anything reading inside a
   group — a driver included — must expand it first.
+- **The sidebar renders a WINDOW of each group, never the whole group** (`SIDEBAR_WINDOW_ROWS` = 30, plus the
+  `MoreRows` line that says 「还有 N 条」): a conversation list has no upper bound (this machine's own bucket is
+  100+ sessions) and the reader is looking at the newest handful, so the rest is scroll nobody asked to paint.
+  Three properties, and each is load-bearing: the window is PER GROUP (a three-session project is not held back
+  by the bucket beside it); it only GROWS within a session (arriving at the tail — an IntersectionObserver on
+  the `MoreRows` line, or a click on it — adds one more window, and folding is `expandedProjects`' business,
+  not this one's); and **being selected and being RENDERED are two halves of one rule** — a row beyond the
+  window is not in the DOM at all, so the reveal effect below GROWS the owning group's window instead of
+  scrolling a row that does not exist (a folded group is the other half: growing cannot help, so nothing
+  happens and the header's ● marker answers instead). Nothing else reads a window: ⌘K / ⌘P / `nextSessionAfter`
+  / the boot's group-opening all work on the full list.
 - **Deleting a session hands the reader to the NEXT one — and only when the deleted session was the one on
   screen**: the row below inside its own group, else the row above when it was that group's last one. Deleting
   any OTHER row moves nothing; it must not yank the reader out of the conversation they are reading. The
@@ -915,10 +927,12 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   the list, a delete hands the reader to a neighbour, compaction moves the conversation to a new row. The trigger
   is `currentId` (App.tsx: the `revealRow` request, set by an effect watching it) and NOT the gesture — the
   sidebar has to know only one rule. **The request is cleared when the row is FOUND, and it survives the renders
-  in between** (`sessions` and `expandedProjects` are its other two dependencies, because opening the group is
-  what makes the row exist and the list is fetched a beat after the switch): an ordinary re-render — a streamed
-  delta, a title arriving, a refresh — must never move the list under the reader's hands. The scroll is
-  `block: 'nearest'`, never centre: a row already on screen must not move at all.
+  in between** (`sessions` and `expandedProjects` are its other two dependencies, and `rowWindow` the third:
+  opening the group and growing the window are what make the row exist — a switch into a folded group or past the
+  window would otherwise find no row at all, and the pending request would sit there until something unrelated
+  changed the list): an ordinary re-render — a streamed delta, a title arriving, a refresh — must never move the
+  list under the reader's hands. The scroll is `block: 'nearest'`, never centre: a row already on screen must not
+  move at all. Regression: `sidebar-window` (the window's half) and `session-keys` (the fold's).
 - **`⌘⇧⌫` opens the delete confirmation for the session on screen and never deletes on its own** — the row's
   right-click 「删除」 in keyboard form, through the same backend call, so a running session's refusal lands in
   the same box. **The box TAKES focus, by calling `focus()` on a ref — `autoFocus` does nothing on a div** (it is

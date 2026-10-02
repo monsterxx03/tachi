@@ -9,6 +9,41 @@ import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, 
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
+// MoreRows is the tail of a group's row WINDOW in the sidebar (App.tsx owns the window itself): the
+// line that says how many of that group's conversations are not rendered yet, and the thing that
+// renders the next slice of them. The sidebar grows without bound — this machine has a hundred
+// project-less sessions — and the reader is looking at the newest handful, so the rest is scroll
+// nobody asked to paint.
+//
+// Two ways in, ONE action. Reaching the line by scrolling grows the window: the sidebar is a
+// scroller, and arriving at the end of what is on screen IS the request for more. A click does the
+// same for a reader who would rather not scroll, and it is the only thing to do there, so a real
+// <button> (Enter/Space included) rather than a div with a role. The margin pre-loads a little
+// before the line is actually visible, so the list does not visibly stop and then start again.
+//
+// It is a NOTE when it does nothing, and that is not a state: the caller renders it only while rows
+// are hidden (App.tsx), so the two readings can never disagree with the list above it.
+function MoreRows({ hidden, onGrow }: { hidden: number; onGrow: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    // No IntersectionObserver (an old runtime, or a test harness): the click still works, and the
+    // line stops being an affordance that promises nothing.
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onGrow()
+    }, { rootMargin: '160px 0px' })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [hidden, onGrow])
+  return (
+    <button type="button" className="session-more" ref={ref} onClick={onGrow}
+      title="展开更早的会话（滚到这里也会自动展开）">
+      还有 {hidden} 条 ▾
+    </button>
+  )
+}
+
 // ContextRing is the meter itself: used fraction of the context window as a
 // ring. Purely decorative — ContextMeter (below) owns the button semantics and
 // the popover, so the SVG carries no title/role of its own.
@@ -1252,4 +1287,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }

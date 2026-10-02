@@ -425,6 +425,27 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .session-chain.is-open { color: var(--text-dim); }
 .session-chain-caret { display: inline-flex; align-items: center; line-height: 1; }
 
+/* The tail of a group's row window: 「还有 N 条 ▾」 (MoreRows in components.tsx). One visual language
+   with .session-chain above — it is the same kind of line, a quiet note about the rows it sits
+   among — and it is left-aligned at the group's own indent because what it speaks for is the rows
+   ABOVE it. Its own click/scroll behaviour lives in the component. */
+.session-more {
+  display: block;
+  width: calc(100% - 10px);
+  margin: 0 0 4px 10px;
+  padding: 4px 8px;
+  border: none;
+  border-left: 2px solid var(--border-2);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.session-more:hover { background: var(--hover); color: var(--text-dim); }
+
 /* A session kept only as the pre-compaction half of a chain: indented under its successor, and
    its own meta says so — the title alone cannot tell the two apart. */
 .session.is-compacted { margin-left: 12px; }

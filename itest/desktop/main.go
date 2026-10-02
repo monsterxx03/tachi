@@ -133,6 +133,19 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "unbound session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
+	// A LONG list, for the sidebar's row window (see scenario.seedLoose): the window only does
+	// anything with more rows than it shows, and no driver can create a hundred sessions one ⌘N at a
+	// time. Seeded here — before 冒烟会话 below — so the app still opens that one rather than the last
+	// bulk row.
+	//
+	// Titled in seed order, which is also age order (each New stamps CreatedAt/UpdatedAt now): the
+	// driver needs to name one that the window cannot possibly be showing, and 「批量会话 01」 — the
+	// oldest, so the LAST row of the bucket — is it.
+	if sc.seedLoose > 0 {
+		if err := sb.seedSessions(sc.seedLoose, func(i int) string { return fmt.Sprintf("批量会话 %02d", i) }); err != nil {
+			return report(sc.name, nil, []Line{{Label: "bulk sessions fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+	}
 	// An EXTRA session, seeded BEFORE the restored one so the app still opens the newest (it is
 	// the one a driver gets by clicking a row it has never opened — see seedSecond).
 	if len(sc.seedSecond) > 0 {
@@ -441,6 +454,27 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 		if err := mgr.UpdateMeta(cur); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// seedSessions seeds n project-less sessions in ONE pass: one store and one manager for the whole
+// set, because the sidebar-window fixture needs a hundred of them and a per-session NewFileStore
+// would pay that construction a hundred times. Titles are the driver's handle on a specific row
+// (see scenario.seedLoose), so it hands in the naming.
+func (sb *sandbox) seedSessions(n int, title func(i int) string) error {
+	store, err := session.NewFileStore(filepath.Join(sb.home, ".tachi", "session"))
+	if err != nil {
+		return err
+	}
+	mgr := session.NewManagerWithStore(store, nil)
+	for i := 1; i <= n; i++ {
+		if _, err := mgr.New("smoke", sb.work); err != nil {
+			return err
+		}
+		// SetTitle persists on its own (UpdateMeta inside), which is the whole record these
+		// fixtures need: no project, no roots, no transcript.
+		mgr.SetTitle(title(i))
 	}
 	return nil
 }

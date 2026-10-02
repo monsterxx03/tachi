@@ -102,6 +102,11 @@ type scenario struct {
 	// half of the same fixture (see sandbox.seedOrphanChain). The row must still say the
 	// conversation was compacted; it is the case that reads as "the chain is gone".
 	orphanChain bool
+	// seedLoose seeds this many project-less sessions (titled 批量会话 01…n, oldest first), for the
+	// sidebar's ROW WINDOW: a window is only observable with a group longer than it renders, and no
+	// driver can produce that one ⌘N at a time. They land in the 无项目 bucket, where the rest of a
+	// fixture's project-less sessions already are.
+	seedLoose int
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -863,6 +868,33 @@ func scenarios() []scenario {
 			},
 			after: func(c *checkCtx) {
 				c.check("预置的会话没有被多余地跑起来", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		// sidebar-window: 侧栏每个组只渲染「窗口」那么多行（App.tsx 的 rowWindow + components.tsx
+		// 的 MoreRows），滚到尾部或点行尾再续。四件界面上看不出来的事：
+		// (1) 截断只发生在长的那个组上，且画出来的行 + 行尾「还有 N 条」= 桶里真实的条数；
+		// (2) 续窗口一次只续一段（滚到尾部会自己续，点也行），不是一次画完；
+		// (3) **最关键**：⌘K 选中窗口够不到的旧会话时，窗口必须为它撑开、那行必须滚进视野 ——
+		//     「把当前会话滚进视野」撞上一个还没渲染的行，就是找不到行、请求悄悄卡住；
+		// (4) 整个过程不碰模型，也不增删任何会话（窗口是渲染层的事）。
+		{
+			name: "sidebar-window",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sidebar-window scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-window",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe sidebar-window scenario's project directory\n",
+				},
+			},
+			// 100 个无项目会话，titled 批量会话 01…100：桶因此有 101 条（加 fixture 自己那个
+			// 无项目会话），而项目组只有 1 条 —— 窗口是每组各自的，短的那个不该被牵连。
+			seedLoose: 100,
+			after: func(c *checkCtx) {
+				c.check("窗口化没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				c.check("窗口化没有建过也没有删过会话（磁盘上仍是 102 个）", len(c.sessionMetas()) == 102,
+					fmt.Sprintf("%d 个", len(c.sessionMetas())))
 			},
 		},
 		// Session-scoped numbers: a brand-new session must not inherit the previous one's
