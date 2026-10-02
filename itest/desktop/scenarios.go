@@ -1004,6 +1004,35 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// composer-page-turn: ⌃U / ⌃D 在**输入框里**也要翻半页。手就在输入框里的时候，才是想回看上文最
+		// 多的那一刻，而消息区那份处理器给不了这件事 —— 它按设计不拦落在文本框上的键，而且从框里按下的
+		// 键根本不经过它。所以这对键由 composer 自己认，再交给同一个 scrollByHalfPage（设备的手势走的
+		// 也是那一个）。
+		//
+		// 判据是转写的 scrollTop，所以种子转写必须**真的够长**（撑不住就没有"往上翻"这回事），而且开屏
+		// 钉在底部、基线 > 0 —— 否则"翻上去了"是恒真的。driver 里还有一条反向断言：G / gg 是普通字母，
+		// 必须在输入框里保持普通（放开这一层就等于把打字吃掉）。
+		//
+		// 合成事件能证明的到此为止：WebKit 在这两个组合上的光标动作有没有被 preventDefault 挡掉，
+		// 是 driver 看不见的（不受信任的事件本来就不触发默认动作）。
+		{
+			name: "composer-page-turn",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe composer-page-turn scenario's working directory\n",
+			},
+			seedMessages: []session.Message{
+				{Type: session.MessageTypeUser, Content: "先把转写撑长一点"},
+				{Type: session.MessageTypeAssistant,
+					Content: "好。\n\n" + strings.Repeat("这一段只是把转写撑长，好让翻半页真的翻得动。", 40)},
+				{Type: session.MessageTypeUser, Content: "再来一段"},
+				{Type: session.MessageTypeAssistant,
+					Content: "补上了。\n\n" + strings.Repeat("再多几行，好让上面翻得动、下面也翻得回来。", 40)},
+				{Type: session.MessageTypeUser, Content: "最后一段"},
+				{Type: session.MessageTypeAssistant,
+					Content: "完了。\n\n" + strings.Repeat("最后一段同样只是填充，够翻就行。", 40)},
+			},
+		},
+		//
 		// 桌面自己的语音输入（composer 上的麦克风按钮）。它和 badge 那条路共用**转写**那一半
 		// （desktop/stt），不共用投递：设备没有键盘，所以它转出来的字直接成为一条消息；桌面有
 		// 键盘，所以这里给的是草稿——填进输入框，由人改完再回车。这一条断的就是后半句：字落到框

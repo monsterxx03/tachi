@@ -425,9 +425,11 @@ function App() {
     if (followBottomRef.current) pinBottom()
   }, [pinBottom])
 
-  // scrollByHalfPage is THE page-turn: Ctrl+U/Ctrl+D in the conversation, and the badge's short
-  // up/down press (desktop/remote.go turns that gesture into a chat:scroll event) — one function,
-  // so "翻页" cannot mean two different things depending on where the finger is.
+  // scrollByHalfPage is THE page-turn: Ctrl+U/Ctrl+D in the conversation, the same pair inside the
+  // composer (composer.tsx claims it there, since a keydown born in the input box never reaches the
+  // chat area's handler), and the badge's short up/down press (desktop/remote.go turns that gesture
+  // into a chat:scroll event) — one function, so "翻页" cannot mean two different things depending
+  // on where the finger is.
   const scrollByHalfPage = useCallback((delta: number) => {
     const el = chatRef.current
     if (!el) return
@@ -671,7 +673,10 @@ function App() {
 
   // Vim-like keys while the message area has focus: G jumps to the newest
   // message, gg returns to the top, Ctrl+U / Ctrl+D scroll half a page. Keys
-  // typed into the composer or a form field are never intercepted.
+  // typed into the composer or a form field are never intercepted here — the
+  // composer claims Ctrl+U / Ctrl+D for ITSELF (see composer.tsx: the caret is
+  // usually there when you want to look back up), and G/gg stay plain letters
+  // that must reach whatever is being typed into.
   const ggPendingRef = useRef(false)
   const onChatKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement | null
@@ -2284,7 +2289,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           </div>
 
           <footer className="composer">
-            <Composer api={composer} running={isCurrentRunning} onStop={stopChat} />
+            <Composer api={composer} running={isCurrentRunning} onStop={stopChat} onPageTurn={scrollByHalfPage} />
             <div className="composer-status">
               <div className="work-dir-wrap popover-anchor">
                 {rootsOpen ? (
@@ -2643,7 +2648,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <div className="shortcut-section">消息区（聚焦时）</div>
               <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
               <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>
-              <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页</span></div>
+              <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页（焦点在消息区或输入框时都生效）</span></div>
             </div>
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setShortcutsOpen(false)}>关闭（Esc）</button>

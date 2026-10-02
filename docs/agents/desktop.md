@@ -53,6 +53,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
 | the reading size (⌘= / ⌘- / ⌘0, and the two stores it lands in) | `font-size`, `bubble-lines` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
+| a key the composer has to claim itself (⌃U / ⌃D page the transcript from inside the box) | `composer-page-turn` |
 | the microphone button / the `voice:*` events (states, where the text lands) | `voice-input` |
 | scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
 | sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |

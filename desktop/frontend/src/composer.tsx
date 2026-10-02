@@ -908,7 +908,7 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // textarea, and the stop/send buttons. It owns no state — `api` is useComposer's return
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
-export function Composer({ api, running, onStop }: { api: ComposerApi; running: boolean; onStop: () => void }) {
+export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerApi; running: boolean; onStop: () => void; onPageTurn: (delta: number) => void }) {
   const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError, voiceState, voiceAvailable, voiceNotice, toggleVoice } = api
 
   // ONE line above the box, because a paste failure and a recording's complaint can never both be
@@ -977,6 +977,19 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
             onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
             onKeyDown={(e) => {
               const ime = composingRef.current || imeActive(e)
+              // ⌃U / ⌃D page the transcript, and they work HERE too — the caret is usually in this
+              // box when someone wants to look back up at what was just said. The message area's own
+              // handler cannot do it for us: it refuses keys targeted at a field, by design, and a
+              // keydown born here never passes through it anyway. So the composer claims the pair and
+              // hands it to the same half-page scroll the badge's gesture uses. That takes the two
+              // away from WebKit's own text handling in this field (macOS gives ⌃D a caret meaning —
+              // delete forward): a key that means different things depending on where the focus is is
+              // the worse deal, and paging the conversation is what the pair means everywhere else.
+              if (!ime && e.ctrlKey && (e.key === 'u' || e.key === 'd')) {
+                e.preventDefault()
+                onPageTurn(e.key === 'd' ? 1 : -1)
+                return
+              }
               // ⌘⇧↑/⌘⇧↓ resize the box from INSIDE the field — the handle's own ↑↓ and the drag stay
               // as they are. Deliberately not a window-level binding: ⌥↑/⌥↓ already walks the diff
               // pane's findings, and a global handler would have to out-guess which pane is focused.
