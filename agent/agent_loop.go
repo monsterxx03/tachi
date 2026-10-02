@@ -798,7 +798,11 @@ func (a *AIAgent) runLoop(
 	for {
 		if !rs.Budget.consume() {
 			err := errors.New("iteration budget exhausted")
-			ch <- a.terminalError(ctx, rs, ExitReasonBudgetExhausted, err, nil)
+			// The budget runs out AFTER work, never before it: one iteration is consumed per API
+			// call, so reaching the cap means the earlier ones already ran their tools. Handing the
+			// frontend nothing here would lose them just as a rejected request would — the cap is a
+			// statement about how much more this turn may do, not about what it did.
+			ch <- a.terminalError(ctx, rs, ExitReasonBudgetExhausted, err, rs.partialHistory())
 			return
 		}
 
@@ -855,7 +859,14 @@ func (a *AIAgent) runLoop(
 			// Request context + (near-zero) duration recorded now, since the
 			// call never produced a stream to await.
 			a.recordAPIRequest(ctx, rs, in.Provider, opts, llmTools, requestStart)
-			ch <- a.terminalError(ctx, rs, ExitReasonError, fmt.Errorf("API call failed: %w", err), nil)
+			// A request the provider REJECTS fails here rather than mid-stream — a 400 arrives as
+			// an error from this call, before any stream exists. And "no stream was opened" is NOT
+			// "this turn produced nothing": from the second iteration on, the turn has already run
+			// tool calls that sit in rs.Messages AND in the session file, so a frontend left
+			// holding its pre-turn history would send the next turn a conversation missing work
+			// the model actually did (and repeat it). partialHistory draws that line — only the
+			// first call of a turn has nothing to keep.
+			ch <- a.terminalError(ctx, rs, ExitReasonError, fmt.Errorf("API call failed: %w", err), rs.partialHistory())
 			return
 		}
 
@@ -899,9 +910,13 @@ func (a *AIAgent) runLoop(
 //     request that failed for its own reasons is still a turn that RAN.
 //   - an interrupt / cancellation hands it over so the next turn can continue from where the user
 //     stopped it (both the tui and acp have always taken whatever arrives).
-//   - the exits that fail BEFORE the model produced anything — the iteration budget, a call that
-//     never opened a stream — pass nil: there is no partial turn, only the user's message, and a
-//     frontend that stored it would keep a question with no answer it never got.
+//   - the exits that fail BEFORE the model produced anything pass nil: there is no partial turn,
+//     only the user's message, and a frontend that stored it would keep a question with no answer
+//     it never got. WHICH exits those are is a question about the RUN, not about the failure: the
+//     iteration budget and a request the provider rejects (a 400 — the one failure that arrives
+//     without a stream) both land after whole iterations have already run, so those sites ASK the
+//     run (RunState.partialHistory) rather than assume. On a turn that produced nothing — its
+//     first call failing — asking answers nil, which is the shape this bullet describes.
 //
 // A frontend that only takes the partial history when ExitReason is Interrupted is therefore
 // DROPPING the mid-turn failure case (desktop/agent_turn.go did, until issue #38).
@@ -949,6 +964,9 @@ func (a *AIAgent) maybeAutoCompact(ctx context.Context, rs *RunState, in *runInp
 	oldMsgCount := len(rs.Messages)
 	rs.mu.Lock()
 	rs.Messages = newHistory
+	// The rewritten history is the loop's own product just as much as an appended message:
+	// from here a later failure must hand it over, not fall back to the input.
+	rs.produced = true
 	rs.mu.Unlock()
 	a.setCompactCooldown()
 	// Compact swapped the current session — refresh session-scoped values

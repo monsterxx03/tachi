@@ -382,6 +382,13 @@ type RunState struct {
 	// failed — which disables the file half for the turn. Under mu because a
 	// rewind command reads it from another goroutine.
 	checkpointTurn int
+	// produced records that the loop has put messages of its OWN into rs.Messages —
+	// an assistant turn, its tool results, a steer, a loop reminder, or a compaction's
+	// rewritten history. It is what separates a turn that failed before the model ever
+	// answered from one that failed with work already behind it (see partialHistory),
+	// which is the whole question at a failure site. Written together with Messages
+	// under mu by append; read by the run goroutine only.
+	produced bool
 
 	// injectedReminders records what this TURN has already put in front of the model,
 	// keyed by reminder piece name. The loop re-runs the collector after every tool
@@ -478,11 +485,34 @@ func (rs *RunState) trace() string {
 	return rs.TraceID
 }
 
-// append appends messages to the stored slice under the mutex.
+// append appends messages to the stored slice under the mutex, recording that this turn has
+// produced something of its own (see produced / partialHistory).
 func (rs *RunState) append(msgs ...llm.Message) {
+	if len(msgs) == 0 {
+		return
+	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.Messages = append(rs.Messages, msgs...)
+	rs.produced = true
+}
+
+// partialHistory is what a FAILED turn hands its frontend: the messages it produced, or nil when
+// it produced none — rs.Messages is then still just the input, and a frontend that stored it
+// would carry forward a question the model never answered.
+//
+// The line is drawn by the RUN rather than guessed from the failure, because it is not the same as
+// "was this failure hard": a call that never opened a stream is the first-call case on iteration 1
+// and a mid-turn failure on every later one, and an exhausted budget is always the latter. The
+// exits that can land on either side of it ask here (agent_loop.go: the iteration budget, and the
+// CreateChatStream error a rejected request arrives on).
+func (rs *RunState) partialHistory() []llm.Message {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	if !rs.produced {
+		return nil
+	}
+	return rs.Messages
 }
 
 // ---------------------------------------------------------------------------

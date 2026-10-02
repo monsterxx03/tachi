@@ -2440,6 +2440,40 @@ permissions:
 			},
 		},
 		//
+		// api-error-mid-turn: 同一个部位的另一半 —— 失败不是**流**断在半路，而是这次请求本身被拒（400：
+		// 请求还没成流就错了）。它走的是 agent loop 里另一条退出路径（CreateChatStream 直接报错），而那条
+		// 路径一度把 partial history 当 nil 交出去，理由是"调用根本没开流，没有半轮"—— 这话只对 turn 的
+		// **第一次**调用成立。第 2 次调用被拒时，这一轮已经跑过工具，判据与 stream-fail 一字不差：
+		// 出错之后的那一轮请求里必须带着那一步。
+		{
+			name: "api-error-mid-turn",
+			files: map[string]string{
+				"README.md": "# smoke\n\napi-error-mid-turn scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 1. 一轮正常的工具调用：它会被真正执行。
+				{Reply: bashStream("echo smoke-step-ok", "call_ae1")},
+				// 2. 同一个 turn 的下一次调用被拒：HTTP 状态错误，流根本没建立（400 不可重试，
+				//    所以脚本的步数是准的）。
+				{Reply: mockllm.StatusError(400, "invalid request")},
+				// 3. 出错之后用户又发了一条：这一轮的请求必须带着上面那一步。
+				{Reply: textStream("接着来。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三次请求：工具调用 / 被拒的请求 / 出错后的下一轮", len(c.requests) == 3, requestCount(c.requests))
+				if len(c.requests) < 3 {
+					return
+				}
+				// 前提同上：被拒的那一次请求里已经有那条工具结果。
+				c.check("前提：被拒的那一次请求里已经有这一步的结果",
+					requestHasText(c.requests[1], "smoke-step-ok"), requestTail(c.requests[1]))
+				// 正题：出错之后的下一轮仍然带着它。
+				c.check("请求被拒之后的那一轮把上一轮已执行的步骤带给了模型",
+					requestHasText(c.requests[2], "smoke-step-ok"), requestTail(c.requests[2]))
+			},
+		},
+		//
 		//
 		// chat-find: ⌘F 搜消息区（issue #35）。两件事只有真机才验得到 —— 搜索的**范围**（用户输入 +
 		// 模型正文，不含工具的参数与结果）和**落点**（直接滚到那一条消息）。fixture 里三个 token 各就

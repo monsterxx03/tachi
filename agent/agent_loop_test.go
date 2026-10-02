@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,6 +111,25 @@ func (p *failingStreamProvider) CreateChat(ctx context.Context, messages []llm.M
 }
 func (p *failingStreamProvider) CreateChatStream(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
 	return nil, fmt.Errorf("connection refused")
+}
+
+// apiErrorAfterToolsProvider answers a turn's FIRST call normally and REJECTS every later one the
+// way a provider rejects a bad request: an error from CreateChatStream itself, before any stream
+// exists. That is the shape "a call that never opened a stream" used to be read as "nothing was
+// produced" — true only while the loop is still on its first iteration.
+type apiErrorAfterToolsProvider struct {
+	mockStreamProvider
+	calls int
+}
+
+func (p *apiErrorAfterToolsProvider) Name() string { return "api-error-after-tools" }
+
+func (p *apiErrorAfterToolsProvider) CreateChatStream(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+	if p.calls > 0 {
+		return nil, fmt.Errorf("invalid request: 400 bad request")
+	}
+	p.calls++
+	return p.mockStreamProvider.CreateChatStream(ctx, messages, tools, opts)
 }
 
 // ---- Helpers ----
@@ -393,11 +413,111 @@ func TestAgentLoop_APICallFailed(t *testing.T) {
 
 	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
-	result, _ := drainAgentEvents(ch)
+	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, ExitReasonError, result.ExitReason)
 	assert.Contains(t, result.Error.Error(), "API call failed")
 	assert.Contains(t, result.Error.Error(), "connection refused")
+
+	// The FIRST call failing is the one failure with no half turn behind it: what the run holds is
+	// still just the input, so the event carries no history for a frontend to adopt (a stored
+	// question with no answer). The other half of this rule — the same failure one iteration later —
+	// is TestAgentLoop_APICallFailedAfterAToolRoundKeepsTheSteps.
+	for _, e := range events {
+		if e.Type == AgentEventError {
+			assert.Nil(t, e.Messages, "a first-call failure has no partial history to hand over")
+		}
+	}
+}
+
+func TestAgentLoop_BudgetExhaustedKeepsTheStepsTheTurnAlreadyRan(t *testing.T) {
+	// The cap is reached AFTER work, never before it: one iteration is spent per API call, so a turn
+	// that runs out of budget has already run its tools. Handing the frontend nothing there loses
+	// them exactly as a rejected request would.
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"echo ran-it"}`),
+		},
+	}
+	a := newTestAgent(t, mp)
+	a.RegisterTool(echoStub())
+	a.Config.MaxIterations = 1 // the tool round consumes it; the second call is refused
+
+	ch := a.RunConversationStream(t.Context(), nil, "run echo", "", llm.ChatOptions{MaxTokens: 4096})
+
+	result, events := drainAgentEvents(ch)
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonBudgetExhausted, result.ExitReason)
+
+	var errEvent *AgentEvent
+	for i := range events {
+		if events[i].Type == AgentEventError {
+			errEvent = &events[i]
+		}
+	}
+	require.NotNil(t, errEvent, "the turn ends with an error event")
+	require.NotNil(t, errEvent.Messages, "the partial history rides along")
+	assert.Contains(t, lastToolResultText(errEvent.Messages), "executed: echo ran-it")
+}
+
+// lastToolResultText is the concatenated content of a history's tool messages, for the tests that
+// ask what a turn had already done when it failed.
+func lastToolResultText(msgs []llm.Message) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			b.WriteString(m.Content)
+		}
+	}
+	return b.String()
+}
+
+func TestAgentLoop_APICallFailedAfterAToolRoundKeepsTheSteps(t *testing.T) {
+	// A turn whose first call runs a tool, then whose NEXT call is rejected (a 400 arrives before
+	// any stream exists). The tool call already executed, and the session file already holds it —
+	// so the error event must carry it: a frontend that kept its pre-turn history would send the
+	// next turn a conversation missing work the model did.
+	provider := &apiErrorAfterToolsProvider{
+		mockStreamProvider: mockStreamProvider{
+			name: "mock",
+			sequences: [][]llm.StreamEvent{
+				toolCallSeq("Bash", "call-1", `{"command":"echo ran-it"}`),
+			},
+		},
+	}
+	a := newTestAgent(t, provider)
+	a.RegisterTool(echoStub())
+
+	ch := a.RunConversationStream(t.Context(), nil, "run echo", "", llm.ChatOptions{MaxTokens: 4096})
+
+	result, events := drainAgentEvents(ch)
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonError, result.ExitReason)
+	assert.Contains(t, result.Error.Error(), "API call failed")
+
+	var errEvent *AgentEvent
+	for i := range events {
+		if events[i].Type == AgentEventError {
+			errEvent = &events[i]
+		}
+	}
+	require.NotNil(t, errEvent, "the turn ends with an error event")
+	require.NotNil(t, errEvent.Messages, "the partial history rides along")
+
+	// Both halves of the pair, not just a count: the assistant message that asked for the call and
+	// the result it produced. A provider that received only one of them would reject the request.
+	var sawCall, sawResult bool
+	for _, m := range errEvent.Messages {
+		if len(m.ToolCalls) > 0 {
+			sawCall = true
+		}
+		if strings.Contains(m.Content, "executed: echo ran-it") {
+			sawResult = true
+		}
+	}
+	assert.True(t, sawResult, "the executed step is in the handed-over history")
+	assert.True(t, sawCall, "and its tool call, so the history is a legal request")
 }
 
 func TestAgentLoop_StreamErrorMidway(t *testing.T) {

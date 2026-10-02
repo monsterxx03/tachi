@@ -81,7 +81,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
-| a turn whose stream dies mid-flight (what it keeps, what the next turn sends) | `stream-fail` |
+| a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
 | the settings page's MCP server editor (the one block that writes mcp.json instead of config.yaml) | `mcp-edit` |
@@ -863,12 +863,15 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   `sessionRun.running`, because a turn publishes its own `turn_complete` and only THEN exits to `endTurn` — the
   state is set before the event, so it can never contradict it. WHICH session the answer names is a
   second rule, and the compaction window is the one case where they differ (see Desktop Compaction).
-- **A turn that fails MID-STREAM keeps the history it already produced** (the partial messages are adopted on
-  EVERY error exit that carries them): it has already EXECUTED tool calls by then, and dropping them is how the
-  next request comes to be missing work the model did. What arrives is complete pairs, so the
-  adopted history is always a legal request — and the STATE still says 出错, because keeping the history is not
-  calling the turn a success. The guard also stays held for a moment after the error event (the checkpoint is
-  being finalized), so a send landing in that window is refused by name.
+- **A turn that fails after producing something keeps that history** — the desktop adopts whatever the error
+  event carries, and the agent attaches the partial messages on every exit that HAS them (a mid-stream death
+  and a rejected request are both "the turn RAN"; only a failure before the model was ever asked has nothing to
+  hand over). It has already EXECUTED tool calls by then, and dropping them is how the next request comes to be
+  missing work the model did. What arrives is complete pairs, so the adopted history is always a legal request —
+  and the STATE still says 出错, because keeping the history is not calling the turn a success. The guard also
+  stays held for a moment after the error event (the checkpoint is being finalized), so a send landing in that
+  window is refused by name. Regression: `stream-fail` and `api-error-mid-turn` (the two shapes), whose
+  criterion is that the NEXT request carries the executed step.
 - **Copying goes through `copyText` (`lib.ts`), never a bare `navigator.clipboard`**: the page is not a secure
   context, so the global is UNDEFINED there and an optional-chain call reads as a no-op with nothing failing
   anywhere. The runtime's own clipboard comes first, so a copy either works or is visible as a failure.
