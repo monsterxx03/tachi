@@ -1,21 +1,32 @@
-# Tachi desktop — build/run targets (Wails v3, macOS).
+# Tachi desktop — build/run targets (Wails v3, macOS + Linux).
 #
 # Usage:
-#   make build    → wails3 package → bin/Tachi.app (frontend + go + codesign)
+#   make build    → macOS: wails3 package → bin/Tachi.app (frontend + go + codesign)
+#                   Linux: go build → bin/tachi-desktop（前端要先用 make frontend 出 dist）
 #   make test     → go test ./...（这个模块自己的，根 go.work 看不见它）
-#   make run      → build then `open -n bin/Tachi.app`
+#   make run      → macOS: build then `open -n bin/Tachi.app`；Linux: build then 直接跑
 #   make dev      → wails3 dev (hot reload)
-#   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源）
+#   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源，macOS 专用）
 #   make frontend → npm run build in frontend/
 #   make tidy     → go mod tidy
 #   make clean    → remove bin/ and frontend/dist
 #
 # Wails v3 CLI is installed at ~/go/bin/wails3.
+#
+# 两个平台各走各的：macOS 用 wails3 package（.app bundle + 签名）；Linux 直接用 go build，
+# 出包（appimage/deb/rpm/aur）交给 `wails3 package` / `task linux:package`——那套要 wails3
+# CLI，而日常开发（本目标）不该被它挡住。两边的差异都收在下面 UNAME_S 的分支里。
 
 GO        ?= go
 WAILS     ?= wails3
 NPM       ?= npm
 APPDIR     = bin/Tachi.app
+
+# 平台分支用得到的两个：uname 选分支；Linux 的产物名要和 .desktop / nfpm 包一致
+# （build/linux/tachi-desktop.desktop 的 Exec、build/linux/nfpm/nfpm.yaml 的 contents
+# 都写的是 tachi-desktop）。
+UNAME_S   := $(shell uname -s)
+LINUX_BIN  = bin/tachi-desktop
 
 # LOCAL_SIGN_ID is the local, self-signed code-signing identity the build signs with (see the
 # `build` target: it does this whenever the identity exists). macOS ties TCC grants — bluetooth,
@@ -42,7 +53,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build dev appicon frontend tidy clean run sign-local stt-shim
+.PHONY: all build package dev appicon frontend tidy clean run sign-local stt-shim
 
 all: build
 
@@ -54,10 +65,18 @@ all: build
 #
 # 为什么这里会有 Swift：macOS 26 的转写 API 只在 Swift 的模块接口里存在（ObjC 头里
 # 只有老的 SFSpeechRecognizer），见 docs/2026-09-29-badge-voice-answers-design.md §7。
+#
+# 只在 macOS 上跑：Linux 的 stt 走 stt/stt_other.go（纯 Go 桩，没有 cgo 静态库要链），
+# 而这个脚本本身要 swiftc/xcrun——非 darwin 上不但没必要，还会直接把构建打断。
 stt-shim:
+ifeq ($(UNAME_S),Darwin)
 	@stt/build_shim.sh
+else
+	@echo "stt-shim: 跳过（$(UNAME_S)；语音转写在本平台不接）"
+endif
 
 build: stt-shim
+ifeq ($(UNAME_S),Darwin)
 	$(WAILS) package
 	@if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$(LOCAL_SIGN_ID)"; then \
 		$(MAKE) --no-print-directory sign-local; \
@@ -66,6 +85,20 @@ build: stt-shim
 		echo "  是内容哈希——重建一次就换一个身份，macOS 于是把蓝牙/语音/通知的权限再问一遍。"; \
 		echo "  建一张：./scripts/dev-cert.sh（一次就够，之后重建多少次都还是同一个 app）。"; \
 	fi
+else
+	@test -d frontend/dist || { echo "frontend/dist 不存在——先跑 make frontend（或 wails3 package）"; exit 1; }
+	$(GO) build -o $(LINUX_BIN) .
+	@echo "→ $(LINUX_BIN)（出安装包用 make package 或 task linux:package）"
+endif
+
+# package 是 Linux 的出包入口（appimage/deb/rpm/aur，走 build/linux/Taskfile.yml）。
+# macOS 的 .app/dmg 打包仍在 build 里（wails3 package）。
+package:
+ifeq ($(UNAME_S),Darwin)
+	@echo "macOS 的包由 make build 产出（bin/Tachi.app）；dmg 见 task darwin:package:dmg"
+else
+	$(WAILS) package
+endif
 
 dev:
 	$(WAILS) dev
@@ -89,7 +122,11 @@ tidy:
 	$(GO) mod tidy
 
 run: build
+ifeq ($(UNAME_S),Darwin)
 	open -n $(APPDIR)
+else
+	./$(LINUX_BIN)
+endif
 
 clean:
 	rm -rf bin frontend/dist

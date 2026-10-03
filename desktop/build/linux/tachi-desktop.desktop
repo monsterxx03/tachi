@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Name=Tachi Desktop
+Comment=Tachi — AI Agent desktop companion
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/tachi-desktop %u
+Terminal=false
+Type=Application
+Icon=tachi-desktop
+Categories=Utility;
+# Wails 在 Linux 上把 WM_CLASS/initialClass 设成 `org.wails.tachi`（实测，见
+# `hyprctl clients`），不是包名也不是可执行名——写成别的值会让窗口和这条
+# desktop entry 对不上：任务栏多一个无名图标，通知也归不到应用名下。
+StartupWMClass=org.wails.tachi
+
+ 

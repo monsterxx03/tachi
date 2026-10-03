@@ -133,6 +133,20 @@ func main() {
 			// never takes the foreground (see activationPolicy).
 			ActivationPolicy: activationPolicy(),
 		},
+		Linux: application.LinuxOptions{
+			// The Linux twin of ApplicationShouldTerminateAfterLastWindowClosed above:
+			// closing the window only HIDES it (the close hook in main() turns the
+			// delete into a hide), and the tray is the way back — so GTK must not quit
+			// the app when the last window goes away.
+			//
+			// ProgramName is deliberately NOT set: Wails derives the GTK application id
+			// (and therefore WM_CLASS / the Wayland app_id) from the app Name —
+			// `org.wails.<sanitized name>` — so it comes out `org.wails.tachi` regardless,
+			// and g_set_prgname does not move it. The .desktop file's StartupWMClass is
+			// what has to match, and it says `org.wails.tachi` (desktop/build/linux/
+			// tachi-desktop.desktop).
+			DisableQuitOnLastWindowClosed: true,
+		},
 	})
 
 	// Appearance: follow the system by default, unless the app has remembered a
