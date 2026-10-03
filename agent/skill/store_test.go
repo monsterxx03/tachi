@@ -911,3 +911,149 @@ func TestStoreEnabled(t *testing.T) {
 		t.Error("rewriting an enabled skill should NOT add an enabled field")
 	}
 }
+
+// TestStoreList_SymlinkedSkill covers a skill directory that is a symlink — the
+// way a skill is kept in the repo that owns it while still being visible under
+// ~/.tachi/skills. ReadDir reports the link's own type, so without following it
+// the skill never reaches List(), and List() is what feeds the reminder, the
+// LLM's skill list and the slash commands.
+func TestStoreList_SymlinkedSkill(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	globalSkillDir := filepath.Join(tmpDir, "global-skills")
+	realSkillDir := filepath.Join(tmpDir, "repo", "linked-skill")
+
+	// The skill's real home, outside any scan root.
+	if err := os.MkdirAll(filepath.Join(realSkillDir, "references"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	skillMD := "---\nname: linked-skill\ndescription: lives in its own repo\ntags: [link]\n---\nBody of linked-skill\n"
+	if err := os.WriteFile(filepath.Join(realSkillDir, "SKILL.md"), []byte(skillMD), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realSkillDir, "references", "checklist.md"), []byte("## Checklist\n- Item 1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(globalSkillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realSkillDir, filepath.Join(globalSkillDir, "linked-skill")); err != nil {
+		t.Fatal(err)
+	}
+	// A broken link and a link to a FILE are not skill directories: skipped quietly.
+	if err := os.Symlink(filepath.Join(tmpDir, "does-not-exist"), filepath.Join(globalSkillDir, "dead-skill")); err != nil {
+		t.Fatal(err)
+	}
+	fileTarget := filepath.Join(tmpDir, "notaskill.md")
+	if err := os.WriteFile(fileTarget, []byte("# nope\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(fileTarget, filepath.Join(globalSkillDir, "file-skill")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A project-level skill of the same name still shadows the linked global one.
+	projectSkill := filepath.Join(projectSkillDir, "linked-skill")
+	if err := os.MkdirAll(projectSkill, 0755); err != nil {
+		t.Fatal(err)
+	}
+	projectMD := "---\nname: linked-skill\ndescription: the project's own\n---\nproject body\n"
+	if err := os.WriteFile(filepath.Join(projectSkill, "SKILL.md"), []byte(projectMD), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
+
+	// Shadowing is unchanged: one entry, the project's, and the link is shadowed.
+	metas := s.List()
+	if len(metas) != 1 {
+		t.Fatalf("expected 1 skill (shadowed), got %d: %v", len(metas), metas)
+	}
+	if metas[0].Description != "the project's own" || metas[0].Source != SourceProject {
+		t.Errorf("linked global skill should be shadowed by the project's, got %+v", metas[0])
+	}
+
+	// With the project copy gone, the LINKED skill is what List reports.
+	s2 := newStore([]string{globalSkillDir}, []string{SourceGlobal})
+	metas = s2.List()
+	if len(metas) != 1 {
+		t.Fatalf("expected the linked skill only (dead/file links skipped), got %d: %v", len(metas), metas)
+	}
+	if metas[0].Name != "linked-skill" || metas[0].Source != SourceGlobal {
+		t.Errorf("unexpected meta: %+v", metas[0])
+	}
+	if metas[0].Description != "lives in its own repo" || len(metas[0].Tags) != 1 {
+		t.Errorf("frontmatter should be read through the link, got %+v", metas[0])
+	}
+
+	// It reaches the LLM-facing lists and the slash commands.
+	var inListSkills, inListMetas bool
+	for _, e := range s2.ListSkills() {
+		inListSkills = inListSkills || e.Name == "linked-skill"
+	}
+	for _, r := range s2.ListSkillMetas() {
+		inListMetas = inListMetas || r.Name == "linked-skill"
+	}
+	if !inListSkills || !inListMetas {
+		t.Errorf("linked skill missing from LLM-facing lists (skills=%v metas=%v)", inListSkills, inListMetas)
+	}
+	if _, ok := s2.ResolveCommand("/linked-skill"); !ok {
+		t.Error("ResolveCommand should resolve a linked skill")
+	}
+
+	// Load reads through the link, and supporting files come with it — the walk
+	// does not open a linked root by itself.
+	sk, err := s2.Load("linked-skill")
+	if err != nil {
+		t.Fatalf("Load(linked-skill) failed: %v", err)
+	}
+	if sk.Meta.Name != "linked-skill" || !strings.Contains(sk.Body, "Body of linked-skill") {
+		t.Errorf("unexpected loaded skill: %+v", sk.Meta)
+	}
+	if content, ok := sk.Files["references/checklist.md"]; !ok || content != "## Checklist\n- Item 1" {
+		t.Errorf("supporting files should be read through the link, got %v", sk.Files)
+	}
+
+	// Delete unlinks: the link disappears, the repo it pointed at survives.
+	if err := s2.Delete("linked-skill", SourceGlobal); err != nil {
+		t.Fatalf("Delete(linked-skill) failed: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(globalSkillDir, "linked-skill")); !os.IsNotExist(err) {
+		t.Errorf("the link should be gone after Delete, Lstat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(realSkillDir, "SKILL.md")); err != nil {
+		t.Errorf("Delete must not touch what the link pointed at: %v", err)
+	}
+}
+
+// TestStoreList_SymlinkedScanRoot covers the other end: the scan root itself
+// (.tachi/skills) is a link, which ReadDir opens without help.
+func TestStoreList_SymlinkedScanRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	realSkills := filepath.Join(tmpDir, "repo-skills")
+	if err := os.MkdirAll(filepath.Join(realSkills, "rooted-skill"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: rooted-skill\ndescription: behind a linked root\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(realSkills, "rooted-skill", "SKILL.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(tmpDir, "skills-link")
+	if err := os.Symlink(realSkills, linkRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newStore([]string{linkRoot}, []string{SourceGlobal})
+	metas := s.List()
+	if len(metas) != 1 || metas[0].Name != "rooted-skill" {
+		t.Fatalf("a linked scan root should be scanned, got %v", metas)
+	}
+	sk, err := s.Load("rooted-skill")
+	if err != nil {
+		t.Fatalf("Load through a linked root failed: %v", err)
+	}
+	if !strings.Contains(sk.Body, "body") {
+		t.Errorf("unexpected body: %q", sk.Body)
+	}
+}

@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -146,11 +147,11 @@ func (s *Store) List() []SkillMeta {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			skillDir := filepath.Join(dir, entry.Name())
+			if !isDirOrDirLink(entry, skillDir) {
 				continue
 			}
 
-			skillDir := filepath.Join(dir, entry.Name())
 			skillFile := filepath.Join(skillDir, "SKILL.md")
 			data, err := os.ReadFile(skillFile)
 			if err != nil {
@@ -215,6 +216,26 @@ func (s *Store) List() []SkillMeta {
 	})
 
 	return result
+}
+
+// isDirOrDirLink reports whether an entry from os.ReadDir names a directory,
+// following a symlink to its target.
+//
+// ReadDir reports the LINK's own type (lstat semantics), so a symlinked skill
+// directory — the way to keep a skill in the repo that owns it and still have
+// this store see it — looks like a non-directory and would be skipped before its
+// SKILL.md is ever read. A link is followed on purpose, and everything after
+// this point reads through the LINK path: the store's job is to report what is
+// at <dir>/<name>/SKILL.md, and a link is just another way to put it there.
+func isDirOrDirLink(entry os.DirEntry, path string) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(path) // follows the link; a broken one fails here
+	return err == nil && info.IsDir()
 }
 
 // Load reads and parses a skill's SKILL.md, returns full content + metadata.
@@ -378,6 +399,11 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 
 // Delete removes a skill from the filesystem. source narrows the search scope
 // ("project" or "global"); empty means search all dirs (respects priority).
+//
+// A skill reached through a symlink (see isDirOrDirLink) is UNLINKED, not
+// followed: the link this store scans is what goes away, and the tree it points
+// at — the repo that owns the skill — survives untouched. That is RemoveAll's
+// own behaviour on a link, and it is the behaviour we want.
 func (s *Store) Delete(name string, source string) error {
 	if err := ValidateName(name); err != nil {
 		return fmt.Errorf("invalid skill name: %w", err)
@@ -572,22 +598,31 @@ func parseFrontmatter(content string) (*frontmatter, string, error) {
 func loadSupportingFiles(dir string) (map[string]string, error) {
 	result := make(map[string]string)
 
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	// dir may be a symlink to the skill's real home (see isDirOrDirLink).
+	// filepath.WalkDir does not open a linked root — it reports the root's own
+	// type and stops — so resolve the target and walk that, keeping the keys
+	// relative to dir so callers see the same shape either way.
+	root := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		root = resolved
+	}
+
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible files
 		}
 		if d.IsDir() {
-			if path != dir && d.Name() == ".git" {
+			if path != root && d.Name() == ".git" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		// Skip SKILL.md itself
-		if filepath.Base(path) == "SKILL.md" && filepath.Dir(path) == dir {
+		if filepath.Base(path) == "SKILL.md" && filepath.Dir(path) == root {
 			return nil
 		}
 
-		relPath, err := filepath.Rel(dir, path)
+		relPath, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil
 		}
