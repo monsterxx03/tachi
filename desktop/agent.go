@@ -108,9 +108,14 @@ func (s *AgentService) RunningSessions() []string {
 }
 
 type desktopApp struct {
-	app    *application.App
-	tray   *application.SystemTray
-	window *application.WebviewWindow
+	app  *application.App
+	tray *application.SystemTray
+	// trayStatus is the tray menu's live readout item (state + today's spend + the
+	// displayed session's context %). refreshTray updates it. On Linux it is the ONLY
+	// place those numbers can be seen: a tray host there shows neither the bar label
+	// (SetLabel) nor a tooltip.
+	trayStatus *application.MenuItem
+	window     *application.WebviewWindow
 	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what
 	// lets the main window's close hook tell a USER-initiated close (which hides the window)
 	// from the one the shutdown path performs on its way out (which must go through). Without
@@ -169,12 +174,12 @@ type desktopApp struct {
 	// milliseconds, neither of which may ever wait behind the app-wide lock (see voice.go).
 	voice voiceInput
 
-	mu    sync.Mutex
-	runs  map[string]*sessionRun // key: session ID
+	mu   sync.Mutex
+	runs map[string]*sessionRun // key: session ID
 	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every
 	// state change, and the ledger read is a file scan.
 	trayCost trayCostCache
-	simCh chan struct{}          // simulated-turn stop signal
+	simCh    chan struct{} // simulated-turn stop signal
 
 	// asks holds every "a turn is parked on the user" record, keyed by session +
 	// tool call (permKey): a bash policy ask and an AskUserQuestion alike. It is

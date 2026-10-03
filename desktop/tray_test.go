@@ -32,3 +32,26 @@ func TestNumberCoercion(t *testing.T) {
 		t.Error("toFloat 没按预期宽容/保守")
 	}
 }
+
+// TestTrayStatusItemText：托盘菜单里那行状态要同时说清「在干什么」和两个数字。
+//
+// 为什么这条值得钉：Linux 上托盘菜单是这两个数字唯一能出现的地方（SetLabel 和 tooltip
+// 都不显示，见 setupTray），而只给数字会让人不知道 app 是忙还是闲——状态词不能因为
+// 「有数字了」就被省掉。
+func TestTrayStatusItemText(t *testing.T) {
+	st := AgentState{Status: StatusIdle, Label: "空闲"}
+	tests := []struct {
+		cost, context, want string
+	}{
+		{"¥0.386", "42%", "运行状态: 空闲 · ¥0.386 · 42%"},
+		{"¥0.386", "", "运行状态: 空闲 · ¥0.386"},
+		{"", "42%", "运行状态: 空闲 · 42%"},
+		// 两个都没有时只剩状态词，不能留一个空的「运行状态: 」。
+		{"", "", "运行状态: 空闲"},
+	}
+	for _, tc := range tests {
+		if got := trayStatusItemText(st, tc.cost, tc.context); got != tc.want {
+			t.Errorf("trayStatusItemText(%q, %q) = %q, want %q", tc.cost, tc.context, got, tc.want)
+		}
+	}
+}

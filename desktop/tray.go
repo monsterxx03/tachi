@@ -26,12 +26,16 @@ func loadTrayIcon(name string) []byte {
 	return b
 }
 
-// setupTray builds the macOS menu-bar item that reflects the agent state and
-// offers quick actions. It returns the tray so the caller can attach it to the
-// desktopApp (for state updates).
+// setupTray builds the tray item that reflects the agent state and offers quick
+// actions — the menu bar on macOS, the StatusNotifier icon in the bar on Linux. It
+// returns the tray so the caller can attach it to the desktopApp (for state updates).
+//
+// Two things differ per platform and live behind helpers (trayicon_darwin.go /
+// trayicon_other.go): HOW the icon is drawn (a macOS template vs. a tinted colour) and
+// whether a click has to open the menu itself.
 func setupTray(d *desktopApp) *application.SystemTray {
 	tray := d.app.SystemTray.New()
-	tray.SetTemplateIcon(iconIdle)
+	applyTrayIcon(tray, StatusIdle)
 	tray.SetLabel("空闲")
 	tray.SetTooltip("Tachi")
 
@@ -44,24 +48,37 @@ func setupTray(d *desktopApp) *application.SystemTray {
 		d.newSessionFromMenuBar()
 	})
 	menu.AddSeparator()
-	// Status readout — updated per state. Kept disabled so users can't
-	// accidentally activate it; it is purely informational.
-	menu.Add("运行状态: 空闲").SetEnabled(false)
+	// Status readout — updated per state by refreshTray. Kept disabled so users
+	// can't accidentally activate it; it is purely informational.
+	//
+	// It is a live MENU ITEM rather than only the bar label because the two platforms
+	// differ in where text can appear: macOS shows SetLabel in the menu bar, while a
+	// Linux tray host shows neither that label nor the tooltip — the menu is the only
+	// surface left for the numbers there.
+	d.trayStatus = menu.Add(trayStatusPlaceholder).SetEnabled(false)
 	menu.AddSeparator()
 	menu.Add("退出 Tachi Desktop").OnClick(func(ctx *application.Context) {
 		d.app.Quit()
 	})
 
 	tray.SetMenu(menu)
-	// The LEFT button opens the menu too — it no longer shows the window, so
-	// 「打开主窗口」 is the item that brings the window back. The right button
-	// keeps the framework's default for a menu-bearing tray (same menu).
-	tray.OnClick(func() {
-		tray.OpenMenu()
-	})
+	// The LEFT button: on macOS a menu-bar item does not drop its menu on a click by
+	// itself, so the app opens it. On Linux the HOST shows the menu on click and the
+	// framework's OpenMenu is unimplemented — so this is deliberately skipped there
+	// (trayClickOpensMenu), or the click would be swallowed and an error logged on
+	// every press.
+	if trayClickOpensMenu {
+		tray.OnClick(func() {
+			tray.OpenMenu()
+		})
+	}
 
 	return tray
 }
+
+// trayStatusPlaceholder is the status item's label before any state has been reported
+// (refreshTray replaces it). Mirrors the initial "空闲" the tray label starts from.
+const trayStatusPlaceholder = "运行状态: 空闲"
 
 // uiNewSessionEventName is the shell asking the UI for a new conversation. The menu bar cannot
 // make one itself: creation is the frontend's `newChat`, which also reveals the group the session
