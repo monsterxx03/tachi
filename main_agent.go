@@ -169,9 +169,11 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	// Non-interactive mode: unregister AskUserQuestion so the LLM never
-	// attempts to use it — there's no TUI form available in pipe mode.
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	// Non-interactive mode: AskUserQuestion is already unregistered by
+	// construction — applyAskUserGating drops it whenever PermissionMode is Skip
+	// and AskUserEnabled is false (this shape, channel, subagents), and it re-runs
+	// after any tool-registry rebuild. One statement, one place: a second
+	// unregister here would be free to drift from that rule.
 
 	// Wait briefly for MCP to connect so the first LLM call has tools available.
 	// No-op when MCP is disabled (DisableMCP): WaitForMCP returns immediately

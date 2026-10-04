@@ -37,8 +37,9 @@ convention-not-history, split + index when a subject grows) apply to this split 
   `HandlerResult`; a channel that wants concurrency spawns its own goroutines, but the manager already
   runs the agent turn on a goroutine and blocks the handler on a result channel, so a slow turn does not
   block the channel's read loop forever — it blocks only that thread's next message.
-- **`PermissionModeSkip` all the way down**: a channel agent REFUSES a bash `ask` rather than parking one
-  (`.tachi.md`'s entry-mode table). The two exceptions both come from the *channel's* own capability, not
+- **`PermissionModeSkip` all the way down**: a channel agent APPROVES a bash `ask` rather than parking one —
+  nobody is at the console, so a rule that asks for a human is answered "run it" (`.tachi.md`'s entry-mode
+  table; `deny` still decides). The two exceptions both come from the *channel's* own capability, not
   from the manager's choice:
   - `AskUserQuestion` is unregistered for a non-interactive channel and **re-registered** in `buildAgent`
     for one whose channel implements `InteractiveChannel` with `Interactive() == true`. `NewAIAgentWithConfig`

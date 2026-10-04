@@ -1051,7 +1051,7 @@ func (c *HerdrConfig) IsEnabled() bool {
 // deny > allow > ask > default(allow).
 type BashPermissions struct {
 	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
-	Ask   []string `yaml:"ask"`   // requires interactive approval (denied in non-interactive modes)
+	Ask   []string `yaml:"ask"`   // requires approval: a frontend with a human asks; an unattended mode runs it
 	Allow []string `yaml:"allow"` // exempts matching segments from ask rules
 	// DisableBuiltinDeny turns off the built-in absolutely-dangerous deny
 	// rules (permission.BuiltinDenyRules). Only honored from the GLOBAL
@@ -1128,7 +1128,7 @@ type BashPermissions struct {
 // directory, not as a file that cannot exist without a trailing name.
 type PathPermissions struct {
 	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
-	Ask   []string `yaml:"ask"`   // requires interactive approval (refused where nobody can answer)
+	Ask   []string `yaml:"ask"`   // requires approval: a frontend with a human asks; an unattended mode runs it
 	Allow []string `yaml:"allow"` // exempts matching paths from ask rules (GLOBAL config only)
 }
 

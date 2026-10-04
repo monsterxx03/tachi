@@ -215,17 +215,18 @@ func TestFileGateFallsBackToTheRules(t *testing.T) {
 			assert.False(t, handled)
 			assert.Nil(t, note)
 
-			// A matched ask rule still asks — and with nobody able to answer here
-			// (Skip), still refuses.
+			// A matched ask rule still asks — but with nobody able to answer here
+			// (Skip) the ask is approved by the mode's own branch, so the gate hands
+			// the call back to the executor (handled=false).
 			a.SetPermissionMode(PermissionModeSkip)
 			a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
 				permission.WithFileRules(permission.FileRules{
 					Read: testPathRules(nil, []string{"/repo/secrets/*"}, nil),
 				}, permission.FileRules{})))
-			res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/repo/secrets/token", ""))
+			_, handled, note, err = callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/repo/secrets/token", ""))
 			require.NoError(t, err)
-			require.True(t, handled)
-			assert.Contains(t, res.Err.Error(), "/repo/secrets/*")
+			assert.False(t, handled, "an unattended ask is approved, so the call proceeds")
+			assert.Nil(t, note, "approved without an answer to report: no note")
 		})
 	}
 }
@@ -382,30 +383,58 @@ func TestFileRuleDenyStopsTraversalAndSymlinks(t *testing.T) {
 // not to explain the configuration to it. Naming a permission file would send a
 // helpful model off to read it, and the fix is the user's either way — the bash
 // refusals have the same rule (TestBashRefusalsDoNotInviteInvestigation).
+//
+// Two refusals are left on this half: a `deny` rule, and a human answering a card
+// with "no" (the file tools' ask has no unattended refusal — an unattended mode
+// approves it, see TestFileGateFallsBackToTheRules).
 func TestFileRefusalsDoNotInviteInvestigation(t *testing.T) {
-	judge := &fakeAskJudge{p: 0.95}
-	a := fileGateAgent(t, judge, nil)
-	a.SetPermissionMode(PermissionModeSkip)
-	a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
-		permission.WithFileRules(permission.FileRules{
-			Read: testPathRules(nil, []string{"/repo/secrets/*"}, nil),
-		}, permission.FileRules{})))
-
-	res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/repo/secrets/token", ""))
-	require.NoError(t, err)
-	require.True(t, handled)
-	msg := strings.ToLower(res.Err.Error())
-
-	assert.Contains(t, res.Err.Error(), "/repo/secrets/*", "the refusal names the rule that stopped it")
-	for _, forbidden := range []string{"permissions.yaml", "permissions.bash", "permissions.files", "/.tachi/", "config.yaml"} {
-		assert.NotContains(t, msg, strings.ToLower(forbidden),
-			"a refusal must not name a configuration path")
+	// Shared shape: no config path is ever named, and the fact is stated.
+	shared := func(t *testing.T, text string) {
+		t.Helper()
+		msg := strings.ToLower(text)
+		for _, bad := range []string{"permissions.yaml", "permissions.bash", "permissions.files", "/.tachi/", "config.yaml"} {
+			assert.NotContains(t, msg, strings.ToLower(bad), "a refusal must not name a configuration path")
+		}
+		assert.Contains(t, msg, "not executed")
 	}
-	for _, forbidden := range []string{"read the permission", "look for a way around", "find a rule"} {
-		assert.NotContains(t, msg, forbidden,
-			"a refusal must not read as an invitation to investigate")
-	}
-	assert.Contains(t, msg, "not executed")
+
+	t.Run("deny rule", func(t *testing.T) {
+		a := fileGateAgent(t, &fakeAskJudge{p: 0.95}, nil)
+		a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
+			permission.WithFileRules(permission.FileRules{
+				Read: testPathRules([]string{"/repo/secrets/*"}, nil, nil),
+			}, permission.FileRules{})))
+
+		res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/repo/secrets/token", ""))
+		require.NoError(t, err)
+		require.True(t, handled)
+		require.Error(t, res.Err)
+		shared(t, res.Err.Error())
+		assert.Contains(t, res.Err.Error(), "/repo/secrets/*", "the refusal names the rule that stopped it")
+		assert.Contains(t, res.Err.Error(), "Only the user can change this rule")
+		assert.Contains(t, res.Err.Error(), "do not attempt the same thing in another form")
+	})
+
+	t.Run("human refused", func(t *testing.T) {
+		a := fileGateAgent(t, &fakeAskJudge{p: 0.95}, nil)
+		a.SetPermissionMode(PermissionModeExternal)
+		a.SetPermissionHandler(func(context.Context, string, string, string, string) (bool, error) {
+			return false, nil
+		})
+		a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
+			permission.WithFileRules(permission.FileRules{
+				Read: testPathRules(nil, []string{"/repo/secrets/*"}, nil),
+			}, permission.FileRules{})))
+
+		res, handled, _, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/repo/secrets/token", ""))
+		require.NoError(t, err)
+		require.True(t, handled)
+		require.Error(t, res.Err)
+		shared(t, res.Err.Error())
+		assert.Contains(t, res.Err.Error(), "/repo/secrets/*", "the refusal names what the user was consulted about")
+		assert.Contains(t, res.Err.Error(), "only they can change that", "the refusal says who can change it")
+		assert.Contains(t, res.Err.Error(), "do not reach the same file through another path or another tool")
+	})
 }
 
 // TestFileAskDeniedRefusesTheCallAndNotTheTurn: this is the one place the file ask

@@ -67,7 +67,7 @@ type SystemReminderConfig struct {
 // 字段分类：
 //   - "构造输入"：构造时被消费，派生到运行时字段（titleGenEnabled /
 //     PermState / Frontend）。构造完成后这些字段不再被读取——改它们无效，
-//     要改运行时行为请用对应 Setter（SetAutoApprovePolicyAsks、EnablePlanTool 等）。
+//     要改运行时行为请用对应 Setter（SetPermissionMode、EnablePlanTool 等）。
 //   - "只读配置"：构造后不变，通过 Config 引用
 //   - "回填"：由 Configure() 初始化后回填
 type AgentConfig struct {
@@ -109,7 +109,6 @@ type AgentConfig struct {
 	DisableSystemReminders bool  // 只读配置：禁用全部 system reminder（非交互模式如 `tachi -p`）
 	DisableMCP             bool  // 只读配置：跳过 MCP server 连接与工具发现（非交互模式如 `tachi -p` / `tachi commit`）
 	DisableSkills          bool  // 只读配置：跳过 skill store 扫描与 skill 工具注册（非交互模式如 `tachi -p` / `tachi commit`）
-	AutoApprovePolicyAsks  bool  // 构造输入 → 初始化 PermState
 	AskUserEnabled         bool  // 只读配置：即使 PermissionModeSkip 也保留 AskUserQuestion（desktop 等交互式前端）
 
 	// --- 独立 Provider（构造输入；nil = fallback 到主 provider）---
@@ -258,9 +257,10 @@ type RuntimeChannels struct {
 // AIAgent. Unlike AgentConfig (read-only after construction), these
 // fields are modified during a session by user actions:
 //   - PermissionHandler: set when PermissionModeExternal is active
-//   - AutoApprovePolicyAsks: set when user chooses "allow all"
+//   - AllowAllAsks: set when the user answers 「本会话全部允许」
 //
-// Initial values come from AgentConfig construct inputs.
+// It is empty for an agent with none of those (a fresh PermState is all a
+// channel or one-off agent needs).
 type PermissionState struct {
 	// PermissionHandler is called by PermissionModeExternal to decide
 	// tool execution. It receives the tool name, tool call ID, preview,
@@ -271,12 +271,6 @@ type PermissionState struct {
 	// whole interactive path, and its refusal refuses THAT CALL rather than
 	// the turn.
 	PermissionHandler PermissionHandler
-
-	// AutoApprovePolicyAsks makes PermissionModeSkip approve policy
-	// "ask" decisions instead of denying them. Set only when a user
-	// explicitly chose "allow all" (ACP); channel/subagent/one-off
-	// runs leave it false.
-	AutoApprovePolicyAsks bool
 
 	// AllowAllAsks is 「本会话全部允许」 — the answer the interactive frontends give to a permission
 	// card (the TUI's `a`, the desktop's 本会话全部允许 button). The policy keeps its own copy of this

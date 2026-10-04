@@ -312,9 +312,7 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	}
 
 	// PermState initialization
-	a.PermState = &PermissionState{
-		AutoApprovePolicyAsks: cfg.AutoApprovePolicyAsks,
-	}
+	a.PermState = &PermissionState{}
 
 	// Frontend config
 	a.Frontend = FrontendConfig{
@@ -538,13 +536,6 @@ func (a *AIAgent) SetPermissionTrees(ctx context.Context, primary string, additi
 // PermissionPolicy returns the installed policy, or nil.
 func (a *AIAgent) PermissionPolicy() *permission.Policy {
 	return a.Config.PermissionPolicy
-}
-
-// SetAutoApprovePolicyAsks controls how PermissionModeSkip handles policy
-// "ask" decisions: true = execute anyway (used after an explicit "allow all"
-// choice, e.g. ACP); false (default) = deny with an explanatory error.
-func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
-	a.PermState.AutoApprovePolicyAsks = v
 }
 
 // EnablePlanTool enables registration of the SavePlan tool. Must be called

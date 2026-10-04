@@ -62,9 +62,12 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **Four answers, chosen by the per-agent `PermissionMode`**: `TUI` prompts (`y` allow once / `a` allow for the
   session / `n` deny, which ABORTS the turn — a FILE tool's refusal refuses that call and the turn continues,
   see its section); `External` delegates to a `PermissionHandler` (the desktop's card,
-  ACP's `session/request_permission`); `Skip` REFUSES the command with an explanation, and is every entry mode
-  with nobody to ask — channel, `tachi -p`, subagents, dream, the one-off commands. `Skip` + a user's explicit
-  ACP 「allow all」 is the only thing that auto-approves there.
+  ACP's `session/request_permission`); `Skip` APPROVES the ask, and is every entry mode with nobody to ask —
+  channel, `tachi -p`, subagents, dream, the one-off commands. A matched `ask` rule is the user asking to be
+  consulted before the command runs; with nobody to consult, refusing would stall a run that no one can
+  unblock, so those entries run it and `deny` (decided before the ask branch) is what still says no there.
+  `Skip` also never judges (see the gate section) and, approving without asking anyone, writes no
+  `[permission]` note.
 - **The ask's preview is written by the agent, not by the frontend** (`askPreview`: the subject, then why — the subject is the command for a Bash ask and the tool plus the path a caller wrote for a file ask).
   The desktop shows it verbatim — a second renderer of that format would be free to drift, and the reason line is
   the part a human acts on.
@@ -72,8 +75,8 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   the rule, who can change it (the user), and an explicit "do not attempt the same thing in another form, do not
   go reading the permission files". **No refusal may name a config path**, and none is written as an invitation
   to look something up — naming the file is what sends a helpful model off to read it
-  (`TestBashRefusalsDoNotInviteInvestigation`). The one exception is the unparseable
-  command, whose fix IS in the model's hands: it says to correct the syntax and re-issue.
+  (`TestBashRefusalsDoNotInviteInvestigation`). A refusal can only ever come from a `deny` now: an `ask` has no
+  refusal left in it (an attached frontend puts it to a human, an unattended mode approves it).
 - **A `deny` is decided before any ask is raised**, so nothing on the ask path can reach it: not a session-wide
   approval, not a permission handler, not the judgment gate. That property is the call graph's, not a convention
   to be remembered — keep it that way when adding a step.
@@ -142,9 +145,10 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   state a write to `.tachi/permissions.yaml` scored 0.87, without it 0.43 — so **the rules, not the
   judgment, are what stops an agent from rewriting the rules it is judged by**.
 - **A refusal refuses the CALL and never the turn** (`resolveFileAsk`), unlike the bash ask's
-  `errCancelled`; a `deny` is still decided before the gate is reached. Under `PermissionModeSkip` the
-  gate is off entirely and a matched ask rule REFUSES the call (the same "the rule means no" reading the
-  command half has) — no stock config has file rules, so the default behaviour is unchanged.
+  `errCancelled`; a `deny` is still decided before the gate is reached. Under `PermissionModeSkip` the gate is
+  off entirely and a matched ask rule is approved by that mode's branch — the same reading the command half
+  has, and the reason no unattended file call is refused for an `ask` — no stock config has file rules, so the
+  default behaviour is unchanged.
 - **`Read` and `Edit` are PARALLEL tools** (`Write` is not): the gate runs on both executors, and a
   parked ask serializes on `PermissionState.askMu` — one `ConfirmResp` channel serves the whole agent.
   The `[permission]` note travels out of a parallel group through the `notes[i]` slice, one index per
@@ -201,8 +205,8 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **deny is decided before EITHER reader is reached**, so "stop asking me" can never become "run what I
   forbade". The one ask it does widen into is the UNPARSEABLE command (`AskNoRule`): nothing was parsed, so no
   rule — deny included — saw any part of it, and the command runs on the blanket answer alone. That is
-  deliberate and matches the other frontends' 「allow all」 (PermissionModeSkip's `AutoApprovePolicyAsks`
-  approves either kind of policy ask), and the population is benign: an unclosed quote, or a trailing `&&`.
+  deliberate and matches every unattended frontend (PermissionModeSkip approves a policy ask of either kind on
+  its own, having nobody to consult), and the population is benign: an unclosed quote, or a trailing `&&`.
 - **Rebuilding a policy must INHERIT the policy's half** (`InheritSessionApprovals`), or a folder change re-asks
   a question the user already answered — a regression they cannot see coming. The PermState half needs no
   inheritance (a tree change rebuilds the policy, not the agent). The RULES must not carry over: they are
@@ -237,9 +241,9 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **Both gates write the same line, and it goes to the EVENT ONLY — the transcript — and never into the model's message**
   (`agent.askNote`, written by `checkBashPermission` and `checkFilePermission` alike):
   `[permission] decided_by=judgment score=0.180 threshold=0.850`, or `decided_by=approval` for a call that was
-  asked about and approved. It is appended for a FAILED call too (the call ran, or was refused, either way), and no
-  judgment and no ask means no line at all, so an unremarkable call's result is byte-for-byte what it was
-  before the gate existed.
+  asked about and approved (the unattended branch approves without asking anyone, so it writes no note). It is
+  appended for a FAILED call too (the call ran, or was refused, either way), and no judgment and no ask means no
+  line at all, so an unremarkable call's result is byte-for-byte what it was before the gate existed.
 - **The model deliberately does not get it.** Two costs on that side: a line the model does not act on is re-sent
   in the history of every LATER request (the event is not in the history), and "this one was allowed" in front of
   the model invites reading it as a standing permission for commands like it. The Bash tool description therefore

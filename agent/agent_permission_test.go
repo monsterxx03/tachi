@@ -81,12 +81,17 @@ func TestAgentLoop_BashPolicyDeny(t *testing.T) {
 		"deny error should be fed back to the LLM as a tool error; events: %v", events)
 }
 
-func TestAgentLoop_BashPolicyAsk_NonInteractiveDenied(t *testing.T) {
+// A matched `ask` rule in an unattended mode (channel, subagent, dream, `tachi -p`)
+// is APPROVED rather than refused: the rule is the user asking to be consulted,
+// there is nobody to consult, and refusing would stall a run that no one can
+// unblock. `deny` is unaffected — it is decided before the ask branch is reached
+// (TestAgentLoop_BashPolicyDeny).
+func TestAgentLoop_BashPolicyAsk_UnattendedApproves(t *testing.T) {
 	mp := &mockStreamProvider{
 		name: "mock",
 		sequences: [][]llm.StreamEvent{
 			toolCallSeq("Bash", "call-1", `{"command":"git push origin main"}`),
-			textSeq("cannot run that here"),
+			textSeq("pushed"),
 		},
 	}
 
@@ -100,35 +105,10 @@ func TestAgentLoop_BashPolicyAsk_NonInteractiveDenied(t *testing.T) {
 		a.RunConversationStream(t.Context(), nil, "push it", "", llm.ChatOptions{MaxTokens: 4096}))
 
 	require.NotNil(t, result)
-	assert.Equal(t, "cannot run that here", result.Response)
-	assert.True(t, toolResultContains(events, true, "requires interactive approval"),
-		"ask in non-interactive mode should be denied with guidance")
-	assert.Equal(t, 0, countConfirmations(events), "no interactive prompt in Skip mode")
-}
-
-func TestAgentLoop_BashPolicyAsk_NonInteractiveAutoApprove(t *testing.T) {
-	mp := &mockStreamProvider{
-		name: "mock",
-		sequences: [][]llm.StreamEvent{
-			toolCallSeq("Bash", "call-1", `{"command":"git push origin main"}`),
-			textSeq("pushed"),
-		},
-	}
-
-	a := newTestAgent(t, mp)
-	a.RegisterTool(bashStub())
-	a.SetPermissionMode(PermissionModeSkip)
-	a.SetAutoApprovePolicyAsks(true) // ACP "allow all" path
-	a.SetPermissionPolicy(permission.NewPolicy(
-		permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
-
-	result, events := drainAgentEvents(
-		a.RunConversationStream(t.Context(), nil, "push it", "", llm.ChatOptions{MaxTokens: 4096}))
-
-	require.NotNil(t, result)
 	assert.Equal(t, "pushed", result.Response)
 	assert.True(t, toolResultContains(events, false, "ran: git push origin main"),
-		"auto-approved ask should execute")
+		"an unattended ask is approved, not refused")
+	assert.Equal(t, 0, countConfirmations(events), "no interactive prompt in Skip mode")
 }
 
 func TestAgentLoop_BashPolicyAsk_TUIAllowOnce(t *testing.T) {
@@ -535,6 +515,9 @@ func TestCheckBashUnparseableIsItsOwnValue(t *testing.T) {
 // and a model being helpful went and read the permission files to explain them —
 // burning turns on a decision that is the user's. So: no paths, and an explicit
 // "only the user can change this, do not go looking".
+//
+// A `deny` is the one refusal this half can still produce: an `ask` rule has no
+// refusal left in it (an unattended mode approves it, an attached frontend asks).
 func TestBashRefusalsDoNotInviteInvestigation(t *testing.T) {
 	args := `{"command":"terraform destroy -auto-approve"}`
 	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{Name: "Bash", Arguments: args}}
@@ -547,34 +530,20 @@ func TestBashRefusalsDoNotInviteInvestigation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled, "a deny is handled: the command never reaches the tool")
 	require.Error(t, res.Err)
-	denyText := res.Err.Error()
+	text := res.Err.Error()
 
-	ask := newTestAgent(t, &mockStreamProvider{name: "mock"})
-	ask.RegisterTool(bashStub())
-	ask.SetPermissionMode(PermissionModeSkip) // nobody to ask → the refusal is the answer
-	ask.SetPermissionPolicy(permission.NewPolicy(
-		permission.Rules{Ask: []string{"terraform destroy*"}}, permission.Rules{}))
-	res, handled, _, err = ask.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
-	require.NoError(t, err)
-	require.True(t, handled)
-	require.Error(t, res.Err)
-	askText := res.Err.Error()
-
-	for name, text := range map[string]string{"deny": denyText, "non-interactive ask": askText} {
-		for _, path := range []string{"~/.tachi/config.yaml", ".tachi/permissions.yaml", "permissions.bash"} {
-			if strings.Contains(text, path) {
-				t.Errorf("%s refusal names %q — naming the file is what sent the model reading it:\n%s",
-					name, path, text)
-			}
-		}
-		if !strings.Contains(text, "Only the user can") {
-			t.Errorf("%s refusal must say who can change it:\n%s", name, text)
-		}
-		if !strings.Contains(text, "the command was NOT executed") {
-			t.Errorf("%s refusal must state the command did not run:\n%s", name, text)
+	for _, path := range []string{"~/.tachi/config.yaml", ".tachi/permissions.yaml", "permissions.bash"} {
+		if strings.Contains(text, path) {
+			t.Errorf("deny refusal names %q — naming the file is what sent the model reading it:\n%s", path, text)
 		}
 	}
-	if !strings.Contains(denyText, "do not attempt the same thing in another form") {
-		t.Errorf("deny refusal must close the workaround loop:\n%s", denyText)
+	if !strings.Contains(text, "Only the user can") {
+		t.Errorf("deny refusal must say who can change it:\n%s", text)
+	}
+	if !strings.Contains(text, "the command was NOT executed") {
+		t.Errorf("deny refusal must state the command did not run:\n%s", text)
+	}
+	if !strings.Contains(text, "do not attempt the same thing in another form") {
+		t.Errorf("deny refusal must close the workaround loop:\n%s", text)
 	}
 }

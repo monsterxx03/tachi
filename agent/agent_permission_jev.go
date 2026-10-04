@@ -116,8 +116,9 @@ func (a *AIAgent) judgeBashAsk(ctx context.Context, cmd, rule string) askJudged 
 // whether the gate runs at all. All three are read here rather than captured at
 // Configure time, so a settings save reaches the next command.
 func (a *AIAgent) bashAskGate() (threshold float64, budget time.Duration, on bool) {
-	// Nobody to ask: an ask would either be refused (Skip) or auto-approved,
-	// and auto-approving someone else's unattended run is not this gate's call.
+	// Nobody to ask: the gate's one outcome beyond "run" is "raise the ask", and an
+	// unattended mode answers that ask on its own — approving someone else's run on
+	// a probability is not this gate's call.
 	if a.Config.PermissionMode == PermissionModeSkip {
 		return 0, 0, false
 	}

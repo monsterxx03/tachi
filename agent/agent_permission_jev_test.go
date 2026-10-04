@@ -372,8 +372,8 @@ func TestSessionAllowAllReachesTheJudgmentGate(t *testing.T) {
 
 	t.Run("unparseable command", func(t *testing.T) {
 		// The conservative ask (`AskNoRule`) is covered too — it is a policy ask like any other, and
-		// the other frontends' 「allow all」 approves it as well (PermissionModeSkip's
-		// AutoApprovePolicyAsks checks before it special-cases the sentinel). Worth pinning because
+		// every unattended frontend approves it as well (PermissionModeSkip's own branch approves a
+		// policy ask before it special-cases the sentinel). Worth pinning because
 		// it is the one ask where NOTHING could be evaluated: the command did not parse, so no rule —
 		// deny included — sees any part of it, and the user's blanket answer is the only thing
 		// carrying the command. The population is benign in practice: an unclosed quote, or the

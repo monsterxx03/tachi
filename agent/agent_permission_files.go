@@ -31,9 +31,10 @@ import (
 //   - It acts only where a human can answer (PermissionModeSkip is excluded):
 //     letting a probability approve unattended file access on the user's behalf
 //     is a product decision, not this gate's.
-//   - When it cannot answer, the RULES decide — a rule-matched call asks (and is
-//     refused where nobody can answer), an unmatched one runs. That is why a
-//     service outage cannot make anything worse than it already is.
+//   - When it cannot answer, the RULES decide — a rule-matched call asks (and, in
+//     an unattended mode, is approved by that mode's own branch), an unmatched one
+//     runs. That is why a service outage cannot make anything worse than it
+//     already is.
 //
 // Two differences from the bash gate, both deliberate and both visible to the
 // user:
@@ -130,8 +131,9 @@ func (a *AIAgent) judgeFileAsk(ctx context.Context, call jevfiles.Call) askJudge
 // whether the gate runs at all. All three are read here rather than captured at
 // Configure time, so a settings save reaches the next call.
 func (a *AIAgent) fileAskGate() (threshold float64, budget time.Duration, on bool) {
-	// Nobody to ask: an ask would either be refused (Skip) or auto-approved, and
-	// auto-approving someone else's unattended file access is not this gate's call.
+	// Nobody to ask: the gate's one outcome beyond "run" is "raise the ask", and
+	// that ask would have no answer to act on here — approving someone else's
+	// unattended file access on a probability is not this gate's call.
 	if a.Config.PermissionMode == PermissionModeSkip {
 		return 0, 0, false
 	}
@@ -263,37 +265,36 @@ func (a *AIAgent) checkFilePermission(ctx context.Context, tc llm.ToolCall, ch c
 			return res, handled, nil, err
 		}
 		// A rule asked and it was approved. No judgment number exists here (the
-		// gate was off, or answered nothing), so the note carries none.
+		// gate was off, or answered nothing), so the note carries none. The
+		// unattended branch approves without asking anyone, and a note claiming an
+		// approval nobody gave would be the transcript misreporting who decided.
+		if a.Config.PermissionMode == PermissionModeSkip {
+			return tools.ToolResult{}, false, nil, nil
+		}
 		return tools.ToolResult{}, false, &askNote{By: noteByApproval}, nil
 	}
 	return tools.ToolResult{}, false, nil, nil
 }
 
 // resolveFileAsk dispatches an ask according to the agent's permission mode:
-// interactive prompt (TUI), external handler (desktop, ACP), or the
-// non-interactive refusal (Skip). Unlike the bash ask, a refusal here refuses the
-// CALL and never aborts the turn (see the file comment).
+// interactive prompt (TUI), external handler (desktop, ACP), or the unattended
+// branch (Skip), which approves the matched rule — nobody is there to answer, and
+// the call has to proceed for an unattended run to finish. Unlike the bash ask, a
+// refusal here refuses the CALL and never aborts the turn (see the file comment).
 func (a *AIAgent) resolveFileAsk(ctx context.Context, tc llm.ToolCall, call fileCall, cause askCause, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
 	preview := askPreview(call.subject(), cause)
 	toolName, path := call.facts.Tool, call.facts.Path
 
 	switch a.Config.PermissionMode {
 	case PermissionModeSkip:
-		// Channel, subagent, one-off runs: no human at the console, and the
-		// judgment gate is off here too — so this is a matched ask rule, which is
-		// the user asking to be consulted. Consulting them is impossible, and
-		// running it anyway would be this gate granting what the rule refused.
-		if a.PermState.AutoApprovePolicyAsks {
-			a.Config.Logger.Info(ctx, "Agent: file ask auto-approved (allow-all session)",
-				"tool", toolName, "path", path, "rule", cause.rule)
-			return tools.ToolResult{}, false, nil
-		}
-		a.Config.Logger.Info(ctx, "Agent: file ask denied in non-interactive mode",
+		// Channel, subagent, dream, the one-off runs: nobody at the console, so a
+		// matched ask rule is approved instead of refused — the same reading the bash
+		// half has, and for the same reason (see resolveBashAsk). A path always
+		// parses, so this half has no unparseable case, and `deny` was already decided
+		// above this point.
+		a.Config.Logger.Info(ctx, "Agent: file ask approved (non-interactive mode)",
 			"tool", toolName, "path", path, "rule", cause.rule)
-		return tools.ToolResult{
-			Status: tools.ToolResultError,
-			Err:    fileAskUnavailable(cause, call),
-		}, true, nil
+		return tools.ToolResult{}, false, nil
 
 	case PermissionModeExternal:
 		a.Config.Logger.Info(ctx, "Agent: file ask requesting external permission",
@@ -436,18 +437,6 @@ func filePaths(ctx context.Context, raw string) (lexical, canonical string) {
 	}
 	lexical = filepath.Clean(lexical)
 	return lexical, permission.CanonicalizePath(lexical)
-}
-
-// fileAskUnavailable is what the model reads when a rule-matched call needs
-// approval nobody can give (PermissionModeSkip). Shaped like the bash refusals:
-// the fact (not executed), the rule, who can change it, and an explicit "do not
-// work around this, do not go reading the permission files" — no config path is
-// named, because naming one is what sends a helpful model off to read it.
-func fileAskUnavailable(cause askCause, call fileCall) error {
-	return fmt.Errorf("this %s call requires interactive approval (matched ask rule %q), which is unavailable "+
-		"in this non-interactive context — the call was NOT executed and %s was not touched. Only the user can "+
-		"allow it (an allow rule of theirs, not something to work around), so say what was blocked and carry on "+
-		"without it: do not reach the same file through another path or another tool", call.facts.Tool, cause.rule, call.lexical)
 }
 
 // fileAskDenied is what the model reads when a human refused this call. The two

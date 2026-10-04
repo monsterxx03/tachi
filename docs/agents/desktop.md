@@ -514,8 +514,8 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   fourth `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a
   `PermissionHandler`, so the turn parks on the window and the decision comes back through
   `AnswerPermission`. `PermissionModeSkip` is the wrong posture: its ask branch is the *unattended* one
-  (channel / subagent / `tachi -p`) — it refuses the command and says "add an allow rule", to the user who
-  wrote that rule. `deny` behaves identically either way; only `ask` differs. Four properties: an answer is
+  (channel / subagent / `tachi -p`) — it approves the command, in a GUI that has a user sitting in front of a
+  window and a form to ask them with. `deny` behaves identically either way; only `ask` differs. Four properties: an answer is
   addressed by **session + tool call id**, because two conversations can generate the same id; the pending
   entry is dropped by the waiting goroutine itself, so Stop cannot leave an approvable orphan; a side-channel
   run has no turn on screen, so `commands.go` marks its ctx and the handler refuses instead of parking a run

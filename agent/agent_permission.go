@@ -210,8 +210,8 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 	// The unparseable cause is worth naming, because it is the one ask that stops being a JUDGMENT
 	// about risk: nothing was parsed, so no rule — deny included — could be evaluated, and the
 	// command runs on the strength of the user's blanket answer alone. That is deliberate and
-	// matches the other frontends' 「allow all」 (PermissionModeSkip's AutoApprovePolicyAsks
-	// approves a policy ask of either kind), and the population is benign in practice: an unclosed
+	// matches every unattended frontend (PermissionModeSkip approves a policy ask of either kind
+	// on its own, having nobody to consult), and the population is benign in practice: an unclosed
 	// quote or a trailing `&&` — both of which bash refuses too.
 	if a.PermState.AllowAllAsks {
 		return tools.ToolResult{}, false, nil, nil
@@ -249,7 +249,12 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 			return res, handled, nil, err
 		}
 		// A rule asked and it was approved. No judgment number exists here (the
-		// gate was off, or answered nothing), so the note carries none.
+		// gate was off, or answered nothing), so the note carries none. The
+		// unattended branch approves without asking anyone, and a note claiming an
+		// approval nobody gave would be the transcript misreporting who decided.
+		if a.Config.PermissionMode == PermissionModeSkip {
+			return tools.ToolResult{}, false, nil, nil
+		}
 		return tools.ToolResult{}, false, &askNote{By: noteByApproval}, nil
 	}
 	return tools.ToolResult{}, false, nil, nil
@@ -285,30 +290,22 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd strin
 
 	switch a.Config.PermissionMode {
 	case PermissionModeSkip:
-		// Channel, subagent, one-off runs: no human at the console.
-		if a.PermState.AutoApprovePolicyAsks {
-			a.Config.Logger.Info(ctx, "Agent: bash ask auto-approved (allow-all session)", "rule", rule)
-			return tools.ToolResult{}, false, nil
-		}
-		a.Config.Logger.Info(ctx, "Agent: bash ask denied in non-interactive mode", "rule", rule, "command", cmd)
-		if rule == permission.AskNoRule {
-			// Not a rule the user could allow: the policy never got far enough to consult one.
-			// Fixing the command is the only way through, so say that instead of naming a rule
-			// that does not exist.
-			return tools.ToolResult{
-				Status: tools.ToolResultError,
-				Err: fmt.Errorf("the command could not be parsed, so it needs approval that is unavailable " +
-					"in this non-interactive context — the command was NOT executed. Fix the syntax (an " +
-					"unclosed quote/bracket, or a trailing &&) and re-issue it"),
-			}, true, nil
-		}
-		return tools.ToolResult{
-			Status: tools.ToolResultError,
-			Err: fmt.Errorf("command requires interactive approval (matched ask rule %q), which is unavailable "+
-				"in this non-interactive context — the command was NOT executed. Only the user can allow it "+
-				"(an allow rule of theirs, not something to work around), so say what was blocked and carry on "+
-				"without that command", rule),
-		}, true, nil
+		// Channel, subagent, dream, the one-off runs (`tachi -p`, `-c`): no human at the
+		// console. An `ask` rule is the user asking to be consulted before the command
+		// runs, and there is nobody to consult, so the only reading that lets an
+		// unattended run finish is "run it" — refusing stalls the run on a question
+		// that has no answer here (the desktop is the interactive frontend, and it
+		// raises the same rule as a card: PermissionModeExternal).
+		//
+		// `deny` is untouched: it is decided before this branch is reached, so a deny
+		// rule and the built-in protections keep meaning what they say in this mode.
+		// The unparseable command ends up here too (AskNoRule): nothing was parsed, so
+		// no rule — deny included — saw any part of it, and the command runs on this
+		// mode's blanket answer alone. The population is benign in practice: an
+		// unclosed quote, or a trailing `&&`, both of which bash refuses as well.
+		a.Config.Logger.Info(ctx, "Agent: bash ask approved (non-interactive mode)",
+			"rule", rule, "command", cmd)
+		return tools.ToolResult{}, false, nil
 
 	case PermissionModeExternal:
 		a.Config.Logger.Info(ctx, "Agent: bash ask requesting external permission", "rule", rule)
