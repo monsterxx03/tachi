@@ -1736,6 +1736,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         return
       }
       if (!isMod(e)) return
+      // A palette OWNS the box while it is up — on a platform whose shortcut modifier IS Ctrl
+      // (everywhere but macOS) its list navigation is Ctrl+N / Ctrl+P (listNav), which is the very
+      // key ⌘N / ⌘P ride: without this, Ctrl+N inside the box would move the highlight AND start a
+      // session behind it, and Ctrl+P would close the palette it was navigating. macOS needs no
+      // such rule — its navigation is Ctrl while its shortcuts are ⌘ — which is why the collision
+      // only ever showed up on Linux. ⌘K stays out of it: no list key is named k, so its toggle
+      // still closes the box (see the two branches below).
+      const paletteUp = (paletteOpen || sessionPaletteOpen) && !IS_MAC
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key === ',') { e.preventDefault(); setView('settings') }
       // The reading size. ⌘= / ⌘⇧= and ⌘- / ⌘⇧- are the same press on a US layout (the shifted
@@ -1748,13 +1756,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
       // The two palettes are the same box in the same place, so opening one closes the other —
       // and each is a toggle, so its own key closes it again.
-      else if (e.key.toLowerCase() === 'p' && !e.shiftKey) {
+      else if (e.key.toLowerCase() === 'p' && !e.shiftKey && !paletteUp) {
         e.preventDefault(); setSessionPaletteOpen(false); setPaletteOpen((v) => !v)
       }
       else if (e.key.toLowerCase() === 'k' && !e.shiftKey) {
         e.preventDefault(); setPaletteOpen(false); setSessionPaletteOpen((v) => !v)
       }
-      else if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
+      else if (e.key.toLowerCase() === 'n' && !e.shiftKey && !paletteUp) {
         e.preventDefault()
         newChatLikeCurrent()
       }
@@ -1763,7 +1771,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // to get a project-less session was the sidebar's own ＋ (which is at the foot of the list,
       // and that is not a keyboard gesture). Shift is what makes it a different command rather than
       // a spelling of ⌘N; the two are the same key on purpose, so the pair reads as one idea.
-      else if (e.shiftKey && e.key.toLowerCase() === 'n') {
+      else if (e.shiftKey && e.key.toLowerCase() === 'n' && !paletteUp) {
         e.preventDefault()
         void newChat()
       }
