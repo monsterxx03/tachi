@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/urfave/cli/v3"
 
@@ -202,26 +201,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			return fmt.Errorf("config path: %w", err)
 		}
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			for _, candidate := range []string{"nvim", "vim", "vi", "code"} {
-				if p, err := exec.LookPath(candidate); err == nil {
-					editor = p
-					break
-				}
-			}
-		}
-		if editor == "" {
-			return fmt.Errorf("no editor found; set $EDITOR or install one of: vi, nano, vim, code")
-		}
-		editCmd := exec.Command(editor, path)
-		editCmd.Stdin = os.Stdin
-		editCmd.Stdout = os.Stdout
-		editCmd.Stderr = os.Stderr
-		if err := editCmd.Run(); err != nil {
-			return fmt.Errorf("editor failed: %w", err)
-		}
-		return nil
+		return launchEditor(path)
 	}
 
 	boot, err := agent.Bootstrap(ctx)
