@@ -298,6 +298,21 @@ type FileDiff struct {
 	Removed int
 }
 
+// GitPrefixArgs are the flags that pin a `git diff`'s path prefixes to the a/ and b/
+// this parser strips. Pass them to EVERY `git diff` whose output feeds ParseUnified.
+//
+// `git diff` honours the user's `diff.mnemonicprefix` (a common setting): the prefixes
+// become i/ and w/ (index/worktree), c/ and w/ (commit/worktree) or c/ and i/, none of
+// which diffPath knows — so the header would keep its letter and the panel would show
+// "w/src/main.go". The prefixes are overridden rather than the parser loosened, because
+// a bare path may legitimately begin with "b/" (a repo can have a b/ directory), and
+// stripping that would be silent corruption.
+//
+// A fresh slice each call, so a caller may append without sharing storage.
+func GitPrefixArgs() []string {
+	return []string{"--src-prefix=a/", "--dst-prefix=b/"}
+}
+
 // ParseUnified parses unified diff text (what `git diff` prints, with or without
 // -U<n>) into per-file changes. Anything that is not a file or a hunk header is
 // ignored, so mode changes, index lines and "\ No newline at end of file" markers

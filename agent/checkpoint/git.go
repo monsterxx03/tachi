@@ -212,6 +212,11 @@ func (r repo) numstat(ctx context.Context, from, to string) (files, added, remov
 // diffText is the unified diff between two TREES, for the changes panel and the
 // review prompt: real file coordinates, and — because both sides are recorded —
 // the same answer whenever it is asked, even after the worktree has moved on.
+//
+// No prefix pinning needed here even though the panel parses this with
+// linediff.ParseUnified: `diff.mnemonicprefix` only rewrites the prefixes when a
+// side is the index or the worktree, and both sides here are recorded trees, so
+// git prints plain a/ and b/.
 func (r repo) diffText(ctx context.Context, from, to string) (string, error) {
 	return r.output(ctx, "diff", "--no-color", "-U3", "--no-renames", from, to)
 }

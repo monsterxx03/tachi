@@ -275,10 +275,10 @@ func rootWorkingTreeChanges(root, label string, paths []string) rootChanges {
 	// covers — so the failure is not an error here.
 	var tracked string
 	if _, err := gitOutput(root, "rev-parse", "--verify", "HEAD"); err == nil {
-		tracked, _ = gitOutput(root, gitArgs([]string{"diff", "HEAD", "--no-color", "-U3", "--"}, inside)...)
+		tracked, _ = gitOutput(root, diffArgs([]string{"HEAD"}, inside)...)
 	} else {
-		staged, _ := gitOutput(root, gitArgs([]string{"diff", "--cached", "--no-color", "-U3", "--"}, inside)...)
-		unstaged, _ := gitOutput(root, gitArgs([]string{"diff", "--no-color", "-U3", "--"}, inside)...)
+		staged, _ := gitOutput(root, diffArgs([]string{"--cached"}, inside)...)
+		unstaged, _ := gitOutput(root, diffArgs(nil, inside)...)
 		tracked = staged + unstaged
 	}
 	// The same converter the checkpoint-sourced diff uses (turnchanges.go): both sides are
@@ -344,6 +344,16 @@ func ignoredNote(ignored []string) string {
 // spread cannot be mixed with other variadic arguments in one call.
 func gitArgs(prefix, paths []string) []string {
 	return append(append(make([]string, 0, len(prefix)+len(paths)), prefix...), paths...)
+}
+
+// diffArgs builds a `git diff` whose unified output goes to linediff.ParseUnified: the
+// path prefixes are pinned (linediff.GitPrefixArgs) so the parser's a// b/ expectation
+// holds whatever the user's diff.mnemonicprefix says — otherwise every path in the panel
+// arrives as "w/src/main.go". mode carries the comparison ("HEAD", "--cached", or none).
+func diffArgs(mode, paths []string) []string {
+	prefix := append([]string{"diff", "--no-color", "-U3"}, mode...)
+	prefix = append(prefix, linediff.GitPrefixArgs()...)
+	return gitArgs(append(prefix, "--"), paths)
 }
 
 // resolveUnder makes a path absolute the way the panel means it: a relative one resolves

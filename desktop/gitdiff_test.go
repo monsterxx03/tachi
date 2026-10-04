@@ -85,6 +85,29 @@ func TestGetTurnDiffModifiedFile(t *testing.T) {
 	}
 }
 
+// TestGetTurnDiffWithMnemonicPrefix: the panel's paths stay repo-relative when the
+// user's git is configured with `diff.mnemonicprefix = true`.
+//
+// That setting (a popular one) replaces the a/ b/ prefixes with i/ w/ — index and
+// worktree — and pkg/linediff only knows a/ and b/ (see linediff.GitPrefixArgs). Left
+// unpinned, every path in the panel would arrive as "w/src/main.go", which resolves
+// against the root to a file that does not exist.
+func TestGetTurnDiffWithMnemonicPrefix(t *testing.T) {
+	repo := gitRepo(t)
+	// Written into THIS repo's config (not the user's), exactly as the setting arrives
+	// on a real machine.
+	if out, err := exec.Command("git", "-C", repo, "config", "diff.mnemonicprefix", "true").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v (%s)", err, out)
+	}
+	path := writeRepoFile(t, repo, "src/main.go", "package main\n\nfunc main() {\n\tchanged()\n}\n")
+	_, svc, sid := newRootsApp(t, repo)
+
+	vo := svc.GetTurnDiff(sid, []string{path})
+	if len(vo.Files) != 1 || vo.Files[0].Path != "src/main.go" {
+		t.Errorf("files = %+v, want src/main.go without a prefix", vo.Files)
+	}
+}
+
 // TestGetTurnDiffUntracked: a file the turn created is new content end to end, and
 // git will not report it — the desktop has to synthesize it.
 func TestGetTurnDiffUntracked(t *testing.T) {
