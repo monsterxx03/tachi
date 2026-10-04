@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -126,6 +127,11 @@ func main() {
 		Assets: application.AssetOptions{
 			Handler: assetHandler(assets),
 		},
+		// The one fact the frontend cannot work out for itself: which OS this process is
+		// running on. Read synchronously there (Flags.GetFlag — `window._wails.flags`), which
+		// is what lets a key handler decide ⌘ vs. Ctrl at module load with no round trip.
+		// See frontend/src/platform.ts for why it comes from here instead of a UA sniff.
+		Flags: map[string]any{"os": runtime.GOOS},
 		Mac: application.MacOptions{
 			// Keep the app alive in the menu bar when the window closes.
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
@@ -276,7 +282,7 @@ func main() {
 			themes.setFromFrontend(theme)
 		}
 	})
-	app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(*application.ApplicationEvent) {
+	app.Event.OnApplicationEvent(events.Common.ThemeChanged, func(*application.ApplicationEvent) {
 		themes.onSystemChange(app.Env.IsDarkMode())
 	})
 
@@ -301,14 +307,15 @@ func main() {
 	// within the webview, so we can exercise input + state transitions without
 	// relying on system-level mouse/keyboard coordinates.
 	//
-	// It starts from ApplicationDidFinishLaunching, NOT from a goroutine that sleeps: the
-	// bootstrap's first act is a dispatch onto the main thread, and dispatching before
-	// App.Run() has built the runtime dereferences a nil platform impl inside Wails and PANICS
-	// the whole process (measured: the app appeared to "not start" — no window, no driver, no
-	// log — while a busy machine was simply slower than the sleep we used to guess with).
-	// This event is that moment, so there is nothing left to guess.
+	// It starts from ApplicationStarted (Wails' Cross-platform name for "the app is up and its
+	// runtime exists" — ApplicationDidFinishLaunching on macOS, ApplicationStartup on Linux),
+	// NOT from a goroutine that sleeps: the bootstrap's first act is a dispatch onto the main
+	// thread, and dispatching before App.Run() has built the runtime dereferences a nil platform
+	// impl inside Wails and PANICS the whole process (measured: the app appeared to "not start" —
+	// no window, no driver, no log — while a busy machine was simply slower than the sleep we
+	// used to guess with). This event is that moment, so there is nothing left to guess.
 	if demoEnabled() {
-		app.Event.OnApplicationEvent(events.Mac.ApplicationDidFinishLaunching,
+		app.Event.OnApplicationEvent(events.Common.ApplicationStarted,
 			func(*application.ApplicationEvent) { go runJsDemo(window) })
 	}
 

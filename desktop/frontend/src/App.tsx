@@ -28,6 +28,7 @@ import { FindBar, FindButton, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
 import { bumpFontScale, reconcileFontScale, resetFontScale } from './fontsize'
 import { useTheme, useThemeHostSync } from './theme'
+import { isMod, MOD_KEY } from './platform'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -1734,7 +1735,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         if (projectForm) setProjectForm(null)
         return
       }
-      if (!e.metaKey) return
+      if (!isMod(e)) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key === ',') { e.preventDefault(); setView('settings') }
       // The reading size. ⌘= / ⌘⇧= and ⌘- / ⌘⇧- are the same press on a US layout (the shifted
@@ -2714,21 +2715,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 one control the reader needs to leave. */}
             <div className="shortcut-body">
               <div className="shortcut-section">全局</div>
-              <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
-              <div className="shortcut-row"><kbd>⌘ = / ⌘ -</kbd><span>放大 / 缩小阅读字号（⌘ 0 复位；消息区、评审报告与预览一起变）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
-              <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ⇧ N</kbd><span>新建会话（不属于任何项目，侧栏停在新建的那一行）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ⇧ ⌫</kbd><span>删除当前会话（先弹确认框，按 Enter 确认）</span></div>
-              <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
-              <div className="shortcut-row"><kbd>⌘ K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
-              <div className="shortcut-row"><kbd>⌘ ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
-              <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
-              <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} /</kbd><span>聚焦输入框</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} = / {MOD_KEY} -</kbd><span>放大 / 缩小阅读字号（{MOD_KEY} 0 复位；消息区、评审报告与预览一起变）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ,</kbd><span>打开设置（设置页里按 Esc 返回会话）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ N</kbd><span>新建会话（不属于任何项目，侧栏停在新建的那一行）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ ⌫</kbd><span>删除当前会话（先弹确认框，按 Enter 确认）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} B</kbd><span>折叠 / 展开侧栏</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} ?</kbd><span>显示本快捷键列表</span></div>
               <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
-              <div className="shortcut-row"><kbd>⌘ F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>
               <div className="shortcut-section">消息区（聚焦时）</div>
               <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
               <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>

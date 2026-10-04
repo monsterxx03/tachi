@@ -21,6 +21,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
+import { isMod, MOD_KEY } from './platform'
+
 // The two highlight names. They are registered on `CSS.highlights` (a process-wide registry keyed
 // by name), so the CSS that paints them lives in base.css next to the colour tokens it reads.
 const HL_ALL = 'tachi-find'
@@ -93,7 +95,7 @@ if (typeof window !== 'undefined') {
       top.close()
       return
     }
-    if (e.metaKey && !e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'f') {
+    if (isMod(e) && !e.altKey && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       top.call()
     }
@@ -281,6 +283,6 @@ export function FindBar({ find, className }: { find: Find; className?: string })
 // and the shortcut cannot drift apart.
 export function FindButton({ find }: { find: Find }) {
   return (
-    <button type="button" className="find-open" title="查找（⌘F）" onClick={find.openBar}>⌕</button>
+    <button type="button" className="find-open" title={`查找（${MOD_KEY}F）`} onClick={find.openBar}>⌕</button>
   )
 }

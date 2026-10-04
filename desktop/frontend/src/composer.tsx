@@ -24,6 +24,7 @@ import {
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
 import { atRefAt, countAtRefs, imeActive, insertRefText, listNav, replaceRefText } from './lib'
+import { isMod } from './platform'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
 import { oneOffDoneLabel } from './oneoff'
@@ -995,7 +996,7 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
               // pane's findings, and a global handler would have to out-guess which pane is focused.
               // Plain ⌘↑/⌘↓ keep the text system's caret gestures (and still select, with ⇧, to the
               // ends of the box).
-              if (!ime && e.metaKey && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+              if (!ime && isMod(e) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 e.preventDefault()
                 nudgeHeight(e.key === 'ArrowUp' ? 1 : -1)
                 return

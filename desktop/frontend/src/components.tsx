@@ -3,6 +3,7 @@ import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/to
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib'
+import { isMod, MOD_KEY } from './platform'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
@@ -1163,7 +1164,7 @@ function AskForm({ questions, onSubmit, onCancel }: {
   // and silently dropping a question would be a nasty surprise.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() }
+      if (e.key === 'Enter' && isMod(e)) { e.preventDefault(); submit() }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -1213,7 +1214,7 @@ function AskForm({ questions, onSubmit, onCancel }: {
         })}
       </div>
       <div className="ask-actions">
-        <span className="ask-hint">Enter / ⌘↩ 提交</span>
+        <span className="ask-hint">Enter / {MOD_KEY}↩ 提交</span>
         <button className="btn ghost" onClick={onCancel}>跳过</button>
         <button className="btn" onClick={submit}>提交</button>
       </div>

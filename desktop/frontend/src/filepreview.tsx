@@ -12,6 +12,7 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { fmtBytes, toLocalAsset, toLocalPath } from './lib'
+import { REVEAL_LABEL } from './platform'
 import { MarkdownBlock } from './markdown'
 import { CloseButton, ImageViewer, ViewerOverlay } from './viewer'
 import type { AttachmentInfo } from './types'
@@ -126,7 +127,7 @@ export const FileCard = memo(function FileCard({ file, workDir }: { file: Attach
           {meta && meta.kind !== 'missing' ? (
             <>
               <button className="file-btn" onClick={() => { AgentService.OpenPath(path).catch(() => {}) }}>打开</button>
-              <button className="file-btn" onClick={() => { AgentService.RevealPath(path).catch(() => {}) }}>在 Finder 中显示</button>
+              <button className="file-btn" onClick={() => { AgentService.RevealPath(path).catch(() => {}) }}>{REVEAL_LABEL}</button>
             </>
           ) : null}
         </span>

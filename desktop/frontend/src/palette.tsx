@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, LOOSE_LABEL, LOOSE_LABEL_HINT, LOOSE_GROUP_KEY } from './lib'
+import { MOD_KEY } from './platform'
 import type { SessionItem } from './types'
 
 // usePaletteInput owns a palette's filter box: what it HOLDS and what the LIST filters by are two
@@ -298,7 +299,7 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
             // The empty state names the OTHER search: a reader who typed a project (or a word from
             // the conversation rather than from its title) is one keystroke away from ⌘P, and
             // "no match" alone would leave them retyping into the same box.
-            <div className="palette-empty">没有匹配的会话（⌘P 搜的是项目）</div>
+            <div className="palette-empty">没有匹配的会话（{MOD_KEY}P 搜的是项目）</div>
           ) : rows.map((s, i) => (
             <div key={s.id} className={`palette-row${i === idx ? ' is-sel' : ''}`}
               role="option" aria-selected={i === idx}

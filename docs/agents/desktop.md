@@ -18,6 +18,7 @@ gets its own handbook beside this one rather than growing here.
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
+| **Desktop on Linux (omarchy)** | you build/run desktop on Linux, or touch the tray, file-open, or the close-the-window behaviour — **that section also lists what is deliberately NOT wired up there (voice, BLE)** |
 | **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
 | **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
@@ -272,6 +273,45 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   build. Grants are judged against the **responsible** process, which for `open bin/Tachi.app` (PPID 1) is
   Tachi.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
   terminal it was launched from.
+
+## Desktop on Linux (omarchy)
+
+- **Every platform difference lives behind a `_darwin.go` / `_other.go` pair — do not add a bare
+  `runtime.GOOS` branch to shared code.** What differs so far, and why: the BUILD (`make build` dispatches on
+  `uname` — macOS runs `wails3 package` and the Swift `stt-shim`, Linux is a plain
+  `go build -o bin/tachi-desktop .` and skips the shim, whose `swiftc` does not exist there); the TRAY icon
+  (`trayicon_*.go` — macOS gets the TEMPLATE icon, Linux gets the same monochrome shape TINTED, because only
+  macOS recolours a template image and a black glyph on a dark panel is invisible); file open/reveal
+  (`attach_*.go` — `open` / `open -R` vs. `xdg-open` / `FileManager1.ShowItems`); the shortcut modifier (see the
+  frontend's `src/platform.ts` — ⌘ on macOS, Ctrl elsewhere, for BOTH the handler and the on-screen keycaps).
+  Its `MOD_KEY` / `REVEAL_LABEL` are the two things a platform decides for RENDERED text; a string in this tree
+  that still spells ⌘ or "Finder" is either the gesture's own name in a comment or a bug.
+- **The Linux twin of "closing the window does not quit" is `LinuxOptions.DisableQuitOnLastWindowClosed`.**
+  The close HOOK itself (`Hide` + `Cancel`, `desktop/main.go`) is the same on both, because Wails maps Linux's
+  `WindowDeleteEvent` onto `Common.WindowClosing`; without the option GTK quits the app with its last window,
+  and a tray-resident app loses its only way back. The macOS-only events do not fire on Linux and are replaced
+  by their Common equivalents (`Common.ApplicationStarted`, `Common.ThemeChanged`).
+- **The window's app_id is `org.wails.tachi`, and `LinuxOptions.ProgramName` does NOT change it** (Wails builds
+  the GTK application id as `org.wails.<sanitized Name>`; `g_set_prgname` does not move WM_CLASS). The `.desktop`
+  file's `StartupWMClass` must say exactly that value — a mismatch gives the app a second, nameless task-bar
+  entry and breaks notification attribution.
+- **On Linux the tray MENU is the only surface the state readout can reach.** A tray host here shows neither
+  `SetLabel` nor a tooltip, so `refreshTray` writes the same strings to the macOS bar label AND to the
+  `trayStatus` menu item. And never register `OnClick → OpenMenu` off macOS: the framework's `openMenu` is
+  unimplemented on Linux, so the click is swallowed and every press logs `openMenu not implemented on Linux`.
+- **There is NO application menu on Linux, and it is a `menu_darwin.go` / `menu_other.go` pair — never call
+  `app.Menu.SetApplicationMenu` from shared code.** Wails draws that menu as a GTK menu bar INSIDE the window and
+  its entries are macOS roles (App, Services, Hide, a Window menu), so the Linux window opened with a dead
+  File/Edit/View/Window/Help strip. It must be left UNSET rather than set to nil: Wails substitutes its own
+  default for a nil menu (linuxApp.setApplicationMenu), which is the same bar again. Leaving it unset is also
+  what keeps the default's accelerators off keys the page owns — the macOS half exists to trim exactly that, and
+  its 「⌘= / ⌘- / ⌘0 must reach the page」 assertion is why the pair's tests gate on darwin.
+- **Two halves are deliberately NOT wired up on Linux: voice input and the device link (BLE) — leave them.** Voice
+  is already stopped by `stt/stt_other.go` (`Available() == false`): the composer's button is not shown and
+  nothing ever asks for a permission. The BLE link (`desktop/link/ble.go`) runs on `tinygo`'s BlueZ backend,
+  whose write-chunking constants were tuned against macOS CoreBluetooth and never measured on BlueZ — so it stays
+  off until someone actually measures it. The serial half would work, but its port name is `/dev/ttyACM*` and the
+  user has to be in the `uucp` group.
 
 ## Badge (device link & voice)
 
