@@ -4,6 +4,7 @@ import type { SettingFieldVO, SettingListVO, SettingsPreviewVO, SettingsSchemaVO
 import { Caret, EyeIcon } from './components'
 import { DiffLines } from './diff'
 import { MCPServersEditor } from './mcpeditor'
+import { IS_MAC } from './platform'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
 //
@@ -729,6 +730,10 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   return (
     <div className="settings-view">
       <div className="settings-rail">
+        {/* The window's top strip, as on the sidebar: the lights' room on macOS, the drag handle
+            this page otherwise has none of off macOS (the page covers the window, toolbar
+            included). */}
+        <div className={`window-strip${IS_MAC ? '' : ' drag-region'}`} aria-hidden="true" />
         <button className="settings-back" onClick={back} title="返回对话（设置已保存的部分不受影响）">
           <span aria-hidden="true">←</span> 返回对话
         </button>

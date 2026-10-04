@@ -28,7 +28,7 @@ import { FindBar, FindButton, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
 import { bumpFontScale, reconcileFontScale, resetFontScale } from './fontsize'
 import { useTheme, useThemeHostSync } from './theme'
-import { isMod, MOD_KEY } from './platform'
+import { isMod, IS_MAC, MOD_KEY } from './platform'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -2126,14 +2126,17 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     <div className="app" data-session-id={currentId}>
       {/* sidebar-folded exists for ONE reason: with the sidebar folded away, the content column
           slides under the window's own traffic lights, and the titlebar has to buy their room back
-          (see the .titlebar rules in layout.css). */}
+          (see the .titlebar rules in layout.css). Where there are no lights the clearance is the
+          bar's own padding, so the class changes nothing — it stays on for the macOS rule. */}
       <div className={`app-body${sidebarCollapsed ? ' sidebar-folded' : ''}`} ref={appBodyRef}>
         <aside ref={sidebarW.ref as React.RefObject<HTMLElement>}
           className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}${sidebarW.resizing ? ' is-resizing' : ''}`}
           style={sidebarW.width === null ? undefined : { width: sidebarW.width, minWidth: sidebarW.width }}>
-          {/* No top strip element: the sidebar's own padding-top IS it (the height of the window's
-              controls — see .sidebar in layout.css). It stays empty on purpose: the traffic lights
-              are painted onto the sidebar's background there, and the window is dragged from it. */}
+          {/* The window's top strip: the traffic lights are painted onto it on macOS, and off
+              macOS — where the window is frameless — it is the handle that window has no bar for.
+              It stays empty either way: no brand, no controls. Whether it is a drag region is the
+              platform's answer (macOS has one already, at the window level). */}
+          <div className={`window-strip${IS_MAC ? '' : ' drag-region'}`} aria-hidden="true" />
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
               rather than hiding the feature until a session happens to be bound. This is the

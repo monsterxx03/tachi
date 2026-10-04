@@ -13,13 +13,12 @@
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  /* The column runs the window's FULL height, so the traffic lights are painted onto it and the
-     top strip has to be theirs. Its height is --titlebar-h — the same one the toolbar beside it
-     is — and it is deliberately EMPTY: no brand, no controls. The window is dragged from there
-     (Wails' InvisibleTitleBarHeight makes the window's top strip a drag handle), and the 14px
-     below it is what the old sidebar's own padding-top used to be, so the list starts at the very
-     same y it did when the toolbar took that room instead. */
-  padding: var(--titlebar-h) 12px 12px;
+  /* The column runs the window's FULL height, so the traffic lights are painted onto its top
+     strip and that strip has to be theirs. It is a .window-strip ELEMENT (see base.css) rather
+     than this box's own padding, because off macOS the same strip is the window's drag handle and
+     a drag region has to be a real element — `--wails-draggable` inherits, so a draggable .sidebar
+     would make every click on a row a window drag. The 12px below it is this column's own. */
+  padding: 0 12px 12px;
   overflow: hidden;
   transition: width 0.22s var(--ease), min-width 0.22s var(--ease), padding 0.22s var(--ease);
 }
@@ -547,10 +546,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
      column, this bar included, slides under them — so the left padding has to become their
      clearance, on the sidebar's own curve and duration. The two animate together, which is what
      keeps the first control from passing under a light on the way (the padding only ever grows as
-     the column's left edge moves left, so the control's x is monotonically >= the lights' edge). */
+     the column's left edge moves left, so the control's x is monotonically >= the lights' edge).
+     `--titlebar-fold-pad` is where a platform that has no lights says so — see base.css. */
   transition: padding-left 0.22s var(--ease);
 }
-.app-body.sidebar-folded .titlebar { padding-left: 78px; }
+.app-body.sidebar-folded .titlebar { padding-left: var(--titlebar-fold-pad); }
 
 /* Which conversation this is. With the sidebar folded there was otherwise nothing on screen saying
    so; here it is the one thing in the bar that can be long, so it takes the room and yields it

@@ -144,14 +144,21 @@ func main() {
 			// closing the window only HIDES it (the close hook in main() turns the
 			// delete into a hide), and the tray is the way back — so GTK must not quit
 			// the app when the last window goes away.
-			//
-			// ProgramName is deliberately NOT set: Wails derives the GTK application id
-			// (and therefore WM_CLASS / the Wayland app_id) from the app Name —
-			// `org.wails.<sanitized name>` — so it comes out `org.wails.tachi` regardless,
-			// and g_set_prgname does not move it. The .desktop file's StartupWMClass is
-			// what has to match, and it says `org.wails.tachi` (desktop/build/linux/
-			// tachi-desktop.desktop).
 			DisableQuitOnLastWindowClosed: true,
+			// ProgramName fixes the window's TITLE, and only that. Nothing to do with the
+			// app id: Wails derives WM_CLASS / the Wayland app_id (and therefore the id)
+			// from the app Name — `org.wails.<sanitized name>` — so it comes out
+			// `org.wails.tachi` either way, and g_set_prgname does not move it. The
+			// .desktop file's StartupWMClass is what has to match that (desktop/build/
+			// linux/tachi-desktop.desktop).
+			//
+			// The title needs it because the window is FRAMELESS here (window_frame_other.go):
+			// a frameless window never reaches gtk_window_set_title — Wails' Linux setTitle
+			// returns early on exactly that condition, on the assumption that a window with no
+			// title bar has no title to show — so GTK falls back to g_get_prgname(), which is
+			// the BINARY's name. The compositor is where that shows: Hyprland's window list,
+			// its `title:` rules and the bar would all call this window "tachi-desktop".
+			ProgramName: "Tachi",
 		},
 	})
 
@@ -177,13 +184,15 @@ func main() {
 	// Native macOS title bar is hidden but its traffic-light buttons remain
 	// (like Zed): MacTitleBarHidden keeps the standard red/yellow/green controls
 	// in the top-left while the content fills the window. InvisibleTitleBarHeight
-	// gives the top region a drag handle.
+	// gives the top region a drag handle. There is no Linux counterpart of either,
+	// which is what Frameless answers there (see window_frame_*.go).
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Tachi",
 		Width:     1200,
 		Height:    780,
 		MinWidth:  900,
 		MinHeight: 600,
+		Frameless: framelessWindow,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 44,
 			// Opaque window: the UI is a flat, solid design (no vibrancy, no

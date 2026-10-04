@@ -30,11 +30,19 @@
     linear-gradient(180deg, var(--bg-top), var(--bg) 46%);
 
   /* The window's top strip — one height for every column's first row: the content column's
-     toolbar (.titlebar), the sidebar's brand strip (.sidebar-brand, which the traffic lights sit
-     on), and the settings rail's clearance above its first control. It also has to stay equal to
-     Wails' InvisibleTitleBarHeight (desktop/main.go): that is what makes the strip a native drag
-     handle, and the two are the same 44px of the same window. */
+     toolbar (.titlebar), the sidebar's own strip, and the settings rail's one (both are
+     .window-strip). On macOS it is the room the traffic lights are painted into, and it must
+     stay equal to Wails' InvisibleTitleBarHeight (desktop/main.go): that is what makes the
+     strip a native drag handle there. Off macOS the window has NO frame at all
+     (main.go's framelessWindow), and the same 44px is still the right number — the columns'
+     first rows keep lining up — but the dragging has to come from the app (see .window-strip). */
   --titlebar-h: 44px;
+
+  /* What a folded-away sidebar leaves for the traffic lights: with the sidebar collapsed the
+     content column slides to the window's left edge, where macOS's three lights sit, so its
+     toolbar buys their room back. Off macOS there is nothing up there to clear and the bar keeps
+     the 16px of padding it has in every other state (the rule below). */
+  --titlebar-fold-pad: 78px;
 
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses
      MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
@@ -392,6 +400,23 @@ body {
 
 .drag-region { --wails-draggable: drag; }
 .no-drag { --wails-draggable: no-drag; }
+
+/* The window's top strip, one per full-height column (the sidebar and the settings rail): macOS
+   paints its traffic lights into it there, and off macOS — where the window is frameless and has
+   no bar of its own — it is the HANDLE that bar would have been. It is deliberately empty (no
+   brand, no controls), and it is a real element rather than padding because a drag region has to
+   be: `--wails-draggable` inherits, so marking the COLUMN draggable would turn every click in it
+   into a window drag. Whether it carries `drag-region` is the frontend's call (App.tsx): on
+   macOS the native InvisibleTitleBarHeight already owns that strip and the two must not race. */
+.window-strip {
+  height: var(--titlebar-h);
+  flex-shrink: 0;
+}
+
+/* The platform's own answer to what a folded sidebar leaves at the window's left edge — see
+   --titlebar-fold-pad in :root. "unknown" (a page with no runtime) counts as not-macOS: it has no
+   traffic lights either. */
+html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 .app {

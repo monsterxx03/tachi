@@ -36,6 +36,25 @@ function detectOS(): string {
 const os = detectOS()
 
 /**
+ * The one place the platform is written down for things that CANNOT import it: the stylesheets
+ * (a box that only macOS needs, e.g. the room a folded-away traffic-light strip buys back) and
+ * the smoke drivers (which live inside the app's page and assert what is on screen). Stamped on
+ * the document root so one attribute serves both. "unknown" is a page with no runtime and no
+ * recognisable engine — treated as NOT macOS everywhere, because a browser preview has no
+ * traffic lights either.
+ */
+if (typeof document !== 'undefined') {
+  document.documentElement.dataset.platform = os || 'unknown'
+}
+
+/**
+ * IS_MAC is true only on macOS. Prefer it over spelling `os === 'darwin'` at a call site: the
+ * string is the BACKEND's word for the platform (GOOS), and there is exactly one place that has
+ * to know it.
+ */
+export const IS_MAC = os === 'darwin'
+
+/**
  * isMod reports whether THIS event carries the platform's shortcut modifier. Every shortcut
  * handler goes through it, so making a new platform work is one edit here instead of one per
  * key — and no handler can silently disagree with the keycap.
@@ -56,3 +75,4 @@ export const MOD_KEY = os === 'darwin' ? '⌘' : 'Ctrl'
  * half, the word on the button, so the label cannot promise Finder on a machine that has none.
  */
 export const REVEAL_LABEL = os === 'darwin' ? '在 Finder 中显示' : '在文件管理器中显示'
+

@@ -41,6 +41,11 @@ make desktop-smoke                                      # everything (~50 scenar
 make desktop-smoke ARGS="-keep"                         # keep the sandbox after a pass (artifacts)
 ```
 
+**Today the suite only RUNS on macOS** — `itest/desktop/sandbox.go` copies a `.app` bundle, rewrites its plist
+and re-signs it, none of which exists on Linux (`desktop/bin/Tachi` is a bare binary there). The app half is
+already platform-neutral, though, and worth knowing when someone closes that gap: on Linux a run *does* reach
+the page — `TACHI_DEMO=1 TACHI_DEMO_JS=<file>` injects the driver and the script runs.
+
 ### Which scenarios to run — run the touched ones, not the suite
 
 **Pick from this table; a full run is for a change that reshapes the transcript or the event plumbing
@@ -291,10 +296,13 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   `WindowDeleteEvent` onto `Common.WindowClosing`; without the option GTK quits the app with its last window,
   and a tray-resident app loses its only way back. The macOS-only events do not fire on Linux and are replaced
   by their Common equivalents (`Common.ApplicationStarted`, `Common.ThemeChanged`).
-- **The window's app_id is `org.wails.tachi`, and `LinuxOptions.ProgramName` does NOT change it** (Wails builds
-  the GTK application id as `org.wails.<sanitized Name>`; `g_set_prgname` does not move WM_CLASS). The `.desktop`
+- **The window's app_id is `org.wails.tachi` — `LinuxOptions.ProgramName` does NOT move it** (Wails builds the
+  GTK application id as `org.wails.<sanitized Name>`; `g_set_prgname` does not move WM_CLASS). The `.desktop`
   file's `StartupWMClass` must say exactly that value — a mismatch gives the app a second, nameless task-bar
-  entry and breaks notification attribution.
+  entry and breaks notification attribution. `ProgramName` IS set, for the one other thing it decides: the
+  window's TITLE. A frameless window never reaches `gtk_window_set_title` — Wails' Linux `setTitle` returns
+  early on exactly that condition — so GTK falls back to `g_get_prgname()`, the BINARY's name
+  (`tachi-desktop`), which is what the compositor's window list, its bar and any `title:` rule would show.
 - **On Linux the tray MENU is the only surface the state readout can reach.** A tray host here shows neither
   `SetLabel` nor a tooltip, so `refreshTray` writes the same strings to the macOS bar label AND to the
   `trayStatus` menu item. And never register `OnClick → OpenMenu` off macOS: the framework's `openMenu` is
@@ -306,6 +314,17 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   default for a nil menu (linuxApp.setApplicationMenu), which is the same bar again. Leaving it unset is also
   what keeps the default's accelerators off keys the page owns — the macOS half exists to trim exactly that, and
   its 「⌘= / ⌘- / ⌘0 must reach the page」 assertion is why the pair's tests gate on darwin.
+- **The window is FRAMELESS off macOS, and that is what the app's own top strips are for.** Wails draws GTK's
+  default title bar above the webview, so a decorated window shows two stacked bars with the upper one saying
+  nothing the lower one does not; `window_frame_*.go` decides `Frameless` per platform (macOS keeps its native
+  frame — the traffic lights ARE its window controls). Two consequences, both in the frontend: every full-height
+  column (the sidebar, the settings rail) carries a `.window-strip` ELEMENT — the room macOS paints its lights
+  into, and off macOS the one drag handle a window with no bar has (a drag region has to be an element:
+  `--wails-draggable` inherits, so a draggable column would turn every click on a row into a window drag); and
+  the folded toolbar's clearance is the platform's value, `--titlebar-fold-pad` (the lights' 78px, or the bar's
+  own 16px). Resizing by the window's edges only exists while frameless — the runtime gates that path on the
+  same flag — and there is deliberately NO close button: a window-manager close (omarchy's `Super+W`) arrives as
+  `Common.WindowClosing`, which main.go's hook already turns into a hide, with the tray as the way back.
 - **Two halves are deliberately NOT wired up on Linux: voice input and the device link (BLE) — leave them.** Voice
   is already stopped by `stt/stt_other.go` (`Available() == false`): the composer's button is not shown and
   nothing ever asks for a permission. The BLE link (`desktop/link/ble.go`) runs on `tinygo`'s BlueZ backend,
