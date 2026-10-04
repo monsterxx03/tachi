@@ -112,8 +112,9 @@ type desktopApp struct {
 	tray *application.SystemTray
 	// trayStatus is the tray menu's live readout item (state + today's spend + the
 	// displayed session's context %). refreshTray updates it. On Linux it is the ONLY
-	// place those numbers can be seen: a tray host there shows neither the bar label
-	// (SetLabel) nor a tooltip.
+	// place those numbers can be seen INSIDE Tachi's own chrome: a tray host there shows
+	// neither the bar label (SetLabel) nor a tooltip. What a bar OUTSIDE this process can
+	// draw comes from refreshTray's other copy, desktop_status.json (barstatus.go).
 	trayStatus *application.MenuItem
 	window     *application.WebviewWindow
 	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what

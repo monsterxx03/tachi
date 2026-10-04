@@ -54,7 +54,8 @@ func setupTray(d *desktopApp) *application.SystemTray {
 	// It is a live MENU ITEM rather than only the bar label because the two platforms
 	// differ in where text can appear: macOS shows SetLabel in the menu bar, while a
 	// Linux tray host shows neither that label nor the tooltip — the menu is the only
-	// surface left for the numbers there.
+	// surface left for the numbers in Tachi's own chrome (a bar widget outside this
+	// process reads them instead from desktop_status.json, see barstatus.go).
 	d.trayStatus = menu.Add(trayStatusPlaceholder).SetEnabled(false)
 	menu.AddSeparator()
 	menu.Add("退出 Tachi Desktop").OnClick(func(ctx *application.Context) {

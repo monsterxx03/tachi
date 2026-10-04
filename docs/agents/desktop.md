@@ -350,10 +350,15 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   window's TITLE. A frameless window never reaches `gtk_window_set_title` — Wails' Linux `setTitle` returns
   early on exactly that condition — so GTK falls back to `g_get_prgname()`, the BINARY's name
   (`tachi-desktop`), which is what the compositor's window list, its bar and any `title:` rule would show.
-- **On Linux the tray MENU is the only surface the state readout can reach.** A tray host here shows neither
-  `SetLabel` nor a tooltip, so `refreshTray` writes the same strings to the macOS bar label AND to the
-  `trayStatus` menu item. And never register `OnClick → OpenMenu` off macOS: the framework's `openMenu` is
-  unimplemented on Linux, so the click is swallowed and every press logs `openMenu not implemented on Linux`.
+- **On Linux the tray MENU is the only surface the state readout can reach INSIDE the app — and
+  `desktop_status.json` is the one outside it.** A tray host here shows neither `SetLabel` nor a tooltip, so
+  `refreshTray` writes the same strings to the macOS bar label AND to the `trayStatus` menu item, and mirrors the
+  same numbers to `$TACHI_HOME/desktop_status.json` for a consumer it cannot call (a quickshell bar widget reads
+  that file — see `desktop/barstatus.go` for its shape, which fields are OMITTED when unmeasured, why it is
+  written atomically, and why it is deleted on shutdown rather than heartbeated). The three surfaces are painted
+  from one repaint, so they cannot disagree. And never register `OnClick → OpenMenu` off macOS: the framework's
+  `openMenu` is unimplemented on Linux, so the click is swallowed and every press logs
+  `openMenu not implemented on Linux`.
 - **There is NO application menu on Linux, and it is a `menu_darwin.go` / `menu_other.go` pair — never call
   `app.Menu.SetApplicationMenu` from shared code.** Wails draws that menu as a GTK menu bar INSIDE the window and
   its entries are macOS roles (App, Services, Hide, a Window menu), so the Linux window opened with a dead

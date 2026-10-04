@@ -265,6 +265,9 @@ func main() {
 		// The device link is stopped explicitly: its reconnect loop owns a goroutine that
 		// would otherwise keep waking up while the process is going away.
 		desk.stopBadge()
+		// And the bar's copy of the readout is withdrawn: a consumer that keeps drawing it
+		// would be reporting a process that no longer exists (see barstatus.go).
+		removeDesktopStatus()
 	})
 
 	// Native notifications for the two moments the app waits on the user (a

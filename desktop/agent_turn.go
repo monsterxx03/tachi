@@ -817,23 +817,26 @@ func trayLabel(st AgentState, cost, context string) string {
 // not per session. The icon carries the state; the two numbers are what the window cannot tell you
 // while it is hidden.
 //
-// The numbers go to TWO places, and each covers a platform the other cannot reach: SetLabel is the
-// macOS menu bar's text (a Linux tray host ignores it), and the status MENU ITEM is where a Linux
-// user reads them (a macOS menu shows it too, which is a bonus). Both are set from the same strings
-// so the two surfaces can never disagree.
+// The numbers go to THREE places, and each covers a surface the others cannot reach: SetLabel is
+// the macOS menu bar's text (a Linux tray host ignores it), the status MENU ITEM is where a Linux
+// user reads them (a macOS menu shows it too, which is a bonus), and desktop_status.json is what a
+// bar widget outside this process draws (barstatus.go). The three are set from the same strings
+// and numbers so they can never disagree.
 func (d *desktopApp) refreshTray() {
 	if d.tray == nil {
 		return
 	}
 	st := d.currentState()
 	estimate, _, window := d.contextUsage(st.SessionID)
-	cost := formatCost(d.todayCost())
+	spent := d.todayCost()
+	cost := formatCost(spent)
 	context := trayContext(estimate, window)
 	d.tray.SetLabel(trayLabel(st, cost, context))
 	if d.trayStatus != nil {
 		d.trayStatus.SetLabel(trayStatusItemText(st, cost, context))
 	}
 	applyTrayIcon(d.tray, st.Status)
+	writeDesktopStatus(st, spent, contextPercent(estimate, window))
 }
 
 // trayStatusItemText is the label of the tray menu's status item: the state word plus the same two
