@@ -26,14 +26,16 @@ func defaultAppPath() string { return "desktop/bin/Tachi" }
 // same reason the macOS one is: `pkill -f` in killAll must never reach the user's own Tachi.
 func smokeAppPath(dir string) string { return filepath.Join(dir, smokeExecName) }
 
-// prepareApp gives the sandbox its private copy of the built binary.
+// prepareApp gives the sandbox its private name for the built binary.
 //
-// Hardlinked, NOT copied: /tmp is a tmpfs on many Linux boxes, and one 60-70MB binary per scenario
-// (68 of them, and a failing run keeps every sandbox for its artifacts) is several gigabytes —
-// measured as a run whose second half failed with `cp: error writing …`, which reads like a
-// scenario bug and is a full disk. The app is never written to, so a second name for the same
-// inode is exactly as good as a copy, and free. The fallback covers a /tmp on another filesystem
-// from the build tree.
+// It is a SYMLINK, not a copy: /tmp is a tmpfs on many Linux boxes while the build tree is on the
+// root filesystem, and one 60-70MB binary per scenario (68 of them, with a failing run keeping
+// every sandbox for its artifacts) filled a 12GB /tmp — measured as a run whose second half failed
+// with `cp: error writing …`, which reads like a scenario bug and is a full disk. A hardlink is
+// not enough either: it cannot cross filesystems, so it silently falls back to the same copy (also
+// measured). A symlink costs nothing, always works, and keeps the one thing this name is FOR —
+// argv[0] is the sandbox's path, so `pkill -f TachiSmoke` (killAll) cannot reach the user's own
+// Tachi. The app under test is never written to, so following the link is harmless.
 //
 // No re-identification is possible or needed here: there is no Info.plist to rewrite (the window's
 // app_id comes from the app Name at runtime — see the Linux section of docs/agents/desktop.md) and
@@ -42,13 +44,14 @@ func (sb *sandbox) prepareApp(srcApp string) error {
 	if _, err := os.Stat(srcApp); err != nil {
 		return fmt.Errorf("app binary %s: %w (run `make -C desktop build` first)", srcApp, err)
 	}
-	if err := os.Link(srcApp, sb.appPath); err != nil {
-		if err := run("cp", srcApp, sb.appPath); err != nil {
-			return fmt.Errorf("copy app: %w", err)
-		}
+	abs, err := filepath.Abs(srcApp)
+	if err != nil {
+		abs = srcApp
 	}
-	if err := os.Chmod(sb.appPath, 0o755); err != nil {
-		return fmt.Errorf("chmod app: %w", err)
+	if err := os.Symlink(abs, sb.appPath); err != nil {
+		if err := run("cp", srcApp, sb.appPath); err != nil {
+			return fmt.Errorf("link app: %w", err)
+		}
 	}
 	return nil
 }
