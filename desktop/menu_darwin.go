@@ -1,6 +1,18 @@
+//go:build darwin
+
 package main
 
 import "github.com/wailsapp/wails/v3/pkg/application"
+
+// installApplicationMenu installs Tachi's menu bar (applicationMenu below).
+//
+// It is a platform PAIR (menu_other.go is the other half) because the application menu is a
+// macOS-only surface here: on Linux Wails draws the same menu as a GTK menu bar INSIDE the
+// window — File / Edit / View / Window / Help — with nothing behind it, since the roles it
+// carries (App, Services, Hide, a Window menu) are macOS ideas. See menu_other.go.
+func installApplicationMenu(app *application.App) {
+	app.Menu.SetApplicationMenu(applicationMenu())
+}
 
 // applicationMenu returns the app's menu bar: Wails' default macOS menu with the
 // three WebKit zoom items REMOVED.
@@ -16,7 +28,7 @@ import "github.com/wailsapp/wails/v3/pkg/application"
 // Everything else the default carries is kept exactly as it is — Reload / Force Reload /
 // DevTools / Toggle Full Screen and the App, File, Edit, Window and Help menus. Wails
 // only substitutes this menu for its default when one was set at all, which is why
-// main() installs it explicitly.
+// installApplicationMenu above installs it explicitly.
 func applicationMenu() *application.Menu {
 	menu := application.DefaultApplicationMenu()
 

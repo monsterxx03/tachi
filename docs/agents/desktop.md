@@ -186,8 +186,9 @@ Fixtures exist where the real path needs something a driver cannot do:
 - **A driver dispatches a synthetic key INTO THE PAGE, so it can never say whether the menu bar claims that
   key** (`smoke.key` fires a `KeyboardEvent` on an element; the native menu is not in that path at all). A key
   equivalent a menu ITEM owns is handled before the webview sees the event — which is why the reading size's
-  ⌘= / ⌘- / ⌘0 needed Wails' `View`→zoom items removed (`desktop/menu.go`) and why that half is pinned by
-  `desktop/menu_test.go` (asserting on ACCELERATORS, not on labels). `font-size` asserts what the keys DO.
+  ⌘= / ⌘- / ⌘0 needed Wails' `View`→zoom items removed (`desktop/menu_darwin.go`) and why that half is pinned
+  by `desktop/menu_darwin_test.go` (asserting on ACCELERATORS, not on labels). `font-size` asserts what the keys
+  DO. Those two gate on darwin because the menu itself is macOS-only — see the Linux section.
 - **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the real
   Finder. Assert the control on screen and pin the argument off screen (`TestOpenSessionDirOpensTheSessionDirectory`
   stubs `openFile` and reads the argv). Any "open in …" action has this shape.

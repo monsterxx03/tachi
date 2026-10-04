@@ -162,9 +162,10 @@ func main() {
 		background = windowBgDark
 	}
 
-	// Menu bar: Wails' default minus the WebKit zoom items, so ⌘= / ⌘- / ⌘0 reach the page
-	// instead of magnifying the whole window (see menu.go).
-	app.Menu.SetApplicationMenu(applicationMenu())
+	// Menu bar: macOS gets Wails' default minus the WebKit zoom items, so ⌘= / ⌘- / ⌘0 reach
+	// the page instead of magnifying the whole window; Linux gets none at all. The pair
+	// (menu_darwin.go / menu_other.go) says why.
+	installApplicationMenu(app)
 
 	// Main conversational window.
 	// Native macOS title bar is hidden but its traffic-light buttons remain
