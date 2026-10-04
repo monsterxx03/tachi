@@ -9,6 +9,7 @@
 #   make dev      → wails3 dev (hot reload)
 #   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源，macOS 专用）
 #   make frontend → npm run build in frontend/
+#   make bar-widget → 装 omarchy bar 控件到 ~/.config/omarchy/plugins/（见 omarchy/README.md）
 #   make tidy     → go mod tidy
 #   make clean    → remove bin/ and frontend/dist
 #
@@ -51,7 +52,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build package package-appimage dev appicon frontend tidy clean run sign-local stt-shim
+.PHONY: all build package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
 
 all: build
 
@@ -118,6 +119,19 @@ appicon:
 
 frontend:
 	cd frontend && $(NPM) run build
+
+# bar-widget 把 omarchy bar 控件（omarchy/）装到用户配置里。
+#
+# 母本在仓库（desktop/omarchy/），装到 ~/.config/omarchy/plugins/<id>/ 的是一份拷贝 —— 改那个
+# 目录里的文件会在下次安装时被覆盖，所以改的是仓库这份，然后重跑本目标（见 omarchy/README.md）。
+#
+# 和 `omarchy plugin clone` 一个道理（它也是拷贝），不软链接：仓库挪走之后插件还得能用。
+bar-widget:
+	install -d $(HOME)/.config/omarchy/plugins/monsterxx03.tachi
+	install -m644 omarchy/manifest.json omarchy/Tachi.qml $(HOME)/.config/omarchy/plugins/monsterxx03.tachi/
+	@echo "→ ~/.config/omarchy/plugins/monsterxx03.tachi/（已装）"
+	@echo "  改完要 omarchy restart shell 才生效（bar 控件不会热重载已挂上去的实例）；"
+	@echo "  第一次还要放位置：omarchy bar put monsterxx03.tachi --after omarchy.agents"
 
 # test 跑这个模块的测试。前置 stt-shim 是必需的，而不是顺手：desktop/stt 要链接那个
 # 静态库，缺了它是**整个包编译不过**（不是个别用例失败），而报错藏在 cgo 的一长串

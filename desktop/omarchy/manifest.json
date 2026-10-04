@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "monsterxx03.tachi",
+  "name": "My Tachi",
+  "version": "1.0.0",
+  "author": "monsterxx03",
+  "description": "Tachi Desktop 的今日花费、上下文占用与运行状态",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Tachi.qml"
+  },
+  "barWidget": {
+    "displayName": "My Tachi",
+    "description": "Tachi Desktop 的今日花费、上下文占用与运行状态",
+    "category": "AI",
+    "aliases": [
+      "tachi"
+    ],
+    "allowMultiple": false
+  }
+}

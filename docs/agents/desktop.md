@@ -368,7 +368,11 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   same numbers to `$TACHI_HOME/desktop_status.json` for a consumer it cannot call (a quickshell bar widget reads
   that file — see `desktop/barstatus.go` for its shape, which fields are OMITTED when unmeasured, why it is
   written atomically, and why it is deleted on shutdown rather than heartbeated). The three surfaces are painted
-  from one repaint, so they cannot disagree. And never register `OnClick → OpenMenu` off macOS: the framework's
+  from one repaint, so they cannot disagree. **The widget that reads it is in this repo too — `desktop/omarchy/`,
+  installed with `make -C desktop bar-widget`** (never hand-edited in `~/.config`: the repo copy is the master and
+  the target overwrites it), and its README carries the two traps: a QML change needs `omarchy restart shell` to
+  reach a live bar widget, and offering to place it (`omarchy bar put`) is the user's call, not the installer's.
+  And never register `OnClick → OpenMenu` off macOS: the framework's
   `openMenu` is unimplemented on Linux, so the click is swallowed and every press logs
   `openMenu not implemented on Linux`.
 - **There is NO application menu on Linux, and it is a `menu_darwin.go` / `menu_other.go` pair — never call
