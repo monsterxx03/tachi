@@ -118,11 +118,18 @@ func main() {
 	// must never open a window on the machine it is running on.
 	installDemoBrowserOpener()
 
+	// The notification backend, registered below so Wails runs its startup — on Linux
+	// that is what opens the D-Bus connection the notifier posts through, and an
+	// unstarted backend panics on the first post (desktop/notify.go says why the
+	// wrapper, and not the service itself, is what gets registered).
+	notifyService := newNotificationService()
+
 	app := application.New(application.Options{
 		Name:        "Tachi",
 		Description: "Tachi — AI Agent desktop companion",
 		Services: []application.Service{
 			application.NewService(&AgentService{desk: desk}),
+			application.NewService(notifyService),
 		},
 		Assets: application.AssetOptions{
 			Handler: assetHandler(assets),
@@ -264,7 +271,7 @@ func main() {
 	// finished turn, a parked AskUserQuestion). They are posted only while the
 	// window is unfocused; permission is asked once, in the background, so the
 	// prompt is not tied to the first notification. See desktop/notify.go.
-	desk.notify = newNotifier(window)
+	desk.notify = newNotifier(notifyService, window)
 	desk.notify.onNotificationClick()
 	go desk.notify.requestAuthorization()
 

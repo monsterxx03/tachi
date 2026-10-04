@@ -285,6 +285,15 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   attribution with the **responsible** process. `notifyTurnDone` is for the transcript lane only: a side-channel
   run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone`, raised from
   `commands.go`, where the outcome is known.
+- **The notifications service IS registered, and what gets registered is `desktop/notify.go`'s wrapper — never
+  `notifications.New()` itself.** Registration is the only thing that runs `ServiceStartup`, and on Linux THAT
+  call is what opens the D-Bus session connection the notifications travel on: unregistered, `SendNotification`
+  reaches godbus with a nil connection and PANICS the process — not an error, a dead app (it died on every turn
+  that ended while the window was unfocused). The raw service must not be registered either, because Wails
+  aborts the whole application when a registered service's `ServiceStartup` returns an error, which is exactly
+  what happens on a macOS build launched outside its `.app` bundle, or a Linux session with no bus. So
+  `notificationService` absorbs that error (logging `notifications unavailable`) and its `ready` gates the
+  POST — never the permission questions, which touch no connection.
 - **A signature change STRANDS the TCC rows it replaces: reset, then re-add — per service, by hand.** TCC
   stores the requirement it matched at grant time (an ad-hoc build's is `cdhash H"…"`, which is why sign-local
   exists), so re-signing leaves an entry that still reads as granted in the pane and fails every request —

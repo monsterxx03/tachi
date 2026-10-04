@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
 // The notification bodies are deliberately terse and never quote the model —
@@ -80,5 +82,22 @@ func TestTruncateRunes(t *testing.T) {
 	}
 	if got := truncateRunes("任意", 0); got != "" {
 		t.Errorf("truncateRunes(max=0) = %q, want empty", got)
+	}
+}
+
+// A backend whose startup never ran must swallow a post instead of making it:
+// on Linux the real call reaches godbus with a nil connection and panics the
+// process, which is how the app used to die on any turn that ended while the
+// window was unfocused (the service was never registered, so its Startup — and
+// with it the D-Bus connection — never happened). Losing the notification is
+// the acceptable end of "this machine cannot show notifications".
+func TestPostBeforeStartupIsSilent(t *testing.T) {
+	svc := newNotificationService()
+	if svc.ready.Load() {
+		t.Fatal("a fresh service must not report that it started")
+	}
+	svc.post(notifications.NotificationOptions{ID: "tachi-test", Title: notifyAppTitle})
+	if svc.ready.Load() {
+		t.Error("a swallowed post must not count as a started backend")
 	}
 }

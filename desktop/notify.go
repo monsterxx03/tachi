@@ -9,15 +9,20 @@ package main
 // badge and the menu-bar item all say the same thing — so focus, not the turn
 // itself, is what decides.
 //
-// The notification service is used directly instead of being registered as an
-// application service: Wails' own ServiceStartup returns an error on a system
-// or build where notifications cannot be registered (a dev build launched
-// outside the .app bundle, for instance) and a failing service aborts
-// application startup. Trading "no notifications" for "the app will not start"
-// is never the right call, and nothing is lost — the Objective-C side
-// initialises its delegate lazily on the first call (ensureDelegateInitialized).
+// The Wails notification service is REGISTERED with the application (`Options.Services`
+// in main.go), because that is the only thing that runs its ServiceStartup — and on Linux
+// that call is where the D-Bus session connection is opened. An unstarted service has a
+// nil connection there, and posting through it does not fail, it PANICS godbus and takes
+// the process down (which is how the app used to die on every turn end while the window
+// was unfocused). Registration is not allowed to become a startup dependency, though:
+// Wails aborts the whole application when a registered service's ServiceStartup returns an
+// error, and it does return one on a system or build that cannot register notifications —
+// a macOS build launched outside the .app bundle, a Linux session with no message bus. So
+// what is registered is notificationService below, which absorbs that error (see its
+// comment) and leaves silence where a notification would have been.
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -57,16 +62,94 @@ const (
 	notifyPermBodyMaxRune = 80
 )
 
+// notificationService owns the one Wails notification backend and the two rules
+// this app adds to it: startup may not abort the process, and nothing is posted
+// before it succeeded.
+//
+// Registration and failure tolerance pull in opposite directions, which is why
+// this type exists at all. It must be registered (`Options.Services` in main.go)
+// for Wails to call ServiceStartup, which is where the Linux backend opens its
+// D-Bus connection. But a registered service whose ServiceStartup returns an
+// error aborts the whole application, and Wails returns exactly that error on a
+// system or build that cannot register notifications — so the call is made here,
+// its failure is logged, and success is reported regardless. The cost is the
+// notifications themselves, which `ready` records.
+//
+// The Wails service underneath is a package singleton — notifications.New()
+// hands every caller the same instance — so the object registered with the app
+// and the object the notifier posts through are one and the same.
+type notificationService struct {
+	svc *notifications.NotificationService
+	// ready says the platform backend started. Posting before that is not a
+	// dropped notification: on Linux it is the nil-connection panic the package
+	// comment describes, so the gate lives HERE, inside post, where no caller
+	// can forget it.
+	ready atomic.Bool
+}
+
+func newNotificationService() *notificationService {
+	return &notificationService{svc: notifications.New()}
+}
+
+// ServiceStartup runs the platform startup and absorbs its error; see the type
+// comment. Wails calls it only because the instance is registered.
+func (s *notificationService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	if err := s.svc.ServiceStartup(ctx, options); err != nil {
+		log.Printf("desktop: notifications unavailable: %v", err)
+		return nil
+	}
+	s.ready.Store(true)
+	return nil
+}
+
+// ServiceShutdown releases what a successful startup opened (on Linux, the
+// D-Bus connection). Wails pairs it with a startup that did not report an error
+// — which, for this wrapper, includes the failures it swallows — so the gate is
+// what keeps it from closing a backend that was never opened.
+func (s *notificationService) ServiceShutdown() error {
+	if !s.ready.Load() {
+		return nil
+	}
+	return s.svc.ServiceShutdown()
+}
+
+// post sends one notification, or does nothing when the backend never started.
+// A backend that cannot deliver is silent rather than fatal here, and the reason
+// is already in the log line from ServiceStartup.
+func (s *notificationService) post(options notifications.NotificationOptions) {
+	if !s.ready.Load() {
+		return
+	}
+	if err := s.svc.SendNotification(options); err != nil {
+		log.Printf("desktop: notification failed: %v", err)
+	}
+}
+
+// The remaining three are pass-throughs, so that the Wails service object itself
+// stays inside this type. Only posting has to wait for a started backend: asking
+// (or being told) about the permission touches no connection, on either platform.
+func (s *notificationService) checkAuthorization() (bool, error) {
+	return s.svc.CheckNotificationAuthorization()
+}
+
+func (s *notificationService) requestAuthorization() (bool, error) {
+	return s.svc.RequestNotificationAuthorization()
+}
+
+func (s *notificationService) onResponse(callback func(notifications.NotificationResult)) {
+	s.svc.OnNotificationResponse(callback)
+}
+
 type notifier struct {
-	svc    *notifications.NotificationService
+	svc    *notificationService
 	window *application.WebviewWindow
 	// seq makes every notification ID unique, so consecutive ones stack in
 	// Notification Center instead of replacing each other.
 	seq atomic.Uint64
 }
 
-func newNotifier(window *application.WebviewWindow) *notifier {
-	return &notifier{svc: notifications.New(), window: window}
+func newNotifier(svc *notificationService, window *application.WebviewWindow) *notifier {
+	return &notifier{svc: svc, window: window}
 }
 
 // requestAuthorization asks for notification permission once, at startup, in a
@@ -79,10 +162,10 @@ func (n *notifier) requestAuthorization() {
 	if n == nil {
 		return
 	}
-	if granted, err := n.svc.CheckNotificationAuthorization(); err == nil && granted {
+	if granted, err := n.svc.checkAuthorization(); err == nil && granted {
 		return
 	}
-	granted, err := n.svc.RequestNotificationAuthorization()
+	granted, err := n.svc.requestAuthorization()
 	switch {
 	case err != nil:
 		log.Printf("desktop: notifications unavailable: %v", err)
@@ -99,7 +182,7 @@ func (n *notifier) onNotificationClick() {
 	if n == nil {
 		return
 	}
-	n.svc.OnNotificationResponse(func(result notifications.NotificationResult) {
+	n.svc.onResponse(func(result notifications.NotificationResult) {
 		if result.Error != nil {
 			log.Printf("desktop: notification response error: %v", result.Error)
 			return
@@ -123,17 +206,14 @@ func (n *notifier) notify(title, subtitle, body string) {
 		if n.window.IsFocused() {
 			return
 		}
-		opts := notifications.NotificationOptions{
+		n.svc.post(notifications.NotificationOptions{
 			ID:       fmt.Sprintf("tachi-%d", n.seq.Add(1)),
 			Title:    title,
 			Subtitle: truncateRunes(subtitle, notifySubtitleMaxRune), // macOS/Linux only
 			Body:     body,
 			// Group them so Notification Center shows one Tachi stack.
 			ThreadID: "tachi",
-		}
-		if err := n.svc.SendNotification(opts); err != nil {
-			log.Printf("desktop: notification failed: %v", err)
-		}
+		})
 	}()
 }
 
