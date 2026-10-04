@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/atfile"
+	"github.com/monsterxx03/tachi/agent/sessionref"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
@@ -64,6 +66,62 @@ type DroppedFileVO struct {
 type searchRoot struct {
 	path  string
 	label string // "" = the primary root
+}
+
+// sessionSource builds the @session: resolver over the app's ONE session store: a
+// reference expands to a pointer into it, and the picker searches the same list.
+//
+// It is built per call on purpose — a Source holds a lister and a directory, while
+// the memoized list it reads lives in the store itself — and nil means the session
+// namespace offers nothing (no store, which the app degrades to when the session
+// directory cannot be resolved).
+func (d *desktopApp) sessionSource() *sessionref.Source {
+	store := d.sessionStore()
+	if store == nil {
+		return nil
+	}
+	dir, err := config.SessionDir()
+	if err != nil {
+		return nil
+	}
+	return sessionref.New(store.ListSessions, dir)
+}
+
+// SessionMatchVO is one @session: completion match.
+type SessionMatchVO struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Date  string `json:"date"` // display form of the session's last update
+	// Ref is the complete reference to insert into the input, '@' included —
+	// agent/atfile's own spelling (atfile.RefForSession), so a row the popup
+	// offered is a reference the expansion reads back.
+	Ref string `json:"ref"`
+	// WorkingDir is the directory that conversation ran in. It is what tells two
+	// sessions with the same title apart, so it rides along for display.
+	WorkingDir string `json:"workingDir"`
+}
+
+// SearchSessions returns @session: completion matches: other conversations, ranked
+// by the store (title, id, working directory). exclude is the session the composer
+// belongs to — offering the conversation you are already in says nothing and
+// references itself.
+func (s *AgentService) SearchSessions(exclude, query string, limit int) []SessionMatchVO {
+	source := s.desk.sessionSource()
+	if source == nil {
+		return nil
+	}
+	targets := source.Search(query, exclude, limit)
+	matches := make([]SessionMatchVO, len(targets))
+	for i, t := range targets {
+		matches[i] = SessionMatchVO{
+			ID:         t.ID,
+			Title:      t.Title,
+			Date:       t.UpdatedAt.Format(strutil.TimeFormatDateTimeShort),
+			Ref:        atfile.RefForSession(t.ID),
+			WorkingDir: t.WorkingDir,
+		}
+	}
+	return matches
 }
 
 // SearchFiles returns @-file completion matches for a session.

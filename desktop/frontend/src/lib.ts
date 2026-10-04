@@ -536,6 +536,12 @@ export function isRefBoundary(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
 }
 
+// AT_SESSION_PREFIX mirrors agent/atfile.SessionRefPrefix: the "@" namespace that
+// names ANOTHER conversation instead of a path. The popup routes a query by it,
+// so both sides have to spell it the same way — and only the backend knows what a
+// session reference expands to (a pointer, never the transcript).
+export const AT_SESSION_PREFIX = 'session:'
+
 // atRefAt returns the @-reference the caret sits in — its start index and the
 // query typed after it — or null when the caret is not inside one.
 export function atRefAt(value: string, caret: number): { start: number; query: string } | null {

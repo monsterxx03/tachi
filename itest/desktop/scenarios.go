@@ -870,6 +870,37 @@ func scenarios() []scenario {
 				c.check("预置的会话没有被多余地跑起来", len(c.requests) == 0, requestCount(c.requests))
 			},
 		},
+		//
+		// at-session: `@session:` 引用另一个会话。和 at-file-reload 是同一件事的两半——那个 pin 的
+		// 是「气泡显示用户打的原文」，这个 pin 的是「另一个会话只以指针进上下文」：
+		//
+		//   驱动侧（drivers/at-session.js）：命名空间路由 + Tab 插进来的是完整 id 的引用；
+		//   Go 侧：模型收到的是那一行指针（id/标题/条数/transcript 路径），**不是**那个会话的正文。
+		//   内联另一段对话会让本会话的上下文为一份没人要读的转写买单，所以最后一项查的是「没有正文」。
+		//
+		{
+			name: "at-session",
+			seedSecond: []session.Message{
+				{Type: session.MessageTypeUser, Content: "另一个会话里问过的事"},
+				{Type: session.MessageTypeAssistant, Content: "另一个会话里给出的答案。"},
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("读过那个会话的转写了。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				_, pointer := c.requestSeen("[@session: ")
+				_, titled := c.requestSeen(`"另一个会话"`)
+				c.check("模型拿到的是 @session 指针而不是转写正文", pointer && titled, requestCount(c.requests))
+				_, stored := c.requestSeen(".tachi/session/")
+				_, transcript := c.requestSeen("messages.jsonl")
+				c.check("指针带着会话存储里的 transcript 路径", stored && transcript, "")
+				_, counted := c.requestSeen("— 2 messages")
+				c.check("指针说得出那个会话有多少条记录", counted, "")
+				_, inlined := c.requestSeen("另一个会话里给出的答案")
+				c.check("没有把另一个会话的内容内联进消息", !inlined, "")
+			},
+		},
 		// sidebar-window: 侧栏每个组只渲染「窗口」那么多行（App.tsx 的 rowWindow + components.tsx
 		// 的 MoreRows），滚到尾部或点行尾再续。四件界面上看不出来的事：
 		// (1) 截断只发生在长的那个组上，且画出来的行 + 行尾「还有 N 条」= 桶里真实的条数；

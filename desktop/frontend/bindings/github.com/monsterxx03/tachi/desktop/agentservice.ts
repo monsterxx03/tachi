@@ -765,6 +765,16 @@ export function SearchFiles(sessionID: string, query: string, limit: number): $C
 }
 
 /**
+ * SearchSessions returns @session: completion matches: other conversations, ranked
+ * by the store (title, id, working directory). exclude is the session the composer
+ * belongs to — offering the conversation you are already in says nothing and
+ * references itself.
+ */
+export function SearchSessions(exclude: string, query: string, limit: number): $CancellablePromise<$models.SessionMatchVO[] | null> {
+    return $Call.ByID(4023370845, exclude, query, limit);
+}
+
+/**
  * SendMessage starts a turn in the session the CALLER names. It returns immediately; state changes
  * are streamed to the frontend via the "agent:state" event and to the menu bar.
  * 

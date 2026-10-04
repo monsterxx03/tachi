@@ -44,6 +44,7 @@ export type {
     RewindTurnVO,
     SaveSettingsResultVO,
     SessionInfo,
+    SessionMatchVO,
     SessionMessage,
     SessionPage,
     SessionRootVO,

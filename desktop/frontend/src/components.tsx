@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
-import { actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib'
+import { AT_SESSION_PREFIX, actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib'
 import { isMod, MOD_KEY } from './platform'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
@@ -1010,10 +1010,12 @@ function baseName(p: string): string {
   return i >= 0 ? trimmed.slice(i + 1) : trimmed
 }
 
-// AtFilePicker is the @-file completion popup. It floats above the composer,
-// listing the files the backend fuzzy-matched under the session's working
-// directory. Keyboard handling lives in the composer (which owns the caret and
-// the text); this component only renders and reports picks.
+// AtFilePicker is the @-picker. It floats above the composer, listing what the
+// backend fuzzy-matched: files under the session's working directory, or — when
+// the query opens the "@session:" namespace — other conversations. Keyboard
+// handling lives in the composer (which owns the caret and the text); this
+// component only renders and reports picks. The namespace follows from the query,
+// so the header can never disagree with what was searched.
 function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHover }: {
   query: string
   items: AtMatch[]
@@ -1024,6 +1026,7 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
   onHover: (index: number) => void
 }) {
   const listRef = useRef<HTMLDivElement>(null)
+  const sessions = query.startsWith(AT_SESSION_PREFIX)
   // Keep the highlighted row in view while arrowing through a long list.
   useEffect(() => {
     const el = listRef.current?.children[selected] as HTMLElement | undefined
@@ -1031,32 +1034,37 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
   }, [selected, items])
 
   return (
-    <div className="at-picker" role="listbox" aria-label="@ 文件">
+    <div className="at-picker" role="listbox" aria-label={sessions ? '@ 会话' : '@ 文件'}>
       <div className="at-picker-head">
         <span className="at-picker-title">
-          @ 文件{query ? <span className="at-picker-query">{query}</span> : null}
+          {sessions ? '@ 会话' : '@ 文件'}{query ? <span className="at-picker-query">{query}</span> : null}
           {refCount > 1 ? <span className="at-picker-count">已引用 {refCount} 个</span> : null}
         </span>
         <span className="at-picker-hint">↑↓/Ctrl+P·N 选择 · Tab/Enter 确认 · Esc 关闭</span>
       </div>
       {items.length === 0 ? (
-        <div className="at-picker-empty">{loading ? '搜索中…' : '无匹配文件'}</div>
+        <div className="at-picker-empty">{loading ? '搜索中…' : (sessions ? '无匹配会话' : '无匹配文件')}</div>
       ) : (
         <div className="at-picker-list" ref={listRef}>
           {items.map((m, i) => (
             /* onMouseDown (not onClick) with preventDefault: the textarea must
                keep focus, or the caret we splice the reference into is lost. */
-            <div key={(m.ref || m.path) + m.root} role="option" aria-selected={i === selected} title={m.ref || m.path}
+            <div key={(m.ref || m.path) + (m.root || '')} role="option" aria-selected={i === selected}
+              title={m.kind === 'session' ? `${m.path}${m.workingDir ? ' · ' + m.workingDir : ''}` : (m.ref || m.path)}
               className={`at-picker-item${i === selected ? ' is-selected' : ''}`}
               onMouseDown={(e) => { e.preventDefault(); onPick(i) }}
               onMouseEnter={() => onHover(i)}>
               <span className="at-picker-ico">{m.isDir ? <Caret /> : '·'}</span>
               {/* The root label comes FIRST, as a word rather than a colour: two
                   roots can hold the same relative path, and "which one is this"
-                  has to be answerable at a glance (and without colour vision). */}
+                  has to be answerable at a glance (and without colour vision). A
+                  session row puts the DATE there — the same question, since a
+                  title alone does not say which conversation it was. */}
               {m.root ? <span className="at-picker-root">[{m.root}]</span> : null}
+              {m.date ? <span className="at-picker-root">{m.date}</span> : null}
               <span className="at-picker-path">{m.path}</span>
               {m.isDir ? <span className="at-picker-tag">目录</span> : null}
+              {m.kind === 'session' ? <span className="at-picker-tag">会话</span> : null}
             </div>
           ))}
         </div>

@@ -122,7 +122,7 @@ func (s *AgentService) Steer(sessionID, text string) string {
 	}
 	// An empty steer stays empty: it is the "nothing queued" signal that
 	// unblocks the agent loop.
-	expanded := atfile.Expand(root, text)
+	expanded := atfile.Expand(root, text, atfile.Options{Sessions: d.sessionSource()})
 	select {
 	case <-ch:
 	default:
@@ -203,7 +203,7 @@ func (d *desktopApp) startTurn(id, text string) string {
 	// messages, so expanding the merged text would inline the same files twice.
 	// References resolve against the session's working directory (the root the
 	// tools run in), never the app bundle's cwd.
-	expanded := atfile.Expand(d.expansionRoot(r), text)
+	expanded := atfile.Expand(d.expansionRoot(r), text, atfile.Options{Sessions: d.sessionSource()})
 	text = expanded.Text
 	// An interrupted session may end with a user message and no matching
 	// assistant reply. Merge that trailing user message into the new user

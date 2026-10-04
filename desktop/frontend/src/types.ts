@@ -164,11 +164,20 @@ export interface AtMatch {
   // root labels the additional root a match came from ("" = primary), so two roots
   // holding the same path are tellable apart in the list.
   root?: string
+  // kind marks a row from the "@session:" namespace. Files leave it unset; a
+  // session row carries a date instead of a root tag, and a title where a file
+  // row carries a path.
+  kind?: 'session'
+  date?: string
+  // workingDir is the directory that conversation ran in — what tells two
+  // sessions with the same title apart.
+  workingDir?: string
 }
 
-// AtPickerState is the composer's @-file picker: the reference being typed
+// AtPickerState is the composer's @-picker: the reference being typed
 // (start index + query), the matches, the highlighted row and the number of
-// references already present in the input.
+// references already present in the input. Files and sessions share it: the
+// query's prefix decides which namespace the backend was asked about.
 export interface AtPickerState {
   start: number
   query: string

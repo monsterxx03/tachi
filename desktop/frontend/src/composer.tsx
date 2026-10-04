@@ -21,9 +21,9 @@ import {
   type PermissionDecision,
   type PermissionRequest,
 } from './types'
-import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, SessionMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { atRefAt, countAtRefs, imeActive, insertRefText, listNav, replaceRefText } from './lib'
+import { AT_SESSION_PREFIX, atRefAt, countAtRefs, imeActive, insertRefText, listNav, replaceRefText } from './lib'
 import { isMod } from './platform'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
@@ -46,6 +46,21 @@ const COMPOSER_INPUT_KEY_STEP = 24
 function composerInputMaxH(): number {
   if (typeof window === 'undefined') return COMPOSER_INPUT_MIN_H * 4
   return Math.max(COMPOSER_INPUT_MIN_H * 2, Math.round(window.innerHeight * COMPOSER_INPUT_MAX_FRACTION))
+}
+
+// sessionAtMatch maps a backend session match into a popup row. The TITLE is what
+// the row reads and the REFERENCE is what gets inserted; both are the backend's
+// call (which is the side that expands the reference again), and the date is the
+// row's label of which conversation this is — a session has no path to show.
+function sessionAtMatch(s: SessionMatchVO): AtMatch {
+  return {
+    path: s.title || '(untitled)',
+    isDir: false,
+    ref: s.ref,
+    kind: 'session',
+    date: s.date,
+    workingDir: s.workingDir,
+  }
 }
 
 export type ComposerDeps = {
@@ -140,7 +155,10 @@ export function useComposer(deps: ComposerDeps) {
     setAt(null)
   }, [])
 
-  // scheduleAtSearch runs the (debounced) backend search for a query.
+  // scheduleAtSearch runs the (debounced) backend search for a query. The query's
+  // prefix picks the namespace: "@session:…" asks for conversations, anything else
+  // for files under the session's roots. Both answer with the SAME row shape,
+  // because both are inserted into the box as references the backend expands.
   const scheduleAtSearch = useCallback((query: string) => {
     const sid = currentId
     atQueryRef.current = query
@@ -155,9 +173,11 @@ export function useComposer(deps: ComposerDeps) {
         setAt((p) => (p && p.query === query ? { ...p, items, idx: 0, loading: false } : p))
       }
       try {
-        AgentService.SearchFiles(sid, query, AT_MAX_RESULTS)
-          .then((res) => applyResult(res || []))
-          .catch(() => applyResult([]))
+        const search = query.startsWith(AT_SESSION_PREFIX)
+          ? AgentService.SearchSessions(sid, query.slice(AT_SESSION_PREFIX.length), AT_MAX_RESULTS)
+              .then((res) => (res || []).map(sessionAtMatch))
+          : AgentService.SearchFiles(sid, query, AT_MAX_RESULTS).then((res) => res || [])
+        search.then(applyResult).catch(() => applyResult([]))
       } catch {
         applyResult([])
       }
@@ -240,15 +260,18 @@ export function useComposer(deps: ComposerDeps) {
     return () => window.clearTimeout(t)
   }, [pasteError])
 
-  // acceptAt REPLACES the reference being typed with the picked path — it must not splice at
-  // the caret, or the "@query" the user was typing survives and the text ends up with a stray
-  // "@" (counted as a second reference). A directory keeps the picker open on the new prefix
-  // so the user can drill in.
+  // acceptAt REPLACES the reference being typed with the picked row's own reference
+  // — it must not splice at the caret, or the "@query" the user was typing survives
+  // and the text ends up with a stray "@" (counted as a second reference). A
+  // directory keeps the picker open on the new prefix so the user can drill in; a
+  // session row is a leaf (its reference is the whole thing, and what it expands to
+  // is the backend's business).
   const acceptAt = useCallback((match?: AtMatch) => {
     if (!match || !at) return
     const dir = !!match.isDir
-    // The backend decides the reference form (relative under the primary root, absolute under
-    // an additional one); Path is only what the row displays.
+    // The backend decides the reference form (relative under the primary root,
+    // absolute under an additional one, "@session:<id>" for a conversation);
+    // Path is only what the row displays.
     const text = (match.ref || '@' + match.path) + (dir ? '/' : ' ')
     const ins = replaceRefText(inputRef.current, at.start, text)
     atQueryRef.current = null // whatever follows is a fresh query
@@ -1052,7 +1075,7 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
               send()
             }}
             onPaste={onPaste}
-            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，可直接粘贴截图）'} />
+            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，@session: 引用会话）'} />
           {running && (
             <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
               <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>

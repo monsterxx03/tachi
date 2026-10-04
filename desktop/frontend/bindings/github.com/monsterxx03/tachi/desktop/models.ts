@@ -866,6 +866,32 @@ export interface SessionInfo {
 }
 
 /**
+ * SessionMatchVO is one @session: completion match.
+ */
+export interface SessionMatchVO {
+    "id": string;
+    "title": string;
+
+    /**
+     * display form of the session's last update
+     */
+    "date": string;
+
+    /**
+     * Ref is the complete reference to insert into the input, '@' included —
+     * agent/atfile's own spelling (atfile.RefForSession), so a row the popup
+     * offered is a reference the expansion reads back.
+     */
+    "ref": string;
+
+    /**
+     * WorkingDir is the directory that conversation ran in. It is what tells two
+     * sessions with the same title apart, so it rides along for display.
+     */
+    "workingDir": string;
+}
+
+/**
  * SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
  * so the frontend can reconstruct the true in-turn ordering and show timestamps.
  */

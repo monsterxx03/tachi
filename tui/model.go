@@ -242,6 +242,11 @@ func NewModel(cfg ModelConfig) *Model {
 	// Sync session info to the statusbar if there's already a current session.
 	m.syncSessionInfo()
 
+	// The @-completion popup's session namespace reads the same store the agent
+	// does; wiring it here keeps the store's memoized list as the one source of
+	// truth for both the picker and the expansion an @session: reference gets.
+	m.input.SetSessionSource(newSessionSource(m.agent))
+
 	// Show the initial thinking level (provider config default until /thinking
 	// or /model changes it).
 	m.syncThinkingBadge()
@@ -265,8 +270,13 @@ func (m *Model) syncSessionInfo() {
 	}
 	if curr := sm.Current(); curr != nil {
 		m.statusbar.SetSessionInfo(curr.Title, curr.ID)
+		// The picker leaves the conversation you are in out of its list — but it
+		// has to KNOW it, and this is the one place that tracks it (every load,
+		// creation, compaction and title change lands here).
+		m.input.SetCurrentSession(curr.ID)
 	} else {
 		m.statusbar.SetSessionInfo("", "")
+		m.input.SetCurrentSession("")
 	}
 }
 

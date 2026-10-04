@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/monsterxx03/tachi/agent/atfile"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/agent/sessionref"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
@@ -33,13 +34,22 @@ type InputArea struct {
 	completions []Command
 	selectedIdx int
 
-	// @-file completions
-	atFileQuery       string
-	atFileMatches     []fileindex.Match
-	atFileSelectedIdx int
+	// @-completions: ONE popup with two namespaces — files under the working
+	// directory, and sessions (@session:). A row carries the text it inserts,
+	// so the popup and the expansion can never disagree about a reference.
+	atQuery       string
+	atMatches     []atMatch
+	atSelectedIdx int
 	// files indexes the working directory for @-file completion (cached per
 	// root, so keystrokes do not re-run ripgrep).
 	files *fileindex.Index
+	// sessions resolves and searches other conversations. nil = the session
+	// namespace offers nothing (a frontend with no session store, most tests).
+	sessions *sessionref.Source
+	// currentSessionID is left out of session completion: the picker opens
+	// INSIDE a conversation, and referencing that same one is never what the
+	// reader meant.
+	currentSessionID string
 
 	// skill completions (populated from agent skill store)
 	skillNames []string
@@ -113,18 +123,30 @@ func (i *InputArea) SetSkills(names []string, descs map[string]string) {
 	i.skillDescs = descs
 }
 
+// SetSessionSource supplies the store @session: completion searches and
+// references resolve against. Without one the session namespace offers nothing.
+func (i *InputArea) SetSessionSource(s *sessionref.Source) { i.sessions = s }
+
+// SessionSource exposes the same store to the expansion path, which needs it at
+// send time rather than while typing.
+func (i *InputArea) SessionSource() *sessionref.Source { return i.sessions }
+
+// SetCurrentSession names the conversation this input belongs to, so session
+// completion can leave it out of the list.
+func (i *InputArea) SetCurrentSession(id string) { i.currentSessionID = id }
+
 // SetMaxHeight dynamically caps the total height of the input area (textarea +
 // completions) to at most maxTotal. This allows the parent layout to constrain
 // the input area and force internal scrolling in the textarea when screen space
 // is tight.
 func (i *InputArea) SetMaxHeight(maxTotal int) {
-	// Reserve lines for slash-completions and @-file completions
+	// Reserve lines for slash-completions and @-completions
 	completionLines := 0
 	if i.completions != nil {
 		completionLines = len(i.completions)
 	}
-	if i.atFileMatches != nil {
-		completionLines += 1 + len(i.atFileMatches) // header + matches
+	if i.atMatches != nil {
+		completionLines += 1 + len(i.atMatches) // header + matches
 	}
 	maxTA := max(maxTotal-completionLines, 1)
 	i.textarea.MaxHeight = maxTA
@@ -136,13 +158,13 @@ func (i *InputArea) SetEnabled(enabled bool) {
 		i.textarea.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
 		i.histIdx = -1
 		i.histScratch = ""
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 		i.textarea.Focus()
 	} else {
 		i.textarea.Placeholder = "Ctrl+C to interrupt"
 		i.completions = nil
 		i.selectedIdx = 0
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 		i.histIdx = -1
 		i.histScratch = ""
 		i.textarea.Blur()
@@ -151,8 +173,8 @@ func (i *InputArea) SetEnabled(enabled bool) {
 
 func (i InputArea) Height() int {
 	h := i.textarea.Height() + len(i.completions)
-	if i.atFileMatches != nil {
-		h += 1 + len(i.atFileMatches) // header + matches
+	if i.atMatches != nil {
+		h += 1 + len(i.atMatches) // header + matches
 	}
 	return h
 }
@@ -163,13 +185,14 @@ func (i InputArea) browsingHistory() bool { return i.histIdx >= 0 }
 // slash 补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。
 func (i InputArea) completionsOn() bool { return i.histIdx < 0 && len(i.completions) > 0 }
 
-// @-file 补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。
-func (i InputArea) atFileCompletionsOn() bool { return i.histIdx < 0 && i.atFileMatches != nil }
+// @-补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。文件与 session
+// 两个命名空间共用一个列表：前缀决定查哪一边，交互只有一套。
+func (i InputArea) atCompletionsOn() bool { return i.histIdx < 0 && i.atMatches != nil }
 
-func (i *InputArea) clearAtFileCompletions() {
-	i.atFileQuery = ""
-	i.atFileMatches = nil
-	i.atFileSelectedIdx = 0
+func (i *InputArea) clearAtCompletions() {
+	i.atQuery = ""
+	i.atMatches = nil
+	i.atSelectedIdx = 0
 }
 
 // pastePlaceholder returns a compact, dim-styled label for a large paste so
@@ -312,9 +335,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "up", "ctrl+p":
-			if i.atFileCompletionsOn() {
-				if i.atFileSelectedIdx < len(i.atFileMatches)-1 {
-					i.atFileSelectedIdx++
+			if i.atCompletionsOn() {
+				if i.atSelectedIdx < len(i.atMatches)-1 {
+					i.atSelectedIdx++
 				}
 				return i, nil
 			}
@@ -328,9 +351,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "down", "ctrl+n":
-			if i.atFileCompletionsOn() {
-				if i.atFileSelectedIdx > 0 {
-					i.atFileSelectedIdx--
+			if i.atCompletionsOn() {
+				if i.atSelectedIdx > 0 {
+					i.atSelectedIdx--
 				}
 				return i, nil
 			}
@@ -344,8 +367,8 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "tab":
-			if i.atFileCompletionsOn() {
-				i.applyAtFileCompletion()
+			if i.atCompletionsOn() {
+				i.applyAtCompletion()
 				i.updateCompletions()
 				return i, nil
 			}
@@ -356,8 +379,8 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "esc":
-			if i.atFileCompletionsOn() {
-				i.clearAtFileCompletions()
+			if i.atCompletionsOn() {
+				i.clearAtCompletions()
 				return i, nil
 			}
 			if i.completionsOn() {
@@ -369,9 +392,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			i.textarea.InsertString("\n")
 			return i, nil
 		case "enter":
-			if i.atFileCompletionsOn() {
-				i.applyAtFileCompletion()
-				i.clearAtFileCompletions()
+			if i.atCompletionsOn() {
+				i.applyAtCompletion()
+				i.clearAtCompletions()
 				i.updateCompletions()
 				return i, nil
 			}
@@ -390,7 +413,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			i.pushHistoryLine(text)
 			i.textarea.Reset()
 			i.clearHistoryNav()
-			i.clearAtFileCompletions()
+			i.clearAtCompletions()
 			i.completions = nil
 			i.selectedIdx = 0
 			return i, func() tea.Msg { return InputSubmitMsg(text) }
@@ -406,13 +429,13 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	return i, cmd
 }
 
-func (i *InputArea) applyAtFileCompletion() {
-	if !i.atFileCompletionsOn() {
+func (i *InputArea) applyAtCompletion() {
+	if !i.atCompletionsOn() {
 		return
 	}
-	match := i.atFileMatches[i.atFileSelectedIdx]
+	match := i.atMatches[i.atSelectedIdx]
 
-	// Replace "@query" with "@match.Path " in the textarea value
+	// Replace "@query" with the row's own reference in the textarea value
 	val := i.textarea.Value()
 	atPos := atfile.LastRefStart(val)
 	if atPos < 0 {
@@ -420,8 +443,8 @@ func (i *InputArea) applyAtFileCompletion() {
 	}
 
 	before := val[:atPos]
-	after := val[atPos+len(i.atFileQuery)+1:]
-	newVal := before + "@" + match.Path + " " + after
+	after := val[atPos+len(i.atQuery)+1:]
+	newVal := before + match.Ref + " " + after
 	i.textarea.SetValue(newVal)
 	i.textarea.CursorEnd()
 }
@@ -494,7 +517,7 @@ func (i *InputArea) updateCompletions() {
 	if i.browsingHistory() {
 		i.completions = nil
 		i.selectedIdx = 0
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 		return
 	}
 	val := i.textarea.Value()
@@ -523,11 +546,11 @@ func (i *InputArea) updateCompletions() {
 		if i.selectedIdx >= len(i.completions) {
 			i.selectedIdx = 0
 		}
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 	} else {
 		i.completions = nil
 		i.selectedIdx = 0
-		i.updateAtFileCompletions(val)
+		i.updateAtCompletions(val)
 	}
 }
 
@@ -607,40 +630,52 @@ func (i *InputArea) appendMCPCompletions(val string) {
 	}
 }
 
-func (i *InputArea) updateAtFileCompletions(val string) {
+// updateAtCompletions refreshes the @-completion popup for the reference being
+// typed. The query's prefix picks the namespace — "@session:…" searches the
+// session store, anything else the working directory — and both produce the same
+// rows, so the popup's keys and rendering stay one implementation.
+func (i *InputArea) updateAtCompletions(val string) {
 	atPos := atfile.LastRefStart(val)
 	if atPos < 0 {
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 		return
 	}
 
 	query := val[atPos+1:]
 	// Don't trigger if query contains a space (already completed)
 	if strings.Contains(query, " ") {
-		i.clearAtFileCompletions()
+		i.clearAtCompletions()
 		return
 	}
 
-	if query == i.atFileQuery && i.atFileMatches != nil {
+	if query == i.atQuery && i.atMatches != nil {
 		return // No change, skip search
 	}
 
-	matches, err := i.searchAtFiles(query)
-	if err != nil || len(matches) == 0 {
-		i.clearAtFileCompletions()
+	rows := i.atRowsFor(query)
+	if len(rows) == 0 {
+		i.clearAtCompletions()
 		return
 	}
 
-	i.atFileQuery = query
-	i.atFileMatches = matches
-	i.atFileSelectedIdx = 0 // best score, rendered at bottom
+	i.atQuery = query
+	i.atMatches = rows
+	i.atSelectedIdx = 0 // best score, rendered at bottom
+}
+
+// atRowsFor routes one popup query to its namespace.
+func (i *InputArea) atRowsFor(query string) []atMatch {
+	if rest, ok := strings.CutPrefix(query, sessionQueryPrefix); ok {
+		return i.atSessionRows(rest)
+	}
+	return i.atFileRows(query)
 }
 
 func (i InputArea) View() string {
 	hasCompletions := len(i.completions) > 0
-	hasAtFiles := i.atFileMatches != nil
+	hasAtMatches := i.atMatches != nil
 
-	if !hasCompletions && !hasAtFiles {
+	if !hasCompletions && !hasAtMatches {
 		return inputStyle.Width(i.width).Render(i.textarea.View())
 	}
 
@@ -665,19 +700,20 @@ func (i InputArea) View() string {
 		}
 	}
 
-	// Render @-file completions (best score at the bottom)
-	if hasAtFiles {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  @ files matching %q:", i.atFileQuery)))
+	// Render @-completions (best score at the bottom). Files and sessions share
+	// the popup; the header is what says which one is being offered.
+	if hasAtMatches {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s matching %q:", i.atHeader(), i.atQuery)))
 		b.WriteString("\n")
 
-		for idx := len(i.atFileMatches) - 1; idx >= 0; idx-- {
-			m := i.atFileMatches[idx]
+		for idx := len(i.atMatches) - 1; idx >= 0; idx-- {
+			m := i.atMatches[idx]
 			icon := "  "
 			if m.IsDir {
 				icon = " D"
 			}
-			line := fmt.Sprintf("%s %s", icon, m.Path)
-			if idx == i.atFileSelectedIdx {
+			line := fmt.Sprintf("%s %s", icon, m.Label)
+			if idx == i.atSelectedIdx {
 				b.WriteString(completionSelectedStyle.Width(i.width).Render(line))
 			} else {
 				b.WriteString(completionNormalStyle.Width(i.width).Render(line))
@@ -688,4 +724,14 @@ func (i InputArea) View() string {
 
 	b.WriteString(inputStyle.Width(i.width).Render(i.textarea.View()))
 	return b.String()
+}
+
+// atHeader names the namespace the popup is currently offering. It is derived
+// from the query rather than stored beside the rows, so the header cannot
+// disagree with what was searched.
+func (i InputArea) atHeader() string {
+	if strings.HasPrefix(i.atQuery, sessionQueryPrefix) {
+		return "@ sessions"
+	}
+	return "@ files"
 }

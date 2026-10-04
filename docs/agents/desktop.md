@@ -95,6 +95,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
+| 输入框的 `@session:` 引用（打进哪个命名空间、插进来的是什么、模型收到的是指针而不是正文） | `at-session` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
@@ -910,6 +911,13 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   decision — `route`: send now, queue for the next steer point, or dispatch as a slash command. The microphone
   button lives here too, but its STATE does not: it draws `voice:state` (the backend owns the microphone and the
   watchdog, see Desktop Voice Input), and the click only asks for a transition.
+- **The @-picker has TWO namespaces, and the query's prefix picks one**: `@` searches files (`SearchFiles`),
+  `@session:` searches conversations (`SearchSessions`) — the SAME popup, the same keys, the same row shape,
+  because a row is nothing but a reference to insert. Both sides take the reference's spelling from the backend
+  (`atfile.RefForPath` / `RefForSession`), and only the backend knows what it EXPANDS to: a session reference
+  becomes a POINTER into the session store (id, title, size, transcript path), never the transcript itself —
+  inlining another conversation would spend this session's context on text nobody asked to read. The list comes
+  from THE ONE store (see session-store.md), so the picker and the expansion read the same snapshot.
 - **Backend events are subscribed in `agentEvents.ts`.** Each payload names its session; compare it against
   `currentId` only where the UI genuinely means "on screen", never to address storage.
 - **The sidebar's groups have one interaction contract** (`App.tsx`'s `groups.map`): the whole
