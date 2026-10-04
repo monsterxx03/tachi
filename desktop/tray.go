@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"fmt"
+	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -41,8 +42,7 @@ func setupTray(d *desktopApp) *application.SystemTray {
 
 	menu := d.app.NewMenu()
 	menu.Add("打开主窗口").OnClick(func(ctx *application.Context) {
-		d.window.Show()
-		d.window.Focus()
+		d.revealWindow()
 	})
 	menu.Add("新会话").OnClick(func(ctx *application.Context) {
 		d.newSessionFromMenuBar()
@@ -92,6 +92,20 @@ const trayStatusPlaceholder = "运行状态: 空闲"
 // menu item would quietly do nothing.
 const uiNewSessionEventName = "ui:new_session"
 
+// revealWindow brings the window back and gives it the keyboard: the way home from a hidden
+// window (the close hook in main.go only hides it, and the tray is the route back). Used by the
+// menu's 打开主窗口 and by a second launch of the app (singleInstanceOptions).
+func (d *desktopApp) revealWindow() {
+	if d.window == nil {
+		// A second launch can land while this instance is still building its window; the window
+		// it is asking for is about to appear on its own, so there is nothing to do.
+		log.Printf("desktop: asked to reveal the window before one existed")
+		return
+	}
+	d.window.Show()
+	d.window.Focus()
+}
+
 // newSessionFromMenuBar is the menu bar's 「新会话」: bring the window forward and let the frontend
 // create the session (see uiNewSessionEventName). The event reaches a HIDDEN window too — the
 // webview stays alive across a hide, which is what makes this work with the window closed.
@@ -99,8 +113,7 @@ func (d *desktopApp) newSessionFromMenuBar() {
 	if d.window == nil {
 		return
 	}
-	d.window.Show()
-	d.window.Focus()
+	d.revealWindow()
 	if d.app != nil {
 		d.app.Event.Emit(uiNewSessionEventName)
 	}

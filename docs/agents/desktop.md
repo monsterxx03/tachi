@@ -343,6 +343,18 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   `WindowDeleteEvent` onto `Common.WindowClosing`; without the option GTK quits the app with its last window,
   and a tray-resident app loses its only way back. The macOS-only events do not fire on Linux and are replaced
   by their Common equivalents (`Common.ApplicationStarted`, `Common.ThemeChanged`).
+- **A second launch is not a second Tachi — `Options.SingleInstance` is what makes that true, and it is set ONLY
+  off macOS** (`desktop/singleinstance_*.go`). Because closing the window only HIDES it, the process stays alive
+  with its tray icon; with no lock, launching the app again started a second process with a second tray icon and
+  a second writer of every file in `~/.tachi`. Wails implements it as a session-bus name (built from
+  `singleInstanceID`, the same `org.wails.tachi` identity the window and the `.desktop` file use): the first
+  instance exports it, the second finds it taken, hands over its argv and exits with code 0 — and the callback
+  `revealWindow`s the running window, which is what the launch meant. macOS returns nothing on purpose:
+  LaunchServices already activates the running app, and `open -n` — a deliberate second instance, which
+  `make -C desktop run` and the smoke suite use — has to keep working. **A scripted run opts out as well**
+  (`demoEnabled`): the smoke suite's app shares the user's session bus, so taking the name would swallow the
+  suite's launch into the user's own Tachi (raising that window mid-run) instead of starting the isolated
+  instance the run is about.
 - **The window's app_id is `org.wails.tachi` — `LinuxOptions.ProgramName` does NOT move it** (Wails builds the
   GTK application id as `org.wails.<sanitized Name>`; `g_set_prgname` does not move WM_CLASS). The `.desktop`
   file's `StartupWMClass` must say exactly that value — a mismatch gives the app a second, nameless task-bar

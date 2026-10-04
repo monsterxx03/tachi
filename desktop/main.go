@@ -146,6 +146,10 @@ func main() {
 			// never takes the foreground (see activationPolicy).
 			ActivationPolicy: activationPolicy(),
 		},
+		// A second launch must not become a second Tachi: closing the window only hides it, so
+		// the process (and its tray icon) is still there to be talked to (see
+		// singleInstanceOptions, which also says why macOS and scripted runs opt out).
+		SingleInstance: singleInstanceOptions(func() { desk.revealWindow() }),
 		Linux: application.LinuxOptions{
 			// The Linux twin of ApplicationShouldTerminateAfterLastWindowClosed above:
 			// closing the window only HIDES it (the close hook in main() turns the
