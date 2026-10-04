@@ -79,12 +79,18 @@ func TestAskpassHelperUnwritableBaseDir(t *testing.T) {
 		t.Fatalf("prepare blocker: %v", err)
 	}
 	withBaseDir(t, blocked)
+	// Cleared explicitly: the ambient environment may already carry one (a developer whose
+	// session sets SUDO_ASKPASS would otherwise see it here and read it as this code's doing).
+	t.Setenv("SUDO_ASKPASS", "")
 
 	if path := askpassHelper(); path != "" {
 		t.Errorf("askpassHelper() = %q with an unwritable base dir, want \"\"", path)
 	}
+	// The assertion is about what THIS code names, not about the ambient entry: an inherited
+	// empty SUDO_ASKPASS= stays in the environment (it is not ours to remove), and it must not
+	// hide a helper we could not install.
 	for _, kv := range bashEnv() {
-		if strings.HasPrefix(kv, "SUDO_ASKPASS=") {
+		if value, ok := strings.CutPrefix(kv, "SUDO_ASKPASS="); ok && value != "" {
 			t.Errorf("bashEnv() named an askpass helper it could not install: %s", kv)
 		}
 	}
@@ -172,5 +178,28 @@ func TestAskpassScriptStaysSilentWhenCancelled(t *testing.T) {
 	}
 	if len(out) != 0 {
 		t.Errorf("helper printed %q on a cancelled dialog, want nothing", out)
+	}
+}
+
+// An empty ambient SUDO_ASKPASS (what a wrapper or a conditional export leaves behind) must be
+// REPLACED, not appended to: two entries for one variable are read differently by the two sides —
+// sudo is a C program and glibc's getenv takes the first — so a duplicate could hand sudo the
+// empty one and no dialog would ever appear.
+func TestBashEnvReplacesAnEmptyAskpass(t *testing.T) {
+	withBaseDir(t, t.TempDir())
+	t.Setenv("SUDO_ASKPASS", "")
+	want := installedAskpass(t)
+
+	var found []string
+	for _, kv := range bashEnv() {
+		if strings.HasPrefix(kv, "SUDO_ASKPASS=") {
+			found = append(found, kv)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("bashEnv() carries %d SUDO_ASKPASS entries (%v), want exactly one", len(found), found)
+	}
+	if found[0] != "SUDO_ASKPASS="+want {
+		t.Errorf("bashEnv() = %q, want ours (%q)", found[0], want)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	"github.com/monsterxx03/tachi/config"
@@ -57,10 +58,24 @@ func bashEnv() []string {
 	if os.Getenv("SUDO_ASKPASS") != "" {
 		return env
 	}
-	if path := askpassHelper(); path != "" {
-		env = append(env, "SUDO_ASKPASS="+path)
+	path := askpassHelper()
+	if path == "" {
+		return env
 	}
-	return env
+
+	// REPLACE any entry rather than appending a second one. An ambient SUDO_ASKPASS= (empty —
+	// what "unset" looks like to sudo, and what a wrapper may leave behind) would otherwise sit
+	// in the child next to ours, and the two are read differently: glibc's getenv, which is what
+	// sudo itself uses, takes the FIRST match — so the empty one could win and no dialog would
+	// ever appear. Same class of trap the smoke sandbox documents for HOME.
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "SUDO_ASKPASS=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "SUDO_ASKPASS="+path)
 }
 
 // askpassHelper installs the helper if it is missing or out of date and returns its path, or
