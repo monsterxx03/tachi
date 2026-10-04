@@ -557,7 +557,8 @@ export function ResolveDroppedPaths(sessionID: string, paths: string[] | null): 
 }
 
 /**
- * RevealPath shows the file in Finder.
+ * RevealPath shows the file in the platform's file manager (Finder on macOS, the
+ * desktop's own on Linux).
  */
 export function RevealPath(path: string): $CancellablePromise<string> {
     return $Call.ByID(1709803226, path);
