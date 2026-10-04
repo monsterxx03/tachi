@@ -61,7 +61,6 @@ type voiceUpload struct {
 	hz       int
 	declared int
 	payload  []byte
-	parts    int
 	gotParts int
 	started  time.Time
 	lastSeen time.Time
