@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 func TestValidateName(t *testing.T) {
@@ -35,16 +37,37 @@ func TestNewStore(t *testing.T) {
 	if s == nil {
 		t.Fatal("NewStore returned nil")
 	}
-	if len(s.dirs) != 1 {
-		t.Errorf("expected 1 dir (global only), got %d: %v", len(s.dirs), s.dirs)
+	// The global dir is always scanned; a machine that ships agent skills for its whole OS adds
+	// one more root (omarchy.go), so the COUNT is not pinned — what is, is that the global dir is
+	// there and that every root carries a source.
+	if !containsDir(s.dirs, config.GlobalSkillsDir()) {
+		t.Errorf("NewStore(\"\") does not scan the global skills dir: %v", s.dirs)
+	}
+	if len(s.dirs) != len(s.source) {
+		t.Errorf("dirs and sources disagree: %d vs %d", len(s.dirs), len(s.source))
 	}
 
 	wd, _ := os.Getwd()
 	s2 := NewStore(wd)
 	// Now includes .tachi/skills, .claude/skills, .cursor/skills, and global
-	if len(s2.dirs) < 2 {
-		t.Errorf("expected at least 2 dirs (project-level + global), got %d: %v", len(s2.dirs), s2.dirs)
+	if len(s2.dirs) <= len(s.dirs) {
+		t.Errorf("expected project-level roots to be added, got %d for %q vs %d for \"\": %v",
+			len(s2.dirs), wd, len(s.dirs), s2.dirs)
 	}
+	if !containsDir(s2.dirs, filepath.Join(wd, ".tachi", "skills")) {
+		t.Errorf("NewStore(%q) does not scan the project skills dir: %v", wd, s2.dirs)
+	}
+}
+
+// containsDir reports whether dirs holds path (comparing cleaned paths).
+func containsDir(dirs []string, path string) bool {
+	want := filepath.Clean(path)
+	for _, dir := range dirs {
+		if filepath.Clean(dir) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStoreListAndLoad(t *testing.T) {

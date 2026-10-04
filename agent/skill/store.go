@@ -48,6 +48,7 @@ type Store struct {
 //	<project>/.claude/skills
 //	<project>/.cursor/skills
 //	~/.tachi/skills
+//	$OMARCHY_PATH/default/agents/skills   (only on an omarchy machine; see omarchy.go)
 //
 // Skills with the same name are shadowed by the first directory that contains
 // them. projectRoot is the workspace root (usually os.Getwd()). If empty, only
@@ -78,8 +79,14 @@ func NewStore(projectRoot string) *Store {
 		addDir(filepath.Join(projectRoot, ".cursor", "skills"), SourceCursor)
 	}
 
-	// Lowest priority: global personal skills
+	// Next: global personal skills
 	addDir(config.GlobalSkillsDir(), SourceGlobal)
+
+	// Lowest: the skills the operating system ships for its agents. A machine
+	// without omarchy has no such directory and no such root.
+	if dir := omarchyAgentSkillsDir(); dir != "" {
+		addDir(dir, SourceOmarchy)
+	}
 
 	return &Store{dirs: dirs, source: source, logger: nil}
 }
@@ -91,9 +98,9 @@ func newStore(dirs, source []string) *Store {
 
 // NewStoreWithDirs creates a Store scanning the given directories in priority
 // order (highest first). Each entry in sources must be a valid source constant
-// (SourceProject, SourceClaude, SourceCursor, or SourceGlobal) and have the
-// same length as dirs. Intended for tests and other callers that need an
-// isolated, hermetic skill scope.
+// (SourceProject, SourceClaude, SourceCursor, SourceGlobal or SourceOmarchy)
+// and have the same length as dirs. Intended for tests and other callers that
+// need an isolated, hermetic skill scope.
 func NewStoreWithDirs(dirs, sources []string) *Store {
 	return newStore(dirs, sources)
 }

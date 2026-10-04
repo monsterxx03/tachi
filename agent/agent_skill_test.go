@@ -74,6 +74,10 @@ func TestReloadSkillsInFollowsTheGivenTree(t *testing.T) {
 // scan scope is the global skills alone (skill.NewStore("")), and it must not fall back
 // to the process cwd — a Finder-launched desktop's cwd is "/", so a fallback would
 // advertise the filesystem root as the project.
+//
+// The assertion is about the project side, not about the exact root list: a machine whose
+// operating system ships skills for its agents adds one more root of its own (see
+// agent/skill/omarchy.go), and that is not a cwd fallback.
 func TestReloadSkillsInWithoutDirectory(t *testing.T) {
 	a := newBareTestAgent(t, &mockStreamProvider{name: "mock"}, 5)
 	defer a.Close()
@@ -81,6 +85,14 @@ func TestReloadSkillsInWithoutDirectory(t *testing.T) {
 
 	a.ReloadSkillsIn("")
 
-	assert.Equal(t, []string{config.GlobalSkillsDir()}, a.SkillStore().Dirs(),
-		"an unset working directory must mean the global scope only, never the process cwd")
+	dirs := a.SkillStore().Dirs()
+	assert.Contains(t, dirs, config.GlobalSkillsDir(),
+		"an unset working directory must still scan the global scope")
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	for _, project := range []string{".tachi", ".claude", ".cursor"} {
+		assert.NotContains(t, dirs, filepath.Join(wd, project, "skills"),
+			"an unset working directory must never fall back to the process cwd")
+	}
 }

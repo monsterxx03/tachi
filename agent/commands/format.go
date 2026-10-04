@@ -248,14 +248,18 @@ func FormatSkillList(metas []skill.SkillMeta) string {
 	for _, meta := range metas {
 		sourceTag := ""
 		switch meta.Source {
-		case "project":
+		case skill.SourceProject:
 			sourceTag = " 🏠"
-		case "claude":
+		case skill.SourceClaude:
 			sourceTag = " 🤖"
-		case "cursor":
+		case skill.SourceCursor:
 			sourceTag = " 🖱️"
-		case "global":
+		case skill.SourceGlobal:
 			sourceTag = " 🌐"
+		case skill.SourceOmarchy:
+			// Shipped by the operating system for whatever agent runs on it
+			// (agent/skill/omarchy.go).
+			sourceTag = " 🐧"
 		}
 		disabledTag := ""
 		if !meta.Enabled {

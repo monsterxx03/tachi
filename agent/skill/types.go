@@ -10,7 +10,7 @@ type SkillMeta struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
-	Source      string   `json:"source"`  // "project" | "claude" | "cursor" | "global"
+	Source      string   `json:"source"`  // "project" | "claude" | "cursor" | "global" | "omarchy"
 	Enabled     bool     `json:"enabled"` // false (enabled: false in frontmatter) → not loaded/activatable
 }
 
@@ -28,12 +28,17 @@ const (
 	SourceClaude  = "claude"
 	SourceCursor  = "cursor"
 	SourceGlobal  = "global"
+	// SourceOmarchy is the skills omarchy ships FOR agents on an omarchy machine
+	// (see omarchy.go). Read-only like claude/cursor: the directory belongs to the
+	// package manager, so a skill created or deleted there would not survive an
+	// update.
+	SourceOmarchy = "omarchy"
 )
 
 // isWritableSource checks whether a source string is valid for write
 // operations (Create/Update/Delete). Only "project" (.tachi/skills/) and
-// "global" (~/.tachi/skills/) are writable; claude/cursor dirs are
-// read-only for compatibility import.
+// "global" (~/.tachi/skills/) are writable; claude/cursor/omarchy dirs are
+// read-only (imported for compatibility, or owned by something else).
 func isWritableSource(s string) bool {
 	return s == SourceProject || s == SourceGlobal
 }
