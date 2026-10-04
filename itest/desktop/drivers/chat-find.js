@@ -12,6 +12,7 @@
 // 以及 Esc 关掉那一条（不关别的）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   // 种子会话加载完：最后一条助手消息上屏（fixture 的最后一轮）。
   if (!(await smoke.waitFor(() => smoke.text('.chat').indexOf('第 5 轮的回答') >= 0, '种子转写上屏'))) return smoke.finish()
 

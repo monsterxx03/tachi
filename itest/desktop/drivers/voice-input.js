@@ -11,6 +11,7 @@
   const TYPED = '先写几个字，'
 
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // The button is only rendered when the backend says this machine can transcribe, so its
   // presence is also the assertion that VoiceInputAvailable() reached the page.

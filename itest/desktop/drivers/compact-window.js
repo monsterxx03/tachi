@@ -20,6 +20,7 @@
   const dump = () => rows().map((r) => smoke.text(r)).join(' | ')
 
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   if (!(await smoke.waitFor(() => (sessionId() ? true : null), '会话加载完成（app 上出现 data-session-id）'))) return smoke.finish()
   const fixtureId = sessionId()
   smoke.check('压缩前侧栏只有一个会话', rows().length === 1, rows().length + ' 行')

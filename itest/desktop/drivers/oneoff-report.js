@@ -18,10 +18,11 @@ const MARKER = 'SMOKE-REPORT-MARKER'
 
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // The two keys this driver presses: ⌘F (find) and Esc (its dismissal, and the panel's own).
   const cmdF = (target) => (target || document.body).dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+    smoke.keyEvent('f', { metaKey: true }))
   const esc = (target) => (target || document.body).dispatchEvent(
     new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
 

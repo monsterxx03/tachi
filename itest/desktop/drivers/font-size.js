@@ -8,6 +8,7 @@
 // 直接进页面，根本不经过菜单栏。那条守卫是 desktop/menu_test.go（按 accelerator 断言）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   await smoke.waitFor(() => !smoke.q('.chat-loading'), '会话加载完成', 10000)
 
   // 要量字号，得先有一段正文上屏。

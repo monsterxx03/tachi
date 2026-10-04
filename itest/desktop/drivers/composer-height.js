@@ -9,6 +9,7 @@
 // pointer it never saw go down.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const box = () => Math.round(smoke.q('.composer-input').getBoundingClientRect().height)
   const chatH = () => Math.round(smoke.q('.chat').getBoundingClientRect().height)
@@ -74,9 +75,7 @@
   // typing can resize the box it types into. The pair has to come back down to the floor too — that is
   // the same "not resized" (no inline height) the drag proves, reached from the other end.
   const keyIn = (key, mods) => {
-    smoke.q('.composer-input').dispatchEvent(new KeyboardEvent('keydown', Object.assign({
-      key, bubbles: true, cancelable: true,
-    }, mods)))
+    smoke.q('.composer-input').dispatchEvent(smoke.keyEvent(key, mods))
   }
   smoke.q('.composer-input').focus()
   const midHot = box()

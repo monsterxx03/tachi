@@ -8,6 +8,7 @@
 // cannot run git, and the exact string is already pinned by the desktop's own test.
 ;(async () => {
   if (!(await smoke.waitFor('.work-dir', '工作区 chip 出现', 15000))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.click('.work-dir')
   if (!(await smoke.waitFor('.roots-panel', '工作区面板打开', 8000))) return smoke.finish()

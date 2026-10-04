@@ -6,6 +6,7 @@
 // the reminder in the second turn's prompt).
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '按计划来')
   smoke.click('.send-btn')

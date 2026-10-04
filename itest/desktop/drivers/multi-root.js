@@ -9,6 +9,7 @@
 // 其中一个带 root 标签，Go 侧另断言评审 prompt 里两棵树都被点名（分组形式）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '两个目录各改一行')
   smoke.click('.send-btn')

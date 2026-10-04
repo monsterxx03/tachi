@@ -18,6 +18,7 @@
 // 本身是读者自己的动作。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   if (!(await smoke.waitFor('.session.active', '侧栏出现当前会话行', 10000))) return smoke.finish()
 
   const PROJECT = 'smoke-sesspal'
@@ -109,7 +110,7 @@
   smoke.type('.palette-input', PROJECT)
   const none = await smoke.waitFor('.palette-empty', '项目名搜不到会话', 4000)
   smoke.check('搜项目名没有结果，空态指向 ⌘P',
-    !!none && smoke.text('.palette-empty').indexOf('⌘P') >= 0, smoke.text('.palette-empty'))
+    !!none && smoke.text('.palette-empty').indexOf(smoke.MOD + 'P') >= 0, smoke.text('.palette-empty'))
 
   // ── 3. 中文输入法：组合不参与过滤，落字才参与 ───────────────────────────────
   // 这三条是「打字过程中不要有干扰」的全部内容：列表不动（拼音不是查询），输入框不动（不打断候选），

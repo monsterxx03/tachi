@@ -4,6 +4,7 @@
 // 命令直接跑了」也会让那条通过；只有 deny 一条时，「根本没弹卡」也会让那条通过。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '读一下那个文件')
   smoke.click('.send-btn')

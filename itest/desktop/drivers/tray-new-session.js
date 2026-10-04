@@ -13,6 +13,7 @@
 //     对话，用户在设置页上什么都看不见，等于没反应。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // 运行时自己的兜底调用：POST /wails/runtime。x-wails-client-id 是运行时用来区分客户端的头，
   // 而 args 就是方法自己的参数对象 —— Events.Emit(name, data) 的参数是那个 WailsEvent。

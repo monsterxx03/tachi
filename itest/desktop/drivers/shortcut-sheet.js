@@ -6,6 +6,7 @@
 // 还在原处。顺带钉住新加的 ⌘⇧N / ⌘⇧⌫ 真的被写进了表里（键位与说明两处分开加，漏一处没人看得出来）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const viewport = { top: 0, bottom: window.innerHeight }
   const inside = (el) => {
@@ -34,9 +35,11 @@
   if (!closeBtn) return smoke.fail('表底部有「关闭」按钮', smoke.allText('.shortcuts-box .btn').join('/'))
   smoke.check('关闭键在框里可见（不用滚动）', inside(closeBtn), smoke.text(closeBtn))
 
-  // 新键位真的写进了表：⌘N / ⌘⇧N / ⌘⇧⌫ 各一行。
+  // 新键位真的写进了表：⌘N / ⌘⇧N / ⌘⇧⌫ 各一行。表上的修饰键是**平台印出来的那个**
+  // （macOS 是 ⌘，别处是 Ctrl —— 见 harness 的 MOD），所以断言跟着它走，不跟着这个文件里的
+  // 手势名走。
   const labels = kbdLabels()
-  for (const want of ['⌘ N', '⌘ ⇧ N', '⌘ ⇧ ⌫']) {
+  for (const want of [smoke.MOD + ' N', smoke.MOD + ' ⇧ N', smoke.MOD + ' ⇧ ⌫']) {
     smoke.check('表里列着 ' + want, labels.indexOf(want) >= 0, labels.join(' | '))
   }
 

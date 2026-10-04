@@ -12,6 +12,7 @@
 // the app.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   if (!smoke.type('.composer-input', '你好')) return smoke.fail('填入编辑器', 'textarea 找不到')
   if (!smoke.click('.send-btn')) return smoke.fail('点击发送', '按钮找不到')

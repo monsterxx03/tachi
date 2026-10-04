@@ -14,6 +14,7 @@
 // 后端那份叶子名集合说了算，不是前端看名字猜的。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const rowByKey = (key) =>
     smoke.qa('.set-row').find((r) => {

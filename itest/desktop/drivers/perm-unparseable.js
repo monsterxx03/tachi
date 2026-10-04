@@ -9,6 +9,7 @@
 // 无关，所以"卡片**没有**提那条规则"本身就是断言。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '看一眼目录')
   smoke.click('.send-btn')

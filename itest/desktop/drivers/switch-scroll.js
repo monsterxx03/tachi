@@ -12,6 +12,7 @@
 // streaming in while the switch happens, which is the whole point.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // Turn 1 puts a mermaid diagram in the history: it renders asynchronously, so on every
   // switch back it grows from its placeholder into a figure — content that changes height

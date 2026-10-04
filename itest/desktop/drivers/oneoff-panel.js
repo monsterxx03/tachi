@@ -8,6 +8,7 @@
 // where the output went.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.check('面板默认是收起的', !smoke.q('.oneoff-panel'), '')
 

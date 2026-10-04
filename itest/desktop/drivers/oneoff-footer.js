@@ -9,13 +9,14 @@
 // uncommitted change — a scoped review refuses to start without a baseline.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // Two keys this driver presses from several places: Esc (dismissal, and the panel's ownership
   // dance at the end) and ⌘F (find, which three surfaces now host).
   const pressEsc = (target) => (target || document.body).dispatchEvent(
     new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
   const pressCmdF = (target) => (target || document.body).dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+    smoke.keyEvent('f', { metaKey: true }))
 
   smoke.type('.composer-input', '写一个 NOTES.md')
   smoke.click('.send-btn')

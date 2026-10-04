@@ -7,6 +7,7 @@
 // reference, not the image's textual form or nothing at all.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // Must stay identical to pasteImageB64 in scenarios.go — the Go side looks for exactly these
   // bytes in the request.

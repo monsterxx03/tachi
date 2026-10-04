@@ -6,6 +6,7 @@
 // 数字是真实 numstat，评审的 scope 里也有这两个文件名 —— Go 侧直接断言评审的 prompt。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '用 bash 写两个文件')
   smoke.click('.send-btn')

@@ -9,6 +9,7 @@
 // 会话里没有要发出去的消息，因此这一轮不该产生任何模型请求。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   if (!(await smoke.waitFor('.msg-user', '预置的会话渲染出用户气泡', 15000))) return smoke.finish()
   const bubble = smoke.text('.msg-user')

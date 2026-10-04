@@ -47,7 +47,7 @@ const mcpConsentDelay = 4 * time.Second
 
 func main() {
 	var (
-		appPath = flag.String("app", "desktop/bin/Tachi.app", "the built app bundle to test")
+		appPath = flag.String("app", defaultAppPath(), "the built app (bundle or binary) to test")
 		run     = flag.String("run", "", "comma-separated scenario names (default: all)")
 		keep    = flag.Bool("keep", false, "keep the sandbox after a successful run")
 		timeout = flag.Duration("timeout", 90*time.Second, "per-scenario budget for the driver")

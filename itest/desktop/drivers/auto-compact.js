@@ -11,6 +11,7 @@
 // while the row still belongs to the old one.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const rows = () => smoke.qa('.session')
   const dump = () => rows().map((r) => smoke.text(r)).join(' | ')

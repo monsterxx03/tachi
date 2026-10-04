@@ -18,6 +18,7 @@
   // 标题做不到这件事，第二个会话一建出来「未命名会话」就会重复）。
   const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   // 编辑器比会话先出现：启动时那是个空壳（currentId 还没选上），此时打进去的字会落进一个没人
   // 渲染的桶里 —— 发送键一样会亮，点下去输入框清空、没有请求也没有消息，看起来像"turn 没起来"。
   // 标题栏的会话 id 才是"应用已经选好会话"（同 session-running.js 的等待），先等它再动手。

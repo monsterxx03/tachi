@@ -13,6 +13,7 @@
   // 标题做不到这件事，第二个会话一建出来「未命名会话」就会重复）。
   const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const ringLabel = () => {
     const el = smoke.q('.ctx-btn[aria-label^="上下文"]')

@@ -10,6 +10,7 @@
 // not exist is a session record no driver can write.
 ;(async () => {
   if (!(await smoke.waitFor('.session-list .session', '侧栏出现会话行'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const rows = () => smoke.qa('.session')
   const target = rows().filter((r) => smoke.text(r).indexOf('压缩过的会话') >= 0)[0]

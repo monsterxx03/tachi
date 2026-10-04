@@ -6,6 +6,7 @@
 // prompt by the runner.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '第一件事：跑很久')
   smoke.click('.send-btn')

@@ -15,6 +15,7 @@
   const midFolded = (where) => smoke.text(where).indexOf(midMark) < 0
 
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '跑两步')
   smoke.click('.send-btn')

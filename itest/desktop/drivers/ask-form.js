@@ -8,6 +8,7 @@
 // on. ⌘↩ still submits from anywhere, so the assertion is on the BARE key.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '需要你确认一下')
   // The send button's own state is the evidence that the text reached React: it is disabled while

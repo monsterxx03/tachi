@@ -22,6 +22,7 @@
 ;(async () => {
   if (!(await smoke.waitFor('.sidebar .session-title', '侧栏渲染出会话行', 15000))) return smoke.finish()
   if (!(await smoke.waitFor('.titlebar-title', '工具栏渲染出标题位', 8000))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const box = (sel) => {
     const el = smoke.q(sel)

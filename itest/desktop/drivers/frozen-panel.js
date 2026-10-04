@@ -7,6 +7,7 @@
 // 两边都必须还是第 1 轮的两棵树。Go 侧另断言评审 prompt 里点名了两个文件、且指向冻结的命令。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const settle = async (label) => {
     await smoke.waitFor(() => !smoke.q('.stop-btn'), label, 15000)

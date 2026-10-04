@@ -13,6 +13,7 @@
 //      revealRow effect 为此多了一次「撑窗口」）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const nav = () => smoke.q('.session-list')
   // 无项目桶的行是 nav 的直接子元素（项目行缩在 .proj-rows 里）——与 session-keys.js 同一个判据。

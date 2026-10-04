@@ -7,6 +7,7 @@
 // 「文件真的读了」「回合没有中止」属于 Go 那一半（scenarios.go 的 after）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '读一下那份 fixture')
   smoke.click('.send-btn')

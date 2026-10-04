@@ -7,6 +7,7 @@
 // 上 —— 拖动监听在那儿（离开手柄也要继续拖）。手柄在侧栏内部靠右边缘，所以拖 x 就是拖宽度。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const sidebarWidth = () => Math.round(smoke.q('.sidebar').getBoundingClientRect().width)
   const chatWidth = () => Math.round(smoke.q('.chat').getBoundingClientRect().width)

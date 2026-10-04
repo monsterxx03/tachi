@@ -10,6 +10,7 @@
 //   3. Esc 什么也不做：不建会话、不切会话。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   if (!(await smoke.waitFor('.proj-head', '侧栏出现项目组头', 10000))) return smoke.finish()
 
   // 组头 → 它那一组的行。两个项目名一个包含另一个（smoke-pal / smoke-pal-empty），所以按

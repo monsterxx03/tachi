@@ -16,6 +16,7 @@
 // 调用同样被拒。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 1. 先让池子真的有一个未加载的工具：授权这台 OAuth server ────────────────
   // 与 mcp-auth 的同一段路（那里才是它的主场，这里只为把池子填起来）：状态栏 → 面板 → 授权

@@ -41,10 +41,18 @@ make desktop-smoke                                      # everything (~50 scenar
 make desktop-smoke ARGS="-keep"                         # keep the sandbox after a pass (artifacts)
 ```
 
-**Today the suite only RUNS on macOS** — `itest/desktop/sandbox.go` copies a `.app` bundle, rewrites its plist
-and re-signs it, none of which exists on Linux (`desktop/bin/Tachi` is a bare binary there). The app half is
-already platform-neutral, though, and worth knowing when someone closes that gap: on Linux a run *does* reach
-the page — `TACHI_DEMO=1 TACHI_DEMO_JS=<file>` injects the driver and the script runs.
+**The suite runs on BOTH platforms**, and the two halves that know the difference are
+`itest/desktop/sandbox_darwin.go` and `sandbox_other.go` — macOS copies a `.app` bundle, re-identifies it and
+re-signs it before `open -g`; Linux copies the bare binary and starts it as a child. What that costs on Linux,
+and where it shows: a run is VISIBLE and the compositor may focus each window (GTK has no show-without-
+activating lever, and a HIDDEN window lays its page out at 0×0 — a driver would assert against zeroes), and the
+app's own stdout lands in the sandbox as `app.log` (`open` throws it away on macOS, so that artifact is
+Linux-only).
+
+**The sandbox HOME must SHADOW the parent's, not sit beside it** (`envWith`, sandbox_other.go): a duplicated
+`HOME` is resolved last-wins by Go and first-wins by the GLib/GTK stack under it, so whichever order the two
+copies are in, one of the two readers gets the real home. Measured: the suite drove the app against the user's
+own `~/.tachi`, created sessions in it and reported the result as UI failures.
 
 ### Which scenarios to run — run the touched ones, not the suite
 
@@ -189,6 +197,16 @@ Fixtures exist where the real path needs something a driver cannot do:
   there, their box is right, their styles are right. Do not read "no spec fails" as "it renders correctly"; a
   driver's job is to pin the MECHANISM that causes such a bug (see the `settings` scenario's
   `.app-body[inert]` + sidebar-`visibility` pair).
+- **A driver's first gate is the app MOUNTED; the second is the app READY.** `.composer-input` exists — and looks
+  interactive — before a session is open, and a send in that window is refused by the backend and then wiped by
+  the switch that follows: the click vanishes with nothing on screen to show for it. `smoke.waitForSession()`
+  (the root's `data-session-id`) is the second gate every driver starts with; macOS boots fast enough that the
+  race never showed, and on Linux it landed inside the opening action of every sending scenario.
+- **Two things a driver must never spell for macOS: the shortcut modifier, and its printed name.** `smoke.key()`
+  turns `{metaKey: true}` — the gesture's name, which is how this codebase writes it everywhere — into the field
+  the platform actually presses (Ctrl off macOS), and a driver's real `ctrlKey` (⌃U/⌃D, Ctrl+N/P) is left alone;
+  `smoke.MOD` is the printed "⌘"/"Ctrl" for assertions on RENDERED keycaps. A driver that hard-coded `⌘ N`
+  passed on macOS and failed on Linux, where the shortcut sheet is right to say `Ctrl N`.
 - **A driver dispatches a synthetic key INTO THE PAGE, so it can never say whether the menu bar claims that
   key** (`smoke.key` fires a `KeyboardEvent` on an element; the native menu is not in that path at all). A key
   equivalent a menu ITEM owns is handled before the webview sees the event — which is why the reading size's

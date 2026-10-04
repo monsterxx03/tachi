@@ -5,6 +5,7 @@
 // 还是图在浮层里根本没有拿到它该有的固有尺寸。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '画一张流程图')
   smoke.click('.send-btn')

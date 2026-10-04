@@ -14,6 +14,7 @@
   const textOf = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '')
 
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   smoke.type('.composer-input', '跑一条慢命令')
   smoke.click('.send-btn')
   if (!(await smoke.waitFor('.stop-btn', '回合开始（停止按钮出现）', 15000))) return smoke.finish()

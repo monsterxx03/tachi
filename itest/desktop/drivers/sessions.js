@@ -7,6 +7,7 @@
 // button, so a new session has to start with the user able to type.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // 第一条消息带 @-file 引用：模型收到的是展开后的文件内容，但**转写里显示的**必须是用户打的
   // 原文 —— 切回旧会话时（最后那段）会从磁盘重建转写，那里钉住这件事。

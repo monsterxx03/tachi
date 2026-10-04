@@ -8,6 +8,7 @@
 // 断言看两处：卡片标题（= 参数摘要，读的是这条调用自己的参数）与卡片正文里的「执行中…」。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '把四份都读一遍')
   smoke.click('.send-btn')

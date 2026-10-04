@@ -7,6 +7,7 @@
 // §6.2 的 detach;prompt 那一半由 Go 侧在 LLM 边界断言。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 1. 侧栏按项目分组 ────────────────────────────────────────────────────
   const head = await smoke.waitFor('.proj-head', '侧栏出现项目组头', 10000)

@@ -9,6 +9,7 @@
 // 是装载器认得的形状。driver 只说界面。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const catByName = (name) =>
     smoke.qa('.settings-cat').find((b) => smoke.text(b.firstElementChild) === name)

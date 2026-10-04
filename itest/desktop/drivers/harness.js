@@ -128,10 +128,68 @@ const smoke = (() => {
     return true
   }
 
+  // The platform's shortcut modifier as a KeyboardEvent field, and the ONE place in the driver
+  // harness that fact is decided.
+  //
+  // Drivers write the GESTURE's name — `{metaKey: true}` for ⌘F / ⌘K / ⌘N — exactly as the app's
+  // own source does (frontend/src/platform.ts spells out why: ⌘ is this codebase's word for the
+  // gesture, not the key on the reader's keyboard). On macOS that IS the field a KeyboardEvent
+  // carries; anywhere else the same gesture rides Ctrl, so the field has to change. A driver that
+  // did not know that presses a key the app ignores — which is exactly how every ⌘-driven
+  // scenario failed the first time this suite ran on Linux.
+  //
+  // The value is the one the page was GIVEN (data-platform, stamped by platform.ts from the
+  // backend's GOOS), with the same user-agent fallback that file uses for a page with no runtime.
+  //
+  // A driver's REAL ctrlKey is left alone: the app binds ⌃U / ⌃D (and Ctrl+N/P inside a list) on
+  // every platform, so translating those would break them on macOS.
+  const PLATFORM = document.documentElement.dataset.platform ||
+    (/mac/i.test(navigator.platform || navigator.userAgent || '') ? 'darwin' : '')
+  const MAC = PLATFORM === 'darwin'
+
+  function mod(opts) {
+    const out = Object.assign({}, opts || {})
+    if (out.metaKey && !MAC) {
+      delete out.metaKey
+      out.ctrlKey = true
+    }
+    return out
+  }
+
+  // MOD is how the modifier is PRINTED on this platform — what the app puts in its own keycaps
+  // (frontend/src/platform.ts's MOD_KEY, from the same data-platform value). A driver that asserts
+  // on screen text needs this one: "the sheet lists ⌘N" is true on macOS and false on Linux, where
+  // the sheet says Ctrl N and would be right to.
+  const MOD = MAC ? '⌘' : 'Ctrl'
+
+  // keyEvent is for the drivers that build the event themselves (a target that is not an
+  // element `key` could take, or a dispatch whose return value is the assertion). It is the same
+  // event `key` sends.
+  function keyEvent(k, opts) {
+    return new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, mod(opts)))
+  }
+
   function key(sel, k, opts) {
     const el = (typeof sel === 'string' ? q(sel) : sel) || document.activeElement || document.body
-    el.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, opts || {})))
+    el.dispatchEvent(keyEvent(k, opts))
     return el
+  }
+
+  // waitForSession is the gate every driver starts with, and it exists because "the composer is on
+  // screen" is NOT "the app can be driven": the shell renders an empty composer before the session
+  // list has been read and the newest conversation opened, so for a few hundred milliseconds there
+  // is an interactive-looking input that belongs to NO session. A send in that window is refused by
+  // the backend ("no such session") and then wiped by the switch that follows — the click vanishes
+  // with nothing on screen saying so, which is how every sending scenario failed the first time the
+  // suite ran on Linux (macOS boots fast enough to hide the window from the injection).
+  //
+  // The session on screen is the app root's data-session-id (App.tsx): empty until one is open.
+  async function waitForSession() {
+    const sid = () => {
+      const app = document.querySelector('.app')
+      return app && app.dataset ? app.dataset.sessionId : ''
+    }
+    return waitFor(() => (sid() ? true : null), '会话已打开（应用可以驱动了）', 15000)
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -213,6 +271,7 @@ const smoke = (() => {
     finish,
     sleep,
     waitFor,
+    waitForSession,
     waitText,
     waitGone,
     q,
@@ -223,5 +282,7 @@ const smoke = (() => {
     pick,
     click,
     key,
+    keyEvent,
+    MOD,
   }
 })()

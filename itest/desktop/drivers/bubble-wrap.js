@@ -6,6 +6,7 @@
 // 溢出时 scrollWidth 会大于 clientWidth。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const long = 'https://example.com/' + 'a'.repeat(200) + '?q=' + 'b'.repeat(60)
   smoke.type('.composer-input', '看看这个链接：' + long)

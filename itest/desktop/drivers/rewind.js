@@ -11,6 +11,7 @@
 // point of going back to it: you edit what you asked and send again.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // One turn: send, then wait for the turn's own RESULT. Waiting for the stop button to
   // appear is the trap here — the scripted mock answers faster than the next poll, so a

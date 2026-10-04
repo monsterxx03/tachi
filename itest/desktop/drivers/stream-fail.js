@@ -8,6 +8,7 @@
 // 事件流出来的），就算后端把历史丢了，界面照样显示。丢的是下一轮发给模型的上下文。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 第一轮：跑一条命令（这会是一个成功的工具调用，然后同一次 turn 的下一个请求断流）────
   smoke.type('.composer-input', '先跑一条命令')

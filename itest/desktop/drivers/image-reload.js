@@ -9,6 +9,7 @@
 // 视图里看不见（mockllm 只保留文本），所以 Go 侧查的是请求的原始 body。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // 预置的会话由磁盘渲染：先确认它真的起来了，再看后面那一轮。
   if (!(await smoke.waitFor('.msg-user', '预置的会话渲染出用户气泡', 15000))) return smoke.finish()

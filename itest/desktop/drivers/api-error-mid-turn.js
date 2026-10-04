@@ -6,6 +6,7 @@
 // （读第 3 个请求），driver 只负责把两个状态走到：出错上屏、出错之后还能再发一条。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 第一轮：跑一条命令（这会是一个成功的工具调用，然后同一次 turn 的下一个请求被拒）────
   smoke.type('.composer-input', '先跑一条命令')

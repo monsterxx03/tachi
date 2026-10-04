@@ -6,6 +6,7 @@
 // 它：第二条就是最后一条，而「滚到底时最后一个胜出」的兜底会把答案修正回来，看着是对的。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '写三个文件')
   smoke.click('.send-btn')

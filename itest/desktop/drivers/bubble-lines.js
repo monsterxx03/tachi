@@ -9,6 +9,7 @@
 // 气泡里那行时间戳、内边距都影响不到它）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   // 会话的首次加载在启动后那一帧才落定，输入框在那次渲染里会被重挂一次——冷启动时敲进去的
   // 字就这样没了，点击落在 disabled 的按钮上，症状却是「气泡一直没出现」。等它落定再敲。
   await smoke.waitFor(() => !smoke.q('.chat-loading'), '会话加载完成', 10000)

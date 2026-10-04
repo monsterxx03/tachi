@@ -4,6 +4,7 @@
 // 不会逐字重复）。Go 那一半证"两条命令都真的跑了、三步都走到了"；这一侧证"只见到一张卡"。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '读两个文件')
   smoke.click('.send-btn')

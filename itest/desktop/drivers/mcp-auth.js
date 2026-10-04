@@ -10,6 +10,7 @@
 // 告知了模型(下一条请求里的 deferred tools 提示)。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 1. 面板:未授权的 server 要自己说出来 ───────────────────────────────
   // 启动时后台连接会撞上 401,后端据此把这一行标成「需要授权」。没有这个标记,用户看到的

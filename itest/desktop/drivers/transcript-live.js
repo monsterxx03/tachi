@@ -5,6 +5,7 @@
 // 真的在跑的窗口来观察。观察点两处：过程条的实时行，以及外露的运行卡。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // 过程条的高度序列：10ms 采样、只记变化。这是"整轮不跳"的判据 —— 状态是瞬时的（工具一跑完
   // 就切回摘要），读一次不算数，所以采一串。每一格是 `<高度>:<状态类名>`。

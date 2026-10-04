@@ -14,6 +14,7 @@
 // 「左右」，两个方向都断言，最后停回「上下」（默认态）。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '把 README 里那三行换成一行')
   smoke.click('.send-btn')

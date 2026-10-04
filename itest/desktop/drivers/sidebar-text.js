@@ -6,6 +6,7 @@
 // order, and one shared caret size — so retuning the scale later is not a failure.
 ;(async () => {
   if (!(await smoke.waitFor('.sidebar .proj-name', '侧栏渲染出项目组', 15000))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const px = (sel) => {
     const el = smoke.q(sel)

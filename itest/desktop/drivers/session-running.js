@@ -27,6 +27,7 @@
   const rowByTitle = (t) => smoke.qa('.session').find((s) => smoke.text(s.querySelector('.session-title')) === t)
 
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   // The displayed session's id is the switch's own fact (unique per session, unlike a title):
   // 未命名会话 repeats as soon as a second session is created. The titlebar stopped showing it, so
   // the app root carries it as data-session-id.

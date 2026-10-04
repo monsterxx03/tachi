@@ -14,6 +14,7 @@
 // 总数变成四。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   const rowsBefore = smoke.allText('.session-title')
   const row = smoke.qa('.session').find((s) => smoke.text(s.querySelector('.session-title')) === '另一个会话')

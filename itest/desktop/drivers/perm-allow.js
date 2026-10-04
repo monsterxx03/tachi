@@ -5,6 +5,7 @@
 // 看得到的是 UI，那里看得到的是模型收到的工具结果。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '读一下那个文件')
   smoke.click('.send-btn')

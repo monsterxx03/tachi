@@ -9,6 +9,7 @@
 // 目录，转录会静默丢失，还可能留下一个只有 meta.json 的重建目录。停不停是用户的决定。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '这一轮要跑久一点')
   smoke.click('.send-btn')

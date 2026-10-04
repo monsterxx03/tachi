@@ -7,6 +7,7 @@
 // from memory, because a stale meter is exactly the bug this scenario was written for.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   // A first turn, so there is something to summarise and a measured context to compare against.
   smoke.type('.composer-input', '看一下工作目录')

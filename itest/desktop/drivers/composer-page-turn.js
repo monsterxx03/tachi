@@ -11,6 +11,7 @@
 // 反向那一句同样要紧：G / gg 是普通字母。输入框这一层若顺手把它们也拦了，读者就再也打不出 g。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
   // 种子转写上屏（fixture 那一段填充的最后几个字）。
   if (!(await smoke.waitFor(() => (smoke.text('.chat').indexOf('翻半页真的翻得动') >= 0 ? true : null),
     '种子转写上屏', 15000))) return smoke.finish()

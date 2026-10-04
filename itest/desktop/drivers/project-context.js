@@ -8,6 +8,7 @@
 // 的既有行为，不是这条注入路径的性质，钉在这里只会钉住一个与主题无关的事实。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   smoke.type('.composer-input', '看下项目约定')
   smoke.click('.send-btn')

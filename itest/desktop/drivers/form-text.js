@@ -8,6 +8,7 @@
 // not a test failure.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
+  if (!(await smoke.waitForSession())) return smoke.finish()
 
   if (!smoke.click('.new-project')) return smoke.fail('点新建项目', '按钮找不到')
   if (!(await smoke.waitFor('.confirm-box.project-form', '弹窗出现', 5000))) return smoke.finish()

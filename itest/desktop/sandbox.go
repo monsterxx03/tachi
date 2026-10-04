@@ -21,12 +21,14 @@ import (
 // ~/.tachi.
 //
 //	<sandbox>/
-//	  TachiSmoke.app/      a private copy of the app, renamed so pkill can never hit the
-//	                       user's own Tachi (see the bundle rules in docs/agents/desktop.md)
+//	  TachiSmoke(.app)     a private copy of the app, renamed so pkill can never hit the
+//	                       user's own Tachi (see the bundle rules in docs/agents/desktop.md);
+//	                       a bundle on macOS, a bare binary on Linux — see the platform pair
 //	  home/                $HOME for the run: .tachi/config.yaml, session store, UI state
 //	  work/                the session's working directory (what tools and @-references see)
 //	  driver.js            harness.js + the scenario, with the sink URL filled in
 //	  mock-requests.txt    what the model was asked, for the Go-side assertions
+//	  app.log              the app's own stdout/stderr (Linux only: `open` on macOS discards it)
 type sandbox struct {
 	dir     string
 	appPath string
@@ -48,15 +50,15 @@ type sandbox struct {
 	mcpConfig []byte
 }
 
-// smokeBundleName is deliberately unique: `open -a <path>` matches bundles and
-// `pkill -f Tachi.app/Contents/MacOS/Tachi` matches the executable path, so either one
-// aimed at the real app kills the user's running instance.
+// smokeExecName is deliberately unique: it names both the sandbox's copy of the app and the
+// process the suite starts, so `pkill -f TachiSmoke` can only ever reach a smoke run — while
+// the REAL app (Tachi.app/Contents/MacOS/Tachi, or bin/Tachi) keeps its own name.
 const smokeExecName = "TachiSmoke"
 
 func newSandbox(dir, srcApp string) (*sandbox, error) {
 	sb := &sandbox{
 		dir:     dir,
-		appPath: filepath.Join(dir, smokeExecName+".app"),
+		appPath: smokeAppPath(dir),
 		home:    filepath.Join(dir, "home"),
 		work:    filepath.Join(dir, "work"),
 	}
@@ -71,81 +73,34 @@ func newSandbox(dir, srcApp string) (*sandbox, error) {
 	return sb, nil
 }
 
-// prepareApp copies the built bundle and re-identifies it as the smoke app: refresh the
-// executable from the freshly built bare binary, rename it (the pkill guard), rewrite the
-// bundle identity with plutil, re-sign ad-hoc.
+// demoEnv is the environment a scripted run needs, whichever platform starts it: the isolated
+// HOME, demo mode, and the driver. What each platform adds on top of it — macOS's
+// TACHI_DEMO_NO_ACTIVATE and `open -g`, and the absence of either on Linux — is launch's
+// business: see sandbox_darwin.go and sandbox_other.go.
 //
-// The bundle (assets, Info.plist) comes from `make build`; the executable comes from
-// `go build -o bin/Tachi .`, which is what the Makefile target re-runs before each suite —
-// so the app under test is always the current tree, never a stale package.
-func (sb *sandbox) prepareApp(srcApp string) error {
-	if _, err := os.Stat(srcApp); err != nil {
-		return fmt.Errorf("app bundle %s: %w (run `cd desktop && make build` first)", srcApp, err)
+// The names are duplicated here rather than shared: the app's copies live in desktop/demo.go,
+// desktop/voice.go and desktop/voice.go's browser switch, and the runner cannot import the
+// app's own package. Same reason smokeExecName is duplicated.
+func (sb *sandbox) demoEnv() map[string]string {
+	env := map[string]string{
+		"HOME":          sb.home,
+		"TACHI_DEMO":    "1",
+		"TACHI_DEMO_JS": filepath.Join(sb.dir, "driver.js"),
 	}
-	if err := run("cp", "-R", srcApp, sb.appPath); err != nil {
-		return fmt.Errorf("copy bundle: %w", err)
+	if sb.browserFetch {
+		// The MCP OAuth flow would otherwise open a real browser — on the machine this run is
+		// happening on. The app swaps in a headless fetch (desktop/demo.go), which is enough
+		// against the fixture's authorization endpoint: it redirects straight back to the
+		// callback listener the app already has up.
+		env["TACHI_DEMO_BROWSER_FETCH"] = "1"
 	}
-	macOS := filepath.Join(sb.appPath, "Contents", "MacOS")
-	target := filepath.Join(macOS, "Tachi")
-	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("bundle has no Contents/MacOS/Tachi: %w", err)
+	if sb.voiceText != "" {
+		// The microphone's stand-in: a real recording would raise a permission prompt on the
+		// machine running the suite and capture the room. Duplicated from desktop/voice.go
+		// (voiceDemoTextEnv) — see above.
+		env["TACHI_DEMO_VOICE_TEXT"] = sb.voiceText
 	}
-	if bare := filepath.Join(filepath.Dir(srcApp), "Tachi"); fileExists(bare) {
-		if err := run("cp", bare, target); err != nil {
-			return fmt.Errorf("refresh executable from %s: %w", bare, err)
-		}
-	} else {
-		return fmt.Errorf("no %s next to the bundle: build the binary first (`cd desktop && go build -o bin/Tachi .`)", bare)
-	}
-	if err := os.Rename(target, filepath.Join(macOS, smokeExecName)); err != nil {
-		return err
-	}
-
-	plist := filepath.Join(sb.appPath, "Contents", "Info.plist")
-	for _, kv := range [][2]string{
-		{"CFBundleExecutable", smokeExecName},
-		{"CFBundleName", smokeExecName},
-		{"CFBundleIdentifier", "com.monsterxx03.tachi.smoke"},
-	} {
-		if err := run("plutil", "-replace", kv[0], "-string", kv[1], plist); err != nil {
-			return fmt.Errorf("plutil %s: %w", kv[0], err)
-		}
-	}
-	// Sign with the local certificate, NOT ad-hoc — see smokeSignID.
-	return run("codesign", "--force", "--deep", "--sign", smokeSignID(), sb.appPath)
-}
-
-// smokeSignIDDefault is the certificate desktop/Makefile's LOCAL_SIGN_ID names (created once by
-// `desktop/scripts/dev-cert.sh`). Kept in sync by hand: itest is its own module and cannot read
-// that Makefile.
-const smokeSignIDDefault = "Tachi Local Code Signing"
-
-// smokeSignID is the identity the smoke bundle is signed with, or "-" (ad-hoc) when the local
-// certificate is not there.
-//
-// The certificate is the point, not a nicety: an ad-hoc signature's identity IS the content hash,
-// so every rebuild is a DIFFERENT app to macOS — and this bundle does ask for a TCC permission,
-// on every launch, because desktop links the BLE package and that package builds a CBCentralManager
-// in a package-level variable (importing it is enough; nothing has to touch the badge — see
-// docs/agents/badge.md). With a stable identity macOS records the answer once (allow OR deny) and
-// stops asking; ad-hoc makes the Bluetooth prompt come back on every smoke run.
-//
-// A machine without the certificate still runs the suite — it just gets asked every time.
-func smokeSignID() string {
-	id := smokeSignIDDefault
-	if override := os.Getenv("TACHI_SMOKE_SIGN_ID"); override != "" {
-		id = override
-	}
-	out, err := exec.Command("security", "find-identity", "-v", "-p", "codesigning").Output()
-	if err != nil || !strings.Contains(string(out), "\""+id+"\"") {
-		return "-"
-	}
-	return id
-}
-
-func fileExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
+	return env
 }
 
 // writeConfig points the app at the scenario's mock. Every scenario gets its own provider
@@ -276,51 +231,14 @@ func (sb *sandbox) writeDriver(driversDir, scenarioName, sinkURL string) (string
 	return path, os.WriteFile(path, []byte(script), 0o644)
 }
 
-// launch starts the app through LaunchServices (`open`), which is what makes its window
-// frontmost and interactive (a direct exec would run, but attached to nothing). The env vars
-// are how the app learns about the isolated HOME and the driver.
-//
-// TACHI_DEMO_NO_ACTIVATE plus `open -g` keep the launch from taking the foreground — the suite
-// starts the app once per scenario, and an activated app pulls the window in front of the
-// user's work every time (and out of whatever Space they were on). BOTH are needed: `-g` stops
-// LaunchServices from asking the app to activate itself, and demo mode then launches as a
-// hidden-window accessory app so nothing else activates it either — see activationPolicy and
-// demoNoActivate in desktop/demo.go, which spell out what each one was measured to fix.
-func (sb *sandbox) launch() error {
-	env := []string{
-		"--env", "HOME=" + sb.home,
-		"--env", "TACHI_DEMO=1",
-		"--env", "TACHI_DEMO_NO_ACTIVATE=1",
-		"--env", "TACHI_DEMO_JS=" + filepath.Join(sb.dir, "driver.js"),
-	}
-	if sb.browserFetch {
-		// The MCP OAuth flow would otherwise open a real browser — on the machine this run
-		// is happening on. The app swaps in a headless fetch (desktop/demo.go), which is
-		// enough against the fixture's authorization endpoint: it redirects straight back
-		// to the callback listener the app already has up.
-		//
-		// The name is duplicated here rather than shared: the app's copy lives in
-		// desktop/demo.go, and the runner cannot import the app's own package. Same reason
-		// smokeExecName is duplicated (see the bundle rules).
-		env = append(env, "--env", "TACHI_DEMO_BROWSER_FETCH=1")
-	}
-	if sb.voiceText != "" {
-		// The microphone's stand-in, for the same class of reason: a real recording would
-		// raise a TCC prompt on the machine running the suite and capture the room. The name
-		// is duplicated from desktop/voice.go (voiceDemoTextEnv) — see above.
-		env = append(env, "--env", "TACHI_DEMO_VOICE_TEXT="+sb.voiceText)
-	}
-	args := append([]string{"open", "-g", sb.appPath}, env...)
-	return run(args[0], args[1:]...)
-}
-
 // killAll stops any smoke instance. The executable name is unique to the sandbox, so this
 // cannot touch the user's own app.
 func killAll() {
 	_ = exec.Command("pkill", "-f", smokeExecName).Run()
-	// Wait for it to actually go away: `open` on a live instance activates it and
-	// passes NO environment, which would silently run the next scenario in the
-	// previous (or a leaked) app.
+	// Wait for it to actually go away: the next scenario starts its own app, and a leaked one
+	// would keep the sandbox's port/state alive (on macOS a second `open` on a live instance
+	// activates it and passes NO environment, which would silently run the next scenario in the
+	// previous app).
 	for i := 0; i < 40; i++ {
 		out, _ := exec.Command("pgrep", "-f", smokeExecName).Output()
 		if strings.TrimSpace(string(out)) == "" {
