@@ -328,6 +328,9 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 	// background process must survive the turn.
 	cmd := exec.Command("bash", "-c", a.Command)
 	cmd.Dir = wdctx.Dir(ctx)
+	// The askpass helper rides along so a command that needs a password can raise a dialog:
+	// with no controlling terminal, SUDO_ASKPASS is the only way sudo can ask (askpass.go).
+	cmd.Env = bashEnv()
 
 	// Process group isolation: kill -pgid terminates the entire process tree
 	// (bash + all children like python/wget/curl). Without this, killing
@@ -338,6 +341,11 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 	// ssh -t, etc.) from hanging by reading the TUI's terminal directly.
 	// Without Setsid, the child inherits the parent's controlling terminal
 	// even when stdin is /dev/null, causing hangs when programs open /dev/tty.
+	//
+	// sudo is the one of those that still has a way in: with no terminal it asks
+	// through SUDO_ASKPASS, which the env above supplies (askpass.go). pass and
+	// ssh -t have no such helper and simply fail — granting them a TTY instead
+	// would put the hang back.
 	//
 	// Setsid alone also makes the child a process group leader (PGID = PID),
 	// so -PID process group kill still works — no separate Setpgid needed.

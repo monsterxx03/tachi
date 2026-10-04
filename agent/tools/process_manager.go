@@ -160,6 +160,9 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 	// Use context.Background() so the process survives the tool call's ctx.
 	cmd := exec.CommandContext(context.Background(), "bash", "-c", command)
 	cmd.Dir = wdctx.Dir(ctx)
+	// Same reason as the foreground path: a detached command with no controlling terminal can
+	// only be asked for a password through the askpass helper (askpass.go).
+	cmd.Env = bashEnv()
 
 	// Process group isolation: kill -pgid terminates the entire tree.
 	// Setsid detaches from the parent's controlling terminal, preventing
