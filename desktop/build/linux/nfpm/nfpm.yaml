@@ -9,10 +9,14 @@ platform: "linux"
 version: "0.1.0"
 section: "default"
 priority: "extra"
-maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
+# Written literally rather than from ${GIT_COMMITTER_NAME}/${GIT_COMMITTER_EMAIL} (the template's
+# form): those are only set when the build runs from a git hook, so a plain `make package` shipped a
+# package with an EMPTY Maintainer field — which dpkg reports as a malformed control file. The
+# maintainer of a package is the project's, not whoever happens to be building it.
+maintainer: "monsterxx03 <xyj.asmy@gmail.com>"
 description: "Tachi — AI Agent desktop companion"
 vendor: "monsterxx03"
-homepage: "https://wails.io"
+homepage: "https://github.com/monsterxx03/tachi"
 license: "MIT"
 release: "1"
 
@@ -28,6 +32,11 @@ contents:
 depends:
   - libgtk-4-1
   - libwebkitgtk-6.0-4
+
+# Arch-only metadata: without it nfpm writes `packager = Unknown Packager` into .PKGINFO
+# (its default — nfpm v2.44 has no top-level packager field).
+archlinux:
+  packager: "monsterxx03 <xyj.asmy@gmail.com>"
 
 # Distribution-specific overrides for different package formats
 overrides:

@@ -18,7 +18,7 @@ gets its own handbook beside this one rather than growing here.
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
-| **Desktop on Linux (omarchy)** | you build/run desktop on Linux, or touch the tray, file-open, or the close-the-window behaviour — **that section also lists what is deliberately NOT wired up there (voice, BLE)** |
+| **Desktop on Linux (omarchy)** | you build, package or run desktop on Linux, or touch the tray, file-open, the window frame, or the close-the-window behaviour — **that section also lists what is deliberately NOT wired up there (voice, BLE)** |
 | **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
 | **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
@@ -309,6 +309,23 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   frontend's `src/platform.ts` — ⌘ on macOS, Ctrl elsewhere, for BOTH the handler and the on-screen keycaps).
   Its `MOD_KEY` / `REVEAL_LABEL` are the two things a platform decides for RENDERED text; a string in this tree
   that still spells ⌘ or "Finder" is either the gesture's own name in a comment or a bug.
+- **`make package` is Linux's packaging entry: deb / rpm / arch, through `wails3 package` → `linux:package`
+  → nfpm** (self-contained — no dpkg/rpmbuild on the host). It needs the wails3 CLI at `~/go/bin/wails3`,
+  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Three things in that chain
+  are load-bearing and easy to undo by accident: `build/linux/Taskfile.yml` OVERRIDES `APP_NAME` to
+  `tachi-desktop` (the parent Taskfile's "Tachi" is the macOS name, and nfpm's `contents:`, the .desktop's
+  `Exec` and the Makefile all say `tachi-desktop` — a package that disagrees installs a binary nothing points
+  at); `common:generate:icons` and `generate:dotdesktop` are REMOVED from the Linux deps (the first rewrites
+  `build/darwin/icons.icns` and `build/windows/icon.ico` — including them dirtied the tree on every Linux
+  package build; the second would overwrite `build/linux/tachi-desktop.desktop`, whose `StartupWMClass` line is
+  the load-bearing part a generator cannot know); and nfpm's metadata is written out by hand (`maintainer`,
+  `homepage`) because the template's `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` expand to nothing
+  outside a git hook, which produced a deb with an EMPTY Maintainer field.
+- **The AppImage is NOT part of `make package` — it is `make package-appimage`, and it is host-dependent.**
+  linuxdeploy's GTK plugin wants a Debian-ish gdk-pixbuf layout (`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`);
+  Arch-family hosts have no such directory (gdk-pixbuf's loaders are built in), so bundling there dies after
+  its library pass with `Failed to run plugin: gtk`. That is a property of the plugin, not of this app — the
+  three nfpm formats install the distro's own GTK/WebKit through `depends:` instead of bundling them.
 - **The Linux twin of "closing the window does not quit" is `LinuxOptions.DisableQuitOnLastWindowClosed`.**
   The close HOOK itself (`Hide` + `Cancel`, `desktop/main.go`) is the same on both, because Wails maps Linux's
   `WindowDeleteEvent` onto `Common.WindowClosing`; without the option GTK quits the app with its last window,

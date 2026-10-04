@@ -3,6 +3,7 @@
 # Usage:
 #   make build    → macOS: wails3 package → bin/Tachi.app (frontend + go + codesign)
 #                   Linux: go build → bin/tachi-desktop（前端要先用 make frontend 出 dist）
+#   make package  → Linux: deb / rpm / arch 三个包（wails3，见下）；macOS 不需要它
 #   make test     → go test ./...（这个模块自己的，根 go.work 看不见它）
 #   make run      → macOS: build then `open -n bin/Tachi.app`；Linux: build then 直接跑
 #   make dev      → wails3 dev (hot reload)
@@ -11,11 +12,8 @@
 #   make tidy     → go mod tidy
 #   make clean    → remove bin/ and frontend/dist
 #
-# Wails v3 CLI is installed at ~/go/bin/wails3.
-#
-# 两个平台各走各的：macOS 用 wails3 package（.app bundle + 签名）；Linux 直接用 go build，
-# 出包（appimage/deb/rpm/aur）交给 `wails3 package` / `task linux:package`——那套要 wails3
-# CLI，而日常开发（本目标）不该被它挡住。两边的差异都收在下面 UNAME_S 的分支里。
+# Wails v3 CLI 装在 ~/go/bin/wails3（下面 export PATH 把它带上）。出包和 dev 都要它；日常的
+# build/test 不要——那条路是纯 go build，装不装 CLI 都能跑。
 
 GO        ?= go
 WAILS     ?= wails3
@@ -53,7 +51,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build package dev appicon frontend tidy clean run sign-local stt-shim
+.PHONY: all build package package-appimage dev appicon frontend tidy clean run sign-local stt-shim
 
 all: build
 
@@ -88,17 +86,26 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@test -d frontend/dist || { echo "frontend/dist 不存在——先跑 make frontend（或 wails3 package）"; exit 1; }
 	$(GO) build -o $(LINUX_BIN) .
-	@echo "→ $(LINUX_BIN)（出安装包用 make package 或 task linux:package）"
+	@echo "→ $(LINUX_BIN)（出安装包用 make package）"
 endif
 
-# package 是 Linux 的出包入口（appimage/deb/rpm/aur，走 build/linux/Taskfile.yml）。
-# macOS 的 .app/dmg 打包仍在 build 里（wails3 package）。
+# package 是 Linux 的出包入口：deb / rpm / arch 三种，走 build/linux/Taskfile.yml 的
+# linux:package（nfpm 直接写这三种格式，不依赖宿主上的打包工具）。macOS 的 .app/dmg 打包在
+# build 里（wails3 package）。
+#
+# 为什么 AppImage 不在这里：linuxdeploy 的 GTK 插件假定 Debian 那套 gdk-pixbuf 布局
+# （/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0），Arch 系主机上没有那个目录，于是它跑到一半就
+# "Failed to run plugin: gtk"。它在能跑的主机上仍然是 `make package-appimage`。
 package:
 ifeq ($(UNAME_S),Darwin)
 	@echo "macOS 的包由 make build 产出（bin/Tachi.app）；dmg 见 task darwin:package:dmg"
 else
 	$(WAILS) package
+	@ls -1 bin/*.deb bin/*.rpm bin/*.pkg.tar.zst 2>/dev/null | sed 's/^/→ /'
 endif
+
+package-appimage:
+	$(WAILS) task linux:package:appimage
 
 dev:
 	$(WAILS) dev

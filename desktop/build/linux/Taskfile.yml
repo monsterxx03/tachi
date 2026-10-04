@@ -4,6 +4,13 @@ includes:
   common: ../Taskfile.yml
 
 vars:
+  # APP_NAME is overridden here because this project's Linux artifact has its own name:
+  # `tachi-desktop` (what the Makefile builds, what nfpm's `contents:` installs, and what the
+  # hand-written .desktop file Execs — the package must not disagree with any of them). The
+  # parent Taskfile's "Tachi" is the macOS/Windows name; overriding it in this file is enough
+  # because every task below is defined here.
+  APP_NAME: "tachi-desktop"
+
   # Signing configuration - edit these values for your project
   # PGP_KEY: "path/to/signing-key.asc"
   # SIGN_ROLE: "builder"  # Options: origin, maint, archive, builder
@@ -51,8 +58,11 @@ tasks:
             ref: .OBFUSCATED
           DEV:
             ref: .DEV
-      - task: common:generate:icons
-      - task: generate:dotdesktop
+      # Deliberately NOT `common:generate:icons` (it rewrites build/darwin/icons.icns and
+      # build/windows/icon.ico, which are this platform's nothing) and NOT `generate:dotdesktop`
+      # (it would overwrite build/linux/tachi-desktop.desktop, whose StartupWMClass=org.wails.tachi
+      # line is load-bearing and is not something the generator knows — see docs/agents/desktop.md).
+      # The AppImage's own icon is build/appicon.png, copied below, and nfpm installs that same PNG.
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
         msg: "garble is required for obfuscated builds. Install it with: go install mvdan.cc/garble@v0.16.0 (requires Go 1.24+). See https://github.com/burrowers/garble/releases for version/toolchain compatibility."
@@ -75,8 +85,11 @@ tasks:
         vars:
           OBFUSCATED:
             ref: .OBFUSCATED
-      - task: common:generate:icons
-      - task: generate:dotdesktop
+      # Deliberately NOT `common:generate:icons` (it rewrites build/darwin/icons.icns and
+      # build/windows/icon.ico, which are this platform's nothing) and NOT `generate:dotdesktop`
+      # (it would overwrite build/linux/tachi-desktop.desktop, whose StartupWMClass=org.wails.tachi
+      # line is load-bearing and is not something the generator knows — see docs/agents/desktop.md).
+      # The AppImage's own icon is build/appicon.png, copied below, and nfpm installs that same PNG.
     preconditions:
       - sh: docker info > /dev/null 2>&1
         msg: "Docker is required for cross-compilation to Linux. Please install Docker."
@@ -100,21 +113,31 @@ tasks:
         sh: 'wails3 tool docker-mounts'
 
   package:
-    summary: Packages the application for Linux
+    # The three formats nfpm writes with no host tooling: Debian, RPM, Arch. `package:appimage` is
+    # deliberately NOT in this list — linuxdeploy's GTK plugin assumes a Debian-ish gdk-pixbuf
+    # layout (`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`) that Arch-family hosts do not have, so
+    # bundling there fails after ~10s of work with "Failed to run plugin: gtk". Run it on a host
+    # where it can work: `wails3 task linux:package:appimage`.
+    summary: Packages the application for Linux (deb / rpm / arch)
+    deps:
+      - task: build
+    cmds:
+      - task: create:deb
+      - task: create:rpm
+      - task: create:aur
+
+  package:appimage:
+    summary: Creates an AppImage (host-dependent — see the note on `package`)
     deps:
       - task: build
     cmds:
       - task: create:appimage
-      - task: create:deb
-      - task: create:rpm
-      - task: create:aur
 
   create:appimage:
     summary: Creates an AppImage
     dir: build/linux/appimage
     deps:
       - task: build
-      - task: generate:dotdesktop
     cmds:
       - cp "{{.APP_BINARY}}" "{{.APP_NAME}}"
       - cp ../../appicon.png "{{.APP_NAME}}.png"
@@ -131,7 +154,6 @@ tasks:
     deps:
       - task: build
     cmds:
-      - task: generate:dotdesktop
       - task: generate:deb
 
   create:rpm:
@@ -139,7 +161,6 @@ tasks:
     deps:
       - task: build
     cmds:
-      - task: generate:dotdesktop
       - task: generate:rpm
 
   create:aur:
@@ -147,7 +168,6 @@ tasks:
     deps:
       - task: build
     cmds:
-      - task: generate:dotdesktop
       - task: generate:aur
 
   generate:deb:
@@ -164,19 +184,6 @@ tasks:
     summary: Creates a arch linux packager package
     cmds:
       - wails3 tool package -name "{{.APP_NAME}}" -format archlinux -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
-
-  generate:dotdesktop:
-    summary: Generates a `.desktop` file
-    dir: build
-    cmds:
-      - mkdir -p {{.ROOT_DIR}}/build/linux/appimage
-      - wails3 generate .desktop -name "{{.APP_NAME}}" -exec "{{.EXEC}}" -icon "{{.ICON}}" -outputfile "{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop" -categories "{{.CATEGORIES}}"
-    vars:
-      APP_NAME: '{{.APP_NAME}}'
-      EXEC: '{{.APP_NAME}}'
-      ICON: '{{.APP_NAME}}'
-      CATEGORIES: 'Development;'
-      OUTPUTFILE: '{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop'
 
   run:
     cmds:
