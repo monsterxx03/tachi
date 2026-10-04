@@ -41,6 +41,39 @@ BarWidget {
   readonly property bool working: ["thinking", "tool_running", "busy"].indexOf(stateStatus) >= 0
   readonly property bool failed: stateStatus === "error"
 
+  // 正在跑哪个工具。AgentState 里没有单独的「工具名」字段，它装在 detail 的开头：桌面端的
+  // toolDetail 写的是「调用 <工具>：<参数>」（desktop/agent_turn.go），这里就从这个格式里
+  // 抽一段。抽不到（措辞变了、或者根本不是工具）就什么都不显示——少一个词，不会显示垃圾；
+  // 那个 「调用工具 grep」 是模拟模式的状态文案，`\s+` 正好把它挡在外面。
+  function toolName() {
+    var m = /^调用\s+([^：\s]+)/.exec(detail)
+    return m ? m[1] : ""
+  }
+
+  // bar 上那一段状态字：状态词后面直接跟工具名（有的话），读作「执行 grep」。
+  readonly property string stateText: toolName() !== "" ? stateWord + " " + toolName() : stateWord
+
+  // 点开的面板内容：打开那一刻的 detail 快照。
+  //
+  // 快照而不是跟着文件走 —— 你想读的是"我刚点的那条命令"，一秒后它跑完、detail 变成"已回复"，
+  // 跟着变就把你要读的东西换掉了。
+  property bool detailOpen: false
+  property string detailSnapshot: ""
+  property string stateSnapshot: ""
+
+  function openDetail() {
+    if (detail === "") return
+    detailSnapshot = detail
+    stateSnapshot = stateText
+    detailOpen = true
+  }
+
+  // PopupCard 的关闭协议：点弹窗外面时它调 owner.close()（见 qs.Ui.PopupCard 的 close()）。
+  // 这个函数不是给用户调的，是那条协议的接口 —— 少了它，外面一点弹窗会关不掉。
+  function close() {
+    detailOpen = false
+  }
+
   // 字体的来源和 WidgetButton 一致（它就是 bar 上写字的那个部件）：本控件要自己排版只是
   // 因为一个 WidgetButton 只能有一个颜色。
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -77,7 +110,7 @@ BarWidget {
   // 时就只剩状态词——bar 上永远有东西可读，而不是空一格。
   function readout() {
     var parts = []
-    if (stateWord !== "") parts.push(stateWord)
+    if (stateText !== "") parts.push(stateText)
     if (hasNumbers()) parts.push(numbersText())
     return parts.join(" · ")
   }
@@ -158,7 +191,7 @@ BarWidget {
       spacing: 0
 
       Part {
-        text: root.stateWord
+        text: root.stateText
         color: root.stateColor
         opacity: root.stateOpacity
 
@@ -170,7 +203,7 @@ BarWidget {
       // 状态词和数字之间的分隔符：两边都有才画。
       Part {
         text: " · "
-        visible: root.stateWord !== "" && root.hasNumbers()
+        visible: root.stateText !== "" && root.hasNumbers()
       }
 
       Part { text: root.costText() }
@@ -194,9 +227,72 @@ BarWidget {
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: Qt.ArrowCursor
+      cursorShape: Qt.PointingHandCursor
       onEntered: if (root.bar) root.bar.showTooltip(button, root.tooltip())
       onExited: if (root.bar) root.bar.hideTooltip(button)
+      // 左键点开完整参数（再点一次关掉）。先收掉悬停提示：它和面板叠在一起是两块东西。
+      onClicked: {
+        if (root.bar) root.bar.hideTooltip(button)
+        if (root.detailOpen) root.close()
+        else root.openDetail()
+      }
+    }
+  }
+
+  // 点开后那张卡片：标题是打开时的状态，正文是**不截断**的 detail（bar 上那串字只给结论，
+  // 命令/参数要读全就点这里）。太长时正文可滚，并且明说可以滚——被裁掉而看不出来是最糟的。
+  PopupCard {
+    id: detailCard
+    anchorItem: root
+    owner: root
+    bar: root.bar
+    open: root.detailOpen
+    contentWidth: detailCard.fittedContentWidth(Style.space(520))
+    contentHeight: detailCard.fittedContentHeight(detailColumn.implicitHeight)
+
+    Column {
+      id: detailColumn
+      anchors.fill: parent
+      spacing: Style.space(8)
+
+      Text {
+        id: detailTitle
+        text: root.stateSnapshot
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        font.bold: true
+      }
+
+      Flickable {
+        id: detailFlick
+        width: parent.width
+        height: Math.min(detailBody.implicitHeight, Style.space(320))
+        contentWidth: width
+        contentHeight: detailBody.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Text {
+          id: detailBody
+          width: detailFlick.width
+          text: root.detailSnapshot
+          color: Qt.darker(root.foreground, 1.25)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          // 命令和 JSON 里没有空格可断，按字符折行才不会再撑宽。
+          wrapMode: Text.WrapAnywhere
+        }
+      }
+
+      Text {
+        // 只在真的被裁掉时才说，否则是废话。
+        visible: detailBody.implicitHeight > detailFlick.height
+        text: "内容较长 · 滚轮查看"
+        color: Qt.darker(root.foreground, 1.6)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
   }
 
