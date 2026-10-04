@@ -11,6 +11,12 @@ vars:
   # because every task below is defined here.
   APP_NAME: "tachi-desktop"
 
+  # PKG_NAME is the distro PACKAGE name (deb `Package:`, rpm `Name:`, Arch `pkgname`) and what the
+  # artifacts are named after. It is not APP_NAME on purpose: the package is `tachi.desktop` while
+  # the executable, the .desktop file and the icon are `tachi-desktop`. Kept in step with
+  # nfpm.yaml's `name:` BY HAND — nfpm reads that file directly and cannot see this variable.
+  PKG_NAME: "tachi.desktop"
+
   # Signing configuration - edit these values for your project
   # PGP_KEY: "path/to/signing-key.asc"
   # SIGN_ROLE: "builder"  # Options: origin, maint, archive, builder
@@ -173,17 +179,17 @@ tasks:
   generate:deb:
     summary: Creates a deb package
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format deb -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+      - wails3 tool package -name "{{.PKG_NAME}}" -format deb -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
 
   generate:rpm:
     summary: Creates a rpm package
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format rpm -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+      - wails3 tool package -name "{{.PKG_NAME}}" -format rpm -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
 
   generate:aur:
     summary: Creates a arch linux packager package
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format archlinux -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+      - wails3 tool package -name "{{.PKG_NAME}}" -format archlinux -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
 
   run:
     cmds:

@@ -311,16 +311,19 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   that still spells ⌘ or "Finder" is either the gesture's own name in a comment or a bug.
 - **`make package` is Linux's packaging entry: deb / rpm / arch, through `wails3 package` → `linux:package`
   → nfpm** (self-contained — no dpkg/rpmbuild on the host). It needs the wails3 CLI at `~/go/bin/wails3`,
-  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Three things in that chain
-  are load-bearing and easy to undo by accident: `build/linux/Taskfile.yml` OVERRIDES `APP_NAME` to
-  `tachi-desktop` (the parent Taskfile's "Tachi" is the macOS name, and nfpm's `contents:`, the .desktop's
-  `Exec` and the Makefile all say `tachi-desktop` — a package that disagrees installs a binary nothing points
-  at); `common:generate:icons` and `generate:dotdesktop` are REMOVED from the Linux deps (the first rewrites
-  `build/darwin/icons.icns` and `build/windows/icon.ico` — including them dirtied the tree on every Linux
-  package build; the second would overwrite `build/linux/tachi-desktop.desktop`, whose `StartupWMClass` line is
-  the load-bearing part a generator cannot know); and nfpm's metadata is written out by hand (`maintainer`,
-  `homepage`) because the template's `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` expand to nothing
-  outside a git hook, which produced a deb with an EMPTY Maintainer field.
+  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Four things in that chain
+  are load-bearing and easy to undo by accident: the Linux Taskfile OVERRIDES `APP_NAME` to `tachi-desktop`
+  (the parent Taskfile's "Tachi" is the macOS name, and nfpm's `contents:`, the .desktop's `Exec`, the icon and
+  the Makefile all say `tachi-desktop` — a build that disagrees installs a binary nothing points at); the
+  PACKAGE name is a different thing again, `tachi.desktop` (nfpm's `name:` and the Taskfile's `PKG_NAME`, kept
+  in step BY HAND because nfpm cannot see a Taskfile variable — and `wails3 tool package -name` only names the
+  ARTIFACT, which is why `PKG_NAME` is what gets passed there); `common:generate:icons` and `generate:dotdesktop`
+  are REMOVED from the Linux deps (the first rewrites `build/darwin/icons.icns` and `build/windows/icon.ico` —
+  including them dirtied the tree on every Linux package build; the second would overwrite
+  `build/linux/tachi-desktop.desktop`, whose `StartupWMClass` line is the load-bearing part a generator cannot
+  know); and nfpm's metadata is written out by hand (`maintainer`, `homepage`) because the template's
+  `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` expand to nothing outside a git hook, which produced a deb
+  with an EMPTY Maintainer field.
 - **The AppImage is NOT part of `make package` — it is `make package-appimage`, and it is host-dependent.**
   linuxdeploy's GTK plugin wants a Debian-ish gdk-pixbuf layout (`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`);
   Arch-family hosts have no such directory (gdk-pixbuf's loaders are built in), so bundling there dies after

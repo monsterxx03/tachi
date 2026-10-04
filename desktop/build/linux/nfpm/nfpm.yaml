@@ -3,7 +3,12 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "tachi-desktop"
+# The PACKAGE name — what `pacman -Q` / `dpkg -l` / `rpm -q` answer, and deliberately NOT the
+# executable's name: the binary, the .desktop file and the icon all stay `tachi-desktop` (this
+# file's `contents:` says so, and so does the .desktop's Exec). Kept in step with PKG_NAME in
+# build/linux/Taskfile.yml BY HAND, because nfpm reads this file directly and cannot see that
+# variable — and the two must agree, or an artifact is named after something its package is not.
+name: "tachi.desktop"
 arch: ${GOARCH}
 platform: "linux"
 version: "0.1.0"
