@@ -29,6 +29,13 @@ vars:
 tasks:
   build:
     summary: Builds the application for Linux
+    deps:
+      # The CLI/TUI rides in the SAME package (nfpm's contents installs bin/tachi next to
+      # tachi-desktop), so it is built as part of `build` rather than by a step of its own: every
+      # path that packages — including the three `create:*` tasks when invoked directly — comes
+      # through here, and no one has to remember the extra step. The recipe lives in the COMMON
+      # Taskfile (build:cli), shared with darwin, whose bundle carries the same binary.
+      - task: common:build:cli
     cmds:
       # Linux requires CGO - use Docker when:
       # 1. Cross-compiling from non-Linux, OR

@@ -7,9 +7,14 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)
 NPM := npm --prefix web/frontend
 
+# CLI_OUT is where `make build` writes the CLI/TUI binary. It is a variable because
+# the DESKTOP package ships that same binary (see desktop/Makefile's `cli`) and
+# builds it from here: `make -C .. build CLI_OUT=…` — so the version stamp,
+# -trimpath and the embedded web console stay defined in ONE place.
+CLI_OUT ?= tachi
 
-build:
-	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .
+build: web-check
+	go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_OUT) .
 
 # Build the frontend into web/frontend/dist so it's embedded into the Go binary.
 # `npm ci`, not `install`: it installs strictly from package-lock.json, so it can

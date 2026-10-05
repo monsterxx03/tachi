@@ -19,7 +19,7 @@ priority: "extra"
 # package with an EMPTY Maintainer field — which dpkg reports as a malformed control file. The
 # maintainer of a package is the project's, not whoever happens to be building it.
 maintainer: "monsterxx03 <xyj.asmy@gmail.com>"
-description: "Tachi — AI Agent desktop companion"
+description: "Tachi — AI Agent desktop app (tachi-desktop) and CLI/TUI (tachi)"
 vendor: "monsterxx03"
 homepage: "https://github.com/monsterxx03/tachi"
 license: "MIT"
@@ -28,6 +28,12 @@ release: "1"
 contents:
   - src: "./bin/tachi-desktop"
     dst: "/usr/local/bin/tachi-desktop"
+  # The CLI/TUI rides in the same package: one project, one install step. It is built by the Linux
+  # Taskfile's build:cli (desktop/Makefile's `cli`) — the ROOT module's binary, version-stamped and
+  # with the web console embedded. `/usr/local/bin` because that is where this package already puts
+  # the desktop binary, and it is on PATH.
+  - src: "./bin/tachi"
+    dst: "/usr/local/bin/tachi"
   - src: "./build/appicon.png"
     dst: "/usr/share/icons/hicolor/128x128/apps/tachi-desktop.png"
   - src: "./build/linux/tachi-desktop.desktop"

@@ -1,9 +1,11 @@
 # Tachi desktop — build/run targets (Wails v3, macOS + Linux).
 #
 # Usage:
-#   make build    → macOS: wails3 package → bin/Tachi.app (frontend + go + codesign)
+#   make build    → macOS: wails3 package → bin/Tachi.app（frontend + go + codesign，内含 CLI）
 #                   Linux: go build → bin/tachi-desktop（前端要先用 make frontend 出 dist）
-#   make package  → Linux: deb / rpm / arch 三个包（wails3，见下）；macOS 不需要它
+#   make cli      → 构建根模块的 tachi（CLI/TUI）到 bin/tachi —— 就是进包/.app 的那一个
+#   make package  → Linux: deb / rpm / arch 三个包（wails3，见下；内含 tachi + tachi-desktop）
+#                   macOS: 一个 .pkg 安装器（app 进 /Applications，CLI 进 /usr/local/bin）
 #   make test     → go test ./...（这个模块自己的，根 go.work 看不见它）
 #   make run      → macOS: build then `open -n bin/Tachi.app`；Linux: build then 直接跑
 #   make dev      → wails3 dev (hot reload)
@@ -26,6 +28,12 @@ APPDIR     = bin/Tachi.app
 # 都写的是 tachi-desktop）。
 UNAME_S   := $(shell uname -s)
 LINUX_BIN  = bin/tachi-desktop
+
+# CLI_OUT is where `make cli` writes the CLI/TUI binary — the ROOT module's `tachi`, which the Linux
+# package installs next to the desktop app and which macOS's bundle carries in Contents/MacOS.
+# Written as $(CURDIR): the target exists to be called from other directories (the Linux Taskfile's
+# build:cli), where a bare relative path would land somewhere else.
+CLI_OUT   ?= $(CURDIR)/bin/tachi
 
 # LOCAL_SIGN_ID is the local, self-signed code-signing identity the build signs with (see the
 # `build` target: it does this whenever the identity exists). macOS ties TCC grants — bluetooth,
@@ -52,7 +60,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
+.PHONY: all build cli package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
 
 all: build
 
@@ -87,19 +95,34 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@test -d frontend/dist || { echo "frontend/dist 不存在——先跑 make frontend（或 wails3 package）"; exit 1; }
 	$(GO) build -o $(LINUX_BIN) .
-	@echo "→ $(LINUX_BIN)（出安装包用 make package）"
+	@echo "→ $(LINUX_BIN)（CLI 用 make cli；出安装包用 make package）"
 endif
 
-# package 是 Linux 的出包入口：deb / rpm / arch 三种，走 build/linux/Taskfile.yml 的
-# linux:package（nfpm 直接写这三种格式，不依赖宿主上的打包工具）。macOS 的 .app/dmg 打包在
-# build 里（wails3 package）。
+# cli 构建根模块的 tachi（CLI/TUI）到 CLI_OUT。它是两个平台出包时都要的那个二进制：Linux 装到
+# /usr/local/bin/tachi（nfpm 的 contents），macOS 进 .app 的 Contents/MacOS——两边的打包链都只是
+# **调用本目标**（Taskfile 的 common:build:cli），不再各写一条 go build。
+#
+# 之所以走根 Makefile：版本号（git describe）、-trimpath，以及**内嵌的 web console**
+# （web/frontend/dist——缺了它根模块根本编译不过，对应根 Makefile 的 web-check）都定义在那边一处。
+# 本 Makefile 导出的 GOWORK=off 会被继承，根模块因此按自己的 go.mod 构建，正是我们要的。
+cli:
+	$(MAKE) -C .. --no-print-directory build CLI_OUT=$(CLI_OUT)
+	@echo "→ $(CLI_OUT)"
+
+# package 是出包入口：Linux 是 deb / rpm / arch 三种，走 build/linux/Taskfile.yml 的
+# linux:package（nfpm 直接写这三种格式，不依赖宿主上的打包工具）；macOS 是一个 .pkg 安装器（app
+# 进 /Applications、CLI 进 /usr/local/bin），走 build/darwin/Taskfile.yml 的 create:pkg
+# （pkgbuild/productbuild，系统自带）。.dmg 仍是另一条：task darwin:package:dmg——它只把 app 拖进去，
+# CLI 不会上 PATH。
 #
 # 为什么 AppImage 不在这里：linuxdeploy 的 GTK 插件假定 Debian 那套 gdk-pixbuf 布局
 # （/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0），Arch 系主机上没有那个目录，于是它跑到一半就
 # "Failed to run plugin: gtk"。它在能跑的主机上仍然是 `make package-appimage`。
 package:
 ifeq ($(UNAME_S),Darwin)
-	@echo "macOS 的包由 make build 产出（bin/Tachi.app）；dmg 见 task darwin:package:dmg"
+	@$(MAKE) --no-print-directory build
+	@$(WAILS) task darwin:create:pkg
+	@ls -1 bin/*.pkg | sed 's/^/→ /'
 else
 	$(WAILS) package
 	@ls -1 bin/*.deb bin/*.rpm bin/*.pkg.tar.zst 2>/dev/null | sed 's/^/→ /'

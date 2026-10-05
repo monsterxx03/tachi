@@ -277,6 +277,18 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   with `security` and **the system's own `/usr/bin/openssl`** — Homebrew's OpenSSL 3 writes a PKCS#12 whose
   default algorithms macOS refuses to verify, so a script that reaches for `openssl` from `PATH` produces an
   identity that will not import — and trust it for code signing.
+- **`make package` on macOS produces ONE installer (`.pkg`) — a bundle never puts anything on PATH.**
+  `create:pkg` (`pkgbuild` + `productbuild`, system tools) installs the app into `/Applications` and the CLI
+  into `/usr/local/bin/tachi`, the same path the Linux package uses, so both platforms answer "where does
+  `tachi` live" the same way. (`package:dmg` stays the drag-it-in form: it carries the CLI INSIDE the `.app`,
+  reachable only by full path.) Three things are load-bearing: the app payload goes through
+  `pkgbuild --component` (the form for a BUNDLE — `--root` describes a bare file tree) and must ALREADY be
+  signed, because the installer adds no signature of its own; the CLI payload is a `--root` staging tree
+  installed at `/`; and the `.pkg` is deliberately UNSIGNED — `productsign` wants a Developer ID **Installer**
+  certificate, which is not the code-signing identity the app carries, so a distributed one needs that
+  certificate (and notarization) while a local one installs as-is. `make -C desktop package` calls
+  `create:pkg` directly rather than `package:pkg`: the latter re-runs wails3's build, so the `.app` it packs
+  never got the local-identity re-sign above.
 - **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in
   front proves nothing. The TUI's notifications are a different mechanism (`terminal-notifier` / `osascript`),
   **but they can still be the desktop's fault**: the app is often launched from a herdr pane, inherits
@@ -311,8 +323,9 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 
 - **Every platform difference lives behind a `_darwin.go` / `_other.go` pair — do not add a bare
   `runtime.GOOS` branch to shared code.** What differs so far, and why: the BUILD (`make build` dispatches on
-  `uname` — macOS runs `wails3 package` and the Swift `stt-shim`, Linux is a plain
-  `go build -o bin/tachi-desktop .` and skips the shim, whose `swiftc` does not exist there); the TRAY icon
+  `uname` — macOS runs `wails3 package`, whose bundle assembly carries the CLI into `Contents/MacOS` BEFORE
+  the ad-hoc signature, and the Swift `stt-shim`; Linux is a plain `go build -o bin/tachi-desktop .` and skips
+  the shim, whose `swiftc` does not exist there); the TRAY icon
   (`trayicon_*.go` — macOS gets the TEMPLATE icon, Linux gets the same monochrome shape TINTED, because only
   macOS recolours a template image and a black glyph on a dark panel is invisible); file open/reveal
   (`attach_*.go` — `open` / `open -R` vs. `xdg-open` / `FileManager1.ShowItems`); the shortcut modifier (see the
@@ -321,7 +334,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   that still spells ⌘ or "Finder" is either the gesture's own name in a comment or a bug.
 - **`make package` is Linux's packaging entry: deb / rpm / arch, through `wails3 package` → `linux:package`
   → nfpm** (self-contained — no dpkg/rpmbuild on the host). It needs the wails3 CLI at `~/go/bin/wails3`,
-  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Four things in that chain
+  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Five things in that chain
   are load-bearing and easy to undo by accident: the Linux Taskfile OVERRIDES `APP_NAME` to `tachi-desktop`
   (the parent Taskfile's "Tachi" is the macOS name, and nfpm's `contents:`, the .desktop's `Exec`, the icon and
   the Makefile all say `tachi-desktop` — a build that disagrees installs a binary nothing points at); the
@@ -333,7 +346,14 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   `build/linux/tachi-desktop.desktop`, whose `StartupWMClass` line is the load-bearing part a generator cannot
   know); and nfpm's metadata is written out by hand (`maintainer`, `homepage`) because the template's
   `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` expand to nothing outside a git hook, which produced a deb
-  with an EMPTY Maintainer field.
+  with an EMPTY Maintainer field. The fifth is the CLI/TUI's own presence: nfpm's `contents` installs
+  `bin/tachi` — the ROOT module's binary, at `/usr/local/bin/tachi` next to the desktop one — and `build:cli`
+  in the COMMON Taskfile (shared with darwin, whose bundle carries the same binary) is what puts it in `bin/`,
+  by calling the Makefile's `cli` (which calls the root Makefile) rather than repeating a `go build`: the
+  version stamp, `-trimpath` and the embedded web console (`web/frontend/dist`, gated by the root `web-check`)
+  live there, and a second copy of that recipe is exactly how the two binaries would come to disagree about
+  their version. It carries `run: once` (the three `create:*` formats would otherwise each compile it) and is a
+  HOST-ARCH build, so the cross-arch `build:docker` path would ship a wrong-arch CLI silently.
 - **The AppImage is NOT part of `make package` — it is `make package-appimage`, and it is host-dependent.**
   linuxdeploy's GTK plugin wants a Debian-ish gdk-pixbuf layout (`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`);
   Arch-family hosts have no such directory (gdk-pixbuf's loaders are built in), so bundling there dies after

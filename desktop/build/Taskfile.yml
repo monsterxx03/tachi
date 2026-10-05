@@ -16,6 +16,25 @@ tasks:
     cmds:
       - task: install:frontend:deps:{{.PACKAGE_MANAGER}}
 
+  # build:cli builds the CLI/TUI — the ROOT module's `tachi` — into bin/, where BOTH platforms'
+  # packaging picks it up: the Linux package installs it at /usr/local/bin/tachi (nfpm's contents)
+  # and a macOS bundle carries it in Contents/MacOS. Defined here rather than per platform so the two
+  # cannot drift; the recipe is the Makefile's `cli`, because the version stamp, -trimpath and the
+  # embedded web console (web/frontend/dist) belong to the ROOT Makefile — a second `go build` is
+  # exactly how the two binaries would come to disagree about their version.
+  #
+  # `run: once`: the Linux chain reaches this through build, and each of the three `create:*` formats
+  # rebuilds through build again — without `once` the same 50MB binary is compiled once per format
+  # (its own `run: once` is how the template already guards go:mod:tidy from the same multiplication).
+  #
+  # HOST-ARCH only: a universal darwin package needs the CLI lipo'ed as well — not covered here.
+  build:cli:
+    summary: Builds the tachi CLI/TUI into bin/ for packaging
+    run: once
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - make --no-print-directory cli
+
   install:frontend:deps:npm:
     dir: frontend
     sources:

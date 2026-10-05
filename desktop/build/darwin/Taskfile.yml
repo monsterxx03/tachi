@@ -134,6 +134,61 @@ tasks:
     cmds:
       - task: create:dmg
 
+  # package:pkg is the INSTALLER: one .pkg that puts the app in /Applications and the CLI in
+  # /usr/local/bin, which is what makes `tachi` reachable from a terminal after installing (a bundle
+  # alone never joins PATH). `make -C desktop package` calls create:pkg directly instead — see the
+  # comment there for why that skips a rebuild.
+  #
+  # A `.dmg` and a `.pkg` answer different questions: the dmg is "drag the app in" (no CLI on PATH),
+  # the pkg is "install both".
+  package:pkg:
+    summary: Packages the app AND the CLI into one installer (.pkg)
+    platforms: [darwin]
+    deps:
+      - task: package
+    cmds:
+      - task: create:pkg
+
+  # create:pkg builds the installer itself, with no build dependency on purpose: the caller decides
+  # whether the .app in bin/ is the freshly dressed one (make build ⇒ local-identity signed) or a
+  # rebuild. `make -C desktop package` therefore calls THIS after its own build.
+  #
+  # Two payloads, one installer:
+  #   · the app, through `pkgbuild --component` (the form for a BUNDLE; --root describes a bare file
+  #     tree). It must ALREADY be signed — whatever signature it carries is what ships, and this
+  #     step adds none.
+  #   · the CLI, through `pkgbuild --root` of a staging dir, landing at /usr/local/bin/tachi — the
+  #     same path the Linux package uses, so the two platforms answer the same way.
+  # `productbuild` merges them and synthesizes the distribution XML (no Distribution file to keep in
+  # sync).
+  #
+  # The .pkg is NOT signed: productsign needs a "Developer ID Installer" certificate, which is not
+  # the code-signing identity the app is signed with (and is not something a dev machine has). An
+  # unsigned pkg installs fine locally; distributing one needs that certificate plus notarization.
+  create:pkg:
+    summary: Builds the installer (.pkg) — app into /Applications, CLI into /usr/local/bin
+    platforms: [darwin]
+    cmds:
+      - rm -rf "{{.BIN_DIR}}/pkg-stage"
+      - mkdir -p "{{.BIN_DIR}}/pkg-stage/usr/local/bin"
+      - cp "{{.BIN_DIR}}/tachi" "{{.BIN_DIR}}/pkg-stage/usr/local/bin/tachi"
+      - pkgbuild --component "{{.BIN_DIR}}/{{.APP_NAME}}.app" --install-location /Applications
+        --identifier com.monsterxx03.tachi --version "{{.PKG_VERSION}}"
+        "{{.BIN_DIR}}/tachi-app.pkg"
+      - pkgbuild --root "{{.BIN_DIR}}/pkg-stage" --install-location /
+        --identifier com.monsterxx03.tachi.cli --version "{{.PKG_VERSION}}"
+        "{{.BIN_DIR}}/tachi-cli.pkg"
+      - productbuild --package "{{.BIN_DIR}}/tachi-app.pkg" --package "{{.BIN_DIR}}/tachi-cli.pkg"
+        "{{.BIN_DIR}}/{{.APP_NAME}}-{{.PKG_VERSION}}.pkg"
+      - rm -f "{{.BIN_DIR}}/tachi-app.pkg" "{{.BIN_DIR}}/tachi-cli.pkg"
+      - rm -rf "{{.BIN_DIR}}/pkg-stage"
+    vars:
+      # The version the installer reports is the one the binaries carry (the ROOT Makefile's
+      # `git describe`), so `pkgutil --pkg-info` and `tachi --version` agree. pkgbuild refuses an
+      # empty --version, hence the fallback for a checkout without git.
+      PKG_VERSION:
+        sh: 'v=$(git describe --tags --always 2>/dev/null); echo "${v:-0.0.0}" | sed "s/^v//"'
+
   create:dmg:
     summary: Creates a configurable `.dmg` from the `.app` bundle
     platforms: [darwin]
@@ -157,6 +212,11 @@ tasks:
 
   create:app:bundle:
     summary: Creates an `.app` bundle
+    deps:
+      # The CLI/TUI ships INSIDE the bundle (Contents/MacOS/tachi below), so it is built as part of
+      # assembling the bundle — the one place `package`, `package:universal` and `package:dmg` all
+      # come through. Same binary as the Linux package's /usr/local/bin/tachi: build:cli is shared.
+      - task: common:build:cli
     cmds:
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
@@ -167,6 +227,13 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      # The CLI, WITHOUT a .app suffix and with its own plain name: it is a terminal command, not a
+      # second launcher — CFBundleExecutable still names the app's own binary.
+      #
+      # The order is load-bearing: this must come BEFORE codesign:adhoc (or before the Makefile's
+      # local-identity re-sign, which runs after `wails3 package`). A bundle is signed as a whole, so
+      # a file added afterwards leaves the seal matching a file list that no longer exists.
+      - cp "{{.BIN_DIR}}/tachi" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/tachi"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:
