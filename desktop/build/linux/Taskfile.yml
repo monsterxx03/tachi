@@ -4,12 +4,12 @@ includes:
   common: ../Taskfile.yml
 
 vars:
-  # APP_NAME is overridden here because this project's Linux artifact has its own name:
-  # `tachi-desktop` (what the Makefile builds, what nfpm's `contents:` installs, and what the
-  # hand-written .desktop file Execs — the package must not disagree with any of them). The
-  # parent Taskfile's "Tachi" is the macOS/Windows name; overriding it in this file is enough
-  # because every task below is defined here.
-  APP_NAME: "tachi-desktop"
+  # APP_NAME is deliberately NOT overridden here any more. It used to be ("tachi-desktop", because
+  # the parent Taskfile called the artifact "Tachi") — but a Taskfile's top-level vars are merged
+  # into the GLOBAL scope, and this file is included AFTER darwin, so that override silently renamed
+  # macOS's bundle as well: bin/Tachi.app became bin/tachi-desktop.app, whose Info.plist still named
+  # a `Tachi` executable that was no longer there. The one artifact name both platforms use is now
+  # declared in the parent Taskfile — see the comment on APP_NAME there.
 
   # PKG_NAME is the distro PACKAGE name (deb `Package:`, rpm `Name:`, Arch `pkgname`) and what the
   # artifacts are named after. It is not APP_NAME on purpose: the package is `tachi.desktop` while

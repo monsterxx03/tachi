@@ -3,7 +3,7 @@
 <plist version="1.0">
 	<dict>
 		<key>CFBundleExecutable</key>
-		<string>Tachi</string>
+		<string>tachi-desktop</string>
 		<key>CFBundleGetInfoString</key>
 		<string>Tachi</string>
 		<key>CFBundleIconFile</key>

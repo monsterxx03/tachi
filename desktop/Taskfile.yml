@@ -1,7 +1,21 @@
 version: '3'
 
 vars:
-  APP_NAME: "Tachi"
+  # APP_NAME names the ARTIFACT on both desktop platforms — the binary `bin/<APP_NAME>` and, on
+  # macOS, the bundle `<APP_NAME>.app` (whose DIRECTORY name is what Finder and the Dock display).
+  # It is NOT the user-visible product name: that one is "Tachi", and it lives in
+  # build/darwin/Info.plist (CFBundleName/CFBundleDisplayName) and build/config.yml.
+  #
+  # Why lowercase-and-hyphenated rather than "Tachi": macOS's filesystem is case-INSENSITIVE, so an
+  # app binary named "Tachi" and the CLI "tachi" (both built into this same bin/) would be the SAME
+  # file — whichever is built last silently overwrites the other. The name must also equal the
+  # bundle's CFBundleExecutable, or the .app cannot launch at all.
+  #
+  # This is the ONE place the name is declared: a Taskfile that overrode it (as build/linux used to)
+  # has its top-level vars merged into the GLOBAL scope, which silently renamed the OTHER platform's
+  # artifacts too. Keep in step by hand with build/darwin/Info.plist (CFBundleExecutable) and
+  # itest/desktop/sandbox_*.go (defaultAppPath) — nothing enforces the three agreeing.
+  APP_NAME: "tachi-desktop"
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'

@@ -52,7 +52,7 @@ type sandbox struct {
 
 // smokeExecName is deliberately unique: it names both the sandbox's copy of the app and the
 // process the suite starts, so `pkill -f TachiSmoke` can only ever reach a smoke run — while
-// the REAL app (Tachi.app/Contents/MacOS/Tachi, or bin/Tachi) keeps its own name.
+// the REAL app (tachi-desktop.app/Contents/MacOS/tachi-desktop, or bin/tachi-desktop) keeps its own name.
 const smokeExecName = "TachiSmoke"
 
 func newSandbox(dir, srcApp string) (*sandbox, error) {

@@ -118,8 +118,8 @@ isolated HOME, launch/kill), `sink.go` (the loopback endpoint drivers report to)
 one script per scenario). Per run it builds a throwaway sandbox holding a private copy of the app (executable
 renamed `TachiSmoke` so no `pkill` can reach the user's own Tachi), an isolated HOME with a `config.yaml`
 pointing at the scripted model, the work dir, `driver.js`, `dom.html` (the page as the verdict found it) and
-`mock-requests.txt` (what the model was actually asked). **`desktop/bin/Tachi.app` must exist**
-(`make -C desktop build`); the runner refreshes the executable inside it from `bin/Tachi` on every run.
+`mock-requests.txt` (what the model was actually asked). **`desktop/bin/tachi-desktop.app` must exist**
+(`make -C desktop build`); the runner refreshes the executable inside it from `bin/tachi-desktop` on every run.
 
 A driver asserts what the UI **shows** (transcript shape, chips, buttons); the scenario's Go half asserts what
 actually **happened** (the prompt the model received, the files written) — a regression usually shows up in
@@ -172,7 +172,7 @@ Fixtures exist where the real path needs something a driver cannot do:
 
 - **Only one instance may run.** `open` on a live instance only hands the launch to the running process and
   passes NO environment (the driver never runs and the previous scenario's app answers), and
-  `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's own app. The unique executable name is what
+  `pkill -f "tachi-desktop.app/Contents/MacOS/tachi-desktop"` matches the user's own app. The unique executable name is what
   makes `pkill -f TachiSmoke` safe. That pattern also matches the SANDBOX's own build (`codesign` carries it
   on its command line), so a stray `pkill -f TachiSmoke` while a run is preparing kills the ad-hoc signing and
   the scenario reports `codesign …: signal: terminated` before its app ever launches. Never kill a run in
@@ -231,15 +231,15 @@ Fixtures exist where the real path needs something a driver cannot do:
   `getBoundingClientRect()` in the same task gets the OLD value, however correct the code is.
 - **A stale element swallows a gesture**: re-query the handle for EVERY synthetic drag, or the drag lands on a
   detached node and passes against the previous value without dragging at all.
-- **A control run proves nothing until the build is PROVEN to carry it** (`make frontend && go build -o bin/Tachi .`):
+- **A control run proves nothing until the build is PROVEN to carry it** (`make frontend && go build -o bin/tachi-desktop .`):
   `npm run build` is `tsc && vite build`, so an edit that does not type-check skips the Go build via `&&` and
-  the run measures the PREVIOUS binary. Check `[ bin/Tachi -nt <the edited source> ]`.
+  the run measures the PREVIOUS binary. Check `[ bin/tachi-desktop -nt <the edited source> ]`.
 - **A capture is not part of the suite** (the suite keeps `dom.html` + the assertion lines; a screenshot nobody
   diffs rots). It IS possible BY HAND where the terminal holds the Screen Recording grant:
   `screencapture -x -o -l <window id>` — the id via `CGWindowListCopyWindowInfo` — and `-R <x,y,w,h>` works too on
-  macOS 26. What a hand-run needs is its own HOME and a REAL bundle: the bare `bin/Tachi` aborts in
+  macOS 26. What a hand-run needs is its own HOME and a REAL bundle: the bare `bin/tachi-desktop` aborts in
   `UserNotifications` (`bundleProxyForCurrentProcess is nil`), so refresh the bundle (`make build`) and launch
-  `open -n --env HOME=<a clone of ~/.tachi> bin/Tachi.app` — an APFS clone (`cp -Rc`) so the user's own instance,
+  `open -n --env HOME=<a clone of ~/.tachi> bin/tachi-desktop.app` — an APFS clone (`cp -Rc`) so the user's own instance,
   its session store and its TCC grants stay out of the loop. Leave `TACHI_DEMO_NO_ACTIVATE` unset (the window
   comes to the front) and point `TACHI_DEMO_JS` at a script that clicks the app into the state to look at; env
   reaches the app only through `open`'s own `--env`, which is why the launch goes through LaunchServices.
@@ -315,8 +315,8 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   stored requirement and the app's current one. `tccutil reset <service> <bundle-id>` followed by re-adding the
   app (系统设置 → 隐私与安全性 → 屏幕录制 → `+`, Finder's ⌘⇧G for the path) is the fix; screen recording
   **never prompts** (`does not allow prompting; returning denied`), so a missed pane visit looks like a broken
-  build. Grants are judged against the **responsible** process, which for `open bin/Tachi.app` (PPID 1) is
-  Tachi.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
+  build. Grants are judged against the **responsible** process, which for `open bin/tachi-desktop.app` (PPID 1) is
+  tachi-desktop.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
   terminal it was launched from.
 
 ## Desktop on Linux (omarchy)
@@ -335,9 +335,13 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 - **`make package` is Linux's packaging entry: deb / rpm / arch, through `wails3 package` → `linux:package`
   → nfpm** (self-contained — no dpkg/rpmbuild on the host). It needs the wails3 CLI at `~/go/bin/wails3`,
   which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Five things in that chain
-  are load-bearing and easy to undo by accident: the Linux Taskfile OVERRIDES `APP_NAME` to `tachi-desktop`
-  (the parent Taskfile's "Tachi" is the macOS name, and nfpm's `contents:`, the .desktop's `Exec`, the icon and
-  the Makefile all say `tachi-desktop` — a build that disagrees installs a binary nothing points at); the
+  are load-bearing and easy to undo by accident: `APP_NAME` is `tachi-desktop` and is declared ONCE, in the
+  parent Taskfile — nfpm's `contents:`, the .desktop's `Exec`, the icon, the Makefile and the macOS bundle
+  DIRECTORY all say it, so a build that disagrees installs a binary nothing points at (a per-platform override
+  is exactly how that drifts: the Linux Taskfile used to override `APP_NAME`, and because an included Taskfile's
+  top-level vars land in the GLOBAL scope — linux is included after darwin — it silently renamed the macOS
+  bundle too, leaving `bin/tachi-desktop.app` whose `CFBundleExecutable` still named a `Tachi` that was not
+  there); the
   PACKAGE name is a different thing again, `tachi.desktop` (nfpm's `name:` and the Taskfile's `PKG_NAME`, kept
   in step BY HAND because nfpm cannot see a Taskfile variable — and `wails3 tool package -name` only names the
   ARTIFACT, which is why `PKG_NAME` is what gets passed there); `common:generate:icons` and `generate:dotdesktop`
@@ -472,7 +476,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   package**, and the root `make lint` does not cover it either: after touching `desktop/`, run
   `cd desktop && GOWORK=off go test ./...` too.
 - **The packaged app must be signed with the LOCAL CERTIFICATE, not ad-hoc.** `wails3 package`
-  leaves `bin/Tachi.app` ad-hoc signed, and an ad-hoc identity is a content hash — it changes on
+  leaves `bin/tachi-desktop.app` ad-hoc signed, and an ad-hoc identity is a content hash — it changes on
   every rebuild, so macOS re-asks every TCC permission (bluetooth, speech recognition) and may
   deny notifications permanently. `desktop/Makefile`'s `build` target re-signs automatically
   **when the identity exists** (`Tachi Local Code Signing`, `LOCAL_SIGN_ID`); without it the build
@@ -480,7 +484,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   repeated prompts. Create it once with `desktop/scripts/dev-cert.sh` (⚠ that script must use
   `/usr/bin/openssl` and a NON-empty p12 password — OpenSSL 3's default p12 encryption and an
   empty password each produce `MAC verification failed during PKCS12 import`). Verify with
-  `codesign -dv --verbose=2 bin/Tachi.app | grep -E "Authority|flags"`: `flags=0x0` plus an
+  `codesign -dv --verbose=2 bin/tachi-desktop.app | grep -E "Authority|flags"`: `flags=0x0` plus an
   `Authority=` line means it worked; `flags=0x2(adhoc)` means it did not.
 - **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
   separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the

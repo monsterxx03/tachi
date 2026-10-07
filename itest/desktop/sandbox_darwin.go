@@ -17,7 +17,7 @@ import (
 // scenario (the isolated HOME, the driver, the sink) is shared — see sandbox.go.
 
 // defaultAppPath is what `-app` defaults to: the bundle `make -C desktop build` leaves behind.
-func defaultAppPath() string { return "desktop/bin/Tachi.app" }
+func defaultAppPath() string { return "desktop/bin/tachi-desktop.app" }
 
 // smokeAppPath is the sandbox's private copy of the app under test — renamed, so that no
 // pkill/`open` aimed at it can reach the user's own running Tachi (see the bundle rules in
@@ -29,7 +29,7 @@ func smokeAppPath(dir string) string { return filepath.Join(dir, smokeExecName+"
 // bundle identity with plutil, re-sign ad-hoc.
 //
 // The bundle (assets, Info.plist) comes from `make build`; the executable comes from
-// `go build -o bin/Tachi .`, which is what the Makefile target re-runs before each suite —
+// `go build -o bin/tachi-desktop .`, which is what the Makefile target re-runs before each suite —
 // so the app under test is always the current tree, never a stale package.
 func (sb *sandbox) prepareApp(srcApp string) error {
 	if _, err := os.Stat(srcApp); err != nil {
@@ -39,16 +39,16 @@ func (sb *sandbox) prepareApp(srcApp string) error {
 		return fmt.Errorf("copy bundle: %w", err)
 	}
 	macOS := filepath.Join(sb.appPath, "Contents", "MacOS")
-	target := filepath.Join(macOS, "Tachi")
+	target := filepath.Join(macOS, "tachi-desktop")
 	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("bundle has no Contents/MacOS/Tachi: %w", err)
+		return fmt.Errorf("bundle has no Contents/MacOS/tachi-desktop: %w", err)
 	}
-	if bare := filepath.Join(filepath.Dir(srcApp), "Tachi"); fileExists(bare) {
+	if bare := filepath.Join(filepath.Dir(srcApp), "tachi-desktop"); fileExists(bare) {
 		if err := run("cp", bare, target); err != nil {
 			return fmt.Errorf("refresh executable from %s: %w", bare, err)
 		}
 	} else {
-		return fmt.Errorf("no %s next to the bundle: build the binary first (`cd desktop && go build -o bin/Tachi .`)", bare)
+		return fmt.Errorf("no %s next to the bundle: build the binary first (`cd desktop && go build -o bin/tachi-desktop .`)", bare)
 	}
 	if err := os.Rename(target, filepath.Join(macOS, smokeExecName)); err != nil {
 		return err

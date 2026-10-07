@@ -115,6 +115,6 @@ itest-acp: itest-mockllm
 # in the repo-root go.work, so a `go build` inside it under workspace mode fails with
 # "main module (github.com/monsterxx03/tachi) does not contain package .../desktop".
 desktop-smoke:
-	cd desktop && $(MAKE) frontend && GOWORK=off go build -o bin/Tachi .
+	cd desktop && $(MAKE) frontend && GOWORK=off go build -o bin/tachi-desktop .
 	go run ./itest/desktop $(ARGS)
 

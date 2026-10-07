@@ -12,7 +12,7 @@ import (
 
 // The Linux half of the sandbox's app handling. Where macOS has a .app bundle to copy,
 // re-identify and re-sign (sandbox_darwin.go), the app here is a BARE BINARY — `make -C desktop
-// build` leaves `desktop/bin/Tachi` — so the whole dance collapses to "copy it under a name of
+// build` leaves `desktop/bin/tachi-desktop` — so the whole dance collapses to "copy it under a name of
 // our own and start it".
 //
 // Everything else about a scenario is the same on both platforms: the isolated HOME, the
@@ -20,7 +20,7 @@ import (
 
 // defaultAppPath is what `-app` defaults to: the binary `make -C desktop build` leaves behind.
 // NOT a bundle — there is no bundling step on this platform (see desktop/Makefile).
-func defaultAppPath() string { return "desktop/bin/Tachi" }
+func defaultAppPath() string { return "desktop/bin/tachi-desktop" }
 
 // smokeAppPath is the sandbox's private copy of the app under test. The name is unique for the
 // same reason the macOS one is: `pkill -f` in killAll must never reach the user's own Tachi.

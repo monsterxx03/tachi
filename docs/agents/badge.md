@@ -61,8 +61,8 @@ and its own gate.
   key` and `This app has crashed because it attempted to access privacy-sensitive data without a usage description`,
   i.e. SIGABRT with no Go stack, arriving **asynchronously** (the CentralManager's callback thread), so it looks like
   "the first test passed, the second one aborted". Both `build/darwin/Info.plist` and `Info.dev.plist` carry the key.
-  A `bin/Tachi.app` built before that line will abort `go test ./desktop/...` launched from it, because the test
-  binary inherits Tachi.app as its responsible process — rebuild the app and restart it before believing a desktop
+  A `bin/tachi-desktop.app` built before that line will abort `go test ./desktop/...` launched from it, because the test
+  binary inherits tachi-desktop.app as its responsible process — rebuild the app and restart it before believing a desktop
   test failure. Embedding an `__TEXT,__info_plist` section in the test binary does **not** help: tccd never looks at
   the requesting process here (find the reason with
   `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`). The same mechanism is why
@@ -207,7 +207,7 @@ window — it reports gestures and the host decides what they mean (`desktop/rem
     (a constant `-L` path), so its contents are not part of the build action's ID: rewrite `shim.swift`, rebuild
     the `.a`, run `make build` — and if those exact build flags ran before the change, the previous LINK result
     is reused. Zero warnings, and it looks exactly like "my fix does not work". **Ask the binary, not the build
-    log**: `nm -u bin/Tachi | grep AVCapture` (an ObjC class reference is an undefined symbol, so it survives
+    log**: `nm -u bin/tachi-desktop | grep AVCapture` (an ObjC class reference is an undefined symbol, so it survives
     `-ldflags="-w -s"`; `strings` does NOT show it). Pick a symbol that only the change under test could have
     introduced — `AVCaptureSession` for the capture rewrite, while `AVCaptureDevice` proves nothing (the old
     code referenced it too). The cure is `cd desktop && GOWORK=off go clean -cache`, then `make build`; a new

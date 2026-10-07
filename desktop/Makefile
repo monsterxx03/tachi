@@ -1,13 +1,13 @@
 # Tachi desktop — build/run targets (Wails v3, macOS + Linux).
 #
 # Usage:
-#   make build    → macOS: wails3 package → bin/Tachi.app（frontend + go + codesign，内含 CLI）
+#   make build    → macOS: wails3 package → bin/tachi-desktop.app（frontend + go + codesign，内含 CLI）
 #                   Linux: go build → bin/tachi-desktop（前端要先用 make frontend 出 dist）
 #   make cli      → 构建根模块的 tachi（CLI/TUI）到 bin/tachi —— 就是进包/.app 的那一个
 #   make package  → Linux: deb / rpm / arch 三个包（wails3，见下；内含 tachi + tachi-desktop）
 #                   macOS: 一个 .pkg 安装器（app 进 /Applications，CLI 进 /usr/local/bin）
 #   make test     → go test ./...（这个模块自己的，根 go.work 看不见它）
-#   make run      → macOS: build then `open -n bin/Tachi.app`；Linux: build then 直接跑
+#   make run      → macOS: build then `open -n bin/tachi-desktop.app`；Linux: build then 直接跑
 #   make dev      → wails3 dev (hot reload)
 #   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源，macOS 专用）
 #   make frontend → npm run build in frontend/
@@ -21,7 +21,7 @@
 GO        ?= go
 WAILS     ?= wails3
 NPM       ?= npm
-APPDIR     = bin/Tachi.app
+APPDIR     = bin/tachi-desktop.app
 
 # 平台分支用得到的两个：uname 选分支；Linux 的产物名要和 .desktop / nfpm 包一致
 # （build/linux/tachi-desktop.desktop 的 Exec、build/linux/nfpm/nfpm.yaml 的 contents

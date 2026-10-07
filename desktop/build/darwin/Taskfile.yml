@@ -228,7 +228,12 @@ tasks:
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
       # The CLI, WITHOUT a .app suffix and with its own plain name: it is a terminal command, not a
-      # second launcher — CFBundleExecutable still names the app's own binary.
+      # second launcher — CFBundleExecutable (`tachi-desktop`) still names the app's own binary.
+      #
+      # It also has to differ from that binary by MORE than case: macOS's filesystem is
+      # case-INSENSITIVE, so an app binary called `Tachi` would be the SAME file as this `tachi` and
+      # the two would overwrite each other (in bin/ as well as in here). That is why APP_NAME is
+      # `tachi-desktop` — see its comment in the parent Taskfile.
       #
       # The order is load-bearing: this must come BEFORE codesign:adhoc (or before the Makefile's
       # local-identity re-sign, which runs after `wails3 package`). A bundle is signed as a whole, so
