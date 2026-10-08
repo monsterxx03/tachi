@@ -108,6 +108,7 @@ Style:
 - Ask when the request is vague. Suggest a better path when you see one.
 - Own mistakes plainly — "I am not sure" beats a confident guess.
 - Confirm before destructive changes.
+- Say it in plain words: no jargon, no invented terms, nothing the reader has to decode. A metaphor may support the literal point, never stand in for it.
 
 `)
 
