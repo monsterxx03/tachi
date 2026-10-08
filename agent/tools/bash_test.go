@@ -396,6 +396,38 @@ func TestBashTool_WaitName(t *testing.T) {
 		}
 	})
 
+	t.Run("a large timeout is capped at one step", func(t *testing.T) {
+		// A wait is a step, not a bound the model picks: the longest wait a
+		// call can produce is waitStep, whatever `timeout` says. Without the
+		// cap a model-chosen bound of minutes would hold the turn — and the
+		// screen — silent that long.
+		stepped := NewBashTool(BashToolConfig{ProcessManager: pm})
+		stepped.waitStep = 100 * time.Millisecond
+
+		if _, err := stepped.ExecuteContext(t.Context(),
+			`{"background": true, "bg_name": "long", "command": "sleep 30"}`); err != nil {
+			t.Fatalf("failed to start background job: %v", err)
+		}
+		defer pm.Stop("long")
+
+		started := time.Now()
+		out, err := stepped.ExecuteContext(t.Context(), `{"wait_name": "long", "timeout": 600000}`)
+		if err != nil {
+			t.Fatalf("wait_name failed: %v", err)
+		}
+		elapsed := time.Since(started)
+
+		var r bashWaitResult
+		json.Unmarshal([]byte(out), &r)
+		if !r.StillRunning || r.Status != ProcessRunning {
+			t.Errorf("expected the step to end while still running, got %+v", r)
+		}
+		// A generous bound: the point is that 600000ms did NOT become the wait.
+		if elapsed > 2*time.Second || r.WaitedMs > 2000 {
+			t.Errorf("timeout 600000 was waited out instead of one 100ms step: elapsed %s, reported %dms", elapsed, r.WaitedMs)
+		}
+	})
+
 	t.Run("unknown name", func(t *testing.T) {
 		_, err := tool.ExecuteContext(t.Context(), `{"wait_name": "nope"}`)
 		if err == nil || !strings.Contains(err.Error(), "not found") {

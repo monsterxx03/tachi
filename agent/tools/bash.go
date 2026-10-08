@@ -27,14 +27,18 @@ const (
 	// it is automatically moved to the background (see BashTool).
 	defaultForegroundWindow = 15 * time.Second
 
-	// defaultWaitWindow bounds a `wait_name` call when the model sets no
-	// `timeout`: long enough that waiting for a slow command (a big clone)
-	// takes a couple of calls rather than many, short enough that a mistaken
-	// wait does not stall the turn for minutes.
-	defaultWaitWindow = 60 * time.Second
+	// defaultWaitStep bounds ONE `wait_name` call — what the model sets no
+	// `timeout` is capped to, and a larger `timeout` cannot widen it. Waiting
+	// is done in steps so the turn regains control every step at worst: a
+	// single call blocked on a model-chosen bound of minutes would leave the
+	// screen silent with no output and no way to change plan, while a step
+	// returns the process's output and lets the model wait again. Matches the
+	// foreground window so "how long may one call block" has one answer.
+	defaultWaitStep = 15 * time.Second
 
-	// maxWindowMs is the largest `timeout` value the schema accepts, shared by
-	// the foreground window and the wait bound.
+	// maxWindowMs is the largest `timeout` value the schema accepts — a
+	// foreground window. A wait step is capped at defaultWaitStep instead, so
+	// a larger value here only narrows nothing.
 	maxWindowMs = 600_000
 
 	// drainTimeout bounds waiting for a killed process to exit. SIGKILL
@@ -83,6 +87,11 @@ type BashTool struct {
 	// Exposed as a field for tests.
 	foregroundWindow time.Duration
 
+	// waitStep caps one `wait_name` call. 0 = defaultWaitStep. Exposed as a
+	// field for tests — a bounded step must be observable without waiting
+	// the real fifteen seconds.
+	waitStep time.Duration
+
 	// acpMode routes execution through the ACP client's terminal API
 	// (terminal/create + wait_for_exit + kill + release) when a connection is
 	// available, instead of running the command locally. Enabled only for ACP
@@ -118,6 +127,16 @@ func NewBashTool(cfg BashToolConfig) *BashTool {
 }
 
 func (t BashTool) Name() string { return ToolNameBash }
+
+// waitStepOrDefault is the cap on ONE wait_name call: the test override when
+// set, defaultWaitStep otherwise.
+func (t BashTool) waitStepOrDefault() time.Duration {
+	if t.waitStep > 0 {
+		return t.waitStep
+	}
+	return defaultWaitStep
+}
+
 func (t *BashTool) Description() string {
 	desc := "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +
@@ -144,8 +163,8 @@ func (t *BashTool) Properties() map[string]PropertySchema {
 	// params are dropped entirely.
 	timeoutDesc := "Hard kill deadline in milliseconds — the command is killed after this duration (default 15000, max 600000). Set it explicitly for long-running builds/tests."
 	if !t.acpMode {
-		timeoutDesc = fmt.Sprintf("Foreground window in milliseconds — commands still running after it are moved to the background (default %d, max %d). With wait_name it bounds the wait instead (default %d)",
-			defaultForegroundWindow.Milliseconds(), maxWindowMs, defaultWaitWindow.Milliseconds())
+		timeoutDesc = fmt.Sprintf("Foreground window in milliseconds — commands still running after it are moved to the background (default %d, max %d). With wait_name it bounds ONE wait step instead (default %d, and only a SMALLER value shortens it): waiting is done in steps, so a wait that ends while the process is still running returns its output and you can wait again.",
+			defaultForegroundWindow.Milliseconds(), maxWindowMs, defaultWaitStep.Milliseconds())
 		if t.processManager == nil {
 			timeoutDesc = fmt.Sprintf("Optional timeout in milliseconds before the command is killed (max %d)", maxWindowMs)
 		}
@@ -159,7 +178,7 @@ func (t *BashTool) Properties() map[string]PropertySchema {
 		props["bg_name"] = PropertySchema{Type: "string", Description: "A unique name for this background process. Required when background=true. Reference this name later via the stop_name parameter."}
 		props["stop_name"] = PropertySchema{Type: "string", Description: "When set, stops the background process with this bg_name instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
 		props["list_bg"] = PropertySchema{Type: "boolean", Description: "When set to true, lists all running background processes instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
-		props["wait_name"] = PropertySchema{Type: "string", Description: fmt.Sprintf("When set, blocks until the background process with this bg_name finishes, then returns its final status and recent output — the way to wait for a long background command (the `timeout` parameter bounds the wait here, default %dms). Do NOT wait with a shell `sleep`: it is a foreground command of its own and gets backgrounded too.", defaultWaitWindow.Milliseconds())}
+		props["wait_name"] = PropertySchema{Type: "string", Description: fmt.Sprintf("When set, waits for the background process with this bg_name for at most one step (%dms) and returns its status and recent output. When the process is still running at the end of the step the result carries stillRunning — call wait_name again to keep waiting. Do NOT wait with a shell `sleep`: it is a foreground command of its own and gets backgrounded too.", defaultWaitStep.Milliseconds())}
 	}
 	return props
 }
@@ -239,17 +258,24 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		return marshalResult(list)
 	}
 
-	// wait_name: block until a background process finishes (or the bound
-	// elapses). This is the alternative to a shell `sleep`: a sleep is itself a
-	// foreground command, so it too gets backgrounded at the window — leaving a
-	// stray process behind on every poll.
+	// wait_name: observe a background process for at most one step, returning
+	// whether it finished. This is the alternative to a shell `sleep`: a sleep
+	// is itself a foreground command, so it too gets backgrounded at the
+	// window — leaving a stray process behind on every poll.
+	//
+	// The wait is a STEP, not a bound the model picks: a larger `timeout` is
+	// capped at the step, a smaller one shortens it. Waiting out a model-chosen
+	// bound of minutes in one call would hold the turn silent that long, with
+	// nothing on screen and no point at which to change plan.
 	if a.WaitName != "" {
 		if pm == nil {
 			return "", fmt.Errorf("background process management is not available (no ProcessManager configured)")
 		}
-		bound := defaultWaitWindow
+		bound := t.waitStepOrDefault()
 		if a.Timeout != nil && *a.Timeout > 0 {
-			bound = time.Duration(*a.Timeout) * time.Millisecond
+			if d := time.Duration(*a.Timeout) * time.Millisecond; d < bound {
+				bound = d
+			}
 		}
 		start := time.Now()
 		info, stillRunning, err := pm.Wait(ctx, a.WaitName, bound)
@@ -268,7 +294,7 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		case err != nil: // cancelled mid-wait — report the snapshot, not an error
 			result.Note = fmt.Sprintf("Wait cancelled: %v", err)
 		case stillRunning:
-			result.Note = fmt.Sprintf("Still running after %s — call wait_name again to keep waiting, list_bg to inspect its output, or stop_name to terminate.", bound)
+			result.Note = fmt.Sprintf("Still running after %s — call wait_name again to keep waiting, list_bg to inspect its output, or stop_name to terminate. If it is meant to keep running (a server), stop waiting for it.", bound)
 		}
 		return marshalResult(result)
 	}
