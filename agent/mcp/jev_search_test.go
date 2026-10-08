@@ -420,7 +420,7 @@ func TestJevSearcher_BudgetDegrades(t *testing.T) {
 func TestJevSearcher_ChunksThePool(t *testing.T) {
 	pool := NewDeferredPool()
 	answers := map[string]float64{}
-	const total = 101 // one more than a full chunk at the current constants
+	total := config.DefaultJevQuestionsPerRequest + 1 // one more than a full request
 	for i := range total {
 		name := "mcp__s__tool" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		pool.Add(testDeferredTool(name, "s", "a tool"))
@@ -431,9 +431,44 @@ func TestJevSearcher_ChunksThePool(t *testing.T) {
 
 	got := ask(context.Background(), s, "find any of them", 5)
 	assert.Len(t, judge.calls, 2, "the pool does not fit one request")
-	assert.Len(t, judge.calls[0], jevSearchChunkTokens/jevSearchTokensPerQuestion)
-	assert.Len(t, judge.calls[1], total-jevSearchChunkTokens/jevSearchTokensPerQuestion)
+	assert.Len(t, judge.calls[0], config.DefaultJevQuestionsPerRequest)
+	assert.Len(t, judge.calls[1], total-config.DefaultJevQuestionsPerRequest)
 	assert.Len(t, got, 5, "max_results still caps the answer")
+}
+
+// How many questions one request may carry is the ENDPOINT's limit, not this
+// gate's, so it is config: a gateway fronting the service can cap the count far
+// lower than the reference one, and exceeding a cap fails the whole request
+// rather than answering part of it. The knob is read per search, from the live
+// block, so a save reaches the next one.
+func TestJevSearcher_QuestionsPerRequestComesFromConfig(t *testing.T) {
+	pool := NewDeferredPool()
+	answers := map[string]float64{}
+	for i := range 7 {
+		name := "mcp__s__tool" + string(rune('a'+i))
+		pool.Add(testDeferredTool(name, "s", "a tool"))
+		answers[name] = 0.9
+	}
+	judge := &fakeJudge{answers: answers}
+	cfg := config.DefaultConfig()
+	cfg.Jev.MaxQuestionsPerRequest = 3
+	s := NewJevSearcher(pool, judge, cfg, 0.35, time.Second, nil, nil)
+
+	got := ask(context.Background(), s, "find any of them", 5)
+	assert.Len(t, judge.calls, 3, "7 tools at 3 per request is 3 requests")
+	for i, call := range judge.calls {
+		assert.Len(t, call, min(3, 7-i*3))
+	}
+	assert.Len(t, got, 5, "chunking is invisible to the answer")
+
+	// Zero (a bare struct, a hand-written file) means "resolve from the
+	// endpoint" rather than "send everything in one request": the reference
+	// default for an unset base_url, and a known gateway's own measured cap when
+	// base_url names one.
+	cfg.Jev.MaxQuestionsPerRequest = 0
+	assert.Equal(t, config.DefaultJevQuestionsPerRequest, s.questionsPerRequest())
+	cfg.Jev.BaseURL = "https://api.commandcode.ai/provider"
+	assert.Equal(t, 20, s.questionsPerRequest(), "a gateway's cap applies without the user knowing it")
 }
 
 // Past the cap the rest of the pool is not judged at all — and the search still

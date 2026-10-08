@@ -1401,9 +1401,9 @@ title_provider: main
 //
 // "Consumed" is a source-text search for the leaf's Go field name in non-test .go files OUTSIDE
 // config/ — somewhere other than the package that declares it. The map below is the EXHAUSTIVE
-// list of leaves whose only reader lives inside config/, each with that reader named: three are
-// read through an accessor (config exposes `MaxResultChars()`, not the field) and one is consumed
-// at LOAD time by config itself.
+// list of leaves whose only reader lives inside config/, each with that reader named: four are
+// read through an accessor (config exposes `MaxResultChars()` / `QuestionsPerRequest()`, not the
+// field) and one is consumed at LOAD time by config itself.
 //
 // Its limits, so nobody trusts it further than it goes: it is text, not types (an identically named
 // identifier elsewhere would pass), and it says nothing about whether the reader's effect is
@@ -1412,10 +1412,11 @@ title_provider: main
 func TestEveryOfferedLeafIsConsumed(t *testing.T) {
 	// leaf → the reader inside config/ that makes the field name invisible to the search below.
 	readInsideConfig := map[string]string{
-		"mcp_tool_refresh.interval": "RefreshInterval()",
-		"tool_result.max_chars":     "MaxResultChars()",
-		"tool_result.file_dir":      "ResultFileDir()",
-		"provider_aliases":          "ExpandProviderAliases() (runs once, at the end of LoadFrom)",
+		"mcp_tool_refresh.interval":     "RefreshInterval()",
+		"tool_result.max_chars":         "MaxResultChars()",
+		"tool_result.file_dir":          "ResultFileDir()",
+		"provider_aliases":              "ExpandProviderAliases() (runs once, at the end of LoadFrom)",
+		"jev.max_questions_per_request": "JevConfig.QuestionsPerRequest() (resolved from base_url when unset)",
 	}
 	src := goSourceOutsideConfig(t)
 	cfg := config.DefaultConfig()

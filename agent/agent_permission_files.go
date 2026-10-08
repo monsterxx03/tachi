@@ -223,6 +223,15 @@ func (a *AIAgent) checkFilePermission(ctx context.Context, tc llm.ToolCall, ch c
 		}, true, nil, nil
 	}
 
+	// An allow pattern the user wrote: the judgment gate is not consulted, for the
+	// reason checkBashPermission gives — the rule is the user's own answer for this
+	// path, and the only thing the gate could do over it is raise the ask the rule
+	// exempted. After deny, before the gate; nothing asked, nothing judged, no
+	// `[permission]` note.
+	if decision == permission.DecisionAllowExempt {
+		return tools.ToolResult{}, false, nil, nil
+	}
+
 	// 「本会话全部允许」: the session-scoped approval, read at the same point the bash half reads it
 	// — after deny, before the judgment. See agent_permission.go for why it is here rather than
 	// inside the policy (the gates ask a different question than the rules do) and why the judgment

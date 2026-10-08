@@ -21,6 +21,18 @@ type Decision int
 const (
 	// DecisionAllow lets the call proceed without user interaction.
 	DecisionAllow Decision = iota
+	// DecisionAllowExempt is an allow the USER WROTE: an `allow` rule matched,
+	// and the matched rule comes back with the decision. It is stronger than
+	// DecisionAllow in exactly one way — an allow pattern means "no exception is
+	// needed here", which on the ask path also means the JUDGMENT GATE is not
+	// consulted (see agent/agent_permission.go's checkBashPermission).
+	//
+	// It is a separate value rather than a rule returned alongside
+	// DecisionAllow because the two must not be confused by a caller that reads
+	// only the decision: a bare Allow is "nothing covered this, so it runs by
+	// default" — the population the judgment gate exists for — while this one is
+	// the user's own answer about exactly this shape.
+	DecisionAllowExempt
 	// DecisionAsk requires interactive user approval before execution.
 	DecisionAsk
 	// DecisionDeny blocks the call; an error is returned to the LLM.
@@ -31,6 +43,8 @@ func (d Decision) String() string {
 	switch d {
 	case DecisionAllow:
 		return "allow"
+	case DecisionAllowExempt:
+		return "allow (exempted by an allow rule)"
 	case DecisionAsk:
 		return "ask"
 	case DecisionDeny:
@@ -49,7 +63,8 @@ func (d Decision) String() string {
 // Which text a rule is matched against is the check's business: CheckBash
 // matches canonical command segments, CheckPath a canonical absolute path (see
 // paths.go). The three lists mean the same thing in both: deny blocks, allow
-// exempts from ask rules, ask raises the question.
+// exempts from ask rules AND from the judgment gate (the decision comes back as
+// DecisionAllowExempt), ask raises the question.
 type Rules struct {
 	Deny  []string
 	Ask   []string
@@ -274,9 +289,11 @@ const AskNoRule = "no-rule:unparseable"
 //   - Redirects are checked as pseudo-segments (e.g. `> /dev/sda`).
 //   - A leading "sudo " prefix is stripped per segment, so `sudo rm -rf /`
 //     matches rules written for `rm -rf /`.
-//   - Per segment: deny match → Deny; allow match → exempt from ask;
-//     ask match → Ask.
-//   - Whole command: any Deny → Deny; else any Ask → Ask; else Allow.
+//   - Per segment: deny match → Deny; allow match → the segment is exempt from
+//     ask rules AND the whole command is reported as DecisionAllowExempt (the
+//     rule that matched comes back with it); ask match → Ask.
+//   - Whole command: any Deny → Deny; else any Ask → Ask; else AllowExempt when
+//     an allow rule matched, else Allow.
 //   - Unparseable commands → Ask (conservative).
 //   - A session-wide approval (AllowAllAsksForSession) turns Ask into Allow —
 //     and only Ask: deny is decided above this point, so a forbidden command
@@ -299,6 +316,7 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 	}
 
 	askRule := ""
+	allowRule := ""
 	for _, seg := range segments {
 		// User deny rules first — they may be broader or more specific than
 		// the built-in guard, and the matched rule name is shown to the user.
@@ -312,8 +330,14 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 				return DecisionDeny, rule
 			}
 		}
-		if matchSegment(p.allow, seg) != "" {
-			continue // explicitly exempted from ask rules
+		if rule := matchSegment(p.allow, seg); rule != "" {
+			// Explicitly exempted from ask rules — and, because the gate runs on
+			// the same path, from the judgment too (the caller reads
+			// DecisionAllowExempt). Remembered rather than returned here: a later
+			// segment can still deny, and an ask rule on ANOTHER segment still
+			// stands.
+			allowRule = rule
+			continue
 		}
 		if rule := matchSegment(p.ask, seg); rule != "" {
 			askRule = rule // keep scanning: a later segment may still deny
@@ -327,6 +351,9 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 			return DecisionAllow, ""
 		}
 		return DecisionAsk, askRule
+	}
+	if allowRule != "" {
+		return DecisionAllowExempt, allowRule
 	}
 	return DecisionAllow, ""
 }

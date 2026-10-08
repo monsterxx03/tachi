@@ -752,3 +752,42 @@ func TestFileGateArmedIsTheCheapQuestion(t *testing.T) {
 	a.Config.FullConfig.Permissions.Files.Jev = config.FilesJevAuto
 	assert.True(t, a.fileGateArmed(permission.FileToolRead))
 }
+
+// The path half of the same rule: an allow pattern the user wrote turns the
+// judgment gate off for that path, so a call the user pre-approved is not
+// judged, not asked about and not noted. Without it there is no way to say "this
+// directory is fine, stop asking" — a probability can only raise an ask, never
+// settle one.
+func TestFileGateSkipsAnAllowRule(t *testing.T) {
+	dir := t.TempDir()
+	judge := &fakeAskJudge{p: 0.99}
+	a := fileGateAgent(t, judge, nil)
+	a.SetPermissionPolicy(permission.NewPolicy(permission.Rules{}, permission.Rules{},
+		permission.WithFileRules(permission.FileRules{
+			Write: testPathRules(nil, nil, []string{filepath.Join(dir, "*")}),
+		}, permission.FileRules{})))
+	a.SetPermissionMode(PermissionModeExternal)
+	cards := 0
+	a.SetPermissionHandler(func(context.Context, string, string, string, string) (bool, error) {
+		cards++
+		return true, nil
+	})
+
+	_, handled, note, err := callForCheck(t, a, newFileCall(t, tools.ToolNameWrite, filepath.Join(dir, "out.txt"), "hi"))
+	require.NoError(t, err)
+	assert.False(t, handled, "an allow pattern lets the call run")
+	assert.Equal(t, 0, judge.callCount(), "the judgment is not consulted for a rule the user wrote")
+	assert.Equal(t, 0, cards, "and nothing is put to the human either")
+	assert.Nil(t, note, "no decision happened beyond the rules, so there is nothing to note")
+
+	// Control: a path no rule covers IS judged, so this cannot pass for a gate
+	// that had stopped working.
+	b := fileGateAgent(t, judge, nil)
+	b.SetPermissionMode(PermissionModeExternal)
+	b.SetPermissionHandler(func(context.Context, string, string, string, string) (bool, error) { return true, nil })
+	_, _, note, err = callForCheck(t, b, newFileCall(t, tools.ToolNameWrite, filepath.Join(dir, "other.txt"), "hi"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, judge.callCount(), "an unmatched path is still judged")
+	require.NotNil(t, note)
+	assert.Equal(t, noteByApproval, note.By)
+}

@@ -171,10 +171,11 @@ func (p *Policy) rulesFor(tool FileTool) PathRules {
 // PathPattern for why it is that form), and returns the decision plus the matched
 // rule AS THE USER WROTE IT (or "").
 //
-// Order, once per call: a deny pattern → Deny; an allow pattern → allowed and
-// EXEMPT from the ask rules (allow means "no exception needed here", never "only
-// this may run"); an ask pattern → Ask. Nothing matching is Allow: the rule sets
-// are tripwires, not whitelists.
+// Order, once per call: a deny pattern → Deny; an allow pattern → AllowExempt
+// (allowed because the USER wrote a rule for it, and exempt from the ask rules —
+// allow means "no exception needed here", never "only this may run"); an ask
+// pattern → Ask. Nothing matching is Allow: the rule sets are tripwires, not
+// whitelists.
 //
 // A session-wide approval (AllowAllAsksForSession) turns Ask into Allow and
 // nothing else: deny is decided above it, so 「本会话全部允许」 can never become
@@ -187,8 +188,12 @@ func (p *Policy) CheckPath(tool FileTool, path string) (Decision, string) {
 	if rule := matchPath(r.Deny, path); rule != "" {
 		return DecisionDeny, rule
 	}
-	if matchPath(r.Allow, path) != "" {
-		return DecisionAllow, ""
+	if rule := matchPath(r.Allow, path); rule != "" {
+		// The matched rule comes back AS THE USER WROTE IT (PathPattern.Text):
+		// it is what a log line or a preview quotes, and the caller reads
+		// AllowExempt as "the user already answered for this path" (the judgment
+		// gate is not consulted, see checkFilePermission).
+		return DecisionAllowExempt, rule
 	}
 	if rule := matchPath(r.Ask, path); rule != "" {
 		if p.sessionApproved() {

@@ -495,3 +495,46 @@ func TestBashResultEventCarriesTheNote(t *testing.T) {
 	assert.NotContains(t, results[0], "BEGIN TOOL OUTPUT",
 		"the event is what the transcript shows — the untrusted-content wrapper is for the model")
 }
+
+// An allow rule the user wrote is the ONE thing that keeps this gate off a
+// command, and it is meant to: the rule is the user's own answer about that
+// shape, while the gate's only outcomes are "run" and "ask" — so consulting it
+// could only ever undo the rule. Nothing is judged, nobody is asked, and no
+// `[permission]` note is written, i.e. the command behaves exactly as it did
+// before a judgment gate existed (the same reading 「本会话全部允许」 gets).
+//
+// The matched allow rule is also what makes this different from a command that
+// matched NOTHING: that one is judged, and this test's whole point is the pair.
+func TestAskGateSkipsAnAllowRule(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.99}
+	a := askGateAgent(t, judge, nil)
+	a.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Allow: []string{"ssh *"}}, permission.Rules{}))
+	a.SetPermissionMode(PermissionModeExternal)
+	cards := 0
+	a.SetPermissionHandler(func(context.Context, string, string, string, string) (bool, error) {
+		cards++
+		return true, nil
+	})
+
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{
+		Name: "Bash", Arguments: `{"command":"ssh ugreen 'ls /vol1'"}`}}
+
+	_, handled, note, err := a.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	assert.False(t, handled, "an allow rule lets the call run")
+	assert.Equal(t, 0, judge.callCount(), "the judgment is not consulted for a rule the user wrote")
+	assert.Equal(t, 0, cards, "and nothing is put to the human either")
+	assert.Nil(t, note, "no decision happened beyond the rules, so there is nothing to note")
+
+	// Control: the same command with no allow rule IS judged — otherwise this
+	// test would pass for a gate that had simply stopped working.
+	b := askGateAgent(t, judge, nil)
+	b.SetPermissionMode(PermissionModeExternal)
+	b.SetPermissionHandler(func(context.Context, string, string, string, string) (bool, error) { return true, nil })
+	_, _, note, err = b.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	assert.Equal(t, 1, judge.callCount(), "an unmatched command is still judged")
+	require.NotNil(t, note)
+	assert.Equal(t, noteByApproval, note.By)
+}

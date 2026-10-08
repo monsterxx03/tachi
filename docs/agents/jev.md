@@ -128,6 +128,12 @@ Five things every gate needs, in the order they matter:
 2. **A pinned model.** `pkg/jev`'s `DefaultModel` is a concrete version; leave a blank config field
    blank so the package default applies. The service's `jev-latest` alias moves, and a threshold
    swept against the old weights silently stops applying when it does.
+   **An endpoint that exposes only an alias cannot satisfy this, and that has to be said out loud
+   where the number is recorded.** A gateway fronting the service accepts one model name and rejects
+   a pinned version (`typesafe/jev` answers, `typesafe/jev-1.13.0` answers 400 `unsupported_model`),
+   and the response echoes the alias rather than what answered it — so a config pointed at one has an
+   alias in `model` and its τ values are hypotheses again, with the move invisible from here. Prefer
+   an endpoint that takes the version; where none will, the thresholds are re-swept, not trusted.
 3. **A catch-all option on every `choice`.** Not a safety net for inputs you forgot — it is what
    calibrates the distribution. Without one the model is forced to pick something and raises its
    confidence to do it, so the threshold you sweep afterwards comes out systematically too high and
@@ -290,7 +296,24 @@ neither of the two things it is tempting to blame instead:**
   question — 「against its own server」 above is literally one of the four forms compared — so it is
   a cost lever (one candidate is one question, and a full pool is one request per hundred of them)
   rather than a different question. That is also why the narrowed search logs its scope
+- **Not the request shape.** The same (query, tool) asked solo, against its own server, in one
+  184-question request, and in production's chunks scored within 0.02 of one another
+  (`TestToolSearchShapeProbe`). A fixture-swept threshold is shape-portable; the gate's own batching
+  is never why a number moved. **Narrowing a search to one server is that same case, not a
+  re-sweep**: the search tool's `server` argument removes candidates instead of rewording a
+  question — 「against its own server」 above is literally one of the four forms compared — so it is
+  a cost lever (one candidate is one question, and a full pool is one request per hundred of them)
+  rather than a different question. That is also why the narrowed search logs its scope
   (`logAnswers` carries `server`) and answers nothing from outside it.
+  How many questions ride in one request is the same kind of lever, and it belongs to the ENDPOINT
+  rather than to any gate: a service — or a gateway in front of it — rejects a request that carries too
+  many questions (measured on one gateway: HTTP 400 `at most 20 questions per call`, one over the cap,
+  and the status is not retried, so the whole search degrades to the keyword path). `jev.max_questions_per_request`
+  sets the page size and `config.JevConfig.QuestionsPerRequest` resolves an unset one from `base_url`:
+  a known gateway takes its own measured cap (a table in `config`), everything else the reference
+  service's 100. Changing it moves the number of round trips (and the wall time `jev_budget` has to
+  cover), not a probability: a search's state is the query itself and the question texts are the same
+  either way.
 - **It IS the tool texts.** The same intents separate cleanly against a small hand-written fixture
   and do not against a real pool: real descriptions are written for someone who already knows the
   product — preconditions ("使用前提：先调用 …"), required server modes, product jargon — and the `No`

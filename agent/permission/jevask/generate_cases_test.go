@@ -161,7 +161,7 @@ func TestGenerateBashAskCases(t *testing.T) {
 			t.Fatalf("case %q: a rule matched, so the label is the rule's and must be true", c.ID)
 		}
 		group := groupOf(c.Command, c.Expect)
-		base := Cmd{Command: c.Command, Rule: c.Rule, CWD: caseCWD, Trees: caseTreeList()}
+		base := Cmd{Command: c.Command, Rule: c.Rule, CWD: caseCWD}
 		if c.Request == "" {
 			out.Cases = append(out.Cases, genCase{
 				ID: c.ID, Group: group, Expect: c.Expect, State: State(base),
@@ -197,11 +197,6 @@ func TestGenerateBashAskCases(t *testing.T) {
 // groupOf derives the population: parsed or not (from the production parser), and
 // the label. Naming it here means the corpus cannot claim a case is unparseable
 // when it is not.
-// caseTreeList is the corpus's fixed tree set, spelled once.
-func caseTreeList() []string {
-	return []string{"/Users/dev/projects/app", "/Users/dev/projects/shared-lib"}
-}
-
 func groupOf(command, expect string) string {
 	which := "ask"
 	if expect == "false" {

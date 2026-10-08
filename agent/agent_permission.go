@@ -164,7 +164,9 @@ func bashCommand(args string) string {
 // tool call before it reaches the tool registry.
 //
 // Returns (result, handled, err):
-//   - (zero, false, nil)  — policy allows; caller proceeds with normal Invoke
+//   - (zero, false, nil)  — allowed (no rule matched, or an allow rule did):
+//     the caller proceeds with normal Invoke. A rule that ALLOWED the command
+//     also skips the judgment gate, so this return covers both.
 //   - (result, true, nil) — policy deny, or an ask resolved without execution
 //     (non-interactive denial / external rejection / ctx cancel); result is
 //     a ToolResultError fed back to the LLM
@@ -197,6 +199,28 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 				"then carry on without that command: do not attempt the same thing in another form, and do not "+
 				"read the permission configuration looking for a way around it", rule),
 		}, true, nil, nil
+	}
+
+	// An allow rule the user wrote: the judgment gate is not consulted at all.
+	//
+	// The rule IS the user's answer about this shape of command, and the gate's
+	// two outcomes are "run" and "raise the ask" — so over a command the user
+	// already exempted, the only thing it could ever do is raise the ask it was
+	// told not to raise. Passing the rule to the judgment as another state fact
+	// instead was measured and buys ~0.02 (docs/2026-09-30-bash-ask-jev-design.md):
+	// the rule has to decide, not advise.
+	//
+	// The position matters: after deny (the one decision that outranks it, so an
+	// allow rule can never widen into running what a deny forbids) and before the
+	// gate. Nothing is asked and nothing is judged, so no `[permission]` note is
+	// written either — a command the user exempted behaves exactly as it did
+	// before this gate existed.
+	//
+	// Note the asymmetry with the ask path: an `ask` rule narrows the gate (the
+	// command is still judged, and a verdict of "run" lets it through), while an
+	// `allow` rule switches it off for that command.
+	if decision == permission.DecisionAllowExempt {
+		return tools.ToolResult{}, false, nil, nil
 	}
 
 	// 「本会话全部允许」 (the session-scoped approval): the user has already answered every ask this

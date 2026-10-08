@@ -31,9 +31,16 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 - **Three decisions, decided in this order, and the order is the invariant**: per command SEGMENT — a `deny` rule
   matches → `Deny`; the built-in structured `rm` guard fires → `Deny`; an `allow` rule matches → that segment is
-  EXEMPT from ask rules (it is not a whitelist: nothing matching still runs); an `ask` rule matches → remember it
-  and keep scanning (a later segment may still deny). Whole command: any `Deny` → deny; else any `Ask` → ask;
-  else **allow**. `allow` therefore means "no exception needed here", never "only this may run".
+  EXEMPT from ask rules (it is not a whitelist: nothing matching still runs) **and the whole command comes back as
+  `DecisionAllowExempt`**, the matched pattern riding back with the decision like a deny's does; an `ask` rule
+  matches → remember it and keep scanning (a later segment may still deny). Whole command: any `Deny` → deny;
+  else any `Ask` → ask; else `DecisionAllowExempt` when an allow rule matched, else plain **allow**. `allow`
+  therefore means "no exception needed here", never "only this may run".
+- **`DecisionAllow` and `DecisionAllowExempt` are two values because a caller acts on the difference**: a bare
+  `Allow` is "nothing covered this, so it runs by default" — the population the judgment gate exists for — while the
+  exempt form is the USER's own answer about exactly this shape, and it is what switches the gate off for that call.
+  One segment's allow rule never overrides another segment's deny, and an ask rule on a segment no allow rule covers
+  still stands.
 - **Segments come from a real parser** (`mvdan.cc/sh`, `permission.Segments`): pipelines, `&&`/`||`/`;`,
   command substitutions and redirects each become their own segment, quoting is respected (`echo "a;b"` is one),
   a heredoc's BODY is data and never a segment, and a leading `sudo ` is stripped per segment so `sudo rm -rf /`
@@ -88,16 +95,28 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **It judges EVERY command that is not denied, and it can only do two things**: run it, or raise the ask a rule
   would have raised. It never produces a `deny` — a probability is not a guarantee, and a `deny` that is right
   99% of the time is broken (jev.md). A catastrophic command judged at the top of the scale is still only
-  escalated to a human, which is the point. The one thing that switches it off per SESSION is
-  「本会话全部允许」 (see Session-scoped approvals below): a verdict nobody can act on is not worth the call.
+  escalated to a human, which is the point. Two things switch it off: **an `allow` rule the user wrote** (below),
+  and 「本会话全部允许」 per SESSION (see Session-scoped approvals below) — a verdict nobody can act on is not worth
+  the call.
+- **An `allow` rule is the deterministic way to stop a whole class of command being judged** — and it is the only
+  lever that is per-shape rather than per-session, which matters because the gate's answers are what a user meets
+  constantly (measured on real traffic: nearly every ask was one `ssh <host> '<script>'` class of work, and no
+  threshold could separate it from the commands that should ask). `CheckBash` reports the matched pattern as
+  `DecisionAllowExempt` and `checkBashPermission` returns before the gate — nothing is judged, so no
+  `[permission]` note is written either, exactly as if the gate did not exist for that command. It sits AFTER the
+  deny branch, so an allow rule can never widen into running what a deny forbids. Passing the rule to the judgment
+  as another STATE FACT instead was measured and buys ~0.02 (see
+  `docs/2026-09-30-bash-ask-jev-design.md`) — the rule has to decide, not advise.
 - **Only where a human can answer**: `PermissionModeSkip` is excluded, so a channel bot, a subagent or `-p` never
   has a probability approve something. Letting it would be a product decision, not this gate's.
 - **When the service cannot answer, the RULES decide**: a rule-matched command asks, an unmatched one runs. That is why an outage cannot make anything worse, and why
   a failure is never latched for the session (the next command tries again).
-- **It cannot widen a rule either**: with the gate on, a rule-matched command IS judged, and a verdict of "run"
-  lets it through — that is what "auto approval" means, and it is the one behaviour a user has to know about
-  (`config.BashPermissions.Jev`'s own comment says so). If you ever want rules to keep a veto ("matched ⇒ ask,
-  never judge"), it is one branch in `checkBashPermission` — but then the gate only covers the unmatched half.
+- **It cannot widen an ASK rule either**: with the gate on, an ask-rule-matched command IS judged, and a verdict of
+  "run" lets it through — that is what "auto approval" means, and it is the one behaviour a user has to know about
+  (`config.BashPermissions.Jev`'s own comment says so). If you ever want ask rules to keep a veto ("matched ⇒ ask,
+  never judge"), it is one branch in `checkBashPermission` — but then the gate only covers the unmatched half. The
+  allow rule above is the opposite case and deliberately so: a rule the user wrote to EXEMPT a shape decides, while a
+  rule that only says "ask first" is judged.
 - **A session memo (per agent) stores the PROBABILITY, and the threshold is applied when it is read**
   (`PermissionState.askVerdicts`): editing `jev_threshold` re-decides commands already judged, and the key is
   (canonical command, matched rule) — nothing is inferred about a command that was not itself judged, and
@@ -116,6 +135,11 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
   the command rules); `permissions.files.jev` is one `auto|off` switch over all three, with one τ — the
   tool name is a FACT in the state, and a threshold belongs to the question, so three switches over one
   measured number would be three numbers where there is one.
+- **A path rule's `allow` means the same as the command side's — and it is read the same way**: `CheckPath`
+  returns `DecisionAllowExempt` with the matched pattern, `checkFilePermission` returns before the judgment, and
+  nothing is asked or noted. It is a GLOBAL-only list (`allow` never comes from a project file), so what it can do is
+  let a user exempt a directory outside their trees — e.g. a scratch directory the agent keeps writing exports
+  into — from being judged at all.
 - **A rule has two forms, and both are load-bearing** (`permission.PathPattern`): `Text` is the
   pattern VERBATIM as the user wrote it — `~/.ssh/*` stays `~/.ssh/*`, a project's `secrets/*` stays
   `secrets/*` — and it is what an ask preview, a refusal and the judgment's state quote back;
@@ -168,16 +192,26 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 - **No threshold is a fact.** `confidence` means "how concentrated the distribution is over the options THIS
   caller supplied", so the question, the criteria, the STATE SHAPE and the model version all belong to any τ.
   It is recorded in `config.BashPermissions.JevThreshold`'s comment **with the case set and the model version**,
-  and re-sweeping is the only way to move it.
-- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Shipped τ = 0.85 —
-  deliberately ABOVE the measured corridor (0.66, 0.75), i.e. the gate only asks on near-certainty and a
-  borderline command is not interrupted — was swept on a state whose only facts are: the canonical segments, the working
-  directory, **the trees the session works in**, and the matched rule (or why there is none). A single tree is not
-  enough — a session can span several, and a command in the second one would read as "outside the tree".
-  **Change any sentence the state renders and the number is void.**
+  and re-sweeping is the only way to move it. Where the endpoint serves an ALIAS rather than a version, say that
+  in the same comment: the number is then a hypothesis about weights nobody pinned (jev.md, "A pinned model").
+- **The state's fact set belongs to the judgment, not to whatever the layer happens to hold.** Shipped τ = 0.66 —
+  the middle of the measured window (0.62, 0.70) — was swept on a state whose only facts are: the canonical
+  segments, the working directory, and the matched rule (or why there is none). It used to carry a fourth, **the
+  trees the session works in**, for a criterion ("touches data outside the working tree") that has since been
+  removed: the axis was measured, and it was the whole reason the gate asked about real work (see
+  agent/permission/jevask's package doc). **Change any sentence the state renders and the number is void.**
+- **A criterion is the lever; a fact the criteria do not read is dead weight.** The same measurement is what says
+  so: deleting the trees line from the state alone moved the routine commands by 0.036, while deleting the
+  outside-the-tree clause from the CRITERIA moved them by 0.225 and moved the intrinsically dangerous ones by
+  0.009. Do not try to quiet a gate by taking context away from it — take the clause out, or it will keep judging
+  by it.
+- **What the bash gate asks about, after that removal**: what the command DOES — reads credentials, changes or
+  publishes shared state, rewrites history, runs code fetched from the network, deletes unreproducible work, or
+  walks a whole filesystem or an unbounded tree (that last one is the one read-only shape on the Yes side: a
+  DURATION reason, kept on purpose and deliberately not tied to scope).
 - **Facts only, never a derived verdict.** "outside the working tree: no" would be consumed as a fact, and a wrong
-  fact here is asymmetric (it can talk a command under the threshold). Listing the trees is a fact; comparing is
-  the model's job. An empty fact says "(unknown …)" rather than inventing one.
+  fact here is asymmetric (it can talk a command under the threshold). An empty fact says "(unknown …)" rather than
+  inventing one.
 - **A label has to be decidable from what the gate sees** — the command as WRITTEN, never what would happen if
   the shell rejected it. (A case filed the other way empties the corridor.)
 - **Do not put the user's turn message in the state.** The judgment answers what the COMMAND is; a request is
@@ -240,7 +274,7 @@ Related: [`desktop.md`](desktop.md) (the desktop's tree resolver and its permiss
 
 - **Both gates write the same line, and it goes to the EVENT ONLY — the transcript — and never into the model's message**
   (`agent.askNote`, written by `checkBashPermission` and `checkFilePermission` alike):
-  `[permission] decided_by=judgment score=0.180 threshold=0.850`, or `decided_by=approval` for a call that was
+  `[permission] decided_by=judgment score=0.180 threshold=0.660`, or `decided_by=approval` for a call that was
   asked about and approved (the unattended branch approves without asking anyone, so it writes no note). It is
   appended for a FAILED call too (the call ran, or was refused, either way), and no judgment and no ask means no
   line at all, so an unremarkable call's result is byte-for-byte what it was before the gate existed.

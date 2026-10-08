@@ -65,8 +65,8 @@ const (
 	defaultPoolQueries = "testdata/tool-search/queries.json"
 
 	// prodChunkQuestions is how many candidates one request carries, mirroring
-	// agent/mcp's jevSearchQuestionsPerChunk (jevSearchChunkTokens /
-	// jevSearchTokensPerQuestion = 8000/80). It is duplicated here rather than
+	// the production default (config.DefaultJevQuestionsPerRequest, i.e.
+	// jev.max_questions_per_request). It is duplicated here rather than
 	// imported because this harness must not depend on the production package —
 	// the measurement is supposed to be able to outlive an implementation — and
 	// a stale copy only means the sweep sends a shape production no longer

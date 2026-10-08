@@ -74,24 +74,26 @@ type JevSearcher struct {
 type Judge = jev.Judge
 
 const (
-	// jevSearchChunkTokens bounds one REQUEST's question text. A pool large
-	// enough to overflow it is judged in several sequential calls rather than
-	// one huge one: the service charges per input token and counts question
-	// COUNT against its total budget, while state + the longest single question
-	// is what binds at ~32k (pkg/jev's package doc).
-	jevSearchChunkTokens = 8000
-	// jevSearchTokensPerQuestion is the chunking estimate per question (tool
-	// text + criteria). It is a budgeting slack, not a measurement.
-	jevSearchTokensPerQuestion = 80
-	// jevSearchQuestionsPerChunk is how many tools one request judges, derived
-	// from the two above rather than configured separately: they are what the
-	// budget is stated in, and a second knob could disagree with them.
-	jevSearchQuestionsPerChunk = jevSearchChunkTokens / jevSearchTokensPerQuestion
 	// jevSearchMaxQuestions caps how much of a pool one search judges. Past it
 	// the remaining tools are not judged at all and the log says so — a silent
 	// truncation would read as "the gate found nothing".
 	jevSearchMaxQuestions = 400
 )
+
+// questionsPerRequest is how many tools ONE request judges: the endpoint's cap
+// (see config.JevConfig.QuestionsPerRequest — a configured value, else a known
+// gateway's measured cap, else the reference default).
+//
+// Read from the LIVE config per search rather than captured at build time, so a
+// settings save reaches the next search; on the desktop the `jev` row also
+// rebuilds this searcher (a.RefreshMCPSearch). A searcher built without a config
+// (a test) resolves like an empty block, i.e. the reference default.
+func (s *JevSearcher) questionsPerRequest() int {
+	if s.cfg == nil {
+		return config.JevConfig{}.QuestionsPerRequest()
+	}
+	return s.cfg.Jev.QuestionsPerRequest()
+}
 
 // NewJevSearcher builds the gate. threshold and budget come from
 // mcp_tool_search.jev_threshold / jev_budget; usage may be nil (no ledger row)
@@ -165,9 +167,10 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, opts tools.MCPSearchOption
 	defer cancel()
 
 	probs := make(map[string]float64, len(all))
-	chunks := (len(all) + jevSearchQuestionsPerChunk - 1) / jevSearchQuestionsPerChunk
+	per := s.questionsPerRequest()
+	chunks := (len(all) + per - 1) / per
 	for start := 0; start < len(all); {
-		end := min(start+jevSearchQuestionsPerChunk, len(all))
+		end := min(start+per, len(all))
 		questions := make(map[string]jev.Question, end-start)
 		for _, t := range all[start:end] {
 			questions[t.Name] = jevsearch.Question(candidateOf(t))
@@ -176,7 +179,7 @@ func (s *JevSearcher) judgeQuery(ctx context.Context, opts tools.MCPSearchOption
 		if err != nil {
 			return nil, err
 		}
-		s.logAnswers(ctx, opts.Query, opts.Server, all[start:end], resp, start/jevSearchQuestionsPerChunk+1, chunks)
+		s.logAnswers(ctx, opts.Query, opts.Server, all[start:end], resp, start/per+1, chunks)
 		s.recordUsage(ctx, resp)
 		for _, t := range all[start:end] {
 			// A question the service did not answer is NOT a zero: it is no

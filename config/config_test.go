@@ -81,6 +81,11 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
 	// written twice (a tag cannot name a constant), and this is what notices the day one of
 	// them moves. A config that never mentions the block still gets the bound.
 	assert.Equal(t, DefaultJevTimeout, cfg.Jev.Timeout)
+	// The question cap has no `default:` tag — its answer depends on base_url —
+	// so a config that never mentions the block must still resolve to the
+	// reference service's number rather than to 0 questions per request.
+	assert.Equal(t, 0, cfg.Jev.MaxQuestionsPerRequest, "the field stays unset, the resolution happens on read")
+	assert.Equal(t, DefaultJevQuestionsPerRequest, cfg.Jev.QuestionsPerRequest())
 	// The file gate's three leaves live two structs deep (permissions.files.*),
 	// which is one level deeper than anything else defaults.Set reaches: without
 	// this the gate could arrive with τ = 0 (every call asks) and a zero budget
@@ -1134,4 +1139,35 @@ func TestBadgeAlertsDefaultToOn(t *testing.T) {
 	assert.True(t, BadgeConfig{}.AlertsEnabled(), "未设置时应当默认开")
 	assert.True(t, BadgeConfig{Alert: &on}.AlertsEnabled(), "显式 true 是开")
 	assert.False(t, BadgeConfig{Alert: &off}.AlertsEnabled(), "显式 false 是关")
+}
+
+// The per-request question cap is a property of the ENDPOINT, so leaving it
+// unset has to resolve from base_url — a known gateway takes its own measured
+// cap, everything else the reference service's. Getting this wrong is a whole
+// search degrading to the keyword path (an over-long request is an HTTP 400 the
+// client does not retry), which is why the table is worth having at all.
+func TestJevQuestionsPerRequestResolvesFromBaseURL(t *testing.T) {
+	// The reference service, and anything we do not recognise.
+	for _, base := range []string{"", "https://api.typesafe.ai", "https://gw.example.com/v1", "not a url at all"} {
+		got := JevConfig{BaseURL: base}.QuestionsPerRequest()
+		assert.Equal(t, DefaultJevQuestionsPerRequest, got, "base_url %q", base)
+	}
+
+	// A known gateway, with the scheme written or omitted — the path is the
+	// deployment's business, the host is what identifies the service.
+	for _, base := range []string{
+		"https://api.commandcode.ai/provider",
+		"https://api.commandcode.ai/provider/v1",
+		"API.commandcode.ai/provider",
+	} {
+		assert.Equal(t, jevGatewayQuestionCaps["api.commandcode.ai"], JevConfig{BaseURL: base}.QuestionsPerRequest(),
+			"base_url %q", base)
+	}
+
+	// An explicit value always decides, on any endpoint — including a number
+	// that disagrees with the table.
+	for _, n := range []int{1, 20, 500} {
+		assert.Equal(t, n, JevConfig{BaseURL: "https://api.commandcode.ai/provider", MaxQuestionsPerRequest: n}.QuestionsPerRequest())
+		assert.Equal(t, n, JevConfig{MaxQuestionsPerRequest: n}.QuestionsPerRequest())
+	}
 }

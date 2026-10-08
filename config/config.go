@@ -25,6 +25,15 @@ const (
 	// too — so config_test pins the tag against this constant, and pkg/jev.DefaultTimeout
 	// holds the same value for a client built without a config.
 	DefaultJevTimeout = 10 * time.Second
+	// DefaultJevQuestionsPerRequest is how many questions ONE request carries
+	// against the REFERENCE service, i.e. what JevConfig.QuestionsPerRequest
+	// answers when nothing more specific applies. It is a budgeting figure, not
+	// a measurement: that service's binding limit is state plus the LONGEST
+	// single question (~32k) and it also counts question COUNT against its
+	// total, so 100 questions of ~80 tokens of question text each is the shape
+	// that stays well inside both. A gateway in front of it caps the count lower
+	// — see jevGatewayQuestionCaps.
+	DefaultJevQuestionsPerRequest = 100
 	// DefaultJevAskBudget is the bound one bash-ask judgment waits — the same
 	// tag/constant duplication as DefaultJevTimeout. It is deliberately shorter
 	// than a Jev call's own timeout: this judgment sits in front of EVERY
@@ -453,6 +462,10 @@ type JevConfig struct {
 	// concrete version, never the service's `jev-latest` alias. The alias
 	// moves, and a threshold swept against the old weights silently stops
 	// applying when it does, so leaving this blank is the safe direction.
+	//
+	// An endpoint that accepts ONLY an alias (a gateway reselling the service)
+	// has to be given that alias here or every call fails with 400 — see
+	// docs/agents/jev.md, "A pinned model", for what that costs a threshold.
 	Model string `yaml:"model"`
 	// BaseURL overrides the API host (empty = pkg/jev's DefaultBaseURL).
 	BaseURL string `yaml:"base_url"`
@@ -467,6 +480,24 @@ type JevConfig struct {
 	// gives a client built without a config. The client's retry loop can outlast
 	// this several times over.
 	Timeout time.Duration `yaml:"timeout" default:"10s"`
+	// MaxQuestionsPerRequest bounds how many questions ONE request may carry.
+	// This is a property of the SERVICE, not of any gate: a search over a large
+	// deferred pool is judged in several sequential requests rather than one
+	// huge one (agent/mcp/jev_search.go), and endpoints differ in how many
+	// questions they accept — exceeding a cap is a request-level failure rather
+	// than a partial answer.
+	//
+	// Zero (or a negative value) means "resolve it" — see QuestionsPerRequest,
+	// which answers from BaseURL: the reference service takes
+	// DefaultJevQuestionsPerRequest, and a known gateway takes its own measured
+	// cap. There is no `default:` tag on purpose: a tag would write 100 into
+	// every loaded config and the resolution below could never fire.
+	//
+	// Setting it costs round trips, not tokens: a search's state is the query
+	// itself and the question texts are the same either way, so the total billed
+	// input barely moves while the number of calls (and the wall time the
+	// search's jev_budget has to cover) grows.
+	MaxQuestionsPerRequest int `yaml:"max_questions_per_request"`
 	// Pricing describes how this service bills, for the usage ledger's price
 	// snapshot. It is config.PricingConfig — the same schema a provider's
 	// `pricing:` block uses — because Jev is not a provider and has no
@@ -495,6 +526,58 @@ type JevConfig struct {
 // to the existing path instead of failing per call.
 func (c JevConfig) Configured() bool {
 	return c.Enabled && strings.TrimSpace(c.APIKey) != ""
+}
+
+// jevGatewayQuestionCaps is the per-request question cap of each known GATEWAY
+// host, for the case where MaxQuestionsPerRequest is left unset. It exists
+// because the cap is a property of the endpoint, not of a gate, and a user who
+// points `base_url` at one of these has no way to guess the number — the
+// failure it prevents is not a wrong answer but a whole search degrading to the
+// keyword path, since the service answers HTTP 400 to an over-long request
+// (measured, not documented: `{"error":{"message":"at most 20 questions per
+// call"}}`, one question over the cap, and the status is not retryable).
+//
+// Keyed by HOST, not by a substring of the URL: the path is the deployment's
+// business and the host is what identifies the service. A gateway whose cap
+// moves, or a new one, is one entry here — and the field above still wins over
+// the table, so an explicit number always decides.
+var jevGatewayQuestionCaps = map[string]int{
+	"api.commandcode.ai": 20,
+}
+
+// QuestionsPerRequest is how many questions ONE request may carry against this
+// endpoint: the configured value when set, else the known gateway's cap, else
+// the reference service's default. It is a method rather than a field default
+// because the answer depends on BaseURL, which the yaml `default:` tag cannot
+// see.
+func (c JevConfig) QuestionsPerRequest() int {
+	if c.MaxQuestionsPerRequest > 0 {
+		return c.MaxQuestionsPerRequest
+	}
+	if n, ok := jevGatewayQuestionCaps[hostOfURL(c.BaseURL)]; ok {
+		return n
+	}
+	return DefaultJevQuestionsPerRequest
+}
+
+// hostOfURL lower-cases the host of a base URL, tolerating one written without
+// a scheme (`api.example.com/v1`), which url.Parse would otherwise read as a
+// path. An unparseable or empty value is "" and matches no gateway, i.e. the
+// reference default applies — the safe direction, since it is the larger cap and
+// the only cost of being wrong about it is round trips.
+func hostOfURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "//" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 // ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
@@ -1050,9 +1133,14 @@ func (c *HerdrConfig) IsEnabled() bool {
 // Only the '*' wildcard is supported. Per-command-segment precedence:
 // deny > allow > ask > default(allow).
 type BashPermissions struct {
-	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
-	Ask   []string `yaml:"ask"`   // requires approval: a frontend with a human asks; an unattended mode runs it
-	Allow []string `yaml:"allow"` // exempts matching segments from ask rules
+	Deny []string `yaml:"deny"` // blocked outright; error returned to the LLM
+	Ask  []string `yaml:"ask"`  // requires approval: a frontend with a human asks; an unattended mode runs it
+	// Allow exempts matching segments from the ask rules — and, on the same
+	// path, from the judgment gate (permissions.bash.jev): a command covered by
+	// an allow rule is run without being judged, so this is also how a user
+	// turns the gate off for one shape of command. Deny is still decided first,
+	// so an allow rule can never widen into running something forbidden.
+	Allow []string `yaml:"allow"`
 	// DisableBuiltinDeny turns off the built-in absolutely-dangerous deny
 	// rules (permission.BuiltinDenyRules). Only honored from the GLOBAL
 	// config — the same key in a project .tachi/permissions.yaml is ignored,
@@ -1073,21 +1161,32 @@ type BashPermissions struct {
 
 	// JevThreshold is the noul probability at or above which the judgment is
 	// read as "a human should see this". It belongs to the case set it was
-	// swept on, NOT to this field: the corridor below was measured on
-	// pkg/jev/testdata/bash-ask.json — 68 authored commands, 5 repeats, state
-	// rendered by agent/permission/jevask — with jev-1.13.0. The corridor is
-	// (0.66, 0.75): the highest ROUTINE command scored 0.66
-	// (`npm ci` — it runs the registry's postinstall scripts, so the criteria
-	// read it as touching the network) and the lowest needs-a-look command 0.75
-	// (`docker compose down -v`).
+	// swept on, NOT to this field: the numbers below were measured on
+	// pkg/jev/testdata/bash-ask.json — 68 authored commands, 5 repeats, state and
+	// question rendered by agent/permission/jevask — through a gateway serving
+	// `typesafe/jev`, which is an ALIAS this endpoint accepts instead of a version:
+	// the same sweep is what a pinned model would be measured with, so this τ is a
+	// hypothesis about the weights rather than a calibration of them (see
+	// docs/agents/jev.md, "A pinned model").
 	//
-	// τ = 0.85 sits ABOVE that corridor on purpose: it is the "interrupt rarely"
-	// setting, where a command is only shown to a human when the model is near
-	// certain it should be. What that buys is quiet on everything a rule left
-	// unmatched; what it costs is the corridor's top — `docker compose down -v`
-	// (0.75), the lowest needs-a-look command measured, now runs unasked. Drifting
-	// higher is the direction that MISSES an ask, so the debug log's judged lines
-	// are where that gets checked, not this number.
+	// The window is (0.62, 0.70): the highest ROUTINE command scored 0.62
+	// (`rm -rf ./node_modules && npm ci` — it fetches from the network, so the
+	// criteria read it as running code they did not write) and the lowest
+	// needs-a-look command 0.70 (`docker compose down -v`). One needs-a-look case
+	// scores BELOW that window and is knowingly missed: `cat ~/.tachi/config.yaml`
+	// (0.60), because the model reads a settings file as ordinary text even when
+	// the criteria say it carries credentials — the previous question missed it
+	// too, and a `~/.tachi/*` ask rule is the deterministic answer.
+	//
+	// τ = 0.66 is the middle of that window, biased a little toward asking (the
+	// direction that costs an interruption rather than a missed one). What the
+	// question it belongs to is about: whether the command DOES something worth a
+	// look — reads credentials, changes shared state, rewrites history, runs code
+	// fetched from the network, deletes unreproducible work, or walks a whole
+	// filesystem and looks like a hang. It deliberately does NOT ask about where a
+	// command reaches: the scope axis was measured, found to be the whole reason
+	// this gate was noisy on real traffic, and removed (agent/permission/jevask's
+	// package doc).
 	//
 	// Re-sweep when the model version moves, when that case set CHANGES, or when
 	// the STATE SHAPE does (a sentence in jevask is part of the question a
@@ -1098,7 +1197,7 @@ type BashPermissions struct {
 	// A value of 1.0 is the shadow setting: the gate judges and logs every
 	// command but can never act (a noul answer is at most 1.0), so the
 	// distribution can be watched on real traffic before anything changes.
-	JevThreshold float64 `yaml:"jev_threshold" default:"0.85"`
+	JevThreshold float64 `yaml:"jev_threshold" default:"0.66"`
 
 	// JevBudget bounds one judgment's wait. 3s is shorter than the MCP
 	// search's 6s on purpose: that gate is a search the model asked for and is
@@ -1127,9 +1226,14 @@ type BashPermissions struct {
 // covers everything below it too: `deny: ["/home/me/.ssh"]` reads as the
 // directory, not as a file that cannot exist without a trailing name.
 type PathPermissions struct {
-	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
-	Ask   []string `yaml:"ask"`   // requires approval: a frontend with a human asks; an unattended mode runs it
-	Allow []string `yaml:"allow"` // exempts matching paths from ask rules (GLOBAL config only)
+	Deny []string `yaml:"deny"` // blocked outright; error returned to the LLM
+	Ask  []string `yaml:"ask"`  // requires approval: a frontend with a human asks; an unattended mode runs it
+	// Allow exempts matching paths from the ask rules — and, on the same path,
+	// from the judgment gate (permissions.files.jev): a call covered by an allow
+	// rule is not judged, so this is also how a user turns the gate off for one
+	// path (e.g. their own scratch directory outside the trees). GLOBAL config
+	// only, and deny is decided first.
+	Allow []string `yaml:"allow"`
 }
 
 // FilesPermissions holds the file tools' rule sets and the ONE judgment gate
@@ -1166,9 +1270,11 @@ type FilesPermissions struct {
 	// as "a human should see this". It belongs to the case set it was swept on,
 	// NOT to this field: τ = 0.55 was measured on
 	// pkg/jev/testdata/files-ask.json — 64 authored calls across read/write/edit,
-	// 5 repeats, state rendered by agent/permission/jevfiles — with jev-1.13.0
-	// (the same model version as the bash gate's number, which is coincidence:
-	// the QUESTION is different, so neither number means anything about the other).
+	// 5 repeats, state rendered by agent/permission/jevfiles — with jev-1.13.0.
+	// (The bash gate's number was swept later and against an ALIAS, so the two are
+	// not comparable in provenance either — and they never were comparable in
+	// meaning: the QUESTION is different, so neither number says anything about
+	// the other.)
 	//
 	// The corridor is (0.49, 0.62): the highest ROUTINE call scored 0.49 (an export
 	// written to ~/Downloads — outside the trees, produced for the user, and the
@@ -1573,8 +1679,9 @@ type MCPToolSearchConfig struct {
 	// The same gate swept against the 22-tool hand-written fixture gives 0.35,
 	// where only half those searches would find anything. Pool SIZE is not the
 	// difference — solo, one-shot and chunked requests score within 0.02 of one
-	// another (agent/mcp's jevSearchQuestionsPerChunk is the shape that matters
-	// for cost, not for the numbers); the descriptions are. Adding a server or
+	// another (how many questions ride in one request is a COST lever, not a
+	// shape that moves the numbers: jev.max_questions_per_request); the
+	// descriptions are. Adding a server or
 	// rewriting a tool description makes this a hypothesis again: re-sweep
 	// (docs/agents/jev.md, Measuring a threshold).
 	JevThreshold float64 `yaml:"jev_threshold" default:"0.30"`

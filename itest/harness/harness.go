@@ -140,8 +140,9 @@ func WithProtocol(p mockllm.Protocol) Option {
 }
 
 // WithBashAllow adds permissions.bash.allow: ["*"] so Bash tool calls never
-// hit an ask rule. Default bash policy is allow already, but this is a
-// defense-in-depth pin for scenarios that must execute Bash.
+// hit an ask rule (or the judgment gate — an allow rule is what switches that
+// off, see docs/agents/permission.md). Default bash policy is allow already, but
+// this is a defense-in-depth pin for scenarios that must execute Bash.
 func WithBashAllow() Option {
 	return func(o *options) { o.bashAllow = true }
 }

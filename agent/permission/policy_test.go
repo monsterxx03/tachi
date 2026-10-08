@@ -111,20 +111,28 @@ func TestCheckBash_AskAndAllowExemption(t *testing.T) {
 		Allow: []string{"git status*", "git diff*"},
 	}, Rules{})
 
+	// AllowExempt rather than Allow: the exemption is a fact the caller acts on
+	// (it skips the judgment gate), so the decision has to carry it — and the
+	// matched rule comes back with it, the way a deny or an ask does.
 	tests := []struct {
-		cmd  string
-		want Decision
+		cmd      string
+		want     Decision
+		wantRule string
 	}{
-		{"git status", DecisionAllow},      // exempted by allow
-		{"git diff HEAD~1", DecisionAllow}, // exempted by allow
-		{"git push", DecisionAsk},          // ask, no allow exemption
-		{"git status && git push", DecisionAsk},
-		{"git push && git status", DecisionAsk},
-		{"ls -la", DecisionAllow}, // no rule at all
+		{"git status", DecisionAllowExempt, "git status*"},
+		{"git diff HEAD~1", DecisionAllowExempt, "git diff*"},
+		{"git push", DecisionAsk, "git *"}, // ask, no allow exemption
+		{"git status && git push", DecisionAsk, "git *"},
+		{"git push && git status", DecisionAsk, "git *"},
+		{"ls -la", DecisionAllow, ""}, // no rule at all
 	}
 	for _, tt := range tests {
-		if d, _ := p.CheckBash(tt.cmd); d != tt.want {
+		d, rule := p.CheckBash(tt.cmd)
+		if d != tt.want {
 			t.Errorf("CheckBash(%q) = %v, want %v", tt.cmd, d, tt.want)
+		}
+		if rule != tt.wantRule {
+			t.Errorf("CheckBash(%q) rule = %q, want %q", tt.cmd, rule, tt.wantRule)
 		}
 	}
 }
@@ -232,8 +240,8 @@ func TestCheckBash_ProjectUnion(t *testing.T) {
 	if d, _ := p.CheckBash("npm install"); d != DecisionAsk {
 		t.Error("project ask should tighten (union)")
 	}
-	if d, _ := p.CheckBash("git diff HEAD~1"); d != DecisionAllow {
-		t.Error("global allow should exempt from global ask")
+	if d, rule := p.CheckBash("git diff HEAD~1"); d != DecisionAllowExempt || rule != "git diff*" {
+		t.Errorf("global allow should exempt from global ask: got %v, %q", d, rule)
 	}
 	// Project-level allow is dropped: it must NOT exempt the global ask rule.
 	if d, _ := p.CheckBash("git status"); d != DecisionAsk {

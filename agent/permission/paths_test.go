@@ -76,14 +76,15 @@ func TestCheckPathDecisions(t *testing.T) {
 }
 
 // Allow is an exemption, not a whitelist: a path that matches allow is not asked
-// about, and a path that matches nothing at all runs too.
+// about (and the decision says WHY it was allowed — the caller skips the judgment
+// gate on it), and a path that matches nothing at all runs too.
 func TestCheckPathAllowExemptsFromAsk(t *testing.T) {
 	p := NewPolicy(Rules{}, Rules{}, WithFileRules(FileRules{
 		Write: pathRules(Rules{Ask: []string{"/repo/*"}, Allow: []string{"/repo/build/*"}}),
 	}, FileRules{}))
 
-	if d, _ := p.CheckPath(FileToolWrite, "/repo/build/out.bin"); d != DecisionAllow {
-		t.Fatalf("an allow-exempted path should run, got %v", d)
+	if d, rule := p.CheckPath(FileToolWrite, "/repo/build/out.bin"); d != DecisionAllowExempt || rule != "/repo/build/*" {
+		t.Fatalf("an allow-exempted path should run with its rule quoted, got (%v, %q)", d, rule)
 	}
 	if d, rule := p.CheckPath(FileToolWrite, "/repo/src/main.go"); d != DecisionAsk || rule != "/repo/*" {
 		t.Fatalf("an ask rule should still ask, got (%v, %q)", d, rule)
@@ -149,8 +150,8 @@ func TestWithFileRulesProjectLayerCanOnlyTighten(t *testing.T) {
 	if d, _ := p.CheckPath(FileToolWrite, "/repo/.git/config"); d != DecisionDeny {
 		t.Fatalf("a project deny rule must apply, got %v", d)
 	}
-	if d, _ := p.CheckPath(FileToolWrite, "/repo/build/out.bin"); d != DecisionAllow {
-		t.Fatalf("the global allow still exempts, got %v", d)
+	if d, rule := p.CheckPath(FileToolWrite, "/repo/build/out.bin"); d != DecisionAllowExempt || rule != "/repo/build/*" {
+		t.Fatalf("the global allow still exempts, got (%v, %q)", d, rule)
 	}
 }
 

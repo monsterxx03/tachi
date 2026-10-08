@@ -10,17 +10,35 @@
 //
 // The state is assembled from named fields, never from prose. The segments come
 // from agent/permission's own parser — the same canonical output the rules were
-// matched against — the working directory and the roots are facts about the
-// session, and the matched rule is the user's own text verbatim. That is what
-// makes this judgment thresholable at all (jev.md, "Register beats language").
+// matched against — the working directory is a fact about the session (a bare
+// `rm -rf build` means different things in different places), and the matched
+// rule is the user's own text verbatim. That is what makes this judgment
+// thresholable at all (jev.md, "Register beats language").
 //
-// The judgment is deliberately NOT "does this command modify anything". A
-// read-only command can still be exactly the thing a user wants to see first:
-// a recursive grep over / or $HOME runs for minutes and looks like a hang, and
-// reading ~/.ssh/id_rsa, ~/.aws/credentials or ~/.tachi/config.yaml hands
-// credentials to the model and to the transcript. Both are on the
-// "needs a human" side of the case set, and the criteria below say so — a gate
-// whose No-pole was only "it is read-only" would let them through.
+// The judgment is about what the command DOES, not about where it reaches. An
+// earlier version of these criteria led with "touches data outside the working
+// tree (a read-only scan of / or the home directory runs for minutes and can look
+// like a hang)", and the state declared the session's trees for it. The SCOPE
+// half of that was measured and REMOVED — it was the whole reason the gate was
+// noisy on real traffic (each `ssh <host> '<script>'` scored over the cut-off, and
+// no threshold separated that class from the commands that should ask), while
+// removing it moved the intrinsically dangerous commands by at most 0.01. Being
+// outside the working tree is not danger: where a command runs says nothing about
+// whether a human should see it.
+//
+// The DURATION half is kept, as its own clause and named as what it is: a walk
+// over a whole filesystem or an unbounded tree runs for minutes with no output and
+// looks like a hang. That is a reason to show a command first that has nothing to
+// do with scope (the same scan of a small subtree is routine), and it is the one
+// case where a read-only command is on the Yes side.
+//
+// "Read-only" is therefore sufficient for the No pole — but only together with
+// the rest of it: reading ~/.ssh/id_rsa or ~/.aws/credentials stays on the ask
+// side, which the sweep confirms (0.93), while a `find` over one directory does
+// not. One case the criteria name but the model does not score that way is the
+// assistant's own settings file (measured 0.60, under any cut-off the rest of the
+// case set supports) — a `~/.tachi/*` ask rule is the deterministic answer there,
+// not another sentence here.
 package jevask
 
 import (
@@ -61,17 +79,19 @@ const (
 	//
 	// They are one command's worth of context, so they carry the whole rubric —
 	// there are no per-case instructions here (contrast the MCP tool search,
-	// whose question is per candidate). "Read-only" is deliberately NOT a
-	// sufficient condition on the No side: see the package doc.
-	yes = "The command touches data outside the working tree (a read-only scan of / or the home directory runs for " +
-		"minutes and can look like a hang), or reads credentials, private keys or secrets, or changes or publishes " +
-		"shared state, or rewrites history, or runs code fetched from the network, or deletes work that is not " +
-		"reproducible — or it is the kind of action the matched rule exists to guard. A careful user would want to " +
-		"see this first."
+	// whose question is per candidate). Every clause is something the command
+	// DOES, never somewhere it reaches: see the package doc for the axis that was
+	// measured and removed.
+	yes = "The command reads credentials, private keys or secrets — the assistant's own settings file carries " +
+		"them — or changes or publishes shared state, or rewrites history, or runs code fetched from the " +
+		"network, or deletes work that is not reproducible, or walks a whole filesystem or an unbounded " +
+		"directory tree (a recursive search over / or over a home directory runs for minutes with no output " +
+		"and looks like a hang) — or it otherwise does something the matched rule exists to guard. A careful " +
+		"user would want to see this first."
 
-	no = "The command stays inside the working tree, is cheap, and either only reads or makes a change the user can " +
-		"undo (building, testing, listing files, deleting build artifacts), and it reaches no network, no shared " +
-		"state and no secret outside the tree — there is nothing here for the user to decide."
+	no = "The command finishes quickly and either only reads, or makes a change the user can undo " +
+		"(building, testing, listing files, deleting build artifacts), and it reaches no network, no " +
+		"shared state and no secret — there is nothing here for the user to decide."
 )
 
 // Question is the noul question every command is judged by.
@@ -85,18 +105,15 @@ func Question() jev.Question {
 // are different states and the text distinguishes them, because "why is this
 // command at the gate at all" is exactly what the judgment needs.
 //
-// Trees are the trees this session works in — agent.AIAgent.Config.PermissionTrees,
-// i.e. config.ProjectRootsFrom of the session's working directory plus its
-// additional workspace roots, which is also the set the RULES were read from.
-// It is a list because a desktop session can span several repositories, and a
-// single path would make a command in the second one read as "outside the tree"
-// — over-asking there, and stating a fact that is not the session's shape.
-// Empty means no tree is known, which the state says rather than inventing one.
+// There is deliberately NO field for the session's trees. One existed (a list,
+// because a desktop session can span several repositories) while the criteria
+// asked whether the command stayed inside them; both went together, because a
+// fact no clause reads is dead weight in every request — measured, and the
+// removal moved nothing but the noise (see the package doc).
 type Cmd struct {
 	Command string
 	Rule    string
 	CWD     string
-	Trees   []string
 	// Request is what the user asked for in THIS turn ("把 feature/login 删了").
 	//
 	// MEASURED — and the measurement says it buys nothing, so the gate leaves it
@@ -116,8 +133,9 @@ type Cmd struct {
 }
 
 // State assembles the text one command is judged against. Its shape is fixed —
-// header, command, then the three facts — so the model reads the same register
-// every time regardless of what the command looks like.
+// header, command, then the session's working directory and the matched rule —
+// so the model reads the same register every time regardless of what the command
+// looks like.
 func State(c Cmd) string {
 	var b strings.Builder
 	b.WriteString("An automated coding assistant wants to run this command on the user's machine.\n")
@@ -141,7 +159,6 @@ func State(c Cmd) string {
 	}
 
 	fmt.Fprintf(&b, "\nWorking directory: %s\n", orPlaceholder(c.CWD))
-	fmt.Fprintf(&b, "Trees this session works in (the rules were read from each): %s\n", treesLine(c.Trees))
 	b.WriteString("Matched ask rule: " + ruleLine(c.Rule, unparsed))
 	return b.String()
 }
@@ -167,22 +184,6 @@ func ruleLine(rule string, unparsed bool) string {
 	default:
 		return "(none — no rule matched; this command is allowed by default)"
 	}
-}
-
-// treesLine names the session's trees, and says so when there are none: a
-// session with no workspace (or a bare agent) has no tree to be outside OF, and
-// inventing one would make the judgment wrong in the direction that matters.
-func treesLine(trees []string) string {
-	live := make([]string, 0, len(trees))
-	for _, t := range trees {
-		if s := strings.TrimSpace(t); s != "" {
-			live = append(live, s)
-		}
-	}
-	if len(live) == 0 {
-		return "(unknown — treat the working directory above as the tree)"
-	}
-	return strings.Join(live, ", ")
 }
 
 // oneLine collapses the request to one line: the field is a sentence, and a
