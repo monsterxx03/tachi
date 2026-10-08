@@ -13,8 +13,17 @@ NPM := npm --prefix web/frontend
 # -trimpath and the embedded web console stay defined in ONE place.
 CLI_OUT ?= tachi
 
+# third_party_channels.go (local-only, gitignored) blank-imports channel plugins that
+# live OUTSIDE this module and are resolved through the repo's go.work. With the
+# workspace off that import cannot resolve at all, so the file carries a
+# `//go:build !no_workspace` constraint and we tag it out here. GOWORK=off arrives from
+# desktop/Makefile (its module is deliberately not in the workspace) through the
+# environment of `make -C ..`: the desktop package builds the CLI it ships that way,
+# and that build must not depend on a local plugin checkout existing.
+TAGS := $(if $(filter off,$(GOWORK)),-tags no_workspace,)
+
 build: web-check
-	go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLI_OUT) .
+	go build -trimpath $(TAGS) -ldflags="$(LDFLAGS)" -o $(CLI_OUT) .
 
 # Build the frontend into web/frontend/dist so it's embedded into the Go binary.
 # `npm ci`, not `install`: it installs strictly from package-lock.json, so it can
@@ -34,13 +43,13 @@ web-check:
 	fi
 
 build-debug: web-check
-	go build -ldflags="-X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)" -o tachi .
+	go build $(TAGS) -ldflags="-X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)" -o tachi .
 
 build-linux: web-check
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-amd64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(TAGS) -ldflags="$(LDFLAGS)" -o tachi-linux-amd64 .
 
 build-linux-arm64: web-check
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath $(TAGS) -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
 
 test: web-check
 	go test ./...
