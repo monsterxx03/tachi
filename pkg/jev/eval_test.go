@@ -30,6 +30,10 @@ package jev_test
 //	JEV_EVAL_FILE     Run only this file under testdata/ (e.g. notify-gate.json).
 //	JEV_EVAL_REPEATS  Repeats per case (default 5). Below 5 the stability
 //	                  numbers cannot distinguish "drifts" from "drifted once".
+//	JEV_EVAL_CONCURRENCY  How many CASES are measured at once (default 4).
+//	                  Cases are independent requests, so this moves the wall
+//	                  clock and nothing else — set it to 1 to narrow a run that
+//	                  failed on request errors (a rate limit is the usual cause).
 //	JEV_EVAL_MODEL    Model override. Record which version produced a
 //	                  calibration — the default is a pinned version, and a
 //	                  threshold does not survive a change of weights.
@@ -51,11 +55,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"text/tabwriter"
 	"time"
@@ -72,6 +80,10 @@ const (
 	evalFileEnv = "JEV_EVAL_FILE"
 	// evalRepeatsEnv overrides the repeat count per case.
 	evalRepeatsEnv = "JEV_EVAL_REPEATS"
+	// evalConcurrencyEnv bounds how many of a file's cases are in flight at
+	// once. It changes the wall clock and nothing else — see
+	// defaultEvalConcurrency.
+	evalConcurrencyEnv = "JEV_EVAL_CONCURRENCY"
 	// evalModelEnv overrides the model version, for re-measuring a calibration
 	// against a new one.
 	evalModelEnv = "JEV_EVAL_MODEL"
@@ -86,6 +98,20 @@ const (
 	// defaultEvalRepeats is the repeat count when unset. Five is the floor
 	// that makes a drift measurement meaningful.
 	defaultEvalRepeats = 5
+
+	// defaultEvalConcurrency is how many cases are measured at once when
+	// unset. The parallelism is over CASES, each an independent request, so it
+	// changes the WALL CLOCK and nothing else: a 68-case file at 5 repeats is
+	// 340 requests, and serial that is a coffee break (measured: ~1.2s per
+	// request through a gateway, so ~7 minutes). The repeats of one case stay
+	// sequential inside measureCase — a stability number compares repeat i
+	// against repeat i+1, and interleaving those would make it compare runs.
+	//
+	// 4 matches the pool sweep's poolConcurrency, and it is a bound rather than
+	// a target: raise it and a rate limit answers 429, which the client retries
+	// (the run gets slower, not wrong); set it to 1 for a strictly serial run,
+	// which is what to try first when a run fails on request errors.
+	defaultEvalConcurrency = 4
 
 	// evalCaseTimeout bounds the repeats of one case. A retried request can
 	// spend the client's default timeout several times over.
@@ -419,6 +445,20 @@ func evalRepeats(t *testing.T) int {
 	return n
 }
 
+// evalConcurrency resolves the in-flight case bound, flooring at 1.
+func evalConcurrency(t *testing.T) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(evalConcurrencyEnv))
+	if raw == "" {
+		return defaultEvalConcurrency
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		t.Fatalf("%s = %q, want a positive integer", evalConcurrencyEnv, raw)
+	}
+	return n
+}
+
 // runEvalFile measures one case file end to end and logs the report.
 func runEvalFile(t *testing.T, apiKey, path string) {
 	t.Helper()
@@ -462,21 +502,46 @@ func runEvalFile(t *testing.T, apiKey, path string) {
 	}
 	t.Logf("endpoint=%s model=%s", endpoint, client.Model())
 	repeats := evalRepeats(t)
+	concurrency := evalConcurrency(t)
 
-	results := make([]evalCaseResult, 0, len(file.Cases))
-	for _, c := range file.Cases {
-		q, err := questionFor(file.Question, c)
-		if err != nil {
-			t.Fatalf("%s: case %s: %v", path, c.ID, err)
-		}
-		res, err := measureCase(t, client, q, c, file.ActionLabel, repeats)
-		if err != nil {
-			t.Fatalf("%v", err)
-		}
-		results = append(results, res)
+	results, err := measureAll(t.Context(), client, file.Cases, file.Question, file.ActionLabel, repeats, concurrency)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
+	t.Log(renderReport(file, path, client.Model(), repeats, concurrency, results))
+}
 
-	t.Log(renderReport(file, path, client.Model(), repeats, results))
+// measureAll measures one file's cases, up to concurrency of them at a time, and
+// returns them in the FILE's order whatever order they finished in: the report is
+// a table, and a table whose rows move between runs is not a record.
+//
+// A failure is reported as the first one in FILE order rather than the first one
+// to happen, so a broken case file fails the same way on every run however the
+// calls interleaved.
+func measureAll(ctx context.Context, client *jev.Client, cases []evalCase, base evalQuestion, actionLabel string, repeats, concurrency int) ([]evalCaseResult, error) {
+	results := make([]evalCaseResult, len(cases))
+	errs := make([]error, len(cases))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, c := range cases {
+		q, err := questionFor(base, c)
+		if err != nil {
+			errs[i] = fmt.Errorf("case %s: %w", c.ID, err)
+			continue
+		}
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i], errs[i] = measureCase(ctx, client, q, c, actionLabel, repeats)
+		})
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
 }
 
 // questionFor returns the question a case asks: the file's, with the
@@ -546,21 +611,19 @@ func TestEvalCaseInstructionsOverride(t *testing.T) {
 }
 
 // measureCase asks one case `repeats` times and collects the outcomes.
-func measureCase(t *testing.T, client *jev.Client, question jev.Question, c evalCase, actionLabel string, repeats int) (evalCaseResult, error) {
-	t.Helper()
-
+func measureCase(ctx context.Context, client *jev.Client, question jev.Question, c evalCase, actionLabel string, repeats int) (evalCaseResult, error) {
+	res := evalCaseResult{evalCase: c}
 	var state any
 	if err := json.Unmarshal(c.State, &state); err != nil {
 		return evalCaseResult{}, fmt.Errorf("case %s: decode state: %w", c.ID, err)
 	}
 
-	res := evalCaseResult{evalCase: c}
 	for i := 0; i < repeats; i++ {
 		// Per-repeat timeout: one slow case must not consume the budget of
 		// the rest of the file.
-		ctx, cancel := context.WithTimeout(t.Context(), evalCaseTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, evalCaseTimeout)
 		start := time.Now()
-		resp, err := client.Evaluate(ctx, state, map[string]jev.Question{evalQuestionID: question})
+		resp, err := client.Evaluate(attemptCtx, state, map[string]jev.Question{evalQuestionID: question})
 		latency := time.Since(start)
 		cancel()
 		if err != nil {
@@ -625,10 +688,14 @@ func answerLabel(a jev.Answer) string {
 // renderReport formats the whole measurement. It returns a string rather
 // than writing to t so the layout can be asserted offline — a formatting
 // panic would otherwise only surface during a metered run.
-func renderReport(file evalCaseFile, path, model string, repeats int, results []evalCaseResult) string {
+func renderReport(file evalCaseFile, path, model string, repeats, concurrency int, results []evalCaseResult) string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "\n=== %s (%s) ===\n", file.Name, path)
-	fmt.Fprintf(&b, "model=%s cases=%d repeats=%d action_label=%q\n", model, len(results), repeats, file.ActionLabel)
+	// concurrency is recorded because it is part of HOW the run was made: it
+	// cannot move a number (the parallelism is over independent cases), and a
+	// run that failed on request errors is read differently from a clean one.
+	fmt.Fprintf(&b, "model=%s cases=%d repeats=%d concurrency=%d action_label=%q\n",
+		model, len(results), repeats, concurrency, file.ActionLabel)
 	if n := countOverrides(file.Cases); n > 0 {
 		fmt.Fprintf(&b, "instructions: %d/%d cases carry their own (the file-level text is their frame)\n", n, len(file.Cases))
 	}
@@ -1091,4 +1158,110 @@ func identicalEverywhere(results []evalCaseResult) bool {
 		}
 	}
 	return true
+}
+
+// TestEvalConcurrencyChangesNothingButTheClock: the parallelism is over CASES,
+// each of which is an independent request, so a run at 4 has to produce the same
+// results — in the same order — as a run at 1.
+//
+// What it buys is the wall clock (a 68-case file at 5 repeats is 340 requests, and
+// serial against a gateway that is a coffee break); what it must not buy is a
+// different measurement, and what it must not do is drop a case: every case is
+// asked the same number of times under either bound.
+func TestEvalConcurrencyChangesNothingButTheClock(t *testing.T) {
+	var mu sync.Mutex
+	asked := map[string]int{}
+	var inFlight, maxInFlight int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			State string `json:"state"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		asked[body.State]++
+		mu.Unlock()
+		cur := atomic.AddInt64(&inFlight, 1)
+		for {
+			old := atomic.LoadInt64(&maxInFlight)
+			if cur <= old || atomic.CompareAndSwapInt64(&maxInFlight, old, cur) {
+				break
+			}
+		}
+		// A handler that returns instantly would let a parallel run finish in
+		// the same order it was started, which is not what "parallel" means.
+		time.Sleep(20 * time.Millisecond)
+		atomic.AddInt64(&inFlight, -1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"fake","answers":{"q":{"type":"noul","noul":0.9}},` +
+			`"usage":{"input_tokens":7,"output_tokens":3}}`))
+	}))
+	t.Cleanup(srv.Close)
+	client, err := jev.NewClient("test-key", jev.WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	base := evalQuestion{Type: "noul", Instructions: "judge it", Yes: "yes", No: "no"}
+	const (
+		caseCount = 8
+		repeats   = 3
+	)
+	cases := make([]evalCase, 0, caseCount)
+	for i := range caseCount {
+		cases = append(cases, evalCase{
+			ID:     fmt.Sprintf("c%02d", i),
+			Expect: "true",
+			State:  json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("state-%d", i))),
+		})
+	}
+
+	serial, err := measureAll(t.Context(), client, cases, base, "true", repeats, 1)
+	if err != nil {
+		t.Fatalf("serial run: %v", err)
+	}
+	if got := atomic.LoadInt64(&maxInFlight); got != 1 {
+		t.Errorf("a run at concurrency 1 had %d requests in flight, want 1", got)
+	}
+
+	parallel, err := measureAll(t.Context(), client, cases, base, "true", repeats, 4)
+	if err != nil {
+		t.Fatalf("parallel run: %v", err)
+	}
+	if got := atomic.LoadInt64(&maxInFlight); got < 2 {
+		t.Errorf("a run at concurrency 4 never had two requests in flight (max %d)", got)
+	}
+
+	if len(serial) != len(cases) || len(parallel) != len(cases) {
+		t.Fatalf("results: serial %d, parallel %d, want %d each", len(serial), len(parallel), len(cases))
+	}
+	for i := range cases {
+		if serial[i].ID != cases[i].ID || parallel[i].ID != cases[i].ID {
+			t.Fatalf("row %d came back as %q/%q, want %q — the report is ordered by the file",
+				i, serial[i].ID, parallel[i].ID, cases[i].ID)
+		}
+		if len(serial[i].repeats) != repeats || len(parallel[i].repeats) != repeats {
+			t.Fatalf("case %s: %d/%d repeats, want %d each",
+				cases[i].ID, len(serial[i].repeats), len(parallel[i].repeats), repeats)
+		}
+		for r := range repeats {
+			a, b := serial[i].repeats[r], parallel[i].repeats[r]
+			// Latency is the one field that is allowed to differ.
+			if a.label != b.label || a.labelProb != b.labelProb ||
+				a.actionProb != b.actionProb || a.actionFound != b.actionFound ||
+				a.inputTokens != b.inputTokens || a.outputTokens != b.outputTokens {
+				t.Errorf("case %s repeat %d: serial %+v, parallel %+v", cases[i].ID, r, a, b)
+			}
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != caseCount {
+		t.Errorf("%d distinct states were asked, want %d", len(asked), caseCount)
+	}
+	for state, n := range asked {
+		if want := repeats * 2; n != want { // once serial, once parallel
+			t.Errorf("%s: asked %d times, want %d", state, n, want)
+		}
+	}
 }

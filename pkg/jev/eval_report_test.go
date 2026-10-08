@@ -280,11 +280,11 @@ func TestRenderReportCoversEverySection(t *testing.T) {
 		),
 	}
 
-	out := renderReport(file, "testdata/sample.json", "jev-1.13.0", 2, results)
+	out := renderReport(file, "testdata/sample.json", "jev-1.13.0", 2, 4, results)
 
 	for _, want := range []string{
 		"=== sample (testdata/sample.json) ===",
-		`model=jev-1.13.0 cases=2 repeats=2 action_label="true"`,
+		`model=jev-1.13.0 cases=2 repeats=2 concurrency=4 action_label="true"`,
 		"notes: synthetic",
 		"PER CASE",
 		"CASE", "GROUP", "WANT", "GOT", "AGREE", "P(WANT)", "P(ACTION)", "CONF", "LATENCY",
@@ -318,7 +318,7 @@ func TestRenderReportCoversEverySection(t *testing.T) {
 // happened, whether it is repeatable, what it cost, then what to do about it.
 func TestRenderReportSectionOrder(t *testing.T) {
 	file := evalCaseFile{Name: "n", ActionLabel: "true", Question: evalQuestion{Type: string(jev.QuestionNoul)}}
-	out := renderReport(file, "p", "m", 2, []evalCaseResult{
+	out := renderReport(file, "p", "m", 2, 1, []evalCaseResult{
 		resultFor("a", "true", "clear", repeatFor("true", 0.9, 0.9), repeatFor("true", 0.9, 0.9)),
 		resultFor("b", "false", "clear", repeatFor("false", 0.9, 0.1), repeatFor("false", 0.9, 0.1)),
 	})
