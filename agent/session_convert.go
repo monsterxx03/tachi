@@ -219,32 +219,48 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 		})
 	}
 
-	// Strip orphaned tool calls from all assistant messages.
-	// LLM APIs (DeepSeek, Anthropic) require every tool_use block to have
-	// a corresponding tool_result in the next message. When a session is
-	// restored mid-turn (e.g., after a crash or interruption), an assistant
-	// message may contain tool calls whose results were never saved — e.g.
-	// a tool_call followed by user messages (user continued in a different
-	// channel) without a matching tool_result. Stripping them prevents API
-	// protocol errors.
-	for i := len(result) - 1; i >= 0; i-- {
-		if result[i].Role != "assistant" || len(result[i].ToolCalls) == 0 {
-			continue
-		}
-		// Check if any tool result exists AFTER this message.
-		hasResults := false
-		for j := i + 1; j < len(result); j++ {
-			if result[j].Role == "tool" {
-				hasResults = true
-				break
-			}
-		}
-		if !hasResults {
-			result[i].ToolCalls = nil
+	// Strip the tool calls no tool result answers.
+	//
+	// LLM APIs (DeepSeek, Anthropic) require every tool_use block to have a corresponding
+	// tool_result — the request is rejected outright otherwise. A history rebuilt here can hold an
+	// unanswered call for two reasons: the process died mid-turn (the loop records each CALL before
+	// it runs and each RESULT as it finishes — tool_executor.go — so a batch killed halfway leaves
+	// an assistant message whose calls are only PARTLY answered), or the user continued from
+	// another frontend without ever running that call.
+	//
+	// The pairing is per CALL, by id: the old check asked only whether ANY tool result followed the
+	// message and kept the whole batch when one did, so an orphan rode along for the rest of the
+	// conversation, with the session broken until someone edited the record by hand.
+	//
+	// A message left with nothing at all — no text, no thinking, no calls — is dropped with its
+	// calls: it says nothing, and an empty assistant message is not a valid one either.
+	answered := make(map[string]bool)
+	for _, m := range result {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			answered[m.ToolCallID] = true
 		}
 	}
+	kept := result[:0]
+	for i := range result {
+		m := result[i]
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			kept = append(kept, m)
+			continue
+		}
+		calls := m.ToolCalls[:0]
+		for _, tc := range m.ToolCalls {
+			if answered[tc.ID] {
+				calls = append(calls, tc)
+			}
+		}
+		m.ToolCalls = calls
+		if len(m.ToolCalls) == 0 && m.Content == "" && len(m.ThinkingBlocks) == 0 {
+			continue
+		}
+		kept = append(kept, m)
+	}
 
-	return result, nil
+	return kept, nil
 }
 
 // reminderPrefix renders buffered reminder blocks the way the live turn wraps a user

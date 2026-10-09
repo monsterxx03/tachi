@@ -530,3 +530,71 @@ func TestConvertSessionToLLMMessages_IgnoresDisplayContent(t *testing.T) {
 		}
 	}
 }
+
+// TestConvertSessionToLLMMessages_StripsOnlyTheUnansweredToolCalls pins the case a killed process
+// leaves behind, which is the reason the strip exists at all.
+//
+// The loop records each tool CALL before it executes, and each RESULT as it finishes
+// (tool_executor.go), so a process that dies in the middle of a batch leaves an assistant message
+// whose calls are only PARTLY answered. The provider rejects that outright — every tool_use block
+// needs its tool_result — and the old strip never noticed, because it asked "does any tool result
+// follow this message?" and kept the whole batch when even one did. So the orphan rode along on
+// every later request, and the session stayed broken until the record was edited by hand.
+//
+// The last request's leading history is the shape that matters: the user message that started the
+// interrupted turn is still there, and the next turn's text is appended after this conversion.
+func TestConvertSessionToLLMMessages_StripsOnlyTheUnansweredToolCalls(t *testing.T) {
+	sessionMsgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "两条都跑一下"},
+		{Type: session.MessageTypeThinking, Content: "两条命令一起发", Signature: "sig-1"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command": "git status"}`, ToolCallID: "call_1"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command": "git diff"}`, ToolCallID: "call_2"},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "status output", ToolCallID: "call_1"},
+	}
+
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, m := range result {
+		for _, tc := range m.ToolCalls {
+			if tc.ID == "call_2" {
+				t.Errorf("the unanswered tool call %q is still in the history: %+v", tc.ID, result)
+			}
+		}
+	}
+	var calls []llm.ToolCall
+	for _, m := range result {
+		calls = append(calls, m.ToolCalls...)
+	}
+	if len(calls) != 1 || calls[0].ID != "call_1" {
+		t.Errorf("the answered tool call must survive: got %+v", calls)
+	}
+	// The thinking block belongs to the same assistant message and stays: the call it was made for
+	// survived, so the block is still the reasoning behind it.
+	if len(result) < 2 || len(result[1].ThinkingBlocks) != 1 {
+		t.Errorf("the assistant message lost its thinking block: %+v", result)
+	}
+}
+
+// TestConvertSessionToLLMMessages_DropsAnAssistantMessageThatLosesEveryCall is the other end:
+// when NO call of a tool-call-only assistant message can be answered, that message has nothing
+// left to say. An emptied assistant message (no text, no thinking, no calls) is not a valid
+// message for the provider either — and it would sit between the user's message and the next
+// turn's, so it goes entirely.
+func TestConvertSessionToLLMMessages_DropsAnAssistantMessageThatLosesEveryCall(t *testing.T) {
+	sessionMsgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "看看目录"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "call_1"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "call_2"},
+	}
+
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0].Role != "user" {
+		t.Fatalf("expected the orphaned assistant message to be dropped, got %+v", result)
+	}
+}

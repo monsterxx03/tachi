@@ -694,6 +694,15 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 //
 // If cancellation happens during step 2, we'd have tool_calls without results
 // which violates the LLM API's alternating role requirement.
+//
+// The all-or-nothing form ("does ANY tool result follow this message?") is correct FOR THIS INPUT
+// and only for it: executeAndAppendTools appends a batch's results only once the whole batch has
+// finished, so a run state either has every result of that assistant message or none. A history
+// rebuilt FROM DISK is the other shape — each call and each result is recorded on its own
+// (tool_executor.go), so a killed process leaves a batch answered only in part — and it is
+// session_convert.go's per-ID pairing that handles that one (issue #47). Reusing this check there
+// is what kept the orphan alive for the rest of the conversation; do not reach for it in a
+// from-disk path.
 func stripPendingToolCalls(msgs []llm.Message) []llm.Message {
 	if len(msgs) == 0 {
 		return msgs
