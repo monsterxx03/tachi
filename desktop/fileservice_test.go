@@ -157,7 +157,7 @@ func TestSavePastedImageStoresUnderTheSession(t *testing.T) {
 	if path == got.Ref {
 		t.Fatalf("ref = %q, want an @-reference", got.Ref)
 	}
-	if want := filepath.Join(dir, pastedDirName) + string(filepath.Separator); !strings.HasPrefix(path, want) {
+	if want := filepath.Join(dir, "pasted") + string(filepath.Separator); !strings.HasPrefix(path, want) {
 		t.Errorf("pasted file %q is not under the session's directory (%q)", path, want)
 	}
 

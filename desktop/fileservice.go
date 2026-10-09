@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/agent/sessionref"
@@ -27,6 +26,7 @@ import (
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // FileDropEvent is emitted to the frontend when files are dropped onto the
@@ -351,12 +351,6 @@ type PastedImageVO struct {
 	Error string `json:"error,omitempty"`
 }
 
-// pastedDirName is where a session's pasted images live: beside oneoff/ and subagent/, inside the
-// session's own directory. A screenshot belongs to the conversation it was sent in and dies with
-// it — the session cleanup removes the whole directory — and it must not land in the user's
-// workspace, where it would show up in their diff.
-const pastedDirName = "pasted"
-
 // SavePastedImage stores an image pasted into the composer and answers with the @-reference that
 // attaches it — the SAME route a dropped file takes (ResolveDroppedPaths), because that is already
 // how an image reaches the model: @-file expansion turns the reference into a multi-modal content
@@ -379,6 +373,10 @@ const pastedDirName = "pasted"
 // (docs/agents/prompt-cache.md). This pasted file is what the @-reference keeps pointing at — a
 // copy of the bytes, deliberately, since the record must not depend on a file the reader can
 // edit or delete.
+//
+// WHERE the file goes is the session package's business, not this binding's: the TUI pastes images
+// too, and its own way in is the same file in the same place (session.SavePastedImage) — one
+// layout for both frontends, stated once.
 func (s *AgentService) SavePastedImage(sessionID, mediaType, data string) PastedImageVO {
 	ext, ok := llm.ImageExtForMediaType(mediaType)
 	if !ok {
@@ -395,19 +393,14 @@ func (s *AgentService) SavePastedImage(sessionID, mediaType, data string) Pasted
 		return PastedImageVO{Error: fmt.Sprintf("粘贴的图片太大（%s，上限 %s）",
 			strutil.HumanBytes(int64(len(raw))), strutil.HumanBytes(llm.MaxImageSize))}
 	}
-	dir, err := sessionDirPath(sessionID)
-	if err != nil {
+	// The id names one directory under the store and comes from the webview, so it is resolved —
+	// and refused when it is not a single path element — before anything is written; the message is
+	// this frontend's, which is why the resolution happens here rather than inside the store call.
+	if _, err := sessionDirPath(sessionID); err != nil {
 		return PastedImageVO{Error: err.Error()}
 	}
-	sub := filepath.Join(dir, pastedDirName)
-	if err := os.MkdirAll(sub, 0o700); err != nil {
-		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
-	}
-	// Time for the eye, a short uuid for uniqueness: a millisecond timestamp alone collides when
-	// two pastes land in the same one (measured by this package's own test — the second paste
-	// overwrote the first), and a lost screenshot is not a failure the reader could notice.
-	path := filepath.Join(sub, "paste-"+time.Now().Format("20060102-150405")+"-"+strutil.ShortUUID(8)+ext)
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	path, err := session.SavePastedImage(sessionID, ext, raw)
+	if err != nil {
 		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
 	}
 	return PastedImageVO{Ref: "@" + path}

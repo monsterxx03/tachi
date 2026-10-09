@@ -71,39 +71,23 @@ func (t *ReadTool) Properties() map[string]PropertySchema {
 func (t *ReadTool) Required() []string { return []string{"path"} }
 func (t *ReadTool) Parallel() bool     { return true }
 
-// imageMagicBytes contains magic byte signatures for image format detection.
-// Checked after extension match to avoid false positives.
-var imageMagicBytes = map[string][]byte{
-	"image/png":  {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
-	"image/jpeg": {0xFF, 0xD8, 0xFF},
-	"image/gif":  {0x47, 0x49, 0x46, 0x38}, // "GIF8"
-	"image/webp": nil,                      // webp detected by RIFF+WEBP; handled separately
-}
-
 // detectImageMime determines whether a file is a supported image format.
 // Uses file extension first, then validates with magic bytes.
 // Returns the MIME type or empty string if not a supported image.
+//
+// The two halves are deliberately BOTH required: the extension says what the caller claims the file
+// is, the magic bytes (llm.ImageMediaTypeForBytes, which recognises the formats with no name to
+// lean on) say what it actually holds, and a file whose bytes disagree with its name is not an
+// image this tool will hand to a model.
 func detectImageMime(filePath string, data []byte) string {
 	ext := strings.ToLower(path.Ext(filePath))
 	mime, ok := llm.ImageMediaType(ext)
 	if !ok {
 		return ""
 	}
-
-	// Validate with magic bytes
-	if expected, ok := imageMagicBytes[mime]; ok && expected != nil {
-		if len(data) < len(expected) || !bytes.Equal(data[:len(expected)], expected) {
-			return ""
-		}
+	if llm.ImageMediaTypeForBytes(data) != mime {
+		return ""
 	}
-
-	// WebP: check RIFF header (first 4 bytes) + WEBP at offset 8
-	if mime == "image/webp" {
-		if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
-			return ""
-		}
-	}
-
 	return mime
 }
 

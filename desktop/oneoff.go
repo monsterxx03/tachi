@@ -26,6 +26,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -481,14 +482,15 @@ func oneOffPath(sessionID, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !isSinglePathElement(name) || filepath.Ext(name) != ".jsonl" {
+	if !fileutil.IsSinglePathElement(name) || filepath.Ext(name) != ".jsonl" {
 		return "", fmt.Errorf("非法记录名：%q", name)
 	}
 	return filepath.Join(dir, name), nil
 }
 
-// isSinglePathElement lives beside the session-path resolution it guards (sessiondir.go): it
-// is the rule for "this name is one entry inside one directory", not a one-off detail.
+// The record-name rule is the shared "one entry in one directory" predicate (pkg/fileutil), the
+// same one the session directory resolution uses: a name read back from ListOneOffs must not be
+// able to walk out of the directory it came from either.
 
 // GetUIState returns the desktop-only UI preferences the frontend owns.
 //

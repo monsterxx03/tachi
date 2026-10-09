@@ -654,13 +654,15 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 - **A pasted image is stored, then attached by reference — the same route a dropped file takes**
   (`SavePastedImage`): a screenshot is BYTES with no path, so it is written under the SESSION's own directory
   (`pasted/`, so the file dies with the conversation and never appears in the user's workspace diff) and the
-  binding answers with an ABSOLUTE `@`-reference. The answer is a VO, not "ok"/reason — a paste that silently
-  does nothing is the same class of bug as a message that silently goes nowhere. **The `@`-reference is
-  expanded ONCE, for the turn it is sent with**, and what a later turn sees comes from the record instead:
-  the image part is persisted with its bytes (`session.Message.Parts` + the session's `images/` blob — see
-  session-store.md), so a reloaded history rebuilds the image rather than the placeholder. `paste-image`
-  asserts the pasted BYTES at the LLM boundary; `image-reload` asserts them again after a seeded record is
-  loaded from disk, which is what a restart does.
+  binding answers with an ABSOLUTE `@`-reference. **That storage is `session.SavePastedImage`, not this
+  package's** — the TUI pastes images too and takes the same route into the same directory, so the layout is
+  stated once, in the store (`.tachi.md` → Pasted Images). The answer is a VO, not "ok"/reason — a paste that
+  silently does nothing is the same class of bug as a message that silently goes nowhere. **The
+  `@`-reference is expanded ONCE, for the turn it is sent with**, and what a later turn sees comes from the
+  record instead: the image part is persisted with its bytes (`session.Message.Parts` + the session's
+  `images/` blob — see session-store.md), so a reloaded history rebuilds the image rather than the
+  placeholder. `paste-image` asserts the pasted BYTES at the LLM boundary; `image-reload` asserts them again
+  after a seeded record is loaded from disk, which is what a restart does.
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`). The
   id comes from the CALLER, and every refusal is a returned string — never a bare `"ok"` for a message that
   started no turn, because the frontend draws the user's bubble and a running placeholder BEFORE the call: a

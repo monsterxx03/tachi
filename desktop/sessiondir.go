@@ -13,29 +13,25 @@ package main
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
 
-	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/session"
 )
 
-// sessionDirPath resolves the directory a session is stored in.
+// sessionDirPath resolves the directory a session is stored in, in the wording this frontend shows.
 //
-// sessionID arrives from the webview, so it is treated as untrusted: only a single path
-// element is accepted. Without that check a name like "../../other-session" would point
-// somewhere else entirely — and the caller is one `open` away from showing it.
+// The layout and the untrusted-id rule belong to session.DirFor (the same directory is where the
+// TUI's pasted images land, so it is stated once, in the store); what stays here is the message. The
+// id arrives from the webview, and a refusal is something the reader sees.
 func sessionDirPath(sessionID string) (string, error) {
-	if sessionID == "" {
+	dir, err := session.DirFor(sessionID)
+	switch {
+	case err == nil:
+		return dir, nil
+	case errors.Is(err, session.ErrNoSessionID):
 		return "", errors.New("没有会话")
-	}
-	if !isSinglePathElement(sessionID) {
+	default:
 		return "", fmt.Errorf("非法会话名：%q", sessionID)
 	}
-	dir, err := config.SessionDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, sessionID), nil
 }
 
 // OpenSessionDir opens a session's directory in the Finder — the sidebar row's right-click
@@ -50,11 +46,4 @@ func (s *AgentService) OpenSessionDir(id string) string {
 	// Opening a directory is the app's existing "open this thing" action, so the stat, the
 	// launcher and the error wording stay ONE implementation rather than a second copy.
 	return s.OpenPath(dir)
-}
-
-// isSinglePathElement reports whether s names one entry in one directory: no separator, no
-// traversal, and not the current/parent directory itself.
-func isSinglePathElement(s string) bool {
-	return s != "" && s != "." && s != ".." &&
-		s == filepath.Base(s) && !strings.ContainsAny(s, `/\\`)
 }

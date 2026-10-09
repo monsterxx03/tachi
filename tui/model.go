@@ -640,6 +640,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.state == stateIdle || turnRunning(m.state) {
+			// A paste carrying NOTHING means the clipboard held no text — which is exactly the case
+			// in which a terminal cannot deliver an image: if the clipboard has one, that is what the
+			// reader meant (see pasteClipboard). Terminals differ on whether they report such a
+			// gesture at all, which is why ctrl+v exists as well.
+			if msg.Content == "" {
+				return m, m.pasteClipboard()
+			}
 			oldHeight := m.input.Height()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -648,6 +655,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		}
+
+	case clipboardPasteMsg:
+		return m.handleClipboardPaste(msg)
 
 	case spinner.TickMsg:
 		if m.state == stateWaiting || m.state == stateStreaming {
@@ -932,6 +942,11 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+m":
 		return m, m.enterMCPOverlay()
+	case "ctrl+v":
+		// The TUI's own paste: the terminal's Cmd+V can only deliver TEXT, so an image on the
+		// clipboard is read here instead (see pasteClipboard) — and text goes through the same
+		// handler, so this key is a working paste in terminals that never bound ctrl+v either.
+		return m, m.pasteClipboard()
 	case "esc":
 		if m.copyMode {
 			m.copyMode = false

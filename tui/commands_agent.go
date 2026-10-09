@@ -57,7 +57,14 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 
 // currentSessionID returns the active tachi session ID ("" if none), used to
 // anchor one-off transcripts (/commit, /review) under the session directory.
+//
+// No session manager — or no agent at all, as in a model built without one — is "" rather than a
+// crash: callers ask this about state that may simply not exist yet (the first turn creates the
+// session), and "" is what they act on.
 func (m *Model) currentSessionID() string {
+	if m.agent == nil {
+		return ""
+	}
 	if sm := m.agent.SessionManager(); sm != nil {
 		if cur := sm.Current(); cur != nil {
 			return cur.ID

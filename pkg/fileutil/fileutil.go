@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MarshalJSON serializes v as JSON with 2-space indentation — the project-wide
@@ -168,6 +169,18 @@ func RemoveIgnoreNotExist(path string) error {
 		return err
 	}
 	return nil
+}
+
+// IsSinglePathElement reports whether name is exactly one entry in one directory: no separator, no
+// traversal, and not the current or parent directory itself.
+//
+// It is the rule for a name that arrives from OUTSIDE — a webview, a stored record — before it is
+// joined onto a directory the program owns. A single shared implementation because the failure it
+// prevents is the same everywhere: "../../other" joined onto a path escapes it, and the caller is
+// usually one file write, or one `open`, away from acting on the result.
+func IsSinglePathElement(name string) bool {
+	return name != "" && name != "." && name != ".." &&
+		name == filepath.Base(name) && !strings.ContainsAny(name, `/\`)
 }
 
 // IsDir reports whether path exists and is a directory.

@@ -21,6 +21,11 @@ import (
 
 type InputSubmitMsg string
 
+// inputPlaceholder is the hint line an empty input shows. It names the keys the TUI binds ITSELF
+// (the ones a reader could not guess): Ctrl+V is the paste, and the reason it has to be named is
+// that the terminal's own Cmd+V can only ever deliver text.
+const inputPlaceholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history, Ctrl+V paste)"
+
 // maxCompletionDescLen is the maximum rune length for a skill description
 // shown in slash-command completions. Longer descriptions are truncated.
 const maxCompletionDescLen = 60
@@ -72,7 +77,7 @@ type InputArea struct {
 
 func NewInputArea(historyMax int, historyPath string, l *logger.Logger) InputArea {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
+	ta.Placeholder = inputPlaceholder
 	// Only show the "> " prompt on the first visual line. Wrapped continuation
 	// lines get a 2-space indent instead to keep alignment without clutter.
 	ta.Prompt = ""
@@ -135,6 +140,17 @@ func (i *InputArea) SessionSource() *sessionref.Source { return i.sessions }
 // completion can leave it out of the list.
 func (i *InputArea) SetCurrentSession(id string) { i.currentSessionID = id }
 
+// InsertText inserts text at the cursor, for a caller that has the text to insert rather than a
+// keystroke (the paste path inserting an image's @-reference).
+//
+// It clears the @-completions popup because it bypasses Update, which is what normally keeps the
+// popup in step with the value: matches for the old value left on screen would describe something
+// that is no longer there.
+func (i *InputArea) InsertText(text string) {
+	i.textarea.InsertString(text)
+	i.clearAtCompletions()
+}
+
 // SetMaxHeight dynamically caps the total height of the input area (textarea +
 // completions) to at most maxTotal. This allows the parent layout to constrain
 // the input area and force internal scrolling in the textarea when screen space
@@ -155,7 +171,7 @@ func (i *InputArea) SetMaxHeight(maxTotal int) {
 func (i *InputArea) SetEnabled(enabled bool) {
 	i.enabled = enabled
 	if enabled {
-		i.textarea.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
+		i.textarea.Placeholder = inputPlaceholder
 		i.histIdx = -1
 		i.histScratch = ""
 		i.clearAtCompletions()

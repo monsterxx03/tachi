@@ -693,6 +693,10 @@ export function SaveMCPServerEntry(entry: $models.MCPServerEntryVO): $Cancellabl
  * (docs/agents/prompt-cache.md). This pasted file is what the @-reference keeps pointing at — a
  * copy of the bytes, deliberately, since the record must not depend on a file the reader can
  * edit or delete.
+ * 
+ * WHERE the file goes is the session package's business, not this binding's: the TUI pastes images
+ * too, and its own way in is the same file in the same place (session.SavePastedImage) — one
+ * layout for both frontends, stated once.
  */
 export function SavePastedImage(sessionID: string, mediaType: string, data: string): $CancellablePromise<$models.PastedImageVO> {
     return $Call.ByID(871218941, sessionID, mediaType, data);
