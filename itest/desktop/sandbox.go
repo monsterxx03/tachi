@@ -29,6 +29,7 @@ import (
 //	  driver.js            harness.js + the scenario, with the sink URL filled in
 //	  mock-requests.txt    what the model was asked, for the Go-side assertions
 //	  app.log              the app's own stdout/stderr (Linux only: `open` on macOS discards it)
+//	  opened.txt           what the app asked the SYSTEM to open — a link, a file (see demoEnv)
 type sandbox struct {
 	dir     string
 	appPath string
@@ -86,6 +87,11 @@ func (sb *sandbox) demoEnv() map[string]string {
 		"HOME":          sb.home,
 		"TACHI_DEMO":    "1",
 		"TACHI_DEMO_JS": filepath.Join(sb.dir, "driver.js"),
+		// Every launcher action (OpenURL, OpenPath) is RECORDED instead of performed, and the file
+		// lives in the sandbox because the runner owns it — see desktop/demo.go. Set for every
+		// scenario, not only the one that clicks a link: a run must never open a browser or a Finder
+		// window on the machine it is happening on, whoever's driver does the clicking.
+		"TACHI_DEMO_OPEN_LOG": filepath.Join(sb.dir, "opened.txt"),
 	}
 	if sb.browserFetch {
 		// The MCP OAuth flow would otherwise open a real browser — on the machine this run is
@@ -212,6 +218,26 @@ func (sb *sandbox) gitInit() error {
 		}
 	}
 	return nil
+}
+
+// openedByTheApp returns the argument lists the app handed to `open` / xdg-open (one per line,
+// space-joined), i.e. the links and paths a driver's click actually asked the system for. Empty
+// when nothing was launched — which is the normal case, and the reason most scenarios ignore it.
+//
+// It reads the artifact TACHI_DEMO_OPEN_LOG points the app at (demoEnv): the app records instead of
+// launching, so this file is the only evidence that a click reached the launcher at all.
+func (sb *sandbox) openedByTheApp() []string {
+	body, err := os.ReadFile(filepath.Join(sb.dir, "opened.txt"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // writeDriver concatenates the shared harness and the scenario driver into the single

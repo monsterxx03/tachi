@@ -139,6 +139,11 @@ type checkCtx struct {
 	// mcpConfigBefore is the sandbox's mcp.json as it was seeded, for asserting that a
 	// panel toggle edited it by exactly one line.
 	mcpConfigBefore string
+	// opened is what the app asked the SYSTEM to open (one entry per launcher call, the argv
+	// space-joined): a link clicked in the transcript, a 打开 button. Read from the sandbox's own
+	// artifact, where TACHI_DEMO_OPEN_LOG points the app (desktop/demo.go) — a run must never really
+	// launch a browser or Finder, so this is the only evidence the click reached the launcher.
+	opened []string
 }
 
 func (c *checkCtx) check(label string, ok bool, detail string) {
@@ -168,6 +173,38 @@ func requestTail(r *mockllm.RecordedRequest) string {
 		parts = parts[len(parts)-4:]
 	}
 	return strings.Join(parts, " | ")
+}
+
+// orphanCallID is the tool call the orphan-tool-call fixture leaves UNANSWERED, and
+// orphanAnsweredCallID is the one its result answers. Named rather than inlined because both the
+// fixture and the assertion spell them, and a typo in either would make the assertion vacuous.
+const (
+	orphanCallID         = "call_orphan"
+	orphanAnsweredCallID = "call_answered"
+)
+
+// requestHasToolCall reports whether ONE request advertises a tool call with that id — the question
+// a rebuilt history has to answer about an unpaired call. It reads the normalized view, where a
+// call's id survives (mockllm.ToolCall).
+func requestHasToolCall(r *mockllm.RecordedRequest, id string) bool {
+	for _, m := range r.Messages {
+		for _, tc := range m.ToolCalls {
+			if tc.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// requestHasToolResult reports whether ONE request carries the tool message answering that call.
+func requestHasToolResult(r *mockllm.RecordedRequest, id string) bool {
+	for _, m := range r.Messages {
+		if m.Role == "tool" && m.ToolCallID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // requestSeen reports whether any request's messages contain want (the prompt-level
@@ -3291,6 +3328,80 @@ permissions:
 				}
 			},
 		},
+		//
+		//
+		// external-link: 消息区里的链接点下去必须走**系统浏览器**，而不是让 webview 自己导航走。
+		//
+		// webview 没有标签页、没有后退键（窗口就是 app 本身），所以旧行为是「点一下，整个界面被那个网页
+		// 换掉，而且回不来」（issue #48）。修法是一条路：响应里的 <a> 由前端的 MdLink 接管
+		// （preventDefault + AgentService.OpenURL），后端只放行 http/https/mailto。
+		//
+		// 断言分两半。driver 侧：链接是个带地址的真控制，点完应用还在原地 —— 真被导航走的话，那个页面
+		// 整个换掉，driver 连下一行断言都跑不到。Go 侧：那次点击确实把**原样的地址**交给了系统启动器。
+		// 启动器在脚本运行里被换成记录器（desktop/demo.go 的 TACHI_DEMO_OPEN_LOG），所以 smoke 绝不会
+		// 在别人的机器上弹出浏览器窗口，而记下来的 argv 就是「本来会被打开的东西」。
+		{
+			name: "external-link",
+			files: map[string]string{
+				"README.md": "# smoke\n\nexternal-link scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("看这个：[示例]("+externalLinkURL+") 里面有详情。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("这一轮只有一次请求", len(c.requests) == 1, requestCount(c.requests))
+				// 不是「文件里含有这个 URL」，而是「启动器收到的就是它」：多一个字少一个字都算错，
+				// 而多出来的启动调用（比如顺手把整个会话目录也打开了）同样是失败。
+				c.check("点链接把地址原样交给了系统启动器",
+					len(c.opened) == 1 && c.opened[0] == externalLinkURL, fileList(c.opened))
+			},
+		},
+		//
+		//
+		// orphan-tool-call: 进程死在工具批次中间之后，重启加载出来的历史里会留下**只配对了一半**的
+		// tool call —— assistant 一次发两条 call，落盘顺序是「先把 call 全记下，再逐个记 result」
+		// （agent/tool_executor.go），所以 kill 在第二条跑完之前就只剩一条 result。
+		//
+		// provider 会直接拒掉这种请求（每个 tool_use 都要有 tool_result），而旧的全有全无式清理只看
+		// 「这条之后有没有任意一条 tool」，有一条就整批留下 —— 于是孤儿 call 跟着会话一路走到最后，
+		// 除非有人手改记录。desktop 只是最容易重启到这条路径的入口（record 从磁盘重建）。
+		//
+		// 现场由 fixture 预置（预置 = 重启的等价物）：一条 user + thinking + 两条 Bash call + 只有
+		// 第一条 call 的 result。断言打在**模型实际收到的请求**上：孤儿 call 不在，配过对的那条还在
+		// （少了后者，这条断言在「清理把手里的 call 全删了」时也会绿）。
+		{
+			name: "orphan-tool-call",
+			files: map[string]string{
+				"README.md": "# smoke\n\norphan-tool-call scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("好，接着来。", 900)},
+			},
+			seedMessages: []session.Message{
+				{Type: session.MessageTypeUser, Content: "两条都跑一下"},
+				{Type: session.MessageTypeThinking, Content: "一起发两条命令", Signature: "sig-orphan"},
+				{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command": "git status"}`,
+					ToolCallID: orphanAnsweredCallID},
+				{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command": "git diff"}`,
+					ToolCallID: orphanCallID},
+				{Type: session.MessageTypeToolResult, Name: "Bash", Result: "nothing to commit",
+					ToolCallID: orphanAnsweredCallID},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("这一轮只有一次请求", len(c.requests) == 1, requestCount(c.requests))
+				if len(c.requests) == 0 {
+					return
+				}
+				req := c.requests[0]
+				c.check("没有结果的 tool call 没有跟着上线", !requestHasToolCall(req, orphanCallID),
+					requestTail(req))
+				c.check("配过对的那条 call 还在（不是把两条一起删了）", requestHasToolCall(req, orphanAnsweredCallID),
+					requestTail(req))
+				c.check("它的 result 也还在", requestHasToolResult(req, orphanAnsweredCallID), requestTail(req))
+			},
+		},
 	}
 }
 
@@ -3323,6 +3434,15 @@ const mcpEditSeedEntry = `    {
       "args": ["smoke"],
       "enabled": false
     }`
+
+// externalLinkURL is the address the external-link scenario's reply links to. The DRIVER spells it
+// too (drivers/external-link.js reads it off the anchor) — a driver cannot read a Go constant — so
+// the two must stay identical, exactly like pasteImageB64 below.
+//
+// It points at example.com because nothing ever fetches it: the app records the launcher call
+// instead of performing it (TACHI_DEMO_OPEN_LOG), which is what keeps a smoke run from opening a
+// browser window on the machine it runs on.
+const externalLinkURL = "https://example.com/tachi-link-smoke"
 
 // pasteImageB64 is the 1x1 PNG the paste-image driver pastes, as the webview sends it (a data URL's
 // payload). It is duplicated in drivers/paste-image.js — a driver cannot read a Go constant — so the

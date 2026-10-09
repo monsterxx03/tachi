@@ -102,6 +102,8 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
+| a link in a reply, clicked (the system browser opens it and the webview stays put) | `external-link` |
+| a history REBUILT from disk rather than written live — a record seeded before the app started (`seedMessages`), an interrupted turn's leftovers | `orphan-tool-call`, `at-file-reload`, `image-reload` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
 | the settings page's MCP server editor (the one block that writes mcp.json instead of config.yaml) | `mcp-edit` |
@@ -218,9 +220,14 @@ Fixtures exist where the real path needs something a driver cannot do:
   ⌘= / ⌘- / ⌘0 needed Wails' `View`→zoom items removed (`desktop/menu_darwin.go`) and why that half is pinned
   by `desktop/menu_darwin_test.go` (asserting on ACCELERATORS, not on labels). `font-size` asserts what the keys
   DO. Those two gate on darwin because the menu itself is macOS-only — see the Linux section.
-- **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the real
-  Finder. Assert the control on screen and pin the argument off screen (`TestOpenSessionDirOpensTheSessionDirectory`
-  stubs `openFile` and reads the argv). Any "open in …" action has this shape.
+- **A launcher action is RECORDED in a scripted run, so a driver may click one — the argv is the assertion**
+  (`TACHI_DEMO_OPEN_LOG`, `desktop/demo.go`): the app appends what it would have handed to `open` / xdg-open to
+  the runner's own file (`opened.txt`, read back as `checkCtx.opened`) instead of launching it, for every
+  scenario. That is what keeps a run from opening a browser or a Finder window on the machine it happens on, and
+  it is what lets `external-link` prove the CLICK — the one fact a Go unit test cannot see — while
+  `TestOpenSessionDirOpensTheSessionDirectory` stays the half that pins the argv of a specific action. A
+  scenario that only wants the control asserted (打开会话目录 is asserted and deliberately not clicked) still pins it
+  that way.
 - **A control used as a TRIGGER for another behaviour pins neither** — a button and a page switch must not ride
   on one click. And **an assertion belongs to the scenario that produces the fact**: a check that sat in
   `oneoff-footer`'s `after` while the driver producing the fact is `oneoff-panel`'s read a default forever.
@@ -646,6 +653,16 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath`, both `stat`-ing first and returning `"ok"` or the reason. New open/reveal actions
   reuse them, and a test replaces the single `openFile` var to read the argv.
+- **A link in prose is the one action that leaves the app for the outside world, and it is ONE path from the
+  click to the system browser**: the backend's `OpenURL` (same `openFile` launcher, since `open` / xdg-open take
+  a URL as readily as a path) and the frontend's `MdLink` (`frontend/src/markdown.tsx`), which the transcript's
+  react-markdown AND the review panel's `InlineMd` both render. A plain `<a href>` in this page is a one-way
+  door — the webview has no tabs and no back button, so following one replaced the whole app with the page and
+  left nothing to go back to (issue #48) — hence `preventDefault` + the binding, and hence a SECOND renderer
+  with its own idea of a link is how one of them becomes dead. **The scheme is an allowlist** (http/https/mailto)
+  because the URL comes from markdown a MODEL wrote and the platform launcher opens whatever it has a handler
+  for: `file:` would turn a link in a reply into "open this path on your machine", outside every rule the file
+  tools answer to. Smoke: `external-link` (which also pins that clicking does not navigate).
 - **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`;
   `shutil.GitBranch`): two checkouts of one repository are otherwise the same row. It is probed PER ROOT when
   the panel opens (never stored: a checkout moves under you), skipped for a missing root, and EMPTY for one
