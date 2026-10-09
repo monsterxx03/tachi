@@ -61,8 +61,14 @@ split + index when a subject grows) apply to this split too.
 ## The search
 
 - **Two halves, and only one of them is narrowed.** A query that NAMES what it wants (`select:`, an exact or
-  suffix tool name, an `mcp__server` prefix, the empty-query listing) is resolved against EVERY server: a name
-  is an identity, and a mis-remembered server must not turn a hit into a miss. Prose is what `server` narrows.
+  suffix tool name, an `mcp__server` prefix) is resolved against EVERY server: a name is an identity, and a
+  mis-remembered server must not turn a hit into a miss. Prose is what `server` narrows — **and so is the
+  empty-query listing**, which is a page of the pool rather than an identity, so answering it from every server
+  hands the next request another server's schemas (a tool list change, i.e. a whole-prefix re-read). Both rules
+  live in `DeferredPool.SearchExact`, the one entry point every caller's exact half goes through — including the
+  Jev gate, which takes that half itself rather than via `SearchIn`; a searcher that keeps its own copy of the
+  listing rule is how the same input got two answers. The search tool rejects a whitespace query
+  (`query is required`), so the listing is reached by code, never by a model forgetting to fill the field.
 - **`server` exists to keep the Jev gate affordable** — a candidate is one question, so a full pool is one
   request per hundred tools. `tools.NormalizeMCPServer` normalizes what the model wrote (`mcp__GITHUB`,
   ` github ` → `github`), and the searcher receives `tools.MCPSearchOptions`. An unknown `server` is an ERROR

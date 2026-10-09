@@ -174,7 +174,7 @@ func (s PoolSearcher) SearchAdvice() string { return tools.KeywordSearchAdvice }
 // jev_search.go — can take the exact half on its own and leave the prose to its
 // own judgment, while this stays the whole answer for every other caller.
 func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
-	if exact, ok := p.SearchExact(query, maxResults); ok {
+	if exact, ok := p.SearchExact(query, "", maxResults); ok {
 		return exact
 	}
 	return p.keywordSearch(p.snapshot(), query, clampMaxResults(maxResults))
@@ -184,14 +184,23 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 // exact or suffix tool NAME, an `mcp__server` prefix, or nothing at all (the
 // caller asked for the listing). ok is false for anything else — prose, which
 // is a judgment call rather than a lookup.
-func (p *DeferredPool) SearchExact(query string, maxResults int) ([]SearchResult, bool) {
+//
+// server narrows the LISTING and nothing else. Every name form above is
+// resolved against the whole pool — a name is an identity, and a mis-remembered
+// server must not turn a hit into a miss — while a page of the pool is not an
+// identity and has no reason to come from another server's tools. The rule
+// lives here, in the one place every caller's exact half goes through, because
+// the Jev gate takes that half on its own: answering it from a different
+// candidate set than the keyword path is how one input gets two answers.
+func (p *DeferredPool) SearchExact(query, server string, maxResults int) ([]SearchResult, bool) {
 	maxResults = clampMaxResults(maxResults)
-	allTools := p.snapshot()
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return p.searchAll(allTools, maxResults), true
+		return p.searchAll(p.snapshotFor(server), maxResults), true
 	}
+
+	allTools := p.snapshot()
 
 	// 1. Direct selection via "select:" prefix.
 	// When a name doesn't include the "mcp__server__" prefix (i.e. the user gives just
@@ -265,6 +274,11 @@ func (p *DeferredPool) SearchExact(query string, maxResults int) ([]SearchResult
 //   - An empty query is a listing, and a listing narrowed to a server is that
 //     server's tools, not the whole pool's first page.
 //
+// Both live with SearchExact rather than here, because the Jev gate reaches
+// that half without passing through this method (see JevSearcher.Search) and one
+// input must not get two answers. What is left here is the keyword half, whose
+// candidates ARE the narrowing.
+//
 // An unknown server yields whatever the empty candidate set scores (nothing).
 // The caller that knows the names rejects it first — see
 // tools.MCPSearchToolsTool.checkServer — so an empty answer is never read as
@@ -274,10 +288,7 @@ func (p *DeferredPool) SearchIn(query, server string, maxResults int) []SearchRe
 		return p.Search(query, maxResults)
 	}
 	maxResults = clampMaxResults(maxResults)
-	if strings.TrimSpace(query) == "" {
-		return p.searchAll(p.snapshotFor(server), maxResults)
-	}
-	if exact, ok := p.SearchExact(query, maxResults); ok {
+	if exact, ok := p.SearchExact(query, server, maxResults); ok {
 		return exact
 	}
 	return p.keywordSearch(p.snapshotFor(server), query, maxResults)

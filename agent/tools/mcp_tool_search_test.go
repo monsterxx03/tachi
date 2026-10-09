@@ -12,9 +12,13 @@ import (
 // servers" case, where a `server` argument is passed through unvalidated.
 type stubSearcher struct {
 	results []MCPSearchResultItem
+	// searched records that a query REACHED the searcher — what a test needs to
+	// pin that an input was rejected before anything was looked up.
+	searched bool
 }
 
 func (s *stubSearcher) Search(_ context.Context, opts MCPSearchOptions) []MCPSearchResultItem {
+	s.searched = true
 	return s.results
 }
 
@@ -210,6 +214,23 @@ func TestMCPSearchToolsTool_Execute_EmptyQuery(t *testing.T) {
 	_, err := tool.ExecuteContext(t.Context(), `{"query": ""}`)
 	if err == nil {
 		t.Error("expected error for empty query")
+	}
+}
+
+// A whitespace query is the same mistake as an empty one, not the empty-query
+// LISTING: read as a listing it answered from the pool's first page, marking
+// another server's tools discovered — so a stray space changed the next
+// request's tool list (and with it the whole prompt prefix) without saying so.
+func TestMCPSearchToolsTool_Execute_WhitespaceQuery(t *testing.T) {
+	searcher := &stubSearcher{results: nil}
+	tool := NewMCPSearchToolsTool(searcher, &stubTracker{})
+
+	_, err := tool.ExecuteContext(t.Context(), `{"query": "  "}`)
+	if err == nil {
+		t.Error("expected error for a whitespace query")
+	}
+	if searcher.searched {
+		t.Error("a whitespace query must not reach the searcher")
 	}
 }
 

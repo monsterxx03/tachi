@@ -402,6 +402,40 @@ func TestDeferredPool_SearchIn_EmptyQueryListsThatServer(t *testing.T) {
 	assert.Equal(t, "mcp__pg__query", results[0].Name)
 }
 
+// The listing rule belongs to SearchExact, because SearchIn is not the only way
+// into that half: the Jev gate calls it directly. A caller that took the rule
+// with it — or dropped it — answered a narrowed listing from the whole pool,
+// and the next request's tool list then carried another server's schemas.
+func TestDeferredPool_SearchExact_ListingHonorsServer(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", ""))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", ""))
+
+	listing, ok := p.SearchExact("", "pg", 5)
+	require.True(t, ok)
+	require.Len(t, listing, 1)
+	assert.Equal(t, "mcp__pg__query", listing[0].Name)
+	assert.Equal(t, tools.MatchByName, listing[0].MatchedBy)
+
+	// Whitespace is the same request, whoever trimmed it: the caller's own
+	// spelling is not what decides whether a server applies.
+	spaced, ok := p.SearchExact("   ", "pg", 5)
+	require.True(t, ok)
+	assert.Equal(t, listing, spaced)
+
+	// No server is the whole pool, unchanged — the behaviour every caller had
+	// before the parameter existed.
+	all, ok := p.SearchExact("", "", 5)
+	require.True(t, ok)
+	assert.Len(t, all, 2)
+
+	// A NAME is not a listing: it stays global even with a server named.
+	byName, ok := p.SearchExact("mcp__gh__pr", "pg", 5)
+	require.True(t, ok)
+	require.Len(t, byName, 1)
+	assert.Equal(t, "mcp__gh__pr", byName[0].Name)
+}
+
 // No server is the pool's own search, unchanged — which is the behaviour every
 // caller had before the parameter existed.
 func TestDeferredPool_SearchIn_NoServerIsSearch(t *testing.T) {

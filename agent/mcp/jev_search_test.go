@@ -119,6 +119,39 @@ func TestJevSearcher_NarrowsTheJudgmentToOneServer(t *testing.T) {
 	assert.Len(t, got, 1)
 }
 
+// A narrowed LISTING is that server's tools — the empty query is a page of the
+// pool, not a name, so it is the one exact-half form `server` narrows. Getting
+// this wrong is silent in the worst way: the answer looks like a listing and
+// the extra names are marked discovered, so another server's schemas ride in the
+// next request's tool list.
+func TestJevSearcher_NarrowedListingIsThatServersTools(t *testing.T) {
+	pool := jevTestPool(
+		testDeferredTool("mcp__pg__query", "pg", "Query database"),
+		testDeferredTool("mcp__gh__pr", "gh", "Create PR"),
+	)
+	judge := &fakeJudge{answers: map[string]float64{"mcp__pg__query": 0.9, "mcp__gh__pr": 0.9}}
+	s := newTestSearcher(pool, judge, 0.35)
+
+	for _, query := range []string{"", "   "} {
+		got := s.Search(context.Background(), tools.MCPSearchOptions{
+			Query: query, Server: "pg", MaxResults: 5,
+		})
+		require.Len(t, got, 1, "query %q", query)
+		assert.Equal(t, "mcp__pg__query", got[0].Name, "query %q", query)
+		assert.Equal(t, tools.MatchByName, got[0].MatchedBy)
+	}
+	assert.Empty(t, judge.calls, "a listing is a lookup, not a judgment")
+
+	// With no server the listing is the whole pool, as it always was.
+	got := ask(context.Background(), s, "", 5)
+	names := make([]string, 0, len(got))
+	for _, r := range got {
+		names = append(names, r.Name)
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{"mcp__gh__pr", "mcp__pg__query"}, names)
+}
+
 // The exact-name half is NOT narrowed: a name is an identity, and a
 // mis-remembered server must not turn a hit into a miss.
 func TestJevSearcher_NarrowingDoesNotHideNamedTools(t *testing.T) {

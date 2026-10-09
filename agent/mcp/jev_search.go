@@ -25,7 +25,9 @@ import (
 // One search is:
 //
 //   - the query that NAMES something (select: / exact or suffix name /
-//     mcp__server / empty) is resolved by the pool, no judgment involved;
+//     mcp__server) is resolved by the pool, no judgment involved, and against
+//     the WHOLE pool — a name is an identity. An empty query is a listing, not
+//     a name, and the pool answers it from opts.Server's tools alone;
 //   - anything else becomes prose to judge: every candidate tool gets its own
 //     noul question ("can this tool carry the request out directly?"), all
 //     sharing the query as the one state. The wording lives in
@@ -109,10 +111,12 @@ func NewJevSearcher(pool *DeferredPool, judge Judge, cfg *config.Config, thresho
 //
 // A narrowed request (opts.Server) costs less and asks a different question
 // than a full-pool one: the judgment only sees that server's tools, so its
-// answers are a verdict about THAT candidate set. The exact-name half is still
-// resolved against the whole pool (see DeferredPool.SearchIn).
+// answers are a verdict about THAT candidate set. The exact half gets opts.Server
+// too, so a narrowed LISTING is that server's tools — while a name stays global,
+// because a name is an identity. Both rules live in DeferredPool.SearchExact,
+// which is why it takes the server rather than this method filtering afterwards.
 func (s *JevSearcher) Search(ctx context.Context, opts tools.MCPSearchOptions) []tools.MCPSearchResultItem {
-	if exact, ok := s.pool.SearchExact(opts.Query, opts.MaxResults); ok {
+	if exact, ok := s.pool.SearchExact(opts.Query, opts.Server, opts.MaxResults); ok {
 		return exact
 	}
 	results, err := s.judgeQuery(ctx, opts)

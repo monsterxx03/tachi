@@ -51,6 +51,10 @@ type MCPSearchOptions struct {
 	// wants (select:, an exact or suffix tool name, an mcp__server prefix) is
 	// resolved against every server whatever Server says — a name is an
 	// identity, and a mis-remembered server must not turn a hit into a miss.
+	// An empty query is a LISTING, which is not an identity: it is answered
+	// from Server's tools alone (DeferredPool.SearchExact). The tool refuses a
+	// whitespace query before it gets here, so that is the pool's rule rather
+	// than a spelling the model can reach by accident.
 	Query string
 	// Server restricts the candidate set to one MCP server's tools, spelled the
 	// way the deferred-tools reminder lists it ("github"); NormalizeMCPServer
@@ -254,7 +258,13 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if params.Query == "" {
+	// TrimSpace, not == "": a whitespace-only query is a caller that forgot to
+	// fill the field, and it must not be read as the empty-query listing. That
+	// listing is a lookup over a page of the pool — a spelling the MODEL gets by
+	// naming a server (`mcp__server`), never by leaving the field nearly blank —
+	// and interpreting a stray space as one silently loaded another server's
+	// tools into the next request's tool list (see DeferredPool.SearchExact).
+	if strings.TrimSpace(params.Query) == "" {
 		return "", fmt.Errorf("query is required")
 	}
 	if params.MaxResults <= 0 {
