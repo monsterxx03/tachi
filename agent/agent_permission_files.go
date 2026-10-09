@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/permission"
@@ -84,6 +85,17 @@ func (c fileCall) subject() string {
 func (a *AIAgent) judgeFileAsk(ctx context.Context, call jevfiles.Call) askJudged {
 	threshold, budget, on := a.fileAskGate()
 	if !on {
+		return askJudged{}
+	}
+
+	// 目标落在会话的工作树内 → 不判：树内是用户让 agent 干活的地方，规则已经决定过
+	// 它能不能跑，再让一个概率模型复述一遍没有增量。
+	//
+	// 返回零值 = "没判定"，于是**规则继续说话**（规则匹配的 ask 照样 ask）—— 跳过的
+	// 只是这一层概率判定，不是整个检查。树为空（bare agent / 无 workspace）时
+	// insideTrees 恒 false，行为不变。
+	if insideTrees(call.Path, call.Trees) {
+		a.logFileAskJudgment(ctx, call, 0, threshold, "in-tree", nil)
 		return askJudged{}
 	}
 
@@ -413,14 +425,40 @@ func (a *AIAgent) fileCallFacts(ctx context.Context, tool jevfiles.Tool, path st
 	return call
 }
 
+// insideTrees 报告 path 是否落在会话的某棵工作树之下。
+//
+// 两侧都是**规范化后**的路径（call.Path 来自 filePaths 的 canonical 侧，trees 来自
+// canonicalTrees），所以直接按字符串边界比较即可 —— 不能再各自 RealPath 一次，那正是
+// canonicalTrees 注释里说的"两边用不同方式解析"的坑。
+//
+// 末尾补分隔符再比较：`/w/foo` 不该匹配上 `/w/foobar`。
+func insideTrees(path string, trees []string) bool {
+	if path == "" {
+		return false
+	}
+	for _, t := range trees {
+		t = strings.TrimSuffix(t, "/")
+		if t == "" {
+			continue
+		}
+		if path == t || strings.HasPrefix(path, t+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // canonicalTrees resolves the session's trees the way the target path is resolved.
 //
-// The two are compared in the state ("is this call inside the trees?" is the
-// judgment's reading, not ours), so a machine that reaches a workspace through a
-// symlink — macOS's /var → /private/var is the everyday case — would otherwise
-// show a target under /private/var against a tree listed as /var, and every call
-// inside it would read as being outside. That is the asymmetric error the criteria
-// cannot absorb: it talks a call under the threshold.
+// The two sides are compared in two places since the in-tree short circuit:
+// insideTrees decides the gate without asking, and State still shows the trees to
+// the judgment for calls that fall outside. Both need them resolved the same way —
+// a machine that reaches a workspace through a symlink (macOS's /var → /private/var
+// is the everyday case) would otherwise show a target under /private/var against a
+// tree listed as /var, and every call inside it would read as being outside. That
+// is the asymmetric error the criteria cannot absorb: it talks a call under the
+// threshold. When the short circuit was the judgment's reading alone, this
+// canonicalisation was what kept its input honest.
 func canonicalTrees(trees []string) []string {
 	out := make([]string, 0, len(trees))
 	for _, t := range trees {

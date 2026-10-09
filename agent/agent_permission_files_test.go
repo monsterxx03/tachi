@@ -127,8 +127,60 @@ func TestFileGateJudgesUnmatchedCalls(t *testing.T) {
 	assert.Equal(t, 1, judge.callCount())
 }
 
-// TestFileGateRunsWhatTheJudgmentReadAsRoutine: the other verdict — a call inside
-// the tree is not raised, and the note says a judgment decided it.
+// TestFileGateSkipsCallsInsideTheTrees: 目标落在会话的工作树内时不判 —— 树内是用户让
+// agent 干活的地方，规则已经决定过它能不能跑，再让概率模型复述一遍没有增量。
+func TestFileGateSkipsCallsInsideTheTrees(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.94} // 高于阈值：一旦判了就一定会被提起
+	tree := t.TempDir()
+	a := fileGateAgent(t, judge, nil)
+	a.SetPermissionTrees(t.Context(), tree, nil)
+
+	_, canonical := filePaths(t.Context(), filepath.Join(tree, "src", "main.go"))
+	v := a.judgeFileAsk(t.Context(), a.fileCallFacts(t.Context(), jevfiles.ToolEdit, canonical))
+
+	assert.False(t, v.judged, "树内的调用不该被判定")
+	assert.Equal(t, 0, judge.callCount(), "树内的调用不该请求判决服务")
+}
+
+// TestFileGateStillJudgesOutsideTheTrees: 对照组 —— 短路只作用于树内，树外照旧判。
+func TestFileGateStillJudgesOutsideTheTrees(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.94}
+	a := fileGateAgent(t, judge, nil)
+	a.SetPermissionTrees(t.Context(), t.TempDir(), nil)
+
+	_, canonical := filePaths(t.Context(), "/Users/someone/.ssh/id_rsa")
+	v := a.judgeFileAsk(t.Context(), a.fileCallFacts(t.Context(), jevfiles.ToolRead, canonical))
+
+	assert.True(t, v.judged, "树外的调用仍要被判定")
+	assert.Equal(t, 1, judge.callCount())
+}
+
+// TestInsideTreesMatchesOnPathBoundary 钉住比较方式：必须按路径边界，而不是裸字符串前缀
+// （少了分隔符，`/w/foo` 就会把 `/w/foobar` 也当成树内）。
+func TestInsideTreesMatchesOnPathBoundary(t *testing.T) {
+	cases := []struct {
+		name  string
+		path  string
+		trees []string
+		want  bool
+	}{
+		{"树本身", "/w/foo", []string{"/w/foo"}, true},
+		{"树下", "/w/foo/a/b.go", []string{"/w/foo"}, true},
+		{"同前缀的兄弟目录不算", "/w/foobar/a.go", []string{"/w/foo"}, false},
+		{"树尾带斜杠也认", "/w/foo/a.go", []string{"/w/foo/"}, true},
+		{"无树（bare agent / 无 workspace）", "/w/foo/a.go", nil, false},
+		{"空路径", "", []string{"/w/foo"}, false},
+		{"多棵树命中其一", "/other/x.go", []string{"/w/foo", "/other"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, insideTrees(tc.path, tc.trees))
+		})
+	}
+}
+
+// TestFileGateRunsWhatTheJudgmentReadAsRoutine: 另一种裁决 —— 判了、但读起来是例行操作，
+// 于是不提起。**与树内短路是两回事**：那条根本不判，这条判了而概率低。
 func TestFileGateRunsWhatTheJudgmentReadAsRoutine(t *testing.T) {
 	judge := &fakeAskJudge{p: 0.05}
 	a := fileGateAgent(t, judge, nil)
