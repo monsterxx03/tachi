@@ -23,7 +23,9 @@
   smoke.check('两个 root 的改动都算进了这一轮', !!chip, chip ? smoke.text(chip) : '(没有 chip)')
   if (!chip) return smoke.finish()
 
-  const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
+  const diffChip = await smoke.waitFor(
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '完整 diff'),
+    '找到「完整 diff」入口', 8000)
   if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
   diffChip.click()
   if (!(await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '「完整 diff」打开宽浮层', 8000))) return smoke.finish()
@@ -103,13 +105,15 @@
   if (!(await smoke.waitFor(() => !smoke.q('.viewer-overlay'), '浮层关掉', 5000))) return smoke.finish()
 
   // 评审：scope 必须按 root 分组，否则「notes.md」在两个目录里各指一个文件。
-  const reviewChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('评审本轮改动') >= 0)
+  const reviewChip = await smoke.waitFor(
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '评审本轮改动'),
+    '找到「评审本轮改动」入口', 8000)
   if (!reviewChip) return smoke.fail('找到「评审本轮改动」入口', '按钮找不到')
   reviewChip.click()
   const reviewed = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('已评审') >= 0) || null,
-    '评审跑完（chip 报出条数）', 30000)
-  smoke.check('多 root 的一轮能评审', !!reviewed, reviewed ? smoke.text(reviewed) : '(chip 没变成已评审)')
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '已评审'),
+    '评审跑完（入口报出条数）', 30000)
+  smoke.check('多 root 的一轮能评审', !!reviewed, reviewed ? smoke.text(reviewed) : '(入口没变成已评审)')
 
   smoke.finish()
 })()

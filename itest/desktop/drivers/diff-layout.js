@@ -23,7 +23,7 @@
   await smoke.sleep(300)
 
   const chip = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0) || null,
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '完整 diff'),
     'footer 出现「完整 diff」入口', 8000)
   if (!chip) return smoke.finish()
   chip.click()

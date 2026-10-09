@@ -50,6 +50,16 @@
 .assistant-text h1 { font-size: 1.226em; }
 .assistant-text h2 { font-size: 1.065em; }
 .assistant-text h3 { font-size: 0.968em; }
+/* h4–h6 had NO rule here, so they fell back to the browser's own sizes and margins — the one
+   part of a reply whose type was not the app's. They are the deepest levels and the ones a
+   model reaches for in a long answer, so they get the same treatment as the rest: em off the
+   message's own size (they move with ⌘=), tighter margins (this is where the scale runs out of
+   size to spend, so the WEIGHT and the space above do the work of saying "heading"), and h6 —
+   which can be smaller than body text without being wrong — goes dim like a label. */
+.assistant-text h4, .assistant-text h5, .assistant-text h6 { margin: 0.95em 0 0.35em; line-height: 1.45; color: var(--text); font-weight: 640; }
+.assistant-text h4 { font-size: 0.935em; }
+.assistant-text h5 { font-size: 0.903em; }
+.assistant-text h6 { font-size: 0.871em; color: var(--text-dim); letter-spacing: 0.02em; }
 .assistant-text ul, .assistant-text ol { margin: 0.65em 0; padding-left: 1.35em; }
 .assistant-text li { margin: 0.3em 0; }
 .assistant-text li::marker { color: var(--accent); }
@@ -105,8 +115,13 @@
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
   overflow: hidden;
+  /* Opts out of the prose's `overflow-wrap: anywhere`: a table's answer to "too wide" is the
+     wrapper's horizontal scroll (see .table-scroll), not breaking an identifier in the middle.
+     `anywhere` would also shrink the table's min-content to nothing, so a wide table would
+     squash into the column instead of scrolling. */
+  overflow-wrap: normal;
 }
-.assistant-text th, .assistant-text td { border-bottom: 1px solid var(--border); padding: 7px 11px; text-align: left; }
+.assistant-text th, .assistant-text td { border-bottom: 1px solid var(--border); padding: 7px 11px; text-align: left; vertical-align: top; }
 .assistant-text tr:last-child td { border-bottom: none; }
 .assistant-text th { background: var(--accent-softer); font-weight: 620; color: var(--text); }
 
@@ -211,13 +226,23 @@
   background: var(--wash);
   color: var(--text-dim);
   font-size: 11.5px;
+  /* ONE line tall, and DECLARED as a length. The row is the same row in four states — reporting
+     what is happening, reporting what happened, foldable, not foldable — and the transcript is
+     pinned to the bottom, so a state that is one pixel taller moves everything on screen
+     (transcript-live measures exactly this). A length here is what makes that hold: every child
+     inherits the same 16px line box whatever its own font size is, so the 12px toggle no longer
+     makes the foldable row a pixel taller than the status row that has no toggle. `.roll`'s `1lh`
+     resolves against this value too. */
+  line-height: 16px;
   cursor: pointer;
   transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
 .process-head:hover { background: var(--wash-2); color: var(--text); }
-/* Running: the row reports the CURRENT step instead of the finished counts, and the dot
-   is what says "still moving" when the step number has not changed for a while. */
-/* Nothing folded yet (a turn whose only part is the call running now): a status line, not
+/* Running: the row reports the CURRENT state instead of the finished counts — one turn, one
+   status line, for as long as the turn lasts (a call in flight, or what the model is doing:
+   transcript.ts's processLiveText). The pulse dot is what says "still moving" when the text has
+   not changed for a while. */
+/* Nothing folded yet (a turn whose only part is the text streaming in): a status line, not
    a button — no caret, no hover invitation, no toggle. */
 .process-head.static { cursor: default; }
 .process-head.live { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); color: var(--text); }
@@ -402,9 +427,14 @@
 .msg-user .msg-ts { text-align: right; }
 .msg-assistant .msg-ts { text-align: left; }
 
+/* One quiet row under a finished answer: what you can DO with it (copy it), what it changed
+   (the 🧾 chip), everything else (the ⋯ menu), and when it happened. It wraps rather than
+   squeezing on a narrow window — it is laid out once per message, so its height never moves
+   while a turn runs. */
 .msg-footer {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   align-items: center;
   margin-top: 7px;
   font-size: 11px;
@@ -412,6 +442,58 @@
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
+/* The timestamp rides the row above instead of taking a line of its own: it is the same fact
+   about the same turn (when), and the flex row already exists for it. Pushed to the far end so
+   it reads as the row's tail rather than as one more control. */
+.msg-footer .msg-ts { margin-top: 0; margin-left: auto; }
+/* A plain action on the turn (复制回答) and the ⋯ menu's trigger. Quieter than the 🧾 chip on
+   purpose: the chip carries numbers the reader scans for, these are gestures. */
+.footer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.footer-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The ⋯ menu: the entries about a turn's WORK, which used to be a row of chips under every
+   answer. Anchored to its own trigger (see .popover-anchor) and opening UPWARD — the newest
+   turn's footer sits just above the composer, so a panel below it would land behind the
+   composer. The rows themselves are overlays.css's .ctx-item, the same ones the sidebar's
+   context menus use. */
+.turn-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  min-width: 176px;
+  max-width: 320px;
+  padding: 5px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  font-size: 12px;
+  animation: panel-in 0.14s var(--ease) both;
+}
+/* The entry's own state (评审中… / 已评审), after its scope and dimmer than it: the row keeps
+   saying WHICH review it is. */
+.ctx-note { margin-left: 6px; color: var(--text-faint); font-size: 11px; }
+/* The turn's numbers: a row that reports and does nothing, so it must not invite a click. */
+.turn-menu .ctx-item.is-detail {
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+}
+.turn-menu .ctx-item.is-detail:hover { background: transparent; color: var(--text-faint); }
 
 /* Ordered segments inside a single assistant turn card */
 .turn-parts {
@@ -576,12 +658,70 @@
 .mermaid svg { max-width: 100%; height: auto; }
 
 /* ── Copy buttons on code blocks & diagrams ───────────────────────────────── */
-/* The wrapper is positioned so the button can float over the block without
-   scrolling with it; it fades in on hover (or stays visible right after a copy,
-   showing the confirmation). */
+/* A fenced code block is one piece: a header (language, wrap toggle, copy) sitting on a real
+   edge, and the code below it. The HEADER is what replaced a button that floated over the
+   block — it sat on the first line of code, only appeared on hover, and on a short block it
+   covered the very characters it copied. The wrapper owns the block's vertical rhythm, so the
+   header and the code share one edge instead of the header being positioned over the code. */
 .code-wrap,
 .mermaid-wrap { position: relative; }
-/* Button row floats over the block (top-right) so it never scrolls with it. */
+.assistant-text .code-wrap { margin: 0.8em 0; }
+.assistant-text .code-wrap pre {
+  margin: 0;
+  /* Flush against the header: the two are one block, and a rounded top edge under a header
+     would draw a seam between them. */
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 6px 1px 10px;
+  min-height: 24px;
+  background: var(--wash);
+  border: 1px solid var(--border-2);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.code-lang {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+.code-head-actions { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.code-tool {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.code-tool:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The toggle says its own state: pressed = the block is wrapping. It is a per-BLOCK choice
+   (a log or a wide JSON wants it, a path or a command does not), so it lives on the block. */
+.code-tool[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-2); }
+.code-head .code-copy {
+  opacity: 1;
+  border: none;
+  background: transparent;
+}
+.code-head .code-copy:hover { background: var(--accent-soft); }
+/* Wrapping is the reader's call on one block: long lines break instead of scrolling. */
+.code-wrap.is-wrapped pre { white-space: pre-wrap; overflow-x: hidden; overflow-wrap: anywhere; }
+
+/* Button row floats over the block (top-right) so it never scrolls with it — diagrams keep
+   this shape: a diagram IS the block, so there is no header to hang a button on. */
 .code-actions {
   position: absolute;
   top: calc(0.8em + 6px);

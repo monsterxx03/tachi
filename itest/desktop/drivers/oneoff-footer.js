@@ -21,22 +21,25 @@
   smoke.type('.composer-input', '写一个 NOTES.md')
   smoke.click('.send-btn')
 
-  // The turn writes TWO files in two rounds, and the chip below appears as soon as the FIRST
-  // file's change landed — it is a proxy for "this turn changed something", not for "this turn's
-  // file set is final". Clicking 完整 diff on the strength of that proxy captured a one-file
-  // `paths` set, and the overlay then showed only NOTES.md: a full run failed exactly these two
-  // assertions that way (2/78, and the DOM carried NOTES.md with no OTHER.md in the overlay).
-  // What the click needs is the turn's FINAL file set, so wait for the turn's own closing line.
+  // The chip below appears as soon as the FIRST file's change landed — it is a proxy for "this
+  // turn changed something", not for "this turn's file set is final". Clicking 完整 diff on the
+  // strength of that proxy captured a one-file `paths` set, and the overlay then showed only
+  // NOTES.md: a full run failed exactly these two assertions that way (2/78, and the DOM carried
+  // NOTES.md with no OTHER.md in the overlay). What the click needs is the turn's FINAL file set,
+  // so wait for the turn's own closing line.
   if (!(await smoke.waitText('.msg-assistant', '已经写下', 30000))) return smoke.finish()
 
-  // The chip's arrival is the proof that a changed-file turn gets a review entry (and that the
-  // WriteFile round landed — a fragment diff on the card feeds the same aggregate).
+  // The footer's arrival is the proof that a changed-file turn gets a review entry (and that the
+  // WriteFile round landed — a fragment diff on the card feeds the same aggregate). The entries
+  // live behind the ⋯ menu (harness.js's turnMenu), so reading one opens it.
+  const bubble = () => smoke.q('.chat .msg-assistant')
+  const entriesOf = () => smoke.turnMenu(bubble()).map((b) => smoke.text(b)).join(' | ')
   const before = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('评审本轮改动') >= 0) || null,
+    () => smoke.menuItem(bubble(), '评审本轮改动'),
     'footer 出现「评审本轮改动」', 30000)
   if (!before) return smoke.finish()
-  smoke.check('有改动的回合才有评审入口', true, smoke.qa('.diff-chip').map((b) => b.textContent).join(' | '))
-  smoke.check('评审前没有已评审状态', !smoke.qa('.diff-chip').some((b) => b.textContent.indexOf('已评审') >= 0), '')
+  smoke.check('有改动的回合才有评审入口', true, entriesOf())
+  smoke.check('评审前没有已评审状态', !entriesOf().includes('已评审'), entriesOf())
 
   // ── 「完整 diff」 belongs to the TURN, and works with no review at all ────────
   // This is the entry's own promise (本轮的完整改动，带真实行号；与什么对照由浮层顶部那行说明),
@@ -45,7 +48,9 @@
   // 是空的」); once a run did exist, the panel showed the SELECTED run's file set rather than this
   // turn's. Hence both halves are pinned HERE, before any review exists: the turn's own files are in
   // the overlay, and no panel was involved in getting them.
-  const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
+  const diffChip = await smoke.waitFor(
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '完整 diff'),
+    '找到「完整 diff」入口', 8000)
   if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
   diffChip.click()
   const overlay = await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '「完整 diff」打开宽浮层', 8000)
@@ -233,33 +238,43 @@
   // turn's id, so the chip jumped straight to 已评审 with the button disabled by the very run it
   // reported on), AND it is a short-lived state whose length is the run's — a few hundred ms under
   // the mock, seconds to minutes for a real review. So this does not wait for the state, it
-  // SAMPLES the chip and asserts the sequence contains it: what is being pinned is that the chip
-  // passes through 评审中…, and that it stays clickable there.
+  // SAMPLES it and asserts the sequence contains it: what is being pinned is that the footer
+  // passes through 评审中…, and that the entry stays clickable there.
+  //
+  // Two places carry it now: the TRIGGER says 评审中… (that is the state the reader sees without
+  // opening anything), and the MENU ITEM says it too — and it is the item that must stay
+  // clickable, because it is the one that opens the running review.
   const seen = []
   const tick = setInterval(() => {
-    const chip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('评审') >= 0)
-    if (!chip) return
-    const text = smoke.text(chip)
-    if (!seen.length || seen[seen.length - 1].text !== text) seen.push({ text, disabled: chip.disabled })
+    const text = smoke.turnMenuLabel(bubble())
+    if (!text) return
+    // The entry is what must stay clickable while the review runs, so it is read from the ITEM —
+    // and a tick that just opened the menu (the rows arrive on the next commit) is skipped rather
+    // than recorded as "no state": the next tick, 10ms later, reads it.
+    const item = smoke.menuItem(bubble(), '评审本轮改动')
+    if (!item) return
+    if (!seen.length || seen[seen.length - 1].text !== text) seen.push({ text, disabled: item.disabled })
   }, 10)
-  before.click()
+  const startTurn = await smoke.waitFor(() => smoke.menuItem(bubble(), '评审本轮改动'), '菜单里的评审入口', 8000)
+  if (!startTurn) return smoke.finish()
+  startTurn.click()
   const after = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('已评审') >= 0) || null,
+    () => smoke.menuItem(bubble(), '已评审'),
     'footer 变成「已评审 N 条 · 查看」', 30000)
   clearInterval(tick)
   const trail = seen.map((s) => s.text).join(' → ')
 
   const pending = seen.find((s) => s.text.indexOf('评审中') >= 0)
-  smoke.check('评审期间 chip 经过「评审中…」（而不是直接跳到已评审）', !!pending, trail)
-  smoke.check('「评审中…」可以点（去看过程）', !!pending && !pending.disabled,
-    pending ? `disabled=${pending.disabled}` : '')
-  smoke.check('评审结束后 chip 报出意见条数', !!after, after ? smoke.text(after) : trail)
+  smoke.check('评审期间 footer 经过「评审中…」（而不是直接跳到已评审）', !!pending, trail)
+  smoke.check('「评审中…」可以点（去看过程）', !!pending && pending.disabled === false,
+    pending ? `入口 disabled=${pending.disabled}` : '')
+  smoke.check('评审结束后入口报出意见条数', !!after, after ? smoke.text(after) : trail)
   // The FINAL state is read off the element the wait returned, not off the trail: the trail is
   // for states whose whole life is the run (评审中…), and its 10ms ticks can be starved while the
   // webview is busy — the last change before the wait resolved was missed in one run, which
   // turned a steady state into an intermittent failure.
   smoke.check('「已评审 · 查看」可以点（会话忙也不禁用）', !!after && !after.disabled,
-    after ? `disabled=${after.disabled}` : '(没找到已评审的 chip)')
+    after ? `disabled=${after.disabled}` : '(没找到已评审的入口)')
   smoke.check('条数来自后端对 ReportFinding 的计数（mock 报了 1 条）',
     !!after && smoke.text(after).indexOf('1 条') >= 0, after ? smoke.text(after) : '')
 
@@ -281,9 +296,10 @@
   if (!(await smoke.waitFor('.oneoff-panel', '评审开始即打开面板', 8000))) return smoke.finish()
   if (!smoke.click('.oneoff-toggle')) return smoke.fail('关掉面板', '按钮找不到')
   if (!(await smoke.waitFor(() => !smoke.q('.oneoff-panel'), '面板已收起', 5000))) return smoke.finish()
-  after.click()
+  const backEntry = await smoke.waitFor(() => smoke.menuItem(bubble(), '已评审'), '菜单里的「已评审」入口', 8000)
+  if (backEntry) backEntry.click()
   const reopened = await smoke.waitFor('.oneoff-panel', '点「查看」重新打开面板', 5000)
-  smoke.check('完成后 chip 变成回到面板的入口', !!reopened, '')
+  smoke.check('完成后入口是回到面板的路', !!reopened, '')
 
   // The panel opens on 过程 and is showing THIS review, with the reply the mock produced.
   const replay = await smoke.waitFor(
@@ -375,15 +391,15 @@
 
   // Re-running from the pane: the record carries the scope, so "review these files again" also
   // works from a historical entry. The mock's second review reports TWO findings, which is how
-  // the chip proves it is showing the new run rather than the old one.
+  // the entry proves it is showing the new run rather than the old one.
   const rerun = smoke.qa('.oneoff-body .diff-open').find((b) => b.textContent.indexOf('重新评审') >= 0)
   if (!rerun) return smoke.fail('意见区有「重新评审」按钮', '按钮找不到')
   rerun.click()
   const again = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('已评审 2 条') >= 0) || null,
-    '重跑后 chip 报出新的条数', 30000)
-  smoke.check('按同一范围重跑，chip 报出新条数（2 条）', !!again,
-    again ? smoke.text(again) : smoke.qa('.diff-chip').map((b) => b.textContent).join(' | '))
+    () => smoke.menuItem(bubble(), '已评审 2 条'),
+    '重跑后入口报出新的条数', 30000)
+  smoke.check('按同一范围重跑，入口报出新条数（2 条）', !!again,
+    again ? smoke.text(again) : entriesOf())
 
   // The walk over the NEW run's payload: two findings, so it can be seen to advance — and to
   // start from the beginning again, because the position belongs to the run (the pane keeps

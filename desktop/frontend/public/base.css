@@ -521,10 +521,6 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
     animation-duration: 0.8s !important;
     animation-iteration-count: infinite !important;
   }
-  .typing i {                                     /* reply is being generated */
-    animation-duration: 1.2s !important;
-    animation-iteration-count: infinite !important;
-  }
   .process-dot {                                  /* turn is still working */
     animation-duration: 1.25s !important;
     animation-iteration-count: infinite !important;

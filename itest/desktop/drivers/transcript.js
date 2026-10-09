@@ -21,6 +21,9 @@
   const reply = await smoke.waitText('.msg-assistant .msg-content', '命令跑完了')
   if (!reply) return smoke.finish()
   smoke.check('回复上屏（结论恒显）', true)
+  // The strip is the turn's ONE status line, so it also exists WHILE the turn runs (它那时报的是
+  // 正在…). The counts below are the finished turn's fact, so read them at rest.
+  if (!(await smoke.waitFor(() => !smoke.q('.stop-btn'), '回合结束（停止按钮消失）'))) return smoke.finish()
 
   const strip = smoke.q('.process-head')
   if (!strip) return smoke.fail('过程条出现', '找不到 .process-head')

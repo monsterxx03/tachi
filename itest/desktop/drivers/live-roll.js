@@ -1,8 +1,9 @@
-// live-roll — 跑着的那几行字必须"滚动"着换状态，而不是瞬切。
+// live-roll — 跑着的那一行字必须"滚动"着换状态，而不是瞬切。
 //
-// 切换最快的是助手气泡里的运行占位行：模型每在"思考"与"起工具"之间来回一次，它就换一次文案
-// （正在思考… ↔ 正在执行…）。模型数据一快，瞬切看起来就是不相干的词闪过去 —— 滚动才读得出
-// "同一个东西在换内容"。过程条的实时行同理（正在 X · 第 N 步）。
+// 切换最快的文字是过程条上的那一行：模型在「回答」与「起工具」之间来回一次，它就换一次
+// （正在回答… ↔ 正在 Bash · sleep 3 && echo roll-ok · 第 1 步）。助手气泡下方原本还有第二行同样的
+// 状态（正在思考… ↔ 正在执行…），它已经并进这一行 —— 一轮只有一句状态，见 App.tsx 里那段注释。
+// 模型数据一快，瞬切看起来就是不相干的词闪过去 —— 滚动才读得出"同一个东西在换内容"。
 //
 // 断言分两半：
 //   - 结构：这些文字必须装在会滚动的盒子里（瞬切也能过其他断言，所以这是唯一能钉住"滚动"存在的
@@ -26,7 +27,7 @@
 
   smoke.type('.composer-input', '跑一条命令，再回来说一声')
   // 发送这一步单独判一句：编辑器是受控输入，文字若没进 React 状态，发送按钮就一直 disabled，
-  // 点它什么也不会发生 —— 而失败会以"占位行没出现"的样子出现，把真因埋掉 20 秒。
+  // 点它什么也不会发生 —— 而失败会以"状态行没出现"的样子出现，把真因埋掉 20 秒。
   if (!(await smoke.waitFor(() => { const b = smoke.q('.send-btn'); return b && !b.disabled }, '发送按钮可用（文字进了编辑器）', 5000))) {
     const ta = smoke.q('.composer-input')
     smoke.check('编辑器真的收到了文字', false, 'textarea value=' + JSON.stringify(ta ? ta.value : null))
@@ -34,10 +35,16 @@
   }
   smoke.click('.send-btn')
 
-  // ① 运行占位行出现，文字在滚动盒里
-  if (!(await smoke.waitFor('.msg-assistant .running', '运行占位行出现', 20000))) return smoke.finish()
-  smoke.check('占位行文字在滚动盒里', !!smoke.q('.msg-assistant .running .roll'),
-    smoke.q('.msg-assistant .running') ? smoke.q('.msg-assistant .running').outerHTML.slice(0, 140) : '找不到 .running')
+  // ① 状态行出现，文字在滚动盒里。它一开始报的是"模型在做什么"（还没有工具在跑）。
+  if (!(await smoke.waitFor('.process-head.live .process-now', '状态行出现', 20000))) return smoke.finish()
+  smoke.check('状态行文字在滚动盒里', !!smoke.q('.process-head .process-now.roll'),
+    smoke.q('.process-head .process-now') ? smoke.q('.process-head .process-now').outerHTML.slice(0, 140) : '找不到 .process-now')
+  smoke.check('还没有工具时它说的是模型在做什么（回答/思考）',
+    /正在(回答|思考)/.test(smoke.text('.process-head .process-now')), smoke.text('.process-head .process-now'))
+  // 还没有东西可折的时候它不是按钮 —— 一个点开什么都没有的开关比没有更糟。这一场的第一个工具
+  // 前面有一整段停顿，所以这个中间态看得见（transcript-live 那边第一个工具几乎立刻就跑起来）。
+  smoke.check('还没有工具时它不是按钮（没有东西可展开）',
+    !!smoke.q('.process-head.static'), smoke.q('.process-head') ? smoke.q('.process-head').className : '找不到')
 
   // 这台机器开不开 reduced-motion 决定该看到哪个动画名，所以先问清楚。base.css 用的是
   // matchMedia 认的那个设置，这里问的是同一件事。
@@ -45,16 +52,16 @@
   const want = reduced ? 'roll-in' : 'roll-up'
   smoke.log('动效模式', (reduced ? 'reduced-motion：位移换成淡入' : '常规：滚动') + '（本次要求 ' + want + '）')
 
-  const box = () => smoke.q('.msg-assistant .running')
-  const inner = () => smoke.q('.msg-assistant .running .roll-inner')
+  const box = () => smoke.q('.process-head.live .process-now')
+  const inner = () => smoke.q('.process-head.live .process-now .roll-inner')
 
   // 采样"到场的那一行"，不是整个盒子。滚动时盒子里同时有两行（正在离场的、刚到场的），盒子的
   // 文本因此是"新状态 + 上一个状态"；按盒子采样会把每次切换数成两次（滚动开始一次、离场行被
   // 丢掉时一次），再要求两次都有动画 —— 那读数只会是"切换次数比动画次数多一倍"。:last-child
   // 恰好就是刚到的那一行，也就是当前状态。
   const stateOf = () => {
-    if (!box()) return null // 回合结束，占位行收掉
-    const el = smoke.q('.msg-assistant .running .roll-line:last-child')
+    if (!box()) return null // 回合结束，状态行收掉
+    const el = smoke.q('.process-head.live .process-now .roll-line:last-child')
     return el ? smoke.text(el) : smoke.text(box())
   }
   const animNames = () => {
@@ -86,14 +93,12 @@
     if (names.length) cur.roll = names.join(',')
   }, 25)
 
-  // ② 工具那段：过程条的实时行也在滚动盒里（同一套机制的另一处使用点）
-  if (!(await smoke.waitFor('.process-head.live .process-now', '过程条实时行出现', 25000))) return smoke.finish()
-  smoke.check('过程条实时行也在滚动盒里', !!smoke.q('.process-now.roll'),
-    smoke.q('.process-head.live') ? smoke.q('.process-head.live').outerHTML.slice(0, 160) : '找不到 .process-head.live')
-  // 实时行的标题（命令原文）随 agent:tool 的第二个事件到，比实时行本身晚，所以要等它 —— 采样太早
-  // 会把"还没到"读成"没有"。
-  const titled = await smoke.waitFor(() => smoke.text('.process-now').indexOf('sleep') >= 0, '实时行报出那条命令', 4000)
-  smoke.check('过程条实时行报的是那条命令', !!titled, smoke.text('.process-now'))
+  // ② 工具那段：同一行换成那条命令（"正在 Bash · sleep 3 && echo roll-ok · 第 1 步"）。标题（命令
+  // 原文）随 agent:tool 的第二个事件到，比这一行本身晚，所以要等它 —— 采样太早会把"还没到"读成
+  // "没有"。
+  const titled = await smoke.waitFor(() => (smoke.text('.process-now').indexOf('sleep') >= 0 ? true : null),
+    '状态行报出那条命令', 25000)
+  smoke.check('工具跑起来时这一行报的是那条命令', !!titled, smoke.text('.process-now'))
 
   // ③ 回合收尾（工具跑完，模型再回一句话）
   if (!(await smoke.waitText('.msg-assistant .msg-content', '两步都跑完了', 40000))) return smoke.finish()
@@ -103,12 +108,13 @@
   const trail = flips.map((f) => (f.ts / 1000).toFixed(1) + 's ' + f.from + '→' + f.to + ' ' + (f.roll || '✗无动效')).join(' ｜ ')
   const quiet = flips.filter((f) => !f.roll)
   const misnamed = flips.filter((f) => f.roll && f.roll.indexOf(want) < 0)
-  // 场景保证至少两次翻转：起工具→执行，工具完模型再说话→又回思考。实测还有第三次：占位行刚出现
-  // 那一刻报的是"正在执行…"，第一个事件到达才纠正成"正在思考…"（App.tsx 的 runningLabel 把
-  // "非 thinking"一律读成"正在执行"，包括回合还没开始的 idle）。所以这里只要求 >= 2，不钉次数。
-  smoke.check('占位行走过思考与执行两种状态（有东西可换）',
-    seen.indexOf('正在思考…') >= 0 && seen.indexOf('正在执行…') >= 0, seen.join('→') + ' ｜ ' + trail)
-  smoke.check('占位行切换过状态', flips.length >= 2, flips.length + ' 次切换 ｜ ' + trail)
+  // 场景保证至少两次翻转：模型起工具（回答 → 正在 Bash），工具回来模型再说话（正在 Bash → 回答/
+  // 思考）。所以这里只要求 >= 2，不钉次数。
+  smoke.check('状态行走过"模型在做"与"工具在跑"两种状态（有东西可换）',
+    seen.some((s) => s.indexOf('正在 Bash') >= 0)
+    && seen.some((s) => s.indexOf('正在回答') >= 0 || s.indexOf('正在思考') >= 0),
+    seen.join('→') + ' ｜ ' + trail)
+  smoke.check('状态行切换过状态', flips.length >= 2, flips.length + ' 次切换 ｜ ' + trail)
   smoke.check('每次切换都有动效（不是瞬切）', flips.length >= 2 && quiet.length === 0,
     quiet.length + '/' + flips.length + ' 次切换没看到动效 ｜ ' + trail)
   smoke.check(reduced ? 'reduced-motion 下动效是淡入，不是位移' : '常规模式下动效是滚动（roll-up）',

@@ -10,10 +10,10 @@ import {
   type SessionItem,
 } from './types'
 import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, type SessionRow, type SessionGroup } from './lib'
-import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
+import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
-  ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
-  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows,
+  ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AskForm, PermissionForm,
+  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -93,7 +93,7 @@ function useElapsedMs(ts: string | undefined, running: boolean): number {
   return Number.isNaN(start) ? 0 : Math.max(0, now - start)
 }
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, elapsedMs, onFoldToggle, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onReviewAll, onOpenOneOff, reviewPending, reviewDone, reviewNotice, allReviewPending, allReviewDone, allReviewNotice, allReviewFiles, sessionBusy }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, elapsedMs, onFoldToggle, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onReviewAll, onOpenOneOff, reviewPending, reviewDone, reviewNotice, allReviewPending, allReviewDone, allReviewNotice, allReviewFiles, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
@@ -127,9 +127,6 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   reviewNotice?: string
   // The session is mid-turn, so a review has to wait its turn.
   sessionBusy?: boolean
-  // Only passed while the turn is running, so finished messages keep a stable
-  // props shape and stay memoized.
-  runningLabel?: string
   // How long this turn has been running, for the strip's live row (0 = not running).
   elapsedMs?: number
   // Called AFTER a fold toggle's layout lands (see the layout effect below and
@@ -183,6 +180,75 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // stops looking dirty under it (a /commit, or a count that came back empty for its own reasons).
   const showAllReview = !!onReviewAll && ((allReviewFiles ?? 0) > 0 || !!allReviewPending || !!allReviewDone)
 
+  // 「复制回答」 confirms itself where it was pressed (the copy button on a code block does the
+  // same). One timer, cleared on unmount: a session switch can take this bubble away mid-flash.
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = window.setTimeout(() => setCopied(false), 1200)
+    return () => window.clearTimeout(t)
+  }, [copied])
+
+  // The menu's entries: what this turn can be ASKED for. Built here rather than inline in the JSX
+  // so an entry the turn does not have is simply absent — a disabled control is a control that has
+  // to explain itself, and 完整 diff on a turn that changed nothing would be exactly that.
+  //
+  // The labels keep their scope (本轮改动 vs 所有改动), the note carries the RUN state, and the
+  // order runs from "this turn's own work" to "the tree as it is now" — the same order the two
+  // review entries had on the footer.
+  const menuItems: TurnMenuItem[] = []
+  if (chip.files > 0) {
+    menuItems.push({
+      key: 'diff', label: '完整 diff',
+      // The baseline is not this entry's promise: a turn with a checkpoint pair is read from its own
+      // two trees (frozen — a shell command's writes are in it, and a commit since does not empty
+      // it), and only a turn without one falls back to the working tree against HEAD. So the tooltip
+      // names both and points at the overlay's own head line, the one place that knows which answer
+      // came back — a promise made here would be a second, guessing surface.
+      title: '本轮的完整改动，带真实文件行号（浮层顶部会说明这一次与什么对照：有检查点的是这一轮自己的两个快照，没有的是 git HEAD）',
+      onClick: () => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths),
+    })
+    menuItems.push({
+      key: 'review-turn', label: '评审本轮改动',
+      // The note is the WHOLE state the old chip showed, 「已评审 1 条 · 查看」 included: the entry
+      // still names its scope, and the state after it says both what happened and what clicking
+      // does (it opens the run). 评审中… is clickable too, for the same reason it always was — that
+      // is how the reader watches the run work.
+      note: reviewPending ? '评审中…' : (reviewDone || ''),
+      disabled: !reviewPending && !reviewDone && !!sessionBusy,
+      title: reviewPending ? '评审进行中（过程在右侧面板）'
+        : reviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
+          : sessionBusy ? '等这一轮跑完' : '让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）',
+      onClick: () => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id)),
+    })
+  }
+  if (showAllReview) {
+    menuItems.push({
+      key: 'review-all', label: '评审所有改动',
+      note: allReviewPending ? '评审中…' : (allReviewDone || ''),
+      disabled: !allReviewPending && !allReviewDone && !!sessionBusy,
+      title: allReviewPending ? '评审进行中（过程在右侧面板）'
+        : allReviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
+          : sessionBusy ? '等这一轮跑完' : '让 agent 评审工作树里所有未提交的改动（与 git HEAD 对照，只读；过程与意见在右侧面板）',
+      onClick: () => (allReviewPending || allReviewDone ? onOpenOneOff?.() : onReviewAll?.(m.id)),
+    })
+  }
+  // The turn's own numbers are a STAT row, not an entry: they are read once, in passing — which is
+  // why they are in the menu at all instead of buying a second line under every answer.
+  if (m.summary) {
+    const bits: string[] = []
+    if (m.summary.durationMs > 0) bits.push(`⏱ ${fmtDur(m.summary.durationMs)}`)
+    if (m.summary.iterations > 0) bits.push(`${m.summary.iterations} iters`)
+    if (m.summary.cost > 0) bits.push(`¥${m.summary.cost.toFixed(3)}`)
+    if (m.summary.credit > 0) bits.push(`${fmtCredit(m.summary.credit)} 积分`)
+    if (bits.length) menuItems.push({ key: 'detail', label: `本轮 ${bits.join(' · ')}`, title: '这一轮的耗时、迭代次数与费用', stat: true })
+  }
+  // What the trigger says: the state of a review, while there is one to report — a run started from
+  // this footer must stay visible on the footer that started it, and its entry is behind the menu
+  // now. Otherwise the dots, which are the "there is more here" mark.
+  const menuLabel = (reviewPending || allReviewPending) ? '评审中…'
+    : (reviewDone || allReviewDone) ? '已评审' : '⋯'
+
   let askShown = false
   let permShown = false
   // One part → one piece of the transcript, with the two substitutions that put a blocking
@@ -227,16 +293,20 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
       <div className="msg-avatar"><img src="/agent-avatar.png" alt="" draggable={false} /></div>
       <div className="msg-content">
         <div className="turn-parts">
-          {/* The strip also renders while nothing is folded yet but a call is RUNNING: that is
-              the moment the live row matters most (the turn's only part is the running card),
-              and hiding the row then would make a busy turn look empty. Nothing folded and
-              nothing running = nothing to say, so no row at all. */}
-          {view.folded.length > 0 || (m.running && view.live) ? (
+          {/* The strip renders for the whole turn: while it RUNS it is the turn's one status line
+              (a call in flight, or what the model is doing), and once it is over it is the summary
+              of what happened. A turn that is still running its first call has nothing FOLDED yet,
+              and that is exactly when the status matters most — hiding the row then made a busy
+              turn look empty, and it is also why this row now replaces the second status line that
+              used to sit under the prose being written (one turn, one status). */}
+          {view.folded.length > 0 || m.running ? (
             <div className="process-block">
               <ProcessStrip summary={view.summary} open={processOpen}
                 onToggle={() => setProcessOpen((v) => !v)}
                 foldable={view.folded.length > 0}
-                live={m.running ? view.live : null} elapsedMs={elapsedMs} />
+                running={!!m.running}
+                status={processLiveText(view.live, view.phase, view.unfinished)}
+                elapsedMs={elapsedMs} />
               {processOpen && view.folded.length > 0
                 ? <div className="process-timeline">{view.folded.map((it) => renderPart(it, `f${it.index}`))}</div>
                 : null}
@@ -269,86 +339,76 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         {perm && onPermAnswer && !permShown && m.running ? (
           <PermissionForm perm={perm} onAnswer={onPermAnswer} />
         ) : null}
-        {m.running ? (
-          <span className="running">
-            <span className="typing"><i></i><i></i><i></i></span>
-            {/* The label flips 正在思考… ↔ 正在执行… on every thinking/tool transition — the
-                fastest-switching text in the UI, and the one that reads as a flicker when the
-                model answers quickly. It rolls (RollingLine) for the same reason the strip's
-                live row does; the dots stay put, so the row keeps a still anchor. */}
-            <RollingLine text={runningLabel ?? '正在执行…'} />
-          </span>
-        ) : null}
+        {/* The turn's running state is the strip's (see above) — there is deliberately no second
+            status row here. It used to sit exactly here, under the prose being written, saying
+            正在思考…/正在执行… while the strip above named the call in flight: two rows, one fact,
+            and the reader's eye is on THIS one while the answer streams. */}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
-        {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
-        {chip.files > 0 || showAllReview ? (
+        {chip.files > 0 || showAllReview || !!m.ts ? (
           <div className="msg-footer">
+            {/* The answer is the thing a reader takes away from a turn, and copying it used to mean
+                selecting across the prose by hand — the tool cards and notices that surround it make
+                that a careful drag. It copies the MODEL'S OWN PROSE (transcript.ts's answerTextOf),
+                never the arguments or the outputs: "copy this" is about what it said.
+                Not offered while the turn runs: there is no finished answer to take yet. */}
+            {!m.running ? (
+              <button type="button" className="footer-btn" title="复制这一轮的回答文字（只含模型的正文，不含工具参数与工具输出）"
+                onClick={() => { copyText(answerTextOf(m.parts)); setCopied(true) }}>
+                {copied ? '已复制' : '复制回答'}
+              </button>
+            ) : null}
+            {/* The turn's changes stay a FIRST-CLASS entry rather than moving into the menu: it is
+                the one thing here a reader scans the transcript FOR, and its numbers are the reason
+                the entry exists. Clicking it is still the light touch — it unfolds this turn's
+                fragment diffs (or opens the full diff when there are no fragments to unfold). */}
             {chip.files > 0 ? (
-              <>
-                <button type="button" className="diff-chip"
-                  title={chipTitle}
-                  onClick={() => {
-                    // Nothing to unfold: the turn's changes came from a shell command (or from a
-                    // form the fragments cannot express), so the only place they are readable is the
-                    // full diff. Toggling here would open the fold onto an empty list.
-                    if (diffParts.length === 0) {
-                      onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)
-                      return
-                    }
-                    // The diffs live inside their tool cards, and those cards sit in the fold:
-                    // opening every diff without opening the fold would look like a dead click.
-                    if (!allDiffsOpen) setProcessOpen(true)
-                    onToggleAllDiffs?.(!allDiffsOpen)
-                  }}>
-                  🧾 {chip.files} files
-                  {chip.added > 0 ? <span className="diff-count is-add">+{chip.added}</span> : null}
-                  {chip.removed > 0 ? <span className="diff-count is-del">−{chip.removed}</span> : null}
-                  {chip.source === 'tools' && diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
-                  {chip.source === 'tools' ? <span className="diff-chip-shell">· 来自工具调用</span> : null}
-                </button>
-                {/* The second view: this turn's changes as ONE diff, in a lightbox with real file
-                    line numbers — the chip above stays the light touch (it toggles the inline
-                    fragment diffs). The BASELINE is not this chip's promise: a turn with a
-                    checkpoint pair is read from its own two trees (frozen — a shell command's
-                    writes are in it, and a commit since does not empty it), and only a turn
-                    without one falls back to the working tree against HEAD. So the tooltip names
-                    both and points at the overlay's own head line, the one place that knows which
-                    answer came back — a promise made here would be a second, guessing surface. */}
-                <button type="button" className="diff-chip"
-                  title="本轮的完整改动，带真实文件行号（浮层顶部会说明这一次与什么对照：有检查点的是这一轮自己的两个快照，没有的是 git HEAD）"
-                  onClick={() => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)}>完整 diff</button>
-                {/* The review entry: ONE per turn, never per edit card — the review's scope
-                    is this turn's file set, and findings carry real file lines that a
-                    fragment card has no coordinates for. */}
-                <ReviewChip label="评审本轮改动" scope="让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）"
-                  pending={!!reviewPending} done={reviewDone} notice={reviewNotice} busy={!!sessionBusy}
-                  onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id))} />
-              </>
+              <button type="button" className="diff-chip"
+                title={chipTitle}
+                onClick={() => {
+                  // Nothing to unfold: the turn's changes came from a shell command (or from a
+                  // form the fragments cannot express), so the only place they are readable is the
+                  // full diff. Toggling here would open the fold onto an empty list.
+                  if (diffParts.length === 0) {
+                    onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)
+                    return
+                  }
+                  // The diffs live inside their tool cards, and those cards sit in the fold:
+                  // opening every diff without opening the fold would look like a dead click.
+                  if (!allDiffsOpen) setProcessOpen(true)
+                  onToggleAllDiffs?.(!allDiffsOpen)
+                }}>
+                🧾 {chip.files} files
+                {chip.added > 0 ? <span className="diff-count is-add">+{chip.added}</span> : null}
+                {chip.removed > 0 ? <span className="diff-count is-del">−{chip.removed}</span> : null}
+                {chip.source === 'tools' && diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
+                {chip.source === 'tools' ? <span className="diff-chip-shell">· 来自工具调用</span> : null}
+              </button>
             ) : null}
-            {showAllReview ? (
-              <>
-                {/* A turn that changed nothing of its OWN still carries this entry, because the
-                    working tree's changes (from earlier turns) are exactly what it reviews — and
-                    without this row they would be unreachable from the transcript. The row then
-                    has no 🧾 chip to explain itself, so the count does the explaining: a bare
-                    「评审所有改动」 under a turn that changed nothing invites the reader to ask
-                    "review what?". */}
-                {chip.files === 0 ? (
-                  <span className="diff-hint">工作树里还有 {allReviewFiles} 个未提交的改动（来自更早的轮次）</span>
-                ) : null}
-                <ReviewChip label="评审所有改动" scope="让 agent 评审工作树里所有未提交的改动（与 git HEAD 对照，只读；过程与意见在右侧面板）"
-                  pending={!!allReviewPending} done={allReviewDone} notice={allReviewNotice} busy={!!sessionBusy}
-                  onClick={() => (allReviewPending || allReviewDone ? onOpenOneOff?.() : onReviewAll?.(m.id))} />
-              </>
+            {/* The entries about the turn's work: the full diff, the two review scopes, and the
+                turn's own numbers. They were a row of chips — two of them whole sentences about
+                review scope — under every answer in the transcript. The trigger carries the review
+                STATE, because the entry that says 评审中… is behind the menu and a run started here
+                must still be reported here. */}
+            {menuItems.length > 0 ? (
+              <TurnMenu items={menuItems} label={menuLabel}
+                title="更多：本轮的完整 diff、评审，以及这一轮的耗时与费用" />
             ) : null}
-          </div>
-        ) : null}
-        {m.summary ? (
-          <div className="msg-footer">
-            {m.summary.durationMs > 0 ? <span>⏱ {fmtDur(m.summary.durationMs)}</span> : null}
-            {m.summary.iterations > 0 ? <span>{m.summary.iterations} iters</span> : null}
-            {m.summary.cost > 0 ? <span>¥{m.summary.cost.toFixed(3)}</span> : null}
-            {m.summary.credit > 0 ? <span>{fmtCredit(m.summary.credit)} 积分</span> : null}
+            {/* A turn that changed nothing of its OWN still carries the whole-tree review entry,
+                because the working tree's changes (from earlier turns) are exactly what it reviews —
+                and without this row they would be unreachable from the transcript. The menu item
+                then has no 🧾 chip to explain itself, so the count does the explaining: a bare
+                「评审所有改动」 under a turn that changed nothing invites the reader to ask
+                "review what?". */}
+            {showAllReview && chip.files === 0 ? (
+              <span className="diff-hint">工作树里还有 {allReviewFiles} 个未提交的改动（来自更早的轮次）</span>
+            ) : null}
+            {/* A refused review reports itself OUTSIDE the menu: it is the answer to "I clicked
+                review and nothing happened", and it must be readable without opening anything. */}
+            {reviewNotice ? <span className="diff-notice" title={reviewNotice}>⚠ 没有开始评审</span> : null}
+            {allReviewNotice && allReviewNotice !== reviewNotice
+              ? <span className="diff-notice" title={allReviewNotice}>⚠ 没有开始评审</span> : null}
+            {/* When it happened, on the row that already exists because of it. */}
+            {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
           </div>
         ) : null}
       </div>
@@ -2349,7 +2409,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       key={m.id}
                       m={m}
                       workDir={workDir}
-                      runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
                       elapsedMs={m.running ? runningElapsedMs : undefined}
                       onFoldToggle={repinAfterFoldToggle}
                       ask={m.running ? (composer.ask?.questions || null) : null}

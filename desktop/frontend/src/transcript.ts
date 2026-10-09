@@ -222,6 +222,15 @@ export interface TurnView {
   conclusion: IndexedPart | null
   // live: the call running right now, or null (finished, between calls, or parked on a form).
   live: LiveStep | null
+  // unfinished: how many of the turn's tool calls are still running. `live` names the NEWEST one,
+  // and one name alone reads as "this is the only thing happening" — a model that opens a batch of
+  // parallel calls is running several at once (see processLiveText).
+  unfinished: number
+  // phase: what the MODEL itself is doing, read from the turn's TRAILING part. The strip reports
+  // it while a turn runs with no tool in flight (see processLiveText): a turn that has only
+  // streamed prose has no call to name, and "the answer is being written" is its whole status
+  // then. '' when the turn has produced nothing yet.
+  phase: 'thinking' | 'writing' | ''
 }
 
 export interface TurnViewOptions {
@@ -270,10 +279,12 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
   const exposed: IndexedPart[] = []
   const attachments: IndexedPart[] = []
   let live: LiveStep | null = null
+  let unfinished = 0
 
   list.forEach((part, index) => {
     if (part.type === 'tool') {
       summary.steps++
+      if (!part.done) unfinished++
       if (index === runningIndex && index !== parkedIndex && index !== askIndex) {
         live = { name: part.name || '', title: part.title, step: summary.steps }
       }
@@ -313,7 +324,12 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
     const at = exposed.findIndex((it) => it.index === conclusionIndex)
     conclusion = at >= 0 ? exposed.splice(at, 1)[0] : null
   }
-  return { summary, folded, exposed, attachments, conclusion, live }
+  // The phase reads the TRAILING part: it is the last thing the model put on the wire, so a turn
+  // whose newest part is prose is writing, one whose newest is reasoning is thinking, and one whose
+  // newest is a finished call is back to generating ('' → 正在思考…, see processLiveText).
+  const tail = list[list.length - 1]
+  const phase: TurnView['phase'] = !tail ? '' : tail.type === 'thinking' ? 'thinking' : tail.type === 'text' ? 'writing' : ''
+  return { summary, folded, exposed, attachments, conclusion, live, unfinished, phase }
 }
 
 // deliveredAttachment reports whether a part IS the file card of a SendFile that succeeded.
@@ -377,6 +393,34 @@ export function processSummaryLine(s: ProcessSummary): string {
 // from the backend, not this.
 export function processLiveState(live: LiveStep): string {
   return `正在 ${live.name}${live.title ? ` · ${live.title}` : ''} · 第 ${live.step} 步`
+}
+
+// processLiveText is the strip's ONE status line while a turn runs: the call in flight when there
+// is one, else what the model itself is doing.
+//
+// It is one line on purpose. The turn used to say it twice — this row, and a second row under the
+// prose being written — and while a tool ran the two disagreed in wording (the strip named the
+// call, the row below said 正在执行…) about the same fact, which reads as two different things
+// happening. The row under the prose is gone; this is what replaced it (see AssistantBubble).
+//
+// Several calls in flight at once is its own case: naming the newest one alone ("正在 ReadFile")
+// says the other three are not running, so the count takes over from the name.
+export function processLiveText(live: LiveStep | null, phase: TurnView['phase'], unfinished: number): string {
+  if (live && unfinished > 1) return `正在执行 ${unfinished} 个工具调用 · 第 ${live.step} 步`
+  if (live) return processLiveState(live)
+  return phase === 'writing' ? '正在回答…' : '正在思考…'
+}
+
+// answerTextOf is what 「复制回答」 copies: the model's own prose, in order, and nothing else — a
+// tool call's arguments, its output and a notice are not the answer, and copying them alongside it
+// is how "copy this for me" turns into a paste nobody wants. The parts are already the turn's
+// ordered model output, so this is the reader's "what did it actually say".
+export function answerTextOf(parts: Part[] | undefined): string {
+  return (parts || [])
+    .filter((p) => p.type === 'text' && p.text)
+    .map((p) => (p.text || '').trim())
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 // processStepLabel is the strip's leading count. A turn with only reasoning shows its

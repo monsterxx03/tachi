@@ -9,6 +9,10 @@
 
   // 过程条的高度序列：10ms 采样、只记变化。这是"整轮不跳"的判据 —— 状态是瞬时的（工具一跑完
   // 就切回摘要），读一次不算数，所以采一串。每一格是 `<高度>:<状态类名>`。
+  //
+  // 采样从回合开始前就开着，而这一行现在从回合的第一帧就在（它是那一轮唯一的状态行，报的是模型
+  // 在做什么），所以轨迹的第一格必然是它、不再是"还没有"。不跳的判据因此是：整条轨迹的高度只有
+  // 一个值，而且中间没有任何一格是"行不见了"。
   const trail = []
   const sampler = setInterval(() => {
     const h = smoke.q('.process-head')
@@ -20,12 +24,18 @@
   smoke.type('.composer-input', '睡一会儿')
   smoke.click('.send-btn')
 
-  // ① 工具在跑
-  if (!(await smoke.waitFor('.process-head.live', '实时条出现（工具正在跑）', 20000))) return smoke.finish()
+  // ① 回合在跑：状态行从第一帧就在，说的是模型此刻在做什么（还没有工具在跑）。
+  if (!(await smoke.waitFor('.process-head.live', '状态行出现（回合在跑）', 20000))) return smoke.finish()
+  const opening = smoke.text('.process-head')
+  smoke.check('状态行说清正在做什么', opening.indexOf('正在') >= 0, opening)
+  smoke.check('状态行有脉冲点（"还在动"的信号）', !!smoke.q('.process-head .process-dot'))
+  // 工具跑起来之后这一行才报得出第几步 —— 那是"在做什么"和"做到哪一步"的区别。（这一场的第一个
+  // 工具几乎立刻就开始，"还没有工具"那一段在 live-roll 里钉：那一场的第一步是一段正文加一个停顿。）
+  // 工具跑起来之后这一行才报得出第几步 —— 那是"在做什么"和"做到哪一步"的区别。
+  if (!(await smoke.waitFor(() => (smoke.text('.process-head').indexOf('第 1 步') >= 0 ? true : null),
+    '状态行报出第几步（工具跑起来）', 20000))) return smoke.finish()
   const live = smoke.text('.process-head')
-  smoke.check('实时条说清正在做什么', live.indexOf('正在') >= 0, live)
   smoke.check('实时条报出第几步', live.indexOf('第 1 步') >= 0, live)
-  smoke.check('实时条有脉冲点（"还在动"的信号）', !!smoke.q('.process-head .process-dot'))
   // 运行中的卡不外露：它每完成一步就消失一次，会让下面的正文一上一下地跳。这个事实由实时行
   // 承担；想看卡本身，点开过程条即可（它就在时序里，且会原地更新）。
   smoke.check('运行中的卡不外露（页面不再逐步一跳）',
@@ -52,9 +62,8 @@
   const heights = [...new Set(trail.map((e) => e.split(':')[0]).filter((h) => h !== 'gone'))]
   smoke.check('过程条高度整轮恒定（"工具在跑"与"两次调用之间"不改变高度）',
     heights.length === 1, trail.join(' | '))
-  smoke.check('过程条出现后不再消失（整轮都占着那一行）',
-    trail[0].indexOf('gone') === 0 && trail.slice(1).every((e) => e.indexOf('gone') !== 0),
-    trail.join(' | '))
+  smoke.check('过程条从回合开头就在，整轮都不消失（没有闪一下再回来）',
+    trail.every((e) => e.indexOf('gone') !== 0), trail.join(' | '))
 
   // ③ 折叠会收缩高度，所以"跟随底部"必须在收缩方向也成立。要断言这一点，就得真的制造一次
   // 收缩：先展开（长高），再收起（变矮），两次都读底部距离。只读"回合结束后贴底"是空的——

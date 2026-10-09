@@ -45,14 +45,22 @@
 /* The transcript's content box. It carries the message rhythm (the scrollport above it does
    not lay anything out), and it is the element the follow-the-bottom ResizeObserver watches:
    a scrollport's own box never changes when its content grows, so the observer has to sit on
-   the content that does. */
+   the content that does.
+
+   The rhythm is per RELATIONSHIP, not one gap for everything: a question and the answer to it
+   are one exchange (18px apart), while two exchanges are two blocks of reading (34px). A
+   single value made the bubble that asked something look as unrelated to the reply under it
+   as it did to the turn before it, which is the structure of a conversation thrown away.
+   Margins rather than `gap`, because `gap` cannot tell the pairs apart — and scoped to the
+   transcript's own children (`> .msg`), because the side panel replays the same `.msg` markup
+   and spaces its own rows with its container's gap. */
 .chat-content {
   display: flex;
   flex-direction: column;
-  /* Roomy vertical rhythm now that messages are not separated by cards:
-     whitespace is the only separator between turns. */
-  gap: 30px;
 }
+.chat-content > .msg { margin-top: 34px; }
+.chat-content > .msg:first-child { margin-top: 0; }
+.chat-content > .msg-user + .msg-assistant { margin-top: 18px; }
 
 /* Shown only when the user has scrolled away from the bottom — clicking it
    re-arms auto-follow. */
@@ -90,14 +98,23 @@
   width: 100%;
   max-width: var(--reading-width);
   margin-inline: auto;
-  /* Each turn slides in shallowly — enough to signal "new", not enough to
-     make a long transcript feel restless. */
-  animation: msg-in 0.32s var(--ease) both;
+  /* A new turn slides in shallowly — enough to signal "new", not enough to
+     make a long transcript feel restless. Only the NEWEST message animates:
+     the animation fires on mount, and a mount is not always news (switching
+     sessions, loading a page of history, a reload all mount every message at
+     once — thirty rows sliding is a flicker, not a signal). The newest row is
+     the one that can only be new, and it is also the one at the bottom, where
+     the reader is looking. See .chat-content > .msg:last-child below. */
 }
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
+/* The one message that animates in: the newest. A mount is not news by itself — a session
+   switch, a page of history, a reload after a compaction all mount the whole transcript — and
+   the newest row is both the only one that can only be new and the one the reader is looking at
+   (the transcript is pinned to the bottom). */
+.chat-content > .msg:last-child { animation: msg-in 0.32s var(--ease) both; }
 /* The user's own message has no avatar (see UserBubble), so the bubble is simply
    pushed to the right end of the reading column. */
 .msg-user { justify-content: flex-end; }
@@ -198,6 +215,32 @@
   display: block;
   margin: 8px 0;
 }
+/* A markdown image is a CONTROL, not just a picture: clicking it opens the same lightbox an
+   attachment image uses (markdown.tsx's MdImage). It is worth the gesture because the message
+   column caps an image at 45vh — a screenshot of a UI, a chart with axis labels or a diagram
+   with text in it stops being readable well before that. The wrapper is a <span> (markdown puts
+   images inside a <p>, where a <div> is not allowed) and inline-block so it hugs its image. */
+.md-img {
+  display: inline-block;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+.md-img:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+/* A local path that does not resolve. Left to the browser, a broken <img> draws its alt text,
+   which reads as a caption — the reader cannot tell "the file is gone" from "this is a label". */
+.md-img-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
 
 /* Assistant prose is what the app is for, so it gets book-like leading: a
    generous line-height on a light warm page is what makes a long answer
@@ -207,6 +250,14 @@
   line-height: 1.76;
   color: var(--text);
   letter-spacing: 0.005em;
+  /* Nothing in a reply is guaranteed to have a space in it: a path, a URL, a long
+     identifier, a diff line pasted into prose. The default `normal` lets one of those run
+     straight out of the reading column, and the bubble's own rule does not reach here (the
+     assistant has no bubble). `anywhere` breaks it and lets the box shrink to the room it
+     has — the same reason the reader's own bubble uses it. Code and tables opt back out
+     below: a `pre` has no soft wrap opportunity to apply this to, and a table's columns
+     should scroll rather than be shredded into one character per line. */
+  overflow-wrap: anywhere;
 }
 
 /* ── Tool calls (inline records inside the assistant card) ───────────────── */
@@ -258,6 +309,10 @@
 .tool-status { margin-left: auto; font-size: 11.5px; font-weight: 700; }
 .tool-status.ok { color: var(--green); }
 .tool-status.err { color: var(--red); }
+/* In flight. It is neither of the two above: the start event carries ok=true (nothing has gone
+   wrong yet), so a card used to wear a green ✓ while its arguments were still arriving — the
+   mark for "this succeeded", drawn on a call nobody has run. */
+.tool-status.run { color: var(--accent-2); }
 /* Result copy + elapsed time live on the tool header line (not their own row). */
 .tool-dur { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 /* Tool result: a scrollable block like the args — a long tool output expands
@@ -278,23 +333,6 @@
   scrollbar-gutter: stable;
 }
 
-/* ── Running / typing indicator ──────────────────────────────────────────── */
-.running {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  color: var(--text-dim);
-}
-.typing { display: flex; gap: 4px; }
-.typing i {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: blink 1.2s infinite ease-in-out;
-}
-.typing i:nth-child(2) { animation-delay: 0.2s; }
-.typing i:nth-child(3) { animation-delay: 0.4s; }
 /* Turn stopped by the user — neutral note, never an error banner. */
 .stopped-note {
   display: inline-flex;
@@ -305,10 +343,6 @@
   color: var(--text-faint);
 }
 .stopped-note .stop-square { font-size: 10px; }
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
-  40% { opacity: 1; transform: scale(1); }
-}
 
 /* ── Composer ────────────────────────────────────────────────────────────── */
 /* The bar spans the window (it is chrome, like the titlebar), but the blocks
@@ -1595,9 +1629,8 @@ button.work-dir {
 .diff-sendbar-go:hover { filter: brightness(1.06); }
 .diff-sendbar-go:disabled { opacity: 0.5; cursor: default; filter: none; }
 
-/* The review entry: disabled while a turn runs (a review IS a turn, so it waits). */
-.diff-chip:disabled { opacity: 0.55; cursor: default; }
-.diff-chip:disabled:hover { background: transparent; color: var(--text-dim); }
+/* The review entries are menu items now (App.tsx's TurnMenu), and a menu row that cannot be
+   pressed explains itself through its own title — see .ctx-item:disabled in overlays.css. */
 /* A refused review: a marker plus the reason on hover. It must never squeeze the chips it
    sits next to, hence nowrap + no shrink — the detail lives in the title and in the panel. */
 .diff-notice {

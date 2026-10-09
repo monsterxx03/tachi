@@ -92,8 +92,8 @@ const smoke = (() => {
   }
 
   // ── DOM helpers ───────────────────────────────────────────────────────────
-  const q = (sel) => document.querySelector(sel)
-  const qa = (sel) => Array.prototype.slice.call(document.querySelectorAll(sel))
+  const q = (sel, root) => (root || document).querySelector(sel)
+  const qa = (sel, root) => Array.prototype.slice.call((root || document).querySelectorAll(sel))
   const text = (sel) => {
     const el = typeof sel === 'string' ? q(sel) : sel
     return el ? el.textContent.replace(/\s+/g, ' ').trim() : ''
@@ -127,6 +127,42 @@ const smoke = (() => {
     el.click()
     return true
   }
+
+  // ── A turn footer's ⋯ menu ─────────────────────────────────────────────────
+  // The entries about a turn's WORK — 完整 diff, the two review scopes, the run's numbers — live
+  // behind the footer's ⋯ trigger (App.tsx's TurnMenu): under every answer, a row of chips that
+  // included two whole sentences about review scope is exactly the noise the menu removes. So a
+  // driver that wants one opens the menu first — the same gesture the reader makes — and these two
+  // helpers are that gesture written once.
+  //
+  // menuitems are the rows INSIDE it. `label()` is the TRIGGER's text, which is where a review's
+  // state (评审中… / 已评审) is read while the menu is shut: the run was started from this footer,
+  // and the entry that reports it is not on screen until the menu is open.
+  //
+  // turnMenu is SYNCHRONOUS — it returns what is there NOW, and opens the menu as a side effect,
+  // so a `waitFor` predicate can call it (an async predicate would return a Promise, which is
+  // always truthy, and the wait would end on the first poll). Read it through `waitFor`: the rows
+  // are React state, so they arrive on the commit AFTER the click — the first poll clicks the
+  // trigger and finds nothing, the next one finds the rows. A caller that reads it in the same
+  // statement as the click gets an empty list (that is how multi-root and bash-diff failed once).
+  const turnRoot = (bubble) => (typeof bubble === 'string' ? q(bubble) : bubble) || q('.chat .msg-assistant')
+  const turnMenuLabel = (bubble) => {
+    const root = turnRoot(bubble)
+    const btn = root && root.querySelector('.turn-menu-btn')
+    return btn ? text(btn) : ''
+  }
+  function turnMenu(bubble) {
+    const root = turnRoot(bubble)
+    if (!root) return []
+    const btn = root.querySelector('.turn-menu-btn')
+    if (!btn) return []
+    if (!root.querySelector('.turn-menu')) click(btn)
+    return qa('.turn-menu .ctx-item', root)
+  }
+  // menuItem finds one row by the label it carries — by NAME, never by position: the entries a turn
+  // offers depend on what that turn did.
+  const menuItem = (bubble, label) =>
+    turnMenu(bubble).find((el) => el.textContent.indexOf(label) >= 0) || null
 
   // The platform's shortcut modifier as a KeyboardEvent field, and the ONE place in the driver
   // harness that fact is decided.
@@ -284,5 +320,8 @@ const smoke = (() => {
     key,
     keyEvent,
     MOD,
+    turnMenu,
+    turnMenuLabel,
+    menuItem,
   }
 })()

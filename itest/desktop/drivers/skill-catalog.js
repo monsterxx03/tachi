@@ -12,6 +12,10 @@
 
   const reply = await smoke.waitText('.msg-assistant', '收到。', 30000)
   smoke.check('这一轮正常跑完', !!reply, smoke.text('.chat-content').slice(-70))
+  // 断言之前等这一轮结算：跑着的那一轮现在也有过程条（它是那一轮唯一的状态行 —— 正在回答…），
+  // 而这里要判的是"这一轮没有工具调用、也没有思考块"，那是收尾后的事实。
+  await smoke.waitFor(() => !smoke.q('.stop-btn'), '这一轮结算', 15000)
+  await smoke.sleep(300)
 
   // "没有工具卡"在过程折叠之后变弱了（卡可能只是折起来了），所以连过程条一起断言。注意过程条
   // 也收思考块，所以这两条合起来是"这一轮既没工具调用、也没有思考块"。

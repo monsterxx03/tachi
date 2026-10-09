@@ -14,12 +14,15 @@
     await smoke.sleep(300)
   }
   // The Nth assistant card in the CONVERSATION. The side panel replays messages of its own
-  // (same classes), so every lookup here is scoped to `.chat` — and every chip lookup to the
-  // card it belongs to: both turns have chips, and only turn 1's is the subject.
+  // (same classes), so every lookup here is scoped to `.chat` — and every entry lookup to the
+  // card it belongs to: both turns have entries, and only turn 1's is the subject.
+  //
+  // The entries (完整 diff / 评审本轮改动) live behind the footer's ⋯ menu (harness.js's turnMenu),
+  // so a lookup opens it — scoped to the card, never the document: two cards' menus can be open at
+  // once and an unscoped query would pick whichever came last.
   const card = (idx) => smoke.qa('.chat .msg-assistant')[idx] || null
-  const chipIn = (el, text) =>
-    el ? Array.prototype.slice.call(el.querySelectorAll('.diff-chip')).find((b) => b.textContent.indexOf(text) >= 0) || null : null
-  const chipText = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '(没有卡片)')
+  const entryIn = (el, text) => (el ? smoke.menuItem(el, text) : null)
+  const entriesOf = (el) => (el ? smoke.turnMenu(el).map((b) => smoke.text(b)).join(' | ') : '(没有卡片)')
 
   // Turn 1: only a shell command writes — no tool call declares a path, so this turn used to
   // render no chip at all.
@@ -38,8 +41,8 @@
     String(smoke.qa('.chat .msg-assistant').length))
 
   // ── Turn 1's 完整 diff: the files are gone from disk, the turn's change is not ────────
-  const diffChip = chipIn(card(0), '完整 diff')
-  if (!diffChip) return smoke.fail('第 1 轮卡片上有「完整 diff」入口', chipText(card(0)))
+  const diffChip = await smoke.waitFor(() => entryIn(card(0), '完整 diff'), '第 1 轮卡片上有「完整 diff」入口', 8000)
+  if (!diffChip) return smoke.fail('第 1 轮卡片上有「完整 diff」入口', entriesOf(card(0)))
   diffChip.click()
   if (!(await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '「完整 diff」打开宽浮层', 8000))) return smoke.finish()
   const frozen = await smoke.waitFor(
@@ -58,13 +61,13 @@
   if (!(await smoke.waitFor(() => !smoke.q('.viewer-overlay'), '浮层关掉', 5000))) return smoke.finish()
 
   // ── The review: it starts, and the panel shows the diff the reviewer actually read ─────
-  const reviewChip = chipIn(card(0), '评审本轮改动')
-  if (!reviewChip) return smoke.fail('第 1 轮卡片上有「评审本轮改动」入口', chipText(card(0)))
+  const reviewChip = await smoke.waitFor(() => entryIn(card(0), '评审本轮改动'), '第 1 轮卡片上有「评审本轮改动」入口', 8000)
+  if (!reviewChip) return smoke.fail('第 1 轮卡片上有「评审本轮改动」入口', entriesOf(card(0)))
   reviewChip.click()
-  const reviewed = await smoke.waitFor(() => chipIn(card(0), '已评审'), '评审跑完（chip 报出条数）', 30000)
-  smoke.check('改动不在工作树里也能评审（scope 来自检查点）', !!reviewed, reviewed ? chipText(reviewed) : chipText(card(0)))
+  const reviewed = await smoke.waitFor(() => entryIn(card(0), '已评审'), '评审跑完（入口报出条数）', 30000)
+  smoke.check('改动不在工作树里也能评审（scope 来自检查点）', !!reviewed, reviewed ? smoke.text(reviewed) : entriesOf(card(0)))
   smoke.check('意见数来自对已删文件的评审（1 条）',
-    !!reviewed && chipText(reviewed).indexOf('1 条') >= 0, reviewed ? chipText(reviewed) : '')
+    !!reviewed && smoke.text(reviewed).indexOf('1 条') >= 0, reviewed ? smoke.text(reviewed) : '')
   if (!(await smoke.waitFor('.oneoff-panel', '评审开始即打开面板', 8000))) return smoke.finish()
 
   const findingsTab = smoke.qa('.oneoff-tab').find((b) => b.textContent.indexOf('意见') >= 0)
@@ -98,8 +101,8 @@
   const rerun = smoke.qa('.oneoff-body .diff-open').find((b) => b.textContent.indexOf('重新评审') >= 0)
   if (!rerun) return smoke.fail('意见区有「重新评审」按钮', '按钮找不到')
   rerun.click()
-  const again = await smoke.waitFor(() => chipIn(card(0), '已评审 2 条'), '重跑后 chip 报出新的条数', 30000)
-  smoke.check('按同一轮重跑没有被拒绝（chip 报出新条数）', !!again, again ? chipText(again) : chipText(card(0)))
+  const again = await smoke.waitFor(() => entryIn(card(0), '已评审 2 条'), '重跑后入口报出新的条数', 30000)
+  smoke.check('按同一轮重跑没有被拒绝（入口报出新条数）', !!again, again ? smoke.text(again) : entriesOf(card(0)))
 
   smoke.finish()
 })()

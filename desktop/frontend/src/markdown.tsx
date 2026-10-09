@@ -3,14 +3,14 @@
 // highlighted code). Keeping it in one module is what makes "the same file looks
 // the same in the chat and in the card" true by construction.
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type RefObject } from 'react'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { CopyIcon } from './components'
-import { copyText, toLocalAsset } from './lib'
+import { copyText, actOnKey, toLocalAsset } from './lib'
 import { useThemeSnapshot } from './theme'
-import { CloseButton, ViewerOverlay, ZoomControls, useViewerZoomKeys, useZoomPan } from './viewer'
+import { CloseButton, ImageViewer, ViewerOverlay, ZoomControls, useViewerZoomKeys, useZoomPan } from './viewer'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
 // table wider than the message card scrolls inside it instead of bursting out
@@ -27,8 +27,8 @@ function TableScroller(props: { children?: ReactNode }) {
 // which is what keeps a streaming turn from re-parsing every earlier reply on
 // each animation frame.
 export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: string; workDir: string }) {
-  const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
-    <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
+  const MdImg = useCallback(({ src, alt, title }: { src?: string; alt?: string; title?: string }) => (
+    <MdImage src={src} alt={alt} title={title} workDir={workDir} />
   ), [workDir])
   return (
     <div className="assistant-text">
@@ -37,12 +37,54 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { te
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
+        urlTransform={keepInlineImage}
         components={{ img: MdImg, table: TableScroller, pre: PreBlock }}>
         {text}
       </ReactMarkdown>
     </div>
   )
 })
+
+// keepInlineImage is react-markdown's own URL policy plus ONE exception: `data:image/…`.
+//
+// The library strips every URL whose protocol is outside its allowlist (http/https/mailto/irc/xmpp),
+// and `data:` is on that list — so an answer that embeds a picture inline (a small icon, a generated
+// diagram) arrived as a BROKEN image, with nothing wrong with the source. The exception is narrow on
+// purpose: only for an <img>, and only `data:image/`. A data URL fetches nothing over the network,
+// and inside an `<img>` it cannot execute anything either — an SVG's scripts do not run in an image
+// context — which is what makes this safe where a `data:` LINK would not be.
+function keepInlineImage(url: string, _key: string, node: { tagName?: string } | undefined): string {
+  if (node && node.tagName === 'img' && /^data:image\//i.test(url)) return url
+  return defaultUrlTransform(url)
+}
+
+// MdImage is a markdown image: clicking it (or Enter, it is a real control) opens the SAME
+// lightbox an attachment uses — so a screenshot the agent pasted into its answer can be read at
+// full size instead of being capped by the message column, which is where a diagram or a UI shot
+// with text in it stops being legible. It is a <span role="button"> rather than a wrapper
+// element because markdown puts images inside a <p>, where a <div> is not allowed; the lightbox
+// itself is a portal (see viewer.tsx), so nothing here escapes the paragraph.
+//
+// A local path that does not resolve is a broken image whose alt text is easy to read as a
+// caption: it says so instead. `title` is the markdown title — kept, because the author put it
+// there for the reader.
+function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; title?: string; workDir: string }) {
+  const [open, setOpen] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const url = toLocalAsset(src, workDir)
+  if (!src || failed) {
+    return <span className="md-img-failed" title={src || ''}>图片无法加载{alt ? `：${alt}` : ''}</span>
+  }
+  return (
+    <>
+      <span className="md-img" role="button" tabIndex={0} title={title || '点击放大'}
+        onClick={() => setOpen(true)} onKeyDown={actOnKey(() => setOpen(true))}>
+        <img src={url} alt={alt || ''} title={title} onError={() => setFailed(true)} />
+      </span>
+      {open ? <ImageViewer src={url} alt={alt || ''} onClose={() => setOpen(false)} /> : null}
+    </>
+  )
+}
 
 // ── Inline markdown ─────────────────────────────────────────────────────────
 // InlineMd renders the inline markdown ONE PIECE OF PROSE is written in: `code`, **bold**,
@@ -165,25 +207,58 @@ function CopyButton({ getText, title = '复制' }: { getText: () => string; titl
 }
 
 // PreBlock intercepts fenced code blocks: ```mermaid becomes a diagram, every
-// other block stays a normal <pre> (already tokenised by rehype-highlight).
-// Either way the block gets a copy button — the code itself, or for a diagram
-// its mermaid source.
+// other block becomes a code block with its own header (see CodeBlock).
 export function PreBlock(props: ComponentPropsWithoutRef<'pre'>) {
-  const ref = useRef<HTMLPreElement>(null)
+  const codeRef = useRef<HTMLPreElement>(null)
   const child = Array.isArray(props.children) ? props.children[0] : props.children
   const el = child as { props?: { className?: string; children?: ReactNode } } | null
   if ((el?.props?.className || '').includes('language-mermaid')) {
     return <MermaidDiagram code={String(el?.props?.children ?? '').replace(/\n$/, '')} />
   }
+  return <CodeBlock preProps={props} codeRef={codeRef} lang={langOf(el?.props?.className)} />
+}
+
+// langOf reads the info string react-markdown turned into the code element's class
+// (`language-go`), which is the language the block was TAGGED with. '' when it was not tagged.
+function langOf(className: string | undefined): string {
+  const m = /(?:^|\s)language-([\w+#.-]+)/.exec(className || '')
+  return m ? m[1] : ''
+}
+
+// CodeBlock is a fenced code block with its own header: the language, a copy button, and a wrap
+// toggle.
+//
+// The header replaced a button that FLOATED over the block — it sat on the first line of code, was
+// invisible until the reader happened to hover, and covered the very characters it copied on a
+// short block. Everything it needs now sits on a real edge above the code, and the language (which
+// rehype-highlight had been tagging all along, invisibly) is readable without hovering anything.
+//
+// Wrapping is the reader's call, not a default: a long line is usually a path or a command where
+// the horizontal shape carries meaning, and a block that silently re-wraps it is harder to read
+// than one that scrolls. Whoever wants it back switches it off, and the choice is per block —
+// it is about THIS output (a log, a wide JSON), not a global preference.
+function CodeBlock({ preProps, codeRef, lang }: {
+  preProps: ComponentPropsWithoutRef<'pre'>
+  codeRef: RefObject<HTMLPreElement>
+  lang: string
+}) {
+  const [wrapped, setWrapped] = useState(false)
   return (
-    <div className="code-wrap">
-      {/* Read the rendered text rather than walking the token tree: after
-          rehype-highlight the code element is a tree of spans, and innerText
-          gives back exactly what the user sees. */}
-      <div className="code-actions">
-        <CopyButton title="复制代码" getText={() => ref.current?.innerText ?? ''} />
+    <div className={`code-wrap${wrapped ? ' is-wrapped' : ''}`}>
+      <div className="code-head">
+        <span className="code-lang">{lang}</span>
+        <span className="code-head-actions">
+          <button type="button" className="code-tool" aria-pressed={wrapped}
+            title={wrapped ? '关掉自动折行（恢复横向滚动）' : '自动折行：长行换行显示，而不是横向滚动'}
+            onClick={() => setWrapped((v) => !v)}>折行</button>
+          {/* Read the rendered text rather than walking the token tree: after
+              rehype-highlight the code element is a tree of spans, and innerText
+              gives back exactly what the user sees — wrapped or not (a soft wrap
+              is not a newline in innerText, so the copy stays the source text). */}
+          <CopyButton title="复制代码" getText={() => codeRef.current?.innerText ?? ''} />
+        </span>
       </div>
-      <pre {...props} ref={ref} />
+      <pre {...preProps} ref={codeRef} />
     </div>
   )
 }

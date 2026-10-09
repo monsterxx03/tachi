@@ -65,6 +65,9 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | tool cards (their own args and result, several calls of one tool in a turn) | `parallel-tools`, `transcript-fold` |
 | the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
 | a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
+| a REPLY's own markup — a code block (its header, the wrap toggle), a markdown image, a long unbreakable string in prose | `md-widgets` |
+| the rhythm between messages (a question and its answer vs two turns) or which message animates in | `md-widgets` |
+| a turn's controls on its footer (复制回答, the ⋯ menu, the entries inside it, the run's numbers) | `md-widgets`, `oneoff-footer` |
 | the reading size (⌘= / ⌘- / ⌘0, and the two stores it lands in) | `font-size`, `bubble-lines` |
 | composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
 | a key the composer has to claim itself (⌃U / ⌃D page the transcript from inside the box) | `composer-page-turn` |
@@ -125,9 +128,10 @@ A driver asserts what the UI **shows** (transcript shape, chips, buttons); the s
 actually **happened** (the prompt the model received, the files written) — a regression usually shows up in
 exactly one of the two, so write both. A new scenario is a `drivers/<name>.js` against the harness
 (`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`, plus
-`q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`) plus its entry in `scenarios.go` (the mock's
-`steps`, the work-dir `files`, an `after` func), added to the routing table above. Keep both halves small: one
-behaviour per scenario, asserting what the user would notice.
+`q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`, and `turnMenu`/`menuItem`/`turnMenuLabel` for a
+turn footer's ⋯ menu) plus its entry in `scenarios.go` (the mock's `steps`, the work-dir `files`, an `after`
+func), added to the routing table above. Keep both halves small: one behaviour per scenario, asserting what
+the user would notice.
 
 Three traps in the driver half, each of which fails a run that looks green:
 
@@ -220,11 +224,18 @@ Fixtures exist where the real path needs something a driver cannot do:
 - **A control used as a TRIGGER for another behaviour pins neither** — a button and a page switch must not ride
   on one click. And **an assertion belongs to the scenario that produces the fact**: a check that sat in
   `oneoff-footer`'s `after` while the driver producing the fact is `oneoff-panel`'s read a default forever.
-- **Wait for the fact the action reads, not for a neighbour that correlates with it.** The 评审本轮改动 chip
-  exists after its FIRST changed file, not its last, so a click on 「完整 diff」 that waits only for the chip
+- **Wait for the fact the action reads, not for a neighbour that correlates with it.** The 评审本轮改动
+  entry exists after its FIRST changed file, not its last, so a click on 「完整 diff」 that waits only for it
   captures a one-file set.
+- **A turn footer's entries live BEHIND a trigger, so a driver opens it — and re-queries the entry at click
+  time.** 完整 diff, the two review scopes and the run's numbers are the footer's ⋯ menu (App.tsx's TurnMenu;
+  the state a reader sees without opening anything, 评审中… / 已评审, is on the TRIGGER). `smoke.turnMenu` /
+  `smoke.menuItem` are that gesture. Two traps, both of which cost a run: the rows arrive on the commit AFTER
+  the click, so a lookup must go through `waitFor` (a synchronous read in the same statement as the click
+  returns nothing), and clicking an entry UNMOUNTS the menu — a node captured before an intervening
+  interaction is detached, and `.click()` on it is a silent no-op.
 - **A transient state belongs to the trail; a steady state belongs to a direct read.** A UI state whose length
-  is the WORK's length (the 评审中… chip) makes `waitFor` a coin flip — sample on a ~10ms timer, dedupe into a
+  is the WORK's length (the 评审中… state) makes `waitFor` a coin flip — sample on a ~10ms timer, dedupe into a
   trail, assert the trail CONTAINS the state. But read the END state off the element the wait returned.
 - **With Reduce motion ON, EVERY property change is a real transition** (`transition-duration: 0.01ms
   !important` in base.css). 0.01ms is not zero: a driver that writes a style and reads
@@ -653,7 +664,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`). The
   id comes from the CALLER, and every refusal is a returned string — never a bare `"ok"` for a message that
   started no turn, because the frontend draws the user's bubble and a running placeholder BEFORE the call: a
-  dropped message would leave the reader looking at their own text under a 正在执行 nothing could clear. Two
+  dropped message would leave the reader looking at their own text under a 正在… nothing could clear. Two
   traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN map, so it is false for a session that
   exists on disk and has not been loaded — every first send), and the busy check has to come BEFORE the agent
   build.
@@ -983,6 +994,24 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 
 **A turn on screen**
 
+- **A turn has ONE status line, and it is the strip's.** While the turn runs the strip reports what is
+  happening now — the call in flight (`正在 Bash · <title> · 第 N 步`), the count when several run at once, the
+  elapsed clock — and once it is over it reports what happened. A second status row under the prose being
+  written (正在思考…/正在执行…) was removed: two rows, one fact, and the two disagreed in wording whenever a
+  tool ran. The strip therefore exists from the turn's FIRST frame, and its height must not move on ANY of its
+  transitions (status ↔ summary, foldable ↔ not) — the transcript is bottom-pinned, so a pixel of growth
+  shifts everything on screen; its line box is a declared length for exactly that reason, not `normal`.
+  Regression: `transcript-live` (height trail), `live-roll` (the roll), `file-find` (a settled turn that only
+  delivered a file has no strip at all).
+- **A turn's footer is ONE row**: 复制回答 (the model's own prose, never the tool arguments), the 🧾 changes
+  chip (kept out of the menu — its numbers are the thing a reader scans a transcript for), the ⋯ menu, and the
+  timestamp. The entries about the turn's WORK — 完整 diff, 评审本轮改动, 评审所有改动, the run's numbers — are
+  the menu's rows, so the footer does not carry two whole sentences of review scope under every answer.
+  **A review's STATE stays on screen without opening anything**: it rides the trigger (评审中… / 已评审), and
+  the row inside carries the full state (已评审 N 条 · 查看). A refused review's reason stays OUTSIDE the menu —
+  it is the answer to "I pressed review and nothing happened". Regressions: `oneoff-footer` (the state machine
+  and the trail), `review-all` (which entry each turn offers), `multi-root` / `bash-diff` / `frozen-panel` /
+  `file-index` / `diff-layout` (the entries themselves).
 - **A turn is folded by the CONVERSATION, not by the part renderer** (`turnView()`, pure, shared by the live
   view and a rebuilt transcript): one strip stands in for its thinking, tool cards and intermediate messages,
   the turn's LAST prose, plus the parts that must never be hidden — a FAILED call, the call a permission card

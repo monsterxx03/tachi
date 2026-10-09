@@ -382,6 +382,24 @@ func textStreamPrompt(text string, cacheRead, prompt int) mockllm.ReplyFunc {
 	)
 }
 
+// mdWidgetsReply 是 md-widgets 那一场的回答：一段带语言的代码块（其中一行故意很长）、一张内联的
+// SVG（data URI，不碰磁盘，必成），和一张指向不存在路径的图（要落到"图片无法加载"那一态）。
+//
+// 长行是折行开关的判据：不折行时它必须横向溢出，开了折行之后不能 —— 那是读者的观感，`white-space`
+// 只是手段。
+func mdWidgetsReply() string {
+	long := strings.Repeat("abcdefghij", 40)
+	return "看这段代码：\n\n```go\nfunc main() { fmt.Println(\"" + long + "\") }\n```\n\n" +
+		"再看两张图：\n\n" +
+		"![dot](data:image/svg+xml;base64," + mdWidgetsDot + ")\n\n" +
+		"![missing](nope/missing.png)\n\n" +
+		"最后是一个没有空格的长串：`" + long + "`\n"
+}
+
+// mdWidgetsDot 是上面那张内联图：48x24 的实心小方块。写成 data URI 是有意的 —— 要钉的是"正文里的
+// 图片能开浮层"，不是 /local 那条路由（那是附件那条路的事）。
+const mdWidgetsDot = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSIyNCI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjI0IiBmaWxsPSIjNDQ2MGUwIi8+PC9zdmc+"
+
 // askStream scripts the agent asking the user something: one AskUserQuestion call carrying a
 // question with two options and a free-text box. The turn parks on the answer, which is what
 // makes the form's own keystrokes observable at all.
@@ -537,6 +555,30 @@ func scenarios() []scenario {
 				c.check("两次请求都到达了模型", len(c.requests) == 2, requestCount(c.requests))
 				_, toolResultSeen := c.requestSeen("smoke-tool-ok")
 				c.check("工具结果回喂给了模型", toolResultSeen, "")
+			},
+		},
+		//
+		// 消息区里的富文本控件：代码块的头栏（语言 / 复制 / 折行）与正文图片的放大。三样都是"看得见、
+		// 点得动"的东西，单测看不见，所以各自钉一条最容易被改坏的：头栏必须真的在代码之上（不是像
+		// 从前那样浮在第一行代码上）、折行开关必须真的改变换行方式（长行从溢出变成不溢出）、图片必须
+		// 真的能开浮层。
+		//
+		// 第二轮是给"消息节奏"和"入场动画"用的：问题与它的回答是一段对话（挨得近），两轮之间是两段
+		// 阅读（离得远），而只有最新那条消息会滑入 —— 换会话、翻历史、压缩后重载都是一次 mount 一屏
+		// 消息，全都滑一遍就是闪。这两条都只能在"多轮"里量。
+		//
+		{
+			name: "md-widgets",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe md-widgets scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream(mdWidgetsReply(), 900)},
+				{Reply: textStream("收到。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮共两次调用", len(c.requests) == 2, requestCount(c.requests))
 			},
 		},
 		//

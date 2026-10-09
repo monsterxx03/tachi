@@ -39,7 +39,9 @@
 
   // 「完整 diff」 reads the turn's own two trees, so both shell-written files are in it — with
   // real line numbers, which a fragment card never had.
-  const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
+  const diffChip = await smoke.waitFor(
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '完整 diff'),
+    '找到「完整 diff」入口', 8000)
   if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
   diffChip.click()
   if (!(await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '「完整 diff」打开宽浮层', 8000))) return smoke.finish()
@@ -55,13 +57,15 @@
 
   // 「评审本轮改动」: the scope is taken from the same trees, and the Go half asserts that the
   // reviewer's prompt names the two files and points at the frozen pair rather than HEAD.
-  const reviewChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('评审本轮改动') >= 0)
+  const reviewChip = await smoke.waitFor(
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '评审本轮改动'),
+    '找到「评审本轮改动」入口', 8000)
   if (!reviewChip) return smoke.fail('找到「评审本轮改动」入口', '按钮找不到')
   reviewChip.click()
   const reviewed = await smoke.waitFor(
-    () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('已评审') >= 0) || null,
-    '评审跑完（chip 报出条数）', 30000)
-  smoke.check('评审能对 shell 写出的文件跑起来', !!reviewed, reviewed ? smoke.text(reviewed) : '(chip 没变成已评审)')
+    () => smoke.menuItem(smoke.q('.chat .msg-assistant'), '已评审'),
+    '评审跑完（入口报出条数）', 30000)
+  smoke.check('评审能对 shell 写出的文件跑起来', !!reviewed, reviewed ? smoke.text(reviewed) : '(入口没变成已评审)')
   // The mock's finding is ON made.txt — a file only a shell command created, so a review that
   // could not see it could not have reported it.
   smoke.check('意见数来自对 shell 写出文件的评审（1 条）',

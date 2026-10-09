@@ -17,15 +17,18 @@
   if (!(await smoke.waitForSession())) return smoke.finish()
   if (!(await smoke.waitFor(() => (sessionId() ? true : null), '会话加载完成（app 上出现 data-session-id）'))) return smoke.finish()
 
-  const chipIn = (bubble, label) =>
-    Array.from(bubble.querySelectorAll('.diff-chip')).find((b) => b.textContent.indexOf(label) >= 0) || null
+  // The review entries live behind the footer's ⋯ menu (harness.js's turnMenu/menuItem), so a
+  // lookup OPENS it — scoped to the bubble under test, never the document: the assertions here are
+  // about WHICH entries a given turn offers, and two turns' menus can be open at once.
+  //
   // Scoped to `.chat`: the side-channel panel replays its run through the same bubble markup
   // (`.msg msg-assistant oneoff-turn`) and sits AFTER <main> in the DOM, so a bare
   // '.msg-assistant' query puts the panel's messages "last" — and the footer under test has no
-  // chips there. (`frozen-panel` scopes the same way.)
+  // entries there. (`frozen-panel` scopes the same way.)
+  const chipIn = (bubble, label) => (bubble ? smoke.menuItem(bubble, label) : null)
   const bubbles = () => smoke.qa('.chat .msg-assistant')
   const lastBubble = () => bubbles()[bubbles().length - 1] || null
-  const chipsOf = (bubble) => (bubble ? Array.from(bubble.querySelectorAll('.diff-chip')).map((b) => b.textContent.trim()).join(' | ') : '(没有气泡)')
+  const chipsOf = (bubble) => (bubble ? smoke.turnMenu(bubble).map((b) => smoke.text(b)).join(' | ') : '(没有气泡)')
 
   // ── 第 1 轮：这一轮自己写了文件 → 两个入口都在 ──────────────────────────────
   smoke.type('.composer-input', '写一个 NOTES.md')
@@ -37,7 +40,7 @@
       return last && chipIn(last, '评审本轮改动') && chipIn(last, '评审所有改动') ? last : null
     },
     '最新一轮同时出现两个评审入口', 20000)
-  smoke.check('有改动的一轮：评审本轮改动 + 评审所有改动 在同一行', !!both, chipsOf(lastBubble()))
+  smoke.check('有改动的一轮：评审本轮改动 + 评审所有改动 都在那个菜单里', !!both, chipsOf(lastBubble()))
   if (!both) return smoke.finish()
 
   // ── 第 2 轮：只读的一问 → 整树入口跟着最新一轮走 ────────────────────────────
@@ -62,18 +65,21 @@
   smoke.check('空档那一行说清有多少未提交的改动', hint.indexOf('未提交') >= 0, hint || '(没有 .diff-hint)')
 
   // ── 状态机：点击 → 评审中… → 已评审 N 条 · 查看 ────────────────────────────
+  // 采样的是那一行入口（trigger）上的状态：评审中… / 已评审 都在它上面，而"已评审 N 条 · 查看"
+  // 那条完整状态在菜单里 —— 所以条数最后从菜单项上读（见 after）。
   const seen = []
   const tick = setInterval(() => {
-    const chip = chipIn(lastBubble() || document.body, '评审')
-    if (!chip) return
-    const text = smoke.text(chip)
-    if (!seen.length || seen[seen.length - 1].text !== text) seen.push({ text, disabled: chip.disabled })
+    const text = smoke.turnMenuLabel(lastBubble())
+    if (!text) return
+    if (!seen.length || seen[seen.length - 1].text !== text) seen.push({ text, disabled: false })
   }, 10)
-  chipIn(gap, '评审所有改动').click()
+  const startAll = await smoke.waitFor(() => chipIn(lastBubble(), '评审所有改动'), '菜单里有「评审所有改动」入口', 8000)
+  if (!startAll) return smoke.finish()
+  startAll.click()
   const after = await smoke.waitFor(
     () => {
       const last = lastBubble()
-      return last && chipIn(last, '已评审') ? chipIn(last, '已评审') : null
+      return last ? chipIn(last, '已评审') : null
     },
     'footer 变成「已评审 N 条 · 查看」', 40000)
   clearInterval(tick)
@@ -161,10 +167,13 @@
   // 这里顺带确认整树那一个也守同样的约定。
   if (!smoke.click('.oneoff-toggle')) return smoke.fail('关掉面板', '按钮找不到')
   if (!(await smoke.waitFor(() => !smoke.q('.oneoff-panel'), '面板已收起', 5000))) return smoke.finish()
-  const stillThere = lastBubble() && chipIn(lastBubble(), '已评审')
-  smoke.check('收起后入口还在（已评审状态不随面板走）', !!stillThere, chipsOf(lastBubble()))
-  if (stillThere) stillThere.click()
-  const reopened = await smoke.waitFor('.oneoff-panel', '点「查看」重新打开面板', 5000)
+  // The state itself sits on the footer's trigger (the menu is shut), and the entry that goes back
+  // to the run is the menu item — so this is the reader's two-gesture path written out.
+  smoke.check('收起后入口还在（已评审状态不随面板走）',
+    smoke.turnMenuLabel(lastBubble()).indexOf('已评审') >= 0, smoke.turnMenuLabel(lastBubble()) + ' ｜ ' + chipsOf(lastBubble()))
+  const back = await smoke.waitFor(() => chipIn(lastBubble(), '已评审'), '菜单里有「已评审」入口', 8000)
+  if (back) back.click()
+  const reopened = await smoke.waitFor('.oneoff-panel', '点「已评审」入口重新打开面板', 5000)
   smoke.check('完成后这个入口是回到面板的路', !!reopened, '')
 
   smoke.finish()

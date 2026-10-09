@@ -42,7 +42,14 @@
   const last = parts && parts.lastElementChild
   smoke.check('附件组是该轮正文之后的最后一块', !!last && String(last.className).indexOf('turn-files') >= 0,
     last ? String(last.className) : '(找不到 .turn-parts)')
-  smoke.check('一轮只发了文件就没有过程条（没有别的东西可折）', !smoke.q('.msg-assistant .process-head'),
+  // The strip is the turn's ONE status line while it runs, so it exists for as long as the turn
+  // does — this assertion is about the turn at REST: a turn that only handed a file over has
+  // nothing to fold and nothing to report. Waiting for it to go is the turn's own end (the reply
+  // above arrives over the live stream, so it can land before the turn is over).
+  const settled = await smoke.waitFor(
+    () => (!smoke.q('.msg-assistant .process-head') ? true : null),
+    '回合收尾后没有过程条（这一轮只有一次交付）', 8000)
+  smoke.check('一轮只发了文件，收尾后就没有过程条（没有别的东西可折）', !!settled,
     smoke.q('.msg-assistant .process-head') ? '居然有过程条' : '')
 
   // A file gets to the viewer in two steps: the attachment card (预览), then the card's ⤢.

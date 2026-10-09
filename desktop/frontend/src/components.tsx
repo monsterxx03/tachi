@@ -6,7 +6,7 @@ import { AT_SESSION_PREFIX, actOnKey, copyText, fmtDur, fmtShare, humanize, imeA
 import { isMod, MOD_KEY } from './platform'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
-import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
+import { processStepLabel, processSummaryLine, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -318,52 +318,21 @@ function RollingLine({ text, className }: { text: string; className?: string }) 
   )
 }
 
-// ReviewChip is one of a turn's two review entries. They differ only in SCOPE — this turn's
-// checkpoint pair, or the whole working tree against HEAD — while the state machine is identical:
-// 评审x → 评审中… → 已评审 N 条 · 查看, where the last two LOOK at a run (one to watch it work, one
-// to read it) and only the first starts one. Written once and told which by `scope`, because two
-// copies of a four-state chip is how they drift apart.
-function ReviewChip({ label, scope, pending, done, notice, busy, onClick }: {
-  label: string
-  scope: string
-  pending: boolean
-  done?: string
-  notice?: string
-  busy: boolean
-  onClick: () => void
-}) {
-  return (
-    <>
-      <button type="button" className="diff-chip"
-        /* Both 「评审中…」 and 「已评审 · 查看」 LOOK at a run — one to watch it work, one to
-           read it — so both stay clickable. Only STARTING a review waits for the turn to
-           finish. (Disabling on sessionBusy alone is what made the chip unclickable while
-           it was busy running the very review it was reporting on.) */
-        disabled={!pending && !done && busy}
-        title={pending ? '评审进行中（过程在右侧面板）'
-          : done ? '看这次评审的过程、意见与报告（右侧面板）'
-            : busy ? '等这一轮跑完' : scope}
-        onClick={onClick}>
-        {pending ? '评审中…' : (done || label)}
-      </button>
-      {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it shoved the
-          chips around (the sentence is a whole line), and hovering is the honest place for the
-          detail — 「完整 diff」 spells out the same thing. This is per ENTRY, not per turn: one
-          can refuse (nothing of its own to review) while the other has plenty. */}
-      {notice ? <span className="diff-notice" title={notice}>⚠ 没有开始评审</span> : null}
-    </>
-  )
-}
-
 // ProcessStrip is one turn's process, folded into a single row: it stands in for every
 // thinking block, tool card and intermediate message of that turn, which stay behind the
 // "展开时序" toggle. The row is the summary — steps, what the tools touched, and whether
 // anything failed — so the turn's answer is what the reader lands on.
 //
+// While the turn RUNS the same row reports the CURRENT state instead (a tool in flight, or what
+// the model is doing — see transcript.ts's processLiveText): one turn, one status line. The
+// transcript used to carry a second one under the prose being written, which is where this
+// turn's reader is looking, and the two said the same thing in different words whenever a tool
+// ran.
+//
 // It renders ONLY the row; the timeline belongs to the caller, which owns the open state
 // (per turn, presentational) and the part renderer. Failure is not hidden: the count turns
 // the row red, and the failed cards themselves stay outside the fold (see turnView).
-function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
+function ProcessStrip({ summary, open, onToggle, foldable, running, status, elapsedMs }: {
   summary: ProcessSummary
   open: boolean
   onToggle: () => void
@@ -371,10 +340,11 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
   // folded yet (its only part is the call that is running), so the row is then a status line
   // rather than a button — a toggle that opens nothing is worse than none.
   foldable?: boolean
-  // live: the call running right now. While it is set the row says WHAT is happening
-  // instead of how much has happened — the counts are the same fact told afterwards, and
-  // the elapsed time is the difference between "working" and "stuck".
-  live?: LiveStep | null
+  // running: the turn is in flight, so the row reports `status` (and the elapsed clock) instead
+  // of the finished counts. The counts are the same fact told afterwards.
+  running?: boolean
+  // status: the live line — what the turn is doing right now (transcript.ts's processLiveText).
+  status?: string
   elapsedMs?: number
 }) {
   const steps = processStepLabel(summary)
@@ -382,7 +352,7 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
   const failed = summary.failed > 0
   return (
     <div
-      className={`process-head${open ? ' open' : ''}${failed ? ' failed' : ''}${live ? ' live' : ''}${foldable ? '' : ' static'}`}
+      className={`process-head${open ? ' open' : ''}${failed ? ' failed' : ''}${running ? ' live' : ''}${foldable ? '' : ' static'}`}
       role={foldable ? 'button' : undefined}
       tabIndex={foldable ? 0 : undefined}
       aria-expanded={foldable ? open : undefined}
@@ -390,10 +360,10 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
       onClick={foldable ? onToggle : undefined}
       onKeyDown={foldable ? actOnKey(onToggle) : undefined}
     >
-      {live ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret"><Caret open={open} /></span>}
-      {live ? (
+      {running ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret"><Caret open={open} /></span>}
+      {running ? (
         <>
-          <RollingLine className="process-now" text={processLiveState(live)} />
+          <RollingLine className="process-now" text={status || ''} />
           {elapsedMs ? <span className="process-elapsed">· {fmtDur(elapsedMs)}</span> : null}
           {failed ? <span className="process-failed">⚠ {summary.failed} 步失败</span> : null}
         </>
@@ -406,6 +376,79 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
       )}
       {foldable ? <span className="process-toggle">{open ? '收起' : '展开时序'}</span> : null}
     </div>
+  )
+}
+
+export interface TurnMenuItem {
+  key: string
+  label: string
+  // note: the entry's own state (评审中… / 已评审), painted dim AFTER the label — so the entry keeps
+  // naming its scope whichever state it is in, instead of the state replacing the scope.
+  note?: string
+  title: string
+  disabled?: boolean
+  // stat: a row that reports and does nothing (the turn's own numbers). Never a button.
+  stat?: boolean
+  onClick?: () => void
+}
+
+// TurnMenu is a turn footer's ⋯ trigger and the entries behind it: the things about the turn's
+// WORK — the full diff, the two review scopes — plus the turn's own numbers, which are read once
+// and therefore must not buy a second line under every answer. Those entries used to be a row of
+// chips on every turn, two of them whole sentences about review scope, sitting under every reply
+// in the transcript.
+//
+// Two rules the chips had, kept here:
+//
+//   - the STATE stays on screen. A review started from this footer is reported by the footer that
+//     started it, and behind a menu the entry saying 评审中… is not on screen — so the TRIGGER
+//     carries it (label), and the item carries it too for a reader who has the menu open.
+//   - a disabled entry explains itself. The reason lives in the button's own title, the way the
+//     sidebar's context menu does it.
+//
+// Dismissal follows the sidebar's context menus: a press outside the menu (never on it), or Escape.
+function TurnMenu({ items, label, title }: {
+  items: TurnMenuItem[]
+  label: string
+  title: string
+}) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node | null
+      if (t && wrapRef.current && wrapRef.current.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <span className="popover-anchor" ref={wrapRef}>
+      <button type="button" className="footer-btn turn-menu-btn" aria-haspopup="menu" aria-expanded={open}
+        title={title} onClick={() => setOpen((v) => !v)}>
+        {label}
+      </button>
+      {open ? (
+        <div className="turn-menu" role="menu">
+          {items.map((it) => it.stat
+            ? <div key={it.key} className="ctx-item is-detail" role="none" title={it.title}>{it.label}</div>
+            : (
+              <button key={it.key} type="button" className="ctx-item" role="menuitem" disabled={it.disabled}
+                title={it.title} onClick={() => { setOpen(false); it.onClick?.() }}>
+                {it.label}
+                {it.note ? <span className="ctx-note">{it.note}</span> : null}
+              </button>
+            ))}
+        </div>
+      ) : null}
+    </span>
   )
 }
 
@@ -580,7 +623,13 @@ function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, dura
             {change!.removed > 0 ? <span className="diff-count is-del">−{change!.removed}</span> : null}
           </span>
         ) : null}
-        <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
+        {/* A call that has not finished is neither ok nor failed — and it used to read as BOTH:
+            the start event carries ok=true (nothing has gone wrong yet), so an in-flight card drew
+            a green ✓ while the args were still arriving. That is the mark for "this succeeded", and
+            a reader who sees it stops waiting for the call. `done` is what the mark is about. */}
+        {!done
+          ? <span className="tool-status run" title="执行中">⋯</span>
+          : <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>}
         {durationMs ? <span className="tool-dur" title="耗时">{fmtDur(durationMs)}</span> : null}
         {/* Copying the result only makes sense when the result is on screen: a diff card
             replaced it with the diff. */}
@@ -1303,4 +1352,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }
