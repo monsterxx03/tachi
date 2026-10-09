@@ -3,8 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // mockRunner implements SubagentRunner for testing.
@@ -216,6 +219,83 @@ func TestSubagentTool_TruncateOutput_ZeroMaxChars(t *testing.T) {
 	result := tool.truncateOutput(input, 0)
 	if result != input {
 		t.Error("maxOutputChars=0 should mean no truncation")
+	}
+}
+
+// TestSubagentTool_TruncateOutput_CountsRunesNotBytes 校验阈值按**字符**计而非字节：
+// 一个汉字占 3 字节，按字节判会让中文内容在 1/3 处就被截断，且按字节切会留下半截字符。
+func TestSubagentTool_TruncateOutput_CountsRunesNotBytes(t *testing.T) {
+	t.Run("恰好等于阈值不截断（字节数已远超阈值）", func(t *testing.T) {
+		tool := NewSubagentTool(&mockRunner{maxOutputChars: 10})
+		input := strings.Repeat("中", 10) // 10 字符 / 30 字节
+		if got := tool.truncateOutput(input, 0); got != input {
+			t.Errorf("10 个汉字 = 10 字符，不该截断（按字节判会误截）: %q", got)
+		}
+	})
+
+	t.Run("超限时按字符边界截断", func(t *testing.T) {
+		tool := NewSubagentTool(&mockRunner{maxOutputChars: 10})
+		got := tool.truncateOutput(strings.Repeat("中", 12), 0)
+
+		want := strings.Repeat("中", 10) + "\n\n⚠️ [Output truncated at 10 chars]"
+		if got != want {
+			t.Errorf("截断结果 = %q, want %q", got, want)
+		}
+		if !utf8.ValidString(got) {
+			t.Error("按字符边界切不应产出非法 UTF-8")
+		}
+	})
+}
+
+// TestSubagentTool_SpillOversizedToFile 校验配了 resultBaseDir 时超限结果落盘而非截断，
+// 且落盘的是**完整内容** —— 这正是与截断路径的关键差别（截断丢的内容无法取回）。
+func TestSubagentTool_SpillOversizedToFile(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewSubagentTool(&mockRunner{maxOutputChars: 10})
+	tool.SetResultBaseDir(dir)
+
+	input := "0123456789ABCDEFGHIJ" // 20 chars，超 10 的阈值
+	result := tool.truncateOutput(input, 0)
+
+	if !strings.Contains(result, "[SUBAGENT OUTPUT TOO LARGE]") {
+		t.Fatalf("超限应返回落盘指针，got: %q", result)
+	}
+	if !strings.Contains(result, "20 chars exceeds limit (10 chars)") {
+		t.Errorf("指针应写明原始长度与阈值，got: %q", result)
+	}
+	if strings.Contains(result, input) {
+		t.Error("指针里不应内联完整内容（那就等于没省下 context）")
+	}
+
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("应恰好落盘一个文件, files=%v err=%v", files, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, files[0].Name()))
+	if err != nil {
+		t.Fatalf("读回落盘文件: %v", err)
+	}
+	if string(got) != input {
+		t.Errorf("落盘内容 = %q, want %q（必须是完整内容，不能是截断后的）", got, input)
+	}
+	if !strings.Contains(result, files[0].Name()) {
+		t.Errorf("指针里的路径应指向落盘文件，got: %q", result)
+	}
+}
+
+// TestSubagentTool_SpillFallsBackToTruncation 校验落盘失败时退回截断，而不是让工具直接失败。
+func TestSubagentTool_SpillFallsBackToTruncation(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSubagentTool(&mockRunner{maxOutputChars: 10})
+	tool.SetResultBaseDir(blocker) // 指向普通文件 → 建目录失败 → 落盘失败
+
+	result := tool.truncateOutput("12345678901", 0)
+	if !strings.Contains(result, "⚠️ [Output truncated at 10 chars]") {
+		t.Errorf("落盘失败应退回截断，got: %q", result)
 	}
 }
 
