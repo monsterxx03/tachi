@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -140,6 +141,42 @@ func installDemoBrowserOpener() {
 		return resp.Body.Close()
 	}
 	log.Printf("demo: MCP OAuth browser replaced by a headless fetch (%s=1)", demoBrowserFetchEnv)
+}
+
+// demoOpenLogEnv turns the two launcher actions (OpenPath / OpenURL) into a RECORD instead of a
+// launch, appending each argument list to the file it names.
+//
+// A smoke run happens on a real machine, and the point of the external-link scenario is the CLICK:
+// without this, driving it would open a real browser window on whoever is running the suite (the
+// same reason the OAuth flow gets a headless fetch, see demoBrowserFetchEnv). What a launcher
+// action actually did is `open <arg>` — so the argv IS the observable fact, and the runner's own
+// artifact file is where the Go half reads it. The filename is the RUNNER's (sandbox.go passes it
+// in), so the app never invents one in the user's state directory.
+//
+// It also covers OpenPath by construction: a scripted run can never launch Finder either, which is
+// what keeps "a driver asserts the control, never clicks 打开" from being a rule someone has to
+// remember.
+const demoOpenLogEnv = "TACHI_DEMO_OPEN_LOG"
+
+// installDemoOpenLog swaps the launcher for that recorder when the flag is set. It runs beside the
+// browser swap, before any window exists, and is a no-op without the flag — which is what keeps the
+// swap out of the product path (a demo RECORDING still opens the real browser: it is demonstrating
+// exactly that).
+func installDemoOpenLog() {
+	path := os.Getenv(demoOpenLogEnv)
+	if path == "" {
+		return
+	}
+	openFile = func(args ...string) error {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = fmt.Fprintln(f, strings.Join(args, " "))
+		return err
+	}
+	log.Printf("demo: launcher actions recorded to %s (%s)", path, demoOpenLogEnv)
 }
 
 // runJsDemo drives the WebView DOM via Wails ExecJS — a reliable way to

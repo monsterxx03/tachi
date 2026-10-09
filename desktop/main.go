@@ -117,6 +117,9 @@ func main() {
 	// replaced by a headless fetch when a smoke scenario asks for it, because a run
 	// must never open a window on the machine it is running on.
 	installDemoBrowserOpener()
+	// …and the launcher itself is swapped for a recorder, so a scripted click on a link (or on 打开)
+	// cannot open anything on the machine either — see installDemoOpenLog.
+	installDemoOpenLog()
 
 	// The notification backend, registered below so Wails runs its startup — on Linux
 	// that is what opens the D-Bus connection the notifier posts through, and an

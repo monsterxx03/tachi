@@ -480,6 +480,22 @@ export function OpenSessionDir(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * OpenURL opens an http/https/mailto URL in the SYSTEM BROWSER.
+ * 
+ * It exists because the transcript's links have nowhere else to go: the reply is markdown rendered
+ * inside the webview, so an <a> that is allowed to follow its href takes the whole app off itself,
+ * with no back button — the window IS the app. The frontend therefore hands the URL here instead
+ * (see MdLink in frontend/src/markdown.tsx), and the app is left where it was.
+ * 
+ * It goes through the same openFile var as OpenPath: the launcher is one action per platform
+ * (`open` / xdg-open both take a URL), and a test can stand in for it rather than opening a real
+ * browser window.
+ */
+export function OpenURL(rawURL: string): $CancellablePromise<string> {
+    return $Call.ByID(3805832325, rawURL);
+}
+
+/**
  * PreviewFile describes the attachment at path and, when withContent is set,
  * returns the content of its text and table kinds.
  * 

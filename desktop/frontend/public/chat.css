@@ -1526,9 +1526,11 @@ button.work-dir {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 0.9em;
 }
-/* A link shows where it points (in the tooltip) but does not navigate: the app has no
-   external-link path, and following one would take the webview off the app. */
-.finding-body .md-link { color: var(--accent-2); text-decoration: underline dotted; cursor: default; }
+/* A link in a finding is the same control it is in a reply (MdLink → OpenURL, the system
+   browser): the dotted underline marks it apart from the finding's own prose, and the pointer
+   says it can be followed. */
+.finding-body .md-link { color: var(--accent-2); text-decoration: underline dotted; cursor: pointer; }
+.finding-body .md-link:hover { text-decoration: underline; }
 .finding-orphan { color: var(--text-faint); font-size: 10.5px; }
 /* A finding whose file is not in the diff has no code column to be indented under. */
 .finding-list .finding { margin-left: 0; }

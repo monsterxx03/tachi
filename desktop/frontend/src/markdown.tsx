@@ -7,6 +7,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Component
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { CopyIcon } from './components'
 import { copyText, actOnKey, toLocalAsset } from './lib'
 import { useThemeSnapshot } from './theme'
@@ -20,6 +21,36 @@ function TableScroller(props: { children?: ReactNode }) {
     <div className="table-scroll">
       <table>{props.children}</table>
     </div>
+  )
+}
+
+// MdLink is the app's ONLY way out: a link in prose hands its URL to the SYSTEM browser
+// (AgentService.OpenURL) instead of to the webview.
+//
+// A plain <a href> in this page is a one-way door. The webview has no tabs and no back button —
+// the window IS the app — so following one replaced the transcript, the sidebar and the composer
+// with the page and left the reader with nothing to go back to (issue #48). `preventDefault` on the
+// click cancels the navigation before WebKit acts on it, and that is the ONE event every form of the
+// gesture goes through (a plain click, ⌘-click): the binding does the rest. The backend refuses any
+// scheme that is not http/https/mailto (attach.go), so a model-written `file:` link is not a way to
+// reach the machine either.
+//
+// The href STAYS on the element: it is what makes the target readable on hover, what a screen
+// reader announces as a link, and the only thing that says where the click goes.
+//
+// ONE component for both renderers — the transcript's replies (MarkdownBlock) and a review
+// finding's own prose (InlineMd) — because "what a link does" is one fact, and a second renderer
+// with its own idea of it is how a link becomes dead in one place and live in another.
+export function MdLink({ href, children, title }: ComponentPropsWithoutRef<'a'>) {
+  const url = typeof href === 'string' ? href.trim() : ''
+  // A malformed link (no target at all) renders as its own label: a control that cannot go
+  // anywhere is worse than plain text.
+  if (!url) return <>{children}</>
+  return (
+    <a className="md-link" href={url} title={title || url}
+      onClick={(e) => { e.preventDefault(); AgentService.OpenURL(url).catch(() => {}) }}>
+      {children}
+    </a>
   )
 }
 
@@ -38,7 +69,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { te
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         urlTransform={keepInlineImage}
-        components={{ img: MdImg, table: TableScroller, pre: PreBlock }}>
+        components={{ img: MdImg, table: TableScroller, pre: PreBlock, a: MdLink }}>
         {text}
       </ReactMarkdown>
     </div>
@@ -98,10 +129,11 @@ function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; tit
 // 60 times to decorate compact list rows costs far more than the rows themselves, and its
 // block spacing fights the list layout.
 //
-// Links render as an anchor whose label is shown and whose target is in the tooltip, but a
-// click does not navigate: this app has no external-link path (no OpenURL binding and no
-// navigation interception), so following one would take the whole webview off the app.
-// Making links live is its own change, not a side effect of rendering a finding.
+// Links go through the SAME MdLink the transcript's replies use: a finding's `[label](url)` is
+// followed by the same click, into the system browser. It used to be a dead anchor (the label was
+// shown, the target sat in the tooltip, and a click did nothing) because there was no
+// external-link path at all; there is now, and leaving this half inert would have meant two
+// answers to "what does a link do" a few hundred lines apart.
 const INLINE_MD = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|\[([^\]\n]+)\]\(([^)\s]+)\)/g
 
 // inlineNodes splits text into literal chunks and inline elements, keyed by offset so a
@@ -116,7 +148,7 @@ function inlineNodes(text: string): ReactNode[] {
     if (m[1] !== undefined) out.push(<code key={key}>{m[1]}</code>)
     else if (m[2] !== undefined) out.push(<strong key={key}>{m[2]}</strong>)
     else if (m[3] !== undefined) out.push(<em key={key}>{m[3]}</em>)
-    else out.push(<a key={key} className="md-link" href={m[5]} title={m[5]} onClick={(e) => e.preventDefault()}>{m[4]}</a>)
+    else out.push(<MdLink key={key} href={m[5]}>{m[4]}</MdLink>)
     last = at + m[0].length
   }
   if (last < text.length) out.push(text.slice(last))
