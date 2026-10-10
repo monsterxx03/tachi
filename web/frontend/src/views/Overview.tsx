@@ -5,7 +5,8 @@ import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
 import { credit, num, yuan } from '../lib/format'
-import { Card, CardHead, Loading, PageHead, StatCard } from '../components/ui'
+import { isManaged, managedLabel } from '../lib/managed'
+import { Badge, Card, CardHead, Loading, PageHead, StatCard } from '../components/ui'
 
 const KIND_COLORS: Record<string, string> = {
   conversation: '#3b82c4',
@@ -251,6 +252,11 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
                 <span className="flex-1 min-w-0">
                   <span className="block text-[13px] font-semibold text-ink truncate">
                     {s.title || '(无标题)'}
+                    {isManaged(s.kind) && (
+                      <span className="ml-2 align-middle">
+                        <Badge color="yellow">{managedLabel(s.kind)}</Badge>
+                      </span>
+                    )}
                   </span>
                   <span className="block text-[11px] text-muted">
                     {s.created_at.slice(0, 16).replace('T', ' ')} · {num(s.message_count)} msgs

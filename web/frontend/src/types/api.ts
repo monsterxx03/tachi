@@ -51,6 +51,8 @@ export interface SessionMeta {
   compacted_child_id?: string
   compacted_parent_id?: string
   compacted_parent_title?: string
+  /** 子系统（今天是接收侧节点的 A2A 执行）拥有的会话；空 = 普通对话。 */
+  kind?: string
 }
 
 export interface SessionSummaryItem {
@@ -67,6 +69,8 @@ export interface SessionSummaryItem {
   compacted_child_id?: string
   cost: number
   calls: number
+  /** 子系统（今天是接收侧节点的 A2A 执行）拥有的会话；空 = 普通对话。 */
+  kind?: string
 }
 
 /** One page of GET /api/sessions (keyset-paginated by session id). */

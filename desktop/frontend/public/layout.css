@@ -457,6 +457,59 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-size: 12px;
   color: var(--text-faint);
 }
+/* A session a SUBSYSTEM drives (today a receiving node's A2A execution). It carries the same
+   weight as 压缩前 beside it — a state marker, not a button — but in accent ink: unlike a
+   compaction half, this row is not the reader's conversation at all, and the difference is the
+   one thing the row must not understate. */
+.session-tag.is-managed {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+}
+
+/* The read-only banner at the top of the transcript for such a session. A reader who arrived by
+   the window (a restart restores the newest session) never saw the sidebar row, so the fact is
+   stated where it cannot be missed. It is a ROW inside chat-wrap rather than an overlay: it is
+   the reason the box below has no input, and a message sliding under it would read as a rendering
+   fault. */
+.managed-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 8px 26px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-2);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.managed-banner-tag {
+  color: var(--accent-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.managed-banner-note { line-height: 1.45; }
+
+/* What stands in for the composer on such a session: the reason, in the place the input box
+   would have been. The box is REMOVED rather than disabled because a greyed-out field still
+   invites a click, and the send is refused by the agent's own entry anyway (agent/managed.go) —
+   this is where the reader learns that, instead of a turn that comes back as an error. */
+.composer-readonly {
+  width: 100%;
+  max-width: var(--reading-width);
+  margin-inline: auto;
+  padding: 8px 0 4px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.composer-readonly-title {
+  margin-right: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--accent-2);
+  border-radius: var(--radius-xs);
+  color: var(--accent-2);
+  font-weight: 600;
+}
 /* The pinned row's mark, in the row's meta line. It is there because the order is not
    self-explaining: a row that sits above a newer one reads as a bug unless something on it says
    why (see the row's own title attribute for the rule). Accent ink + a literal pushpin, the same

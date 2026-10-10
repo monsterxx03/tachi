@@ -102,7 +102,10 @@ func (m *Model) renderSessionSelection() string {
 			active = "*"
 		}
 
-		line := fmt.Sprintf(" %s %s  %-40s  %s", active, dateStr, displayTitle, modelInfo)
+		// A session a subsystem owns is marked on the row (design §2.1). Its title came from a
+		// remote prompt, so an unmarked row would read as a conversation the reader had — and
+		// selecting one is refused below rather than silently continued.
+		line := fmt.Sprintf(" %s %s  %-40s  %s%s", active, dateStr, displayTitle, modelInfo, managedRowSuffix(s.Kind))
 		if idx == m.sessionSelIdx {
 			b.WriteString(completionSelectedStyle.Width(m.width).Render(line))
 		} else {
@@ -140,6 +143,18 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	// If selecting the current session, just exit
 	if current != nil && current.ID == s.ID {
 		m.exitSessionSelect(fmt.Sprintf("Already viewing session: **%s**", s.Title))
+		return m, nil
+	}
+
+	// A session a subsystem owns cannot be switched into (design §2.1). The refusal is HERE,
+	// before the current session is ended and before anything is loaded: switching first and
+	// letting the agent refuse the opening turn would have ended the reader's own conversation
+	// just to show them an error, and the reader would then be sitting in a session the agent
+	// had already declined to drive.
+	if s.Managed() {
+		m.exitSessionSelect(fmt.Sprintf(
+			"**%s** is a subsystem's execution record (%s) — read-only, and it cannot be continued here. "+
+				"Start a new session instead if you want to build on it.", s.Title, s.Kind))
 		return m, nil
 	}
 

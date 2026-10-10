@@ -107,6 +107,12 @@ type scenario struct {
 	// driver can produce that one ⌘N at a time. They land in the 无项目 bucket, where the rest of a
 	// fixture's project-less sessions already are.
 	seedLoose int
+	// sessionKind puts the seeded session under a SUBSYSTEM's ownership (session.Session.Kind;
+	// today session.KindA2AExecution is the only kind) and makes it the session the app restores
+	// on startup. Seeded rather than produced by a driver for the obvious reason — a driver cannot
+	// write a session record — and the managed state has to be the FIRST render's, which is exactly
+	// what a restart finds: a window opened onto a receiving node's execution record.
+	sessionKind string
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -3504,6 +3510,30 @@ permissions:
 				c.check("配过对的那条 call 还在（不是把两条一起删了）", requestHasToolCall(req, orphanAnsweredCallID),
 					requestTail(req))
 				c.check("它的 result 也还在", requestHasToolResult(req, orphanAnsweredCallID), requestTail(req))
+			},
+		},
+		// managed-session: 受管会话在桌面上的样子 —— 侧栏行带来源标注，打开只能看，输入框换成一句原因。
+		//
+		// 这条 fixture 只能预置：kind 写在会话记录里，driver 写不了记录，而它必须是**启动时恢复的
+		// 那一个**会话才说明问题 —— 重启后直接落在一条子系统的执行记录上，正是这个形状最常发生的
+		// 时刻（节点的会话就在这个数据目录里）。另一半 ——「驱动它会被 agent 入口拒掉」——由 node/
+		// 与 agent/ 的单测钉住；这里验的是桌面没有摆出一个点了必然失败的输入框。
+		//
+		// 断言几乎全在界面上；Go 侧只钉一件事：这一轮一次模型都没调过 —— 只读会话不该产生任何请求
+		// （mock 有脚本就会有请求，所以脚本是空的：来了就是失败）。
+		{
+			name:        "managed-session",
+			sessionKind: session.KindA2AExecution,
+			files: map[string]string{
+				"README.md": "# smoke\n\nmanaged-session scenario's working directory\n",
+			},
+			seedMessages: []session.Message{
+				{Type: session.MessageTypeUser, Content: "检查昨天的备份"},
+				{Type: session.MessageTypeAssistant, Content: "发现两个目录未完成备份。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("只读会话没有产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
+				c.check("mock 脚本没被消耗", c.mockErr == nil, errText(c.mockErr))
 			},
 		},
 	}

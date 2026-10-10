@@ -173,6 +173,11 @@ type sessionsListItem struct {
 	CompactedChild string    `json:"compacted_child_id,omitempty"`
 	Cost           float64   `json:"cost"`
 	Calls          int       `json:"calls"`
+	// Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a
+	// receiving node's A2A execution (session.KindA2AExecution). The console is read-only by
+	// construction, so the label is the whole of its obligation here: it says what the record
+	// IS instead of letting a title the remote prompt generated pass for a local conversation.
+	Kind string `json:"kind,omitempty"`
 }
 
 // listSessionsPageSize is the default page size for GET /api/sessions;
@@ -275,6 +280,7 @@ func (s *Server) buildSessionsListItems(sessions []*session.Session, usageBySess
 			CompactedChild: sess.CompactedChildID,
 			Cost:           u.TotalCost,
 			Calls:          u.TotalCalls,
+			Kind:           sess.Kind,
 		})
 	}
 	return items

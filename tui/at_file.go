@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -93,6 +94,12 @@ func (i *InputArea) atSessionRows(query string) []atMatch {
 
 // sessionRowLabel is what a session row shows: when it was last touched and what
 // it is called — the two things a reader picks a conversation by.
+//
+// A session a SUBSYSTEM owns says so on the row. The title it would otherwise show was written
+// from the remote prompt, so a row without this marking would present someone else's execution
+// record as a conversation the reader had (design §2.1) — and the pointer this row expands into
+// already carries the same fact (atfile.SessionTarget.ManagedKind), because the two sides are
+// required to tell one story about one session.
 func sessionRowLabel(t atfile.SessionTarget) string {
 	title := t.Title
 	if title == "" {
@@ -102,7 +109,17 @@ func sessionRowLabel(t atfile.SessionTarget) string {
 	if t.UpdatedAt.IsZero() {
 		return title
 	}
-	return t.UpdatedAt.Format(strutil.TimeFormatDateTimeShort) + "  " + title
+	return t.UpdatedAt.Format(strutil.TimeFormatDateTimeShort) + "  " + title + managedRowSuffix(t.ManagedKind)
+}
+
+// managedRowSuffix is the marking a picker row carries for a session a subsystem owns, empty for
+// an ordinary conversation. One spelling, used by the session picker and the @-session parser
+// alike — a second one is how the two would start disagreeing.
+func managedRowSuffix(kind string) string {
+	if kind == "" {
+		return ""
+	}
+	return fmt.Sprintf("  [子系统执行记录 %s · 只读]", kind)
 }
 
 // ExpandAtReferences expands the @-references in a user message for the LLM: text

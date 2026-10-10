@@ -129,7 +129,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		// "current session", and the app opens the newest (ListSessions sorts by CreatedAt).
 		// Seeding them the other way round left the driver asserting on the wrong session —
 		// which looked exactly like "the project does not drive its member".
-		if err := sb.seedSession("无项目会话", nil, nil, ""); err != nil {
+		if err := sb.seedSession("无项目会话", nil, nil, "", ""); err != nil {
 			return report(sc.name, nil, []Line{{Label: "unbound session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
@@ -149,7 +149,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	// An EXTRA session, seeded BEFORE the restored one so the app still opens the newest (it is
 	// the one a driver gets by clicking a row it has never opened — see seedSecond).
 	if len(sc.seedSecond) > 0 {
-		if err := sb.seedSession("另一个会话", nil, sc.seedSecond, ""); err != nil {
+		if err := sb.seedSession("另一个会话", nil, sc.seedSecond, "", ""); err != nil {
 			return report(sc.name, nil, []Line{{Label: "second session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
@@ -161,7 +161,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "orphan chain fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
-	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID); err != nil {
+	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID, sc.sessionKind); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -417,7 +417,7 @@ func fatal(format string, args ...any) {
 // app uses. They have to be seeded here because a root set is the one piece of scenario state a
 // driver cannot build: the UI's only way in is a NATIVE directory picker, which a scripted run
 // cannot click.
-func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message, projectID string) error {
+func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message, projectID string, kind string) error {
 	// The store's base dir IS the sessions directory (each session is <dir>/<id>/),
 	// not the config dir — pointing it one level up would put the fixture where the app
 	// never looks, and startup would quietly create its own session instead.
@@ -435,6 +435,10 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 	// STALE snapshot the project's roots override on every read (design §3.2). Seeding the
 	// project's own path here would make the fixture unable to tell the two apart.
 	cur.ProjectID = projectID
+	// A SUBSYSTEM's session (see scenario.sessionKind). Written on the record because that is
+	// where the fact lives: the sidebar labels from it, and the agent's own entry refuses a local
+	// turn on it whatever the frontend does.
+	cur.Kind = kind
 	if len(extraRoots) > 0 {
 		for _, name := range sortedKeys(extraRoots) {
 			cur.AdditionalDirs = append(cur.AdditionalDirs, filepath.Join(sb.dir, name))
@@ -451,7 +455,7 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 			return err
 		}
 	}
-	if len(extraRoots) > 0 || len(seedMessages) > 0 || projectID != "" {
+	if len(extraRoots) > 0 || len(seedMessages) > 0 || projectID != "" || kind != "" {
 		if err := mgr.UpdateMeta(cur); err != nil {
 			return err
 		}

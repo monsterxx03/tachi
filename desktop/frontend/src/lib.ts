@@ -709,3 +709,24 @@ export function rewindTargetForMessage(
   }
   return found ? { kind: 'ok', turn: found.turn } : { kind: 'none' }
 }
+
+// ── 子系统拥有的会话 ──────────────────────────────────────────────────────────
+//
+// 今天是接收侧节点的 A2A 执行（session.KindA2AExecution；见 docs/agents/node.md）。桌面上
+// 它出现为一个可以被打开、但**不能在这里被驱动**的会话：标题是从远端 prompt 生成的，
+// 不标出来就等于把它当成读者自己的对话。
+//
+// 真正的边界不在前端。任何从这里发出的回合都会被 agent 入口拒掉（agent/managed.go），
+// 输入框关掉只是把那次必然失败的尝试省下来。措辞与 TUI 的 managedRowSuffix、web 控制台
+// 的 managedLabel 一致：同一个事实，三处同一句话。
+
+/** 这类会话的标签文本；普通会话返回空串。 */
+export function managedLabel(kind?: string): string {
+  return kind ? `子系统执行记录 ${kind} · 只读` : ''
+}
+
+/** 只读会话里代替输入框的那句话。 */
+export function managedReadOnlyNote(kind: string): string {
+  return `这段对话由子系统（${kind}）驱动，不归本窗口：可以在这里查看，但不能继续、回退或重试。` +
+    `要基于它继续研究，请新建一段会话。`
+}

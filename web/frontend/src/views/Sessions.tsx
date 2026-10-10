@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import type { AuthReporter } from '../App'
 import { Badge, Card, Loading, PageHead } from '../components/ui'
 import { num, shortTime, yuan } from '../lib/format'
+import { isManaged, managedLabel } from '../lib/managed'
 import { SESSION_PAGE_SIZE, useSessionList } from '../lib/useSessionList'
 
 export function Sessions({ onAuthError }: { onAuthError: AuthReporter }) {
@@ -63,6 +64,11 @@ export function Sessions({ onAuthError }: { onAuthError: AuthReporter }) {
                 >
                   <td className="px-2 py-2 text-ink font-medium max-w-[260px] truncate">
                     {s.title || '(无标题)'}
+                    {isManaged(s.kind) && (
+                      <span className="ml-2 align-middle">
+                        <Badge color="yellow">{managedLabel(s.kind)}</Badge>
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-2 mono text-xs text-inkdim">
                     {s.id.slice(0, 19)}…

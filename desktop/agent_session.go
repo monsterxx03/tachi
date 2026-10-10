@@ -45,6 +45,13 @@ type SessionInfo struct {
 	// record's own field (session.Session.Pinned), so the order survives a restart and every
 	// reader of the list agrees on it.
 	Pinned bool `json:"pinned,omitempty"`
+	// Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a
+	// receiving node's A2A execution (session.KindA2AExecution). It travels so the sidebar can
+	// LABEL such a row instead of presenting it as a conversation the reader had; the label is
+	// not the rule, which is enforced at the agent's entry (agent/Managed) and refuses a local
+	// turn whatever the frontend does. A read-only banner is a courtesy; the refusal is the
+	// boundary.
+	Kind string `json:"kind,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -496,6 +503,7 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		CompactedParentTitle: ss.CompactedParentTitle,
 		ProjectID:            ss.ProjectID,
 		Pinned:               ss.Pinned,
+		Kind:                 ss.Kind,
 	}
 }
 

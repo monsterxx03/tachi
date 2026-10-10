@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, type SessionRow, type SessionGroup } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AskForm, PermissionForm,
@@ -2117,6 +2117,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         {s.pinned ? <span className="session-pin" title="已置顶：排在本组最前（项目内的会话排在项目内）"><PinIcon /></span> : null}
         {/* A compacted-away session says what it is: same title, older time, and it is history. */}
         {compacted ? <span className="session-tag" title="这一段对话在压缩时被摘要取代，可以回看">压缩前</span> : null}
+        {/* A session a subsystem owns says so too, and for a stronger reason than 压缩前: its
+            title came from a REMOTE prompt, so an unmarked row reads as a conversation the
+            reader had. Opening it is allowed (the transcript is worth reading) — the mark is
+            what stops it being mistaken for one more row of their own. */}
+        {s.kind ? (
+          <span className="session-tag is-managed" title="子系统驱动的执行记录：只能查看，不能在这里继续">{managedLabel(s.kind)}</span>
+        ) : null}
         {new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}
       </div>
     </div>
@@ -2168,6 +2175,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // conversation's name is one fact and two surfaces must not spell it differently.
   const currentSessionItem = sessions.find((s) => s.id === currentId)
   const sessionTitle = currentSessionItem ? currentSessionItem.title || '未命名会话' : ''
+
+  // A session a SUBSYSTEM drives (today a receiving node's A2A execution — see lib.ts). It can be
+  // opened — reading it is the point — but not driven: the composer is replaced by the reason,
+  // because every send from here would be refused by the agent's own entry (agent/managed.go),
+  // and an input box that silently cannot send is worse than no box. The refusal there is the
+  // boundary; this is the courtesy that keeps a reader from walking into it.
+  const managedSession = currentSessionItem?.kind ? currentSessionItem : null
 
   // The sidebar's grouping (see the memo above): the list renders the project groups, then the
   // plain 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
@@ -2372,6 +2386,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           </header>
 
           <div className="chat-wrap">
+            {/* A read-only banner at the TOP of the transcript: the row in the sidebar marks the
+                session, but a reader who came straight to the window never saw that row. The
+                composer below is replaced by the same reason, so the two say one thing. */}
+            {managedSession ? (
+              <div className="managed-banner" role="note">
+                <span className="managed-banner-tag">{managedLabel(managedSession.kind)}</span>
+                <span className="managed-banner-note">{managedReadOnlyNote(managedSession.kind!)}</span>
+              </div>
+            ) : null}
             {/* The bar floats over the transcript (its own position: .find-bar.is-chat) rather than
                 taking a row: it appears on a keypress, and a row appearing would shift every message
                 down at the moment the reader is trying to read one. */}
@@ -2451,7 +2474,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           </div>
 
           <footer className="composer">
-            <Composer api={composer} running={isCurrentRunning} onStop={stopChat} onPageTurn={scrollByHalfPage} />
+            {managedSession ? (
+              <div className="composer-readonly" role="note">
+                <span className="composer-readonly-title">只读</span>
+                <span className="composer-readonly-note">{managedReadOnlyNote(managedSession.kind!)}</span>
+              </div>
+            ) : (
+              <Composer api={composer} running={isCurrentRunning} onStop={stopChat} onPageTurn={scrollByHalfPage} />
+            )}
             <div className="composer-status">
               <div className="work-dir-wrap popover-anchor">
                 {rootsOpen ? (
