@@ -576,7 +576,13 @@ var settingsTable = []settingApply{
 	// node: 入口启动时起/停本机节点服务（StartOrAttachNode），关掉开关也是启动时才生效。
 	// 运行中切换需要能起停服务本身（还要处理它与本地聊天互不影响的那套语义），首版不做 ——
 	// 所以是 ⟳ 而不是热改。
-	{Key: "node", Category: catAdvanced, Mode: applyRestart, Note: "入口启动即起/停节点服务；运行中切换要能起停服务本身，首版不做"},
+	//
+	// workspace 与 tools 是**远程任务的**工作目录与工具白名单（不是本机聊天的）：前者空着
+	// 就拒绝远程任务，后者空着就是"没有工具"。ListExample 是给空列表的提示 —— 推荐的起点是
+	// 只读那三个。
+	{Key: "node", Category: catAdvanced, Mode: applyRestart,
+		ListExample: "ReadFile\nGrep\nGlob",
+		Note:        "入口启动即起/停节点服务；workspace/tools 是远程任务的工作目录与工具白名单，空 workspace 拒绝远程任务，空 tools 即无工具，均重启生效"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},

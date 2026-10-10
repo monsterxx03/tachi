@@ -426,6 +426,37 @@ type WeixinConfig struct {
 // config key with no behaviour behind it is a lie the reader cannot detect.
 type NodeConfig struct {
 	Enabled bool `yaml:"enabled"`
+
+	// Workspace is where this node works: the working directory of every session a remote
+	// task creates. It is deliberately NOT the hosting process's cwd (design §10.3) — a
+	// node started from a shell must not do remote work in whatever directory that shell
+	// happened to be sitting in, because nobody asked for that directory and the caller
+	// cannot see it.
+	//
+	// "~" is expanded (see fileutil.ExpandHome) and the directory is created on first use.
+	Workspace string `yaml:"workspace" default:"~/workspace/"`
+
+	// Tools is the tool allowlist for remote tasks. It is an ALLOWLIST on purpose
+	// (design §10.2): a remote caller gets exactly the tools the operator named. An empty
+	// list means no tools at all — there is no hidden default here, because a security
+	// setting whose empty value silently means something else is one nobody can reason
+	// about. The recommended starting point (read-only) belongs in the example config and
+	// in the docs, not in a fallback.
+	//
+	// Note that a tool allowlist is not the same thing as a sandbox: an unrestricted Bash
+	// is not "read-only" however few tools are listed next to it.
+	Tools []string `yaml:"tools"`
+}
+
+// WorkspaceDir is where remote tasks work: the configured workspace with "~" expanded to
+// an absolute path. The directory is NOT created here — config answering a question about
+// a path should not have side effects, and the node creates it when it first needs it.
+func (nc NodeConfig) WorkspaceDir() (string, error) {
+	dir := strings.TrimSpace(nc.Workspace)
+	if dir == "" {
+		return "", errors.New("node: node.workspace is empty; a remote task needs a working directory to run in")
+	}
+	return filepath.Abs(fileutil.ExpandHome(dir))
 }
 
 // CronConfig holds cron scheduler configuration (only active in channel mode).

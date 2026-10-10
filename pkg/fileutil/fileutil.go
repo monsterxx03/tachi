@@ -171,6 +171,30 @@ func RemoveIgnoreNotExist(path string) error {
 	return nil
 }
 
+// ExpandHome expands a leading "~" to the user's home directory, leaving every other
+// path untouched.
+//
+// It exists because "~" is shell syntax, not Go's: a config value of "~/workspace" handed
+// to os.MkdirAll creates a LITERAL directory named "~" in the process's working
+// directory — a quiet failure whose result looks deliberate. One shared implementation
+// because the mistake is the same everywhere it is made.
+//
+// The home directory is resolved once; a path that cannot be resolved is returned
+// unchanged (still starting with "~"), so a caller that cares can tell the difference.
+func ExpandHome(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+}
+
 // IsSinglePathElement reports whether name is exactly one entry in one directory: no separator, no
 // traversal, and not the current or parent directory itself.
 //
