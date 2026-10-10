@@ -239,8 +239,14 @@ func (d *desktopApp) startTurn(id, text string) string {
 		// the live turn and reloaded history take one rendering path.
 		ropts := []agent.RunOption{
 			agent.WithSteerChannel(steerCh),
-			agent.WithExtraTools(d.turnTools(d.config())...),
+			agent.WithExtraTools(tools.NewSendFileTool()),
 			agent.WithDisplayUserMessage(rawText),
+		}
+		// Delegation rides as its own option: it brings both the two tools and the reminders that
+		// describe nodes and outstanding work, and it is the run-scoped gate (§10.2.1) — a run
+		// that does not pass it can neither call the tools nor be told about them.
+		if delegator := d.delegatorFor(d.config()); delegator != nil {
+			ropts = append(ropts, agent.WithDelegation(delegator))
 		}
 		if len(expanded.Images) > 0 {
 			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
@@ -1128,21 +1134,6 @@ type sessionRun struct {
 	// conversation this one is still writing. followCompaction consumes it, and the ownership
 	// goes with it.
 	compaction *compactionRecord
-}
-
-// turnTools are the run-scoped tools a USER turn gets.
-//
-// Extras rather than registry entries, and that is the whole gate (§10.2.1): the same cached
-// agent serves turns that must not delegate — a cron-style or ambient turn — and a tool attached
-// to a run simply is not there for the others. Delegation is added only when this machine has
-// somewhere to delegate TO: no peers configured means no delegator, which means the tools are
-// absent rather than present and failing on every call.
-func (d *desktopApp) turnTools(cfg *config.Config) []tools.Tool {
-	out := []tools.Tool{tools.NewSendFileTool()}
-	if delegator := d.delegatorFor(cfg); delegator != nil {
-		out = append(out, tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0))
-	}
-	return out
 }
 
 // delegatorFor returns the sending side for this configuration, rebuilt when the peer list

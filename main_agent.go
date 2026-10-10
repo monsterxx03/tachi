@@ -213,8 +213,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// command runs (--commit, --review and friends) take their own paths and get none of this.
 	runOpts := []agent.RunOption{}
 	if delegator := node.NewDelegatorCache(logger.New("run")).For(cfg.Peers); delegator != nil {
-		runOpts = append(runOpts,
-			agent.WithExtraTools(tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0)))
+		runOpts = append(runOpts, agent.WithDelegation(delegator))
 	}
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg), llm.ChatOptions{
 		MaxTokens: cfg.MaxTokens,

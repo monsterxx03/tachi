@@ -63,7 +63,7 @@ func (f *fakeDelegator) Cancel(_ context.Context, id string) (RemoteTaskInfo, er
 	return f.view, f.err
 }
 
-func (f *fakeDelegator) List(logicalID string) []RemoteTaskInfo {
+func (f *fakeDelegator) RemoteTasks(logicalID string) []RemoteTaskInfo {
 	f.lists = append(f.lists, logicalID)
 	return []RemoteTaskInfo{f.view}
 }

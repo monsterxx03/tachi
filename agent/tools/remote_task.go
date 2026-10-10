@@ -169,7 +169,7 @@ func (t *RemoteTaskTool) ExecuteContext(ctx context.Context, args string) (strin
 func (t *RemoteTaskTool) list(conversation, node string) (string, error) {
 	// The conversation filter comes from the RUN, never from a model argument: a `list` that
 	// could be widened by the model would show another conversation's work (§8.5).
-	views := t.delegator.List(conversation)
+	views := t.delegator.RemoteTasks(conversation)
 	if node != "" {
 		kept := make([]RemoteTaskInfo, 0, len(views))
 		for _, v := range views {

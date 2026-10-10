@@ -427,6 +427,13 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 		&systemreminder.BackgroundTaskReminder{
 			Provider: &backgroundTaskProvider{pm: a.Config.ProcessManager},
 		},
+		// Delegation's two reminders. Registered unconditionally because they read the RUN's
+		// delegator and stay silent without one: a turn that was not given a sending side must
+		// not be told which nodes exist or what is outstanding elsewhere (§10.2.1), and that gate
+		// is the run's, not the collector's. Registered BY POINTER where they keep state (the
+		// peers reminder remembers what each conversation was already told).
+		&systemreminder.PeersReminder{},
+		systemreminder.RemoteTasksReminder{},
 	)
 
 	// Skill list reminder — only when skills are initialized (DisableSkills

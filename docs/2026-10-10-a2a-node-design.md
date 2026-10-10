@@ -552,6 +552,10 @@ A2A 任务有独立身份、异步生命周期、远端权限、后续输入及�
 2. **`RemoteTasksReminder`**：为当前本地对话注入有限的未完成任务、待回答问题与近期可延续的任务引用，弥补历史压缩或长对话中的可见性不足。
 3. **`RemoteTask(action="list")`**：按需查询较早记录，支持分页，拿到准确 ID 再继续；不把所有历史任务常驻 prompt。
 
+**已落地**：1 与 2 两层都在（`agent/systemreminder/delegation.go`）。`RemoteTasksReminder` 每回合给本对话的有限摘要：**待答的排前面**（只有它需要模型动手）、超限时给出"还有 N 项"与查询入口、并明确写"未列出的任务不等于已结束或已删除"；`PeersReminder` 说有哪些节点可用（可达时用对方 Card 的描述，不可达时用配置的 note 并注明"上次联系不上"），并且**按作用域做变化检测**——同一份列表不会被重复塞进每一回合，节点增删/改名/可达性翻转才会再说一次。两条都**只读本机记录**，不在生成时访问远端。
+
+闸门与工具同一个：它们读 run 的 delegator（`agent.WithDelegation` 一并给出工具与提醒），没有它的 run 一句话都不会听到（§10.2.1）。注册是无条件的（`buildReminderCollectorFrom`），因为它们在没有 delegator 时本就沉默——判定落在 run 上，不在 collector 上。**`-p` 例外地本来就没有提醒**（`DisableSystemReminders`）：无对话的一次性运行要靠 `RemoteTask(action="list")` 或工具拒绝里列出的节点名来拿引用，这一点在 `itest/run/delegation_test.go` 里被钉住。
+
 任务 reminder 与 PeersReminder 分开：前者回答“之前做过什么、引用是什么”，后者回答“有哪些节点可以使用”。内容示意：
 
 ```text
@@ -804,7 +808,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 锁隔离与恢复 | **已落地**：两把锁路径分离、协调锁不在释放时删文件、删除前在锁内复查保护、文件锁先于进程内锁（枚举在锁外）；并发竞争的压测暂时不做（§9.4 末） |
 | 连接与取消 | 断开订阅不取消任务、等待超时、重复取消、取消/完成竞争 |
 | 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。过期答案与取消的并发竞争、`RemoteTask(reply)` 一侧仍待做 |
-| Reminder | 首轮快照、回合内去重、节点清空、未知状态、稳定排序、恢复历史字节不变、任务摘要有界且未列出不等于删除、等待项清空 |
+| Reminder | **部分落地**（`agent/systemreminder/delegation_test.go` + `agent/agent_delegation_test.go`）：待答项排前、有界且给出"还有 N 项"与查询入口、"未列出不等于已删除"、节点不可达如实标注且用配置 note、按作用域变化检测（同列表不重复）、无 delegator 的 run 一句不说、`hosting` 与 `list` 同作用域（`itest/run/delegation_test.go`）。回合内去重与恢复历史字节不变由既有机制保证（collector 的 piece 去重 + `historyHasReminder`），**稳定排序**（多个同状态任务的顺序）仍待做 |
 | 认证声明与授权 | SecurityScheme 每项只选一种标准类型且符合真实认证；服务端 pinning 不误报 mTLS；陌生节点不可委派、越权 task/产物不可读、本机接口与 A2A 凭据隔离、远端模型不能批准工具权限 |
 | 循环与回合限制 | 远端任务、子 agent 默认/显式工具复制都不能继承委派；同一缓存 agent 的普通用户回合可用而 cron/system/ambient 回合禁用；重载不复活禁用工具或 reminder |
 | 入口展示 | 工具结果/任务 ID/问题/错误在 TUI、channel、Desktop 中可读，不给旧 tool call 补写第二结果 |

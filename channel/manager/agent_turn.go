@@ -662,15 +662,16 @@ func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact
 	// runAmbientTurn) and never come through this function, which is what keeps those two from
 	// ever being handed a way to delegate (§10.2.1). An ambient message that was absorbed into
 	// this turn is steer input inside a turn a person started, so it is unaffected.
+	ropts := []agent.RunOption{agent.WithExtraTools(extra...)}
 	if delegator := m.delegator.For(m.cfg.Peers); delegator != nil {
-		extra = append(extra, tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0))
+		ropts = append(ropts, agent.WithDelegation(delegator))
 	}
 
 	return &turnScope{
 		agent:   ca.agent,
 		ca:      ca,
 		sink:    sink,
-		ropts:   []agent.RunOption{agent.WithExtraTools(extra...)},
+		ropts:   ropts,
 		cleanup: func() { m.releaseAgent(ca) },
 	}, nil
 }

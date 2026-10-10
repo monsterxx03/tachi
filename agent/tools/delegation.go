@@ -132,6 +132,8 @@ type RemoteDelegator interface {
 	Reply(ctx context.Context, id, questionID string, answer map[string]string, budget time.Duration) (RemoteTaskInfo, error)
 	// Cancel asks the peer to stop a task and reports what it actually resolved to.
 	Cancel(ctx context.Context, id string) (RemoteTaskInfo, error)
-	// List reports what ONE conversation delegated, newest first.
-	List(logicalID string) []RemoteTaskInfo
+	// RemoteTasks reports what ONE conversation delegated, newest first. It is the same
+	// operation the reminders read (systemreminder.RemoteTaskProvider), under one name so the
+	// tool and the reminder cannot drift into two ideas of "this conversation's work".
+	RemoteTasks(conversation string) []RemoteTaskInfo
 }

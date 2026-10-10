@@ -127,11 +127,11 @@ func (s *Sender) Cancel(ctx context.Context, id string) (tools.RemoteTaskInfo, e
 	return viewOf(d, ""), nil
 }
 
-// List reports what ONE local conversation delegated, newest first (§8.2).
+// RemoteTasks reports what ONE local conversation delegated, newest first (§8.2).
 //
 // The filter is not a convenience: without it a `list` would show work from every conversation
 // this machine has ever had, which is both useless and a leak between conversations (§8.5).
-func (s *Sender) List(logicalID string) []tools.RemoteTaskInfo {
+func (s *Sender) RemoteTasks(logicalID string) []tools.RemoteTaskInfo {
 	if s == nil {
 		return nil
 	}

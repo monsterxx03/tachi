@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -72,6 +73,31 @@ type runParams struct {
 	// noAutoCompact turns the loop's auto-compaction off for this run — set through
 	// CompactRunOptions, which is the only thing that may set it.
 	noAutoCompact bool
+	// delegator is this machine's sending side, when the run was given one (WithDelegation).
+	// It is the run's half of the delegation gate: the TOOLS are its extras, and the reminders
+	// that describe nodes and outstanding work are generated from it — so a run without it can
+	// neither call the tools nor be told about them.
+	delegator tools.RemoteDelegator
+}
+
+// WithDelegation gives a run the delegation tools and the reminders that describe them.
+//
+// One option rather than two, on purpose: a run that can call DelegateTask but is never told
+// which nodes exist — or one told about work it has no tools to manage — is a model with half a
+// picture, and two options passed by hand at four call sites is how that drift starts.
+//
+// This IS the gate (§10.2.1): a turn that must not delegate (cron, an ambient or non-directed
+// turn, a one-off command run) simply never passes it, and because the tools travel as run-scoped
+// extras rather than registry entries, there is nothing for such a turn to un-register or
+// accidentally inherit.
+func WithDelegation(d tools.RemoteDelegator) RunOption {
+	return func(p *runParams) {
+		if d == nil {
+			return
+		}
+		p.delegator = d
+		WithExtraTools(tools.NewDelegateTaskTool(d), tools.NewRemoteTaskTool(d, 0))(p)
+	}
 }
 
 // SteerInput represents pending user input to inject at the steer point,
@@ -212,6 +238,15 @@ func WithOneOffMeta(meta *OneOffMeta) RunOption {
 	return func(p *runParams) {
 		p.oneoffMeta = meta
 	}
+}
+
+// delegatorForRun is the run's sending side, or nil — a run with no options at all (the common
+// case) has no params and therefore no delegation.
+func (p *runParams) delegatorForRun() systemreminder.RemoteTaskProvider {
+	if p == nil || p.delegator == nil {
+		return nil
+	}
+	return p.delegator
 }
 
 // buildToolView extracts the toolView from runParams. Returns nil when params

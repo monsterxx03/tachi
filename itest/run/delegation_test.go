@@ -87,6 +87,12 @@ var _ = ginkgo.Describe("delegation", func() {
 		gomega.Expect(res.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", res.Stdout, res.Stderr)
 		gomega.Expect(res.Stdout).To(gomega.ContainSubstring("远端说对了"))
 
+		// The pipe entry runs with every reminder switched off by its own config
+		// (DisableSystemReminders), so nothing here asserts a reminder: what it asserts is the
+		// round trip. The reminders are exercised where they exist — an interactive conversation
+		// (agent/agent_delegation_test.go) and the TUI's own node spec.
+		gomega.Expect(sutMock.Requests()).To(gomega.HaveLen(2), "one call to decide, one to act on the result")
+
 		// The peer really ran a turn of its own.
 		gomega.Expect(peerMock.Requests()).To(gomega.HaveLen(1))
 		gomega.Expect(peerMock.Error()).NotTo(gomega.HaveOccurred())
@@ -109,7 +115,84 @@ var _ = ginkgo.Describe("delegation", func() {
 		gomega.Expect(body).To(gomega.ContainSubstring("不修改文件"),
 			"the request itself is kept: a retry after a lost response has to send the same thing")
 	})
+
+	ginkgo.It("无对话的运行落在空作用域里，list 能看到该作用域的引用", func() {
+		// Two runs of the SAME binary with no session at all. The empty scope is a SCOPE: the
+		// second run's RemoteTask(action="list") shows the first run's task — and, being a scope
+		// rather than a wildcard, it shows nothing from any real conversation.
+		peerMock := mockllm.NewServer()
+		ginkgo.DeferCleanup(peerMock.Close)
+		peerMock.Script(
+			mockllm.Step{Reply: mockllm.Stream(mockllm.Text("备份正常"), mockllm.Finish("stop"), mockllm.Done())},
+		)
+
+		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
+			harness.WithNodeWorkspace(filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")))
+		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ginkgo.DeferCleanup(cancel)
+		peerHandle, err := node.StartOrAttachNode(ctx, peerCfg)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() { _ = peerHandle.Close() })
+
+		sutMock := mockllm.NewServer()
+		ginkgo.DeferCleanup(sutMock.Close)
+		sutMock.Script(
+			// Run 1: delegate.
+			mockllm.Step{Reply: mockllm.Stream(
+				mockllm.ToolCallStart("call_a", tools.ToolNameDelegateTask, `{"node":"peer","prompt":"检查备份"}`),
+				mockllm.Finish("tool_calls"), mockllm.Done(),
+			)},
+			mockllm.Step{Reply: mockllm.Stream(mockllm.Text("交给 peer 了。"), mockllm.Finish("stop"), mockllm.Done())},
+			// Run 2: a NEW pipe run asks what this scope has out, and its tool result must carry
+			// the record run 1 created — the id is the only handle, and a sessionless run has no
+			// reminder to be told about it (the pipe entry runs with reminders switched off).
+			mockllm.Step{Reply: mockllm.Stream(
+				mockllm.ToolCallStart("call_l", tools.ToolNameRemoteTask, `{"action":"list"}`),
+				mockllm.Finish("tool_calls"), mockllm.Done(),
+			)},
+			mockllm.Step{
+				Require: mockllm.HasToolResult("call_l", containsSubstring(`"title":"检查备份"`)),
+				Reply: mockllm.Stream(
+					mockllm.Text("看到了，之前让 peer 查过备份。"),
+					mockllm.Finish("stop"), mockllm.Done(),
+				),
+			},
+		)
+		sutHome := harness.NewHome(ginkgo.GinkgoT(), sutMock,
+			harness.WithPeers("peer", "http://"+peerHandle.RemoteAddr()))
+		workdir := harness.SeedWorkDir(ginkgo.GinkgoT(), nil)
+
+		first := run.Binary(bin, workdir, "--home", sutHome, "-p", "让 peer 查一下备份", "-o", "json-stream")
+		gomega.Expect(first.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", first.Stdout, first.Stderr)
+
+		// The record names the empty scope, never somebody's conversation.
+		records, err := os.ReadDir(filepath.Join(sutHome, "delegations"))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(records).To(gomega.HaveLen(1))
+		raw, err := os.ReadFile(filepath.Join(sutHome, "delegations", records[0].Name()))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(string(raw)).To(gomega.ContainSubstring(`"logical_id": ""`),
+			"a run with no session files under the empty scope, never under somebody's conversation")
+
+		second := run.Binary(bin, workdir, "--home", sutHome, "-p", "我记得之前让它查过什么？", "-o", "json-stream")
+		gomega.Expect(second.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", second.Stdout, second.Stderr)
+		gomega.Expect(second.Stdout).To(gomega.ContainSubstring("之前让 peer 查过备份"))
+		gomega.Expect(sutMock.Error()).NotTo(gomega.HaveOccurred())
+	})
+
 })
+
+// requestText flattens one recorded request's messages: the reminder is part of a user message,
+// and which one it lands in is the machinery's business, not this spec's.
+func requestText(req *mockllm.RecordedRequest) string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		b.WriteString(m.Content)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
 
 // containsSubstring is a mockllm.Matcher: the mock's core keeps gomega out, and this spec needs
 // one substring check.

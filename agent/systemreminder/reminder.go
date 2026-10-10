@@ -71,6 +71,19 @@ type Context struct {
 	// to filter plan files belonging to the current session.
 	SessionID string
 
+	// LogicalConversation is the conversation this run belongs to, in the form that survives
+	// local compaction (session.Session.LogicalConversationID). Anything scoped to "this
+	// conversation" rather than to one session — delegated work, for one — is filed under it.
+	//
+	// Empty means there is no conversation: a run with no session at all (the pipe entry), and
+	// then a reminder that files by conversation has nothing to say.
+	LogicalConversation string
+
+	// Delegator is this machine's sending side, present only on a run that was given one
+	// (agent.WithDelegation). A reminder must treat its absence as "this run cannot delegate" and
+	// stay silent — that is the per-run gate (§10.2.1), not a reason to describe anything.
+	Delegator RemoteTaskProvider
+
 	// Logger is the logger for this reminder generation cycle.
 	// When nil, uses logger.Default().
 	Logger *logger.Logger

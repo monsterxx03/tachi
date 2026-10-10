@@ -83,8 +83,8 @@ func TestASubmissionReachesThePeerAndItsAnswerComesBack(t *testing.T) {
 	require.Equal(t, record.MessageID, record.MessageID, "the message id is stored for a retry")
 
 	// The list shows it to the conversation that asked, and to nobody else.
-	require.Len(t, sender.List("conv-1"), 1)
-	require.Empty(t, sender.List("another-conversation"))
+	require.Len(t, sender.RemoteTasks("conv-1"), 1)
+	require.Empty(t, sender.RemoteTasks("another-conversation"))
 }
 
 func TestAParkedPeerQuestionComesBackAndIsAnsweredThroughTheSameRecord(t *testing.T) {

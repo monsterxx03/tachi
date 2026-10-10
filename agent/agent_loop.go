@@ -356,7 +356,10 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		// Fresh history (nil) — one-off runs never inherit messages.
-		messages, reminderPieces := a.prepareTurnMessages(ctx, nil, userMessage, systemPrompt)
+		// One-off runs never delegate: they have no conversation to file work under, and the
+		// command templates that use them (/commit, /review) are not the user asking for remote
+		// work. Nil here is that decision, made where the run is.
+		messages, reminderPieces := a.prepareTurnMessages(ctx, nil, nil, userMessage, systemPrompt)
 		reminderBlock := systemreminder.RenderPieces(reminderPieces)
 
 		// Create RunState with SkipSessionWrites=true. One-off runs never
@@ -446,7 +449,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			opts.MaxTokens = DefaultMaxTokens
 		}
 
-		messages, reminderPieces := a.prepareTurnMessages(ctx, history, userMessage, systemPrompt)
+		messages, reminderPieces := a.prepareTurnMessages(ctx, params.delegatorForRun(), history, userMessage, systemPrompt)
 		reminderBlock := systemreminder.RenderPieces(reminderPieces)
 
 		// Attach pending images from params as multi-modal content parts
@@ -596,6 +599,7 @@ func isReminderOnly(content string) bool {
 // separately from the user text).
 func (a *AIAgent) prepareTurnMessages(
 	ctx context.Context,
+	delegator systemreminder.RemoteTaskProvider,
 	history []llm.Message,
 	userMessage string,
 	systemPrompt string,
@@ -628,6 +632,13 @@ func (a *AIAgent) prepareTurnMessages(
 
 	rctx := a.buildReminderContext(reminderIsFirst, false)
 	rctx.CurrentPrompt = userMessage
+	// Which conversation this run is in, and whether it may delegate at all: both come from the
+	// RUN, so a reminder that describes delegated work is silent on a turn that was not given a
+	// sending side. The conversation may be empty here (a run that has no session yet, or none at
+	// all): then there is nothing filed under it to describe, which is the honest answer rather
+	// than a listing of some other conversation's work.
+	rctx.Delegator = delegator
+	rctx.LogicalConversation = a.logicalConversation()
 	reminderPieces = a.collectReminderPieces(ctx, rctx)
 	wrappedUser := userMessage
 	if block := systemreminder.RenderPieces(reminderPieces); block != "" {
@@ -1516,6 +1527,19 @@ func (a *AIAgent) collectReminderPieces(ctx context.Context, rctx systemreminder
 		return nil
 	}
 	return a.Config.ReminderCollector.CollectPieces(ctx, rctx)
+}
+
+// logicalConversation is the conversation this agent's current session belongs to, in the form
+// that survives local compaction — empty when there is no session.
+//
+// It is read at reminder time, which is BEFORE the session is ensured for this turn: a run that
+// is about to create a session has no conversation yet, and correctly has nothing filed under
+// one either. Every turn after the first sees it.
+func (a *AIAgent) logicalConversation() string {
+	if a.Config.SessionManager == nil || a.Config.SessionManager.Current() == nil {
+		return ""
+	}
+	return a.Config.SessionManager.Current().LogicalConversationID()
 }
 
 // sessionID returns the current session's ID, or empty string if no session.

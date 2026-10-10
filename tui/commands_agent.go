@@ -52,8 +52,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	// extra rather than a registered tool so that a turn which does not attach it cannot call it
 	// (§10.2.1) — the same mechanism keeps it off the one-off command runs below.
 	if delegator := m.delegator(); delegator != nil {
-		ropts = append(ropts,
-			agent.WithExtraTools(tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0)))
+		ropts = append(ropts, agent.WithDelegation(delegator))
 	}
 
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.systemPrompt, m.chatOpts, ropts...)
