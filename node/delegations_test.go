@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/stretchr/testify/require"
@@ -68,6 +69,38 @@ func TestAListShowsOneConversationItsOwnWork(t *testing.T) {
 	sessionless := newDelegation("home-nas", "", "管道跑的一次", "p4", "m4")
 	require.NoError(t, store.put(sessionless))
 	require.Len(t, store.list(""), 1)
+}
+
+// The store's answer must not depend on MAP ITERATION. A burst of delegations made in one instant
+// is the shape that exposes it: the records come out of a map and an unstable comparator leaves
+// their relative order to the iteration. A reminder whose lines reorder for no reason is one the
+// collector appends again as if it were news, and the prompt prefix moves with it.
+func TestAListOrdersTiesTheSameWayEveryTime(t *testing.T) {
+	store, err := openDelegationStore(t.TempDir())
+	require.NoError(t, err)
+
+	same := time.Now().UTC()
+	for _, id := range []string{"d_cccccccc", "d_aaaaaaaa", "d_bbbbbbbb"} {
+		d := newDelegation("home-nas", "conv-a", id, "p", id)
+		d.ID = id
+		d.CreatedAt, d.UpdatedAt = same, same
+		require.NoError(t, store.put(d))
+	}
+
+	first := store.list("conv-a")
+	require.Len(t, first, 3)
+	require.Equal(t, []string{"d_aaaaaaaa", "d_bbbbbbbb", "d_cccccccc"},
+		[]string{first[0].ID, first[1].ID, first[2].ID},
+		"equal instants are broken by id, so the answer reads the same twice")
+
+	for i := range 20 {
+		again := store.list("conv-a")
+		require.Len(t, again, 3)
+		for k := range first {
+			require.Equal(t, first[k].ID, again[k].ID,
+				"the order must not depend on map iteration (call %d)", i+1)
+		}
+	}
 }
 
 func TestAnUnknownIDIsRefusedRatherThanGuessed(t *testing.T) {

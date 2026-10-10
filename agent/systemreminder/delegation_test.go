@@ -100,6 +100,38 @@ func TestTheTaskReminderIsBoundedAndSaysHowToSeeTheRest(t *testing.T) {
 	}
 }
 
+// The reminder GROUPS (waiting first) but never re-sorts within a group: the order it renders is
+// the order its provider gave it, which is "newest first" and — since node.Sender's store breaks
+// ties by id — a total order. So the block a turn sends is the same block the next turn would,
+// and a reminder that has not changed is not re-appended as if it had (see the collector's dedup).
+func TestTheTaskReminderKeepsTheProvidersOrderInsideAGroup(t *testing.T) {
+	// Provider order, as a list is defined to give it: newest first.
+	provider := &fakeProvider{tasks: []tools.RemoteTaskInfo{
+		task("d_new", "nas", "最新的一件", "working"),
+		task("d_mid", "nas", "中间那件", "completed"),
+		task("d_old", "vps", "最早的一件", "failed"),
+	}}
+	lines := RemoteTasksReminder{}.Generate(t.Context(), Context{
+		Delegator: provider, LogicalConversation: "conv-1",
+	})
+	body := strings.Join(lines, "\n")
+	newIdx, midIdx, oldIdx := strings.Index(body, "d_new"), strings.Index(body, "d_mid"), strings.Index(body, "d_old")
+	if newIdx < 0 || midIdx < 0 || oldIdx < 0 {
+		t.Fatalf("every task has to be listed:\n%s", body)
+	}
+	if newIdx >= midIdx || midIdx >= oldIdx {
+		t.Errorf("within a group the provider's order is the order shown:\n%s", body)
+	}
+
+	// And the same input renders the same block twice — nothing here is keyed by a map.
+	again := strings.Join(RemoteTasksReminder{}.Generate(t.Context(), Context{
+		Delegator: provider, LogicalConversation: "conv-1",
+	}), "\n")
+	if again != body {
+		t.Errorf("the same list must render the same block:\nfirst:\n%s\nsecond:\n%s", body, again)
+	}
+}
+
 func TestThePeersReminderSpeaksOncePerConversation(t *testing.T) {
 	provider := &fakeProvider{peers: []tools.PeerSummary{
 		{Name: "nas", Description: "家里的 NAS", Reachable: true},

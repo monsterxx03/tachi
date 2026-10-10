@@ -76,6 +76,48 @@ func UsageKindFromCtx(ctx context.Context) UsageKind {
 	return UsageKindConversation
 }
 
+// UsageSource names WHERE a call came from when it was not made for the local
+// conversation the row is filed under. It is a SECOND dimension, not another
+// kind: the kind stays what the call was FOR (conversation / title / compact /
+// …), and the source says who asked for it. Folding the two together would
+// cost the ability to answer either question — "what did this remote task
+// cost" and "what does this machine spend on titling" are different sums
+// (design §9.5).
+//
+// Today there is one origin: a receiving node running an inbound A2A task.
+type UsageSource struct {
+	// Origin is the source's name — UsageSourceA2A for a remote task.
+	Origin string
+	// TaskID and ContextID are the node's own identifiers for the work, and
+	// they are what keeps the row traceable back to the task after the session
+	// it ran in has been reclaimed. Empty when the origin has none.
+	TaskID    string
+	ContextID string
+}
+
+// UsageSourceA2A marks a call made on behalf of a remote caller: an inbound A2A
+// task executed by this machine's node (design §9.5). The cost stays on THIS
+// machine's ledger — that is where the provider was called from — and the
+// source is what makes it attributable instead of anonymous.
+const UsageSourceA2A = "a2a"
+
+// ctxKeyUsageSource is the context key for the per-call usage source.
+type ctxKeyUsageSource struct{}
+
+// WithUsageSource marks every call made under ctx as coming from the given
+// source. RecordingProvider reads it when recording the call; the default is
+// no source, which is what the local conversation itself looks like.
+func WithUsageSource(ctx context.Context, src UsageSource) context.Context {
+	return context.WithValue(ctx, ctxKeyUsageSource{}, src)
+}
+
+// UsageSourceFromCtx returns the source from the context, and whether one was
+// set at all. A zero value means "no source", never "an empty-named one".
+func UsageSourceFromCtx(ctx context.Context) (UsageSource, bool) {
+	src, ok := ctx.Value(ctxKeyUsageSource{}).(UsageSource)
+	return src, ok && src.Origin != ""
+}
+
 // UsageRow is one ledger line — a single LLM API call. It is self-contained:
 // token counts use the normalized cache-miss input scale (see below) and the
 // price fields hold the FINAL effective unit prices (per 1M tokens, CNY) as
@@ -117,6 +159,18 @@ type UsageRow struct {
 	// genuinely 0" (rate unconfigured at call time → stays 0 forever, the
 	// same snapshot semantics as the price fields).
 	Credit *float64 `json:"credit,omitempty"`
+
+	// Source / SourceTaskID / SourceContextID carry the origin of a call that
+	// was NOT made for the local conversation it is filed under — today a
+	// receiving node's remote task (design §9.5; see UsageSource). Empty means
+	// the ordinary case, and it is what every row written before these fields
+	// existed reads back as, so old ledger lines keep their meaning.
+	//
+	// Kind is deliberately NOT rewritten for such a call: "a remote task's
+	// compaction" is still a compact call, and the source is what says whose.
+	Source          string `json:"source,omitempty"`
+	SourceTaskID    string `json:"source_task_id,omitempty"`
+	SourceContextID string `json:"source_context_id,omitempty"`
 }
 
 // TotalTokens returns the row's total token count. The four categories are
@@ -516,7 +570,12 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 	totalTokens := input + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 	credit := ComputeCredit(totalTokens, creditRate)
 
-	return p.rec.Record(UsageRow{
+	// Where the call came from, when it was not the local conversation it is filed under
+	// (a receiving node's remote task — design §9.5). Kind is left as it is: the source is
+	// the second dimension, not a replacement for the first.
+	src, sourced := UsageSourceFromCtx(ctx)
+
+	row := UsageRow{
 		TS:                       time.Now(),
 		SessionID:                sid,
 		Kind:                     kind,
@@ -532,7 +591,11 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 		CacheCreationPrice:       cacheCreationPrice,
 		Band:                     rp.Band,
 		Credit:                   &credit,
-	})
+	}
+	if sourced {
+		row.Source, row.SourceTaskID, row.SourceContextID = src.Origin, src.TaskID, src.ContextID
+	}
+	return p.rec.Record(row)
 }
 
 // normalizeUsageKind maps any kind drift onto the closed constant set

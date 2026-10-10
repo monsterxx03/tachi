@@ -1,11 +1,17 @@
 package node
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,13 +45,22 @@ func startPeer(t *testing.T, mock *mockllm.Server, tools ...string) (*Sender, *H
 	// The sender's home: another base dir, with a peer entry pointing at the receiver. Only one
 	// process-global base dir exists, so this is built in two steps — records written under the
 	// sender's dir, addresses taken from the receiver that is already up.
+	return openSenderFor(t, "http://"+peer.RemoteAddr()), peer
+}
+
+// openSenderFor points a sender at a peer URL, in its OWN home — the sender hosts no node, which
+// is the case this whole half of the package exists for. Split out from startPeer so a test can
+// aim it at something other than the receiver itself (a proxy in front of one, say).
+func openSenderFor(t *testing.T, peerURL string) *Sender {
+	t.Helper()
 	senderHome := t.TempDir()
+	previous := config.BaseDir()
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: "http://" + peer.RemoteAddr()}})
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}})
 	require.NoError(t, err)
-	return sender, peer
+	return sender
 }
 
 func TestASubmissionReachesThePeerAndItsAnswerComesBack(t *testing.T) {
@@ -254,6 +269,97 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A follow-up names the PREVIOUS remote task as its reference — not its own id, and not this
+// machine's local `d_…` id (§8.1). The far side is what reads it: `referenceTaskIds` is how the
+// peer is told which earlier piece of work this continues, so an id it has never seen (a local
+// one) or a task it has not been told about yet (its own successor) tells it nothing.
+//
+// The outgoing body is not observable through the sender's API, so the receiver's listener is put
+// behind a recording proxy: the card resolution, the submissions and the answers are the real
+// ones, and what is captured on the way through is exactly what would have gone on the wire.
+func TestAFollowUpReferencesThePreviousRemoteTask(t *testing.T) {
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("第一轮完成")...)
+	mock.Script(oneMessageScript("第二轮完成")...)
+
+	peerHome := t.TempDir()
+	previous := config.BaseDir()
+	config.SetBaseDir(peerHome)
+	t.Cleanup(func() { config.SetBaseDir(previous) })
+	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws"), "ReadFile"))
+
+	upstream, err := url.Parse("http://" + peer.RemoteAddr())
+	require.NoError(t, err)
+	var mu sync.Mutex
+	var sent []map[string]any
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "message:send") {
+			var parsed map[string]any
+			if json.Unmarshal(body, &parsed) == nil {
+				mu.Lock()
+				sent = append(sent, parsed)
+				mu.Unlock()
+			}
+		}
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream.String()+r.URL.RequestURI(), bytes.NewReader(body))
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		req.Header = r.Header.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, vs := range resp.Header {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(proxy.Close)
+
+	sender := openSenderFor(t, proxy.URL)
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+	second, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "第二轮", LogicalID: "conv-1", ContinueFrom: first.ID,
+	})
+	require.NoError(t, err)
+
+	firstRecord, ok := sender.records.get(first.ID)
+	require.True(t, ok)
+	secondRecord, ok := sender.records.get(second.ID)
+	require.True(t, ok)
+	require.NotEqual(t, firstRecord.RemoteTaskID, secondRecord.RemoteTaskID)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, sent, 2, "two submissions went out")
+	firstMsg, ok := sent[0]["message"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, firstMsg, "referenceTaskIds", "the first submission continues nothing")
+
+	secondMsg, ok := sent[1]["message"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []any{firstRecord.RemoteTaskID}, secondMsg["referenceTaskIds"],
+		"the follow-up references the PREVIOUS remote task")
+	require.NotContains(t, secondMsg["referenceTaskIds"].([]any), secondRecord.RemoteTaskID,
+		"…never its own")
+}
+
 func TestAQuestionWithoutAnOpenQuestionIsRefusedLocally(t *testing.T) {
 	mock := mockllm.NewServer()
 	t.Cleanup(mock.Close)
@@ -341,4 +447,129 @@ func TestATitleIsDerivedFromTheFirstLine(t *testing.T) {
 	long := deriveTitle(strings.Repeat("很长的描述", 20))
 	require.LessOrEqual(t, len([]rune(long)), 61, "a title is a label, not the prompt")
 	require.True(t, strings.HasSuffix(long, "…"))
+}
+
+// A peer may answer with a direct Message instead of creating a task, and that is an ANSWER, not a
+// failure: the spec's SendMessageResponse is a oneOf and its words for this shape are "a direct
+// Message response for simple interactions that don't require task tracking".
+//
+// This node used to refuse it — "answered with a message rather than a task" — which threw away
+// the text the peer had just produced and left the record saying the outcome was UNKNOWN. Three
+// different stories about one successful exchange, and the model got the worst of them.
+//
+// The stub IS the peer: one route, and no card (an unreachable card is not a failure either, §8.6).
+// A real Tachi node always answers with a Task, so only a stub can produce this shape at all.
+func messageAnswerPeer(t *testing.T, contextID string) (*Sender, func() int, func() []map[string]any) {
+	t.Helper()
+	var mu sync.Mutex
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "message:send") {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
+
+		answer := map[string]any{
+			"messageId": "m-answer",
+			"role":      "agent",
+			"parts":     []any{map[string]any{"text": "直接答复：两个目录都完整"}},
+		}
+		if contextID != "" {
+			answer["contextId"] = contextID
+		}
+		raw, _ = json.Marshal(map[string]any{"message": answer})
+		w.Header().Set("Content-Type", a2aMediaType)
+		_, _ = w.Write(raw)
+	}))
+	t.Cleanup(srv.Close)
+	sender := openSenderFor(t, srv.URL)
+	return sender,
+		func() int { mu.Lock(); defer mu.Unlock(); return len(bodies) },
+		func() []map[string]any { mu.Lock(); defer mu.Unlock(); return bodies }
+}
+
+func TestAPeerThatAnswersWithAMessageIsRecordedAsAnAnswer(t *testing.T) {
+	sender, requests, _ := messageAnswerPeer(t, "ctx-direct")
+
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+	})
+	require.NoError(t, err, "a direct message is an answer, not a failure")
+	require.Equal(t, "completed", view.State,
+		"the interaction is over and the answer is in hand — not \"unknown\"")
+	require.Contains(t, view.Result, "两个目录都完整")
+	require.Contains(t, view.Note, "direct message",
+		"the model has to be told there is no handle, or it will try to wait on one")
+	require.False(t, view.InFlight(), "there is nothing in flight to wait for")
+	require.Empty(t, view.QuestionID, "a direct message cannot be a question for us to answer")
+
+	// Asking again is answered from the record, without a round trip: there is no task to ask about.
+	before := requests()
+	again, err := sender.Get(context.Background(), view.ID)
+	require.NoError(t, err)
+	require.Equal(t, view.Result, again.Result)
+	require.Equal(t, before, requests(), "a handle-less record must not cost a request")
+
+	// Cancelling says WHICH reason there is nothing to cancel, not the wrong one.
+	_, err = sender.Cancel(context.Background(), view.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "answered directly")
+	require.NotContains(t, err.Error(), "never accepted",
+		"it WAS accepted — the peer answered it")
+
+	// And it shows up in the conversation's own list, like any other delegated work.
+	list := sender.RemoteTasks("conv-1")
+	require.Len(t, list, 1)
+	require.Equal(t, view.ID, list[0].ID)
+	require.Empty(t, sender.RemoteTasks("conv-other"), "another conversation sees none of it")
+}
+
+// The conversation is still continuable, because the answer named one: the follow-up goes out on
+// the SAME contextId (that is what lets a peer pick up its own history), and it references no task,
+// because this exchange never produced one.
+func TestAFollowUpContinuesTheConversationADirectAnswerNamed(t *testing.T) {
+	sender, _, bodies := messageAnswerPeer(t, "ctx-direct")
+
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "缺失的那两个目录呢", LogicalID: "conv-1", ContinueFrom: first.ID,
+	})
+	require.NoError(t, err)
+
+	sent := bodies()
+	require.Len(t, sent, 2)
+	follow, ok := sent[1]["message"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "ctx-direct", follow["contextId"],
+		"the follow-up continues the conversation the answer named")
+	require.NotContains(t, follow, "referenceTaskIds",
+		"there is no task to reference — a direct answer never made one")
+}
+
+// Without a contextId there is nothing to continue, and the refusal says WHICH of the two reasons
+// it is: this node answered, it just never named a conversation.
+func TestADirectAnswerWithoutAContextCannotBeContinued(t *testing.T) {
+	sender, _, _ := messageAnswerPeer(t, "")
+
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "接着说", LogicalID: "conv-1", ContinueFrom: first.ID,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "answered directly")
+	require.NotContains(t, err.Error(), "never accepted")
 }

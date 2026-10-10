@@ -177,6 +177,90 @@ func TestAnEmptyToolListOffersNoToolsThatTouchThisMachine(t *testing.T) {
 		"an empty allowlist must leave exactly the tool that only talks to the caller")
 }
 
+// A remote turn must not read or write THIS machine's long-term memory (design §2.3). The two
+// ways in are separate mechanisms, so both are asserted: the recall reminder injects the host's
+// memory on its own, and the two memory tools are reachable through whatever the operator put in
+// `node.tools`.
+//
+// The memory tools are named IN the allowlist here, which is the configuration that would expose
+// them — and the machine really has memory configured, so the tools existed to be excluded rather
+// than the assertion passing because there was nothing to exclude.
+func TestARemoteTurnDoesNotReadOrWriteTheHostsMemory(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("ok")...)
+
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"),
+		"ReadFile", tools.ToolNameMemoryRecall, tools.ToolNameRecordMemory)
+	cfg.Memory.Type = "topic"
+
+	h := startRealNode(t, cfg)
+	client := newTestClient(t, h)
+	_, err := client.SendMessage(context.Background(), sendRequest("你好", false))
+	require.NoError(t, err)
+
+	requests := mock.Requests()
+	require.Len(t, requests, 1)
+	offered := map[string]bool{}
+	for _, tool := range requests[0].Tools {
+		offered[tool.Name] = true
+	}
+	require.True(t, offered["ReadFile"],
+		"the rest of the allowlist must still apply — otherwise this proves nothing, got %v", offered)
+	for name := range hostOnlyTools {
+		require.False(t, offered[name],
+			"%s must never reach a remote turn, even when the operator names it, got %v", name, offered)
+	}
+}
+
+// The other half of the same rule, asserted on the agent the runner actually builds: recall is
+// switched off, so no reminder injects this machine's memory into a remote prompt. It has to be
+// asserted here rather than through a turn — a remote conversation with nothing worth recalling
+// produces the same (empty) prompt either way.
+func TestARemoteAgentHasRecallSwitchedOff(t *testing.T) {
+	base := nodeHome(t)
+	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base, "ws"))
+	cfg.Memory.Type = "topic"
+
+	r, err := newRunner(cfg, filepath.Join(base, "ws"),
+		filepath.Join(base, "node"), filepath.Join(base, "sessions"), logger.New("node-test"))
+	require.NoError(t, err)
+	cr, err := r.contextRun(context.Background(), "", "ctx-1")
+	require.NoError(t, err)
+	require.NotNil(t, cr.agent.Config.Memory, "memory must be configured for this to mean anything")
+	require.NotNil(t, cr.agent.Config.Memory.Backend,
+		"a configured machine has a backend — which is what registers the two tools")
+	require.True(t, cr.agent.Config.Memory.SkipRecall,
+		"a remote turn must not have the host's memory recalled into its prompt")
+}
+
+// A remote turn's context carries the usage source, so every model call it makes is attributable
+// to the task that caused it (design §9.5).
+//
+// Asserted on the context rather than on the ledger, because the ledger's recorder is a
+// process-wide singleton whose directory is fixed at its first use in the process — a test that
+// read it would be reading whichever directory another test happened to set up. What THIS side
+// owns is the context, and llm/usage_recorder_test.go covers the row it produces.
+func TestATurnRunsWithItsUsageSourceAttached(t *testing.T) {
+	base := nodeHome(t)
+	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base, "ws"))
+	r, err := newRunner(cfg, filepath.Join(base, "ws"),
+		filepath.Join(base, "node"), filepath.Join(base, "sessions"), logger.New("node-test"))
+	require.NoError(t, err)
+	cr, err := r.contextRun(context.Background(), "", "ctx-1")
+	require.NoError(t, err)
+
+	ctx, cancel := r.turnContext(context.Background(), cr, a2a.TaskID("t-1"))
+	defer cancel()
+
+	src, ok := llm.UsageSourceFromCtx(ctx)
+	require.True(t, ok, "a remote turn must file its calls under a source")
+	require.Equal(t, llm.UsageSourceA2A, src.Origin)
+	require.Equal(t, "t-1", src.TaskID)
+	require.Equal(t, "ctx-1", src.ContextID)
+}
+
 func TestAFailedTurnIsReportedAsFailed(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()
@@ -204,6 +288,56 @@ func TestAFailedTurnIsReportedAsFailed(t *testing.T) {
 // This is the version of agent/managed_test.go that matters, because the session here was
 // created by the real runner and the "local" agent below is built exactly the way a
 // frontend builds one (its own manager, the session loaded as current, no grant).
+// sessionCount is how many conversations this machine's store holds, read the way a local
+// frontend reads it — so a session a remote task opened is counted, which is the point: it is a
+// conversation on this machine whether or not it is one the user may drive.
+func sessionCount(t *testing.T) int {
+	t.Helper()
+	sm, err := session.NewManager(logger.New("node-test"))
+	require.NoError(t, err)
+	list, err := sm.List()
+	require.NoError(t, err)
+	return len(list)
+}
+
+// Only a NEW work request opens a conversation (design §7.1.1). The other three things that reach
+// this surface — a replay of an accepted message, a query, and a cancel — travel the same way and
+// must not: a `get` that quietly opened one would leave an empty conversation behind every poll,
+// and a replay would leave one behind every retry.
+func TestOnlyANewWorkRequestOpensAConversation(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("备份检查完成")...)
+
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	client := newTestClient(t, h)
+
+	// ONE request object, sent twice: the same message id is what makes the second a replay.
+	// A fresh one would be a new work request with new ids — which is a different test.
+	req := sendRequest("检查备份", false)
+	first, err := client.SendMessage(context.Background(), req)
+	require.NoError(t, err)
+	task := first.(*a2a.Task)
+
+	replay, err := client.SendMessage(context.Background(), req)
+	require.NoError(t, err)
+	replayed, ok := replay.(*a2a.Task)
+	require.True(t, ok)
+	require.Equal(t, task.ID, replayed.ID, "a replay answers with the task already accepted")
+
+	if _, err = client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: task.ID}); err != nil {
+		require.NoError(t, err)
+	}
+	// A finished task cannot be cancelled, and that refusal is not the point here — what is being
+	// asserted is that the call opens nothing on its way to it.
+	_, _ = client.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: task.ID})
+
+	require.Len(t, mock.Requests(), 1, "only the first submission may reach the model")
+	require.Equal(t, 1, sessionCount(t),
+		"a replay, a query and a cancel must not each leave a conversation behind")
+}
+
 func TestASessionHeldByAContextCannotBeDrivenLocally(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()

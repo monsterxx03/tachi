@@ -161,6 +161,20 @@ func viewOf(d *Delegation, note string) tools.RemoteTaskInfo {
 		view.QuestionID, view.QuestionText = d.QuestionID, d.LastKnown.Text
 		view.Result = ""
 	}
+	if d.DirectAnswer {
+		// The answer is in hand and there is no handle (see Delegation.DirectAnswer). Said here
+		// because the alternative is a model that tries to `wait` on or `cancel` something the
+		// peer never created — and said as a NOTE rather than a refusal because the conversation
+		// is still continuable when the peer named one (`continue_from`).
+		direct := "the peer answered with a direct message rather than a task: this result IS the outcome, " +
+			"there is no handle to query, wait on or cancel"
+		if note == "" {
+			note = direct
+		} else {
+			note += "; " + direct
+		}
+		view.Note = note
+	}
 	return view
 }
 

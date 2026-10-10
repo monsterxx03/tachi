@@ -179,6 +179,67 @@ func TestRecordingProvider_CreateChatStream_PassthroughAndRecord(t *testing.T) {
 	}
 }
 
+// A call made for something other than the local conversation is filed under the KIND it was
+// made for with the SOURCE beside it (design §9.5). Both fields are asserted together because the
+// mistake this guards against is folding one into the other: an "a2a" kind would make "what did
+// this remote task cost" and "what does titling cost" the same question.
+func TestRecordingProvider_RecordsTheSourceBesideTheKind(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewUsageRecorder(dir)
+	inner := &stubRecordingProvider{
+		name: config.ProviderTypeOpenAI, providerName: "p", model: "m",
+		resp: &Response{Content: "ok", Usage: &Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	p := WrapRecordingProvider(inner, rec, nil, nil)
+
+	// A compaction inside a remote task: the kind says compact, the source says whose.
+	ctx := WithUsageKind(context.Background(), UsageKindCompact)
+	ctx = WithUsageSource(ctx, UsageSource{Origin: UsageSourceA2A, TaskID: "t-1", ContextID: "c-1"})
+	ctx = WithSessionID(ctx, "sess-1")
+	if _, err := p.CreateChat(ctx, nil, nil, ChatOptions{}); err != nil {
+		t.Fatalf("CreateChat: %v", err)
+	}
+
+	rows, err := rec.Rows("sess-1", time.Time{})
+	if err != nil {
+		t.Fatalf("Rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Kind != UsageKindCompact {
+		t.Errorf("Kind = %q, want compact — the source must not overwrite what the call was for", row.Kind)
+	}
+	if row.Source != UsageSourceA2A || row.SourceTaskID != "t-1" || row.SourceContextID != "c-1" {
+		t.Errorf("source = %q/%q/%q, want a2a/t-1/c-1", row.Source, row.SourceTaskID, row.SourceContextID)
+	}
+}
+
+// And a call with no source writes none: an ordinary conversation row must read back as it did
+// before these fields existed, which is also what every pre-upgrade ledger line is.
+func TestRecordingProvider_NoSourceForALocalCall(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewUsageRecorder(dir)
+	inner := &stubRecordingProvider{
+		name: config.ProviderTypeOpenAI, model: "m",
+		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	p := WrapRecordingProvider(inner, rec, nil, nil)
+	if _, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{}); err != nil {
+		t.Fatalf("CreateChat: %v", err)
+	}
+
+	rows, _ := rec.Rows("", time.Time{})
+	if len(rows) != 1 {
+		t.Fatalf("Rows = %d, want 1", len(rows))
+	}
+	if row := rows[0]; row.Source != "" || row.SourceTaskID != "" || row.SourceContextID != "" {
+		t.Errorf("a local call must carry no source, got %q/%q/%q",
+			row.Source, row.SourceTaskID, row.SourceContextID)
+	}
+}
+
 func TestRecordingProvider_ErrorsNotRecorded(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)

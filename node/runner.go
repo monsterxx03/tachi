@@ -571,20 +571,9 @@ func (r *runner) beginTurn(
 		return nil, err
 	}
 
-	// Tools resolve RELATIVE paths against the node's workspace, not against wherever the
-	// hosting process happens to stand: same mechanism the channel uses per thread.
-	//
-	// The turn's context is DETACHED from the request that started it (design §7.2), and this
-	// is not caution: the SDK runs the executor inside an errgroup whose context is cancelled
-	// the moment the execution ends — which for a turn that stops to ask a question is exactly
-	// when it must keep running. WithoutCancel keeps the request's VALUES (the trace id, the
-	// caller) and drops the lifetime; the lifetime is this turn's own, ended by advance
-	// reaching an outcome, by a cancel, or by the node shutting down.
-	ctx := context.WithoutCancel(parent)
-	ctx = wdctx.WithDir(ctx, cr.binding.Workspace)
-	// The grant that lets THIS run drive the managed session it owns (agent/managed.go).
-	ctx = agent.WithTrustedExecution(ctx)
-	ctx, cancel := context.WithCancel(ctx)
+	// Everything that rides on a remote turn's context — its detached lifetime, the node's
+	// workspace, the trusted-execution grant and the usage source — is assembled in one place.
+	ctx, cancel := r.turnContext(parent, cr, taskID)
 
 	history, err := cr.agent.LoadSessionHistory()
 	if err != nil {
@@ -622,6 +611,41 @@ func (r *runner) beginTurn(
 	r.turns[taskID] = lt
 	r.mu.Unlock()
 	return lt, nil
+}
+
+// turnContext returns the context ONE remote turn runs in, and the cancel that ends it.
+//
+// It is a function rather than four lines inside beginTurn because four separate things ride on
+// this context and each one was a decision:
+//
+//   - WithoutCancel detaches the turn from the request that started it (design §7.2), and that
+//     is not caution: the SDK runs the executor inside an errgroup whose context is cancelled the
+//     moment the execution ends — which, for a turn that stopped to ask a question, is exactly
+//     when it must keep running. The request's VALUES (trace id, caller) survive; its lifetime
+//     does not. The lifetime is this turn's own, ended by advance reaching an outcome, by a
+//     cancel, or by the node shutting down.
+//   - the node's workspace, so tools resolve relative paths against it and never against wherever
+//     the hosting process happens to stand (§10.3).
+//   - the trusted-execution grant that lets THIS run drive the managed session it owns
+//     (agent/managed.go). Nothing else in this process sets it.
+//   - the usage source, so every model call the turn makes is attributable to the remote task
+//     that caused it (§9.5).
+//
+// Its own lifetime (the returned cancel) is deliberately not derived from the SDK's: that is the
+// whole point of the first item.
+func (r *runner) turnContext(parent context.Context, cr *contextRun, taskID a2a.TaskID) (context.Context, context.CancelFunc) {
+	ctx := context.WithoutCancel(parent)
+	ctx = wdctx.WithDir(ctx, cr.binding.Workspace)
+	ctx = agent.WithTrustedExecution(ctx)
+	// The KIND stays whatever the call was for — a compaction or a title call inside this turn is
+	// still a compact or a title call — because the source is a second dimension. Folding them
+	// into one "a2a" kind would lose what the work actually cost on this machine (§9.5).
+	ctx = llm.WithUsageSource(ctx, llm.UsageSource{
+		Origin:    llm.UsageSourceA2A,
+		TaskID:    string(taskID),
+		ContextID: cr.binding.ContextID,
+	})
+	return context.WithCancel(ctx)
 }
 
 // resumeTurn delivers the caller's answer to the turn waiting for it and reads on.
@@ -940,9 +964,15 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 		// No title generation: a remote task has no window to title, and the extra model
 		// call would be charged to this node for nothing.
 		TitleGenEnabled: ptr(false),
-		FullConfig:      r.cfg,
-		SystemConfig:    agent.SystemConfigFromConfig(r.cfg),
-		SessionManager:  sm,
+		// No host memory recall (§2.3). The reminder injects this machine's own long-term
+		// memory straight into whatever prompt arrives, so leaving it on hands a remote
+		// caller the host's private context — and skipping the TOOLS is not enough, because
+		// the reminder fires on its own (hostOnlyTools takes the other half). It is also the
+		// one part of MemoryState a reload does not recompute, so setting it here keeps it.
+		SkipMemoryRecall: true,
+		FullConfig:       r.cfg,
+		SystemConfig:     agent.SystemConfigFromConfig(r.cfg),
+		SessionManager:   sm,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: build agent: %w", err)
@@ -1011,8 +1041,22 @@ func (r *runner) beginContextUse(cr *contextRun) error {
 	return nil
 }
 
-// toolViewOption turns the node's allowlist into the run's tool view: the operator's tools,
-// plus AskUserQuestion.
+// hostOnlyTools are the tools a remote turn is NEVER offered, whatever the operator's allowlist
+// says (design §2.3). Both ends of THIS machine's long-term memory, and a remote conversation is
+// not the user's: recalling it would hand a caller's prompt the host's private context, and
+// recording into it would let a caller plant facts the user's own conversations later read back.
+//
+// The exclusion is unconditional on purpose. An allowlist cannot decide this — "the operator
+// listed it" says nothing about whose memory it is, and the design is explicit that being on the
+// same machine as the same user is not an authorization. A future slice that wants shared project
+// knowledge has to name the data and the authorization rather than flip this into a switch.
+var hostOnlyTools = map[string]bool{
+	tools.ToolNameRecordMemory: true,
+	tools.ToolNameMemoryRecall: true,
+}
+
+// toolViewOption turns the node's allowlist into the run's tool view: the operator's tools, less
+// the host's own memory, plus AskUserQuestion.
 //
 // AskUserQuestion is not an exception to the allowlist: the list says what this node may DO
 // to the machine it runs on, and asking the caller a question does nothing to it. Leaving
@@ -1024,7 +1068,12 @@ func (r *runner) beginContextUse(cr *contextRun) error {
 // and the model is offered exactly one tool: the one that can only talk to the caller.
 func (r *runner) toolViewOption() []agent.RunOption {
 	names := make([]string, 0, len(r.cfg.Node.Tools)+1)
-	names = append(names, r.cfg.Node.Tools...)
+	for _, name := range r.cfg.Node.Tools {
+		if hostOnlyTools[name] {
+			continue
+		}
+		names = append(names, name)
+	}
 	names = append(names, tools.ToolNameAskUser)
 	return []agent.RunOption{agent.WithToolSet(names...)}
 }

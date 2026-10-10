@@ -126,3 +126,23 @@ func TestAnOrdinarySessionIsNotBlockedByTheManagedRule(t *testing.T) {
 	require.NotErrorIs(t, err, ErrManagedSession)
 	require.NotContains(t, err.Error(), "subsystem")
 }
+
+// A FORK of a managed session cannot write into it, and the reason is structure rather than a
+// check: the child is built without a session manager (agent/agent_fork.go). The design leans on
+// exactly that (§7.1.3: "fork 出来的子 agent 没有 SessionManager（写不进任何会话）"), so it is
+// asserted here — a later change that handed the child the parent's manager would otherwise turn
+// a fork of a remote execution into a writer of it, silently.
+func TestAForkOfAManagedSessionHasNoSessionToWriteInto(t *testing.T) {
+	a, mgr := managedAgent(t, session.KindA2AExecution)
+	require.NotNil(t, a.Config.SessionManager, "the parent owns its managed session")
+
+	child := a.Fork(ForkConfig{Provider: &mockStreamProvider{name: "mock"}})
+	t.Cleanup(child.Close)
+
+	require.Nil(t, child.Agent().Config.SessionManager,
+		"a fork must not inherit the parent's session — it has nothing to write into")
+	// And the refusal the parent carries by KIND cannot even be reached from the child: it has no
+	// session to judge, so it is not a second spelling of the same rule.
+	require.NoError(t, child.Agent().managedSessionRefusal(context.Background()))
+	require.Equal(t, "s-managed", mgr.current.ID, "forking must change nothing about the parent")
+}

@@ -95,6 +95,19 @@ type Delegation struct {
 	// LastKnown is the last thing we saw this task be, with when we saw it.
 	LastKnown lastKnown `json:"last_known"`
 
+	// DirectAnswer is set when the peer answered the submission with a MESSAGE rather than
+	// creating a task (§6.1 — the spec's SendMessageResponse is a oneOf, and "a direct Message
+	// response for simple interactions" is a legitimate answer). The answer itself is in
+	// LastKnown.Text, and RemoteTaskID stays empty: there is no handle to query, wait on or
+	// cancel.
+	//
+	// It is recorded rather than inferred from "completed with no remote task id" because the
+	// two reasons for an empty RemoteTaskID are DIFFERENT FACTS and every refusal that mentions
+	// one must not read as the other: a submission whose fate is unknown (nothing came back) is
+	// not a peer that answered. Empty for every record written before this field existed, which
+	// is correct — none of them were answered that way.
+	DirectAnswer bool `json:"direct_answer,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -216,7 +229,19 @@ func (s *delegationStore) list(logicalID string) []*Delegation {
 		snapshot := *d
 		out = append(out, &snapshot)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	// A TOTAL order, not merely "newest first". The records come out of a MAP, so a comparator
+	// that can report two entries as equal leaves their relative order to map iteration — which
+	// differs between calls, and between one load and the next. Two delegations made in the same
+	// instant would then trade places in the reminder's rendering, and a reminder whose text
+	// changes for no reason is one the collector re-appends as if it were news (the prompt prefix
+	// moves with it). The id is the tie-break because it is the record's own identity and never
+	// changes once written.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

@@ -91,7 +91,10 @@ func (c *remoteClient) Get(ctx context.Context, id string) (*Delegation, error) 
 		return nil, err
 	}
 	if d.RemoteTaskID == "" {
-		return d, nil // never accepted: there is nothing at the peer to ask about
+		// No remote task to ask about, for one of two reasons that both end here: the submission
+		// was never accepted (the record is the only answer we can give), or the peer answered it
+		// with a direct Message (the record already HOLDS the answer — see DirectAnswer).
+		return d, nil
 	}
 	task, err := c.fetch(ctx, d)
 	if err != nil {
@@ -115,6 +118,8 @@ func (c *remoteClient) Wait(ctx context.Context, id string, budget time.Duration
 		budget = c.waitBudget
 	}
 	if d.RemoteTaskID == "" {
+		// Nothing to poll: either the submission's fate is unknown, or the peer answered it
+		// directly and the answer is already in the record. Waiting would not change either.
 		return d, nil
 	}
 	deadline := time.Now().Add(budget)
@@ -152,7 +157,7 @@ func (c *remoteClient) Reply(ctx context.Context, id, questionID string, answer 
 		return nil, err
 	}
 	if d.RemoteTaskID == "" {
-		return nil, fmt.Errorf("node: delegation %s was never accepted by %s, so there is no question to answer", id, d.Peer)
+		return nil, noHandle(d, "no question to answer")
 	}
 	// The record is the authority on whether a question is open: it is what the peer's last
 	// answer said, and an answer to a task that asks nothing would buy a round trip only to be
@@ -172,15 +177,19 @@ func (c *remoteClient) Reply(ctx context.Context, id, questionID string, answer 
 	msg.Metadata = map[string]any{QuestionIDMetadataKey: questionID}
 	msg.ContextID = d.RemoteContextID
 
-	task, err := c.send(ctx, d, msg)
+	res, err := c.send(ctx, d, msg)
 	if err != nil {
 		return d, err
 	}
-	d, err = c.record(d, task)
+	d, err = c.recordSend(d, res)
 	if err != nil {
 		return d, err
 	}
-	if settlesWait(task.Status.State) {
+	// Same two shapes as a submission: a direct Message ends it, a terminal task does.
+	if res.Message != nil {
+		return d, nil
+	}
+	if settlesWait(res.Task.Status.State) {
 		return d, nil
 	}
 	return c.Wait(ctx, d.ID, budget)
@@ -194,7 +203,7 @@ func (c *remoteClient) Cancel(ctx context.Context, id string) (*Delegation, erro
 		return nil, err
 	}
 	if d.RemoteTaskID == "" {
-		return nil, fmt.Errorf("node: delegation %s was never accepted by %s, so there is nothing to cancel", id, d.Peer)
+		return nil, noHandle(d, "nothing to cancel")
 	}
 
 	body, err := c.do(ctx, d, http.MethodPost, restTasksPath+d.RemoteTaskID+cancelSuffix, nil)
@@ -236,8 +245,15 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 			return nil, fmt.Errorf("node: %s was delegated to %s, not to %s", prev.ID, prev.Peer, req.Peer)
 		}
 		if prev.RemoteContextID == "" {
-			return nil, fmt.Errorf("node: %s has no remote conversation yet (its submission was never accepted), "+
-				"so it cannot be continued", prev.ID)
+			// Either the submission's fate is unknown, or the peer answered it directly without
+			// naming a conversation. Both mean "there is nothing here to continue" — and neither
+			// may be turned into a fresh conversation behind the caller's back (§8.5).
+			why := "its submission was never accepted"
+			if prev.DirectAnswer {
+				why = "it was answered directly, and the peer named no conversation"
+			}
+			return nil, fmt.Errorf("node: %s has no remote conversation yet (%s), so it cannot be continued",
+				prev.ID, why)
 		}
 		contextID = prev.RemoteContextID
 		// The PREVIOUS remote task is a reference, not this message's task: §8.1 is explicit
@@ -261,25 +277,43 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 		msg.ReferenceTasks = []a2a.TaskID{a2a.TaskID(reference)}
 	}
 
-	task, err := c.send(ctx, d, msg)
+	res, err := c.send(ctx, d, msg)
 	if err != nil {
 		return d, err
 	}
-	d, err = c.record(d, task)
+	d, err = c.recordSend(d, res)
 	if err != nil {
 		return d, err
 	}
 
+	// A direct Message IS the outcome — there is no task to wait on.
+	if res.Message != nil {
+		return d, nil
+	}
 	// A task that is already finished carries its answer; one that is running or waiting is
 	// handed back with what we know (§6.2, §8.1). The wait is bounded either way.
-	if settlesWait(task.Status.State) {
+	if settlesWait(res.Task.Status.State) {
 		return d, nil
 	}
 	return c.Wait(ctx, d.ID, req.Wait)
 }
 
-// send is one message:send and the task it answered with.
-func (c *remoteClient) send(ctx context.Context, d *Delegation, msg *a2a.Message) (*a2a.Task, error) {
+// sendResult is what one message:send answered with: the task the peer created, OR a direct
+// Message that means no task exists at all (design §6.1 — the spec's SendMessageResponse is a
+// oneOf of exactly one of these).
+//
+// The two are not variants of one thing and must not be flattened into one. A Task is a HANDLE:
+// queryable, waitable, cancellable, continuable. A Message is an ANSWER that is simply over. The
+// spec lets a peer pick either ("the agent MAY create a new Task ... or MAY return a direct
+// Message response for simple interactions"), so a client that knows only the first turns a
+// perfectly good answer into an error — which is exactly what this node used to do.
+type sendResult struct {
+	Task    *a2a.Task
+	Message *a2a.Message
+}
+
+// send is one message:send and the Task or Message it answered with.
+func (c *remoteClient) send(ctx context.Context, d *Delegation, msg *a2a.Message) (*sendResult, error) {
 	payload := map[string]any{
 		"message": msg,
 		// Read the handle, then wait locally: the design's rule for every delegation (§6.2).
@@ -294,7 +328,8 @@ func (c *remoteClient) send(ctx context.Context, d *Delegation, msg *a2a.Message
 		return nil, err
 	}
 
-	// The envelope is the spec's StreamResponse: a task for work, a message for a reply.
+	// The envelope is the spec's StreamResponse: a task for work, a message for a reply. The spec
+	// requires EXACTLY one, so "both" is as unreadable as "neither" and neither may be guessed at.
 	var envelope struct {
 		Task    *a2a.Task    `json:"task"`
 		Message *a2a.Message `json:"message"`
@@ -302,11 +337,70 @@ func (c *remoteClient) send(ctx context.Context, d *Delegation, msg *a2a.Message
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("node: %s answered with something this node cannot read: %w", d.Peer, err)
 	}
-	if envelope.Task == nil {
-		// A message answer is not a task outcome. Recording it as one would invent a task.
-		return nil, fmt.Errorf("node: %s answered with a message rather than a task", d.Peer)
+	switch {
+	case envelope.Task != nil && envelope.Message != nil:
+		return nil, fmt.Errorf("node: %s answered with a task and a message at once; the protocol allows exactly one", d.Peer)
+	case envelope.Task != nil:
+		return &sendResult{Task: envelope.Task}, nil
+	case envelope.Message != nil:
+		return &sendResult{Message: envelope.Message}, nil
+	default:
+		return nil, fmt.Errorf("node: %s answered with neither a task nor a message", d.Peer)
 	}
-	return envelope.Task, nil
+}
+
+// recordSend files what a message:send answered with, in whichever of the two shapes it came.
+func (c *remoteClient) recordSend(d *Delegation, res *sendResult) (*Delegation, error) {
+	if res.Task != nil {
+		return c.record(d, res.Task)
+	}
+	return c.recordDirectAnswer(d, res.Message)
+}
+
+// recordDirectAnswer files a peer's direct Message.
+//
+// There is no task, no state to poll and nothing to cancel, so the record must neither pretend one
+// exists nor leave the outcome looking UNKNOWN: the answer is right here, in the caller's hands.
+//
+// The contextId travels when the peer sent one (the spec REQUIRES it if the agent generated one),
+// and that is what keeps `continue_from` able to continue the CONVERSATION even though this
+// particular ask produced no task: the next message goes out on the same context, where the peer's
+// own history can pick it up.
+func (c *remoteClient) recordDirectAnswer(d *Delegation, msg *a2a.Message) (*Delegation, error) {
+	now := time.Now().UTC()
+	next := *d
+	next.DirectAnswer = true
+	next.LastKnown = lastKnown{
+		// COMPLETED is the honest state for "this IS the answer": the interaction is over. Leaving
+		// it UNSPECIFIED would read as "we do not know whether it was accepted", which is a
+		// different fact — and the one the record reports when nothing came back at all.
+		State: a2a.TaskStateCompleted,
+		Text:  excerpt(messageText(msg)),
+		At:    now,
+	}
+	// A direct Message cannot carry an answer back into the node's question slot, so whatever
+	// question this machine was holding is over with it: there is no task left to answer into.
+	next.QuestionID = ""
+	if msg.ContextID != "" {
+		next.RemoteContextID = msg.ContextID
+	}
+	if err := c.delegations.put(&next); err != nil {
+		return d, err
+	}
+	return &next, nil
+}
+
+// noHandle explains why an action has nothing to act on, and the TWO reasons are different facts:
+// a submission whose fate is unknown (nothing came back) versus a peer that ANSWERED with a
+// Message (no task was ever going to come back). A caller that read one as the other would either
+// retry work that already succeeded or give up on work the peer may still be running.
+func noHandle(d *Delegation, what string) error {
+	if d.DirectAnswer {
+		return fmt.Errorf("node: delegation %s was answered directly by %s (no task was created), so there is %s",
+			d.ID, d.Peer, what)
+	}
+	return fmt.Errorf("node: delegation %s was never accepted by %s (its outcome is unknown), so there is %s",
+		d.ID, d.Peer, what)
 }
 
 // fetch reads the peer's current view of a task.
