@@ -102,7 +102,8 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
-| a link in a reply, clicked (the system browser opens it and the webview stays put) | `external-link` |
+| a link in a reply, clicked — an ordinary URL (the system browser opens it and the webview stays put) | `external-link` |
+| a link in a reply that names a FILE on disk (preview opens in-app; a path that does not exist stays browser-only) | `file-link` |
 | a history REBUILT from disk rather than written live — a record seeded before the app started (`seedMessages`), an interrupted turn's leftovers | `orphan-tool-call`, `at-file-reload`, `image-reload` |
 | plans, `SavePlan`, the plan panel | `plan-writeback` |
 | the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
@@ -653,16 +654,25 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath`, both `stat`-ing first and returning `"ok"` or the reason. New open/reveal actions
   reuse them, and a test replaces the single `openFile` var to read the argv.
-- **A link in prose is the one action that leaves the app for the outside world, and it is ONE path from the
-  click to the system browser**: the backend's `OpenURL` (same `openFile` launcher, since `open` / xdg-open take
-  a URL as readily as a path) and the frontend's `MdLink` (`frontend/src/markdown.tsx`), which the transcript's
-  react-markdown AND the review panel's `InlineMd` both render. A plain `<a href>` in this page is a one-way
-  door — the webview has no tabs and no back button, so following one replaced the whole app with the page and
-  left nothing to go back to (issue #48) — hence `preventDefault` + the binding, and hence a SECOND renderer
-  with its own idea of a link is how one of them becomes dead. **The scheme is an allowlist** (http/https/mailto)
-  because the URL comes from markdown a MODEL wrote and the platform launcher opens whatever it has a handler
-  for: `file:` would turn a link in a reply into "open this path on your machine", outside every rule the file
-  tools answer to. Smoke: `external-link` (which also pins that clicking does not navigate).
+- **A link in prose leaves the app in exactly two ways, and both are ONE path from the click**: the frontend's
+  `MdLink` (`frontend/src/markdown.tsx`), which the transcript's react-markdown AND the review panel's
+  `InlineMd` both render, hands an href either to `AgentService.OpenURL` — the backend's `allowlist`ed
+  launcher (`openFile`, since `open` / xdg-open take a URL as readily as a path) — or, when the href names a
+  file that IS on disk, to the in-app preview (`FilePreviewOverlay`, the same one an attachment card and the
+  diff panel open): that is what a reply's `[desktop.md](desktop.md)` means, and before it, the click did
+  nothing at all (issue #49). **Which of the two it is, only the BACKEND can answer** — `PreviewFile`'s
+  `missing` kind decides, because a site-absolute URL path (`[state](/concepts/state)`, which replies do
+  contain) and an absolute disk path are the same string until something asks the disk; a path that is not
+  there keeps the old browser-only behaviour. A relative path resolves against the session's working
+  directory (`linkTargetPath`, deliberately beside `toLocalAsset` — one rule for a link and for the image
+  next to it). A plain `<a href>` in this page is a one-way door — the webview has no tabs and no back
+  button, so following one replaced the whole app with the page and left nothing to go back to (issue #48)
+  — hence `preventDefault` on every click, and hence a SECOND renderer with its own idea of a link is how
+  one of them becomes dead. **The launcher's scheme is still an allowlist** (http/https/mailto) because the
+  URL comes from markdown a MODEL wrote and the platform launcher opens whatever it has a handler for:
+  `file:` never even reaches a component (react-markdown drops it) and would be refused if it did. Smoke:
+  `external-link` (also pins that clicking does not navigate), `file-link` (a local file opens the preview,
+  a path that does not exist does not, and the launcher is never asked).
 - **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`;
   `shutil.GitBranch`): two checkouts of one repository are otherwise the same row. It is probed PER ROOT when
   the panel opens (never stored: a checkout moves under you), skipped for a missing root, and EMPTY for one

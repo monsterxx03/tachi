@@ -516,6 +516,37 @@ export function toLocalAsset(src: string | undefined, workDir: string): string {
   return `/local?p=${encodeURIComponent(p)}`
 }
 
+// linkTargetPath applies the same resolution to a markdown LINK: the absolute
+// path its href names, or null when the href is not a file on disk at all (a web
+// URL, a mailto:, an in-page #anchor).
+//
+// The two live side by side because they have to agree on what "a local path"
+// means: a reply that links `[设计](./2026-09-14-desktop-project-design.md)` and
+// one that embeds `![](./shot.png)` name the same directory — the session's
+// working directory — and a link that resolved differently from the image beside
+// it would be a bug with no principle behind it.
+//
+// Only paths are resolved, not `file:` URLs: the markdown pipeline drops those
+// before any component sees them (react-markdown's own protocol allowlist, see
+// keepInlineImage in markdown.tsx), and what replies actually contain is paths —
+// verified against this repo's own transcripts, where relative links like
+// `[desktop.md](desktop.md)` are common and `file://` appears only in prose
+// about file URLs.
+export function linkTargetPath(href: string, workDir: string): string | null {
+  const url = href.trim()
+  if (!url || url.startsWith('#')) return null
+  // A scheme (`http:`, `mailto:`, `data:` …) means it is not a path. A bare
+  // relative path has none, and neither does an absolute one.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return null
+  if (url.startsWith('/')) return url
+  // A relative path is only a path once there is a directory to resolve it
+  // against: without one, `/etc`-style guessing would turn a link like
+  // `[etc](etc)` into a file at the filesystem root. A caller with no working
+  // directory (a finding's InlineMd) therefore gets no local target at all.
+  if (!workDir) return null
+  return `${workDir}/${url.replace(/^\.\//, '')}`
+}
+
 // toLocalPath is the same asset route in its path form (/local/<path>). It is
 // what a previewed document is loaded through: with the disk path in the URL
 // PATH, the document's own relative references ("./chart.js") resolve against it

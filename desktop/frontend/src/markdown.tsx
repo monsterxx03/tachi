@@ -9,7 +9,8 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { CopyIcon } from './components'
-import { copyText, actOnKey, toLocalAsset } from './lib'
+import { copyText, actOnKey, linkTargetPath, toLocalAsset } from './lib'
+import { FilePreviewOverlay } from './filepreview'
 import { useThemeSnapshot } from './theme'
 import { CloseButton, ImageViewer, ViewerOverlay, ZoomControls, useViewerZoomKeys, useZoomPan } from './viewer'
 
@@ -27,30 +28,65 @@ function TableScroller(props: { children?: ReactNode }) {
 // MdLink is the app's ONLY way out: a link in prose hands its URL to the SYSTEM browser
 // (AgentService.OpenURL) instead of to the webview.
 //
+// A link that names a file ON DISK is the exception, and the interesting one: it opens the same
+// in-app preview the diff panel and an attachment card use, because "look at this file" is what
+// the reader meant — handing a local path to the system launcher is how a reply's
+// `[desktop.md](desktop.md)` used to do nothing at all (issue #49).
+//
+// Which of the two a click means is decided by the BACKEND, not by a shape test here: a link like
+// `[state](/concepts/state)` (a site-absolute URL path, which replies do contain) is
+// indistinguishable from an absolute disk path until something asks the disk. So the click first
+// asks whether the path names anything — PreviewFile's own `missing` kind is that answer — and
+// falls back to the browser when it does not, which leaves exactly the old behaviour for every
+// link that is not a file.
+//
 // A plain <a href> in this page is a one-way door. The webview has no tabs and no back button —
 // the window IS the app — so following one replaced the transcript, the sidebar and the composer
 // with the page and left the reader with nothing to go back to (issue #48). `preventDefault` on the
 // click cancels the navigation before WebKit acts on it, and that is the ONE event every form of the
-// gesture goes through (a plain click, ⌘-click): the binding does the rest. The backend refuses any
+// gesture goes through (a plain click, ⌘-click): the handler does the rest. The backend refuses any
 // scheme that is not http/https/mailto (attach.go), so a model-written `file:` link is not a way to
-// reach the machine either.
+// reach the machine either. (Those do not even arrive here: react-markdown drops a `file:` href
+// before rendering — see keepInlineImage.)
 //
 // The href STAYS on the element: it is what makes the target readable on hover, what a screen
 // reader announces as a link, and the only thing that says where the click goes.
 //
 // ONE component for both renderers — the transcript's replies (MarkdownBlock) and a review
 // finding's own prose (InlineMd) — because "what a link does" is one fact, and a second renderer
-// with its own idea of it is how a link becomes dead in one place and live in another.
-export function MdLink({ href, children, title }: ComponentPropsWithoutRef<'a'>) {
+// with its own idea of it is how a link becomes dead in one place and live in another. A caller
+// that knows the session's working directory passes it (MarkdownBlock does); without one a
+// relative path cannot be resolved, so those links keep the browser-only behaviour.
+export function MdLink({ href, children, title, workDir }: ComponentPropsWithoutRef<'a'> & { workDir?: string }) {
+  const [preview, setPreview] = useState<string | null>(null)
   const url = typeof href === 'string' ? href.trim() : ''
   // A malformed link (no target at all) renders as its own label: a control that cannot go
   // anywhere is worse than plain text.
   if (!url) return <>{children}</>
+  const local = linkTargetPath(url, workDir || '')
+  const asBrowser = () => { AgentService.OpenURL(url).catch(() => {}) }
+  const onClick = (e: { preventDefault: () => void }) => {
+    e.preventDefault()
+    if (!local) { asBrowser(); return }
+    // The file question, then the preview. A content-less PreviewFile is a plain stat, and it
+    // answers for directories and unreadable files too — an overlay that explains the kind is
+    // the right place for those; only "there is nothing at this path" goes to the browser.
+    AgentService.PreviewFile(local, false)
+      .then((vo) => { if (vo.kind === 'missing') asBrowser(); else setPreview(local) })
+      .catch(asBrowser)
+  }
   return (
-    <a className="md-link" href={url} title={title || url}
-      onClick={(e) => { e.preventDefault(); AgentService.OpenURL(url).catch(() => {}) }}>
-      {children}
-    </a>
+    <>
+      <a className="md-link" href={url} title={title || (local ? `${url}（点击预览）` : url)}
+        onClick={onClick}>
+        {children}
+      </a>
+      {/* The overlay is a portal (see viewer.tsx), so mounting it here does not escape the
+          paragraph the link sits in. The import is a cycle — filepreview renders markdown, and
+          markdown now opens a preview — but neither module reads the other while it is being
+          evaluated (both only inside a render), which is what keeps it benign. */}
+      {preview ? <FilePreviewOverlay path={preview} onClose={() => setPreview(null)} /> : null}
+    </>
   )
 }
 
@@ -61,6 +97,11 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { te
   const MdImg = useCallback(({ src, alt, title }: { src?: string; alt?: string; title?: string }) => (
     <MdImage src={src} alt={alt} title={title} workDir={workDir} />
   ), [workDir])
+  // The link renderer needs workDir for the same reason the image one does: a relative path in a
+  // reply is relative to the session's working directory. It is a bound component rather than a
+  // prop on each <a> because react-markdown only hands a component the element's own attributes.
+  const MdLinkHere = useCallback(
+    (props: ComponentPropsWithoutRef<'a'>) => <MdLink {...props} workDir={workDir} />, [workDir])
   return (
     <div className="assistant-text">
       {/* rehypeHighlight tokenises fenced code; PreBlock turns ```mermaid into a
@@ -69,7 +110,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { te
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         urlTransform={keepInlineImage}
-        components={{ img: MdImg, table: TableScroller, pre: PreBlock, a: MdLink }}>
+        components={{ img: MdImg, table: TableScroller, pre: PreBlock, a: MdLinkHere }}>
         {text}
       </ReactMarkdown>
     </div>

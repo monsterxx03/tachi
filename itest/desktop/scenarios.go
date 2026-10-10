@@ -3358,6 +3358,35 @@ permissions:
 			},
 		},
 		//
+		// file-link: 回复里指向**本地文件**的链接点下去要开应用内的预览，而不是交给系统浏览器
+		// （issue #49）。它是 external-link 的另一半：同一个手势、同一个组件，只是目标在磁盘上。
+		//
+		// 相对路径是这条链路的要害：回复里的链接和正文里的图片一样，相对**会话工作目录**解析
+		// （lib.ts 的 linkTargetPath / toLocalAsset 是并列的两条），而 workDir 得真的传到链接
+		// 渲染器上 —— 传不到时这一条会退化成「点了没反应」，测试正是钉住这一点。
+		//
+		// 「是不是文件」这个判断由后端的 stat 给出，不是前端照形状猜的：回复里确实存在
+		// `[state](/concepts/state)` 这种站点绝对路径，和绝对文件路径长得一样。于是第二个链接
+		// 只有路径不存在这一种差别：它按老行为落到 OpenURL，而后端只放行 http/https/mailto，
+		// 所以 driver 断「没有浮层」，Go 侧断「一次启动器调用都没有」。
+		{
+			name: "file-link",
+			files: map[string]string{
+				"README.md": "# smoke\n\n" + fileLinkMarker + "\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("看这个文件：[README.md](./README.md)，还有 [没有这个](nope/missing.md)。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("这一轮只有一次请求", len(c.requests) == 1, requestCount(c.requests))
+				// 浮层那半在 driver 里断。这里断的是它**没有**要系统去开任何东西：本地文件链接
+				// 一旦走回浏览器那条路，这里就会多出一条（哪怕后端最后拒绝了它，被记录下来的
+				// 也只会是放行的 scheme，所以多出来的必然是真被开的东西）。
+				c.check("点本地文件链接不碰系统启动器", len(c.opened) == 0, fileList(c.opened))
+			},
+		},
+		//
 		//
 		// orphan-tool-call: 进程死在工具批次中间之后，重启加载出来的历史里会留下**只配对了一半**的
 		// tool call —— assistant 一次发两条 call，落盘顺序是「先把 call 全记下，再逐个记 result」
@@ -3443,6 +3472,14 @@ const mcpEditSeedEntry = `    {
 // instead of performing it (TACHI_DEMO_OPEN_LOG), which is what keeps a smoke run from opening a
 // browser window on the machine it runs on.
 const externalLinkURL = "https://example.com/tachi-link-smoke"
+
+// fileLinkMarker is a sentence inside the file-link scenario's README.md. The DRIVER spells it too
+// (drivers/file-link.js) — a driver cannot read a Go constant — so the two must stay identical, the
+// same convention as externalLinkURL and pasteImageB64 above.
+//
+// It exists to tell "the overlay opened" from "the overlay opened ON THIS FILE": an empty frame is
+// also a .viewer-overlay, and an overlay showing yesterday's file would satisfy every other check.
+const fileLinkMarker = "file-link smoke marker"
 
 // pasteImageB64 is the 1x1 PNG the paste-image driver pastes, as the webview sends it (a data URL's
 // payload). It is duplicated in drivers/paste-image.js — a driver cannot read a Go constant — so the
