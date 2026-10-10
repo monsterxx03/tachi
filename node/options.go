@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/netutil"
 )
@@ -39,6 +40,11 @@ const (
 	// DefaultLocalListen binds a kernel-chosen port on loopback. Tests rely on
 	// ":0" so two nodes never fight over a port.
 	DefaultLocalListen = "127.0.0.1:0"
+
+	// DefaultRemoteListen is the A2A interface's default address. Loopback, and it
+	// will stay loopback until caller authentication exists: enabling a node must not
+	// put an unauthenticated agent on the network.
+	DefaultRemoteListen = "127.0.0.1:0"
 
 	// DefaultAttachTimeout bounds how long StartOrAttach waits for a host that is
 	// still coming up to publish its local info. Bounded, not infinite: a process
@@ -78,6 +84,20 @@ type Options struct {
 	// instead of hosting. Empty means DefaultLocalListen.
 	LocalListen string
 
+	// RemoteListen is the address of the A2A interface — the one other nodes talk
+	// to. It must name a loopback host too, until caller authentication exists
+	// (design §3.3, §10.1): a node that anyone can call must not be reachable from
+	// anywhere. The address it actually binds is what the Card publishes. Ignored
+	// when this process attaches. Empty means DefaultRemoteListen.
+	RemoteListen string
+
+	// Executor is the receiving side's agent: it turns an accepted task into events.
+	// Nil means the built-in placeholder that echoes the task text — the seam a test
+	// injects through, and the one the real executor (task store, agent loop) will
+	// take over. It is nil by default on purpose: a node that has not been wired to
+	// an agent must not appear to run one.
+	Executor a2asrv.AgentExecutor
+
 	// AttachTimeout bounds the wait for a starting host to publish its info.
 	// Zero means DefaultAttachTimeout.
 	AttachTimeout time.Duration
@@ -103,13 +123,14 @@ func (o Options) normalized() (Options, error) {
 	if o.LocalListen == "" {
 		o.LocalListen = DefaultLocalListen
 	}
-	host, _, err := net.SplitHostPort(o.LocalListen)
-	if err != nil {
-		return Options{}, fmt.Errorf("node: LocalListen %q: %w", o.LocalListen, err)
+	if err := checkLoopback("LocalListen", o.LocalListen); err != nil {
+		return Options{}, err
 	}
-	if !netutil.IsLoopbackHost(host) {
-		return Options{}, fmt.Errorf("node: LocalListen %q must name a loopback host: "+
-			"the local interface is guarded by a private credential, not by its address", o.LocalListen)
+	if o.RemoteListen == "" {
+		o.RemoteListen = DefaultRemoteListen
+	}
+	if err := checkLoopback("RemoteListen", o.RemoteListen); err != nil {
+		return Options{}, err
 	}
 
 	if o.AttachTimeout <= 0 {
@@ -119,4 +140,24 @@ func (o Options) normalized() (Options, error) {
 		o.Logger = logger.New("node")
 	}
 	return o, nil
+}
+
+// checkLoopback refuses an address that is not loopback.
+//
+// Both of this node's listeners are on loopback for the same reason and it is not
+// politeness: neither of them authenticates its callers yet. The local one has a
+// private credential but is meant for THIS machine, and the remote one has nothing
+// at all until the pairing slice lands. A non-loopback address would therefore be
+// the difference between "a feature nobody enabled" and "an open agent endpoint",
+// so it is refused rather than warned about.
+func checkLoopback(name, addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("node: %s %q: %w", name, addr, err)
+	}
+	if !netutil.IsLoopbackHost(host) {
+		return fmt.Errorf("node: %s %q must name a loopback host: "+
+			"this listener does not authenticate callers yet, so it must not be reachable from anywhere", name, addr)
+	}
+	return nil
 }

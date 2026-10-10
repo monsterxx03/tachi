@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/monsterxx03/tachi/pkg/flock"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -30,6 +32,7 @@ type Handle struct {
 	lock    *flock.Lock
 	ln      net.Listener
 	srv     *http.Server
+	remote  *a2aSurface
 	info    *localInfo
 	client  *Client
 }
@@ -119,6 +122,15 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		return nil, fmt.Errorf("node: listen %s: %w", o.LocalListen, err)
 	}
 
+	// The remote surface binds before anything is published, so a failure here leaves
+	// no half-started node behind: nothing on disk mentions a service that is not up.
+	remote, err := startA2ASurface(o)
+	if err != nil {
+		_ = ln.Close()
+		_ = lock.Release()
+		return nil, err
+	}
+
 	info := &localInfo{
 		InstanceID: newRandomHex(16),
 		NodeID:     identity.NodeID,
@@ -129,6 +141,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		StartedAt:  time.Now().UTC(),
 	}
 	if err := publishLocalInfo(o.DataDir, info); err != nil {
+		_ = remote.close()
 		_ = ln.Close()
 		_ = lock.Release()
 		return nil, err
@@ -155,6 +168,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		lock:     lock,
 		ln:       ln,
 		srv:      srv,
+		remote:   remote,
 		info:     info,
 		client:   newClient(o.DataDir, info),
 	}, nil
@@ -253,6 +267,24 @@ func (h *Handle) Addr() string {
 	return h.info.Addr
 }
 
+// RemoteAddr is the A2A interface's address — what another node would call — or
+// empty when this process attached (only the host serves it).
+func (h *Handle) RemoteAddr() string {
+	if h == nil {
+		return ""
+	}
+	return h.remote.Addr()
+}
+
+// Card is the agent card this node publishes about itself, nil when this process
+// attached: it belongs to the hosting process's listener.
+func (h *Handle) Card() *a2a.AgentCard {
+	if h == nil {
+		return nil
+	}
+	return h.remote.Card()
+}
+
 // Close stops hosting. An attached handle owns nothing and does nothing.
 //
 // local.json is left in place on purpose: removing it would open a window where a
@@ -267,12 +299,18 @@ func (h *Handle) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
+	// Both listeners go down before the lock is released: a caller that finds the
+	// lock free may start hosting, and it must not have to race a service that is
+	// still answering on the old instance.
 	serr := h.srv.Shutdown(ctx)
+	rerr := h.remote.close()
 	lerr := h.lock.Release()
 	h.logger.Info(ctx, "node: stopped hosting", "data_dir", h.dataDir, "instance", h.info.InstanceID)
 
-	if serr != nil {
-		return fmt.Errorf("node: shut down local interface: %w", serr)
+	for _, err := range []error{serr, rerr} {
+		if err != nil {
+			return fmt.Errorf("node: shut down listener: %w", err)
+		}
 	}
 	return lerr
 }

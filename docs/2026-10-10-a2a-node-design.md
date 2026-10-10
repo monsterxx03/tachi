@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口、单实例锁与三个入口的接线已落地**（`node/`、`pkg/flock`、`config.Node`），**其余尚未实现**。日期：2026-10-10。
+状态：**设计；本机接口、单实例锁、三入口接线与 A2A 服务端骨架已落地**（`node/`、`pkg/flock`、`config.Node`；服务端目前只绑 loopback、跑占位执行器），**其余尚未实现**。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -256,13 +256,19 @@ reminder 帮助选择目标，不代表执行许可或实时可达性。`Delegat
 
 ## 六、A2A 的接口边界
 
-协议基线为官方 A2A 1.0.0；建议评估并固定官方 Go SDK `github.com/a2aproject/a2a-go/v2` 的 v2.6.0，依赖兼容和合同测试通过后再采用。SDK 版本不等于协议版本；SDK 提供 Agent Card JWS 签名能力不意味着必须启用，也不替代配对、可信密钥和撤销策略。
+协议基线为官方 A2A 1.0.0，SDK 已固定为 `github.com/a2aproject/a2a-go/v2` **v2.6.0** 并落地（`node/a2a.go`，HTTP+JSON/REST 绑定）。SDK 版本不等于协议版本；SDK 提供 Agent Card JWS 签名能力不意味着必须启用，也不替代配对、可信密钥和撤销策略。
+
+**使用 SDK 时实测到的三件事**（合同测试 `node/a2a_test.go` 钉住）：
+
+- **`A2A-Version` 协商要应用自己实现**：SDK 客户端每个请求都发这个 service parameter，但 SDK 服务端从不检查它 —— 本节点用一个 `CallInterceptor` 拒绝不支持的版本，返回规范的 `VersionNotSupportedError`。
+- **`tasks/list` 要求已认证调用者**：没有调用者身份时 SDK 直接返回 `unauthenticated`。这不是缺陷，而正是「列举是全局视图」的那条资源隐藏规则；因此 list 只在调用者认证到位的那一片才可用（GetTask 不受影响）。
+- **媒体类型与规范有一处出入**：SDK 客户端与响应都用 `application/json`，规范写的是 `application/a2a+json`（§11.4）。本节点**接受**规范的媒体类型（第三方按规范实现的客户端可以直接调通），响应沿用 SDK 的写法；是否改写响应头留到第三方兼容范围一并定。
 
 ### 6.1 绑定与版本
 
 首版选 HTTP+JSON/REST 绑定，不同时实现三种传输。远端请求使用标准 `A2A-Version: 1.0`，Card 的 `supportedInterfaces` 声明可连接的 `url`、`protocolBinding: "HTTP+JSON"` 和 `protocolVersion: "1.0"`。协议兼容版本用 Major.Minor，不把 SDK 的 v2.6.0 或协议 patch 号当作请求版本。
 
-SendMessage 对应 `POST /message:send`，按该绑定使用 `application/a2a+json`。协议编码、媒体类型和错误封装交给固定 SDK 并用合同测试验证，不手抄另一套。按规范实现必需操作；流式、push notifications 等可选能力只有实现后才在 Card 中声明。
+SendMessage 对应 `POST /message:send`，规范的媒体类型是 `application/a2a+json`（SDK 在响应侧的出入见本节开头，输入侧接受规范写法）。协议编码、错误封装交给固定 SDK 并用合同测试验证，不手抄另一套。按规范实现必需操作；流式、push notifications 等可选能力只有实现后才在 Card 中声明。
 
 Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择规范支持的一种：`apiKeySecurityScheme`、`httpAuthSecurityScheme`、`oauth2SecurityScheme`、`openIdConnectSecurityScheme` 或 `mtlsSecurityScheme`；不能新增私有认证类型冒充标准字段。若采用 TLS + Bearer token，则声明 HTTP Bearer 认证；只有实际验证 TLS 客户端证书的双向 TLS 才声明 mTLS。配合 `securityRequirements` 如实表示调用要求，不能用 Card 的声明替代服务端认证和带外信任配置。
 
@@ -669,7 +675,7 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 | 位置 | 建议职责 |
 | --- | --- |
-| `node/` | StartOrAttachNode、NodeClient、对端目录、任务管理、A2A 适配、TaskRunner |
+| `node/` | StartOrAttachNode、NodeClient、对端目录、任务管理、A2A 适配、TaskRunner。已落地：本机接口与锁、**A2A 服务端骨架（`a2a.go`：Card、REST 绑定、版本协商、占位执行器）** |
 | `agent/tools/delegate_task.go` | DelegateTask schema 与注入接口 |
 | `agent/tools/remote_task.go` | RemoteTask schema 与注入接口 |
 | `agent/systemreminder/peers_reminder.go` | 读取节点快照，生成稳定 reminder |
@@ -730,7 +736,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | --- | --- |
 | 单实例 | 三种入口启动顺序、并发启动、非 Tachi 占端口、陈旧连接信息、版本/身份不匹配 |
 | 生命周期 | 非承载实例退出不影响任务，承载者退出后 TUI 无需重启可持锁按需恢复；原进程卡住但持锁时不另起；恢复不重跑旧执行 |
-| A2A 合同 | returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；本地等待到期不取消任务；A2A-Version/Card/媒体类型及标准错误映射；文本/结构化/文件 Part 的编解码与产物走 Artifact、输入走 Message |
+| A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本/结构化/文件 Part 的编解码与产物走 Artifact、输入走 Message 仍待做 |
 | 入站任务 | 不占当前聊天 agent、不继承 cwd/Skip、session 准备失败不启动 loop、查询/取消/重复消息不新建 session |
 | 多轮对话 | 同 task 回答不新起 loop、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |

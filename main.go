@@ -38,6 +38,9 @@ var commonFlags = []cli.Flag{
 
 func main() {
 	llm.Version = Version
+	// The node's Card publishes an agent version, and a released binary must not
+	// claim to be "dev": this is the same build string the CLI reports.
+	node.AgentVersion = Version
 
 	app := &cli.Command{
 		Name:    "tachi",
