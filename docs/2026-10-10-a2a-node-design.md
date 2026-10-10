@@ -382,6 +382,8 @@ flowchart TD
 
 准入统一放在 agent 公共执行入口的前置阶段，覆盖 `RunConversationStream`、`RunOneOffStream` 及其公共封装：先只读取判定必需的会话元数据和受信授权，再准备消息、写 transcript、生成标题、建 checkpoint、触发 hook 或调用模型。未经授权的受管会话请求在这些动作之前结束；可以返回错误事件和审计日志，但不能为这次被拒绝的输入修改该会话历史。前端若有更早的相关副作用，也必须先通过同一准入判定，不能将它当成绕过点。
 
+**已落地**：跑一轮的两条入口（`RunConversationStream` / `RunOneOffStream`）之外，**不经过 loop 的写入**也接上了同一判定 —— `managedSessionWriteRefusal`（与 loop 那份读同一个事实 `session.Managed()`，形状不同而已）把住了**回退**：`AIAgent.Rewind` 会截断历史并还原工作区文件，受管会话上必须拒绝；`PreviewRewind` 与 `RewindChainBlocked` 也把原因报出来，否则界面会摆出一张点了必然失败的卡片。这条洞是逐条核过写入路径后剩下的唯一一条，其余：压缩走的是 run（被 loop 门口拦住），fork 出来的子 agent **没有 SessionManager**（写不进任何会话），按 ID 删除走保留层（§9.4）。重命名/置顶只动元数据，不算破坏，但"要不要允许改子系统拥有的记录"仍是待定口径（§14）。被拒绝后的断言是**历史字节不变**，不是"返回了错误"。
+
 TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task、承载实例及允许的操作，执行入口核验其与当前绑定一致。`context.Context` 可以传递这份回合级信息，但 ctx、内部类型或 RunOption 本身都不是安全保证；不接受模型参数、远端 metadata 或任意布尔值充当授权。可信签发/构造路径与验证接口必须明确，不将“同进程所有 Go 代码互相对抗”作为威胁模型。
 
 授权不在 fork/子 agent 中无条件复制；必要的子操作显式派生更小范围。compaction 更换 session 或承载实例恢复时，由管理路径按新绑定重新建立授权，旧授权不能用于其他 session 或后续无关任务。合法任务内自动压缩及 AskUser 回答可继续走管理路径，不把准入误写成禁止一切派生执行。
@@ -730,7 +732,7 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 | 位置 | 建议职责 |
 | --- | --- |
-| `node/` | StartOrAttachNode、NodeClient、对端目录、任务管理、A2A 适配、TaskRunner。已落地：本机接口与锁、**A2A 服务端骨架（`a2a.go`：Card、REST 绑定、版本协商、占位执行器）** |
+| `node/` | StartOrAttachNode、NodeClient、对端目录、任务管理、A2A 适配、TaskRunner。已落地：本机接口与锁（`node.go`/`local.go`/`identity.go`）、**A2A 服务端（`a2a.go` 的 Card、REST 绑定与版本协商 + `executor.go`/`runner.go` 的真执行器与停放）**、TaskStore 与受理去重（`taskstore.go`/`tasks.go`）、对端目录与委派记录（`peers.go`/`delegations.go`）、REST 客户端与发送方（`remoteclient.go`/`sender.go`/`delegatorcache.go`） |
 | `agent/tools/delegate_task.go` | DelegateTask schema 与注入接口 |
 | `agent/tools/remote_task.go` | RemoteTask schema 与注入接口 |
 | `agent/systemreminder/peers_reminder.go` | 读取节点快照，生成稳定 reminder |
@@ -753,8 +755,8 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 | 入口 | 首版节点行为 |
 | --- | --- |
-| channel / TUI / Desktop 的普通用户回合 | 启用配置时 StartOrAttachNode，按能力注入工具与 reminder。**接线已落地**（`config.Node.Enabled`，默认关闭）：开启时三个入口各自承载或附着，关闭时连数据目录都不建；工具与 reminder 属后续切片 |
-| ACP / `-p` | 不自动承载节点；首版不隐式启用委派，后续可做 attach-only。**已由 itest 钉住**：即使配置开启也不承载、不建目录（一次性的管道运行没有"谁在承载"，隐式启用会挤掉正在跑的实例） |
+| channel / TUI / Desktop 的普通用户回合 | 启用配置时 StartOrAttachNode，按能力注入工具与 reminder。**接线已落地**（`config.Node.Enabled`，默认关闭）：开启时三个入口各自承载或附着，关闭时连数据目录都不建；工具与 reminder 也已接入（`agent.WithDelegation`，闸门是"谁附加"而不是某个开关，§10.2.1） |
+| ACP / `-p` | 不自动承载节点，也不建数据目录（**已由 itest 钉住**：一次性的管道运行没有"谁在承载"，隐式启用会挤掉正在跑的实例）。`-p` 本身是一个用户回合，所以本机配了 `peers` 时**会**拿到委派工具（`node.NewDelegatorCache(cfg.Peers)`，只读本机委派记录、不需要本机有节点在跑），但没有 reminder（`DisableSystemReminders`），引用靠 `RemoteTask(action="list")`；ACP 不带 |
 | cron / system 定时回调 / 未来完成事件触发的回合 | 定时或系统触发，即使复用普通 agent 也在回合级禁用委派；后台节点连接/存储继续服务不代表该回合有工具权限 |
 | ambient 非定向用户回合 | 真人群聊消息触发但未明确向助手提出任务，首版禁委派；不等同于无用户的系统回合 |
 | subagent / fork / dream / review、commit、compact 等受限回合 | 默认不启用委派，构造、继承和回合限制共同保证，显式 allowed-tools 也不能越权 |
@@ -770,8 +772,8 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 1. **生命周期链**：节点身份、配置、节点服务锁、启动/附着、本机认证，以及承载者退出后的持锁按需恢复；先验证与独立保留协调锁的职责和锁序，用假任务验证三个入口共存，不引入面向用户的本机委派模式。
 2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。**已落地**：受理/去重/busy/中断恢复与追问（§7.4，含停放上限、answer 校验与拒绝面）；多轮引用与 `RemoteTask` 一侧仍在阶段一第 4 项。
-3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。
-4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。
+3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。**已落地**：`node/runner.go` 把真 loop 接进来（`contextRun` 建/绑 session、`beginTurn` 起 turn、在节点配置的工作区里跑真一轮），准入落在副作用之前（§7.1.3）；来源与受管类型随 session 落盘（`Kind = KindA2AExecution`、`SkipDream`，压缩时一起传递），双端关联在 `node/context.go` 的 context 绑定与 `node/tasks.go` 的任务记录里，保留依据见 §9.4。工具面是节点自己的允许集合（`toolViewOption`：名单 + AskUserQuestion，空名单仍只剩后者），permission ask 一律拒绝（§10.1）。**仍未做**：宿主记忆读写/自动召回的统一排除接入点（重载与 fork 也在内，§14）、usage 来源记录（§9.5）——后者属记账切片，不和入口闭环挤在一起。
+4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。**已落地**：两个工具、两条 reminder 与四个入口共用一个开关 `agent.WithDelegation`（§8.6、§10.2.1），端到端由 `itest/run/delegation_test.go` 钉住（真二进制委派给另一个真节点，结果回到本地）；首版产物为文本/结构化 Part。接收侧记录的来源标签与「只读、拒绝普通恢复」已接（受管会话在公共循环前的入口与回退上被拒，`@session:` 与选择器用同一字段），**只剩各界面上的视觉标注**（§13「入口展示」）。**完成通知**落在「结果照常保存 + reminder 展示」这一层：跨入口推送与空闲自动续跑属阶段二（§8.4）；usage 可追溯随 §9.5 一起做，跨节点统一账本不做。
 
 两条验证链可独立推进，合并时复用同一套服务与存储接口。不把 mDNS、gossip 或完整 Desktop 任务面板作为依赖；优先跑通明确指定节点的一项任务及后续追问。
 
@@ -797,7 +799,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
 | 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。无效/越权引用与 `referenceTaskIds` 的构造、reminder/list 找回仍待做 |
 | 跨入口归属 | 发起方同授权主体恢复同一逻辑对话能跨 Desktop/TUI 访问任务；接收侧执行记录换入口仍只读受管；其他对话/主体不能靠知道 ID 访问任何任务操作 |
-| 执行记录展示与准入 | Desktop/TUI/web 按权限标注来源；普通发送、按 ID 恢复、steer、重试、手动压缩/回退、fork 均不能绕过任务管理器；`@session:` 引用按同一规则判定且选择器带来源标注；直接后端调用同样拒绝；合法 TaskRunner 后续任务仍可执行 |
+| 执行记录展示与准入 | **部分落地**：普通发送被 loop 门口拒（S5a）；**回退被拒且历史字节不变**（`managedSessionWriteRefusal`，`agent/managed_test.go`）；`@session:` 引用与选择器用同一字段判定并标注（`agent/atfile`、`agent/sessionref` 的测试互相对齐）。**仍未做**：Desktop/TUI/web 的来源标注视觉面（S8b）、steer/重试/fork 的逐条测试、直接后端调用的用例 |
 | 准入时序与授权范围 | 拒绝发生在 reminder/记忆访问、写 transcript、标题生成、checkpoint、hook、模型调用前；RunOneOff 及非 loop 历史修改同样约束；错绑/过期授权拒绝，fork 不泛化继承，合法自动压缩和问题回答可继续 |
 | 来源生命周期 | 创建/压缩/恢复保留来源和受管类型；context 过期或节点离线不变普通聊天；来源不等于授权或永久保留；显式引用结果新建普通会话不继承远端绑定 |
 | 派生消费与记忆 | 接收侧执行 session 及压缩后继均不进入 Dream，发起方普通聊天策略不被误改；RecordMemory/MemoryRecall/自动召回默认禁用，重载/fork 不重新开放 |
@@ -824,7 +826,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 - TLS/调用者认证的具体选择及对应 Card 声明、带外配对凭据格式、首次确认与撤销入口；本机接口的认证与版本**已定**——loopback 监听 + 每次承载随机生成的凭据写在 0600 的 `local.json`，附着方经 `GET /local/v1/handshake` 带 Bearer 校验 `instance_id` / `node_id` / `api_version`（实现见 `node/`）；远端调用者认证仍待定，不从 pinning 推断 mTLS。
 - 默认端口、监听范围、对外地址生成、多地址选择与快照过期策略；本机监听地址**已定**（`127.0.0.1:0`，端口由内核选，实际地址发布在 `local.json` 里）。
 - TaskStore 介质、记录原子性、保留/清理规则、去重保留期；逻辑对话标识/映射的存储位置和压缩传递的可靠写入点。
-- 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）。
+- 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）——**已定并提供**：`atfile.SessionTarget.ManagedKind` 是选择器的行与展开出的指针**共用的同一个字段**（值来自 `session.Session.Kind`），所以两侧不可能各说一套；指针会写明"某子系统的执行记录（kind=…）— 只读，不要在这里继续它"。选择器里的**视觉标注**属于界面那一片（§13 入口展示）。
 - session 保留依据的持久化格式、独立协调锁的路径与 Manager/存储锁顺序、原子写入与恢复对账**已定并落地**（§9.4：`session/retention.go` 的持有记录与两把锁、`node/runner.go` 的取得/释放/对账）。**显式关闭 context 入口与 context 数量上限暂时不做**（理由见 §9.4 末）；将来要加时，关闭的触发入口按「本机控制面优先、发起方请求次之」定，语义顺序已固定。
 - 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；**无人审批与问题等待已定**——permission ask 一律拒绝（§10.1）、追问的时限与并发上限见 §7.4（`node.question_timeout` / `node.max_parked`），`AUTH_REQUIRED` 不用于工具审批；宿主记忆隔离在工具、自动召回和重载/fork 中的统一接入点仍待定。
 - usage 来源字段或独立关联的持久化位置和保留期，确保辅助调用用途、真实本机计费及远端报告展示不混淆。
