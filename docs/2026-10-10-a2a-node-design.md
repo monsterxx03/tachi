@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；服务端仍只绑 loopback、无调用者认证；应答的两种形状按 §6.1.1 处理）。**尚未实现的是调用者认证及其连带的四件事**（非 loopback 监听、`tasks/list`、文件 Part、Card `securitySchemes`），以及阶段二的体验件（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
+状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；**调用者认证（mTLS + TOFU，接收侧只识别不授权）也已落地**；应答的两种形状按 §6.1.1 处理）。**尚未实现的是文件 `Part`（`raw`/`url` + 受鉴权下载端点）、客户端证书（mTLS，及随之而来的密码学调用者身份），以及阶段二的体验件**（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -134,6 +134,8 @@ channel、TUI、Desktop 共享启动函数，返回统一 `NodeClient` 和当前
 
 拥有远端 A2A 凭据不意味着能调用本机管理接口或借本机身份继续转委托。本机客户端使用私有凭据，连接信息仅当前用户可读；必要时独立 loopback listener。仅判断来源为 localhost 不足以替代认证。
 
+**两个 listener 的上限不同，且已落地**：本机控制面**永远 loopback**（`checkLoopback`）——它带凭据，但它服务的是本机上另外的 Tachi 进程，绑到别处等于把凭据端点交给网络；远端 A2A 面**可以绑任何地址**，非 loopback 时一定走 TLS 并要求客户端证书（`isLoopbackListen` 是那个唯一的开关）。**是否允许某个调用者进来不再由本节点判断**——网络是边界（见 §4.2）。
+
 节点 HTTP server 使用独立 mux。`agent/bootstrap.go` 的 `_ "net/http/pprof"` 将调试 handler 注册到 `http.DefaultServeMux`，`startPprof` 再以 `http.Serve(ln, nil)` 在 loopback 提供服务。新节点 server 若同样传 nil handler，就会顺带暴露这些接口；不得复用默认 mux。
 
 ### 3.4 退出、合盖与接管
@@ -170,7 +172,7 @@ reminder 生成只读快照，不触发这一恢复流程；没有存活实例�
 | `card` | 验证来源后缓存的 Agent Card 和能力摘要 |
 | `availability` | 本机观测的可用、不可达、未知等状态 |
 
-别名变化不能改变任务归属；持久化远端绑定使用 `node_id`，不使用别名或 IP 作为身份。节点目录去重也依据经过验证的身份。
+别名变化不能改变任务归属；持久化远端绑定使用 `node_id`，不使用别名或 IP 作为身份。节点目录去重也依据经过验证的身份。**已落地**：委派记录里的 `PeerNodeID` 来自握手验证过的密钥，`continue_from` 因此**按身份而不是按别名**判定归属——改名之后老记录仍属于同一台机器（`remoteClient.verifyPeerIdentity` 在**发消息之前**确认对面是哪台，确认不了或对不上就拒绝，并把两边的 node_id 报出来），而 alias 只在**没有身份可比**时（明文 loopback）才当依据。展示用的名字也跟着配置走（`Sender.displayName`），免得 reminder 里出现一个工具调用会被拒的旧名字。
 
 ### 4.2 手动地址与信任
 
@@ -178,7 +180,17 @@ reminder 生成只读快照，不触发这一恢复流程；没有存活实例�
 
 首次接触需要用户确认指纹或预配置可信身份。TOFU 只能记住第一次见到的身份，不证明首次连接无冒充，应明确其限制。信任配置不通过模型工具自动批准，也不把长期秘密放入 Agent Card。
 
-**固定服务端证书/公钥不等于 mTLS。** pinning、首次指纹确认、可信身份与撤销策略留在带外配置；Card 只声明实际采用的标准调用者认证方式（见 §6.1）。TLS + Bearer token 与双向 TLS 都是可选实现，本文不借“固定证书身份”提前选定 mTLS。
+**mTLS 已落地，形状与最初设想有一处不同，理由值得记：调用者身份就是 `node_id`，而且接收侧**不设白名单**。** 走到 mTLS 的动因是「**秘密不能当身份**」：早先的 `callers[].name` 之所以必需，是因为凭据是一个共享秘密——它既不能写进任务记录（`task_record.caller_id` 比凭据文件暴露得多），也不能承受轮换（用 token 派生身份的话，**换一次 token 就等于换了个人**，老 context 与老记录全成孤儿）。一旦凭据本身就是公开的身份（一把密钥），这个「另起一个名字」的层次就没有必要了。白名单则被进一步去掉了：那属于**授权**，而本项目的选择是「能连上就能调」（§3.3），代价写在下面——**可读的名字因此只能是自称的**（`taskRecord.SelfReportedName`，字段名说明性质），真正的身份是证书里的密钥。
+
+**已落地，选型与上面这段有两处偏差，都记在这里：走的是 TOFU（首次记录）而不是「用户确认指纹」，而且**接收侧不设白名单**。** 具体是：
+
+- **服务端身份 = 节点自己的 ed25519 身份密钥签的自签证书**（`identity.json`，`node/tls.go`）。这是关键：`NodeIDFor` 从同一把密钥推出 `node_id`，所以「这台机器是 node X」可以被**校验**，而不是靠对端自报。**同一张证书双向使用**（证书带 `ServerAuth` + `ClientAuth`），所以没有第二套材料。
+- **调用者身份 = 上述证书本身**。TLS 握手要求客户端证书（`RequireAnyClientCert` + 自己的校验：用途位与有效期），服务端从证书里读出 `node_id` 写进 `CallContext.User`，于是任务记录的 `CallerID`、去重键的调用者一半、context 归属检查、`List` 的过滤、`Get` 的归属规则全部生效——`List`/`Get` 这两条是**认证到位才真正可用**的资源隐藏规则（§6.3）。`node_id` 由公钥推导，因此**不可冒充**：能生成新密钥，但不能声称是别人的 id。
+- **接收侧不做授权**（与上面这段的偏差）：**任何客户端证书都接受**，`checkRemoteListen` 也不再限制监听地址——**能不能连上就是许可**，边界属于网络（网格/防火墙/loopback）。仍然保证的是：**不存在匿名调用者**（没有证书就没有身份，也没有「谁问的」可记）。想要白名单的部署，把成员检查加回 `verifyCallerCertificate` 即可，别处不动；`TestAnyCertificateIsAccepted` 钉着这一条，防止它被悄悄改回去。
+- **可读的名字是自称的**：`node.name`（如 `tachi@home-nas`）发布在 Card 的 `Name` 里，并随每次调用以私有 header `X-Tachi-Node-Name` 送到对端，对端把它记成 `taskRecord.SelfReportedName`。**字段名本身说明了它的性质**：任何密钥都能自称任何名字，所以它是给人看的标签，旁边的 `CallerID` 才是身份。识别「谁调的」因此有两层：**不可伪造的 node_id**（判定用）+ **自称的名字**（阅读用）。
+- **局限（必须与选型一起读）**：接收侧拿到的是密钥身份而不是可读名，所以 session 上的 `source_node_id`（§2.2）仍然空着——它需要一张 `node_id → 名字` 的本地映射，而那张表就是白名单会占的位置。
+
+**固定服务端证书/公钥不等于 mTLS。** pinning、首次指纹确认、可信身份与撤销策略留在带外配置；Card 只声明实际采用的标准调用者认证方式（见 §6.1）。TLS + Bearer token 与双向 TLS 都是可选实现，本文不借“固定证书身份”提前选定 mTLS。（**实际选定 = 双向 TLS**：服务端也要求并读取客户端证书；固定仍然只是客户端那一侧的做法，用于识别服务端。）
 
 地址、身份和权限的配置字段在实现前固定；下面只展示结构，不是可用配置：
 
@@ -270,7 +282,7 @@ reminder 帮助选择目标，不代表执行许可或实时可达性。`Delegat
 
 SendMessage 对应 `POST /message:send`，规范的媒体类型是 `application/a2a+json`（SDK 在响应侧的出入见本节开头，输入侧接受规范写法）。协议编码、错误封装交给固定 SDK 并用合同测试验证，不手抄另一套。按规范实现必需操作；流式、push notifications 等可选能力只有实现后才在 Card 中声明。
 
-Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择规范支持的一种：`apiKeySecurityScheme`、`httpAuthSecurityScheme`、`oauth2SecurityScheme`、`openIdConnectSecurityScheme` 或 `mtlsSecurityScheme`；不能新增私有认证类型冒充标准字段。若采用 TLS + Bearer token，则声明 HTTP Bearer 认证；只有实际验证 TLS 客户端证书的双向 TLS 才声明 mTLS。配合 `securityRequirements` 如实表示调用要求，不能用 Card 的声明替代服务端认证和带外信任配置。
+Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择规范支持的一种：`apiKeySecurityScheme`、`httpAuthSecurityScheme`、`oauth2SecurityScheme`、`openIdConnectSecurityScheme` 或 `mtlsSecurityScheme`；不能新增私有认证类型冒充标准字段。若采用 TLS + Bearer token，则声明 HTTP Bearer 认证；只有实际验证 TLS 客户端证书的双向 TLS 才声明 mTLS。**已落地**：远端面走 TLS 时 Card 声明 `mtls`（`mutualTLSSecurityScheme`）并给出对应的 `securityRequirements`；loopback（明文）时两个字段都为空——不声明一个自己根本不校验的方案。Card 由**同一个 mTLS 面**提供（传输层先于路径决定），所以读它需要一张证书：它是给**调用者**看的发现文档，不是匿名可读的。配合 `securityRequirements` 如实表示调用要求，不能用 Card 的声明替代服务端认证和带外信任配置。
 
 | A2A 概念/操作 | Tachi 对应职责 |
 | --- | --- |
@@ -504,7 +516,7 @@ TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task
 }
 ```
 
-`continue_from` 引用**已有本机委派记录**，服务端由它解析远端 nodeId/contextId，并将原远端 taskId 填入 `referenceTaskIds`，不把它当作本次消息的 taskId。新工作产生新的本地委派记录与远端 task。引用过期、无权访问、原记录尚未取得远端 contextId 时明确返回错误/未就绪，不猜测、不改投其他节点、不自动新开会话。
+`continue_from` 引用**已有本机委派记录**，服务端由它解析远端 nodeId/contextId，并将原远端 taskId 填入 `referenceTaskIds`，不把它当作本次消息的 taskId。新工作产生新的本地委派记录与远端 task。引用过期、无权访问、原记录尚未取得远端 contextId 时明确返回错误/未就绪，不猜测、不改投其他节点、不自动新开会话。**归属按身份判**（§4.1）：`continue_from` 所引记录绑定的 `node_id` 与「这次要去的那个 peer 答案里的 node_id」必须一致，不一致就拒绝——且这个确认发生在**任何消息发出之前**（代价是一次取卡请求），不能等到对方读完再发现自己收错了对话。
 
 返回统一任务视图，例如首次检查很快完成时（对端合法地直接回了 `Message` 时同样返回这个视图，只是没有句柄、`note` 会说明 —— 见 §6.1.1）：
 
@@ -825,7 +837,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop 仍待做；**查询/取消/重放不新建 session 已落地**（`node/runner_test.go` 的 `TestOnlyANewWorkRequestOpensAConversation`：重放返回同一 task、两次调用只到模型一次、三条路径合起来仍只有一段会话） |
 | 多轮对话 | 同 task 回答不新起 loop（**已落地** `node/park_test.go`）、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
-| 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。**`referenceTaskIds` 的构造已落地并钉住**（`node/remoteclient_test.go` 的 `TestAFollowUpReferencesThePreviousRemoteTask`：经一个记录代理读实际发出的 body，跟进引用的是**上一条远端 task id**，不是自己的、也不是本机 `d_`）；越权引用按 peer 拒绝已有用例、未知 id 拒绝已有用例（`node/delegations_test.go`）；reminder/list 找回仍待做 |
+| 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。**按身份续接已落地并钉住**（`node/tls_test.go`：改名后仍是同一台机器、把对话续到另一台机器会被拒且**一条消息都没发出去**；两条都在摘掉检查时会 FAIL）；**`referenceTaskIds` 的构造已落地并钉住**（`node/remoteclient_test.go` 的 `TestAFollowUpReferencesThePreviousRemoteTask`：经一个记录代理读实际发出的 body，跟进引用的是**上一条远端 task id**，不是自己的、也不是本机 `d_`）；越权引用按 peer 拒绝已有用例、未知 id 拒绝已有用例（`node/delegations_test.go`）；reminder/list 找回仍待做 |
 | 跨入口归属 | 发起方同授权主体恢复同一逻辑对话能跨 Desktop/TUI 访问任务；接收侧执行记录换入口仍只读受管；其他对话/主体不能靠知道 ID 访问任何任务操作 |
 | 执行记录展示与准入 | **部分落地**：普通发送被 loop 门口拒（S5a）；**回退被拒且历史字节不变**（`managedSessionWriteRefusal`，`agent/managed_test.go`）；`@session:` 引用与选择器用同一字段判定并标注（`agent/atfile`、`agent/sessionref` 的测试互相对齐）。**三个前端的呈现已落地**：TUI 行标注 + 拒绝切入（`tui/session_selector.go`）、`@` 选择器行同口径（`tui/at_file.go`）、web 列表/详情标签（`web/frontend/src/lib/managed.ts`）、desktop 只读横幅 + 换掉输入框（smoke `managed-session`，18 项断言）。**fork 已钉住**（`agent/managed_test.go` 的 `TestAForkOfAManagedSessionHasNoSessionToWriteInto`：子 agent 没有 SessionManager，结构上写不进任何会话）。**仍未做**：steer/重试的逐条测试、直接后端调用的用例 |
 | 准入时序与授权范围 | 拒绝发生在 reminder/记忆访问、写 transcript、标题生成、checkpoint、hook、模型调用前；RunOneOff 及非 loop 历史修改同样约束；错绑/过期授权拒绝，fork 不泛化继承，合法自动压缩和问题回答可继续 |
@@ -839,6 +851,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 连接与取消 | 断开订阅不取消任务、等待超时、重复取消、取消/完成竞争 |
 | 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。过期答案与取消的并发竞争、`RemoteTask(reply)` 一侧仍待做 |
 | Reminder | **部分落地**（`agent/systemreminder/delegation_test.go` + `agent/agent_delegation_test.go`）：待答项排前、有界且给出"还有 N 项"与查询入口、"未列出不等于已删除"、节点不可达如实标注且用配置 note、按作用域变化检测（同列表不重复）、无 delegator 的 run 一句不说、`hosting` 与 `list` 同作用域（`itest/run/delegation_test.go`）。回合内去重与恢复历史字节不变由既有机制保证（collector 的 piece 去重 + `historyHasReminder`），**稳定排序已落地**：`node/delegations.go` 的 list 改成全序（CreatedAt desc，同刻按 id），reminder 只分组不再排序（`agent/systemreminder/delegation_test.go` 钉住「组内保持 provider 顺序」） |
+| 调用者认证与传输 | **已落地 `node/auth_test.go` + `node/tls_test.go`**：证书里的 key 推出 `CallerID`（不可冒充）、证书没带名字时记录如实为空、**任何证书都被接受**（这一条被钉住，防止白名单被悄悄加回）、没有证书的连接拿不到任何东西、两个调用者互相看不到对方的任务（`List` 与按 ID `Get` 都拒，且 Get 的拒绝与「不存在」同答）、自知名随请求到达并被记成 `SelfReportedName`（同一个 key 改名字不改变身份）、发起侧每次调用都带上自己的名字、Card 声明 mTLS 与节点名（wildcard 监听不公告接口）、监听地址与 TLS 的对应（本机 listener 永远 loopback）、证书公钥推出 node_id 且重载稳定、TOFU 首次记录 / 二次通过 / 换密钥拒绝并指向文件、非 loopback 明文 http 的 peer 被拒 |
 | 认证声明与授权 | SecurityScheme 每项只选一种标准类型且符合真实认证；服务端 pinning 不误报 mTLS；陌生节点不可委派、越权 task/产物不可读、本机接口与 A2A 凭据隔离、远端模型不能批准工具权限 |
 | 循环与回合限制 | 远端任务、子 agent 默认/显式工具复制都不能继承委派；同一缓存 agent 的普通用户回合可用而 cron/system/ambient 回合禁用；重载不复活禁用工具或 reminder |
 | 入口展示 | 工具结果/任务 ID/问题/错误在 TUI、channel、Desktop 中可读，不给旧 tool call 补写第二结果 |
@@ -851,7 +864,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 
 以下不是方向上的阻塞，落代码前应明确：
 
-- TLS/调用者认证的具体选择及对应 Card 声明、带外配对凭据格式、首次确认与撤销入口；本机接口的认证与版本**已定**——loopback 监听 + 每次承载随机生成的凭据写在 0600 的 `local.json`，附着方经 `GET /local/v1/handshake` 带 Bearer 校验 `instance_id` / `node_id` / `api_version`（实现见 `node/`）；远端调用者认证仍待定，不从 pinning 推断 mTLS。
+- ~~TLS/调用者认证的具体选择及对应 Card 声明、带外配对凭据格式、首次确认与撤销入口~~ **已定并落地**：同一张自签证书（节点身份密钥签，带 `ServerAuth`+`ClientAuth`）双向使用；接收侧**无白名单**（任何证书都接受，网络即许可）；对端 TOFU（`peer-identities.json`）；Card 声明 mTLS。**配对 = 交换公开的 node_id**（`local.json` / 启动日志），没有秘密要带外传递。**首次确认入口仍未做**（TOFU 只把首次接触告警打出来，没有让人在界面上点一下）；**撤销没有专门入口**——设备换密钥就是换身份，删掉它在别处的记录即可（需要精确撤销时加白名单，见 §4.2）。本机接口的认证与版本**已定**——loopback 监听 + 每次承载随机生成的凭据写在 0600 的 `local.json`，附着方经 `GET /local/v1/handshake` 带 Bearer 校验 `instance_id` / `node_id` / `api_version`（实现见 `node/`）；远端调用者认证**已定并落地为 mTLS**（同一张证书双向使用，接收侧不设白名单，见 §4.2）。
 - 默认端口、监听范围、对外地址生成、多地址选择与快照过期策略；本机监听地址**已定**（`127.0.0.1:0`，端口由内核选，实际地址发布在 `local.json` 里）。
 - TaskStore 介质、记录原子性、保留/清理规则、去重保留期；逻辑对话标识/映射的存储位置和压缩传递的可靠写入点。
 - 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）——**已定并提供**：`atfile.SessionTarget.ManagedKind` 是选择器的行与展开出的指针**共用的同一个字段**（值来自 `session.Session.Kind`），所以两侧不可能各说一套；指针会写明"某子系统的执行记录（kind=…）— 只读，不要在这里继续它"。选择器行与展开同口径已落地；**三个前端的视觉标注也已落地**（TUI 行 + 拒绝切入、desktop 只读横幅 + 换掉输入框、web 标签），见 `docs/agents/node.md` 的「Where a managed session SHOWS UP」。

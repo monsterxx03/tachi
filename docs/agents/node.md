@@ -38,13 +38,41 @@ split + index when a subject grows) apply to this split too.
   wrong data dir is `ErrIdentityMismatch`; a different live instance is `ErrInstanceChanged`; `APIVersion`
   (currently `1`) mismatch is `ErrVersionMismatch`. Only `ErrUnavailable` / `ErrUnreachable` /
   `ErrInstanceChanged` are retried — a bad file fails fast instead of waiting out `AttachTimeout`.
-- **Two listeners, two surfaces, one reason for both being loopback.** The local control plane is one route,
-  `GET /local/v1/handshake`, Bearer-checked with `subtle.ConstantTimeCompare`; it returns the identity and
-  **never the token**. The remote A2A surface is a separate listener with its own mux (`/message:send`,
-  `/tasks/...`, the well-known Card path) and **no credential at all** until the pairing slice lands. That is
-  what `checkLoopback` enforces at options-validation time, for both: a non-loopback address is the difference
-  between "a feature nobody enabled" and "an open agent endpoint". Do not relax it while adding auth — relax
-  it *after*.
+- **Two listeners, two surfaces, and two DIFFERENT rules about where they may bind.** The local control
+  plane is one route, `GET /local/v1/handshake`, Bearer-checked with `subtle.ConstantTimeCompare`; it returns
+  the identity and **never the token**. It is loopback FOREVER (`checkLoopback`) — not because it lacks a
+  credential but because it is a way for the other Tachi processes on this machine to reach the one holding
+  the lock: nobody else's business, and binding it anywhere else hands that credential's endpoint to the
+  network for no gain. The remote A2A surface is a separate listener with its own mux (`/message:send`,
+  `/tasks/...`, the well-known Card path); its address is the operator's (`node.listen`) and
+  the remote one may bind ANY address (`checkRemoteListen` no longer restricts it) because it always serves
+  TLS with a client certificate off loopback — so a caller is always identified, and who may reach the port is
+  the network's business.
+- **The certificate IS the node identity, in both directions.** The remote surface serves TLS whenever it is
+  non-loopback — the ADDRESS is the switch, one expression, so "encrypted", "asks for a client certificate"
+  and "carries the identity into the request" can never disagree (`startA2ASurface`) — with a self-signed
+  certificate made from `identity.json`'s ed25519 key (`node/tls.go`). `NodeIDFor` derives the node id from
+  that same key, so the id a peer reads out of the certificate is unforgeable: a caller can generate keys all
+  day and cannot present one that derives somebody else's id. The caller side remembers what it saw instead of
+  trusting it twice — TOFU, in `<BaseDir>/peer-identities.json`, the first key is recorded loudly as UNVERIFIED
+  and a later handshake with a different key is refused, naming that file. (The first contact is therefore only
+  as trustworthy as the path to it: a mesh that authenticates devices, or loopback. That is the trade, and it
+  is why the record says `first_seen`.)
+- **This node identifies callers; it does NOT authorise them, and that is a decision rather than a gap.** Any
+  client certificate is accepted (`serverTLSConfig`): `checkRemoteListen` no longer restricts the address, so
+  "who may call" is the network's business — a mesh, a firewall, or loopback. What is still guaranteed is that
+  nothing is anonymous: the handshake REQUIRES a certificate, and without one there is no identity and no
+  record of who asked. Re-adding a whitelist is a small, deliberate act where the old `node.callers` was, and
+  `TestAnyCertificateIsAccepted` is there so it cannot happen by accident.
+- **The identity travels one way and the LABEL the other, and the record keeps them apart.** `CallInterceptor`
+  writes the certificate's node id into `CallContext.User` — it has to be the interceptor and not the
+  middleware, because the REST transport builds a FRESH `CallContext` per request (`a2asrv.NewCallContext`
+  shadows whatever was attached), so a User set outside the request handler is discarded. `callerFrom` — task
+  records, the dedupe key, the context-ownership check, List's filtering, Get's ownership rule — is downstream
+  of that one value and unchanged. The caller's own NAME (`node.name`) rides in as the private header
+  `X-Tachi-Node-Name` and is filed as `taskRecord.SelfReportedName`: **any key can claim any name**, so the
+  field's own name says what it is, and the identity beside it is the key. A request cannot name its own
+  identity (nothing in it reaches `CallerID`), and a connection without a certificate is refused.
 - **Inside `host()` the order is lock → local listener → store → remote surface → publish**, and the store
   must have loaded and reconciled before the remote surface can accept work; every failure path releases the
   lock. At shutdown, take the listeners down **before** releasing the lock, or a caller that finds the lock
@@ -154,6 +182,15 @@ split + index when a subject grows) apply to this split too.
   unspecified: "we do not know whether it was accepted" is a state the record is allowed to be in, not
   something to guess. The peer's message id is kept so a retry is a replay, not a second task. An unknown id
   is refused and points at `RemoteTask(action="list")`; `find` never guesses a nearby record.
+- **A record binds an IDENTITY, not the alias it was made under** (§4.1). `PeerNodeID` is written from the
+  verified handshake and `continue_from` compares THAT — so renaming a peer is a rename, while pointing an
+  alias at another machine is refused, and the refusal names both node ids. The comparison happens BEFORE the
+  message leaves (`verifyPeerIdentity` does a card request for the proof): a check that ran afterwards would
+  have already read the wrong machine the conversation. The alias stays as the fallback for a peer this
+  machine has no identity for at all (plaintext loopback). Two consequences worth knowing: the displayed name
+  comes from the CURRENT config (`Sender.displayName`, resolved through the TOFU record), because a reminder
+  naming a peer by an alias the config no longer knows would send the model into a refusal; and each of these
+  tests fails if the identity check is removed (the suite pins the behaviour, not the code shape).
 - **An empty `LogicalID` is a SCOPE, not a wildcard.** It is what a sessionless run (`-p`) files under, so a
   script's later runs see their own delegations and no real conversation's; `Sender.RemoteTasks` always filters
   by it, and that filter is unconditional — without it a `list` would show every task this machine ever ran,
@@ -236,11 +273,18 @@ Each of these is a decision, not an oversight — the design's ordering is fixed
 - **Contention tests** (create/compact/delete re-entry, another process taking the coordination lock while a
   node is online). The lock order is fixed, written in comments and in the design; the tests wait for a real
   concurrent scenario to drive them.
-- **Caller authentication** — and therefore **non-loopback listening**, `tasks/list` (the SDK refuses it
-  without an authenticated caller), file `Part`s (`raw` / `url`, the SSRF check on the fetch-back direction),
-  and Card `securitySchemes`. These travel together: neither listener authenticates a remote caller today,
-  which is why both refuse any address that is not loopback. Card pinning must not be turned into a claim of
-  mTLS.
+- **File `Part`s** (`raw` / `url`) and an artifact download endpoint, with the SSRF check the fetch-back
+  direction needs (§6.4). `url` genuinely waits for authentication — a download handle has to be
+  authenticated and expiring, and an open one would be the same mistake as an open agent endpoint.
+- **A whitelist, if a deployment wants one.** Today any certificate is accepted and the network decides who
+  may reach the port. A cluster that wants the sharper rule puts it back where `node.callers` was: the handshake
+  already hands over a node id, so the check is a membership test in `verifyCallerCertificate` and nothing else
+  moves.
+- **Peer names on THIS side of a record.** `source_node_id` on a session (§2.2) still has nothing to hold: the
+  receiving side learns the caller's node id, not a name it can trust, and it deliberately does not use the
+  self-reported one for that. A locally-mapped label (`node_id → name`) is the missing piece, and it is the
+  same table a whitelist would be.
+
 - **Reminders in `-p`.** A one-off run has `DisableSystemReminders` by construction; it gets references from
   `RemoteTask(action="list")` or from the peer names in a refusal instead.
 - **Cross-entry completion notification** and idle auto-continuation. A finished remote task is stored, and
