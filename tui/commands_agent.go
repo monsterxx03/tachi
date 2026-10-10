@@ -342,10 +342,12 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 
 	// Use RunConversationStream so the LLM sees the current session as
 	// structured history (role alternation, tool calls, etc.).
-	// WithNoTools hides every tool for this run — the prompt also says
-	// "不要调用任何工具" as a double safeguard.
+	// CompactRunOptions hides every tool for this run — the prompt also says
+	// "不要调用任何工具" as a double safeguard — and keeps the loop's
+	// auto-compaction out of it: this run IS the compaction, and a loop that
+	// compacted it would swallow the instruction (see CompactRunOptions).
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts,
-		agent.WithNoTools())
+		agent.CompactRunOptions()...)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

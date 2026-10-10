@@ -93,7 +93,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | the diff's 上下/左右 layout (pairing, blank cells, column scroll, the choice surviving) | `diff-layout`, `review-all` |
 | review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
 | rewind / checkpoints | `rewind`, `compact` |
-| context meter, usage numbers, auto-compaction (the loop compacts on its own, mid-turn) | `ctx-ring`, `compact`, `auto-compact` |
+| context meter, usage numbers, auto-compaction (the loop compacts on its own, mid-turn) | `ctx-ring`, `compact`, `auto-compact`, `compact-race` |
 | the compaction WINDOW (the child exists while the turn is still running: which row shows 运行中, what a send in the child does) | `compact-window` |
 | MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
@@ -944,6 +944,14 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   which `followCompaction` consumes — a map of its own would be a copy of one fact, and the copy
   is what goes stale. The manual `/compact` path sets that same record, so it needs no extra
   wiring: it only differs in who decided to compact.
+- **A `/compact` turn must not be auto-compacted from under itself**, and the desktop's half of
+  that floor is `runCompactCommand` returning WITHOUT the hand-off when the run's own stream
+  carried a successful `AgentEventAutoCompactDone` (the loop compacted instead): the record the
+  event's handler wrote is the one `followCompaction` must honour. `agent.CompactRunOptions` is
+  what keeps that path unreachable in the first place — without it the instruction disappears from
+  the request the summarising call makes, the reply is a continuation, and the hand-off stores it
+  as the summary of a SECOND child session (two new rows for one `/compact`). `compact-race` fails
+  without it; the full account, including the TUI's half, is `docs/agents/compact.md`.
 - **The window's frontend half is pinned by `compact-window`**, and it is not only about the
   spinner: the message the reader sends in the child queues, and the switch that ends the turn
   re-reads that child from disk WHILE the flush is in the air — so the transcript store has to

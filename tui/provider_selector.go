@@ -191,9 +191,10 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 
 	ctx := m.startTurn()
 
-	// WithNoTools: the compact run must not call tools (see handleCompactCommand).
+	// CompactRunOptions: the compact run must not call tools, and must not be
+	// auto-compacted from under itself (see handleCompactCommand).
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts,
-		agent.WithNoTools())
+		agent.CompactRunOptions()...)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

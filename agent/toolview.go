@@ -69,6 +69,9 @@ type runParams struct {
 	// Session records keep it as DisplayContent so a reloaded transcript shows what the user
 	// typed; the model still receives userMessage. See session.Message.DisplayContent.
 	displayUserMessage string
+	// noAutoCompact turns the loop's auto-compaction off for this run — set through
+	// CompactRunOptions, which is the only thing that may set it.
+	noAutoCompact bool
 }
 
 // SteerInput represents pending user input to inject at the steer point,
@@ -125,6 +128,28 @@ func WithNoTools() RunOption {
 		if p.allow == nil {
 			p.allow = make(map[string]bool)
 		}
+	}
+}
+
+// CompactRunOptions are the per-run options every COMPACT run must carry, and the only place that
+// sets noAutoCompact. A compact run is an ordinary conversation turn whose user message IS the
+// compact instruction (the model has to see the whole history to summarise it), so without the
+// second half the loop is free to auto-compact at its own top — and it is precisely the history
+// that crossed the threshold which brings a reader to /compact.
+//
+// When that happened, the instruction was GONE from the request the summarising call made
+// (maybeAutoCompact had replaced rs.Messages with the summary) and the model saw 「请基于以上摘要
+// 继续对话。」 instead: it answered a continuation, and the frontend — which collects that reply as
+// its summary — compacted a SECOND time, into a child whose "summary" is the continuation. With
+// every tool hidden that continuation also arrives as the model's native tool-call markup in
+// plain text, a request with no tools having nothing to parse it against (the DSML leak).
+//
+// So both halves matter: WithNoTools keeps the summary text-only, and noAutoCompact makes it
+// exactly one compaction per /compact, with a summary that is a summary.
+func CompactRunOptions() []RunOption {
+	return []RunOption{
+		WithNoTools(),
+		func(p *runParams) { p.noAutoCompact = true },
 	}
 }
 

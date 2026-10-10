@@ -1263,6 +1263,81 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// compact-race: /compact on a conversation that is ALREADY over the threshold — the state
+		// every real /compact is typed in, and the one where the loop used to compact the compact
+		// run's OWN turn. The cost was a second child session: the summarising call's history had
+		// been replaced by the loop's own summary (the instruction was gone from it), so the reply
+		// was a continuation, and the frontend — which collects that reply as "the summary" —
+		// compacted again, into a child whose summary was a fragment of conversation.
+		{
+			name: "compact-race",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe compact-race scenario's working directory\n",
+			},
+			// The threshold is set where the SECOND turn's billed prompt lands the estimate: under
+			// it while turns 1-2 run, over it at the top of the /compact turn. That turn's estimate
+			// is the previous call's real prompt scaled by how much the estimate has grown since
+			// that call — so the long reply below is what carries it across, exactly as a grown
+			// conversation does.
+			config: "compact:\n  threshold: 0.2\n",
+			steps: []mockllm.Step{
+				{Reply: textStreamPrompt("第一轮回复：确认。", 600, 2000)},
+				{Reply: textStreamPrompt(strings.Repeat("这是一段很长的历史内容，用来把上下文撑起来。", 1500), 600, 20000)},
+				// The /compact turn's own call — the summary the child session is built from.
+				{Reply: textStreamPrompt("历史摘要：两轮对话，只看了工作目录。", 600, 22000)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 两轮对话 + 压缩那一次。四种请求数就是 bug：循环自己压了一次，压缩轮的调用又发了一次。
+				c.check("一次 /compact 只发三次请求（两轮对话 + 压缩）",
+					len(c.requests) == 3, requestCount(c.requests))
+
+				// ONE child session. The bug left two: the loop compacted the run's own turn (a
+				// child nobody asked for) and the frontend then compacted the continuation that
+				// replaced the instruction (a grandchild summarising a fragment).
+				metas := c.sessionMetas()
+				var child map[string]any
+				children := 0
+				for _, m := range metas {
+					if m["compacted_parent_id"] != nil {
+						children++
+						child = m
+					}
+				}
+				c.check("压缩后只有两个会话（父 + 一个子）", len(metas) == 2, strconv.Itoa(len(metas)))
+				c.check("只产出一个子会话", children == 1, fmt.Sprintf("子会话 %d 个", children))
+
+				// …and the child carries the SUMMARY, not the text the model happened to answer
+				// next. This is the assertion the scenario exists for: under the bug the child's
+				// first message was the model's reply to a request that no longer carried the
+				// compact instruction.
+				if child == nil {
+					return
+				}
+				id, _ := child["id"].(string)
+				raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "session", id, "messages.jsonl"))
+				if err != nil {
+					c.check("读得出子会话的记录", false, err.Error())
+					return
+				}
+				first := ""
+				for _, line := range strings.Split(string(raw), "\n") {
+					if strings.TrimSpace(line) == "" {
+						continue
+					}
+					var m session.Message
+					if json.Unmarshal([]byte(line), &m) != nil || m.Type != session.MessageTypeAssistant {
+						continue
+					}
+					first = m.Content
+					break
+				}
+				c.check("子会话的第一条是摘要（不是对话片段）",
+					strings.Contains(first, "历史摘要") && strings.Contains(first, "两轮对话"),
+					strutil.Truncate(first, 100))
+			},
+		},
+		//
 		// auto-compact: the compaction nobody typed. The agent loop swaps the conversation into
 		// a child session ON ITS OWN, in the middle of a turn, and the sidebar has to fold the
 		// chain the same way /compact does. It is a scenario of its own because the two paths

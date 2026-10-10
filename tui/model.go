@@ -138,6 +138,12 @@ type Model struct {
 	isReviewing   bool                     // true during a review run (single or multi-round; blocks user input)
 	reviewOrch    *cmds.ReviewOrchestrator // non-nil while a review is running (see reviewOrch doc above)
 	forkedAgent   *agent.ForkedAgent       // active forked agent (e.g. /review), closed on TurnComplete/error
+	// autoCompacted records that the run in flight already compacted on its own
+	// (AgentEventAutoCompactDone, success). It is what keeps a /compact turn from being compacted
+	// twice when the loop got there first: the savedHistory rollback belongs to the compaction that
+	// this run has already performed (see the isOneOff guard in model_events.go). Set by the event,
+	// cleared at turn start and when it is consumed.
+	autoCompacted bool
 	// researchReminder / reviewReminder: pending artifact reminder blocks
 	// awaiting splice into m.history. research is written by the research
 	// goroutine (safe via happens-before through the status channel) and
@@ -357,6 +363,9 @@ func (m *Model) startTurn() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	m.streamGen++
+	// A new turn starts with no compaction behind it: the flag describes the run
+	// that is ending, not the one starting (see Model.autoCompacted).
+	m.autoCompacted = false
 	return ctx
 }
 

@@ -1433,6 +1433,55 @@ func TestMaybeAutoCompact_Success(t *testing.T) {
 	assert.True(t, compactDone, "AutoCompactDone event must be emitted")
 }
 
+// TestMaybeAutoCompact_SkippedForCompactRun: a run carrying CompactRunOptions never compacts.
+// It exists to PRODUCE the summary, so compacting it replaces the instruction the model was
+// given with the new summary and turns its reply into a continuation — which the frontend then
+// stores as the summary of a SECOND child session (the reader typed /compact once and got two).
+func TestMaybeAutoCompact_SkippedForCompactRun(t *testing.T) {
+	trueVal := true
+	a := newTestAgent(t, nil,
+		withFakeSession(),
+		withCompactStrategy(&fakeCompactStrategy{summary: "compacted summary"}),
+	)
+	a.Config.FullConfig = &config.Config{
+		Compact: config.CompactConfig{
+			Auto:      &trueVal,
+			Threshold: 0.5,
+			MaxTokens: 1024,
+			Timeout:   time.Minute,
+		},
+	}
+	a.Config.Resolved.ContextWindow = 1000
+	a.conv.setEstimate(600, tokenbreakdown.Breakdown{}) // 60% > 50% threshold
+
+	rs := &RunState{
+		Messages: []llm.Message{
+			{Role: "system", Content: "You are Tachi."},
+			{Role: "user", Content: "please compress the above conversation"},
+		},
+		Budget: NewIterationBudget(0),
+	}
+	_, err := a.Config.SessionManager.New("test", "/tmp")
+	require.NoError(t, err)
+	before := a.Config.SessionManager.Current().ID
+
+	ch := make(chan AgentEvent, 10)
+	ctx := context.Background()
+
+	_, compacted := a.maybeAutoCompact(ctx, rs, &runInput{
+		UserText: "please compress the above conversation",
+		Params:   applyRunOptions(CompactRunOptions()),
+	}, &llm.ChatOptions{}, ch)
+	close(ch)
+
+	assert.False(t, compacted, "a compact run must not be auto-compacted")
+	assert.Len(t, rs.Messages, 2, "the history must be left exactly as the run was given it")
+	assert.Equal(t, before, a.Config.SessionManager.Current().ID, "no child session may be created")
+	for e := range ch {
+		assert.NotEqual(t, AgentEventAutoCompactStart, e.Type)
+	}
+}
+
 func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 	trueVal := true
 	a := newTestAgent(t, nil,

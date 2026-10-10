@@ -629,10 +629,12 @@ func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact
 		if err != nil {
 			return nil, fmt.Errorf("compact: build agent: %w", err)
 		}
-		// /compact: no tool calls — only summarize from session context.
+		// /compact: no tool calls — only summarize from session context. And no
+		// auto-compaction inside this run: it IS the compaction (see
+		// agent.CompactRunOptions).
 		return &turnScope{
 			agent:   aiAgent,
-			ropts:   []agent.RunOption{agent.WithNoTools()},
+			ropts:   agent.CompactRunOptions(),
 			cleanup: func() { aiAgent.Close() },
 		}, nil
 	}

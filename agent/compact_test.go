@@ -8,10 +8,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCompactRunOptions: both halves, because each covers a different failure. Hidden tools keep
+// the reply a summary rather than a tool call; noAutoCompact is what stops the loop from compacting
+// the compact run itself — which swallowed the instruction and left a frontend storing a
+// continuation as "the summary" (see CompactRunOptions).
+func TestCompactRunOptions(t *testing.T) {
+	params := applyRunOptions(CompactRunOptions())
+	require.NotNil(t, params)
+	assert.True(t, params.restrict, "a compact run must not see tools")
+	assert.Empty(t, params.allow, "a compact run must see no registry tools")
+	assert.True(t, params.noAutoCompact, "a compact run must not be auto-compacted")
+
+	// The option is reachable through the pair ONLY: a run that hides tools for its own reasons (the
+	// node's managed session) must keep the auto-compaction it may still need.
+	only := applyRunOptions([]RunOption{WithNoTools()})
+	require.NotNil(t, only)
+	assert.False(t, only.noAutoCompact, "WithNoTools alone must leave auto-compaction on")
+}
+
 func TestBuildCompactHistory_Structure(t *testing.T) {
 	systemPrompt := "You are Tachi."
 	summary := "用户希望重构用户模块。已完成注册功能迁移。"
-
 	history := buildCompactHistory(systemPrompt, summary)
 	require.Len(t, history, 3)
 

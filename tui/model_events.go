@@ -291,8 +291,22 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 		isOneOff := m.savedHistory != nil
 		if isOneOff {
-			m.history = m.savedHistory
-			m.savedHistory = nil
+			if m.autoCompacted {
+				// This savedHistory belongs to a /compact run, and the compaction it was
+				// going to produce has ALREADY happened — the loop compacted the
+				// conversation itself mid-run (so isCompacting was cleared by
+				// AgentEventAutoCompactDone before reaching here). Restoring the snapshot
+				// would put the pre-compaction history back in front of a session that is
+				// the child on disk: the next request would send the OLD history and cross
+				// the threshold again, exactly as if the user's /compact had done nothing.
+				// Drop it and keep event.Messages (the compacted history written above).
+				// Agent.CompactRunOptions makes this path unreachable; this is the floor.
+				m.autoCompacted = false
+				m.savedHistory = nil
+			} else {
+				m.history = m.savedHistory
+				m.savedHistory = nil
+			}
 		}
 		// Splice a completed review's artifact reminder AFTER the one-off
 		// restore — splicing in appendReviewArtifact would be wiped by the
@@ -396,6 +410,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 				Content: fmt.Sprintf("⚠️ 对话压缩失败: %v，将保留原始上下文继续对话。", event.Result.Error),
 			})
 		} else {
+			// A compaction really happened in this run, which is what a pending
+			// /compact was for: remember it so TurnComplete does not hand the text
+			// that follows to CompleteCompact as "the summary" (a second child whose
+			// summary is a fragment of conversation). See Model.autoCompacted.
+			m.autoCompacted = true
 			// Compact succeeded — show the summary inline and continue.
 			m.chatview.SetStreaming(false)
 			m.chatview.AddMessage(chatMessage{

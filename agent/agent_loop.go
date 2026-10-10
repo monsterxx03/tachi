@@ -955,6 +955,10 @@ func (a *AIAgent) terminalError(ctx context.Context, rs *RunState, exitReason st
 // the main conversation, and doCompact would swap the main session out from
 // under a side-channel run.
 //
+// A COMPACT run (CompactRunOptions) never compacts either, and that one is not
+// an optimisation: this run exists to produce the summary, and compacting it
+// would swallow the instruction it was given (see CompactRunOptions).
+//
 // On success rs.Messages is replaced with the shorter history and the
 // returned context carries the NEW session's ID (compaction swaps the
 // current session); on failure the original history and ctx are kept and
@@ -962,6 +966,9 @@ func (a *AIAgent) terminalError(ctx context.Context, rs *RunState, exitReason st
 // hitting the limit.
 func (a *AIAgent) maybeAutoCompact(ctx context.Context, rs *RunState, in *runInput, opts *llm.ChatOptions, ch chan<- AgentEvent) (context.Context, bool) {
 	if rs.SkipSessionWrites {
+		return ctx, false
+	}
+	if in.Params != nil && in.Params.noAutoCompact {
 		return ctx, false
 	}
 	if !a.shouldAutoCompact() {

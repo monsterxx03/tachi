@@ -515,7 +515,8 @@ func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewed
 
 // runCompactCommand compacts the conversation on demand: the same shape as the
 // TUI's /compact — a normal conversation turn (the model has to see the whole
-// history) with every tool hidden, then the shared CompleteCompact hand-off that
+// history) with every tool hidden and the loop's own auto-compaction switched
+// off (agent.CompactRunOptions), then the shared CompleteCompact hand-off that
 // the auto-compaction path also uses.
 func runCompactCommand(c *commandRun) error {
 	r := c.run
@@ -528,18 +529,30 @@ func runCompactCommand(c *commandRun) error {
 	systemPrompt := c.desk.systemPromptFor(c.id)
 
 	stream := r.agent.RunConversationStream(c.ctx, history, cmds.BuildCompactInstruction(),
-		systemPrompt, llm.ChatOptions{MaxTokens: c.desk.config().MaxTokens}, agent.WithNoTools())
+		systemPrompt, llm.ChatOptions{MaxTokens: c.desk.config().MaxTokens}, agent.CompactRunOptions()...)
 
 	var summary strings.Builder
+	// compactedInRun is the floor under CompactRunOptions: if the loop DID compact inside this run
+	// anyway, the conversation has already moved into a child carrying a real summary — the text
+	// collected above is whatever the model said NEXT, and compressing that would hand the reader a
+	// second child whose "summary" is a fragment of conversation. Handle it by doing nothing: the
+	// event's own handler already recorded the move (handleEventIn), and endTurn's followCompaction
+	// re-homes the run onto that child.
+	compactedInRun := false
 	for ev := range stream {
-		if ev.Type == agent.AgentEventTextDelta {
+		switch {
+		case ev.Type == agent.AgentEventAutoCompactDone && (ev.Result == nil || ev.Result.Error == nil):
+			compactedInRun = true
+		case ev.Type == agent.AgentEventTextDelta:
 			summary.WriteString(ev.TextDelta)
-		}
-		if ev.Type == agent.AgentEventError {
+		case ev.Type == agent.AgentEventError:
 			c.ech <- ev
 			return nil // the loop already reported why
 		}
 		c.ech <- ev
+	}
+	if compactedInRun {
+		return nil
 	}
 	if strings.TrimSpace(summary.String()) == "" {
 		return errors.New("压缩未产生摘要")

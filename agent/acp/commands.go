@@ -433,12 +433,13 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	}
 
 	// Run compact turn — use DrainCompactEvents approach (simple, reliable).
-	// WithNoTools hides every tool for this run; the registry is untouched, so
-	// there is nothing to restore on any exit path (see agent/toolview.go).
+	// CompactRunOptions hides every tool for this run and keeps the loop's
+	// auto-compaction out of it; the registry is untouched, so there is nothing
+	// to restore on any exit path (see agent/toolview.go).
 	eventCh := sess.agent.RunConversationStream(ctx, history,
 		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
-		agent.WithNoTools(),
+		agent.CompactRunOptions()...,
 	)
 
 	summary, err := agent.DrainCompactEvents(eventCh)
