@@ -244,9 +244,16 @@ func (p *OpenAIResponsesProvider) convertMessages(messages []Message) (instructi
 // convertTools converts tachi Tool definitions into Responses API function
 // tools. strict mode is enabled per tool only when the schema satisfies the
 // strict-mode constraints (every object node lists all of its properties in
-// "required"); otherwise the schema is sent as-is with strict off — sending
-// a non-compliant schema with strict=true makes the API reject the request
-// with a 400.
+// "required", and no node is a free-form object); otherwise the schema is sent
+// as-is with strict off — sending a non-compliant schema with strict=true makes
+// the API reject the request with a 400.
+//
+// A strict schema is CLOSED on the way out: every object node gains
+// "additionalProperties": false. Strict mode requires it (the API rejects the
+// whole request otherwise: "'additionalProperties' is required to be supplied
+// and to be false"), no Tachi tool can declare it (tools.PropertySchema has no
+// such field), and MCP-provided schemas are not written to the strict contract.
+// Closing is what strict mode means — the declared properties are exhaustive.
 func (p *OpenAIResponsesProvider) convertTools(tools []Tool) []responses.ToolUnionParam {
 	out := make([]responses.ToolUnionParam, 0, len(tools))
 	for _, tool := range tools {
@@ -263,6 +270,7 @@ func (p *OpenAIResponsesProvider) convertTools(tools []Tool) []responses.ToolUni
 			Parameters: params,
 		}
 		if strictCompatibleSchema(params) {
+			closeObjectNodes(params)
 			ft.Strict = openai.Bool(true)
 		}
 		if tool.Description != "" {
@@ -271,6 +279,37 @@ func (p *OpenAIResponsesProvider) convertTools(tools []Tool) []responses.ToolUni
 		out = append(out, responses.ToolUnionParam{OfFunction: &ft})
 	}
 	return out
+}
+
+// isObjectNode reports whether a schema node describes an object: it carries a
+// "properties" key or declares type "object". Both spellings reach this package
+// (Tachi's own tools always carry the key; MCP schemas may only declare the
+// type), and strict mode's rules apply to either.
+func isObjectNode(schema map[string]any) bool {
+	if _, has := schema["properties"]; has {
+		return true
+	}
+	t, _ := schema["type"].(string)
+	return t == "object"
+}
+
+// closeObjectNodes adds "additionalProperties": false to a schema's object
+// nodes, the root, nested properties and array items alike — see convertTools
+// for why strict mode needs it and why the client supplies it.
+func closeObjectNodes(schema map[string]any) {
+	if isObjectNode(schema) {
+		schema["additionalProperties"] = false
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for _, prop := range props {
+			if sub, ok := prop.(map[string]any); ok {
+				closeObjectNodes(sub)
+			}
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		closeObjectNodes(items)
+	}
 }
 
 // strictCompatibleSchema reports whether a JSON Schema is compatible with
@@ -283,12 +322,20 @@ func (p *OpenAIResponsesProvider) convertTools(tools []Tool) []responses.ToolUni
 // tool schemas (which now declare defaults, see tools.PropertySchema.Default)
 // safe from a future regression where every parameter of a tool is required
 // AND has a default.
+//
+// An object node that declares NO properties (the shape a free-form tool has)
+// is not strict-compatible either: strict mode closes every object, so such a
+// node would forbid every key and leave the tool uncallable — it is sent
+// lenient instead, the same answer as for "default".
 func strictCompatibleSchema(schema map[string]any) bool {
 	if _, has := schema["default"]; has {
 		return false
 	}
-	props, _ := schema["properties"].(map[string]any)
-	if len(props) > 0 {
+	if isObjectNode(schema) {
+		props, _ := schema["properties"].(map[string]any)
+		if len(props) == 0 {
+			return false
+		}
 		required := make(map[string]bool)
 		for _, r := range asStringList(schema["required"]) {
 			required[r] = true

@@ -788,9 +788,24 @@ func TestResponsesStrictCompatibleSchema(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "no properties",
+			// A node that declares no properties is either a no-argument tool or
+			// a free-form one, and strict mode cannot tell them apart: it closes
+			// every object, so a free-form tool would be sent
+			// additionalProperties:false and the model could pass no key at all.
+			// Such a schema is sent lenient.
+			name:   "no declared properties",
 			schema: `{"type":"object","required":[]}`,
-			want:   true,
+			want:   false,
+		},
+		{
+			name:   "empty properties map",
+			schema: `{"type":"object","properties":{},"required":[]}`,
+			want:   false,
+		},
+		{
+			name:   "nested free-form object",
+			schema: `{"type":"object","properties":{"a":{"type":"object"}},"required":["a"]}`,
+			want:   false,
 		},
 		{
 			name:   "default keyword forces non-strict",
@@ -851,5 +866,51 @@ func TestResponsesConvertTools_StrictPerSchema(t *testing.T) {
 	}
 	if !run.Strict.Valid() || !run.Strict.Or(false) {
 		t.Errorf("run tool Strict = %v, want true (all params required)", run.Strict)
+	}
+	// A strict tool's schema is closed on the way out: strict mode requires
+	// additionalProperties:false on every object node, and a request that omits
+	// it is rejected whole (400).
+	runParams := run.Parameters
+	if runParams["additionalProperties"] != false {
+		t.Errorf("run tool parameters additionalProperties = %v, want false", runParams["additionalProperties"])
+	}
+	// The lenient tool is sent exactly as the tool declared it.
+	askParams := ask.Parameters
+	if _, has := askParams["additionalProperties"]; has {
+		t.Errorf("ask tool parameters gained additionalProperties (%v) — a non-strict schema must go out untouched", askParams["additionalProperties"])
+	}
+}
+
+// TestResponsesCloseObjectNodes pins the closure: every object node of a
+// strict schema — root, nested properties, array items — gets
+// additionalProperties:false, and nothing else is touched.
+func TestResponsesCloseObjectNodes(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+			"q": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"x": map[string]any{"type": "string"}},
+					"required":   []any{"x"},
+				},
+			},
+		},
+		"required": []any{"name", "q"},
+	}
+	closeObjectNodes(schema)
+
+	if schema["additionalProperties"] != false {
+		t.Errorf("root additionalProperties = %v, want false", schema["additionalProperties"])
+	}
+	props := schema["properties"].(map[string]any)
+	if _, has := props["name"].(map[string]any)["additionalProperties"]; has {
+		t.Error("a scalar node gained additionalProperties")
+	}
+	items := props["q"].(map[string]any)["items"].(map[string]any)
+	if items["additionalProperties"] != false {
+		t.Errorf("array items additionalProperties = %v, want false", items["additionalProperties"])
 	}
 }
