@@ -33,8 +33,10 @@ func TestDelegationIDsAreLocalAndStable(t *testing.T) {
 	require.Equal(t, d.ID, onDisk.ID)
 	require.Equal(t, "msg-1", onDisk.MessageID, "the message id is part of the record, not regenerated")
 	require.Equal(t, "检查昨天的备份，只看不改", onDisk.Prompt, "the request text is kept so a retry can be identical")
-	require.Equal(t, a2a.TaskStateSubmitted, onDisk.LastKnown.State)
-	require.False(t, onDisk.LastKnown.At.IsZero(), "a cached state carries when it was seen")
+	// No state yet: the request may not have left, so the record reports "unknown" until a peer
+	// says otherwise — recording SUBMITTED here would claim an acceptance that may never happen.
+	require.Equal(t, a2a.TaskState(""), onDisk.LastKnown.State)
+	require.False(t, onDisk.LastKnown.At.IsZero(), "when the record was last touched is not optional")
 
 	// A reopened store finds it: the record outlives the process that wrote it.
 	reopened, err := openDelegationStore(dir)

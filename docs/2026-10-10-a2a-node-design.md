@@ -294,6 +294,8 @@ Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择�
 
 句柄返回时记录里可能还停在 `SUBMITTED`：状态的落盘由 SDK 异步完成，实测 `returnImmediately` 的响应经常先于 `WORKING` 的写入到达。所以**发起端必须把 `SUBMITTED` 与 `WORKING` 同等视为"在飞"**（等待与轮询都按这个判定），不能因为看到 `SUBMITTED` 就重发或判定受理失败。
 
+同一条纪律也适用于 `reply`：回答唤醒的是"同一轮"，而句柄可能在 `WORKING` 就回来了（实测如此）。所以**"取句柄"与"拿结果"是两个动作，任何期望结局的操作都要走同一次有界等待**，不能把刚拿到的 `WORKING` 当成答完了。
+
 ### 6.3 错误与本地观测状态
 
 | 场景 | 对外语义 |
@@ -447,6 +449,8 @@ TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task
 ## 八、主动委派：两个工具
 
 工具执行通过注入的接口调用 `NodeClient`；模型不接触认证材料、原始地址或 HTTP 请求。接口在工具层定义最小契约，实现由节点组件提供，避免 `agent` 与节点包循环依赖。
+
+**发送端不复用 SDK 的客户端**（已落地）：SDK 的 REST 客户端会把任何 `domain` 不是 `a2a-protocol.org` 的 `ErrorInfo` 丢掉（`internal/rest.ConvertErrorBody` 里那次过滤），而本节点的自有拒绝正是 `domain: tachi`（§9.1.1）——经它一转，拒绝只剩一句人话，`reason` 就没了，"未受理可原样重发"与"任务已结束"再也分不出来。因此发送方向自己说那三个 REST 端点（`POST /message:send`、`GET /tasks/{id}`、`POST /tasks/{id}:cancel`），并按我们写的方式读 body。§9.1.1 的代价由此有了另一侧：谁的自有域，谁自己读。
 
 ### 8.1 `DelegateTask`
 

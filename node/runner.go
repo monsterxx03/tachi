@@ -47,6 +47,13 @@ type runner struct {
 	cfg       *config.Config
 	workspace string
 	logger    *logger.Logger
+	// sessionsDir is the session store this node works in, resolved ONCE when the node is
+	// built. Every manager the runner creates is built on it too, rather than on whatever the
+	// process-global base dir says at that moment: the two must agree, and the retention
+	// handle below is built from this one — a mismatch shows up as "the session I just created
+	// cannot be protected", which is exactly how it was found (two homes in one process, the
+	// shape an integration test needs).
+	sessionsDir string
 
 	contexts *contextStore
 	parking  *parking
@@ -158,7 +165,7 @@ func newRunner(cfg *config.Config, workspace string, dataDir string, sessionsDir
 	}
 	// The node reads and writes the SAME session store the local frontends use (design
 	// §7.1.1): a remote conversation is a session on this machine, not a parallel universe.
-	sm, err := session.NewManager(log)
+	sm, err := newSessionManagerFor(sessionsDir, log)
 	if err != nil {
 		return nil, fmt.Errorf("node: session store: %w", err)
 	}
@@ -175,16 +182,38 @@ func newRunner(cfg *config.Config, workspace string, dataDir string, sessionsDir
 		return nil, fmt.Errorf("node: retention: %w", err)
 	}
 	r := &runner{
-		cfg:       cfg,
-		workspace: workspace,
-		logger:    log,
-		contexts:  contexts,
-		retention: retention,
-		runs:      make(map[string]*contextRun),
-		turns:     make(map[a2a.TaskID]*liveTurn),
+		cfg:         cfg,
+		workspace:   workspace,
+		logger:      log,
+		sessionsDir: sessionsDir,
+		contexts:    contexts,
+		retention:   retention,
+		runs:        make(map[string]*contextRun),
+		turns:       make(map[a2a.TaskID]*liveTurn),
 	}
 	r.parking = newParking(cfg.Node.QuestionTimeout, cfg.Node.MaxParked, r.questionExpired)
 	return r, nil
+}
+
+// newSessionManagerFor builds a manager on an EXPLICIT session directory.
+//
+// Not session.NewManager, which resolves the process-global base dir when it is CALLED: a
+// per-context manager is created mid-turn, so a process that has moved its base dir since the
+// node started would create sessions somewhere the node's retention record is not looking —
+// and the context it was creating would fail with "this session is gone" on its very first
+// turn.
+//
+// The cap matches what NewManager would have set: a node's own sessions are one per
+// conversation, and the count-based sweep is the local frontends' job (retention keeps it off
+// anything still in use).
+func newSessionManagerFor(dir string, log *logger.Logger) (*session.Manager, error) {
+	store, err := session.NewFileStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	sm := session.NewManagerWithStore(store, log)
+	sm.SetMaxKeep(session.DefaultMaxKeep)
+	return sm, nil
 }
 
 // consumeTaskStore is the host handing over the node's task store (see nodeState). It is
@@ -849,7 +878,7 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 		return nil, fmt.Errorf("%w: context %s belongs to another caller", ErrContextNotOwned, contextID)
 	}
 
-	sm, err := session.NewManager(r.logger)
+	sm, err := newSessionManagerFor(r.sessionsDir, r.logger)
 	if err != nil {
 		return nil, fmt.Errorf("node: session manager: %w", err)
 	}

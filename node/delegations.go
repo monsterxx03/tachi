@@ -155,7 +155,11 @@ func newDelegation(peer, logicalID, title, prompt, messageID string) *Delegation
 		Title:     title,
 		Prompt:    prompt,
 		MessageID: messageID,
-		LastKnown: lastKnown{State: a2a.TaskStateSubmitted, At: now},
+		// The state is left UNSPECIFIED on purpose: at this moment the request may not have left
+		// yet, so the honest answer to "what is this task doing" is "we do not know" — and that is
+		// what a view of this record reports until a peer says otherwise (§9.2). Recording
+		// SUBMITTED here would claim the peer accepted something it may never have seen.
+		LastKnown: lastKnown{At: now},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
