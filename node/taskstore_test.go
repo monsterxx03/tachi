@@ -43,7 +43,7 @@ func (c *countingExecutor) Execute(_ context.Context, execCtx *a2asrv.ExecutorCo
 		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 			return
 		}
-		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(echoBody(execCtx.Message))), nil) {
+		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(messageText(execCtx.Message))), nil) {
 			return
 		}
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
@@ -314,7 +314,7 @@ func TestTaskIDMustBeOneFileName(t *testing.T) {
 	store, err := openTaskStore(filepath.Join(t.TempDir(), tasksDirName))
 	require.NoError(t, err)
 
-	for _, id := range []a2a.TaskID{"../../escaped", "a/b", ".", "..", "", a2a.TaskID(strings.Repeat("x", maxTaskIDLen+1))} {
+	for _, id := range []a2a.TaskID{"../../escaped", "a/b", ".", "..", "", a2a.TaskID(strings.Repeat("x", maxRecordIDLen+1))} {
 		task := &a2a.Task{ID: id, ContextID: a2a.NewContextID()}
 		_, err := store.Create(context.Background(), task)
 		require.Error(t, err, "task id %q must be refused", id)

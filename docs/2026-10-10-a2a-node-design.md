@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）已落地**（`node/`、`pkg/flock`、`config.Node`；服务端目前只绑 loopback、跑占位执行器），**其余尚未实现**。日期：2026-10-10。
+状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`；服务端仍只绑 loopback、无调用者认证），**其余尚未实现**（追问/多轮、发起侧工具与提醒、前端表面、认证）。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -78,7 +78,7 @@ flowchart LR
 
 ### 2.2 来源、执行归属与保留分开
 
-接收侧 session 增加由服务端写入的来源/类型信息，字段名为设计示意：`kind: a2a_execution`、稳定的 `source_node_id` 和 `context_binding_id`。界面从可信节点目录解析来源名称，未知名称保留明确的类型标注，不用远端自报标题充当身份。
+接收侧 session 增加由服务端写入的来源/类型信息。**已落地**：`session.Session.Kind`，取值为 `a2a_execution`（`session.KindA2AExecution`），由 TaskRunner 建会话时写入、随 compaction 传给后继（`FinalizeCompact` 逐字段手工搬运，漏一个就是静默清零）。`source_node_id` 与 `context_binding_id` **尚未落地**：前者要等调用者认证（同 `CallerID` 的理由，没有身份可写），后者是节点自己的 context 绑定记录所拥有的事实 —— 不复制进 session meta，避免同一条事实两处可漂移。界面从可信节点目录解析来源名称，未知名称保留明确的类型标注，不用远端自报标题充当身份。
 
 | 信息 | 决定什么 | 不代表什么 |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ flowchart LR
 
 只读展示不等于没有后台消费者。当前 channel 的 AutoDream 枚举 session，再由 `dream.FilterSkippedSessions` 排除 `SkipDream=true`，其余记录仍可能按项目/全局域归并进宿主长期记忆。
 
-首版接收侧 A2A 执行 session **默认排除普通 Dream 整理**：首次可见前设置 `SkipDream=true`，创建、恢复和 compaction 后继均保留此策略。当前 `FinalizeCompact` 没有传递 `SkipDream`，接入时必须补齐；统一 Dream 筛选也应按受管类型落实默认排除，不能仅依靠某个前端记得设字段。来源标记不是授权，但可用于统一选择派生消费策略，不据此把会话永久置顶或保留。
+首版接收侧 A2A 执行 session **默认排除普通 Dream 整理**：首次可见前设置 `SkipDream=true`，创建、恢复和 compaction 后继均保留此策略。`SkipDream` 与 `Kind` 已由 `FinalizeCompact` 随会话迁移（两者原本都会在后继会话上被静默清零）；统一 Dream 筛选仍应按受管类型落实默认排除，不能仅依靠某个前端记得设字段。来源标记不是授权，但可用于统一选择派生消费策略，不据此把会话永久置顶或保留。
 
 还需限制执行期间的反向数据流：远程 agent 默认不读写宿主普通长期记忆，具体覆盖 `RecordMemory` 写入、`MemoryRecall` 工具读取及 `MemoryRecallReminder` 自动召回。禁用一个工具不等于关闭自动注入；`SkipMemoryRecall` 也不代替工具限制。构造、重载、fork 和回合准备都使用同一远程执行配置，不继承宿主普通聊天的记忆后端权限。允许的 Bash/文件/MCP 路径同样不得成为绕读写记忆目录的替代入口；通用 shell 的隔离边界仍按 §10.2 处理。
 
@@ -373,6 +373,8 @@ flowchart TD
 ### 7.1.3 执行前准入，而非 loop 内补检查
 
 当前 `RunConversationStream` 在调用 `runLoop` 之前已经执行 `prepareTurnMessages`（含 reminder/记忆召回）、`ensureSessionAndRecordUser`、checkpoint 初始化及 `turn_start` hook。仅在 `runLoop` 起点拒绝会让未获准的本地输入先进入受管会话，甚至触发模型或外部动作。
+
+**已落地**：`RunConversationStream` 与 `RunOneOffStream` 在**启动 goroutine 之前**调用 `managedSessionRefusal`，受管会话（`session.Session.Managed()`，即 Kind 非空）只有携带 `agent.WithTrustedExecution(ctx)` 的受信执行才放行；被拒绝的输入得到一个错误事件，**会话历史一字未写**。回退/历史重写/压缩落盘等**不经过 loop** 的入口尚未接（随前端表面切片一起做）。
 
 准入统一放在 agent 公共执行入口的前置阶段，覆盖 `RunConversationStream`、`RunOneOffStream` 及其公共封装：先只读取判定必需的会话元数据和受信授权，再准备消息、写 transcript、生成标题、建 checkpoint、触发 hook 或调用模型。未经授权的受管会话请求在这些动作之前结束；可以返回错误事件和审计日志，但不能为这次被拒绝的输入修改该会话历史。前端若有更早的相关副作用，也必须先通过同一准入判定，不能将它当成绕过点。
 
@@ -745,7 +747,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 单实例 | 三种入口启动顺序、并发启动、非 Tachi 占端口、陈旧连接信息、版本/身份不匹配 |
 | 生命周期 | 非承载实例退出不影响任务，承载者退出后 TUI 无需重启可持锁按需恢复；原进程卡住但持锁时不另起；恢复不重跑旧执行 |
 | A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本/结构化/文件 Part 的编解码与产物走 Artifact、输入走 Message 仍待做 |
-| 入站任务 | 不占当前聊天 agent、不继承 cwd/Skip、session 准备失败不启动 loop、查询/取消/重复消息不新建 session |
+| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 即无工具。session 准备失败不启动 loop、查询/取消/重复消息不新建 session 仍待做 |
 | 多轮对话 | 同 task 回答不新起 loop、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
 | 引用与恢复 | continue_from 与 node 互斥、从 tool result 获得准确 ID、无效/越权/过期引用不降级新建、压缩祖先被清理后仍可经 reminder/list 找回、显式 /new 隔离 |

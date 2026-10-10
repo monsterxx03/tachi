@@ -42,6 +42,17 @@ type Session struct {
 	Pinned    bool `json:"pinned,omitempty"`
 	SkipDream bool `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
+	// Kind marks a session that a SUBSYSTEM owns rather than the person at the keyboard:
+	// today only a receiving node's A2A execution (KindA2AExecution) — design §2.2. Empty
+	// is an ordinary conversation, which is what every session written before this field
+	// existed reads back as.
+	//
+	// It is a classification, NOT an authorization: what a kind permits is decided where
+	// the session is used (see agent.WithTrustedExecution), and the source node / context a
+	// remote session belongs to live in the node's own binding record — one authority each,
+	// rather than the same fact copied into metadata that can drift.
+	Kind string `json:"kind,omitempty"`
+
 	// ThinkingLevel is the per-session thinking override, set via /thinking.
 	// One of "", "none", "low", "medium", "high", "xhigh", "max".
 	// Empty = use the provider/model default from config. Only affects
@@ -53,6 +64,14 @@ type Session struct {
 	CompactedParentID    string `json:"compacted_parent_id,omitempty"`
 	CompactedParentTitle string `json:"compacted_parent_title,omitempty"`
 }
+
+// KindA2AExecution marks a session created to hold a remote conversation for an A2A
+// context (design §2.2). Managed() is written as "any kind at all" so a future kind cannot
+// be drivable from a frontend merely because this package had not learned its name.
+const KindA2AExecution = "a2a_execution"
+
+// Managed reports whether this session belongs to a subsystem that owns its turns.
+func (s *Session) Managed() bool { return s != nil && s.Kind != "" }
 
 type MessageType string
 

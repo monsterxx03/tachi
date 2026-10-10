@@ -43,15 +43,17 @@ import (
 func configYAML(o *options, baseURL string) (string, error) {
 	var buf bytes.Buffer
 	if err := configTmpl.Execute(&buf, configData{
-		Protocol:    o.protocol.String(),
-		BaseURL:     baseURL,
-		Timeout:     o.timeout,
-		HasTimeout:  o.timeout > 0,
-		SecondModel: o.secondModel,
-		BashAllow:   o.bashAllow,
-		BashAsk:     o.bashAsk,
-		Permissions: o.bashAllow || o.bashAsk,
-		NodeEnabled: o.nodeEnabled,
+		Protocol:      o.protocol.String(),
+		BaseURL:       baseURL,
+		Timeout:       o.timeout,
+		HasTimeout:    o.timeout > 0,
+		SecondModel:   o.secondModel,
+		BashAllow:     o.bashAllow,
+		BashAsk:       o.bashAsk,
+		Permissions:   o.bashAllow || o.bashAsk,
+		NodeEnabled:   o.nodeEnabled,
+		NodeWorkspace: o.nodeWorkspace,
+		NodeTools:     o.nodeTools,
 	}); err != nil {
 		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
@@ -69,6 +71,10 @@ type configData struct {
 	BashAsk     bool
 	Permissions bool // BashAllow || BashAsk — render the permissions block
 	NodeEnabled bool // render a node: section with the service switched on
+	// NodeWorkspace / NodeTools are the remote-task half of that section: the directory
+	// remote turns run in, and the tool allowlist they get.
+	NodeWorkspace string
+	NodeTools     []string
 }
 
 // configTmpl renders the config.yaml fixture. The {{- ... }} trims keep the
@@ -116,6 +122,15 @@ permissions:
 {{- if .NodeEnabled}}
 node:
   enabled: true
+{{- if .NodeWorkspace}}
+  workspace: {{.NodeWorkspace}}
+{{- end}}
+{{- if .NodeTools}}
+  tools:
+{{- range .NodeTools}}
+    - {{.}}
+{{- end}}
+{{- end}}
 {{- end}}
 `))
 
@@ -132,12 +147,14 @@ type TB interface {
 type Option func(*options)
 
 type options struct {
-	protocol    mockllm.Protocol
-	bashAllow   bool
-	bashAsk     bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
-	timeout     time.Duration // spec.timeout injected into the provider fixture
-	secondModel string        // 第二个 provider 的 model（/model 切换场景）
-	nodeEnabled bool          // node.enabled: true — 节点服务开关（默认关闭）
+	protocol      mockllm.Protocol
+	bashAllow     bool
+	bashAsk       bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
+	timeout       time.Duration // spec.timeout injected into the provider fixture
+	secondModel   string        // 第二个 provider 的 model（/model 切换场景）
+	nodeEnabled   bool          // node.enabled: true — 节点服务开关（默认关闭）
+	nodeWorkspace string        // node.workspace — 远程任务的工作目录
+	nodeTools     []string      // node.tools — 远程任务的工具白名单
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -181,6 +198,21 @@ func WithSecondProvider(model string) Option {
 // means, so this is opt-in.
 func WithNodeEnabled() Option {
 	return func(o *options) { o.nodeEnabled = true }
+}
+
+// WithNodeWorkspace switches the node service on and points its workspace at dir: the
+// directory remote tasks run in. It enables the node as well — a workspace without a node
+// would be an option that changes nothing, and silently doing nothing is worse than not
+// offering it.
+func WithNodeWorkspace(dir string) Option {
+	return func(o *options) { o.nodeEnabled = true; o.nodeWorkspace = dir }
+}
+
+// WithNodeTools switches the node service on and gives remote tasks this tool allowlist
+// (config's node.tools). An empty list enables the node with NO tools, which is what the
+// empty list means at runtime.
+func WithNodeTools(names ...string) Option {
+	return func(o *options) { o.nodeEnabled = true; o.nodeTools = names }
 }
 
 // NewHome creates an isolated --home directory with a config.yaml wired to

@@ -37,6 +37,9 @@ import (
 // rebuilt instead of pretending the two files are one transaction.
 const (
 	tasksDirName = "tasks"
+	// maxRecordIDLen bounds an id used as a filename (a task's or a context's): generous
+	// for a UUID and well under the 255-byte component limit of the filesystems we target.
+	maxRecordIDLen = 128
 	// maxTaskIDLen bounds a task id used as a filename. Generous for a UUID and well
 	// under the 255-byte component limit of the filesystems we target.
 	maxTaskIDLen    = 128
@@ -310,11 +313,11 @@ func (s *taskStore) putLocked(rec *taskRecord) error {
 	return s.writeIndex()
 }
 
-// checkTaskID refuses an id that cannot be one file name.
+// checkRecordID refuses an id that cannot be one file name.
 //
-// The task id becomes a filename in the node's data dir, and it arrives from outside this
-// package (the request handler generates it, and the protocol lets a message carry a task
-// id to continue an existing task). Today the ids we write are server-generated UUIDs, so
+// Both ids this node turns into filenames — a task's and a context's — arrive from outside
+// the package (the request handler generates a task id, and a message may carry a context
+// id to continue a conversation). Today the ones we write are server-generated UUIDs, so
 // this is a guard rather than a parser — but the failure it prevents is a write escaping
 // the directory we own, and that is not a failure worth being merely unlikely.
 //
@@ -322,13 +325,12 @@ func (s *taskStore) putLocked(rec *taskRecord) error {
 // bound is the other half of it, because a filesystem component is 255 bytes on the
 // platforms we target and an unbounded id would surface as an opaque write error instead
 // of a clear refusal.
-func checkTaskID(id a2a.TaskID) error {
-	name := string(id)
-	if !fileutil.IsSinglePathElement(name) {
-		return fmt.Errorf("node: refusing task id %q: not a single path element", name)
+func checkRecordID(kind, id string) error {
+	if !fileutil.IsSinglePathElement(id) {
+		return fmt.Errorf("node: refusing %s id %q: not a single path element", kind, id)
 	}
-	if len(name) > maxTaskIDLen {
-		return fmt.Errorf("node: refusing task id of %d bytes (limit %d)", len(name), maxTaskIDLen)
+	if len(id) > maxRecordIDLen {
+		return fmt.Errorf("node: refusing %s id of %d bytes (limit %d)", kind, len(id), maxRecordIDLen)
 	}
 	return nil
 }
@@ -341,7 +343,7 @@ func (s *taskStore) writeRecord(rec *taskRecord) error {
 	if rec.Task == nil || rec.Task.ID == "" {
 		return errors.New("node: refusing to write a task record without an id")
 	}
-	if err := checkTaskID(rec.Task.ID); err != nil {
+	if err := checkRecordID("task", string(rec.Task.ID)); err != nil {
 		return err
 	}
 	if err := fileutil.AtomicWriteJSONPrivate(s.path(rec.Task.ID), rec); err != nil {

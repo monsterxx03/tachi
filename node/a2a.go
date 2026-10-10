@@ -11,6 +11,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // AgentVersion is what the Card publishes as the agent's own version. The entry
@@ -28,10 +30,6 @@ const (
 	// as the task takes (design §6.2), so a deadline here would cut off exactly the
 	// calls the protocol expects to wait.
 	remoteReadHeaderTimeout = 10 * time.Second
-
-	// shutdownGrace is how long the two listeners get to finish what they are doing
-	// before Close returns.
-	shutdownGrace = 3 * time.Second
 )
 
 // a2aSurface is the node's REMOTE face: what another node talks to.
@@ -113,13 +111,13 @@ func (s *a2aSurface) Card() *a2a.AgentCard {
 	return s.card
 }
 
-func (s *a2aSurface) close() error {
-	if s == nil || s.srv == nil {
-		return nil
+// close drains the A2A listener, then terminates what is left (see shutdownGraceful: a
+// bounded wait followed by termination is the design's own rule, not a failure).
+func (s *a2aSurface) close(log *logger.Logger) {
+	if s == nil {
+		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancel()
-	return s.srv.Shutdown(ctx)
+	shutdownGraceful(s.srv, log, "remote interface")
 }
 
 // newAgentCard describes what this node actually does — no more.
@@ -208,7 +206,7 @@ func (echoExecutor) Execute(_ context.Context, execCtx *a2asrv.ExecutorContext) 
 		if !yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateWorking, nil), nil) {
 			return
 		}
-		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(echoBody(execCtx.Message))), nil) {
+		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(messageText(execCtx.Message))), nil) {
 			return
 		}
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
@@ -228,7 +226,7 @@ func (echoExecutor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) i
 }
 
 // echoBody is the artifact text: the incoming message's text parts, in order.
-func echoBody(msg *a2a.Message) string {
+func messageText(msg *a2a.Message) string {
 	if msg == nil {
 		return ""
 	}

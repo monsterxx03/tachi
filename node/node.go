@@ -34,8 +34,9 @@ type Handle struct {
 	ln      net.Listener
 	srv     *http.Server
 	remote  *a2aSurface
-	info    *localInfo
-	client  *Client
+
+	info   *localInfo
+	client *Client
 }
 
 // StartOrAttach makes this process a node, or attaches to the one already running
@@ -151,7 +152,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		StartedAt:  time.Now().UTC(),
 	}
 	if err := publishLocalInfo(o.DataDir, info); err != nil {
-		_ = remote.close()
+		remote.close(o.Logger)
 		_ = ln.Close()
 		_ = lock.Release()
 		return nil, err
@@ -307,21 +308,37 @@ func (h *Handle) Close() error {
 	}
 	h.hosting = false
 
+	// Both listeners go down before the lock is released: a caller that finds the lock free
+	// may start hosting, and it must not have to race a service that is still answering on
+	// the old instance.
+	shutdownGraceful(h.srv, h.logger, "local interface")
+	h.remote.close(h.logger)
+
+	lerr := h.lock.Release()
+	h.logger.Info(context.Background(), "node: stopped hosting",
+		"data_dir", h.dataDir, "instance", h.info.InstanceID)
+	if lerr != nil {
+		return fmt.Errorf("node: release node lock: %w", lerr)
+	}
+	return nil
+}
+
+// shutdownGraceful drains a listener, then terminates whatever is left.
+//
+// The design allows a bounded wait and then termination (§3.4: "终止或有界等待本机执行"), so
+// a drain that runs out of budget is an EXPECTED outcome rather than a failure. What must
+// not happen is the other reading of that deadline: giving up while connections are still
+// open AND releasing the lock, which would let another process host the node while the old
+// one is still answering. So: drain, then force-close, and say so.
+func shutdownGraceful(srv *http.Server, log *logger.Logger, what string) {
+	if srv == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-
-	// Both listeners go down before the lock is released: a caller that finds the
-	// lock free may start hosting, and it must not have to race a service that is
-	// still answering on the old instance.
-	serr := h.srv.Shutdown(ctx)
-	rerr := h.remote.close()
-	lerr := h.lock.Release()
-	h.logger.Info(ctx, "node: stopped hosting", "data_dir", h.dataDir, "instance", h.info.InstanceID)
-
-	for _, err := range []error{serr, rerr} {
-		if err != nil {
-			return fmt.Errorf("node: shut down listener: %w", err)
-		}
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Warn(context.Background(), "node: "+what+" did not drain in time; terminating its connections",
+			"cause", err)
+		_ = srv.Close()
 	}
-	return lerr
 }

@@ -34,6 +34,9 @@ func TestStartOrAttachNodeEnabledHostsUnderTheConfigDir(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Node.Enabled = true
+	// An enabled node needs a workspace, and a test must never let the default (~/workspace)
+	// do the work: the fail-closed refusal for an empty one is asserted separately.
+	cfg.Node.Workspace = filepath.Join(base, "workspace")
 
 	handle, err := StartOrAttachNode(context.Background(), cfg)
 	require.NoError(t, err)

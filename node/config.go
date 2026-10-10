@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // StartOrAttachNode is the ONE entry point the frontends call. It reads the node's
@@ -22,8 +23,26 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 	if cfg == nil || !cfg.Node.Enabled {
 		return nil, nil
 	}
+
+	workspace, err := cfg.Node.WorkspaceDir()
+	if err != nil {
+		return nil, err
+	}
+	dataDir := config.NodeDir()
+	log := logger.New("node")
+
+	// The remote tasks' executor: a real Tachi turn in a session on this node's workspace.
+	// Building it here (rather than passing the config down) is what keeps StartOrAttach's
+	// inputs explicit — see Options.Executor.
+	taskRunner, err := newRunner(cfg, workspace, dataDir, log)
+	if err != nil {
+		return nil, err
+	}
+
 	return StartOrAttach(ctx, Options{
-		DataDir:     config.NodeDir(),
+		DataDir:     dataDir,
 		LocalListen: DefaultLocalListen,
+		Executor:    &nodeExecutor{runner: taskRunner},
+		Logger:      log,
 	})
 }

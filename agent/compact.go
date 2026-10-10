@@ -126,6 +126,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// ancestor out of session cleanup forever. Same shape as ThreadID below — one binding,
 	// released from the record it no longer means anything on.
 	newSess.Pinned = oldSess.Pinned
+	// Same trap, worse consequence: a field left out of this block is silently zeroed, and for
+	// these two that means a compacted remote execution comes back looking like an ordinary
+	// local conversation — drivable from a frontend, and folded into the user's long-term
+	// memory by the next Dream pass (design §2.2, §2.3).
+	newSess.Kind = oldSess.Kind
+	newSess.SkipDream = oldSess.SkipDream
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}

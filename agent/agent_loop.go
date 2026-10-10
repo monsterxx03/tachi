@@ -335,6 +335,13 @@ func (a *AIAgent) RunOneOffStream(
 ) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
 
+	// Same refusal as RunConversationStream, and for the same reason: a one-off run writes
+	// to the session too (sidecar recorder, history), so it must not be the door left open.
+	if err := a.managedSessionRefusal(ctx); err != nil {
+		a.refuseManagedSession(ctx, ch, err)
+		return ch
+	}
+
 	go func() {
 		defer close(ch)
 
@@ -421,6 +428,14 @@ func (a *AIAgent) RunOneOffStream(
 // /compact). The registry itself is untouched; see agent/toolview.go.
 func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Message, userMessage string, systemPrompt string, opts llm.ChatOptions, ropts ...RunOption) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
+
+	// The managed-session check runs HERE, before the goroutine and therefore before any
+	// side effect (see agent/managed.go): a refused turn must not have written a user
+	// record, generated a title or taken a checkpoint first.
+	if err := a.managedSessionRefusal(ctx); err != nil {
+		a.refuseManagedSession(ctx, ch, err)
+		return ch
+	}
 
 	go func() {
 		defer close(ch)
