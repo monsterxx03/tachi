@@ -438,14 +438,36 @@ type NodeConfig struct {
 
 	// Tools is the tool allowlist for remote tasks. It is an ALLOWLIST on purpose
 	// (design §10.2): a remote caller gets exactly the tools the operator named. An empty
-	// list means no tools at all — there is no hidden default here, because a security
-	// setting whose empty value silently means something else is one nobody can reason
-	// about. The recommended starting point (read-only) belongs in the example config and
-	// in the docs, not in a fallback.
+	// list means no tool that touches this machine — there is no hidden default here, because
+	// a security setting whose empty value silently means something else is one nobody can
+	// reason about. The recommended starting point (read-only) belongs in the example config
+	// and in the docs, not in a fallback.
+	//
+	// AskUserQuestion is not subject to this list: asking the CALLER a question does nothing
+	// to this machine, and it is added to whatever is allowed (node/runner.go toolViewOption).
+	// So an empty list still means "the model is offered exactly one tool, the one that can
+	// only talk to the caller".
 	//
 	// Note that a tool allowlist is not the same thing as a sandbox: an unrestricted Bash
 	// is not "read-only" however few tools are listed next to it.
 	Tools []string `yaml:"tools"`
+
+	// QuestionTimeout bounds how long a question asked over the remote interface waits for
+	// its answer before the task is ended (design §7.4: a parked turn needs a time limit).
+	// Zero or negative means no deadline.
+	//
+	// The task is not left parked when this fires: INPUT_REQUIRED means "a turn in this
+	// process is waiting for the answer", and after the deadline nobody is, so the task is
+	// FAILED with the question kept in its status.
+	QuestionTimeout time.Duration `yaml:"question_timeout" default:"30m"`
+
+	// MaxParked bounds how many questions this node holds at once (design §7.4). A parked
+	// question keeps a goroutine, a session and a task open, so the number is a limit on what
+	// one caller — or several — can make this node hold.
+	//
+	// Reaching it does not refuse new WORK: the running turn is told its question could not be
+	// asked and finishes with what it has.
+	MaxParked int `yaml:"max_parked" default:"16"`
 }
 
 // WorkspaceDir is where remote tasks work: the configured workspace with "~" expanded to

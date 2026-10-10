@@ -2,12 +2,13 @@
 
 package tui_test
 
-// 接收侧：一个远端任务真的在这台机器上跑完一轮。
+// 接收侧：一个远端任务真的在这台机器上跑完一轮，以及停在问题上、被回答之后接着跑同一轮。
 //
 // 这条 spec 覆盖包内测试够不着的那一层 —— **真实的 config.yaml**：`node.enabled` /
-// `workspace` / `tools` 从 YAML 经 config.Load 走到 NodeConfig，工作区、工具白名单、会话
-// 存储全部由文件驱动。node 包的测试用代码构造配置，所以"只有走文件路径才会踩"的东西
-// （defaults 是否生效、context_window 有没有、workspace 里那个 `~` 展开没展开）它测不到。
+// `workspace` / `tools` / `question_timeout` / `max_parked` 从 YAML 经 config.Load 走到
+// NodeConfig，工作区、工具白名单、会话存储全部由文件驱动。node 包的测试用代码构造配置，所以
+// "只有走文件路径才会踩"的东西（defaults 是否生效、context_window 有没有、workspace 里那个
+// `~` 展开没展开）它测不到。
 //
 // 不在这条 spec 里的：受管会话的准入（普通入口不能驱动它）。那条在 node/agent 包内有更精确
 // 的断言（自建 agent、同一会话、逐条比对历史未被写），而在这里驱动真实 TUI 去选中那个会话需要
@@ -94,5 +95,78 @@ var _ = ginkgo.Describe("接收侧：远端任务", func() {
 			"the remote turn must run in the CONFIGURED workspace")
 		gomega.Expect(sessions[0].Kind).To(gomega.Equal(session.KindA2AExecution))
 		gomega.Expect(sessions[0].SkipDream).To(gomega.BeTrue())
+	})
+
+	ginkgo.It("问一个问题，回答之后接着跑同一轮", func() {
+		workspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "workspace")
+
+		mock, home := startMock(mockllm.ProtocolOpenAI,
+			[]mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("ask_1", "AskUserQuestion",
+						`{"questions":[{"question":"检查照片还是文档？","header":"范围","multiSelect":false}]}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.Done(),
+				)},
+				{Reply: mockllm.Stream(
+					mockllm.Text("好，只检查照片。"),
+					mockllm.Finish("stop"),
+					mockllm.Done(),
+				)},
+			},
+			harness.WithNodeWorkspace(workspace),
+			harness.WithNodeTools("ReadFile"),
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), specTimeout)
+		ginkgo.DeferCleanup(cancel)
+
+		cfg := harness.Config(ginkgo.GinkgoT(), home)
+		// The two settings a parked question needs arrive through the YAML like everything
+		// else, and this is the only place the FILE path is exercised (the package's own tests
+		// build the config in code). What must hold is that a question cannot wait forever and
+		// cannot pile up without a limit — the values themselves are defaults.
+		gomega.Expect(cfg.Node.QuestionTimeout).To(gomega.BeNumerically(">", 0),
+			"a question with no deadline is a caller holding a turn open forever")
+		gomega.Expect(cfg.Node.MaxParked).To(gomega.BeNumerically(">", 0))
+
+		handle, err := node.StartOrAttachNode(ctx, cfg)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() { _ = handle.Close() })
+
+		card, err := agentcard.DefaultResolver.Resolve(ctx, "http://"+handle.RemoteAddr())
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		client, err := a2aclient.NewFromCard(ctx, card)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() { _ = client.Destroy() })
+
+		// A blocking send returns at the interrupted state, carrying the question (§6.2).
+		result, err := client.SendMessage(ctx, &a2a.SendMessageRequest{
+			Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("检查昨天的备份")),
+		})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		asked, ok := result.(*a2a.Task)
+		gomega.Expect(ok).To(gomega.BeTrue())
+		gomega.Expect(asked.Status.State).To(gomega.Equal(a2a.TaskStateInputRequired))
+		gomega.Expect(asked.Status.Message.Parts[0].Text()).To(gomega.ContainSubstring("检查照片还是文档？"))
+
+		questionID, ok := asked.Status.Message.Metadata["questionId"].(string)
+		gomega.Expect(ok).To(gomega.BeTrue(), "the question's id has to reach the caller")
+
+		answer := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("照片"))
+		answer.TaskID = asked.ID
+		answer.ContextID = asked.ContextID
+		answer.Metadata = map[string]any{"questionId": questionID}
+
+		// The answer resumes the SAME turn: the script's second step is what a fresh loop
+		// would have needed a question of its own to reach.
+		done, err := client.SendMessage(ctx, &a2a.SendMessageRequest{Message: answer})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		finished, ok := done.(*a2a.Task)
+		gomega.Expect(ok).To(gomega.BeTrue())
+		gomega.Expect(finished.Status.State).To(gomega.Equal(a2a.TaskStateCompleted))
+		gomega.Expect(finished.Artifacts[0].Parts[0].Text()).To(gomega.Equal("好，只检查照片。"))
+		gomega.Expect(mock.Requests()).To(gomega.HaveLen(2))
+		gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
 	})
 })

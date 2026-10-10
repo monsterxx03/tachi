@@ -180,7 +180,14 @@ func (s *taskStore) reindex(rec *taskRecord) {
 }
 
 // resolveInterrupted fails every task that was mid-flight when the previous process
-// stopped.
+// stopped — running OR parked on a question.
+//
+// A parked task belongs here for the same reason a running one does (§7.4): the goroutine
+// that was waiting for the answer did not survive the process, so nothing can receive that
+// answer any more. It is marked FAILED rather than left in INPUT_REQUIRED (which would claim
+// somebody is still waiting) or quietly re-armed as if waiting were resumable — and the
+// QUESTION is kept in the status, because "the node died before this was answered" is only
+// useful alongside what was asked.
 func (s *taskStore) resolveInterrupted() error {
 	now := time.Now().UTC()
 	for _, rec := range s.tasks {
@@ -188,12 +195,7 @@ func (s *taskStore) resolveInterrupted() error {
 			continue
 		}
 		rec.Interrupt = &interruptNote{At: now, Reason: interruptReason}
-		rec.Task.Status = a2a.TaskStatus{
-			State:   a2a.TaskStateFailed,
-			Message: a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(interruptReason)),
-		}
-		rec.Version++
-		rec.UpdatedAt = now
+		s.endUnfinished(rec, interruptReason, now)
 		if err := s.writeRecord(rec); err != nil {
 			return err
 		}
@@ -203,12 +205,68 @@ func (s *taskStore) resolveInterrupted() error {
 	return s.writeIndex()
 }
 
-// lookupLocked finds the record created by this fingerprint: the index first, the records
-// themselves second.
+// failQuestion ends a task whose question was never answered.
 //
-// The fallback is the whole reason the index may be treated as a cache. It also closes
-// the window between "the record is on disk" and "the index mentions it" — a crash in
-// between costs one scan at startup, not a duplicate task.
+// It is the deadline's half of parking: the state must not keep saying INPUT_REQUIRED, which
+// means "a turn in this process is waiting for the answer". The task is FAILED, and the
+// question stays in its status so the record still says what was asked.
+func (s *taskStore) failQuestion(taskID a2a.TaskID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("%w: %s", a2a.ErrTaskNotFound, taskID)
+	}
+	if rec.Task.Status.State.Terminal() {
+		// Someone else already ended it — an answer that arrived first, or a cancel. Ending
+		// it again would only overwrite a state that is already the truth.
+		return nil
+	}
+	s.endUnfinished(rec, reason, time.Now().UTC())
+	return s.putLocked(rec)
+}
+
+// endUnfinished writes the status of a task that will not finish, keeping the question it was
+// last waiting on.
+//
+// Callers hold the store's lock. The reason comes first and the question after it: the record
+// is read by whoever comes looking for what happened, and what happened is the reason.
+func (s *taskStore) endUnfinished(rec *taskRecord, reason string, now time.Time) {
+	text := reason
+	if question := messageText(rec.Task.Status.Message); question != "" {
+		text += "\n\n" + question
+	}
+	rec.Task.Status = a2a.TaskStatus{
+		State:   a2a.TaskStateFailed,
+		Message: a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(text)),
+	}
+	rec.Version++
+	rec.UpdatedAt = now
+}
+
+// parkedTaskIn returns the task in this context that is waiting for an answer.
+//
+// It is the sibling of contextIsBusy, and it exists because "not busy" is not the same as
+// "open for new work": a context whose task is PARKED accepts one thing only — the answer to
+// that task's question (design §7.1.2).
+func (s *taskStore) parkedTaskIn(contextID string) (*taskRecord, bool) {
+	if contextID == "" {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rec := range s.tasks {
+		if rec.Task.ContextID != contextID {
+			continue
+		}
+		if rec.Task.Status.State == a2a.TaskStateInputRequired {
+			return rec.copy(), true
+		}
+	}
+	return nil, false
+}
+
 // copy returns a snapshot that is safe to hand to a caller.
 //
 // The store is the single writer, which is exactly why a reader must never hold a pointer

@@ -47,6 +47,10 @@ type a2aSurface struct {
 	ln   net.Listener
 	srv  *http.Server
 	card *a2a.AgentCard
+	// state is the executor's half that lives OUTSIDE a request, when it has one: a question
+	// waiting for an answer outlives the call that published it, and Close is what ends it
+	// (see nodeState).
+	state nodeState
 }
 
 func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
@@ -55,11 +59,25 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 		return nil, fmt.Errorf("node: listen %s: %w", o.RemoteListen, err)
 	}
 
-	card := newAgentCard(ln.Addr().String())
-
 	executor := o.Executor
+	real := executor != nil
 	if executor == nil {
 		executor = echoExecutor{}
+	}
+	card := newAgentCard(ln.Addr().String(), real)
+	// The store is opened by the host, which is AFTER the executor is built (the store owns
+	// the startup recovery, so there is exactly one). An executor that keeps state outside a
+	// request — a question waiting for an answer, and its deadline — needs it, and this is the
+	// one place both exist. One instance, or the two halves would hold two views of the same
+	// tasks and their version checks would fight.
+	var state nodeState
+	if ns, ok := executor.(nodeState); ok {
+		ns.consumeTaskStore(store)
+		state = ns
+	}
+	var questions questionSource
+	if qs, ok := executor.(questionSource); ok {
+		questions = qs
 	}
 	// One source for two jobs: the capabilities the handler ENFORCES are the ones
 	// the Card publishes, so "declared but not implemented" cannot happen by drift.
@@ -76,10 +94,10 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	// /tasks/{id}, /tasks/{id}:cancel, ...) with no prefix, so it mounts at the root
 	// of this listener — which is why the remote surface gets a mux of its own.
 	//
-	// The busy guard wraps the binding rather than living inside it: a refusal that
+	// The guard wraps the binding rather than living inside it: a refusal that
 	// carries OUR reason and domain must not be rendered by the SDK, whose error
 	// mapping would file it as INTERNAL_ERROR under the standard domain.
-	mux.Handle("/", busyGuard(store, a2asrv.NewRESTHandler(handler)))
+	mux.Handle("/", busyGuard(store, questions, a2asrv.NewRESTHandler(handler)))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: remoteReadHeaderTimeout}
@@ -92,7 +110,7 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	o.Logger.Info(context.Background(), "node: remote interface listening",
 		"addr", ln.Addr().String(), "card", a2asrv.WellKnownAgentCardPath)
 
-	return &a2aSurface{ln: ln, srv: srv, card: card}, nil
+	return &a2aSurface{ln: ln, srv: srv, card: card, state: state}, nil
 }
 
 // Addr is the bound address, empty when there is no surface.
@@ -113,22 +131,46 @@ func (s *a2aSurface) Card() *a2a.AgentCard {
 
 // close drains the A2A listener, then terminates what is left (see shutdownGraceful: a
 // bounded wait followed by termination is the design's own rule, not a failure).
+//
+// It ends the executor's out-of-request state FIRST: a question waiting for an answer is not
+// attached to any connection, so draining the listener would leave its turn waiting for a
+// message no one can send. (The record is not rewritten here — the next start resolves what
+// was still open as interrupted, parked questions included: see openTaskStore.)
 func (s *a2aSurface) close(log *logger.Logger) {
 	if s == nil {
 		return
+	}
+	if s.state != nil {
+		s.state.shutdown()
 	}
 	shutdownGraceful(s.srv, log, "remote interface")
 }
 
 // newAgentCard describes what this node actually does — no more.
 //
-// Every optional capability stays false and only one skill is declared, because
-// that is the truth: the executor behind them is the protocol skeleton's
-// placeholder. Declaring streaming, push notifications or skills that do not exist
-// would be the "claim a capability you do not implement" mistake the design warns
-// about, and it is worse here than in a document — a PEER plans around a Card.
-// This list grows in the same slice that implements the real executor.
-func newAgentCard(addr string) *a2a.AgentCard {
+// Every optional capability stays false (nothing streams, nothing pushes) because that is
+// the truth, and declaring one would be worse here than in a document: a PEER plans around a
+// Card. Which skill it declares depends on the executor behind it, because those are two
+// different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
+// (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
+// be exactly the "declared but not implemented" mistake this function exists to avoid.
+func newAgentCard(addr string, real bool) *a2a.AgentCard {
+	skill := a2a.AgentSkill{
+		ID:          "task",
+		Name:        "Remote task",
+		Description: "Runs one turn of a Tachi agent on this node, in the workspace the operator configured and with the tools they allowed. The artifact is the turn's answer. A turn may stop to ask a question; the task then reads INPUT_REQUIRED and the message that answers it continues the same turn.",
+		Tags:        []string{"agent"},
+		Examples:    []string{"检查昨天的备份是否完整，返回异常清单", "这个目录里最大的十个文件是什么"},
+	}
+	if !real {
+		skill = a2a.AgentSkill{
+			ID:          "echo",
+			Name:        "Echo",
+			Description: "Returns the text it is given as an artifact. The protocol skeleton's placeholder, for a node that has not been wired to an agent.",
+			Tags:        []string{"placeholder"},
+			Examples:    []string{"say something"},
+		}
+	}
 	return &a2a.AgentCard{
 		Name:        "Tachi",
 		Description: "A Tachi node: an agent that runs on the machine that owns it, reachable from the other Tachi nodes you have paired with.",
@@ -139,13 +181,7 @@ func newAgentCard(addr string) *a2a.AgentCard {
 		Capabilities:       a2a.AgentCapabilities{},
 		DefaultInputModes:  []string{mediaTypeText},
 		DefaultOutputModes: []string{mediaTypeText},
-		Skills: []a2a.AgentSkill{{
-			ID:          "echo",
-			Name:        "Echo",
-			Description: "Returns the text it is given as an artifact. The protocol skeleton's placeholder, replaced by the node's real executor.",
-			Tags:        []string{"placeholder"},
-			Examples:    []string{"say something"},
-		}},
+		Skills:             []a2a.AgentSkill{skill},
 	}
 }
 

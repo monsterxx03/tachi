@@ -387,6 +387,37 @@ func (a *AIAgent) RespondToAskUser(answers map[string]string, annotations map[st
 	}
 }
 
+// TryRespondToAskUser is RespondToAskUser with the answer's fate reported: false means no
+// loop was waiting, so the answer reached nobody and the question is NOT answered.
+//
+// The silent drop in RespondToAskUser is right for a frontend taking a keystroke on a
+// question that is already gone, and wrong for a caller that was told its answer would
+// continue an execution: there, "nobody waiting" is a fact the caller has to be able to
+// report instead of pretending the work resumed.
+func (a *AIAgent) TryRespondToAskUser(answers map[string]string, annotations map[string]string) bool {
+	select {
+	case a.Channels.AskUserResp <- tools.AskUserResult{Answers: answers, Annotations: annotations}:
+		return true
+	default:
+		return false
+	}
+}
+
+// DiscardPendingAskUserAnswer empties the answer channel.
+//
+// The channel holds one value and does not say WHICH question that value answers
+// (agent_loop's AskUserResponse carries no request id), so a value left over from a
+// question nobody ever answered would be handed to the NEXT question — a stale answer
+// arriving as the answer to something else. A caller that publishes a question somewhere
+// other than the local UI (the node's remote face) empties the channel before doing so,
+// which makes "empty when the caller can see the question" the state its answer can rely on.
+func (a *AIAgent) DiscardPendingAskUserAnswer() {
+	select {
+	case <-a.Channels.AskUserResp:
+	default:
+	}
+}
+
 // ConfirmTool is called by TUI to respond to a confirmation request
 func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 	select {

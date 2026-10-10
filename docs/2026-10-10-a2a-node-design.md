@@ -364,7 +364,7 @@ flowchart TD
 
 ### 7.1.2 两种多轮交互
 
-**任务内补充输入**：NAS 问“检查照片还是文档？”，调用方回答“照片”。使用同 taskId/contextId/session，将任务从 `INPUT_REQUIRED` 恢复执行。对当前 AskUser 实现，答案唤醒等待中的 loop，不额外启动一个并行 loop。
+**任务内补充输入**：NAS 问“检查照片还是文档？”，调用方回答“照片”。使用同 taskId/contextId/session，将任务从 `INPUT_REQUIRED` 恢复执行。对当前 AskUser 实现，答案唤醒等待中的 loop，不额外启动一个并行 loop。**已落地**：唤醒是「带 `taskId` 的消息第二次进入执行器 + runner 里活着的那个 turn 续读同一事件流」，答案只投给 pending question 且必须带 questionId（见 §7.4）。
 
 **任务结束后的追问**：检查完成后再问“缺失目录上次成功备份是什么时候？”。发送同 contextId、无旧 taskId 的新消息，并将被引用的**远端 task ID** 放入 `referenceTaskIds`，既说明继续哪段对话，也说明引用哪项工作。载入该会话历史并启动新的 agent turn；原任务保持终态，新任务有新的 ID。不能把本地 `d_...` 委派记录 ID 直接写进远端 `referenceTaskIds`。
 
@@ -399,7 +399,7 @@ TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task
 | --- | --- |
 | 已受理、尚未执行 | `SUBMITTED` |
 | 开始执行 | `WORKING` |
-| `AskUserQuestion` | `INPUT_REQUIRED`，保存问题及请求 ID |
+| `AskUserQuestion` | `INPUT_REQUIRED`，保存问题及请求 ID（**已落地**：问题 ID 是工具调用 ID，随状态消息的 `metadata.questionId` 公布） |
 | 正常完成 | `COMPLETED`，保存 Artifact |
 | 执行错误、预算耗尽、不可恢复中断 | `FAILED`，保留原因及可用的部分结果 |
 | 明确拒绝工作 | `REJECTED`，不与普通技术失败混淆 |
@@ -422,6 +422,25 @@ TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task
 - 等待问题先落盘再对外公布；首版可以保留 goroutine 等待，但需有数量/时限上限。
 - 首版承载进程重启后，无法恢复原等待执行时标记失败并保留问题，不假装原 goroutine 仍可继续。
 - 业务澄清可以由调用者补充；工具授权必须来自有权的人工入口或预配置策略，不能由对端模型自行批准。
+
+**已落地**（`node/park.go` 停放槽、`node/executor.go` 映射、`node/runner.go` 活 turn、`node/admission.go` 拒绝面）：
+
+- **一轮跨两次调用**。停在问题上的 turn 是 runner 里的 `liveTurn`：执行器给出 `INPUT_REQUIRED` 后**返回**（阻塞式 `message/send` 停在中断态，§6.2），agent loop 仍阻塞在应答通道上；带 `taskId` 的下一条消息唤醒**同一个** turn，续读同一个事件流。`node/executor.go:continueTask` 是那段续接。
+- **turn 的 ctx 不来自请求**。SDK 在 errgroup 里跑执行器，执行器一返回该 ctx 就被取消 —— 恰好是停放时必须继续的时刻。所以 turn 的 ctx 由 `context.WithoutCancel(请求 ctx)` 派生（保留 trace/调用者等值，丢掉寿命，§7.2），寿命由 turn 自己、取消或节点关闭决定。
+- **问题 ID = AskUserQuestion 的工具调用 ID**，随 `INPUT_REQUIRED` 状态消息的 `metadata.questionId` 公布，答案也按同一 key 回填；答案必须带它，不带时拒绝里回当前 ID。问题本身以「每问题一个文本 Part + 一个 `data` Part（`{"questions":[...]}`）」公布，人读文本、客户端读选项。
+- **答案形状**：一个待答问题用一个文本 Part 即答；多个待答问题必须用 `data` Part 按**完整问题文本**为 key 命名（与 TUI/desktop 的既有形状一致），映射不上就拒绝，不猜、不按位置配。
+- **停放槽单次消耗** `parking.take`：回答问题即取走槽。agent 的应答通道只缓冲一个值、不带请求 ID，所以节点在**公布问题之前**先清空它（`AIAgent.DiscardPendingAskUserAnswer`），并用返回是否送达的 `TryRespondToAskUser` 判断答案是否真的被接走 —— 残留值会被下一个问题当作自己的答案。
+- **上限已接配置**：`node.question_timeout`（默认 30m）到点则结束 turn 并把任务写成 `FAILED`，状态里保留原问题（`INPUT_REQUIRED` 的含义是"本进程有 turn 在等这个答案"，到点后没有）；`node.max_parked`（默认 16）满时该次**提问**失败（模型拿到"问不到"的空答案，用现有信息收尾），不拒绝新任务。
+- **准入拒绝面**（全部用自有 domain/reason 渲染，§9.1.1）：带 `taskId` 的消息按「停放中且有槽 + questionId 匹配 + 形状可映射 → 放行；运行中 → `TASK_BUSY`；终态 → `TASK_FINISHED`；本机没有 → `UNKNOWN_TASK`；槽不在 → `NO_WAITING_QUESTION`；questionId 不符 → `QUESTION_MISMATCH`；形状不符 → `ANSWER_SHAPE`」判定；不带 `taskId` 而 context 有停放任务 → `CONTEXT_PARKED`（否则同一个 context 会起第二个 task，两个 turn 写同一个会话）。带 `taskId` 的消息不再走创建去重（它不创建任何东西）。
+- **重启**：停放中的任务与运行中的一样按中断处理，区别只在 `FAILED` 的状态里**保留问题**（`node/tasks.go` 的 `endUnfinished`）。
+- **授权边界**：只有 AskUser（业务澄清）会成为 `INPUT_REQUIRED`。工具授权仍走 `denyRemoteAsk`——`PermissionModeExternal` + 拒绝式 handler，`ConfirmResp` 通道节点侧无人写，对端模型点头在结构上无法批准一次命令。
+
+两个 SDK 事实决定了上面的形状，都属于「不写下来下一次还会踩」的类型：
+
+1. **`INPUT_REQUIRED` 被 SDK 当作 final**（`internal/taskupdate.IsFinal`）：写这个状态后 SDK 停止读执行器的事件流，所以执行器必须返回、活 turn 只能留在应用侧；续答由「带 `taskId` 的消息」第二次进入执行器完成。
+2. **任务的 Part/metadata 会被 SDK 用 gob 克隆**（`taskstore.inmemory`）。`any` 槽位里只能放内建或已注册类型，塞自定义结构体（例如 `[]tools.Question`）会让**整条事件**以 `gob: type not registered for interface` 失败、任务变 `FAILED`。SDK 注册了 `map[string]any` 与 `[]any`，所以结构化部分要用手搭的 map/slice。
+
+**已知限制**：取消恰好赶在停放 turn 的收尾竞争窗口时，SDK 的并发取消路径可能给调用方回「不可取消」（其 `local_manager.go` 里带 TODO），而这一侧其实已经停了 turn —— 调用方看到的与节点实际做的不一致，属于 SDK 行为，不在本侧修。
 
 ## 八、主动委派：两个工具
 
@@ -591,7 +610,7 @@ A2A 允许而不强制 SendMessage 去重，因此这是 Tachi 节点之间额�
 | HTTP/流式连接断开 | 执行不依赖连接；可重新查询最终状态 |
 | 发起端重启 | 找回委派记录，按原请求身份和远端 task 查询/对账 |
 | 接收端重启 | 恢复记录；尚未启动的已受理任务可按明确策略排队，运行中/等待中的旧执行不自动重跑 |
-| 运行中状态无法恢复 | 对外 `FAILED`，原因说明承载进程中断及副作用可能未知 |
+| 运行中状态无法恢复 | 对外 `FAILED`，原因说明承载进程中断及副作用可能未知；**等待中的问题一并按此处理，并把问题留在状态里**（已落地：`node/tasks.go` 的 `endUnfinished`） |
 | 完成但通知丢失 | 结果仍可查询，通知可独立去重重试 |
 | 取消与完成同时发生 | 串行提交合法终态，不能将已经完成的任务伪装成取消 |
 | agent 缓存清理或进程重启后的新追问 | 校验 context 归属并加载当前 session 历史，新 task 继续对话，不重新执行旧 task |
@@ -657,7 +676,8 @@ A2A 允许而不强制 SendMessage 去重，因此这是 Tachi 节点之间额�
 - 文件、Bash、MCP 和子 agent 的路径及副作用边界一致。
 - 不把关闭 WriteFile 等同于只读；不受限的 Bash/MCP 仍然可以写入。
 - 如果要开放通用 shell，需要相应隔离或明确接受其权限范围，不能声称已有规则等同于沙箱。
-- 对调用者、任务数、运行并发、问题等待、输入/输出大小、迭代和运行期限设置上限；值用统一命名配置/常量，不散落在调用点。
+- 对调用者、任务数、运行并发、问题等待、输入/输出大小、迭代和运行期限设置上限；值用统一命名配置/常量，不散落在调用点。**问题等待已定**：`node.question_timeout` / `node.max_parked`（§7.4）。
+- **AskUserQuestion 不看工具允许集合**（已落地）：允许集合约束的是"这台机器上能做什么"，而问调用者不碰这台机器；把它挂在名单上会让"支持追问"与"开放能力"绑成同一个开关（§7.4）。所以空名单仍意味着一件工具都不碰本机，模型被给到的只有那个只能跟调用者说话的工具。
 
 Agent Card 是能力声明，不是授权清单的替代；读取任务、列举任务和获取产物都再次检查归属，错误响应遵循 §6.3 的资源隐藏规则。
 
@@ -724,7 +744,7 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 先拆开验证两条链，再接入真实 agent，不把完整本机任务系统做完后才验证 A2A：
 
 1. **生命周期链**：节点身份、配置、节点服务锁、启动/附着、本机认证，以及承载者退出后的持锁按需恢复；先验证与独立保留协调锁的职责和锁序，用假任务验证三个入口共存，不引入面向用户的本机委派模式。
-2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。
+2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。**已落地**：受理/去重/busy/中断恢复与追问（§7.4，含停放上限、answer 校验与拒绝面）；多轮引用与 `RemoteTask` 一侧仍在阶段一第 4 项。
 3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。
 4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。
 
@@ -747,8 +767,8 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 单实例 | 三种入口启动顺序、并发启动、非 Tachi 占端口、陈旧连接信息、版本/身份不匹配 |
 | 生命周期 | 非承载实例退出不影响任务，承载者退出后 TUI 无需重启可持锁按需恢复；原进程卡住但持锁时不另起；恢复不重跑旧执行 |
 | A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本/结构化/文件 Part 的编解码与产物走 Artifact、输入走 Message 仍待做 |
-| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 即无工具。session 准备失败不启动 loop、查询/取消/重复消息不新建 session 仍待做 |
-| 多轮对话 | 同 task 回答不新起 loop、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
+| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop、查询/取消/重复消息不新建 session 仍待做 |
+| 多轮对话 | 同 task 回答不新起 loop（**已落地** `node/park_test.go`）、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
 | 引用与恢复 | continue_from 与 node 互斥、从 tool result 获得准确 ID、无效/越权/过期引用不降级新建、压缩祖先被清理后仍可经 reminder/list 找回、显式 /new 隔离 |
 | 跨入口归属 | 发起方同授权主体恢复同一逻辑对话能跨 Desktop/TUI 访问任务；接收侧执行记录换入口仍只读受管；其他对话/主体不能靠知道 ID 访问任何任务操作 |
@@ -762,7 +782,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 会话保留 | 跨 Manager/进程清理不删除运行中、等待输入或有效 context 所需 session；创建/压缩/崩溃恢复无保护空窗；到期与继续请求竞争安全；取消用户置顶不解除保护、释放保护不改用户置顶；显式删除先处理引用 |
 | 锁隔离与恢复 | 节点服务锁持有期间另一进程仍可获取独立协调锁；创建/压缩不重入死锁，删除前复查保护；进程崩溃释放 OS 锁但持久保护仍保留并可对账；不删除/替换锁文件导致双锁 |
 | 连接与取消 | 断开订阅不取消任务、等待超时、重复取消、取消/完成竞争 |
-| 追问 | 问题与回答关联、重复/过期回答、取消竞争、进程重启后的明确状态 |
+| 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。过期答案与取消的并发竞争、`RemoteTask(reply)` 一侧仍待做 |
 | Reminder | 首轮快照、回合内去重、节点清空、未知状态、稳定排序、恢复历史字节不变、任务摘要有界且未列出不等于删除、等待项清空 |
 | 认证声明与授权 | SecurityScheme 每项只选一种标准类型且符合真实认证；服务端 pinning 不误报 mTLS；陌生节点不可委派、越权 task/产物不可读、本机接口与 A2A 凭据隔离、远端模型不能批准工具权限 |
 | 循环与回合限制 | 远端任务、子 agent 默认/显式工具复制都不能继承委派；同一缓存 agent 的普通用户回合可用而 cron/system/ambient 回合禁用；重载不复活禁用工具或 reminder |
@@ -781,10 +801,10 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 - TaskStore 介质、记录原子性、保留/清理规则、去重保留期；逻辑对话标识/映射的存储位置和压缩传递的可靠写入点。
 - 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）。
 - session 保留依据的持久化格式、独立协调锁的路径与 Manager/存储锁顺序、原子写入与恢复对账；文件锁原语及两类锁分离已定，确认全部清理/显式删除入口遵循同一约束，并固定 context 保留期限及容量限制。
-- 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；宿主记忆隔离在工具、自动召回和重载/fork 中的统一接入点。
+- 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；**无人审批与问题等待已定**——permission ask 一律拒绝（§10.1）、追问的时限与并发上限见 §7.4（`node.question_timeout` / `node.max_parked`），`AUTH_REQUIRED` 不用于工具审批；宿主记忆隔离在工具、自动召回和重载/fork 中的统一接入点仍待定。
 - usage 来源字段或独立关联的持久化位置和保留期，确保辅助调用用途、真实本机计费及远端报告展示不混淆。
 - 产物传输策略：`raw` 与 `url` 的取舍、体积与媒体类型白名单、`url` 下载端点的鉴权/过期/可达性，以及取回方向（本机去取对端地址）的 SSRF 校验；产物的存储位置与保留期（§6.4）。
-- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围；Tachi 私有 ErrorInfo.domain 的固定值，以及 §6/§7 错误语义在 SDK 的具体接入点。
+- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围；Tachi 私有 `ErrorInfo.domain` **已定为 `tachi`**，§6/§7 错误语义的接入点是「自有拒绝由 `node/admission.go` 的 guard 自己渲染、不放给 SDK 的错误映射」（§9.1.1）。
 
 不因这些字段尚未固定而扩大到独立 daemon、全局调度器或共享会话系统。
 

@@ -1,7 +1,8 @@
 // Package node owns this machine's side of multi-node collaboration: the node
 // identity, the single-instance lock, the local control interface that the other
-// Tachi processes on this machine talk to, and — in later slices — the A2A surface
-// and the task store.
+// Tachi processes on this machine talk to, the A2A surface a peer talks to, the task
+// store that remembers what was accepted, and the runner that turns an accepted task
+// into a real Tachi turn.
 //
 // Everything it needs is handed in. This package never reads the process-global
 // config and never resolves paths from the user's data directory; the entry points
@@ -13,9 +14,10 @@
 //
 //   - the LOCAL control interface — loopback only, guarded by a private credential
 //     read from the node's data dir. Other Tachi processes on this machine use it.
-//   - the REMOTE A2A interface — not implemented yet; it arrives with the A2A slice.
-//
-// This slice implements the local one only.
+//   - the REMOTE A2A interface — loopback only as well, and for a harder reason: it
+//     authenticates nobody yet, so it must not be reachable from anywhere
+//     (Options.normalized refuses a non-loopback address). Caller authentication is
+//     the slice that opens it up.
 package node
 
 import (
@@ -93,9 +95,9 @@ type Options struct {
 
 	// Executor is the receiving side's agent: it turns an accepted task into events.
 	// Nil means the built-in placeholder that echoes the task text — the seam a test
-	// injects through, and the one the real executor (task store, agent loop) will
-	// take over. It is nil by default on purpose: a node that has not been wired to
-	// an agent must not appear to run one.
+	// injects through. The real one is the task runner (node/runner.go), wired by
+	// StartOrAttachNode; it is not built here because it needs the config, which this
+	// Options struct deliberately does not carry.
 	Executor a2asrv.AgentExecutor
 
 	// AttachTimeout bounds the wait for a starting host to publish its info.

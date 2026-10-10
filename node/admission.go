@@ -13,24 +13,29 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
-// Admission: the two questions this node answers before any work starts, in the order
-// the design fixes (design §7.1.1):
+// Admission: the questions this node answers before any work starts, in the order the
+// design fixes (design §7.1.1, §7.4):
 //
 //  1. Is this a REPLAY of a request already accepted? Then the answer is the task that
 //     was accepted, and nothing runs a second time.
-//  2. Is this NEW work for a context that is already busy? Then it is refused, and the
-//     refusal says so in a way a client can trust (503 + our own error domain).
+//  2. Does this message NAME A TASK? Then it is either the answer to a question that task
+//     is waiting on, or an attempt to send work to a task that cannot take it — and both
+//     answers are this node's own.
+//  3. Is this NEW work for a context that already has a task in flight, or one PARKED on a
+//     question? Then it is refused, and the refusal says so in a way a client can trust
+//     (our own error domain behind a standard status).
 //
 // They live in two different places for one reason: the replay answer is a RESULT, which
 // the transport renders (returning it from an interceptor gives the caller exactly what
-// the handler would have produced), while the busy answer is an ERROR that must NOT be
-// rendered by the SDK — its error mapping would file our private reason under the
+// the handler would have produced), while the refusals are ERRORS that must NOT be
+// rendered by the SDK — its error mapping would file our private reasons under the
 // standard domain as INTERNAL_ERROR, which is the "private convention dressed as a
-// standard capability" mistake in its purest form. So the busy check stands in front of
-// the protocol handler and writes its own response.
+// standard capability" mistake in its purest form. So the checks stand in front of the
+// protocol handler and write their own response.
 
 // Sentinels of this node's own admission rules. They are deliberately not the SDK's:
-// nothing in the spec maps to "this context already has work in flight".
+// nothing in the spec maps to "this context already has work in flight", and nothing in it
+// maps to "your answer names the wrong question" either.
 var (
 	// errMessageIDReused — the same messageId arrived with different content. Returning
 	// the stored task would be answering a question nobody asked.
@@ -46,10 +51,33 @@ const (
 	// reasons filed under it are ours, and claiming the standard's domain would tell a
 	// client that the protocol defines them.
 	errorDomain = "tachi"
-	// reasonContextBusy is the reason a busy refusal carries.
+	// reasonContextBusy is the reason a busy refusal carries: this context has work in
+	// flight, and NEW work for it is what is refused.
 	reasonContextBusy = "CONTEXT_BUSY"
 	// reasonMessageIDReused is the reason a same-id-different-content refusal carries.
 	reasonMessageIDReused = "MESSAGE_ID_REUSED"
+	// reasonContextParked is the reason a refusal carries when the context's task is
+	// waiting for an answer: the message has to name that task, because that is what
+	// answering it means.
+	reasonContextParked = "CONTEXT_PARKED"
+	// reasonTaskBusy is the reason a message naming a RUNNING task is refused with.
+	reasonTaskBusy = "TASK_BUSY"
+	// reasonTaskFinished is the reason a message naming a finished task is refused with.
+	reasonTaskFinished = "TASK_FINISHED"
+	// reasonUnknownTask is the reason a message naming a task this node does not hold is
+	// refused with.
+	reasonUnknownTask = "UNKNOWN_TASK"
+	// reasonNoWaitingQuestion is the reason a message naming a task that says it is waiting
+	// is refused with: this process is not holding that question, so there is nothing for an
+	// answer to reach.
+	reasonNoWaitingQuestion = "NO_WAITING_QUESTION"
+	// reasonQuestionMismatch is the reason an answer that names a different question — or no
+	// question at all — is refused with. The current question's id travels with the refusal,
+	// so the caller can answer it without guessing.
+	reasonQuestionMismatch = "QUESTION_MISMATCH"
+	// reasonAnswerShape is the reason an answer that cannot be mapped onto the waiting
+	// questions is refused with (§7.4: the shape of an answer is this node's own rule).
+	reasonAnswerShape = "ANSWER_SHAPE"
 )
 
 // fingerprintKey carries the admission fingerprint from the interceptor (which sees the
@@ -85,6 +113,13 @@ func (a *admission) Before(ctx context.Context, callCtx *a2asrv.CallContext, req
 		// one, so there is nothing to guess.
 		return ctx, nil, nil
 	}
+	if sm.Message.TaskID != "" {
+		// A message that NAMES a task continues it: it creates nothing, so it is not a
+		// replay of an accepted request and the creation key does not apply to it. (Its id
+		// could even collide with a creation id by accident, and answering the caller with
+		// that other task would be worse than useless.)
+		return ctx, nil, nil
+	}
 
 	caller := ""
 	if callCtx != nil && callCtx.User != nil {
@@ -111,22 +146,42 @@ func (a *admission) After(context.Context, *a2asrv.CallContext, *a2asrv.Response
 	return nil
 }
 
-// busyGuard answers the two refusals this node makes on its own terms, in front of the
-// protocol handler:
+// questionSource is the one thing the guard needs to know about the turns this node is
+// holding: which question a parked task is waiting on. The runner is behind it; a node
+// running the placeholder executor has no source, and then no task is ever waiting.
+type questionSource interface {
+	waitingQuestion(taskID a2a.TaskID) (*parkedAsk, bool)
+}
+
+// busyGuard answers the refusals this node makes on its own terms, in front of the protocol
+// handler:
 //
 //   - the same message id with DIFFERENT content (a private rule: the spec allows
 //     idempotency, it does not require it — design §9.2);
-//   - NEW work for a context that already has a task in flight (design §7.1.1).
+//   - NEW work for a context that already has a task in flight, or parked on a question
+//     (design §7.1.1);
+//   - a message that names a task which cannot take it: one that is running, one that is
+//     finished, one this node does not hold, and — the answer path — one whose question is
+//     not the question this message answers (design §7.4).
 //
-// Both must be rendered HERE rather than by the protocol handler. The SDK maps an
-// unrecognised error to 500/INTERNAL_ERROR filed under `a2a-protocol.org`, and a reason
-// the spec never defines must not be presented as one it does. A replay (same id, same
-// content) is not a refusal: it passes through to the admission interceptor, which
-// answers it with the task that was already accepted.
-func busyGuard(store *taskStore, next http.Handler) http.Handler {
+// All of them must be rendered HERE rather than by the protocol handler. The SDK maps an
+// unrecognised error to 500/INTERNAL_ERROR filed under `a2a-protocol.org`, and a reason the
+// spec never defines must not be presented as one it does. A replay (same id, same content)
+// is not a refusal: it passes through to the admission interceptor, which answers it with
+// the task that was already accepted.
+func busyGuard(store *taskStore, questions questionSource, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		msg, ok := readSendMessage(r)
 		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if msg.message != nil && msg.message.TaskID != "" {
+			if ref := namedTaskRefusal(store, questions, msg); ref != nil {
+				ref.write(w)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -143,14 +198,126 @@ func busyGuard(store *taskStore, next http.Handler) http.Handler {
 			return
 		}
 
-		if msg.ContextID != "" && store.contextIsBusy(msg.ContextID) {
-			writeRefusal(w, http.StatusServiceUnavailable, "UNAVAILABLE", reasonContextBusy,
-				"this context already has a task in flight; query it, wait for it, or use another context",
-				map[string]string{"contextId": msg.ContextID})
-			return
+		if msg.ContextID != "" {
+			// A context whose task is PARKED is not busy — the next message is the answer it
+			// is waiting for. But an answer has to name the task it answers: without a task
+			// id this message would create a SECOND task in that context, and two turns in
+			// one conversation is what §7.1.1 refuses everywhere else.
+			if parked, ok := store.parkedTaskIn(msg.ContextID); ok {
+				ref := refusal{
+					status:     http.StatusConflict,
+					statusText: "FAILED_PRECONDITION",
+					reason:     reasonContextParked,
+					message: "this context is waiting for an answer; name that task in the message " +
+						"so the answer reaches the question it answers",
+					metadata: map[string]string{"contextId": msg.ContextID, "taskId": string(parked.Task.ID)},
+				}
+				if q := QuestionID(parked.Task.Status.Message); q != "" {
+					ref.metadata[QuestionIDMetadataKey] = q
+				}
+				ref.write(w)
+				return
+			}
+			if store.contextIsBusy(msg.ContextID) {
+				writeRefusal(w, http.StatusServiceUnavailable, "UNAVAILABLE", reasonContextBusy,
+					"this context already has a task in flight; query it, wait for it, or use another context",
+					map[string]string{"contextId": msg.ContextID})
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// namedTaskRefusal decides what a message that names a task is, and returns the refusal when
+// it is not an answer this node can deliver.
+//
+// The answer path is the only one that passes, and it passes only when every part of the
+// question-answer pairing lines up: the task is parked, this process is holding the question
+// it is parked on, the message names THAT question, and its shape maps onto the questions
+// that were asked. Anything less is refused with the reason — and, where there is one, with
+// the id of the question that IS open, so a caller can answer it without guessing (§7.4:
+// expired or mismatched answers are refused, not handed to another waiting slot).
+func namedTaskRefusal(store *taskStore, questions questionSource, msg guardedMessage) *refusal {
+	rec, known := store.record(msg.message.TaskID)
+	if !known {
+		return &refusal{
+			status:     http.StatusNotFound,
+			statusText: "NOT_FOUND",
+			reason:     reasonUnknownTask,
+			message:    "this node holds no task with that id",
+			metadata:   map[string]string{"taskId": string(msg.message.TaskID)},
+		}
+	}
+
+	state := rec.Task.Status.State
+	if state != a2a.TaskStateInputRequired {
+		if state.Terminal() {
+			return &refusal{
+				status:     http.StatusConflict,
+				statusText: "FAILED_PRECONDITION",
+				reason:     reasonTaskFinished,
+				message: "this task is finished and does not reopen; to continue the conversation, " +
+					"send a new message that references it",
+				metadata: map[string]string{"taskId": string(rec.Task.ID), "state": string(state)},
+			}
+		}
+		return &refusal{
+			status:     http.StatusConflict,
+			statusText: "ABORTED",
+			reason:     reasonTaskBusy,
+			message:    "this task is still running; wait for it or cancel it",
+			metadata:   map[string]string{"taskId": string(rec.Task.ID), "state": string(state)},
+		}
+	}
+
+	if questions == nil {
+		return noWaitingQuestionRefusal(rec)
+	}
+	ask, waiting := questions.waitingQuestion(rec.Task.ID)
+	if !waiting {
+		// The record says a question is open and this process is not holding it — the state a
+		// restart leaves behind, and one that must never be answered as if it were live.
+		return noWaitingQuestionRefusal(rec)
+	}
+	if got := QuestionID(msg.message); got != ask.questionID {
+		return &refusal{
+			status:     http.StatusConflict,
+			statusText: "FAILED_PRECONDITION",
+			reason:     reasonQuestionMismatch,
+			message: "this task is waiting for another question; the answer must name the question " +
+				"it answers (message metadata " + QuestionIDMetadataKey + ")",
+			metadata: map[string]string{
+				"taskId":              string(rec.Task.ID),
+				QuestionIDMetadataKey: ask.questionID,
+			},
+		}
+	}
+	if _, err := answersFor(ask.questions, msg.message); err != nil {
+		return &refusal{
+			status:     http.StatusBadRequest,
+			statusText: "INVALID_ARGUMENT",
+			reason:     reasonAnswerShape,
+			message:    err.Error(),
+			metadata:   map[string]string{"taskId": string(rec.Task.ID)},
+		}
+	}
+	return nil
+}
+
+// noWaitingQuestionRefusal is the refusal a task that says it is waiting gets when this
+// process is not holding the question: nothing could deliver an answer to it. The question's
+// id is deliberately NOT sent back — the answer would be addressed to a question no loop is
+// waiting to receive.
+func noWaitingQuestionRefusal(rec *taskRecord) *refusal {
+	return &refusal{
+		status:     http.StatusConflict,
+		statusText: "FAILED_PRECONDITION",
+		reason:     reasonNoWaitingQuestion,
+		message: "this task is waiting for an answer, but no turn in this process is holding " +
+			"that question any more",
+		metadata: map[string]string{"taskId": string(rec.Task.ID)},
+	}
 }
 
 // guardedMessage is what the guard reads out of one message/send body.
@@ -158,6 +325,10 @@ type guardedMessage struct {
 	MessageID string
 	ContextID string
 	digest    string
+	// message is the decoded message itself, kept for the checks that need more than an id:
+	// the task it names, the question it answers, and the parts its answer is made of.
+	// Decoding it here costs nothing — the digest already required the whole body.
+	message *a2a.Message
 }
 
 // readSendMessage buffers the body, puts it back untouched, and digests the message.
@@ -192,12 +363,31 @@ func readSendMessage(r *http.Request) (guardedMessage, bool) {
 	g.MessageID = envelope.Message.ID
 	g.ContextID = envelope.Message.ContextID
 	g.digest = digestMessage(envelope.Message)
+	g.message = envelope.Message
 	return g, true
 }
 
 // restSendMessagePath is the spec's REST path for message/send (§11.3.1), spelled here
 // because the guard reads it before the binding does.
 const restSendMessagePath = "/message:send"
+
+// refusal is one of this node's own answers to a request it will not accept.
+//
+// It carries the standard status a client can act on AND the private reason that says what
+// this node means by it (design §9.1.1): a caller that trusts the source can tell "not
+// accepted, retry the same message" (CONTEXT_BUSY) from "this task is over" (TASK_FINISHED)
+// without either reason pretending to be part of the protocol.
+type refusal struct {
+	status     int
+	statusText string
+	reason     string
+	message    string
+	metadata   map[string]string
+}
+
+func (x refusal) write(w http.ResponseWriter) {
+	writeRefusal(w, x.status, x.statusText, x.reason, x.message, x.metadata)
+}
 
 // rpcStatus and friends render the google.rpc.Status shape the spec's HTTP binding uses
 // for errors (§11.6), with our own ErrorInfo. Rendered by us rather than by the SDK

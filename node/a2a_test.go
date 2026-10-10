@@ -6,6 +6,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/stretchr/testify/require"
+
+	"github.com/monsterxx03/tachi/itest/mockllm"
 )
 
 const (
@@ -132,6 +135,25 @@ func TestCardSaysOnlyWhatThisNodeActuallyDoes(t *testing.T) {
 	require.Empty(t, card.SecuritySchemes)
 }
 
+// A node with an agent behind it and a node without one are two different nodes to a peer,
+// and the Card is the only place a peer can tell them apart — so it must not still say
+// "echo" once the real executor is wired, nor claim real work when it is not.
+func TestARealNodeCardNamesTheRealWork(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	require.Len(t, h.Card().Skills, 1)
+	require.Equal(t, "task", h.Card().Skills[0].ID)
+	require.NotContains(t, h.Card().Skills[0].Description, "placeholder")
+
+	// A test-built node keeps its own honest declaration.
+	placeholder := start(t, t.TempDir())
+	require.Len(t, placeholder.Card().Skills, 1)
+	require.Equal(t, "echo", placeholder.Card().Skills[0].ID)
+}
+
 func TestSendMessageWaitsForTheTaskAndReturnsItsArtifact(t *testing.T) {
 	h := start(t, t.TempDir())
 	client := newTestClient(t, h)
@@ -190,10 +212,20 @@ func TestMessageToATerminalTaskIsRejected(t *testing.T) {
 
 	// Continuing a finished task is not a thing the protocol allows: the client must
 	// start a new task in the same context instead (design §7.1.2).
-	_, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
-		Message: a2a.NewMessageForTask(a2a.MessageRoleUser, done, a2a.NewTextPart("more")),
-	})
-	require.ErrorIs(t, err, a2a.ErrUnsupportedOperation)
+	//
+	// Raw, because the refusal has to be readable as a CLIENT reads it: the SDK's own
+	// generic unsupported-operation would say nothing about why, and the reason a caller can
+	// act on ("it is finished, reference it in a new message") is one this node makes up —
+	// which is exactly why §9.1.1 keeps it out of the SDK's error mapping.
+	resp, raw := post(t, "http://"+h.RemoteAddr()+restSendMessagePath, "application/a2a+json",
+		taskMessageBody("msg-after-terminal", done.ID, done.ContextID, nil,
+			map[string]any{"text": "more"}), nil)
+
+	require.Equal(t, http.StatusConflict, resp.StatusCode, "body=%s", raw)
+	require.Contains(t, raw, reasonTaskFinished)
+	require.Contains(t, raw, errorDomain)
+	require.NotContains(t, raw, a2a.ProtocolDomain,
+		"a private reason must not borrow the protocol's domain")
 }
 
 func TestReturnImmediatelyHandsBackARunningTask(t *testing.T) {

@@ -578,11 +578,13 @@ var settingsTable = []settingApply{
 	// 所以是 ⟳ 而不是热改。
 	//
 	// workspace 与 tools 是**远程任务的**工作目录与工具白名单（不是本机聊天的）：前者空着
-	// 就拒绝远程任务，后者空着就是"没有工具"。ListExample 是给空列表的提示 —— 推荐的起点是
-	// 只读那三个。
+	// 就拒绝远程任务，后者空着就是"没有工具"（AskUserQuestion 不看这个列表 —— 问调用者不碰
+	// 本机）。question_timeout / max_parked 是停放中的追问的上限：到点任务判 FAILED（问题留在
+	// 状态里），超过数量上限则该次提问失败、让模型用现有信息收尾。ListExample 是给空列表的
+	// 提示 —— 推荐的起点是只读那三个。
 	{Key: "node", Category: catAdvanced, Mode: applyRestart,
 		ListExample: "ReadFile\nGrep\nGlob",
-		Note:        "入口启动即起/停节点服务；workspace/tools 是远程任务的工作目录与工具白名单，空 workspace 拒绝远程任务，空 tools 即无工具，均重启生效"},
+		Note:        "入口启动即起/停节点服务；workspace/tools 是远程任务的工作目录与工具白名单，question_timeout/max_parked 是追问的时限与并发上限，均重启生效"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},

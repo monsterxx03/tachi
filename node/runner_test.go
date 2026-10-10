@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/llm"
@@ -151,15 +152,16 @@ func TestRemoteTurnOffersOnlyTheNodesAllowedTools(t *testing.T) {
 	require.False(t, offered["WriteFile"])
 }
 
-func TestAnEmptyToolListOffersNoTools(t *testing.T) {
+func TestAnEmptyToolListOffersNoToolsThatTouchThisMachine(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("ok")...)
 
-	// The empty list is a POLICY, not an accident: a node whose operator named no tools
-	// hands the model none. (WithToolSet and WithNoTools differ in spelling precisely so
-	// this path cannot be reached by a list that happens to be empty.)
+	// The empty list is a POLICY, not an accident: a node whose operator named no tools hands
+	// the model nothing that acts on this machine. AskUserQuestion is not one of those — it
+	// asks the CALLER, and it is the only interaction a remote task has — so it is the one
+	// tool left in the view, and the list still means what it says about everything else.
 	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	client := newTestClient(t, h)
 	_, err := client.SendMessage(context.Background(), sendRequest("你好", false))
@@ -167,7 +169,12 @@ func TestAnEmptyToolListOffersNoTools(t *testing.T) {
 
 	requests := mock.Requests()
 	require.Len(t, requests, 1)
-	require.Empty(t, requests[0].Tools, "no allowlist entry means no tool is offered")
+	offered := make([]string, 0, len(requests[0].Tools))
+	for _, tool := range requests[0].Tools {
+		offered = append(offered, tool.Name)
+	}
+	require.Equal(t, []string{tools.ToolNameAskUser}, offered,
+		"an empty allowlist must leave exactly the tool that only talks to the caller")
 }
 
 func TestAFailedTurnIsReportedAsFailed(t *testing.T) {
