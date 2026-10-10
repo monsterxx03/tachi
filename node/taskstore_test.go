@@ -93,7 +93,12 @@ func TestAcceptedTaskIsOnDiskBeforeTheWorkRuns(t *testing.T) {
 	require.NoError(t, err)
 	task := result.(*a2a.Task)
 
-	<-parked.started // it is running now, which means acceptance already happened
+	<-parked.started // the task is really being worked on, not merely accepted
+
+	// The executor having started and the SDK having WRITTEN that are two events; wait for the
+	// second before reading the record, or the write lands during teardown (see
+	// waitForParkedStatus).
+	waitForParkedStatus(t, dir, task.ID, a2a.TaskStateWorking)
 
 	// Read the files, not the store: the claim is about what would survive a crash.
 	var rec taskRecord
@@ -151,6 +156,11 @@ func TestRestartResolvesInFlightTasksAsInterrupted(t *testing.T) {
 
 	task := sendMessage(t, h, "msg-interrupted", "long job", "")
 	<-parked.started
+
+	// The task has to be really RUNNING before this "crash" means anything — and the state is
+	// the SDK's write, which may still be in flight (see waitForParkedStatus). Waiting for it
+	// also keeps that write out of teardown.
+	waitForParkedStatus(t, dir, task.ID, a2a.TaskStateWorking)
 
 	// The process goes away with the task still running. Nothing closes it politely:
 	// this is what a crash leaves behind.
