@@ -268,8 +268,14 @@ func (rec *taskRecord) matches(fp fingerprint) bool {
 	return rec.Digest == fp.digest
 }
 
-// contextIsBusy reports whether this context has a task that has not reached a terminal
-// state — the one condition under which a NEW work request is refused.
+// contextIsBusy reports whether this context has a task that is EXECUTING — the one
+// condition under which a NEW work request is refused (design §7.1.1).
+//
+// "Executing" excludes the interrupted states on purpose. A task in INPUT_REQUIRED is not
+// busy: it is PARKED, and the message that answers its question is exactly the message this
+// context is waiting for. Counting it as busy would refuse that answer — the caller locked
+// out of the conversation the node just asked it to continue — which is the opposite of
+// what the rule is for.
 func (s *taskStore) contextIsBusy(contextID string) bool {
 	if contextID == "" {
 		return false
@@ -277,7 +283,14 @@ func (s *taskStore) contextIsBusy(contextID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, rec := range s.tasks {
-		if rec.Task.ContextID == contextID && !rec.Task.Status.State.Terminal() {
+		if rec.Task.ContextID != contextID {
+			continue
+		}
+		switch rec.Task.Status.State {
+		case a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired:
+			continue // parked: the next message is the answer it is waiting for
+		}
+		if !rec.Task.Status.State.Terminal() {
 			return true
 		}
 	}

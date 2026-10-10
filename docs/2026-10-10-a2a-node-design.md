@@ -302,7 +302,7 @@ Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择�
 | 缺少或无效认证 | 标准认证错误，如 HTTP 401 |
 | 缺少调用某操作的权限 | 标准授权错误，如 HTTP 403；不能泄露具体受保护资源的存在性，不把所有授权错误一律改成 404 |
 | 接口不支持请求的 A2A 版本 | `VersionNotSupportedError`，不静默切换版本 |
-| 同 context 暂不能接受另一项工作 | §7.1.1 的受理前 busy 错误，不发明 A2A TaskState 或未声明的专用错误 |
+| 同 context 暂不能接受另一项工作 | §7.1.1 的受理前 busy 错误，不发明 A2A TaskState 或未声明的专用错误。**busy 指"正在执行"，不含中断态**：`INPUT_REQUIRED` / `AUTH_REQUIRED` 是**停放**，它的下一条消息正是这段对话在等的回答 —— 把它算成 busy 就会把调用方挡在自己刚被要求回答的问题外面 |
 
 REST 错误按规范使用 `google.rpc.Status` JSON 表达及结构化详情。标准 A2A 错误的 `google.rpc.ErrorInfo` 使用 `domain: "a2a-protocol.org"` 与规范定义的 reason；私有 `CONTEXT_BUSY` 必须使用 Tachi 自己定义并固定的错误域，不能占用标准域。客户端识别“明确未受理的 busy”时同时校验可信来源、错误域和 reason，不能只匹配字符串。暂不可用响应可带 `Retry-After`，仅作为等待建议，不保证届时可受理，也不替代去重。
 

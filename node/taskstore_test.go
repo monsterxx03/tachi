@@ -325,3 +325,33 @@ func TestTaskIDMustBeOneFileName(t *testing.T) {
 	_, err = store.Create(context.Background(), ok)
 	require.NoError(t, err)
 }
+
+// A parked task is not a busy context. This is the distinction the reply path depends on:
+// a task in INPUT_REQUIRED exists precisely so the caller's next message can continue it,
+// and treating that message as "new work in a busy context" would lock the caller out of
+// the conversation the node just asked it to continue.
+func TestAParkedTaskDoesNotMakeTheContextBusy(t *testing.T) {
+	store, err := openTaskStore(filepath.Join(t.TempDir(), tasksDirName))
+	require.NoError(t, err)
+
+	const contextID = "ctx-parked"
+	parked := &a2a.Task{
+		ID:        a2a.NewTaskID(),
+		ContextID: contextID,
+		Status:    a2a.TaskStatus{State: a2a.TaskStateInputRequired},
+	}
+	_, err = store.Create(context.Background(), parked)
+	require.NoError(t, err)
+	require.False(t, store.contextIsBusy(contextID),
+		"a task waiting for the caller's answer must not refuse that answer")
+
+	// Executing, on the other hand, still refuses new work in the same context.
+	version, err := store.Create(context.Background(), &a2a.Task{
+		ID:        a2a.NewTaskID(),
+		ContextID: "ctx-working",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateWorking},
+	})
+	require.NoError(t, err)
+	require.NotZero(t, version)
+	require.True(t, store.contextIsBusy("ctx-working"))
+}
