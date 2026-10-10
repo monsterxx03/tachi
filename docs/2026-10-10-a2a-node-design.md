@@ -567,9 +567,9 @@ A2A 任务有独立身份、异步生命周期、远端权限、后续输入及�
 - 待回答项携带准确问题 ID，完整问题/选项由任务结果或查询返回；清空或失去来源时明确说明，不无限沿用旧待办。
 - 模型拿不到精确 ID 就查询，不能编 ID。服务端校验当前本地对话归属、调用者权限以及远端 context 的有效性。
 
-本地会话 compaction 后，新 session 必须通过持久化的逻辑对话关联仍能找到原委派记录；显式 `/new` 则建立新归属，不自动带入旧私聊任务。远端 context 的 session 绑定与发起方本地对话归属是两套关联，不能混用。
+本地会话 compaction 后，新 session 必须通过持久化的逻辑对话关联仍能找到原委派记录；显式 `/new` 则建立新归属，不自动带入旧私聊任务。**无对话的运行**（`-p` 这类没有 session 的一次性 run）落在**空作用域**里：它的 `list` 只看得到同类无对话运行委派过的任务，既看不到任何真实对话的任务，也不会被任何对话看到 —— 空值是一个作用域，不是通配符。远端 context 的 session 绑定与发起方本地对话归属是两套关联，不能混用。
 
-逻辑对话关联的权威是持久化标识/映射，不能每次靠遍历 `CompactedParentID` 到根计算。现有压缩链可用于沿革展示和迁移辅助，但祖先会被清理、链接可能单向或断裂。允许以最初 session ID 初始化逻辑标识，随后在压缩时显式保存传递；不要求引入另一套随机 ID，也不能要求所有祖先永久保留。逻辑标识不替代物理 session ID、checkpoint 或工具的 session 绑定。
+逻辑对话关联的权威是持久化标识/映射，不能每次靠遍历 `CompactedParentID` 到根计算。现有压缩链可用于沿革展示和迁移辅助，但祖先会被清理、链接可能单向或断裂。允许以最初 session ID 初始化逻辑标识，随后在压缩时显式保存传递；不要求引入另一套随机 ID，也不能要求所有祖先永久保留。逻辑标识不替代物理 session ID、checkpoint 或工具的 session 绑定。**已落地**：`session.Session.LogicalID`（空 = 自身即一段对话，旧文件读回来天然正确），由 `FinalizeCompact` 与 `Kind`/`Pinned` 一起迁到子会话；每次 run 由 agent loop 在会话确定之后标到 ctx 上（`tools.WithLogicalConversation`），工具与 reminder 读同一个值 —— 因此"哪段对话"既不来自模型参数，也不受压缩影响（本 run 内捕获的值跨压缩仍然正确）。
 
 同一授权主体恢复同一逻辑对话，可跨入口查询和继续；不同私聊/群聊或新对话默认隔离，知道 ID 不等于有权访问。入口只决定交互能力、通知路由和审计信息。这套规则同时约束任务 reminder、list/get/wait/reply/cancel 和 continue_from，不只过滤列表。此处的“继续”指发起方聊天及获准的任务操作，不授权普通聊天入口直接续写接收侧执行 session；后者遵循 §2.1。
 
@@ -708,6 +708,8 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 上述回合默认禁用委派工具及其 reminder。可复用 `agent/toolview.go` 的回合工具视图（例如 `WithToolSet`），既对模型隐藏，也在执行端拒绝；NodeClient 接口还须验证由受信调用路径提供的回合权限，而不是采信模型参数。后续允许定时任务或非定向回合委派时需要各自的显式策略，不能按“运行在 channel/desktop 进程中”推断有权。
 
+**已落地**：两个委派工具**只作为 run 级 extras 注入**（`agent.WithExtraTools`），从不进注册表 —— 因此闸门就是"谁附加"：cron（`channel/manager/cron.go`）与 ambient（`runAmbientTurn`）各自构造自己的 run、不附加，于是**结构上拿不到**，不需要禁名单；`TestTheDelegationToolsAreNotInTheRegistry` 钉住"它们不在注册表里"。已接的入口：TUI 的用户回合、desktop 的用户回合、channel 的定向回合（`acquireForTurn` 的非 compact 分支），以及 `-p` 的用户回合；`/compact` 那类一次性 run 与 `--commit`/`--review` 的 one-off 路径不带。
+
 子 agent/fork 的默认复制和显式 allowed-tools 路径也要限制，不能只从默认列表去掉 DelegateTask 后仍可点名继承。任务查询、回复或取消同样按本回合能力约束，不允许通过 RemoteTask 绕过限制。
 
 ### 10.3 工作目录与数据传递
@@ -789,7 +791,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop、查询/取消/重复消息不新建 session 仍待做 |
 | 多轮对话 | 同 task 回答不新起 loop（**已落地** `node/park_test.go`）、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
-| 引用与恢复 | continue_from 与 node 互斥、从 tool result 获得准确 ID、无效/越权/过期引用不降级新建、压缩祖先被清理后仍可经 reminder/list 找回、显式 /new 隔离 |
+| 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。无效/越权引用与 `referenceTaskIds` 的构造、reminder/list 找回仍待做 |
 | 跨入口归属 | 发起方同授权主体恢复同一逻辑对话能跨 Desktop/TUI 访问任务；接收侧执行记录换入口仍只读受管；其他对话/主体不能靠知道 ID 访问任何任务操作 |
 | 执行记录展示与准入 | Desktop/TUI/web 按权限标注来源；普通发送、按 ID 恢复、steer、重试、手动压缩/回退、fork 均不能绕过任务管理器；`@session:` 引用按同一规则判定且选择器带来源标注；直接后端调用同样拒绝；合法 TaskRunner 后续任务仍可执行 |
 | 准入时序与授权范围 | 拒绝发生在 reminder/记忆访问、写 transcript、标题生成、checkpoint、hook、模型调用前；RunOneOff 及非 loop 历史修改同样约束；错绑/过期授权拒绝，fork 不泛化继承，合法自动压缩和问题回答可继续 |

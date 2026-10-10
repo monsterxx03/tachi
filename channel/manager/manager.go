@@ -15,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/syncx"
@@ -89,6 +90,11 @@ import (
 // instructions mid-turn without waiting for the current turn to finish.
 type Manager struct {
 	cfg *config.Config
+	// delegator is this machine's sending side for delegated work, kept in step with the peers
+	// config. It carries its own lock (node.DelegatorCache), so the turn goroutines can ask it
+	// without touching the manager's guard — the nesting rule this package follows is one lock
+	// at a time.
+	delegator *node.DelegatorCache
 
 	// defaultResolvedProvider is the eagerly-resolved default provider, set
 	// once in New and immutable after construction (per-thread /model
@@ -244,6 +250,7 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	return &Manager{
 		cfg:                     cfg,
+		delegator:               node.NewDelegatorCache(logger.New("channel")),
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
 		agents:                  newAgentPool(),

@@ -115,9 +115,6 @@ func (t *RemoteTaskTool) ExecuteContext(ctx context.Context, args string) (strin
 		return "", fmt.Errorf("this session cannot manage remote tasks: the sending side is not available in this entry point")
 	}
 	conversation := LogicalConversation(ctx)
-	if conversation == "" {
-		return "", fmt.Errorf("this run has no conversation identity, so it cannot be told which remote tasks are its own")
-	}
 
 	action := strings.ToLower(strings.TrimSpace(in.Action))
 	id := strings.TrimSpace(in.TaskID)

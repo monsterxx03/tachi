@@ -198,17 +198,19 @@ func (s *delegationStore) get(id string) (*Delegation, bool) {
 	return &out, true
 }
 
-// list returns the records of one logical conversation, newest first.
+// list returns the records of ONE conversation, newest first.
 //
-// The ownership filter is the whole reason the field exists: §8.2's `list` must show a
-// conversation its own work and nothing else, and the logical id is what keeps that true across
-// local compaction (where the physical session id changes).
+// The filter always applies, and an empty logical id is a scope rather than a wildcard: it is
+// what a run WITHOUT a conversation files under (the pipe entry has no session by design), so a
+// script's one-off delegation is findable by that script's later runs and invisible to — and
+// from — every real conversation. "No filter" would let a sessionless run read a private
+// conversation's tasks, which is the leak §8.5's rule is about.
 func (s *delegationStore) list(logicalID string) []*Delegation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*Delegation, 0, len(s.items))
 	for _, d := range s.items {
-		if logicalID != "" && d.LogicalID != logicalID {
+		if d.LogicalID != logicalID {
 			continue
 		}
 		snapshot := *d

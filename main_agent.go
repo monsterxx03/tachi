@@ -17,6 +17,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -205,10 +206,20 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	applyToolRestrictions(aiAgent, cmd)
 
 	thinkingDisabled := false
+	// Work may be delegated to another node, when this machine has one configured. The tools are
+	// attached to THIS run rather than registered on the agent: `-p` is a user turn (a person ran
+	// the command), while the same agent shape serves runs that must not delegate at all
+	// (§10.2.1) — the difference is what a run is given, not a switch somewhere. The one-off
+	// command runs (--commit, --review and friends) take their own paths and get none of this.
+	runOpts := []agent.RunOption{}
+	if delegator := node.NewDelegatorCache(logger.New("run")).For(cfg.Peers); delegator != nil {
+		runOpts = append(runOpts,
+			agent.WithExtraTools(tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0)))
+	}
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg), llm.ChatOptions{
 		MaxTokens: cfg.MaxTokens,
 		Thinking:  &thinkingDisabled,
-	})
+	}, runOpts...)
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
 	if result == nil {

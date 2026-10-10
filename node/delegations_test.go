@@ -61,7 +61,13 @@ func TestAListShowsOneConversationItsOwnWork(t *testing.T) {
 	require.Len(t, list, 2, "another conversation's work must not be listed (§8.2)")
 	require.Equal(t, newer.ID, list[0].ID, "newest first")
 
-	require.Len(t, store.list(""), 3, "no filter means the machine's own records, all of them")
+	// The empty scope is not a wildcard: it is what a run without a conversation files under.
+	require.Empty(t, store.list(""), "a sessionless scope must not see a conversation's work")
+	require.Len(t, store.list("conv-b"), 1)
+
+	sessionless := newDelegation("home-nas", "", "管道跑的一次", "p4", "m4")
+	require.NoError(t, store.put(sessionless))
+	require.Len(t, store.list(""), 1)
 }
 
 func TestAnUnknownIDIsRefusedRatherThanGuessed(t *testing.T) {

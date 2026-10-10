@@ -11,8 +11,10 @@ import (
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -237,7 +239,7 @@ func (d *desktopApp) startTurn(id, text string) string {
 		// the live turn and reloaded history take one rendering path.
 		ropts := []agent.RunOption{
 			agent.WithSteerChannel(steerCh),
-			agent.WithExtraTools(tools.NewSendFileTool()),
+			agent.WithExtraTools(d.turnTools(d.config())...),
 			agent.WithDisplayUserMessage(rawText),
 		}
 		if len(expanded.Images) > 0 {
@@ -1126,4 +1128,38 @@ type sessionRun struct {
 	// conversation this one is still writing. followCompaction consumes it, and the ownership
 	// goes with it.
 	compaction *compactionRecord
+}
+
+// turnTools are the run-scoped tools a USER turn gets.
+//
+// Extras rather than registry entries, and that is the whole gate (§10.2.1): the same cached
+// agent serves turns that must not delegate — a cron-style or ambient turn — and a tool attached
+// to a run simply is not there for the others. Delegation is added only when this machine has
+// somewhere to delegate TO: no peers configured means no delegator, which means the tools are
+// absent rather than present and failing on every call.
+func (d *desktopApp) turnTools(cfg *config.Config) []tools.Tool {
+	out := []tools.Tool{tools.NewSendFileTool()}
+	if delegator := d.delegatorFor(cfg); delegator != nil {
+		out = append(out, tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0))
+	}
+	return out
+}
+
+// delegatorFor returns the sending side for this configuration, rebuilt when the peer list
+// changes (see node.DelegatorCache). Nil means this process cannot delegate right now.
+func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
+	if cfg == nil {
+		return nil
+	}
+	d.delegatorMu.Lock()
+	if d.delegator == nil {
+		d.delegator = node.NewDelegatorCache(logger.New("desktop"))
+	}
+	cache := d.delegator
+	d.delegatorMu.Unlock()
+
+	// The cache is asked with no app lock held: it does its own locking, and the rule this
+	// codebase follows is one lock at a time (a disk read under mu is how the desktop's own
+	// turn goroutines would start queueing behind the sidebar's).
+	return cache.For(cfg.Peers)
 }

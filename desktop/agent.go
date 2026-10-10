@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/desktop/link"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -151,6 +152,13 @@ type desktopApp struct {
 	// thing to need it) and must never wait on the app-wide lock.
 	storeMu sync.Mutex
 	store   *session.FileStore
+
+	// delegator is this machine's sending side (peers + the delegated-task records), kept in
+	// step with the peers config leaf. Guarded by delegatorMu, NOT by mu, for the same reason
+	// cfgMu and storeMu are: a turn reads it as it starts, and it must never wait behind the
+	// app-wide lock.
+	delegatorMu sync.Mutex
+	delegator   *node.DelegatorCache
 
 	// promptCache memoizes built system prompts, keyed by the exact build inputs
 	// (working directory + session ID) — see systemPromptFor. Guarded by

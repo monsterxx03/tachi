@@ -104,10 +104,11 @@ func (t *DelegateTaskTool) ExecuteContext(ctx context.Context, args string) (str
 	if t.delegator == nil {
 		return "", fmt.Errorf("this session cannot delegate: the sending side is not available in this entry point")
 	}
+	// A run without a conversation (the pipe entry: no session, by design) files under the empty
+	// scope instead of refusing. That keeps a script's one-off delegation working — it does get
+	// the result — while `RemoteTask(action="list")` there shows only what such runs delegated:
+	// a sessionless run can never see a conversation's tasks, and a conversation never sees its.
 	conversation := LogicalConversation(ctx)
-	if conversation == "" {
-		return "", fmt.Errorf("this run has no conversation identity, so there is nothing to file a delegated task under")
-	}
 
 	info, err := t.delegator.Delegate(ctx, DelegationRequest{
 		Peer:         node,

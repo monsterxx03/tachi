@@ -10,7 +10,9 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -45,6 +47,13 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	ropts = append(ropts, agent.WithDisplayUserMessage(text))
 	if len(expanded.Images) > 0 {
 		ropts = append(ropts, agent.WithPendingImages(expanded.Images))
+	}
+	// Delegation to another node, when this machine has one configured. It rides as a run-scoped
+	// extra rather than a registered tool so that a turn which does not attach it cannot call it
+	// (§10.2.1) — the same mechanism keeps it off the one-off command runs below.
+	if delegator := m.delegator(); delegator != nil {
+		ropts = append(ropts,
+			agent.WithExtraTools(tools.NewDelegateTaskTool(delegator), tools.NewRemoteTaskTool(delegator, 0)))
 	}
 
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.systemPrompt, m.chatOpts, ropts...)
@@ -404,3 +413,18 @@ func (m *Model) abortCompactForSwitch(errMsg string) {
 // /skill              → list all available skills
 // /skill <name>       → activate a specific skill
 // /skill reload       → re-scan skill directories
+
+// delegator is this machine's sending side, rebuilt when the peers config changes — nil when
+// there is nothing to delegate to (see node.DelegatorCache).
+//
+// Only this file's turn paths touch the cache, and they all run on bubbletea's Update goroutine,
+// so it needs no lock of its own.
+func (m *Model) delegator() tools.RemoteDelegator {
+	if m.cfg == nil {
+		return nil
+	}
+	if m.delegators == nil {
+		m.delegators = node.NewDelegatorCache(m.agent.Logger())
+	}
+	return m.delegators.For(m.cfg.Peers)
+}

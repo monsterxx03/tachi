@@ -355,9 +355,23 @@ providers:
 		if !row.offered() {
 			continue
 		}
-		if !slices.ContainsFunc(schema.Fields, func(f SettingFieldVO) bool { return row.covers(f.Key) }) {
-			t.Errorf("row %q (mode %s) offers no field in the schema", row.Key, row.Mode)
+		// A row is reachable either through leaves or through a LIST editor, and the second case
+		// is not an exception: a growable list (peers, providers) with no items yet HAS no leaves
+		// to read — the page grows it from the list editor (settingLists). Requiring a leaf would
+		// fail exactly for the empty-list case the editor exists for.
+		reachable := slices.ContainsFunc(schema.Fields, func(f SettingFieldVO) bool { return row.covers(f.Key) })
+		if !reachable {
+			reachable = slices.ContainsFunc(schema.Lists, func(l SettingListVO) bool { return row.covers(l.Path) })
 		}
+		if !reachable {
+			t.Errorf("row %q (mode %s) offers no field and no list in the schema", row.Key, row.Mode)
+		}
+	}
+
+	// The list-only case really is offered: a peers row with nothing configured must still be
+	// reachable as the list the reader adds nodes to.
+	if !slices.ContainsFunc(schema.Lists, func(l SettingListVO) bool { return l.Path == "peers" }) {
+		t.Error("peers must be offered as a list editor even with no peers configured")
 	}
 
 	// The groups ride along with the fields: the page's nav IS Categories, so a field whose

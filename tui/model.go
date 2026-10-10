@@ -16,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -164,7 +165,11 @@ type Model struct {
 	// auto-switch-to-smaller-model flow (rather than the /compact command).
 	compactForSwitch bool
 
-	cfg            *config.Config
+	cfg *config.Config
+	// delegators is this machine's sending side for delegated work (peers + the records of what
+	// was delegated). It is nil until a user turn needs it: a TUI with no peers never builds one.
+	// Only the Update goroutine touches it (see delegator()).
+	delegators     *node.DelegatorCache
 	providerItems  []config.ProviderConfig
 	providerSelIdx int
 

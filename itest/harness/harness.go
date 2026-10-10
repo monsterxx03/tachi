@@ -54,6 +54,7 @@ func configYAML(o *options, baseURL string) (string, error) {
 		NodeEnabled:   o.nodeEnabled,
 		NodeWorkspace: o.nodeWorkspace,
 		NodeTools:     o.nodeTools,
+		Peers:         o.peers,
 	}); err != nil {
 		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
@@ -75,6 +76,17 @@ type configData struct {
 	// remote turns run in, and the tool allowlist they get.
 	NodeWorkspace string
 	NodeTools     []string
+	// Peers are the nodes THIS machine may delegate work to (config's top-level `peers:`). They
+	// are the sending side's directory, so unlike the node: section they are independent of
+	// whether this machine serves anything itself.
+	Peers []peerFixture
+}
+
+// peerFixture is one `peers:` entry: the alias the model uses and the address of that node's
+// A2A interface.
+type peerFixture struct {
+	Name string
+	URL  string
 }
 
 // configTmpl renders the config.yaml fixture. The {{- ... }} trims keep the
@@ -119,6 +131,13 @@ permissions:
       - "*"
 {{- end}}
 {{- end}}
+{{- if .Peers}}
+peers:
+{{- range .Peers}}
+  - name: {{.Name}}
+    url: {{.URL}}
+{{- end}}
+{{- end}}
 {{- if .NodeEnabled}}
 node:
   enabled: true
@@ -155,6 +174,7 @@ type options struct {
 	nodeEnabled   bool          // node.enabled: true — 节点服务开关（默认关闭）
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
 	nodeTools     []string      // node.tools — 远程任务的工具白名单
+	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -206,6 +226,13 @@ func WithNodeEnabled() Option {
 // offering it.
 func WithNodeWorkspace(dir string) Option {
 	return func(o *options) { o.nodeEnabled = true; o.nodeWorkspace = dir }
+}
+
+// WithPeers adds nodes this machine may delegate work to (config's top-level `peers:`). It
+// deliberately does NOT switch the local node service on: delegating and serving are two
+// different halves, and a spec that only sends should not accidentally host.
+func WithPeers(name, url string) Option {
+	return func(o *options) { o.peers = append(o.peers, peerFixture{Name: name, URL: url}) }
 }
 
 // WithNodeTools switches the node service on and gives remote tasks this tool allowlist
