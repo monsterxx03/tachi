@@ -51,7 +51,7 @@ type a2aSurface struct {
 	card *a2a.AgentCard
 }
 
-func startA2ASurface(o Options) (*a2aSurface, error) {
+func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	ln, err := net.Listen("tcp", o.RemoteListen)
 	if err != nil {
 		return nil, fmt.Errorf("node: listen %s: %w", o.RemoteListen, err)
@@ -67,14 +67,21 @@ func startA2ASurface(o Options) (*a2aSurface, error) {
 	// the Card publishes, so "declared but not implemented" cannot happen by drift.
 	handler := a2asrv.NewHandler(executor,
 		a2asrv.WithCapabilityChecks(&card.Capabilities),
-		a2asrv.WithCallInterceptors(protocolVersionInterceptor{}),
+		// Our store is the authority for accepted tasks; the SDK's own default would be
+		// an in-memory map that forgets them at exit (design §9.1).
+		a2asrv.WithTaskStore(store),
+		a2asrv.WithCallInterceptors(protocolVersionInterceptor{}, &admission{store: store}),
 	)
 
 	mux := http.NewServeMux()
 	// The REST binding's routes are the spec's own paths (/message:send,
 	// /tasks/{id}, /tasks/{id}:cancel, ...) with no prefix, so it mounts at the root
 	// of this listener — which is why the remote surface gets a mux of its own.
-	mux.Handle("/", a2asrv.NewRESTHandler(handler))
+	//
+	// The busy guard wraps the binding rather than living inside it: a refusal that
+	// carries OUR reason and domain must not be rendered by the SDK, whose error
+	// mapping would file it as INTERNAL_ERROR under the standard domain.
+	mux.Handle("/", busyGuard(store, a2asrv.NewRESTHandler(handler)))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: remoteReadHeaderTimeout}

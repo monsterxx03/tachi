@@ -11,6 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +29,11 @@ import (
 // Everything else about the node is verified in-process, where a failing test can
 // point at a stack instead of a killed child.
 const (
-	helperModeEnv = "TACHI_NODE_TEST_HELPER" // "host" | "attach"
+	// host        — a hosting node with the default executor, alive until stdin closes
+	// host-parked — a hosting node whose executor parks: the only way to have a task
+	//               genuinely in flight when the process is killed
+	// attach      — joins the host that is already running
+	helperModeEnv = "TACHI_NODE_TEST_HELPER"
 	helperDirEnv  = "TACHI_NODE_TEST_DIR"
 	helperTimeout = 20 * time.Second
 )
@@ -33,7 +41,9 @@ const (
 func TestMain(m *testing.M) {
 	switch os.Getenv(helperModeEnv) {
 	case "host":
-		helperHost()
+		helperHost(nil)
+	case "host-parked":
+		helperHost(newParkedExecutor())
 	case "attach":
 		helperAttach()
 	default:
@@ -43,13 +53,16 @@ func TestMain(m *testing.M) {
 
 // helperHost takes the lock, announces what it published, then holds on until its
 // stdin closes — which is how the parent ends it cleanly (or kills it outright).
-func helperHost() {
-	handle, err := StartOrAttach(context.Background(), helperOptions())
+func helperHost(executor a2asrv.AgentExecutor) {
+	opts := helperOptions()
+	opts.Executor = executor
+	handle, err := StartOrAttach(context.Background(), opts)
 	if err != nil {
 		fmt.Printf("ERROR %v\n", err)
 		os.Exit(3)
 	}
-	fmt.Printf("HOSTING instance=%s addr=%s\n", handle.Client().InstanceID(), handle.Addr())
+	fmt.Printf("HOSTING instance=%s addr=%s remote=%s\n",
+		handle.Client().InstanceID(), handle.Addr(), handle.RemoteAddr())
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	_ = handle.Close()
 	os.Exit(0)
@@ -208,4 +221,43 @@ func TestSecondProcessCanAttachToThisOne(t *testing.T) {
 	require.Equal(t, "false", field(t, line, "hosting"))
 	require.Equal(t, host.Client().InstanceID(), field(t, line, "instance"))
 	require.Equal(t, host.NodeID(), field(t, line, "node"))
+}
+
+// The crash case, end to end and across processes: a node accepts a task, the process is
+// killed while it runs (SIGKILL — no defers, no Cleanup), and the NEXT process must find
+// that task marked as interrupted rather than perpetually running.
+//
+// This is the design's "承载进程崩溃 → 运行中任务按中断处理" as a test rather than a
+// promise, and it is the only way to reach it: an in-process test can close a handle
+// politely, which is not what a crash is.
+func TestKilledHostLeavesItsInFlightTaskInterrupted(t *testing.T) {
+	dir := t.TempDir()
+
+	child := startHelper(t, "host-parked", dir)
+	line := child.line(t)
+
+	// Talk to the child the way a peer would: resolve its Card, then send.
+	card, err := agentcard.DefaultResolver.Resolve(context.Background(), "http://"+field(t, line, "remote"))
+	require.NoError(t, err)
+	client, err := a2aclient.NewFromCard(context.Background(), card)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Destroy() })
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("killed mid-flight")),
+		Config:  &a2a.SendMessageConfig{ReturnImmediately: true},
+	})
+	require.NoError(t, err)
+	task := result.(*a2a.Task)
+	require.False(t, task.Status.State.Terminal())
+
+	child.kill()
+
+	// The next process takes over the data dir; loading it is where recovery happens.
+	host := start(t, dir)
+	recovered, err := newTestClient(t, host).GetTask(context.Background(), &a2a.GetTaskRequest{ID: task.ID})
+	require.NoError(t, err)
+	require.Equal(t, a2a.TaskStateFailed, recovered.Status.State,
+		"a task whose process was killed must not come back as running")
+	require.Equal(t, interruptReason, recovered.Status.Message.Parts[0].Text())
 }

@@ -30,6 +30,7 @@ type Handle struct {
 
 	hosting bool
 	lock    *flock.Lock
+	store   *taskStore
 	ln      net.Listener
 	srv     *http.Server
 	remote  *a2aSurface
@@ -122,9 +123,18 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		return nil, fmt.Errorf("node: listen %s: %w", o.LocalListen, err)
 	}
 
+	// The store loads (and resolves what the previous process left running) before the
+	// surface that accepts work is up.
+	store, err := openTaskStore(filepath.Join(o.DataDir, tasksDirName))
+	if err != nil {
+		_ = ln.Close()
+		_ = lock.Release()
+		return nil, err
+	}
+
 	// The remote surface binds before anything is published, so a failure here leaves
 	// no half-started node behind: nothing on disk mentions a service that is not up.
-	remote, err := startA2ASurface(o)
+	remote, err := startA2ASurface(o, store)
 	if err != nil {
 		_ = ln.Close()
 		_ = lock.Release()
@@ -166,6 +176,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		logger:   o.Logger,
 		hosting:  true,
 		lock:     lock,
+		store:    store,
 		ln:       ln,
 		srv:      srv,
 		remote:   remote,
