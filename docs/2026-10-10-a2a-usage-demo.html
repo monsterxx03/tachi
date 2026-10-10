@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>多节点协作 · 完成后的使用形态</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161a21; --panel2:#1b2029; --line:#252b37;
+    --tx:#e7ebf2; --mut:#93a0b4; --dim:#6b7688;
+    --mac:#6ea8fe; --nas:#f5b64f; --vps:#6fe0a8; --warn:#ff8f85; --ok:#6fe0a8;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  header{padding:22px 26px 12px}
+  h1{margin:0 0 4px;font-size:19px;letter-spacing:.3px}
+  .sub{margin:0;color:var(--mut);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0;padding:0;list-style:none}
+  .chip{border:1px solid var(--line);background:var(--panel);color:var(--mut);
+    padding:6px 12px;border-radius:999px;cursor:pointer;font-size:13px;white-space:nowrap}
+  .chip:hover{border-color:#3a4456;color:var(--tx)}
+  .chip.on{background:#243044;border-color:#3c5b8f;color:#cfe0ff}
+  .wrap{display:grid;grid-template-columns:minmax(420px,1.05fr) minmax(360px,.95fr);
+    gap:16px;padding:14px 26px 0;align-items:start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .card h2{margin:0;padding:11px 16px;font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--dim);border-bottom:1px solid var(--line);font-weight:600}
+  #net{display:block;width:100%;height:auto;background:
+    radial-gradient(900px 400px at 12% 8%,#141a24,transparent 60%),var(--panel)}
+  .node rect{fill:#1c222c;stroke:#2e3746;stroke-width:1.2;rx:12}
+  .node.on rect{stroke:#4a6187}
+  .node .t{fill:#e7ebf2;font-size:14px;font-weight:600}
+  .node .s{fill:#93a0b4;font-size:11.5px}
+  .node .badge{font-size:11.5px}
+  .edge{stroke:#2b3441;stroke-width:1.6}
+  .edge.hot{stroke:#6ea8fe;stroke-width:2;stroke-dasharray:6 5;animation:dash 1s linear infinite}
+  @keyframes dash{to{stroke-dashoffset:-22}}
+  #packetG{opacity:0}
+  #packetG text{font-size:11.5px;font-family:var(--mono)}
+  .panel{min-height:470px;max-height:470px;overflow:auto;padding:12px 14px}
+  .ln{margin:0 0 8px;padding:7px 10px;border-radius:9px;border-left:3px solid var(--line);
+    background:var(--panel2);font-size:13px;white-space:pre-wrap;word-break:break-word}
+  .ln b{font-weight:600}
+  .k-user{border-left-color:var(--mac)}
+  .k-tool{border-left-color:#8d7bd8;font-family:var(--mono);font-size:12.3px}
+  .k-res{border-left-color:var(--ok);font-family:var(--mono);font-size:12.3px}
+  .k-proto{border-left-color:#46536a;color:var(--mut);font-size:12.2px;font-family:var(--mono)}
+  .k-side{border-left-color:var(--nas);color:#c9cfda}
+  .k-note{border-left-color:#39414f;color:var(--mut);font-size:12.6px}
+  .k-side.rec{border-left-color:var(--vps)}
+  .k-data{border-left-color:#6fe0a8;font-family:var(--mono);font-size:12.3px}
+  .k-art{border-left-color:#8d7bd8;display:flex;gap:12px;align-items:center}
+  .artbox svg{flex:0 0 auto;border-radius:8px;background:#12161d}
+  .fname{font-family:var(--mono);font-size:12.4px;color:#e7ebf2}
+  .fmeta{color:var(--mut);font-size:12px;margin-top:2px}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:0 5px;margin-right:7px}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 26px 0}
+  button{background:var(--panel2);color:var(--tx);border:1px solid var(--line);border-radius:9px;
+    padding:7px 13px;font-size:13px;cursor:pointer}
+  button:hover{border-color:#3a4456}
+  button.primary{background:#243044;border-color:#3c5b8f;color:#cfe0ff}
+  .cap{margin:12px 26px 0;padding:12px 16px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;color:#cdd5e1;min-height:52px}
+  .cap .n{color:var(--dim);font-family:var(--mono);margin-right:10px;font-size:12.5px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;padding:10px 26px 0;color:var(--dim);font-size:12.3px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  section.tables{padding:26px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;font-size:13px}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;background:#141821}
+  tr:last-child td{border-bottom:0}
+  td code,.ln code{font-family:var(--mono);font-size:12.2px;color:#dbe3ef}
+  .foot{padding:0 26px 34px;color:var(--dim);font-size:12.4px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:1000px){.wrap{grid-template-columns:1fr}.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>多节点协作 · 完成后的使用形态</h1>
+  <p class="sub">设计示意，不是现行行为。点场景看它在你平时用的入口里长什么样 —— 左边是机器与消息流，右边是你实际看到的东西。</p>
+  <ul class="chips" id="chips"></ul>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <h2>节点与消息流</h2>
+    <svg id="net" viewBox="0 0 760 440" role="img" aria-label="三个节点与消息流动">
+      <line id="e_mac_nas" class="edge" x1="140" y1="205" x2="620" y2="95"></line>
+      <line id="e_mac_vps" class="edge" x1="140" y1="205" x2="620" y2="345"></line>
+      <line id="e_nas_vps" class="edge" x1="620" y1="95" x2="620" y2="345"
+            stroke-dasharray="3 6" opacity=".5"></line>
+
+      <g class="node" id="n_mac">
+        <rect x="30" y="145" width="220" height="120"></rect>
+        <text class="t" x="48" y="175">MacBook</text>
+        <text class="s" x="48" y="197">Desktop · 常用</text>
+        <text class="s" x="48" y="215">TUI · 偶尔</text>
+        <text class="badge" id="b_mac" x="48" y="245"></text>
+      </g>
+      <g class="node" id="n_nas">
+        <rect x="510" y="35" width="220" height="120"></rect>
+        <text class="t" x="528" y="65">home-nas</text>
+        <text class="s" x="528" y="87">IM channel · 常驻</text>
+        <text class="s" x="528" y="105">家庭文件 / 备份</text>
+        <text class="badge" id="b_nas" x="528" y="135"></text>
+      </g>
+      <g class="node" id="n_vps">
+        <rect x="510" y="285" width="220" height="120"></rect>
+        <text class="t" x="528" y="315">hk-vps</text>
+        <text class="s" x="528" y="337">IM channel · 常驻</text>
+        <text class="s" x="528" y="355">公网诊断 / 构建</text>
+        <text class="badge" id="b_vps" x="528" y="385"></text>
+      </g>
+
+      <g id="packetG"><circle id="pk" r="9"></circle><text id="pkT" x="0" y="0"></text></g>
+    </svg>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--ok)"></span>可用</span>
+      <span><span class="dot" style="background:var(--mac)"></span>承载节点服务</span>
+      <span><span class="dot" style="background:#5a6474"></span>离线 / 未知</span>
+      <span>实线 = 已配置的直连地址；虚线 = 可选的点对点地址</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 id="panelTitle">你的界面</h2>
+    <div class="panel" id="chat"></div>
+  </div>
+</div>
+
+<div class="bar">
+  <button id="bPrev">‹ 上一步</button>
+  <button id="bPlay" class="primary">▶ 播放</button>
+  <button id="bNext">下一步 ›</button>
+  <button id="bReset">重播</button>
+  <span id="prog" style="color:var(--dim);font-size:12.5px"></span>
+</div>
+<div class="cap" id="cap"></div>
+
+<section class="tables">
+  <h2 style="font-size:13px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin:0 0 10px">
+    完成后你会看到的三样东西
+  </h2>
+  <div class="two">
+    <table>
+      <tr><th>看到的东西</th><th>它回答什么</th></tr>
+      <tr><td><b>工具结果</b>（带本地 ID <code>d_7f3a</code>）</td><td>“刚才那件事”是哪一件，下一轮追问直接引用</td></tr>
+      <tr><td><b>系统提醒</b>（PeersReminder / RemoteTasksReminder）</td><td>有哪些节点可用；这段对话关联过哪些远程任务、有没有等你回答的</td></tr>
+      <tr><td><b>执行记录</b>（侧栏里的只读会话）</td><td>远端请求在这台机器上具体做了什么</td></tr>
+    </table>
+    <table>
+      <tr><th>入口</th><th>首版行为</th></tr>
+      <tr><td>channel / TUI / Desktop 的普通回合</td><td>配置开启时可用委派与任务查询</td></tr>
+      <tr><td>ACP / <code>-p</code></td><td>不承载节点，也不隐式获得委派</td></tr>
+      <tr><td>cron / 系统回调 / ambient</td><td>回合级禁用委派（没点名要它干的活）</td></tr>
+      <tr><td>subagent / fork / dream / 一次性命令</td><td>默认不继承委派</td></tr>
+      <tr><td><code>tachi web</code></td><td>只读控制台，不承载节点</td></tr>
+    </table>
+  </div>
+</section>
+<p class="foot">来源：<code>docs/2026-10-10-a2a-node-design.md</code>。页面里的文案、ID、状态都是示意，用于说明形态而非承诺字段。</p>
+
+<script>
+const NODES = { mac:{x:140,y:205,c:'#6ea8fe',n:'MacBook'}, nas:{x:620,y:95,c:'#f5b64f',n:'home-nas'},
+                vps:{x:620,y:345,c:'#6fe0a8',n:'hk-vps'} };
+const BADGE = {
+  host:  ['● 承载节点服务','#6ea8fe'],
+  ok:    ['● 可用','#6fe0a8'],
+  ok2:   ['● 可用（正在执行）','#6fe0a8'],
+  cand:  ['○ 候选（未信任）','#5a6474'],
+  off:   ['○ 离线','#5a6474'],
+  work:  ['● 正在执行任务','#f5b64f'],
+  wait:  ['● 等待你的回答','#f5b64f']
+};
+
+const SCEN = [
+{
+  name:'配对一次', hint:'手工填地址 + 指纹确认',
+  nodes:{mac:{s:'host'},nas:{s:'cand'},vps:{s:'off'}},
+  panel:'Mac 上的入口',
+  steps:[
+   {cap:'你只是在配置里填了一行地址 —— 地址和信任是两件事。',
+    add:[['user','你：把 home-nas 加到节点里，地址 10.0.0.10:7080'],
+         ['note','配置里多一条 peers 项：alias / address / identity（identity 待确认）']],
+    packet:{from:'mac',to:'nas',label:'首次连接'}},
+   {cap:'第一次接触只给候选：连上后拿到它的身份指纹，等你确认。',
+    add:[['proto','TLS 握手 → 对方身份：SHA256 7f:3a:…:c1'],
+         ['note','此时它还只是“候选”，不会出现在可委派的节点清单里']],
+    nodes:{nas:{s:'cand'}}},
+   {cap:'确认后它才进入可用清单 —— 凭据和撤销入口都在带外，不通过模型工具批准。',
+    add:[['note','你确认指纹 → 写入带外信任'],
+         ['proto','提醒里出现：home-nas：可用；Linux；家庭文件检索、备份检查']],
+    nodes:{nas:{s:'ok'}}}
+  ]
+},
+{
+  name:'点名委派', hint:'一句话 → 另一台机器上执行',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 上的对话',
+  steps:[
+   {cap:'你用大白话说要什么，不用记节点 ID；提醒里已经有可用节点。',
+    add:[['user','你：让 home-nas 检查昨天的备份是否完整，只读，别改文件'],
+         ['proto','提醒（每条回合都会给）：home-nas：可用；家庭文件检索、备份检查']]},
+   {cap:'模型选节点并提交。任务在 NAS 上跑，用的是 NAS 配置的工作区，不是你的 cwd。',
+    add:[['tool','DelegateTask{ node:"home-nas",\n  prompt:"检查昨天的备份是否完整，返回异常清单，不修改文件。" }'],
+         ['proto','A2A：SendMessage(contextId=新, returnImmediately=true) → 受理 SUBMITTED → WORKING']],
+    packet:{from:'mac',to:'nas',label:'task'},
+    nodes:{nas:{s:'work'}}},
+   {cap:'工具不阻塞：给你一个本地句柄，你可以接着聊别的。',
+    add:[['res','{ task_id:"d_7f3a", node:"home-nas",\n  title:"检查昨天的备份", state:"working" }'],
+         ['note','“d_7f3a”是这台机器上的委派记录 ID，之后追问、查询都用它']],
+    packet:{from:'nas',to:'mac',label:'句柄'}},
+   {cap:'那里真在干活 —— 独立的任务 agent，不占用你 Mac 上的聊天会话。',
+    add:[['side','home-nas：新建执行会话 → 跑工具 → 记录每一轮'],
+         ['side','权限按节点配置走：远程任务的默认策略不等于 channel 的无人值守模式']],
+    packet:{from:'mac',to:'nas',label:'执行'}},
+   {cap:'跑完后结果落盘，也回到这段对话里。',
+    add:[['res','{ task_id:"d_7f3a", state:"completed",\n  result:"发现两个目录未完成备份……" }'],
+         ['note','结果同时可在会话里被检索到，不必你手动搬运']],
+    packet:{from:'nas',to:'mac',label:'结果'},nodes:{nas:{s:'ok'}}}
+  ]
+},
+{
+  name:'你离线了', hint:'任务继续，回来还能查',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 合盖之后',
+  steps:[
+   {cap:'你合上笔记本，Mac 断网 —— 那台机器上的执行不受影响。',
+    add:[['note','Mac 上的状态是“部分未知”，不是“已完成”也不是“失败”']],
+    nodes:{mac:{s:'off'},nas:{s:'work'}}},
+   {cap:'远端继续跑完，结果写进它自己的任务记录。',
+    add:[['side','home-nas：WORKING → COMPLETED，产物已落盘']],
+    nodes:{nas:{s:'ok'}}},
+   {cap:'你回来问一句就行 —— 不需要当初那个窗口还开着。',
+    add:[['user','你：昨天那个备份检查有结果了吗'],
+         ['tool','RemoteTask{ action:"get", task_id:"d_7f3a" }'],
+         ['res','{ state:"completed", result:"发现两个目录未完成备份……" }']],
+    packet:{from:'mac',to:'nas',label:'查询'},nodes:{mac:{s:'host'}}},
+   {cap:'“之前做过什么、引用是什么”也会自动出现在提醒里。',
+    add:[['proto','提醒：当前对话关联的远程任务（有限摘要）\n- d_7f3a | home-nas | 检查昨天的备份 | 已完成']]}
+  ]
+},
+{
+  name:'接着追问', hint:'同一段对话，新的任务',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 上的对话',
+  steps:[
+   {cap:'追问不需要你重复上下文 —— 只要引用上一条记录。',
+    add:[['user','你：刚才缺失的两个目录，上次成功备份是什么时候'],
+         ['tool','DelegateTask{ continue_from:"d_7f3a",\n  prompt:"刚才缺失的两个目录，上一次成功备份是什么时候？" }']]},
+   {cap:'服务端翻译成同一段远端对话里的新任务，并指出“引用的是哪件工作”，不重放旧任务。',
+    add:[['proto','A2A：同 contextId + referenceTaskIds=[远端 task]，新 task'],
+         ['side','home-nas：载入这段对话的历史 → 新的 agent 回合']],
+    packet:{from:'mac',to:'nas',label:'追问'},nodes:{nas:{s:'work'}}},
+   {cap:'旧任务保持它自己的终态，新任务有自己的 ID。',
+    add:[['res','{ task_id:"d_91bc", state:"completed",\n  result:"上次成功备份是 10-07 03:12……" }'],
+         ['note','这就是“默认新建、显式引用才延续”：不按节点猜最近一次会话']],
+    packet:{from:'nas',to:'mac',label:'结果'},nodes:{nas:{s:'ok'}}}
+  ]
+},
+{
+  name:'它反问你', hint:'INPUT_REQUIRED → 回答唤醒',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 上的对话',
+  steps:[
+   {cap:'远端干活时卡在一个只有你能回答的问题上。',
+    add:[['side','home-nas：需要澄清 → 任务进入“等待输入”，问题落盘'],
+         ['tool','RemoteTask{ action:"get", task_id:"d_7f3a" }'],
+         ['res','{ state:"input_required",\n  question:{ id:"q_2", text:"检查照片还是文档？" } }']],
+    packet:{from:'nas',to:'mac',label:'提问'},nodes:{nas:{s:'wait'}}},
+   {cap:'提醒里也带着问题 ID，所以你不用翻历史。',
+    add:[['proto','提醒：… - d_7f3a | home-nas | 检查照片还是文档 | 等待回答 | question_id=q_2']]},
+   {cap:'回答走任务通道，唤醒原来那次执行 —— 不另起一个并行回合。',
+    add:[['user','你：照片'],
+         ['tool','RemoteTask{ action:"reply", task_id:"d_7f3a",\n  question_id:"q_2", answer:"照片" }'],
+         ['proto','A2A：同 taskId/contextId 补充输入 → 返回 WORKING']],
+    packet:{from:'mac',to:'nas',label:'回答'},nodes:{nas:{s:'work'}}},
+   {cap:'业务澄清可以这样回答；但工具授权不能由对方模型自己批准 —— 那是另一条路径。',
+    add:[['res','{ state:"completed", result:"照片目录共 1,204 项，全部有备份……" }'],
+         ['note','需要人工授权的工具：按节点策略询问有权的人，或直接拒绝，不放行']],
+    packet:{from:'nas',to:'mac',label:'结果'},nodes:{nas:{s:'ok'}}}
+  ]
+},
+{
+  name:'带回来的附件', hint:'产物走 artifact，不是消息',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 上的对话',
+  steps:[
+   {cap:'你要的不只是几句话 —— 是那台机器上生成的一份东西。',
+    add:[['user','你：让 home-nas 跑一次备份检查，把结果整理成清单，有异常就画个图回来'],
+         ['tool','DelegateTask{ node:"home-nas",\n  prompt:"跑一次备份检查；结果整理成 JSON 清单，异常时附一张 PNG。" }']],
+    packet:{from:'mac',to:'nas',label:'task'}},
+   {cap:'给它的输入文件走同一套 parts —— 首版只做内联字节 + 体积上限。',
+    add:[['proto','A2A：message.parts = [ {text}, {raw, filename, mediaType} ]'],
+         ['note','内联是 base64，体积膨胀约 1/3，所以先用上限卡住；URL 形态留给下一版']]},
+   {cap:'那边跑完，产物挂在 task 的 artifact 上 —— 规范要求产物走 artifact，而不是回复消息里塞一段 base64。',
+    add:[['side','home-nas：生成 missing.json 与 backup-report.png'],
+         ['proto','A2A：task.artifacts = [ {parts:[{data…}]}, {parts:[{raw…}]} ]']],
+    packet:{from:'mac',to:'nas',label:'执行'},nodes:{nas:{s:'work'}}},
+   {cap:'回到你这边，工具结果里就是这两样东西：结构化清单直接可读，图片是附件。',
+    add:[['res','{ task_id:"d_5c2e", state:"completed",\n  artifacts:[ { name:"missing.json", mediaType:"application/json" },\n              { name:"backup-report.png", mediaType:"image/png", size:"184 KB" } ] }'],
+         ['data','{ "missing_dirs": ["a/2024", "b/2025"], "last_ok": "10-07 03:12", "ok": 1202 }'],
+         ['art','backup-report.png · image/png · 184 KB']],
+    packet:{from:'nas',to:'mac',label:'产物'},nodes:{nas:{s:'ok'}}},
+   {cap:'它是受管副本或带鉴权的句柄，不是那台机器上的路径 —— 与“不把远端绝对路径当本地可读文件”同一条规则。',
+    add:[['note','将来用 URL 形态：下载地址要鉴权、可过期；本机去取对端给的地址要防 SSRF，给出的地址不能是内网'],
+         ['note','媒体类型与体积按节点白名单；产物的保留期与去重记录分开定义，清理 session 不能删掉仍承诺可查的产物']]}
+  ]
+},
+{
+  name:'同一段对话不并行', hint:'明确拒绝，而不是排队成两遍',
+  nodes:{mac:{s:'host'},nas:{s:'work'},vps:{s:'off'}},
+  panel:'Mac 上的对话',
+  steps:[
+   {cap:'上一件还在跑，你又在这段对话上派了新活。',
+    add:[['note','home-nas 上这段对话正有一个任务在执行'],
+         ['tool','DelegateTask{ node:"home-nas", prompt:"顺便也看一下文档目录" }']]},
+   {cap:'接收端在受理前就拒绝：明确“没受理、没有新任务 ID”，不是成功。',
+    add:[['proto','HTTP 503 + ErrorInfo(domain=本产品自有域, reason=CONTEXT_BUSY)'],
+         ['res','{ state:"not_accepted",\n  reason:"这段对话正在执行，未受理；可稍后重试或另开对话" }']],
+    packet:{from:'nas',to:'mac',label:'busy'}},
+   {cap:'用原请求重试会拿到同一个任务，不会执行两遍；着急就另开一段对话。',
+    add:[['note','普通的 503 或连接错误不能推断成“未受理”——必须来源可信、错误域和原因都对上'],
+         ['note','重复的提交按“调用者 + 消息 ID”去重，重启后依然有效']]}
+  ]
+},
+{
+  name:'一台机器一个服务', hint:'附着 + 按需接管',
+  nodes:{mac:{s:'host'},nas:{s:'off'},vps:{s:'off'}},
+  panel:'Mac 上同时开了两个入口',
+  steps:[
+   {cap:'Desktop 先启动：进程锁 + 监听端口，服务就长在它里面，没有额外常驻进程。',
+    add:[['note','Desktop：取得节点服务锁 → 承载节点服务'],
+         ['note','同一份数据目录、同一个用户身份下，只有一个进程承载']],
+    nodes:{mac:{s:'host'}}},
+   {cap:'你再开 TUI：它不抢，附着上去用同一个服务。',
+    add:[['note','TUI：拿不到锁 → 读取本机连接信息 → 带认证握手 → 附着'],
+         ['note','TUI 的普通聊天仍跑在 TUI 进程里；只有节点相关的操作经过服务']]},
+   {cap:'关掉 Desktop：服务停了，但 TUI 还在 —— 它下次要动节点时自己把锁接过来。',
+    add:[['note','Desktop 退出 → 释放锁'],
+         ['note','TUI 下一次显式节点操作：先尝试附着，服务不在就持锁恢复监听'],
+         ['note','刚在跑的东西不会被“恢复”，按中断如实报告；接管监听 ≠ 恢复原执行']],
+    nodes:{mac:{s:'host'}}},
+   {cap:'所以“谁在承载”是生命周期问题，不决定任务继承哪个聊天窗口、工作目录或审批方式。',
+    add:[['note','后台任务用节点级配置：cwd、审批策略、可见工具集都不跟前台窗口走']]}
+  ]
+},
+{
+  name:'接收侧长什么样', hint:'执行记录：能看，不能续写',
+  nodes:{mac:{s:'host'},nas:{s:'ok'},vps:{s:'off'}},
+  panel:'Mac 的会话列表（侧栏）',
+  steps:[
+   {cap:'远端请求在这台机器上留下的会话，普通列表里看得到 —— 但带着来源标签。',
+    add:[['note','会话列表：\n· 重构 web 侧栏\n· 排查上传超时\n· A2A 执行记录 · 来自 home-nas']],
+    packet:{from:'nas',to:'mac',label:'请求'}},
+   {cap:'点开是只读的：输入框不可用，按 ID 恢复、fork、删除都会被拒。',
+    add:[['note','可以看历史、工具调用和结果；不能在这里发消息，也不能改历史'],
+         ['proto','拒绝发生在写记录/召回记忆/生成标题/建 checkpoint 之前 —— 不是等跑了才拒绝']]},
+   {cap:'它也不会被当成你的对话喂进记忆整理。',
+    add:[['note','执行记录默认不进 Dream；写/读长期记忆的工具对远程任务默认禁用'],
+         ['note','想自己接着研究：新建一个普通会话，显式引用获准读取的结果']]},
+   {cap:'只有节点任务管理器能启动这段对话的下一轮 —— 本机用户打开记录不等于接管执行。',
+    add:[['note','问题回答、审批、取消也都走任务通道，不拼成普通聊天消息'],
+         ['note','它也不会被普通的“会话数量清理”删掉；用完由节点按到期回收']]}
+  ]
+}
+];
+
+const $=id=>document.getElementById(id);
+let si=0, idx=-1, timer=null, playing=false, pktRAF=null;
+
+function buildChips(){
+  $('chips').innerHTML='';
+  SCEN.forEach((s,i)=>{
+    const li=document.createElement('li');
+    li.className='chip'+(i===si?' on':'');
+    li.innerHTML=s.name+' <span style="color:var(--dim)">· '+s.hint+'</span>';
+    li.onclick=()=>{si=i;buildChips();reset();};
+    $('chips').appendChild(li);
+  });
+}
+
+function fold(stepIdx){
+  const sc=SCEN[si];
+  const nodes=JSON.parse(JSON.stringify(sc.nodes));
+  const lines=[]; let edge=null, packet=null;
+  for(let i=0;i<=stepIdx;i++){
+    const st=sc.steps[i];
+    if(st.nodes) for(const k in st.nodes) nodes[k]=Object.assign({},nodes[k],st.nodes[k]);
+    if(st.add) st.add.forEach(l=>lines.push(l));
+    if(st.packet){edge=[st.packet.from,st.packet.to];packet=st.packet;}
+  }
+  return {nodes,lines,edge,packet};
+}
+
+function drawNodes(nodes){
+  for(const id in nodes){
+    const g=$('n_'+id), b=$('b_'+id);
+    const st=nodes[id].s||'off';
+    const [txt,col]=BADGE[st]||BADGE.off;
+    b.textContent=txt; b.setAttribute('fill',col);
+    g.classList.toggle('on', st==='host'||st==='work'||st==='wait');
+  }
+}
+
+function drawEdges(edge){
+  ['e_mac_nas','e_mac_vps','e_nas_vps'].forEach(e=>$(e).classList.remove('hot'));
+  if(!edge) return;
+  const key=[edge[0],edge[1]].sort().join('_');
+  const el=$('e_'+key); if(el) el.classList.add('hot');
+}
+
+function drawLines(lines,panel){
+  const box=$('chat');
+  box.innerHTML='';
+  lines.forEach(([k,t])=>{
+    const d=document.createElement('div');
+    d.className='ln k-'+k;
+    const tag={user:'你',tool:'tool',res:'result',proto:'wire',side:'远端',note:'',art:'artifact',data:'data'}[k]||'';
+    let body=esc(t);
+    if(k==='art'){
+      const bars=[[6,18],[20,30],[34,12],[48,38],[62,22],[76,44],[90,26]]
+        .map(function(p){return '<rect x="'+p[0]+'" y="'+(62-p[1])+'" width="9" height="'+p[1]+
+          '" rx="2" fill="#8d7bd8" opacity=".9"></rect>';}).join('');
+      d.className='ln k-art artbox';
+      d.innerHTML=(tag?'<span class="tag">'+tag+'</span>':'')+
+        '<svg viewBox="0 0 108 62" width="108" height="62" aria-hidden="true">'+
+        '<rect x="0" y="60" width="108" height="1" fill="#2b3441"></rect>'+bars+'</svg>'+
+        '<div><div class="fname">'+esc(t)+'</div>'+
+        '<div class="fmeta">artifact · 受管副本或带鉴权的句柄，不是执行节点上的路径</div></div>';
+      box.appendChild(d); return;
+    }
+    d.innerHTML=(tag?'<span class="tag">'+tag+'</span>':'')+body;
+    box.appendChild(d);
+  });
+  box.scrollTop=box.scrollHeight;
+  $('panelTitle').textContent=panel||'你的界面';
+}
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function flyPacket(p){
+  if(!p) return Promise.resolve();
+  return new Promise(res=>{
+    const a=NODES[p.from], b=NODES[p.to];
+    const g=$('packetG'), c=$('pk'), t=$('pkT');
+    c.setAttribute('fill',a.c); c.setAttribute('opacity','0.95');
+    t.textContent=p.label; t.setAttribute('fill',a.c);
+    const t0=performance.now(), D=p.dur||900, ins=0.18;
+    g.style.opacity='1';
+    const tick=now=>{
+      const k=Math.min(1,(now-t0)/D);
+      const e=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+      const f=ins+(1-2*ins)*e;
+      const x=a.x+(b.x-a.x)*f, y=a.y+(b.y-a.y)*f;
+      g.setAttribute('transform','translate('+x+','+y+')');
+      t.setAttribute('x', 14); t.setAttribute('y', 4);
+      if(k<1){pktRAF=requestAnimationFrame(tick);}
+      else{ setTimeout(()=>{g.style.opacity='0';res();},260); }
+    };
+    pktRAF=requestAnimationFrame(tick);
+  });
+}
+
+function render(i,animate){
+  const sc=SCEN[si], st=sc.steps[i], f=fold(i);
+  idx=i;
+  $('cap').innerHTML='<span class="n">'+String(i+1).padStart(2,'0')+' / '+
+      String(sc.steps.length).padStart(2,'0')+'</span>'+esc(st.cap);
+  $('prog').textContent=sc.name;
+  drawNodes(f.nodes); drawEdges(f.edge); drawLines(f.lines, sc.panel);
+  if(animate && st.packet) flyPacket(st.packet);
+}
+
+function reset(){ stop(); render(0,false); }
+function stop(){ playing=false; $('bPlay').textContent='▶ 播放'; clearTimeout(timer); }
+function step(){ if(idx>=SCEN[si].steps.length-1){stop();return;} render(idx+1,true); nextTick(); }
+function nextTick(){
+  if(!playing) return;
+  const base=2100, extra=SCEN[si].steps[idx]&&SCEN[si].steps[idx].packet?700:0;
+  timer=setTimeout(()=>{ if(playing) step(); }, base+extra);
+}
+function play(){ playing=true; $('bPlay').textContent='⏸ 暂停';
+  if(idx>=SCEN[si].steps.length-1) render(0,false);
+  nextTick(); }
+
+$('bNext').onclick=()=>{stop(); if(idx<SCEN[si].steps.length-1) render(idx+1,true);};
+$('bPrev').onclick=()=>{stop(); if(idx>0) render(idx-1,false);};
+$('bPlay').onclick=()=>{playing?stop():play();};
+$('bReset').onclick=()=>{stop(); render(0,false);};
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight') $('bNext').click();
+  else if(e.key==='ArrowLeft') $('bPrev').click();
+  else if(e.key===' '){e.preventDefault(); $('bPlay').click();}
+});
+document.addEventListener('visibilitychange',()=>{ if(document.hidden) stop(); });
+
+buildChips(); reset();
+</script>
+</body>
+</html>
