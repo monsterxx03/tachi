@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,14 @@ type Manager struct {
 	maxKeep int // max sessions to retain; 0 = no cleanup
 	mu      sync.Mutex
 	logger  *logger.Logger
+	// retention is the shared answer to "may this session be deleted?" (see retention.go).
+	// Nil means this manager cannot reach the session data dir (a custom store), and then it
+	// makes no claim about protection: it neither skips a held session nor refuses a delete,
+	// because it cannot tell. Managers over the real store always have one.
+	retention *Retention
+	// onSwitch, when set, is called when a conversation MOVES to another session (compaction)
+	// — see SetSessionSwitchHook.
+	onSwitch func(old, next *Session)
 }
 
 // DefaultMaxKeep is how many sessions a manager retains when the caller sets no
@@ -35,13 +44,56 @@ func NewManager(l *logger.Logger) (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{store: store, maxKeep: DefaultMaxKeep, logger: l}, nil
+	retention, err := NewRetention(dir, l)
+	if err != nil {
+		return nil, fmt.Errorf("session dir: %w", err)
+	}
+
+	return &Manager{store: store, maxKeep: DefaultMaxKeep, logger: l, retention: retention}, nil
 }
 
-// NewManagerWithStore creates a Manager with a custom store implementation
+// NewManagerWithStore creates a Manager with a custom store implementation.
+//
+// A store that knows its directory (`BaseDir`) also brings retention with it: the protection
+// layer is nothing but files beside the sessions, so a manager that can see them can honour
+// them. A store that does not (a test double, an in-memory store) has no holds to honour
+// either — the node is the only writer, and it always works through the real store.
 func NewManagerWithStore(store Store, l *logger.Logger) *Manager {
-	return &Manager{store: store, logger: l}
+	m := &Manager{store: store, logger: l}
+	if withDir, ok := store.(interface{ BaseDir() string }); ok {
+		if retention, err := NewRetention(withDir.BaseDir(), l); err == nil {
+			m.retention = retention
+		}
+	}
+	return m
 }
+
+// SetSessionSwitchHook installs the callback a conversation's move to another session fires.
+//
+// It exists for the state a host keeps keyed by session id — a receiving node's retention
+// holds and its context binding — which must follow the CONVERSATION, not the id it used to
+// live in. Compaction is the only thing that moves a conversation (agent/compact.go), and it
+// is also the one moment when the new session is unprotected and already being written to, so
+// the notification has to arrive from there rather than being inferred later from the ids.
+func (m *Manager) SetSessionSwitchHook(fn func(old, next *Session)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onSwitch = fn
+}
+
+// NotifySessionSwitch is how the compaction path tells the manager its conversation moved.
+// It is a no-op without a hook (the ordinary case: most managers have nothing keyed by id).
+func (m *Manager) NotifySessionSwitch(old, next *Session) {
+	m.mu.Lock()
+	fn := m.onSwitch
+	m.mu.Unlock()
+	if fn != nil {
+		fn(old, next)
+	}
+}
+
+// Retention exposes the protection layer for a host that owns the holds (the receiving node).
+func (m *Manager) Retention() *Retention { return m.retention }
 
 // SetMaxKeep sets the maximum number of sessions to retain.
 // 0 means no automatic cleanup.
@@ -64,18 +116,19 @@ func (m *Manager) SetMaxKeep(maxKeep int) {
 // lifted. Nothing else is affected — the sweep still trims every unpinned session it would
 // have trimmed.
 //
+// A HELD session is never deleted either, and that protection is not this manager's memory:
+// it is the persisted record beside the sessions (retention.go), which every process sharing
+// this data dir reads and writes under one coordination lock. So a receiving node's session
+// survives a sweep run by the desktop, by another TUI, or by a manager inside the node's own
+// process that never heard of that context.
+//
 // Storage errors (e.g. listing sessions) are logged internally and reported as
 // zero removals, so callers don't need to handle an error return.
 func (m *Manager) CleanupOldSessions() int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.cleanupLocked()
-}
-
-// cleanupLocked is the lock-holding variant of CleanupOldSessions.
-// Caller must hold m.mu.
-func (m *Manager) cleanupLocked() int {
-	if m.maxKeep <= 0 {
+	maxKeep := m.maxKeep
+	m.mu.Unlock()
+	if maxKeep <= 0 {
 		return 0
 	}
 
@@ -85,30 +138,26 @@ func (m *Manager) cleanupLocked() int {
 		return 0
 	}
 
-	if len(sessions) <= m.maxKeep {
+	if len(sessions) <= maxKeep {
 		return 0
 	}
 
 	// sessions are sorted newest-first, so excess are at the end
-	excess := sessions[m.maxKeep:]
-
-	// Collect current session ID to avoid deleting it
-	currentID := ""
-	if m.current != nil {
-		currentID = m.current.ID
-	}
+	excess := sessions[maxKeep:]
 
 	removed := 0
 	skippedThread := 0
+	skippedPinned := 0
+	skippedHeld := 0
+	skippedCurrent := 0
 	skipped := make([]string, 0)
-	skippedPinned := make([]string, 0)
+	held := make([]string, 0)
 	for _, s := range excess {
-		if s.ID == currentID {
-			continue
-		}
-		// A pinned session is kept whatever its age — see CleanupOldSessions.
+		// Pinned and thread-bound are decided from the record as it was enumerated: both are
+		// the user's (or a channel's) own statements about the session, and a sweep that reads
+		// them one candidate at a time would only re-read the same file.
 		if s.Pinned {
-			skippedPinned = append(skippedPinned, s.ID)
+			skippedPinned++
 			continue
 		}
 		// Skip sessions that are actively used by IM channels.
@@ -121,25 +170,105 @@ func (m *Manager) cleanupLocked() int {
 			skipped = append(skipped, s.ID+"("+s.ThreadID+")")
 			continue
 		}
-		if err := m.store.DeleteSession(s.ID); err != nil {
-			// Log but continue — best-effort cleanup
-			m.logger.Error(context.Background(), "session cleanup: failed to delete", err, "id", s.ID)
-			continue
+
+		outcome := m.deleteIfUnprotected(s.ID)
+		switch outcome {
+		case deleteRemoved:
+			removed++
+		case deleteSkippedCurrent:
+			skippedCurrent++
+		case deleteSkippedHeld:
+			skippedHeld++
+			held = append(held, s.ID)
 		}
-		removed++
 	}
 
 	if skippedThread > 0 {
 		m.logger.Info(context.Background(), "session cleanup: skipped sessions with active ThreadID", "skipped", skippedThread, "ids", skipped)
 	}
-	if len(skippedPinned) > 0 {
-		m.logger.Info(context.Background(), "session cleanup: kept pinned sessions past maxKeep", "skipped", len(skippedPinned), "ids", skippedPinned)
+	if skippedPinned > 0 {
+		m.logger.Info(context.Background(), "session cleanup: kept pinned sessions past maxKeep", "skipped", skippedPinned)
+	}
+	if skippedHeld > 0 {
+		m.logger.Info(context.Background(), "session cleanup: kept sessions a task or context still needs", "skipped", skippedHeld, "ids", held)
+	}
+	if skippedCurrent > 0 {
+		m.logger.Info(context.Background(), "session cleanup: kept this manager's current session", "skipped", skippedCurrent)
 	}
 	if removed > 0 {
-		m.logger.Info(context.Background(), "session cleanup: removed old sessions", "removed", removed, "maxKeep", m.maxKeep)
+		m.logger.Info(context.Background(), "session cleanup: removed old sessions", "removed", removed, "maxKeep", maxKeep)
 	}
 
 	return removed
+}
+
+// deleteOutcome is why one candidate did or did not go.
+type deleteOutcome int
+
+const (
+	deleteFailed deleteOutcome = iota
+	deleteRemoved
+	deleteSkippedCurrent
+	deleteSkippedHeld
+)
+
+// deleteIfUnprotected is one deletion decision, made where it has to be: inside the
+// coordination lock, with the manager's own lock taken inside THAT (the fixed order — file
+// lock first, then the in-process one). Two things are re-read here rather than trusted from
+// the enumeration, because both can change while a sweep is running: whether this session
+// became the manager's current one, and whether something took a hold on it.
+func (m *Manager) deleteIfUnprotected(id string) deleteOutcome {
+	if m.retention == nil {
+		// A manager that cannot see the session data dir (a custom store) also cannot see
+		// holds. It makes no claim about protection rather than refusing to clean at all.
+		m.mu.Lock()
+		current := m.current != nil && m.current.ID == id
+		m.mu.Unlock()
+		if current {
+			return deleteSkippedCurrent
+		}
+		return m.deleteNow(id)
+	}
+
+	outcome := deleteFailed
+	err := m.retention.Lock(func() error {
+		if err := m.retention.protected(id); err != nil {
+			var held *SessionHeldError
+			if errors.As(err, &held) || errors.Is(err, errProtectionUnknown) {
+				// Held, or unknowable — both mean "keep it", and the difference is only what
+				// gets logged (see deleteIfUnprotected's caller).
+				m.logger.Info(context.Background(), "session cleanup: keeping a session; held or unreadable",
+					"id", id, "cause", err)
+				outcome = deleteSkippedHeld
+				return nil
+			}
+			return err
+		}
+		m.mu.Lock()
+		current := m.current != nil && m.current.ID == id
+		m.mu.Unlock()
+		if current {
+			outcome = deleteSkippedCurrent
+			return nil
+		}
+		outcome = m.deleteNow(id)
+		return nil
+	})
+	if err != nil {
+		m.logger.Error(context.Background(), "session cleanup: retention decision failed", err, "id", id)
+		return deleteFailed
+	}
+	return outcome
+}
+
+// deleteNow is the one place a session directory is removed inside this package.
+func (m *Manager) deleteNow(id string) deleteOutcome {
+	if err := m.store.DeleteSession(id); err != nil {
+		// Log but continue — best-effort cleanup
+		m.logger.Error(context.Background(), "session cleanup: failed to delete", err, "id", id)
+		return deleteFailed
+	}
+	return deleteRemoved
 }
 
 // Current returns the current session
@@ -158,9 +287,21 @@ func (m *Manager) HasCurrent() bool {
 
 // New creates a new session
 func (m *Manager) New(providerName, workingDir string) (*Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	session, err := m.newLocked(providerName, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	// Cleanup runs AFTER the new session exists and this manager's lock is released: the sweep
+	// takes the cross-process coordination lock, and the fixed order is that lock first, then
+	// the manager's own (see retention.go). Doing it here also means the new session can never
+	// be one of the candidates — it is the newest by construction.
+	m.CleanupOldSessions()
+	return session, nil
+}
 
+// newLocked is New's first half: create the session and make it current.
+// Caller must hold m.mu.
+func (m *Manager) newLocked(providerName, workingDir string) (*Session, error) {
 	now := time.Now()
 	session := &Session{
 		ID:           GenerateID(),
@@ -175,10 +316,6 @@ func (m *Manager) New(providerName, workingDir string) (*Session, error) {
 	}
 
 	m.current = session
-
-	// Clean up old sessions if we exceed the limit (lock already held).
-	m.cleanupLocked()
-
 	return session, nil
 }
 
@@ -358,9 +495,29 @@ func (m *Manager) LoadAPIRequests(sessionID string) ([]APIRequest, error) {
 	return m.store.LoadAPIRequests(sessionID)
 }
 
-// Delete deletes a session by ID
+// Delete deletes a session by ID.
+//
+// A session something still needs is REFUSED, and the refusal carries the reason (which task
+// or conversation) so the reader knows what to end first. The decision is made under the
+// coordination lock and against the persisted holds, not against this process's memory: the
+// same check has to stop a desktop delete, an ACP delete and a count-based sweep in another
+// process, and only a shared, persisted answer can (design §9.4: 拒绝判定落在共享保留/删除层).
 func (m *Manager) Delete(id string) error {
-	return m.store.DeleteSession(id)
+	if m.retention == nil {
+		return m.store.DeleteSession(id)
+	}
+	var refusal error
+	err := m.retention.Lock(func() error {
+		if err := m.retention.protected(id); err != nil {
+			refusal = err
+			return nil
+		}
+		return m.store.DeleteSession(id)
+	})
+	if err != nil {
+		return err
+	}
+	return refusal
 }
 
 // UpdateMeta persists the given session's metadata. It is safe to call on

@@ -31,7 +31,9 @@ type contextBinding struct {
 	CallerID string `json:"caller_id,omitempty"`
 	// SessionID is the session the context is held in RIGHT NOW. Compaction moves the
 	// conversation to a successor session, and this field follows it — the context id and
-	// the task ids never change.
+	// the task ids never change. The node's retention hold follows with it (see
+	// runner.onSessionSwitch), which is why the move happens while the turn is running
+	// rather than at the next request.
 	SessionID string `json:"session_id"`
 	// Workspace is the working directory this context was opened in, recorded so a later
 	// task in the same conversation runs in the same place even if the node's config has
@@ -39,6 +41,33 @@ type contextBinding struct {
 	Workspace string    `json:"workspace"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastUsedAt is when this context was last used — a task started or resumed in it. The
+	// retention window is counted from here rather than from creation, so a conversation in
+	// daily use never expires and an abandoned one ages out (design §9.4's "idle but still
+	// answerable" window).
+	LastUsedAt time.Time `json:"last_used_at,omitzero"`
+}
+
+// lastUsed is the instant this context's retention window starts from.
+func (b contextBinding) lastUsed() time.Time {
+	if b.LastUsedAt.After(b.CreatedAt) {
+		return b.LastUsedAt
+	}
+	return b.CreatedAt
+}
+
+// expired reports whether this context's retention window has passed. It is the node's own
+// check, and it has to exist beside the hold's deadline rather than inside it: the hold says
+// how long the SESSION is kept, while this says whether the conversation may still be
+// continued. Both end at the same instant, so a caller can never be told "the session is gone"
+// by a sweep before it is told "this conversation has expired".
+func (b contextBinding) expired(now time.Time, retention time.Duration) bool {
+	if retention <= 0 {
+		// No window configured: the context stays valid (and so does its hold, which the
+		// runner writes without a deadline).
+		return false
+	}
+	return !now.Before(b.lastUsed().Add(retention))
 }
 
 const contextsDirName = "contexts"

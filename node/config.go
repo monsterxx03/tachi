@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -29,12 +30,19 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 		return nil, err
 	}
 	dataDir := config.NodeDir()
+	// The retention record lives beside the sessions, because that is what it is about: the
+	// node protects ITS conversations from a cleanup that runs in any other process, and the
+	// sweep reads the same directory (see session/retention.go).
+	sessionsDir, err := config.SessionDir()
+	if err != nil {
+		return nil, fmt.Errorf("node: session dir: %w", err)
+	}
 	log := logger.New("node")
 
 	// The remote tasks' executor: a real Tachi turn in a session on this node's workspace.
 	// Building it here (rather than passing the config down) is what keeps StartOrAttach's
 	// inputs explicit — see Options.Executor.
-	taskRunner, err := newRunner(cfg, workspace, dataDir, log)
+	taskRunner, err := newRunner(cfg, workspace, dataDir, sessionsDir, log)
 	if err != nil {
 		return nil, err
 	}

@@ -37,15 +37,20 @@ var _ a2asrv.AgentExecutor = (*nodeExecutor)(nil)
 //   - consumeTaskStore receives the node's task store. It is opened by the host after the
 //     executor is built (the store owns the startup recovery, so there may be exactly one),
 //     and it is what lets a question whose deadline passes end its task.
+//   - reconcile repairs what the last process left behind, once both halves of its state exist
+//     (the task store and the retention record). It runs before the surface accepts work.
 //   - shutdown ends the work that is waiting for something that is no longer coming.
 type nodeState interface {
 	consumeTaskStore(*taskStore)
+	reconcile()
 	shutdown()
 }
 
 var _ nodeState = (*nodeExecutor)(nil)
 
 func (e *nodeExecutor) consumeTaskStore(store *taskStore) { e.runner.consumeTaskStore(store) }
+
+func (e *nodeExecutor) reconcile() { e.runner.reconcile() }
 
 func (e *nodeExecutor) shutdown() { e.runner.shutdown() }
 

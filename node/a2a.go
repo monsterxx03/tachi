@@ -73,6 +73,10 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	var state nodeState
 	if ns, ok := executor.(nodeState); ok {
 		ns.consumeTaskStore(store)
+		// Repairs what the last process left behind, now that both halves of the node's state
+		// exist — and BEFORE this surface accepts anything. A hold whose task or conversation
+		// is gone is released here, so a crash cannot leave a session protected forever.
+		ns.reconcile()
 		state = ns
 	}
 	var questions questionSource

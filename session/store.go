@@ -115,6 +115,14 @@ func (s *FileStore) sessionDir(id string) string {
 	return filepath.Join(s.baseDir, id)
 }
 
+// BaseDir is the directory this store keeps its sessions in.
+//
+// It is exported for the layers that exist BESIDE the sessions rather than inside them — the
+// retention records a sweep must consult (session/retention.go) — because a fact about layout
+// cannot be split in two without drifting: the hold for a session is named after the
+// directory that holds it, so whoever writes or reads one must be looking at the same tree.
+func (s *FileStore) BaseDir() string { return s.baseDir }
+
 func (s *FileStore) metaPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "meta.json")
 }

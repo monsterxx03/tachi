@@ -43,6 +43,52 @@ func TestBuildCompactHistory_Structure(t *testing.T) {
 	assert.Contains(t, history[2].Content, "请基于以上摘要继续对话")
 }
 
+func TestFinalizeCompactTellsTheHostTheConversationMoved(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewFileStore(dir)
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("anthropic", "/test/dir")
+	require.NoError(t, err)
+	oldSess.Title = "帮我重构用户模块"
+	oldSess.ThreadID = "thread-1" // a binding the migration moves to the child
+	require.NoError(t, sm.UpdateMeta(oldSess))
+
+	// The host's view, as it is at the moment of the notification. What matters is the ORDER:
+	// the new session is already the conversation (current, meta written) and the old one has
+	// not been unwound yet, because the host protects the new session before anything releases
+	// the old one (design §9.4).
+	var notifiedOld, notifiedNew string
+	var sawNewCurrent, sawNewMeta, oldStillBound bool
+	sm.SetSessionSwitchHook(func(o, n *session.Session) {
+		notifiedOld, notifiedNew = o.ID, n.ID
+		sawNewCurrent = sm.Current() != nil && sm.Current().ID == n.ID
+		if loaded, err := store.LoadMeta(n.ID); err == nil {
+			sawNewMeta = loaded.Title == o.Title
+		}
+		if loaded, err := store.LoadMeta(o.ID); err == nil {
+			oldStillBound = loaded.ThreadID == "thread-1"
+		}
+	})
+
+	_, err = FinalizeCompact(sm, "system prompt", "summary")
+	require.NoError(t, err)
+
+	require.Equal(t, oldSess.ID, notifiedOld, "the host must be told which session was left")
+	require.Equal(t, sm.Current().ID, notifiedNew, "…and which one it moved to")
+	require.NotEqual(t, oldSess.ID, notifiedNew)
+	require.True(t, sawNewCurrent, "the child has to be current when the host hears about it")
+	require.True(t, sawNewMeta, "…and its meta written, or the host would protect a half-made session")
+	require.True(t, oldStillBound,
+		"the old session's bindings are released AFTER the notification, so the host can move "+
+			"them rather than race their removal")
+
+	// And a manager nobody installed a hook on simply says nothing (the ordinary case).
+	plain := session.NewManagerWithStore(store, nil)
+	require.NotPanics(t, func() { plain.NotifySessionSwitch(oldSess, oldSess) })
+}
+
 func TestFinalizeCompact_NoActiveSession(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)

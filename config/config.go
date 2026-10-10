@@ -468,6 +468,18 @@ type NodeConfig struct {
 	// Reaching it does not refuse new WORK: the running turn is told its question could not be
 	// asked and finishes with what it has.
 	MaxParked int `yaml:"max_parked" default:"16"`
+
+	// ContextRetention is how long a remote CONVERSATION stays valid after its last use, and
+	// with it how long its session is kept (design §9.4). Within the window the conversation
+	// can be continued even while no task is running; after it, a continuation is refused —
+	// explicitly, never by quietly starting a new conversation — and the session becomes
+	// ordinary again, so any count-based cleanup may reclaim it.
+	//
+	// The clock runs from the LAST use, so a conversation in daily use never expires and an
+	// abandoned one ages out. Zero or negative means no window: the conversation stays valid
+	// and its session stays protected until something releases it (only sensible for a node
+	// whose data dir is cleaned by hand).
+	ContextRetention time.Duration `yaml:"context_retention" default:"168h"`
 }
 
 // WorkspaceDir is where remote tasks work: the configured workspace with "~" expanded to

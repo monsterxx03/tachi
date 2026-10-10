@@ -9,6 +9,15 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// sessionSwitchNotifier is the optional half of a SessionManager: a manager that can tell its
+// host the conversation moved. Only a manager that somebody installed a hook on does anything
+// with it (session.Manager.NotifySessionSwitch), so the ordinary frontends are unaffected —
+// but the type assertion stays here rather than on the interface so that a test double does
+// not have to implement a notification it will never receive.
+type sessionSwitchNotifier interface {
+	NotifySessionSwitch(old, next *session.Session)
+}
+
 // CompleteCompact finalizes a compaction: creates the new compacted session
 // and returns the new conversation history ready for RunConversationStream.
 //
@@ -134,6 +143,18 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	newSess.SkipDream = oldSess.SkipDream
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
+	}
+
+	// The conversation just MOVED, and a host that keeps state keyed by session id has to hear
+	// it here rather than figure it out later. A receiving node protects its sessions with
+	// persisted holds and remembers a context's session by id: the child is unprotected and
+	// already being written to at this moment, so "the host will notice at the next task" is a
+	// window in which a cleanup in another process deletes the session a running turn is using
+	// (design §9.4). The notification happens BEFORE the old session's own bookkeeping is
+	// updated below, which is the order the design fixes: protect the new one, persist the new
+	// binding, then release what the old one no longer needs.
+	if notifier, ok := sm.(sessionSwitchNotifier); ok {
+		notifier.NotifySessionSwitch(oldSess, newSess)
 	}
 
 	// 4. Update old session meta

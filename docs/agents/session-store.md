@@ -46,5 +46,29 @@ convention-not-history, split + index when a subject grows) apply to this split 
   reached through the manager as `agent.ImageResolver`; a blob that is gone degrades that one part, it never
   fails the conversion ([prompt-cache.md](prompt-cache.md) explains why the rebuild has to be byte-exact).
 
+## What a cleanup may delete
+
+- **A session can be HELD, and a held session is never deleted — the record is on disk, not in the memory of
+  the manager that took it.** `session/retention.go` is the authority: one file per session under
+  `<sessionDir>/retention/holds/`, each naming the owner, the reason (`task` / `context`) and a deadline. The
+  count-based sweep skips a held session (`Manager.CleanupOldSessions`) and an explicit delete is REFUSED with
+  the reason (`Manager.Delete` → `SessionHeldError`), so `desktop.DeleteSession`, ACP's delete and a sweep in
+  another process cannot get round it. `Pinned`, `ThreadID` and `Kind` are NOT the mechanism — a pin is the
+  reader's own statement and lifting it must not drop a running task (design §9.4).
+- **Every decision that ends in a deletion is made under ONE cross-process lock**
+  (`<sessionDir>/retention/retention.lock`, `Retention.Lock`), which is a different lock from the node's
+  lifecycle lock and never shares its path: a node being online must not stop another process from cleaning up
+  legally. Candidates are enumerated OUTSIDE the lock (a directory scan must not be inside a cross-process
+  critical section); the re-check of "is it held, is it still current" is INSIDE. The lock file is never
+  removed on release, like every other flock in this repo.
+- **The in-process lock comes SECOND.** The fixed order is file lock → `Manager`/store lock, so a caller must
+  not hold the manager's mutex when it reaches for the retention lock; `Manager.Delete` and
+  `ManagerCleanupOldSessions` are written that way, and `Manager.New` sweeps only after releasing its own lock.
+  The reverse order is a deadlock between a sweep and a node binding a context.
+- **A hold also says what it can no longer know.** A hold whose file cannot be read keeps the session (skipped
+  and reported), never releases it: unreadable protection is not the same as no protection. The owner of a
+  hold's lifetime reconciles leftovers at startup (`node/runner.go`'s `reconcile`), because a crash can leave
+  a reason nobody will ever withdraw.
+
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (Desktop Backend, the sidebar's reads),
 [checkpoints.md](checkpoints.md) (the sidecar files a turn writes under a session).
