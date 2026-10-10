@@ -107,20 +107,68 @@ func TestEffectiveThinking(t *testing.T) {
 }
 
 func TestFormatThinkingStatus(t *testing.T) {
-	status := FormatThinkingStatus("high")
+	status := FormatThinkingStatus("high", nil)
 	assert.Contains(t, status, "**high**")
 	for _, lvl := range ThinkingLevels {
 		assert.Contains(t, status, lvl)
 	}
 	// The option list should not be empty.
-	assert.Contains(t, status, FormatThinkingOptions())
+	assert.Contains(t, status, FormatThinkingOptions(nil))
 	assert.True(t, strings.HasPrefix(status, "🧠"))
 }
 
 func TestFormatThinkingOptions(t *testing.T) {
-	opts := FormatThinkingOptions()
+	opts := FormatThinkingOptions(nil)
 	for _, lvl := range ThinkingLevels {
 		assert.Contains(t, opts, lvl)
 		assert.Contains(t, opts, ThinkingLevelDescriptions[lvl])
 	}
+}
+
+func TestIsThinkingLevelSupported(t *testing.T) {
+	declared := []string{"low", "medium", "high", "xhigh"}
+
+	t.Run("undeclared provider accepts every level", func(t *testing.T) {
+		for _, lvl := range ThinkingLevels {
+			assert.True(t, IsThinkingLevelSupported(lvl, nil), "level %q", lvl)
+		}
+	})
+
+	t.Run("declared provider accepts only its own", func(t *testing.T) {
+		for _, lvl := range declared {
+			assert.True(t, IsThinkingLevelSupported(lvl, declared), "level %q", lvl)
+		}
+		assert.False(t, IsThinkingLevelSupported("max", declared))
+		assert.False(t, IsThinkingLevelSupported("none", declared))
+	})
+
+	t.Run("default and empty are not efforts", func(t *testing.T) {
+		// "default" means "follow the provider's thinking_level" and "" means
+		// "no override" — neither is sent as an effort, so a declared set
+		// must not turn them into a refusal.
+		assert.True(t, IsThinkingLevelSupported("default", declared))
+		assert.True(t, IsThinkingLevelSupported("", declared))
+	})
+}
+
+func TestSupportedThinkingLevels(t *testing.T) {
+	t.Run("undeclared provider offers every level", func(t *testing.T) {
+		assert.Equal(t, ThinkingLevels, SupportedThinkingLevels(nil))
+	})
+
+	t.Run("declared provider offers its levels plus default, in order", func(t *testing.T) {
+		assert.Equal(t, []string{"low", "high", "default"},
+			SupportedThinkingLevels([]string{"high", "low"}))
+	})
+}
+
+func TestFormatThinkingRejected(t *testing.T) {
+	msg := FormatThinkingRejected("max", "gpt-6-astra", []string{"low", "medium", "high", "xhigh"})
+	assert.Contains(t, msg, "**max**")
+	assert.Contains(t, msg, "gpt-6-astra")
+	assert.Contains(t, msg, "**xhigh**")
+	assert.NotContains(t, msg, "**max** — ") // the rejected level is never offered as an option
+
+	// No provider name → no empty parenthetical.
+	assert.NotContains(t, FormatThinkingRejected("max", "", []string{"high"}), "（）")
 }

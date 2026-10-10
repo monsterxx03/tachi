@@ -140,6 +140,20 @@ export interface ModelSpec {
     "ThinkingLevel": string;
 
     /**
+     * ThinkingEfforts 覆盖该 provider 端点接受的思考档位
+     * （取值同 ThinkingLevel 的具体档位，顺序无关）。空 = 用模型内置的档位表
+     * （llm.ModelThinkingEfforts，厂商文档口径），内置表也没有声明时 = 全部可用。
+     * 
+     * 为什么需要一层覆盖：级别是原样透传的，而端点把 effort 映射到另一个参数时
+     * （某些网关上只接受一部分档位），送一个它不认的档位不是被忽略而是整单失败
+     * ——整个请求 400，且这个档位已经写进 session meta，会话会一直失败到用户
+     * 手动改回来。同一模型在不同线路上的档位可以不同（实测某网关的
+     * chat-completions 拒绝 max、Responses 接受），内置表描述模型本身，线路差异
+     * 落在这一层。与 spec.vision / llm.ModelSupportsVision 是同一种关系。
+     */
+    "ThinkingEfforts": string[] | null;
+
+    /**
      * Vision 标记模型是否支持图片（多模态）输入。
      *   - nil（默认）：按模型名内置能力表自动判断（llm.ModelSupportsVision）
      *   - true：显式声明支持图片

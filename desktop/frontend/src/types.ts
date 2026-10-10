@@ -143,6 +143,11 @@ export type PermissionKind = 'bash' | 'mcp_search' | 'files'
 // session's ask rules from asking again (it is not a per-command memory).
 export type PermissionDecision = 'allow_once' | 'allow_session' | 'deny'
 
+// THINKING_LEVELS is the picker's list until the backend answers with the
+// active provider's own set (GetProviderInfo's thinkingLevels). A provider
+// declares what its endpoint accepts (config's thinking_efforts) because some
+// endpoints reject a level the official API supports, and a rejected effort
+// fails the whole request — so the picker must not offer one.
 export const THINKING_LEVELS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']
 // PAGE_SIZE is the number of raw session messages loaded per "page" when
 // switching to a session or scrolling up for older history.

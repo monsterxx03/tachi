@@ -240,18 +240,33 @@ func (m *Manager) handleThinkingCommand(threadID, args string) (string, error) {
 		return "", fmt.Errorf("find session: %w", err)
 	}
 
+	// The endpoint decides which levels exist: a provider declaring
+	// thinking_efforts rejects the others WHOLE, so a level it doesn't accept
+	// is refused here rather than persisted into the session (which would keep
+	// failing until changed back).
+	prov := m.getProviderForThread(threadID)
+	var supported []string
+	var providerName string
+	if prov != nil {
+		supported, providerName = prov.ThinkingEfforts, prov.Name
+	}
+
 	// No argument — show the current level and valid options.
 	if args == "" {
 		current := "default"
 		if sess != nil && sess.ThinkingLevel != "" {
 			current = sess.ThinkingLevel
 		}
-		return cmds.FormatThinkingStatus(current), nil
+		return cmds.FormatThinkingStatus(current, supported), nil
 	}
 
 	if !cmds.IsValidThinkingLevel(args) {
 		return fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s",
-			args, cmds.FormatThinkingOptions()), nil
+			args, cmds.FormatThinkingOptions(supported)), nil
+	}
+
+	if !cmds.IsThinkingLevelSupported(args, supported) {
+		return cmds.FormatThinkingRejected(args, providerName, supported), nil
 	}
 
 	// Ensure a provider is available before persisting. The per-session

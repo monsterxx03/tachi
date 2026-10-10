@@ -9,10 +9,10 @@ import (
 
 // === 内置模型注册表 ==========================================================
 // 单一数据源：一条记录 = 一个模型/家族的完整内置能力（价格/上下文/视觉/
-// 推理开关）。四个查询入口（GetBuiltinModelPriceAt / ModelContextWindow /
-// ModelSupportsVision / ModelSupportsReasoningEffortNone）共享同一条查找路径
-// lookup()——加内置模型 = 加一条记录，改能力 = 改一条记录，不再需要在多个
-// 函数里同步修改匹配逻辑。
+// 推理档位）。五个查询入口（GetBuiltinModelPriceAt / ModelContextWindow /
+// ModelSupportsVision / ModelThinkingEfforts / ModelSupportsReasoningEffortNone）
+// 共享同一条查找路径 lookup()——加内置模型 = 加一条记录，改能力 = 改一条记录，
+// 不再需要在多个函数里同步修改匹配逻辑。
 //
 // 价格单位是 CNY / 1M token（ledger 的单位）。厂商以美元报价的记录置
 // usdPrices：单价按 USD/M 写入，解析时按配置汇率换算（见 DefaultUSDToCNY）。
@@ -22,7 +22,7 @@ import (
 //   - 变体记录必须排在它所属的家族记录之前（TestBuiltinModelOrder 固定此约束）。
 //   - 记录自包含、无继承：命中即终态，所有字段在命中时必须已是最终值。
 //
-// 未知模型 = 未命中任何记录：无价格（nil）/ 上下文 0 / 视觉 false。
+// 未知模型 = 未命中任何记录：无价格（nil）/ 上下文 0 / 视觉 false / 档位不过滤。
 
 type builtinModel struct {
 	match   []string              // 任一子串命中（小写）即匹配
@@ -37,11 +37,30 @@ type builtinModel struct {
 	// 一个会变的数变成常量。
 	usdPrices bool
 
-	// rejectsEffortNone 表示该模型不接受 reasoning.effort = none。
-	// 零值（false）= 接受，即与引入本字段之前的行为一致——那时已登记的
-	// 推理模型都接受 none，所以只有明确说明不接受的模型才置 true。
-	rejectsEffortNone bool
+	// thinkingEfforts 是该模型 API 接受的思考档位（厂商文档口径）。
+	// nil = 不做声明，即全部档位可用——与引入本字段之前的行为一致，所以
+	// 只有文档明确说明档位范围的模型才写。
+	//
+	// 为什么必须是「文档口径」而不是「我们这条线路的口径」：同一个网关可能
+	// 在不同接口上映射得不同（实测某网关的 chat-completions 路径拒绝 max、
+	// Responses 路径接受），而这张表描述的是模型本身。线路差异由 provider 配置
+	// 的 spec.thinking_efforts 覆盖（见 llm.ResolvedProvider.ThinkingEfforts），
+	// 显式配置优先——同 spec.vision 与 ModelSupportsVision 的关系。
+	//
+	// 一个被拒绝的档位不是被忽略，而是整单失败（400），所以这条事实同时决定
+	// 前端让你选什么、以及 ModelSupportsReasoningEffortNone 的答案。
+	thinkingEfforts []string
 }
+
+// gpt6EffortsWithoutNone 是 gpt-6 里那两个 API 拒绝 none/minimal 的变体
+// （Astra / 6.1 Sol）接受的全部档位：官方文档给的是 low..max。没有 none——
+// 这类模型无法关掉推理，送 none 是整单失败。luna / sol 没有这条限制，
+// 记录里不写 thinkingEfforts（= 不声明 = 全部可用）。
+//
+// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+//
+//	https://developers.openai.com/api/docs/models/gpt-6.1-sol
+var gpt6EffortsWithoutNone = []string{"low", "medium", "high", "xhigh", "max"}
 
 // builtinModels 是内置模型注册表，按声明顺序匹配（变体在前、家族兜底在后）。
 var builtinModels = []builtinModel{
@@ -65,22 +84,23 @@ var builtinModels = []builtinModel{
 	//
 	// Astra 与 6.1 Sol 是 gpt-6 里两个不接受 reasoning.effort = none 的模型
 	// （官方文档：Astra 支持 low..max；6.1 Sol 明确不支持 none/minimal）——
-	// 见 ModelSupportsReasoningEffortNone。
+	// 同一个事实写一次（thinkingEfforts），前端据此不给这个档位，
+	// ModelSupportsReasoningEffortNone 也读它。
 	{
-		match:             []string{"gpt-6-astra"},
-		context:           1_050_000,
-		vision:            true,
-		prices:            gpt6AstraPriceVersions,
-		usdPrices:         true,
-		rejectsEffortNone: true,
+		match:           []string{"gpt-6-astra"},
+		context:         1_050_000,
+		vision:          true,
+		prices:          gpt6AstraPriceVersions,
+		usdPrices:       true,
+		thinkingEfforts: gpt6EffortsWithoutNone,
 	},
 	{
-		match:             []string{"gpt-6.1-sol"},
-		context:           1_050_000,
-		vision:            true,
-		prices:            gpt6Sol61PriceVersions,
-		usdPrices:         true,
-		rejectsEffortNone: true,
+		match:           []string{"gpt-6.1-sol"},
+		context:         1_050_000,
+		vision:          true,
+		prices:          gpt6Sol61PriceVersions,
+		usdPrices:       true,
+		thinkingEfforts: gpt6EffortsWithoutNone,
 	},
 	{
 		match:     []string{"gpt-6-luna"},

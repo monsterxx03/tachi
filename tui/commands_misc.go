@@ -84,7 +84,7 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
-			Content: cmds.FormatThinkingStatus(current),
+			Content: cmds.FormatThinkingStatus(current, sp.ThinkingEfforts),
 		})
 		return nil
 	}
@@ -93,7 +93,20 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
-			Content: fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s", level, cmds.FormatThinkingOptions()),
+			Content: fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s", level, cmds.FormatThinkingOptions(sp.ThinkingEfforts)),
+		})
+		return nil
+	}
+
+	// A valid level the session's endpoint doesn't accept is refused here:
+	// sending it would fail the whole request (not just the setting) and the
+	// level is persisted to the session, so the session would keep failing
+	// until the user changed it back.
+	if !cmds.IsThinkingLevelSupported(level, sp.ThinkingEfforts) {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: cmds.FormatThinkingRejected(level, sp.Name, sp.ThinkingEfforts),
 		})
 		return nil
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/httpx"
@@ -118,6 +120,10 @@ type ResolvedProvider struct {
 	Thinking *bool
 	// ThinkingEffort 思考强度（原样透传；空 = 模型默认）。
 	ThinkingEffort string
+	// ThinkingEfforts 该 provider 端点接受的思考档位（配置声明）。
+	// 空 = 全部档位都可用（未声明的 provider 与引入本字段前行为一致）。
+	// 前端据此过滤可选档位——端点对不认的档位是整单拒绝，不是降级。
+	ThinkingEfforts []string
 
 	// SupportsVision 标记模型是否支持图片（多模态）输入。
 	// 由 ProviderConfig.Spec.Vision 显式配置解析而来；未配置时按模型名
@@ -193,6 +199,27 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 		thinkingEffort = pCfg.Spec.ThinkingLevel
 	}
 
+	// Resolve the accepted effort set: explicit spec.thinking_efforts wins (a
+	// deployment's endpoint may reject what the model itself accepts), then the
+	// model's own built-in set, then no claim = every level. Same shape as
+	// vision below, and for the same reason: the registry describes the MODEL,
+	// the config describes THIS endpoint.
+	thinkingEfforts := pCfg.Spec.ThinkingEfforts
+	if len(thinkingEfforts) == 0 {
+		thinkingEfforts = ModelThinkingEfforts(pCfg.Model)
+	}
+
+	// An effort the resolved set doesn't contain is a contradiction between two
+	// config values (or between the config and the model): every request will be
+	// rejected whole (see ModelSpec.ThinkingEfforts). Warn once here rather than
+	// letting the first turn fail with an API error.
+	if thinkingEffort != "" && len(thinkingEfforts) > 0 && !slices.Contains(thinkingEfforts, thinkingEffort) {
+		logger.New("llm").Warn(context.Background(),
+			"thinking_level is not accepted by this provider/model; requests will be rejected",
+			"provider", pCfg.Name, "model", pCfg.Model, "thinking_level", thinkingEffort,
+			"thinking_efforts", strings.Join(thinkingEfforts, ","))
+	}
+
 	// Resolve vision capability: explicit spec.vision override wins;
 	// otherwise fall back to the built-in model-name capability table.
 	// ModelSupportsVision is conservative (unknown names → false), so an
@@ -205,10 +232,11 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 		BaseURL:        pCfg.BaseURL,
 		APIKey:         apiKey,
 		ContextWindow:  contextWindow,
-		Name:           pCfg.Name,
-		Thinking:       thinking,
-		ThinkingEffort: thinkingEffort,
-		SupportsVision: supportsVision,
+		Name:            pCfg.Name,
+		Thinking:        thinking,
+		ThinkingEffort:  thinkingEffort,
+		ThinkingEfforts: thinkingEfforts,
+		SupportsVision:  supportsVision,
 	}, nil
 }
 

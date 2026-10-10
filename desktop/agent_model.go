@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -92,11 +93,18 @@ func (s *AgentService) GetProviderInfo() map[string]any {
 	// message's persisted estimate (usage.estimated_input_tokens) so the
 	// context ring shows a sensible value for a resumed session.
 	est, win := d.contextUsageOf(r)
+	// thinkingLevels: the levels the ACTIVE session's provider accepts, so the
+	// picker offers no level the endpoint would reject whole (a gateway maps
+	// effort to its own parameter and refuses the rest — see
+	// config.ModelSpec.ThinkingEfforts). It rides in this payload rather than a
+	// method of its own because it is the same fact about the same model, read
+	// at the same moment. Empty = every level (undeclared provider).
 	return map[string]any{
 		"provider":        provider,
 		"model":           r.agent.Model(),
 		"contextWindow":   win,
 		"contextEstimate": est,
+		"thinkingLevels":  cmds.SupportedThinkingLevels(r.agent.Config.Resolved.ThinkingEfforts),
 	}
 }
 
@@ -132,6 +140,13 @@ func (s *AgentService) SetThinkingLevel(level string) string {
 	}
 	if r.agent == nil {
 		return refuseNoSession
+	}
+	// A valid level the session's endpoint doesn't accept is refused here
+	// rather than persisted: the endpoint rejects the whole request, so the
+	// session would keep failing until the user changed the level back (see
+	// config.ModelSpec.ThinkingEfforts).
+	if efforts := r.agent.Config.Resolved.ThinkingEfforts; !cmds.IsThinkingLevelSupported(level, efforts) {
+		return cmds.FormatThinkingRejected(level, r.agent.Config.Resolved.Name, efforts)
 	}
 	applyThinking(r.agent, level)
 	store := level

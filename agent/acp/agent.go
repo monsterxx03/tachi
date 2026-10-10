@@ -206,7 +206,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		})
 		// Also advertise model and mode config options so clients can switch.
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
@@ -214,7 +214,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session created id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, aiAgent.Provider().ProviderName())
-	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+	thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
@@ -573,7 +573,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 			},
 		})
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
@@ -581,7 +581,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
-	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+	thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
@@ -780,7 +780,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		})
 		// Also advertise model and mode config options so clients can switch.
 		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, thinkingOpt)
 		// Send initial usage so Zed can show context window usage right away.
 		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
@@ -788,7 +788,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session loaded id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
-	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+	thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 	configOpts := []acp.SessionConfigOption{}
 	if opt != nil {
 		configOpts = append(configOpts, *opt)
@@ -922,7 +922,7 @@ func (t *TachiAgent) SetSessionConfigOption(ctx context.Context, req acp.SetSess
 
 	// Build both config options and return them so the client can update its UI.
 	sessConfigOption, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+	thinkingOpt := buildThinkingEffortConfigOption(sess.agent)
 	configOptions := []acp.SessionConfigOption{}
 	if sessConfigOption != nil {
 		configOptions = append(configOptions, *sessConfigOption)

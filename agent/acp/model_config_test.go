@@ -102,7 +102,13 @@ func TestSwitchSessionModel(t *testing.T) {
 }
 
 func TestBuildThinkingEffortConfigOption(t *testing.T) {
-	opt := buildThinkingEffortConfigOption("high")
+	provider, err := llm.NewProvider("openai", "sk", "", "gpt-4o-mini")
+	require.NoError(t, err)
+	a := newBareTestAgent(t, provider, 0)
+
+	// effort 设为 high，options 来自 provider 声明的集合（未声明 = 全集）
+	a.Config.Resolved.ThinkingEffort = "high"
+	opt := buildThinkingEffortConfigOption(a)
 	require.NotNil(t, opt)
 	require.NotNil(t, opt.Select)
 	assert.Equal(t, acp.SessionConfigId(thinkingEffortConfigID), opt.Select.Id)
@@ -111,26 +117,50 @@ func TestBuildThinkingEffortConfigOption(t *testing.T) {
 	assert.Equal(t, acp.SessionConfigOptionCategoryThoughtLevel, *opt.Select.Category)
 	assert.Equal(t, acp.SessionConfigValueId("high"), opt.Select.CurrentValue)
 	require.NotNil(t, opt.Select.Options.Ungrouped)
-	assert.Len(t, *opt.Select.Options.Ungrouped, len(thinkingEffortOptions))
+	assert.Len(t, *opt.Select.Options.Ungrouped, len(cmds.ThinkingLevels))
 
 	// 空 effort（无覆盖，provider 默认）→ 显示 "default"
-	optDefault := buildThinkingEffortConfigOption("")
+	a.Config.Resolved.ThinkingEffort = ""
+	optDefault := buildThinkingEffortConfigOption(a)
 	require.NotNil(t, optDefault)
 	assert.Equal(t, acp.SessionConfigValueId("default"), optDefault.Select.CurrentValue)
 }
 
+// TestThinkingEffortOptionsFilteredByProvider pins that a provider declaring
+// its endpoint's efforts offers exactly those: an effort the endpoint would
+// reject (whole-request failure, see config.ModelSpec.ThinkingEfforts) must not
+// appear in the ACP select options at all.
+func TestThinkingEffortOptionsFilteredByProvider(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "gpt-6-astra")
+	require.NoError(t, err)
+	a := newBareTestAgent(t, provider, 0)
+	a.Config.Resolved.ThinkingEfforts = []string{"low", "medium", "high", "xhigh"}
+
+	opt := buildThinkingEffortConfigOption(a)
+	require.NotNil(t, opt.Select)
+	require.NotNil(t, opt.Select.Options.Ungrouped)
+	var values []string
+	for _, o := range *opt.Select.Options.Ungrouped {
+		values = append(values, string(o.Value))
+	}
+	assert.Equal(t, []string{"low", "medium", "high", "xhigh", "default"}, values)
+	assert.NotContains(t, values, "max")
+}
+
 // TestThinkingEffortOptionsSharedWithCommands pins the value-set contract
 // between the ACP "Reasoning Effort" config option and the /thinking command:
-// the shared subset (cmds.ThinkingEffortLevels) must match exactly, with
-// "default" appended as the ACP-only restore-provider-default choice.
+// for a provider that declares nothing, the shared subset
+// (cmds.ThinkingEffortLevels) must match exactly, with "default" appended as
+// the ACP-only restore-provider-default choice.
 func TestThinkingEffortOptionsSharedWithCommands(t *testing.T) {
-	require.NotNil(t, thinkingEffortOptions)
-	assert.Len(t, thinkingEffortOptions, len(cmds.ThinkingEffortLevels)+1)
+	options := buildThinkingEffortOptions(nil)
+	require.NotEmpty(t, options)
+	assert.Len(t, options, len(cmds.ThinkingEffortLevels)+1)
 	for i, lvl := range cmds.ThinkingEffortLevels {
-		assert.Equal(t, acp.SessionConfigValueId(lvl), thinkingEffortOptions[i].Value)
-		assert.NotEmpty(t, thinkingEffortOptions[i].Name, "level %q needs a display name", lvl)
+		assert.Equal(t, acp.SessionConfigValueId(lvl), options[i].Value)
+		assert.NotEmpty(t, options[i].Name, "level %q needs a display name", lvl)
 	}
-	last := thinkingEffortOptions[len(thinkingEffortOptions)-1]
+	last := options[len(options)-1]
 	assert.Equal(t, acp.SessionConfigValueId("default"), last.Value)
 	assert.NotEmpty(t, last.Name)
 }

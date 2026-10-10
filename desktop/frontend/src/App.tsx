@@ -546,6 +546,9 @@ function App() {
   const [providers, setProviders] = useState<any[]>([])
   const [providerName, setProviderName] = useState('')
   const [thinkingLevel, setThinkingLevel] = useState('none')
+  // The levels the active provider's endpoint accepts: from the backend
+  // (GetProviderInfo), falling back to the full list until a session answers.
+  const [thinkingLevels, setThinkingLevels] = useState<string[]>(THINKING_LEVELS)
   const [workDir, setWorkDir] = useState('')
   // Workspace roots (primary + additional) and the popover that manages them. The
   // popover is only mounted while open, so its own outside-click/Esc handling is
@@ -964,6 +967,10 @@ function App() {
     try {
       const info = await (AgentService as any).GetProviderInfo?.()
       if (info) setProviderName(info.provider)
+      // The provider decides which levels exist (a declared thinking_efforts
+      // set); an empty/absent answer keeps the full list.
+      const lvs = info?.thinkingLevels
+      if (Array.isArray(lvs) && lvs.length > 0) setThinkingLevels(lvs)
       const lv = await (AgentService as any).GetThinkingLevel?.()
       if (lv) setThinkingLevel(lv)
     } catch { /* ignore */ }
@@ -2509,10 +2516,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 </select>
                 <select className="provider-select" value={thinkingLevel} onChange={async (e) => {
                   const lv = e.target.value
-                  await (AgentService as any).SetThinkingLevel?.(lv)
+                  // A level the backend refuses (an endpoint that rejects it) is
+                  // NOT shown as if it were set: re-read, which puts the select
+                  // back on the level the session actually has.
+                  const res = await (AgentService as any).SetThinkingLevel?.(lv)
+                  if (res && res !== 'ok') { refreshProvider(); return }
                   setThinkingLevel(lv)
                 }}>
-                  {THINKING_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
+                  {/* The current level is always drawn, even when the provider's
+                      set excludes it (a level chosen before the session moved
+                      to this endpoint): a select whose value has no option
+                      renders blank, which would hide what is actually set. */}
+                  {(thinkingLevels.includes(thinkingLevel) ? thinkingLevels : [thinkingLevel, ...thinkingLevels]).map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
                 <ContextMeter sessionId={currentId} estimate={ctxEstimate} window={ctxWindow} />
                 <span className="usage-meta">

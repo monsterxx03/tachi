@@ -116,6 +116,71 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 	assert.Equal(t, "max", resolved.ThinkingEffort)
 }
 
+// TestResolveProviderConfig_ThinkingEfforts pins that the provider's declared
+// effort set reaches ResolvedProvider (the frontends filter on it) and that an
+// undeclared provider keeps the empty set = "every level".
+func TestResolveProviderConfig_ThinkingEfforts(t *testing.T) {
+	apiKey := "sk-test"
+
+	undeclared := &config.ProviderConfig{
+		Name:   "claude",
+		Type:   "anthropic",
+		Model:  "claude-sonnet-4-6",
+		APIKey: apiKey,
+	}
+	resolved, err := resolveProviderConfig(undeclared)
+	require.NoError(t, err)
+	assert.Empty(t, resolved.ThinkingEfforts)
+
+	declared := &config.ProviderConfig{
+		Name:   "gpt-6-astra",
+		Type:   "openai-res",
+		Model:  "gpt-6-astra",
+		APIKey: apiKey,
+		Spec: config.ModelSpec{
+			ThinkingLevel:   "high",
+			ThinkingEfforts: []string{"low", "medium", "high", "xhigh"},
+		},
+	}
+	resolved, err = resolveProviderConfig(declared)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"low", "medium", "high", "xhigh"}, resolved.ThinkingEfforts)
+	assert.Equal(t, "high", resolved.ThinkingEffort)
+}
+
+// TestResolveProviderConfig_ThinkingEffortsOrder pins the two layers: the
+// model's own built-in set applies when the provider declares nothing, and an
+// explicit spec.thinking_efforts overrides it (a deployment's endpoint may
+// reject what the model itself accepts — see config.ModelSpec.ThinkingEfforts).
+func TestResolveProviderConfig_ThinkingEffortsOrder(t *testing.T) {
+	apiKey := "sk-test"
+
+	builtin := &config.ProviderConfig{
+		Name:   "gpt-6-astra",
+		Type:   "openai-res",
+		Model:  "gpt-6-astra",
+		APIKey: apiKey,
+	}
+	resolved, err := resolveProviderConfig(builtin)
+	require.NoError(t, err)
+	assert.Equal(t, ModelThinkingEfforts("gpt-6-astra"), resolved.ThinkingEfforts,
+		"an undeclared provider must use the model's built-in set")
+	assert.NotContains(t, resolved.ThinkingEfforts, "none")
+
+	// A gateway whose chat-completions route rejects max narrows it further.
+	override := &config.ProviderConfig{
+		Name:   "gpt-6-astra",
+		Type:   "anthropic",
+		Model:  "gpt-6-astra",
+		APIKey: apiKey,
+		Spec:   config.ModelSpec{ThinkingEfforts: []string{"low", "medium", "high", "xhigh"}},
+	}
+	resolved, err = resolveProviderConfig(override)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"low", "medium", "high", "xhigh"}, resolved.ThinkingEfforts,
+		"the config override must win over the built-in set")
+}
+
 func TestResolveProviderConfig_SupportsVision(t *testing.T) {
 	apiKey := "sk-test"
 

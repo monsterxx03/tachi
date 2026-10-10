@@ -227,3 +227,51 @@ func TestModelSupportsReasoningEffortNone(t *testing.T) {
 		})
 	}
 }
+
+// TestModelThinkingEfforts pins the effort sets the registry records: the two
+// gpt-6 variants whose API rejects "none" (Astra / 6.1 Sol) and nothing else.
+// nil = no claim = every level, which is what an undeclared model keeps — the
+// answer every model had before this capability existed.
+// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+//
+//	https://developers.openai.com/api/docs/models/gpt-6.1-sol
+func TestModelThinkingEfforts(t *testing.T) {
+	want := []string{"low", "medium", "high", "xhigh", "max"}
+	for _, m := range []string{"gpt-6-astra", "gpt-6-astra-2026-09-30", "GPT-6.1-SOL"} {
+		t.Run("declared_"+m, func(t *testing.T) {
+			got := ModelThinkingEfforts(m)
+			if len(got) != len(want) {
+				t.Fatalf("ModelThinkingEfforts(%q) = %v, want %v", m, got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("ModelThinkingEfforts(%q) = %v, want %v", m, got, want)
+				}
+			}
+		})
+	}
+
+	// No claim: the family's other members, models outside the family, and
+	// names the registry has never seen.
+	for _, m := range []string{"gpt-6-luna", "gpt-6-sol", "gpt-5.5", "claude-opus", "unknown-model", ""} {
+		t.Run("no_claim_"+m, func(t *testing.T) {
+			if got := ModelThinkingEfforts(m); got != nil {
+				t.Errorf("ModelThinkingEfforts(%q) = %v, want nil (no claim = every level)", m, got)
+			}
+		})
+	}
+}
+
+// TestModelThinkingEffortsIsACopy pins that a caller cannot edit the registry:
+// the set is put on a resolved provider that is then handed around (and the
+// same slice backs two records).
+func TestModelThinkingEffortsIsACopy(t *testing.T) {
+	got := ModelThinkingEfforts("gpt-6-astra")
+	if len(got) == 0 {
+		t.Fatal("no effort set for gpt-6-astra")
+	}
+	got[0] = "tampered"
+	if again := ModelThinkingEfforts("gpt-6-astra"); again[0] == "tampered" {
+		t.Error("the registry was mutated through the returned slice")
+	}
+}

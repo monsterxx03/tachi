@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/checkpoint"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -434,7 +435,25 @@ func (a *AIAgent) SetResolvedProvider(providerName string) (*llm.ResolvedProvide
 // effort). Used when switching models at runtime (/model): the target
 // provider's thinking_level may differ from the current one, and without
 // this the runLoop would keep applying the old model's defaults.
+//
+// An effort the provider's endpoint doesn't accept is DROPPED here (the
+// provider/model default applies instead, with a warning). A level outlives
+// the provider it was chosen for — a session can be moved onto an endpoint that
+// rejects it by /model, or resume with one after the config changed — and the
+// endpoint rejects the whole request rather than the setting (see
+// config.ModelSpec.ThinkingEfforts). The frontends refuse such a level when it
+// is picked; this is what keeps a stale one from being sent at all.
 func (a *AIAgent) SetThinking(thinking *bool, effort string) {
+	if effort != "" && !cmds.IsThinkingLevelSupported(effort, a.Config.Resolved.ThinkingEfforts) {
+		lg := a.Config.Logger
+		if lg == nil {
+			lg = logger.New("agent")
+		}
+		lg.Warn(context.Background(), "thinking effort is not accepted by the provider's endpoint; falling back to the provider default",
+			"provider", a.Config.Resolved.Name, "model", a.Config.Resolved.Model, "effort", effort,
+			"thinking_efforts", strings.Join(a.Config.Resolved.ThinkingEfforts, ","))
+		effort = ""
+	}
 	a.Config.Resolved.Thinking = thinking
 	a.Config.Resolved.ThinkingEffort = effort
 }

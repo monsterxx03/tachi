@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -80,14 +81,12 @@ const (
 	thinkingEffortConfigDescription = "Controls the thinking/reasoning effort for the current model. \"None\" disables thinking where supported; other levels are passed to the API, which maps them to the model's inference effort. \"Default\" restores the provider's configured default."
 )
 
-// thinkingEffortOptions lists the selectable effort levels in ascending
-// order: the shared concrete levels from cmds.ThinkingEffortLevels plus
-// "default" (restore the provider's configured default). Values on the shared
-// subset come from cmds so the two surfaces never drift apart; only the
+// buildThinkingEffortOptions lists the selectable effort levels in ascending
+// order for a provider: the shared levels from cmds (so the surfaces never
+// drift apart) plus "default" (restore the provider's configured default).
+// supported is the provider's declared effort set (empty = every level); the
 // display names are ACP-specific.
-var thinkingEffortOptions = buildThinkingEffortOptions()
-
-func buildThinkingEffortOptions() []acp.SessionConfigSelectOption {
+func buildThinkingEffortOptions(supported []string) []acp.SessionConfigSelectOption {
 	displayNames := map[string]string{
 		"none":    "None (off)",
 		"low":     "Low",
@@ -97,7 +96,7 @@ func buildThinkingEffortOptions() []acp.SessionConfigSelectOption {
 		"max":     "Max",
 		"default": "Default (provider)",
 	}
-	levels := append(append([]string{}, cmds.ThinkingEffortLevels...), "default")
+	levels := cmds.SupportedThinkingLevels(supported)
 	opts := make([]acp.SessionConfigSelectOption, 0, len(levels))
 	for _, lvl := range levels {
 		opts = append(opts, acp.SessionConfigSelectOption{
@@ -108,17 +107,31 @@ func buildThinkingEffortOptions() []acp.SessionConfigSelectOption {
 	return opts
 }
 
+// thinkingEffortsOf returns the effort levels the agent's provider declared,
+// nil when there is no agent/resolved config (nil = every level).
+func thinkingEffortsOf(a *agent.AIAgent) []string {
+	if a == nil || a.Config.Resolved == nil {
+		return nil
+	}
+	return a.Config.Resolved.ThinkingEfforts
+}
+
 // buildThinkingEffortConfigOption builds a SessionConfigOption (select)
-// exposing the thinking effort levels. currentEffort is the agent's resolved
-// effort; empty (no override, provider default) is displayed as "default".
-func buildThinkingEffortConfigOption(currentEffort string) *acp.SessionConfigOption {
+// exposing the thinking effort levels the agent's provider accepts (its
+// declared thinking_efforts; empty = every level). The agent's resolved effort
+// is the current value; empty (no override, provider default) displays as
+// "default".
+func buildThinkingEffortConfigOption(a *agent.AIAgent) *acp.SessionConfigOption {
+	currentEffort := currentThinkingValue(a)
+	supported := thinkingEffortsOf(a)
+	options := buildThinkingEffortOptions(supported)
 	if currentEffort == "" {
 		currentEffort = "default"
 	}
 	category := acp.SessionConfigOptionCategoryThoughtLevel
 	opt := acp.NewSessionConfigOptionSelect(
 		acp.SessionConfigValueId(currentEffort),
-		acp.SessionConfigSelectOptions{Ungrouped: (*acp.SessionConfigSelectOptionsUngrouped)(&thinkingEffortOptions)},
+		acp.SessionConfigSelectOptions{Ungrouped: (*acp.SessionConfigSelectOptionsUngrouped)(&options)},
 	)
 	opt.Select.Id = acp.SessionConfigId(thinkingEffortConfigID)
 	opt.Select.Name = thinkingEffortConfigName
@@ -162,6 +175,14 @@ func switchSessionThinkingEffort(ctx context.Context, sess *ACPSession, level st
 	// tolerated and treated as "restore provider default".
 	if level != "" && !cmds.IsValidThinkingLevel(level) {
 		return fmt.Errorf("invalid reasoning effort level %q", level)
+	}
+	// A valid level this provider's endpoint doesn't accept fails the whole
+	// request, and the level is persisted to session meta — so refuse it here
+	// (the option list already offers only the declared ones; this covers a
+	// client sending one anyway).
+	if level != "" && !cmds.IsThinkingLevelSupported(level, thinkingEffortsOf(sess.agent)) {
+		return fmt.Errorf("reasoning effort %q is not accepted by provider %q (supported: %s)",
+			level, sess.agent.Config.Resolved.Name, strings.Join(thinkingEffortsOf(sess.agent), ", "))
 	}
 	if level == "" {
 		level = "default"
