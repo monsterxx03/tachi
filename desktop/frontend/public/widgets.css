@@ -802,7 +802,11 @@
 .viewer-image { display: block; max-width: none; }
 .viewer-frame { display: block; width: 100%; height: 100%; border: 0; }
 .viewer-doc {
-  max-width: 860px;
+  /* The reading column's own measure (base.css --reading-width), not a copy of its number: the
+     lightbox and the transcript must not drift apart, and a measure that follows the window is
+     what both of them want. The is-table and is-diff variants below override it, because a
+     spreadsheet is not prose and code is not prose. */
+  max-width: var(--reading-width);
   margin: 0 auto;
   padding: 26px 32px;
   background: var(--panel-solid);

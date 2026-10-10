@@ -1055,7 +1055,11 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   it before the window exists); what a pane can SHOW is that number clamped to the room left by every other
   fixed column, re-measured on resize and read from the DOM rather than assumed. The conversation's share is a
   floor PLUS a share (`CHAT_MIN_WIDTH`, `CHAT_MIN_SHARE`) — a bare floor pins the conversation AT the floor and
-  hands every extra pixel to the panel — and the reading column is one token (`--reading-width`).
+  hands every extra pixel to the panel — and the reading column is one token (`--reading-width`), a
+  VIEWPORT-relative clamp with a floor and a ceiling rather than a fixed number, so the column follows the
+  window instead of being re-tuned per display; the previewed document takes that same token, and the diff
+  pane keeps a cap of its own (`vw` and not a percentage, because the transcript and the composer box have
+  different parents and only a window-relative number keeps the input lined up with the text).
 
 **Sessions and the sidebar**
 

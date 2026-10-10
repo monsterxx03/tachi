@@ -212,11 +212,23 @@
 
   /* Reading column: messages and the composer share this width, so the input
      lines up with the transcript instead of stretching to the window edge
-     (a maximised 1920 window would otherwise give prose a 1536px measure —
-     this is a reading measure, not a layout accident). 860 matches what the
-     fullscreen document preview gives a prose document (.viewer-doc): the same
-     text reads at the same measure whether it is a reply or a previewed file. */
-  --reading-width: 860px;
+     (a maximised window would otherwise give prose a 1500px+ measure — this is
+     a reading measure, not a layout accident).
+
+     It is a VIEWPORT-RELATIVE clamp rather than a fixed number, because the
+     window it has to fit is a laptop one day and a 27" display the next: 62vw
+     lets the column grow with the room it has, 860px is the floor and is what
+     the column used to be at EVERY size (a narrow window is served by the floor,
+     and shrinks further on its own when the room is smaller still), and 1180px
+     is the ceiling, past which a line of prose stops being worth reading.
+
+     `vw` and not a percentage, deliberately: the two readers of this value — a
+     message inside the transcript, the composer box inside a bar that spans the
+     whole window — have different parents, so only a window-relative number
+     keeps the input lined up with the text it belongs to. The fullscreen
+     document preview takes this same token (.viewer-doc) rather than a copy of
+     its number, so a reply and a previewed file still read at one measure. */
+  --reading-width: clamp(860px, 62vw, 1180px);
 
   /* Reading surfaces: the sizes a reader actually READS, in one place, so
      "the text is too small" is an edit here rather than a hunt through four

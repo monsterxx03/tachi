@@ -1126,11 +1126,13 @@ button.work-dir {
    numbers — that is the whole difference between the two views, so the line
    styles are shared and only the number column is added. */
 .viewer-doc.is-diff {
-  /* 1100px is the reading-width cap this pane shares with the file-preview overlay; `100%` is
-     the cap it needs as a PANEL: in the side column the pane must never be wider than the
-     column, or the whole pane (and the send bar with it) starts scrolling sideways — measured
-     at 734px inside a 419px panel in oneoff-footer, with the bar's left end 300px out of view.
-     Long diff LINES still scroll, in `.diff-body`, which is where that belongs. */
+  /* A diff keeps a cap of its OWN instead of the reading column's (base.css --reading-width, the
+     measure a previewed DOCUMENT shares): this pane is code, and 1100px holds a workable line
+     without the pane growing wider than it needs. `100%` is the cap it needs as a PANEL: in the
+     side column the pane must never be wider than the column, or the whole pane (and the send bar
+     with it) starts scrolling sideways — measured at 734px inside a 419px panel in oneoff-footer,
+     with the bar's left end 300px out of view. Long diff LINES still scroll, in `.diff-body`,
+     which is where that belongs. */
   max-width: min(1100px, 100%);
   padding: 18px 22px;
 }
