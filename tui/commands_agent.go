@@ -423,7 +423,7 @@ func (m *Model) delegator() tools.RemoteDelegator {
 		return nil
 	}
 	if m.delegators == nil {
-		m.delegators = node.NewDelegatorCache(m.agent.Logger())
+		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, m.agent.Logger())
 	}
 	return m.delegators.For(m.cfg.Peers)
 }

@@ -356,27 +356,6 @@ func TestTheTwoSurfacesAreSeparateListeners(t *testing.T) {
 		"the local surface must not carry the protocol")
 }
 
-func TestRemoteListenMustBeLoopback(t *testing.T) {
-	_, err := StartOrAttach(context.Background(), Options{
-		DataDir:      t.TempDir(),
-		RemoteListen: "0.0.0.0:0",
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "loopback")
-}
-
-// waitForParkedStatus waits until the record ON DISK shows the state a parked execution is
-// sitting in.
-//
-// It is a wait and not a check, and the difference is the whole point: the executor reaching
-// its parked line and the SDK applying (and writing) the status update are two events, and the
-// write regularly lands after the test has already read the file — measured, the record is
-// still version 1 / SUBMITTED at that moment. Whatever is still in flight then lands during
-// teardown, where t.TempDir() is removing the tree, which on a loaded runner surfaces as
-// "unlinkat .../tasks: directory not empty" against a test whose assertions had all passed.
-//
-// Waiting for the parked state closes that window: once it is on disk, a parked execution has
-// nothing else queued.
 func waitForParkedStatus(t *testing.T, dir string, id a2a.TaskID, want a2a.TaskState) {
 	t.Helper()
 	path := filepath.Join(dir, tasksDirName, string(id)+".json")

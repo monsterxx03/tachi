@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // The cache every entry point holds: one delegator per peer list, rebuilt when the list changes
@@ -18,7 +19,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "http://127.0.0.1:1"}}
-	cache := NewDelegatorCache(nil)
+	cache := NewDelegatorCache("", nil)
 
 	first := cache.For(peers)
 	require.NotNil(t, first)
@@ -38,7 +39,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 func TestNoPeersMeansNoDelegator(t *testing.T) {
 	// Empty is a state, not a broken one: with nothing to delegate to, the tools are absent
 	// rather than present and always failing.
-	cache := NewDelegatorCache(nil)
+	cache := NewDelegatorCache("", nil)
 	require.Nil(t, cache.For(nil))
 	require.Nil(t, cache.For([]config.PeerConfig{}))
 }
@@ -50,13 +51,13 @@ func TestAFailedOpenIsNotCached(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "http://127.0.0.1:1"}}
 	attempts := 0
-	cache := NewDelegatorCache(nil)
-	cache.openFunc = func(p []config.PeerConfig) (*Sender, error) {
+	cache := NewDelegatorCache("", nil)
+	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger) (*Sender, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, errors.New("the records directory is not writable")
 		}
-		return OpenSender(p)
+		return OpenSender(p, "", nil)
 	}
 
 	// A failure must not be remembered: the next turn tries again, so a transient problem heals

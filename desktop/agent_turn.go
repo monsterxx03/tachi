@@ -1144,7 +1144,7 @@ func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
 	}
 	d.delegatorMu.Lock()
 	if d.delegator == nil {
-		d.delegator = node.NewDelegatorCache(logger.New("desktop"))
+		d.delegator = node.NewDelegatorCache(cfg.Node.Name, logger.New("desktop"))
 	}
 	cache := d.delegator
 	d.delegatorMu.Unlock()

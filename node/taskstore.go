@@ -51,11 +51,12 @@ func (s *taskStore) Create(ctx context.Context, task *a2a.Task) (taskstore.TaskV
 
 	now := time.Now().UTC()
 	rec := &taskRecord{
-		Task:      task,
-		Version:   1,
-		CallerID:  caller,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Task:             task,
+		Version:          1,
+		CallerID:         caller,
+		SelfReportedName: selfReportedNameFrom(ctx),
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if fp, ok := fingerprintFrom(ctx); ok {
 		rec.MessageID = fp.messageID
@@ -96,10 +97,22 @@ func (s *taskStore) Update(ctx context.Context, update *taskstore.UpdateRequest)
 	return taskstore.TaskVersion(rec.Version), nil
 }
 
-// Get returns a stored task by id.
-func (s *taskStore) Get(_ context.Context, taskID a2a.TaskID) (*taskstore.StoredTask, error) {
+// Get returns a stored task by id — to its owner, and to nobody else.
+//
+// Ownership is checked here and not only in List, because an id is not a capability: the design's
+// rule is that reading a task re-checks it (§6.3), and the refusal is TASK_NOT_FOUND rather than a
+// permission error so that a caller cannot learn that somebody else's task exists at that id.
+//
+// A request with NO caller keeps the behaviour it had before this check existed: on loopback (or
+// on a node that configures no callers) the transport is the boundary, and there is no identity to
+// compare against. A record with no owner — one written before this node had callers — therefore
+// matches no authenticated caller, which is what "nobody's" means.
+func (s *taskStore) Get(ctx context.Context, taskID a2a.TaskID) (*taskstore.StoredTask, error) {
 	rec, ok := s.record(taskID)
 	if !ok {
+		return nil, fmt.Errorf("%w: %s", a2a.ErrTaskNotFound, taskID)
+	}
+	if caller := callerFrom(ctx); caller != "" && caller != rec.CallerID {
 		return nil, fmt.Errorf("%w: %s", a2a.ErrTaskNotFound, taskID)
 	}
 	return &taskstore.StoredTask{
@@ -164,9 +177,10 @@ const (
 // callerFrom is the caller's identity as the authentication layer established it.
 //
 // It reads the CallContext and nothing else: a caller cannot name itself in a message or
-// in metadata, which is the whole point of the design's "调用者身份取自认证和服务端绑定".
-// Today nothing sets it, so it is empty — and that emptiness is what makes an
-// unauthenticated list impossible rather than merely discouraged.
+// in metadata, which is the whole point of the design's "调用者身份取自认证和服务端绑定". The
+// node's TLS handshake is what fills it (node/auth.go), out of the certificate the caller
+// presented; a request that never went through that handshake has no identity, and the
+// emptiness is what makes an unauthenticated list impossible rather than merely discouraged.
 func callerFrom(ctx context.Context) string {
 	callCtx, ok := a2asrv.CallContextFrom(ctx)
 	if !ok || callCtx == nil || callCtx.User == nil {

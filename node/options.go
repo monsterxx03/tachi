@@ -86,12 +86,33 @@ type Options struct {
 	// instead of hosting. Empty means DefaultLocalListen.
 	LocalListen string
 
-	// RemoteListen is the address of the A2A interface — the one other nodes talk
-	// to. It must name a loopback host too, until caller authentication exists
-	// (design §3.3, §10.1): a node that anyone can call must not be reachable from
-	// anywhere. The address it actually binds is what the Card publishes. Ignored
-	// when this process attaches. Empty means DefaultRemoteListen.
+	// RemoteListen is the address of the A2A interface — the one other nodes talk to.
+	//
+	// Loopback (the default) is always allowed. Any other address is allowed ONLY when Callers
+	// is non-empty, and the rule is deliberately a hard one: without credentials this listener
+	// accepts work from whoever can reach it, so a non-loopback address would be the difference
+	// between "a feature nobody enabled" and "an open agent endpoint". It is refused at
+	// validation time rather than warned about later (checkRemoteListen).
+	//
+	// Ignored when this process attaches. Empty means DefaultRemoteListen.
 	RemoteListen string
+
+	// Name is what this node calls itself (config: node.name): published in its Agent Card and
+	// sent to a peer with every call, so the peer's records can say who asked. Empty means the
+	// default.
+	//
+	// It is a LABEL, and the receiving side records it as self-declared. There is no list of
+	// accepted callers and no credential: any client certificate is accepted, because this node's
+	// job here is to know WHO called (a node id it cannot be fooled about) rather than to decide
+	// who MAY (that judgment belongs to the network — design §3.3, and a cluster that wants a
+	// whitelist can add one back where this one was).
+	Name string
+
+	// PublicURL is what the Agent Card advertises as the way to reach this node, when that is
+	// not simply the address the socket bound (a mesh address, a port forwarder, a real host
+	// name). Empty means "derive it from the bound address, or advertise none at all if it is
+	// not connectable" — a Card pointing at 0.0.0.0 sends callers nowhere.
+	PublicURL string
 
 	// Executor is the receiving side's agent: it turns an accepted task into events.
 	// Nil means the built-in placeholder that echoes the task text — the seam a test
@@ -131,7 +152,7 @@ func (o Options) normalized() (Options, error) {
 	if o.RemoteListen == "" {
 		o.RemoteListen = DefaultRemoteListen
 	}
-	if err := checkLoopback("RemoteListen", o.RemoteListen); err != nil {
+	if err := checkRemoteListen(o.RemoteListen); err != nil {
 		return Options{}, err
 	}
 
@@ -146,12 +167,10 @@ func (o Options) normalized() (Options, error) {
 
 // checkLoopback refuses an address that is not loopback.
 //
-// Both of this node's listeners are on loopback for the same reason and it is not
-// politeness: neither of them authenticates its callers yet. The local one has a
-// private credential but is meant for THIS machine, and the remote one has nothing
-// at all until the pairing slice lands. A non-loopback address would therefore be
-// the difference between "a feature nobody enabled" and "an open agent endpoint",
-// so it is refused rather than warned about.
+// The LOCAL control interface lives under this rule forever, and not because it lacks a
+// credential — it has one. That interface is a way for the OTHER Tachi processes on this machine
+// to talk to the node holding the lock; it is this machine's own business, nobody else's, and
+// binding it anywhere else would hand its credential's endpoint to the network for no gain.
 func checkLoopback(name, addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -159,7 +178,35 @@ func checkLoopback(name, addr string) error {
 	}
 	if !netutil.IsLoopbackHost(host) {
 		return fmt.Errorf("node: %s %q must name a loopback host: "+
-			"this listener does not authenticate callers yet, so it must not be reachable from anywhere", name, addr)
+			"this interface is this machine's own business, and it is not authenticated for the network", name, addr)
 	}
 	return nil
+}
+
+// checkRemoteListen used to allow a non-loopback address only when the node authenticated its
+// callers. It no longer restricts the address at all, and that is a deliberate trade rather than a
+// relaxation nobody noticed:
+//
+//   - what still holds: the surface serves TLS off loopback and REQUIRES a client certificate, so
+//     a caller is always identified (node/tls.go) and nothing travels in the clear;
+//   - what no longer holds: nobody is turned away. Any machine that can reach this address and
+//     present a certificate gets work done on this one, so THE NETWORK IS THE BOUNDARY — a mesh
+//     that authenticates devices, a firewall, or loopback.
+//
+// That is a decision this project made on purpose (a personal cluster where reachability IS
+// permission), and it is the reason this comment sits where a reader looks before pointing a node
+// at a public address.
+func checkRemoteListen(addr string) error {
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return fmt.Errorf("node: RemoteListen %q: %w", addr, err)
+	}
+	return nil
+}
+
+// isLoopbackListen reports whether the remote surface is on loopback, which is what decides
+// whether it serves TLS: leaving the machine is what makes encryption and a client certificate
+// necessary, and staying on it is what makes them pointless.
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	return err == nil && netutil.IsLoopbackHost(host)
 }

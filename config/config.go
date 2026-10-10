@@ -427,16 +427,29 @@ type PeerConfig struct {
 	// be unique across the list: a name that resolved to two nodes would make every delegation
 	// ambiguous, so a duplicate is refused when the node is wired (node/peers.go).
 	Name string `yaml:"name"`
-	// URL is the base address of the peer's A2A interface, e.g. "http://127.0.0.1:34567".
+	// URL is the base address of the peer's A2A interface, e.g. "https://100.64.0.3:7080".
 	//
-	// Until caller authentication exists a node only listens on LOOPBACK, so today this is a
-	// loopback address: the slice that authenticates callers is also the one that makes a
-	// remote host meaningful here (see docs/2026-10-10-a2a-node-design.md §3.3, §S9).
+	// It must be https unless the host is loopback, and that is a rule rather than a habit
+	// (node/peers.go refuses the rest): a delegation carries the prompt and the answer, so
+	// plaintext to another machine is not a smaller version of an encrypted one, it is the same
+	// conversation read aloud on the way.
 	URL string `yaml:"url"`
 	// Note is an optional human line ("家里的 NAS"), carried by the peers reminder when the
 	// card cannot be read and there is nothing factual to say about the node.
 	Note string `yaml:"note,omitempty"`
 }
+
+// PeerIdentitiesPath is where this machine records which key each peer presented the first time
+// it was reached (TOFU — see PeerConfig.Identity).
+//
+// It sits beside the delegation records rather than inside the node's data dir, for the same
+// reason they do: delegating is not a feature of HOSTING a node, and a machine that only ever
+// calls out still has to remember who it called.
+func PeerIdentitiesPath() string {
+	return filepath.Join(BaseDir(), peerIdentitiesFileName)
+}
+
+const peerIdentitiesFileName = "peer-identities.json"
 
 // DelegationsDir is where this machine records the work it delegated to peers.
 //
@@ -458,12 +471,46 @@ const delegationsDirName = "delegations"
 // point keep behaving exactly as it did before the node existed, and it is asserted
 // by tests rather than promised in a comment.
 //
-// Only the switch lives here. The data directory is derived
-// (config.NodeDir), and the settings a node needs once it does something —
-// listen addresses, peers, timeouts — arrive with the slices that use them: a
-// config key with no behaviour behind it is a lie the reader cannot detect.
+// The data directory is derived (config.NodeDir). Everything a node needs once it
+// actually does something lives here — as does the credential that decides who may
+// ask it to: a config key with no behaviour behind it is a lie the reader cannot
+// detect, and this file should not carry one.
 type NodeConfig struct {
 	Enabled bool `yaml:"enabled"`
+
+	// Listen is the address of the REMOTE A2A surface — the one other machines talk to. It is
+	// NOT the local control interface, which is this machine's own business and stays on
+	// loopback forever (design §3.3).
+	//
+	// The default is loopback with a kernel-chosen port: enabling the node must not, by itself,
+	// put anything on a network. A deployment where other machines delegate here names an
+	// address (the mesh interface, or 0.0.0.0 behind a firewall), and that is refused unless
+	// `callers` is configured — because a listener nobody authenticates is an open agent
+	// endpoint, not a feature (node/options.go).
+	Listen string `yaml:"listen" default:"127.0.0.1:0"`
+
+	// PublicURL is the address this node ADVERTISES in its Agent Card, e.g.
+	// "https://nas.tail-scale.ts.net:7080". It is separate from Listen on purpose: what a
+	// socket binds to and what a caller can reach are different facts, and a Card that
+	// published 0.0.0.0 (or a port behind a forwarder) would send callers somewhere that does
+	// not answer.
+	//
+	// Empty means "derive it from Listen when that is possible" (a concrete host), and
+	// otherwise publish no interface URL at all rather than a wrong one.
+	PublicURL string `yaml:"public_url,omitempty"`
+
+	// Name is what this node CALLS ITSELF: a human-readable line, published as the Agent Card's
+	// name and sent to a peer on every call so its records can say who asked.
+	//
+	// It is a LABEL and nothing more. It is self-declared — a peer records it as exactly that
+	// (task records keep it under `self_reported_name`), because anyone with a valid key can claim
+	// any name. The identity a node is judged by is its `node_id`, which is derived from the key
+	// it proved in the TLS handshake and cannot be claimed by anyone else (design §4.2).
+	//
+	// "Tachi" is the default because a node that says nothing about itself is what every node was
+	// before this field existed. A cluster wants them distinct — `tachi@home-nas`, `tachi@mac` —
+	// and then a log line, a Card or a task record reads like a sentence instead of like hex.
+	Name string `yaml:"name" default:"Tachi"`
 
 	// Workspace is where this node works: the working directory of every session a remote
 	// task creates. It is deliberately NOT the hosting process's cwd (design §10.3) — a

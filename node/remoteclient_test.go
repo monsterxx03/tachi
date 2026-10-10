@@ -58,7 +58,7 @@ func openSenderFor(t *testing.T, peerURL string) *Sender {
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}})
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}}, "", nil)
 	require.NoError(t, err)
 	return sender
 }
@@ -149,7 +149,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: "http://" + peer.RemoteAddr()}})
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: "http://" + peer.RemoteAddr()}}, "", nil)
 	require.NoError(t, err)
 
 	// First submission: the peer accepts it and keeps working. The short wait is deliberate —
@@ -190,7 +190,7 @@ func TestAnUnreachablePeerIsUnknownRatherThanRefused(t *testing.T) {
 
 	// Nothing listens here. The difference matters: the peer never considered the request, so
 	// "it said no" would be a lie — and the record must say what we actually know.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: "http://127.0.0.1:1"}})
+	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: "http://127.0.0.1:1"}}, "", nil)
 	require.NoError(t, err)
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
@@ -386,7 +386,8 @@ func TestTheModelViewIsTheDesignsShape(t *testing.T) {
 		QuestionID: "ask_1",
 		LastKnown:  lastKnown{State: a2a.TaskStateInputRequired, Text: "检查照片还是文档？", At: time.Now()},
 	}
-	view := viewOf(record, "")
+	// No sender: a bare record with no identity renders under the alias it was created with.
+	view := (&Sender{}).viewOf(record, "")
 	require.Equal(t, "d_7f3a1c02", view.ID)
 	require.Equal(t, "home-nas", view.Node)
 	require.Equal(t, "input_required", view.State)
@@ -409,7 +410,7 @@ func TestAToolLayerFailureIsNotAFabricatedTask(t *testing.T) {
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender(nil)
+	sender, err := OpenSender(nil, "", nil)
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "nobody", Prompt: "hi"})

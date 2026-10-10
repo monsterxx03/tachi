@@ -148,7 +148,7 @@ func TestAnUnreachablePeerIsReportedNotInvented(t *testing.T) {
 		{Name: "home-nas", URL: "http://127.0.0.1:9", Note: "家里的 NAS"},
 	})
 	require.NoError(t, err)
-	dir.resolve = func(context.Context, string) (*a2a.AgentCard, error) {
+	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
 		return nil, errors.New("connection refused")
 	}
 
@@ -160,7 +160,7 @@ func TestAnUnreachablePeerIsReportedNotInvented(t *testing.T) {
 
 	// The card is cached, failure included: a peer that is down must not cost a timeout per turn.
 	calls := 0
-	dir.resolve = func(context.Context, string) (*a2a.AgentCard, error) {
+	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
 		calls++
 		return nil, errors.New("still down")
 	}
@@ -171,7 +171,7 @@ func TestAnUnreachablePeerIsReportedNotInvented(t *testing.T) {
 func TestAReachablePeerIsDescribedByItsOwnCard(t *testing.T) {
 	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: "http://127.0.0.1:9"}})
 	require.NoError(t, err)
-	dir.resolve = func(context.Context, string) (*a2a.AgentCard, error) {
+	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
 		return &a2a.AgentCard{Name: "Tachi", Description: "一台节点的自述"}, nil
 	}
 

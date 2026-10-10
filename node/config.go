@@ -48,9 +48,17 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 	}
 
 	return StartOrAttach(ctx, Options{
-		DataDir:     dataDir,
+		DataDir: dataDir,
+		// The local control interface stays where it was: this machine's own business, never a
+		// config key (design §3.3).
 		LocalListen: DefaultLocalListen,
-		Executor:    &nodeExecutor{runner: taskRunner},
-		Logger:      log,
+		// The REMOTE surface is the operator's decision: the address it binds, what it calls
+		// itself, and what it advertises. Nothing here decides WHO may call — the network does
+		// (see checkRemoteListen), and every caller is still identified by its certificate.
+		RemoteListen: cfg.Node.Listen,
+		PublicURL:    cfg.Node.PublicURL,
+		Name:         cfg.Node.Name,
+		Executor:     &nodeExecutor{runner: taskRunner},
+		Logger:       log,
 	})
 }

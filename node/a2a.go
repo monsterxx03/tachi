@@ -2,11 +2,13 @@ package node
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"iter"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -53,10 +55,27 @@ type a2aSurface struct {
 	state nodeState
 }
 
-func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
+func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurface, error) {
 	ln, err := net.Listen("tcp", o.RemoteListen)
 	if err != nil {
 		return nil, fmt.Errorf("node: listen %s: %w", o.RemoteListen, err)
+	}
+
+	// ONE switch decides three things, and they cannot drift because it is one expression: whether
+	// this surface encrypts, whether it asks for a client certificate, and whether the identity
+	// that certificate establishes is carried into the request context.
+	//
+	// The switch is the ADDRESS, not a config flag: leaving the machine is what makes encryption
+	// and identification necessary, staying on loopback is what makes them pointless. Who may call
+	// is deliberately NOT part of it — see checkRemoteListen.
+	encrypted := !isLoopbackListen(o.RemoteListen)
+	if encrypted {
+		cert, err := loadOrCreateCertificate(o.DataDir, identity)
+		if err != nil {
+			_ = ln.Close()
+			return nil, err
+		}
+		ln = tls.NewListener(ln, serverTLSConfig(cert, o.Logger))
 	}
 
 	executor := o.Executor
@@ -64,7 +83,7 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	if executor == nil {
 		executor = echoExecutor{}
 	}
-	card := newAgentCard(ln.Addr().String(), real)
+	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), real, encrypted)
 	// The store is opened by the host, which is AFTER the executor is built (the store owns
 	// the startup recovery, so there is exactly one). An executor that keeps state outside a
 	// request — a question waiting for an answer, and its deadline — needs it, and this is the
@@ -85,12 +104,24 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	}
 	// One source for two jobs: the capabilities the handler ENFORCES are the ones
 	// the Card publishes, so "declared but not implemented" cannot happen by drift.
+	// Authentication is ONE decision with two halves, so it is one condition: a node with no
+	// callers configured authenticates nobody and behaves exactly as it did before this slice —
+	// which is what every loopback deployment (and every test) is.
+	//
+	// When it is on, the interceptor goes FIRST among the interceptors: a caller this node cannot
+	// identify has no business learning whether its protocol version is supported either.
+	interceptors := []a2asrv.CallInterceptor{protocolVersionInterceptor{}, &admission{store: store}}
+	if encrypted {
+		// See node/auth.go for why the identity has to be attached HERE and not by the middleware
+		// that already read it off the connection.
+		interceptors = append([]a2asrv.CallInterceptor{callerIdentityInterceptor{}}, interceptors...)
+	}
 	handler := a2asrv.NewHandler(executor,
 		a2asrv.WithCapabilityChecks(&card.Capabilities),
 		// Our store is the authority for accepted tasks; the SDK's own default would be
 		// an in-memory map that forgets them at exit (design §9.1).
 		a2asrv.WithTaskStore(store),
-		a2asrv.WithCallInterceptors(protocolVersionInterceptor{}, &admission{store: store}),
+		a2asrv.WithCallInterceptors(interceptors...),
 	)
 
 	mux := http.NewServeMux()
@@ -101,7 +132,14 @@ func startA2ASurface(o Options, store *taskStore) (*a2aSurface, error) {
 	// The guard wraps the binding rather than living inside it: a refusal that
 	// carries OUR reason and domain must not be rendered by the SDK, whose error
 	// mapping would file it as INTERNAL_ERROR under the standard domain.
-	mux.Handle("/", busyGuard(store, questions, a2asrv.NewRESTHandler(handler)))
+	protocol := busyGuard(store, questions, a2asrv.NewRESTHandler(handler))
+	if encrypted {
+		// It refuses nothing — the handshake already required a certificate, so by the time a
+		// request exists the caller is identified. What it does is carry that identity, and the
+		// name the caller declared, into the request context: node/auth.go.
+		protocol = callerIdentityMiddleware(o.Logger, protocol)
+	}
+	mux.Handle("/", protocol)
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: remoteReadHeaderTimeout}
@@ -158,7 +196,32 @@ func (s *a2aSurface) close(log *logger.Logger) {
 // different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
 // (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
 // be exactly the "declared but not implemented" mistake this function exists to avoid.
-func newAgentCard(addr string, real bool) *a2a.AgentCard {
+// advertisedURL is what the Card tells a caller to dial.
+//
+// `public_url` wins when the operator set it (a mesh name, a port forwarder, a real host name are
+// all facts this process cannot derive). Otherwise the bound address is used — unless it is
+// unspecified, in which case NOTHING is advertised: 0.0.0.0 is not an address anyone can call,
+// and a Card that named it would send every caller somewhere that does not answer, which is worse
+// than a Card that admits it does not know (design §4.2).
+func advertisedURL(publicURL, boundAddr string, https bool) string {
+	if u := strings.TrimSpace(publicURL); u != "" {
+		return u
+	}
+	host, port, err := net.SplitHostPort(boundAddr)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return ""
+	}
+	scheme := "http"
+	if https {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port)
+}
+
+func newAgentCard(name, url string, real bool, authenticated bool) *a2a.AgentCard {
+	if strings.TrimSpace(name) == "" {
+		name = defaultNodeName
+	}
 	skill := a2a.AgentSkill{
 		ID:          "task",
 		Name:        "Remote task",
@@ -175,19 +238,50 @@ func newAgentCard(addr string, real bool) *a2a.AgentCard {
 			Examples:    []string{"say something"},
 		}
 	}
-	return &a2a.AgentCard{
-		Name:        "Tachi",
-		Description: "A Tachi node: an agent that runs on the machine that owns it, reachable from the other Tachi nodes you have paired with.",
-		Version:     AgentVersion,
-		SupportedInterfaces: []*a2a.AgentInterface{
-			a2a.NewAgentInterface("http://"+addr, a2a.TransportProtocolHTTPJSON),
-		},
+	card := &a2a.AgentCard{
+		Name:               name,
+		Description:        "A Tachi node: an agent that runs on the machine that owns it, reachable from the other Tachi nodes you have paired with.",
+		Version:            AgentVersion,
 		Capabilities:       a2a.AgentCapabilities{},
 		DefaultInputModes:  []string{mediaTypeText},
 		DefaultOutputModes: []string{mediaTypeText},
 		Skills:             []a2a.AgentSkill{skill},
 	}
+	if url != "" {
+		card.SupportedInterfaces = []*a2a.AgentInterface{
+			a2a.NewAgentInterface(url, a2a.TransportProtocolHTTPJSON),
+		}
+	}
+	if authenticated {
+		// What this node actually requires, in the spec's own vocabulary: mutual TLS. The client
+		// brings a certificate and this node reads the caller's identity out of it — which is what
+		// the spec's mTLS scheme means, and it is declared exactly when the surface serves TLS (a
+		// Card that demanded a scheme the server does not check would be worse than one that asks
+		// for nothing).
+		//
+		// Worth stating because the confusion runs the other way too: certificate PINNING on the
+		// client side is not by itself mutual TLS (design §6.1). What makes this mutual is that
+		// the SERVER asks for a client certificate as well — one certificate per node, the same
+		// key in both directions.
+		card.SecuritySchemes = a2a.NamedSecuritySchemes{
+			authSchemeName: a2a.MutualTLSSecurityScheme{
+				Description: "A Tachi node's own self-signed certificate. Any such certificate is accepted: this node identifies callers rather than authorising them.",
+			},
+		}
+		card.SecurityRequirements = a2a.SecurityRequirementsOptions{
+			a2a.SecurityRequirements{authSchemeName: {}},
+		}
+	}
+	return card
 }
+
+// authSchemeName is the key the Card's scheme and its requirement share. One constant, because a
+// requirement naming a scheme the Card does not declare is a Card that describes a different node.
+const authSchemeName = a2a.SecuritySchemeName("mtls")
+
+// defaultNodeName is what a node calls itself when the operator named it nothing: the string every
+// node published before node.name existed, kept so an unconfigured node looks exactly as it did.
+const defaultNodeName = "Tachi"
 
 // protocolVersionInterceptor rejects a call that names an A2A protocol version this
 // node does not speak.

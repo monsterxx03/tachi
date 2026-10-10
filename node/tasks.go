@@ -56,13 +56,20 @@ type taskRecord struct {
 	// messageId with DIFFERENT content is a client bug we must refuse, and this is what
 	// lets us tell the two apart instead of silently returning the old task.
 	Digest string `json:"digest"`
-	// CallerID is empty until callers can be authenticated. The field exists now so the
-	// dedupe key already has its final shape (see fingerprint.key): a wrong identity in
-	// the key would make dedupe look stricter than it is.
-	CallerID  string         `json:"caller_id,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Interrupt *interruptNote `json:"interrupt,omitempty"`
+	// CallerID is the authenticated identity that submitted this task, empty for a request with
+	// no credential (loopback, or a node that configures no callers). It is the OWNER as well as
+	// part of the dedupe key (see fingerprint.key): List filters by it, and Get refuses a caller
+	// that is not it — an id is not a capability (design §6.3). A record written before this
+	// node had callers has no owner, and nobody can claim one.
+	CallerID string `json:"caller_id,omitempty"`
+	// SelfReportedName is the name the caller declared for itself (node.name, sent as a header).
+	// The FIELD NAME says what it is: anyone with a valid key can claim any name, so this is a
+	// label for a human reading the record and never an identity — CallerID, which is derived from
+	// the key the handshake accepted, is the identity (design §2.2).
+	SelfReportedName string         `json:"self_reported_name,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	Interrupt        *interruptNote `json:"interrupt,omitempty"`
 }
 
 // interruptNote records why a task was resolved as interrupted at startup.

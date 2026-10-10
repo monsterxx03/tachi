@@ -29,16 +29,19 @@ import (
 // decides which nodes exist and where they are. A note change rebuilds too: it is what the
 // reminder says about an unreachable node, and a stale description is worse than a rebuild.
 type DelegatorCache struct {
-	mu       sync.Mutex
-	current  tools.RemoteDelegator
-	key      string
-	log      *logger.Logger
-	openFunc func(peers []config.PeerConfig) (*Sender, error)
+	mu      sync.Mutex
+	current tools.RemoteDelegator
+	key     string
+	log     *logger.Logger
+	// ownName is what this machine calls itself, sent with every delegation so a peer's records
+	// can say who asked (node.name).
+	ownName  string
+	openFunc func(peers []config.PeerConfig, ownName string, log *logger.Logger) (*Sender, error)
 }
 
 // NewDelegatorCache returns a cache that builds senders with OpenSender.
-func NewDelegatorCache(log *logger.Logger) *DelegatorCache {
-	return &DelegatorCache{log: log, openFunc: OpenSender}
+func NewDelegatorCache(ownName string, log *logger.Logger) *DelegatorCache {
+	return &DelegatorCache{ownName: strings.TrimSpace(ownName), log: log, openFunc: OpenSender}
 }
 
 // For returns the sending side for this peer list, rebuilding it when the list changed.
@@ -67,7 +70,7 @@ func (c *DelegatorCache) For(peers []config.PeerConfig) tools.RemoteDelegator {
 	if open == nil {
 		open = OpenSender
 	}
-	sender, err := open(peers)
+	sender, err := open(peers, c.ownName, c.log)
 	if err != nil {
 		if c.log != nil {
 			c.log.Warn(context.Background(), "delegation is unavailable this turn", "cause", err)

@@ -3,12 +3,14 @@ package node
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // Sender is this machine's sending side: the peers it may delegate to, the records of what it
@@ -28,7 +30,7 @@ type Sender struct {
 //
 // It is called once per entry point rather than once per turn: the records are files, and a
 // tool call must not pay a directory scan.
-func OpenSender(peers []config.PeerConfig) (*Sender, error) {
+func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (*Sender, error) {
 	records, err := openDelegationStore(config.DelegationsDir())
 	if err != nil {
 		return nil, err
@@ -37,13 +39,46 @@ func OpenSender(peers []config.PeerConfig) (*Sender, error) {
 	if err != nil {
 		return nil, err
 	}
+	// What each peer proved the first time this machine reached it (§4.2: TOFU remembers the first
+	// identity it saw, and says so). Keyed by alias, which is what a config entry is keyed by.
+	urls := make(map[string]string, len(peers))
+	for _, p := range peers {
+		urls[p.Name] = p.URL
+	}
+	known, err := openKnownPeers(config.PeerIdentitiesPath(), urls, log)
+	if err != nil {
+		return nil, err
+	}
+	// Our own identity, and the certificate it signs: what we present to a peer so it can check us
+	// against its node.callers. It lives in the NODE's data dir even on a machine that hosts
+	// nothing — being a caller means having a key, and a machine that only calls out still has to
+	// say who it is (the alternative would be an anonymous caller, which is exactly what the
+	// receiving side refuses).
+	identity, err := LoadOrCreateIdentity(config.NodeDir())
+	if err != nil {
+		return nil, err
+	}
+	ourCert, err := loadOrCreateCertificate(config.NodeDir(), identity)
+	if err != nil {
+		return nil, err
+	}
 	client := &remoteClient{
 		peers:          directory,
 		delegations:    records,
+		known:          known,
+		ourCert:        ourCert,
+		ourName:        strings.TrimSpace(ownName),
 		http:           &http.Client{},
 		requestTimeout: defaultRequestTimeout,
 		waitBudget:     defaultWaitBudget,
 		pollInterval:   defaultPollInterval,
+	}
+	// The Agent Card is read through the SAME client, and that is not a detail: the certificate a
+	// Tachi node serves is self-signed, so no system verifier accepts it, and on an mTLS surface
+	// the card needs a client certificate as well. The library's default resolver can read
+	// neither — through it every peer would look unreachable and the reminder would say so.
+	directory.resolve = func(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
+		return client.fetchCard(ctx, alias, baseURL)
 	}
 	return &Sender{peers: directory, records: records, client: client}, nil
 }
@@ -74,11 +109,11 @@ func (s *Sender) Delegate(ctx context.Context, req tools.DelegationRequest) (too
 	})
 	if err != nil {
 		if d != nil {
-			return viewOf(d, err.Error()), err
+			return s.viewOf(d, err.Error()), err
 		}
 		return tools.RemoteTaskInfo{}, err
 	}
-	return viewOf(d, ""), nil
+	return s.viewOf(d, ""), nil
 }
 
 // Get reports the last known state of one delegated task, asking the peer when it can.
@@ -87,7 +122,7 @@ func (s *Sender) Get(ctx context.Context, id string) (tools.RemoteTaskInfo, erro
 	if err != nil {
 		return tools.RemoteTaskInfo{}, err
 	}
-	return viewOf(d, ""), nil
+	return s.viewOf(d, ""), nil
 }
 
 // Wait waits for a delegated task to reach a state that ends the wait.
@@ -95,11 +130,11 @@ func (s *Sender) Wait(ctx context.Context, id string, budget time.Duration) (too
 	d, err := s.client.Wait(ctx, id, budget)
 	if err != nil {
 		if d != nil {
-			return viewOf(d, err.Error()), err
+			return s.viewOf(d, err.Error()), err
 		}
 		return tools.RemoteTaskInfo{}, err
 	}
-	return viewOf(d, ""), nil
+	return s.viewOf(d, ""), nil
 }
 
 // Reply answers the question a peer is waiting on, waiting boundedly for what the answer set
@@ -108,11 +143,11 @@ func (s *Sender) Reply(ctx context.Context, id, questionID string, answer map[st
 	d, err := s.client.Reply(ctx, id, questionID, answer, budget)
 	if err != nil {
 		if d != nil {
-			return viewOf(d, err.Error()), err
+			return s.viewOf(d, err.Error()), err
 		}
 		return tools.RemoteTaskInfo{}, err
 	}
-	return viewOf(d, ""), nil
+	return s.viewOf(d, ""), nil
 }
 
 // Cancel asks the peer to stop a task.
@@ -120,11 +155,11 @@ func (s *Sender) Cancel(ctx context.Context, id string) (tools.RemoteTaskInfo, e
 	d, err := s.client.Cancel(ctx, id)
 	if err != nil {
 		if d != nil {
-			return viewOf(d, err.Error()), err
+			return s.viewOf(d, err.Error()), err
 		}
 		return tools.RemoteTaskInfo{}, err
 	}
-	return viewOf(d, ""), nil
+	return s.viewOf(d, ""), nil
 }
 
 // RemoteTasks reports what ONE local conversation delegated, newest first (§8.2).
@@ -138,19 +173,35 @@ func (s *Sender) RemoteTasks(logicalID string) []tools.RemoteTaskInfo {
 	records := s.records.list(logicalID)
 	out := make([]tools.RemoteTaskInfo, 0, len(records))
 	for _, d := range records {
-		out = append(out, viewOf(d, ""))
+		out = append(out, s.viewOf(d, ""))
 	}
 	return out
+}
+
+// displayName is the name to SHOW for the peer a record belongs to: the alias this machine uses
+// NOW, when the record's identity is still configured under one.
+//
+// A record keeps the alias it was created with, and after a rename that stale name is one the
+// config no longer knows — the model would read it in a reminder and then have its tool call
+// refused as an unknown peer. The identity is what the record really binds (see
+// remoteClient.currentAliasFor), so it is what resolves the current name.
+func (s *Sender) displayName(d *Delegation) string {
+	if s != nil && s.client != nil {
+		if cur := s.client.currentAliasFor(d.PeerNodeID); cur != "" {
+			return cur
+		}
+	}
+	return d.Peer
 }
 
 // viewOf turns a record into the view the tools and the reminder both speak in.
 //
 // A task waiting for input carries the QUESTION as its text and no result: handing the same
 // string over twice would put a question in the model's hands as if it were an answer.
-func viewOf(d *Delegation, note string) tools.RemoteTaskInfo {
+func (s *Sender) viewOf(d *Delegation, note string) tools.RemoteTaskInfo {
 	view := tools.RemoteTaskInfo{
 		ID:       d.ID,
-		Node:     d.Peer,
+		Node:     s.displayName(d),
 		Title:    d.Title,
 		State:    viewState(d.LastKnown.State),
 		Result:   d.LastKnown.Text,

@@ -135,7 +135,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 
 	// The remote surface binds before anything is published, so a failure here leaves
 	// no half-started node behind: nothing on disk mentions a service that is not up.
-	remote, err := startA2ASurface(o, store)
+	remote, err := startA2ASurface(o, store, identity)
 	if err != nil {
 		_ = ln.Close()
 		_ = lock.Release()

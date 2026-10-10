@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/netutil"
 )
 
 // The peer directory: which other Tachi nodes this machine may delegate to.
@@ -37,7 +38,7 @@ type peerDirectory struct {
 
 	// resolve is the card lookup, injected so a test can answer without a live peer. Nil means
 	// the SDK's own resolver, which is what a real node uses.
-	resolve func(ctx context.Context, baseURL string) (*a2a.AgentCard, error)
+	resolve func(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error)
 
 	// cardTTL bounds how long a resolved card is trusted, and how long a FAILURE is remembered.
 	// A peer that was down is retried after this; a card that was read is re-read after it.
@@ -81,6 +82,64 @@ func (e *UnknownPeerError) Error() string {
 
 const defaultPeerCardTTL = 5 * time.Minute
 
+// configOnly returns one configured peer WITHOUT touching the network.
+//
+// Separate from Lookup on purpose: Lookup resolves the Agent Card, which is a request, and the
+// request path needs the connection facts (address, credential, pin) on every call while it must
+// not pay for a card fetch it did not ask for. The card is a DESCRIPTION of the peer; this is how
+// to REACH it.
+func (d *peerDirectory) configOnly(name string) (peer, bool) {
+	if d == nil {
+		return peer{}, false
+	}
+	for _, p := range d.peers {
+		if p.Name == name {
+			return peer{Name: p.Name, URL: p.URL, Note: p.Note}, true
+		}
+	}
+	return peer{}, false
+}
+
+// configOnlyNames lists the configured aliases, sorted (the same order Names() gives, from the
+// config rather than from a network round trip).
+func (d *peerDirectory) configOnlyNames() []string {
+	if d == nil {
+		return nil
+	}
+	out := make([]string, 0, len(d.peers))
+	for _, p := range d.peers {
+		out = append(out, p.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkPeerURL refuses a peer address this machine must not delegate over.
+//
+// The rule is about what a delegation carries: the prompt and the answer ARE the conversation, so
+// plaintext to another machine is not a smaller version of an encrypted one — it is the same
+// conversation read aloud on the way. Loopback is exempt because there is no network to read it
+// from (and because every deployment starts there), and https is accepted for any host because
+// the pin, not the scheme, is what says which machine answered (node/tls.go).
+func checkPeerURL(name, raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("node: peer %q has no url: a delegation needs an address to reach", name)
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("node: peer %q has no usable url: %q", name, raw)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && netutil.IsLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("node: peer %q is %q: a delegation carries the prompt and its answer, so a peer "+
+		"must be https — http is allowed only on loopback", name, raw)
+}
+
 // newPeerDirectory validates a peer list and returns the directory over it.
 //
 // Validation is here rather than at config load because these are the SENDER's constraints: a
@@ -97,8 +156,8 @@ func newPeerDirectory(peers []config.PeerConfig) (*peerDirectory, error) {
 			return nil, fmt.Errorf("node: peer name %q is configured twice; a name must resolve to one node", name)
 		}
 		seen[name] = true
-		if _, err := url.Parse(strings.TrimSpace(p.URL)); err != nil || strings.TrimSpace(p.URL) == "" {
-			return nil, fmt.Errorf("node: peer %q has no usable url: %q", name, p.URL)
+		if err := checkPeerURL(name, p.URL); err != nil {
+			return nil, err
 		}
 	}
 	return &peerDirectory{
@@ -166,7 +225,7 @@ func (d *peerDirectory) card(ctx context.Context, p config.PeerConfig) (*a2a.Age
 		return cached.card, cached.err
 	}
 
-	card, err := d.resolveCard(ctx, p.URL)
+	card, err := d.resolveCard(ctx, p.Name, p.URL)
 
 	d.mu.Lock()
 	d.cards[p.Name] = &peerCard{card: card, err: err, at: time.Now()}
@@ -178,9 +237,9 @@ func (d *peerDirectory) card(ctx context.Context, p config.PeerConfig) (*a2a.Age
 	return card, nil
 }
 
-func (d *peerDirectory) resolveCard(ctx context.Context, baseURL string) (*a2a.AgentCard, error) {
+func (d *peerDirectory) resolveCard(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
 	if d.resolve != nil {
-		return d.resolve(ctx, baseURL)
+		return d.resolve(ctx, alias, baseURL)
 	}
 	card, err := agentcard.DefaultResolver.Resolve(ctx, baseURL)
 	if err != nil {
