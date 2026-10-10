@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/config"
@@ -387,19 +388,27 @@ func (d *desktopApp) sessionPrimaryDir(sm *session.Manager) string {
 }
 
 // applyThinking configures the given agent's thinking level from a session's
-// stored value. "" / "default" means DON'T set it — follow the provider's own
-// default; "none" disables thinking. Mirrors SetThinkingLevel's semantics.
+// stored value: "none" disables thinking, a concrete level sets the effort, and
+// "" / "default" means the session has no override — the PROVIDER's own
+// thinking_level applies.
+//
+// The provider default is asked of the CONFIG, not read off the agent: once a
+// session's override has been applied, the agent's Resolved is that override.
+// Clearing it instead of restoring it (SetThinking(nil, "")) silently erased the
+// provider's thinking_level — invisible until a path that only asks for a
+// reasoning summary when an effort is set (the Responses API) went out with no
+// effort at all, which is how a configured gpt-6-astra lost its thinking chain.
+// This is the same resolution the TUI / channel / ACP frontends use
+// (cmds.EffectiveThinking against a provider resolved from config).
 func applyThinking(a *agent.AIAgent, level string) {
-	switch level {
-	case "none":
-		f := false
-		a.SetThinking(&f, "")
-	case "", "default":
-		a.SetThinking(nil, "")
-	default:
-		t := true
-		a.SetThinking(&t, level)
+	base := a.Config.Resolved
+	if level == "" || level == "default" {
+		if resolved, err := a.SetResolvedProvider(base.Name); err == nil {
+			base = resolved
+		}
 	}
+	thinking, effort := cmds.EffectiveThinking(level, *base)
+	a.SetThinking(thinking, effort)
 }
 
 // teardownAgent closes every per-session agent and the shared MCP manager,
