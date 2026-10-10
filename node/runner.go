@@ -897,8 +897,8 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 	binding, known := r.contexts.get(contextID)
 	if known && binding.CallerID != "" && callerID != "" && binding.CallerID != callerID {
 		// A known context belongs to the caller that opened it. Checked only when both
-		// sides have an identity: until callers can be authenticated there is nothing to
-		// compare, and pretending otherwise would refuse work for no reason.
+		// sides have an identity — on loopback nobody does, so there is nothing to compare,
+		// and pretending otherwise would refuse work for no reason.
 		return nil, fmt.Errorf("%w: context %s belongs to another caller", ErrContextNotOwned, contextID)
 	}
 

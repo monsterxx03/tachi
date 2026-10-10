@@ -440,7 +440,8 @@ type PeerConfig struct {
 }
 
 // PeerIdentitiesPath is where this machine records which key each peer presented the first time
-// it was reached (TOFU — see PeerConfig.Identity).
+// it was reached (TOFU — see node/knownpeers.go). It is the file to edit, by hand, when a peer was
+// genuinely reinstalled and has a new key: the pin refuses the change and names this path.
 //
 // It sits beside the delegation records rather than inside the node's data dir, for the same
 // reason they do: delegating is not a feature of HOSTING a node, and a machine that only ever
@@ -483,10 +484,12 @@ type NodeConfig struct {
 	// loopback forever (design §3.3).
 	//
 	// The default is loopback with a kernel-chosen port: enabling the node must not, by itself,
-	// put anything on a network. A deployment where other machines delegate here names an
-	// address (the mesh interface, or 0.0.0.0 behind a firewall), and that is refused unless
-	// `callers` is configured — because a listener nobody authenticates is an open agent
-	// endpoint, not a feature (node/options.go).
+	// put anything on a network. A deployment where other machines delegate here names an address
+	// (the mesh interface, or 0.0.0.0 behind a firewall) — and that address is not decoration: it
+	// is the ONE switch that decides whether this surface serves TLS and requires a client
+	// certificate (node/options.go isLoopbackListen). Loopback is plaintext and names nobody;
+	// anything else encrypts and identifies every caller, which is why pointing this at a public
+	// address is also a statement about what may reach it.
 	Listen string `yaml:"listen" default:"127.0.0.1:0"`
 
 	// PublicURL is the address this node ADVERTISES in its Agent Card, e.g.

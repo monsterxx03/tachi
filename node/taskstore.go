@@ -23,9 +23,10 @@ import (
 //
 // The caller-identity half of List is the SDK's Authenticator idea, implemented here
 // from the CallContext: with no authenticated caller there is no owner to scope a list
-// to, and answering a list anyway would be the resource-leak the design forbids. It
-// starts working the moment caller authentication sets CallContext.User — no change
-// here.
+// to, and answering a list anyway would be the resource-leak the design forbids. It is
+// filled by the node's own surface — the TLS handshake establishes the identity and an
+// interceptor puts it on the CallContext (node/auth.go) — so on loopback, where nobody
+// is identified, List refuses rather than answering.
 var _ taskstore.Store = (*taskStore)(nil)
 
 // Create stores a task the request handler just built. The fingerprint written with it
@@ -103,10 +104,10 @@ func (s *taskStore) Update(ctx context.Context, update *taskstore.UpdateRequest)
 // rule is that reading a task re-checks it (§6.3), and the refusal is TASK_NOT_FOUND rather than a
 // permission error so that a caller cannot learn that somebody else's task exists at that id.
 //
-// A request with NO caller keeps the behaviour it had before this check existed: on loopback (or
-// on a node that configures no callers) the transport is the boundary, and there is no identity to
-// compare against. A record with no owner — one written before this node had callers — therefore
-// matches no authenticated caller, which is what "nobody's" means.
+// A request with NO caller identity keeps the behaviour it had before this check existed: on
+// loopback the transport is the boundary, and there is no identity to compare against. A record
+// with no owner — one written on that surface — therefore matches no authenticated caller, which
+// is what "nobody's" means.
 func (s *taskStore) Get(ctx context.Context, taskID a2a.TaskID) (*taskstore.StoredTask, error) {
 	rec, ok := s.record(taskID)
 	if !ok {

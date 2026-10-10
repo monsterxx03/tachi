@@ -815,9 +815,10 @@ func (c *remoteClient) fetchCard(ctx context.Context, alias, baseURL string) (*a
 // clientFor returns the HTTP client for one peer: the shared one for plaintext loopback, and a
 // per-peer client carrying its TLS pin for anything else.
 //
-// The pin is read ONCE per peer per process. A `peers[].identity` that changes at runtime is not a
-// case worth handling (the sender is rebuilt when the peer list changes — node/delegatorcache.go),
-// and re-reading it per request would put a lock and a map lookup in front of every poll.
+// The pin is read ONCE per peer per process. A peer's KEY changing at runtime is not a
+// case worth handling (the sender is rebuilt when the peer list changes — node/delegatorcache.go,
+// and a re-keyed peer is a mismatch the pin refuses by design), and re-reading it per request
+// would put a lock and a map lookup in front of every poll.
 func (c *remoteClient) clientFor(pc peer) *http.Client {
 	u, err := url.Parse(pc.URL)
 	if err != nil || u.Scheme != "https" {

@@ -14,10 +14,11 @@
 //
 //   - the LOCAL control interface — loopback only, guarded by a private credential
 //     read from the node's data dir. Other Tachi processes on this machine use it.
-//   - the REMOTE A2A interface — loopback only as well, and for a harder reason: it
-//     authenticates nobody yet, so it must not be reachable from anywhere
-//     (Options.normalized refuses a non-loopback address). Caller authentication is
-//     the slice that opens it up.
+//   - the REMOTE A2A interface — the one other machines talk to. Off loopback it serves TLS and
+//     requires a client certificate from the caller, so a request that arrives is always
+//     identified and never in the clear; on loopback it serves plaintext and identifies nobody,
+//     because there is no network to read it off and no caller to name. What that surface does NOT
+//     do is decide who MAY call: it knows WHO did (Options.checkRemoteListen).
 package node
 
 import (
@@ -88,11 +89,16 @@ type Options struct {
 
 	// RemoteListen is the address of the A2A interface — the one other nodes talk to.
 	//
-	// Loopback (the default) is always allowed. Any other address is allowed ONLY when Callers
-	// is non-empty, and the rule is deliberately a hard one: without credentials this listener
-	// accepts work from whoever can reach it, so a non-loopback address would be the difference
-	// between "a feature nobody enabled" and "an open agent endpoint". It is refused at
-	// validation time rather than warned about later (checkRemoteListen).
+	// It decides MORE than where to bind: this address is the one switch that says whether the
+	// surface serves TLS, and with it whether callers are identified at all (see isLoopbackListen,
+	// and node/a2a.go where one expression drives encryption, the client certificate request and
+	// the identity carried into the request).
+	//
+	// Loopback (the default) is plaintext and identifies nobody, which is right for what it is:
+	// nothing can read a conversation off the machine, and there is no caller to name. Any other
+	// address encrypts and REQUIRES a client certificate, so a node is never an open agent
+	// endpoint — but it is also not a gatekeeper: whoever can reach the address gets work done on
+	// this machine. THE NETWORK IS THE BOUNDARY, deliberately (checkRemoteListen).
 	//
 	// Ignored when this process attaches. Empty means DefaultRemoteListen.
 	RemoteListen string

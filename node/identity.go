@@ -133,8 +133,9 @@ func (i *Identity) validate() error {
 	return nil
 }
 
-// SigningKey returns the private key. Authentication and TLS use it; nothing in
-// this slice does yet.
+// SigningKey returns the private key. The TLS certificate is signed with it and this node's
+// client certificate is made from the same key pair (node/tls.go), so it is the key behind every
+// identity this node presents in either direction.
 func (i *Identity) SigningKey() (ed25519.PrivateKey, error) {
 	seed, err := base64.StdEncoding.DecodeString(i.PrivateKey)
 	if err != nil {

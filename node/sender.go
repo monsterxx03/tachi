@@ -49,11 +49,11 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 	if err != nil {
 		return nil, err
 	}
-	// Our own identity, and the certificate it signs: what we present to a peer so it can check us
-	// against its node.callers. It lives in the NODE's data dir even on a machine that hosts
-	// nothing — being a caller means having a key, and a machine that only calls out still has to
-	// say who it is (the alternative would be an anonymous caller, which is exactly what the
-	// receiving side refuses).
+	// Our own identity, and the certificate it signs: what we present to a peer so it can read
+	// WHO is calling out of the TLS handshake. It lives in the NODE's data dir even on a machine
+	// that hosts nothing — being a caller means having a key, and a machine that only calls out
+	// still has to say who it is (the alternative would be an anonymous caller, which is exactly
+	// what a remote surface on TLS refuses: node/auth.go).
 	identity, err := LoadOrCreateIdentity(config.NodeDir())
 	if err != nil {
 		return nil, err

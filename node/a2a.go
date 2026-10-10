@@ -40,11 +40,11 @@ const (
 // interface (design §3.3): a remote credential must never reach the local
 // management surface, and a local client must not depend on the remote one.
 //
-// Caller authentication does not exist yet — it arrives with the pairing and TLS
-// slice, and until then this surface binds LOOPBACK ONLY (Options.normalized
-// enforces it) and the Card declares no security scheme. That is not an omission
-// in the Card: it is the truth about this surface today, and the design's rule is
-// that a Card declares what is actually implemented.
+// WHO may call is the network's business; who DID call is this surface's (Options.checkRemoteListen
+// states the trade). Off loopback it serves TLS and requires a client certificate, so a request
+// that reaches the handler always carries an identity, and the Card declares exactly that. On
+// loopback it serves plaintext and identifies nobody — nothing can read the conversation off a
+// machine, and there is no caller to name.
 type a2aSurface struct {
 	ln   net.Listener
 	srv  *http.Server
@@ -104,9 +104,11 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	}
 	// One source for two jobs: the capabilities the handler ENFORCES are the ones
 	// the Card publishes, so "declared but not implemented" cannot happen by drift.
-	// Authentication is ONE decision with two halves, so it is one condition: a node with no
-	// callers configured authenticates nobody and behaves exactly as it did before this slice —
-	// which is what every loopback deployment (and every test) is.
+	//
+	// The identity interceptor is added by the SAME condition that turned TLS on, and that is the
+	// point rather than a coincidence: a caller certificate and the identity it establishes are one
+	// arrangement, so a surface that asks for the first cannot forget the second. On loopback
+	// neither exists — nobody is identified, and the Card declares no scheme.
 	//
 	// When it is on, the interceptor goes FIRST among the interceptors: a caller this node cannot
 	// identify has no business learning whether its protocol version is supported either.
@@ -188,14 +190,6 @@ func (s *a2aSurface) close(log *logger.Logger) {
 	shutdownGraceful(s.srv, log, "remote interface")
 }
 
-// newAgentCard describes what this node actually does — no more.
-//
-// Every optional capability stays false (nothing streams, nothing pushes) because that is
-// the truth, and declaring one would be worse here than in a document: a PEER plans around a
-// Card. Which skill it declares depends on the executor behind it, because those are two
-// different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
-// (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
-// be exactly the "declared but not implemented" mistake this function exists to avoid.
 // advertisedURL is what the Card tells a caller to dial.
 //
 // `public_url` wins when the operator set it (a mesh name, a port forwarder, a real host name are
@@ -218,6 +212,14 @@ func advertisedURL(publicURL, boundAddr string, https bool) string {
 	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
+// newAgentCard describes what this node actually does — no more.
+//
+// Every optional capability stays false (nothing streams, nothing pushes) because that is
+// the truth, and declaring one would be worse here than in a document: a PEER plans around a
+// Card. Which skill it declares depends on the executor behind it, because those are two
+// different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
+// (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
+// be exactly the "declared but not implemented" mistake this function exists to avoid.
 func newAgentCard(name, url string, real bool, authenticated bool) *a2a.AgentCard {
 	if strings.TrimSpace(name) == "" {
 		name = defaultNodeName

@@ -28,9 +28,17 @@ import (
 // therefore costs no configuration at all — what a peer checks is the identity the node already
 // had, and a certificate for a pinned node cannot be forged the way a name or a bearer token can.
 //
-// What this is NOT is mutual TLS. The caller presents a bearer token, not a certificate, so the
-// accepting side learns a NAME and not a key. The Card must therefore declare HTTP Bearer, and
-// nothing here may be described as mTLS (design §6.1) — client certificates are a separate slice.
+// It is the SAME certificate in both directions, which is what makes this mutual TLS rather than
+// a server certificate plus a shared secret: the node serves it on its remote surface and
+// presents it as the client certificate when it is the one calling out (see makeCertificate's
+// ExtKeyUsage). The accepting side therefore learns a KEY, and the node id it derives from that
+// key is not something a caller can claim — a caller can generate as many keys as it likes, but
+// it cannot present one that derives somebody else's id (verifyCallerCertificate).
+//
+// What the certificate deliberately does NOT say is anything a name would: it carries no subject
+// alternative names, so a hostname is never verified, and the address a peer dials comes from
+// that peer's config, not from the certificate. What is checked instead is the pin (TOFU,
+// node/knownpeers.go) — which is why a peer may be configured by bare IP.
 
 const (
 	// tlsDirName holds the node's certificate, beside the identity key it was made from.
@@ -222,9 +230,11 @@ func verifyCallerCertificate(rawCerts [][]byte, log *logger.Logger) error {
 func peerTLSConfig(ourCert tls.Certificate, p *knownPeers, alias string) *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		// Our own identity, presented so the peer can check it against its node.callers. This is
-		// the whole of "authentication" on this side: no token travels, and there is nothing here
-		// that a listener on the wire could replay.
+		// Our own identity, presented so the peer can read the caller out of it. This is the whole
+		// of "authentication" on this side: no token travels, and there is nothing here that a
+		// listener on the wire could replay. Whether the peer MAY call this one is not something
+		// this certificate is checked against — there is no list of accepted callers on either
+		// side (node/options.go checkRemoteListen), only the fact of who it is.
 		Certificates: []tls.Certificate{ourCert},
 		// The system verifier would reject a self-signed certificate before our own check ran.
 		// Nothing it does is being skipped in spirit: none of it is the check this node makes.

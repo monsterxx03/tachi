@@ -57,10 +57,11 @@ type taskRecord struct {
 	// lets us tell the two apart instead of silently returning the old task.
 	Digest string `json:"digest"`
 	// CallerID is the authenticated identity that submitted this task, empty for a request with
-	// no credential (loopback, or a node that configures no callers). It is the OWNER as well as
-	// part of the dedupe key (see fingerprint.key): List filters by it, and Get refuses a caller
-	// that is not it — an id is not a capability (design §6.3). A record written before this
-	// node had callers has no owner, and nobody can claim one.
+	// no identity at all — a loopback surface, where the transport is the boundary and there is
+	// nobody to name. It is the OWNER as well as part of the dedupe key (see fingerprint.key):
+	// List filters by it, and Get refuses a caller that is not it — an id is not a capability
+	// (design §6.3). A record written on loopback has no owner, and an authenticated caller can
+	// never claim one.
 	CallerID string `json:"caller_id,omitempty"`
 	// SelfReportedName is the name the caller declared for itself (node.name, sent as a header).
 	// The FIELD NAME says what it is: anyone with a valid key can claim any name, so this is a
@@ -92,13 +93,13 @@ type fingerprint struct {
 // mint, so this is a guard, not a parser: it is rejected at write time.
 const dedupeKeySep = "|"
 
-// key is the dedupe key. With no caller identity yet it is the messageId alone, and the
-// day callers can be authenticated it becomes (caller, messageId) by filling CallerID —
-// no format change, no migration.
+// key is the dedupe key: (caller, messageId) whenever there is a caller identity, and the
+// messageId alone when there is none (loopback, where the transport is the boundary).
 //
-// The caller half must be at least as fine-grained as the credential: anything that can
-// send a messageId of its own has to be distinguishable here, or one principal would be
-// served the other's task.
+// The caller half must be at least as fine-grained as the credential: anything that can send a
+// messageId of its own has to be distinguishable here, or one principal would be served the
+// other's task. That is why it is filled from the identity the handshake established and never
+// from anything the request carries.
 func (f fingerprint) key() string {
 	if f.caller == "" {
 		return f.messageID

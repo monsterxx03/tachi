@@ -21,8 +21,11 @@ import (
 // first-contact window on every launch — the one moment the mechanism exists to close.
 //
 // What TOFU does NOT do is prove the first contact was genuine, and nothing here may pretend
-// otherwise (design §4.2): the first pin is recorded and REPORTED as unverified, and an operator
-// who wants a stronger promise fills in `peers[].identity` instead of relying on this file.
+// otherwise (design §4.2): the first pin is recorded and REPORTED as unverified. The way to close
+// that window is out of band — read the peer's node id where it is published, and compare it with
+// what this file holds after the first call; there is no configured identity to fill in instead
+// (an earlier slice had one, and it was removed along with the caller whitelist it served:
+// callers are identified, not authorised — node/options.go checkRemoteListen).
 type knownPeers struct {
 	path string
 	log  *logger.Logger

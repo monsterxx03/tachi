@@ -25,9 +25,10 @@ import (
 // history of the previous one without any of them being "the peer's session".
 type contextBinding struct {
 	ContextID string `json:"context_id"`
-	// CallerID is the authenticated principal that opened this context. Empty until
-	// callers can be authenticated; it is stored so a later slice can refuse a context to
-	// a caller that is not its owner (the same granularity rule as the dedupe key).
+	// CallerID is the authenticated principal that opened this context, empty on loopback,
+	// where nobody is identified. It is what refuses a context to a caller that is not its
+	// owner (the same granularity rule as the dedupe key) — set from the TLS handshake's
+	// identity, so it cannot be claimed (node/auth.go).
 	CallerID string `json:"caller_id,omitempty"`
 	// SessionID is the session the context is held in RIGHT NOW. Compaction moves the
 	// conversation to a successor session, and this field follows it — the context id and
