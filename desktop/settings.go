@@ -558,6 +558,11 @@ var settingsTable = []settingApply{
 	// collector cannot remove a reminder without taking every other reminder's state with it.
 	{Key: "system_reminder", Category: catSession, Mode: applyLazy, Note: "git reminder 每次生成时现读配置"},
 
+	// peers: 这台机器可以向哪些节点委派（发送方目录，与 node.enabled 无关）。工具与 reminder
+	// 都在用时现读，所以是热改：改完下一轮就生效，不用重启。
+	{Key: "peers", Category: catAdvanced, Mode: applyLazy,
+		Note: "发送方目录：name / url / note；工具与 reminder 每轮现读，改完下一轮生效"},
+
 	// --- consumed once at startup ---
 	{
 		Key:      "logs.level",

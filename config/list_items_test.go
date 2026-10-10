@@ -21,6 +21,9 @@ func TestListItemPathsAreTheListsAFormCanGrow(t *testing.T) {
 		"web_search.providers": true,
 		"web_fetch.providers":  true,
 		"jev.pricing.bands":    true,
+		// The peers a form can grow: this machine's send-side directory (one row per node it
+		// may delegate to).
+		"peers": true,
 	}
 	for _, p := range got {
 		if !want[p] {

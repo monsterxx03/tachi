@@ -412,6 +412,44 @@ type WeixinConfig struct {
 	BotAgent string `yaml:"bot_agent"` // v2.3.1+: bot_agent identity string (default: "Tachi")
 }
 
+// PeerConfig is one other Tachi node this machine may delegate work to.
+//
+// It is the SENDER's directory entry, which is why it lives at the top level of the config and
+// not under `node`: `node:` describes what THIS machine offers to others, and a machine that
+// only delegates (its own node service switched off) still has peers to delegate to.
+//
+// The URL is where that node's A2A interface answers; its Agent Card is resolved from there,
+// and the card is what tells this machine what the peer actually does (§8.6: the reminder
+// describes available nodes, and a peer that cannot be reached is reported as unknown rather
+// than described from a guess).
+type PeerConfig struct {
+	// Name is the alias the model uses, and the only thing a tool argument carries. It has to
+	// be unique across the list: a name that resolved to two nodes would make every delegation
+	// ambiguous, so a duplicate is refused when the node is wired (node/peers.go).
+	Name string `yaml:"name"`
+	// URL is the base address of the peer's A2A interface, e.g. "http://127.0.0.1:34567".
+	//
+	// Until caller authentication exists a node only listens on LOOPBACK, so today this is a
+	// loopback address: the slice that authenticates callers is also the one that makes a
+	// remote host meaningful here (see docs/2026-10-10-a2a-node-design.md §3.3, §S9).
+	URL string `yaml:"url"`
+	// Note is an optional human line ("家里的 NAS"), carried by the peers reminder when the
+	// card cannot be read and there is nothing factual to say about the node.
+	Note string `yaml:"note,omitempty"`
+}
+
+// DelegationsDir is where this machine records the work it delegated to peers.
+//
+// It sits under the base dir rather than inside the node's data dir on purpose: delegating is
+// not a feature of hosting a node, and a machine that never serves a remote task still needs
+// its own records (design §8.6 — the local id in a tool result is the model's only handle on
+// that work).
+func DelegationsDir() string {
+	return filepath.Join(BaseDir(), delegationsDirName)
+}
+
+const delegationsDirName = "delegations"
+
 // NodeConfig holds this machine's node-service settings for multi-node
 // collaboration (docs/2026-10-10-a2a-node-design.md).
 //
@@ -1130,6 +1168,7 @@ type Config struct {
 	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
 	Badge                  BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
 	Node                   NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
+	Peers                  []PeerConfig         `yaml:"peers"`                           // Other Tachi nodes THIS machine may delegate work to
 
 	// USDToCNY is the rate the built-in price table uses for the vendors that
 	// publish in USD (OpenAI's gpt-6 family, TypeSafe/Jev): their records quote
