@@ -280,10 +280,15 @@ Each of these is a decision, not an oversight — the design's ordering is fixed
   may reach the port. A cluster that wants the sharper rule puts it back where `node.callers` was: the handshake
   already hands over a node id, so the check is a membership test in `verifyCallerCertificate` and nothing else
   moves.
-- **Peer names on THIS side of a record.** `source_node_id` on a session (§2.2) still has nothing to hold: the
-  receiving side learns the caller's node id, not a name it can trust, and it deliberately does not use the
-  self-reported one for that. A locally-mapped label (`node_id → name`) is the missing piece, and it is the
-  same table a whitelist would be.
+- **Showing a peer's NAME on a record held here.** The session a remote turn lands in already records
+  `source_node_id` — the identity out of the caller's certificate, written when the node opens the
+  conversation and carried to a compacted successor exactly like `Kind` and `SkipDream` — so the fact is on
+  disk, and nothing displays it yet. Turning it into something readable means looking that id up in THIS
+  machine's peer directory (`node/knownpeers.go`); the caller's self-reported name is never used for it, since
+  any key can claim any name. Two things to know before building it: that directory is written by OUTBOUND
+  contact, so a node that only ever receives has pinned nobody and every id resolves to "unknown" (a correct
+  answer, but the common one); and the wording has to stay one spelling of one fact across the three
+  frontends, the way the `Kind` label already does.
 
 - **Reminders in `-p`.** A one-off run has `DisableSystemReminders` by construction; it gets references from
   `RemoteTask(action="list")` or from the peer names in a refusal instead.

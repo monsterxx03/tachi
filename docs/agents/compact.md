@@ -44,9 +44,10 @@ subject grows) apply to this split too.
 - **Every session-meta field `FinalizeCompact` does not copy is silently ZEROED** — not reported. Each one has
   its own failure: `AdditionalDirs`/`ProjectID` (tools, prompt and checkpoints agreeing with each other in the
   wrong tree), `Pinned` (invisible state on a folded-away row, plus a permanent exemption from session
-  cleanup), `Kind`/`SkipDream` (a remote task coming back as the user's own local conversation). Adding a field
-  to the meta means deciding whether it travels with the conversation; `agent/compact_test.go` pins the ones
-  that exist.
+  cleanup), `Kind`/`SkipDream`/`SourceNodeID` (a remote task coming back as the user's own local conversation —
+  and, for the source, a record of somebody's work that no longer says whose). Adding a field to the meta means
+  deciding whether it travels with the conversation; `agent/compact_test.go` pins the path fields and
+  `agent/managed_test.go` the three that mark a session as a remote execution.
 - **`ThreadID` and `Pinned` MOVE rather than being copied** — the parent releases them in the same step. One
   binding, held by the record it still means something on: a thread binding left on the parent makes
   `FindByThreadID` resolve to the pre-compaction history, which is how every turn after a compaction used to

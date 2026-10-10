@@ -48,10 +48,39 @@ type Session struct {
 	// existed reads back as.
 	//
 	// It is a classification, NOT an authorization: what a kind permits is decided where
-	// the session is used (see agent.WithTrustedExecution), and the source node / context a
-	// remote session belongs to live in the node's own binding record — one authority each,
-	// rather than the same fact copied into metadata that can drift.
+	// the session is used (see agent.WithTrustedExecution). What a remote session BELONGS
+	// TO has two halves, and they are stored differently on purpose: the node that asked is
+	// on the record (SourceNodeID below), while which context and workspace the conversation
+	// is lives in the node's own binding record (node/context.go).
 	Kind string `json:"kind,omitempty"`
+
+	// SourceNodeID is WHICH node the work in this session came from: the caller's node id on
+	// the receiving side of a delegation (design §2.2). It comes out of the key in the
+	// certificate that caller presented, so it cannot be claimed — a caller can generate as
+	// many keys as it likes, but it cannot present one that derives somebody else's id
+	// (node/auth.go).
+	//
+	// A NAME is deliberately not stored here, and the name a caller gives itself is never
+	// used as one: any key can claim any name. Reading it as a name means looking this id up
+	// in the machine's own peer directory, and an id that is not in it is reported as the
+	// unknown node it is.
+	//
+	// It is a copy of a fact the node also holds in its context binding, and the copy is the
+	// point rather than the drift that arrangement normally risks:
+	//
+	//   - a reader labels a ROW, and a row is a session. The binding FOLLOWS the
+	//     conversation — a compaction re-points it at the successor session — so a session
+	//     that has since been compacted (still listed, still readable) would have nothing
+	//     left to look up;
+	//   - resolving it where it is shown would put the same inference in every frontend.
+	//
+	// What it cannot drift from is the caller itself: a context belongs to the caller that
+	// opened it and the runner refuses another one, so this value is written once and is
+	// never rewritten.
+	//
+	// Empty for an ordinary conversation, for a session written before this field existed,
+	// and on a surface that identifies nobody (loopback).
+	SourceNodeID string `json:"source_node_id,omitempty"`
 
 	// ThinkingLevel is the per-session thinking override, set via /thinking.
 	// One of "", "none", "low", "medium", "high", "xhigh", "max".

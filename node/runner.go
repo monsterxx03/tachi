@@ -928,6 +928,11 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 		// both are written on the record.
 		sess.SkipDream = true
 		sess.Kind = session.KindA2AExecution
+		// WHO asked, in the identity the handshake established (empty on a surface that
+		// identifies nobody — loopback). Written with the rest of the session's nature and
+		// before the turn runs: a record in a list that says somebody's work is in here has
+		// to be able to say whose (design §2.2).
+		sess.SourceNodeID = callerID
 		if err := sm.UpdateMeta(sess); err != nil {
 			return nil, fmt.Errorf("node: mark remote session: %w", err)
 		}

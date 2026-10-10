@@ -141,6 +141,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// memory by the next Dream pass (design §2.2, §2.3).
 	newSess.Kind = oldSess.Kind
 	newSess.SkipDream = oldSess.SkipDream
+	// The source node travels too, and unlike Pinned this is a COPY rather than a move: the
+	// parent is still a remote execution record and stays one (it is readable, and a reader
+	// has to be able to tell whose work it was), while the child is the row the conversation
+	// continues in. Left out of this block it is silently zeroed on the child — and the child
+	// is what a list shows.
+	newSess.SourceNodeID = oldSess.SourceNodeID
 	// The logical conversation travels with the conversation too, and for the same reason: a
 	// delegated task's record and a reminder's idea of "this conversation" are filed under it,
 	// and a compaction must not make them look like another conversation's work. Written from

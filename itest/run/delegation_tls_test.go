@@ -26,11 +26,13 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/harness"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/itest/run"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/session"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
@@ -151,7 +153,7 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		record := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "delegations"), "d_"))
 		gomega.Expect(record).To(gomega.ContainSubstring(`"peer": "nas"`),
 			"alias 也留一份：它是模型和用户用的那个词")
-		gomega.Expect(record).To(gomega.ContainSubstring(`"peer_node_id": "`+peerID+`"`))
+		gomega.Expect(record).To(gomega.ContainSubstring(`"peer_node_id": "` + peerID + `"`))
 		gomega.Expect(record).To(gomega.ContainSubstring(`"remote_task_id"`))
 		gomega.Expect(record).To(gomega.ContainSubstring(`"state": "TASK_STATE_COMPLETED"`))
 
@@ -162,8 +164,43 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		gomega.Expect(task).To(gomega.ContainSubstring(`"self_reported_name": "tachi@mac"`),
 			"而名字是自称的，所以它单独一个字段、按自称记")
 		gomega.Expect(task).To(gomega.ContainSubstring(`"state": "TASK_STATE_COMPLETED"`))
+
+		// ---- 而它自己那个会话，也说得出是谁派的 ----
+		//
+		// 「谁的活儿」这件事不只落在任务记录里：受管会话自己身上也写着（界面标一行时要读的
+		// 就是它）。读的是前端走的同一条路 —— 会话目录里还住着保留记录这类管理目录，
+		// 「哪些条目算会话」不该由这条 spec 自己再推一遍。
+		//
+		// 它记的是身份，不是名字：名字要去本机的对端目录里查，查不到就老实说不知道。那一步
+		// 还没做（这一轮只让事实先落到盘上），所以这里断言的是那个算出来的 id。
+		held := receivingSession(ginkgo.GinkgoT(), peerHome)
+		gomega.Expect(held.Kind).To(gomega.Equal(session.KindA2AExecution),
+			"这条会话归子系统，不归坐在键盘前的人")
+		gomega.Expect(held.SourceNodeID).To(gomega.Equal(sutID.NodeID),
+			"来源是证书算出来的那个身份，和任务记录里的 caller_id 是同一个")
 	})
 })
+
+// receivingSession returns the ONE session a --home's store holds, read through the same manager
+// a frontend uses rather than by scanning the directory: the session dir also holds the retention
+// bookkeeping (a management dir beside the sessions), and "which entries are sessions" is exactly
+// the kind of thing a spec should not re-derive.
+//
+// The base dir is a process global and this spec has it pointed at the PEER's home (harness.Config
+// above) — which is where the node resolved its own session store from when it wrote the record.
+func receivingSession(t ginkgo.GinkgoTInterface, home string) *session.Session {
+	t.Helper()
+	previous := config.BaseDir()
+	config.SetBaseDir(home)
+	defer config.SetBaseDir(previous)
+
+	sm, err := session.NewManager(nil)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	sessions, err := sm.List()
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	gomega.Expect(sessions).To(gomega.HaveLen(1), "the run created exactly one conversation")
+	return sessions[0]
+}
 
 // pinnedPeer is one entry of peer-identities.json (node/knownpeers.go's knownPeer), read here
 // rather than through an accessor because what this spec asserts is the FILE a restart reads.

@@ -127,6 +127,53 @@ func TestRemoteTaskRunsARealTurnInTheNodesWorkspace(t *testing.T) {
 	require.Equal(t, workspace, binding.Workspace)
 }
 
+// The session a remote turn lands in records WHO asked, in the one form that cannot be
+// claimed: the identity the TLS handshake established out of the caller's certificate.
+//
+// The surface has to be off loopback for there to be an identity at all (node/options.go:
+// leaving the machine is what makes identifying a caller necessary), which makes this the one
+// place in the package where a REAL turn runs behind a required client certificate.
+//
+// Two callers rather than one, deliberately: with a single caller a field filled from the
+// wrong handshake — the last one seen, a package-global — is indistinguishable from the right
+// answer. Two conversations that must each record their OWN caller are not.
+func TestTheReceivingSessionRecordsWhoseWorkItHolds(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(append(oneMessageScript("第一件活儿"), oneMessageScript("第二件活儿")...)...)
+
+	cfg := nodeConfig(t, mock, filepath.Join(base, "workspace"), "ReadFile")
+	cfg.Node.Listen = "0.0.0.0:0"
+	h := startRealNode(t, cfg)
+
+	first, err := LoadOrCreateIdentity(t.TempDir())
+	require.NoError(t, err)
+	second, err := LoadOrCreateIdentity(t.TempDir())
+	require.NoError(t, err)
+
+	for _, caller := range []*Identity{first, second} {
+		status, body, err := sendAs(t, h, caller, "谁在这儿干活？")
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status, "body=%s", body)
+	}
+
+	sm, err := session.NewManager(logger.New("node-test"))
+	require.NoError(t, err)
+	sessions, err := sm.List()
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+
+	sources := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		require.Equal(t, session.KindA2AExecution, s.Kind)
+		sources[s.SourceNodeID] = true
+	}
+	require.Equal(t, map[string]bool{first.NodeID: true, second.NodeID: true}, sources,
+		"each conversation carries the caller that opened it, not whichever handshake came last")
+	require.NotEqual(t, h.NodeID(), first.NodeID, "a caller is never the machine it called")
+}
+
 func TestRemoteTurnOffersOnlyTheNodesAllowedTools(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()

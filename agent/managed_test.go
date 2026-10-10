@@ -74,12 +74,14 @@ func TestOneOffRunsAreRefusedToo(t *testing.T) {
 // Compaction is where a session-level classification goes to die: FinalizeCompact carries
 // fields to the successor BY HAND, so anything not listed there is silently zeroed. A
 // compacted remote execution that lost its kind would come back as an ordinary local
-// conversation — drivable from a frontend, and fed to the next Dream pass.
-func TestCompactionCarriesTheManagedKindAndTheDreamExemption(t *testing.T) {
+// conversation — drivable from a frontend, and fed to the next Dream pass — and one that lost
+// its source node would be a record that says somebody's work is in here without saying whose.
+func TestCompactionCarriesTheManagedKindTheDreamExemptionAndTheSource(t *testing.T) {
 	mgr := &fakeSessionManager{current: &session.Session{
-		ID:        "s-remote",
-		Kind:      session.KindA2AExecution,
-		SkipDream: true,
+		ID:           "s-remote",
+		Kind:         session.KindA2AExecution,
+		SkipDream:    true,
+		SourceNodeID: "448ed5358a38add359c08cf734f05240",
 	}}
 
 	if _, err := FinalizeCompact(mgr, "sys", "summary of the remote work"); err != nil {
@@ -91,6 +93,8 @@ func TestCompactionCarriesTheManagedKindAndTheDreamExemption(t *testing.T) {
 	require.NotEqual(t, "s-remote", child.ID, "compaction continues in a NEW session")
 	require.Equal(t, session.KindA2AExecution, child.Kind)
 	require.True(t, child.SkipDream)
+	require.Equal(t, "448ed5358a38add359c08cf734f05240", child.SourceNodeID,
+		"the child is the session a list shows, so it is the one that has to say whose work it holds")
 }
 
 // The other half of the same rule: a session a subsystem drives must not be MODIFIED from a
