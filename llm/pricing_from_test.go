@@ -32,7 +32,7 @@ func TestResolveModelPriceFromAppliesAScheduleWithNoProviderBehindIt(t *testing.
 		OutputPrice: f64(0),
 	}
 
-	got := ResolveModelPriceFrom(schedule, testSource, "not-in-the-builtin-table", atHour(10))
+	got := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, testSource, "not-in-the-builtin-table", atHour(10))
 	if got.Price.InputPrice != 2.5 {
 		t.Errorf("InputPrice = %v, want 2.5", got.Price.InputPrice)
 	}
@@ -45,7 +45,7 @@ func TestResolveModelPriceFromAppliesAScheduleWithNoProviderBehindIt(t *testing.
 // UsageRow.Unpriced needs both fields zero, which is exactly why a
 // billed-on-input-only service still produces rows the ledger counts as priced.
 func TestResolveModelPriceFromFreeOutputIsStillPriced(t *testing.T) {
-	got := ResolveModelPriceFrom(&config.PricingConfig{InputPrice: f64(1.0), OutputPrice: f64(0)}, testSource, "m", atHour(10))
+	got := ResolveModelPriceFrom(&config.PricingConfig{InputPrice: f64(1.0), OutputPrice: f64(0)}, DefaultUSDToCNY, testSource, "m", atHour(10))
 
 	row := &UsageRow{
 		InputTokens:  1000,
@@ -65,14 +65,14 @@ func TestResolveModelPriceFromFreeOutputIsStillPriced(t *testing.T) {
 // ones come back unpriced rather than guessing.
 func TestResolveModelPriceFromNilScheduleUsesTheBuiltinTable(t *testing.T) {
 	t.Run("a model in the built-in table", func(t *testing.T) {
-		got := ResolveModelPriceFrom(nil, testSource, "deepseek-chat", atHour(10))
+		got := ResolveModelPriceFrom(nil, DefaultUSDToCNY, testSource, "deepseek-chat", atHour(10))
 		if !got.HasPrice() {
 			t.Errorf("HasPrice = false for a built-in model: %+v", got)
 		}
 	})
 
 	t.Run("a model nobody has priced", func(t *testing.T) {
-		got := ResolveModelPriceFrom(nil, testSource, "not-in-the-builtin-table", atHour(10))
+		got := ResolveModelPriceFrom(nil, DefaultUSDToCNY, testSource, "not-in-the-builtin-table", atHour(10))
 		if got.HasPrice() {
 			t.Errorf("HasPrice = true, want an unpriced resolution: %+v", got)
 		}
@@ -89,11 +89,11 @@ func TestResolveModelPriceFromBandsSurviveAnUnknownModel(t *testing.T) {
 		},
 	}
 
-	in := ResolveModelPriceFrom(schedule, testSource, "not-in-the-builtin-table", atHour(10))
+	in := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, testSource, "not-in-the-builtin-table", atHour(10))
 	if in.Price.InputPrice != 7.0 || in.Band != "peak" {
 		t.Errorf("in-band = %+v (band %q), want 7.0 + peak", in.Price, in.Band)
 	}
-	out := ResolveModelPriceFrom(schedule, testSource, "not-in-the-builtin-table", atHour(13))
+	out := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, testSource, "not-in-the-builtin-table", atHour(13))
 	if out.Price.InputPrice != 0 || out.Band != "" {
 		t.Errorf("off-band = %+v (band %q), want the zero flat price", out.Price, out.Band)
 	}
@@ -114,9 +114,9 @@ func TestResolveModelPriceFromIsRepeatable(t *testing.T) {
 	// A built-in model is the interesting case: it arrives with its own bands
 	// and location, which the schedule's bands must replace wholesale without
 	// touching the table entry they came from.
-	first := ResolveModelPriceFrom(schedule, testSource, "deepseek-chat", atHour(10))
+	first := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, testSource, "deepseek-chat", atHour(10))
 	for i := 2; i <= 4; i++ {
-		again := ResolveModelPriceFrom(schedule, testSource, "deepseek-chat", atHour(10))
+		again := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, testSource, "deepseek-chat", atHour(10))
 		if !reflect.DeepEqual(again, first) {
 			t.Fatalf("call %d = %+v, want %+v — resolution is accumulating state", i, again, first)
 		}
@@ -125,7 +125,7 @@ func TestResolveModelPriceFromIsRepeatable(t *testing.T) {
 	// The table entry itself must be untouched: ask it directly after the
 	// resolutions above and compare against a fresh lookup of another model's
 	// untouched sibling — a mutated entry would carry the schedule's 7.0.
-	if entry := GetBuiltinModelPriceAt("deepseek-chat", atHour(10)); entry != nil {
+	if entry := GetBuiltinModelPriceAt("deepseek-chat", atHour(10), DefaultUSDToCNY); entry != nil {
 		for _, b := range entry.Bands {
 			if b.InputPrice == 7.0 {
 				t.Errorf("built-in entry carries the schedule's band — the shared table was mutated: %+v", b)
@@ -156,7 +156,7 @@ func TestResolveModelPriceAtIsResolveModelPriceFromOfTheProviderSchedule(t *test
 		{name: "out of band", t: atHour(13)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want := ResolveModelPriceFrom(schedule, "custom", "some-model", tc.t)
+			want := ResolveModelPriceFrom(schedule, DefaultUSDToCNY, "custom", "some-model", tc.t)
 			got := ResolveModelPriceAt(cfg, "custom", "some-model", tc.t)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("ResolveModelPriceAt = %+v, want %+v (the provider's own schedule, resolved once)", got, want)
@@ -165,7 +165,7 @@ func TestResolveModelPriceAtIsResolveModelPriceFromOfTheProviderSchedule(t *test
 	}
 
 	t.Run("unknown provider falls back to a nil schedule", func(t *testing.T) {
-		want := ResolveModelPriceFrom(nil, testSource, "some-model", atHour(10))
+		want := ResolveModelPriceFrom(nil, DefaultUSDToCNY, testSource, "some-model", atHour(10))
 		got := ResolveModelPriceAt(cfg, "no-such-provider", "some-model", atHour(10))
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("ResolveModelPriceAt = %+v, want the built-in-only resolution %+v", got, want)
@@ -173,7 +173,7 @@ func TestResolveModelPriceAtIsResolveModelPriceFromOfTheProviderSchedule(t *test
 	})
 
 	t.Run("nil config", func(t *testing.T) {
-		want := ResolveModelPriceFrom(nil, testSource, "some-model", atHour(10))
+		want := ResolveModelPriceFrom(nil, DefaultUSDToCNY, testSource, "some-model", atHour(10))
 		got := ResolveModelPriceAt(nil, "custom", "some-model", atHour(10))
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("ResolveModelPriceAt(nil cfg) = %+v, want the built-in-only resolution %+v", got, want)

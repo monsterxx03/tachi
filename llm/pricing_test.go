@@ -58,7 +58,7 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			got := GetBuiltinModelPriceAt(tt.model, prePeak)
+			got := GetBuiltinModelPriceAt(tt.model, prePeak, DefaultUSDToCNY)
 			if tt.want == nil {
 				if got != nil {
 					t.Errorf("GetBuiltinModelPriceAt(%q, pre-peak) = %+v, want nil", tt.model, got)
@@ -90,7 +90,7 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 // Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 func TestGetBuiltinModelPriceAt_DeepSeekPeakVersions(t *testing.T) {
 	// 8/16: old flat prices, no bands.
-	old := GetBuiltinModelPriceAt("deepseek-v4-flash", prePeak)
+	old := GetBuiltinModelPriceAt("deepseek-v4-flash", prePeak, DefaultUSDToCNY)
 	if old == nil {
 		t.Fatal("old price = nil")
 	}
@@ -99,7 +99,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakVersions(t *testing.T) {
 	}
 
 	// 8/17 起: bands present, flat = off-peak (空闲) prices.
-	peak := GetBuiltinModelPriceAt("deepseek-v4-flash", time.Date(2026, 8, 17, 0, 0, 0, 0, tzAsiaShanghai))
+	peak := GetBuiltinModelPriceAt("deepseek-v4-flash", time.Date(2026, 8, 17, 0, 0, 0, 0, tzAsiaShanghai), DefaultUSDToCNY)
 	if peak == nil || len(peak.Bands) != 2 {
 		t.Fatalf("peak version = %+v, want 2 bands", peak)
 	}
@@ -114,7 +114,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakVersions(t *testing.T) {
 	}
 
 	// 8/24 起: workday-only peak bands (Mon-Fri), weekend = flat off-peak all day.
-	weekday := GetBuiltinModelPriceAt("deepseek-v4-flash", time.Date(2026, 8, 24, 0, 0, 0, 0, tzAsiaShanghai))
+	weekday := GetBuiltinModelPriceAt("deepseek-v4-flash", time.Date(2026, 8, 24, 0, 0, 0, 0, tzAsiaShanghai), DefaultUSDToCNY)
 	if weekday == nil || len(weekday.Bands) != 2 {
 		t.Fatalf("weekday-peak version = %+v, want 2 bands", weekday)
 	}
@@ -167,7 +167,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			price := GetBuiltinModelPriceAt("deepseek-v4-flash", tt.at)
+			price := GetBuiltinModelPriceAt("deepseek-v4-flash", tt.at, DefaultUSDToCNY)
 			if price == nil {
 				t.Fatal("price = nil")
 			}
@@ -182,7 +182,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 	}
 
 	// pro: peak 10:00 → 9.0/27.0/0.30 (weekday, post-8/24) and weekend off-peak.
-	pro := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(25, 10))
+	pro := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(25, 10), DefaultUSDToCNY)
 	if pro == nil {
 		t.Fatal("pro price = nil")
 	}
@@ -193,7 +193,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 	if band != "peak" {
 		t.Errorf("pro band = %q, want peak", band)
 	}
-	proWeekend, band := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(30, 10)).PriceAt(beijing(30, 10))
+	proWeekend, band := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(30, 10), DefaultUSDToCNY).PriceAt(beijing(30, 10))
 	if proWeekend.InputPrice != 4.5 || proWeekend.OutputPrice != 13.5 || band != "" {
 		t.Errorf("pro weekend = %+v (band %q), want flat 4.5/13.5", proWeekend, band)
 	}
@@ -214,7 +214,7 @@ func TestGetBuiltinModelPriceAt_DeepSeekFlashSep2026Adjustment(t *testing.T) {
 	}
 	type price struct{ input, output, cacheRead float64 }
 	snap := func(model string, at time.Time) (ModelPrice, string) {
-		p := GetBuiltinModelPriceAt(model, at)
+		p := GetBuiltinModelPriceAt(model, at, DefaultUSDToCNY)
 		if p == nil {
 			t.Fatalf("GetBuiltinModelPriceAt(%q, %v) = nil", model, at)
 		}
@@ -442,7 +442,7 @@ func TestGetBuiltinModelPrice_GLM(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			got := GetBuiltinModelPriceAt(tt.model, at)
+			got := GetBuiltinModelPriceAt(tt.model, at, DefaultUSDToCNY)
 			if tt.want == nil {
 				if got != nil {
 					t.Errorf("GetBuiltinModelPriceAt(%q) = %+v, want nil", tt.model, got)
@@ -469,19 +469,19 @@ func TestGetBuiltinModelPrice_GLM(t *testing.T) {
 // writes the row itself), so the built-in table is where its price has to be.
 //
 // Source: TypeSafe's published price — $0.042 per 1M input tokens, output free
-// (jev-1.13.0). The table's unit is CNY per 1M, so the record carries the
-// conversion through usdToCNY; a wrong rate here shows up as a wrong ¥ figure
-// in /usage, which is why the constant is documented where it is defined.
+// (jev-1.13.0). The record quotes USD (builtinModel.usdPrices) and the resolver
+// converts at the configured rate; a wrong rate here shows up as a wrong ¥
+// figure in /usage, which is why the default is documented where it is defined.
 func TestGetBuiltinModelPrice_Jev(t *testing.T) {
 	at := time.Date(2026, 9, 20, 12, 0, 0, 0, time.Local)
 
 	for _, model := range []string{"jev", "jev-1.13.0", "JEV-1.13.0"} {
-		got := GetBuiltinModelPriceAt(model, at)
+		got := GetBuiltinModelPriceAt(model, at, DefaultUSDToCNY)
 		if got == nil {
 			t.Fatalf("GetBuiltinModelPriceAt(%q) = nil, want the Jev price", model)
 		}
-		if want := 0.042 * usdToCNY; got.InputPrice != want {
-			t.Errorf("%s: InputPrice = %v, want %v ($0.042/M at usdToCNY)", model, got.InputPrice, want)
+		if want := 0.042 * DefaultUSDToCNY; got.InputPrice != want {
+			t.Errorf("%s: InputPrice = %v, want %v ($0.042/M at DefaultUSDToCNY)", model, got.InputPrice, want)
 		}
 		// Output is free: the price must stay 0, not "unknown".
 		if got.OutputPrice != 0 || got.CacheReadInputPrice != 0 || got.CacheCreationInputPrice != 0 {
@@ -544,7 +544,7 @@ func TestGetBuiltinModelPrice_MiniMax(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			got := GetBuiltinModelPriceAt(tt.model, at)
+			got := GetBuiltinModelPriceAt(tt.model, at, DefaultUSDToCNY)
 			if got == nil {
 				t.Fatalf("GetBuiltinModelPriceAt(%q, at) = nil", tt.model)
 			}
@@ -680,5 +680,151 @@ func TestCostForUsage(t *testing.T) {
 				t.Errorf("CostForUsage() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGetBuiltinModelPrice_GPT6 pins the four gpt-6 records against the
+// vendor's published USD figures. OpenAI publishes in USD, so the record quotes
+// USD and the resolver converts (builtinModel.usdPrices): each expectation is
+// the published number TIMES the rate it was resolved with. What must not drift
+// is the published part — a typo here is a wrong ¥ figure in /usage.
+//
+// Source: https://developers.openai.com/api/docs/models/gpt-6-luna
+//
+//	https://developers.openai.com/api/docs/models/gpt-6-sol
+//	https://developers.openai.com/api/docs/models/gpt-6-astra
+//	https://developers.openai.com/api/docs/models/gpt-6.1-sol
+func TestGetBuiltinModelPrice_GPT6(t *testing.T) {
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.Local)
+
+	luna := ModelPrice{InputPrice: 0.10, OutputPrice: 0.50, CacheReadInputPrice: 0.01, CacheCreationInputPrice: 0.125}
+	sol := ModelPrice{InputPrice: 2.00, OutputPrice: 10.00, CacheReadInputPrice: 0.20, CacheCreationInputPrice: 2.50}
+	astra := ModelPrice{InputPrice: 10.00, OutputPrice: 50.00, CacheReadInputPrice: 1.00, CacheCreationInputPrice: 12.50}
+	// 6.1 Sol is the same price as Sol except for the cache hit rate (5%).
+	sol61 := ModelPrice{InputPrice: 2.00, OutputPrice: 10.00, CacheReadInputPrice: 0.10, CacheCreationInputPrice: 2.50}
+
+	tests := []struct {
+		model string
+		usd   ModelPrice
+	}{
+		{model: "gpt-6-luna", usd: luna},
+		{model: "gpt-6-sol", usd: sol},
+		{model: "gpt-6-astra", usd: astra},
+		{model: "gpt-6.1-sol", usd: sol61},
+		// A dated snapshot carries its variant's price: the match is a substring.
+		{model: "gpt-6-sol-2026-09-22", usd: sol},
+		{model: "gpt-6.1-sol-preview", usd: sol61},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := GetBuiltinModelPriceAt(tt.model, at, DefaultUSDToCNY)
+			if got == nil {
+				t.Fatalf("GetBuiltinModelPriceAt(%q) = nil, want the published price", tt.model)
+			}
+			want := ModelPrice{
+				InputPrice:              tt.usd.InputPrice * DefaultUSDToCNY,
+				OutputPrice:             tt.usd.OutputPrice * DefaultUSDToCNY,
+				CacheReadInputPrice:     tt.usd.CacheReadInputPrice * DefaultUSDToCNY,
+				CacheCreationInputPrice: tt.usd.CacheCreationInputPrice * DefaultUSDToCNY,
+			}
+			if got.InputPrice != want.InputPrice ||
+				got.OutputPrice != want.OutputPrice ||
+				got.CacheReadInputPrice != want.CacheReadInputPrice ||
+				got.CacheCreationInputPrice != want.CacheCreationInputPrice {
+				t.Errorf("GetBuiltinModelPriceAt(%q) = %+v, want %+v ($%+v at %v)",
+					tt.model, got, want, tt.usd, DefaultUSDToCNY)
+			}
+			if len(got.Bands) != 0 {
+				t.Errorf("%s: gpt-6 has no time-of-use bands, got %+v", tt.model, got.Bands)
+			}
+		})
+	}
+
+	// An unknown gpt-6 variant knows its FAMILY's context and vision but not its
+	// price: Luna and Astra differ by 100x, so a guessed price would be wrong by
+	// that much where an unpriced row is visibly unpriced.
+	if got := GetBuiltinModelPriceAt("gpt-6-octarine", at, DefaultUSDToCNY); got != nil {
+		t.Errorf("GetBuiltinModelPriceAt(gpt-6-octarine) = %+v, want nil (unpriced variant)", got)
+	}
+	if got := ModelContextWindow("gpt-6-octarine"); got != 1_050_000 {
+		t.Errorf("ModelContextWindow(gpt-6-octarine) = %d, want 1050000", got)
+	}
+}
+
+// TestGetBuiltinModelPrice_USDRate pins the conversion itself: the rate applies
+// to the USD-quoted records, a CNY-quoted record does not move with it (the
+// table's unit IS the ledger's), and a rate of 0/negative means "not
+// configured" rather than "free".
+func TestGetBuiltinModelPrice_USDRate(t *testing.T) {
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.Local)
+
+	const rate = 7.5
+	astra := GetBuiltinModelPriceAt("gpt-6-astra", at, rate)
+	if astra == nil {
+		t.Fatal("gpt-6-astra = nil")
+	}
+	if astra.InputPrice != 10.00*rate || astra.OutputPrice != 50.00*rate ||
+		astra.CacheReadInputPrice != 1.00*rate || astra.CacheCreationInputPrice != 12.50*rate {
+		t.Errorf("gpt-6-astra at rate %v = %+v, want 4 unit prices scaled by the rate", rate, astra)
+	}
+
+	// A CNY record is already in the ledger's unit: scaling it would be a
+	// silent 7x overcharge. (GLM-5.3 rather than a DeepSeek record, whose price
+	// depends on the hour of the day through its peak bands.)
+	glm := GetBuiltinModelPriceAt("glm-5.3", at, rate)
+	if glm == nil {
+		t.Fatal("glm-5.3 = nil")
+	}
+	if glm.InputPrice != 8.0 || glm.OutputPrice != 28.0 || glm.CacheReadInputPrice != 2.0 {
+		t.Errorf("glm-5.3 at rate %v = %+v, want the table's own CNY prices", rate, glm)
+	}
+
+	for _, r := range []float64{0, -1} {
+		got := GetBuiltinModelPriceAt("gpt-6-sol", at, r)
+		if got == nil {
+			t.Fatalf("gpt-6-sol at rate %v = nil", r)
+		}
+		if want := 2.00 * DefaultUSDToCNY; got.InputPrice != want {
+			t.Errorf("gpt-6-sol at rate %v: InputPrice = %v, want the default rate's %v", r, got.InputPrice, want)
+		}
+	}
+}
+
+// TestResolveModelPrice_USDToCNYConfig: the configured rate (usd_to_cny)
+// reaches a resolution, and a config that does not set one keeps the default —
+// the config is read per resolution so a settings save applies to the next call
+// rather than to the next process.
+func TestResolveModelPrice_USDToCNYConfig(t *testing.T) {
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.Local)
+
+	r := 7.5
+	cfg := &config.Config{USDToCNY: &r}
+	if got := USDToCNYRate(cfg); got != r {
+		t.Errorf("USDToCNYRate(configured) = %v, want %v", got, r)
+	}
+	got := ResolveModelPriceAt(cfg, "openai", "gpt-6-luna", at)
+	if !got.HasPrice() {
+		t.Fatal("gpt-6-luna resolved as unpriced")
+	}
+	if want := 0.10 * r; got.Price.InputPrice != want {
+		t.Errorf("gpt-6-luna InputPrice = %v, want %v (configured rate %v)", got.Price.InputPrice, want, r)
+	}
+
+	// nil config, an unset field, and nonsense rates all mean "the default".
+	zero := 0.0
+	neg := -3.0
+	for name, c := range map[string]*config.Config{
+		"nil config": nil,
+		"unset":      {},
+		"zero":       {USDToCNY: &zero},
+		"negative":   {USDToCNY: &neg},
+	} {
+		if rate := USDToCNYRate(c); rate != DefaultUSDToCNY {
+			t.Errorf("USDToCNYRate(%s) = %v, want the default %v", name, rate, DefaultUSDToCNY)
+		}
+	}
+	if got := ResolveModelPriceAt(nil, "openai", "gpt-6-luna", at); got.Price.InputPrice != 0.10*DefaultUSDToCNY {
+		t.Errorf("gpt-6-luna with no config: InputPrice = %v, want %v", got.Price.InputPrice, 0.10*DefaultUSDToCNY)
 	}
 }

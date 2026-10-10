@@ -182,11 +182,11 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 	case "none":
 		v := false
 		thinking = &v
-		// o1/o3/o4/gpt-5 等推理模型的思考模式无法关闭：Thinking=false
+		// o1/o3/o4/gpt-5/gpt-6 等推理模型的思考模式无法关闭：Thinking=false
 		// 在 OpenAI 路径只会"不设置 ReasoningEffort"，模型仍会推理。
 		if IsReasoningModelPrefix(pCfg.Model) {
 			logger.New("llm").Warn(context.Background(),
-				"thinking_level: none has no effect on reasoning models (o1/o3/o4/gpt-5); thinking stays on",
+				"thinking_level: none has no effect on reasoning models (o1/o3/o4/gpt-5/gpt-6); thinking stays on",
 				"model", pCfg.Model)
 		}
 	default:

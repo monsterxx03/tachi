@@ -23,7 +23,7 @@ func isDeepSeek(model string) bool {
 }
 
 // isReasoningModelPrefix reports whether the model belongs to OpenAI's
-// reasoning families (o1/o3/o4/gpt-5). These models reject max_tokens in
+// reasoning families (o1/o3/o4/gpt-5/gpt-6). These models reject max_tokens in
 // favor of max_completion_tokens — the go-openai client validates this and
 // errors out otherwise.
 func isReasoningModelPrefix(model string) bool {
@@ -31,14 +31,41 @@ func isReasoningModelPrefix(model string) bool {
 	return strings.HasPrefix(m, "o1") ||
 		strings.HasPrefix(m, "o3") ||
 		strings.HasPrefix(m, "o4") ||
-		strings.HasPrefix(m, "gpt-5")
+		strings.HasPrefix(m, "gpt-5") ||
+		strings.HasPrefix(m, "gpt-6")
 }
 
 // IsReasoningModelPrefix reports whether the model belongs to OpenAI's
-// reasoning families (o1/o3/o4/gpt-5). Exported for config validation —
+// reasoning families (o1/o3/o4/gpt-5/gpt-6). Exported for config validation —
 // these models have mandatory reasoning and ignore "thinking off" requests.
 func IsReasoningModelPrefix(model string) bool {
 	return isReasoningModelPrefix(model)
+}
+
+// ModelSupportsReasoningEffortNone reports whether the Responses API may be
+// asked to turn reasoning OFF for this model (reasoning.effort = "none").
+//
+// It is not the same question as isReasoningModelPrefix: gpt-6 Astra and
+// gpt-6.1 Sol are reasoning models that REJECT "none"/"minimal", so sending one
+// to them fails the whole request. The answer is therefore two facts together —
+// it is a reasoning model at all (a non-reasoning one gets no reasoning field),
+// and the registry does not record it as rejecting "none"
+// (builtinModel.rejectsEffortNone), the same one place a model's other
+// capabilities live.
+//
+// A model with no record keeps the answer it had before this capability
+// existed (send it), because this query exists to STOP sending a value we now
+// know is rejected — not to start withholding one on the strength of a missing
+// row. The gap that leaves is a future variant of a family whose known members
+// accept "none": it inherits the family record's answer, so a model OpenAI
+// ships that rejects "none" needs its name added to the table
+// (builtinModel.rejectsEffortNone) to be handled.
+func ModelSupportsReasoningEffortNone(model string) bool {
+	if !isReasoningModelPrefix(model) {
+		return false
+	}
+	r := lookup(model)
+	return r == nil || !r.rejectsEffortNone
 }
 
 // ModelSupportsVision reports whether a model is known to accept image

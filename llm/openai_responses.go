@@ -336,6 +336,12 @@ func asStringList(v any) []string {
 // reasoning field at all: they don't reason anyway, and some servers reject
 // the param for them.
 //
+// …but not every reasoning model accepts "none": gpt-6 Astra and gpt-6.1 Sol
+// reject it (see ModelSupportsReasoningEffortNone), and a rejected parameter
+// fails the WHOLE request rather than just the setting. For those the field is
+// left off, which is what chat completions does for everyone — reasoning stays
+// on, and resolve.go has already warned the reader who asked for none.
+//
 // When an effort is set, reasoning.summary is requested ("auto") so that
 // non-streaming responses carry reasoning text (the reasoning output item's
 // content is encrypted by default on POST /responses).
@@ -359,8 +365,9 @@ func (p *OpenAIResponsesProvider) buildParams(messages []Message, tools []Tool, 
 	}
 	switch {
 	case opts.Thinking != nil && !*opts.Thinking:
-		// Explicitly disabled: turn reasoning off on models that support it.
-		if isReasoningModelPrefix(p.model) {
+		// Explicitly disabled: turn reasoning off on the models that allow
+		// it (see the "none" note on buildParams).
+		if ModelSupportsReasoningEffortNone(p.model) {
 			params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffortNone}
 		}
 	case opts.ThinkingEffort != "":

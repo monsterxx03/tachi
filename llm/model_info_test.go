@@ -39,6 +39,13 @@ func TestModelContextWindow_GPT(t *testing.T) {
 		{"gpt-5.4-preview", 1_050_000},
 		{"gpt-5.5", 1_050_000},
 		{"gpt-5.5-turbo", 1_050_000},
+		// gpt-6 家族：四个已登记的模型同上下文，未登记的变体由家族记录兜底。
+		{"gpt-6-luna", 1_050_000},
+		{"gpt-6-sol", 1_050_000},
+		{"gpt-6-astra", 1_050_000},
+		{"gpt-6.1-sol", 1_050_000},
+		{"gpt-6-sol-2026-09-22", 1_050_000},
+		{"gpt-6-unknown-variant", 1_050_000},
 		{"gpt-5.3-codex", 400_000},
 		{"gpt-5.3-codex-something", 400_000},
 		{"gpt-4o", 400_000},
@@ -113,6 +120,7 @@ func TestModelSupportsVision(t *testing.T) {
 	visionModels := []string{
 		"claude-sonnet-4-6", "claude-opus-4", "claude-haiku-3-5", "claude-3-5-sonnet",
 		"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-5.2", "gpt-5.1-codex",
+		"gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-preview",
 		"o4-mini", "o4", "gpt-4-turbo", "gpt-4-vision-preview",
 		"qwen-vl-max", "qwen2.5-vl-72b", "qwen3-vl-plus",
 		"glm-4v", "glm-4.1v", "glm-4.5v", "glm-5.3-flash",
@@ -143,6 +151,78 @@ func TestModelSupportsVision(t *testing.T) {
 		t.Run("text_"+m, func(t *testing.T) {
 			if ModelSupportsVision(m) {
 				t.Errorf("ModelSupportsVision(%q) = true, want false", m)
+			}
+		})
+	}
+}
+
+// The reasoning families select max_completion_tokens over max_tokens (see
+// isReasoningModelPrefix), so a new family missing from it fails at request
+// build time. gpt-6 joined with the four models added alongside it.
+func TestIsReasoningModelPrefix(t *testing.T) {
+	reasoning := []string{
+		"o1", "o1-mini", "o3", "o4", "o4-mini",
+		"gpt-5.4", "gpt-5.5-turbo",
+		"gpt-6", "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol",
+		"gpt-6-sol-2026-09-22", "GPT-6-ASTRA",
+	}
+	for _, m := range reasoning {
+		t.Run("reasoning_"+m, func(t *testing.T) {
+			if !IsReasoningModelPrefix(m) {
+				t.Errorf("IsReasoningModelPrefix(%q) = false, want true", m)
+			}
+		})
+	}
+
+	notReasoning := []string{"gpt-4o", "gpt-4.1", "gpt-4", "gpt-3.5-turbo", "claude-opus", "deepseek-chat", ""}
+	for _, m := range notReasoning {
+		t.Run("plain_"+m, func(t *testing.T) {
+			if IsReasoningModelPrefix(m) {
+				t.Errorf("IsReasoningModelPrefix(%q) = true, want false", m)
+			}
+		})
+	}
+}
+
+// TestModelSupportsReasoningEffortNone: reasoning models whose API rejects
+// reasoning.effort = "none" (gpt-6 Astra / 6.1 Sol) must not be sent it — the
+// rejected parameter fails the whole request. Everything else keeps the
+// behavior that existed before the capability was recorded.
+// Source: https://developers.openai.com/api/docs/models/gpt-6-astra
+//
+//	https://developers.openai.com/api/docs/models/gpt-6.1-sol
+func TestModelSupportsReasoningEffortNone(t *testing.T) {
+	allowed := []string{
+		"gpt-5.4", "gpt-5.5-turbo",
+		"gpt-6-luna", "gpt-6-sol", "gpt-6-sol-2026-09-22",
+		// o-series: no record says otherwise, so the pre-existing answer stands.
+		"o3", "o4-mini",
+	}
+	for _, m := range allowed {
+		t.Run("none_ok_"+m, func(t *testing.T) {
+			if !ModelSupportsReasoningEffortNone(m) {
+				t.Errorf("ModelSupportsReasoningEffortNone(%q) = false, want true (sending none is how thinking_level: none works)", m)
+			}
+		})
+	}
+
+	rejected := []string{"gpt-6-astra", "gpt-6-astra-2026-09-30", "GPT-6.1-SOL", "gpt-6.1-sol"}
+	for _, m := range rejected {
+		t.Run("none_rejected_"+m, func(t *testing.T) {
+			if ModelSupportsReasoningEffortNone(m) {
+				t.Errorf("ModelSupportsReasoningEffortNone(%q) = true, want false", m)
+			}
+		})
+	}
+
+	// Not a reasoning model at all → no reasoning field either way. A reasoning
+	// family with no registry row (o1/o3) keeps the pre-existing answer: this
+	// query blocks a value known to be rejected, it does not withhold one for
+	// lack of a row.
+	for _, m := range []string{"gpt-4o", "claude-opus", "unknown-model", ""} {
+		t.Run("no_reasoning_"+m, func(t *testing.T) {
+			if ModelSupportsReasoningEffortNone(m) {
+				t.Errorf("ModelSupportsReasoningEffortNone(%q) = true, want false", m)
 			}
 		})
 	}

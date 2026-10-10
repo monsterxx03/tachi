@@ -240,6 +240,28 @@ func TestOpenAIResponses_ReasoningParam(t *testing.T) {
 		}
 	}
 
+	// explicitly disabled thinking on a reasoning model that REJECTS "none"
+	// (gpt-6 Astra) → no reasoning field either: the parameter is not merely
+	// ineffective there, it fails the whole request.
+	{
+		handler := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, completedResponseJSON(`{"id":"m","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"x","annotations":[]}]}`, 1, 1))
+		}
+		srv, body := newResponsesMockServer(t, handler)
+		p := NewOpenAIResponsesProvider("sk-test", srv.URL, "gpt-6-astra")
+		thinking := false
+		_, err := p.CreateChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil,
+			ChatOptions{Thinking: &thinking, ThinkingEffort: "high"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := decodeBody(t, body)
+		if _, ok := req["reasoning"]; ok {
+			t.Errorf("reasoning should be omitted on a model that rejects effort=none, got %v", req["reasoning"])
+		}
+	}
+
 	// explicitly disabled thinking on a non-reasoning model → no reasoning
 	// field (the server would reject the param for models that don't reason)
 	{

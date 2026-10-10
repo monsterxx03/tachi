@@ -271,7 +271,7 @@ func (g *notifyGate) recordUsage(ctx context.Context, resp *jev.Response, sessio
 	if resp == nil {
 		return
 	}
-	if err := llm.RecordJevUsage(g.usage, g.cfg.Jev, g.judge.Model(), sessionID,
+	if err := llm.RecordJevUsage(g.usage, g.cfg.Jev, llm.USDToCNYRate(g.cfg), g.judge.Model(), sessionID,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, time.Now()); err != nil {
 		g.logger.Warn(ctx, "channel: cron notify usage not recorded", "err", err)
 	}

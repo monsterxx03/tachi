@@ -326,7 +326,7 @@ func (s *JevSearcher) recordUsage(ctx context.Context, resp *jev.Response) {
 	if s.usage == nil || resp == nil {
 		return
 	}
-	err := llm.RecordJevUsage(s.usage, s.jevConfig(), s.judge.Model(),
+	err := llm.RecordJevUsage(s.usage, s.jevConfig(), llm.USDToCNYRate(s.cfg), s.judge.Model(),
 		tools.SessionIDFromCtx(ctx), resp.Usage.InputTokens, resp.Usage.OutputTokens, time.Now())
 	if err != nil {
 		logger.FromContext(ctx).Warn(ctx, "MCP: jev usage not recorded", "err", err)

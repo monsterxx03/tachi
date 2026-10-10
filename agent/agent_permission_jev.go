@@ -185,7 +185,7 @@ func (a *AIAgent) recordAskJudgmentUsage(ctx context.Context, resp *jev.Response
 	if cfg == nil {
 		return
 	}
-	err := llm.RecordJevUsage(a.usageRecorder(), cfg.Jev, resp.Model, a.currentSessionID(),
+	err := llm.RecordJevUsage(a.usageRecorder(), cfg.Jev, llm.USDToCNYRate(cfg), resp.Model, a.currentSessionID(),
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, time.Now())
 	if err != nil {
 		a.Config.Logger.Warn(ctx, "Agent: failed to record jev ask usage", "err", err)

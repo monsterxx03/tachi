@@ -503,10 +503,11 @@ type JevConfig struct {
 	// `pricing:` block uses — because Jev is not a provider and has no
 	// ProviderConfig to hang one on. Nil = the built-in table decides, which
 	// prices a Jev call on its own (llm/builtin_models.go carries a Jev record,
-	// snapshot rate and all), so this block is the override rather than the
-	// source. The reader is the tool-search gate, which resolves each ledger row
-	// through llm.ResolveModelPriceFrom as it writes it (agent/mcp/jev_search.go)
-	// — set a field here and the next call's row carries it.
+	// quoted in USD and converted at the configured usd_to_cny), so this block
+	// is the override rather than the source. The reader is the tool-search gate,
+	// which resolves each ledger row through llm.ResolveModelPriceFrom as it
+	// writes it (agent/mcp/jev_search.go) — set a field here and the next
+	// call's row carries it.
 	//
 	// Note what a ledger row means here: this service bills INPUT only, so a
 	// priced row carries input_price > 0 and output_price = 0. That zero is
@@ -1034,6 +1035,20 @@ type Config struct {
 	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
 	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
 	Badge                  BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
+
+	// USDToCNY is the rate the built-in price table uses for the vendors that
+	// publish in USD (OpenAI's gpt-6 family, TypeSafe/Jev): their records quote
+	// USD per 1M tokens and the resolver converts, because the ledger's unit is
+	// CNY (see llm/builtin_models.go, builtinModel.usdPrices).
+	//
+	// It is a config rather than a constant because the number is not a fact
+	// about the models — it is a snapshot of a moving exchange rate, and a bill
+	// read months later was converted at whatever rate was configured then. nil
+	// or <= 0 = llm.DefaultUSDToCNY.
+	//
+	// A row keeps the price it was RESOLVED with (the ledger snapshots it), so
+	// changing this reprices only the calls made after the change.
+	USDToCNY *float64 `yaml:"usd_to_cny,omitempty"`
 }
 
 // WebConfig controls the local web console (`tachi web`): a read-only
@@ -1656,8 +1671,8 @@ func (c *Config) LoadMCPServers() error {
 
 // MCPToolSearchConfig controls MCPSearchTools behavior.
 type MCPToolSearchConfig struct {
-	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
-	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
+	Enabled           *bool `yaml:"enabled" default:"true"`           // false = load all tools directly (disable ToolSearch)
+	MinToolsForSearch int   `yaml:"min_tools_for_search" default:"5"` // Auto-load all if total MCP tools <= this threshold
 
 	// Matcher picks how a prose query is matched against the deferred pool:
 	// "bm25" = the keyword search (the original behaviour), "jev" = the System

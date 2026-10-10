@@ -175,6 +175,11 @@ type builtinPriceVersion struct {
 // The model → prices mapping lives in the built-in registry
 // (builtin_models.go), not here.
 //
+// usdToCNY converts a record whose prices the vendor publishes in USD
+// (builtinModel.usdPrices); pass USDToCNYRate(cfg). A rate <= 0 means "not
+// configured" and falls back to DefaultUSDToCNY — never 0, which would make a
+// priced model look free.
+//
 // INVARIANT: each model's version slice MUST stay ordered by EffectiveFrom
 // ascending (initial unversioned entry first) — the scan picks the last
 // version whose EffectiveFrom is not after at, so an out-of-order slice
@@ -183,7 +188,7 @@ type builtinPriceVersion struct {
 // This is the only built-in lookup — the usage ledger and the TUI statusbar
 // both resolve "the price at call time", which is exactly the time-of-use
 // semantics.
-func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
+func GetBuiltinModelPriceAt(model string, at time.Time, usdToCNY float64) *ModelPrice {
 	record := lookup(model)
 	if record == nil || len(record.prices) == 0 {
 		return nil
@@ -202,7 +207,31 @@ func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 			cur = &p
 		}
 	}
+	if cur != nil && record.usdPrices {
+		convertUSDToCNY(cur, usdToCNY)
+	}
 	return cur
+}
+
+// convertUSDToCNY converts a USD-quoted price in place into the table's CNY
+// unit, at the given rate (<= 0 = DefaultUSDToCNY). Bands convert with the
+// flat price even though no USD-quoted record has a time-of-use table today:
+// half-converting one that grew a table would be a price nobody can explain.
+func convertUSDToCNY(p *ModelPrice, usdToCNY float64) {
+	rate := usdToCNY
+	if rate <= 0 {
+		rate = DefaultUSDToCNY
+	}
+	p.InputPrice *= rate
+	p.OutputPrice *= rate
+	p.CacheReadInputPrice *= rate
+	p.CacheCreationInputPrice *= rate
+	for i := range p.Bands {
+		p.Bands[i].InputPrice *= rate
+		p.Bands[i].OutputPrice *= rate
+		p.Bands[i].CacheReadInputPrice *= rate
+		p.Bands[i].CacheCreationInputPrice *= rate
+	}
 }
 
 // PricingConfig / PriceBandSpec are defined in config (pure data, loaded
@@ -230,7 +259,7 @@ func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 // which is what a caller whose pricing does not live under a ProviderConfig
 // entry (the TypeSafe/Jev ledger rows) should use directly.
 func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time.Time) ResolvedPrice {
-	return ResolveModelPriceFrom(PricingSchedule(cfg, providerName), providerName, model, at)
+	return ResolveModelPriceFrom(PricingSchedule(cfg, providerName), USDToCNYRate(cfg), providerName, model, at)
 }
 
 // ResolveModelPriceFrom resolves a price snapshot from an explicit pricing
@@ -248,9 +277,12 @@ func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time
 // label for the warnings only; nothing about resolution depends on it, and an
 // empty string is fine for a caller with nothing to name.
 //
+// usdToCNY converts a USD-quoted record (see GetBuiltinModelPriceAt); pass
+// USDToCNYRate(cfg), or DefaultUSDToCNY for a caller with no config at hand.
+//
 // A nil schedule means "built-in only": the model's versioned entry, or
 // ResolvedPrice{} (unpriced) when the model has none.
-func ResolveModelPriceFrom(schedule *config.PricingConfig, source, model string, at time.Time) ResolvedPrice {
+func ResolveModelPriceFrom(schedule *config.PricingConfig, usdToCNY float64, source, model string, at time.Time) ResolvedPrice {
 	var flat *ModelPrice
 	var bands []config.PriceBandSpec
 	tzName := ""
@@ -265,11 +297,11 @@ func ResolveModelPriceFrom(schedule *config.PricingConfig, source, model string,
 		} else {
 			// Pricing block present but fully unset → built-in flat
 			// price (bands-only overrides inherit from it).
-			flat = GetBuiltinModelPriceAt(model, at)
+			flat = GetBuiltinModelPriceAt(model, at, usdToCNY)
 		}
 	}
 	if flat == nil {
-		flat = GetBuiltinModelPriceAt(model, at)
+		flat = GetBuiltinModelPriceAt(model, at, usdToCNY)
 	}
 	if flat == nil {
 		if len(bands) > 0 {

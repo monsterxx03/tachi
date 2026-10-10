@@ -144,12 +144,13 @@ Five things every gate needs, in the order they matter:
    the gate writes the row itself under `llm.UsageKindJev` (session, model, input/output tokens, an
    explicit credit of 0 — Jev earns no 积分 but is not a pre-credit row either), and the price comes
    from the built-in model table, where Jev has a record like any other model
-   (`llm/builtin_models.go`: the vendor publishes USD, the table's unit is CNY, so the record carries
-   a documented snapshot rate). A gate that skipped the price would log its calls as free, which is
-   how a side channel quietly becomes invisible in /usage.
+   (`llm/builtin_models.go`: the vendor publishes USD, so the record quotes USD — `usdPrices` — and the
+   resolver converts it at the configured rate, `usd_to_cny`, default `llm.DefaultUSDToCNY`). A gate that
+   skipped the price would log its calls as free, which is how a side channel quietly becomes invisible
+   in /usage.
    The config-side halves of the same seam are `config.JevConfig.Pricing` / `CreditRate` and
-   `llm.ResolveModelPriceFrom(schedule, source, model, at)`: `Record(UsageRow)` takes a plain row
-   (no `Provider` needed) and a raw `*config.PricingConfig` prices it, because a price schedule is
+   `llm.ResolveModelPriceFrom(schedule, usdToCNY, source, model, at)`: `Record(UsageRow)` takes a plain
+   row (no `Provider` needed) and a raw `*config.PricingConfig` prices it, because a price schedule is
    not always a provider's. That is what tool search resolves through — the block's override when it
    sets one, the built-in table otherwise, the order a provider's own row resolves in — and its credit
    is `ComputeCredit` over the call's tokens at the configured rate, written even when 0 (nil Credit

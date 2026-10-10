@@ -22,18 +22,20 @@ const JevProviderName = "typesafe"
 //
 // jevCfg is passed as a value read by the CALLER at the moment of the call,
 // because the row carries a price snapshot and that snapshot has to be the
-// price in force then. input and output are what the response reported: Jev
-// bills input only, and the output count is recorded because a reader expects a
-// whole row, not because it costs anything.
+// price in force then. usdToCNY is the same kind of reading: Jev's price is
+// quoted in USD, so the row's CNY snapshot depends on the rate configured at
+// that moment (pass USDToCNYRate(cfg)). input and output are what the response
+// reported: Jev bills input only, and the output count is recorded because a
+// reader expects a whole row, not because it costs anything.
 //
 // A nil recorder is a no-op rather than an error — a gate must never fail
 // because the ledger is unwritable, and a process without a ledger is a valid
 // installation.
-func RecordJevUsage(rec *UsageRecorder, jevCfg config.JevConfig, model, sessionID string, input, output int, now time.Time) error {
+func RecordJevUsage(rec *UsageRecorder, jevCfg config.JevConfig, usdToCNY float64, model, sessionID string, input, output int, now time.Time) error {
 	if rec == nil {
 		return nil
 	}
-	rp := ResolveModelPriceFrom(jevCfg.Pricing, JevProviderName, model, now)
+	rp := ResolveModelPriceFrom(jevCfg.Pricing, usdToCNY, JevProviderName, model, now)
 	cacheReadPrice, cacheCreationPrice := CacheReadCreationPrice(&rp.Price)
 
 	in, out := int64(input), int64(output)

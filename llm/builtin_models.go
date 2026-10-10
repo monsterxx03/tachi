@@ -3,13 +3,19 @@ package llm
 import (
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // === 内置模型注册表 ==========================================================
-// 单一数据源：一条记录 = 一个模型/家族的完整内置能力（价格/上下文/视觉）。
-// 三个查询入口（GetBuiltinModelPriceAt / ModelContextWindow / ModelSupportsVision）
-// 共享同一条查找路径 lookup()——加内置模型 = 加一条记录，改能力 = 改一条记录，
-// 不再需要在多个函数里同步修改匹配逻辑。
+// 单一数据源：一条记录 = 一个模型/家族的完整内置能力（价格/上下文/视觉/
+// 推理开关）。四个查询入口（GetBuiltinModelPriceAt / ModelContextWindow /
+// ModelSupportsVision / ModelSupportsReasoningEffortNone）共享同一条查找路径
+// lookup()——加内置模型 = 加一条记录，改能力 = 改一条记录，不再需要在多个
+// 函数里同步修改匹配逻辑。
+//
+// 价格单位是 CNY / 1M token（ledger 的单位）。厂商以美元报价的记录置
+// usdPrices：单价按 USD/M 写入，解析时按配置汇率换算（见 DefaultUSDToCNY）。
 //
 // 匹配语义（有序、首条命中）：
 //   - match 是子串（小写）匹配，任一命中即可；require 里的条件须全部命中（"且"）。
@@ -24,6 +30,17 @@ type builtinModel struct {
 	context int64                 // 上下文窗口（0 = 未知）
 	vision  bool                  // 视觉支持
 	prices  []builtinPriceVersion // 价格版本（nil = 未定价）
+
+	// usdPrices 表示 prices 的四个单价是 USD / 1M token，而不是本表的
+	// CNY——厂商的价目表用什么货币，就照抄什么货币，换算留给解析时：
+	// 汇率是用户可配的（config 的 usd_to_cny），在这里烤进数字等于把
+	// 一个会变的数变成常量。
+	usdPrices bool
+
+	// rejectsEffortNone 表示该模型不接受 reasoning.effort = none。
+	// 零值（false）= 接受，即与引入本字段之前的行为一致——那时已登记的
+	// 推理模型都接受 none，所以只有明确说明不接受的模型才置 true。
+	rejectsEffortNone bool
 }
 
 // builtinModels 是内置模型注册表，按声明顺序匹配（变体在前、家族兜底在后）。
@@ -41,6 +58,52 @@ var builtinModels = []builtinModel{
 	},
 
 	// ---- OpenAI ----
+	// gpt-6 家族的变体记录必须排在家族（"gpt-6"）之前，且都在最下面的 "gpt"
+	// 兜底之前——匹配是有序、首条命中的子串匹配。"gpt-6.1-sol" 不含子串
+	// "gpt-6-sol"，反之亦然，但 6.1 的记录仍放在 gpt-6 家族记录之前，读起来
+	// 才知道谁覆盖谁。
+	//
+	// Astra 与 6.1 Sol 是 gpt-6 里两个不接受 reasoning.effort = none 的模型
+	// （官方文档：Astra 支持 low..max；6.1 Sol 明确不支持 none/minimal）——
+	// 见 ModelSupportsReasoningEffortNone。
+	{
+		match:             []string{"gpt-6-astra"},
+		context:           1_050_000,
+		vision:            true,
+		prices:            gpt6AstraPriceVersions,
+		usdPrices:         true,
+		rejectsEffortNone: true,
+	},
+	{
+		match:             []string{"gpt-6.1-sol"},
+		context:           1_050_000,
+		vision:            true,
+		prices:            gpt6Sol61PriceVersions,
+		usdPrices:         true,
+		rejectsEffortNone: true,
+	},
+	{
+		match:     []string{"gpt-6-luna"},
+		context:   1_050_000,
+		vision:    true,
+		prices:    gpt6LunaPriceVersions,
+		usdPrices: true,
+	},
+	{
+		match:     []string{"gpt-6-sol"},
+		context:   1_050_000,
+		vision:    true,
+		prices:    gpt6SolPriceVersions,
+		usdPrices: true,
+	},
+	{
+		// 未知 gpt-6 变体：家族已知的上下文/视觉照给，价格不给——变体的价
+		// 只有官方页面才能确定（Luna 与 Astra 差 100 倍），猜一个会把账
+		// 算错而不是留白。
+		match:   []string{"gpt-6"},
+		context: 1_050_000,
+		vision:  true,
+	},
 	{
 		match:   []string{"gpt-5.4", "gpt-5.5"},
 		context: 1_050_000,
@@ -187,22 +250,37 @@ var builtinModels = []builtinModel{
 		match: []string{"jev"},
 		// 一次请求 64k，其中 state + 最长问句 32k（pkg/jev 的包注释）。
 		context: 64_000,
-		// 输出不计费：计费只按 input（官方价目表：$0.042/M 输入，输出免费），
-		// 表格单位是 CNY/M，故按 usdToCNY 换算快照。
-		prices: []builtinPriceVersion{{Price: ModelPrice{InputPrice: 0.042 * usdToCNY}}},
+		// 输出不计费：计费只按 input（官方价目表：$0.042/M 输入，输出免费）。
+		// 厂商按 USD 报价 → usdPrices，换算在解析时按汇率做（见 DefaultUSDToCNY）。
+		prices:    []builtinPriceVersion{{Price: ModelPrice{InputPrice: 0.042}}},
+		usdPrices: true,
 	},
 }
 
-// usdToCNY converts a vendor's USD price into this table's unit (CNY per 1M
-// tokens).
+// DefaultUSDToCNY is the rate used to convert a USD-quoted price record into
+// this table's unit (CNY per 1M tokens) when the config sets none.
 //
-// The registry is written in CNY because the vendors it prices bill in CNY;
-// TypeSafe publishes Jev in USD, so that one record carries the conversion. The
-// rate is a SNAPSHOT (≈6.73, 2026-09) of a number that moves: it is here so the
-// ledger can show a cost at all, not because a call's cost is a fixed fact. A
-// row keeps the effective price it was written with, so changing this constant
-// reprices only the calls made after the change — it never rewrites history.
-const usdToCNY = 6.73
+// The registry is written in the vendor's own currency: the vendors it prices
+// mostly bill in CNY, and the ones that publish in USD (OpenAI's gpt-6 family,
+// TypeSafe/Jev) say so with builtinModel.usdPrices rather than baking a rate
+// into the number. 6.73 is a SNAPSHOT (2026-09) of a number that moves — it is
+// the fallback so the ledger can show a cost at all, and the configured rate
+// (config's usd_to_cny) is what a reader who cares should set.
+const DefaultUSDToCNY = 6.73
+
+// USDToCNYRate returns the conversion rate to price USD-quoted records with:
+// the configured one, else DefaultUSDToCNY. A nil config or an unset/absurd
+// rate (<= 0) falls back, so no caller has to decide what a zero rate means.
+//
+// It is read per price resolution, not captured — the desktop writes its
+// config live, and a rate cached at startup would silently price the rest of
+// the process with the launch-day one.
+func USDToCNYRate(cfg *config.Config) float64 {
+	if cfg == nil || cfg.USDToCNY == nil || *cfg.USDToCNY <= 0 {
+		return DefaultUSDToCNY
+	}
+	return *cfg.USDToCNY
+}
 
 // lookup 返回首个匹配 model 的内置记录；nil = 未知模型。
 func lookup(model string) *builtinModel {
@@ -235,6 +313,52 @@ func (b *builtinModel) matches(m string) bool {
 }
 
 // === 价格版本数据 =============================================================
+
+// OpenAI gpt-6 家族：官方按 USD 报价（usdPrices），单价照抄官方页面，换算交给
+// 解析时的汇率。四个模型的价目表只差数字，形状相同（输入/输出/缓存命中/缓存
+// 写入），故各一条记录、无版本。
+//
+// 共同的两条约定：
+//   - 输入 > 272K token 的请求，OpenAI 按整单 2x 输入/缓存价、1.5x 输出价计
+//     （官方价目表原文）。本表不建「按输入 token 量分档」的机制，超长请求按
+//     标准档计入 = 低估，与 MiniMax-M3（>512k 翻倍）的处理一致。
+//   - 缓存命中价各不相同：Luna/Sol/Astra 是输入的 10%，6.1 Sol 是 5%。缓存
+//     写入一律是输入的 1.25x，照抄官方给的数。
+//
+// Source: https://developers.openai.com/api/docs/models/gpt-6-luna
+//
+//	https://developers.openai.com/api/docs/models/gpt-6-sol
+//	https://developers.openai.com/api/docs/models/gpt-6-astra
+//	https://developers.openai.com/api/docs/models/gpt-6.1-sol
+var gpt6LunaPriceVersions = []builtinPriceVersion{{Price: ModelPrice{
+	InputPrice:              0.10,
+	OutputPrice:             0.50,
+	CacheReadInputPrice:     0.01,
+	CacheCreationInputPrice: 0.125,
+}}}
+
+var gpt6SolPriceVersions = []builtinPriceVersion{{Price: ModelPrice{
+	InputPrice:              2.00,
+	OutputPrice:             10.00,
+	CacheReadInputPrice:     0.20,
+	CacheCreationInputPrice: 2.50,
+}}}
+
+var gpt6AstraPriceVersions = []builtinPriceVersion{{Price: ModelPrice{
+	InputPrice:              10.00,
+	OutputPrice:             50.00,
+	CacheReadInputPrice:     1.00,
+	CacheCreationInputPrice: 12.50,
+}}}
+
+// gpt6Sol61PriceVersions: 6.1 Sol 与 6.0 Sol 同价，只有缓存命中价更低（5% vs
+// 10%）——不是笔误，是官方页面上的差别。
+var gpt6Sol61PriceVersions = []builtinPriceVersion{{Price: ModelPrice{
+	InputPrice:              2.00,
+	OutputPrice:             10.00,
+	CacheReadInputPrice:     0.10,
+	CacheCreationInputPrice: 2.50,
+}}}
 
 // tzAsiaShanghai anchors DeepSeek's peak-pricing bands: the official
 // schedule is defined in 北京时间. China has no DST since 1991, so a fixed
