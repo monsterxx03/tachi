@@ -74,6 +74,7 @@ const (
 	toolResultsDirName        = "tool_results"
 	oneoffDirName             = "oneoff"
 	usageDirName              = "usage"
+	nodeDirName               = "node"
 	defaultToolResultMaxChars = 50000
 )
 
@@ -409,6 +410,22 @@ type WeixinConfig struct {
 	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
 	Greeting string `yaml:"greeting"`  // Startup greeting sent to the admin user after login (default: "👋 你好！Tachi 已启动，随时可以开始工作～")
 	BotAgent string `yaml:"bot_agent"` // v2.3.1+: bot_agent identity string (default: "Tachi")
+}
+
+// NodeConfig holds this machine's node-service settings for multi-node
+// collaboration (docs/2026-10-10-a2a-node-design.md).
+//
+// Disabled is the default, and it means NOTHING happens: no data directory is
+// created, no lock is taken, no listener is opened. That is what lets every entry
+// point keep behaving exactly as it did before the node existed, and it is asserted
+// by tests rather than promised in a comment.
+//
+// Only the switch lives here. The data directory is derived
+// (config.NodeDir), and the settings a node needs once it does something —
+// listen addresses, peers, timeouts — arrive with the slices that use them: a
+// config key with no behaviour behind it is a lie the reader cannot detect.
+type NodeConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // CronConfig holds cron scheduler configuration (only active in channel mode).
@@ -1047,6 +1064,7 @@ type Config struct {
 	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
 	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
 	Badge                  BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
+	Node                   NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
 
 	// USDToCNY is the rate the built-in price table uses for the vendors that
 	// publish in USD (OpenAI's gpt-6 family, TypeSafe/Jev): their records quote
@@ -1451,6 +1469,19 @@ func WeixinStateDir() string {
 // ResearchDir returns the path to the deep research reports directory.
 func ResearchDir() string {
 	return filepath.Join(BaseDir(), researchDirName)
+}
+
+// NodeDir returns this machine's node data directory, where the node identity, the
+// single-instance lock and the published local connection info live
+// (docs/2026-10-10-a2a-node-design.md §3.1).
+//
+// Derived rather than configurable on purpose: ONE data directory is ONE node
+// identity, and that is the whole rule. A different --home, or a different OS user,
+// is therefore a different node with no extra switch to set — and the integration
+// harness gets its isolation for free, since its temporary home moves this path with
+// everything else.
+func NodeDir() string {
+	return filepath.Join(BaseDir(), nodeDirName)
 }
 
 // ToolResultsDir returns the path to the tool results storage directory.

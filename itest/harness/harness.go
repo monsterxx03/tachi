@@ -51,6 +51,7 @@ func configYAML(o *options, baseURL string) (string, error) {
 		BashAllow:   o.bashAllow,
 		BashAsk:     o.bashAsk,
 		Permissions: o.bashAllow || o.bashAsk,
+		NodeEnabled: o.nodeEnabled,
 	}); err != nil {
 		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
@@ -67,6 +68,7 @@ type configData struct {
 	BashAllow   bool
 	BashAsk     bool
 	Permissions bool // BashAllow || BashAsk — render the permissions block
+	NodeEnabled bool // render a node: section with the service switched on
 }
 
 // configTmpl renders the config.yaml fixture. The {{- ... }} trims keep the
@@ -111,6 +113,10 @@ permissions:
       - "*"
 {{- end}}
 {{- end}}
+{{- if .NodeEnabled}}
+node:
+  enabled: true
+{{- end}}
 `))
 
 // TB is the minimal testing surface harness needs. Satisfied by *testing.T
@@ -131,6 +137,7 @@ type options struct {
 	bashAsk     bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
 	timeout     time.Duration // spec.timeout injected into the provider fixture
 	secondModel string        // 第二个 provider 的 model（/model 切换场景）
+	nodeEnabled bool          // node.enabled: true — 节点服务开关（默认关闭）
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -167,6 +174,13 @@ func WithSpecTimeout(d time.Duration) Option {
 // ACP SetSessionConfigOption scenarios.
 func WithSecondProvider(model string) Option {
 	return func(o *options) { o.secondModel = model }
+}
+
+// WithNodeEnabled switches the node service on in the fixture (node.enabled:
+// true). The default is off, and the point of most node scenarios is what OFF
+// means, so this is opt-in.
+func WithNodeEnabled() Option {
+	return func(o *options) { o.nodeEnabled = true }
 }
 
 // NewHome creates an isolated --home directory with a config.yaml wired to

@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
@@ -209,6 +210,17 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	cfg := boot.Config
+
+	// The node service (multi-node collaboration) is optional and OFF by default.
+	// A failure here must not cost the user their local chat, so it is logged and
+	// the turn continues (design §3.2); the handle keeps the service alive for as
+	// long as this process runs.
+	nodeHandle, err := node.StartOrAttachNode(ctx, cfg)
+	if err != nil {
+		logger.New("tui").Error(ctx, "node: node service unavailable; local chat continues", err)
+	} else if nodeHandle != nil {
+		defer nodeHandle.Close()
+	}
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
 	// Resolved (main provider + resolved config) is built inside the

@@ -15,7 +15,9 @@ import (
 	acppkg "github.com/monsterxx03/tachi/agent/acp"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -26,6 +28,16 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	cfg := boot.Config
+
+	// The node service is optional and OFF by default; a failure must not cost the
+	// user their channels, so it is logged and the channels start anyway (design
+	// §3.2). The handle keeps the service alive as long as this process runs.
+	nodeHandle, err := node.StartOrAttachNode(ctx, cfg)
+	if err != nil {
+		logger.New("channel").Error(ctx, "node: node service unavailable; channels continue", err)
+	} else if nodeHandle != nil {
+		defer nodeHandle.Close()
+	}
 
 	mgr, err := channelmgr.New(cfg)
 	if err != nil {

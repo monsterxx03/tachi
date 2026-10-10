@@ -12,6 +12,9 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+
+	"github.com/monsterxx03/tachi/node"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // Window background colours, mirroring --bg in base.css (light / dark). The
@@ -322,6 +325,25 @@ func main() {
 	if err := desk.initAgent(context.Background()); err != nil {
 		log.Printf("agent unavailable, falling back to simulated turns: %v", err)
 		desk.setSessionState("", AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
+	}
+
+	// The node service (multi-node collaboration) is optional and OFF by default,
+	// and a failure to start it must not cost the user their desktop: log and carry
+	// on (design §3.2). It is started here, next to the config it needs, and closed
+	// by a hook registered right after the app's own shutdown work — hooks run in
+	// registration order, so the single-instance lock is released LAST, once nothing
+	// is talking to the node any more.
+	if cfg := desk.config(); cfg != nil && cfg.Node.Enabled {
+		nodeHandle, err := node.StartOrAttachNode(context.Background(), cfg)
+		if err != nil {
+			logger.New("desktop").Error(context.Background(), "node: node service unavailable; desktop continues", err)
+		} else if nodeHandle != nil {
+			app.OnShutdown(func() {
+				if err := nodeHandle.Close(); err != nil {
+					logger.New("desktop").Error(context.Background(), "node: stopping the node service failed", err)
+				}
+			})
+		}
 	}
 
 	// The device link (badge.go): a screen the agent's questions can reach when nobody is

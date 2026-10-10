@@ -573,6 +573,10 @@ var settingsTable = []settingApply{
 	{Key: "logs", Category: catAdvanced, Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
 	{Key: "debug.pprof", Category: catAdvanced, Mode: applyRestart, Note: "启动即绑端口"},
 	{Key: "herdr", Category: catAdvanced, Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
+	// node: 入口启动时起/停本机节点服务（StartOrAttachNode），关掉开关也是启动时才生效。
+	// 运行中切换需要能起停服务本身（还要处理它与本地聊天互不影响的那套语义），首版不做 ——
+	// 所以是 ⟳ 而不是热改。
+	{Key: "node", Category: catAdvanced, Mode: applyRestart, Note: "入口启动即起/停节点服务；运行中切换要能起停服务本身，首版不做"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},
