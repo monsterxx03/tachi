@@ -53,6 +53,14 @@ var _ = ginkgo.Describe("delegation", func() {
 		gomega.Expect(peerHandle.Hosting()).To(gomega.BeTrue())
 		ginkgo.DeferCleanup(func() { _ = peerHandle.Close() })
 
+		// 同一个 Card 的另一面：这个对端绑在 loopback 上，所以它不加密、也不要证书 —— 于是
+		// 什么 scheme 都不声明。开关是地址而不是配置项（node/a2a.go），两半合起来才是那句话，
+		// 离开本机的那一半在 itest/run/delegation_tls_test.go。
+		gomega.Expect(peerHandle.Card().SecuritySchemes).To(gomega.BeEmpty())
+		gomega.Expect(peerHandle.Card().SupportedInterfaces).To(gomega.HaveLen(1))
+		gomega.Expect(peerHandle.Card().SupportedInterfaces[0].URL).To(gomega.HavePrefix("http://"),
+			"loopback 上这份 Card 说的是 http，因为它真的就只是一个 http 面")
+
 		// ---- the caller: the real binary, with the peer in its peers: ----
 		sutMock := mockllm.NewServer()
 		ginkgo.DeferCleanup(sutMock.Close)

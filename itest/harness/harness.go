@@ -51,7 +51,10 @@ func configYAML(o *options, baseURL string) (string, error) {
 		BashAllow:     o.bashAllow,
 		BashAsk:       o.bashAsk,
 		Permissions:   o.bashAllow || o.bashAsk,
+		NodeSection:   o.nodeSection(),
 		NodeEnabled:   o.nodeEnabled,
+		NodeListen:    o.nodeListen,
+		NodeName:      o.nodeName,
 		NodeWorkspace: o.nodeWorkspace,
 		NodeTools:     o.nodeTools,
 		Peers:         o.peers,
@@ -71,7 +74,22 @@ type configData struct {
 	BashAllow   bool
 	BashAsk     bool
 	Permissions bool // BashAllow || BashAsk — render the permissions block
-	NodeEnabled bool // render a node: section with the service switched on
+	// NodeSection switches the whole `node:` block on, and it is NOT the same as NodeEnabled:
+	// a machine that serves nothing can still have a node.name — that is the label it sends a
+	// peer with every call, which is what a peer's records say about who asked (node/config.go).
+	// Rendering that alone needs a `node:` section with something other than `enabled: true`
+	// under it, so the block is rendered when ANY of its keys has something to say.
+	NodeSection bool
+	NodeEnabled bool // render `enabled: true` in that block
+	// NodeListen is the REMOTE A2A surface's address, and the only switch that decides whether
+	// this node serves TLS: off loopback it encrypts and requires a client certificate
+	// (node/options.go isLoopbackListen, node/a2a.go). A spec that exercises mTLS therefore has
+	// to name a non-loopback address here.
+	NodeListen string
+	// NodeName is what this node calls itself. It is a LABEL and travels as one — in the Card
+	// and in the header a peer files under `self_reported_name` — so it is also the only way to
+	// assert, from the other machine's disk, which node asked for the work.
+	NodeName string
 	// NodeWorkspace / NodeTools are the remote-task half of that section: the directory
 	// remote turns run in, and the tool allowlist they get.
 	NodeWorkspace string
@@ -138,9 +156,17 @@ peers:
     url: {{.URL}}
 {{- end}}
 {{- end}}
-{{- if .NodeEnabled}}
+{{- if .NodeSection}}
 node:
+{{- if .NodeEnabled}}
   enabled: true
+{{- end}}
+{{- if .NodeListen}}
+  listen: "{{.NodeListen}}"
+{{- end}}
+{{- if .NodeName}}
+  name: "{{.NodeName}}"
+{{- end}}
 {{- if .NodeWorkspace}}
   workspace: {{.NodeWorkspace}}
 {{- end}}
@@ -172,9 +198,17 @@ type options struct {
 	timeout       time.Duration // spec.timeout injected into the provider fixture
 	secondModel   string        // 第二个 provider 的 model（/model 切换场景）
 	nodeEnabled   bool          // node.enabled: true — 节点服务开关（默认关闭）
+	nodeListen    string        // node.listen — 远程 A2A 面的地址（loopback 之外就serve TLS）
+	nodeName      string        // node.name — 这个节点对自己的称呼
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
 	nodeTools     []string      // node.tools — 远程任务的工具白名单
 	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
+}
+
+// nodeSection reports whether the fixture needs a `node:` block at all. See configData.
+func (o *options) nodeSection() bool {
+	return o.nodeEnabled || o.nodeListen != "" || o.nodeName != "" ||
+		o.nodeWorkspace != "" || len(o.nodeTools) > 0
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -218,6 +252,31 @@ func WithSecondProvider(model string) Option {
 // means, so this is opt-in.
 func WithNodeEnabled() Option {
 	return func(o *options) { o.nodeEnabled = true }
+}
+
+// WithNodeListen switches the node service on and points its REMOTE A2A surface at addr.
+//
+// It enables the node as well: an address with no listener behind it is an option that changes
+// nothing, and silently doing nothing is worse than not offering it.
+//
+// This is the ONLY switch that decides whether that surface serves TLS — the rule is the address,
+// not a flag (node/options.go isLoopbackListen): loopback is plaintext because nothing can read it
+// off a network, and anything else encrypts and asks for a client certificate. So a spec that
+// wants to exercise the mTLS path has to come through here ("0.0.0.0:0" is how a test names
+// "off this machine, kernel-chosen port").
+func WithNodeListen(addr string) Option {
+	return func(o *options) { o.nodeEnabled = true; o.nodeListen = addr }
+}
+
+// WithNodeName sets node.name: what this node calls itself.
+//
+// It deliberately does NOT switch the node service on, and that asymmetry with WithNodeListen is
+// the point: a machine that serves nothing still has a name, because the name is also what it
+// sends a PEER with every call — the label the peer's records show as who asked (node/auth.go,
+// taskRecord.SelfReportedName). A spec whose subject is "what the receiving side recorded about
+// the caller" configures exactly this and nothing else.
+func WithNodeName(name string) Option {
+	return func(o *options) { o.nodeName = name }
 }
 
 // WithNodeWorkspace switches the node service on and points its workspace at dir: the
