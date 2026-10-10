@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；**调用者认证（mTLS + TOFU，接收侧只识别不授权）也已落地**；应答的两种形状按 §6.1.1 处理）。**尚未实现的是文件 `Part`（`raw`/`url` + 受鉴权下载端点）、客户端证书（mTLS，及随之而来的密码学调用者身份），以及阶段二的体验件**（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
+状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；**调用者认证（mTLS + TOFU，接收侧只识别不授权）也已落地**；应答的两种形状按 §6.1.1 处理）。**尚未实现的是文件 `Part`（`raw`/`url` + 受鉴权下载端点）、来源名称在界面上的呈现（id 已随会话落盘，见 §2.2），以及阶段二的体验件**（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -78,7 +78,7 @@ flowchart LR
 
 ### 2.2 来源、执行归属与保留分开
 
-接收侧 session 增加由服务端写入的来源/类型信息。**已落地**：`session.Session.Kind`，取值为 `a2a_execution`（`session.KindA2AExecution`），由 TaskRunner 建会话时写入、随 compaction 传给后继（`FinalizeCompact` 逐字段手工搬运，漏一个就是静默清零）。`source_node_id` 与 `context_binding_id` **尚未落地**：前者要等调用者认证（同 `CallerID` 的理由，没有身份可写），后者是节点自己的 context 绑定记录所拥有的事实 —— 不复制进 session meta，避免同一条事实两处可漂移。界面从可信节点目录解析来源名称，未知名称保留明确的类型标注，不用远端自报标题充当身份。
+接收侧 session 增加由服务端写入的来源/类型信息。**已落地**：`session.Session.Kind`，取值为 `a2a_execution`（`session.KindA2AExecution`），由 TaskRunner 建会话时写入、随 compaction 传给后继（`FinalizeCompact` 逐字段手工搬运，漏一个就是静默清零）。**`source_node_id` 也已落地**（`session.Session.SourceNodeID`，建会话时从握手建立的调用方身份写入，同样随 compaction 传给后继）：它是**那一小份刻意的复制**，理由是「读者标的是行，而行是 session」——绑定记录会在压缩时改指后继 session，于是被压缩掉的父 session（列表里照样能读）就查不到来源了；再加上「解析规则不能一个前端一份」。前提（调用者认证）已由 mTLS 满足，而它不会漂移：一段 context 属于开它的那个调用方，runner 会拒绝别人接手。**`context_binding_id` 仍未落地**，理由不变：那是节点自己的 context 绑定记录所拥有的事实，不复制进 session meta，避免同一条事实两处可漂移。**把 id 变成人读的名字这一步还没做**：界面从可信节点目录解析来源名称，未知名称保留明确的类型标注，不用远端自报的名字充当身份（注意那本目录是**出站**接触写下的，只收不发的机器谁都认不出来，届时得接受"未知"是常见答案）。
 
 | 信息 | 决定什么 | 不代表什么 |
 | --- | --- | --- |
@@ -811,9 +811,9 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 先拆开验证两条链，再接入真实 agent，不把完整本机任务系统做完后才验证 A2A：
 
 1. **生命周期链**：节点身份、配置、节点服务锁、启动/附着、本机认证，以及承载者退出后的持锁按需恢复；先验证与独立保留协调锁的职责和锁序，用假任务验证三个入口共存，不引入面向用户的本机委派模式。
-2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。**已落地**：受理/去重/busy/中断恢复与追问（§7.4，含停放上限、answer 校验与拒绝面）；多轮引用与 `RemoteTask` 一侧仍在阶段一第 4 项。
+2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。**已落地**：受理/去重/busy/中断恢复与追问（§7.4，含停放上限、answer 校验与拒绝面）；多轮引用与 `RemoteTask` 一侧见第 4 项（已落地）。
 3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。**已落地**：`node/runner.go` 把真 loop 接进来（`contextRun` 建/绑 session、`beginTurn` 起 turn、在节点配置的工作区里跑真一轮），准入落在副作用之前（§7.1.3）；来源与受管类型随 session 落盘（`Kind = KindA2AExecution`、`SkipDream`，压缩时一起传递），双端关联在 `node/context.go` 的 context 绑定与 `node/tasks.go` 的任务记录里，保留依据见 §9.4。工具面是节点自己的允许集合（`toolViewOption`：名单 + AskUserQuestion，空名单仍只剩后者），permission ask 一律拒绝（§10.1）。**宿主记忆隔离已落地**：远端 agent 构造时 `SkipMemoryRecall`（关自动召回），run 的工具视图无条件剔除 `hostOnlyTools`（`RecordMemory`/`MemoryRecall`），操作者把它们列进 `node.tools` 也开不出来；两处都在 `node/runner.go`，reload 抹不掉（flag 是 `ReloadMemory` 唯一保住的那项、工具视图是逐 run 的）。**usage 来源已落地**：`llm.WithUsageSource` 把 origin + task/context 挂上 turn 的 ctx，ledger 行多三个可选字段，`Kind` 不动（§9.5）。
-4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。**已落地**：两个工具、两条 reminder 与四个入口共用一个开关 `agent.WithDelegation`（§8.6、§10.2.1），端到端由 `itest/run/delegation_test.go` 钉住（真二进制委派给另一个真节点，结果回到本地）；首版产物为文本/结构化 Part。接收侧记录的来源标签与「只读、拒绝普通恢复」已接（受管会话在公共循环前的入口与回退上被拒，`@session:` 与选择器用同一字段），**各界面上的呈现也已接**（TUI 行 + 拒绝切换、desktop 只读横幅 + 换掉输入框 + smoke `managed-session`、web 控制台标签；见 `docs/agents/node.md` 的「Where a managed session SHOWS UP」）。**完成通知**落在「结果照常保存 + reminder 展示」这一层：跨入口推送与空闲自动续跑属阶段二（§8.4）；usage 来源可追溯已落地（§9.5），跨节点统一账本不做。
+4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。**已落地**：两个工具、两条 reminder 与四个入口共用一个开关 `agent.WithDelegation`（§8.6、§10.2.1），端到端由 `itest/run/delegation_test.go` 钉住（真二进制委派给另一个真节点，结果回到本地）；首版产物为文本/结构化 Part。接收侧记录的来源标签（`kind` 与 `source_node_id`，两者都随压缩传递给后继 session）与「只读、拒绝普通恢复」已接（受管会话在公共循环前的入口与回退上被拒，`@session:` 与选择器用同一字段），**各界面上的呈现也已接**（TUI 行 + 拒绝切换、desktop 只读横幅 + 换掉输入框 + smoke `managed-session`、web 控制台标签；见 `docs/agents/node.md` 的「Where a managed session SHOWS UP」）。**完成通知**落在「结果照常保存 + reminder 展示」这一层：跨入口推送与空闲自动续跑属阶段二（§8.4）；usage 来源可追溯已落地（§9.5），跨节点统一账本不做。
 
 两条验证链可独立推进，合并时复用同一套服务与存储接口。不把 mDNS、gossip 或完整 Desktop 任务面板作为依赖；优先跑通明确指定节点的一项任务及后续追问。
 
