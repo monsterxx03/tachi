@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,4 +129,41 @@ func TestSearchLimit(t *testing.T) {
 	src := seedStore(t)
 	assert.Len(t, src.Search("", "", 1), 1)
 	assert.Len(t, src.Search("", "", 0), 2, "an unset limit still returns everything here")
+}
+
+// The picker's rows carry the session's kind, and so does the resolved target: one value from
+// one record, so "what the picker offered" and "what the reference means" cannot drift (§13).
+func TestRowsAndTargetsCarryTheSessionKind(t *testing.T) {
+	managed := &session.Session{ID: "2026-10-10-120000-aaaa1111", Title: "远端执行", Kind: session.KindA2AExecution}
+	ordinary := &session.Session{ID: "2026-10-10-130000-bbbb2222", Title: "我自己的对话"}
+	src := New(func() ([]*session.Session, error) { return []*session.Session{managed, ordinary}, nil }, t.TempDir())
+
+	rows := src.Search("", "", 10)
+	if len(rows) != 2 {
+		t.Fatalf("expected both sessions, got %d", len(rows))
+	}
+	var managedRow, ordinaryRow atfile.SessionTarget
+	for _, r := range rows {
+		switch r.ID {
+		case managed.ID:
+			managedRow = r
+		case ordinary.ID:
+			ordinaryRow = r
+		}
+	}
+	if managedRow.ManagedKind != session.KindA2AExecution {
+		t.Errorf("a managed session's row must carry its kind, got %q", managedRow.ManagedKind)
+	}
+	if ordinaryRow.ManagedKind != "" {
+		t.Errorf("an ordinary conversation has no kind, got %q", ordinaryRow.ManagedKind)
+	}
+
+	target, ok := src.Resolve(managed.ID)
+	if !ok {
+		t.Fatal("the resolved target must exist")
+	}
+	if target.ManagedKind != managedRow.ManagedKind {
+		t.Errorf("the picker and the pointer disagree: row=%q target=%q",
+			managedRow.ManagedKind, target.ManagedKind)
+	}
 }

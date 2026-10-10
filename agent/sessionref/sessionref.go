@@ -128,7 +128,10 @@ func (s *Source) target(sess *session.Session, withCount bool) atfile.SessionTar
 		Title:      sess.Title,
 		UpdatedAt:  sess.UpdatedAt,
 		WorkingDir: sess.WorkingDir,
-		Transcript: s.transcriptPath(sess.ID),
+		// The kind travels with every row AND with the resolved target: they are the same value
+		// from the same record, which is what makes the picker and the pointer one story.
+		ManagedKind: sess.Kind,
+		Transcript:  s.transcriptPath(sess.ID),
 	}
 	if withCount {
 		t.Messages = countLines(t.Transcript)

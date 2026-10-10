@@ -55,6 +55,32 @@ func (a *AIAgent) managedSessionRefusal(ctx context.Context) error {
 	return fmt.Errorf("%w (kind=%s, session=%s)", ErrManagedSession, cur.Kind, cur.ID)
 }
 
+// managedSessionWriteRefusal is the same rule for a caller that is NOT a run: it reports why
+// this agent's session may not be MODIFIED, or nil when it may.
+//
+// It exists because not every write goes through a turn. A rewind rewrites the conversation and
+// restores workspace files with no run involved, and a receiving node's execution is exactly the
+// session a local frontend must not rewrite from behind (design §2.1) — the node would keep
+// appending to a history that was cut under it, and its context binding and retention holds
+// would still describe a conversation that no longer exists.
+//
+// Two functions rather than one because the shapes differ (a run reports through an error event
+// on its channel; a command reports to the caller), and they read the SAME fact —
+// session.Session.Managed() — so they cannot disagree about what "managed" means.
+//
+// No context grant here, deliberately: no subsystem rewinds today, and a trusted writer that
+// ever needs one must say so explicitly rather than inherit an exemption from the turn path.
+func (a *AIAgent) managedSessionWriteRefusal() error {
+	if a == nil || a.Config.SessionManager == nil {
+		return nil
+	}
+	cur := a.Config.SessionManager.Current()
+	if !cur.Managed() {
+		return nil
+	}
+	return fmt.Errorf("%w (kind=%s, session=%s)", ErrManagedSession, cur.Kind, cur.ID)
+}
+
 // refuseManagedSession reports a refused turn the way every other early exit does: an error
 // event the caller renders, with the reason in it. Nothing has been written at this point —
 // that is what makes the refusal safe rather than merely visible.

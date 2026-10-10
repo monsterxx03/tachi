@@ -113,6 +113,12 @@ func (a *AIAgent) PreviewRewind(ctx context.Context, turn int) (RewindPreview, e
 	if why := a.rewindBlockedByCompaction(); why != "" {
 		return RewindPreview{Turn: turn, Blocked: why}, nil
 	}
+	// The managed-session refusal is reported by the PREVIEW too, for the same reason as the
+	// compaction one: a card offering a rewind that cannot happen would be an invitation to
+	// click, and the reader would only learn otherwise from the action failing.
+	if err := a.managedSessionWriteRefusal(); err != nil {
+		return RewindPreview{Turn: turn, Blocked: err.Error()}, nil
+	}
 	m, err := a.rewindManager(ctx)
 	if err != nil {
 		return RewindPreview{}, err
@@ -262,6 +268,11 @@ func (a *AIAgent) rewindAllowed() error {
 	if why := a.rewindBlockedByCompaction(); why != "" {
 		return errors.New(why)
 	}
+	// A rewind rewrites the conversation AND restores workspace files. On a session a subsystem
+	// drives, that is the local side cutting the history the node is still appending to.
+	if err := a.managedSessionWriteRefusal(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -270,7 +281,17 @@ func (a *AIAgent) rewindAllowed() error {
 // Exported for the desktop's chain surface, which lists every rewind point at once: a refusal
 // that is true of all of them has to be said once, at the top, instead of being rediscovered by
 // clicking row after row and reading the same sentence each time.
-func (a *AIAgent) RewindChainBlocked() string { return a.rewindBlockedByCompaction() }
+func (a *AIAgent) RewindChainBlocked() string {
+	if why := a.rewindBlockedByCompaction(); why != "" {
+		return why
+	}
+	if err := a.managedSessionWriteRefusal(); err != nil {
+		// Every row of the chain is blocked for this reason, so it belongs at the top with the
+		// compaction one rather than being rediscovered per row.
+		return err.Error()
+	}
+	return ""
+}
 
 // rewindBlockedByCompaction explains why this conversation cannot be rewound at all, or "".
 //

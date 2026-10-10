@@ -92,3 +92,37 @@ func TestCompactionCarriesTheManagedKindAndTheDreamExemption(t *testing.T) {
 	require.Equal(t, session.KindA2AExecution, child.Kind)
 	require.True(t, child.SkipDream)
 }
+
+// The other half of the same rule: a session a subsystem drives must not be MODIFIED from a
+// local frontend either, and the write that reaches it without a run is the rewind — it cuts the
+// conversation and restores workspace files (design §2.1).
+//
+// The assertion that matters is not "returned an error" but "the history is byte-identical
+// afterwards": a refusal that still truncated something would be worse than none.
+func TestManagedSessionRefusesALocalRewind(t *testing.T) {
+	a, mgr := managedAgent(t, session.KindA2AExecution)
+	mgr.messages = []session.Message{{Type: session.MessageTypeUser, Content: "远端的一轮"}}
+
+	// The chain surface the desktop builds must say why up front, not offer rows that fail.
+	require.Contains(t, a.RewindChainBlocked(), session.KindA2AExecution)
+	preview, err := a.PreviewRewind(context.Background(), 1)
+	require.NoError(t, err)
+	require.Contains(t, preview.Blocked, "subsystem", "the card has to explain itself")
+
+	_, err = a.Rewind(context.Background(), 1)
+	require.ErrorIs(t, err, ErrManagedSession)
+	require.Len(t, mgr.messages, 1, "a refused rewind must not have cut the conversation")
+	require.Equal(t, "远端的一轮", mgr.messages[0].Content)
+}
+
+func TestAnOrdinarySessionIsNotBlockedByTheManagedRule(t *testing.T) {
+	// The rule must be invisible for an ordinary conversation: it blocks by KIND, not by "this
+	// agent has a session manager". The rewind still fails in this fixture — checkpoints are off
+	// — and that is the point: it fails for ITS OWN reason, unchanged by the new check.
+	a, _ := managedAgent(t, "")
+	require.Empty(t, a.RewindChainBlocked(), "an ordinary conversation has no chain-wide refusal")
+
+	_, err := a.Rewind(context.Background(), 1)
+	require.NotErrorIs(t, err, ErrManagedSession)
+	require.NotContains(t, err.Error(), "subsystem")
+}

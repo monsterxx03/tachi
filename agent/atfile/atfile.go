@@ -120,6 +120,14 @@ type SessionTarget struct {
 	Messages   int // stored records; 0 = unknown
 	UpdatedAt  time.Time
 	WorkingDir string
+	// ManagedKind is the KIND of subsystem that drives this session (empty for an ordinary
+	// conversation), as the session store records it.
+	//
+	// It is on the TYPE the picker's rows and the expanded pointer both are, on purpose: the
+	// design requires the two sides to read one rule (§13) — a conversation offered with a
+	// marking that the reference it expands into does not carry would be two stories about the
+	// same session, and the reader of the pointer is a MODEL that cannot ask which is true.
+	ManagedKind string
 	// Transcript is the absolute path of the session's messages.jsonl — the
 	// thing the pointer exists to hand over.
 	Transcript string
@@ -366,6 +374,12 @@ func sessionPointer(t SessionTarget) string {
 		fmt.Fprintf(&b, ", cwd=%s", t.WorkingDir)
 	}
 	fmt.Fprintf(&b, "; transcript %s", t.Transcript)
+	if t.ManagedKind != "" {
+		// Said to whoever ends up reading this line. The model cannot open the session and will
+		// not be allowed to continue it, so the useful thing is to name what it is looking at.
+		fmt.Fprintf(&b, "; a subsystem's execution record (kind=%s) — read-only, do not continue it here",
+			t.ManagedKind)
+	}
 	b.WriteString(sessionPointerEndFmt)
 	return b.String()
 }

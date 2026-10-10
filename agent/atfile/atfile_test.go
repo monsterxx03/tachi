@@ -373,3 +373,28 @@ func TestExpandSessionRefWithoutTitleOrCount(t *testing.T) {
 func TestRefForSession(t *testing.T) {
 	assert.Equal(t, "@session:abc12345", RefForSession("abc12345"))
 }
+
+// A session a subsystem drives is marked in the pointer, and the marking comes from the same
+// field the picker's rows carry (SessionTarget.ManagedKind): the offered row and the expanded
+// reference are one story about one session, which is what §13 requires of the two sides.
+func TestExpandSessionRefMarksAManagedSession(t *testing.T) {
+	dir := t.TempDir()
+	managed := SessionTarget{
+		ID:          "2026-10-10-120000-1234abcd",
+		Title:       "远端任务的执行记录",
+		ManagedKind: "a2a_execution",
+		Transcript:  "/home/me/.tachi/session/2026-10-10-120000-1234abcd/messages.jsonl",
+	}
+
+	res := Expand(dir, "@session:2026-10-10-120000-1234abcd", Options{Sessions: staticSessions{managed.ID: managed}})
+	assert.Contains(t, res.Text, "a subsystem's execution record (kind=a2a_execution)")
+	assert.Contains(t, res.Text, "read-only, do not continue it here",
+		"the model cannot continue it, so the pointer has to say so")
+
+	// An ordinary conversation carries no such line: the marking is about the session, not about
+	// session references in general.
+	ordinary := managed
+	ordinary.ManagedKind = ""
+	res = Expand(dir, "@session:2026-10-10-120000-1234abcd", Options{Sessions: staticSessions{ordinary.ID: ordinary}})
+	assert.NotContains(t, res.Text, "execution record")
+}
