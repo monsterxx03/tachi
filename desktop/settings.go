@@ -346,6 +346,7 @@ var settingsTable = []settingApply{
 
 	// --- sessions ---
 	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},
+	{Key: "usd_to_cny", Category: catModel, Mode: applyLazy, Note: "每个读取方都在用时现取（llm.USDToCNYRate(cfg) 由 usage 记账 / jev 调用传入），下次算价即生效"},
 
 	// --- tools ---
 	{
