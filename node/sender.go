@@ -2,12 +2,12 @@ package node
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -48,29 +48,16 @@ func OpenSender(peers []config.PeerConfig) (*Sender, error) {
 	return &Sender{peers: directory, records: records, client: client}, nil
 }
 
-// PeerInfo is one node the model may delegate to, as a reminder or a refusal lists it.
-type PeerInfo struct {
-	Name string
-	// Description is the peer's own account of itself (its card's description), empty when the
-	// card could not be read.
-	Description string
-	// Note is the configured human line, used when there is no description.
-	Note string
-	// Reachable says whether the card was read. It is a fact about a moment, not a promise:
-	// a node can go away between this line being rendered and a tool call using the alias.
-	Reachable bool
-}
-
 // Peers describes every configured node, never failing: an unreachable one is reported as such
 // rather than dropped, because "not listed" would read as "not configured" (§8.6).
-func (s *Sender) Peers(ctx context.Context) []PeerInfo {
+func (s *Sender) Peers(ctx context.Context) []tools.PeerSummary {
 	if s == nil {
 		return nil
 	}
 	snapshot := s.peers.Snapshot(ctx)
-	out := make([]PeerInfo, 0, len(snapshot))
+	out := make([]tools.PeerSummary, 0, len(snapshot))
 	for _, p := range snapshot {
-		info := PeerInfo{Name: p.Name, Note: p.Note, Reachable: p.Card != nil}
+		info := tools.PeerSummary{Name: p.Name, Note: p.Note, Reachable: p.Card != nil}
 		if p.Card != nil {
 			info.Description = p.Card.Description
 		}
@@ -79,60 +66,63 @@ func (s *Sender) Peers(ctx context.Context) []PeerInfo {
 	return out
 }
 
-// Submit asks a peer for work.
-func (s *Sender) Submit(ctx context.Context, req SubmitRequest) (TaskView, error) {
-	d, err := s.client.Submit(ctx, req)
+// Delegate asks a peer for work (the tool layer's name for a submission).
+func (s *Sender) Delegate(ctx context.Context, req tools.DelegationRequest) (tools.RemoteTaskInfo, error) {
+	d, err := s.client.Submit(ctx, SubmitRequest{
+		Peer: req.Peer, Prompt: req.Prompt, Title: req.Title,
+		LogicalID: req.LogicalID, ContinueFrom: req.ContinueFrom, Wait: req.Wait,
+	})
 	if err != nil {
 		if d != nil {
 			return viewOf(d, err.Error()), err
 		}
-		return TaskView{}, err
+		return tools.RemoteTaskInfo{}, err
 	}
 	return viewOf(d, ""), nil
 }
 
 // Get reports the last known state of one delegated task, asking the peer when it can.
-func (s *Sender) Get(ctx context.Context, id string) (TaskView, error) {
+func (s *Sender) Get(ctx context.Context, id string) (tools.RemoteTaskInfo, error) {
 	d, err := s.client.Get(ctx, id)
 	if err != nil {
-		return TaskView{}, err
+		return tools.RemoteTaskInfo{}, err
 	}
 	return viewOf(d, ""), nil
 }
 
 // Wait waits for a delegated task to reach a state that ends the wait.
-func (s *Sender) Wait(ctx context.Context, id string, budget time.Duration) (TaskView, error) {
+func (s *Sender) Wait(ctx context.Context, id string, budget time.Duration) (tools.RemoteTaskInfo, error) {
 	d, err := s.client.Wait(ctx, id, budget)
 	if err != nil {
 		if d != nil {
 			return viewOf(d, err.Error()), err
 		}
-		return TaskView{}, err
+		return tools.RemoteTaskInfo{}, err
 	}
 	return viewOf(d, ""), nil
 }
 
 // Reply answers the question a peer is waiting on, waiting boundedly for what the answer set
 // off. A wait that runs out is not a failure: the task keeps working, and the view says so.
-func (s *Sender) Reply(ctx context.Context, id, questionID string, answer map[string]string, budget time.Duration) (TaskView, error) {
+func (s *Sender) Reply(ctx context.Context, id, questionID string, answer map[string]string, budget time.Duration) (tools.RemoteTaskInfo, error) {
 	d, err := s.client.Reply(ctx, id, questionID, answer, budget)
 	if err != nil {
 		if d != nil {
 			return viewOf(d, err.Error()), err
 		}
-		return TaskView{}, err
+		return tools.RemoteTaskInfo{}, err
 	}
 	return viewOf(d, ""), nil
 }
 
 // Cancel asks the peer to stop a task.
-func (s *Sender) Cancel(ctx context.Context, id string) (TaskView, error) {
+func (s *Sender) Cancel(ctx context.Context, id string) (tools.RemoteTaskInfo, error) {
 	d, err := s.client.Cancel(ctx, id)
 	if err != nil {
 		if d != nil {
 			return viewOf(d, err.Error()), err
 		}
-		return TaskView{}, err
+		return tools.RemoteTaskInfo{}, err
 	}
 	return viewOf(d, ""), nil
 }
@@ -141,52 +131,24 @@ func (s *Sender) Cancel(ctx context.Context, id string) (TaskView, error) {
 //
 // The filter is not a convenience: without it a `list` would show work from every conversation
 // this machine has ever had, which is both useless and a leak between conversations (§8.5).
-func (s *Sender) List(logicalID string) []TaskView {
+func (s *Sender) List(logicalID string) []tools.RemoteTaskInfo {
 	if s == nil {
 		return nil
 	}
 	records := s.records.list(logicalID)
-	out := make([]TaskView, 0, len(records))
+	out := make([]tools.RemoteTaskInfo, 0, len(records))
 	for _, d := range records {
 		out = append(out, viewOf(d, ""))
 	}
 	return out
 }
 
-// QuestionView is the question a delegated task is waiting on: its id is what an answer must
-// name (§7.4).
-type QuestionView struct {
-	ID   string `json:"question_id"`
-	Text string `json:"text"`
-}
-
-// TaskView is one delegated task as the model sees it.
+// viewOf turns a record into the view the tools and the reminder both speak in.
 //
-// The field names are the design's (§8.1's example), and the STATE tokens are the protocol's
-// lowercased: a model that knows `input_required` from a tool result is being told the same
-// thing the receiving side told this machine.
-type TaskView struct {
-	// ID is the local record's id (d_…): the only handle the model gets, and the one a follow-up
-	// or an answer refers to.
-	ID    string `json:"task_id"`
-	Node  string `json:"node"`
-	Title string `json:"title"`
-	State string `json:"state"`
-	// Result is the answer, or for a failed task the reason. It is an excerpt of the remote
-	// record, which stays queryable (§7.3).
-	Result string `json:"result,omitempty"`
-	// Question is set while the task waits for input.
-	Question *QuestionView `json:"question,omitempty"`
-	// Note carries what a caller must not be told as a fact: a connection problem, a cached
-	// state, a refusal from the peer.
-	Note string `json:"note,omitempty"`
-	// LastSeen is when this state was observed at the peer.
-	LastSeen time.Time `json:"last_seen,omitzero"`
-}
-
-// viewOf turns a record into the model's view.
-func viewOf(d *Delegation, note string) TaskView {
-	view := TaskView{
+// A task waiting for input carries the QUESTION as its text and no result: handing the same
+// string over twice would put a question in the model's hands as if it were an answer.
+func viewOf(d *Delegation, note string) tools.RemoteTaskInfo {
+	view := tools.RemoteTaskInfo{
 		ID:       d.ID,
 		Node:     d.Peer,
 		Title:    d.Title,
@@ -196,9 +158,7 @@ func viewOf(d *Delegation, note string) TaskView {
 		Note:     note,
 	}
 	if d.QuestionID != "" {
-		view.Question = &QuestionView{ID: d.QuestionID, Text: d.LastKnown.Text}
-		// A task waiting for input has a question as its text, not a result: showing both would
-		// put the question in the model's hands twice, once as if it were an answer.
+		view.QuestionID, view.QuestionText = d.QuestionID, d.LastKnown.Text
 		view.Result = ""
 	}
 	return view
@@ -226,23 +186,4 @@ func viewState(state a2a.TaskState) string {
 	default:
 		return "unknown"
 	}
-}
-
-// InFlight reports whether a state means the task may still move on its own: a caller asks
-// again later, and must not resubmit (§6.2 — a handle that is still SUBMITTED is in flight, the
-// write simply has not landed yet).
-func (v TaskView) InFlight() bool {
-	switch v.State {
-	case "submitted", "working":
-		return true
-	}
-	return false
-}
-
-// Waiting reports whether the task is parked on a question this machine can answer.
-func (v TaskView) Waiting() bool { return v.State == "input_required" }
-
-// String is the one-line form a refusal or a log line uses.
-func (v TaskView) String() string {
-	return fmt.Sprintf("%s | %s | %s | %s", v.ID, v.Node, v.Title, v.State)
 }

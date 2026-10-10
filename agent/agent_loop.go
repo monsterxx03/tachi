@@ -520,6 +520,16 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		}
 		boundary := a.ensureSessionAndRecordUser(ctx, rs, userMessage, displayUserMessage, reminderBlock, userRecordParts, ch)
 		rs.Seq = boundary.Seq
+		// Which conversation this run belongs to, in the form that survives compaction. It is set
+		// HERE because the session may have just been created by the call above — and it travels
+		// on the context so a tool that files things per conversation (delegation) reads the same
+		// identity the reminder and the session store use, instead of being handed one at
+		// construction that could be stale or missing.
+		if sm := a.Config.SessionManager; sm != nil {
+			if cur := sm.Current(); cur != nil {
+				ctx = tools.WithLogicalConversation(ctx, cur.LogicalConversationID())
+			}
+		}
 		a.beginCheckpointTurn(ctx, rs, userMessage, boundary)
 
 		// Fire turn_start hook before entering agent loop

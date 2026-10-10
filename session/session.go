@@ -63,6 +63,32 @@ type Session struct {
 	CompactedChildID     string `json:"compacted_child_id,omitempty"`
 	CompactedParentID    string `json:"compacted_parent_id,omitempty"`
 	CompactedParentTitle string `json:"compacted_parent_title,omitempty"`
+
+	// LogicalID identifies the CONVERSATION this session belongs to, across compaction.
+	//
+	// A session's own id cannot be that identity: compaction moves the conversation to a
+	// successor session, so anything filed under the id — a delegated task's record, a
+	// reminder's idea of "which conversation is this" — would lose the conversation at the
+	// first compaction, exactly when a long conversation has the most to remember.
+	//
+	// Empty means "this session is its own conversation" (see LogicalConversationID), so every
+	// session written before this field existed reads back correctly, and only a compaction has
+	// to carry a value to the child.
+	LogicalID string `json:"logical_id,omitempty"`
+}
+
+// LogicalConversationID is the identity to file anything conversation-scoped under.
+//
+// The fallback is the point: a session that has never been compacted IS its own conversation,
+// and writing its id into the field would only create two spellings of the same fact.
+func (s *Session) LogicalConversationID() string {
+	if s == nil {
+		return ""
+	}
+	if s.LogicalID != "" {
+		return s.LogicalID
+	}
+	return s.ID
 }
 
 // KindA2AExecution marks a session created to hold a remote conversation for an A2A

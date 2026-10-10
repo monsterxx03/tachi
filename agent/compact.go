@@ -141,6 +141,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// memory by the next Dream pass (design §2.2, §2.3).
 	newSess.Kind = oldSess.Kind
 	newSess.SkipDream = oldSess.SkipDream
+	// The logical conversation travels with the conversation too, and for the same reason: a
+	// delegated task's record and a reminder's idea of "this conversation" are filed under it,
+	// and a compaction must not make them look like another conversation's work. Written from
+	// the OLD session's identity — including the fallback, which is what makes this work for a
+	// session created before the field existed.
+	newSess.LogicalID = oldSess.LogicalConversationID()
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}

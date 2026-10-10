@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
@@ -55,7 +56,7 @@ func TestASubmissionReachesThePeerAndItsAnswerComesBack(t *testing.T) {
 	sender, peer := startPeer(t, mock, "ReadFile")
 	require.NotNil(t, peer)
 
-	view, err := sender.Submit(context.Background(), SubmitRequest{
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer:      "peer",
 		Prompt:    "检查昨天的备份是否完整，返回异常清单，不修改文件。",
 		LogicalID: "conv-1",
@@ -93,25 +94,24 @@ func TestAParkedPeerQuestionComesBackAndIsAnsweredThroughTheSameRecord(t *testin
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 
-	view, err := sender.Submit(context.Background(), SubmitRequest{
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "检查昨天的备份", LogicalID: "conv-1",
 		Wait: 5 * time.Second, // the peer asks instead of finishing; the wait ends at the question
 	})
 	require.NoError(t, err)
 	require.True(t, view.Waiting(), "a question ends the wait: the task will not move until answered")
-	require.NotNil(t, view.Question)
-	require.Equal(t, "ask_1", view.Question.ID)
-	require.Contains(t, view.Question.Text, "检查照片还是文档？")
+	require.Equal(t, "ask_1", view.QuestionID)
+	require.Contains(t, view.QuestionText, "检查照片还是文档？")
 	require.Empty(t, view.Result, "the question must not be handed over as if it were an answer")
 
 	// Answering goes through the SAME local record: it names the question, and the peer wakes
 	// the turn that asked (its script's second step requires the answer to have arrived).
-	answered, err := sender.Reply(context.Background(), view.ID, view.Question.ID,
+	answered, err := sender.Reply(context.Background(), view.ID, view.QuestionID,
 		map[string]string{"检查照片还是文档？": "照片"}, 5*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, "completed", answered.State)
 	require.Contains(t, answered.Result, "只检查照片")
-	require.Nil(t, answered.Question, "an answered task has no open question")
+	require.Empty(t, answered.QuestionID, "an answered task has no open question")
 	require.Len(t, mock.Requests(), 2, "the answer resumed the peer's turn instead of starting a new one")
 }
 
@@ -139,7 +139,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 
 	// First submission: the peer accepts it and keeps working. The short wait is deliberate —
 	// the caller gets the handle, which is what §6.2 is for.
-	first, err := sender.Submit(context.Background(), SubmitRequest{
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "长活儿", LogicalID: "conv-1", Wait: 200 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 	// A follow-up in that conversation: the peer refuses it, with OUR reason and domain. This is
 	// the refusal the sending side has to be able to read — the SDK's own client would drop the
 	// domain and leave only a sentence.
-	_, err = sender.Submit(context.Background(), SubmitRequest{
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "再顺便看看", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	var refusal *PeerRefusal
@@ -178,7 +178,7 @@ func TestAnUnreachablePeerIsUnknownRatherThanRefused(t *testing.T) {
 	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: "http://127.0.0.1:1"}})
 	require.NoError(t, err)
 
-	view, err := sender.Submit(context.Background(), SubmitRequest{
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "ghost", Prompt: "有人吗", LogicalID: "conv-1",
 	})
 	var refusal *PeerRefusal
@@ -227,14 +227,14 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 	mock.Script(oneMessageScript("第二轮完成")...)
 
 	sender, _ := startPeer(t, mock, "ReadFile")
-	first, err := sender.Submit(context.Background(), SubmitRequest{
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
 	// A follow-up names the record it continues, and the peer answers in the SAME remote
 	// conversation (§8.1): same contextId, new task.
-	second, err := sender.Submit(context.Background(), SubmitRequest{
+	second, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 
 	// Asking for work in a conversation that belongs to another peer is refused rather than
 	// quietly sent somewhere else (§8.5).
-	_, err = sender.Submit(context.Background(), SubmitRequest{
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "other-node", Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.Error(t, err)
@@ -260,7 +260,7 @@ func TestAQuestionWithoutAnOpenQuestionIsRefusedLocally(t *testing.T) {
 	mock.Script(oneMessageScript("完成")...)
 
 	sender, _ := startPeer(t, mock, "ReadFile")
-	view, err := sender.Submit(context.Background(), SubmitRequest{
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: "peer", Prompt: "什么都不问的活", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
@@ -285,14 +285,14 @@ func TestTheModelViewIsTheDesignsShape(t *testing.T) {
 	require.Equal(t, "home-nas", view.Node)
 	require.Equal(t, "input_required", view.State)
 	require.True(t, view.Waiting())
-	require.Equal(t, "ask_1", view.Question.ID)
+	require.Equal(t, "ask_1", view.QuestionID)
 	require.Empty(t, view.Result)
 
 	// A handle that is still SUBMITTED counts as in flight: the state write may simply not have
 	// landed yet, and treating it as "not started" is how a caller resubmits (§6.2).
-	require.True(t, TaskView{State: "submitted"}.InFlight())
-	require.True(t, TaskView{State: "working"}.InFlight())
-	require.False(t, TaskView{State: "completed"}.InFlight())
+	require.True(t, tools.RemoteTaskInfo{State: "submitted"}.InFlight())
+	require.True(t, tools.RemoteTaskInfo{State: "working"}.InFlight())
+	require.False(t, tools.RemoteTaskInfo{State: "completed"}.InFlight())
 }
 
 func TestAToolLayerFailureIsNotAFabricatedTask(t *testing.T) {
@@ -306,13 +306,13 @@ func TestAToolLayerFailureIsNotAFabricatedTask(t *testing.T) {
 	sender, err := OpenSender(nil)
 	require.NoError(t, err)
 
-	_, err = sender.Submit(context.Background(), SubmitRequest{Peer: "nobody", Prompt: "hi"})
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "nobody", Prompt: "hi"})
 	var unknown *UnknownPeerError
 	require.ErrorAs(t, err, &unknown)
 	require.Empty(t, unknown.Known)
 	require.Contains(t, err.Error(), "no peers are configured")
 
-	_, err = sender.Submit(context.Background(), SubmitRequest{Peer: "peer", Prompt: "   "})
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "peer", Prompt: "   "})
 	require.Error(t, err)
 
 	if errors.Is(err, context.Canceled) {
