@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`；服务端仍只绑 loopback、无调用者认证），**其余尚未实现**（追问/多轮、发起侧工具与提醒、前端表面、认证）。日期：2026-10-10。
+状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；服务端仍只绑 loopback、无调用者认证；应答的两种形状按 §6.1.1 处理）。**尚未实现的是调用者认证及其连带的四件事**（非 loopback 监听、`tasks/list`、文件 Part、Card `securitySchemes`），以及阶段二的体验件（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -96,7 +96,7 @@ flowchart LR
 
 首版接收侧 A2A 执行 session **默认排除普通 Dream 整理**：首次可见前设置 `SkipDream=true`，创建、恢复和 compaction 后继均保留此策略。`SkipDream` 与 `Kind` 已由 `FinalizeCompact` 随会话迁移（两者原本都会在后继会话上被静默清零）；统一 Dream 筛选仍应按受管类型落实默认排除，不能仅依靠某个前端记得设字段。来源标记不是授权，但可用于统一选择派生消费策略，不据此把会话永久置顶或保留。
 
-还需限制执行期间的反向数据流：远程 agent 默认不读写宿主普通长期记忆，具体覆盖 `RecordMemory` 写入、`MemoryRecall` 工具读取及 `MemoryRecallReminder` 自动召回。禁用一个工具不等于关闭自动注入；`SkipMemoryRecall` 也不代替工具限制。构造、重载、fork 和回合准备都使用同一远程执行配置，不继承宿主普通聊天的记忆后端权限。允许的 Bash/文件/MCP 路径同样不得成为绕读写记忆目录的替代入口；通用 shell 的隔离边界仍按 §10.2 处理。
+还需限制执行期间的反向数据流：远程 agent 默认不读写宿主普通长期记忆，具体覆盖 `RecordMemory` 写入、`MemoryRecall` 工具读取及 `MemoryRecallReminder` 自动召回。禁用一个工具不等于关闭自动注入；`SkipMemoryRecall` 也不代替工具限制。**已落地（两侧各一处）**：构造远端 agent 时 `SkipMemoryRecall` 管自动召回，run 的工具视图无条件剔除 `hostOnlyTools` 管工具（列进 `node.tools` 也开不出来），都在 `node/runner.go`。构造、重载、fork 和回合准备都使用同一远程执行配置，不继承宿主普通聊天的记忆后端权限。允许的 Bash/文件/MCP 路径同样不得成为绕读写记忆目录的替代入口；通用 shell 的隔离边界仍按 §10.2 处理。
 
 发起方原来的普通聊天不因包含委派结果就自动排除 Dream，仍遵循该对话的现有策略。未来需要远端访问共享项目知识或将执行经验纳入宿主记忆时，另行明确数据范围及授权，不以“同一台机器/同一个用户”自动开放。此处不引入共享记忆系统；usage 的真实计费与来源追溯另见 §9.5。
 
@@ -283,6 +283,34 @@ Card 的 `securitySchemes` 中，每个 SecurityScheme 对象必须恰好选择�
 | contextId | 远端上下文关联，不是跨机器共享的 Tachi session ID |
 
 本机管理协议与 Tachi 特有的输入/审批数据需要单独定义版本；§3.2 的本机握手不替代标准 A2A 版本协商。用 A2A 结构化 Part 或声明的扩展承载私有数据，不能把私有约定伪装成标准能力。一般第三方 A2A 客户端仍应能读取基础任务状态和文本结果。
+
+### 6.1.1 收侧固定回 Task，发侧两种都读
+
+`SendMessageResponse` 是 oneOf，且规范要求**恰好一个**：
+
+```text
+| task    | Task    | Optional (OneOf) | The task created or updated by the message. |
+| message | Message | Optional (OneOf) | A message from the agent.                    |
+Note: A SendMessageResponse MUST contain exactly one of the following: task, message
+```
+
+规范把「直接回 Message」定义为正当答复（"The agent MAY create a new `Task` … **or MAY return a direct `Message` response for simple interactions**"），官方文档按此把实现分成三类：message-only / **task-generating** / hybrid。**Tachi 的收侧是 task-generating，且这是结构决定的，不是偏好**：任务记录（审计/恢复/去重、§9.1–9.2）、保留持有（§9.4）、usage 归属（§9.5）、跨入口引用与 reminder（§8.6）、断线后可查询（§6.2）全部挂在这个句柄上；官方文档对这一类的原话是「This avoids the `Task`-versus-`Message` decision, but it creates completed task objects even for simple interactions」——后半句正是我们要的。三条硬约束让 hybrid 对 Tachi 不可用：
+
+1. **岔路在第一次 yield 时定死、不可回头**（`internal/taskupdate`：`message not allowed after task was stored`；任何事件出现在 task/message 之前是 `first event must be a Task or a message`）。所以「回 Message 还是 Task」**不可能由 loop 的结果决定**，只能由请求形状与节点策略在 loop 之前决定 —— 那是对「这次工作会不会一直很简单」的猜测。官方论坛那篇《Demystifying Tasks vs Messages》（链接见「参考」）给了两种真实做法：router 预检（闲聊/能力询问 → Message，命中预定义动作 → Task），以及「动态升级」（拿内部 API 与定时器赛跑，赢在 T 内回 Message，超时立刻建 WORKING 的 Task）—— 后者在窗口内什么都没 yield，调用方是真的干等。
+2. **Message 表达不了反问**：`INPUT_REQUIRED` / `AUTH_REQUIRED` 是 **Task 的 state**（官方对 message-only 的注记也写着「Cannot support interrupted states」），而 §7.4 整条追问链建立在其上。
+3. 一个有时回 Message、有时回 Task 的 peer 会让**每个调用方**都要分支，而 Message 那一支不能等、不能取消、不能往里答。
+
+**发侧必须两种都读**（已落地）。`node/remoteclient.go` 的 `send` 返回 `sendResult`（两个 arm），因为对端合法地回一条 Message 时，本机以前把它当失败——「answered with a message rather than a task」既丢掉了对端刚给出的文字，又把记录留在「受理结果未知」，三种说法互相矛盾。现在的处理：
+
+| 维度 | Task 应答 | Message 应答 |
+| --- | --- | --- |
+| 记录 | `RemoteTaskID` / `RemoteContextID` / 状态 | `DirectAnswer=true`、`State=COMPLETED`、`Text=正文`、`RemoteTaskID` 留空 |
+| `contextId` | 有 | 有则记（规范要求「若 agent 生成了 contextId 则必须包含在应答里」），`continue_from` 因此仍能续这段对话 |
+| `get` / `wait` | 轮询对端 | 直接返回记录，不发请求 |
+| `cancel` / `reply` | 走协议 | 明确拒绝 —— 且 `noHandle` 把「从未受理（结果未知）」与「对端直接回了消息（没建任务）」分开说，前者是「可重试」，后者是「已经答完了」 |
+| `referenceTaskIds` | 引用上一项远端 task | 空（这次交互没有产生 task 可引用） |
+
+一句话：**收侧一种形状，发侧两种都读**。唯一能对着本机产生 Message 应答的是第三方 peer（Tachi 之间永远回 Task），所以这条路径的合同测试用桩替换对端（`node/remoteclient_test.go`），不能靠真节点造出来。
 
 ### 6.2 异步受理与本地有界等待
 
@@ -478,7 +506,7 @@ TaskRunner 提供范围受限的内部执行授权，绑定 session/context/task
 
 `continue_from` 引用**已有本机委派记录**，服务端由它解析远端 nodeId/contextId，并将原远端 taskId 填入 `referenceTaskIds`，不把它当作本次消息的 taskId。新工作产生新的本地委派记录与远端 task。引用过期、无权访问、原记录尚未取得远端 contextId 时明确返回错误/未就绪，不猜测、不改投其他节点、不自动新开会话。
 
-返回统一任务视图，例如首次检查很快完成时：
+返回统一任务视图，例如首次检查很快完成时（对端合法地直接回了 `Message` 时同样返回这个视图，只是没有句柄、`note` 会说明 —— 见 §6.1.1）：
 
 ```json
 {
@@ -678,7 +706,7 @@ A2A 允许而不强制 SendMessage 去重，因此这是 Tachi 节点之间额�
 
 远程任务的模型调用使用实际执行节点配置的 provider，消耗照常写入该节点 usage ledger，不因是 A2A 请求而隐藏或转记到发起方。来源信息由可信任务绑定提供，至少能关联本节点执行 session、task/context 及请求来源节点；压缩、重启或 session 清理后仍需按记账保留策略可追溯，不能只依赖会被删除的 session 标题。
 
-来源与调用用途是两个维度：新增 A2A 来源关联时保留现有 conversation/title/compact/subagent 等 usage kind，不能把所有辅助调用都覆盖成一个 `a2a` kind。落到 usage 行还是独立持久化关联可在实现时选定，但不得另起一套价格计算或重复记录同一次实际模型调用。
+来源与调用用途是两个维度：新增 A2A 来源关联时保留现有 conversation/title/compact/subagent 等 usage kind，不能把所有辅助调用都覆盖成一个 `a2a` kind。**已落地**：来源落在 usage 行上（`source` / `source_task_id` / `source_context_id`，`llm.WithUsageSource`，节点在 `turnContext` 里挂上 ctx），价格快照与用途 kind 都不动 —— 同一次实际模型调用仍然只记一行。发起方一侧的「展示远端汇报值」仍待做，它只做展示、不再写本机 ledger。
 
 发起方可展示“远端报告的用量/费用”，与自己用于协调和总结的模型调用分开；远端汇报值不能再次作为本机实际调用费用写入 ledger。首版提供来源追溯和准确本机总账，不做跨节点统一账本或结算。受管会话的只读展示、Dream 排除均不影响这些真实消耗的记录。
 
@@ -772,8 +800,8 @@ Agent Card 是能力声明，不是授权清单的替代；读取任务、列举
 
 1. **生命周期链**：节点身份、配置、节点服务锁、启动/附着、本机认证，以及承载者退出后的持锁按需恢复；先验证与独立保留协调锁的职责和锁序，用假任务验证三个入口共存，不引入面向用户的本机委派模式。
 2. **协议与任务链**：固定 A2A SDK + loopback 假执行器，结合 TaskStore 验证异步受理/阻塞兼容、本地等待、去重恢复、多轮引用、busy、追问和取消。**已落地**：受理/去重/busy/中断恢复与追问（§7.4，含停放上限、answer 校验与拒绝面）；多轮引用与 `RemoteTask` 一侧仍在阶段一第 4 项。
-3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。**已落地**：`node/runner.go` 把真 loop 接进来（`contextRun` 建/绑 session、`beginTurn` 起 turn、在节点配置的工作区里跑真一轮），准入落在副作用之前（§7.1.3）；来源与受管类型随 session 落盘（`Kind = KindA2AExecution`、`SkipDream`，压缩时一起传递），双端关联在 `node/context.go` 的 context 绑定与 `node/tasks.go` 的任务记录里，保留依据见 §9.4。工具面是节点自己的允许集合（`toolViewOption`：名单 + AskUserQuestion，空名单仍只剩后者），permission ask 一律拒绝（§10.1）。**仍未做**：宿主记忆读写/自动召回的统一排除接入点（重载与 fork 也在内，§14）、usage 来源记录（§9.5）——后者属记账切片，不和入口闭环挤在一起。
-4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。**已落地**：两个工具、两条 reminder 与四个入口共用一个开关 `agent.WithDelegation`（§8.6、§10.2.1），端到端由 `itest/run/delegation_test.go` 钉住（真二进制委派给另一个真节点，结果回到本地）；首版产物为文本/结构化 Part。接收侧记录的来源标签与「只读、拒绝普通恢复」已接（受管会话在公共循环前的入口与回退上被拒，`@session:` 与选择器用同一字段），**只剩各界面上的视觉标注**（§13「入口展示」）。**完成通知**落在「结果照常保存 + reminder 展示」这一层：跨入口推送与空闲自动续跑属阶段二（§8.4）；usage 可追溯随 §9.5 一起做，跨节点统一账本不做。
+3. **真实执行接入**：TaskRunner 接现有 loop，在公共入口副作用之前检查准入，持久化来源、双端对话关联及保留依据；验证清理/压缩、SkipDream 传递、宿主记忆隔离和回合权限，再接真实结果与 usage 来源记录。**已落地**：`node/runner.go` 把真 loop 接进来（`contextRun` 建/绑 session、`beginTurn` 起 turn、在节点配置的工作区里跑真一轮），准入落在副作用之前（§7.1.3）；来源与受管类型随 session 落盘（`Kind = KindA2AExecution`、`SkipDream`，压缩时一起传递），双端关联在 `node/context.go` 的 context 绑定与 `node/tasks.go` 的任务记录里，保留依据见 §9.4。工具面是节点自己的允许集合（`toolViewOption`：名单 + AskUserQuestion，空名单仍只剩后者），permission ask 一律拒绝（§10.1）。**宿主记忆隔离已落地**：远端 agent 构造时 `SkipMemoryRecall`（关自动召回），run 的工具视图无条件剔除 `hostOnlyTools`（`RecordMemory`/`MemoryRecall`），操作者把它们列进 `node.tools` 也开不出来；两处都在 `node/runner.go`，reload 抹不掉（flag 是 `ReloadMemory` 唯一保住的那项、工具视图是逐 run 的）。**usage 来源已落地**：`llm.WithUsageSource` 把 origin + task/context 挂上 turn 的 ctx，ledger 行多三个可选字段，`Kind` 不动（§9.5）。
+4. **入口闭环**：DelegateTask（新建/continue_from）、RemoteTask（含 reply/list）、两个 reminder、完成通知和错误展示，三个入口共用；先支持文本/结构化产物。接收侧执行记录的来源标签及只读/拒绝普通恢复必须随首版接入；费用可追溯但不做跨节点统一账本，完整任务面板可以后置。**已落地**：两个工具、两条 reminder 与四个入口共用一个开关 `agent.WithDelegation`（§8.6、§10.2.1），端到端由 `itest/run/delegation_test.go` 钉住（真二进制委派给另一个真节点，结果回到本地）；首版产物为文本/结构化 Part。接收侧记录的来源标签与「只读、拒绝普通恢复」已接（受管会话在公共循环前的入口与回退上被拒，`@session:` 与选择器用同一字段），**各界面上的呈现也已接**（TUI 行 + 拒绝切换、desktop 只读横幅 + 换掉输入框 + smoke `managed-session`、web 控制台标签；见 `docs/agents/node.md` 的「Where a managed session SHOWS UP」）。**完成通知**落在「结果照常保存 + reminder 展示」这一层：跨入口推送与空闲自动续跑属阶段二（§8.4）；usage 来源可追溯已落地（§9.5），跨节点统一账本不做。
 
 两条验证链可独立推进，合并时复用同一套服务与存储接口。不把 mDNS、gossip 或完整 Desktop 任务面板作为依赖；优先跑通明确指定节点的一项任务及后续追问。
 
@@ -793,16 +821,16 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | --- | --- |
 | 单实例 | 三种入口启动顺序、并发启动、非 Tachi 占端口、陈旧连接信息、版本/身份不匹配 |
 | 生命周期 | 非承载实例退出不影响任务，承载者退出后 TUI 无需重启可持锁按需恢复；原进程卡住但持锁时不另起；恢复不重跑旧执行 |
-| A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本/结构化/文件 Part 的编解码与产物走 Artifact、输入走 Message 仍待做 |
-| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop、查询/取消/重复消息不新建 session 仍待做 |
+| A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本 Part（产物即最终答复，走 Artifact）与结构化 Part（追问的 `data` Part、回答的形状）已落地；**应答的两种形状已落地并钉住**（§6.1.1：桩对端回一条 `Message`，本机记成「已完成 + 正文 + 无句柄」，`get`/`wait` 不发请求、`cancel` 拒绝时说清是哪种原因、带 contextId 时 `continue_from` 仍能续，`node/remoteclient_test.go` 三条）；**文件 Part（`raw`/`url`）与产物下载端点仍待做**（§6.4） |
+| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop 仍待做；**查询/取消/重放不新建 session 已落地**（`node/runner_test.go` 的 `TestOnlyANewWorkRequestOpensAConversation`：重放返回同一 task、两次调用只到模型一次、三条路径合起来仍只有一段会话） |
 | 多轮对话 | 同 task 回答不新起 loop（**已落地** `node/park_test.go`）、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
-| 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。无效/越权引用与 `referenceTaskIds` 的构造、reminder/list 找回仍待做 |
+| 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。**`referenceTaskIds` 的构造已落地并钉住**（`node/remoteclient_test.go` 的 `TestAFollowUpReferencesThePreviousRemoteTask`：经一个记录代理读实际发出的 body，跟进引用的是**上一条远端 task id**，不是自己的、也不是本机 `d_`）；越权引用按 peer 拒绝已有用例、未知 id 拒绝已有用例（`node/delegations_test.go`）；reminder/list 找回仍待做 |
 | 跨入口归属 | 发起方同授权主体恢复同一逻辑对话能跨 Desktop/TUI 访问任务；接收侧执行记录换入口仍只读受管；其他对话/主体不能靠知道 ID 访问任何任务操作 |
-| 执行记录展示与准入 | **部分落地**：普通发送被 loop 门口拒（S5a）；**回退被拒且历史字节不变**（`managedSessionWriteRefusal`，`agent/managed_test.go`）；`@session:` 引用与选择器用同一字段判定并标注（`agent/atfile`、`agent/sessionref` 的测试互相对齐）。**仍未做**：Desktop/TUI/web 的来源标注视觉面（S8b）、steer/重试/fork 的逐条测试、直接后端调用的用例 |
+| 执行记录展示与准入 | **部分落地**：普通发送被 loop 门口拒（S5a）；**回退被拒且历史字节不变**（`managedSessionWriteRefusal`，`agent/managed_test.go`）；`@session:` 引用与选择器用同一字段判定并标注（`agent/atfile`、`agent/sessionref` 的测试互相对齐）。**三个前端的呈现已落地**：TUI 行标注 + 拒绝切入（`tui/session_selector.go`）、`@` 选择器行同口径（`tui/at_file.go`）、web 列表/详情标签（`web/frontend/src/lib/managed.ts`）、desktop 只读横幅 + 换掉输入框（smoke `managed-session`，18 项断言）。**fork 已钉住**（`agent/managed_test.go` 的 `TestAForkOfAManagedSessionHasNoSessionToWriteInto`：子 agent 没有 SessionManager，结构上写不进任何会话）。**仍未做**：steer/重试的逐条测试、直接后端调用的用例 |
 | 准入时序与授权范围 | 拒绝发生在 reminder/记忆访问、写 transcript、标题生成、checkpoint、hook、模型调用前；RunOneOff 及非 loop 历史修改同样约束；错绑/过期授权拒绝，fork 不泛化继承，合法自动压缩和问题回答可继续 |
 | 来源生命周期 | 创建/压缩/恢复保留来源和受管类型；context 过期或节点离线不变普通聊天；来源不等于授权或永久保留；显式引用结果新建普通会话不继承远端绑定 |
-| 派生消费与记忆 | 接收侧执行 session 及压缩后继均不进入 Dream，发起方普通聊天策略不被误改；RecordMemory/MemoryRecall/自动召回默认禁用，重载/fork 不重新开放 |
+| 派生消费与记忆 | 接收侧执行 session 及压缩后继均不进入 Dream（`SkipDream` 随压缩传递，已落地）；发起方普通聊天策略不被误改。**宿主记忆已落地**：`node/runner.go` 构造远端 agent 时 `SkipMemoryRecall`，run 的工具视图无条件剔除 `RecordMemory`/`MemoryRecall`（即便操作者列进名单）；自动召回与工具两侧分开关（§2.3），`node/runner_test.go` 两条测试分别钉住（工具那条先把 patch 摘掉验证过会 FAIL） |
 | Usage 来源 | 接收节点实际调用只记一次、可关联来源节点/task/context；title/compact 等用途分类保留；发起方显示远端汇报不重记成本机调用；session 清理后仍可追溯 |
 | 幂等受理 | **已落地 `node/taskstore_test.go`**：受理前落盘（直接读文件）、同 ID 重放返回同一 task 且执行计数为 1、同 ID 异内容 → 409 + 自有域 reason、索引删除后重建仍能去重、并发更新被拒、busy 拒新请求但不拒重放、不同 context 不受影响；**跨进程 `kill -9`**：承载进程被杀死后下一个进程把在飞任务判为中断（`node/crossprocess_test.go`）。响应丢失后发起端重启且尚无远端 taskId、超出去重有效期仍待做 |
 | 持久化故障 | 受理保存失败不启动任务，结果保存失败不宣称已完成，恢复索引后再服务 |
@@ -810,7 +838,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 锁隔离与恢复 | **已落地**：两把锁路径分离、协调锁不在释放时删文件、删除前在锁内复查保护、文件锁先于进程内锁（枚举在锁外）；并发竞争的压测暂时不做（§9.4 末） |
 | 连接与取消 | 断开订阅不取消任务、等待超时、重复取消、取消/完成竞争 |
 | 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。过期答案与取消的并发竞争、`RemoteTask(reply)` 一侧仍待做 |
-| Reminder | **部分落地**（`agent/systemreminder/delegation_test.go` + `agent/agent_delegation_test.go`）：待答项排前、有界且给出"还有 N 项"与查询入口、"未列出不等于已删除"、节点不可达如实标注且用配置 note、按作用域变化检测（同列表不重复）、无 delegator 的 run 一句不说、`hosting` 与 `list` 同作用域（`itest/run/delegation_test.go`）。回合内去重与恢复历史字节不变由既有机制保证（collector 的 piece 去重 + `historyHasReminder`），**稳定排序**（多个同状态任务的顺序）仍待做 |
+| Reminder | **部分落地**（`agent/systemreminder/delegation_test.go` + `agent/agent_delegation_test.go`）：待答项排前、有界且给出"还有 N 项"与查询入口、"未列出不等于已删除"、节点不可达如实标注且用配置 note、按作用域变化检测（同列表不重复）、无 delegator 的 run 一句不说、`hosting` 与 `list` 同作用域（`itest/run/delegation_test.go`）。回合内去重与恢复历史字节不变由既有机制保证（collector 的 piece 去重 + `historyHasReminder`），**稳定排序已落地**：`node/delegations.go` 的 list 改成全序（CreatedAt desc，同刻按 id），reminder 只分组不再排序（`agent/systemreminder/delegation_test.go` 钉住「组内保持 provider 顺序」） |
 | 认证声明与授权 | SecurityScheme 每项只选一种标准类型且符合真实认证；服务端 pinning 不误报 mTLS；陌生节点不可委派、越权 task/产物不可读、本机接口与 A2A 凭据隔离、远端模型不能批准工具权限 |
 | 循环与回合限制 | 远端任务、子 agent 默认/显式工具复制都不能继承委派；同一缓存 agent 的普通用户回合可用而 cron/system/ambient 回合禁用；重载不复活禁用工具或 reminder |
 | 入口展示 | 工具结果/任务 ID/问题/错误在 TUI、channel、Desktop 中可读，不给旧 tool call 补写第二结果 |
@@ -826,12 +854,12 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 - TLS/调用者认证的具体选择及对应 Card 声明、带外配对凭据格式、首次确认与撤销入口；本机接口的认证与版本**已定**——loopback 监听 + 每次承载随机生成的凭据写在 0600 的 `local.json`，附着方经 `GET /local/v1/handshake` 带 Bearer 校验 `instance_id` / `node_id` / `api_version`（实现见 `node/`）；远端调用者认证仍待定，不从 pinning 推断 mTLS。
 - 默认端口、监听范围、对外地址生成、多地址选择与快照过期策略；本机监听地址**已定**（`127.0.0.1:0`，端口由内核选，实际地址发布在 `local.json` 里）。
 - TaskStore 介质、记录原子性、保留/清理规则、去重保留期；逻辑对话标识/映射的存储位置和压缩传递的可靠写入点。
-- 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）——**已定并提供**：`atfile.SessionTarget.ManagedKind` 是选择器的行与展开出的指针**共用的同一个字段**（值来自 `session.Session.Kind`），所以两侧不可能各说一套；指针会写明"某子系统的执行记录（kind=…）— 只读，不要在这里继续它"。选择器里的**视觉标注**属于界面那一片（§13 入口展示）。
+- 来源/受管类型及 SkipDream 策略的元数据 schema、首次创建与压缩传递点；§7.1.3 公共入口准入及非 loop 修改检查的接入、内部授权构造/验证方式，各前端只读展示或拒绝恢复的落点，以及 `@` 选择器是否提供受管执行会话的取舍（候选与展开两侧必须同口径）——**已定并提供**：`atfile.SessionTarget.ManagedKind` 是选择器的行与展开出的指针**共用的同一个字段**（值来自 `session.Session.Kind`），所以两侧不可能各说一套；指针会写明"某子系统的执行记录（kind=…）— 只读，不要在这里继续它"。选择器行与展开同口径已落地；**三个前端的视觉标注也已落地**（TUI 行 + 拒绝切入、desktop 只读横幅 + 换掉输入框、web 标签），见 `docs/agents/node.md` 的「Where a managed session SHOWS UP」。
 - session 保留依据的持久化格式、独立协调锁的路径与 Manager/存储锁顺序、原子写入与恢复对账**已定并落地**（§9.4：`session/retention.go` 的持有记录与两把锁、`node/runner.go` 的取得/释放/对账）。**显式关闭 context 入口与 context 数量上限暂时不做**（理由见 §9.4 末）；将来要加时，关闭的触发入口按「本机控制面优先、发起方请求次之」定，语义顺序已固定。
-- 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；**无人审批与问题等待已定**——permission ask 一律拒绝（§10.1）、追问的时限与并发上限见 §7.4（`node.question_timeout` / `node.max_parked`），`AUTH_REQUIRED` 不用于工具审批；宿主记忆隔离在工具、自动召回和重载/fork 中的统一接入点仍待定。
-- usage 来源字段或独立关联的持久化位置和保留期，确保辅助调用用途、真实本机计费及远端报告展示不混淆。
+- 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；**无人审批与问题等待已定**——permission ask 一律拒绝（§10.1）、追问的时限与并发上限见 §7.4（`node.question_timeout` / `node.max_parked`），`AUTH_REQUIRED` 不用于工具审批；**宿主记忆隔离的接入点已定并落地**——远端 agent 一处 `SkipMemoryRecall`（自动召回）+ run 的工具视图剔除 `hostOnlyTools`（工具），都在 `node/runner.go`，reload/fork 都开不出来（§2.3、§12 阶段一第 3 项）。
+- usage 来源的持久化位置**已定并落地**：落在 usage 行上（`source` / `source_task_id` / `source_context_id` 三个可选字段，`Kind` 保持用途分类），保留期与账本一致（永久保留，不做清理）。发起方展示远端汇报值仍待做，且明确不再计入本机 ledger。
 - 产物传输策略：`raw` 与 `url` 的取舍、体积与媒体类型白名单、`url` 下载端点的鉴权/过期/可达性，以及取回方向（本机去取对端地址）的 SSRF 校验；产物的存储位置与保留期（§6.4）。
-- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围；Tachi 私有 `ErrorInfo.domain` **已定为 `tachi`**，§6/§7 错误语义的接入点是「自有拒绝由 `node/admission.go` 的 guard 自己渲染、不放给 SDK 的错误映射」（§9.1.1）。
+- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围（**应答的两种形状已按 §6.1.1 定下**：收侧固定回 `Task`，发侧 `Task`/`Message` 都读；剩下的第三方兼容问题是文件 Part 与流式）；Tachi 私有 `ErrorInfo.domain` **已定为 `tachi`**，§6/§7 错误语义的接入点是「自有拒绝由 `node/admission.go` 的 guard 自己渲染、不放给 SDK 的错误映射」（§9.1.1）。
 
 不因这些字段尚未固定而扩大到独立 daemon、全局调度器或共享会话系统。
 

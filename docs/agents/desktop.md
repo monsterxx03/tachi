@@ -99,6 +99,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | 输入框的 `@session:` 引用（打进哪个命名空间、插进来的是什么、模型收到的是指针而不是正文） | `at-session` |
+| 子系统拥有的会话（行上的来源标签、只读横幅、被换掉的输入框） | `managed-session` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
@@ -1004,6 +1005,14 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
 - **A parked permission is composer state too, matched by tool CALL ID** (keyed by session, NOT cleared on
   session switch — the agent is still parked — moved on auto-compaction, cleared on `agent:idle`). Matching by
   tool NAME is the trap: a model emits a whole batch of calls before any of them runs.
+- **A session a SUBSYSTEM owns is openable but not drivable HERE**, and the desktop says so three ways from
+  one field: `SessionItem.kind` (the session record's own `Kind`, see docs/agents/node.md) drives the row's
+  `.session-tag.is-managed`, the `.managed-banner` at the top of the transcript, and a composer REPLACED by
+  `.composer-readonly` — replaced, not disabled, because a greyed-out field still invites a click. **The
+  refusal is not the frontend's**: every send from here is refused by the agent's own entry
+  (`agent/managed.go`), and this is only the courtesy that keeps a reader from walking into it. The label text
+  matches the TUI's and the web console's — three frontends, one sentence. `Kind` is a BINDING: changing
+  `SessionInfo` means regenerating the wails bindings. Smoke: `managed-session`.
 
 **Rules that hold across every surface**
 

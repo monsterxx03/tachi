@@ -77,6 +77,18 @@ split + index when a subject grows) apply to this split too.
 - **Startup recovery is a state, not a rewrite.** `resolveInterrupted` fails every non-terminal task — running
   and parked alike — with `interruptReason`, keeping the question in the status. A crashed host does not
   resume work, and nothing pretends it did.
+- **A remote turn runs with a NARROWER config than a local one, and the narrowing is one function.** The
+  agent is built with `SkipMemoryRecall` (the recall reminder injects THIS machine's memory into whatever
+  prompt arrives, and skipping the tools would not stop it) and the run's tool view drops `hostOnlyTools`
+  (`RecordMemory` / `MemoryRecall`) whatever `node.tools` says — an operator listing them cannot open the
+  host's memory to a caller (§2.3). Both halves live in `node/runner.go`; a reload cannot undo either (the
+  recall flag is the one part of `MemoryState` `ReloadMemory` preserves, and the tool view is per-run).
+- **Every model call a turn makes is attributable to the task that caused it.** `llm.WithUsageSource` puts
+  the origin (`a2a`) plus the task and context ids on the turn's context, so the ledger row carries WHOSE
+  work it was while `Kind` keeps saying what the call was FOR (§9.5) — a compaction inside a remote turn is
+  still a `compact` row, and the two sums ("what did this remote task cost" / "what does this machine spend
+  on titling") stay answerable. Both this and the narrowing above sit in `turnContext` / `toolViewOption`:
+  one place each, because they are the two ways a remote turn differs from a local one.
 
 ## A turn that spans two calls (parking)
 
@@ -121,6 +133,18 @@ split + index when a subject grows) apply to this split too.
   body) means the peer never considered the request — "unknown" is not "safe to retry". `Domain == "tachi"`
   means the peer's admission layer answered us; a protocol domain means something else did. `NotAccepted()` is
   true only for `CONTEXT_BUSY` / `MESSAGE_ID_REUSED` (or a bare 503/409).
+- **An answer is a Task OR a Message, and only one of them is a handle.** `send` returns a `sendResult`
+  covering both arms of the spec's `SendMessageResponse` oneOf, because the second is a legitimate answer
+  ("a direct Message response for simple interactions that don't require task tracking") — this node used to
+  refuse it, which discarded the peer's text AND left the record reading "we do not know whether it was
+  accepted": three different stories about one successful exchange. A direct Message is recorded as
+  `DirectAnswer` + `completed` + its text with `RemoteTaskID` empty (so `Get`/`Wait` answer from the record
+  without a round trip, which is the shape they already had for "nothing to ask the peer about"), and the
+  peer's `contextId` is kept when it sent one — that is what lets `continue_from` continue the CONVERSATION
+  even though no task exists, while `referenceTaskIds` stays empty (there is no task to reference).
+  **`noHandle` keeps the two reasons for an empty `RemoteTaskID` apart in every refusal**: "never accepted,
+  outcome unknown" is not "answered directly, no task was created" — one says retry, the other says it is
+  already done. Only a stub can produce this shape against us: a Tachi peer always answers with a Task.
 - **`SUBMITTED` and `WORKING` are both "in flight"**, and `reply` waits too. The `returnImmediately` response
   often arrives before the SDK has written `WORKING`, so treating `SUBMITTED` as a failure double-sends; and
   answering resumes the same turn, so a handle that says `WORKING` is reporting a state nobody has reached
@@ -183,6 +207,26 @@ split + index when a subject grows) apply to this split too.
 
 Each of these is a decision, not an oversight — the design's ordering is fixed, only the wiring is missing:
 
+- **Answering a simple ask with a `Message` instead of a `Task`.** The receiving side always yields a Task
+  first, so a peer always gets a handle. The spec names this strategy (**task-generating agents**: "always
+  respond with `Task` objects … This avoids the `Task`-versus-`Message` decision, but it creates completed
+  task objects even for simple interactions") and that last clause is the point here: the record IS the
+  feature — the audit trail, the retention hold, the usage attribution, the cross-entry reference, the
+  answer that survives the caller hanging up all hang off the task. Three things would have to change
+  together, and one of them is a hard rule rather than a preference:
+  - **the fork is committed at the FIRST yield and there is no going back** (`internal/taskupdate`:
+    `message not allowed after task was stored`, and any event before a task or message is
+    `first event must be a Task or a message`). So the choice can never follow the turn's outcome; it can
+    only be made from the request and a node policy, before the loop runs — a *guess* about whether the
+    work will stay simple. (the protocol forum's own hybrid example decides with a router; its "dynamic upgrade"
+    variant races the work against a timer and only then yields one of the two — and that window blocks
+    the caller, since nothing has been sent yet.)
+  - **a `Message` cannot ask a question** (`INPUT_REQUIRED`/`AUTH_REQUIRED` are Task states; the spec's
+    taxonomy says message-only agents "cannot support interrupted states"), which is our whole §7.4 chain.
+  - a node that sometimes answers with one and sometimes with the other makes every CALLER branch, and the
+    message-only branch cannot be waited on, cancelled or answered into.
+  So a third-party peer that does this is handled on the SENDING side (see "The sending side"), and this
+  node's own answer shape stays single.
 - **An explicit "close this context" entry point.** Its callers would be "the sender says it is done with this
   conversation" and "the owner cleans up by hand"; neither can call it before `RemoteTask` lands on the
   sending side. Expiry already covers the ordinary ending, and the semantics (refuse new continuations, refuse
@@ -197,15 +241,28 @@ Each of these is a decision, not an oversight — the design's ordering is fixed
   and Card `securitySchemes`. These travel together: neither listener authenticates a remote caller today,
   which is why both refuse any address that is not loopback. Card pinning must not be turned into a claim of
   mTLS.
-- **A visual label for a managed execution session** in TUI / desktop / web. The decision itself has landed —
-  `atfile.SessionTarget.ManagedKind` is the one field the picker's row and the expanded pointer share, and the
-  pointer already says "a subsystem's execution record (kind=…), read-only, do not continue it here" — what is
-  missing is the label in each interface.
 - **Reminders in `-p`.** A one-off run has `DisableSystemReminders` by construction; it gets references from
   `RemoteTask(action="list")` or from the peer names in a refusal instead.
 - **Cross-entry completion notification** and idle auto-continuation. A finished remote task is stored, and
   the reminder shows it in the conversation that owns it; nobody is pushed a message in another window yet,
   and no window's drained queue can consume an event another window would then miss.
+
+## Where a managed session SHOWS UP (all three frontends have this now)
+
+A session a subsystem owns is labelled wherever a reader meets it — the rule itself is enforced at the
+agent's entry (`agent.Managed`), and everything below is the courtesy that keeps a reader from walking into a
+refusal:
+
+- **The row**: `tui/session_selector.go` (and the `@`-picker row, `tui/at_file.go`'s `managedRowSuffix`),
+  `web/frontend/src/lib/managed.ts`, the desktop sidebar's `.session-tag.is-managed`. One spelling of one
+  fact, and it comes from `session.Session.Kind` in every case.
+- **TUI refuses to switch into one** (`loadSession`, before the current session is ended — switching first
+  and letting the agent refuse the opening turn would end the reader's own conversation to show an error).
+- **Desktop opens it read-only**: `SessionInfo.Kind` travels, the transcript pane shows a banner and the
+  composer is REPLACED by the reason (`.composer-readonly`) rather than disabled — a greyed-out field still
+  invites a click. Smoke: `managed-session`.
+- **The web console is read-only by construction**, so the badge is the whole of its obligation there.
+- The desktop's `Kind` field is a binding: after changing `SessionInfo`, regenerate the wails bindings.
 
 Related: [`.tachi.md`](../../.tachi.md), [session-store.md](session-store.md) (holds, the cleanup decision and
 its lock), [compact.md](compact.md) (what must travel with a compacted session),
