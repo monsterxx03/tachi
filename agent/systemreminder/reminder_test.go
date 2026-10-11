@@ -234,16 +234,44 @@ func (m *mockSkillMetaProvider) ListSkillMetas() []SkillMetaRecord {
 	return m.metas
 }
 
+// The list says whose it is. Its lines are rendered into the same block as every other reminder,
+// indented like theirs and with nothing separating it from the block above — so an unlabelled list
+// reads as the CHILDREN of whatever came last. With the peers reminder above it, this list was read
+// as the node's own advertised skills, and a model told the user what a REMOTE machine could do
+// from this machine's local skill store. The heading is the whole guard, so it is pinned here.
+func TestTheSkillListSaysWhoseItIs(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{
+		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
+	})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
+	if len(lines) < 2 {
+		t.Fatalf("expected a heading and at least one entry, got %d lines: %v", len(lines), lines)
+	}
+	head := lines[0]
+	if !strings.Contains(head, "skill") || strings.Contains(head, "<skill ") {
+		t.Errorf("the first line must be a heading, not an entry: %q", head)
+	}
+	if !strings.Contains(head, "本机") {
+		t.Errorf("the heading has to say whose skills these are: %q", head)
+	}
+	if !strings.Contains(head, "Skill(operation=") {
+		t.Errorf("and how to use them: %q", head)
+	}
+	if !strings.HasPrefix(lines[1], "  <skill ") {
+		t.Errorf("entries stay indented under it: %q", lines[1])
+	}
+}
+
 func TestSkillListReminder_FiresOnFirstMessage(t *testing.T) {
 	r := NewSkillListReminder(&mockSkillMetaProvider{
 		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
 	})
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line on first message, got %d", len(lines))
+	if len(lines) == 0 {
+		t.Fatal("expected the skill list on the first message")
 	}
-	if !strings.Contains(lines[0], `name="test"`) {
-		t.Errorf("expected skill 'test' in output, got: %s", lines[0])
+	if !strings.Contains(strings.Join(lines, "\n"), `name="test"`) {
+		t.Errorf("expected skill 'test' in output, got: %s", strings.Join(lines, "\n"))
 	}
 	if r.dirty {
 		t.Error("expected dirty to be false after firing")
@@ -256,8 +284,8 @@ func TestSkillListReminder_SkipsOnNonFirstWhenClean(t *testing.T) {
 	})
 	// First call: fires, clears dirty
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
-	if len(lines) != 1 {
-		t.Fatalf("first call should fire, got %d", len(lines))
+	if len(lines) == 0 {
+		t.Fatal("first call should fire")
 	}
 	// Second call: should skip
 	lines = r.Generate(t.Context(), Context{IsFirstMessage: false})
@@ -287,11 +315,11 @@ func TestSkillListReminder_FiresWhenDirty(t *testing.T) {
 	r.dirty = true
 
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
-	if len(lines) != 1 {
-		t.Fatalf("expected to fire when dirty, got %d lines", len(lines))
+	if len(lines) == 0 {
+		t.Fatal("expected to fire when dirty")
 	}
-	if !strings.Contains(lines[0], `name="test"`) {
-		t.Errorf("expected skill 'test' in output, got: %s", lines[0])
+	if !strings.Contains(strings.Join(lines, "\n"), `name="test"`) {
+		t.Errorf("expected skill 'test' in output, got: %s", strings.Join(lines, "\n"))
 	}
 	if r.dirty {
 		t.Error("expected dirty to be cleared after firing")

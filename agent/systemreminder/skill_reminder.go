@@ -70,32 +70,41 @@ func (r *SkillListReminder) Generate(ctx context.Context, rctx Context) []string
 		return nil
 	}
 	prompt := buildSkillListPrompt(metas)
-	if prompt == "" {
+	if len(prompt) == 0 {
 		return nil
 	}
 	r.dirty = false
-	return []string{prompt}
+	return prompt
 }
 
-// buildSkillListPrompt builds the XML-like skill catalog block.
-func buildSkillListPrompt(metas []SkillMetaRecord) string {
+// buildSkillListPrompt builds the skill catalog block for the reminder, one line per entry.
+//
+// The FIRST line is a heading, and that is not decoration. This block is rendered into the same
+// <system-reminder> as every other reminder, indented two spaces like theirs, and nothing
+// separates it from what came before — so an unlabelled list lands directly under the last line of
+// the previous block and reads as ITS children. That is not hypothetical: with the peers reminder
+// above it (`- ugreen-nas：…`), this list was read as THAT NODE's advertised skills, and a model
+// told the user what a remote machine could do based on the local skill store. The heading is the
+// whole fix — the list now says whose it is.
+//
+// The entries stay XML-ish because that is what a name, a description and tags compress into; the
+// tags and the "how to use it" live in the heading, the way the MCP catalog reminder does it.
+func buildSkillListPrompt(metas []SkillMetaRecord) []string {
 	if len(metas) == 0 {
-		return ""
+		return nil
 	}
 
-	var b strings.Builder
+	lines := make([]string, 0, len(metas)+1)
+	lines = append(lines, `本机可用的 skill（用 Skill(operation="view", name=...) 查看；用户也可以直接打 /名字）：`)
 	for _, m := range metas {
 		desc := escapeXMLAttr(m.Description)
 		tagsStr := ""
 		if len(m.Tags) > 0 {
 			tagsStr = fmt.Sprintf(" tags=%q", strings.Join(m.Tags, ","))
 		}
-		fmt.Fprintf(&b, "  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr)
+		lines = append(lines, fmt.Sprintf("  <skill name=%q description=%q%s/>", m.Name, desc, tagsStr))
 	}
-
-	b.WriteString("\nTo use a skill, call Skill(operation=\"view\", name=...) or the user can type /skill-name.")
-
-	return b.String()
+	return lines
 }
 
 // escapeXMLAttr escapes special XML/HTML characters in an attribute value.
