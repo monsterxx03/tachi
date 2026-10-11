@@ -10,20 +10,29 @@ import (
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
-// SendFileCallback is set by the channel manager when registering the
-// SendFile tool. Instead of passing file contents, it passes the local
-// path so the channel can read from disk at send time.
-type SendFileCallback func(name, mimeType, localPath string)
-
-// SendFileTool allows the LLM to send a file to the user via the IM channel.
-// It validates the file exists, then queues it for deferred delivery — the
-// actual file read happens at send time in the channel implementation, so
-// file content doesn't stay in memory during the agent turn.
+// SendFileCallback is set by whoever registers the tool, and it is what "sending" MEANS in that
+// entry: the channel queues an outgoing attachment and reads the bytes at send time, while the
+// node hands the bytes to the task's artifact. Instead of passing file contents, it passes the
+// local path so the receiver decides when (and whether) to read it.
 //
-// Only registered in channel mode (not in TUI mode) since the TUI has its
-// own file display mechanisms.
+// It RETURNS AN ERROR because the receiver is the one that knows whether it can take this file at
+// all — a size limit, a media type it will not carry, a task whose artifact is already closed. The
+// tool reports that as a failed call, so a model is never told a file was handed over when nothing
+// took it.
+type SendFileCallback func(name, mimeType, localPath string) error
+
+// SendFileTool allows the LLM to hand a file to whoever is on the other end of this entry: the IM
+// channel sends it, the desktop renders an attachment card from the recorded call, the node puts
+// its bytes in the task's artifact. It validates the file exists and is a file, then hands the
+// local path over — the bytes are read by the receiver, so a turn does not hold a whole attachment
+// in memory.
+//
+// Registered per turn, as a run-scoped extra: what "send" means differs per entry (and per turn,
+// for the channel), so it cannot live in the shared registry (see agent/toolview.go).
 type SendFileTool struct {
-	// callback is set by the channel manager to receive file metadata.
+	// callback is set by the entry that registers this tool. A NIL callback is not a missing
+	// wiring: it means the entry renders the hand-over from the recorded tool call itself (the
+	// desktop's attachment card), which is a delivery the model can rely on all the same.
 	callback SendFileCallback
 }
 
@@ -33,15 +42,15 @@ func NewSendFileTool() *SendFileTool {
 	return &SendFileTool{}
 }
 
-// SetCallback attaches the file delivery callback. Called by the channel
-// manager when registering the tool for a specific agent turn.
+// SetCallback attaches the hand-over callback. Called by the entry that registers the tool, before
+// the agent runs; see SendFileCallback for what a nil one means.
 func (t *SendFileTool) SetCallback(cb SendFileCallback) {
 	t.callback = cb
 }
 
 func (t *SendFileTool) Name() string { return ToolNameSendFile }
 func (t *SendFileTool) Description() string {
-	return "Send a file to the user via the chat channel. " +
+	return "Send a file to the user. " +
 		"Use when the user asks for a file (report, screenshot, document, etc.)."
 }
 func (t *SendFileTool) Properties() map[string]PropertySchema {
@@ -79,21 +88,23 @@ func (t *SendFileTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("cannot send directory %q — please specify a file", p.Path)
 	}
 
-	// Reject files larger than 50MB (practical limit for IM channels).
-	const maxSendSize = 50 * 1024 * 1024
-	if info.Size() > maxSendSize {
-		return "", fmt.Errorf("file %q is too large (%d bytes; max %d MB)", p.Path, info.Size(), maxSendSize/(1024*1024))
-	}
-
+	// The size is the RECEIVER's decision, and it is the callback that refuses (it returns an error
+	// on purpose, see SendFileCallback): the IM channel has a platform limit, a node has its own
+	// file policy, and the desktop sends nothing at all. A limit here would be one entry's number
+	// imposed on all three — and the tighter one would win silently, leaving the other two unable
+	// to send what they allow.
 	fileName := filepath.Base(filePath)
 	mimeType := inferMimeType(fileName)
 
-	// Queue the attachment — the channel reads from disk at send time.
+	// Hand the path over — the receiver reads the bytes (the channel at send time, the node into
+	// the task's artifact). A callback that refuses is a FAILED call, not a delivery.
 	if t.callback != nil {
-		t.callback(fileName, mimeType, filePath)
+		if err := t.callback(fileName, mimeType, filePath); err != nil {
+			return "", fmt.Errorf("cannot send %q: %w", fileName, err)
+		}
 	}
 
-	return fmt.Sprintf("✅ 文件 **%s** (%s) 已加入发送队列", fileName, strutil.HumanBytes(info.Size())), nil
+	return fmt.Sprintf("✅ 文件 **%s** (%s) 已交给用户", fileName, strutil.HumanBytes(info.Size())), nil
 }
 
 // inferMimeType returns a best-effort MIME type for the given filename.

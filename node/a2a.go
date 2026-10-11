@@ -144,7 +144,10 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	mux.Handle("/", protocol)
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: remoteReadHeaderTimeout}
+	srv := &http.Server{
+		Handler:           limitBody(mux, maxRequestBodyBytes),
+		ReadHeaderTimeout: remoteReadHeaderTimeout,
+	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			o.Logger.Error(context.Background(), "node: remote interface stopped", err, "addr", ln.Addr().String())
@@ -155,6 +158,24 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 		"addr", ln.Addr().String(), "card", a2asrv.WellKnownAgentCardPath)
 
 	return &a2aSurface{ln: ln, srv: srv, card: card, state: state}, nil
+}
+
+// limitBody caps every request body this listener will read.
+//
+// It is on the LISTENER rather than in the guard because the guard is one route: a body is read by
+// whatever handles the request, and a limit covering only `message:send` would leave the rest of
+// the surface as a way to make this process allocate whatever the caller likes. The guard keeps its
+// own answer for the body it reads (a clear refusal in this node's own terms, see busyGuard), while
+// this is the floor under all of them.
+//
+// MaxBytesReader is what makes it a bound rather than a post-mortem: reads fail once the limit is
+// passed and the server is asked to close the connection, so a body nobody will finish reading is
+// not buffered to its end first.
+func limitBody(next http.Handler, limit int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Addr is the bound address, empty when there is no surface.

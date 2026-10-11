@@ -495,7 +495,7 @@ export function sessionMatches(s: { title?: string }, query: string): boolean {
 
 // fmtBytes renders a byte count the way the agent's own confirmation message
 // does (pkg/strutil.HumanBytes), so "README.md · 12.4 KB" on the card and
-// "✅ 文件 README.md (12.4 KB) 已加入发送队列" in the transcript agree.
+// "✅ 文件 README.md (12.4 KB) 已交给用户" in the transcript agree.
 export function fmtBytes(n: number): string {
   if (!isFinite(n) || n <= 0) return '0 B'
   if (n < 1024) return `${n} B`

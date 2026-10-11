@@ -118,15 +118,60 @@ func TestARemoteSessionsSessionIsAnOrdinarySession(t *testing.T) {
 	// And a follow-up in that conversation FAILS EXPLICITLY rather than being answered with a new
 	// conversation that looks like the old one (design §7.1.2, §9.4). This half of the rule did
 	// not move with the window: what changed is only WHICH cleanup can take the session away, not
-	// what a caller hears when it is gone. No model call happens — the turn never starts, so this
-	// needs no second script — and the reason names the session, because the caller has to be able
-	// to tell "your conversation was collected" from "the node broke".
+	// what a caller hears when it is gone. The turn never starts, so nothing reaches the model —
+	// asserted, because "the answer was refused" and "the answer was refused before any work
+	// happened" are different promises — and the reason names the session, so the caller can tell
+	// "your conversation was collected" from "the node broke".
 	third, err := sendInContext(t, client, "继续，再说两句", task.ContextID)
 	require.NoError(t, err, "the refusal is the task's outcome, not a protocol error")
 	refused, ok := third.(*a2a.Task)
 	require.True(t, ok)
 	require.Equal(t, a2a.TaskStateFailed, refused.Status.State)
 	require.Contains(t, messageText(refused.Status.Message), held)
+	require.Len(t, mock.Requests(), 1, "only the first submission may reach the model")
+}
+
+// The other half of the same refusal, and the one a RESTART reaches: the node comes back with no
+// cached run for the context, so the conversation is loaded from the binding — and that load is
+// where a session collected in the meantime shows up. Session preparation failing must end the
+// task, not start a loop in a session nobody owns (design §7.1: 会话准备或保护建立失败则任务明确
+// 失败，不无记录地继续).
+//
+// It is a separate test from the one above because the two failures happen in different places
+// (`Acquire` refusing against the filesystem vs `contextRun`'s load being the one that notices),
+// and only this one exercises the cold path a recovered host takes.
+func TestAFollowUpIntoACollectedConversationFailsOnTheColdPathToo(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("备份检查完成")...)
+
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile")
+	h := startRealNode(t, cfg)
+	client := newTestClient(t, h)
+	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
+	require.NoError(t, err)
+	task := result.(*a2a.Task)
+	held := boundSession(t, base, task.ContextID)
+
+	// The conversation's session is collected while no node is running — nothing holds it once the
+	// task is over, so any process over this data dir may take it (§9.4).
+	require.NoError(t, h.Close())
+	desktop := otherManager(t)
+	require.NoError(t, desktop.Delete(held), "a finished conversation holds nothing")
+
+	// A fresh host: no cached run, so the binding is loaded, and the load is what fails.
+	fresh := startRealNode(t, cfg)
+	again := newTestClient(t, fresh)
+	refused, err := sendInContext(t, again, "继续，再说两句", task.ContextID)
+	require.NoError(t, err, "the refusal is the task's outcome, not a protocol error")
+	failed, ok := refused.(*a2a.Task)
+	require.True(t, ok)
+	require.Equal(t, a2a.TaskStateFailed, failed.Status.State, "note=%q",
+		messageText(failed.Status.Message))
+	require.Contains(t, messageText(failed.Status.Message), "load session",
+		"the failure has to BE the load: preparing the session is what must not start a loop")
+	require.Len(t, mock.Requests(), 1, "preparing the session failed, so the loop never started")
 }
 
 func TestARunningTaskHoldsItsSessionAndReleasesOnlyItsOwnHold(t *testing.T) {

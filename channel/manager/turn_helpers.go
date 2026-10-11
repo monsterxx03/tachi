@@ -2,13 +2,21 @@ package manager
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
+
+// channelMaxAttachmentBytes is what this entry will hand an IM platform. It is the CHANNEL's own
+// limit, not the tool's: the platform drops a file past it, so refusing here is the difference
+// between a model told "too large" and a reader receiving nothing.
+const channelMaxAttachmentBytes = 50 * 1024 * 1024
 
 // prepareThreadSession returns a ready-to-use session manager and prior LLM
 // history for the given thread. If an existing session exists for the
@@ -64,7 +72,13 @@ func (s *attachmentSink) snapshot() []channel.OutgoingAttachment {
 func newSendFileTool() (*tools.SendFileTool, *attachmentSink) {
 	sink := &attachmentSink{}
 	t := tools.NewSendFileTool()
-	t.SetCallback(func(name, mimeType, localPath string) {
+	t.SetCallback(func(name, mimeType, localPath string) error {
+		// The IM platforms' own limit, enforced where it belongs: this is the receiver that knows
+		// it, and the tool reports the refusal to the model as a failed call.
+		if info, err := os.Stat(localPath); err == nil && info.Size() > channelMaxAttachmentBytes {
+			return fmt.Errorf("a file of %s cannot be sent to this chat: the limit is %s",
+				strutil.HumanBytes(info.Size()), strutil.HumanBytes(channelMaxAttachmentBytes))
+		}
 		sink.mu.Lock()
 		sink.list = append(sink.list, channel.OutgoingAttachment{
 			Type:      channel.AttachmentTypeFile,
@@ -73,6 +87,7 @@ func newSendFileTool() (*tools.SendFileTool, *attachmentSink) {
 			LocalPath: localPath,
 		})
 		sink.mu.Unlock()
+		return nil
 	})
 	return t, sink
 }

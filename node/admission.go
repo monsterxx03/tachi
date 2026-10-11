@@ -11,6 +11,8 @@ import (
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Admission: the questions this node answers before any work starts, in the order the
@@ -171,9 +173,34 @@ type questionSource interface {
 // the task that was already accepted.
 func busyGuard(store *taskStore, questions questionSource, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		msg, ok := readSendMessage(r)
-		if !ok {
+		msg, ok, err := readSendMessage(r)
+		var tooLarge *http.MaxBytesError
+		switch {
+		case errors.As(err, &tooLarge):
+			// Refused HERE rather than by the transport's own error: the caller sent something this
+			// node will not read at all, and that is a fact worth a reason it can match on (§9.1.1).
+			// 413 carries the standard meaning ("do not retry these bytes"); the status NAME has no
+			// standard twin for it, so the nearest one — the resource that ran out — is what travels
+			// beside the reason this node actually means (BODY_TOO_LARGE).
+			writeRefusal(w, http.StatusRequestEntityTooLarge, "RESOURCE_EXHAUSTED", reasonBodyTooLarge,
+				fmt.Sprintf("this request is larger than the %s this node reads",
+					strutil.HumanBytes(maxRequestBodyBytes)), nil)
+			return
+		case err != nil:
+			// The body could not be read at all (a caller that vanished mid-request): not this
+			// guard's to explain, and the protocol layer reports it in its own terms.
 			next.ServeHTTP(w, r)
+			return
+		case !ok:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Files are checked for EVERY message, before anything is created or resumed: what may
+		// cross the boundary is this node's policy (§6.4), and a caller that cannot be told "no"
+		// would get a task whose input silently lost a file — the shape this check replaces.
+		if ref := filePartRefusal(msg.message); ref != nil {
+			ref.write(w)
 			return
 		}
 
@@ -227,6 +254,29 @@ func busyGuard(store *taskStore, questions questionSource, next http.Handler) ht
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// filePartRefusal refuses a message whose files this node will not take.
+//
+// ONE status carries all of them (400 INVALID_ARGUMENT): what a caller has to do is the same in
+// every case — send something else — and the REASON is what says which limit was hit (§9.1.1: the
+// client matches on trusted source + domain + reason, never on the status alone). Only the first
+// refusal is reported: a caller fixes one thing at a time, and a list of them would be a wall.
+func filePartRefusal(msg *a2a.Message) *refusal {
+	if msg == nil {
+		return nil
+	}
+	_, refused := filePartsOf(msg.Parts)
+	if len(refused) == 0 {
+		return nil
+	}
+	first := refused[0]
+	return &refusal{
+		status:     http.StatusBadRequest,
+		statusText: "INVALID_ARGUMENT",
+		reason:     first.Reason,
+		message:    first.Detail,
+	}
 }
 
 // namedTaskRefusal decides what a message that names a task is, and returns the refusal when
@@ -339,16 +389,22 @@ type guardedMessage struct {
 //
 // It reads the WHOLE body on purpose: a truncated one would reach the protocol handler as
 // if the client had sent it that way, and a half-parsed request is worse than a slow one.
-// A size cap belongs with the file-part policy (§6.4) — today the surface is loopback-only
-// and any cap here would be guessing at limits the receiving side has not decided.
-func readSendMessage(r *http.Request) (guardedMessage, bool) {
+// The CAP on it is the file-part policy's (node/partfile.go, and the listener applies it to
+// every route): a request has to be able to carry what that policy allows, and a bound that
+// only covered this path would leave the rest of the surface as a way to spend this
+// process's memory.
+//
+// A body past the cap comes back as an error rather than as "not a message this guard can
+// reason about": those are different facts, and only one of them has something useful to say
+// to the caller.
+func readSendMessage(r *http.Request) (guardedMessage, bool, error) {
 	var g guardedMessage
 	if r.Method != http.MethodPost || r.URL.Path != restSendMessagePath || r.Body == nil {
-		return g, false
+		return g, false, nil
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return g, false
+		return g, false, err
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
@@ -358,13 +414,13 @@ func readSendMessage(r *http.Request) (guardedMessage, bool) {
 	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Message == nil {
 		// Not a message/send this guard can reason about: the binding reports it in the
 		// protocol's own terms.
-		return g, false
+		return g, false, nil
 	}
 	g.MessageID = envelope.Message.ID
 	g.ContextID = envelope.Message.ContextID
 	g.digest = digestMessage(envelope.Message)
 	g.message = envelope.Message
-	return g, true
+	return g, true, nil
 }
 
 // restSendMessagePath is the spec's REST path for message/send (§11.3.1), spelled here

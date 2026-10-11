@@ -112,6 +112,12 @@ type Delegation struct {
 	// is correct — none of them were answered that way.
 	DirectAnswer bool `json:"direct_answer,omitempty"`
 
+	// FilesTaken is set once the artifacts' file Parts have been written into this machine's own
+	// storage. It exists because `record` runs on EVERY observation — a `get`, a `wait`, every
+	// poll — and reading a file Part twice would write the same file again under a new name each
+	// time. Files cross the boundary once; the RECORD is what repeats.
+	FilesTaken bool `json:"files_taken,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

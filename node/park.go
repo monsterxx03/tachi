@@ -230,6 +230,13 @@ func answersFor(questions []tools.Question, msg *a2a.Message) (map[string]string
 					named[k] = val
 				}
 			}
+		case a2a.Raw, a2a.URL:
+			// A question is answered with words or with a choice, not with bytes: a file on an
+			// answer is not a shape this node can map onto a question, and the rule here is that an
+			// unmappable shape is refused rather than ignored (§7.4) — silently dropping it is what
+			// an earlier version of this path did.
+			return nil, fmt.Errorf("%w: an answer cannot carry a file; a waiting question is answered "+
+				"with text, or with a data part naming the question", errAnswerShape)
 		}
 	}
 

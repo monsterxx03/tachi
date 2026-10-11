@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,8 +20,10 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/errordetails"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // remoteClient is this machine's side of a delegation: it submits work to a peer, reads back
@@ -144,7 +147,7 @@ func (c *remoteClient) Get(ctx context.Context, id string) (*Delegation, error) 
 		// exactly this distinction — a cached state, not a failure that hides it.
 		return d, nil
 	}
-	return c.record(d, task)
+	return c.record(ctx, d, task)
 }
 
 // Wait polls until the task reaches a state that ends the wait, or the budget runs out.
@@ -170,7 +173,7 @@ func (c *remoteClient) Wait(ctx context.Context, id string, budget time.Duration
 		if err != nil {
 			return d, err
 		}
-		d, err = c.record(d, task)
+		d, err = c.record(ctx, d, task)
 		if err != nil {
 			return d, err
 		}
@@ -223,7 +226,7 @@ func (c *remoteClient) Reply(ctx context.Context, id, questionID string, answer 
 	if err != nil {
 		return d, err
 	}
-	d, err = c.recordSend(d, res)
+	d, err = c.recordSend(ctx, d, res)
 	if err != nil {
 		return d, err
 	}
@@ -256,7 +259,7 @@ func (c *remoteClient) Cancel(ctx context.Context, id string) (*Delegation, erro
 	if err != nil {
 		return d, fmt.Errorf("node: %s answered a cancel with something this node cannot read: %w", d.Peer, err)
 	}
-	return c.record(d, task)
+	return c.record(ctx, d, task)
 }
 
 // Submit sends the request and records it — BEFORE the request leaves, so "we do not know
@@ -350,7 +353,7 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 	if err != nil {
 		return d, err
 	}
-	d, err = c.recordSend(d, res)
+	d, err = c.recordSend(ctx, d, res)
 	if err != nil {
 		return d, err
 	}
@@ -463,11 +466,11 @@ func (c *remoteClient) send(ctx context.Context, d *Delegation, msg *a2a.Message
 }
 
 // recordSend files what a message:send answered with, in whichever of the two shapes it came.
-func (c *remoteClient) recordSend(d *Delegation, res *sendResult) (*Delegation, error) {
+func (c *remoteClient) recordSend(ctx context.Context, d *Delegation, res *sendResult) (*Delegation, error) {
 	if res.Task != nil {
-		return c.record(d, res.Task)
+		return c.record(ctx, d, res.Task)
 	}
-	return c.recordDirectAnswer(d, res.Message)
+	return c.recordDirectAnswer(ctx, d, res.Message)
 }
 
 // recordDirectAnswer files a peer's direct Message.
@@ -479,7 +482,7 @@ func (c *remoteClient) recordSend(d *Delegation, res *sendResult) (*Delegation, 
 // and that is what keeps `continue_from` able to continue the CONVERSATION even though this
 // particular ask produced no task: the next message goes out on the same context, where the peer's
 // own history can pick it up.
-func (c *remoteClient) recordDirectAnswer(d *Delegation, msg *a2a.Message) (*Delegation, error) {
+func (c *remoteClient) recordDirectAnswer(ctx context.Context, d *Delegation, msg *a2a.Message) (*Delegation, error) {
 	now := time.Now().UTC()
 	next := *d
 	next.DirectAnswer = true
@@ -547,7 +550,7 @@ func (c *remoteClient) fetch(ctx context.Context, d *Delegation) (*a2a.Task, err
 }
 
 // record writes what the peer just said into the local record, and returns the snapshot.
-func (c *remoteClient) record(d *Delegation, task *a2a.Task) (*Delegation, error) {
+func (c *remoteClient) record(ctx context.Context, d *Delegation, task *a2a.Task) (*Delegation, error) {
 	now := time.Now().UTC()
 	next := *d
 	if task.ID != "" {
@@ -556,9 +559,18 @@ func (c *remoteClient) record(d *Delegation, task *a2a.Task) (*Delegation, error
 	if task.ContextID != "" {
 		next.RemoteContextID = task.ContextID
 	}
+	text := taskText(task)
+	if task.Status.State.Terminal() && !d.FilesTaken {
+		// The files are read ONCE, when the task is over — this function runs on every get, wait
+		// and poll, and reading them each time would write the same artifact again and again under
+		// a new name. They are taken on a FAILED task too: "the reason plus whatever partial result
+		// exists" is what a failure is supposed to leave (§7.3).
+		text += c.takeFiles(ctx, d, task)
+		next.FilesTaken = true
+	}
 	next.LastKnown = lastKnown{
 		State: task.Status.State,
-		Text:  c.boundAnswer(d.ID, taskText(task)),
+		Text:  c.boundAnswer(d.ID, text),
 		At:    now,
 	}
 	c.stampPeerIdentity(&next)
@@ -574,6 +586,65 @@ func (c *remoteClient) record(d *Delegation, task *a2a.Task) (*Delegation, error
 		return d, err
 	}
 	return &next, nil
+}
+
+// takeFiles writes the files a finished task's artifacts carried into THIS machine's storage, and
+// returns the lines that tell the model where they are (or why one was not taken).
+//
+// A file that arrived is a file this machine has: it is stored where the conversation's own files
+// live, so the desktop can open it from the recorded tool call and a later `SendFile` can hand it
+// on. What is NEVER handed over is a path from the other machine (§6.4): the line names a path
+// here, and the peer's own naming travels only as the file's name.
+func (c *remoteClient) takeFiles(ctx context.Context, d *Delegation, task *a2a.Task) string {
+	var lines []string
+	for _, artifact := range task.Artifacts {
+		files, refused := filePartsOf(artifact.Parts)
+		for _, r := range refused {
+			// Refused parts are SAID rather than dropped: a model that is told "there was a file
+			// and it was too large" can ask for another form, and a reader can see why the answer
+			// has no attachment.
+			lines = append(lines, "- "+r.Detail)
+		}
+		for _, f := range files {
+			path, err := c.storeFile(ctx, d, f)
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("- %s (%s, %s) — NOT saved here: %v",
+					f.Name, f.MediaType, strutil.HumanBytes(f.Size()), err))
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- %s (%s, %s) — saved on this machine at: %s",
+				f.Name, f.MediaType, strutil.HumanBytes(f.Size()), path))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nFiles the peer sent back:\n" + strings.Join(lines, "\n")
+}
+
+// storeFile puts one file the peer produced where this machine can read it.
+//
+// With a session it goes where the conversation's own files live (session.SaveReceivedFile), which
+// gives a name that is already taken a new suffix — so the record's FilesTaken flag is what keeps
+// one observation from becoming two copies. A run with NO session — `-p`, a one-off — has no
+// conversation to hang it on, so it goes beside the other oversized tool results under a
+// deterministic name (see spillAnswer): there a second write overwrites its own file, which is the
+// same idempotence reached the other way round. Both are copies on THIS machine.
+func (c *remoteClient) storeFile(ctx context.Context, d *Delegation, f filePart) (string, error) {
+	if sessionID := tools.SessionIDFromCtx(ctx); sessionID != "" {
+		return session.SaveReceivedFile(sessionID, f.Name, f.Bytes)
+	}
+	if c.spillDir == "" {
+		return "", errors.New("no session and no directory configured for files a peer sends back")
+	}
+	if err := os.MkdirAll(c.spillDir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(c.spillDir, "remote_"+d.ID+"_"+f.Name)
+	if err := fileutil.WriteFilePrivate(path, f.Bytes); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // do performs one request and classifies what came back.

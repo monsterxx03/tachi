@@ -1,6 +1,6 @@
 # Tachi 多节点协作：嵌入式节点服务与 A2A
 
-状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；**调用者认证（mTLS + TOFU，接收侧只识别不授权）也已落地**；应答的两种形状按 §6.1.1 处理）。**尚未实现的是文件 `Part`（`raw`/`url` + 受鉴权下载端点）、来源名称在界面上的呈现（id 已随会话落盘，见 §2.2），以及阶段二的体验件**（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
+状态：**设计；本机接口与锁、三入口接线、A2A 服务端骨架、TaskStore（受理/去重/恢复/busy）、**真执行接入（远端任务真的在节点工作区跑一轮 agent，含受管会话准入与一条端到端 itest）、追问/多轮、发起侧两个工具与两条提醒、宿主记忆隔离、usage 来源、受管会话在三个前端上的呈现**已落地**（`node/`、`pkg/flock`、`config.Node`、`session.Kind`、`agent.WithTrustedExecution`、`agent.WithDelegation`；**调用者认证（mTLS + TOFU，接收侧只识别不授权）也已落地**；应答的两种形状按 §6.1.1 处理）。**文件 Part 的 `raw` 三个方向（对端发来、对端产出取回、`SendFile` 交回调用方）也已落地**（§6.4）。**尚未实现的是 `url` 载具与受鉴权下载端点、来源名称在界面上的呈现（id 已随会话落盘，见 §2.2），以及阶段二的体验件**（mDNS、任务面板、跨入口通知）。日期：2026-10-10。
 
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
@@ -362,11 +362,11 @@ REST 错误按规范使用 `google.rpc.Status` JSON 表达及结构化详情。�
 
 规范不约束大小、类型或存储（唯一相关表述是自定义绑定须声明自身参数约束），因此以下都是 Tachi 的策略决定：
 
-- **载体选择**：`raw` 内联省事，但体积在 base64 后膨胀约 1/3，且直接受输入/输出上限约束；`url` 需要执行方提供一条**受鉴权、可过期**的产物下载路径（规范示例即带 token 的 URL）。首版只做 `raw` + 大小上限即可闭环，不新增对外端点；`url` 随下载端点一并落地。
-- **取回方向的信任边界**：本机去取对端给的 `url` 是一个 SSRF 面（对端可指向本机内网），需要与 push sender 同级的地址校验；反向给出 `url` 时不得暴露内网地址，与「`0.0.0.0` 不能作为 Card 可连接地址」同一条规则。
-- **产物是受管副本或句柄，不是路径**：对外返回受鉴权的下载句柄或已落地的受管副本，绝不返回执行节点上的文件路径（§7.3）。
-- **保留与清理**：产物的保留期与去重记录分别定义（§9.4），清理 session 不得删掉仍承诺可查询的产物。
-- **类型与体积**：按节点配置的媒体类型白名单与大小上限；协议能做文件传输不等于默认放开任意类型。
+- **载体选择**：`raw` 内联省事，但体积在 base64 后膨胀约 1/3，且直接受输入/输出上限约束；`url` 需要执行方提供一条**受鉴权、可过期**的产物下载路径（规范示例即带 token 的 URL）。首版只做 `raw` + 大小上限，不新增对外端点；`url` 随下载端点一并落地。**已落地**：`raw` 三个方向都通（`node/partfile.go` 一处定义单文件上限 100 MiB、每条消息 8 个、媒体类型白名单与文件名净化）：对端附在消息里的文件先进受理守卫（不合规就**协议级拒绝** `PART_TOO_LARGE` / `PART_MEDIA_TYPE` / `PART_COUNT`，任务都不创建），图片作为 image part 交给模型、其他文件落进会话自己的 `received/` 并在提示词里给出**本机路径**；对端产出的 artifact 由发送侧在**终态取一次**（`Delegation.FilesTaken` 挡住轮询重复写）、落进本机会话目录（无会话则落 `ToolResultsDir`），结果文本给出本机路径；`SendFile` 在节点上被接成「把文件放进本次任务的 artifact」，**只在 `node.tools` 列出它时才给**（它读任意本机路径并把字节送上网络）。收到 `url` Part 今天是**明确拒绝**（`PART_URL_UNSUPPORTED`），不去取。
+- **取回方向的信任边界**：本机去取对端给的 `url` 是一个 SSRF 面（对端可指向本机内网），需要与 push sender 同级的地址校验；反向给出 `url` 时不得暴露内网地址，与「`0.0.0.0` 不能作为 Card 可连接地址」同一条规则。**随 `url` 一起做**：今天不取任何对端给的地址。
+- **产物是受管副本或句柄，不是路径**：对外返回受鉴权的下载句柄或已落地的受管副本，绝不返回执行节点上的文件路径（§7.3）。**已落地**：artifact 里出去的是 `raw` 字节（不是路径），回来落的是**本机**副本，两边文本里出现的都只有本机路径。
+- **保留与清理**：产物的保留期与去重记录分别定义（§9.4），清理 session 不得删掉仍承诺可查询的产物。**已落地**：回来的文件跟着会话生死（`<sessionDir>/<id>/received/`），任务侧的 artifact 仍在任务记录里（`<DataDir>/tasks/`）。
+- **类型与体积**：按节点配置的媒体类型白名单与大小上限；协议能做文件传输不等于默认放开任意类型。**已落地为常量**（`node/partfile.go`，一处定义、三个方向共用）；要变成 per-node 配置，加键的地方就是那里。
 
 ## 七、接收侧：直接对接 agent loop
 
@@ -422,7 +422,7 @@ flowchart TD
 
 当前 `RunConversationStream` 在调用 `runLoop` 之前已经执行 `prepareTurnMessages`（含 reminder/记忆召回）、`ensureSessionAndRecordUser`、checkpoint 初始化及 `turn_start` hook。仅在 `runLoop` 起点拒绝会让未获准的本地输入先进入受管会话，甚至触发模型或外部动作。
 
-**已落地**：`RunConversationStream` 与 `RunOneOffStream` 在**启动 goroutine 之前**调用 `managedSessionRefusal`，受管会话（`session.Session.Managed()`，即 Kind 非空）只有携带 `agent.WithTrustedExecution(ctx)` 的受信执行才放行；被拒绝的输入得到一个错误事件，**会话历史一字未写**。回退/历史重写/压缩落盘等**不经过 loop** 的入口尚未接（随前端表面切片一起做）。
+**已落地**：`RunConversationStream` 与 `RunOneOffStream` 在**启动 goroutine 之前**调用 `managedSessionRefusal`，受管会话（`session.Session.Managed()`，即 Kind 非空）只有携带 `agent.WithTrustedExecution(ctx)` 的受信执行才放行；被拒绝的输入得到一个错误事件，**会话历史一字未写**。回退这类**不经过 loop** 的写入也接了同一判定，见本节末尾的 `managedSessionWriteRefusal`。
 
 准入统一放在 agent 公共执行入口的前置阶段，覆盖 `RunConversationStream`、`RunOneOffStream` 及其公共封装：先只读取判定必需的会话元数据和受信授权，再准备消息、写 transcript、生成标题、建 checkpoint、触发 hook 或调用模型。未经授权的受管会话请求在这些动作之前结束；可以返回错误事件和审计日志，但不能为这次被拒绝的输入修改该会话历史。前端若有更早的相关副作用，也必须先通过同一准入判定，不能将它当成绕过点。
 
@@ -749,7 +749,7 @@ A2A 允许而不强制 SendMessage 去重，因此这是 Tachi 节点之间额�
 - 文件、Bash、MCP 和子 agent 的路径及副作用边界一致。
 - 不把关闭 WriteFile 等同于只读；不受限的 Bash/MCP 仍然可以写入。
 - 如果要开放通用 shell，需要相应隔离或明确接受其权限范围，不能声称已有规则等同于沙箱。
-- 对调用者、任务数、运行并发、问题等待、输入/输出大小、迭代和运行期限设置上限；值用统一命名配置/常量，不散落在调用点。**问题等待已定**：`node.question_timeout` / `node.max_parked`（§7.4）。
+- 对调用者、任务数、运行并发、问题等待、输入/输出大小、迭代和运行期限设置上限；值用统一命名配置/常量，不散落在调用点。**问题等待已定**：`node.question_timeout` / `node.max_parked`（§7.4）。**文件与请求体大小已定并落地**：单个文件 100 MiB、一条消息最多 8 个、媒体类型白名单（`node/partfile.go` 一处定义，三个方向共用，见 §6.4）；**请求体 256 MiB 上限在监听器上**（`node/a2a.go` 的 `limitBody`），超限由守卫以自有 reason `BODY_TOO_LARGE` 拒（413）——一个满额文件 base64 之后约 134 MiB，所以这个 body 装得下一个加一段长提示、装不下两个（第二条同样以自有 reason 拒），而它本身是内存的界，不是对文件的表态。
 - **AskUserQuestion 不看工具允许集合**（已落地）：允许集合约束的是"这台机器上能做什么"，而问调用者不碰这台机器；把它挂在名单上会让"支持追问"与"开放能力"绑成同一个开关（§7.4）。所以空名单仍意味着一件工具都不碰本机，模型被给到的只有那个只能跟调用者说话的工具。
 
 Agent Card 是能力声明，不是授权清单的替代；读取任务、列举任务和获取产物都再次检查归属，错误响应遵循 §6.3 的资源隐藏规则。
@@ -841,8 +841,8 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | --- | --- |
 | 单实例 | 三种入口启动顺序、并发启动、非 Tachi 占端口、陈旧连接信息、版本/身份不匹配 |
 | 生命周期 | 非承载实例退出不影响任务，承载者退出后 TUI 无需重启可持锁按需恢复；原进程卡住但持锁时不另起；恢复不重跑旧执行 |
-| A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本 Part（产物即最终答复，走 Artifact）与结构化 Part（追问的 `data` Part、回答的形状）已落地；**应答的两种形状已落地并钉住**（§6.1.1：桩对端回一条 `Message`，本机记成「已完成 + 正文 + 无句柄」，`get`/`wait` 不发请求、`cancel` 拒绝时说清是哪种原因、带 contextId 时 `continue_from` 仍能续，`node/remoteclient_test.go` 三条）；**文件 Part（`raw`/`url`）与产物下载端点仍待做**（§6.4） |
-| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。session 准备失败不启动 loop 仍待做；**查询/取消/重放不新建 session 已落地**（`node/runner_test.go` 的 `TestOnlyANewWorkRequestOpensAConversation`：重放返回同一 task、两次调用只到模型一次、三条路径合起来仍只有一段会话） |
+| A2A 合同 | **已落地 `node/a2a_test.go`**（固定 SDK 的客户端打真实 loopback 监听）：returnImmediately=true 先返回句柄；省略/false 等待终态或中断态；Card 只声明已实现能力；A2A-Version 协商；终态任务不可再发消息、已完成不可取消、已取消重取消幂等；无身份的 list 被拒；规范路径与媒体类型手打可用。文本 Part（产物即最终答复，走 Artifact）与结构化 Part（追问的 `data` Part、回答的形状）已落地；**应答的两种形状已落地并钉住**（§6.1.1：桩对端回一条 `Message`，本机记成「已完成 + 正文 + 无句柄」，`get`/`wait` 不发请求、`cancel` 拒绝时说清是哪种原因、带 contextId 时 `continue_from` 仍能续，`node/remoteclient_test.go` 三条）；**文件 Part 的 `raw` 三个方向已落地并钉住**（`node/partfile_test.go`：对端附来的文件落进会话并在提示词里给出本机路径、图片作为 image part 到达 provider、超限/类型不允许被协议级拒绝且任务不创建；`SendFile` 交回的文件经 artifact 回到本机、只取一次、**没列进 `node.tools` 的节点不提供这个工具**）；**`url` 载具与产物下载端点仍待做**（§6.4），今天收到 `url` 明确拒绝 |
+| 入站任务 | **已落地 `node/runner_test.go` + 一条 `itest/tui` spec**：远端任务在节点配置的工作区跑真一轮（会话落盘、`kind`/`SkipDream` 正确、artifact 是最终答复）；受管会话拒绝普通入口驱动且历史一字未写；空 workspace 拒绝启动、空 tools 只剩 AskUserQuestion（见 §10.2）。**会话准备失败即任务失败、loop 不启动已落地**（`node/retention_test.go` 两条：一段对话的 session 被收走后追问，缓存路径与冷启动路径各一条 —— 后者失败在 `contextRun` 的加载上，两条都断言模型一次都没被调）；**查询/取消/重放不新建 session 已落地**（`node/runner_test.go` 的 `TestOnlyANewWorkRequestOpensAConversation`：重放返回同一 task、两次调用只到模型一次、三条路径合起来仍只有一段会话） |
 | 多轮对话 | 同 task 回答不新起 loop（**已落地** `node/park_test.go`）、同 context 新 task 继承历史、referenceTaskIds 使用原远端 ID、终态不复活、同 peer 不同 context 隔离 |
 | Busy 与去重 | 已受理重复消息先返回原 task；新请求受理前拒绝不生成 task；可信且 domain/reason 匹配的 busy 才可识别为未受理；错误域冒用、普通 503 或仅有 Retry-After 不推断未受理；reply/cancel 不死锁 |
 | 引用与恢复 | **部分落地**：`continue_from` 与 `node` 互斥（工具层拒绝，`agent/tools/delegation_test.go`）、准确 ID 来自工具结果、归属来自 run 而非模型参数、跨压缩由 `LogicalID` 保住；一条端到端 spec（`itest/run/delegation_test.go`：真二进制把活儿委派给另一个真节点、结果回到本地、本机留下 `delegations/d_*.json`）。**按身份续接已落地并钉住**（`node/tls_test.go`：改名后仍是同一台机器、把对话续到另一台机器会被拒且**一条消息都没发出去**；两条都在摘掉检查时会 FAIL）；**`referenceTaskIds` 的构造已落地并钉住**（`node/remoteclient_test.go` 的 `TestAFollowUpReferencesThePreviousRemoteTask`：经一个记录代理读实际发出的 body，跟进引用的是**上一条远端 task id**，不是自己的、也不是本机 `d_`）；越权引用按 peer 拒绝已有用例、未知 id 拒绝已有用例（`node/delegations_test.go`）；reminder/list 找回仍待做 |
@@ -857,7 +857,7 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 | 会话保留 | **已落地 `session/retention_test.go` + `node/retention_test.go`**：跨 Manager 数量清理不删除运行中/停放的 session（含一个真二进程写的持有），而一段已经结束的远端对话照常被收走——节点会话没有自己的保留期；显式删除被拒且带原因、只释放对应的一项，执行结束后同一个删除就通过；压缩搬迁保护与绑定；崩溃残留由启动对账释放；不认识的 reason 保留。取消用户置顶不解除保护与释放保护不改用户置顶由实现结构保证（本条不动 `Pinned`）；创建无保护空窗的并发竞争测试暂时不做（§9.4 末） |
 | 锁隔离与恢复 | **已落地**：两把锁路径分离、协调锁不在释放时删文件、删除前在锁内复查保护、文件锁先于进程内锁（枚举在锁外）；并发竞争的压测暂时不做（§9.4 末） |
 | 连接与取消 | 断开订阅不取消任务、等待超时、重复取消、取消/完成竞争 |
-| 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。过期答案与取消的并发竞争、`RemoteTask(reply)` 一侧仍待做 |
+| 追问 | **已落地 `node/park_test.go` + `itest/tui` spec**：问题与回答按 questionId 关联、形状不符/答错问题被拒、同 context 无 taskId 被拒、停放期取消后迟到答案被拒、超时判 `FAILED` 且保留问题、进程重启后明确状态（`FAILED` + 问题保留）；工具授权不因回答而放行。**回答经 `RemoteTask(action="reply")` 到场这一侧已落地并钉住**（`node/remoteclient_test.go`：停放的问题经同一本机记录回填、对端的 turn 被唤醒；答一个没在问的任务在本地就拒掉，对端一次都没被惊动）。过期答案与取消的并发竞争仍待做 |
 | Reminder | **部分落地**（`agent/systemreminder/delegation_test.go` + `agent/agent_delegation_test.go`）：待答项排前、有界且给出"还有 N 项"与查询入口、"未列出不等于已删除"、节点不可达如实标注且用配置 note、按作用域变化检测（同列表不重复）、无 delegator 的 run 一句不说、`hosting` 与 `list` 同作用域（`itest/run/delegation_test.go`）。回合内去重与恢复历史字节不变由既有机制保证（collector 的 piece 去重 + `historyHasReminder`），**稳定排序已落地**：`node/delegations.go` 的 list 改成全序（CreatedAt desc，同刻按 id），reminder 只分组不再排序（`agent/systemreminder/delegation_test.go` 钉住「组内保持 provider 顺序」） |
 | 调用者认证与传输 | **已落地 `node/auth_test.go` + `node/tls_test.go`**：证书里的 key 推出 `CallerID`（不可冒充）、证书没带名字时记录如实为空、**任何证书都被接受**（这一条被钉住，防止白名单被悄悄加回）、没有证书的连接拿不到任何东西、两个调用者互相看不到对方的任务（`List` 与按 ID `Get` 都拒，且 Get 的拒绝与「不存在」同答）、自知名随请求到达并被记成 `SelfReportedName`（同一个 key 改名字不改变身份）、发起侧每次调用都带上自己的名字、Card 声明 mTLS 与节点名（wildcard 监听不公告接口）、监听地址与 TLS 的对应（本机 listener 永远 loopback）、证书公钥推出 node_id 且重载稳定、TOFU 首次记录 / 二次通过 / 换密钥拒绝并指向文件、非 loopback 明文 http 的 peer 被拒 |
 | 认证声明与授权 | SecurityScheme 每项只选一种标准类型且符合真实认证；服务端 pinning 不误报 mTLS；陌生节点不可委派、越权 task/产物不可读、本机接口与 A2A 凭据隔离、远端模型不能批准工具权限 |
@@ -879,8 +879,8 @@ gossip、能力/负载选择、多级委派预算、安全恢复步骤，以及�
 - session 保留依据的持久化格式、独立协调锁的路径与 Manager/存储锁顺序、原子写入与恢复对账**已定并落地**（§9.4：`session/retention.go` 的持有记录与两把锁、`node/runner.go` 的取得/释放/对账）。**显式关闭 context 入口与 context 绑定清理暂时不做**（理由见 §9.4 末）；将来要加时，关闭的触发入口按「本机控制面优先、发起方请求次之」定，语义顺序已固定。
 - 首批实际开放的执行配置、工作区、回合来源的可信传递，以及无人审批时的明确行为；**无人审批与问题等待已定**——permission ask 一律拒绝（§10.1）、追问的时限与并发上限见 §7.4（`node.question_timeout` / `node.max_parked`），`AUTH_REQUIRED` 不用于工具审批；**宿主记忆隔离的接入点已定并落地**——远端 agent 一处 `SkipMemoryRecall`（自动召回）+ run 的工具视图剔除 `hostOnlyTools`（工具），都在 `node/runner.go`，reload/fork 都开不出来（§2.3、§12 阶段一第 3 项）。
 - usage 来源的持久化位置**已定并落地**：落在 usage 行上（`source` / `source_task_id` / `source_context_id` 三个可选字段，`Kind` 保持用途分类），保留期与账本一致（永久保留，不做清理）。发起方展示远端汇报值仍待做，且明确不再计入本机 ledger。
-- 产物传输策略：`raw` 与 `url` 的取舍、体积与媒体类型白名单、`url` 下载端点的鉴权/过期/可达性，以及取回方向（本机去取对端地址）的 SSRF 校验；产物的存储位置与保留期（§6.4）。
-- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围（**应答的两种形状已按 §6.1.1 定下**：收侧固定回 `Task`，发侧 `Task`/`Message` 都读；剩下的第三方兼容问题是文件 Part 与流式）；Tachi 私有 `ErrorInfo.domain` **已定为 `tachi`**，§6/§7 错误语义的接入点是「自有拒绝由 `node/admission.go` 的 guard 自己渲染、不放给 SDK 的错误映射」（§9.1.1）。
+- 产物传输策略：`raw` 与 `url` 的取舍、体积与媒体类型白名单、`url` 下载端点的鉴权/过期/可达性，以及取回方向（本机去取对端地址）的 SSRF 校验；产物的存储位置与保留期（§6.4）。**`raw` 已定并落地**：一处定义的上限/条数/白名单/文件名净化（`node/partfile.go`），三个方向共用；**`url` 与下载端点仍待做**，届时带上 SSRF 校验。
+- 建议 SDK 版本的依赖/合同验证、结构化追问扩展及第三方兼容范围（**应答的两种形状已按 §6.1.1 定下**：收侧固定回 `Task`，发侧 `Task`/`Message` 都读；**文件 Part 的 `raw` 也已收发**，见 §6.4；剩下的第三方兼容问题是 `url` 与流式）；Tachi 私有 `ErrorInfo.domain` **已定为 `tachi`**，§6/§7 错误语义的接入点是「自有拒绝由 `node/admission.go` 的 guard 自己渲染、不放给 SDK 的错误映射」（§9.1.1）。
 
 不因这些字段尚未固定而扩大到独立 daemon、全局调度器或共享会话系统。
 

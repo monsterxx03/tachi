@@ -87,8 +87,11 @@ func (e *nodeExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorCont
 			return
 		}
 
+		// What the message carried besides text: the admission guard already refused anything this
+		// node will not take, so this is the same reading of the same Parts (node/partfile.go).
+		files, _ := filePartsOf(execCtx.Message.Parts)
 		lt, err := e.runner.beginTurn(ctx, execCtx.TaskID, callerFrom(ctx),
-			execCtx.ContextID, messageText(execCtx.Message))
+			execCtx.ContextID, messageText(execCtx.Message), files)
 		if err != nil {
 			// The turn never started: session preparation failed, or the node is shutting
 			// down. A task that could not start is failed, with the reason as its status.
@@ -151,6 +154,7 @@ func (e *nodeExecutor) publish(execCtx *a2asrv.ExecutorContext, yield func(a2a.E
 	e.runner.forgetTurn(execCtx.TaskID)
 
 	if out.Result == nil {
+		publishFiles(execCtx, yield, out.Files)
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed,
 			failureMessage(errors.New("node: the turn ended without reporting an outcome"))), nil)
 		return
@@ -159,6 +163,7 @@ func (e *nodeExecutor) publish(execCtx *a2asrv.ExecutorContext, yield func(a2a.E
 		// The turn ran and failed. Its partial answer is NOT a result (design §7.3):
 		// what failed is the work, and reporting it as completed would be the record
 		// claiming something that did not happen.
+		publishFiles(execCtx, yield, out.Files)
 		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, failureMessage(out.Result.Error)), nil)
 		return
 	}
@@ -168,7 +173,27 @@ func (e *nodeExecutor) publish(execCtx *a2asrv.ExecutorContext, yield func(a2a.E
 			return
 		}
 	}
+	publishFiles(execCtx, yield, out.Files)
 	yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
+}
+
+// publishFiles puts the files a turn handed over into the task's artifact.
+//
+// Files ride as their own artifact with `raw` Parts: the protocol's carrier for a file is an
+// artifact (§6.4), and the BYTES are what leaves — never a path on this machine, which is the thing
+// the design forbids handing a caller. Emitted on a failed task too: what the work produced before
+// it failed is part of the result a failure keeps (§7.3).
+func publishFiles(execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool, files []filePart) {
+	if len(files) == 0 {
+		return
+	}
+	parts := make([]*a2a.Part, 0, len(files))
+	for _, f := range files {
+		part := a2a.NewRawPart(f.Bytes)
+		part.Filename, part.MediaType = f.Name, f.MediaType
+		parts = append(parts, part)
+	}
+	yield(a2a.NewArtifactEvent(execCtx, parts...), nil)
 }
 
 func (e *nodeExecutor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {

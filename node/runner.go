@@ -2,10 +2,13 @@ package node
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -121,10 +125,50 @@ type turnResult struct {
 // and they are three different things: the turn finished, it is WAITING for an answer, or
 // somebody stopped it — and a stopped turn publishes nothing, because the state that says
 // so belongs to whoever stopped it.
+// turnOutcome is how one turn ended, for the executor to publish.
 type turnOutcome struct {
 	Result  *turnResult
 	Ask     *parkedAsk
 	Stopped bool
+
+	// Files are what the turn handed over with SendFile, for the executor to publish as an artifact
+	// of the task. They travel WITH the outcome rather than being read from the turn, because the
+	// outcome is the one thing both executor paths already carry (a new turn and a resumed one).
+	Files []filePart
+}
+
+// turnFiles is the basket a turn's SendFile calls drop into.
+//
+// It lives on the TURN, not on the record or the request: a turn that stops to ask a question and
+// is later resumed is still ONE turn (§7.1.2), so a file handed over before the question is handed
+// over when the work ends.
+type turnFiles struct {
+	mu    sync.Mutex
+	files []filePart
+}
+
+// add takes one file, or says why this turn will not carry it. The bound is the same one every
+// direction uses (maxFilePartsPerMessage): without it a remote agent decides how many attachments
+// one task's artifact grows to.
+func (t *turnFiles) add(f filePart) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.files) >= maxFilePartsPerMessage {
+		return fmt.Errorf("this task already carries %d files; %q was not taken",
+			maxFilePartsPerMessage, f.Name)
+	}
+	t.files = append(t.files, f)
+	return nil
+}
+
+// take returns what the turn collected and empties the basket, so one turn's files cannot be
+// published twice however many times an outcome is read.
+func (t *turnFiles) take() []filePart {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := t.files
+	t.files = nil
+	return out
 }
 
 // liveTurn is one turn in flight.
@@ -156,6 +200,9 @@ type liveTurn struct {
 	stopped  bool
 	reading  bool
 	draining bool
+
+	// handed is what this turn's SendFile calls collected (see turnFiles).
+	handed *turnFiles
 }
 
 func newRunner(cfg *config.Config, workspace string, dataDir string, sessionsDir string, log *logger.Logger) (*runner, error) {
@@ -492,7 +539,7 @@ func (r *runner) questionExpired(ask *parkedAsk) {
 
 // beginTurn starts a turn for a task that has none, and returns it.
 func (r *runner) beginTurn(
-	parent context.Context, taskID a2a.TaskID, callerID, contextID, prompt string,
+	parent context.Context, taskID a2a.TaskID, callerID, contextID, prompt string, received []filePart,
 ) (*liveTurn, error) {
 	r.mu.Lock()
 	if r.closed {
@@ -522,6 +569,11 @@ func (r *runner) beginTurn(
 		return nil, err
 	}
 
+	// What came WITH the message: bytes become a local path this turn can read (or, for an image, a
+	// content part the model is handed directly), and the prompt says what arrived and where it is.
+	// The session is known by now, which is why this happens here and not in the executor.
+	prompt, images := r.receiveFiles(cr, prompt, received)
+
 	// Everything that rides on a remote turn's context — its detached lifetime, the node's
 	// workspace, the trusted-execution grant and the usage source — is assembled in one place.
 	ctx, cancel := r.turnContext(parent, cr, taskID)
@@ -536,8 +588,22 @@ func (r *runner) beginTurn(
 	}
 
 	systemPrompt := agent.BuildSystemPrompt(r.cfg.Language, cr.binding.Workspace, cr.binding.SessionID, r.cfg.ExtraSystemPrompt)
+	handed := &turnFiles{}
+	ropts := r.toolViewOption()
+	if r.offersSendFile() {
+		// The receiving side's SendFile: same tool, different meaning — the callback puts the file
+		// into this task's artifact instead of into a chat window (see sendFileToCaller).
+		tool := tools.NewSendFileTool()
+		tool.SetCallback(r.sendFileToCaller(handed))
+		ropts = append(ropts, agent.WithExtraTools(tool))
+	}
+	if len(images) > 0 {
+		// The images ride on the turn's own user message and are recorded with it, so a later turn
+		// sees them again out of the session's blobs rather than out of a file that might be gone.
+		ropts = append(ropts, agent.WithPendingImages(images))
+	}
 	events := cr.agent.RunConversationStream(ctx, history, prompt, systemPrompt,
-		llm.ChatOptions{}, r.toolViewOption()...)
+		llm.ChatOptions{}, ropts...)
 
 	lt := &liveTurn{
 		taskID:    taskID,
@@ -548,6 +614,7 @@ func (r *runner) beginTurn(
 		ctx:       ctx,
 		cancel:    cancel,
 		events:    events,
+		handed:    handed,
 		done:      r.unwound.Done,
 	}
 	r.unwound.Add(1)
@@ -562,6 +629,102 @@ func (r *runner) beginTurn(
 	r.turns[taskID] = lt
 	r.mu.Unlock()
 	return lt, nil
+}
+
+// receiveFiles writes the files a message carried into the conversation's own directory and turns
+// them into what this turn runs with: the caller's text plus one line per file, and the images as
+// content parts the model is handed directly.
+//
+// An IMAGE does not become a file here. The model is given its bytes as an image, and the session
+// record keeps them (agent.RecordParts → the store's blobs), so a later turn still sees the image
+// by re-reading the record — a path would be a second, weaker copy of something already durable
+// (this is the same reason a pasted screenshot is attached as a part, not read back from disk).
+//
+// A file that cannot be stored does NOT fail the turn: the caller's text is still work this node can
+// do, and the line says what went wrong, which is a fact the model can act on (ask for it again) and
+// a reader can see. Refusing the whole request instead would trade a disk problem for the work that
+// had nothing to do with it.
+func (r *runner) receiveFiles(cr *contextRun, prompt string, files []filePart) (string, []llm.ContentPart) {
+	if len(files) == 0 {
+		return prompt, nil
+	}
+	sessionID := cr.binding.SessionID
+	var lines []string
+	var images []llm.ContentPart
+	for _, f := range files {
+		size := strutil.HumanBytes(f.Size())
+		if strings.HasPrefix(f.MediaType, "image/") {
+			images = append(images, llm.ContentPart{
+				Type:      llm.ContentPartImage,
+				MediaType: f.MediaType,
+				Data:      base64.StdEncoding.EncodeToString(f.Bytes),
+			})
+			lines = append(lines, fmt.Sprintf("- %s (%s, %s) — attached to this message as an image", f.Name, f.MediaType, size))
+			continue
+		}
+		path, err := session.SaveReceivedFile(sessionID, f.Name, f.Bytes)
+		if err != nil {
+			r.logger.Error(context.Background(), "node: could not store a file the caller sent",
+				err, "session", sessionID, "file", f.Name)
+			lines = append(lines, fmt.Sprintf("- %s (%s, %s) — NOT saved: %v", f.Name, f.MediaType, size, err))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- %s (%s, %s) — saved on this machine at: %s", f.Name, f.MediaType, size, path))
+	}
+	if len(lines) == 0 {
+		return prompt, images
+	}
+	block := "\n\nFiles the caller sent with this message:\n" + strings.Join(lines, "\n")
+	return prompt + block, images
+}
+
+// offersSendFile reports whether the operator's tool list includes SendFile.
+//
+// It is NOT offered unconditionally, and the reason is the same one the tool list exists for: this
+// tool READS A FILE from this machine — any path the model can name, not only the workspace — and
+// puts its bytes on the wire. That is a capability, so the operator decides it; an empty list still
+// means "nothing that touches this machine" (§10.2). AskUserQuestion is the exception for the
+// opposite reason: asking the caller does nothing to this machine.
+func (r *runner) offersSendFile() bool {
+	return slices.Contains(r.cfg.Node.Tools, tools.ToolNameSendFile)
+}
+
+// sendFileToCaller is the receiving side's SendFile: the remote agent hands a file back to whoever
+// asked for the work.
+//
+// Two things make it different from the channel's callback, and both are about who owns the file:
+//
+//   - It reads the bytes HERE and now. The channel queues a path for a send that happens later, and
+//     that path is a file this machine keeps; this one is a file in a workspace somebody else can
+//     change, and the artifact is written when the turn ends. A path kept until then would be a
+//     promise about a file that may no longer say what it said.
+//   - It REFUSES rather than warns: the size, the media type and the count are the same policy the
+//     other two directions use (asFilePart), and the tool reports the failure to the model. "Handed
+//     over" must never be a sentence about a file that did not leave.
+func (r *runner) sendFileToCaller(files *turnFiles) tools.SendFileCallback {
+	return func(name, mediaType, localPath string) error {
+		info, err := os.Stat(localPath)
+		if err != nil {
+			return err
+		}
+		if info.Size() > maxFilePartBytes {
+			return fmt.Errorf("a file of %s cannot be sent: the limit is %s",
+				strutil.HumanBytes(info.Size()), strutil.HumanBytes(maxFilePartBytes))
+		}
+		bytes, err := os.ReadFile(localPath)
+		if err != nil {
+			return err
+		}
+		part := a2a.NewRawPart(bytes)
+		part.Filename, part.MediaType = name, mediaType
+		file, refusal := asFilePart(part)
+		if refusal != nil {
+			return refusal
+		}
+		r.logger.Info(context.Background(), "node: the remote agent handed a file back",
+			"name", file.Name, "media_type", file.MediaType, "bytes", file.Size())
+		return files.add(file)
+	}
 }
 
 // turnContext returns the context ONE remote turn runs in, and the cancel that ends it.
@@ -762,21 +925,35 @@ func (lt *liveTurn) read() turnOutcome {
 		switch ev.Type {
 		case agent.AgentEventTurnComplete:
 			if ev.Result == nil {
-				return turnOutcome{Result: &turnResult{Error: errors.New("node: the turn ended without a result")}}
+				return turnOutcome{
+					Result: &turnResult{Error: errors.New("node: the turn ended without a result")},
+					Files:  lt.handed.take(),
+				}
 			}
-			return turnOutcome{Result: &turnResult{
-				Text:       ev.Result.Response,
-				ExitReason: ev.Result.ExitReason,
-				Iterations: ev.Result.IterationsUsed,
-				Error:      ev.Result.Error,
-			}}
+			return turnOutcome{
+				Result: &turnResult{
+					Text:       ev.Result.Response,
+					ExitReason: ev.Result.ExitReason,
+					Iterations: ev.Result.IterationsUsed,
+					Error:      ev.Result.Error,
+				},
+				Files: lt.handed.take(),
+			}
 		case agent.AgentEventError:
-			// The loop's own failure exit. The message is what the caller needs to read.
+			// The loop's own failure exit. The message is what the caller needs to read. Files
+			// already handed over go with it: what failed is the work, and an attachment it did
+			// produce is part of the result a failure is supposed to leave behind (§7.3).
 			reason := ev.TextDelta
 			if ev.Result != nil && ev.Result.Error != nil {
-				return turnOutcome{Result: &turnResult{ExitReason: ev.Result.ExitReason, Error: ev.Result.Error}}
+				return turnOutcome{
+					Result: &turnResult{ExitReason: ev.Result.ExitReason, Error: ev.Result.Error},
+					Files:  lt.handed.take(),
+				}
 			}
-			return turnOutcome{Result: &turnResult{Error: errors.New("node: " + reason)}}
+			return turnOutcome{
+				Result: &turnResult{Error: errors.New("node: " + reason)},
+				Files:  lt.handed.take(),
+			}
 		case agent.AgentEventAskUser:
 			if out, published := lt.asking(ev); published {
 				return out
