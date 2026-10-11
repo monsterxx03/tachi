@@ -27,7 +27,8 @@ convention-not-history, split + index when a subject grows) apply to this split 
 
 - **One `Manager` serves every channel.** `main_channels.go` builds it (`channelmgr.New(cfg)`), adds each
   channel the config enables through the registry (`channel.Register` in `channel/discord`, `weixin`,
-  `github`), and calls `mgr.Start(ctx)`. The manager hands each channel ONE handler — `buildHandler()`
+  `github`, and `channel/mock` — the inert one a spec names to get a headless process that hosts a node:
+  [itest.md](itest.md)), and calls `mgr.Start(ctx)`. The manager hands each channel ONE handler — `buildHandler()`
   (`agent_turn.go`) — so every routing decision in the product lives behind that closure. It is a short
   sequence of four such decisions, each its own function: `routeGroupMessage` (ambient or dropped),
   `classifyTurnInput` (which kind of turn, or a synchronous command), `activateDirectedTurn` +

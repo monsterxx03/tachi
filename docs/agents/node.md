@@ -25,6 +25,12 @@ split + index when a subject grows) apply to this split too.
 
 ## Start or attach, and the two listeners
 
+- **Which entries host at all**: `StartOrAttachNode` is called by the TUI, the desktop and the channel entry —
+  and by nobody else. `-p` deliberately never touches the node service (a one-off pipe run has no "who is
+  hosting" and must not squat the machine's identity), and the ACP and `web` entries do not either. So a
+  machine with no terminal hosts a node ONLY through the channel entry, which in turn refuses to start with no
+  channel enabled: a headless deployment that wants to serve A2A without any IM account needs an inert channel
+  to name (`channel/mock`, see [itest.md](itest.md)).
 - **The lock decides, never the file.** `StartOrAttachNode` takes `flock.TryAcquire` on
   `<DataDir>/node.lock` (`<BaseDir>/node/`, mode `0700`): success → `host`, `flock.ErrHeld` → `attach`. flock
   is per open FILE DESCRIPTION, so two descriptors in one process conflict too — which is why concurrent
