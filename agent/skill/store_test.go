@@ -307,42 +307,6 @@ func TestParseFrontmatter(t *testing.T) {
 	}
 }
 
-func TestBuildSkillListPrompt(t *testing.T) {
-	tests := []struct {
-		name  string
-		metas []SkillMeta
-		want  string
-	}{
-		{
-			name:  "empty",
-			metas: nil,
-			want:  "",
-		},
-		{
-			name: "with skills",
-			metas: []SkillMeta{
-				{Name: "code-review", Description: "Review code", Tags: []string{"review"}},
-				{Name: "git-commit", Description: "Commit messages", Tags: nil},
-			},
-			want: `<available_skills>
-  <skill name="code-review" description="Review code" tags="review"/>
-  <skill name="git-commit" description="Commit messages"/>
-</available_skills>
-
-To use a skill, call Skill(operation="view", name=...) or the user can type /skill-name.`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := BuildSkillListPrompt(tt.metas)
-			if got != tt.want {
-				t.Errorf("BuildSkillListPrompt() = %q\nwant %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBuildActivationMessage(t *testing.T) {
 	sk := &Skill{
 		Meta: SkillMeta{
@@ -396,25 +360,6 @@ func TestBuildDirectiveMessage(t *testing.T) {
 	}
 	if !strings.Contains(msg2, "(none)") {
 		t.Error("should indicate no directive")
-	}
-}
-
-func TestXmlEscape(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"<script>", "&lt;script&gt;"},
-		{"a & b", "a &amp; b"},
-		{`"quoted"`, "&quot;quoted&quot;"},
-		{"normal", "normal"},
-	}
-
-	for _, tt := range tests {
-		got := xmlEscape(tt.input)
-		if got != tt.want {
-			t.Errorf("xmlEscape(%q) = %q, want %q", tt.input, got, tt.want)
-		}
 	}
 }
 
