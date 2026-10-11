@@ -133,17 +133,21 @@
   smoke.check('双击项目名不进重命名', !smoke.q('.project-rename'),
     smoke.q('.project-rename') ? '编辑框出现了' : '(没有编辑框)')
 
-  // 会话重命名：双击进编辑，点别处（失焦）就退出 —— 以前只有 Enter/Esc 能退，编辑框会一直占着
-  // 那一行，下一次点击落在文本框里而不是它瞄准的那一行。这里什么都不改，只断言「框没了」。
+  // 会话重命名：双击进编辑，**失焦**就退出 —— 以前只有 Enter/Esc 能退，编辑框会一直占着那一行，
+  // 下一次点击落在文本框里而不是它瞄准的那一行。
+  //
+  // 那一下点击的**后果**没法在这里驱动：`smoke.click()`（以及任何 `el.click()`）是合成点击，不移动
+  // 焦点、也不走坐标，而这条退出恰好挂在 `onBlur` 上——所以原样写「点别处」时，应用是对的、断言永远
+  // 红（它这样红了一阵子）。真机上一次点击的顺序是 mousedown → 焦点移动（blur）→ mouseup → click，
+  // 能测的是把它拆开的那一半，也正是让整件事成立的那一半：**丢掉焦点就退出**。另一半（点击落在
+  // 它瞄准的行上）不要写成断言——合成点击绕开坐标，坏状态下它照样会过。
   const memberRow = smoke.qa('.proj-rows .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
   if (!memberRow) return smoke.fail('找到成员行', smoke.allText('.proj-rows .session').join(' | '))
   memberRow.querySelector('.session-title').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
   if (!(await smoke.waitFor('.session-rename', '双击进入会话重命名', 3000))) return smoke.finish()
-  const elsewhere = smoke.qa('.session-list .session').find((r) => !r.closest('.proj-rows'))
-  if (!elsewhere) return smoke.fail('找到无项目里的另一行（用来点走焦点）', smoke.allText('.session').join(' | '))
-  elsewhere.click()
+  smoke.q('.session-rename').blur()
   await smoke.sleep(300)
-  smoke.check('点别处即退出重命名（不需要 Enter/Esc）', !smoke.q('.session-rename'),
+  smoke.check('失焦即退出重命名（不需要 Enter/Esc）', !smoke.q('.session-rename'),
     smoke.q('.session-rename') ? '编辑框还在' : '(编辑框已退出)')
   smoke.check('改名框退出后行还在', smoke.qa('.proj-rows .session').length >= 1,
     smoke.qa('.proj-rows .session').length + ' 行')

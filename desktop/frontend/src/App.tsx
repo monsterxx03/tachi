@@ -1609,6 +1609,24 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (successor) void clickSession(successor)
   }, [loadAll, clickSession, sessions, projects, currentId])
 
+  // Ending the execution a node is running in this session.
+  //
+  // The banner is where the reader already is — it is the thing that explains this session — and
+  // the button only appears while something is actually running, a state the session list carries
+  // (heldByTask, read from the retention record by ListSessions). The backend refuses politely
+  // when the state it saw is already gone, so a stale button is a sentence, not an error.
+  const [stopNote, setStopNote] = useState('')
+  useEffect(() => { setStopNote('') }, [currentId])
+  const endSessionTask = useCallback(async (id: string) => {
+    setStopNote('')
+    const res = await (AgentService as any).EndSessionTask?.(id).catch(() => null)
+    if (res && res !== 'ok') {
+      setStopNote(res)
+      return
+    }
+    await loadAll()
+  }, [loadAll])
+
   // newChat creates a session. projectID is "" for the sidebar's own button; a project group's
   // ＋ passes its id, which is the only way a session is ever BOUND (design §6.1) — the backend
   // writes the snapshot and project_id, so nothing here needs to know about roots.
@@ -2385,16 +2403,32 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             </div>
           </header>
 
+          {/* A read-only banner at the top of the transcript: the row in the sidebar marks the
+              session, but a reader who came straight to the window never saw that row. The composer
+              below is replaced by the same reason, so the two say one thing.
+
+              It is a ROW OF THIS COLUMN — a sibling of the header and the composer — and NOT a
+              child of .chat-wrap. That box is `display: flex` in its default ROW direction and holds
+              the scroller plus the floats anchored to it (the jump pill, the find bar), so a second
+              in-flow child there lays out BESIDE the transcript: the banner's `flex-shrink: 0` let it
+              take the left half of the window and squeezed the messages into a right-hand strip. */}
+          {managedSession ? (
+            <div className="managed-banner" role="note">
+              <span className="managed-banner-tag">{managedLabel(managedSession.kind)}</span>
+              <span className="managed-banner-note">{managedReadOnlyNote(managedSession.kind!)}</span>
+              {/* The escape hatch, and only while there is something to escape: a task that will
+                  never end by itself (a peer that died, a state a bug left running) holds this
+                  session, and the delete the reader probably wants is refused until it ends. */}
+              {managedSession.heldByTask ? (
+                <button className="managed-banner-stop"
+                  onClick={() => void endSessionTask(managedSession.id)}
+                  title="停止这一轮执行（本机所有者操作）">结束正在运行的任务</button>
+              ) : null}
+              {stopNote ? <span className="managed-banner-stop-note">{stopNote}</span> : null}
+            </div>
+          ) : null}
+
           <div className="chat-wrap">
-            {/* A read-only banner at the TOP of the transcript: the row in the sidebar marks the
-                session, but a reader who came straight to the window never saw that row. The
-                composer below is replaced by the same reason, so the two say one thing. */}
-            {managedSession ? (
-              <div className="managed-banner" role="note">
-                <span className="managed-banner-tag">{managedLabel(managedSession.kind)}</span>
-                <span className="managed-banner-note">{managedReadOnlyNote(managedSession.kind!)}</span>
-              </div>
-            ) : null}
             {/* The bar floats over the transcript (its own position: .find-bar.is-chat) rather than
                 taking a row: it appears on a keypress, and a row appearing would shift every message
                 down at the moment the reader is trying to read one. */}

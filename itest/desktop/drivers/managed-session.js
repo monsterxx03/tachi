@@ -24,6 +24,19 @@
   smoke.check('横幅说明这是子系统的记录', bannerText.indexOf('子系统执行记录') >= 0, bannerText)
   smoke.check('横幅说明不能继续/回退/重试', bannerText.indexOf('不能继续') >= 0, bannerText)
 
+  // ── 2b. 横幅和转写区是**上下**关系，不是并排 ──────────────────────────────
+  //
+  // 存在性与文案都对、排版照样能坏：横幅一度被放进 .chat-wrap（一个默认横排的 flex 容器，
+  // 里面装着滚动区以及锚在它上面的浮动件），于是它凭 flex-shrink: 0 独占了左半屏、把消息挤成
+  // 右边一条。18 项断言全过，因为没人问过"它在不在该在的位置"。几何断言就是那一问。
+  const chat = smoke.q('.chat')
+  const b = banner.getBoundingClientRect()
+  const c = chat.getBoundingClientRect()
+  smoke.check('横幅在转写区上方（不是并排）', Math.round(b.bottom) <= Math.round(c.top) + 1,
+    `banner.bottom=${Math.round(b.bottom)} chat.top=${Math.round(c.top)}`)
+  smoke.check('横幅与转写区同一条左边界', Math.round(b.left) === Math.round(c.left),
+    `banner.left=${Math.round(b.left)} chat.left=${Math.round(c.left)}`)
+
   // ── 3. 没有输入框，取而代之的是同一句原因 ─────────────────────────────────
   smoke.check('受管会话上不存在输入框', smoke.qa('.composer-input').length === 0,
     smoke.qa('.composer-input').length + ' 个 .composer-input')

@@ -183,6 +183,22 @@ export function DeleteSession(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * EndSessionTask stops whatever is executing in one session, on this window's owner's orders, and
+ * says what it did.
+ * 
+ * The execution is NOT this process's: a node's turn runs in whichever process hosts the node
+ * service (this one, or another Tachi on this machine), so the request goes through the local
+ * control interface — the door that exists for exactly this (node.OpenLocalClient). Nothing here
+ * invents a second path: the host answers the same call however it is reached.
+ * 
+ * Deleting the session afterwards is then allowed: with no execution running, what remains is the
+ * conversation's own hold, and that does not refuse the owner (session/retention.go).
+ */
+export function EndSessionTask(id: string): $CancellablePromise<string> {
+    return $Call.ByID(330502210, id);
+}
+
+/**
  * GetContextInfo returns the context-usage breakdown for the session the ring
  * belongs to. An unknown session (or one whose agent is not built yet) yields
  * the zero value, which the frontend renders as "not measured yet".

@@ -99,7 +99,7 @@ itself.** When two rows apply, run both. `-run` takes a comma-separated list.
 | skills discovery / the catalog | `skill-catalog`, `project-context` |
 | workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
 | 输入框的 `@session:` 引用（打进哪个命名空间、插进来的是什么、模型收到的是指针而不是正文） | `at-session` |
-| 子系统拥有的会话（行上的来源标签、只读横幅、被换掉的输入框） | `managed-session` |
+| 子系统拥有的会话（行上的来源标签、只读横幅、被换掉的输入框），以及它被一个**正在跑的任务**持有时那条出路 | `managed-session`, `managed-session-busy` |
 | a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
 | ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
 | a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
@@ -137,8 +137,16 @@ turn footer's ⋯ menu) plus its entry in `scenarios.go` (the mock's `steps`, th
 func), added to the routing table above. Keep both halves small: one behaviour per scenario, asserting what
 the user would notice.
 
-Three traps in the driver half, each of which fails a run that looks green:
+Four traps in the driver half, each of which fails a run that looks green:
 
+- **A synthetic click cannot reach a FOCUS change, so a behaviour hung on `blur` has to be driven as a blur.**
+  `smoke.click()` (and any `el.click()`) fires the handler but moves no focus and visits no coordinates — an
+  untrusted event gets no default action. So "click somewhere else and the rename box closes" is not testable
+  as written: on a real click the ORDER is mousedown → focus moves (blur) → mouseup → click, and only the blur
+  half is in reach here (`smoke.q('.session-rename').blur()` — the `projects` scenario drives exactly that).
+  Worse, the composition's other half cannot be asserted at all: a synthetic click lands on its row whether or
+  not a text box is covering it, so that check passes in the broken state and is not a check. Assert the
+  contract that makes the gesture work, and say in the comment why the gesture itself is out of reach.
 - **Read a computed style only for the frame AFTER the one that changed it.** A scripted key changes
   `--fs-scale` synchronously, but `getComputedStyle` keeps answering with the PREVIOUS frame's value until
   WebKit's style recalc runs — so measuring right after the key reads the size from before it, and the next
@@ -1007,12 +1015,27 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   tool NAME is the trap: a model emits a whole batch of calls before any of them runs.
 - **A session a SUBSYSTEM owns is openable but not drivable HERE**, and the desktop says so three ways from
   one field: `SessionItem.kind` (the session record's own `Kind`, see docs/agents/node.md) drives the row's
-  `.session-tag.is-managed`, the `.managed-banner` at the top of the transcript, and a composer REPLACED by
-  `.composer-readonly` — replaced, not disabled, because a greyed-out field still invites a click. **The
-  refusal is not the frontend's**: every send from here is refused by the agent's own entry
+  `.session-tag.is-managed`, the `.managed-banner` above the transcript, and a composer REPLACED by
+  `.composer-readonly` — replaced, not disabled, because a greyed-out field still invites a click. **The banner
+  is a row of the CONTENT COLUMN (a sibling of the header), NOT a child of `.chat-wrap`**: that box is a
+  default-direction ROW flex container whose job is to hold the scroller plus the floats anchored to it
+  (`.jump-latest`, `.find-bar.is-chat`), so a second in-flow child there lays out BESIDE the transcript — which
+  is what happened, with the banner's `flex-shrink: 0` giving it the left half of the window and squeezing
+  every message into a right-hand strip. The smoke scenario pins that geometry, because presence and wording
+  were all it checked while the layout was wrong.
+- **The refusal is not the frontend's**: every send from here is refused by the agent's own entry
   (`agent/managed.go`), and this is only the courtesy that keeps a reader from walking into it. The label text
   matches the TUI's and the web console's — three frontends, one sentence. `Kind` is a BINDING: changing
   `SessionInfo` means regenerating the wails bindings. Smoke: `managed-session`.
+- **A running execution holding that session gets a way out, and it is in the banner**: the delete is refused
+  while a task holds the session, so the banner — where the reason is already stated — carries
+  `.managed-banner-stop` and calls `AgentService.EndSessionTask`. The button appears only when
+  `SessionInfo.heldByTask` says so (read from the retention record by `ListSessions`, not from this process's
+  run map: the execution belongs to a NODE, which may live in another process), and the click goes through the
+  local control interface to whoever hosts it (`node.OpenLocalClient` → `POST /local/v1/session:end`). The
+  answer is the Go side's own sentence, shown in the banner: `"ok"`, or why not — and "this machine has no node
+  service running" is the TRUE answer in the smoke sandbox, which is why `managed-session-busy` clicks the
+  button and asserts that sentence rather than only the button's existence.
 
 **Rules that hold across every surface**
 

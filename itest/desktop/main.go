@@ -129,7 +129,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		// "current session", and the app opens the newest (ListSessions sorts by CreatedAt).
 		// Seeding them the other way round left the driver asserting on the wrong session —
 		// which looked exactly like "the project does not drive its member".
-		if err := sb.seedSession("无项目会话", nil, nil, "", ""); err != nil {
+		if err := sb.seedSession("无项目会话", nil, nil, "", "", false); err != nil {
 			return report(sc.name, nil, []Line{{Label: "unbound session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
@@ -149,7 +149,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	// An EXTRA session, seeded BEFORE the restored one so the app still opens the newest (it is
 	// the one a driver gets by clicking a row it has never opened — see seedSecond).
 	if len(sc.seedSecond) > 0 {
-		if err := sb.seedSession("另一个会话", nil, sc.seedSecond, "", ""); err != nil {
+		if err := sb.seedSession("另一个会话", nil, sc.seedSecond, "", "", false); err != nil {
 			return report(sc.name, nil, []Line{{Label: "second session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
@@ -161,7 +161,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "orphan chain fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
-	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID, sc.sessionKind); err != nil {
+	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID, sc.sessionKind, sc.sessionHeldByTask); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -417,7 +417,7 @@ func fatal(format string, args ...any) {
 // app uses. They have to be seeded here because a root set is the one piece of scenario state a
 // driver cannot build: the UI's only way in is a NATIVE directory picker, which a scripted run
 // cannot click.
-func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message, projectID string, kind string) error {
+func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message, projectID string, kind string, heldByTask bool) error {
 	// The store's base dir IS the sessions directory (each session is <dir>/<id>/),
 	// not the config dir — pointing it one level up would put the fixture where the app
 	// never looks, and startup would quietly create its own session instead.
@@ -457,6 +457,21 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 	}
 	if len(extraRoots) > 0 || len(seedMessages) > 0 || projectID != "" || kind != "" {
 		if err := mgr.UpdateMeta(cur); err != nil {
+			return err
+		}
+	}
+	// A running execution's hold, when the scenario asks for it: a retention record, written the
+	// way the node writes it (owner "node", ReasonTask, no deadline — a running task has none).
+	// The app reads it on the first render, which is the point: this is the state that refuses a
+	// delete and offers the owner the escape hatch.
+	if heldByTask {
+		retention, err := session.NewRetention(filepath.Join(sb.home, ".tachi", "session"), nil)
+		if err != nil {
+			return err
+		}
+		if err := retention.Acquire(session.Hold{
+			SessionID: cur.ID, Owner: "node", Reason: session.ReasonTask, Ref: "task-smoke",
+		}); err != nil {
 			return err
 		}
 	}

@@ -34,6 +34,9 @@ type Manager struct {
 const DefaultMaxKeep = 100
 
 func NewManager(l *logger.Logger) (*Manager, error) {
+	if l == nil {
+		l = logger.New("session")
+	}
 	dir, err := config.SessionDir()
 	if err != nil {
 		return nil, fmt.Errorf("session dir: %w", err)
@@ -59,6 +62,12 @@ func NewManager(l *logger.Logger) (*Manager, error) {
 // them. A store that does not (a test double, an in-memory store) has no holds to honour
 // either — the node is the only writer, and it always works through the real store.
 func NewManagerWithStore(store Store, l *logger.Logger) *Manager {
+	if l == nil {
+		// Defaulted HERE rather than at each log call: this manager logs from paths that decide
+		// whether a session is deleted, and a nil logger there is a panic on the refusal path —
+		// the one path a reader reaches exactly when something already went wrong.
+		l = logger.New("session")
+	}
 	m := &Manager{store: store, logger: l}
 	if withDir, ok := store.(interface{ BaseDir() string }); ok {
 		if retention, err := NewRetention(withDir.BaseDir(), l); err == nil {
@@ -252,6 +261,9 @@ func (m *Manager) deleteIfUnprotected(id string) deleteOutcome {
 			return nil
 		}
 		outcome = m.deleteNow(id)
+		if outcome == deleteRemoved {
+			m.clearRetiredLocked(id)
+		}
 		return nil
 	})
 	if err != nil {
@@ -495,13 +507,18 @@ func (m *Manager) LoadAPIRequests(sessionID string) ([]APIRequest, error) {
 	return m.store.LoadAPIRequests(sessionID)
 }
 
-// Delete deletes a session by ID.
+// Delete deletes a session by ID, on the owner's explicit instruction.
 //
-// A session something still needs is REFUSED, and the refusal carries the reason (which task
-// or conversation) so the reader knows what to end first. The decision is made under the
-// coordination lock and against the persisted holds, not against this process's memory: the
-// same check has to stop a desktop delete, an ACP delete and a count-based sweep in another
-// process, and only a shared, persisted answer can (design §9.4: 拒绝判定落在共享保留/删除层).
+// A session a TURN is writing into is REFUSED, and the refusal names the task so the reader knows
+// what to end first (or to stop, when it will not end by itself: the desktop's banner button,
+// node's `session:end`). The decision is made under the coordination lock and against the
+// persisted holds, not against this process's memory: the same check has to stop a desktop
+// delete, an ACP delete and a count-based sweep in another process, and only a shared, persisted
+// answer can (design §9.4: 拒绝判定落在共享保留/删除层).
+//
+// Everything ELSE about a session's life is the session store's own business — the count-based
+// cleanup, the user's pin, this delete. A remote conversation used to be an exception, held for a
+// retention window of its own; it is not any more (session/retention.go's ReasonTask comment).
 func (m *Manager) Delete(id string) error {
 	if m.retention == nil {
 		return m.store.DeleteSession(id)
@@ -517,7 +534,29 @@ func (m *Manager) Delete(id string) error {
 	if err != nil {
 		return err
 	}
+	if refusal == nil {
+		m.clearRetiredLocked(id)
+	}
 	return refusal
+}
+
+// clearRetiredLocked drops what is left of a session's record once the session itself is gone.
+//
+// The decision that allowed the delete proved nothing LIVE was holding it, so anything still on
+// the record is a retired reason (session/retention.go's ReasonContextRetired). With the session
+// gone that record names a directory which does not exist, and leaving it for the owner's next
+// startup to migrate is the kind of tidiness that turns into a mystery file in the data dir: the
+// delete is the moment the record stops having a subject.
+//
+// Callers hold the coordination lock.
+func (m *Manager) clearRetiredLocked(id string) {
+	if m.retention == nil {
+		return
+	}
+	if err := m.retention.clearLocked(id); err != nil {
+		m.logger.Error(context.Background(),
+			"session: could not clear a deleted session's retention record", err, "id", id)
+	}
 }
 
 // UpdateMeta persists the given session's metadata. It is safe to call on

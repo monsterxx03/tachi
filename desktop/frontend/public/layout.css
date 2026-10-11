@@ -468,9 +468,14 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 
 /* The read-only banner at the top of the transcript for such a session. A reader who arrived by
    the window (a restart restores the newest session) never saw the sidebar row, so the fact is
-   stated where it cannot be missed. It is a ROW inside chat-wrap rather than an overlay: it is
-   the reason the box below has no input, and a message sliding under it would read as a rendering
-   fault. */
+   stated where it cannot be missed. It is a ROW rather than an overlay: it is the reason the box
+   below has no input, and a message sliding under it would read as a rendering fault.
+
+   It is a row of the CONTENT COLUMN (App.tsx renders it beside the header, not inside chat-wrap),
+   and that placement is load-bearing: .chat-wrap is `display: flex` in its default ROW direction —
+   it exists to hold the scroller plus the floats anchored to it — so a second in-flow child there
+   lays out BESIDE the transcript. With `flex-shrink: 0` below, that put the banner across the left
+   half of the window and squeezed every message into a strip on the right. */
 .managed-banner {
   display: flex;
   align-items: baseline;
@@ -488,6 +493,24 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   white-space: nowrap;
 }
 .managed-banner-note { line-height: 1.45; }
+
+/* The owner's escape hatch, shown in the banner ONLY while a task holds the session (the button
+   is the answer to the refusal a delete gets, so it belongs where the reason is stated). `margin-
+   left: auto` on the first flexible child pushes it and the note to the right end of the row. */
+.managed-banner-stop {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--chrome-1);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.managed-banner-stop:hover { color: var(--accent-2); border-color: var(--accent-line); }
+.managed-banner-stop-note { color: var(--text-dim); font-size: 12px; }
 
 /* What stands in for the composer on such a session: the reason, in the place the input box
    would have been. The box is REMOVED rather than disabled because a greyed-out field still

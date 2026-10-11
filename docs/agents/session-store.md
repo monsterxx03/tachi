@@ -48,13 +48,20 @@ convention-not-history, split + index when a subject grows) apply to this split 
 
 ## What a cleanup may delete
 
-- **A session can be HELD, and a held session is never deleted — the record is on disk, not in the memory of
-  the manager that took it.** `session/retention.go` is the authority: one file per session under
-  `<sessionDir>/retention/holds/`, each naming the owner, the reason (`task` / `context`) and a deadline. The
-  count-based sweep skips a held session (`Manager.CleanupOldSessions`) and an explicit delete is REFUSED with
-  the reason (`Manager.Delete` → `SessionHeldError`), so `desktop.DeleteSession`, ACP's delete and a sweep in
-  another process cannot get round it. `Pinned`, `ThreadID` and `Kind` are NOT the mechanism — a pin is the
-  reader's own statement and lifting it must not drop a running task (design §9.4).
+- **A session can be HELD, and the hold is on disk rather than in the memory of the manager that took it.**
+  `session/retention.go` is the authority: one file per session under
+  `<sessionDir>/retention/holds/`, each naming the owner and the reason, released by that same (owner, ref)
+  pair. **There is ONE reason — `task`, an execution running in this session right now — and every deletion
+  path asks the same question and gets the same answer**: `Manager.CleanupOldSessions` skips a held session,
+  `Manager.Delete` refuses it with a `SessionHeldError` naming what to end, and the delete
+  RELEASES the remaining holds with the session (`Retention.protected` says why). There used to be a second
+  reason and two policies: a `context` hold kept a remote conversation's session for a window of its own, the
+  sweep respected it and the reader's own click did not. The window is gone (design §9.4): a remote
+  conversation's session is an ordinary session, so `desktop.DeleteSession`, ACP's delete and a sweep in
+  another process cannot get round anything. `Pinned`, `ThreadID` and `Kind` are NOT the mechanism — a pin is
+  the reader's own statement and lifting it must not drop a running task (design
+  §9.4). `Retention.BusySessions` answers "which sessions have a running execution" in one scan, which is what
+  the desktop sidebar needs to offer to stop one.
 - **Every decision that ends in a deletion is made under ONE cross-process lock**
   (`<sessionDir>/retention/retention.lock`, `Retention.Lock`), which is a different lock from the node's
   lifecycle lock and never shares its path: a node being online must not stop another process from cleaning up
@@ -63,12 +70,18 @@ convention-not-history, split + index when a subject grows) apply to this split 
   removed on release, like every other flock in this repo.
 - **The in-process lock comes SECOND.** The fixed order is file lock → `Manager`/store lock, so a caller must
   not hold the manager's mutex when it reaches for the retention lock; `Manager.Delete` and
-  `ManagerCleanupOldSessions` are written that way, and `Manager.New` sweeps only after releasing its own lock.
+  `Manager.CleanupOldSessions` are written that way, and `Manager.New` sweeps only after releasing its own lock.
   The reverse order is a deadlock between a sweep and a node binding a context.
 - **A hold also says what it can no longer know.** A hold whose file cannot be read keeps the session (skipped
   and reported), never releases it: unreadable protection is not the same as no protection. The owner of a
   hold's lifetime reconciles leftovers at startup (`node/runner.go`'s `reconcile`), because a crash can leave
-  a reason nobody will ever withdraw.
+  a reason nobody will ever withdraw. **Three readings, not two**: unreadable → keep and report; a reason
+  nobody has ever heard of → keep and report (a newer version may be holding it); a RETIRED reason
+  (`session.ReasonContextRetired`, retired `context`) → understood and protecting nothing, so the questions
+  this layer answers ignore it (`liveHolds` — the reader's delete is not blocked by a record saying "kept for
+  this conversation's window", and the sidebar is not offered a stop for an execution that does not exist),
+  its owner releases it at the next startup, and a delete takes the record with the session
+  (`Manager.clearRetiredLocked`).
 
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (Desktop Backend, the sidebar's reads),
 [checkpoints.md](checkpoints.md) (the sidecar files a turn writes under a session).

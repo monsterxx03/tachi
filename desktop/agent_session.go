@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -11,10 +12,16 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
+
+// nodeEndTaskTimeout bounds the local round trip that ends a session's work. Loopback plus one
+// small answer, so anything slower is a wedged host rather than a busy one.
+const nodeEndTaskTimeout = 10 * time.Second
 
 // SessionInfo is a lightweight session summary for the sidebar list.
 type SessionInfo struct {
@@ -52,6 +59,13 @@ type SessionInfo struct {
 	// turn whatever the frontend does. A read-only banner is a courtesy; the refusal is the
 	// boundary.
 	Kind string `json:"kind,omitempty"`
+	// HeldByTask says a running EXECUTION is holding this session (session.Retention's task hold).
+	//
+	// It is here for two decisions the reader makes in this window: whether a delete will be
+	// refused, and whether to offer to STOP that execution (EndSessionTask). Both are about
+	// work that is happening on this machine but NOT in this process — a node's turn — so the
+	// fact has to travel; the desktop's own run map says nothing about it.
+	HeldByTask bool `json:"heldByTask,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -118,9 +132,17 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	if err != nil {
 		return nil
 	}
+	// Which sessions an execution is holding comes from the retention record, in ONE scan for the
+	// whole list (session.Retention.BusySessions): the sidebar asks this about every row it draws,
+	// and the answer is "no" for almost all of them. A read that cannot be made leaves the flags
+	// false rather than failing the list — a sidebar that does not draw is worse than one that
+	// does not offer to stop something, and the delete path decides for itself either way.
+	busy := s.desk.busySessions()
 	infos := make([]SessionInfo, 0, len(list))
 	for _, ss := range list {
-		infos = append(infos, toSessionInfo(ss))
+		info := toSessionInfo(ss)
+		info.HeldByTask = busy[ss.ID]
+		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].UpdatedAt.After(infos[j].UpdatedAt) })
 	return infos
@@ -160,6 +182,68 @@ func (s *AgentService) DeleteSession(id string) string {
 		d.activeID = ""
 	}
 	d.mu.Unlock()
+	return "ok"
+}
+
+// busySessions reports which sessions a running execution is holding, keyed by session id.
+//
+// Read from the retention record rather than from this process's run map: the executions this
+// answers about are a NODE's, and a node's turn does not live here (it lives in whichever process
+// hosts the node service). A read that fails yields nothing rather than an error — see
+// ListSessions, which is the caller that has to keep drawing either way.
+func (d *desktopApp) busySessions() map[string]bool {
+	dir, err := config.SessionDir()
+	if err != nil {
+		return nil
+	}
+	retention, err := session.NewRetention(dir, nil)
+	if err != nil {
+		return nil
+	}
+	busy, err := retention.BusySessions()
+	if err != nil {
+		return nil
+	}
+	return busy
+}
+
+// EndSessionTask stops whatever is executing in one session, on this window's owner's orders, and
+// says what it did.
+//
+// The execution is NOT this process's: a node's turn runs in whichever process hosts the node
+// service (this one, or another Tachi on this machine), so the request goes through the local
+// control interface — the door that exists for exactly this (node.OpenLocalClient). Nothing here
+// invents a second path: the host answers the same call however it is reached.
+//
+// Deleting the session afterwards is then allowed: with no execution running, what remains is the
+// conversation's own hold, and that does not refuse the owner (session/retention.go).
+func (s *AgentService) EndSessionTask(id string) string {
+	if strings.TrimSpace(id) == "" {
+		return "缺少会话 id"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), nodeEndTaskTimeout)
+	defer cancel()
+
+	client, err := node.OpenLocalClient(ctx, config.NodeDir(), nil)
+	if err != nil {
+		// No node on this machine, or one that cannot be reached. The unavailable case gets a
+		// sentence of its own rather than the wrapped error: the node's own text ("nothing is
+		// published in …") already says where it looked, and repeating the reason in two languages
+		// reads like two failures.
+		if errors.Is(err, node.ErrUnavailable) {
+			return "这台机器上没有正在运行的节点服务，无法结束远端任务"
+		}
+		return err.Error()
+	}
+	ended, err := client.EndSessionWork(ctx, id)
+	if err != nil {
+		return err.Error()
+	}
+	if ended == 0 {
+		// Not an error: the state this window saw may simply be gone (the task finished, or the
+		// question deadline fired) between the read and the click.
+		return "该会话当前没有正在执行的任务"
+	}
 	return "ok"
 }
 

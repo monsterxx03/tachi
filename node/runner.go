@@ -229,23 +229,6 @@ const shutdownGrace = 3 * time.Second
 // release can only ever drop this node's holds, whichever other subsystems share the data dir.
 const nodeHoldOwner = "node"
 
-// contextHold is the context's reason to keep a session: a remote conversation can be
-// continued while it is within its retention window, and that window is measured from the last
-// time the context was USED — a conversation in daily use stays, an abandoned one ages out.
-func (r *runner) contextHold(binding contextBinding) session.Hold {
-	h := session.Hold{
-		Owner:     nodeHoldOwner,
-		Reason:    session.ReasonContext,
-		Ref:       binding.ContextID,
-		SessionID: binding.SessionID,
-		Since:     binding.CreatedAt,
-	}
-	if retention := r.cfg.Node.ContextRetention; retention > 0 {
-		h.ExpiresAt = binding.lastUsed().Add(retention)
-	}
-	return h
-}
-
 // taskHold is a running task's reason to keep the session it is working in. It has no
 // deadline: the task's own lifecycle ends it (a task that dies with the process is resolved
 // as interrupted at the next start, and reconciliation drops this hold then).
@@ -260,14 +243,13 @@ func (r *runner) taskHold(sessionID string, taskID a2a.TaskID) session.Hold {
 }
 
 // releaseTaskHold drops the task's own hold, and nothing else: a task reaching a terminal
-// state says nothing about whether its conversation can still be continued, so the context's
-// hold stays until its own window ends (design §9.4).
+// state says nothing about another execution still running in the same session, nor about any
+// other owner's hold (design §9.4).
 //
 // It is also called when a turn is stopped rather than finished — a cancel, a deadline, or
 // this node shutting down. In every one of those the EXECUTION is over, which is what the hold
-// was protecting; the session stays covered by the context's hold, and a task the process
-// leaves behind is resolved as interrupted (with the session it no longer needs) at the next
-// start.
+// was protecting, and a task the process leaves behind is resolved as interrupted (with the
+// session it no longer needs) at the next start.
 func (r *runner) releaseTaskHold(cr *contextRun, taskID a2a.TaskID) error {
 	if cr == nil || taskID == "" {
 		return nil
@@ -287,17 +269,13 @@ func (r *runner) releaseTaskHold(cr *contextRun, taskID a2a.TaskID) error {
 	return r.retention.Release(sessionID, nodeHoldOwner, string(taskID))
 }
 
-// holdForTurn writes the two reasons a session must survive a task: the context's (refreshed,
-// so its window starts at this use) and the task's.
+// holdForTurn writes the ONE reason a session must survive a turn: an execution is running in it.
 //
-// The context's comes first and the task's second, because the task's hold is the one that
-// must not exist without the other: a task hold whose session nobody protects as a
-// conversation would be released into a sweep the moment the task ends.
+// It is taken per turn rather than once per conversation, because that is exactly the lifetime it
+// describes — the session is protected while a turn is writing into it, and released when the turn
+// ends (node/retention.go's ReasonTask comment says why there is no second reason).
 func (r *runner) holdForTurn(cr *contextRun, taskID a2a.TaskID) error {
 	binding := *cr.binding
-	if err := r.retention.Acquire(r.contextHold(binding)); err != nil {
-		return fmt.Errorf("node: protect the conversation's session: %w", err)
-	}
 	if err := r.retention.Acquire(r.taskHold(binding.SessionID, taskID)); err != nil {
 		return fmt.Errorf("node: protect the task's session: %w", err)
 	}
@@ -330,16 +308,10 @@ func (r *runner) onSessionSwitch(cr *contextRun, old, next *session.Session) {
 	r.mu.Unlock()
 
 	binding.SessionID = next.ID
-	now := time.Now().UTC()
-	binding.LastUsedAt = now
 
-	if err := r.retention.Acquire(r.contextHold(binding)); err != nil {
-		// The turn is already writing into the new session, so the honest thing is to report
-		// and carry on: the record below still has to follow the conversation, or the next
-		// task would open the session this turn has left.
-		r.logger.Error(context.Background(), "node: could not protect the compacted session",
-			err, "context", binding.ContextID, "session", next.ID)
-	}
+	// The running task's hold moves to the session the conversation just moved into. The turn is
+	// already writing there, so a failure is reported and the record below still follows it —
+	// otherwise the next task would open the session this turn has left.
 	if held.taskID != "" {
 		if err := r.retention.Acquire(r.taskHold(next.ID, held.taskID)); err != nil {
 			r.logger.Error(context.Background(), "node: could not protect the running task's new session",
@@ -356,19 +328,16 @@ func (r *runner) onSessionSwitch(cr *contextRun, old, next *session.Session) {
 	cr.holds = holdState{sessionID: next.ID, taskID: held.taskID}
 	r.mu.Unlock()
 
-	// The old session is released LAST, and only for the refs that just moved: if it still
-	// carries another task's or context's hold, that one keeps it exactly where it is.
+	// The old session is released LAST, and only for the ref that just moved: if it still carries
+	// another execution's hold, that one keeps it exactly where it is.
 	if old != nil && old.ID != next.ID {
-		for _, ref := range []struct{ reason, ref string }{
-			{session.ReasonContext, binding.ContextID},
-			{session.ReasonTask, string(held.taskID)},
-		} {
-			if ref.ref == "" {
+		for _, ref := range []string{string(held.taskID)} {
+			if ref == "" {
 				continue
 			}
-			if err := r.retention.Release(old.ID, nodeHoldOwner, ref.ref); err != nil {
+			if err := r.retention.Release(old.ID, nodeHoldOwner, ref); err != nil {
 				r.logger.Error(context.Background(), "node: could not release the pre-compaction session",
-					err, "session", old.ID, "ref", ref.ref)
+					err, "session", old.ID, "ref", ref)
 			}
 		}
 	}
@@ -387,21 +356,14 @@ func sessionIDOf(s *session.Session) string {
 // reconcile repairs the retention record against what this node actually holds.
 //
 // It exists because a hold outlives the process that wrote it: a crash between "protect the
-// session" and "the task ended" leaves a reason nobody will ever withdraw, and only the owner
-// of a hold's lifetime can say which refs are stale (design §9.4: 恢复后对账). Both directions
-// of the mistake are covered — a stale hold is dropped, and a hold for a session that is gone
-// is dropped too, so the record converges on what is real.
+// session" and "the task ended" leaves a reason nobody will ever withdraw — and with no deadline
+// on a hold (there is none: a running execution has no predictable end), this owner is the ONLY
+// thing that can withdraw it (design §9.4: 恢复后对账). The record converges on what is real: a
+// hold whose execution this process does not have is dropped.
 func (r *runner) reconcile() {
-	if dropped, err := r.retention.Sweep(); err != nil {
-		r.logger.Error(context.Background(), "node: could not expire retention holds", err)
-	} else if dropped > 0 {
-		r.logger.Info(context.Background(), "node: released expired retention holds", "count", dropped)
-	}
-
 	holds, err := r.retention.HoldsByOwner(nodeHoldOwner)
 	if err != nil {
-		// Unreadable protection is not "no protection": the sweep already skipped anything it
-		// could not read, and the next start tries again.
+		// Unreadable protection is not "no protection": the next start tries again.
 		r.logger.Error(context.Background(), "node: could not reconcile retention holds", err)
 		return
 	}
@@ -415,17 +377,14 @@ func (r *runner) reconcile() {
 					// resolved as interrupted before this start.
 					r.releaseReconciled(sessionID, h, "the task it named is not running any more")
 				}
-			case session.ReasonContext:
-				binding, known := r.contexts.get(h.Ref)
-				if !known || binding.SessionID != sessionID {
-					// The conversation moved on or is gone: this hold names a session it does
-					// not hold any more.
-					r.releaseReconciled(sessionID, h, "the conversation is no longer in this session")
-					continue
-				}
-				if binding.expired(time.Now().UTC(), r.cfg.Node.ContextRetention) {
-					r.releaseReconciled(sessionID, h, "the conversation's retention window has passed")
-				}
+			case session.ReasonContextRetired:
+				// Written by a version that kept a conversation's session for a retention window.
+				// This node keeps nothing for a conversation, so the record is brought forward
+				// rather than reported as an unknown reason: nothing is running, and the session
+				// is the session store's again. (The retention layer already ignores it when it
+				// answers "may this be deleted", so a reader is not blocked while this waits for
+				// the next start.)
+				r.releaseReconciled(sessionID, h, "this version keeps no session for a conversation")
 			default:
 				r.logger.Warn(context.Background(), "node: keeping a retention hold this version does not know",
 					"reason", h.Reason, "session", sessionID)
@@ -553,14 +512,6 @@ func (r *runner) beginTurn(
 	if err != nil {
 		// Session preparation failed: the task fails explicitly. Continuing without a
 		// session would be working in a conversation nobody can find again (§7.1).
-		return nil, err
-	}
-
-	// Every turn re-checks the conversation's window and refreshes it. It cannot live in
-	// contextRun: that function returns the run this process already has cached, so a
-	// conversation that aged out while this node was running would keep working — the check
-	// would only ever fire after a restart.
-	if err := r.beginContextUse(cr); err != nil {
 		return nil, err
 	}
 
@@ -711,6 +662,55 @@ func (r *runner) stopTurn(taskID a2a.TaskID) bool {
 	lt.stop()
 	r.forgetTurn(taskID)
 	return true
+}
+
+// ownerEndedReason is what a task the machine's owner stopped says about itself. It is the text
+// the CALLER reads (taskText hands a terminal task's status message over), so it says who ended
+// it and what that leaves unknown — the same shape the startup recovery uses for a death.
+const ownerEndedReason = "the machine's owner stopped this execution; side effects before that point are unknown"
+
+// EndSessionWork stops whatever this session is executing, on the MACHINE OWNER's orders, and
+// reports how many executions it ended.
+//
+// It is deliberately NOT the protocol's cancel. That one arrives from the CALLER, belongs to it,
+// and means "I no longer want this"; this one is the owner of the machine saying "this has gone
+// on long enough" — the escape hatch for an execution that will never end by itself (a peer that
+// died, a state a bug left running), and the reason a session it holds can be deleted afterwards.
+// Nothing about it is available to a caller: it is reached through the loopback control interface.
+//
+// The state is written HERE because the stopper owns it (nodeExecutor.publish: a stopped turn
+// keeps nothing to say about itself), and stopTurn has already withdrawn the task's hold — the
+// turn's ending is what releases it, exactly as it does for a caller's cancel.
+func (r *runner) EndSessionWork(ctx context.Context, sessionID string) (int, error) {
+	binding, ok := r.contexts.bySession(sessionID)
+	if !ok {
+		// Nothing is running here, and saying so is the answer: an entry point asks this about a
+		// session it is about to delete, and "no" is what lets the delete go ahead.
+		return 0, nil
+	}
+
+	r.mu.Lock()
+	taskIDs := make([]a2a.TaskID, 0, len(r.turns))
+	for id, lt := range r.turns {
+		if lt.contextID == binding.ContextID {
+			taskIDs = append(taskIDs, id)
+		}
+	}
+	r.mu.Unlock()
+
+	ended := 0
+	for _, id := range taskIDs {
+		if !r.stopTurn(id) {
+			continue // already gone between the snapshot and here
+		}
+		if err := r.tasks.endByOwner(id, ownerEndedReason); err != nil {
+			r.logger.Error(ctx, "node: could not record the end of a task the owner stopped",
+				err, "task", string(id))
+			continue
+		}
+		ended++
+	}
+	return ended, nil
 }
 
 // forgetTurn drops a turn that has ended and any question it was waiting on.
@@ -937,18 +937,11 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 			return nil, fmt.Errorf("node: mark remote session: %w", err)
 		}
 		binding = &contextBinding{
-			ContextID:  contextID,
-			CallerID:   callerID,
-			SessionID:  sess.ID,
-			Workspace:  r.workspace,
-			CreatedAt:  sess.CreatedAt,
-			LastUsedAt: time.Now().UTC(),
-		}
-		// The session exists before it is protected — that order cannot be avoided, so the
-		// hold verifies the session is still there and the task fails if a sweep won the race
-		// (design §9.4: 既有 session 在获保护前须确认仍存在).
-		if err := r.retention.Acquire(r.contextHold(*binding)); err != nil {
-			return nil, fmt.Errorf("node: protect the new conversation's session: %w", err)
+			ContextID: contextID,
+			CallerID:  callerID,
+			SessionID: sess.ID,
+			Workspace: r.workspace,
+			CreatedAt: sess.CreatedAt,
 		}
 		if err := r.contexts.put(binding); err != nil {
 			return nil, err
@@ -997,53 +990,6 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 	sm.SetSessionSwitchHook(func(old, next *session.Session) { r.onSessionSwitch(cr, old, next) })
 	r.runs[contextID] = cr
 	return cr, nil
-}
-
-// beginContextUse is the per-turn half of a conversation's life: the retention window is
-// checked (and the turn REFUSED when it has passed), the use refreshes it, and the hold
-// follows the refresh.
-//
-// Refusing rather than starting fresh is the design's rule (§9.4): a context that aged out must
-// fail loudly, because a caller that asked to continue a conversation and silently got a new
-// one has been told something untrue about its own history.
-func (r *runner) beginContextUse(cr *contextRun) error {
-	now := time.Now().UTC()
-
-	r.mu.Lock()
-	binding := *cr.binding
-	r.mu.Unlock()
-
-	retention := r.cfg.Node.ContextRetention
-	if binding.expired(now, retention) {
-		// The window has passed, and the hold that kept the session is no longer a reason to:
-		// releasing it here (rather than waiting for a sweep) is what lets a cleanup reclaim
-		// the session as soon as the node notices.
-		if err := r.retention.Release(binding.SessionID, nodeHoldOwner, binding.ContextID); err != nil {
-			r.logger.Error(context.Background(), "node: could not release an expired conversation's hold",
-				err, "context", binding.ContextID, "session", binding.SessionID)
-		}
-		return fmt.Errorf("%w: context %s", ErrContextExpired, binding.ContextID)
-	}
-	if retention <= 0 {
-		// No window configured: there is nothing to refresh, and the hold has no deadline
-		// either (see contextHold).
-		return nil
-	}
-
-	binding.LastUsedAt = now
-	// The hold is re-written rather than extended in place: the same (owner, ref) replaces the
-	// record, which is what keeps ONE entry per conversation however often it is used.
-	if err := r.retention.Acquire(r.contextHold(binding)); err != nil {
-		return fmt.Errorf("node: refresh the conversation's protection: %w", err)
-	}
-	if err := r.contexts.put(&binding); err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	*cr.binding = binding
-	r.mu.Unlock()
-	return nil
 }
 
 // hostOnlyTools are the tools a remote turn is NEVER offered, whatever the operator's allowlist
@@ -1097,10 +1043,5 @@ func denyRemoteAsk(context.Context, string, string, string, string) (bool, error
 
 // ErrContextNotOwned is returned when a caller reaches a context that belongs to another.
 var ErrContextNotOwned = errors.New("node: context belongs to another caller")
-
-// ErrContextExpired is returned when a conversation's retention window has passed. It is
-// explicit on purpose: a context that aged out must not be answered with a NEW conversation
-// that looks like the old one (design §9.4: 不静默降级成新会话).
-var ErrContextExpired = errors.New("node: this conversation's retention window has passed")
 
 func ptr[T any](v T) *T { return &v }

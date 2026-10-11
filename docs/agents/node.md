@@ -49,7 +49,14 @@ split + index when a subject grows) apply to this split too.
   the identity and **never the token**. It is loopback FOREVER (`checkLoopback`) — not because it lacks a
   credential but because it is a way for the other Tachi processes on this machine to reach the one holding
   the lock: nobody else's business, and binding it anywhere else hands that credential's endpoint to the
-  network for no gain. The remote A2A surface is a separate listener with its own mux (`/message:send`,
+  network for no gain. **`POST /local/v1/session:end` is the other route**, and it is the machine owner's own
+  way to stop an execution that belongs to one session (`runner.EndSessionWork`): it takes a SESSION id — a
+  reader has a session, never a task id — resolves it through the binding to the live turn, and resolves the
+  task `CANCELED` with a reason, because a stopped turn keeps nothing to say about itself
+  (`nodeExecutor.publish`). Nothing about it is a caller's: a caller's cancel is the protocol's, arrives over
+  the A2A surface, and belongs to whoever owns the task. Any process on this machine reaches it with
+  `node.OpenLocalClient`, which reads what is published and proves the answer comes from that same instance.
+  The remote A2A surface is a separate listener with its own mux (`/message:send`,
   `/tasks/...`, the well-known Card path); its address is the operator's (`node.listen`) and
   the remote one may bind ANY address (`checkRemoteListen` no longer restricts it) because it always serves
   TLS with a client certificate off loopback — so a caller is always identified, and who may reach the port is
@@ -89,8 +96,8 @@ split + index when a subject grows) apply to this split too.
 - **Admission runs before any side effect.** The chain is: `busyGuard` in front of the handler → the
   `admission.Before` interceptor (fingerprint over caller/message id/digest; a replay returns the STORED task
   as the result) → the task record is persisted → the executor yields `SUBMITTED`+`WORKING` → `beginTurn` →
-  `contextRun` (bind or create the session) → `beginContextUse` (per-turn expiry check and refresh) → holds →
-  the turn's ctx → `LoadSessionHistory` / `RunConversationStream`. Nothing before that point may write the
+  `contextRun` (bind or create the session) → holds → the turn's ctx → `LoadSessionHistory` /
+  `RunConversationStream`. Nothing before that point may write the
   session, build a reminder, generate a title, create a checkpoint, fire a hook or call a model. The local
   side mirrors it: `RunConversationStream` / `RunOneOffStream` refuse a managed session before the goroutine
   starts, and `managedSessionWriteRefusal` covers rewind, which has no trusted-execution grant.
@@ -241,20 +248,28 @@ split + index when a subject grows) apply to this split too.
 
 ## Holds and reconciliation
 
-- **Two kinds of hold, with different lifetimes.** A context hold expires at last-use +
-  `node.context_retention` (default 168h); a task hold has no deadline and is withdrawn at the terminal state.
-  The order is session exists → hold on disk → context binding written → loop starts, so a session that loses
-  to a cleanup fails visibly instead of running unprotected. Every turn re-checks the window and refreshes it;
-  past the deadline, continuing is refused (`ErrContextExpired`) and the hold is released, which returns the
-  session to ordinary life rather than deleting it.
+- **One kind of hold, and one reason: an execution is running.** `reason=task`, no deadline, withdrawn at
+  the terminal state. A remote conversation's session gets NO retention window of its own — it lives and dies
+  by the session store's ordinary lifecycle (count-based cleanup, pins, an explicit delete), the same as a
+  conversation the reader had. The order is session exists → hold on disk → context binding written → loop
+  starts, so a session that loses to a cleanup fails visibly instead of running unprotected.
+- **The previous rule, and why it went.** A context used to hold its session for `node.context_retention`
+  (168h) from its last use, on top of the task's hold. It was dropped: the window has no standing in the A2A
+  spec (`contextId` is an opaque grouping id, nothing more), and it made the retention layer a second clock
+  beside the session store's — two answers to "how long does this live" and two sets of delete rules. What it
+  cost: the owner's delete is now the only way to reclaim a conversation nobody wants, and a sender that comes
+  back after a cleanup gets an explicit failure (never a silent new conversation) that may now arrive earlier.
 - **Results do not live in the session.** Artifacts and task states are under `<DataDir>/tasks/`, so a
   reclaimed or compacted session cannot take away a result the node still promises to serve.
 - **Compaction moves the protection, it does not drop it.** `FinalizeCompact` notifies the host before the old
-  session's own bookkeeping is cleared; the node protects the new session, persists the binding, and only then
-  releases what the old one no longer needs.
-- **Startup reconciles leftovers**: expired holds are swept, then each remaining hold is released if its task
-  is terminal or gone, or if its context no longer points at that session. A reason the code does not
-  recognise is KEPT and reported — releasing it would drop a session another version is holding.
+  session's own bookkeeping is cleared; the node moves the running task's hold to the new session, persists the
+  binding, and only then releases the ref that moved.
+- **Startup reconciles leftovers**: each hold is released if its task is terminal or gone, and a hold
+  carrying the retired `context` reason (`session.ReasonContextRetired` — a conversation kept for a retention
+  window, which this version does not do) is released too, so a data dir written by an older version converges
+  on the one reason there is. With no deadline on a hold, this owner is the ONLY thing that can withdraw a
+  leftover one. A reason the code has never heard of is different: KEPT and reported, because releasing it
+  would drop a session another version is holding.
 - **`Close` waits for every turn's stream to be read to the end** (bounded by `shutdownGrace = 3s`), because
   that end is where the loop writes its session and checkpoints. A drain that times out is expected; closing
   never rewrites task records — the next start resolves those as interrupted.
@@ -299,11 +314,18 @@ Each of these is a decision, not an oversight — the design's ordering is fixed
   So a third-party peer that does this is handled on the SENDING side (see "The sending side"), and this
   node's own answer shape stays single.
 - **An explicit "close this context" entry point.** Its callers would be "the sender says it is done with this
-  conversation" and "the owner cleans up by hand"; neither can call it before `RemoteTask` lands on the
-  sending side. Expiry already covers the ordinary ending, and the semantics (refuse new continuations, refuse
-  when a task is still running, release last) are already the order the holds are released in.
-- **A context count / capacity limit.** The only thing that grows is contexts still inside the retention
-  window, and that window IS the limit: a context's session becomes collectable when it expires.
+  conversation" and "the owner cleans up by hand". **The owner's half is now answered a different way** — an
+  explicit delete no longer respects a conversation at all, only a running execution, so the reader who wants
+  this session gone deletes it (`session/retention.go`). That leaves the SENDER's half, which needs something
+  a peer can call and now matters MORE: with no retention window, nothing on this side reclaims a conversation
+  because it went quiet — its session waits for the ordinary count-based cleanup. The semantics are already
+  fixed (refuse new continuations, refuse when a task is still running, release last); only the wiring is
+  missing.
+- **Cleaning up context bindings.** The bindings under `<DataDir>/node/contexts/` are only ever written — one
+  small JSON per context this node has seen, growing with the conversations, not with anything that gets
+  collected. The retention window never cleaned them either, but it let you say "the live ones are inside the
+  window". The binding is worth keeping (it is what makes `continue_from` recognise its own conversation, and
+  what tells a delete whose session this is), so the fix is a cleanup that follows the session, not an expiry.
 - **Contention tests** (create/compact/delete re-entry, another process taking the coordination lock while a
   node is online). The lock order is fixed, written in comments and in the design; the tests wait for a real
   concurrent scenario to drive them.

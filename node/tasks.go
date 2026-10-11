@@ -213,6 +213,36 @@ func (s *taskStore) resolveInterrupted() error {
 	return s.writeIndex()
 }
 
+// endByOwner resolves a task the MACHINE'S OWNER ended, keeping the reason in its status.
+//
+// The state is CANCELED rather than FAILED, and that is the protocol's own vocabulary: a request
+// stopped this work that would otherwise have kept running. FAILED would report it as work that
+// went wrong, which is a different thing to read about from the far side — and the far side DOES
+// read it (taskText hands a terminal task's status message to the caller).
+//
+// A task already in a terminal state is left exactly as it is: the caller's cancel, the question
+// deadline or the turn itself may have got there first, and overwriting a real outcome with ours
+// would be the record lying about what happened.
+func (s *taskStore) endByOwner(taskID a2a.TaskID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("%w: %s", a2a.ErrTaskNotFound, taskID)
+	}
+	if rec.Task.Status.State.Terminal() {
+		return nil
+	}
+	rec.Task.Status = a2a.TaskStatus{
+		State:   a2a.TaskStateCanceled,
+		Message: a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(reason)),
+	}
+	rec.Version++
+	rec.UpdatedAt = time.Now().UTC()
+	return s.putLocked(rec)
+}
+
 // failQuestion ends a task whose question was never answered.
 //
 // It is the deadline's half of parking: the state must not keep saying INPUT_REQUIRED, which

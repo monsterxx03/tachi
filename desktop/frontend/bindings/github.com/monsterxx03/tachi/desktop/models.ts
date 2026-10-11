@@ -873,6 +873,16 @@ export interface SessionInfo {
      * boundary.
      */
     "kind"?: string;
+
+    /**
+     * HeldByTask says a running EXECUTION is holding this session (session.Retention's task hold).
+     * 
+     * It is here for two decisions the reader makes in this window: whether a delete will be
+     * refused, and whether to offer to STOP that execution (EndSessionTask). Both are about
+     * work that is happening on this machine but NOT in this process — a node's turn — so the
+     * fact has to travel; the desktop's own run map says nothing about it.
+     */
+    "heldByTask"?: boolean;
 }
 
 /**

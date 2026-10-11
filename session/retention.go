@@ -32,10 +32,11 @@ import (
 // `ThreadID` is a channel's lookup key, and `Kind` says what a session IS, not how long it
 // has to live: a finished remote conversation is still a remote conversation.
 //
-// The record is per session and per REFERENCE. One task ending releases that task's hold and
-// leaves the context's alone, so "release" can never mean "release everything holding this
-// session" — the node's reason for keeping a session and the context's are different reasons
-// with different lifetimes, and one of them ending says nothing about the other.
+// The record is per session and per REFERENCE: a hold names (owner, ref), and releasing it names
+// the same pair, so "release" can never mean "release everything holding this session". The owner
+// is the subsystem that took the hold — this node is one owner among however many share the data
+// dir — and the ref is one execution, so an execution ending says nothing about another one still
+// running in the same session, nor about anybody else's hold.
 //
 // Layout, inside the session data dir:
 //
@@ -74,48 +75,80 @@ const (
 
 // Reasons a hold exists. They are stored in the record (an operator reading the file should
 // see why), and they are what a refusal quotes to the user.
+//
+// There is ONE reason a hold may be WRITTEN for, and that is the shape the design landed on: a
+// hold means an EXECUTION is running in this session right now. A remote conversation used to hold
+// its session for a retention window of its own, which made the retention layer a second clock
+// beside the session store's — two answers to "how long does this live", and two rules for whether
+// a delete may go through. What is left is the session's own lifecycle (count-based cleanup, pins,
+// an explicit delete) for everything else, and this one fact for the thing that genuinely cannot
+// lose its session. The reason that went — a conversation's own window — is named below rather than
+// forgotten: a record an older version left behind is still something this version has to answer
+// for.
 const (
 	// ReasonTask: a task needs this session until it reaches a terminal state.
 	ReasonTask = "task"
-	// ReasonContext: a remote conversation is still within its retention period, so it can be
-	// continued even while no task is running (§7.1.2's "idle but answerable" window).
-	ReasonContext = "context"
+
+	// ReasonContextRetired is the reason an older version wrote for "a remote conversation inside
+	// its retention window". This version writes it for nothing and keeps nothing for it: the
+	// window is gone (see above), so a hold carrying it protects nothing anybody can act on.
+	//
+	// It is NAMED rather than left to the unknown-reason path, and the difference is what the
+	// reader sees. An unknown reason has to be kept (a newer version may be relying on it), so it
+	// would surface as a refusal telling this machine's owner to end a task in a conversation that
+	// has no task in it — a dead end. Naming it lets both ends be right: the questions this layer
+	// ANSWERS ignore it (may this be deleted, is an execution running), and the node's startup
+	// reconciliation RELEASES it, so a data dir converges on the one reason that exists
+	// (node/runner.go's reconcile).
+	ReasonContextRetired = "context"
 )
+
+// retiredReason reports whether a hold names a reason this version has retired: readable,
+// understood, and no longer a reason to keep anything.
+func retiredReason(reason string) bool { return reason == ReasonContextRetired }
+
+// liveHolds drops the retired ones. It is what the QUESTIONS this layer answers must see, while
+// the record on disk keeps them until its owner reconciles — dropping them silently at read time
+// would hide a migration that has not happened yet.
+func liveHolds(holds []Hold) []Hold {
+	kept := make([]Hold, 0, len(holds))
+	for _, h := range holds {
+		if retiredReason(h.Reason) {
+			continue
+		}
+		kept = append(kept, h)
+	}
+	return kept
+}
 
 // Hold is one reason a session must not be deleted.
 type Hold struct {
 	// Owner is the subsystem holding it. Ownership is recorded rather than assumed: several
 	// owners will share this data dir, and a release must only ever drop one owner's hold.
 	Owner string `json:"owner"`
-	// Reason is what kind of thing is holding it (ReasonTask / ReasonContext).
+	// Reason is what kind of thing is holding it (ReasonTask, today the only one).
 	Reason string `json:"reason"`
-	// Ref identifies the holder: a task id, a context id. Release is by (owner, ref), which is
-	// what makes "one of them ended" expressible.
+	// Ref identifies the holder: a task id. Release is by (owner, ref), which is what makes
+	// "one of them ended" expressible.
 	Ref string `json:"ref"`
 	// SessionID is the session the hold is written on. It is duplicated from the file name so
 	// a record read on its own says what it is about; the file name stays the authority.
 	SessionID string `json:"session_id"`
 	// Since is when the hold was taken (diagnostics; also the honest answer to "why is this
 	// still here").
+	//
+	// There is deliberately no deadline: a running execution has no predictable end, and a hold
+	// that expired on the clock would release a session a turn is still writing into. What ends
+	// this hold is the execution ending — or, when a process died mid-execution, the startup
+	// reconciliation that owns this ref's lifetime (node/runner.go's reconcile).
 	Since time.Time `json:"since"`
-	// ExpiresAt ends the hold without anyone having to act, for holds whose reason has a
-	// limited life (a context's retention window). Zero means "until released".
-	ExpiresAt time.Time `json:"expires_at,omitzero"`
-}
-
-// Expired reports whether a hold's deadline has passed.
-func (h Hold) Expired(now time.Time) bool {
-	return !h.ExpiresAt.IsZero() && !now.Before(h.ExpiresAt)
 }
 
 // Describe renders one hold as a short phrase for a refusal message.
 func (h Hold) Describe() string {
 	what := h.Reason
-	switch h.Reason {
-	case ReasonTask:
+	if h.Reason == ReasonTask {
 		what = "任务"
-	case ReasonContext:
-		what = "对话"
 	}
 	if h.Ref == "" {
 		return what
@@ -123,12 +156,13 @@ func (h Hold) Describe() string {
 	return what + " " + h.Ref
 }
 
-// SessionHeldError is the refusal an explicit delete gets for a session a hold protects.
+// SessionHeldError is the refusal a delete gets for a session a running execution protects.
 //
-// It is a value rather than a bare error so the frontends can render the REASON (which hold,
-// for what) instead of a generic failure: the reader's next action is to end that task or
-// close that conversation, and a refusal that does not say which one is not actionable
-// (design §9.4: the interfaces only display the reason, the decision lives here).
+// It is a value rather than a bare error so the frontends can render the REASON (which task)
+// instead of a generic failure: the reader's next action is to end that task — or, when it will
+// not end by itself, to stop it (the desktop's banner button, node's `session:end`) — and a
+// refusal that does not say which one is not actionable (design §9.4: the interfaces only display
+// the reason, the decision lives here).
 type SessionHeldError struct {
 	SessionID string
 	Holds     []Hold
@@ -139,7 +173,7 @@ func (e *SessionHeldError) Error() string {
 	for _, h := range e.Holds {
 		parts = append(parts, h.Describe())
 	}
-	return fmt.Sprintf("会话 %s 仍在使用中（%s），请先结束对应任务或关闭该对话再删除",
+	return fmt.Sprintf("会话 %s 仍在使用中（%s），请先结束对应任务再删除",
 		e.SessionID, strings.Join(parts, "、"))
 }
 
@@ -220,29 +254,46 @@ func (r *Retention) Acquire(h Hold) error {
 	})
 }
 
-// Release drops the holds matching this owner and ref. Releasing something that is not held is
-// not an error: a crash and a restart both end up releasing the same holds twice.
+// Release drops one hold, identified by (owner, ref), and only that one: a task ending says
+// nothing about a conversation that can still be continued, and vice versa.
+//
+// Releasing something that is not held is not an error: a crash and a restart both end up
+// releasing the same holds twice.
 func (r *Retention) Release(sessionID, owner, ref string) error {
 	if sessionID == "" || owner == "" || ref == "" {
 		return nil
 	}
-	return r.Lock(func() error {
-		holds, err := r.read(sessionID)
-		if err != nil {
-			return err
+	return r.Lock(func() error { return r.releaseLocked(sessionID, owner, ref) })
+}
+
+// releaseLocked is Release with the coordination lock already held.
+func (r *Retention) releaseLocked(sessionID, owner, ref string) error {
+	holds, err := r.read(sessionID)
+	if err != nil {
+		return err
+	}
+	kept := holds[:0]
+	for _, h := range holds {
+		if h.Owner == owner && h.Ref == ref {
+			continue
 		}
-		kept := holds[:0]
-		for _, h := range holds {
-			if h.Owner == owner && h.Ref == ref {
-				continue
-			}
-			kept = append(kept, h)
-		}
-		if len(kept) == len(holds) {
-			return nil
-		}
-		return r.writeLocked(sessionID, kept)
-	})
+		kept = append(kept, h)
+	}
+	if len(kept) == len(holds) {
+		return nil
+	}
+	return r.writeLocked(sessionID, kept)
+}
+
+// clearLocked removes a session's whole record.
+//
+// It is what a DELETE leaves behind: the decision that allowed the delete proved nothing LIVE was
+// holding the session, so whatever is still in the file is a retired reason — and with the session
+// gone, that file names a directory which does not exist (see Manager.clearRetiredLocked).
+//
+// Callers hold the coordination lock.
+func (r *Retention) clearLocked(sessionID string) error {
+	return r.writeLocked(sessionID, nil)
 }
 
 // Held returns the holds that keep a session, which is what a refusal and a repair both need.
@@ -250,22 +301,53 @@ func (r *Retention) Release(sessionID, owner, ref string) error {
 // It reads without the coordination lock: writes publish atomically, so a reader either sees
 // the whole old record or the whole new one. Reading is not deciding — a deletion must go
 // through Lock.
+//
+// It is the RECORD, not the answer: a retired reason is included here (that is what a repair has
+// to see in order to release it), while the two questions this layer answers — may this be
+// deleted, is an execution running — go through liveHolds first.
+//
+// Every hold in it is live: a hold ends by being RELEASED (the execution ended) or by the
+// startup reconciliation that owns its ref, never by the clock (see Hold.Since).
 func (r *Retention) Held(sessionID string) ([]Hold, error) {
 	if sessionID == "" {
 		return nil, nil
 	}
-	holds, err := r.read(sessionID)
+	return r.read(sessionID)
+}
+
+// BusySessions lists the sessions a running execution holds.
+//
+// It exists for the one decision an entry point makes about someone else's work: whether to offer
+// to STOP it (the node's own `session:end` route, node/local.go) and whether a delete it is about
+// to attempt will be refused. A sidebar asks this about every row it draws, so the cost matters:
+// one directory listing plus a read per HELD session — nobody writes a hold for an idle one —
+// rather than a file read per row.
+//
+// A hold that cannot be READ is an error rather than "not busy": the caller is about to enable a
+// destructive action, and guessing there is worse than reporting that it does not know.
+func (r *Retention) BusySessions() (map[string]bool, error) {
+	entries, err := os.ReadDir(r.holdsDir())
 	if err != nil {
-		return nil, err
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // nothing was ever held in this data dir
+		}
+		return nil, fmt.Errorf("session: read retention holds: %w", err)
 	}
-	now := time.Now().UTC()
-	live := make([]Hold, 0, len(holds))
-	for _, h := range holds {
-		if !h.Expired(now) {
-			live = append(live, h)
+	busy := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		holds, err := r.read(id)
+		if err != nil {
+			return nil, fmt.Errorf("session: read retention hold for %s: %w", id, err)
+		}
+		if len(liveHolds(holds)) > 0 {
+			busy[id] = true
 		}
 	}
-	return live, nil
+	return busy, nil
 }
 
 // HoldsByOwner returns every hold this owner has, keyed by session.
@@ -308,86 +390,36 @@ func (r *Retention) HoldsByOwner(owner string) (map[string][]Hold, error) {
 	return out, nil
 }
 
-// Sweep drops holds whose deadline has passed and reports how many it dropped.
-//
-// It is the other half of "a hold has a lifetime": a context's protection must end by itself,
-// because the node that took it may never run again to release it. Dropping a hold is the
-// only safe direction of that mistake — the session merely becomes deletable.
-func (r *Retention) Sweep() (int, error) {
-	now := time.Now().UTC()
-	dropped := 0
-	err := r.Lock(func() error {
-		// The lock made the directory (see Lock), so this read cannot be looking at nothing.
-		entries, err := os.ReadDir(r.holdsDir())
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-				continue
-			}
-			id := strings.TrimSuffix(entry.Name(), ".json")
-			holds, err := r.read(id)
-			if err != nil {
-				return err
-			}
-			kept := holds[:0]
-			for _, h := range holds {
-				if h.Expired(now) {
-					dropped++
-					continue
-				}
-				kept = append(kept, h)
-			}
-			if len(kept) == len(holds) {
-				continue
-			}
-			if err := r.writeLocked(id, kept); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	if dropped > 0 && r.log != nil {
-		r.log.Info(context.Background(), "session: retention holds expired", "dropped", dropped)
-	}
-	return dropped, nil
-}
+// errProtectionUnknown says the retention record could not be read at all. It is separate from
+// "held" because the two lead to the same decision for different reasons — and the reason is what
+// the log has to say.
+var errProtectionUnknown = errors.New("session: retention record unreadable")
 
-// errProtectionUnknown reports that the holds could not be read, so no decision about
-// deletion can be made. It is distinct from ErrSessionHeld because the two mean different
-// consequences for the reader: "something still needs this" versus "we cannot tell, and
-// deleting could lose what something needs" (design §9.4: 保护元数据暂不可读…保守跳过并报告).
-var errProtectionUnknown = errors.New("session: cannot tell whether this session is protected")
-
-// protected returns the error an explicit delete of this session must be refused with, or nil.
+// protected answers the ONE question every deletion path asks: is an execution running in this
+// session right now?
 //
-// Callers that are about to DELETE call it inside Lock (see Manager.Delete and the cleanup):
-// the answer must be the one that was true at the moment of the decision.
+// It used to be two questions — a count-based sweep respected any hold, while an owner's explicit
+// delete respected only an execution's — because a remote conversation held its session for a
+// retention window of its own. That window is gone (see the ReasonTask comment): with a single
+// reason, "may this be deleted?" has a single answer, and the sweep and the reader's click agree
+// by construction. A second reason would split this again, and the split belongs HERE, next to the
+// reasons, rather than in each caller.
+//
+// Callers that are about to DELETE call it inside Lock (see Manager.Delete and the cleanup): the
+// answer must be the one that was true at the moment of the decision. Unreadable protection is
+// not "no protection" — it is an error, and both callers keep their hands off. A RETIRED hold is
+// neither: this version knows what it means and knows it protects nothing (liveHolds).
 func (r *Retention) protected(sessionID string) error {
 	holds, err := r.read(sessionID)
 	if err != nil {
-		// Unreadable protection is not the same as no protection.
 		return fmt.Errorf("%w: %s: %s", errProtectionUnknown, sessionID, err)
 	}
-	now := time.Now().UTC()
-	live := make([]Hold, 0, len(holds))
-	for _, h := range holds {
-		if !h.Expired(now) {
-			live = append(live, h)
-		}
-	}
-	if len(live) == 0 {
+	holds = liveHolds(holds)
+	if len(holds) == 0 {
 		return nil
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].Since.Before(live[j].Since) })
-	return &SessionHeldError{SessionID: sessionID, Holds: live}
+	sort.Slice(holds, func(i, j int) bool { return holds[i].Since.Before(holds[j].Since) })
+	return &SessionHeldError{SessionID: sessionID, Holds: holds}
 }
 
 // holdFile is what one session's hold file contains.

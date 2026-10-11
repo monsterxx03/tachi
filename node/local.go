@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -25,11 +26,27 @@ const (
 	// this slice; the snapshot / delegation / task routes arrive with their slices.
 	localRouteHandshake = "/local/v1/handshake"
 
+	// localRouteEndWork stops whatever is executing in one session — the machine owner's own
+	// escape hatch, reached only from this machine (see runner.EndSessionWork for why this is
+	// not the protocol's cancel). It takes the session id as a query parameter: a reader has a
+	// session, never a task id.
+	localRouteEndWork = "/local/v1/session:end"
+	// localQuerySession names that parameter, in one place because the client and the handler
+	// have to agree on it.
+	localQuerySession = "session"
+
 	// maxLocalErrorBody caps how much of an unexpected response body the client
 	// copies into its error. Loopback and a small JSON answer: anything longer is
 	// not worth carrying around.
 	maxLocalErrorBody = 512
 )
+
+// endWorkResult is what the end-work route answers with: how many executions it stopped. Zero is
+// a real answer — "nothing was running in that session" — and it is the one an entry point acts
+// on when it is about to delete the session.
+type endWorkResult struct {
+	Ended int `json:"ended"`
+}
 
 // localInfo is the published connection info. It carries an instance id as well as
 // an address because the address alone cannot tell a reader whether the process
@@ -98,13 +115,28 @@ func publishLocalInfo(dir string, info *localInfo) error {
 	return nil
 }
 
+// workEnder is the host's half that an ENTRY POINT on this machine can reach: stop whatever is
+// executing in a session.
+//
+// It is a separate optional interface rather than a method on the executor, because only the real
+// task runner has executions to stop — the placeholder echo executor an integration test uses has
+// none, and a node built on it must answer "nothing to stop" rather than fail the route.
+type workEnder interface {
+	EndSessionWork(ctx context.Context, sessionID string) (int, error)
+}
+
 // localHandler serves the local control interface.
 //
 // The listener is loopback-only, and every request still has to carry the
 // credential: being reachable only from this machine is not authentication.
 // Another local user, or any process that guessed a port, can connect — what it
 // cannot do is read the 0600 file the credential was written to.
-func localHandler(info *localInfo) http.Handler {
+//
+// The surface is passed in for the ONE route that has to reach the executor (ending a session's
+// work): that capability lives in the hosting process, and this interface is how the other
+// entries on this machine ask for it. It may be nil — a node whose surface has no such half
+// answers "nothing to end".
+func localHandler(info *localInfo, surface *a2aSurface) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+localRouteHandshake, func(w http.ResponseWriter, r *http.Request) {
 		if !bearerMatches(r, info.Token) {
@@ -118,6 +150,34 @@ func localHandler(info *localInfo) http.Handler {
 			APIVersion: info.APIVersion,
 			PID:        info.PID,
 		})
+	})
+	mux.HandleFunc("POST "+localRouteEndWork, func(w http.ResponseWriter, r *http.Request) {
+		if !bearerMatches(r, info.Token) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="tachi-node"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		sessionID := r.URL.Query().Get(localQuerySession)
+		if sessionID == "" {
+			http.Error(w, "a session id is required", http.StatusBadRequest)
+			return
+		}
+		var ender workEnder
+		if surface != nil && surface.state != nil {
+			ender, _ = surface.state.(workEnder)
+		}
+		if ender == nil {
+			// Nothing on this node can be running work that it knows how to stop: the answer is
+			// "nothing ended", not a failure — the caller asked about ITS session.
+			writeJSON(w, endWorkResult{Ended: 0})
+			return
+		}
+		ended, err := ender.EndSessionWork(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, endWorkResult{Ended: ended})
 	})
 	return mux
 }

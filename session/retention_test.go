@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The retention record: the reason a session must survive a cleanup, kept where every process
@@ -113,7 +112,7 @@ func TestAHoldIsVisibleToEveryManagerOverTheSameDataDir(t *testing.T) {
 
 	held := fillTo(t, node, 1)[0]
 	if err := retention.Acquire(Hold{
-		SessionID: held.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-1",
+		SessionID: held.ID, Owner: "node", Reason: ReasonTask, Ref: "task-1",
 	}); err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -135,52 +134,91 @@ func TestAHoldIsVisibleToEveryManagerOverTheSameDataDir(t *testing.T) {
 	}
 }
 
-func TestDeletingAHeldSessionIsRefusedWithItsReason(t *testing.T) {
+// One hold kind, one answer. A running execution refuses every deletion path — the owner's click
+// and the count-based sweep alike — and releasing it lets the session go. Both halves are here
+// because the pair IS the rule: the sweep and the click cannot disagree while there is a single
+// reason a session can be held for.
+func TestARunningExecutionRefusesEveryDeletionAndReleasingItLetsTheSessionGo(t *testing.T) {
 	_, store, mgr, retention := newRetentionFixture(t)
 	sess := fillTo(t, mgr, 1)[0]
 
-	for _, h := range []Hold{
-		{SessionID: sess.ID, Owner: "node", Reason: ReasonTask, Ref: "task-42"},
-		{SessionID: sess.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-7"},
-	} {
-		if err := retention.Acquire(h); err != nil {
-			t.Fatalf("Acquire: %v", err)
-		}
+	if err := retention.Acquire(Hold{
+		SessionID: sess.ID, Owner: "node", Reason: ReasonTask, Ref: "task-42",
+	}); err != nil {
+		t.Fatalf("Acquire: %v", err)
 	}
 
+	// A turn is writing into this session right now, so the delete is refused — and the refusal
+	// names WHAT to end, because the reader's next move is to end that task (or to stop it, when
+	// it will not end by itself: node's `session:end`, the desktop's banner button).
 	err := mgr.Delete(sess.ID)
 	var refusal *SessionHeldError
 	if !errors.As(err, &refusal) {
-		t.Fatalf("deleting a held session must be refused with the reason, got %v", err)
+		t.Fatalf("deleting a session a task is running in must be refused with the reason, got %v", err)
 	}
-	if len(refusal.Holds) != 2 {
-		t.Errorf("the refusal must name every hold, got %v", refusal.Holds)
+	if len(refusal.Holds) != 1 || refusal.Holds[0].Ref != "task-42" {
+		t.Errorf("the refusal must name the running task, got %v", refusal.Holds)
 	}
-	// The reader's next action is to end that task or close that conversation, so the refusal
-	// has to say which ones.
-	for _, want := range []string{"task-42", "ctx-7"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal %q does not mention %s", err.Error(), want)
-		}
+	if !strings.Contains(err.Error(), "结束对应任务") {
+		t.Errorf("the refusal has to say what the reader can do: %q", err.Error())
 	}
 	if _, err := store.LoadMeta(sess.ID); err != nil {
 		t.Errorf("a refused delete must not touch the session: %v", err)
 	}
 
-	// Releasing ONE reason is not releasing the other: a task ending says nothing about a
-	// conversation that can still be continued.
+	// The execution ends. Nothing holds the session any more, so the ordinary lifecycle owns it
+	// again: the count-based sweep may take it, and so may the reader.
 	if err := retention.Release(sess.ID, "node", "task-42"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if err := mgr.Delete(sess.ID); err == nil {
-		t.Fatal("the conversation's hold still stands, so the delete must still be refused")
+	if err := mgr.Delete(sess.ID); err != nil {
+		t.Fatalf("with no execution running, the owner's delete must go through: %v", err)
+	}
+	if _, err := store.LoadMeta(sess.ID); err == nil {
+		t.Error("the session should be gone")
+	}
+}
+
+// A reason this version RETIRED is neither honoured nor forgotten.
+//
+// Not honoured: the record a previous version left names a promise this version does not make
+// ("keep this conversation's session for a window"), so the two questions this layer answers must
+// ignore it. A reader whose only hold is that one has to be able to delete the conversation — and
+// the sidebar must not offer to stop an execution that does not exist, which is what a refusal
+// reading "请先结束对应任务" about a conversation with no task in it would amount to.
+//
+// Not forgotten: the FILE stays until its owner migrates it (node/runner.go's reconcile), which is
+// the one place that knows what the reason meant. What this test also pins is that the delete
+// itself is that migration's second half: with the session gone, the record has no subject left.
+func TestARetiredReasonNeitherRefusesNorSurvivesItsSession(t *testing.T) {
+	_, store, mgr, retention := newRetentionFixture(t)
+	sess := fillTo(t, mgr, 1)[0]
+
+	if err := retention.Acquire(Hold{
+		SessionID: sess.ID, Owner: "node", Reason: ReasonContextRetired, Ref: "context-1",
+	}); err != nil {
+		t.Fatalf("Acquire: %v", err)
 	}
 
-	if err := retention.Release(sess.ID, "node", "ctx-7"); err != nil {
-		t.Fatalf("Release: %v", err)
+	busy, err := retention.BusySessions()
+	if err != nil {
+		t.Fatalf("BusySessions: %v", err)
 	}
+	if busy[sess.ID] {
+		t.Error("a retired reason is not an execution running in a session")
+	}
+	if holds, err := retention.Held(sess.ID); err != nil || len(holds) != 1 {
+		t.Fatalf("the record is the owner's to migrate, so it has to be readable: %v (%v)", holds, err)
+	}
+
 	if err := mgr.Delete(sess.ID); err != nil {
-		t.Fatalf("with nothing holding it the session must delete: %v", err)
+		t.Fatalf("a retired reason must not refuse the owner's delete: %v", err)
+	}
+	if _, err := store.LoadMeta(sess.ID); err == nil {
+		t.Error("the session should be gone")
+	}
+	if holds, err := retention.Held(sess.ID); err != nil || len(holds) != 0 {
+		t.Errorf("a deleted session must not leave a record naming it: %v (%v)", holds, err)
 	}
 }
 
@@ -200,59 +238,6 @@ func TestAHoldCannotBeTakenOnASessionThatIsGone(t *testing.T) {
 	}
 }
 
-func TestAnExpiredHoldStopsProtectingAndIsSwept(t *testing.T) {
-	_, store, mgr, retention := newRetentionFixture(t)
-	sess := fillTo(t, mgr, 1)[0]
-
-	if err := retention.Acquire(Hold{
-		SessionID: sess.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-1",
-		ExpiresAt: time.Now().Add(20 * time.Millisecond),
-	}); err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	if err := mgr.Delete(sess.ID); err == nil {
-		t.Fatal("a hold within its window must refuse the delete")
-	}
-
-	time.Sleep(40 * time.Millisecond)
-
-	// Expiry is decided by the clock, not by whoever reads the record: a node that never runs
-	// again must not leave a session protected forever.
-	if err := mgr.Delete(sess.ID); err != nil {
-		t.Fatalf("an expired hold must not keep refusing: %v", err)
-	}
-	if _, err := store.LoadMeta(sess.ID); err == nil {
-		t.Fatal("the session should be gone")
-	}
-
-	// And the expired record itself is cleaned up by the sweep rather than lingering.
-	// Sweep is the clock's half of a hold's lifetime: what has passed is dropped from the
-	// record, and what has not is left alone.
-	live := fillTo(t, mgr, 1)[0]
-	for _, h := range []Hold{
-		{SessionID: live.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-expired", ExpiresAt: time.Now().Add(-time.Hour)},
-		{SessionID: live.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-live", ExpiresAt: time.Now().Add(time.Hour)},
-	} {
-		if err := retention.Acquire(h); err != nil {
-			t.Fatalf("Acquire: %v", err)
-		}
-	}
-	dropped, err := retention.Sweep()
-	if err != nil {
-		t.Fatalf("Sweep: %v", err)
-	}
-	if dropped == 0 {
-		t.Error("an expired hold must be dropped, not kept as a record nobody will ever clear")
-	}
-	holds, err := retention.Held(live.ID)
-	if err != nil {
-		t.Fatalf("Held: %v", err)
-	}
-	if len(holds) != 1 || holds[0].Ref != "ctx-live" {
-		t.Errorf("the sweep should have kept exactly the live hold, got %v", holds)
-	}
-}
-
 func TestHoldsByOwnerReportsOnlyThatOwnersHolds(t *testing.T) {
 	_, _, mgr, retention := newRetentionFixture(t)
 	created := fillTo(t, mgr, 2)
@@ -260,7 +245,7 @@ func TestHoldsByOwnerReportsOnlyThatOwnersHolds(t *testing.T) {
 	holds := []Hold{
 		{SessionID: created[0].ID, Owner: "node", Reason: ReasonTask, Ref: "t1"},
 		{SessionID: created[0].ID, Owner: "other", Reason: ReasonTask, Ref: "t2"},
-		{SessionID: created[1].ID, Owner: "node", Reason: ReasonContext, Ref: "c1"},
+		{SessionID: created[1].ID, Owner: "node", Reason: ReasonTask, Ref: "t3"},
 	}
 	for _, h := range holds {
 		if err := retention.Acquire(h); err != nil {
@@ -278,7 +263,7 @@ func TestHoldsByOwnerReportsOnlyThatOwnersHolds(t *testing.T) {
 	if got := mine[created[0].ID]; len(got) != 1 || got[0].Ref != "t1" {
 		t.Errorf("session %s: got %v", created[0].ID, got)
 	}
-	if got := mine[created[1].ID]; len(got) != 1 || got[0].Reason != ReasonContext {
+	if got := mine[created[1].ID]; len(got) != 1 || got[0].Reason != ReasonTask {
 		t.Errorf("session %s: got %v", created[1].ID, got)
 	}
 }
@@ -287,14 +272,13 @@ func TestReacquiringTheSameRefReplacesItRatherThanAdding(t *testing.T) {
 	_, _, mgr, retention := newRetentionFixture(t)
 	sess := fillTo(t, mgr, 1)[0]
 
-	// A context that keeps being used keeps refreshing ONE record: a grown list would make the
-	// refusal unreadable and the file unbounded.
-	for i := range 3 {
+	// The same holder keeps refreshing ONE record rather than piling up: a grown list would make
+	// the refusal unreadable and the file unbounded.
+	for range 3 {
 		if err := retention.Acquire(Hold{
-			SessionID: sess.ID, Owner: "node", Reason: ReasonContext, Ref: "ctx-1",
-			ExpiresAt: time.Now().Add(time.Duration(i+1) * time.Hour),
+			SessionID: sess.ID, Owner: "node", Reason: ReasonTask, Ref: "task-1",
 		}); err != nil {
-			t.Fatalf("Acquire #%d: %v", i, err)
+			t.Fatalf("Acquire: %v", err)
 		}
 	}
 
@@ -305,8 +289,8 @@ func TestReacquiringTheSameRefReplacesItRatherThanAdding(t *testing.T) {
 	if len(holds) != 1 {
 		t.Fatalf("refreshing a hold must not add a second one: %v", holds)
 	}
-	if time.Until(holds[0].ExpiresAt) < 2*time.Hour {
-		t.Errorf("the record should carry the latest deadline, got %s", holds[0].ExpiresAt)
+	if holds[0].Ref != "task-1" {
+		t.Errorf("the kept record should be the one just written, got %+v", holds[0])
 	}
 }
 

@@ -54,6 +54,16 @@ func (e *nodeExecutor) reconcile() { e.runner.reconcile() }
 
 func (e *nodeExecutor) shutdown() { e.runner.shutdown() }
 
+// EndSessionWork forwards the machine owner's stop to the runner.
+//
+// The forwarding exists because the SURFACE hands out the executor (that is what a node builds
+// its handler around), while the operation is about one of this machine's sessions rather than
+// about a caller's task — so it is not part of a2asrv.AgentExecutor, and it is reached through
+// the workEnder assertion the local control interface makes.
+func (e *nodeExecutor) EndSessionWork(ctx context.Context, sessionID string) (int, error) {
+	return e.runner.EndSessionWork(ctx, sessionID)
+}
+
 // waitingQuestion is the admission guard's view of what this node is waiting on (see
 // questionSource): the guard decides whether a message is an answer BEFORE the SDK starts an
 // execution for it, which is the only place a refusal can still be a protocol error.

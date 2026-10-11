@@ -159,7 +159,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 	}
 
 	srv := &http.Server{
-		Handler:           localHandler(info),
+		Handler:           localHandler(info, remote),
 		ReadHeaderTimeout: localHTTPTimeout,
 	}
 	go func() {

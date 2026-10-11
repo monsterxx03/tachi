@@ -113,6 +113,11 @@ type scenario struct {
 	// write a session record — and the managed state has to be the FIRST render's, which is exactly
 	// what a restart finds: a window opened onto a receiving node's execution record.
 	sessionKind string
+	// sessionHeldByTask takes a RUNNING execution's hold on the seeded session (a retention
+	// record, session.ReasonTask), which is the state that refuses a delete and offers the owner
+	// the escape hatch. Seeded the same way and for the same reason as sessionKind: it is a
+	// persisted record, and what the window does with it has to be visible on the first render.
+	sessionHeldByTask bool
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -3534,6 +3539,27 @@ permissions:
 			after: func(c *checkCtx) {
 				c.check("只读会话没有产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
 				c.check("mock 脚本没被消耗", c.mockErr == nil, errText(c.mockErr))
+			},
+		},
+		// managed-session-busy: the same session WITH a running execution holding it. That hold is
+		// what refuses a delete, and the window's answer to it is a button in the banner — this
+		// scenario is the one that pins the button, its absence in the scenario above, and the
+		// honest answer the backend gives when there is no node service to stop (the sandbox has
+		// none). Clicking it here is therefore a REAL round trip that fails in a known way: a test
+		// that only checked the button's presence would pass with the binding mis-wired.
+		{
+			name:              "managed-session-busy",
+			sessionKind:       session.KindA2AExecution,
+			sessionHeldByTask: true,
+			files: map[string]string{
+				"README.md": "# smoke\n\nmanaged-session-busy scenario's working directory\n",
+			},
+			seedMessages: []session.Message{
+				{Type: session.MessageTypeUser, Content: "检查昨天的备份"},
+				{Type: session.MessageTypeAssistant, Content: "发现两个目录未完成备份。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("只读会话没有产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
 			},
 		},
 	}
