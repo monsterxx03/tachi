@@ -1,4 +1,4 @@
-// Package sessionref resolves @session: references and backs the session picker:
+// Package sessionref resolves #s: references and backs the session picker:
 // "which conversation is this" is answered from the session store, never from a
 // second copy of it.
 //

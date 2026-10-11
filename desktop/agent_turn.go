@@ -1136,9 +1136,9 @@ type sessionRun struct {
 	compaction *compactionRecord
 }
 
-// delegatorFor returns the sending side for this configuration, rebuilt when the peer list
-// changes (see node.DelegatorCache). Nil means this process cannot delegate right now.
-func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
+// delegatorCache is this process's ONE sending-side cache, built on first use and kept in step with
+// the peers config leaf (see node.DelegatorCache).
+func (d *desktopApp) delegatorCache(cfg *config.Config) *node.DelegatorCache {
 	if cfg == nil {
 		return nil
 	}
@@ -1148,9 +1148,29 @@ func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
 	}
 	cache := d.delegator
 	d.delegatorMu.Unlock()
+	return cache
+}
 
-	// The cache is asked with no app lock held: it does its own locking, and the rule this
-	// codebase follows is one lock at a time (a disk read under mu is how the desktop's own
-	// turn goroutines would start queueing behind the sidebar's).
+// senderFor returns the sending side as the CONCRETE type, for the callers that need more than the
+// tool layer's contract: the node board shows each peer's card and the address this machine dials,
+// and RemoteDelegator is deliberately blind to both.
+func (d *desktopApp) senderFor(cfg *config.Config) *node.Sender {
+	cache := d.delegatorCache(cfg)
+	if cache == nil {
+		return nil
+	}
+	// The cache is asked with no app lock held: it does its own locking, and the rule this codebase
+	// follows is one lock at a time (a disk read under mu is how the desktop's own turn goroutines
+	// would start queueing behind the sidebar's).
+	return cache.ForSender(cfg.Peers)
+}
+
+// delegatorFor returns the sending side for this configuration, rebuilt when the peer list
+// changes (see node.DelegatorCache). Nil means this process cannot delegate right now.
+func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
+	cache := d.delegatorCache(cfg)
+	if cache == nil {
+		return nil
+	}
 	return cache.For(cfg.Peers)
 }

@@ -160,6 +160,13 @@ type desktopApp struct {
 	delegatorMu sync.Mutex
 	delegator   *node.DelegatorCache
 
+	// peers is the '#' picker's node list (which nodes this machine may delegate to, and what the
+	// last look found). It is kept across calls because the probe's results and its rate limit live
+	// in it; its peer list and sender are read through providers, so it follows the config.
+	// Guarded by peersMu, NOT by mu, for the same reason delegatorMu is.
+	peersMu sync.Mutex
+	peers   *node.PeerList
+
 	// promptCache memoizes built system prompts, keyed by the exact build inputs
 	// (working directory + session ID) — see systemPromptFor. Guarded by
 	// promptMu, NOT by mu: the build is slow (it probes git) and must never run

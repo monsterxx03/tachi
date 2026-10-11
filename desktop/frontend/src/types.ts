@@ -162,29 +162,37 @@ export const AT_SEARCH_DEBOUNCE_MS = 120
 export interface AtMatch {
   path: string
   isDir: boolean
-  // ref is the reference the backend wants inserted ('@' included): a match under
+  // ref is the reference the backend wants inserted (the mark included): a match under
   // the primary root is relative, one under an additional root is absolute — a
   // relative path there would resolve against the primary and point elsewhere.
   ref?: string
   // root labels the additional root a match came from ("" = primary), so two roots
   // holding the same path are tellable apart in the list.
   root?: string
-  // kind marks a row from the "@session:" namespace. Files leave it unset; a
-  // session row carries a date instead of a root tag, and a title where a file
-  // row carries a path.
-  kind?: 'session'
+  // kind marks which namespace a row came from — it is what the picker's header and its row tags
+  // read, so the header cannot disagree with the rows. Files leave it unset.
+  kind?: 'session' | 'agent' | 'prefix'
+  // date is a session row's last update; a file row carries a path instead.
   date?: string
   // workingDir is the directory that conversation ran in — what tells two
   // sessions with the same title apart.
   workingDir?: string
+  // idLabel and reach are a NODE row's identity and the last look's verdict, already worded by the
+  // backend (agentref.IDLabel/ReachWord): the same fact in every frontend, so one window cannot say
+  // "offline" while the other says "checking".
+  idLabel?: string
+  reach?: string
+  // note is a row's one-line explanation: a node's own description, or what a '#' namespace names.
+  note?: string
 }
 
-// AtPickerState is the composer's @-picker: the reference being typed
-// (start index + query), the matches, the highlighted row and the number of
-// references already present in the input. Files and sessions share it: the
-// query's prefix decides which namespace the backend was asked about.
+// AtPickerState is the composer's reference picker: the reference being typed
+// (start index, the mark it opens with, query), the matches, the highlighted row and
+// the number of references already present in the input. Every namespace shares it: the mark and
+// the query's prefix decide which namespace the backend was asked about.
 export interface AtPickerState {
   start: number
+  mark: string
   query: string
   items: AtMatch[]
   idx: number

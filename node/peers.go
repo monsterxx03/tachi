@@ -202,18 +202,46 @@ func (d *peerDirectory) Lookup(ctx context.Context, name string) (peer, error) {
 	return peer{}, &UnknownPeerError{Name: name, Known: d.Names()}
 }
 
-// Snapshot describes every configured peer, for the reminder. It never fails: each entry
-// carries its own resolution state.
+// Snapshot describes every configured peer, for the reminder and the node picker. It never fails:
+// each entry carries its own resolution state.
+//
+// The peers are asked IN PARALLEL, and that is not a micro-optimization: the failures are what cost
+// time. A peer that is down is one that does not answer, so a sequential walk pays every peer's
+// timeout one after another — a fleet of three unreachable nodes would hold the picker (and the
+// turn that triggered the reminder) for as long as their timeouts add up to, for an answer that was
+// "none of them" from the first one. Each goroutine writes its own slot, so the result keeps the
+// configured order, which is the order a reminder reads in.
 func (d *peerDirectory) Snapshot(ctx context.Context) []peer {
 	if d == nil {
 		return nil
 	}
-	out := make([]peer, 0, len(d.peers))
-	for _, p := range d.peers {
-		card, err := d.card(ctx, p)
-		out = append(out, peer{Name: p.Name, URL: p.URL, Note: p.Note, Card: card, Err: err})
+	out := make([]peer, len(d.peers))
+	var wg sync.WaitGroup
+	for i, p := range d.peers {
+		wg.Go(func() {
+			// d.card does its own locking (the card cache is shared), so concurrent callers are
+			// what it is written for.
+			card, err := d.card(ctx, p)
+			out[i] = peer{Name: p.Name, URL: p.URL, Note: p.Note, Card: card, Err: err}
+		})
 	}
+	wg.Wait()
 	return out
+}
+
+// forgetCards drops every cached card, so the next Snapshot really asks the network.
+//
+// It exists for the board's refresh button: a card cache is what makes the reminder and the picker
+// cheap, and a person who pressed 刷新 has asked for the cards as they are NOW — answering that
+// with a cached read would be answering a question they did not ask. Failures are dropped with the
+// successes, so a node that was down a second ago gets a fresh chance.
+func (d *peerDirectory) forgetCards() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.cards = make(map[string]*peerCard)
+	d.mu.Unlock()
 }
 
 // card returns the peer's Agent Card, from the cache when it is fresh.

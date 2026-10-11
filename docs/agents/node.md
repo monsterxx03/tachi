@@ -9,7 +9,7 @@
 | **自己起还是附着，以及那两个监听器** | 你动启动、`node.lock`、`local.json`、握手或监听地址 |
 | **收到的一轮请求 —— 顺序就是保证** | 你动 `runner.go`、`executor.go`、`tasks.go` 或受理层 |
 | **跨两次调用的一轮（停放）** | 你动接收侧的 AskUser、`park.go`、`question_timeout` / `max_parked` 或取消 |
-| **发送侧** | 你动 `remoteclient.go`、`peers.go`、`delegations.go`、`sender.go`、`delegatorcache.go` 或某个委派提醒 |
+| **发送侧** | 你动 `remoteclient.go`、`peers.go`、`peerlist.go`、`delegations.go`、`sender.go`、`delegatorcache.go` 或某个委派提醒 |
 | **文件跨机器（三个方向）** | 你动 `node/partfile.go`、消息里的 Part、`SendFile` 在节点上的含义，或 `remoteclient` 取回文件 |
 | **持有与对账** | 你动节点的持有、`session/retention.go` 或任何会话删除 |
 | **塑造了上面一切的三个 SDK 事实** | 某个协议形状的东西失败，而代码看着没问题 |
@@ -59,6 +59,8 @@
   WebFetch / SubAgent 那样用自己的指针替换掉全部输出：远端答案的头几个字符通常就是答案，而同一段文本也正是提醒渲染的东西——那里放指针会让每个长答案都花一次 `ReadFile`，并让摘要变成一个文件路径。外溢文件名来自**本地记录**而不是时间戳（一个每轮都变的名字会给提醒塞进一行移动的文本，那是每轮都要付的提示词前缀开销：`docs/agents/prompt-cache.md`），而且这也让重复外溢覆盖掉自己的文件。外溢失败（没有目录、磁盘满、权限不足）回退到裸的摘录——一次失败的工具调用比一次答得少一点的更糟。**没有外溢，剩下的部分在任何代价下都够不到**：它在这里被解码一瞬然后丢掉，而对端自己那份又卡在同一个界内（一次 `get` 会再截一次）。这**不是**那件被禁止的事——把一个远端**绝对路径**当作本地可读的交出去；这个文件是副本，就在这台机器上，而说明也这么说。存下的请求（`promptExcerptLen`）遵循同一条按字符的规则；而声明的节点名按**字节**切（`strutil.TruncateBytes`），因为那里的上限真的是字节数。
 - **空的 `LogicalID` 是一个「作用域」，不是通配符。** 它是无会话运行（`-p`）归档的地方，所以一个脚本后续的运行只看得到自己的委派，看不到任何真实会话的；`Sender.RemoteTasks` 总是按它过滤，而那个过滤是无条件的——没有它，一次 `list` 会显示这台机器跑过的每一个任务，那既没用，也是会话之间的泄漏。
 - **委派器按入口各一份，对端集合变了就重建，而「失败」的打开不会被缓存**（瞬时问题会自愈）。缓存键是 name+URL+**note**，因为对不可达节点的一份陈旧描述比一次重建更糟。没有对端 → `nil` 委派器 → 没有工具也没有提醒。对端 Card 的查找连**失败**也缓存（5 分钟），所以一个宕掉的节点不会每轮都花一次超时，而够不到的对端是沉默而不是错误——调用方是在提醒里知道的。
+- **节点选择器（`#a:`）问的是同一份目录，但一次都不等网络**（`node/peerlist.go`）。一张表由本地事实立刻答出来——配置里的别名与 note（`peer-identities.json` 里 pin 住的身份）——而可达性是**上次后台探测**的结果：`PeerList.Probe` 起一次探测（in-flight 去重 + `probeInterval`，于是一串 keystroke 不会变成一串请求），答案落在下一次 `Snapshot` 里；`Checked=false` 是「还没看过」，绝不能当成「连不上」（`agentref.ReachWord` 说的就是这件事）。**探测函数由入口点注入**（它已经持有的那个 sender）：在这里另建一个等于在画列表的路上**创建身份与自签证书**。card 是**并行**取的（`peerDirectory.Snapshot`，每个 peer 一个 goroutine、结果保持配置顺序），因为代价全在失败那一侧——一个下线的节点要靠超时才知道，串行就是把这些超时一份份接起来。
+- **同一个 `PeerList` 有两个投影，面板那个可以「现在就问」**。`PeerReports(ctx, force)` 是发送侧给面板的那份：别名、**本机配置的地址**（不是 card 自称的）、pin 住的身份、`PeerCard` 摘要（name/description/version/entries/skills/abilities，都标着「自称」）、以及没有卡片时的原因；`force=true` 先作废整份 card 缓存（`peerDirectory.forgetCards`），因为一个人按了刷新，用五分钟前的缓存回答等于回答另一个问题。选择器的 `Snapshot` 与面板的 `Details` 读的是**同一轮答案**，所以两者不会对「谁活着」各说一套。`PeerList.Refresh(ctx)` 是那个按钮的同步版本：等到答案落地才返回，且**重复按不会叠**——第二次调用等的是已经在飞的那一轮（`refreshing` 那个 channel），而不是再发一轮请求。`DelegatorCache.ForSender` 是留给这类调用者的：工具层的 `RemoteDelegator` 故意看不见地址与卡片。
 - **门禁就是谁附着。** 两个委派工具都是 run 级附加件（`agent.WithExtraTools`），从不进注册表，所以 cron 和 ambient 结构上就够不到它们——没有需要保持同步的拒绝名单。四个入口会附着它们（TUI 用户轮、桌面用户轮、channel 定向轮、`-p`）；`/compact` 和一次性的 `--commit` / `--review` 运行不会。
 
 ## 文件跨机器（三个方向）

@@ -3,14 +3,18 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/monsterxx03/tachi/agent/sessionref"
-	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/monsterxx03/tachi/agent/agentref"
+	"github.com/monsterxx03/tachi/agent/atfile"
+	"github.com/monsterxx03/tachi/agent/sessionref"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // seedAtFileDir creates a directory with a couple of entries and makes it the
@@ -31,9 +35,15 @@ func atLabels(matches []atMatch) []string {
 	return out
 }
 
-// TestAtSessionCompletion covers the popup's other namespace: "@session:" searches
-// the session store instead of the working directory, and Tab inserts the
-// reference the expansion reads back — never the session's content.
+// staticAgentSource is the node namespace over a fixed peer list, the way a real one
+// sits over node.PeerList.
+func staticAgentSource(peers ...agentref.Peer) *agentref.Source {
+	return agentref.New(func() []agentref.Peer { return peers })
+}
+
+// TestAtSessionCompletion covers the conversation namespace: "#s:" searches the
+// session store, and Tab inserts the reference the expansion reads back — never the
+// session's content.
 func TestAtSessionCompletion(t *testing.T) {
 	seedAtFileDir(t)
 	dir := t.TempDir()
@@ -53,20 +63,20 @@ func TestAtSessionCompletion(t *testing.T) {
 	i.SetCurrentSession("2026-10-04-200000-other002")
 
 	// The bare namespace opens on every OTHER conversation.
-	i.textarea.SetValue("@session:")
+	i.textarea.SetValue("#s:")
 	i.updateCompletions()
 	require.Len(t, i.atMatches, 1, "the current session is not offered")
-	assert.Equal(t, "@session:2026-10-04-100000-hugo0001", i.atMatches[0].Ref)
+	assert.Equal(t, "#s:2026-10-04-100000-hugo0001", i.atMatches[0].Ref)
 	assert.Contains(t, i.atMatches[0].Label, "安装Hugo")
 	assert.Contains(t, i.atMatches[0].Label, "2026-10-04 20:32")
 
 	// A query narrows it, and the file namespace is untouched by a session row.
-	i.textarea.SetValue("@session:hugo")
+	i.textarea.SetValue("#s:hugo")
 	i.updateCompletions()
 	require.Len(t, i.atMatches, 1)
 
 	i, _ = i.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	assert.Equal(t, "@session:2026-10-04-100000-hugo0001 ", i.textarea.Value())
+	assert.Equal(t, "#s:2026-10-04-100000-hugo0001 ", i.textarea.Value())
 }
 
 // Without a session store the namespace offers nothing — the file completion a
@@ -75,7 +85,7 @@ func TestAtSessionCompletionWithoutAStore(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
 
-	i.textarea.SetValue("@session:hugo")
+	i.textarea.SetValue("#s:hugo")
 	i.updateCompletions()
 
 	assert.Nil(t, i.atMatches)
@@ -125,4 +135,127 @@ func TestAtFileCompletionNotTriggeredMidWord(t *testing.T) {
 	i.updateCompletions()
 
 	assert.Nil(t, i.atMatches)
+}
+
+// The bare '#' offers the namespaces themselves, so the spelling does not have to be
+// remembered; picking one opens it rather than ending the reference. That last part is the whole
+// gesture: a trailing space would close the reference before the reader got to type anything.
+func TestHashOpensWithBothNamespaces(t *testing.T) {
+	seedAtFileDir(t)
+	i := NewInputArea(10, "", nil)
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas", NodeID: "cd726b44aa11bb22"}))
+
+	i.textarea.SetValue("#")
+	i.updateCompletions()
+
+	require.Len(t, i.atMatches, 2)
+	assert.Equal(t, []string{"#a:", "#s:"}, atLabels(i.atMatches))
+	assert.True(t, i.atMatches[0].Prefix)
+	assert.Contains(t, i.atMatches[0].Note, "节点")
+
+	// Typing part of a prefix narrows the list instead of leaving it: one gesture.
+	i.textarea.SetValue("#s")
+	i.updateCompletions()
+	require.Len(t, i.atMatches, 1)
+	assert.Equal(t, "#s:", i.atMatches[0].Label)
+
+	// Tab on the first row inserts the prefix, keeps the popup up, and re-reads the SAME
+	// reference — so what it now shows is that namespace's rows.
+	i.textarea.SetValue("#")
+	i.updateCompletions()
+	i, _ = i.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	assert.Equal(t, "#a:", i.textarea.Value(), "a namespace row opens the reference, it does not end it")
+	require.NotNil(t, i.atMatches, "the popup stays up on the namespace it just opened")
+	assert.True(t, i.atMatches[0].Agent)
+	assert.Contains(t, i.atMatches[0].Label, "nas")
+}
+
+// A node row carries the three things a reader needs to tell machines apart: the alias the model
+// must hand to DelegateTask, the identity THIS machine pinned, and what the last look found.
+func TestAtAgentCompletion(t *testing.T) {
+	seedAtFileDir(t)
+	i := NewInputArea(10, "", nil)
+	i.SetAgentSource(staticAgentSource(
+		agentref.Peer{Alias: "ugreen-nas", NodeID: "cd726b446c34386e", Note: "家里的 NAS",
+			Description: "A Tachi node", Reachable: true, Checked: true},
+		agentref.Peer{Alias: "hk-vps"},
+	))
+
+	i.textarea.SetValue("#a:")
+	i.updateCompletions()
+	require.Len(t, i.atMatches, 2)
+
+	assert.Equal(t, "#a:hk-vps", i.atMatches[0].Ref, "rows are ordered by alias")
+	assert.Contains(t, i.atMatches[0].Label, "身份未记录",
+		"never called, so this machine holds no identity for it — and the row says so")
+	assert.Contains(t, i.atMatches[0].Label, "检查中…")
+	assert.Contains(t, i.atMatches[0].Label, "hk-vps")
+
+	assert.Equal(t, "#a:ugreen-nas", i.atMatches[1].Ref)
+	assert.Contains(t, i.atMatches[1].Label, "cd726b44", "the pinned identity, truncated for the row")
+	assert.Contains(t, i.atMatches[1].Label, "可用")
+	assert.Equal(t, "A Tachi node", i.atMatches[1].Note)
+
+	// A query narrows it, and Tab finishes the reference with a space.
+	i.textarea.SetValue("#a:ugreen")
+	i.updateCompletions()
+	require.Len(t, i.atMatches, 1)
+	i, _ = i.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	assert.Equal(t, "#a:ugreen-nas ", i.textarea.Value())
+}
+
+// A '#' that opens no namespace is ordinary text: no popup, and nothing to expand. This is what
+// keeps "#include", "#123" and a heading out of the way.
+func TestHashWithoutANamespaceIsPlainText(t *testing.T) {
+	seedAtFileDir(t)
+	i := NewInputArea(10, "", nil)
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas"}))
+
+	for _, value := range []string{"#include", "#123", "#x:y", "C#a:nas"} {
+		i.textarea.SetValue(value)
+		i.updateCompletions()
+		assert.Nil(t, i.atMatches, "no popup over %q", value)
+	}
+}
+
+// One message may hold several references, of either mark, and the popup follows the one the
+// CARET is in — not "the reference", which stops being a thing the moment there are two.
+func TestSeveralReferencesFollowTheCaret(t *testing.T) {
+	seedAtFileDir(t)
+	i := NewInputArea(10, "", nil)
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas"}))
+
+	i.textarea.SetValue("#a:nas 和 @readme")
+	i.textarea.CursorEnd()
+	i.updateCompletions()
+
+	require.NotNil(t, i.atMatches)
+	assert.Equal(t, "readme", i.atQuery, "the last reference is the one being edited")
+	assert.Equal(t, byte('@'), i.atMark)
+	assert.Contains(t, atLabels(i.atMatches), "readme.md")
+
+	// And the row inserts into THAT reference, leaving the earlier one alone.
+	i, _ = i.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	assert.Equal(t, "#a:nas 和 @readme.md ", i.textarea.Value())
+}
+
+// A picker row's reference must be one the scan reads back: what the popup offers and what the
+// backend routes are the same spelling, or the feature is a pair of near-misses.
+func TestPickerRowsInsertSpellingTheScannerKnows(t *testing.T) {
+	seedAtFileDir(t)
+	i := NewInputArea(10, "", nil)
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas", NodeID: "aa11bb22"}))
+
+	i.textarea.SetValue("#")
+	i.updateCompletions()
+	require.Len(t, i.atMatches, 2)
+
+	for _, m := range i.atMatches {
+		require.NotEmpty(t, m.Ref)
+		assert.Equal(t, byte('#'), m.Ref[0])
+		ns, _ := atfile.HashQueryNamespace(strings.TrimPrefix(m.Ref, "#"))
+		assert.NotEqual(t, atfile.HashNamespaceNone, ns,
+			"%q opens the namespace it claims to, as the expansion scan reads it", m.Ref)
+	}
 }

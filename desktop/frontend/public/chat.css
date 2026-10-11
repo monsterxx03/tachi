@@ -825,6 +825,17 @@ button.work-dir {
   font-size: 10.5px;
 }
 
+/* A row's one-line explanation: what a '#' namespace names, or what a node says about itself.
+   Last in the row and allowed to be the part that gets clipped — the alias, the identity and the
+   verdict are what a reader picks by, and they all come before it. */
+.at-picker-note {
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
 /* Wails puts this class on the drop target (data-file-drop-target) while a
    native file drag hovers it, so the composer is its own drop affordance. */
 .composer-box.file-drop-target-active {

@@ -253,10 +253,12 @@ func NewModel(cfg ModelConfig) *Model {
 	// Sync session info to the statusbar if there's already a current session.
 	m.syncSessionInfo()
 
-	// The @-completion popup's session namespace reads the same store the agent
-	// does; wiring it here keeps the store's memoized list as the one source of
-	// truth for both the picker and the expansion an @session: reference gets.
+	// The reference popup's namespaces read the same stores the agent does; wiring them here keeps
+	// the store's memoized list as the one source of truth for both the picker and the expansion.
+	// The node namespace resolves through this machine's own sending side, which is why it is wired
+	// after the config is in place (and again whenever the config is reloaded).
 	m.input.SetSessionSource(newSessionSource(m.agent))
+	m.syncAgentSource()
 
 	// Show the initial thinking level (provider config default until /thinking
 	// or /model changes it).

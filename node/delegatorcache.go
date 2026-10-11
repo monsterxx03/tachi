@@ -30,7 +30,7 @@ import (
 // reminder says about an unreachable node, and a stale description is worse than a rebuild.
 type DelegatorCache struct {
 	mu      sync.Mutex
-	current tools.RemoteDelegator
+	current *Sender
 	key     string
 	log     *logger.Logger
 	// ownName is what this machine calls itself, sent with every delegation so a peer's records
@@ -44,7 +44,8 @@ func NewDelegatorCache(ownName string, log *logger.Logger) *DelegatorCache {
 	return &DelegatorCache{ownName: strings.TrimSpace(ownName), log: log, openFunc: OpenSender}
 }
 
-// For returns the sending side for this peer list, rebuilding it when the list changed.
+// For returns the sending side for this peer list, as the TOOL layer sees it, rebuilding it when the
+// list changed.
 //
 // It returns nil — meaning "this process cannot delegate" — in two cases, and both are states
 // the entry points should simply live with rather than report per turn:
@@ -54,7 +55,22 @@ func NewDelegatorCache(ownName string, log *logger.Logger) *DelegatorCache {
 //   - the records directory cannot be opened: a broken disk must not cost the user their local
 //     chat (the entry points log it), and the next turn tries again rather than caching the
 //     failure, so a transient problem heals itself.
+//
+// It returns a genuinely nil INTERFACE when there is nothing: returning a typed nil *Sender would
+// make `if d == nil` false at every call site, which is how a "no peers" machine starts to look like
+// an available one.
 func (c *DelegatorCache) For(peers []config.PeerConfig) tools.RemoteDelegator {
+	if sender := c.ForSender(peers); sender != nil {
+		return sender
+	}
+	return nil
+}
+
+// ForSender is For with the concrete type kept: the node picker and the node board need more than
+// the tool-layer contract — the address this machine dials, and each peer's card — and that contract
+// is deliberately blind to both (see the comment on RemoteDelegator). Callers that only delegate
+// should ask For instead.
+func (c *DelegatorCache) ForSender(peers []config.PeerConfig) *Sender {
 	if c == nil || len(peers) == 0 {
 		return nil
 	}

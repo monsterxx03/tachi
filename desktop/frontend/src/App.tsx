@@ -12,8 +12,8 @@ import {
 import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
-  ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AskForm, PermissionForm,
-  SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
+  ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
+  SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -21,7 +21,7 @@ import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } 
 import { RewindChainOverlay } from './rewindchain'
 import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
 import type { OneOffRun } from './agentEvents'
-import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
 import { FindBar, FindButton, useFind } from './find'
@@ -745,6 +745,13 @@ function App() {
   const [theme, toggleTheme] = useTheme()
   useThemeHostSync()
   const [mcpOpen, setMcpOpen] = useState(false)
+  // The node board: which machines this one may delegate to, and what each says about itself. The
+  // data is read from the backend and NOT cached here — every field the panel shows is a fact about
+  // a moment (who answered just now), and a copy kept across turns is exactly what the refresh
+  // button exists to rule out.
+  const [agentsOpen, setAgentsOpen] = useState(false)
+  const [agentsBoard, setAgentsBoard] = useState<PeerBoardVO | null>(null)
+  const [agentsBusy, setAgentsBusy] = useState(false)
   // The side-channel panel (third column): /review and /commit run as one-off forks, and
   // their process belongs here rather than in the conversation — see
   // docs/2026-09-12-desktop-oneoff-panel-design.md. The panel is a reader over the same
@@ -1383,6 +1390,29 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       if (prof) setMcpProfile({ active: prof.active || '', available: prof.available || [] })
     } catch { /* ignore */ }
   }, [])
+
+  // loadAgents reads the board as it stands (no waiting on the network) — what a panel opened for
+  // the first time needs, since nobody has asked those nodes anything yet.
+  const loadAgents = useCallback(async () => {
+    try {
+      setAgentsBoard(await AgentService.PeerBoard())
+    } catch { /* leave the panel empty rather than claiming anything */ }
+  }, [])
+
+  // refreshAgents is the panel's 刷新: it asks every node NOW (the backend drops its cached cards)
+  // and waits for the answers, which is why the button says 检查中… while it runs.
+  const refreshAgents = useCallback(async () => {
+    setAgentsBusy(true)
+    try {
+      setAgentsBoard(await AgentService.RefreshPeerBoard())
+    } catch { /* keep what the panel already shows */ }
+    finally { setAgentsBusy(false) }
+  }, [])
+
+  // Opening the panel reads once; it does not poll. What makes a reading current is the button.
+  useEffect(() => {
+    if (agentsOpen) void loadAgents()
+  }, [agentsOpen, loadAgents])
   const { auth: mcpAuth, setAuth: setMCPAuth, clearAuth: clearMCPAuth } = useMCPAuth(refreshMCP)
   // ...and once more when the backend says its pool is settled: a panel that was already open
   // while the servers were still coming up would otherwise keep the empty snapshot it read.
@@ -2603,6 +2633,23 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     row because it is the one row that is always on screen beside the conversation
                     (the find bar itself lives over the transcript). */}
                 <FindButton find={chatFind} />
+                <span className="popover-anchor">
+                  <button className="agents-btn" title="Agents（可委派的节点）" onClick={() => setAgentsOpen((v) => !v)}>
+                    <span className="agents-ico"><AgentsIcon /></span>
+                    {/* The count is the number of nodes that ANSWERED the last probe, not the number
+                        configured: a machine that cannot delegate to anybody should read as an empty
+                        badge, not as "2". */}
+                    <span className="agents-count">{(agentsBoard?.peers || []).filter((p) => p.reachable).length || ''}</span>
+                  </button>
+                  {agentsOpen && (
+                    <AgentsPanel
+                      board={agentsBoard}
+                      busy={agentsBusy}
+                      onClose={() => setAgentsOpen(false)}
+                      onRefresh={() => void refreshAgents()}
+                    />
+                  )}
+                </span>
                 <span className="popover-anchor">
                   <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
                     <span className="mcp-ico"><MCPIcon /></span>

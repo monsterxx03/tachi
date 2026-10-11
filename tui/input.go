@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/sessionref"
@@ -39,10 +40,11 @@ type InputArea struct {
 	completions []Command
 	selectedIdx int
 
-	// @-completions: ONE popup with two namespaces — files under the working
-	// directory, and sessions (@session:). A row carries the text it inserts,
-	// so the popup and the expansion can never disagree about a reference.
+	// @-completions: ONE popup that serves both marks — '@' names a path, '#' names an entity
+	// (@a: a node, #s: a conversation, see agent/atfile). A row carries the text it inserts, so
+	// the popup and the expansion can never disagree about a reference.
 	atQuery       string
+	atMark        byte
 	atMatches     []atMatch
 	atSelectedIdx int
 	// files indexes the working directory for @-file completion (cached per
@@ -51,6 +53,10 @@ type InputArea struct {
 	// sessions resolves and searches other conversations. nil = the session
 	// namespace offers nothing (a frontend with no session store, most tests).
 	sessions *sessionref.Source
+	// agents resolves and searches this machine's nodes. nil = the node namespace offers
+	// nothing, which is what an entry point with no node side gets — the '#' picker then offers
+	// only the conversation namespace, and a "#a:" reference stays as typed.
+	agents *agentref.Source
 	// currentSessionID is left out of session completion: the picker opens
 	// INSIDE a conversation, and referencing that same one is never what the
 	// reader meant.
@@ -128,13 +134,23 @@ func (i *InputArea) SetSkills(names []string, descs map[string]string) {
 	i.skillDescs = descs
 }
 
-// SetSessionSource supplies the store @session: completion searches and
+// SetSessionSource supplies the store #s: completion searches and
 // references resolve against. Without one the session namespace offers nothing.
 func (i *InputArea) SetSessionSource(s *sessionref.Source) { i.sessions = s }
 
 // SessionSource exposes the same store to the expansion path, which needs it at
 // send time rather than while typing.
 func (i *InputArea) SessionSource() *sessionref.Source { return i.sessions }
+
+// SetAgentSource supplies the nodes #a: completion searches and references
+// resolve against. Without one the node namespace offers nothing — and the '#'
+// picker still offers it, because the namespace list is what tells the reader the
+// spelling exists; it just comes back empty.
+func (i *InputArea) SetAgentSource(s *agentref.Source) { i.agents = s }
+
+// AgentSource exposes the same list to the expansion path, which needs it at send
+// time rather than while typing.
+func (i *InputArea) AgentSource() *agentref.Source { return i.agents }
 
 // SetCurrentSession names the conversation this input belongs to, so session
 // completion can leave it out of the list.
@@ -207,6 +223,7 @@ func (i InputArea) atCompletionsOn() bool { return i.histIdx < 0 && i.atMatches 
 
 func (i *InputArea) clearAtCompletions() {
 	i.atQuery = ""
+	i.atMark = 0
 	i.atMatches = nil
 	i.atSelectedIdx = 0
 }
@@ -460,9 +477,20 @@ func (i *InputArea) applyAtCompletion() {
 
 	before := val[:atPos]
 	after := val[atPos+len(i.atQuery)+1:]
-	newVal := before + match.Ref + " " + after
+	// A namespace row OPENS a reference rather than finishing it, so nothing separates it from
+	// what the reader types next — and the popup stays up, re-reading the same reference with its
+	// new prefix. Inserting a trailing space there would end the reference on the spot and leave
+	// the reader with "#a: " and no list.
+	sep := " "
+	if match.Prefix {
+		sep = ""
+	}
+	newVal := before + match.Ref + sep + after
 	i.textarea.SetValue(newVal)
 	i.textarea.CursorEnd()
+	if match.Prefix {
+		i.updateAtCompletions(newVal)
+	}
 }
 
 func (i *InputArea) clearHistoryNav() {
@@ -646,10 +674,10 @@ func (i *InputArea) appendMCPCompletions(val string) {
 	}
 }
 
-// updateAtCompletions refreshes the @-completion popup for the reference being
-// typed. The query's prefix picks the namespace — "@session:…" searches the
-// session store, anything else the working directory — and both produce the same
-// rows, so the popup's keys and rendering stay one implementation.
+// updateAtCompletions refreshes the reference-completion popup for the reference
+// being typed. WHICH mark it is ('@' or '#') and what was typed after it pick the
+// namespace, and every namespace produces the same rows, so the popup's keys and
+// rendering stay one implementation.
 func (i *InputArea) updateAtCompletions(val string) {
 	atPos := atfile.LastRefStart(val)
 	if atPos < 0 {
@@ -657,6 +685,7 @@ func (i *InputArea) updateAtCompletions(val string) {
 		return
 	}
 
+	mark := val[atPos]
 	query := val[atPos+1:]
 	// Don't trigger if query contains a space (already completed)
 	if strings.Contains(query, " ") {
@@ -664,27 +693,22 @@ func (i *InputArea) updateAtCompletions(val string) {
 		return
 	}
 
-	if query == i.atQuery && i.atMatches != nil {
+	// The mark is part of the identity of what is being typed, not just the query: "@a:x" and
+	// "#a:x" are different questions with different answers.
+	if query == i.atQuery && mark == i.atMark && i.atMatches != nil {
 		return // No change, skip search
 	}
 
-	rows := i.atRowsFor(query)
+	rows := i.atRowsFor(mark, query)
 	if len(rows) == 0 {
 		i.clearAtCompletions()
 		return
 	}
 
 	i.atQuery = query
+	i.atMark = mark
 	i.atMatches = rows
 	i.atSelectedIdx = 0 // best score, rendered at bottom
-}
-
-// atRowsFor routes one popup query to its namespace.
-func (i *InputArea) atRowsFor(query string) []atMatch {
-	if rest, ok := strings.CutPrefix(query, sessionQueryPrefix); ok {
-		return i.atSessionRows(rest)
-	}
-	return i.atFileRows(query)
 }
 
 func (i InputArea) View() string {
@@ -716,8 +740,8 @@ func (i InputArea) View() string {
 		}
 	}
 
-	// Render @-completions (best score at the bottom). Files and sessions share
-	// the popup; the header is what says which one is being offered.
+	// Render reference completions (best score at the bottom). Every namespace shares the popup;
+	// the header is what says which one is being offered.
 	if hasAtMatches {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s matching %q:", i.atHeader(), i.atQuery)))
 		b.WriteString("\n")
@@ -725,10 +749,20 @@ func (i InputArea) View() string {
 		for idx := len(i.atMatches) - 1; idx >= 0; idx-- {
 			m := i.atMatches[idx]
 			icon := "  "
-			if m.IsDir {
+			switch {
+			case m.IsDir:
 				icon = " D"
+			case m.Prefix:
+				icon = " #"
+			case m.Agent:
+				icon = " N"
+			case m.Session:
+				icon = " S"
 			}
 			line := fmt.Sprintf("%s %s", icon, m.Label)
+			if m.Note != "" {
+				line += "  " + m.Note
+			}
 			if idx == i.atSelectedIdx {
 				b.WriteString(completionSelectedStyle.Width(i.width).Render(line))
 			} else {
@@ -743,11 +777,18 @@ func (i InputArea) View() string {
 }
 
 // atHeader names the namespace the popup is currently offering. It is derived
-// from the query rather than stored beside the rows, so the header cannot
+// from what is being typed rather than stored beside the rows, so the header cannot
 // disagree with what was searched.
 func (i InputArea) atHeader() string {
-	if strings.HasPrefix(i.atQuery, sessionQueryPrefix) {
-		return "@ sessions"
+	if i.atMark != atfile.HashRefMark {
+		return "@ 文件"
 	}
-	return "@ files"
+	switch ns, _ := atfile.HashQueryNamespace(i.atQuery); ns {
+	case atfile.HashNamespaceAgents:
+		return "# 节点"
+	case atfile.HashNamespaceSessions:
+		return "# 会话"
+	default:
+		return "# 引用"
+	}
 }

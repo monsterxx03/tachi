@@ -12,6 +12,46 @@ import * as config$0 from "../config/models.js";
 import * as linediff$0 from "../pkg/linediff/models.js";
 
 /**
+ * AgentMatchVO is one #a: completion match: a node this machine may delegate work to.
+ * 
+ * Every field is already in the words a row shows, including the ones that could have been left to
+ * the frontend. That is deliberate: "reachable", "checked" and an identity's short form are the same
+ * fact in the TUI, and two frontends each deciding how to phrase them is how one window ends up
+ * saying "offline" while the other says "checking".
+ */
+export interface AgentMatchVO {
+    "alias": string;
+
+    /**
+     * NodeID is the identity pinned on first outbound contact, empty when this machine has never
+     * called that node. It is never the name the node reports about itself.
+     */
+    "nodeId": string;
+
+    /**
+     * IDLabel is the identity as a row shows it: the first characters of the pinned id, or the
+     * fact that this machine holds no record of it.
+     */
+    "idLabel": string;
+
+    /**
+     * Reach is what the last look found (agentref.ReachWord): 可用 / 联系不上 / 检查中….
+     */
+    "reach": string;
+
+    /**
+     * Note is the node's own description, or the configured line when it has not answered.
+     */
+    "note": string;
+
+    /**
+     * Ref is the complete reference to insert (atfile.RefForAgent), so a row the popup offered is
+     * a reference the expansion reads back.
+     */
+    "ref": string;
+}
+
+/**
  * AgentState is the payload pushed to the frontend (and shown in the menu bar).
  * 
  * SessionID names the session this state is about, and it is what makes the payload
@@ -582,6 +622,103 @@ export interface PastedImageVO {
 }
 
 /**
+ * PeerBoardRowVO is one node as the panel draws it.
+ */
+export interface PeerBoardRowVO {
+    "alias": string;
+
+    /**
+     * NodeID/NodeIDLabel are the pinned identity: full for a tooltip, short for the row. Empty and
+     * "身份未记录" when this machine has never called that node outbound.
+     */
+    "nodeId": string;
+    "nodeIdLabel": string;
+
+    /**
+     * URL is where this machine dials the peer (config), never what the card claims.
+     */
+    "url": string;
+    "note": string;
+
+    /**
+     * Reach and Reachable are the last look's verdict, in the same words the picker uses.
+     */
+    "reach": string;
+    "reachable": boolean;
+
+    /**
+     * Checked separates "not looked at yet" from "looked at and down".
+     */
+    "checked": boolean;
+    "checkedAt": string;
+
+    /**
+     * Card is what the node says about itself, null when it did not answer.
+     */
+    "card": PeerCardVO | null;
+
+    /**
+     * Err says why there is no card (hidden while there is one).
+     */
+    "err": string;
+
+    /**
+     * Ref is the reference that names this node in a message (atfile.RefForAgent), so the panel can
+     * offer the same spelling the picker inserts.
+     */
+    "ref": string;
+}
+
+/**
+ * PeerBoardVO is the whole panel: this machine's nodes, and when they were last looked at.
+ */
+export interface PeerBoardVO {
+    "peers": PeerBoardRowVO[] | null;
+
+    /**
+     * CheckedAt is when the answers were taken, "" when nobody has asked yet. It is stamped on the
+     * ROUND rather than on a row, because one probe answers for all of them.
+     */
+    "checkedAt": string;
+
+    /**
+     * AnyChecked is false before the first probe, which the panel says out loud instead of
+     * rendering an empty state that looks like "no peers".
+     */
+    "anyChecked": boolean;
+}
+
+/**
+ * PeerCardVO is the node's own account of itself, as much as the panel shows. Every field is
+ * self-reported.
+ */
+export interface PeerCardVO {
+    "name": string;
+    "description": string;
+    "version": string;
+    "interfaces": PeerInterfaceVO[] | null;
+    "skills": PeerSkillVO[] | null;
+    "capabilities": string[] | null;
+}
+
+/**
+ * PeerInterfaceVO is one entry point the card advertises.
+ */
+export interface PeerInterfaceVO {
+    "url": string;
+    "protocolBinding": string;
+    "protocolVersion": string;
+}
+
+/**
+ * PeerSkillVO is one thing the node says it can do.
+ */
+export interface PeerSkillVO {
+    "name": string;
+    "description": string;
+}
+
+/**
  * PlanEntryVO is one row of the plan panel's list: enough to choose between a session's
  * plans without loading them all. A session accumulates plans (one file per plan), so the
  * list is the difference between "the newest plan" and "the plans".
@@ -902,7 +1039,7 @@ export interface SessionInfo {
 }
 
 /**
- * SessionMatchVO is one @session: completion match.
+ * SessionMatchVO is one #s: completion match.
  */
 export interface SessionMatchVO {
     "id": string;

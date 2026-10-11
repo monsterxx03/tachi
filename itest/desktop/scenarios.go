@@ -974,10 +974,11 @@ func scenarios() []scenario {
 			},
 		},
 		//
-		// at-session: `@session:` 引用另一个会话。和 at-file-reload 是同一件事的两半——那个 pin 的
+		// at-session: `#s:` 引用另一个会话。和 at-file-reload 是同一件事的两半——那个 pin 的
 		// 是「气泡显示用户打的原文」，这个 pin 的是「另一个会话只以指针进上下文」：
 		//
-		//   驱动侧（drivers/at-session.js）：命名空间路由 + Tab 插进来的是完整 id 的引用；
+		//   驱动侧（drivers/at-session.js）：`#` 先给出两个命名空间候选、`#s:` 打开会话命名空间、
+		//   Tab 插进来的是完整 id 的引用；
 		//   Go 侧：模型收到的是那一行指针（id/标题/条数/transcript 路径），**不是**那个会话的正文。
 		//   内联另一段对话会让本会话的上下文为一份没人要读的转写买单，所以最后一项查的是「没有正文」。
 		//
@@ -992,9 +993,9 @@ func scenarios() []scenario {
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				_, pointer := c.requestSeen("[@session: ")
+				_, pointer := c.requestSeen("[#s:")
 				_, titled := c.requestSeen(`"另一个会话"`)
-				c.check("模型拿到的是 @session 指针而不是转写正文", pointer && titled, requestCount(c.requests))
+				c.check("模型拿到的是 #s: 指针而不是转写正文", pointer && titled, requestCount(c.requests))
 				_, stored := c.requestSeen(".tachi/session/")
 				_, transcript := c.requestSeen("messages.jsonl")
 				c.check("指针带着会话存储里的 transcript 路径", stored && transcript, "")
@@ -1002,6 +1003,30 @@ func scenarios() []scenario {
 				c.check("指针说得出那个会话有多少条记录", counted, "")
 				_, inlined := c.requestSeen("另一个会话里给出的答案")
 				c.check("没有把另一个会话的内容内联进消息", !inlined, "")
+			},
+		},
+		//
+		// at-agent: `#a:` 选一个节点。沙箱没配任何 peer，所以这里钉的是**路由与措辞**（drivers/
+		// at-agent.js）：一个 '#' 给出两个命名空间候选、Tab 把它展开成 `#a:` 并把弹窗留在那个命名
+		// 空间、空的节点列表说的是「没有配好的节点」而不是退回去搜文件、不是引用的 '#' 不开弹窗。
+		// 「行里显示什么」（别名、本机 pin 住的身份、上次探测的结果）由 Go 侧断，三个前端同一句话。
+		//
+		{
+			name: "at-agent",
+			after: func(c *checkCtx) {
+				c.check("只看看选什么，不该产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		//
+		// agents-panel: 状态栏的 Agents 按钮与节点面板（drivers/agents-panel.js）。沙箱配了一个
+		// 连不上的 peer（127.0.0.1:1，立刻被拒），所以面板能显示的三件事都是真的：本机配的别名、
+		// 本机 pin 的身份（从没连过 → 「身份未记录」）、上次探测的结论。刷新是一次真往返。
+		//
+		{
+			name: "agents-panel",
+			config: "peers:\n  - name: smoke-nas\n    url: https://127.0.0.1:1\n    note: 沙箱里没有这台机器\n",
+			after: func(c *checkCtx) {
+				c.check("只看面板，不该产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
 			},
 		},
 		// sidebar-window: 侧栏每个组只渲染「窗口」那么多行（App.tsx 的 rowWindow + components.tsx

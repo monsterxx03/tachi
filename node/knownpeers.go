@@ -85,10 +85,7 @@ func openKnownPeers(path string, urls map[string]string, log *logger.Logger) (*k
 // A record that cannot be read yields nothing: this is a label for a session row, and a sidebar that
 // does not draw is worse than one that says "unknown".
 func PeerAliases() map[string]string {
-	var pinned map[string]knownPeer
-	if err := fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned); err != nil {
-		return nil
-	}
+	pinned := readPinnedPeers()
 	out := make(map[string]string, len(pinned))
 	for alias, peer := range pinned {
 		if peer.NodeID != "" {
@@ -96,6 +93,18 @@ func PeerAliases() map[string]string {
 		}
 	}
 	return out
+}
+
+// readPinnedPeers reads the TOFU record, keyed by alias. It answers with an empty map when the file
+// is absent or unreadable — the CALLERS are labels and pickers, where a blank answer beats a refusal.
+// The node's own identity check reads the record through openKnownPeers instead, which is strict
+// about exactly that case, because there a blank record would re-open the first-contact window.
+func readPinnedPeers() map[string]knownPeer {
+	var pinned map[string]knownPeer
+	if err := fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned); err != nil {
+		return nil
+	}
+	return pinned
 }
 
 // confirm checks a peer's presented identity against what was pinned, and pins it on first contact.

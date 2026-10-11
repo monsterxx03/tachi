@@ -512,6 +512,14 @@ export function OpenURL(rawURL: string): $CancellablePromise<string> {
 }
 
 /**
+ * PeerBoard returns the panel as it stands. It never waits for the network: the answers are the
+ * last probe's, and a fresh probe is started so that a panel left open catches up.
+ */
+export function PeerBoard(): $CancellablePromise<$models.PeerBoardVO> {
+    return $Call.ByID(3089054336);
+}
+
+/**
  * PreviewFile describes the attachment at path and, when withContent is set,
  * returns the content of its text and table kinds.
  * 
@@ -555,6 +563,16 @@ export function PreviewRewind(id: string, turn: number): $CancellablePromise<$mo
  */
 export function PreviewSettings(updates: { [_ in string]?: any } | null, appends: string[] | null, removes: string[] | null): $CancellablePromise<$models.SettingsPreviewVO | null> {
     return $Call.ByID(3511495093, updates, appends, removes);
+}
+
+/**
+ * RefreshPeerBoard asks every node what it is, WAITS for the answers, and returns them: this is the
+ * panel's 刷新 button, where a person pressed something and a spinner is honest. It also throws away
+ * the cached cards (node.Sender.PeerReports), because answering "what is it now" with a
+ * five-minute-old read would be answering a different question.
+ */
+export function RefreshPeerBoard(): $CancellablePromise<$models.PeerBoardVO> {
+    return $Call.ByID(1074826517);
 }
 
 /**
@@ -781,6 +799,19 @@ export function SaveSettings(updates: { [_ in string]?: any } | null, appends: s
 }
 
 /**
+ * SearchAgents returns #a: completion matches: the nodes this machine may delegate to, ranked by
+ * the alias the reader is typing.
+ * 
+ * It never waits for the network. The list itself is configuration plus the pinned identities (both
+ * local files), and reachability is whatever the last background probe found — a fresh probe is
+ * started here, and its answer shows up in a later call. That ordering is what lets the picker run
+ * on every keystroke.
+ */
+export function SearchAgents(query: string, limit: number): $CancellablePromise<$models.AgentMatchVO[] | null> {
+    return $Call.ByID(788124870, query, limit);
+}
+
+/**
  * SearchFiles returns @-file completion matches for a session.
  * 
  * The whole root set is searched (primary + the session's additional roots): an
@@ -801,7 +832,7 @@ export function SearchFiles(sessionID: string, query: string, limit: number): $C
 }
 
 /**
- * SearchSessions returns @session: completion matches: other conversations, ranked
+ * SearchSessions returns #s: completion matches: other conversations, ranked
  * by the store (title, id, working directory). exclude is the session the composer
  * belongs to — offering the conversation you are already in says nothing and
  * references itself.
@@ -1027,4 +1058,14 @@ export function ToggleVoiceInput(): $CancellablePromise<void> {
  */
 export function VoiceInputAvailable(): $CancellablePromise<boolean> {
     return $Call.ByID(2876796569);
+}
+
+/**
+ * WarmAgents starts asking this machine's nodes whether they are up, and returns
+ * without waiting. The composer calls it the moment the '#' mark is typed: the answer is a round
+ * trip per node, and the typing that follows is the time to spend on it. What it finds shows up in
+ * a later SearchAgents.
+ */
+export function WarmAgents(): $CancellablePromise<void> {
+    return $Call.ByID(1270075915);
 }

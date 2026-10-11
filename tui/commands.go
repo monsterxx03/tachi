@@ -58,6 +58,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 			}
 			cfg = freshCfg
 			m.cfg = cfg
+			// The peers the '#' picker offers come from the config too, and the delegator behind its
+			// reachability is rebuilt from the same list.
+			m.syncAgentSource()
 		}
 		if len(cfg.Providers) == 0 {
 			cfgPath, _ := config.ConfigPath()

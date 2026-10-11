@@ -11,6 +11,7 @@ package main
 // the file the agent's tools would open.
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -18,10 +19,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/agent/sessionref"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -68,7 +71,7 @@ type searchRoot struct {
 	label string // "" = the primary root
 }
 
-// sessionSource builds the @session: resolver over the app's ONE session store: a
+// sessionSource builds the #s: resolver over the app's ONE session store: a
 // reference expands to a pointer into it, and the picker searches the same list.
 //
 // It is built per call on purpose — a Source holds a lister and a directory, while
@@ -87,7 +90,53 @@ func (d *desktopApp) sessionSource() *sessionref.Source {
 	return sessionref.New(store.ListSessions, dir)
 }
 
-// SessionMatchVO is one @session: completion match.
+// agentSource builds the #a: resolver over this machine's nodes — the sending side of the same
+// picker the session namespace is the reading side of.
+//
+// The PeerList is kept for the life of the app rather than built per call, and that is load-bearing:
+// it holds the last probe's results AND the rate limit that stops a keystroke from being a request,
+// so rebuilding it per keystroke would probe on every keystroke. Both the peer list and the sender
+// behind it are read through providers, so the cache follows a config the reader edits.
+func (d *desktopApp) agentSource() *agentref.Source {
+	list := d.peerList()
+	if list == nil {
+		return nil
+	}
+	return agentref.New(func() []agentref.Peer {
+		list.Probe()
+		return list.Snapshot()
+	})
+}
+
+// peerList is the app's ONE node list, shared by the '#' picker and the node board: one probe, one
+// rate limit, one set of answers, so the two cannot disagree about what is up.
+func (d *desktopApp) peerList() *node.PeerList {
+	d.peersMu.Lock()
+	defer d.peersMu.Unlock()
+	if d.peers == nil {
+		d.peers = node.NewPeerList(
+			func() []config.PeerConfig {
+				if cfg := d.config(); cfg != nil {
+					return cfg.Peers
+				}
+				return nil
+			},
+			func(ctx context.Context, force bool) []node.PeerReport {
+				// Resolved per probe, not captured at construction: the peers are a config leaf the
+				// settings UI edits in place, and a captured sender would keep asking the machines
+				// this app used to know about.
+				if sender := d.senderFor(d.config()); sender != nil {
+					return sender.PeerReports(ctx, force)
+				}
+				return nil
+			},
+			logger.New("desktop"),
+		)
+	}
+	return d.peers
+}
+
+// SessionMatchVO is one #s: completion match.
 type SessionMatchVO struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -101,7 +150,65 @@ type SessionMatchVO struct {
 	WorkingDir string `json:"workingDir"`
 }
 
-// SearchSessions returns @session: completion matches: other conversations, ranked
+// AgentMatchVO is one #a: completion match: a node this machine may delegate work to.
+//
+// Every field is already in the words a row shows, including the ones that could have been left to
+// the frontend. That is deliberate: "reachable", "checked" and an identity's short form are the same
+// fact in the TUI, and two frontends each deciding how to phrase them is how one window ends up
+// saying "offline" while the other says "checking".
+type AgentMatchVO struct {
+	Alias string `json:"alias"`
+	// NodeID is the identity pinned on first outbound contact, empty when this machine has never
+	// called that node. It is never the name the node reports about itself.
+	NodeID string `json:"nodeId"`
+	// IDLabel is the identity as a row shows it: the first characters of the pinned id, or the
+	// fact that this machine holds no record of it.
+	IDLabel string `json:"idLabel"`
+	// Reach is what the last look found (agentref.ReachWord): 可用 / 联系不上 / 检查中….
+	Reach string `json:"reach"`
+	// Note is the node's own description, or the configured line when it has not answered.
+	Note string `json:"note"`
+	// Ref is the complete reference to insert (atfile.RefForAgent), so a row the popup offered is
+	// a reference the expansion reads back.
+	Ref string `json:"ref"`
+}
+
+// WarmAgents starts asking this machine's nodes whether they are up, and returns
+// without waiting. The composer calls it the moment the '#' mark is typed: the answer is a round
+// trip per node, and the typing that follows is the time to spend on it. What it finds shows up in
+// a later SearchAgents.
+func (s *AgentService) WarmAgents() {
+	s.desk.agentSource().Warm()
+}
+
+// SearchAgents returns #a: completion matches: the nodes this machine may delegate to, ranked by
+// the alias the reader is typing.
+//
+// It never waits for the network. The list itself is configuration plus the pinned identities (both
+// local files), and reachability is whatever the last background probe found — a fresh probe is
+// started here, and its answer shows up in a later call. That ordering is what lets the picker run
+// on every keystroke.
+func (s *AgentService) SearchAgents(query string, limit int) []AgentMatchVO {
+	source := s.desk.agentSource()
+	if source == nil {
+		return nil
+	}
+	targets := source.Search(query, limit)
+	matches := make([]AgentMatchVO, len(targets))
+	for i, t := range targets {
+		matches[i] = AgentMatchVO{
+			Alias:   t.Alias,
+			NodeID:  t.NodeID,
+			IDLabel: agentref.IDLabel(t),
+			Reach:   agentref.ReachWord(t),
+			Note:    agentref.RowNote(t, 0),
+			Ref:     atfile.RefForAgent(t.Alias),
+		}
+	}
+	return matches
+}
+
+// SearchSessions returns #s: completion matches: other conversations, ranked
 // by the store (title, id, working directory). exclude is the session the composer
 // belongs to — offering the conversation you are already in says nothing and
 // references itself.

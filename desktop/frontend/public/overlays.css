@@ -23,6 +23,25 @@
 }
 
 /* ── MCP status-bar button + panel ─────────────────────────────────────── */
+/* The Agents button has its OWN class rather than sharing .mcp-btn: a smoke driver (and anything
+   else) selects the MCP trigger by class, and two buttons answering to one name would make that
+   selection mean "whichever comes first in the DOM". Its look is the same, spelled out beside it. */
+.agents-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.agents-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+.agents-ico { display: inline-flex; align-items: center; }
+.agents-count { font-size: 10px; color: var(--green); font-weight: 600; }
 .mcp-btn {
   display: inline-flex;
   align-items: center;
@@ -80,6 +99,42 @@
 .mcp-close:hover { color: var(--text); }
 .mcp-body { overflow-y: auto; padding: 6px 8px 10px; }
 .mcp-empty { padding: 18px 10px; color: var(--text-faint); font-size: 12.5px; }
+
+/* ── Agents status-bar button + node board ─────────────────────────────── */
+/* The same shell as the MCP panel (.popover-panel plus .mcp-panel's size and scrolling): one
+   trigger beside the conversation, one panel hanging off it. What differs is the content — a board
+   of machines, where each row carries three facts that must NOT read as one: the alias and address
+   this machine asked for, the identity the handshake proved, and what the node says about itself. */
+.agents-refresh {
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.agents-refresh:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-2); }
+.agents-refresh:disabled { opacity: 0.6; cursor: wait; }
+/* The pinned identity, sitting between the alias and the verdict: monospaced and quiet because it is
+   a fact to compare, not prose to read. */
+.agents-id {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.agents-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 8px 10px 24px;
+}
+.agents-line { display: flex; gap: 8px; font-size: 11.5px; line-height: 1.5; }
+.agents-k { flex-shrink: 0; width: 32px; color: var(--text-faint); }
+.agents-v { min-width: 0; color: var(--text-dim); word-break: break-word; }
+.agents-mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; }
 .mcp-server { border-bottom: 1px solid var(--border); }
 .mcp-server:last-child { border-bottom: none; }
 .mcp-server-row { display: flex; align-items: center; gap: 8px; padding: 9px 6px; cursor: pointer; }

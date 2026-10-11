@@ -11,6 +11,7 @@ export {
 } from "./models.js";
 
 export type {
+    AgentMatchVO,
     AgentState,
     AskAnsweredEvent,
     AskEvent,
@@ -34,6 +35,11 @@ export type {
     OneOffRequestVO,
     OneOffVO,
     PastedImageVO,
+    PeerBoardRowVO,
+    PeerBoardVO,
+    PeerCardVO,
+    PeerInterfaceVO,
+    PeerSkillVO,
     PlanEntryVO,
     PlanStepVO,
     PlanVO,

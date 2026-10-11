@@ -12,7 +12,6 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -419,11 +418,8 @@ func (m *Model) abortCompactForSwitch(errMsg string) {
 // Only this file's turn paths touch the cache, and they all run on bubbletea's Update goroutine,
 // so it needs no lock of its own.
 func (m *Model) delegator() tools.RemoteDelegator {
-	if m.cfg == nil {
-		return nil
+	if sender := m.sender(); sender != nil {
+		return sender
 	}
-	if m.delegators == nil {
-		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, m.agent.Logger())
-	}
-	return m.delegators.For(m.cfg.Peers)
+	return nil
 }

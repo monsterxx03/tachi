@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
-import { AT_SESSION_PREFIX, actOnKey, copyText, fmtDur, fmtShare, humanize, imeActive } from './lib'
+import { HASH_REF_MARK, actOnKey, copyText, fmtDur, fmtShare, hashNamespace, humanize, imeActive } from './lib'
 import { isMod, MOD_KEY } from './platform'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processStepLabel, processSummaryLine, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
-import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, PeerBoardVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // MoreRows is the tail of a group's row WINDOW in the sidebar (App.tsx owns the window itself): the
 // line that says how many of that group's conversations are not rendered yet, and the thing that
@@ -1059,13 +1059,14 @@ function baseName(p: string): string {
   return i >= 0 ? trimmed.slice(i + 1) : trimmed
 }
 
-// AtFilePicker is the @-picker. It floats above the composer, listing what the
-// backend fuzzy-matched: files under the session's working directory, or — when
-// the query opens the "@session:" namespace — other conversations. Keyboard
-// handling lives in the composer (which owns the caret and the text); this
-// component only renders and reports picks. The namespace follows from the query,
-// so the header can never disagree with what was searched.
-function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHover }: {
+// AtFilePicker is the reference picker. It floats above the composer, listing what the
+// backend fuzzy-matched: files under the session's working directory, this machine's nodes ("#a:"),
+// other conversations ("#s:"), or — for the bare '#' — the namespaces themselves. Keyboard
+// handling lives in the composer (which owns the caret and the text); this component only renders
+// and reports picks. The namespace follows from the MARK and the query, so the header can never
+// disagree with what was searched.
+function AtFilePicker({ mark, query, items, selected, loading, refCount, onPick, onHover }: {
+  mark: string
   query: string
   items: AtMatch[]
   selected: number
@@ -1075,7 +1076,13 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
   onHover: (index: number) => void
 }) {
   const listRef = useRef<HTMLDivElement>(null)
-  const sessions = query.startsWith(AT_SESSION_PREFIX)
+  const ns = mark === HASH_REF_MARK ? hashNamespace(query).ns : null
+  const title = mark === HASH_REF_MARK
+    ? ns === 'agents' ? '# 节点' : ns === 'sessions' ? '# 会话' : '# 引用'
+    : '@ 文件'
+  const empty = mark === HASH_REF_MARK
+    ? ns === 'agents' ? '没有配好的节点' : '无匹配会话'
+    : '无匹配文件'
   // Keep the highlighted row in view while arrowing through a long list.
   useEffect(() => {
     const el = listRef.current?.children[selected] as HTMLElement | undefined
@@ -1083,16 +1090,16 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
   }, [selected, items])
 
   return (
-    <div className="at-picker" role="listbox" aria-label={sessions ? '@ 会话' : '@ 文件'}>
+    <div className="at-picker" role="listbox" aria-label={title}>
       <div className="at-picker-head">
         <span className="at-picker-title">
-          {sessions ? '@ 会话' : '@ 文件'}{query ? <span className="at-picker-query">{query}</span> : null}
+          {title}{query ? <span className="at-picker-query">{query}</span> : null}
           {refCount > 1 ? <span className="at-picker-count">已引用 {refCount} 个</span> : null}
         </span>
         <span className="at-picker-hint">↑↓/Ctrl+P·N 选择 · Tab/Enter 确认 · Esc 关闭</span>
       </div>
       {items.length === 0 ? (
-        <div className="at-picker-empty">{loading ? '搜索中…' : (sessions ? '无匹配会话' : '无匹配文件')}</div>
+        <div className="at-picker-empty">{loading ? '搜索中…' : empty}</div>
       ) : (
         <div className="at-picker-list" ref={listRef}>
           {items.map((m, i) => (
@@ -1108,12 +1115,18 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
                   roots can hold the same relative path, and "which one is this"
                   has to be answerable at a glance (and without colour vision). A
                   session row puts the DATE there — the same question, since a
-                  title alone does not say which conversation it was. */}
+                  title alone does not say which conversation it was. A node row puts the
+                  IDENTITY there: it is the only fact about a peer nobody else can claim, and
+                  which machine a row means is exactly the question. */
+              }
               {m.root ? <span className="at-picker-root">[{m.root}]</span> : null}
               {m.date ? <span className="at-picker-root">{m.date}</span> : null}
+              {m.idLabel ? <span className="at-picker-root">{m.idLabel}</span> : null}
               <span className="at-picker-path">{m.path}</span>
               {m.isDir ? <span className="at-picker-tag">目录</span> : null}
               {m.kind === 'session' ? <span className="at-picker-tag">会话</span> : null}
+              {m.kind === 'agent' && m.reach ? <span className="at-picker-tag">{m.reach}</span> : null}
+              {m.note ? <span className="at-picker-note">{m.note}</span> : null}
             </div>
           ))}
         </div>
@@ -1352,4 +1365,134 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }
+// AgentsIcon marks the node board's trigger: three nodes and the links between them, which is what
+// this machine's peers are. Drawn rather than an emoji so it inherits the row's ink and size.
+function AgentsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.7"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="5.5" cy="12" r="2.5" />
+      <circle cx="18" cy="5.5" r="2.5" />
+      <circle cx="18" cy="18.5" r="2.5" />
+      <path d="M7.8 10.9 15.7 6.6M7.8 13.1l7.9 4.3" />
+    </svg>
+  )
+}
+
+// AgentsPanel is the node board: the machines this one may delegate to, and what each of them says
+// about itself.
+//
+// Three rows of information per node, and they are deliberately NOT merged, because apart each one
+// means something different: the alias and the address are what THIS machine asked for (config), the
+// identity is what the handshake proved (the one thing a peer cannot claim), and the card's name and
+// description are what the node says about ITSELF (which any key can claim). The panel labels the
+// last one 自称 so a reader is not left to guess which of the three is evidence.
+//
+// It keeps no state of its own beyond which rows are open: what it draws is what the backend last
+// said, so a panel reopened after a refresh agrees with a live one.
+function AgentsPanel({ board, busy, onClose, onRefresh }: {
+  board: PeerBoardVO | null
+  busy: boolean
+  onClose: () => void
+  onRefresh: () => void
+}) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  // Click outside closes the popover, with its own trigger excluded: that button owns open/close,
+  // and closing here would fight the reopen from its own click handler.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || boxRef.current?.contains(t) || t.closest('.agents-btn')) return
+      onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [onClose])
+
+  const peers = board?.peers || []
+  const up = peers.filter((p) => p.reachable).length
+
+  return (
+    <div className="popover-panel mcp-panel agents-panel" ref={boxRef}>
+      <div className="mcp-head">
+        <span className="mcp-head-text">
+          <span className="mcp-title">Agents</span>
+          <span className="mcp-total">
+            {board?.anyChecked ? `${up}/${peers.length} 可达 · 上次检查 ${board.checkedAt}` : '还没检查过'}
+          </span>
+        </span>
+        <button className="agents-refresh" onClick={onRefresh} disabled={busy}>
+          {busy ? '检查中…' : '刷新'}
+        </button>
+        <button className="mcp-close" onClick={onClose}>✕</button>
+      </div>
+      <div className="mcp-body">
+        {peers.length === 0 && <div className="mcp-empty">没有配置可委派的节点（config.yaml 的 peers）</div>}
+        {peers.map((p) => {
+          const isOpen = !!expanded[p.alias]
+          const card = p.card
+          return (
+            <div className="mcp-server" key={p.alias}>
+              <div className="mcp-server-row" onClick={() => setExpanded((prev) => ({ ...prev, [p.alias]: !isOpen }))}>
+                <span className={`mcp-server-state ${p.reachable ? 'on' : p.checked ? 'off' : ''}`}>
+                  {p.reachable ? '●' : p.checked ? '○' : '·'}
+                </span>
+                <span className="mcp-server-name">{p.alias}</span>
+                {/* The identity, right beside the alias: it is what makes "which machine is this"
+                    answerable, and it is never the name the node reports about itself. */}
+                <span className="agents-id" title={p.nodeId || '本机还没跟它连过，身份在第一次出站接触时才记下'}>
+                  {p.nodeIdLabel}
+                </span>
+                <span className="mcp-toolcount">{p.reach}</span>
+                <span className="mcp-caret"><Caret /></span>
+              </div>
+              {isOpen && (
+                <div className="agents-detail">
+                  <div className="agents-line"><span className="agents-k">地址</span><span className="agents-v agents-mono">{p.url}</span></div>
+                  {p.note ? <div className="agents-line"><span className="agents-k">备注</span><span className="agents-v">{p.note}</span></div> : null}
+                  {card ? (
+                    <>
+                      <div className="agents-line">
+                        <span className="agents-k">自称</span>
+                        <span className="agents-v">{card.name}{card.version ? ` · v${card.version}` : ''}</span>
+                      </div>
+                      {card.description ? <div className="agents-line"><span className="agents-k"></span><span className="agents-v">{card.description}</span></div> : null}
+                      {card.capabilities?.length ? (
+                        <div className="agents-line"><span className="agents-k">能力</span><span className="agents-v">{card.capabilities.join(' · ')}</span></div>
+                      ) : null}
+                      {(card.interfaces || []).map((i) => (
+                        <div className="agents-line" key={i.url}>
+                          <span className="agents-k">入口</span>
+                          <span className="agents-v agents-mono">{i.url}（{i.protocolBinding} {i.protocolVersion}）</span>
+                        </div>
+                      ))}
+                      {(card.skills || []).map((s) => (
+                        <div className="agents-line" key={s.name}>
+                          <span className="agents-k">技能</span>
+                          <span className="agents-v">{s.name}{s.description ? ` — ${s.description}` : ''}</span>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <div className="agents-line">
+                      <span className="agents-k">卡片</span>
+                      <span className="agents-v">{p.checked ? (p.err || '它没有回答') : '还没检查（点刷新）'}</span>
+                    </div>
+                  )}
+                  <div className="agents-line">
+                    <span className="agents-k">引用</span>
+                    <span className="agents-v agents-mono">{p.ref}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }

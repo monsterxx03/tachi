@@ -1,23 +1,33 @@
-// Package atfile turns @-references in a user message into LLM input.
+// Package atfile turns @- and #-references in a user message into LLM input.
 //
-// A reference starts with '@' at the beginning of the message or right after
-// whitespace and runs up to the next whitespace. File references resolve against
-// a caller-supplied root — the TUI's working directory, the desktop session's
-// working directory — so that a reference always points at the same tree the
-// agent's tools operate on. Absolute and ~-rooted references resolve as-is.
+// There are two marks, and the split is by WHAT the reference names:
 //
-// A reference expands by kind:
+//   - '@' names a PATH. It starts at the beginning of the message or right after whitespace and
+//     runs up to the next whitespace, resolving against a caller-supplied root — the TUI's
+//     working directory, the desktop session's working directory — so that a reference always
+//     points at the same tree the agent's tools operate on. Absolute and ~-rooted references
+//     resolve as-is.
+//   - '#' names an ENTITY somewhere else: a node this machine may delegate to (AgentRefPrefix)
+//     or another conversation (SessionRefPrefix). It is the same shape, and its namespaces are
+//     opened by their prefix and by NOTHING else — a '#' that is not followed by one of those
+//     two is ordinary text ("#include", "#123", a heading). A path is what '@' is for, so a
+//     reference's mark says which question is being asked, and the pickers can route on it.
+//
+// A path reference expands by kind:
 //
 //   - directory → a file listing from ripgrep
 //   - image     → a base64 content part for multi-modal input
 //   - text file → inlined between UNTRUSTED FILE CONTENT markers
 //   - binary    → annotated as [@file: path] so the agent reads it with tools
-//   - session   → annotated as a pointer to ANOTHER conversation's transcript
-//     (see SessionRefPrefix, SessionResolver); never inlined
 //   - missing   → left verbatim
 //
+// An entity reference expands to a POINTER — one line naming the thing and what to do with it,
+// never its content (see AgentTarget, SessionTarget). A reference nothing can resolve is left
+// exactly as the user typed it, which is also what an unreadable one gets.
+//
 // Only the message handed to the LLM is expanded; frontends keep displaying
-// the raw text the user typed.
+// the raw text the user typed. A message may hold any number of references of either mark:
+// every one is expanded on its own, and the frontends locate the one the caret is in.
 package atfile
 
 import (
@@ -64,18 +74,81 @@ const (
 	// maxSessionTitleRunes caps the title inside a session pointer: a title is
 	// written from the first user message, so it can be a whole paragraph.
 	maxSessionTitleRunes = 60
+	// maxAgentNoteRunes caps a node's description inside an agent pointer, for the same reason:
+	// a card's description is free text written by whoever runs that node.
+	maxAgentNoteRunes = 80
 )
 
-// SessionRefPrefix is the @-reference namespace that names a session instead of
-// a path: "@session:<id>". A file whose own name contains a colon is the price
-// of an unambiguous, greppable spelling — the namespace is checked before any
-// path resolution, so such a file can no longer be referenced by that name.
-const SessionRefPrefix = "session:"
+// The two marks an expansion scan looks for. They are the single source of the
+// spelling: the frontends' pickers insert what these helpers render, and the scan
+// reads back exactly that (see LastRefStart, IsRefBoundary).
+const (
+	// FileRefMark names a path.
+	FileRefMark = '@'
+	// HashRefMark names an entity: a node or another conversation. It is NOT a general-purpose
+	// mark — only the two prefixes below open a namespace, and anything else after it is text.
+	HashRefMark = '#'
+)
+
+// The '#' namespaces, in the order the pickers offer them when the reader has typed
+// only the mark. Each is a two-character alias rather than a word because these
+// references are typed inline, in the middle of a sentence.
+const (
+	// AgentRefPrefix names a node this machine may delegate work to: "#a:<alias>". The alias is
+	// the configured peer name — the same string DelegateTask's `node` argument takes.
+	AgentRefPrefix = "a:"
+	// SessionRefPrefix names another conversation: "#s:<id>". It used to live under '@', and the
+	// mark moved with the split: '@' names paths, and a session is not one.
+	SessionRefPrefix = "s:"
+)
 
 // RefForSession renders the reference text for a session id — the one place
 // that knows the spelling, so a picker's row and the expansion scanner can
 // never disagree about what is inserted.
-func RefForSession(id string) string { return "@" + SessionRefPrefix + id }
+func RefForSession(id string) string { return string(HashRefMark) + SessionRefPrefix + id }
+
+// RefForAgent renders the reference text for a node alias, for the same reason
+// RefForSession exists: a picker row inserts this, and the scan reads it back.
+func RefForAgent(alias string) string { return string(HashRefMark) + AgentRefPrefix + alias }
+
+// HashNamespace is what a '#' reference's query is asking about. The pickers route
+// on it, and both of them route through HashQueryNamespace rather than each
+// deciding for itself — a popup that offers one thing while the scan expands
+// another is the failure this package exists to prevent.
+type HashNamespace int
+
+const (
+	// HashNamespaceNone means the query is not a '#' reference at all ("#include", "#123"): the
+	// picker stays closed and the text stays as typed.
+	HashNamespaceNone HashNamespace = iota
+	// HashNamespaceCandidates means the reader has typed the mark, or part of a prefix, but not a
+	// whole one yet: offer the namespaces themselves, so "#" + Enter becomes "#a:".
+	HashNamespaceCandidates
+	// HashNamespaceAgents means the query opened the node namespace; the rest is a search term.
+	HashNamespaceAgents
+	// HashNamespaceSessions means the query opened the conversation namespace.
+	HashNamespaceSessions
+)
+
+// HashQueryNamespace routes what the reader has typed after a '#': which namespace
+// is open, and what is left to search for inside it. A query that matches no
+// namespace (and no PREFIX of one) is HashNamespaceNone — the rule that keeps
+// "#include" and "#123" out of the picker, and the reason a '#' reference is only
+// a reference once its prefix is complete.
+func HashQueryNamespace(query string) (HashNamespace, string) {
+	if rest, ok := strings.CutPrefix(query, AgentRefPrefix); ok {
+		return HashNamespaceAgents, rest
+	}
+	if rest, ok := strings.CutPrefix(query, SessionRefPrefix); ok {
+		return HashNamespaceSessions, rest
+	}
+	for _, prefix := range []string{AgentRefPrefix, SessionRefPrefix} {
+		if strings.HasPrefix(prefix, query) {
+			return HashNamespaceCandidates, ""
+		}
+	}
+	return HashNamespaceNone, ""
+}
 
 // Kind describes how an existing path expands.
 type Kind int
@@ -96,18 +169,19 @@ const (
 	KindBinary
 )
 
-// Result is the outcome of expanding a message's @-references.
+// Result is the outcome of expanding a message's references.
 type Result struct {
 	// Text is the message with every resolvable reference expanded.
 	Text string
 	// Images holds the image references as multi-modal content parts, in the
 	// order they appeared in the message.
 	Images []llm.ContentPart
-	// Refs counts the references that resolved to something on disk.
+	// Refs counts the references that resolved — paths that exist, and entities
+	// a resolver named.
 	Refs int
 }
 
-// SessionTarget describes the session an @session: reference names, as much of it
+// SessionTarget describes the session a #s: reference names, as much of it
 // as the pointer needs. It carries NO content: the reference expands to a pointer
 // into the session store and the model reads the transcript with its own tools.
 // That is deliberate — another conversation's transcript is bulk the reader of
@@ -133,7 +207,7 @@ type SessionTarget struct {
 	Transcript string
 }
 
-// SessionResolver turns the id in an @session: reference into the session it
+// SessionResolver turns the id in a #s: reference into the session it
 // names. A nil resolver leaves session references verbatim, which is what a
 // caller with no session store to hand (and every test that does not care) gets.
 type SessionResolver interface {
@@ -144,15 +218,54 @@ type SessionResolver interface {
 	Resolve(id string) (SessionTarget, bool)
 }
 
+// AgentTarget describes the node a #a: reference names, as much of it as the
+// pointer needs. Like SessionTarget it carries no content — there is nothing to
+// inline from another machine — and it is what a picker's row and the expanded
+// pointer are both built from, so the two cannot tell different stories about one
+// node.
+type AgentTarget struct {
+	// Alias is this machine's name for the node (config `peers[].name`). It is what the model
+	// must hand to DelegateTask, so the pointer spells it exactly.
+	Alias string
+	// NodeID is the identity the node proved when this machine first reached it out of band
+	// (TOFU — node/knownpeers.go). It is EMPTY when this machine has never called that node:
+	// only outbound contact pins an identity, so a node that has only ever called US has no
+	// record here. The pointer says so rather than inventing an id, and the value is deliberately
+	// NOT what the node calls itself — any key can claim any name.
+	NodeID string
+	// Note is the configured human line ("家里的 NAS"), used when there is no description.
+	Note string
+	// Description is the node's own account of itself, from its Agent Card; empty when the card
+	// could not be read at the moment this target was built.
+	Description string
+	// Reachable and Checked are a fact about a MOMENT, and the pointer does not carry them: the
+	// text a reference expands into stays in the conversation's history, and "was up at 19:04"
+	// is not something a later reader should be told as if it were still true. They are here for
+	// the picker, which shows them about NOW.
+	Reachable bool
+	Checked   bool
+}
+
+// AgentResolver turns the alias (or id) in a #a: reference into the node it names.
+// A nil resolver leaves agent references verbatim, which is what an entry point
+// that cannot delegate gets.
+type AgentResolver interface {
+	// Resolve accepts a configured alias, or a node id — the id is what a reader who saw one in
+	// a transcript would paste back. It reports false when nothing matches.
+	Resolve(alias string) (AgentTarget, bool)
+}
+
 // Options is what an expansion needs beyond the root its file references resolve
 // against.
 type Options struct {
-	// Sessions resolves @session: references. Nil = they stay verbatim, exactly
+	// Sessions resolves #s: references. Nil = they stay verbatim, exactly
 	// like a path that does not exist.
 	Sessions SessionResolver
+	// Agents resolves #a: references, on the same terms.
+	Agents AgentResolver
 }
 
-// IsRefBoundary reports whether b can separate an @-reference from the text
+// IsRefBoundary reports whether b can separate a reference from the text
 // around it: a reference starts at the beginning of the message or after any
 // whitespace, and ends at the next whitespace. Both the expansion scan and the
 // frontends' cursor scans use this single rule.
@@ -160,12 +273,17 @@ func IsRefBoundary(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
-// LastRefStart returns the index of the '@' starting the last reference in s,
-// or -1 when s contains no reference. Frontends use it to locate the reference
-// the cursor is currently editing.
+// LastRefStart returns the index of the mark ('@' or '#') starting the last
+// reference in s, or -1 when s contains none. Frontends use it to locate the
+// reference the cursor is currently editing, and s[LastRefStart(s)] tells them
+// which mark it is — that is what routes the picker.
+//
+// A bare '#' is returned too, because the namespaces have to be OFFERED before
+// one can be typed ("#a:" appears once the reader types "#"). Whether what
+// follows is a reference at all is HashQueryNamespace's call, not this one's.
 func LastRefStart(s string) int {
 	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == '@' && (i == 0 || IsRefBoundary(s[i-1])) {
+		if (s[i] == FileRefMark || s[i] == HashRefMark) && (i == 0 || IsRefBoundary(s[i-1])) {
 			return i
 		}
 	}
@@ -220,7 +338,7 @@ func Classify(path string) (kind Kind, size int64) {
 	}
 }
 
-// Expand rewrites every @-reference in message. References that do not resolve
+// Expand rewrites every reference in message. References that do not resolve
 // are left exactly as the user typed them.
 func Expand(root, message string, opts Options) Result {
 	var b strings.Builder
@@ -228,8 +346,9 @@ func Expand(root, message string, opts Options) Result {
 	refs := 0
 
 	for i := 0; i < len(message); {
-		if message[i] != '@' || (i > 0 && !IsRefBoundary(message[i-1])) {
-			b.WriteByte(message[i])
+		mark := message[i]
+		if (mark != FileRefMark && mark != HashRefMark) || (i > 0 && !IsRefBoundary(message[i-1])) {
+			b.WriteByte(mark)
 			i++
 			continue
 		}
@@ -242,19 +361,31 @@ func Expand(root, message string, opts Options) Result {
 		i = j
 
 		if ref == "" {
-			b.WriteByte('@')
+			b.WriteByte(mark)
 			continue
 		}
-		// The session namespace is checked before any path resolution: an
-		// "session:x" file would be a path, and this spelling is not one.
-		if id, ok := strings.CutPrefix(ref, SessionRefPrefix); ok {
-			if expandSessionRef(&b, opts.Sessions, id) {
-				refs++
-				continue
+
+		// '#' names an entity, and only two prefixes open a namespace. Anything else after the
+		// mark is ordinary text and is written back as typed: that is what keeps "#include",
+		// "#123" and a Markdown heading out of the expansion entirely, rather than resolving them
+		// against a path they never named.
+		if mark == HashRefMark {
+			if id, ok := strings.CutPrefix(ref, SessionRefPrefix); ok {
+				if expandSessionRef(&b, opts.Sessions, id) {
+					refs++
+					continue
+				}
+			} else if alias, ok := strings.CutPrefix(ref, AgentRefPrefix); ok {
+				if expandAgentRef(&b, opts.Agents, alias) {
+					refs++
+					continue
+				}
 			}
-			b.WriteString("@" + ref)
+			b.WriteByte(mark)
+			b.WriteString(ref)
 			continue
 		}
+
 		if expandRef(&b, root, ref, &images) {
 			refs++
 		}
@@ -356,14 +487,15 @@ func expandSessionRef(b *strings.Builder, resolver SessionResolver, id string) b
 	return true
 }
 
-// sessionPointer renders the single line an @session: reference becomes: the id,
+// sessionPointer renders the single line a #s: reference becomes: the id,
 // enough metadata to judge whether this is the conversation the writer meant, and
 // the path to read. It is one line and no content — see SessionTarget.
 func sessionPointer(t SessionTarget) string {
 	var b strings.Builder
-	b.WriteString("[@session: ")
-	b.WriteString(t.ID)
-	fmt.Fprintf(&b, " %q", sessionTitle(t.Title))
+	b.WriteString("[")
+	b.WriteString(RefForSession(t.ID))
+	b.WriteString(" ")
+	fmt.Fprintf(&b, "%q", sessionTitle(t.Title))
 	if t.Messages > 0 {
 		fmt.Fprintf(&b, " — %d messages", t.Messages)
 	}
@@ -382,6 +514,62 @@ func sessionPointer(t SessionTarget) string {
 	}
 	b.WriteString(sessionPointerEndFmt)
 	return b.String()
+}
+
+// expandAgentRef writes the pointer for a single agent reference. It reports
+// whether the reference resolved — false leaves the caller to write it verbatim,
+// exactly like a path that does not exist.
+func expandAgentRef(b *strings.Builder, resolver AgentResolver, alias string) bool {
+	if resolver == nil {
+		return false
+	}
+	target, ok := resolver.Resolve(alias)
+	if !ok {
+		return false
+	}
+	b.WriteString(agentPointer(target))
+	return true
+}
+
+// agentPointer renders the single line a #a: reference becomes.
+//
+// It carries three things and no fourth. The ALIAS, because that is the string DelegateTask takes
+// — a pointer that named the node only by id would leave the model to guess the argument it must
+// actually pass. The NODE ID, because it is the one fact about a peer that cannot be claimed by
+// anyone else, so it is what makes the reference checkable against what the reader expected
+// (design §4.2); when this machine has never called that node there is no pinned id, and the line
+// says so instead of filling the field with the node's SELF-REPORTED name, which any key can
+// claim. And what to DO with it, because the reference exists to get work onto that machine.
+//
+// What it does NOT carry is reachability. "It was up when the message was written" would sit in
+// the conversation's history for the rest of the session, read later as if it were still true;
+// the picker shows that about now, which is the only thing a moment can be.
+func agentPointer(t AgentTarget) string {
+	var b strings.Builder
+	b.WriteString("[")
+	b.WriteString(RefForAgent(t.Alias))
+	if t.NodeID != "" {
+		fmt.Fprintf(&b, " | node_id=%s", t.NodeID)
+	} else {
+		b.WriteString(" | node_id 未知（本机还没跟它连过，身份在第一次出站接触时才记下）")
+	}
+	if what := firstNonEmpty(t.Description, t.Note); what != "" {
+		fmt.Fprintf(&b, " | %s", strutil.TruncateFitted(strutil.FirstLine(what), maxAgentNoteRunes))
+	}
+	fmt.Fprintf(&b, "; 用 DelegateTask(node=%q) 把活派过去]", t.Alias)
+	return b.String()
+}
+
+// firstNonEmpty returns the first non-blank value; the nodes' own description wins over the
+// configured human line, because one is what the machine says about itself and the other is what
+// this machine's operator wrote before it ever answered.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // sessionTitle makes a stored title safe for the inside of a pointer: titles are

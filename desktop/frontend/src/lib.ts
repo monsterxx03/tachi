@@ -558,41 +558,78 @@ export function toLocalPath(path: string): string {
   return '/local' + path.split('/').map(encodeURIComponent).join('/')
 }
 
-// ── @-file references ───────────────────────────────────────────────────────
-// Mirrors agent/atfile.IsRefBoundary: a reference starts at the beginning of
-// the text or after any whitespace, and runs to the next whitespace. Keeping
-// the rule identical on both sides means the popup offers exactly the
-// references the backend will expand when the message is sent.
+// ── references: @ a path, # an entity ───────────────────────────────────────
+// Mirrors agent/atfile: a reference starts at the beginning of the text or after
+// any whitespace, and runs to the next whitespace. Keeping the rule identical on
+// both sides means the popup offers exactly the references the backend will expand
+// when the message is sent.
 export function isRefBoundary(ch: string): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
 }
 
-// AT_SESSION_PREFIX mirrors agent/atfile.SessionRefPrefix: the "@" namespace that
-// names ANOTHER conversation instead of a path. The popup routes a query by it,
-// so both sides have to spell it the same way — and only the backend knows what a
-// session reference expands to (a pointer, never the transcript).
-export const AT_SESSION_PREFIX = 'session:'
+// FILE_REF_MARK names a path; HASH_REF_MARK names an entity (agent/atfile.FileRefMark, HashRefMark).
+// The split is what keeps a '#include' or an issue number out of the picker entirely: only the two
+// prefixes below open a namespace, and anything else after the mark is ordinary text.
+export const FILE_REF_MARK = '@'
+export const HASH_REF_MARK = '#'
 
-// atRefAt returns the @-reference the caret sits in — its start index and the
-// query typed after it — or null when the caret is not inside one.
-export function atRefAt(value: string, caret: number): { start: number; query: string } | null {
+// HASH_AGENT_PREFIX and HASH_SESSION_PREFIX mirror agent/atfile.AgentRefPrefix and SessionRefPrefix:
+// "#a:<alias>" names a node this machine may delegate to, "#s:<id>" another conversation. The
+// spelling has to match the Go side exactly — the popup inserts it and the expansion reads it back —
+// and only the backend knows what a reference expands to (a pointer, never the content).
+export const HASH_AGENT_PREFIX = 'a:'
+export const HASH_SESSION_PREFIX = 's:'
+
+// HashNamespace is what a '#' query is asking about, mirroring atfile.HashNamespace.
+export type HashNamespace = 'none' | 'candidates' | 'agents' | 'sessions'
+
+// hashNamespace mirrors agent/atfile.HashQueryNamespace: which namespace a '#' query opens, and
+// what is left to search for inside it. A query that matches no namespace — and no PREFIX of one —
+// is 'none', which is the whole rule that keeps ordinary '#' text out of the picker. It lives here
+// as the Go one lives in atfile: one rule, so the two frontends cannot answer the same keystrokes
+// differently from each other or from the expansion.
+export function hashNamespace(query: string): { ns: HashNamespace; rest: string } {
+  if (query.startsWith(HASH_AGENT_PREFIX)) return { ns: 'agents', rest: query.slice(HASH_AGENT_PREFIX.length) }
+  if (query.startsWith(HASH_SESSION_PREFIX)) return { ns: 'sessions', rest: query.slice(HASH_SESSION_PREFIX.length) }
+  for (const prefix of [HASH_AGENT_PREFIX, HASH_SESSION_PREFIX]) {
+    if (prefix.startsWith(query)) return { ns: 'candidates', rest: '' }
+  }
+  return { ns: 'none', rest: '' }
+}
+
+// atRefAt returns the reference the caret sits in — its start index, the mark it opens with, and the
+// query typed after it — or null when the caret is not inside one. Both marks are returned: a bare
+// '#' is a reference being started, and whether what follows is one at all is hashNamespace's call.
+export function atRefAt(value: string, caret: number): { start: number; mark: string; query: string } | null {
   for (let i = caret - 1; i >= 0; i--) {
     const c = value[i]
-    if (c === '@') {
-      if (i > 0 && !isRefBoundary(value[i - 1])) return null // attached to a word (e.g. an email)
-      return { start: i, query: value.slice(i + 1, caret) }
+    if (c === FILE_REF_MARK || c === HASH_REF_MARK) {
+      if (i > 0 && !isRefBoundary(value[i - 1])) return null // attached to a word (e.g. an email, C#)
+      return { start: i, mark: c, query: value.slice(i + 1, caret) }
     }
-    if (isRefBoundary(c)) return null // left the reference without finding its @
+    if (isRefBoundary(c)) return null // left the reference without finding its mark
   }
   return null
 }
 
-// countAtRefs counts the @-references in value, used for the picker's
-// "already referencing N" hint.
+// countAtRefs counts the references in value, used for the picker's
+// "already referencing N" hint. A '#' counts only when it opens one of the two
+// namespaces (the same rule the backend expands by): counting every '#' would make the hint lie
+// about a message that says "#include".
 export function countAtRefs(value: string): number {
   let n = 0
   for (let i = 0; i < value.length; i++) {
-    if (value[i] === '@' && (i === 0 || isRefBoundary(value[i - 1]))) n++
+    if (i > 0 && !isRefBoundary(value[i - 1])) continue
+    const c = value[i]
+    if (c === FILE_REF_MARK) {
+      n++
+      continue
+    }
+    if (c === HASH_REF_MARK) {
+      const end = atRefEnd(value, i)
+      const body = value.slice(i + 1, end)
+      if (body.startsWith(HASH_AGENT_PREFIX) || body.startsWith(HASH_SESSION_PREFIX)) n++
+    }
   }
   return n
 }

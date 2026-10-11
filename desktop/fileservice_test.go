@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -191,5 +193,144 @@ func TestSavePastedImageStoresUnderTheSession(t *testing.T) {
 		if out := svc.SavePastedImage(tc.session, tc.media, tc.data); out.Error == "" {
 			t.Errorf("%s: got %+v, want a reason", tc.name, out)
 		}
+	}
+}
+
+// useTestConfigBase points the config paths at a temp dir, so a test that reads (or writes) the
+// peer records cannot touch the real ~/.tachi.
+func useTestConfigBase(t *testing.T) {
+	t.Helper()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir("") })
+}
+
+// TestSearchAgentsDescribesEachNode pins what a #a: row says, because THREE frontends have to say
+// the same thing about the same node: the alias the model must hand to DelegateTask, the identity
+// only THIS machine can vouch for, and what the last look found.
+//
+// Two of the three are refused when they are guessed. The identity comes from the TOFU record
+// (written by a TLS handshake on an outbound call and nothing else), so a node this machine has
+// never called has NO identity — and the row says that, rather than showing the name the node
+// reports about itself, which any key can claim. Reachability is a fact about a moment and nobody
+// has looked yet, so the row says "检查中…" and never "offline".
+func TestSearchAgentsDescribesEachNode(t *testing.T) {
+	useTestConfigBase(t)
+	cfg := config.DefaultConfig()
+	cfg.Peers = []config.PeerConfig{
+		{Name: "ugreen-nas", URL: "https://100.64.0.3:7080", Note: "家里的 NAS"},
+		{Name: "hk-vps", URL: "https://100.64.0.9:7080"},
+	}
+	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
+  "ugreen-nas": {"node_id": "cd726b446c34386ece70d88fdd5fbf2a", "first_seen": "2026-10-01T00:00:00Z"}
+}`)); err != nil {
+		t.Fatalf("write peer identities: %v", err)
+	}
+
+	app := newTestApp()
+	app.setConfig(cfg)
+	svc := &AgentService{desk: app}
+
+	rows := svc.SearchAgents("", 0)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want one per configured peer (a missing row reads as \"not configured\")", len(rows))
+	}
+	byAlias := map[string]AgentMatchVO{}
+	for _, r := range rows {
+		byAlias[r.Alias] = r
+	}
+
+	nas, ok := byAlias["ugreen-nas"]
+	if !ok {
+		t.Fatalf("no row for ugreen-nas: %+v", rows)
+	}
+	if nas.Ref != "#a:ugreen-nas" {
+		t.Errorf("ref = %q, want the reference the expansion reads back", nas.Ref)
+	}
+	if nas.NodeID != "cd726b446c34386ece70d88fdd5fbf2a" || nas.IDLabel != "cd726b44" {
+		t.Errorf("identity = %q/%q, want the pinned id and its short form", nas.NodeID, nas.IDLabel)
+	}
+	if nas.Note != "家里的 NAS" {
+		t.Errorf("note = %q, want the configured line", nas.Note)
+	}
+	if nas.Reach != agentref.ReachWord(atfile.AgentTarget{}) {
+		t.Errorf("reach = %q, want %q — nobody has probed yet", nas.Reach, agentref.ReachWord(atfile.AgentTarget{}))
+	}
+
+	vps, ok := byAlias["hk-vps"]
+	if !ok {
+		t.Fatalf("no row for hk-vps: %+v", rows)
+	}
+	if vps.NodeID != "" || vps.IDLabel != "身份未记录" {
+		t.Errorf("never called outbound: got %+v, want no identity claimed", vps)
+	}
+	if vps.Ref != "#a:hk-vps" {
+		t.Errorf("ref = %q", vps.Ref)
+	}
+
+	// A query narrows by alias, and the row's alias is what gets searched.
+	if narrowed := svc.SearchAgents("ugreen", 0); len(narrowed) != 1 || narrowed[0].Alias != "ugreen-nas" {
+		t.Errorf("SearchAgents(ugreen) = %+v, want just that node", narrowed)
+	}
+}
+
+// TestPeerBoardShowsWhatThisMachineKnows pins the node board's content and its refresh: the alias
+// and address this machine asked for, the identity pinned by the handshake, what the node answered
+// — and a refresh that really asks again rather than re-reading its cache.
+//
+// The peer points at 127.0.0.1:1, where nothing listens: the failure is immediate (a refused
+// connection, not a timeout), which keeps this a fast unit test instead of a fifteen-second one.
+func TestPeerBoardShowsWhatThisMachineKnows(t *testing.T) {
+	useTestConfigBase(t)
+	cfg := config.DefaultConfig()
+	cfg.Peers = []config.PeerConfig{{Name: "ugreen-nas", URL: "https://127.0.0.1:1", Note: "家里的 NAS"}}
+	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
+  "ugreen-nas": {"node_id": "cd726b446c34386ece70d88fdd5fbf2a", "first_seen": "2026-10-01T00:00:00Z"}
+}`)); err != nil {
+		t.Fatalf("write peer identities: %v", err)
+	}
+
+	app := newTestApp()
+	app.setConfig(cfg)
+	svc := &AgentService{desk: app}
+
+	board := svc.PeerBoard()
+	if len(board.Peers) != 1 {
+		t.Fatalf("board has %d rows, want one per configured peer: %+v", len(board.Peers), board)
+	}
+	row := board.Peers[0]
+	if row.Alias != "ugreen-nas" || row.Ref != "#a:ugreen-nas" {
+		t.Errorf("row = %+v, want the configured alias and its reference", row)
+	}
+	if row.URL != "https://127.0.0.1:1" {
+		t.Errorf("url = %q, want the address THIS machine dials (from the config)", row.URL)
+	}
+	if row.NodeID != "cd726b446c34386ece70d88fdd5fbf2a" || row.NodeIDLabel != "cd726b44" {
+		t.Errorf("identity = %q/%q, want the pinned id and its short form", row.NodeID, row.NodeIDLabel)
+	}
+	if row.Note != "家里的 NAS" {
+		t.Errorf("note = %q", row.Note)
+	}
+
+	// The refresh is a real round trip: nothing listens on that port, so the answer is "asked, and it
+	// did not answer" — which is a different thing from "nobody has asked yet", and the row says so.
+	refreshed := svc.RefreshPeerBoard()
+	if len(refreshed.Peers) != 1 {
+		t.Fatalf("refresh returned %d rows: %+v", len(refreshed.Peers), refreshed)
+	}
+	got := refreshed.Peers[0]
+	if !got.Checked {
+		t.Fatalf("after a refresh the node has been asked: %+v", got)
+	}
+	if got.Reachable || got.Card != nil {
+		t.Errorf("nothing listens on that port: got %+v, want no card", got)
+	}
+	if got.Err == "" {
+		t.Errorf("a node that did not answer has to say why: %+v", got)
+	}
+	if got.Reach != agentref.ReachWord(atfile.AgentTarget{Checked: true}) {
+		t.Errorf("reach = %q, want the unreachable word", got.Reach)
+	}
+	if !refreshed.AnyChecked || refreshed.CheckedAt == "" {
+		t.Errorf("the board must stamp when it looked: %+v", refreshed)
 	}
 }

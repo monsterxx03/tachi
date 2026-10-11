@@ -21,9 +21,20 @@ import {
   type PermissionDecision,
   type PermissionRequest,
 } from './types'
-import type { CommandVO, SessionMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { AgentMatchVO, CommandVO, SessionMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { AT_SESSION_PREFIX, atRefAt, countAtRefs, imeActive, insertRefText, listNav, replaceRefText } from './lib'
+import {
+  HASH_REF_MARK,
+  HASH_AGENT_PREFIX,
+  HASH_SESSION_PREFIX,
+  atRefAt,
+  countAtRefs,
+  hashNamespace,
+  imeActive,
+  insertRefText,
+  listNav,
+  replaceRefText,
+} from './lib'
 import { isMod } from './platform'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
@@ -61,6 +72,45 @@ function sessionAtMatch(s: SessionMatchVO): AtMatch {
     date: s.date,
     workingDir: s.workingDir,
   }
+}
+
+// agentAtMatch maps a backend node match into a popup row. Everything it shows is
+// already worded by the backend (idLabel, reach): the TUI shows the same two facts about the same
+// node, and this must not become the place where they start being phrased differently.
+function agentAtMatch(a: AgentMatchVO): AtMatch {
+  return {
+    path: a.alias,
+    isDir: false,
+    ref: a.ref,
+    kind: 'agent',
+    idLabel: a.idLabel,
+    reach: a.reach,
+    note: a.note,
+  }
+}
+
+// HASH_PREFIX_CANDIDATES is the picker's opening list for '#': the namespaces themselves, offered
+// the moment the mark is typed so the spelling does not have to be remembered. They are built here
+// rather than fetched, because they are two constants and a request would arrive after the keystroke
+// that asked for them. The words mirror agentref.PrefixCandidates (the TUI's copy): one fact, one
+// sentence, two renderers.
+const HASH_PREFIX_CANDIDATES = [
+  { ref: HASH_REF_MARK + HASH_AGENT_PREFIX, note: 'agent：另一台机器上的 Tachi 节点，可把活派过去' },
+  { ref: HASH_REF_MARK + HASH_SESSION_PREFIX, note: 'session：另一段对话（只引用它的位置，不内联全文）' },
+]
+
+// hashPrefixMatches narrows those two rows by what has been typed after the mark. Picking one OPENS
+// that namespace instead of finishing the reference (a 'prefix' row): the popup stays up on the new
+// prefix, which is what makes "#" → "#a:" → the node list one gesture.
+function hashPrefixMatches(query: string): AtMatch[] {
+  const typed = HASH_REF_MARK + query
+  return HASH_PREFIX_CANDIDATES.filter((c) => c.ref.startsWith(typed)).map((c) => ({
+    path: c.ref,
+    isDir: false,
+    ref: c.ref,
+    kind: 'prefix' as const,
+    note: c.note,
+  }))
 }
 
 export type ComposerDeps = {
@@ -155,11 +205,11 @@ export function useComposer(deps: ComposerDeps) {
     setAt(null)
   }, [])
 
-  // scheduleAtSearch runs the (debounced) backend search for a query. The query's
-  // prefix picks the namespace: "@session:…" asks for conversations, anything else
-  // for files under the session's roots. Both answer with the SAME row shape,
-  // because both are inserted into the box as references the backend expands.
-  const scheduleAtSearch = useCallback((query: string) => {
+  // scheduleAtSearch runs the (debounced) backend search for a reference being typed. The MARK says
+  // which kind of question it is and, for '#', the query's prefix says which namespace: '@' asks for
+  // paths, "#a:" for this machine's nodes, "#s:" for other conversations. Every namespace answers
+  // with the SAME row shape, because every row is just a reference to be inserted.
+  const scheduleAtSearch = useCallback((mark: string, query: string) => {
     const sid = currentId
     atQueryRef.current = query
     if (atTimerRef.current !== null) window.clearTimeout(atTimerRef.current)
@@ -172,11 +222,21 @@ export function useComposer(deps: ComposerDeps) {
         if (seq !== atSeqRef.current) return // superseded by a newer query
         setAt((p) => (p && p.query === query ? { ...p, items, idx: 0, loading: false } : p))
       }
+      // The namespaces themselves are local: no round trip for two constants.
+      if (mark === HASH_REF_MARK && hashNamespace(query).ns === 'candidates') {
+        applyResult(hashPrefixMatches(query))
+        return
+      }
       try {
-        const search = query.startsWith(AT_SESSION_PREFIX)
-          ? AgentService.SearchSessions(sid, query.slice(AT_SESSION_PREFIX.length), AT_MAX_RESULTS)
-              .then((res) => (res || []).map(sessionAtMatch))
-          : AgentService.SearchFiles(sid, query, AT_MAX_RESULTS).then((res) => res || [])
+        let search: Promise<AtMatch[]>
+        if (mark === HASH_REF_MARK) {
+          const { ns, rest } = hashNamespace(query)
+          search = ns === 'sessions'
+            ? AgentService.SearchSessions(sid, rest, AT_MAX_RESULTS).then((res) => (res || []).map(sessionAtMatch))
+            : AgentService.SearchAgents(rest, AT_MAX_RESULTS).then((res) => (res || []).map(agentAtMatch))
+        } else {
+          search = AgentService.SearchFiles(sid, query, AT_MAX_RESULTS).then((res) => res || [])
+        }
         search.then(applyResult).catch(() => applyResult([]))
       } catch {
         applyResult([])
@@ -193,11 +253,28 @@ export function useComposer(deps: ComposerDeps) {
       closeAt()
       return
     }
+    // A '#' that opens no namespace is ordinary text ("#include", "#123"): no picker over it, so
+    // typing a heading or an issue number is not interrupted by a popup that could only come back
+    // empty.
+    if (ref.mark === HASH_REF_MARK && hashNamespace(ref.query).ns === 'none') {
+      closeAt()
+      return
+    }
+    // Typing '#' is the moment to start asking the nodes: the answer costs a round trip per node,
+    // and the typing that follows is what the reader spends it on. It is fire-and-forget — the rows
+    // that come back later carry whatever the probe found by then.
+    if (ref.mark === HASH_REF_MARK) {
+      try {
+        void Promise.resolve(AgentService.WarmAgents()).catch(() => {})
+      } catch {
+        /* the picker still works: reachability just stays "检查中…" */
+      }
+    }
     const count = countAtRefs(value)
-    setAt((prev) => (prev && prev.start === ref.start && prev.query === ref.query
+    setAt((prev) => (prev && prev.start === ref.start && prev.mark === ref.mark && prev.query === ref.query
       ? { ...prev, count }
-      : { start: ref.start, query: ref.query, items: [], idx: 0, loading: true, count }))
-    if (atQueryRef.current !== ref.query) scheduleAtSearch(ref.query)
+      : { start: ref.start, mark: ref.mark, query: ref.query, items: [], idx: 0, loading: true, count }))
+    if (atQueryRef.current !== ref.query) scheduleAtSearch(ref.mark, ref.query)
   }, [closeAt, scheduleAtSearch])
 
   // insertAtCaret splices text into the composer at the caret, keeping the focus and the
@@ -261,18 +338,21 @@ export function useComposer(deps: ComposerDeps) {
   }, [pasteError])
 
   // acceptAt REPLACES the reference being typed with the picked row's own reference
-  // — it must not splice at the caret, or the "@query" the user was typing survives
-  // and the text ends up with a stray "@" (counted as a second reference). A
-  // directory keeps the picker open on the new prefix so the user can drill in; a
-  // session row is a leaf (its reference is the whole thing, and what it expands to
+  // — it must not splice at the caret, or the "#query" the user was typing survives
+  // and the text ends up with a stray "#" (counted as a second reference). A
+  // directory keeps the picker open on the new prefix so the user can drill in; a namespace row
+  // ("#a:") does the same thing one level up — it OPENS a namespace and the popup moves into it. A
+  // session or node row is a leaf (its reference is the whole thing, and what it expands to
   // is the backend's business).
   const acceptAt = useCallback((match?: AtMatch) => {
     if (!match || !at) return
     const dir = !!match.isDir
+    const opens = dir || match.kind === 'prefix'
     // The backend decides the reference form (relative under the primary root,
-    // absolute under an additional one, "@session:<id>" for a conversation);
-    // Path is only what the row displays.
-    const text = (match.ref || '@' + match.path) + (dir ? '/' : ' ')
+    // absolute under an additional one, "#a:<alias>" for a node, "#s:<id>" for a conversation);
+    // Path is only what the row displays. A row that OPENS a namespace gets no trailing space: the
+    // reference is not finished, and a space would end it on the spot.
+    const text = (match.ref || '@' + match.path) + (dir ? '/' : opens ? '' : ' ')
     const ins = replaceRefText(inputRef.current, at.start, text)
     atQueryRef.current = null // whatever follows is a fresh query
     setAt(null)
@@ -282,7 +362,7 @@ export function useComposer(deps: ComposerDeps) {
       if (!node) return
       node.focus()
       node.setSelectionRange(ins.caret, ins.caret)
-      if (dir) syncAtRef(ins.value, ins.caret)
+      if (opens) syncAtRef(ins.value, ins.caret)
     })
   }, [at, syncAtRef])
 
@@ -983,6 +1063,7 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
         )}
         {at && (
           <AtFilePicker
+            mark={at.mark}
             query={at.query}
             items={at.items}
             selected={at.idx}
@@ -1075,7 +1156,7 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
               send()
             }}
             onPaste={onPaste}
-            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，@session: 引用会话）'} />
+            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，#a: 选节点，#s: 选会话）'} />
           {running && (
             <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
               <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
