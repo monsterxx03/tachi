@@ -92,7 +92,7 @@ func TestARemoteSessionsSessionIsAnOrdinarySession(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("备份检查完成")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	client := newTestClient(t, h)
 	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestAFollowUpIntoACollectedConversationFailsOnTheColdPathToo(t *testing.T) 
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("备份检查完成")...)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
 	h := startRealNode(t, cfg)
 	client := newTestClient(t, h)
 	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
@@ -271,7 +271,7 @@ func TestACompactionMovesTheConversationAndLeavesNoHoldBehind(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("备份检查完成")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	client := newTestClient(t, h)
 	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
 	require.NoError(t, err)
@@ -343,7 +343,7 @@ func TestAStaleHoldIsReleasedWhenTheNodeComesBack(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("检查完成")...)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
 	h := startRealNode(t, cfg)
 	client := newTestClient(t, h)
 	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))

@@ -83,7 +83,7 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	if executor == nil {
 		executor = echoExecutor{}
 	}
-	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), real, encrypted)
+	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), o.Description, o.Skills, real, encrypted)
 	// The store is opened by the host, which is AFTER the executor is built (the store owns
 	// the startup recovery, so there is exactly one). An executor that keeps state outside a
 	// request — a question waiting for an answer, and its deadline — needs it, and this is the
@@ -241,9 +241,16 @@ func advertisedURL(publicURL, boundAddr string, https bool) string {
 // different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
 // (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
 // be exactly the "declared but not implemented" mistake this function exists to avoid.
-func newAgentCard(name, url string, real bool, authenticated bool) *a2a.AgentCard {
+//
+// The description and the machine's skills are self-declared, like the name beside them: a peer
+// records what this node says about itself, and none of it is evidence of anything but what the
+// node chose to publish (design §4.2).
+func newAgentCard(name, url, description string, machineSkills []a2a.AgentSkill, real bool, authenticated bool) *a2a.AgentCard {
 	if strings.TrimSpace(name) == "" {
 		name = defaultNodeName
+	}
+	if strings.TrimSpace(description) == "" {
+		description = defaultNodeDescription
 	}
 	skill := a2a.AgentSkill{
 		ID:          "task",
@@ -261,14 +268,22 @@ func newAgentCard(name, url string, real bool, authenticated bool) *a2a.AgentCar
 			Examples:    []string{"say something"},
 		}
 	}
+	// The node's own capability FIRST, then the machine's skills: a peer reading the Card is deciding
+	// whether to send work here, and that entry is what the decision is about — the list beside it
+	// says what the work will be done WITH. A name collision between the two is left alone: they are
+	// different namespaces, and dropping one would be guessing which was meant.
+	skills := make([]a2a.AgentSkill, 0, len(machineSkills)+1)
+	skills = append(skills, skill)
+	skills = append(skills, machineSkills...)
+
 	card := &a2a.AgentCard{
 		Name:               name,
-		Description:        "A Tachi node: an agent that runs on the machine that owns it, reachable from the other Tachi nodes you have paired with.",
+		Description:        description,
 		Version:            AgentVersion,
 		Capabilities:       a2a.AgentCapabilities{},
 		DefaultInputModes:  []string{mediaTypeText},
 		DefaultOutputModes: []string{mediaTypeText},
-		Skills:             []a2a.AgentSkill{skill},
+		Skills:             skills,
 	}
 	if url != "" {
 		card.SupportedInterfaces = []*a2a.AgentInterface{
@@ -305,6 +320,12 @@ const authSchemeName = a2a.SecuritySchemeName("mtls")
 // defaultNodeName is what a node calls itself when the operator named it nothing: the string every
 // node published before node.name existed, kept so an unconfigured node looks exactly as it did.
 const defaultNodeName = "Tachi"
+
+// defaultNodeDescription is what a node says it is for when the operator said nothing (config
+// `node.description`). It describes what a Tachi node IS rather than what this one is for, which is
+// why a cluster is better off filling the field in: a peering operator reading three identical
+// descriptions has learned nothing about which machine to send work to.
+const defaultNodeDescription = "A Tachi node: an agent that runs on the machine that owns it, reachable from the other Tachi nodes you have paired with."
 
 // protocolVersionInterceptor rejects a call that names an A2A protocol version this
 // node does not speak.

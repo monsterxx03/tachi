@@ -6,6 +6,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
@@ -144,7 +146,7 @@ func TestARealNodeCardNamesTheRealWork(t *testing.T) {
 	mock := mockllm.NewServer()
 	t.Cleanup(mock.Close)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	require.Len(t, h.Card().Skills, 1)
 	require.Equal(t, "task", h.Card().Skills[0].ID)
 	require.NotContains(t, h.Card().Skills[0].Description, "placeholder")
@@ -475,4 +477,61 @@ func TestSpecRestShapeIsAcceptedByHand(t *testing.T) {
 	require.Equal(t, a2a.TaskStateCompleted, got.Task.Status.State)
 	require.Len(t, got.Task.Artifacts, 1)
 	require.Equal(t, "by hand", firstPartText(t, got.Task.Artifacts[0]))
+}
+
+// The Card publishes what THIS MACHINE's agent can do, beside the node's own capability of running a
+// remote turn — and it publishes nothing this machine would refuse to do (a skill with
+// `enabled: false` is left out).
+//
+// It is pinned on the Card a real node serves rather than on MachineSkills() alone, because the
+// interesting half is the WIRING: read at startup by the host and handed down through Options.
+func TestTheCardPublishesTheMachinesSkills(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+
+	writeMachineSkill(t, config.GlobalSkillsDir(), "smoke-skill", "本机技能，应当被发布", false)
+	writeMachineSkill(t, config.GlobalSkillsDir(), "hidden-skill", "关掉的技能", true)
+
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
+	cfg.Node.Description = "家里那台，专门跑备份检查"
+	h := startRealNode(t, cfg)
+
+	card := h.Card()
+	require.Equal(t, "家里那台，专门跑备份检查", card.Description,
+		"the node's own line wins over the built-in one")
+	require.Equal(t, "task", card.Skills[0].ID,
+		"the node's capability comes first — it is what a peer's decision is about")
+
+	byID := map[string]a2a.AgentSkill{}
+	for _, s := range card.Skills {
+		byID[s.ID] = s
+	}
+	require.Contains(t, byID, "smoke-skill", "the machine's own skills are published: %v", byID)
+	require.Equal(t, "本机技能，应当被发布", byID["smoke-skill"].Description)
+	require.NotContains(t, byID, "hidden-skill",
+		"a disabled skill is not claimed — the Card may not advertise what the machine would refuse")
+}
+
+// A node that names no description publishes the built-in line, so an unconfigured node looks
+// exactly as it did before the field existed.
+func TestTheCardFallsBackToTheBuiltInDescription(t *testing.T) {
+	base := nodeHome(t)
+	h := startRealNode(t, nodeConfig(t, mockllm.NewServer(), filepath.Join(base, "ws")))
+
+	require.Contains(t, h.Card().Description, "A Tachi node",
+		"no description configured means the built-in line")
+}
+
+// writeMachineSkill drops one skill under dir, the shape agent/skill reads.
+func writeMachineSkill(t *testing.T, dir, name, description string, disabled bool) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.MkdirAll(path, 0o755))
+	content := "---\nname: " + name + "\ndescription: " + description + "\n"
+	if disabled {
+		content += "enabled: false\n"
+	}
+	content += "---\n\n# " + name + "\n\nBody.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(path, "SKILL.md"), []byte(content), 0o644))
 }

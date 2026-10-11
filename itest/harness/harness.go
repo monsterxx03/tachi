@@ -56,7 +56,6 @@ func configYAML(o *options, baseURL string) (string, error) {
 		NodeListen:    o.nodeListen,
 		NodeName:      o.nodeName,
 		NodeWorkspace: o.nodeWorkspace,
-		NodeTools:     o.nodeTools,
 		Peers:         o.peers,
 		Channels:      o.channels,
 	}); err != nil {
@@ -91,10 +90,9 @@ type configData struct {
 	// and in the header a peer files under `self_reported_name` — so it is also the only way to
 	// assert, from the other machine's disk, which node asked for the work.
 	NodeName string
-	// NodeWorkspace / NodeTools are the remote-task half of that section: the directory
-	// remote turns run in, and the tool allowlist they get.
+	// NodeWorkspace is where remote turns run. What they may DO is not configuration any more
+	// (node/runner.go's remoteTaskTools): it is a property of what this software is.
 	NodeWorkspace string
-	NodeTools     []string
 	// Peers are the nodes THIS machine may delegate work to (config's top-level `peers:`). They
 	// are the sending side's directory, so unlike the node: section they are independent of
 	// whether this machine serves anything itself.
@@ -175,12 +173,6 @@ node:
 {{- if .NodeWorkspace}}
   workspace: {{.NodeWorkspace}}
 {{- end}}
-{{- if .NodeTools}}
-  tools:
-{{- range .NodeTools}}
-    - {{.}}
-{{- end}}
-{{- end}}
 {{- end}}
 {{- if .Channels}}
 channel:
@@ -214,15 +206,13 @@ type options struct {
 	nodeListen    string        // node.listen — 远程 A2A 面的地址（loopback 之外就serve TLS）
 	nodeName      string        // node.name — 这个节点对自己的称呼
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
-	nodeTools     []string      // node.tools — 远程任务的工具白名单
 	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
 	channels      []string      // channel.channels.<name>.enabled — 让 channel 入口起得来（见 channel/mock）
 }
 
 // nodeSection reports whether the fixture needs a `node:` block at all. See configData.
 func (o *options) nodeSection() bool {
-	return o.nodeEnabled || o.nodeListen != "" || o.nodeName != "" ||
-		o.nodeWorkspace != "" || len(o.nodeTools) > 0
+	return o.nodeEnabled || o.nodeListen != "" || o.nodeName != "" || o.nodeWorkspace != ""
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -318,11 +308,11 @@ func WithPeers(name, url string) Option {
 	return func(o *options) { o.peers = append(o.peers, peerFixture{Name: name, URL: url}) }
 }
 
-// WithNodeTools switches the node service on and gives remote tasks this tool allowlist
-// (config's node.tools). An empty list enables the node with NO tools, which is what the
-// empty list means at runtime.
-func WithNodeTools(names ...string) Option {
-	return func(o *options) { o.nodeEnabled = true; o.nodeTools = names }
+// WithNodeService switches the node service on: this machine accepts remote tasks. There is no
+// tool list to pass — what a remote turn may do is fixed by the software (node/runner.go), not by
+// the fixture, and a spec that wants a narrower node would be testing a node that cannot exist.
+func WithNodeService() Option {
+	return func(o *options) { o.nodeEnabled = true }
 }
 
 // NewHome creates an isolated --home directory with a config.yaml wired to

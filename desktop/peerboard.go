@@ -60,12 +60,12 @@ type PeerBoardRowVO struct {
 // PeerCardVO is the node's own account of itself, as much as the panel shows. Every field is
 // self-reported.
 type PeerCardVO struct {
-	Name         string              `json:"name"`
-	Description  string              `json:"description"`
-	Version      string              `json:"version"`
-	Interfaces   []PeerInterfaceVO   `json:"interfaces"`
-	Skills       []PeerSkillVO       `json:"skills"`
-	Capabilities []string            `json:"capabilities"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	Version      string            `json:"version"`
+	Interfaces   []PeerInterfaceVO `json:"interfaces"`
+	Skills       []PeerSkillVO     `json:"skills"`
+	Capabilities []string          `json:"capabilities"`
 }
 
 // PeerInterfaceVO is one entry point the card advertises.

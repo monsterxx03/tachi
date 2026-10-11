@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -58,7 +61,38 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 		RemoteListen: cfg.Node.Listen,
 		PublicURL:    cfg.Node.PublicURL,
 		Name:         cfg.Node.Name,
-		Executor:     &nodeExecutor{runner: taskRunner},
-		Logger:       log,
+		Description:  cfg.Node.Description,
+		// What this machine's agent can do, published beside the node's own capability of running
+		// a remote turn. Read here, once, because a Card is a description published at startup.
+		Skills:   MachineSkills(),
+		Executor: &nodeExecutor{runner: taskRunner},
+		Logger:   log,
 	})
+}
+
+// MachineSkills reads the skills THIS MACHINE's agent has, for the node's Agent Card to publish.
+//
+// It is read here — in the one file where the node meets process-global configuration — because the
+// Card is built at startup, before any session exists: the local agent's store is built per session
+// and is not reachable from here. What it reads is the same set (and the same precedence) the local
+// agent will see, minus a project root: a remote task works in node.workspace, and a project's own
+// skills belong to whoever opened that project.
+//
+// Disabled skills are left out: `enabled: false` means "not loaded, not activatable" everywhere
+// else, and a Card that advertised one would be claiming something this machine will refuse to do.
+func MachineSkills() []a2a.AgentSkill {
+	metas := skill.NewStore("").List()
+	out := make([]a2a.AgentSkill, 0, len(metas))
+	for _, m := range metas {
+		if !m.Enabled {
+			continue
+		}
+		out = append(out, a2a.AgentSkill{
+			ID:          m.Name,
+			Name:        m.Name,
+			Description: m.Description,
+			Tags:        m.Tags,
+		})
+	}
+	return out
 }

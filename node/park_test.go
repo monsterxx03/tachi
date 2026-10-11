@@ -181,7 +181,7 @@ func TestARemoteTaskPausesOnAQuestionAndTheAnswerResumesTheSameTurn(t *testing.T
 	t.Cleanup(mock.Close)
 	mock.Script(askThenReply(t, "检查照片还是文档？", "照片", "好，只检查照片。")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	client := newTestClient(t, h)
 
 	first, err := client.SendMessage(context.Background(), sendRequest("检查昨天的备份", false))
@@ -233,7 +233,7 @@ func TestTheQuestionIsInTheTaskRecordWhileItWaits(t *testing.T) {
 		mockllm.Done(),
 	)})
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	client := newTestClient(t, h)
 
 	first, err := client.SendMessage(context.Background(), sendRequest("检查昨天的备份", false))
@@ -505,7 +505,7 @@ func TestAnAnsweredQuestionNeverApprovesATool(t *testing.T) {
 		},
 	)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), tools.ToolNameBash)
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
 	// A command that REQUIRES approval. There is no human attached to a remote task, so the
 	// ask is a refusal — and the caller's answer to a question (§7.4) is never what turns it
 	// into an approval, because a tool authorization never becomes a question at all.

@@ -204,7 +204,7 @@ func TestAFileTheCallerSendsIsStoredAndNamedInThePrompt(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("清单收到")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 	status, body := postRawMessage(t, h,
 		a2a.NewTextPart("看看这份清单"),
 		rawPart("inventory.csv", "text/csv", []byte("a,b\n1,2\n")))
@@ -240,7 +240,7 @@ func TestAnImageTheCallerSendsReachesTheModelAsAnImage(t *testing.T) {
 
 	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01, 0x02, 0x03}
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
 	cfg.Providers[0].Spec.Vision = ptr(true)
 	h := startRealNode(t, cfg)
 	status, body := postRawMessage(t, h,
@@ -275,7 +275,7 @@ func TestAnUnacceptableFileIsRefusedBeforeAnyTaskExists(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("不该跑起来")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
 
 	status, body := postRawMessage(t, h,
 		a2a.NewTextPart("看这个"),
@@ -420,52 +420,6 @@ func TestAFileTheNodeWillNotSendFailsTheToolCall(t *testing.T) {
 	require.Contains(t, told, "100.0 MB")
 }
 
-// The gate, from the other side: a node whose tool list does NOT name SendFile does not offer it,
-// however determined the model is. This is the security half of the feature — the tool reads any
-// file on this machine and puts its bytes on the wire, so an operator who never listed it must not
-// find it in reach.
-func TestANodeThatDidNotListSendFileDoesNotOfferIt(t *testing.T) {
-	mock := mockllm.NewServer()
-	t.Cleanup(mock.Close)
-	mock.Script(mockllm.Step{Reply: mockllm.Stream(
-		mockllm.ToolCallStart("send_1", tools.ToolNameSendFile, `{"path":"report.txt"}`),
-		mockllm.Finish("tool_calls"),
-		mockllm.Done(),
-	)})
-	mock.Script(oneMessageScript("发不出去")...)
-
-	sender, peer := startPeer(t, mock, "ReadFile") // SendFile deliberately absent
-	report := filepath.Join(filepath.Dir(peer.DataDir()), "ws", "report.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(report), 0o755))
-	require.NoError(t, os.WriteFile(report, []byte("secret\n"), 0o600))
-
-	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "把 report.txt 发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
-	})
-	require.NoError(t, err)
-	require.NotContains(t, view.Result, "Files the peer sent back:",
-		"nothing may cross from a node that does not offer the tool")
-
-	reqs := mock.Requests()
-	require.Len(t, reqs, 2)
-	var told string
-	for _, m := range reqs[1].Messages {
-		if m.Role == "tool" {
-			told = m.Content
-		}
-	}
-	require.Contains(t, told, tools.ToolNameSendFile,
-		"the model has to be told the tool is not there: %q", told)
-}
-
-// Files cross ONCE. `record` runs on every observation — a get, a wait, every poll — so a second
-// reading would write the same artifact again, and the conversation's own storage gives a name that
-// is already taken a new suffix (session.SaveReceivedFile): a task polled three times would leave
-// three copies of a file nobody asked for twice.
-//
-// The context carries a SESSION here, and that is the point. With no session the file goes to the
-// tool-results directory under a deterministic name, so a second write overwrites its own file and
-// the bug hides — the session path is where the flag is load-bearing.
 func TestAFileFromAPeerIsStoredOnlyOnce(t *testing.T) {
 	const sessionID = "2026-09-13-103926-92db8c33"
 

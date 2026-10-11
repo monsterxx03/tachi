@@ -42,7 +42,7 @@ var _ = ginkgo.Describe("delegation", func() {
 		peerWorkspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeWorkspace(peerWorkspace),
-			harness.WithNodeTools("ReadFile"),
+			harness.WithNodeService(),
 		)
 		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

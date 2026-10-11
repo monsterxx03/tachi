@@ -24,7 +24,7 @@ import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
-import { FindBar, FindButton, useFind } from './find'
+import { FindBar, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
 import { bumpFontScale, reconcileFontScale, resetFontScale } from './fontsize'
 import { useTheme, useThemeHostSync } from './theme'
@@ -2629,10 +2629,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
                 </span>
-                {/* ⌘F is invisible, so the same gesture is also a button — in the composer's status
-                    row because it is the one row that is always on screen beside the conversation
-                    (the find bar itself lives over the transcript). */}
-                <FindButton find={chatFind} />
                 <span className="popover-anchor">
                   <button className="agents-btn" title="Agents（可委派的节点）" onClick={() => setAgentsOpen((v) => !v)}>
                     <span className="agents-ico"><AgentsIcon /></span>

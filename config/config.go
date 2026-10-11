@@ -515,6 +515,14 @@ type NodeConfig struct {
 	// and then a log line, a Card or a task record reads like a sentence instead of like hex.
 	Name string `yaml:"name" default:"Tachi"`
 
+	// Description is the one-line answer to "what is this machine for", published as the Agent
+	// Card's description and shown to the operator on the other side (the desktop's Agents panel).
+	//
+	// Like Name it is SELF-DECLARED and read as such: it is what this node says about itself, not
+	// what anyone verified. Empty means the built-in line, which describes what a Tachi node IS
+	// rather than what this one is for — so a cluster is better off filling it in.
+	Description string `yaml:"description,omitempty"`
+
 	// Workspace is where this node works: the working directory of every session a remote
 	// task creates. It is deliberately NOT the hosting process's cwd (design §10.3) — a
 	// node started from a shell must not do remote work in whatever directory that shell
@@ -523,22 +531,6 @@ type NodeConfig struct {
 	//
 	// "~" is expanded (see fileutil.ExpandHome) and the directory is created on first use.
 	Workspace string `yaml:"workspace" default:"~/workspace/"`
-
-	// Tools is the tool allowlist for remote tasks. It is an ALLOWLIST on purpose
-	// (design §10.2): a remote caller gets exactly the tools the operator named. An empty
-	// list means no tool that touches this machine — there is no hidden default here, because
-	// a security setting whose empty value silently means something else is one nobody can
-	// reason about. The recommended starting point (read-only) belongs in the example config
-	// and in the docs, not in a fallback.
-	//
-	// AskUserQuestion is not subject to this list: asking the CALLER a question does nothing
-	// to this machine, and it is added to whatever is allowed (node/runner.go toolViewOption).
-	// So an empty list still means "the model is offered exactly one tool, the one that can
-	// only talk to the caller".
-	//
-	// Note that a tool allowlist is not the same thing as a sandbox: an unrestricted Bash
-	// is not "read-only" however few tools are listed next to it.
-	Tools []string `yaml:"tools"`
 
 	// QuestionTimeout bounds how long a question asked over the remote interface waits for
 	// its answer before the task is ended (design §7.4: a parked turn needs a time limit).
@@ -556,7 +548,6 @@ type NodeConfig struct {
 	// Reaching it does not refuse new WORK: the running turn is told its question could not be
 	// asked and finishes with what it has.
 	MaxParked int `yaml:"max_parked" default:"16"`
-
 }
 
 // WorkspaceDir is where remote tasks work: the configured workspace with "~" expanded to

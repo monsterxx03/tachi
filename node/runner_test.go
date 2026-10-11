@@ -29,8 +29,8 @@ import (
 // the node's own code path.
 
 // nodeConfig is a node's configuration for these tests: one provider pointed at the
-// scripted model, plus the node's own switch, workspace and tool allowlist.
-func nodeConfig(t *testing.T, mock *mockllm.Server, workspace string, tools ...string) *config.Config {
+// scripted model, plus the node's own switch and workspace.
+func nodeConfig(t *testing.T, mock *mockllm.Server, workspace string) *config.Config {
 	t.Helper()
 	cfg := &config.Config{Language: "zh"}
 	cfg.Providers = []config.ProviderConfig{{
@@ -53,7 +53,6 @@ func nodeConfig(t *testing.T, mock *mockllm.Server, workspace string, tools ...s
 	}
 	cfg.Node.Enabled = true
 	cfg.Node.Workspace = workspace
-	cfg.Node.Tools = tools
 	return cfg
 }
 
@@ -92,7 +91,7 @@ func TestRemoteTaskRunsARealTurnInTheNodesWorkspace(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("备份检查完成：两个目录异常")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, workspace, "ReadFile", "Grep", "Glob"))
+	h := startRealNode(t, nodeConfig(t, mock, workspace))
 	client := newTestClient(t, h)
 
 	result, err := client.SendMessage(context.Background(), sendRequest("检查昨天的备份", false))
@@ -143,7 +142,7 @@ func TestTheReceivingSessionRecordsWhoseWorkItHolds(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(append(oneMessageScript("第一件活儿"), oneMessageScript("第二件活儿")...)...)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "workspace"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base))
 	cfg.Node.Listen = "0.0.0.0:0"
 	h := startRealNode(t, cfg)
 
@@ -174,72 +173,63 @@ func TestTheReceivingSessionRecordsWhoseWorkItHolds(t *testing.T) {
 	require.NotEqual(t, h.NodeID(), first.NodeID, "a caller is never the machine it called")
 }
 
-func TestRemoteTurnOffersOnlyTheNodesAllowedTools(t *testing.T) {
+func TestARemoteTurnIsOfferedTheDefaultToolSet(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("ok")...)
 
-	// The tools the model is OFFERED come from the node's config and nothing else. The
-	// other half of the same promise — refusing a tool at execution — is the run's tool
-	// view, built from this very list.
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile", "Grep"))
+	// The default set is a property of this software, not a config key, so what it decides is the
+	// CEILING — and the assertion below is that nothing outside it ever appears.
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base)))
 	client := newTestClient(t, h)
 	_, err := client.SendMessage(context.Background(), sendRequest("你好", false))
 	require.NoError(t, err)
 
 	requests := mock.Requests()
 	require.Len(t, requests, 1)
-	offered := map[string]bool{}
+	offered := make(map[string]bool, len(requests[0].Tools))
 	for _, tool := range requests[0].Tools {
 		offered[tool.Name] = true
 	}
-	require.True(t, offered["ReadFile"], "an allowlisted tool must be offered, got %v", offered)
-	require.False(t, offered["Bash"], "a tool the operator did not allow must not be offered")
-	require.False(t, offered["WriteFile"])
-}
-
-func TestAnEmptyToolListOffersNoToolsThatTouchThisMachine(t *testing.T) {
-	base := nodeHome(t)
-	mock := mockllm.NewServer()
-	t.Cleanup(mock.Close)
-	mock.Script(oneMessageScript("ok")...)
-
-	// The empty list is a POLICY, not an accident: a node whose operator named no tools hands
-	// the model nothing that acts on this machine. AskUserQuestion is not one of those — it
-	// asks the CALLER, and it is the only interaction a remote task has — so it is the one
-	// tool left in the view, and the list still means what it says about everything else.
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
-	client := newTestClient(t, h)
-	_, err := client.SendMessage(context.Background(), sendRequest("你好", false))
-	require.NoError(t, err)
-
-	requests := mock.Requests()
-	require.Len(t, requests, 1)
-	offered := make([]string, 0, len(requests[0].Tools))
-	for _, tool := range requests[0].Tools {
-		offered = append(offered, tool.Name)
+	for name := range offered {
+		require.Contains(t, remoteTaskTools, name, "%s is not in the default set: %v", name, offered)
 	}
-	require.Equal(t, []string{tools.ToolNameAskUser}, offered,
-		"an empty allowlist must leave exactly the tool that only talks to the caller")
+	// The members whose prerequisite this test's config satisfies, so that the ceiling is not
+	// asserted against an empty view. (The two it does not satisfy are named where they matter:
+	// WebSearch needs a search provider, and the memory pair needs memory configured —
+	// TestARemoteTurnIsOfferedTheHostsMemory covers the second.)
+	for _, name := range []string{tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite,
+		tools.ToolNameGrep, tools.ToolNameGlob, tools.ToolNameBash, tools.ToolNameWebFetch,
+		tools.ToolNameSkill, tools.ToolNameAskUser, tools.ToolNameSendFile} {
+		require.True(t, offered[name], "%s must reach a remote turn, got %v", name, offered)
+	}
+
+	// What must NOT appear is anything about THIS PROCESS's own state: the scheduler, plans,
+	// findings, sub-agents, or delegation onward to further nodes. Those are not the work the caller
+	// asked for, and a remote turn that starts filing work of its own is doing something nobody asked
+	// this machine to do.
+	for _, name := range []string{tools.ToolNameCron, tools.ToolNameSavePlan, tools.ToolNameReportFinding,
+		tools.ToolNameSubAgent, tools.ToolNameDelegateTask, tools.ToolNameRemoteTask} {
+		require.False(t, offered[name],
+			"%s is about this process's own state, not the caller's work: %v", name, offered)
+	}
 }
 
-// A remote turn must not read or write THIS machine's long-term memory (design §2.3). The two
-// ways in are separate mechanisms, so both are asserted: the recall reminder injects the host's
-// memory on its own, and the two memory tools are reachable through whatever the operator put in
-// `node.tools`.
+// The two ends of this machine's long-term memory ARE offered to a remote turn: the tools here, and
+// (per the next test) the recall reminder.
 //
-// The memory tools are named IN the allowlist here, which is the configuration that would expose
-// them — and the machine really has memory configured, so the tools existed to be excluded rather
-// than the assertion passing because there was nothing to exclude.
-func TestARemoteTurnDoesNotReadOrWriteTheHostsMemory(t *testing.T) {
+// This is a deliberate reversal of the earlier isolation rule, so it is pinned rather than left to
+// be re-derived from the code: the operator's machines are meant to work as one agent over one
+// long-term store. The boundary for memory is the same one as for everything else — who can reach
+// this node — and that boundary is the network, not this list (node.md, design §10.2).
+func TestARemoteTurnIsOfferedTheHostsMemory(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("ok")...)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"),
-		"ReadFile", tools.ToolNameMemoryRecall, tools.ToolNameRecordMemory)
+	cfg := nodeConfig(t, mock, filepath.Join(base))
 	cfg.Memory.Type = "topic"
 
 	h := startRealNode(t, cfg)
@@ -253,21 +243,19 @@ func TestARemoteTurnDoesNotReadOrWriteTheHostsMemory(t *testing.T) {
 	for _, tool := range requests[0].Tools {
 		offered[tool.Name] = true
 	}
-	require.True(t, offered["ReadFile"],
-		"the rest of the allowlist must still apply — otherwise this proves nothing, got %v", offered)
-	for name := range hostOnlyTools {
-		require.False(t, offered[name],
-			"%s must never reach a remote turn, even when the operator names it, got %v", name, offered)
-	}
+	require.True(t, offered[tools.ToolNameMemoryRecall],
+		"recall must reach a remote turn — this is the reversal, asserted on purpose: %v", offered)
+	require.True(t, offered[tools.ToolNameRecordMemory],
+		"a remote turn may record into this machine's memory: %v", offered)
 }
 
-// The other half of the same rule, asserted on the agent the runner actually builds: recall is
-// switched off, so no reminder injects this machine's memory into a remote prompt. It has to be
-// asserted here rather than through a turn — a remote conversation with nothing worth recalling
-// produces the same (empty) prompt either way.
-func TestARemoteAgentHasRecallSwitchedOff(t *testing.T) {
+// The other half of the same rule, asserted on the agent the runner actually builds: recall is LEFT
+// ON, so the reminder injects this machine's memory into a remote prompt exactly as it does for a
+// local conversation. Asserted here rather than through a turn — a memory with nothing worth
+// recalling produces the same (empty) prompt either way.
+func TestARemoteAgentHasRecallLeftOn(t *testing.T) {
 	base := nodeHome(t)
-	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base, "ws"))
+	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base))
 	cfg.Memory.Type = "topic"
 
 	r, err := newRunner(cfg, filepath.Join(base, "ws"),
@@ -278,8 +266,8 @@ func TestARemoteAgentHasRecallSwitchedOff(t *testing.T) {
 	require.NotNil(t, cr.agent.Config.Memory, "memory must be configured for this to mean anything")
 	require.NotNil(t, cr.agent.Config.Memory.Backend,
 		"a configured machine has a backend — which is what registers the two tools")
-	require.True(t, cr.agent.Config.Memory.SkipRecall,
-		"a remote turn must not have the host's memory recalled into its prompt")
+	require.False(t, cr.agent.Config.Memory.SkipRecall,
+		"a remote turn recalls this machine's memory, like any other conversation on it")
 }
 
 // A remote turn's context carries the usage source, so every model call it makes is attributable
@@ -291,7 +279,7 @@ func TestARemoteAgentHasRecallSwitchedOff(t *testing.T) {
 // owns is the context, and llm/usage_recorder_test.go covers the row it produces.
 func TestATurnRunsWithItsUsageSourceAttached(t *testing.T) {
 	base := nodeHome(t)
-	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base, "ws"))
+	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base))
 	r, err := newRunner(cfg, filepath.Join(base, "ws"),
 		filepath.Join(base, "node"), filepath.Join(base, "sessions"), logger.New("node-test"))
 	require.NoError(t, err)
@@ -318,7 +306,7 @@ func TestAFailedTurnIsReportedAsFailed(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"model exploded"}}`))
 	}})
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base)))
 	client := newTestClient(t, h)
 
 	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
@@ -357,7 +345,7 @@ func TestOnlyANewWorkRequestOpensAConversation(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("备份检查完成")...)
 
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile"))
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base)))
 	client := newTestClient(t, h)
 
 	// ONE request object, sent twice: the same message id is what makes the second a replay.
@@ -391,7 +379,7 @@ func TestASessionHeldByAContextCannotBeDrivenLocally(t *testing.T) {
 	t.Cleanup(mock.Close)
 	mock.Script(oneMessageScript("remote work done")...)
 
-	cfg := nodeConfig(t, mock, filepath.Join(base, "workspace"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base))
 	h := startRealNode(t, cfg)
 	client := newTestClient(t, h)
 	_, err := client.SendMessage(context.Background(), sendRequest("remote job", false))

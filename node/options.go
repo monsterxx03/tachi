@@ -29,7 +29,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/netutil"
 )
@@ -113,6 +115,21 @@ type Options struct {
 	// who MAY (that judgment belongs to the network — design §3.3, and a cluster that wants a
 	// whitelist can add one back where this one was).
 	Name string
+
+	// Description is what this node says it is FOR (config: node.description): published in its
+	// Agent Card and shown to the operator on the other side. Empty means the built-in line, which
+	// describes what a Tachi node is rather than what this one is for.
+	//
+	// Self-declared, like Name, and read the same way.
+	Description string
+
+	// Skills are the skills THIS MACHINE's agent has, published in the Card beside the node's own
+	// capability of running a remote turn. The host reads them at startup from the same store the
+	// local agent reads (node.MachineSkills) and hands them in here: this package never reads the
+	// process-global config or the user's data directory (see the package comment), and a Card is a
+	// description published at startup anyway — a skill added later shows up on the next start,
+	// exactly like a changed Name or Description.
+	Skills []a2a.AgentSkill
 
 	// PublicURL is what the Agent Card advertises as the way to reach this node, when that is
 	// not simply the address the socket bound (a mesh address, a port forwarder, a real host

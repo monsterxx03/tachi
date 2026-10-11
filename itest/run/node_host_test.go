@@ -60,7 +60,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
 			harness.WithNodeWorkspace(peerWorkspace),
-			harness.WithNodeTools("ReadFile"),
+			harness.WithNodeService(),
 			// 让 channel 入口起得来：没有启用的 channel 它会直接报错退出。
 			harness.WithChannel("mock"),
 		)
@@ -210,7 +210,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			harness.WithNodeListen("127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
 			harness.WithNodeWorkspace(filepath.Join(ginkgo.GinkgoT().TempDir(), "ws")),
-			harness.WithNodeTools("ReadFile"),
+			harness.WithNodeService(),
 			harness.WithChannel("mock"),
 		)
 

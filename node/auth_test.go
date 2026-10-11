@@ -206,7 +206,7 @@ func TestAnAuthenticatedCallerReachesTheRunner(t *testing.T) {
 	mock.Script(oneMessageScript("备份检查完成")...)
 
 	caller := newSenderIdentity(t)
-	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"), "ReadFile")
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
 	cfg.Node.Listen = "0.0.0.0:0"
 	cfg.Node.Name = "tachi@mac"
 	h := startRealNode(t, cfg)

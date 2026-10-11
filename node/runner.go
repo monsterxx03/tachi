@@ -678,15 +678,14 @@ func (r *runner) receiveFiles(cr *contextRun, prompt string, files []filePart) (
 	return prompt + block, images
 }
 
-// offersSendFile reports whether the operator's tool list includes SendFile.
+// offersSendFile reports whether SendFile is available to a remote turn.
 //
-// It is NOT offered unconditionally, and the reason is the same one the tool list exists for: this
-// tool READS A FILE from this machine — any path the model can name, not only the workspace — and
-// puts its bytes on the wire. That is a capability, so the operator decides it; an empty list still
-// means "nothing that touches this machine" (§10.2). AskUserQuestion is the exception for the
-// opposite reason: asking the caller does nothing to this machine.
+// It is one lookup in the default set rather than a hardcoded true so the set stays the single
+// answer to "what may a remote turn do": this call site exists because sending a file READS it from
+// this machine — any path the model can name, not only the workspace — and puts its bytes on the
+// wire, which is exactly the kind of capability the list is for.
 func (r *runner) offersSendFile() bool {
-	return slices.Contains(r.cfg.Node.Tools, tools.ToolNameSendFile)
+	return slices.Contains(remoteTaskTools, tools.ToolNameSendFile)
 }
 
 // sendFileToCaller is the receiving side's SendFile: the remote agent hands a file back to whoever
@@ -1139,15 +1138,16 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 		// No title generation: a remote task has no window to title, and the extra model
 		// call would be charged to this node for nothing.
 		TitleGenEnabled: ptr(false),
-		// No host memory recall (§2.3). The reminder injects this machine's own long-term
-		// memory straight into whatever prompt arrives, so leaving it on hands a remote
-		// caller the host's private context — and skipping the TOOLS is not enough, because
-		// the reminder fires on its own (hostOnlyTools takes the other half). It is also the
-		// one part of MemoryState a reload does not recompute, so setting it here keeps it.
-		SkipMemoryRecall: true,
-		FullConfig:       r.cfg,
-		SystemConfig:     agent.SystemConfigFromConfig(r.cfg),
-		SessionManager:   sm,
+		// Memory is NOT suppressed: the recall reminder fires and both memory tools are in the
+		// run's tool view. That is a deliberate reversal of the earlier isolation rule — the
+		// operator's machines are meant to work as one agent over one long-term store, and a
+		// caller who can already read the workspace through Bash gains nothing from being kept
+		// away from the notes beside it. What it does mean is that a remote conversation can
+		// read AND write facts the operator's own conversations later recall, so the boundary
+		// for memory is the same one as for everything else: who can reach this node (§10.2).
+		FullConfig:     r.cfg,
+		SystemConfig:   agent.SystemConfigFromConfig(r.cfg),
+		SessionManager: sm,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("node: build agent: %w", err)
@@ -1169,41 +1169,46 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 	return cr, nil
 }
 
-// hostOnlyTools are the tools a remote turn is NEVER offered, whatever the operator's allowlist
-// says (design §2.3). Both ends of THIS machine's long-term memory, and a remote conversation is
-// not the user's: recalling it would hand a caller's prompt the host's private context, and
-// recording into it would let a caller plant facts the user's own conversations later read back.
+// remoteTaskTools is what a remote turn is offered, by default.
 //
-// The exclusion is unconditional on purpose. An allowlist cannot decide this — "the operator
-// listed it" says nothing about whose memory it is, and the design is explicit that being on the
-// same machine as the same user is not an authorization. A future slice that wants shared project
-// knowledge has to name the data and the authorization rather than flip this into a switch.
-var hostOnlyTools = map[string]bool{
-	tools.ToolNameRecordMemory: true,
-	tools.ToolNameMemoryRecall: true,
+// The list is the operator's machine being handed to a caller, so it is deliberately short: the
+// tools that read and write FILES, run a command, look something up, use a skill, hand a file back,
+// and ask the caller a question. What is NOT here is a tool about THIS PROCESS's own state —
+// scheduler jobs, plans, findings, sub-agents, delegation to further nodes: none of those are about
+// the work the caller asked for, and a remote turn that starts scheduling or filing work is doing
+// something nobody asked the machine to do.
+//
+// It replaced a configured allowlist (config `node.tools`). The allowlist was the wrong shape for
+// the same reason a security switch with a surprising empty value is: what a node can do is a
+// property of WHAT THIS SOFTWARE IS, and every deployment that wanted the obvious set had to write
+// it down and keep it in step with the tools as they were added. Memory is included on purpose
+// (MemoryRecall/RecordMemory, and the recall reminder): a node's memory is the operator's own
+// long-term store, shared with their local conversations, and they asked for their machines to work
+// as one agent rather than as a stranger with a file system.
+var remoteTaskTools = []string{
+	tools.ToolNameRead,
+	tools.ToolNameEdit,
+	tools.ToolNameWrite,
+	tools.ToolNameGrep,
+	tools.ToolNameGlob,
+	tools.ToolNameBash,
+	tools.ToolNameWebFetch,
+	tools.ToolNameWebSearch,
+	tools.ToolNameSkill,
+	tools.ToolNameAskUser,
+	tools.ToolNameSendFile,
+	tools.ToolNameMemoryRecall,
+	tools.ToolNameRecordMemory,
 }
 
-// toolViewOption turns the node's allowlist into the run's tool view: the operator's tools, less
-// the host's own memory, plus AskUserQuestion.
+// toolViewOption turns the node's tool policy into the run's tool view.
 //
-// AskUserQuestion is not an exception to the allowlist: the list says what this node may DO
-// to the machine it runs on, and asking the caller a question does nothing to it. Leaving
-// asking to the list would tie the one form of interaction a remote task has to a switch
-// about capability (§10.2) — and the operator would then have to open a tool to be asked a
-// question.
-//
-// So the empty list is still a policy and still means "nothing that touches this machine",
-// and the model is offered exactly one tool: the one that can only talk to the caller.
+// AskUserQuestion is in that list and is not an exception to anything: the list says what this node
+// may DO to the machine it runs on, and asking the caller a question does nothing to it. Leaving
+// asking out would tie the one form of interaction a remote task has to a capability decision
+// (§10.2) — and the operator would then have to open a tool to be asked a question.
 func (r *runner) toolViewOption() []agent.RunOption {
-	names := make([]string, 0, len(r.cfg.Node.Tools)+1)
-	for _, name := range r.cfg.Node.Tools {
-		if hostOnlyTools[name] {
-			continue
-		}
-		names = append(names, name)
-	}
-	names = append(names, tools.ToolNameAskUser)
-	return []agent.RunOption{agent.WithToolSet(names...)}
+	return []agent.RunOption{agent.WithToolSet(remoteTaskTools...)}
 }
 
 // denyRemoteAsk refuses every permission ask on a remote turn. The refusal is RETURNED as

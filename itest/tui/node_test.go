@@ -43,7 +43,7 @@ var _ = ginkgo.Describe("接收侧：远端任务", func() {
 				mockllm.Done(),
 			)}},
 			harness.WithNodeWorkspace(workspace),
-			harness.WithNodeTools("ReadFile", "Grep", "Glob"),
+			harness.WithNodeService(),
 		)
 
 		ctx, cancel := context.WithTimeout(context.Background(), specTimeout)
@@ -53,8 +53,8 @@ var _ = ginkgo.Describe("接收侧：远端任务", func() {
 		cfg := harness.Config(ginkgo.GinkgoT(), home)
 		gomega.Expect(cfg.Node.Enabled).To(gomega.BeTrue(),
 			"the fixture must have switched the node on, or this spec tests nothing")
-		gomega.Expect(cfg.Node.Tools).To(gomega.Equal([]string{"ReadFile", "Grep", "Glob"}),
-			"the allowlist has to arrive through the YAML, defaults and all")
+		gomega.Expect(cfg.Node.Workspace).To(gomega.Equal(workspace),
+			"the fixture's workspace has to arrive through the YAML, defaults and all — what a remote turn may DO is code now, not configuration")
 
 		handle, err := node.StartOrAttachNode(ctx, cfg)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -115,7 +115,7 @@ var _ = ginkgo.Describe("接收侧：远端任务", func() {
 				)},
 			},
 			harness.WithNodeWorkspace(workspace),
-			harness.WithNodeTools("ReadFile"),
+			harness.WithNodeService(),
 		)
 
 		ctx, cancel := context.WithTimeout(context.Background(), specTimeout)

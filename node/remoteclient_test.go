@@ -41,7 +41,7 @@ func startPeer(t *testing.T, mock *mockllm.Server, tools ...string) (*Sender, *H
 	config.SetBaseDir(peerHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws"), tools...))
+	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws")))
 
 	// The sender's home: another base dir, with a peer entry pointing at the receiver. Only one
 	// process-global base dir exists, so this is built in two steps — records written under the
@@ -437,7 +437,7 @@ func TestAFollowUpReferencesThePreviousRemoteTask(t *testing.T) {
 	previous := config.BaseDir()
 	config.SetBaseDir(peerHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
-	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws"), "ReadFile"))
+	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws")))
 
 	upstream, err := url.Parse("http://" + peer.RemoteAddr())
 	require.NoError(t, err)

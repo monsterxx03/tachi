@@ -5,6 +5,11 @@
 本文记录本次讨论确定的方向及建议的实施边界，是日期方案，不是现行行为手册。
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
 
+> **后续修订（2026-10-11；代码与 `docs/agents/node.md` 为准）**：三个决定已被取代，本文中它们的**机制描述**只作历史参考。
+> 1. **远端一轮的工具集不再配置**：`node.tools` 这个键已删除，改为固定的 `remoteTaskTools`（`node/runner.go`）——读/写/改、Grep/Glob、Bash、WebFetch/WebSearch、Skill、AskUserQuestion、SendFile，以及记忆的两端。留在名单外的是**关于本进程自身状态**的那类工具（Cron、SavePlan、ReportFinding、SubAgent、DelegateTask、RemoteTask）。
+> 2. **§2.3 的宿主记忆隔离已被取代**：记忆的两个工具与自动召回都对远端一轮开放（不再设 `SkipMemoryRecall`）。边界回到同一条——谁能到达这个节点（§10.2 的网络边界），加上「谁问的」永远有记录。
+> 3. 随之，`SendFile` 默认就提供（它读本机任意路径并送出字节，这一点照旧）。
+
 ## 一、目标与已确定的选择
 
 典型部署：家中 Linux NAS 运行微信 channel，远端 Linux VPS 运行 Discord channel，MacBook 主要使用 Desktop，偶尔同时打开 TUI。

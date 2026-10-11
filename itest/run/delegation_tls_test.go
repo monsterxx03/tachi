@@ -60,7 +60,7 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 			harness.WithNodeListen("0.0.0.0:0"),
 			harness.WithNodeName("tachi@home-nas"),
 			harness.WithNodeWorkspace(peerWorkspace),
-			harness.WithNodeTools("ReadFile"),
+			harness.WithNodeService(),
 		)
 		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
