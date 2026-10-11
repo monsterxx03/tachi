@@ -20,6 +20,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/jev"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -860,6 +861,52 @@ func (a *AIAgent) RegisterTools() {
 	// would just produce unseen JSON files.
 	if a.Frontend.PlanToolEnabled {
 		a.Config.ToolRegistry.Register(tools.SavePlanTool{})
+	}
+
+	// NotifyUser — mounted only when the local config names a channel that is
+	// enabled, opted in as a notification tool (`notify: true`) and able to
+	// deliver a direct message. The tool's presence is therefore the statement
+	// that a route exists; see notifyTargets for why it can be resolved here.
+	if set := a.notifyTargets(); !set.Empty() {
+		a.Config.ToolRegistry.Register(tools.NewNotifyUserTool(set))
+	}
+}
+
+// notifyTargets resolves the notification channels the live config justifies,
+// and always returns a set (empty when the config justifies none).
+//
+// Resolving means calling the configured channels' factories — constructing a
+// channel does not connect, so this has no network side effect and is cheap
+// enough to run at mount time, on every ReloadTools. The alternative would be
+// caching the set on the agent and invalidating it on reload, which is more
+// moving parts than a map walk plus a few struct allocations.
+//
+// A failure inside one channel (a factory refusing its config, a channel that
+// does not implement the interface) is that channel's problem and is logged, not
+// an error: a missing notification route must never cost the user their agent.
+func (a *AIAgent) notifyTargets() *channel.NotifierSet {
+	if a.Config.FullConfig == nil {
+		// No config is no routes — the same empty set the resolver returns for a
+		// config that names nothing, so callers need no special case.
+		return channel.NotifiersFromConfig(nil, nil)
+	}
+	return channel.NotifiersFromConfig(
+		a.Config.FullConfig.Channel.ActiveChannels(),
+		a.Config.Logger,
+	)
+}
+
+// applyNotifyGating drops NotifyUser when the live config no longer justifies
+// it — the same shape, and for the same reason, as the WebSearch drop in
+// ReloadTools: the switch can be turned off (or the channel disabled) while the
+// process runs, and RegisterTools only ADDS what the config justifies, so
+// without this the model would keep a tool whose every call must fail.
+//
+// It exists as a function next to applyAskUserGating because ReloadTools is not
+// the only thing that may need to re-state the rule.
+func (a *AIAgent) applyNotifyGating() {
+	if a.notifyTargets().Empty() {
+		a.UnregisterTool(tools.ToolNameNotifyUser)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -45,6 +46,12 @@ type Channel struct {
 	// greetingSent is set to true after the startup greeting has been
 	// delivered (either in OnStart or Run), to prevent duplicate sends.
 	greetingSent bool
+
+	// notify holds the send-only sender NotifyUser prepares on first use. An
+	// atomic pointer rather than a mutex-guarded field: the memo is "prepare
+	// once, then only read", and a losing racer builds a sender it then drops
+	// (see notify.go). Never touched by Run.
+	notify atomic.Pointer[notifySender]
 
 	logger *logger.Logger
 }
@@ -227,18 +234,13 @@ func (ch *Channel) OnStart(ctx context.Context) error {
 // loadOrLogin attempts to load a previously stored account, falling back to
 // interactive QR-code login.
 func (ch *Channel) loadOrLogin(ctx context.Context) error {
-	accounts, err := ch.store.loadAccountList()
+	accountID, data, ok, err := ch.storedAccount()
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) > 0 {
-		// Load the first registered account.
-		data, err := ch.store.loadAccount(accounts[0])
-		if err != nil {
-			return fmt.Errorf("load account %s: %w", accounts[0], err)
-		}
-		ch.accountID = accounts[0]
+	if ok {
+		ch.accountID = accountID
 		ch.userID = data.UserID
 		ch.botToken = data.Token
 		ch.cli.SetBaseURL(data.BaseURL)
@@ -256,12 +258,35 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 			}
 		}
 
-		ch.logger.Info(ctx, "weixin: loaded stored account", "account", accounts[0])
+		ch.logger.Info(ctx, "weixin: loaded stored account", "account", accountID)
 		return nil
 	}
 
 	// No stored account → start QR login.
 	return ch.qrLogin(ctx)
+}
+
+// storedAccount reads the credentials of the first registered account from the
+// state dir — the non-interactive half of loadOrLogin, shared with NotifyUser.
+//
+// ok=false means nothing has ever logged in on this machine. For login that is
+// the cue to start the QR flow; for a notification it is a refusal, because a
+// QR login is a terminal interaction and a notification has nobody at a
+// terminal (see notify.go).
+func (ch *Channel) storedAccount() (accountID string, data *AccountData, ok bool, err error) {
+	accounts, err := ch.store.loadAccountList()
+	if err != nil {
+		return "", nil, false, err
+	}
+	if len(accounts) == 0 {
+		return "", nil, false, nil
+	}
+
+	data, err = ch.store.loadAccount(accounts[0])
+	if err != nil {
+		return "", nil, false, fmt.Errorf("load account %s: %w", accounts[0], err)
+	}
+	return accounts[0], data, true, nil
 }
 
 // qrLogin performs the QR-code login flow: fetch QR → poll status until

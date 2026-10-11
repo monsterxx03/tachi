@@ -13,6 +13,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 | **斜杠命令** | 你新增命令、改分发，或碰 `/compact` 时 |
 | **一次性命令（`/commit`、`/review`）** | 你碰侧信道运行或它们的取消时 |
 | **cron 通知（`when_relevant`）** | 你碰一个跑完的 cron 任务投递什么，或 `[SILENT]` 标记时 |
+| **channel 作为通知工具（NotifyUser）** | 你碰 `pkg/channel/notify.go`、`channel/*/notify.go`、`NotifyUser` 工具的挂载，或改一个 channel 的配置结构时 |
 
 ## 接线：谁造什么
 
@@ -108,6 +109,26 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 每次调用留一行 Info（`channel: cron notify judged`，概率在最后）和一行 `llm.UsageKindJev` 账本记录，经由 `llm.RecordJevUsage`——与工具搜索用的是同一个写入者，所以一道门禁无法把自己的成本变得不可见。问题、状态和阈值的出处属于 `channel/manager/notifygate` 和 [jev.md](jev.md)；碰那个问题之前先读后者。
 
+## channel 作为通知工具（NotifyUser）
+
+**agent 在任何一个入口（tui / desktop / acp / `-p` / channel）都能主动给用户发一条 IM 私信** —— 不是回答某条消息，而是「结果要送到人手上」。三条事实撑起这条路，改其中任何一条都要重新读这一节：
+
+- **挂载条件是三件事的合取，只有一处判定**：channel 在 `ActiveChannels()` 里（即启用）、它自己的配置子树里 `notify: true`、并且工厂造出的实例实现了 `channel.NotificationChannel`。判定在 `pkg/channel/notify.go` 的 `NotifiersFromConfig`，**挂载点在 `agent.RegisterTools`**（所以 `SkipConfigure` 的裸 agent——fork / 子代理 / dream / github pr——天然没有这个工具），**卸载点在 `ReloadTools`**：`RegisterTools` 只加不减，开关关掉后不显式 `UnregisterTool` 就会留一个必然失败的工具（与 WebSearch 同一形状）。
+- **解析要构造实例，但构造不连接**：这是整条路的前提（channel 在 `Run()` 才连）。所以挂载不带网络副作用，代价是「到底能不能发」只有第一次调用才知道 —— 于是失败一律从工具冒泡（没有目标、平台拒绝、无凭据），绝不静默成功。工厂拒绝配置 / 名字没注册 / 接口没实现，都只是跳过 + 一条 warning：缺一个通知通道不该让 agent 起不来。
+- **通道顺序按名字升序，不许依赖 map 顺序**：`ActiveChannels()` 是 map，不排序的话「第一个能成功的通道」和工具 schema 里的通道名都会随进程变（工具在最前缀，见 [prompt-cache.md](prompt-cache.md)）。
+
+每个实现的形状是「只发不收」，这条不是风格而是被调用方强加的：**挂载它的进程未必是那个正在跑完整 channel 的进程，而且没有人会去 Close 它**。所以 ——
+
+| channel | 只发实例做什么 | 不做什么 |
+| --- | --- | --- |
+| weixin（`channel/weixin/notify.go`） | 从 state dir 现读凭据，**自己的 `client`**，发给登录者本人（`ch.userID`） | 不碰 `ch.cli` / `ch.accountID`（`Run` 会写它们 → 数据竞争）、不 QR 登录、不发 `notifyStart`/`notifyStop`、不轮询 |
+| discord（`channel/discord/notify.go`） | 已经有 session（channel 模式）就用它，否则 `discordgo.New` 建一个**不 `Open()`** 的 REST-only session；目标是 `allowed_users[0]` 的私信，先 `UserChannelCreate` 再发 | 不开网关（无 presence、不消费事件）；不猜收件人 —— 没配 `allowed_users` 就报错 |
+| github / mock | 不实现接口 | 永远不是通知通道 |
+
+两个容易踩的坑：**discord 的 `sendTextWithReference` 在没有 session 时是静默返回 nil**（回复路径要这个行为，通知路径绝对不能要——那会把没发出去说成发出去了），所以通知走 `sendTextOn(sess, …)` 那个显式接受 session 的版本；**legacy weixin 路径（`channel.weixin.enabled`）的 `notify` 开关必须出现在 `ActiveChannels()` 合成的 map 里**（`config/config.go`），否则那一行配置会被静默忽略。
+
+未接进来的两处：**node 的远程轮次**用 `remoteTaskTools` 白名单，自动不含这个工具（要开就加一行）；**发到频道而不是私信**（discord 设计文档里的 `home_channel`）没有实现，字段当前被忽略。
+
 ## 测试
 
 ```sh
@@ -126,3 +147,7 @@ go test -race ./channel/manager/     # the package is written for -race; the fie
 | `agent_cache_test.go` | workDir 的优先级（缓存 agent 胜过持久化的会话） |
 | `askuser_regression_test.go` `TestHandler_AskUserAnswerRouting` | 一条消息回答被搁置的 AskUser 等待的三种方式（结构化 / 原始文本兜底 / 取消）抵达那个等待，且永不变成一轮 |
 | `notify_gate_test.go` | 通知决策的顺序和方向：always 任务从不被判定、那条紧的快路径、「没有判定」意味着标记、投递前剥掉开头标记 |
+| `pkg/channel/notify_test.go` | 挂载判定的合取（开关 off / 没实现接口 / 工厂报错 / 名字没注册都为空集）、通道按名字升序、第一条失败时试第二条、全失败时错误里带齐每个原因 |
+| `channel/weixin/notify_test.go` | 没有已存登录是拒绝而不是 QR 登录；真发一次（走 httptest）落在登录者身上、带凭据、只碰 sendmessage（没有 getupdates / notifystart）；平台拒绝要冒泡 |
+| `channel/discord/notify_test.go` | DM 两跳的顺序（先开 DM 再发）、平台拒绝冒泡、没配 `allowed_users` 时一个请求都不发、只发 session 不 `Open()` 且被复用 |
+| `agent/register_notify_test.go` | 挂载的四个分支 + `ReloadTools` 在开关关掉后把工具摘掉（再打开又回来） |

@@ -177,7 +177,15 @@ func (ch *DiscordChannel) sendTextWithReference(channelID, content string, refer
 	if sess == nil {
 		return nil // silently ignore if not connected
 	}
+	return ch.sendTextOn(sess, channelID, content, reference)
+}
 
+// sendTextOn is the one implementation of "send this text on this session, split
+// to fit". The reply path passes the live session; a notification passes either
+// that same one or the REST-only session it prepared, because a notification must
+// report "not connected" as an error rather than take the reply path's silent
+// no-op (see notify.go).
+func (ch *DiscordChannel) sendTextOn(sess *discordgo.Session, channelID, content string, reference *discordgo.MessageReference) error {
 	// Build the base MessageSend with optional SuppressEmbeds flag.
 	flags := discordgo.MessageFlags(0)
 	if ch.cfg.SuppressEmbeds {

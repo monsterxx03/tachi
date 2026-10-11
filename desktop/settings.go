@@ -594,7 +594,11 @@ var settingsTable = []settingApply{
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},
-	{Key: "channel", Mode: applyUnused, Note: "channel 模式的 IM 后端，desktop 不启用"},
+	// The one applyUnused row this process PARTLY reads: a channel's `notify` switch decides
+	// whether the NotifyUser tool mounts (see docs/agents/channel.md), so "desktop 不启用" would
+	// be false. It stays applyUnused because that mode is about the FORM — channel names are
+	// user-defined map keys, so no form can enumerate them — not about whether anything reads it.
+	{Key: "channel", Mode: applyUnused, Note: "channel 模式的 IM 后端；desktop 只读其中的 notify 开关（决定 NotifyUser 工具挂不挂），账号与收信仍归 channel 进程"},
 	{Key: "cron", Mode: applyUnused, Note: "channel 模式的后台调度"},
 	{Key: "dream", Mode: applyUnused, Note: "channel 模式的后台记忆整理"},
 	{Key: "acp", Mode: applyUnused, Note: "ACP 入口的配置"},
@@ -1249,7 +1253,7 @@ func resolveBatch(cfg *config.Config, edits config.ListEdits) (map[string]settin
 			return nil, nil, fmt.Sprintf("未知配置项：%s", key)
 		}
 		if !row.offered() {
-			return nil, nil, fmt.Sprintf("%s 属于别的入口模式（%s），桌面不读它，改不了", key, row.Note)
+			return nil, nil, fmt.Sprintf("%s 属于别的入口模式，页面不提供（%s），改不了", key, row.Note)
 		}
 		rows[key] = row
 	}

@@ -125,6 +125,12 @@ type DiscordChannel struct {
 	// /thinking level values for slash command autocomplete (injected by Manager)
 	thinkingLevels []string
 
+	// notifySess is the REST-only session NotifyUser prepares when Run() is not
+	// the one holding a session (see notify.go). Guarded by notifyMu because
+	// preparation is lazy and a notification may arrive from any turn goroutine.
+	notifySess *discordgo.Session
+	notifyMu   sync.Mutex
+
 	// Attachment cache directory
 	cacheDir string
 

@@ -598,6 +598,17 @@ func TestActiveChannels_LegacyWeixinDisabled(t *testing.T) {
 	assert.Empty(t, active)
 }
 
+// The synthesized legacy map is the whole config everyone downstream sees, so the
+// notify switch has to ride in it — otherwise `channel.weixin.notify: true` on the
+// legacy path would be read by nobody and the NotifyUser tool would never mount.
+func TestActiveChannels_LegacyWeixinCarriesNotifySwitch(t *testing.T) {
+	on := &ChannelConfig{Weixin: WeixinConfig{Enabled: true, Notify: true}}
+	assert.Equal(t, true, on.ActiveChannels()["weixin"]["notify"])
+
+	off := &ChannelConfig{Weixin: WeixinConfig{Enabled: true}}
+	assert.Equal(t, false, off.ActiveChannels()["weixin"]["notify"])
+}
+
 func TestActiveChannels_GenericChannels(t *testing.T) {
 	cc := &ChannelConfig{
 		Channels: map[string]map[string]any{

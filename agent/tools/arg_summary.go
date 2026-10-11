@@ -84,6 +84,10 @@ func ToolArgsSummary(name, argsJSON string) string {
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
+	case ToolNameNotifyUser:
+		if m, ok := args["message"].(string); ok {
+			return m
+		}
 	}
 	// Fallback: format all top-level arguments for unknown tools.
 	return formatFullArgs(args)
@@ -142,6 +146,10 @@ func ToolArgsTitle(name, argsJSON string) string {
 	case ToolNameSendFile:
 		if p, ok := args["path"].(string); ok {
 			return path.Base(p)
+		}
+	case ToolNameNotifyUser:
+		if m, ok := args["message"].(string); ok {
+			return TruncateForTitle(m, 50)
 		}
 	}
 	// Fallback: use the first key=value pair from the args.

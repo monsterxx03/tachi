@@ -113,6 +113,14 @@ func extractMediaItems(items []MessageItem) []MediaRef {
 
 // sendTextReply sends a plain-text reply message to a user.
 func (ch *Channel) sendTextReply(toUserID, contextToken, text string) error {
+	return ch.sendTextVia(ch.cli, toUserID, contextToken, text)
+}
+
+// sendTextVia is the one implementation of "send this text to this user on the
+// -ilink API". The live channel passes its own client (the one Run() logged in
+// and set up); a notification passes the send-only client it prepared, because
+// that one must not share state with the receive loop.
+func (ch *Channel) sendTextVia(cli *client, toUserID, contextToken, text string) error {
 	if text == "" {
 		return nil
 	}
@@ -145,7 +153,7 @@ func (ch *Channel) sendTextReply(toUserID, contextToken, text string) error {
 		BaseInfo: BaseInfo{ChannelVersion: defaultChannelVersion},
 	}
 
-	resp, err := ch.cli.sendMessage(req)
+	resp, err := cli.sendMessage(req)
 	if err != nil {
 		ch.logger.Error(context.Background(), "weixin: sendMessage error", err, "user", toUserID)
 		return err

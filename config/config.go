@@ -410,6 +410,12 @@ type WeixinConfig struct {
 	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
 	Greeting string `yaml:"greeting"`  // Startup greeting sent to the admin user after login (default: "👋 你好！Tachi 已启动，随时可以开始工作～")
 	BotAgent string `yaml:"bot_agent"` // v2.3.1+: bot_agent identity string (default: "Tachi")
+
+	// Notify opts this channel in as a notification tool: the NotifyUser tool is
+	// mounted when any enabled channel asks for it (see pkg/channel's
+	// NotificationChannel). Default off — a channel being able to reach the user
+	// is not the same as the user wanting the agent to reach out unprompted.
+	Notify bool `yaml:"notify"`
 }
 
 // PeerConfig is one other Tachi node this machine may delegate work to.
@@ -956,6 +962,11 @@ func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 			"state_dir": cc.Weixin.StateDir,
 			"route_tag": cc.Weixin.RouteTag,
 			"greeting":  cc.Weixin.Greeting,
+			// The notify switch has to travel with the rest: this map IS the
+			// channel's config for everyone downstream (the factory, and the
+			// NotifyUser mount), so dropping it here would make
+			// `channel.weixin.notify: true` silently do nothing.
+			"notify": cc.Weixin.Notify,
 		}
 	}
 
