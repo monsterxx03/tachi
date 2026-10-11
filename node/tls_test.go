@@ -218,9 +218,9 @@ func TestAPeerIsPinnedOnFirstContactAndCheckAfter(t *testing.T) {
 	// It is on disk. TOFU that forgets is TOFU that has to trust a stranger again on every launch.
 	var pinned map[string]knownPeer
 	require.NoError(t, fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned))
-	require.Equal(t, real.NodeID, pinned["peer"].NodeID)
-	require.False(t, pinned["peer"].FirstSeen.IsZero(), "when the pin was made is part of the record")
-	require.Equal(t, realURL, pinned["peer"].URL, "and so is where it was made")
+	require.Equal(t, "peer", pinned[real.NodeID].Alias, "the record is keyed by the identity the handshake proved")
+	require.False(t, pinned[real.NodeID].FirstSeen.IsZero(), "when the pin was made is part of the record")
+	require.Equal(t, realURL, pinned[real.NodeID].URL, "and so is where it was made")
 
 	// The same machine again — a NEW sender, so this reads the record rather than a cache.
 	again, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil)
@@ -470,7 +470,7 @@ func TestTwoRealNodesTalkOverTLS(t *testing.T) {
 	require.True(t, peers[0].Reachable, "the card must be readable over mTLS: %+v", peers[0])
 
 	// And the server side knows who asked: its own identity is not the caller's.
-	own, err := LoadOrCreateIdentity(filepath.Join(base, "node"))
+	own, err := LoadOrCreateIdentity(filepath.Join(base, "a2a"))
 	require.NoError(t, err)
 	require.NotEqual(t, serverID.NodeID, own.NodeID, "a caller must not be the machine it called")
 }

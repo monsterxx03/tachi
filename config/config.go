@@ -74,7 +74,7 @@ const (
 	toolResultsDirName        = "tool_results"
 	oneoffDirName             = "oneoff"
 	usageDirName              = "usage"
-	nodeDirName               = "node"
+	a2aDirName                = "a2a"
 	defaultToolResultMaxChars = 50000
 )
 
@@ -442,24 +442,16 @@ type PeerConfig struct {
 // PeerIdentitiesPath is where this machine records which key each peer presented the first time
 // it was reached (TOFU — see node/knownpeers.go). It is the file to edit, by hand, when a peer was
 // genuinely reinstalled and has a new key: the pin refuses the change and names this path.
-//
-// It sits beside the delegation records rather than inside the node's data dir, for the same
-// reason they do: delegating is not a feature of HOSTING a node, and a machine that only ever
-// calls out still has to remember who it called.
 func PeerIdentitiesPath() string {
-	return filepath.Join(BaseDir(), peerIdentitiesFileName)
+	return filepath.Join(A2ADir(), peerIdentitiesFileName)
 }
 
 const peerIdentitiesFileName = "peer-identities.json"
 
-// DelegationsDir is where this machine records the work it delegated to peers.
-//
-// It sits under the base dir rather than inside the node's data dir on purpose: delegating is
-// not a feature of hosting a node, and a machine that never serves a remote task still needs
-// its own records (design §8.6 — the local id in a tool result is the model's only handle on
-// that work).
+// DelegationsDir is where this machine records the work it delegated to peers (design §8.6 — the
+// local id in a tool result is the model's only handle on that work).
 func DelegationsDir() string {
-	return filepath.Join(BaseDir(), delegationsDirName)
+	return filepath.Join(A2ADir(), delegationsDirName)
 }
 
 const delegationsDirName = "delegations"
@@ -1605,17 +1597,25 @@ func ResearchDir() string {
 	return filepath.Join(BaseDir(), researchDirName)
 }
 
-// NodeDir returns this machine's node data directory, where the node identity, the
-// single-instance lock and the published local connection info live
-// (docs/2026-10-10-a2a-node-design.md §3.1).
+// A2ADir is where everything about this machine's multi-node side lives: its identity and
+// certificate, the node lock and the published local connection info, the tasks it accepted and the
+// context bindings that go with them, the identities of the peers it reached, and the records of the
+// work it delegated (docs/2026-10-10-a2a-node-design.md §3.1).
 //
-// Derived rather than configurable on purpose: ONE data directory is ONE node
-// identity, and that is the whole rule. A different --home, or a different OS user,
-// is therefore a different node with no extra switch to set — and the integration
-// harness gets its isolation for free, since its temporary home moves this path with
-// everything else.
-func NodeDir() string {
-	return filepath.Join(BaseDir(), nodeDirName)
+// ONE directory, because they are three faces of one thing. It was called `node/` while only the
+// HOSTING half lived in it, and the sending half (peers' identities, delegated work) sat beside the
+// session store instead — on the argument that delegating is not a feature of hosting. That argument
+// was about the SWITCH (`node.enabled`), not about the data: an identity, the peers you have met and
+// the work you have handed out are all "this machine's A2A", whether or not anything can call in.
+// Keeping them together is also what makes the boundary legible: one directory to back up, to move
+// between machines, or to delete when you mean "forget all of it".
+//
+// Derived rather than configurable on purpose: ONE data directory is ONE node identity, and that is
+// the whole rule. A different --home, or a different OS user, is therefore a different node with no
+// extra switch to set — and the integration harness gets its isolation for free, since its temporary
+// home moves this path with everything else.
+func A2ADir() string {
+	return filepath.Join(BaseDir(), a2aDirName)
 }
 
 // ToolResultsDir returns the path to the tool results storage directory.

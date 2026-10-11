@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/tools"
 )
 
@@ -135,7 +136,7 @@ func (r *PeersReminder) Generate(ctx context.Context, rctx Context) []string {
 	}
 
 	lines := make([]string, 0, len(peers)+2)
-	lines = append(lines, "可以委派工作的节点（用 DelegateTask，node 参数填名字；prompt 要写清在它那台机器上做什么）：")
+	lines = append(lines, "可以委派工作的节点（用 DelegateTask，node 参数填名字或它的身份；prompt 要写清在它那台机器上做什么）：")
 	for _, p := range peers {
 		what := p.Description
 		if what == "" {
@@ -150,7 +151,22 @@ func (r *PeersReminder) Generate(ctx context.Context, rctx Context) []string {
 			// may still accept work, and a reminder may not claim otherwise (§8.6).
 			state = "（上次联系不上；描述来自配置）"
 		}
-		lines = append(lines, fmt.Sprintf("- %s：%s%s", p.Name, what, state))
+		// The identity goes beside the name for two reasons: it is the one fact about a peer that
+		// nobody else can claim — so a name the reader may be unsure about becomes checkable — and
+		// it is a second way to name this node in a tool argument, which matters for a machine the
+		// reader knows by its id rather than by this config's word for it.
+		identity := ""
+		if p.NodeID != "" {
+			identity = fmt.Sprintf(" (%s)", agentref.ShortID(p.NodeID))
+		}
+		line := fmt.Sprintf("- %s%s：%s%s", p.Name, identity, what, state)
+		// The node's OWN skills, named as its claim rather than as a fact: this is the Card talking,
+		// and a reminder that listed them as established capabilities would be reporting a
+		// self-declaration as knowledge.
+		if len(p.Skills) > 0 {
+			line += fmt.Sprintf("；它自称会：%s", joinSkills(p.Skills))
+		}
+		lines = append(lines, line)
 	}
 
 	// The change test is on the RENDERED lines, not on the peer structs: what the model was
@@ -185,4 +201,15 @@ func stateLabel(t tools.RemoteTaskInfo) string {
 	default:
 		return "状态未知"
 	}
+}
+
+// joinSkills renders a node's advertised skills for one reminder line, capped: a card may carry a
+// dozen of them, and the reminder is re-sent whenever the list changes — a paragraph of skill names
+// per node is tokens spent on every turn of every conversation that can delegate.
+func joinSkills(skills []string) string {
+	const show = 6
+	if len(skills) <= show {
+		return strings.Join(skills, "、")
+	}
+	return fmt.Sprintf("%s 等 %d 项", strings.Join(skills[:show], "、"), len(skills))
 }

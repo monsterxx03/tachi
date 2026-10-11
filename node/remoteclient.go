@@ -947,23 +947,29 @@ func (c *remoteClient) verifyPeerIdentity(ctx context.Context, alias string) (st
 	return id, nil
 }
 
-// currentAliasFor is the name this machine NOW uses for a node id, or "" when it is not configured
-// any more.
+// currentAliasFor is the name this machine NOW uses for a node id, or "" when the configuration has
+// no entry for it any more.
 //
-// It exists so a rename reads as a rename everywhere: a record keeps the alias it was created
-// with, and showing that stale name would have the model (and the reader) calling a peer by a name
-// the config no longer knows (node/peers.go would refuse it as unknown). The lookup is local: the
-// TOFU record already maps each configured alias to the key it proved.
+// It exists so a rename reads as a rename everywhere: a record keeps the alias it was created with,
+// and showing that stale name would have the model (and the reader) calling a peer by a name the
+// config no longer knows (node/peers.go would refuse it as unknown).
+//
+// It is ONE lookup now, not a scan of the configuration: the TOFU record is keyed by identity, so
+// "which id is this alias" is a question nobody has to ask here any more. What is still checked is
+// that the name the record carries is one the CONFIGURATION has — a record is written by a
+// handshake, and a handshake can outlive the config line it used.
 func (c *remoteClient) currentAliasFor(nodeID string) string {
 	if nodeID == "" || c.known == nil {
 		return ""
 	}
-	for _, alias := range c.peers.configOnlyNames() {
-		if id, ok := c.known.nodeID(alias); ok && id == nodeID {
-			return alias
-		}
+	alias, ok := c.known.aliasFor(nodeID)
+	if !ok {
+		return ""
 	}
-	return ""
+	if _, configured := c.peers.configOnly(alias); !configured {
+		return ""
+	}
+	return alias
 }
 
 // fetchCard reads one peer's Agent Card over that peer's own TLS client.

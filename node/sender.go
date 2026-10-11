@@ -24,6 +24,10 @@ type Sender struct {
 	peers   *peerDirectory
 	records *delegationStore
 	client  *remoteClient
+	// known is the TOFU record, for the one thing a reminder needs beyond the configuration: the
+	// identity this machine pinned for a peer, which makes a name checkable (and is what a tool
+	// argument may carry instead of the name).
+	known *knownPeers
 }
 
 // OpenSender builds the sending side over a peer list, loading this machine's records.
@@ -49,16 +53,19 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 	if err != nil {
 		return nil, err
 	}
+	// The directory resolves an identity through the record, so it needs it (Lookup: a name OR a
+	// node id, whichever the caller has).
+	directory.known = known
 	// Our own identity, and the certificate it signs: what we present to a peer so it can read
 	// WHO is calling out of the TLS handshake. It lives in the NODE's data dir even on a machine
 	// that hosts nothing — being a caller means having a key, and a machine that only calls out
 	// still has to say who it is (the alternative would be an anonymous caller, which is exactly
 	// what a remote surface on TLS refuses: node/auth.go).
-	identity, err := LoadOrCreateIdentity(config.NodeDir())
+	identity, err := LoadOrCreateIdentity(config.A2ADir())
 	if err != nil {
 		return nil, err
 	}
-	ourCert, err := loadOrCreateCertificate(config.NodeDir(), identity)
+	ourCert, err := loadOrCreateCertificate(config.A2ADir(), identity)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +88,7 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 	directory.resolve = func(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
 		return client.fetchCard(ctx, alias, baseURL)
 	}
-	return &Sender{peers: directory, records: records, client: client}, nil
+	return &Sender{peers: directory, records: records, client: client, known: known}, nil
 }
 
 // Peers describes every configured node, never failing: an unreachable one is reported as such
@@ -94,8 +101,27 @@ func (s *Sender) Peers(ctx context.Context) []tools.PeerSummary {
 	out := make([]tools.PeerSummary, 0, len(snapshot))
 	for _, p := range snapshot {
 		info := tools.PeerSummary{Name: p.Name, Note: p.Note, Reachable: p.Card != nil}
+		// The identity this machine holds, when it holds one: it is what makes a name checkable, and
+		// what a follow-up may name the peer by instead.
+		if s.known != nil {
+			if id, ok := s.known.nodeID(p.Name); ok {
+				info.NodeID = id
+			}
+		}
 		if p.Card != nil {
 			info.Description = p.Card.Description
+			// The peer's OWN claim about what it can do. Names only: the reminder is a list the model
+			// reads every turn (when it changes), and a description per skill would be a paragraph
+			// per node.
+			for _, skill := range p.Card.Skills {
+				name := strings.TrimSpace(skill.Name)
+				if name == "" {
+					name = strings.TrimSpace(skill.ID)
+				}
+				if name != "" {
+					info.Skills = append(info.Skills, name)
+				}
+			}
 		}
 		out = append(out, info)
 	}

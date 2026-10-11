@@ -79,11 +79,10 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	}
 
 	executor := o.Executor
-	real := executor != nil
 	if executor == nil {
 		executor = echoExecutor{}
 	}
-	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), o.Description, o.Skills, real, encrypted)
+	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), o.Description, o.Skills, encrypted)
 	// The store is opened by the host, which is AFTER the executor is built (the store owns
 	// the startup recovery, so there is exactly one). An executor that keeps state outside a
 	// request — a question waiting for an answer, and its deadline — needs it, and this is the
@@ -237,44 +236,25 @@ func advertisedURL(publicURL, boundAddr string, https bool) string {
 //
 // Every optional capability stays false (nothing streams, nothing pushes) because that is
 // the truth, and declaring one would be worse here than in a document: a PEER plans around a
-// Card. Which skill it declares depends on the executor behind it, because those are two
-// different nodes to a peer: the real one runs a Tachi turn, the placeholder echoes text
-// (tests, and the protocol contract they pin). Claiming the real one from a placeholder would
-// be exactly the "declared but not implemented" mistake this function exists to avoid.
+// Card.
 //
-// The description and the machine's skills are self-declared, like the name beside them: a peer
-// records what this node says about itself, and none of it is evidence of anything but what the
-// node chose to publish (design §4.2).
-func newAgentCard(name, url, description string, machineSkills []a2a.AgentSkill, real bool, authenticated bool) *a2a.AgentCard {
+// The skills are exactly the skills THIS MACHINE's agent has — nothing is added for the protocol's
+// sake. An earlier version also published a built-in "Remote task" entry (an "Echo" one behind the
+// placeholder executor), and it was removed: a Card's skills are a claim about what can be done
+// here, and a hardcoded entry is a claim about this SOFTWARE that every node makes identically,
+// which tells a peer nothing about which machine to send work to. What a peer decides on is the
+// machine's own skills and the description beside them.
+//
+// The description and the skills are self-declared, like the name: a peer records what this node
+// says about itself, and none of it is evidence of anything but what the node chose to publish
+// (design §4.2).
+func newAgentCard(name, url, description string, machineSkills []a2a.AgentSkill, authenticated bool) *a2a.AgentCard {
 	if strings.TrimSpace(name) == "" {
 		name = defaultNodeName
 	}
 	if strings.TrimSpace(description) == "" {
 		description = defaultNodeDescription
 	}
-	skill := a2a.AgentSkill{
-		ID:          "task",
-		Name:        "Remote task",
-		Description: "Runs one turn of a Tachi agent on this node, in the workspace the operator configured and with the tools they allowed. The artifact is the turn's answer. A turn may stop to ask a question; the task then reads INPUT_REQUIRED and the message that answers it continues the same turn.",
-		Tags:        []string{"agent"},
-		Examples:    []string{"检查昨天的备份是否完整，返回异常清单", "这个目录里最大的十个文件是什么"},
-	}
-	if !real {
-		skill = a2a.AgentSkill{
-			ID:          "echo",
-			Name:        "Echo",
-			Description: "Returns the text it is given as an artifact. The protocol skeleton's placeholder, for a node that has not been wired to an agent.",
-			Tags:        []string{"placeholder"},
-			Examples:    []string{"say something"},
-		}
-	}
-	// The node's own capability FIRST, then the machine's skills: a peer reading the Card is deciding
-	// whether to send work here, and that entry is what the decision is about — the list beside it
-	// says what the work will be done WITH. A name collision between the two is left alone: they are
-	// different namespaces, and dropping one would be guessing which was meant.
-	skills := make([]a2a.AgentSkill, 0, len(machineSkills)+1)
-	skills = append(skills, skill)
-	skills = append(skills, machineSkills...)
 
 	card := &a2a.AgentCard{
 		Name:               name,
@@ -283,7 +263,7 @@ func newAgentCard(name, url, description string, machineSkills []a2a.AgentSkill,
 		Capabilities:       a2a.AgentCapabilities{},
 		DefaultInputModes:  []string{mediaTypeText},
 		DefaultOutputModes: []string{mediaTypeText},
-		Skills:             skills,
+		Skills:             machineSkills,
 	}
 	if url != "" {
 		card.SupportedInterfaces = []*a2a.AgentInterface{

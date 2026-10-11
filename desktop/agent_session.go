@@ -240,7 +240,7 @@ func (s *AgentService) EndSessionTask(id string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), nodeEndTaskTimeout)
 	defer cancel()
 
-	client, err := node.OpenLocalClient(ctx, config.NodeDir(), nil)
+	client, err := node.OpenLocalClient(ctx, config.A2ADir(), nil)
 	if err != nil {
 		// No node on this machine, or one that cannot be reached. The unavailable case gets a
 		// sentence of its own rather than the wrapped error: the node's own text ("nothing is

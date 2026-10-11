@@ -23,7 +23,7 @@ func TestStartOrAttachNodeDisabledCreatesNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, handle)
 
-	_, statErr := os.Stat(config.NodeDir())
+	_, statErr := os.Stat(config.A2ADir())
 	require.True(t, os.IsNotExist(statErr), "disabled must not even create the data directory")
 }
 
@@ -47,11 +47,11 @@ func TestStartOrAttachNodeEnabledHostsUnderTheConfigDir(t *testing.T) {
 	// The data dir is DERIVED from the base dir, never configured: one directory is
 	// one node identity, so a different --home is a different node with no switch to
 	// set (and the integration harness gets its isolation for free).
-	require.Equal(t, filepath.Join(base, "node"), handle.DataDir())
-	require.Equal(t, config.NodeDir(), handle.DataDir())
+	require.Equal(t, filepath.Join(base, "a2a"), handle.DataDir())
+	require.Equal(t, config.A2ADir(), handle.DataDir())
 
 	// What it published is where the next process will look for it.
-	info, err := readLocalInfo(config.NodeDir())
+	info, err := readLocalInfo(config.A2ADir())
 	require.NoError(t, err)
 	require.Equal(t, handle.Client().InstanceID(), info.InstanceID)
 	require.Equal(t, handle.NodeID(), info.NodeID)

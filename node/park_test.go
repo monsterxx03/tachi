@@ -442,7 +442,7 @@ func TestAParkedTaskIsResolvedAsInterruptedWhenTheProcessGoesAway(t *testing.T) 
 	// arrive (§7.4) — and it keeps the question (§9.3).
 	require.NoError(t, h.Close())
 
-	store, err := openTaskStore(filepath.Join(config.NodeDir(), tasksDirName))
+	store, err := openTaskStore(filepath.Join(config.A2ADir(), tasksDirName))
 	require.NoError(t, err)
 	rec, ok := store.record(task.ID)
 	require.True(t, ok)

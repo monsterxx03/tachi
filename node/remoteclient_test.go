@@ -145,7 +145,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 	config.SetBaseDir(peerHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	peer := startWith(t, filepath.Join(peerHome, "node"), func(o *Options) { o.Executor = parked })
+	peer := startWith(t, filepath.Join(peerHome, "a2a"), func(o *Options) { o.Executor = parked })
 	senderHome := t.TempDir()
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })

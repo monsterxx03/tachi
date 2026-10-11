@@ -108,12 +108,12 @@ var _ = ginkgo.Describe("delegation", func() {
 
 		// And this machine kept its own record of what it delegated: that is what a later turn
 		// refers to, and what makes the work findable after the local conversation is compacted.
-		records, err := os.ReadDir(filepath.Join(sutHome, "delegations"))
+		records, err := os.ReadDir(filepath.Join(sutHome, "a2a", "delegations"))
 		gomega.Expect(err).NotTo(gomega.HaveOccurred(), "the delegating side must file a record")
 		gomega.Expect(records).To(gomega.HaveLen(1))
 		gomega.Expect(records[0].Name()).To(gomega.HavePrefix("d_"))
 
-		raw, err := os.ReadFile(filepath.Join(sutHome, "delegations", records[0].Name()))
+		raw, err := os.ReadFile(filepath.Join(sutHome, "a2a", "delegations", records[0].Name()))
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		body := string(raw)
 		gomega.Expect(body).To(gomega.ContainSubstring(`"remote_task_id"`),
@@ -175,10 +175,10 @@ var _ = ginkgo.Describe("delegation", func() {
 		gomega.Expect(first.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", first.Stdout, first.Stderr)
 
 		// The record names the empty scope, never somebody's conversation.
-		records, err := os.ReadDir(filepath.Join(sutHome, "delegations"))
+		records, err := os.ReadDir(filepath.Join(sutHome, "a2a", "delegations"))
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(records).To(gomega.HaveLen(1))
-		raw, err := os.ReadFile(filepath.Join(sutHome, "delegations", records[0].Name()))
+		raw, err := os.ReadFile(filepath.Join(sutHome, "a2a", "delegations", records[0].Name()))
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(string(raw)).To(gomega.ContainSubstring(`"logical_id": ""`),
 			"a run with no session files under the empty scope, never under somebody's conversation")

@@ -189,3 +189,40 @@ func TestThePeersReminderIsSilentWithNoPeersOrNoDelegator(t *testing.T) {
 		t.Errorf("the provider is asked whether there are peers: hits=%d", empty.peerHit)
 	}
 }
+
+// The reminder shows the identity beside the name, and the node's own skills after it.
+//
+// The identity is there because it is the one fact about a peer nobody else can claim: it makes a
+// name the reader is unsure about checkable, and it is a second way to name that node in a tool
+// argument. The skills are the node's OWN claim about what it can do — which is how they are worded
+// ("它自称会") — and they are capped, because a reminder that grows a paragraph per node is paid for
+// on every turn of every conversation that can delegate.
+func TestThePeersReminderShowsIdentityAndAdvertisedSkills(t *testing.T) {
+	provider := &fakeProvider{peers: []tools.PeerSummary{{
+		Name:        "nas",
+		NodeID:      "cd726b446c34386ece70d88fdd5fbf2a",
+		Description: "跑在家里的机器",
+		Skills:      []string{"a", "b", "c", "d", "e", "f", "g"},
+		Reachable:   true,
+	}}}
+	reminder := &PeersReminder{}
+
+	lines := reminder.Generate(t.Context(), Context{Delegator: provider, LogicalConversation: "conv-1"})
+	body := strings.Join(lines, "\n")
+
+	if !strings.Contains(body, "nas (cd726b44)") {
+		t.Errorf("the identity has to sit beside the name, short enough to read:\n%s", body)
+	}
+	if !strings.Contains(body, "它自称会：a、b、c、d、e、f 等 7 项") {
+		t.Errorf("the node's advertised skills are its claim, and the list is capped:\n%s", body)
+	}
+
+	// A node this machine has no identity for says nothing about one, and a node with no skills does
+	// not grow an empty label.
+	provider.peers = []tools.PeerSummary{{Name: "vps", Reachable: false}}
+	lines = reminder.Generate(t.Context(), Context{Delegator: provider, LogicalConversation: "conv-2"})
+	body = strings.Join(lines, "\n")
+	if strings.Contains(body, "(") || strings.Contains(body, "自称会") {
+		t.Errorf("nothing to say about identity or skills means saying nothing:\n%s", body)
+	}
+}

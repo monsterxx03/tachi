@@ -52,7 +52,7 @@ func boundSession(t *testing.T, base, contextID string) string {
 	t.Helper()
 	var binding contextBinding
 	require.NoError(t, fileutil.ReadJSON(
-		filepath.Join(base, "node", contextsDirName, contextID+".json"), &binding))
+		filepath.Join(base, "a2a", contextsDirName, contextID+".json"), &binding))
 	return binding.SessionID
 }
 

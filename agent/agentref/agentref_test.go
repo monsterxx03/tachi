@@ -119,3 +119,25 @@ func aliases(targets []atfile.AgentTarget) []string {
 	}
 	return out
 }
+
+// A node can be referenced by its name, by its whole id, or by a unique prefix of one — a reader who
+// copied eight characters off a picker row is not making a mistake.
+//
+// A prefix that names two machines resolves to nothing, which is the same treatment an unknown name
+// gets: the reference stays visible and unexpanded rather than quietly pointing at the wrong machine.
+func TestResolveAcceptsAnIdentityPrefix(t *testing.T) {
+	src := New(staticPeers(
+		Peer{Alias: "home-nas", NodeID: "abcd1111abcd1111abcd1111abcd1111"},
+		Peer{Alias: "hk-vps", NodeID: "abcd2222abcd2222abcd2222abcd2222"},
+	))
+
+	target, ok := src.Resolve("abcd1111")
+	assert.True(t, ok, "a unique prefix of an id names a machine")
+	assert.Equal(t, "home-nas", target.Alias)
+
+	_, ok = src.Resolve("abcd")
+	assert.False(t, ok, "a prefix that names two machines is refused, not guessed")
+
+	_, ok = src.Resolve("ffff")
+	assert.False(t, ok, "an id this machine does not know resolves to nothing")
+}

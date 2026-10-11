@@ -13,6 +13,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/netutil"
 )
@@ -32,6 +33,11 @@ import (
 // cost a timeout per turn.
 type peerDirectory struct {
 	peers []config.PeerConfig
+	// known is the TOFU record, and it is here for ONE thing: resolving a machine by its IDENTITY
+	// (a node id, or an unambiguous prefix of one), which is how a reader — and, once nodes are
+	// discovered rather than configured, the sender itself — names a peer. nil means no record to
+	// read, and then only names resolve. Set at construction (node/sender.go).
+	known *knownPeers
 
 	mu    sync.Mutex
 	cards map[string]*peerCard
@@ -181,7 +187,14 @@ func (d *peerDirectory) Names() []string {
 	return out
 }
 
-// Lookup returns one peer by alias, resolving its card if that has not been done recently.
+// Lookup returns one peer by NAME (its configured alias) or by IDENTITY (a node id, or an
+// unambiguous prefix of one), resolving its card if that has not been done recently.
+//
+// Two ways in, because two different callers name a machine in two different ways: a model copies
+// the alias the reminder listed, while a reader — and, once nodes are discovered rather than
+// configured, the sender itself — knows a machine by the id it proved. The id path goes through the
+// TOFU record (node/knownpeers.go), which is the only place that knows which name this machine last
+// used for an identity.
 //
 // An unreachable peer is NOT an error here: the caller gets the configured identity plus why the
 // card is missing, because "we cannot describe this node right now" and "there is no such peer"
@@ -190,16 +203,78 @@ func (d *peerDirectory) Lookup(ctx context.Context, name string) (peer, error) {
 	if d == nil {
 		return peer{}, &UnknownPeerError{Name: name}
 	}
+	name = strings.TrimSpace(name)
+
+	// A configured alias first: that is what the reminder lists and what a tool argument carries.
 	for _, p := range d.peers {
-		if p.Name != name {
-			continue
+		if p.Name == name {
+			return d.describe(ctx, p), nil
 		}
-		out := peer{Name: p.Name, URL: p.URL, Note: p.Note}
-		card, err := d.card(ctx, p)
-		out.Card, out.Err = card, err
-		return out, nil
 	}
-	return peer{}, &UnknownPeerError{Name: name, Known: d.Names()}
+
+	// Then an identity. A record can name a machine this configuration no longer has an entry for
+	// (it was renamed, and the rename has not been reached yet) — that is a different answer from
+	// "never heard of it", and it says so, because the fix is different too.
+	if alias, nodeID, err := d.byNodeID(name); err != nil {
+		return peer{}, err
+	} else if alias != "" {
+		for _, p := range d.peers {
+			if p.Name == alias {
+				return d.describe(ctx, p), nil
+			}
+		}
+		return peer{}, fmt.Errorf("node: %s is the identity last reached as %q, which is no longer a "+
+			"configured peer; configure that node again to reach it", nodeID, alias)
+	}
+
+	return peer{}, &UnknownPeerError{Name: name, Known: d.describedNames()}
+}
+
+// describe reads one configured peer's card, for a Lookup that already found the entry.
+func (d *peerDirectory) describe(ctx context.Context, p config.PeerConfig) peer {
+	out := peer{Name: p.Name, URL: p.URL, Note: p.Note}
+	card, err := d.card(ctx, p)
+	out.Card, out.Err = card, err
+	return out
+}
+
+// byNodeID resolves a node id (or a unique prefix of one) to the name this machine last used for
+// it, via the TOFU record. An empty alias with no error means "no record of that identity".
+func (d *peerDirectory) byNodeID(ref string) (alias, nodeID string, err error) {
+	if d == nil || d.known == nil || ref == "" {
+		return "", "", nil
+	}
+	identities := d.known.identities()
+	ids := make([]string, 0, len(identities))
+	for id := range identities {
+		ids = append(ids, id)
+	}
+	resolved, ok, err := agentref.ResolveID(ref, ids)
+	if err != nil || !ok {
+		return "", "", err
+	}
+	return identities[resolved], resolved, nil
+}
+
+// describedNames lists the configured peers the way a refusal should read: the alias, and the
+// identity beside it when this machine holds one. "Which peers could I have used" is only useful if
+// the answer is something the caller can act on, and both of those are names they can.
+func (d *peerDirectory) describedNames() []string {
+	if d == nil {
+		return nil
+	}
+	out := make([]string, 0, len(d.peers))
+	for _, p := range d.peers {
+		if d.known != nil {
+			if id, ok := d.known.nodeID(p.Name); ok {
+				out = append(out, fmt.Sprintf("%s (%s)", p.Name, agentref.ShortID(id)))
+				continue
+			}
+		}
+		out = append(out, p.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Snapshot describes every configured peer, for the reminder and the node picker. It never fails:

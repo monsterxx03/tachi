@@ -129,32 +129,16 @@ func TestCardSaysOnlyWhatThisNodeActuallyDoes(t *testing.T) {
 	require.Equal(t, a2a.TransportProtocolHTTPJSON, iface.ProtocolBinding)
 	require.Equal(t, a2a.Version, iface.ProtocolVersion)
 	require.Equal(t, []string{mediaTypeText}, card.DefaultInputModes)
-	require.NotEmpty(t, card.Skills)
+	// The skills are THIS machine's agent skills and nothing else: a hardcoded entry would be a
+	// claim about the software that every node makes identically, which tells a peer nothing about
+	// which machine to send work to. This node is a bare test node, so the honest answer is none.
+	require.Empty(t, card.Skills)
 
 	// Nothing optional is implemented, so nothing optional may be claimed — and the
 	// Card must not offer an authentication option that does not exist.
 	require.False(t, card.Capabilities.Streaming)
 	require.False(t, card.Capabilities.PushNotifications)
 	require.Empty(t, card.SecuritySchemes)
-}
-
-// A node with an agent behind it and a node without one are two different nodes to a peer,
-// and the Card is the only place a peer can tell them apart — so it must not still say
-// "echo" once the real executor is wired, nor claim real work when it is not.
-func TestARealNodeCardNamesTheRealWork(t *testing.T) {
-	base := nodeHome(t)
-	mock := mockllm.NewServer()
-	t.Cleanup(mock.Close)
-
-	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
-	require.Len(t, h.Card().Skills, 1)
-	require.Equal(t, "task", h.Card().Skills[0].ID)
-	require.NotContains(t, h.Card().Skills[0].Description, "placeholder")
-
-	// A test-built node keeps its own honest declaration.
-	placeholder := start(t, t.TempDir())
-	require.Len(t, placeholder.Card().Skills, 1)
-	require.Equal(t, "echo", placeholder.Card().Skills[0].ID)
 }
 
 func TestSendMessageWaitsForTheTaskAndReturnsItsArtifact(t *testing.T) {
@@ -500,15 +484,14 @@ func TestTheCardPublishesTheMachinesSkills(t *testing.T) {
 	card := h.Card()
 	require.Equal(t, "家里那台，专门跑备份检查", card.Description,
 		"the node's own line wins over the built-in one")
-	require.Equal(t, "task", card.Skills[0].ID,
-		"the node's capability comes first — it is what a peer's decision is about")
 
 	byID := map[string]a2a.AgentSkill{}
 	for _, s := range card.Skills {
 		byID[s.ID] = s
 	}
-	require.Contains(t, byID, "smoke-skill", "the machine's own skills are published: %v", byID)
-	require.Equal(t, "本机技能，应当被发布", byID["smoke-skill"].Description)
+	require.Len(t, card.Skills, 1, "the Card carries exactly the machine's own skills: %v", byID)
+	require.Equal(t, "本机技能，应当被发布", byID["smoke-skill"].Description,
+		"the machine's skill, under its own name")
 	require.NotContains(t, byID, "hidden-skill",
 		"a disabled skill is not claimed — the Card may not advertise what the machine would refuse")
 }

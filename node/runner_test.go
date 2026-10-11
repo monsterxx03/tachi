@@ -121,7 +121,7 @@ func TestRemoteTaskRunsARealTurnInTheNodesWorkspace(t *testing.T) {
 	// without any in-memory state.
 	var binding contextBinding
 	require.NoError(t, fileutil.ReadJSON(
-		filepath.Join(base, "node", contextsDirName, task.ContextID+".json"), &binding))
+		filepath.Join(base, "a2a", contextsDirName, task.ContextID+".json"), &binding))
 	require.Equal(t, sessions[0].ID, binding.SessionID)
 	require.Equal(t, workspace, binding.Workspace)
 }
@@ -259,7 +259,7 @@ func TestARemoteAgentHasRecallLeftOn(t *testing.T) {
 	cfg.Memory.Type = "topic"
 
 	r, err := newRunner(cfg, filepath.Join(base, "ws"),
-		filepath.Join(base, "node"), filepath.Join(base, "sessions"), logger.New("node-test"))
+		filepath.Join(base, "a2a"), filepath.Join(base, "sessions"), logger.New("node-test"))
 	require.NoError(t, err)
 	cr, err := r.contextRun(context.Background(), "", "ctx-1")
 	require.NoError(t, err)
@@ -281,7 +281,7 @@ func TestATurnRunsWithItsUsageSourceAttached(t *testing.T) {
 	base := nodeHome(t)
 	cfg := nodeConfig(t, mockllm.NewServer(), filepath.Join(base))
 	r, err := newRunner(cfg, filepath.Join(base, "ws"),
-		filepath.Join(base, "node"), filepath.Join(base, "sessions"), logger.New("node-test"))
+		filepath.Join(base, "a2a"), filepath.Join(base, "sessions"), logger.New("node-test"))
 	require.NoError(t, err)
 	cr, err := r.contextRun(context.Background(), "", "ctx-1")
 	require.NoError(t, err)

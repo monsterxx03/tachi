@@ -80,8 +80,17 @@ func (r RemoteTaskInfo) InFlight() bool {
 // PeerSummary is one node the model may delegate to, as the peers reminder lists it.
 type PeerSummary struct {
 	Name string `json:"name"`
+	// NodeID is the identity THIS machine pinned for the peer on first contact, and it is empty
+	// when it has never reached that node outbound. The model does not need it to delegate — but it
+	// is the one fact about a peer nobody else can claim, it makes a name checkable, and it is
+	// therefore also what the tool's `node` argument may carry instead of the name.
+	NodeID string `json:"node_id,omitempty"`
 	// Description is the peer's own account of itself, empty when it could not be reached.
 	Description string `json:"description,omitempty"`
+	// Skills are the names of the skills the peer ADVERTISES in its Agent Card — its own claim
+	// about what it can do, which is why they are shown as the peer's words and not as this
+	// machine's knowledge of it.
+	Skills []string `json:"skills,omitempty"`
 	// Note is the configured human line, used when there is no description.
 	Note string `json:"note,omitempty"`
 	// Reachable is a fact about a moment, not a promise.

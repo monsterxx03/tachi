@@ -32,7 +32,7 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 	if err != nil {
 		return nil, err
 	}
-	dataDir := config.NodeDir()
+	dataDir := config.A2ADir()
 	// The retention record lives beside the sessions, because that is what it is about: the
 	// node protects ITS conversations from a cleanup that runs in any other process, and the
 	// sweep reads the same directory (see session/retention.go).

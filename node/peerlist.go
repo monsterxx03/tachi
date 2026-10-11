@@ -295,21 +295,16 @@ func countReachable(reports []PeerReport) int {
 	return n
 }
 
-// pinnedNodeIDs reads alias → node id out of the TOFU record, and answers with an empty map when
-// it cannot be read.
-//
-// It is read on every snapshot rather than cached: the file is small, the picker's snapshot is a
-// per-keystroke read of memory plus this one file, and reading it live means an operator who
-// deleted a stale pin sees the effect immediately instead of after a restart (config.
-// PeerIdentitiesPath is the path to edit by hand when a peer was reinstalled). An unreadable record
-// yields nothing rather than an error, for the same reason PeerAliases does: this is a label on a
-// row, and a row that says "unknown" beats a picker that does not open.
+// pinnedNodeIDs inverts the TOFU record into alias → node id, which is the direction a picker row
+// needs (it shows the identity beside the name). It answers with an empty map when the record cannot
+// be read: this is a label on a row, and a row that says "unknown" beats a picker that does not open
+// (PeerAliases, the other direction, has the full reasoning).
 func pinnedNodeIDs() map[string]string {
 	pinned := readPinnedPeers()
 	out := make(map[string]string, len(pinned))
-	for alias, peer := range pinned {
-		if peer.NodeID != "" {
-			out[alias] = peer.NodeID
+	for nodeID, peer := range pinned {
+		if peer.Alias != "" {
+			out[peer.Alias] = nodeID
 		}
 	}
 	return out

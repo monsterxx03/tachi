@@ -74,7 +74,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		var info struct {
 			PID int `json:"pid"`
 		}
-		gomega.Expect(fileutil.ReadJSON(filepath.Join(peerHome, "node", "local.json"), &info)).To(gomega.Succeed())
+		gomega.Expect(fileutil.ReadJSON(filepath.Join(peerHome, "a2a", "local.json"), &info)).To(gomega.Succeed())
 		gomega.Expect(info.PID).NotTo(gomega.Equal(os.Getpid()),
 			"对端必须是另一个进程，否则这条 spec 和 itest/run 里已有的那些没有区别")
 
@@ -120,15 +120,15 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 
 		// ---- 发起侧：pin 住的是对端进程的身份，记录绑定的也是身份 ----
 		var pinned map[string]pinnedPeer
-		gomega.Expect(fileutil.ReadJSON(filepath.Join(sutHome, "peer-identities.json"), &pinned)).To(gomega.Succeed())
-		gomega.Expect(pinned["nas"].NodeID).To(gomega.Equal(peerID.NodeID),
-			"pin 是这一侧的进程在握手时写下的")
+		gomega.Expect(fileutil.ReadJSON(filepath.Join(sutHome, "a2a", "peer-identities.json"), &pinned)).To(gomega.Succeed())
+		gomega.Expect(pinned[peerID.NodeID].Alias).To(gomega.Equal("nas"),
+			"pin 是这一侧的进程在握手时写下的，键是身份、名字在记录里")
 
-		record := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "delegations"), "d_"))
+		record := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "a2a", "delegations"), "d_"))
 		gomega.Expect(record).To(gomega.ContainSubstring(`"peer_node_id": "` + peerID.NodeID + `"`))
 
 		// ---- 接收侧：那个进程自己的工作记录与受管会话，说得出是谁派的 ----
-		task := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(peerHome, "node", "tasks"), ""))
+		task := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(peerHome, "a2a", "tasks"), ""))
 		gomega.Expect(task).To(gomega.ContainSubstring(`"caller_id": "` + sutID.NodeID + `"`))
 		gomega.Expect(task).To(gomega.ContainSubstring(`"self_reported_name": "tachi@mac"`))
 
@@ -157,7 +157,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		waitForNodeHost(ginkgo.GinkgoT(), host, peerHome, peerPort)
 
 		// The lock is what elects the host, and it is held: one process, not zero, not two.
-		_, err = flock.TryAcquire(filepath.Join(peerHome, "node", "node.lock"))
+		_, err = flock.TryAcquire(filepath.Join(peerHome, "a2a", "node.lock"))
 		gomega.Expect(errors.Is(err, flock.ErrHeld)).To(gomega.BeTrue(),
 			"the hosting process must hold the node lock (got %v)", err)
 
@@ -177,7 +177,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			InstanceID string `json:"instance_id"`
 			PID        int    `json:"pid"`
 		}
-		gomega.Expect(fileutil.ReadJSON(filepath.Join(peerHome, "node", "local.json"), &published)).To(gomega.Succeed())
+		gomega.Expect(fileutil.ReadJSON(filepath.Join(peerHome, "a2a", "local.json"), &published)).To(gomega.Succeed())
 		gomega.Expect(attached).To(gomega.ContainSubstring("instance="+published.InstanceID),
 			"the handshake is what settles which instance a process attached to")
 		gomega.Expect(published.PID).To(gomega.Equal(host.PID()),
@@ -245,7 +245,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		gomega.Expect(res.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", res.Stdout, res.Stderr)
 
 		// The caller's own record says where the work went and what state it is in.
-		raw := readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "delegations"), "d_")
+		raw := readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "a2a", "delegations"), "d_")
 		var record struct {
 			RemoteTaskID string `json:"remote_task_id"`
 		}
@@ -258,7 +258,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		gomega.Expect(string(raw)).To(gomega.ContainSubstring("检查照片还是文档？"))
 
 		// The peer's own record, before the death: unfinished, with the question in it.
-		taskPath := filepath.Join(peerHome, "node", "tasks", record.RemoteTaskID+".json")
+		taskPath := filepath.Join(peerHome, "a2a", "tasks", record.RemoteTaskID+".json")
 		before := readFile(ginkgo.GinkgoT(), taskPath)
 		gomega.Expect(before).To(gomega.ContainSubstring(`"state": "TASK_STATE_INPUT_REQUIRED"`))
 
@@ -319,7 +319,7 @@ func freePort(t ginkgo.GinkgoTInterface) int {
 func waitForNodeHost(t ginkgo.GinkgoTInterface, d *run.Daemon, home string, port int) {
 	t.Helper()
 	deadline := time.Now().Add(nodeHostTimeout)
-	local := filepath.Join(home, "node", "local.json")
+	local := filepath.Join(home, "a2a", "local.json")
 	for {
 		if _, err := os.Stat(local); err == nil && portAnswers(port) {
 			return

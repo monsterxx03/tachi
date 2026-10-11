@@ -221,7 +221,7 @@ func TestSearchAgentsDescribesEachNode(t *testing.T) {
 		{Name: "hk-vps", URL: "https://100.64.0.9:7080"},
 	}
 	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "ugreen-nas": {"node_id": "cd726b446c34386ece70d88fdd5fbf2a", "first_seen": "2026-10-01T00:00:00Z"}
+  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
 }`)); err != nil {
 		t.Fatalf("write peer identities: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestPeerBoardShowsWhatThisMachineKnows(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Peers = []config.PeerConfig{{Name: "ugreen-nas", URL: "https://127.0.0.1:1", Note: "家里的 NAS"}}
 	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "ugreen-nas": {"node_id": "cd726b446c34386ece70d88fdd5fbf2a", "first_seen": "2026-10-01T00:00:00Z"}
+  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
 }`)); err != nil {
 		t.Fatalf("write peer identities: %v", err)
 	}

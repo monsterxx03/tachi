@@ -39,7 +39,7 @@ func peers() func() []config.PeerConfig {
 func TestPeerListSnapshotIsEveryConfiguredNode(t *testing.T) {
 	useTempConfigBase(t)
 	require.NoError(t, fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "ugreen-nas": {"node_id": "cd726b446c34386ece70d88fdd5fbf2a", "first_seen": "2026-10-01T00:00:00Z"}
+  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
 }`)))
 
 	list := NewPeerList(peers(), nil, nil)

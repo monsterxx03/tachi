@@ -18,6 +18,7 @@
 package agentref
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -120,13 +121,14 @@ func (s *Source) Search(query string, limit int) []atfile.AgentTarget {
 	return targets
 }
 
-// Resolve returns the node a reference names: a configured alias, or a node id —
-// the id is what a reader who saw one in a transcript (or in the pointer a previous
-// reference expanded into) would paste back.
+// Resolve returns the node a reference names: a configured alias, or a node id — in full, or as an
+// unambiguous PREFIX of one, because a reader who saw an id in a transcript or on a picker row may
+// well have copied only its front.
 //
-// An unknown name resolves to nothing rather than to a near miss: the reader typed
-// something this machine does not know, and a reference quietly pointing at a
-// DIFFERENT machine is worse than one that stays visible and unexpanded.
+// An unknown name resolves to nothing rather than to a near miss: the reader typed something this
+// machine does not know, and a reference quietly pointing at a DIFFERENT machine is worse than one
+// that stays visible and unexpanded. A prefix that names two machines is refused for the same
+// reason (see ResolveID) — the ambiguity is the caller's to fix by typing more.
 func (s *Source) Resolve(name string) (atfile.AgentTarget, bool) {
 	if s == nil || s.list == nil {
 		return atfile.AgentTarget{}, false
@@ -147,6 +149,20 @@ func (s *Source) Resolve(name string) (atfile.AgentTarget, bool) {
 		if strings.EqualFold(p.Alias, name) {
 			return p.target(), true
 		}
+	}
+
+	// Then an identity, by unique prefix.
+	ids := make([]string, 0, len(peers))
+	byID := make(map[string]atfile.AgentTarget, len(peers))
+	for _, p := range peers {
+		if p.NodeID == "" {
+			continue
+		}
+		ids = append(ids, p.NodeID)
+		byID[p.NodeID] = p.target()
+	}
+	if id, ok, err := ResolveID(name, ids); err == nil && ok {
+		return byID[id], true
 	}
 	return atfile.AgentTarget{}, false
 }
@@ -257,10 +273,47 @@ func IDLabel(p atfile.AgentTarget) string {
 	if p.NodeID == "" {
 		return "身份未记录"
 	}
-	if len(p.NodeID) <= idLabelChars {
-		return p.NodeID
+	return ShortID(p.NodeID)
+}
+
+// ShortID is how a node id is shown where a whole one would not fit: its first characters. An empty
+// id stays empty — "no identity" is a state, not a short one.
+func ShortID(nodeID string) string {
+	if len(nodeID) <= idLabelChars {
+		return nodeID
 	}
-	return p.NodeID[:idLabelChars]
+	return nodeID[:idLabelChars]
+}
+
+// ResolveID turns a node id, or an unambiguous PREFIX of one, into the id it names.
+//
+// ok is false when nothing matches; err is non-nil when the prefix names more than one machine, and
+// it names the candidates. An ambiguous reference must be refused rather than guessed at — the guess
+// would send work to a different machine — which is the rule @session: suffix resolution already
+// follows. A full id always wins, so a prefix that is also somebody's whole id is not ambiguous.
+func ResolveID(ref string, ids []string) (string, bool, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", false, nil
+	}
+	var matches []string
+	for _, id := range ids {
+		if id == ref {
+			return id, true, nil
+		}
+		if strings.HasPrefix(id, ref) {
+			matches = append(matches, id)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		slices.Sort(matches)
+		return "", false, fmt.Errorf("%q matches %d nodes: %s", ref, len(matches), strings.Join(matches, ", "))
+	}
 }
 
 // RowNote renders a peer's one-line description for a picker row: the node's own

@@ -41,7 +41,7 @@ var _ = ginkgo.Describe("node service", func() {
 		gomega.Expect(res.Err).To(gomega.BeNil())
 		gomega.Expect(res.ExitCode).To(gomega.Equal(0), "stdout=%s stderr=%s", res.Stdout, res.Stderr)
 
-		_, err := os.Stat(filepath.Join(home, "node"))
+		_, err := os.Stat(filepath.Join(home, "a2a"))
 		gomega.Expect(os.IsNotExist(err)).To(gomega.BeTrue(),
 			"-p 运行不得创建节点数据目录")
 	})

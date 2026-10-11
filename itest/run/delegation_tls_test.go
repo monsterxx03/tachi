@@ -140,17 +140,18 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		gomega.Expect(sutID.NodeID).NotTo(gomega.Equal(peerID), "调用方不是它调的那台机器")
 
 		var pinned map[string]pinnedPeer
-		gomega.Expect(fileutil.ReadJSON(filepath.Join(sutHome, "peer-identities.json"), &pinned)).
+		gomega.Expect(fileutil.ReadJSON(filepath.Join(sutHome, "a2a", "peer-identities.json"), &pinned)).
 			To(gomega.Succeed(), "首次接触必须留下 pin，否则下一次又要重新信任一个陌生人")
-		gomega.Expect(pinned).To(gomega.HaveKey("nas"))
-		gomega.Expect(pinned["nas"].NodeID).To(gomega.Equal(peerID),
-			"pin 住的是 TLS 握手证明的那个身份，不是对端自称的任何东西")
-		gomega.Expect(pinned["nas"].URL).To(gomega.Equal(peerURL),
+		gomega.Expect(pinned).To(gomega.HaveKey(peerID),
+			"pin 的键是 TLS 握手证明的那个身份，不是对端自称的任何东西")
+		gomega.Expect(pinned[peerID].Alias).To(gomega.Equal("nas"),
+			"名字是记录里的一个字段：改名就是这一行变，键不动")
+		gomega.Expect(pinned[peerID].URL).To(gomega.Equal(peerURL),
 			"pin 的记录里还写着它是在哪儿 pin 的 —— 对端换地址时这正是要读的那一行")
-		gomega.Expect(pinned["nas"].FirstSeen.IsZero()).To(gomega.BeFalse())
+		gomega.Expect(pinned[peerID].FirstSeen.IsZero()).To(gomega.BeFalse())
 
 		// 委派记录绑定的同样是身份：别名哪一天改了，这些活儿还是同一台机器的（design §4.1）。
-		record := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "delegations"), "d_"))
+		record := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(sutHome, "a2a", "delegations"), "d_"))
 		gomega.Expect(record).To(gomega.ContainSubstring(`"peer": "nas"`),
 			"alias 也留一份：它是模型和用户用的那个词")
 		gomega.Expect(record).To(gomega.ContainSubstring(`"peer_node_id": "` + peerID + `"`))
@@ -158,7 +159,7 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		gomega.Expect(record).To(gomega.ContainSubstring(`"state": "TASK_STATE_COMPLETED"`))
 
 		// ---- 那一侧：它的工作记录说得出是谁让它干的 ----
-		task := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(peerHome, "node", "tasks"), ""))
+		task := string(readOnlyRecord(ginkgo.GinkgoT(), filepath.Join(peerHome, "a2a", "tasks"), ""))
 		gomega.Expect(task).To(gomega.ContainSubstring(`"caller_id": "`+sutID.NodeID+`"`),
 			"接收侧的身份取自证书里的公钥，调用方无法冒充成别人")
 		gomega.Expect(task).To(gomega.ContainSubstring(`"self_reported_name": "tachi@mac"`),
@@ -204,8 +205,10 @@ func receivingSession(t ginkgo.GinkgoTInterface, home string) *session.Session {
 
 // pinnedPeer is one entry of peer-identities.json (node/knownpeers.go's knownPeer), read here
 // rather than through an accessor because what this spec asserts is the FILE a restart reads.
+// pinnedPeer mirrors peer-identities.json as the binary writes it: keyed by the identity the
+// handshake proved, with the name this machine used at the time beside it.
 type pinnedPeer struct {
-	NodeID    string    `json:"node_id"`
+	Alias     string    `json:"alias"`
 	URL       string    `json:"url"`
 	FirstSeen time.Time `json:"first_seen"`
 }
@@ -216,7 +219,7 @@ type pinnedPeer struct {
 // rather than the process-global base dir config would resolve.
 func nodeIdentity(t ginkgo.GinkgoTInterface, home string) *node.Identity {
 	t.Helper()
-	id, err := node.LoadIdentity(filepath.Join(home, "node"))
+	id, err := node.LoadIdentity(filepath.Join(home, "a2a"))
 	gomega.Expect(err).NotTo(gomega.HaveOccurred(), "the entry point must have a key of its own")
 	return id
 }
