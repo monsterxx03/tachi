@@ -127,7 +127,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 两个容易踩的坑：**discord 的 `sendTextWithReference` 在没有 session 时是静默返回 nil**（回复路径要这个行为，通知路径绝对不能要——那会把没发出去说成发出去了），所以通知走 `sendTextOn(sess, …)` 那个显式接受 session 的版本；**legacy weixin 路径（`channel.weixin.enabled`）的 `notify` 开关必须出现在 `ActiveChannels()` 合成的 map 里**（`config/config.go`），否则那一行配置会被静默忽略。
 
-未接进来的两处：**node 的远程轮次**用 `remoteTaskTools` 白名单，自动不含这个工具（要开就加一行）；**发到频道而不是私信**（discord 设计文档里的 `home_channel`）没有实现，字段当前被忽略。
+没接进来的是这一处：**发到频道而不是私信**（discord 设计文档里的 `home_channel`）没有实现，字段当前被忽略 —— 通知只走私信。**node 的远程轮次**则是接进来的（`remoteTaskTools` 里有一行），但它同样受挂载条件约束：节点那台机器自己的配置里没有 `notify: true` 的 channel 时，工具照样不会出现在那一轮里 —— 白名单是天花板，不是一个授予。
 
 ## 测试
 

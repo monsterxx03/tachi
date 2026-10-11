@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -15,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
@@ -214,6 +216,79 @@ func TestARemoteTurnIsOfferedTheDefaultToolSet(t *testing.T) {
 		require.False(t, offered[name],
 			"%s is about this process's own state, not the caller's work: %v", name, offered)
 	}
+}
+
+// A remote turn is offered the host's NotifyUser tool EXACTLY when the host's own config justifies
+// it, and that is two facts worth separating: the whitelist is a ceiling (the name is in
+// remoteTaskTools), and the host's config is what turns it into a grant. So the same turn is run
+// twice — once with a channel that opted in and once without — and the tool must follow the config.
+//
+// The channel is a fake because a shipped one needs real credentials; registering it in this
+// process is enough, because that is where the node builds its agents.
+func TestARemoteTurnIsOfferedTheHostsNotifyTool(t *testing.T) {
+	registerNodeTestNotifier()
+
+	offeredToATurn := func(t *testing.T, notify bool) map[string]bool {
+		t.Helper()
+		base := nodeHome(t)
+		mock := mockllm.NewServer()
+		t.Cleanup(mock.Close)
+		mock.Script(oneMessageScript("ok")...)
+
+		cfg := nodeConfig(t, mock, filepath.Join(base))
+		cfg.Channel.Channels = map[string]map[string]any{
+			nodeTestNotifyChannel: {"enabled": true, "notify": notify},
+		}
+
+		h := startRealNode(t, cfg)
+		client := newTestClient(t, h)
+		_, err := client.SendMessage(context.Background(), sendRequest("你好", false))
+		require.NoError(t, err)
+
+		requests := mock.Requests()
+		require.Len(t, requests, 1)
+		offered := make(map[string]bool, len(requests[0].Tools))
+		for _, tool := range requests[0].Tools {
+			offered[tool.Name] = true
+		}
+		return offered
+	}
+
+	t.Run("offered when the host opted in", func(t *testing.T) {
+		offered := offeredToATurn(t, true)
+		require.True(t, offered[tools.ToolNameNotifyUser],
+			"a host set up to notify must be able to tell its operator something: %v", offered)
+	})
+
+	t.Run("absent when the host did not", func(t *testing.T) {
+		offered := offeredToATurn(t, false)
+		require.False(t, offered[tools.ToolNameNotifyUser],
+			"the whitelist is a ceiling, not a grant — a host that never opted in must not hand a "+
+				"caller a tool whose every call would fail: %v", offered)
+	})
+}
+
+// nodeTestNotifyChannel is the fake channel the test above switches on. Registered once for the
+// whole binary: channel.Register panics on a duplicate name.
+const nodeTestNotifyChannel = "node-test-notify"
+
+var registerNodeTestNotifier = sync.OnceFunc(func() {
+	channel.Register(nodeTestNotifyChannel, func(map[string]any) (channel.Channel, error) {
+		return nodeTestNotifier{}, nil
+	})
+})
+
+// nodeTestNotifier is a channel that can reach the user unprompted — the one capability the mount
+// looks for. It never sends: the test asserts what the model is OFFERED, not what gets delivered.
+type nodeTestNotifier struct{}
+
+func (nodeTestNotifier) Name() string                             { return nodeTestNotifyChannel }
+func (nodeTestNotifier) OnStart(context.Context) error            { return nil }
+func (nodeTestNotifier) NotifyUser(context.Context, string) error { return nil }
+
+func (nodeTestNotifier) Run(ctx context.Context, _ channel.MessageHandler) error {
+	<-ctx.Done()
+	return nil
 }
 
 // The two ends of this machine's long-term memory ARE offered to a remote turn: the tools here, and

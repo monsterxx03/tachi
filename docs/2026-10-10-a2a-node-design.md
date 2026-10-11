@@ -6,7 +6,7 @@
 配置、接口与工具参数均为设计示意；实际实现应固定协议和 SDK 版本后校验。
 
 > **后续修订（2026-10-11；代码与 `docs/agents/node.md` 为准）**：三个决定已被取代，本文中它们的**机制描述**只作历史参考。
-> 1. **远端一轮的工具集不再配置**：`node.tools` 这个键已删除，改为固定的 `remoteTaskTools`（`node/runner.go`）——读/写/改、Grep/Glob、Bash、WebFetch/WebSearch、Skill、AskUserQuestion、SendFile，以及记忆的两端。留在名单外的是**关于本进程自身状态**的那类工具（Cron、SavePlan、ReportFinding、SubAgent、DelegateTask、RemoteTask）。
+> 1. **远端一轮的工具集不再配置**：`node.tools` 这个键已删除，改为固定的 `remoteTaskTools`（`node/runner.go`）——读/写/改、Grep/Glob、Bash、WebFetch/WebSearch、Skill、AskUserQuestion、SendFile、NotifyUser，以及记忆的两端。留在名单外的是**关于本进程自身状态**的那类工具（Cron、SavePlan、ReportFinding、SubAgent、DelegateTask、RemoteTask）。
 > 2. **§2.3 的宿主记忆隔离已被取代**：记忆的两个工具与自动召回都对远端一轮开放（不再设 `SkipMemoryRecall`）。边界回到同一条——谁能到达这个节点（§10.2 的网络边界），加上「谁问的」永远有记录。
 > 3. 随之，`SendFile` 默认就提供（它读本机任意路径并送出字节，这一点照旧）。
 > 4. **TOFU 记录（`peer-identities.json`）改为以 `node_id` 为键**，别名降为记录里的字段：改名是同一条记录的更新，而不再是第二份陈旧记录；旧形状（以别名为键）**不迁移**，读到就拒绝并说清删掉重来。同理，工具入参 `node` 与 `#a:` 引用都接受「别名或 `node_id`（唯一前缀）」。这是 §4.1「持久化绑定用 node_id」在本地目录上的落地，也是 mDNS/gossip 发现的前提（发现来的节点没有配置行，也就没有别名可当键）。

@@ -51,7 +51,7 @@
 | 「用户是谁」的来源 | weixin：登录者即 `ch.userID`；discord：`allowed_users` | 决定通知目标从哪来 |
 | 工具挂载点在 `RegisterTools`，只被 `Configure` 和 `ReloadTools` 调用 | `agent/agent_configure.go:104`、`agent/agent_reload.go:92` | 裸 agent（fork / 子代理 / dream / github）用 `SkipConfigure`，天然拿不到这个工具 |
 | `ReloadTools` 只加不减，失去依据的工具要显式卸载 | `agent/agent_reload.go`（WebSearch 就是那个先例） | 配置关掉开关后必须把工具摘掉，否则留一个必然失败的工具 |
-| node 远程轮次用 `remoteTaskTools` 白名单 | `node/runner.go`（`remoteTaskTools`） | 远程任务天然不带这个工具 |
+| node 远程轮次用 `remoteTaskTools` 白名单 | `node/runner.go`（`remoteTaskTools`） | 远程任务默认不带这个工具；实施后把它加进了白名单（见 §7） |
 | desktop 设置表把 `channel` 标成 `applyUnused`（"desktop 不启用"） | `desktop/settings.go:601` | 这条说法在本设计下不再成立，必须同轮改掉 |
 | in-process 通知的第一个先例是 cron | `channel/manager/cron.go` | 投递形态可参考，但决策层不同（见非目标） |
 
@@ -225,7 +225,7 @@ if a.Config.FullConfig != nil {
 | acp（`agent/acp/agent.go`） | 有 | 同上 |
 | `-p` / `tachi commit` / `tachi review` | 有 | 一次性短进程，模型基本不会用；代价是每次请求多一段 schema。按"只看配置"一条规则，不为它们加特例 —— 也不引入 `AgentConfig.DisableNotifications` 这类前端开关，否则挂载条件就有了第二个来源 |
 | channel（`channel/manager/agent_cache.go:99`） | 有 | 群聊线程里私信本人。**用配置派生的独立实例**，不复用 manager 的活实例（见未决问题 1） |
-| node 远程轮次（`node/runner.go`） | 注册了但**不可见** | `remoteTaskTools` 白名单不含它；要开就加一行 |
+| node 远程轮次（`node/runner.go`） | 有，且可见 | `remoteTaskTools` 含它（实施后加的）；但**能不能用仍取决于节点那台机器的配置**——白名单是天花板，不是授予 |
 | fork / 子代理 / dream / github pr | 没有 | `SkipConfigure`，`RegisterTools` 根本不被调用 |
 | `tachi web` | 没有 | 只读会话文件，不跑 agent |
 
@@ -307,6 +307,7 @@ NotifyUser(message: string) → string
 
 - **`-p` / `tachi commit` / `tachi review` 不摘掉这个工具。** 挂载条件只有"配置"一个来源，不引入 `AgentConfig.DisableNotifications` 这类前端开关。代价是多一段 schema，可接受。
 - **discord 的目标就是 `allowed_users[0]`（私信）。** 不接 `home_channel`（见 §5）。
+- **node 的远程轮次也允许它。** `remoteTaskTools` 里加了一行（`node/runner.go`），测试 `TestARemoteTurnIsOfferedTheHostsNotifyTool` 把两个方向都钉住：宿主配置说得通时工具出现在那一轮里，说不通时不出现。
 
 **未决**
 

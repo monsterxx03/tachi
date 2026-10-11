@@ -1177,10 +1177,17 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 //
 // The list is the operator's machine being handed to a caller, so it is deliberately short: the
 // tools that read and write FILES, run a command, look something up, use a skill, hand a file back,
-// and ask the caller a question. What is NOT here is a tool about THIS PROCESS's own state —
-// scheduler jobs, plans, findings, sub-agents, delegation to further nodes: none of those are about
-// the work the caller asked for, and a remote turn that starts scheduling or filing work is doing
-// something nobody asked the machine to do.
+// reach the operator, and ask the caller a question. What is NOT here is a tool about THIS
+// PROCESS's own state — scheduler jobs, plans, findings, sub-agents, delegation to further nodes:
+// none of those are about the work the caller asked for, and a remote turn that starts scheduling
+// or filing work is doing something nobody asked the machine to do.
+//
+// NotifyUser is the one entry that reaches someone OTHER than the caller, and it belongs here for
+// the same reason SendFile does: a task that ran on the operator's machine may have something to
+// say to the operator (finished, needs a decision), and the caller is not a substitute for them.
+// It is the HOST's config that decides whether the tool exists at all (an enabled channel with
+// `notify: true`; see pkg/channel), so naming it here only stops the policy from being what keeps
+// a host that IS set up for it from saying anything.
 //
 // It replaced a configured allowlist (config `node.tools`). The allowlist was the wrong shape for
 // the same reason a security switch with a surprising empty value is: what a node can do is a
@@ -1201,6 +1208,7 @@ var remoteTaskTools = []string{
 	tools.ToolNameSkill,
 	tools.ToolNameAskUser,
 	tools.ToolNameSendFile,
+	tools.ToolNameNotifyUser,
 	tools.ToolNameMemoryRecall,
 	tools.ToolNameRecordMemory,
 }
