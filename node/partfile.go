@@ -55,7 +55,10 @@ const (
 	// Reasons a Part-carrying message is refused with. They travel under Tachi's own error domain
 	// (the admission guard renders them, §9.1.1), so a caller learns "this file was not taken, and
 	// why" instead of the silent drop these three directions used to be.
-	reasonPartTooLarge  = "PART_TOO_LARGE"
+	reasonPartTooLarge = "PART_TOO_LARGE"
+	// reasonPartMediaType is what a ZERO-BYTE Part is refused with (checkPartSize) — a broken
+	// transfer rather than a type this node dislikes. The word outlives the type policy this node
+	// used to have, and it is on the wire, so it stays as it is.
 	reasonPartMediaType = "PART_MEDIA_TYPE"
 	reasonPartCount     = "PART_COUNT"
 	reasonPartURL       = "PART_URL_UNSUPPORTED"
@@ -63,20 +66,6 @@ const (
 	// this node reads, so nothing in it was looked at.
 	reasonBodyTooLarge = "BODY_TOO_LARGE"
 )
-
-// allowedFileMediaTypes is the whitelist for non-text types: the protocol being able to carry a
-// file is not a reason to accept any type (§6.4). Anything `text/*` is allowed on top of this table
-// — text is what a conversation reads, and enumerating the subtypes would refuse the next plain
-// one.
-var allowedFileMediaTypes = map[string]bool{
-	"application/json": true,
-	"application/pdf":  true,
-	"application/zip":  true,
-	"image/png":        true,
-	"image/jpeg":       true,
-	"image/gif":        true,
-	"image/webp":       true,
-}
 
 // partExtensions names the extension a NAMELESS file of a type is stored with, written out rather
 // than asked of the stdlib: `mime.ExtensionsByType` answers in alphabetical order, which would
@@ -150,6 +139,11 @@ func filePartsOf(parts []*a2a.Part) (files []filePart, refused []*partRefusal) {
 }
 
 // asFilePart turns one `raw` Part into a filePart, or says why it cannot be taken.
+//
+// The TYPE is never a reason to refuse: what a peer sends is a file this machine can open with its
+// own tools, and a list of blessed types would have this node deciding, on the sender's behalf, what
+// is worth carrying. The size and the count are about what the transfer costs, which is this node's
+// business (§6.4 leaves the rest to the implementation).
 func asFilePart(p *a2a.Part) (filePart, *partRefusal) {
 	raw, _ := p.Content.(a2a.Raw)
 	bytes := []byte(raw)
@@ -157,26 +151,15 @@ func asFilePart(p *a2a.Part) (filePart, *partRefusal) {
 		return filePart{}, refusal
 	}
 	mediaType := partMediaType(p, bytes)
-	if !allowedFileMediaType(mediaType) {
-		return filePart{}, &partRefusal{
-			Reason: reasonPartMediaType,
-			Detail: fmt.Sprintf("a file of type %q was refused: this node takes text, images, JSON, PDF and ZIP",
-				mediaType),
-		}
-	}
 	if strings.HasPrefix(mediaType, "image/") {
-		// An image is the one type whose BYTES this machine goes on to hand a model as an image, so
-		// the bytes are what decides which image it is — a sender that mislabels a PNG as a JPEG
-		// gets a PNG, and bytes that are not an image at all are refused rather than passed on to a
-		// provider that would reject the whole request over them.
-		if actual := llm.ImageMediaTypeForBytes(bytes); actual != "" {
-			mediaType = actual
-		} else {
-			return filePart{}, &partRefusal{
-				Reason: reasonPartMediaType,
-				Detail: fmt.Sprintf("a file declared as %s was refused: its bytes are not an image", mediaType),
-			}
-		}
+		// An image is the one type this machine goes on to hand a model AS an image, so the bytes are
+		// what decides which image it is — a sender that mislabels a PNG as a JPEG gets a PNG. Bytes
+		// that are not an image at all are not one: the file is then taken as whatever its bytes read
+		// as (text/plain, application/octet-stream) and stored for the model to open, rather than
+		// attached as an image part the provider would reject the whole request over. Whether what
+		// comes out of this is an image a PROVIDER takes is a separate question, asked where the
+		// bytes are handed over (runner.receiveFiles).
+		mediaType = partMediaTypeFromBytes(bytes)
 	}
 	return filePart{Name: partName(p.Filename, mediaType), MediaType: mediaType, Bytes: bytes}, nil
 }
@@ -203,22 +186,22 @@ func checkPartSize(size int64) *partRefusal {
 	return nil
 }
 
-// allowedFileMediaType is the policy: `text/*` plus the enumerated types.
-func allowedFileMediaType(mediaType string) bool {
-	if strings.HasPrefix(mediaType, "text/") {
-		return true
-	}
-	return allowedFileMediaTypes[mediaType]
-}
-
 // partMediaType answers what this file IS, in the order that trusts the most specific statement
 // first: what the sender said, then what the name says, then what the bytes say.
 //
-// The last two are not politeness — a peer may send raw bytes with no mediaType at all, and the
-// whitelist has to be checkable to be a whitelist — and the signatures are checked before the
-// generic sniff because an image is the one type whose bytes this machine goes on to hand a model
-// AS an image. Parameters are dropped ("text/plain; charset=utf-8" is `text/plain`) because the
-// whitelist speaks about types.
+// What comes out is a LABEL — what the model is told, and what a nameless file is named by — and no
+// type is refused for it (asFilePart). The one thing that acts on it is whether the bytes are handed
+// to a model AS an image, and that answer is taken from the bytes further down.
+//
+// The last two steps are not politeness: a peer may send raw bytes with no mediaType at all. Note
+// that `mime.TypeByExtension` answers from the stdlib's own table AND from the host's mime files on
+// unix (/etc/mime.types and friends), so `notes.md` labels as text/markdown on Linux and text/plain
+// here, and `deploy.sh` as application/x-sh there. That is a description varying by machine, which
+// is harmless because nothing is decided from it — but it is exactly why no verdict may ever be.
+//
+// The signatures are checked before the generic sniff so an image comes out as the image it really
+// is. Parameters are dropped ("text/plain; charset=utf-8" is `text/plain`) because the label speaks
+// about the type.
 func partMediaType(p *a2a.Part, bytes []byte) string {
 	if mt := mediaTypeOnly(p.MediaType); mt != "" {
 		return mt
@@ -231,6 +214,16 @@ func partMediaType(p *a2a.Part, bytes []byte) string {
 			return mt
 		}
 	}
+	return partMediaTypeFromBytes(bytes)
+}
+
+// partMediaTypeFromBytes is the last of those steps on its own: what the BYTES say, signatures first
+// (llm's table — the formats a provider actually takes) and the generic sniff after.
+//
+// asFilePart calls it directly for a file whose type came out as an image, because that is the one
+// answer something is decided from and it must therefore be about the bytes rather than about a
+// name or a sender's word.
+func partMediaTypeFromBytes(bytes []byte) string {
 	if mt := llm.ImageMediaTypeForBytes(bytes); mt != "" {
 		return mt
 	}

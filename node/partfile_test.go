@@ -68,29 +68,31 @@ func TestAnEmptyFileIsRefused(t *testing.T) {
 	require.Contains(t, refused[0].Detail, "empty")
 }
 
-func TestATypeOutsideTheWhitelistIsRefused(t *testing.T) {
+// A file of a type this node has no taste about is still a file: it is taken with the type it was
+// given, which travels as the label the model is told and as what a nameless file is named by. What
+// a peer sends is this machine's to open with its own tools, so a list of blessed types would be
+// this node deciding, on the sender's behalf, what is worth carrying (§6.4 leaves the type to the
+// implementation).
+func TestAFileOfAnyTypeIsTakenWithTheTypeItWasGiven(t *testing.T) {
 	files, refused := filePartsOf([]*a2a.Part{
 		rawPart("run", "application/x-executable", []byte("\x7fELF")),
 	})
-	require.Empty(t, files)
-	require.Len(t, refused, 1)
-	require.Equal(t, reasonPartMediaType, refused[0].Reason)
-	require.Contains(t, refused[0].Detail, "application/x-executable")
+	require.Empty(t, refused)
+	require.Len(t, files, 1)
+	require.Equal(t, "application/x-executable", files[0].MediaType)
 }
 
-// The whitelist has to be checkable to be a whitelist: a peer that declares nothing gets an answer
-// from its name, and failing that from its bytes. (`.md` is deliberately NOT the example for the
-// name step: the stdlib's table does not know it, so it lands in the byte sniff — which is exactly
-// why both steps exist.)
+// A peer that declares nothing gets an answer from its name, and failing that from its bytes.
+//
+// The examples are ones the STDLIB's own table knows (`.json`) or that need no name at all, and that
+// is deliberate: `mime.TypeByExtension` also reads the HOST's mime files on unix, so an extension
+// only a host table knows (`.md` is text/markdown on Linux and unknown here, `.sh` is
+// application/x-sh there) would make this test pass or fail by machine. Nothing is decided from that
+// label, so nothing here asserts one that a host answered.
 func TestAnUndeclaredTypeIsAnsweredFromTheNameThenTheBytes(t *testing.T) {
 	byName, refused := filePartsOf([]*a2a.Part{rawPart("data.json", "", []byte(`{"k":1}`))})
 	require.Empty(t, refused)
 	require.Equal(t, "application/json", byName[0].MediaType)
-
-	byExt, refused := filePartsOf([]*a2a.Part{rawPart("notes.md", "", []byte("# hi"))})
-	require.Empty(t, refused)
-	require.True(t, strings.HasPrefix(byExt[0].MediaType, "text/plain"),
-		"the bytes are the last word: %s", byExt[0].MediaType)
 
 	byBytes, refused := filePartsOf([]*a2a.Part{rawPart("", "", []byte("just some words"))})
 	require.Empty(t, refused)
@@ -99,8 +101,8 @@ func TestAnUndeclaredTypeIsAnsweredFromTheNameThenTheBytes(t *testing.T) {
 	require.True(t, strings.HasSuffix(byBytes[0].Name, ".txt"), byBytes[0].Name)
 }
 
-// An image is handed to a model AS an image, so the bytes decide which image it is — and bytes
-// that are not an image never get that far.
+// An image is handed to a model AS an image, so the bytes decide which image it is — and bytes that
+// are not an image are not one, whatever the sender called them.
 func TestAnImageIsTakenFromItsBytesNotItsLabel(t *testing.T) {
 	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01}
 
@@ -108,10 +110,11 @@ func TestAnImageIsTakenFromItsBytesNotItsLabel(t *testing.T) {
 	require.Empty(t, refused)
 	require.Equal(t, "image/png", mislabelled[0].MediaType, "the bytes are what the model will be given")
 
-	_, refused = filePartsOf([]*a2a.Part{rawPart("photo.png", "image/png", []byte("not an image"))})
-	require.Len(t, refused, 1)
-	require.Equal(t, reasonPartMediaType, refused[0].Reason)
-	require.Contains(t, refused[0].Detail, "not an image")
+	// Not an image, so not one: it is taken as whatever its bytes read as, stored for the model to
+	// open, rather than attached as an image part a provider would reject the whole request over.
+	notAnImage, refused := filePartsOf([]*a2a.Part{rawPart("photo.png", "image/png", []byte("not an image"))})
+	require.Empty(t, refused)
+	require.Equal(t, "text/plain", notAnImage[0].MediaType)
 }
 
 // A URL Part is a network reach this version does not make. Ignoring it would be indistinguishable
@@ -263,12 +266,45 @@ func TestAnImageTheCallerSendsReachesTheModelAsAnImage(t *testing.T) {
 	require.Empty(t, received, "an image is carried as a part, not as a file")
 }
 
+// An image no provider takes is still a file the model can open. The BYTES answer both questions —
+// which format it is, and whether it may go into a request as a part (llm's list, the same one the
+// Read tool checks) — because a provider rejects the whole call over a part it does not accept.
+func TestAnImageNoProviderTakesIsSentAsAFile(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("图我当文件看")...)
+
+	// A BMP: an image indeed, and not one this machine hands a model.
+	bmp := []byte{'B', 'M', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+
+	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
+	cfg.Providers[0].Spec.Vision = ptr(true)
+	h := startRealNode(t, cfg)
+	status, body := postRawMessage(t, h,
+		a2a.NewTextPart("这张图里有什么"),
+		rawPart("logo.bmp", "", bmp))
+	require.Equal(t, http.StatusOK, status, body)
+
+	prompt := lastUserText(t, mock)
+	require.Contains(t, prompt, "logo.bmp (image/bmp")
+	require.Contains(t, prompt, "saved on this machine at: ",
+		"an image a provider will not take goes the file way")
+	require.NotContains(t, prompt, "as an image")
+
+	// And its bytes never reach the provider: nothing was attached as an image part.
+	reqs := mock.Requests()
+	require.NotEmpty(t, reqs)
+	require.NotContains(t, string(reqs[0].RawBody), base64.StdEncoding.EncodeToString(bmp))
+}
+
 // What this node will not take is refused BEFORE a task exists, with its own reason: a caller that
 // cannot be told "no" would instead get a task whose input silently lost a file.
 //
-// The refusal used here is the TYPE one, because the three kinds take the same path through the
-// guard: the size kind is covered without materialising it (see checkPartSize's test) and end to end
-// on the way out (a sparse file of the same size, refused by the node's SendFile callback).
+// The refusal used here is the URL one, because every kind takes the same path through the guard and
+// this one needs no bytes materialised: the size kind is covered without allocating them (see
+// checkPartSize's test) and end to end on the way out (a sparse file of the same size, refused by
+// the node's SendFile callback).
 func TestAnUnacceptableFileIsRefusedBeforeAnyTaskExists(t *testing.T) {
 	base := nodeHome(t)
 	mock := mockllm.NewServer()
@@ -279,9 +315,9 @@ func TestAnUnacceptableFileIsRefusedBeforeAnyTaskExists(t *testing.T) {
 
 	status, body := postRawMessage(t, h,
 		a2a.NewTextPart("看这个"),
-		rawPart("run", "application/x-executable", []byte("\x7fELF")))
+		a2a.NewFileURLPart("https://peer.example/report.pdf", "application/pdf"))
 	require.Equal(t, http.StatusBadRequest, status, body)
-	require.Contains(t, body, reasonPartMediaType)
+	require.Contains(t, body, reasonPartURL)
 	require.Contains(t, body, "\"tachi\"", "the refusal travels under this node's own domain")
 
 	require.Empty(t, mock.Requests(), "a refused message must not reach the model")

@@ -653,7 +653,11 @@ func (r *runner) receiveFiles(cr *contextRun, prompt string, files []filePart) (
 	var images []llm.ContentPart
 	for _, f := range files {
 		size := strutil.HumanBytes(f.Size())
-		if strings.HasPrefix(f.MediaType, "image/") {
+		// An image part is for an image a PROVIDER takes — llm's table, the same one the Read tool
+		// checks — while the label only says the sender meant it as one. A .bmp satisfies the second
+		// and not the first, so it takes the file path below instead of failing the whole request as
+		// a part no provider accepts.
+		if strings.HasPrefix(f.MediaType, "image/") && llm.ImageMediaTypeForBytes(f.Bytes) != "" {
 			images = append(images, llm.ContentPart{
 				Type:      llm.ContentPartImage,
 				MediaType: f.MediaType,
