@@ -17,7 +17,7 @@ gets its own handbook beside this one rather than growing here.
 | Section | Read it when |
 | --- | --- |
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
-| **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
+| **Desktop Build & Signing** | you build/package the app (incl. the CLI it ships and the `no_workspace` tag), or debug notifications/TCC |
 | **Desktop on Linux (omarchy)** | you build, package or run desktop on Linux, or touch the tray, file-open, the window frame, or the close-the-window behaviour — **that section also lists what is deliberately NOT wired up there (voice, BLE)** |
 | **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
 | **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
@@ -347,6 +347,13 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   tachi-desktop.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
   terminal it was launched from.
 
+- **The CLI this package ships is the ROOT module's `tachi`, built with `GOWORK=off` like everything else here
+  — and the local-only channel plugins are NOT in that build.** `third_party_channels.go` (gitignored) is
+  resolved through `go.work`, which `GOWORK=off` turns off: the root Makefile therefore passes
+  `-tags no_workspace` whenever it builds with `GOWORK=off`, and that is what the file's `//go:build
+  !no_workspace` constraint keys on. A workspace-mode build still gets the plugins, so **adding a plugin import
+  must not require a `go.mod` entry** — the tag, not a dependency, is what keeps the two builds apart.
+
 ## Desktop on Linux (omarchy)
 
 - **Every platform difference lives behind a `_darwin.go` / `_other.go` pair — do not add a bare
@@ -499,6 +506,9 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   `generate:bindings`, which `make build` runs for you). Never hand-edit one: the numeric `$Call.ByID(...)` is
   derived from the method, and a frontend calling a method the generator has not seen fails `tsc` — the only
   thing that type-checks the call at all.
+- **A desktop change is four surfaces, not one**: the Go method, the regenerated TS binding, the frontend, and
+  the smoke driver. The binding is why the middle two cannot be skipped (a call the generator has not seen does
+  not compile), and the driver is why "the method works" is not a claim a change here can make on its own.
 - **Only `desktop/` is a Go module of its own** (it is NOT listed in the repo-root `go.work`), so every Go
   command for it runs with `GOWORK=off`. **The root `go test ./...` does NOT compile `desktop/`'s test
   package**, and the root `make lint` does not cover it either: after touching `desktop/`, run
@@ -692,7 +702,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   (`pasted/`, so the file dies with the conversation and never appears in the user's workspace diff) and the
   binding answers with an ABSOLUTE `@`-reference. **That storage is `session.SavePastedImage`, not this
   package's** — the TUI pastes images too and takes the same route into the same directory, so the layout is
-  stated once, in the store (`.tachi.md` → Pasted Images). The answer is a VO, not "ok"/reason — a paste that
+  stated once, in the store ([refs.md](refs.md) → A paste is BYTES with no path). The answer is a VO, not "ok"/reason — a paste that
   silently does nothing is the same class of bug as a message that silently goes nowhere. **The
   `@`-reference is expanded ONCE, for the turn it is sent with**, and what a later turn sees comes from the
   record instead: the image part is persisted with its bytes (`session.Message.Parts` + the session's
@@ -803,7 +813,7 @@ ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle b
   server connected mid-session is invisible to the model without the dirty mark — a pool write alone is the
   bug. Toggling is a GLOBAL fact (one pool, one connection for every session), so all live agents are notified
   (`applyToLiveAgents()`), and disabling runs `UnregisterMCPServer` (registry + every session's discovered
-  set), not a bare pool removal. `.tachi.md` carries the general rule.
+  set), not a bare pool removal. [mcp.md](mcp.md) carries the general rule.
 - **The panel's own state comes from the BACKEND, never from a guess**: `MCPServerVO.NeedsAuth` is set wherever
   a connect attempt came back `*mcp.OAuthRequiredError`, because a server that wants a token otherwise looks
   exactly like one that is down; the panel re-reads on every open (nothing else would correct a stale
@@ -997,7 +1007,7 @@ Each bullet is a rule a change must keep. The mechanism behind one lives in the 
   because a row is nothing but a reference to insert. Both sides take the reference's spelling from the backend
   (`atfile.RefForPath` / `RefForSession`), and only the backend knows what it EXPANDS to: a session reference
   becomes a POINTER into the session store (id, title, size, transcript path), never the transcript itself —
-  inlining another conversation would spend this session's context on text nobody asked to read. The list comes
+  inlining another conversation would spend this session's context on text nobody asked to read ([refs.md](refs.md)). The list comes
   from THE ONE store (see session-store.md), so the picker and the expansion read the same snapshot.
 - **Backend events are subscribed in `agentEvents.ts`.** Each payload names its session; compare it against
   `currentId` only where the UI genuinely means "on screen", never to address storage.

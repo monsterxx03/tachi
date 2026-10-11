@@ -1,7 +1,8 @@
 # Prompt cache & hit rate (handbook)
 
 Read this **when a cache hit rate drops** — the user's or your own — or when a restart looks
-expensive, and **before changing anything that shapes a request's prefix**.
+expensive, and **before changing anything that shapes a request's prefix**, `ConvertSessionToLLMMessages`
+included.
 
 ## Contents — read the section you need
 
@@ -13,7 +14,8 @@ expensive, and **before changing anything that shapes a request's prefix**.
 | **Baseline** | you want to know whether a number is normal |
 | **Practical notes** | you are about to run the analysis, or to write it up |
 
-Related: [`.tachi.md`](../../.tachi.md) (the Session History & Reminders invariant).
+Related: [`.tachi.md`](../../.tachi.md), [session-store.md](session-store.md) (the records and blobs a
+history is rebuilt from), [mcp.md](mcp.md) (the reminder piece the MCP pool renders).
 
 ## What actually caches
 
@@ -22,7 +24,7 @@ puts `cache_control` on the system prompt only (with a standing `FIXME`), yet lo
 and break exactly where the request's prefix diverges. The prefix is **tools → system → messages**, in that
 order.
 
-Two consequences drive everything below:
+What follows from that, and each one is a hard boundary rather than a preference:
 
 - **Any tool-list change invalidates the whole message history.** Tools come first, so inserting, removing
   or reordering one (MCP connect/disconnect, tool enable/disable, a new tool from an upgrade) makes
@@ -42,6 +44,17 @@ Two consequences drive everything below:
   itself — its separators, its layout — NOT structural: existing records keep their bytes, and only the block
   being built now renders differently, at the tail. It is also what makes a piece's own leading blank line a
   bug rather than a style choice: the renderer already separates the pieces.
+- **A piece that renders a LIST has to say whose it is.** Every piece lands in the same block, separated by
+  one blank line and indented alike, so an unlabelled indented list is read as the CHILDREN of the piece above
+  it — this machine's skill catalogue, rendered under a peer's line, reads as that NODE's advertised skills. A
+  catalogue therefore gets a heading that names it and says how to use it (`本机可用的 skill（用
+  Skill(operation="view", name=…) 查看…）`), the way the peers and MCP reminders already do.
+- **A rebuilt history drops every tool call no result answers — PAIR BY PAIR, by tool call id.** The loop
+  records each call BEFORE it runs it and each result as it finishes (`agent/tool_executor.go`), so a process
+  killed mid-batch leaves a partly-answered assistant message, and one unpaired `tool_use` is enough for a
+  provider to reject the whole request. The all-or-nothing form of the check (「does any tool result follow
+  this message?」) kept the orphan for the rest of the conversation — the desktop reached it whenever it
+  reloaded such a session. Smoke: `orphan-tool-call`.
 - **An image part survives a reload: the record keeps the parts, the session's `images/` directory keeps the
   bytes.** Both halves are single-write-path — the record sites attach the parts the request actually
   carried (`agent.RecordParts`), and `session.FileStore.AppendMessage`, the only writer of a session record,
