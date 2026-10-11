@@ -58,6 +58,7 @@ func configYAML(o *options, baseURL string) (string, error) {
 		NodeWorkspace: o.nodeWorkspace,
 		NodeTools:     o.nodeTools,
 		Peers:         o.peers,
+		Channels:      o.channels,
 	}); err != nil {
 		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
@@ -98,6 +99,10 @@ type configData struct {
 	// are the sending side's directory, so unlike the node: section they are independent of
 	// whether this machine serves anything itself.
 	Peers []peerFixture
+	// Channels are the IM backends switched on in the fixture (`channel.channels.<name>.enabled`).
+	// Their one use here is making the CHANNEL entry start: it is the only entry that can host a
+	// node with no terminal, and it refuses to run with no channel enabled (see channel/mock).
+	Channels []string
 }
 
 // peerFixture is one `peers:` entry: the alias the model uses and the address of that node's
@@ -177,6 +182,14 @@ node:
 {{- end}}
 {{- end}}
 {{- end}}
+{{- if .Channels}}
+channel:
+  channels:
+{{- range .Channels}}
+    {{.}}:
+      enabled: true
+{{- end}}
+{{- end}}
 `))
 
 // TB is the minimal testing surface harness needs. Satisfied by *testing.T
@@ -203,6 +216,7 @@ type options struct {
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
 	nodeTools     []string      // node.tools — 远程任务的工具白名单
 	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
+	channels      []string      // channel.channels.<name>.enabled — 让 channel 入口起得来（见 channel/mock）
 }
 
 // nodeSection reports whether the fixture needs a `node:` block at all. See configData.
@@ -277,6 +291,16 @@ func WithNodeListen(addr string) Option {
 // the caller" configures exactly this and nothing else.
 func WithNodeName(name string) Option {
 	return func(o *options) { o.nodeName = name }
+}
+
+// WithChannel switches on one IM backend (`channel.channels.<name>.enabled`).
+//
+// It exists for one scenario: a spec that needs a REAL process hosting a node, with no terminal
+// for it. Only three entries host a node and only the channel entry can run headless — but it
+// refuses to start with no channel enabled, so the fixture has to name one (channel/mock is the
+// inert one to name).
+func WithChannel(name string) Option {
+	return func(o *options) { o.channels = append(o.channels, name) }
 }
 
 // WithNodeWorkspace switches the node service on and points its workspace at dir: the
