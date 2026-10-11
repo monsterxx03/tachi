@@ -66,6 +66,16 @@ type SessionInfo struct {
 	// work that is happening on this machine but NOT in this process — a node's turn — so the
 	// fact has to travel; the desktop's own run map says nothing about it.
 	HeldByTask bool `json:"heldByTask,omitempty"`
+	// SourceNodeID is the identity that OPENED this conversation, when a subsystem owns it: the
+	// caller's node id out of its certificate (session.Session.SourceNodeID) — the one thing a peer
+	// cannot choose.
+	SourceNodeID string `json:"sourceNodeId,omitempty"`
+	// SourceNode is what THIS machine calls that identity: the alias of the peer whose pinned key
+	// matches it (node.PeerAliases). EMPTY means "no pinned record" — the machine has never reached
+	// that peer outbound, which is the normal state for a receive-only node and a correct answer
+	// rather than a missing one. The frontend says so in its own words; what it must never do is
+	// show a name the CALLER reported about itself, since any key can claim any name.
+	SourceNode string `json:"sourceNode,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -138,10 +148,16 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	// false rather than failing the list — a sidebar that does not draw is worse than one that
 	// does not offer to stop something, and the delete path decides for itself either way.
 	busy := s.desk.busySessions()
+	// Which machine opened a subsystem's conversation comes from the peer directory, in ONE read
+	// for the whole list (node.PeerAliases): it is a small file, and asking it per row would be one
+	// read per row. An id with no pinned record stays unresolved, and the frontend says "unknown"
+	// rather than inventing a name.
+	peers := node.PeerAliases()
 	infos := make([]SessionInfo, 0, len(list))
 	for _, ss := range list {
 		info := toSessionInfo(ss)
 		info.HeldByTask = busy[ss.ID]
+		info.SourceNode = peers[ss.SourceNodeID]
 		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].UpdatedAt.After(infos[j].UpdatedAt) })
@@ -588,6 +604,7 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		ProjectID:            ss.ProjectID,
 		Pinned:               ss.Pinned,
 		Kind:                 ss.Kind,
+		SourceNodeID:         ss.SourceNodeID,
 	}
 }
 

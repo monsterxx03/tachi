@@ -720,13 +720,31 @@ export function rewindTargetForMessage(
 // 输入框关掉只是把那次必然失败的尝试省下来。措辞与 TUI 的 managedRowSuffix、web 控制台
 // 的 managedLabel 一致：同一个事实，三处同一句话。
 
+/**
+ * 这段对话来自哪台机器，只有名字（标签与说明句各自补自己的介词）。
+ *
+ * 名字是**本机**的说法：配置里的别名对着 pin 住的那份身份。绝不是对端自报的名字——任何密钥都能
+ * 声称任何名字，所以只有本机 pin 住的那条记录能回答「这是哪台机器」。而那条记录是**出站**接触
+ * 写下的，所以一个本机从没反连过的调用方解析不出名字：那时说的是「未知节点 + id 前几位」，而不是
+ * 编一个名字或干脆不提——这是最常见的正确答案，不是缺数据（docs/agents/node.md）。
+ */
+function managedSourceName(sourceNodeId?: string, sourceNode?: string): string {
+  if (!sourceNodeId) return ''
+  return sourceNode ? sourceNode : `未知节点 ${sourceNodeId.slice(0, 8)}`
+}
+
 /** 这类会话的标签文本；普通会话返回空串。 */
-export function managedLabel(kind?: string): string {
-  return kind ? `子系统执行记录 ${kind} · 只读` : ''
+export function managedLabel(kind?: string, sourceNodeId?: string, sourceNode?: string): string {
+  if (!kind) return ''
+  const name = managedSourceName(sourceNodeId, sourceNode)
+  const from = name ? ` · 来自 ${name}` : ''
+  return `子系统执行记录 ${kind}${from} · 只读`
 }
 
 /** 只读会话里代替输入框的那句话。 */
-export function managedReadOnlyNote(kind: string): string {
-  return `这段对话由子系统（${kind}）驱动，不归本窗口：可以在这里查看，但不能继续、回退或重试。` +
+export function managedReadOnlyNote(kind: string, sourceNodeId?: string, sourceNode?: string): string {
+  const name = managedSourceName(sourceNodeId, sourceNode)
+  const from = name ? `，来自 ${name}` : ''
+  return `这段对话由子系统（${kind}）驱动${from}，不归本窗口：可以在这里查看，但不能继续、回退或重试。` +
     `要基于它继续研究，请新建一段会话。`
 }

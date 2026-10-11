@@ -29,6 +29,10 @@ import (
 // SHOWS (transcript shape, chips, buttons); the mock and the filesystem prove what
 // actually HAPPENED (which prompt the model got, which file was written). A regression
 // usually shows up in exactly one of the two, so both are checked here.
+// smokeSourceNodeID is the caller identity the managed-session fixtures record: a fixed value, so
+// the row's wording ("来自未知节点 <8 位>") is assertable.
+const smokeSourceNodeID = "cd726b446c34386ece70d88fdd5fbf2a"
+
 type scenario struct {
 	name string
 	// What the model replies, request by request.
@@ -113,6 +117,15 @@ type scenario struct {
 	// write a session record — and the managed state has to be the FIRST render's, which is exactly
 	// what a restart finds: a window opened onto a receiving node's execution record.
 	sessionKind string
+	// sessionSourceNodeID is the identity recorded as the one that OPENED the seeded session
+	// (session.Session.SourceNodeID). Together with sessionKind it is the whole provenance of a
+	// subsystem's conversation: who it came from, and that it is not the reader's.
+	//
+	// The sandbox's home has no peer-identities.json, so this id resolves to NOTHING — which is the
+	// state the driver asserts, and the normal one on a machine that has never reached that peer
+	// outbound. A resolved name comes from that file (node.PeerAliases, pinned by outbound contact)
+	// and is covered where the matching lives, in the node's own tests.
+	sessionSourceNodeID string
 	// sessionHeldByTask takes a RUNNING execution's hold on the seeded session (a retention
 	// record, session.ReasonTask), which is the state that refuses a delete and offers the owner
 	// the escape hatch. Seeded the same way and for the same reason as sessionKind: it is a
@@ -3527,8 +3540,9 @@ permissions:
 		// 断言几乎全在界面上；Go 侧只钉一件事：这一轮一次模型都没调过 —— 只读会话不该产生任何请求
 		// （mock 有脚本就会有请求，所以脚本是空的：来了就是失败）。
 		{
-			name:        "managed-session",
-			sessionKind: session.KindA2AExecution,
+			name:                "managed-session",
+			sessionKind:         session.KindA2AExecution,
+			sessionSourceNodeID: smokeSourceNodeID,
 			files: map[string]string{
 				"README.md": "# smoke\n\nmanaged-session scenario's working directory\n",
 			},
@@ -3548,9 +3562,10 @@ permissions:
 		// none). Clicking it here is therefore a REAL round trip that fails in a known way: a test
 		// that only checked the button's presence would pass with the binding mis-wired.
 		{
-			name:              "managed-session-busy",
-			sessionKind:       session.KindA2AExecution,
-			sessionHeldByTask: true,
+			name:                "managed-session-busy",
+			sessionKind:         session.KindA2AExecution,
+			sessionSourceNodeID: smokeSourceNodeID,
+			sessionHeldByTask:   true,
 			files: map[string]string{
 				"README.md": "# smoke\n\nmanaged-session-busy scenario's working directory\n",
 			},

@@ -16,6 +16,10 @@
   smoke.check('标注写的是子系统的执行记录', tagText.indexOf('子系统执行记录') >= 0, tagText)
   smoke.check('标注带 kind', tagText.indexOf('a2a_execution') >= 0, tagText)
   smoke.check('标注说明只读', tagText.indexOf('只读') >= 0, tagText)
+  // 来源：本机 pin 过的对端才有名字，而沙箱没有对端目录，所以这一行说的是「未知节点 + id 前 8 位」。
+  // 那句话本身就是要点：名字只能来自本机 pin 住的记录（对端自报的名字不算数），而没有记录时如实
+  // 说不知道，比编一个名字或干脆不提都强。
+  smoke.check('标注写明来自哪台机器', tagText.indexOf('来自 未知节点 cd726b44') >= 0, tagText)
 
   // ── 2. 顶部横幅（读者可能根本没看侧栏）────────────────────────────────────
   const banner = await smoke.waitFor('.managed-banner', '只读横幅出现')
@@ -23,6 +27,7 @@
   const bannerText = smoke.text(banner)
   smoke.check('横幅说明这是子系统的记录', bannerText.indexOf('子系统执行记录') >= 0, bannerText)
   smoke.check('横幅说明不能继续/回退/重试', bannerText.indexOf('不能继续') >= 0, bannerText)
+  smoke.check('横幅也写明来自哪台机器', bannerText.indexOf('来自 未知节点 cd726b44') >= 0, bannerText)
 
   // ── 2b. 横幅和转写区是**上下**关系，不是并排 ──────────────────────────────
   //
@@ -43,6 +48,8 @@
   const ro = smoke.qa('.composer-readonly')
   smoke.check('输入框的位置写着只读原因', ro.length === 1, ro.length + ' 个 .composer-readonly')
   smoke.check('原因里带 kind', ro.length > 0 && smoke.text(ro[0]).indexOf('a2a_execution') >= 0,
+    ro.length ? smoke.text(ro[0]) : '')
+  smoke.check('原因里也写明来源', ro.length > 0 && smoke.text(ro[0]).indexOf('来自 未知节点 cd726b44') >= 0,
     ro.length ? smoke.text(ro[0]) : '')
 
   // ── 4. 内容照常可读（只读不等于看不见）────────────────────────────────────

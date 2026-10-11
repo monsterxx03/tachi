@@ -2140,7 +2140,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             reader had. Opening it is allowed (the transcript is worth reading) — the mark is
             what stops it being mistaken for one more row of their own. */}
         {s.kind ? (
-          <span className="session-tag is-managed" title="子系统驱动的执行记录：只能查看，不能在这里继续">{managedLabel(s.kind)}</span>
+          <span className="session-tag is-managed" title="子系统驱动的执行记录：只能查看，不能在这里继续">{managedLabel(s.kind, s.sourceNodeId, s.sourceNode)}</span>
         ) : null}
         {new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}
       </div>
@@ -2414,8 +2414,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               take the left half of the window and squeezed the messages into a right-hand strip. */}
           {managedSession ? (
             <div className="managed-banner" role="note">
-              <span className="managed-banner-tag">{managedLabel(managedSession.kind)}</span>
-              <span className="managed-banner-note">{managedReadOnlyNote(managedSession.kind!)}</span>
+              <span className="managed-banner-tag">{managedLabel(managedSession.kind, managedSession.sourceNodeId, managedSession.sourceNode)}</span>
+              <span className="managed-banner-note">{managedReadOnlyNote(managedSession.kind!, managedSession.sourceNodeId, managedSession.sourceNode)}</span>
               {/* The escape hatch, and only while there is something to escape: a task that will
                   never end by itself (a peer that died, a state a bug left running) holds this
                   session, and the delete the reader probably wants is refused until it ends. */}
@@ -2511,7 +2511,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             {managedSession ? (
               <div className="composer-readonly" role="note">
                 <span className="composer-readonly-title">只读</span>
-                <span className="composer-readonly-note">{managedReadOnlyNote(managedSession.kind!)}</span>
+                <span className="composer-readonly-note">{managedReadOnlyNote(managedSession.kind!, managedSession.sourceNodeId, managedSession.sourceNode)}</span>
               </div>
             ) : (
               <Composer api={composer} running={isCurrentRunning} onStop={stopChat} onPageTurn={scrollByHalfPage} />

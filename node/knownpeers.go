@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -67,6 +68,34 @@ func openKnownPeers(path string, urls map[string]string, log *logger.Logger) (*k
 		// only answer that keeps the promise.
 		return nil, fmt.Errorf("node: read peer identities %s: %w", path, err)
 	}
+}
+
+// PeerAliases returns the peer name this machine has PINNED for each node id it has reached.
+//
+// The direction a reader needs is the opposite of the config's: a session records WHO opened it (the
+// caller's node id, out of its certificate — the one thing a peer cannot choose), and the question
+// is "which of my machines is that". Only the pinned record answers it. The caller's own name never
+// does: any key can claim any name, which is why the name this node CALLS a peer is the local
+// alias and nothing from the other side (design §4.2).
+//
+// Only OUTBOUND contact writes that record, so an id this machine has never talked to has no answer
+// here. That is a correct answer rather than a failure — the UI says so in its own words — and a
+// receive-only machine is in that state for every caller it has.
+//
+// A record that cannot be read yields nothing: this is a label for a session row, and a sidebar that
+// does not draw is worse than one that says "unknown".
+func PeerAliases() map[string]string {
+	var pinned map[string]knownPeer
+	if err := fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned); err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(pinned))
+	for alias, peer := range pinned {
+		if peer.NodeID != "" {
+			out[peer.NodeID] = alias
+		}
+	}
+	return out
 }
 
 // confirm checks a peer's presented identity against what was pinned, and pins it on first contact.

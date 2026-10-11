@@ -883,6 +883,22 @@ export interface SessionInfo {
      * fact has to travel; the desktop's own run map says nothing about it.
      */
     "heldByTask"?: boolean;
+
+    /**
+     * SourceNodeID is the identity that OPENED this conversation, when a subsystem owns it: the
+     * caller's node id out of its certificate (session.Session.SourceNodeID) — the one thing a peer
+     * cannot choose.
+     */
+    "sourceNodeId"?: string;
+
+    /**
+     * SourceNode is what THIS machine calls that identity: the alias of the peer whose pinned key
+     * matches it (node.PeerAliases). EMPTY means "no pinned record" — the machine has never reached
+     * that peer outbound, which is the normal state for a receive-only node and a correct answer
+     * rather than a missing one. The frontend says so in its own words; what it must never do is
+     * show a name the CALLER reported about itself, since any key can claim any name.
+     */
+    "sourceNode"?: string;
 }
 
 /**
