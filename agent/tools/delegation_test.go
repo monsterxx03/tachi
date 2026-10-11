@@ -129,6 +129,37 @@ func TestDelegateTaskRefusesAmbiguousTargets(t *testing.T) {
 	}
 }
 
+// The shape that made continuing impossible, pinned where the tool is: a continuation names the
+// RECORD and nothing else (the tool refuses to be given both, see the table above). It must reach
+// the sending side exactly that way — filling a node in here would be inventing which machine the
+// record belongs to, and an empty one is what the peer directory saw as a literal "".
+func TestDelegateTaskContinuesWithoutInventingANode(t *testing.T) {
+	fake := &fakeDelegator{view: RemoteTaskInfo{ID: "d_2", Node: "nas", State: "completed"}}
+	tool := NewDelegateTaskTool(fake)
+	ctx := WithLogicalConversation(t.Context(), "conv-1")
+
+	out, err := tool.ExecuteContext(ctx, `{"continue_from":"d_1","prompt":"接着那份"}`)
+	if err != nil {
+		t.Fatalf("a continuation has to be accepted: %v", err)
+	}
+	if len(fake.delegations) != 1 {
+		t.Fatalf("expected one delegation, got %d", len(fake.delegations))
+	}
+	got := fake.delegations[0]
+	if got.ContinueFrom != "d_1" {
+		t.Errorf("the record to continue: %+v", got)
+	}
+	if got.Peer != "" {
+		t.Errorf("no machine may be named: the record already knows which one it is: %+v", got)
+	}
+	if got.LogicalID != "conv-1" {
+		t.Errorf("the work is filed under the tool's conversation, not a model argument: %+v", got)
+	}
+	if !strings.Contains(out, "d_2") {
+		t.Errorf("the result is the handle the next turn refers to: %s", out)
+	}
+}
+
 func TestAFailureThatStillNamesTheTaskIsReportedAsData(t *testing.T) {
 	// A refusal that carries the task id (a busy peer, an unknown outcome) must reach the model
 	// as a result it can act on: a bare error would make it delegate a second time.

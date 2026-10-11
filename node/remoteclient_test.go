@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -267,6 +268,155 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 		Peer: "other-node", Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.Error(t, err)
+}
+
+// A follow-up does NOT have to name the machine, and that is the shape the tool produces: its
+// contract is "exactly one of node / continue_from" (tools.DelegateTask), and §8.1's own example
+// of a continuation is `{"continue_from": "d_7f3a", "prompt": …}` — no node in it.
+//
+// This used to be impossible. Submit looked the alias up first, so an absent one was refused as an
+// unknown peer ("node: \"\" is not a configured peer") before the record was ever consulted, and
+// the tool refuses to be given both — so there was no way to continue anything at all. The record
+// is the authority on which machine it belongs to; that is what §8.1 means by 服务端由它解析.
+func TestAFollowUpWithoutANodeTakesTheMachineFromTheRecord(t *testing.T) {
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("第一轮完成")...)
+	mock.Script(oneMessageScript("第二轮完成")...)
+
+	sender, _ := startPeer(t, mock, "ReadFile")
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	second, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
+	})
+	require.NoError(t, err, "the record names the machine, so the caller does not have to")
+	require.Equal(t, first.Node, second.Node)
+
+	firstRecord, _ := sender.records.get(first.ID)
+	secondRecord, _ := sender.records.get(second.ID)
+	require.Equal(t, firstRecord.RemoteContextID, secondRecord.RemoteContextID,
+		"and it lands in the SAME remote conversation — which is the whole point of continuing")
+	require.NotEqual(t, firstRecord.RemoteTaskID, secondRecord.RemoteTaskID)
+}
+
+// The record's machine is not configured any more. Said as its own fact rather than as an unknown
+// peer: nothing was named, so "which alias did you mean" would be an answer to a question the
+// caller did not ask.
+func TestAFollowUpWhoseMachineIsGoneSaysSo(t *testing.T) {
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(oneMessageScript("第一轮完成")...)
+
+	sender, _ := startPeer(t, mock, "ReadFile")
+	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	// The operator removed that peer, and this is a sender built on the SAME home: the records are
+	// read back from disk, which is what makes this "the config changed", not "the cache is stale".
+	// Another peer IS configured — the point is which alias is missing, not that the list is empty.
+	stripped, err := OpenSender([]config.PeerConfig{
+		{Name: "someone-else", URL: "https://127.0.0.1:1"},
+	}, "tachi@mac", nil)
+	require.NoError(t, err)
+	_, err = stripped.Delegate(context.Background(), tools.DelegationRequest{
+		Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a configured peer any more")
+	require.Contains(t, err.Error(), first.ID, "the refusal names the record the caller must act on")
+}
+
+// A long answer is cut by CHARACTERS, never in the middle of one — and the WHOLE thing stays on this
+// machine. The first characters of an answer are usually the answer (a reminder shows the same text,
+// and must stay a summary), while the rest used to be unreachable at any price: the peer keeps its
+// own copy, and every route back to us shortens it the same way.
+func TestALongAnswerIsKeptWholeOnDiskAndCutSafelyInTheText(t *testing.T) {
+	// A spill dir of its own: the text is written where a model can ReadFile it, and a test must not
+	// write into the real ~/.tachi/tool_results.
+	c := &remoteClient{spillDir: t.TempDir()}
+	const id = "d_0000abcd"
+
+	// 3 bytes each, so a byte budget and a character budget cannot agree by accident.
+	long := strings.Repeat("中", answerExcerptLen+500)
+	got := c.boundAnswer(id, long)
+
+	require.NotContains(t, got, "\uFFFD", "a half-cut character is what this test exists for")
+	require.True(t, strings.HasPrefix(got, strings.Repeat("中", answerExcerptLen)))
+	require.Contains(t, got, "已截断")
+
+	// The whole answer is on disk, byte for byte, at the path the text names — and the path is
+	// derived from the RECORD rather than a timestamp, because this text travels into the reminder:
+	// a rendering that changes for no reason costs the prompt prefix on every turn.
+	path := filepath.Join(c.spillDir, "remote_"+id+".txt")
+	require.Contains(t, got, path)
+	stored, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, long, string(stored), "the whole answer, not the excerpt")
+
+	// Seeing the same answer again (a `get` after the task already finished) points at the same file
+	// and does not leave a second copy behind.
+	require.Contains(t, c.boundAnswer(id, long), path)
+	entries, err := os.ReadDir(c.spillDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// An answer that fits is handed over untouched, and writes nothing. The boundary is included:
+	// exactly the budget is not "too long".
+	require.Equal(t, "全部拿到了", c.boundAnswer(id, "全部拿到了"))
+	require.Equal(t, strings.Repeat("中", answerExcerptLen), c.boundAnswer(id, strings.Repeat("中", answerExcerptLen)))
+	entries, err = os.ReadDir(c.spillDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+}
+
+// A spill that cannot happen must not cost the answer its first characters as well. No directory is
+// a real possibility (a config that names none, a disk that is full, permissions), and a tool call
+// that fails is worse than one that answers with less.
+func TestAnAnswerThatCannotBeSpilledStillComesBackShortened(t *testing.T) {
+	c := &remoteClient{} // no spill dir: every write has to fail
+	got := c.boundAnswer("d_0000abcd", strings.Repeat("中", answerExcerptLen+10))
+
+	require.Contains(t, got, "已截断")
+	require.Contains(t, got, "对端", "the honest note says where the rest really is")
+	require.NotContains(t, got, "本机", "no local path may be named when nothing was written")
+	require.Equal(t, answerExcerptLen, len([]rune(strings.TrimSuffix(got, excerptNote))))
+}
+
+// The whole trip, with an answer long enough to matter: the peer sends it, the record keeps the
+// head, and the REST is on this machine for the model to read.
+//
+// This is the scenario the shortening used to lose. The full text was decoded here for one instant
+// and then dropped — nothing could get it back, because the peer's copy is behind the same bound
+// (a `get` shortens it again), which is why the only advice left was "ask for less next time".
+func TestALongRemoteAnswerSurvivesOnThisMachinesDisk(t *testing.T) {
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	long := "## 1. `df -h`\n" + strings.Repeat("Filesystem 3.7T 1.3T 2.4T 35% /vol1\n", 300)
+	mock.Script(oneMessageScript(long)...)
+
+	sender, _ := startPeer(t, mock, "ReadFile")
+	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "peer", Prompt: "查磁盘", LogicalID: "conv-1",
+	})
+	require.NoError(t, err)
+
+	// The spill dir is this machine's own (under the sender's --home, never the real ~/.tachi).
+	path := filepath.Join(config.ToolResultsDir(), "remote_"+view.ID+".txt")
+	require.Contains(t, view.Result, path, "the shortened answer says where the rest is")
+	require.Contains(t, view.Result, "已截断")
+	require.Less(t, len([]rune(view.Result)), len([]rune(long)),
+		"what reaches the model is the head, not the whole thing")
+
+	stored, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(long), strings.TrimSpace(string(stored)),
+		"and that file is everything the peer sent")
 }
 
 // A follow-up names the PREVIOUS remote task as its reference — not its own id, and not this

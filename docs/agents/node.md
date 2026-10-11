@@ -191,6 +191,34 @@ split + index when a subject grows) apply to this split too.
   comes from the CURRENT config (`Sender.displayName`, resolved through the TOFU record), because a reminder
   naming a peer by an alias the config no longer knows would send the model into a refusal; and each of these
   tests fails if the identity check is removed (the suite pins the behaviour, not the code shape).
+- **A continuation may name NO peer at all**, and that is the shape the tool produces: its contract is exactly
+  one of `node` / `continue_from` (§8.1's own continuation example has no `node` in it), so the record's
+  machine is resolved here, in three steps and cheapest first — the pin record (`currentAliasFor`, no
+  request), the alias the record was made under (the everyday case), then ASKING each configured peer which
+  identity it is (`verifyPeerIdentity`, one card request each). The third step is the only one that survives a
+  RENAME: the pin is keyed by the alias a peer was reached under, so a name the config adopted a minute ago is
+  in no pin yet, and the old alias is gone — without it that conversation is unreachable, because the model may
+  not name a node alongside `continue_from`. Identity first is also why the ORDER matters: asking the recorded
+  alias first turns a rename into "not configured any more" and loses work that is still there. The identity
+  comparison itself (above) still happens before the message leaves — this step only says where the record's
+  peer is reachable.
+- **What comes back from a peer is bounded in CHARACTERS, never mid-character — and the part that does
+  not fit is kept on THIS machine.** `boundAnswer` keeps the first `answerExcerptLen` runes
+  (`strutil.TruncatePlain`) and spills the whole text to `ToolResultsDir` (`remote_<local id>.txt`), so
+  the shortened text names a path the model can actually `ReadFile`. The head is kept, unlike Bash /
+  WebFetch / SubAgent which replace their whole output with the pointer: the first characters of a remote
+  answer are usually the answer, and the same text is what a reminder renders — a pointer there would
+  cost a `ReadFile` per long answer and turn a summary into a file path. The spill filename comes from the
+  LOCAL RECORD rather than a timestamp (a name that changed per turn would put a moving line into the
+  reminder, which is a prompt-prefix cost on every turn: `docs/agents/prompt-cache.md`), and that also
+  makes a re-spill overwrite its own file. A spill that fails (no dir, full disk, permissions) falls back
+  to the bare excerpt — a tool call that fails is worse than one that answers with less. **Without the
+  spill the remainder was unreachable at any price**: it was decoded here for one instant and dropped, and
+  the peer's own copy sits behind the same bound (a `get` shortens it again). This is NOT the forbidden
+  thing — a remote ABSOLUTE PATH handed over as if it were locally readable; the file is a copy, on this
+  machine, and the note says so. The stored request (`promptExcerptLen`) follows the same character rule;
+  a declared node name is cut by BYTES (`strutil.TruncateBytes`), because there the bound really is a byte
+  count.
 - **An empty `LogicalID` is a SCOPE, not a wildcard.** It is what a sessionless run (`-p`) files under, so a
   script's later runs see their own delegations and no real conversation's; `Sender.RemoteTasks` always filters
   by it, and that filter is unconditional — without it a `list` would show every task this machine ever ran,

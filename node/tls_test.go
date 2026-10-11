@@ -351,6 +351,48 @@ func TestARenamedPeerIsStillTheSameMachine(t *testing.T) {
 	require.GreaterOrEqual(t, sends(), 2, "the follow-up really went out")
 }
 
+// The rename again, but this time the follow-up names NOTHING but the record — the shape the tool
+// actually produces (it refuses to take `node` and `continue_from` together).
+//
+// This is the case that needs the third step in peerForContinuation: the pin record is keyed by the
+// alias a peer was reached under, so a name the config adopted a minute ago is in no pin yet, and
+// the alias the record was created with is gone. Neither index has it — the machine has to be ASKED
+// which one it is, which is what makes a rename survivable without the caller naming it.
+//
+// Without that step the model is stuck: continuing a renamed peer's conversation would be refused
+// as "no configured peer answers as node X", and it may not pass `node` to say otherwise.
+func TestAFollowUpWithoutANodeFindsItsMachineAfterARename(t *testing.T) {
+	withBaseDir(t)
+	machine, err := LoadOrCreateIdentity(t.TempDir())
+	require.NoError(t, err)
+	url, sends := cardAndTaskPeer(t, machine)
+
+	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil)
+	require.NoError(t, err)
+	started, err := delegateToNamed(t, first, "nas", "第一轮")
+	require.NoError(t, err)
+	require.Equal(t, machine.NodeID, mustPeerNodeID(t, first.records, started.ID),
+		"the record really does bind the identity — this whole path rests on it")
+
+	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil)
+	require.NoError(t, err)
+	continued, err := renamed.Delegate(context.Background(), tools.DelegationRequest{
+		Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
+	})
+	require.NoError(t, err, "the identity is what the record binds, so the new name still resolves")
+	require.Equal(t, "home-nas", continued.Node, "and the view names it the way the config does now")
+	require.NotEqual(t, started.ID, continued.ID, "a follow-up is new work, not the old record again")
+	require.GreaterOrEqual(t, sends(), 2, "the follow-up really went out")
+}
+
+// mustPeerNodeID is the identity a record holds, for tests that need to assert the binding itself.
+func mustPeerNodeID(t *testing.T, records *delegationStore, id string) string {
+	t.Helper()
+	rec, ok := records.get(id)
+	require.True(t, ok, "no record %s", id)
+	return rec.PeerNodeID
+}
+
 // The other half, and the case the identity check exists for: TWO configured peers, and a
 // follow-up that names the wrong one. Nothing else can catch this — each alias has its own pin, so
 // the handshake is happy to talk to either machine; only comparing the identity on the record

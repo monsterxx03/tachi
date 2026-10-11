@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/errordetails"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // remoteClient is this machine's side of a delegation: it submits work to a peer, reads back
@@ -48,7 +52,11 @@ type remoteClient struct {
 	// records can say who asked — as a LABEL: the peer files it under `self_reported_name`, because
 	// any key can claim any name (node/auth.go).
 	ourName string
-	http    *http.Client
+	// spillDir is where an answer too long for the model is kept WHOLE, beside the other oversized
+	// tool results (config.ToolResultsDir): the pointer in the shortened text has to be a path this
+	// machine can actually read (boundAnswer).
+	spillDir string
+	http     *http.Client
 
 	// clients caches one HTTP client per peer: a TLS configuration belongs to ONE peer (its pin,
 	// its address), and a client is the object that carries one. Built lazily so a peer this
@@ -87,7 +95,16 @@ const (
 	// answerExcerptLen bounds how much of a remote answer travels into a tool result or a
 	// reminder. The result is for the model to read, not to archive: a long answer belongs in
 	// the peer's task record, which stays queryable (§7.3 大结果做上限控制).
+	//
+	// It counts CHARACTERS, and that is a decision rather than an accident: the budget is an
+	// amount of text for a model to read, so measuring it in bytes would make it worth a third as
+	// much to a Chinese answer as to an English one (see excerpt).
 	answerExcerptLen = 4000
+
+	// excerptNote travels with an answer that had to be shortened AND could not be kept whole (a
+	// spill that failed: no configured directory, a full disk, permissions). It says BOTH halves of
+	// what a reader needs — the rest is not lost, and this handle cannot read it.
+	excerptNote = "\n（答复过长，已截断；完整答复留在对端的任务记录里，工具这边拿不到更多，需要就分块索取）"
 )
 
 // SubmitRequest is one thing to ask a peer for.
@@ -245,6 +262,19 @@ func (c *remoteClient) Cancel(ctx context.Context, id string) (*Delegation, erro
 // Submit sends the request and records it — BEFORE the request leaves, so "we do not know
 // whether it was accepted" is a state the record can be in rather than a guess (§9.2).
 func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegation, error) {
+	// A follow-up may name NO peer at all, and that is the normal shape of one (§8.1's own example
+	// is `{"continue_from": "d_7f3a", "prompt": …}`): the record says which machine it belongs to,
+	// and §8.1 puts the resolution on this side ("服务端由它解析远端 nodeId/contextId"). The tool's
+	// contract — exactly one of node / continue_from (tools.DelegateTask) — is written against that,
+	// so a continuation that arrives here without an alias is doing what it was told.
+	if req.ContinueFrom != "" && strings.TrimSpace(req.Peer) == "" {
+		peer, err := c.peerForContinuation(ctx, req.ContinueFrom)
+		if err != nil {
+			return nil, err
+		}
+		req.Peer = peer
+	}
+
 	// The alias is the only thing checked here: a peer whose CARD could not be read is not
 	// necessarily unable to work (the card is how this machine describes a node, not how it
 	// reaches one), and refusing on it would turn a slow well-known fetch into "cannot delegate".
@@ -337,6 +367,50 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 	return c.Wait(ctx, d.ID, req.Wait)
 }
 
+// peerForContinuation is which machine a follow-up belongs to, asked of the RECORD rather than the
+// caller — the whole reason a continuation does not have to name a peer (Submit).
+//
+// It resolves in three steps, cheapest first, and each one exists because the others cannot cover
+// the case it does:
+//
+//  1. the pin record: if this identity has been reached under an alias, that alias is the name the
+//     config uses NOW (no request);
+//  2. the alias the record was created with: the everyday case, where nothing was renamed;
+//  3. asking the configured peers which one this identity is — the only way a RENAME can be
+//     followed, because a record stores the alias it was made with and the new alias is a word
+//     only the config knows. One authenticated card request per peer (the same one the
+//     confirmation below makes anyway), on a path that only runs after a rename.
+//
+// The identity is what makes 1 and 3 possible at all, which is why the ORDER matters: asking the
+// recorded alias first would turn a rename into "not configured any more" and lose a conversation
+// that is still there (§4.1: 别名变化不能改变任务归属).
+//
+// What this does NOT do is decide whether the machine is still the right one: that comparison
+// happens in Submit, before any message is sent (§8.1).
+func (c *remoteClient) peerForContinuation(ctx context.Context, id string) (string, error) {
+	prev, err := c.delegations.find(id)
+	if err != nil {
+		return "", err
+	}
+	if current := c.currentAliasFor(prev.PeerNodeID); current != "" {
+		return current, nil
+	}
+	if _, ok := c.peers.configOnly(prev.Peer); ok {
+		return prev.Peer, nil
+	}
+	if prev.PeerNodeID != "" {
+		for _, alias := range c.peers.configOnlyNames() {
+			if got, err := c.verifyPeerIdentity(ctx, alias); err == nil && got == prev.PeerNodeID {
+				return alias, nil
+			}
+		}
+		return "", fmt.Errorf("node: %s belongs to node %s, which no configured peer answers as; "+
+			"configure that node again to continue it", id, prev.PeerNodeID)
+	}
+	// A plaintext (loopback) record has no identity to look for and only ever had the alias.
+	return "", fmt.Errorf("node: %s was delegated to %q, which is not a configured peer any more", id, prev.Peer)
+}
+
 // sendResult is what one message:send answered with: the task the peer created, OR a direct
 // Message that means no task exists at all (design §6.1 — the spec's SendMessageResponse is a
 // oneOf of exactly one of these).
@@ -414,7 +488,7 @@ func (c *remoteClient) recordDirectAnswer(d *Delegation, msg *a2a.Message) (*Del
 		// it UNSPECIFIED would read as "we do not know whether it was accepted", which is a
 		// different fact — and the one the record reports when nothing came back at all.
 		State: a2a.TaskStateCompleted,
-		Text:  excerpt(messageText(msg)),
+		Text:  c.boundAnswer(d.ID, messageText(msg)),
 		At:    now,
 	}
 	// A direct Message cannot carry an answer back into the node's question slot, so whatever
@@ -484,7 +558,7 @@ func (c *remoteClient) record(d *Delegation, task *a2a.Task) (*Delegation, error
 	}
 	next.LastKnown = lastKnown{
 		State: task.Status.State,
-		Text:  taskText(task),
+		Text:  c.boundAnswer(d.ID, taskText(task)),
 		At:    now,
 	}
 	c.stampPeerIdentity(&next)
@@ -670,31 +744,86 @@ func settlesWait(state a2a.TaskState) bool {
 }
 
 // taskText is the part of a task that travels to the model: the question it is waiting on, or
-// the answer it produced.
+// the answer it produced. It extracts, and does NOT bound: bounding either shrinks the text or
+// keeps the whole thing on this machine first, and that decision belongs to boundAnswer.
 func taskText(task *a2a.Task) string {
 	if task == nil {
 		return ""
 	}
 	if task.Status.State == a2a.TaskStateInputRequired || task.Status.State == a2a.TaskStateAuthRequired {
-		return excerpt(messageText(task.Status.Message))
+		return messageText(task.Status.Message)
 	}
 	for _, artifact := range task.Artifacts {
 		if text := messageText(&a2a.Message{Parts: artifact.Parts}); text != "" {
-			return excerpt(text)
+			return text
 		}
 	}
 	// A failed or cancelled task has nothing else: the status message says what happened.
 	if task.Status.State.Terminal() {
-		return excerpt(messageText(task.Status.Message))
+		return messageText(task.Status.Message)
 	}
 	return ""
 }
 
-func excerpt(s string) string {
-	if len(s) <= answerExcerptLen {
-		return s
+// excerpt bounds a peer's answer for the model's benefit. It reports whether it had to cut, because
+// the caller still holds the whole text and may be able to keep it (boundAnswer).
+//
+// The budget is CHARACTERS (strutil owns the mechanics, by house rule; Bash, WebFetch and SubAgent
+// spill on the same unit). A byte cap — which this was — means two things at once and neither is
+// intended: a Chinese answer is worth a third as much as an English one, and the cut can land
+// inside a multi-byte character — an invalid UTF-8 tail, which the json on the way out turns into a
+// replacement character, so the last thing a reader sees is corruption rather than a truncation.
+func excerpt(s string) (string, bool) {
+	kept := strutil.TruncatePlain(s, answerExcerptLen)
+	return kept, kept != s
+}
+
+// boundAnswer keeps an answer inside the budget the model reads — and, when it does not fit, keeps
+// the WHOLE thing on this machine before shortening it.
+//
+// Shortening in place used to be the end of the text. The full answer is here for one instant (it
+// was just decoded off the wire) and, once the record holds an excerpt, NOTHING on this machine has
+// the rest again: the peer keeps its own copy, and every route back to us (get, wait, list) bounds
+// it the same way. So the model could not reach the remainder at any price, which is what "ask the
+// peer for less next time" was really saying.
+//
+// Spilling is the house's shape for this (Bash, WebFetch, SubAgent), with one deliberate
+// difference: unlike theirs, the head is KEPT. The first characters of an answer are usually the
+// answer, and this same text is what a reminder shows — a pointer alone would make every long
+// answer cost a ReadFile, and turn a summary into a file path.
+func (c *remoteClient) boundAnswer(localID, text string) string {
+	kept, cut := excerpt(text)
+	if !cut {
+		return text
 	}
-	return s[:answerExcerptLen] + "\n…（答复过长，已截断；完整结果在远端任务记录里）"
+	path, err := c.spillAnswer(localID, text)
+	if err != nil {
+		// A spill that cannot happen (no directory, a full disk, permissions) must not cost the
+		// answer its first characters as well: the excerpt still beats a failed tool call.
+		return kept + excerptNote
+	}
+	return kept + fmt.Sprintf("\n（答复过长，已截断；完整答复就在本机：%s —— 用 ReadFile 分页读，或向对端分块索取）", path)
+}
+
+// spillAnswer writes the full text beside the other oversized tool results and returns its path.
+//
+// The NAME comes from the local record instead of a timestamp, and that is about more than tidiness:
+// this text travels into the reminder, so the path is part of a rendered prompt — and a reminder
+// whose rendering changes for no reason is one the prompt prefix pays for on every turn
+// (docs/agents/prompt-cache.md）。A stable name also makes a re-spill — the same answer seen again
+// by a `get` — overwrite its own file instead of filling the directory with near-copies.
+//
+// The file is a COPY of what the peer said, on THIS machine: it is deliberately not a remote path,
+// which is the thing the design forbids handing the model as if it were locally readable (§6.4).
+func (c *remoteClient) spillAnswer(localID, text string) (string, error) {
+	if c.spillDir == "" {
+		return "", errors.New("node: no directory is configured for oversized answers")
+	}
+	path := filepath.Join(c.spillDir, "remote_"+localID+".txt")
+	if err := fileutil.WriteFilePrivate(path, []byte(text)); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // answerParts renders an answer the way the receiving side reads one: one text part for a

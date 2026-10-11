@@ -11,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Who called, and how that fact reaches the code that files the work.
@@ -102,9 +103,11 @@ func callerIdentityMiddleware(log *logger.Logger, next http.Handler) http.Handle
 		name := strings.TrimSpace(r.Header.Get(nodeNameHeader))
 		if len(name) > maxNodeNameLen {
 			// A declared name is display data; an enormous one is a client that cannot be trusted
-			// with the memory its record would cost. Truncated rather than refused: the identity
-			// is unaffected, and losing a name is not a reason to lose the work.
-			name = name[:maxNodeNameLen]
+			// with the memory its record would cost. Truncated rather than refused: the identity is
+			// unaffected, and losing a name is not a reason to lose the work. Cut by BYTES — that IS
+			// the cost being bounded — and never mid-character, which is what leaves invalid UTF-8
+			// on the record (json escapes the tail into a replacement character).
+			name = strutil.TruncateBytes(name, maxNodeNameLen)
 		}
 		next.ServeHTTP(w, r.WithContext(withVerifiedCaller(r.Context(), verifiedCaller{
 			nodeID:           nodeID,

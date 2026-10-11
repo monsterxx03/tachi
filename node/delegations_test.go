@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,22 @@ func TestDelegationIDsAreLocalAndStable(t *testing.T) {
 	got, ok := reopened.get(d.ID)
 	require.True(t, ok)
 	require.Equal(t, d.ID, got.ID)
+}
+
+// The stored request is cut by CHARACTERS too, and for the same reason as a peer's answer: it is
+// text kept for a person to read (and for a retry to send the same thing), and a byte offset both
+// costs a Chinese prompt two thirds of its budget and can cut one in half — invalid UTF-8 written
+// into a json record, which every later read renders as a replacement character.
+func TestALongPromptIsStoredCutBetweenCharacters(t *testing.T) {
+	// One ASCII byte in front, so the byte limit falls off every character boundary.
+	prompt := "x" + strings.Repeat("查", promptExcerptLen)
+
+	d := newDelegation("home-nas", "conv-a", "长请求", prompt, "m1")
+
+	require.NotContains(t, d.Prompt, "\uFFFD", "a half-cut character is what would land here")
+	require.True(t, strings.HasPrefix(prompt, d.Prompt),
+		"what is kept is the beginning of what was sent, not a sequence that broke on the way")
+	require.Equal(t, promptExcerptLen, len([]rune(d.Prompt)), "the budget is characters")
 }
 
 func TestAListShowsOneConversationItsOwnWork(t *testing.T) {

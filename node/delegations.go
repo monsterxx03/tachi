@@ -54,6 +54,10 @@ const (
 	delegationIDLen = 8
 	// promptExcerptLen bounds the stored request text. A prompt is kept so a retry can send
 	// the SAME request; it is not an archive, and the tool result never carries it.
+	//
+	// The budget counts CHARACTERS (strutil.TruncatePlain below applies it): a byte cap would
+	// both cost a Chinese prompt two thirds of its budget and be able to cut a character in
+	// half — invalid UTF-8 in the record, escaped on the way out as a replacement.
 	promptExcerptLen = 4000
 )
 
@@ -158,9 +162,7 @@ func openDelegationStore(dir string) (*delegationStore, error) {
 // newDelegation builds a record for a submission that is about to happen.
 func newDelegation(peer, logicalID, title, prompt, messageID string) *Delegation {
 	now := time.Now().UTC()
-	if len(prompt) > promptExcerptLen {
-		prompt = prompt[:promptExcerptLen]
-	}
+	prompt = strutil.TruncatePlain(prompt, promptExcerptLen)
 	return &Delegation{
 		ID:        delegationIDPrefix + strutil.ShortUUID(delegationIDLen),
 		Peer:      peer,

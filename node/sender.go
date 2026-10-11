@@ -68,6 +68,7 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 		known:          known,
 		ourCert:        ourCert,
 		ourName:        strings.TrimSpace(ownName),
+		spillDir:       config.ToolResultsDir(),
 		http:           &http.Client{},
 		requestTimeout: defaultRequestTimeout,
 		waitBudget:     defaultWaitBudget,

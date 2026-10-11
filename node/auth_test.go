@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -265,4 +266,37 @@ func sendAsNamed(t *testing.T, h *Handle, id *Identity, name, text string) (int,
 	body := `{"message":{"messageId":"` + a2a.NewMessageID() +
 		`","role":"ROLE_USER","parts":[{"text":"` + text + `"}]}}`
 	return callWithHeaders(t, h, id, http.MethodPost, restSendPath, body, map[string]string{nodeNameHeader: name})
+}
+
+// An enormous declared name is cut, not refused — and cut where a CHARACTER ends, not where a byte
+// boundary happens to fall.
+//
+// The name is 3-byte characters behind one ASCII byte ON PURPOSE: that puts the byte limit off every
+// character boundary, so a `name[:max]` lands inside a character. The tail is then invalid UTF-8,
+// and the json encoder on the way out turns it into U+FFFD — so this cannot be caught by asking
+// whether the stored name is valid UTF-8 (a replacement character IS valid), only by asking whether
+// what survived is still a prefix of what was declared.
+func TestAnEnormousDeclaredNameIsCutBetweenCharacters(t *testing.T) {
+	dir := t.TempDir()
+	h := tlsNode(t, dir, nil)
+	caller := newSenderIdentity(t)
+
+	declared := "x" + strings.Repeat("绿", maxNodeNameLen)
+	status, raw, err := sendAsNamed(t, h, caller, declared, "hi")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status, "body=%s", raw)
+
+	var sent struct {
+		Task *a2a.Task `json:"task"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(raw), &sent))
+
+	var rec taskRecord
+	require.NoError(t, fileutil.ReadJSON(filepath.Join(dir, tasksDirName, string(sent.Task.ID)+".json"), &rec))
+
+	require.NotContains(t, rec.SelfReportedName, "\uFFFD",
+		"a byte-sliced tail arrives as a replacement character, not as a cut name")
+	require.True(t, strings.HasPrefix(declared, strings.TrimSuffix(rec.SelfReportedName, "…")),
+		"what is kept is the beginning of what was declared")
+	require.LessOrEqual(t, len(rec.SelfReportedName), maxNodeNameLen, "the bound is what was promised")
 }
