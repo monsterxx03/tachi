@@ -1,1366 +1,360 @@
-# Tachi — Desktop Handbook (split out of .tachi.md)
+# Tachi —— 桌面手册
 
-Read this **before changing anything under `desktop/`**.
+`desktop/` 全在这里：冒烟套件、构建与签名、Wails 后端与绑定、前端的布局与事件归属、MCP 客户端。徽章那条设备链路单独拆成了 [badge.md](badge.md)。
 
-`.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions that
-apply anywhere in the repo and points here for the rest. **New desktop lessons belong in THIS file, not back
-in `.tachi.md`** — and the rules that ride with that file (freshness in the same turn, convention-not-history,
-split + index when a subject grows) apply to every split of it, this one included.
+**它是提纲——每条 bullet 是一个不变量，外加它防住的那个 bug。** 机制属于它所讲的那段代码（仓库里的源码注释承了这份重），或者 `docs/` 下一篇带日期的设计文档；这里的 bullet 只说：什么必须保持为真、为什么。
 
-**What this file is: the OUTLINE — each bullet is one invariant, plus the bug it prevents.** The mechanism
-behind it belongs in the code it is about (this repo's source comments carry that load) or in a dated design
-doc under `docs/`; a bullet here says WHAT must stay true and WHY, and a subject that outgrows a paragraph
-gets its own handbook beside this one rather than growing here.
+## 目录
 
-## Contents — read the section you need, not the file
-
-| Section | Read it when |
+| 章节 | 什么时候读 |
 | --- | --- |
-| **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) — **start with its routing table** |
-| **Desktop Build & Signing** | you build/package the app (incl. the CLI it ships and the `no_workspace` tag), or debug notifications/TCC |
-| **Desktop on Linux (omarchy)** | you build, package or run desktop on Linux, or touch the tray, file-open, the window frame, or the close-the-window behaviour — **that section also lists what is deliberately NOT wired up there (voice, BLE)** |
-| **Badge (device link & voice)** | anything under `desktop/link/`, `desktop/badge.go` or `desktop/stt/` — **read `docs/agents/badge.md`, not this file** |
-| **Desktop Voice Input** | you touch the composer's microphone button or the `voice:*` events (`desktop/voice.go`, the voice half of `composer.tsx`) |
-| **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
-| **Desktop MCP** | you touch MCP authorization, the MCP panel, the settings page's MCP server editor, or the deferred-tools pool/reminder path |
-| **Desktop Session Tree** | you touch skill discovery, permissions, or anything else that resolves "which tree does this session work in" |
-| **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued |
-| **Desktop Compaction** | you touch the compaction path (`agent/compact.go`, `desktop/compaction.go`, the `AgentEventAutoCompactDone` case), `RunningSessions`, or anything that resolves **which run owns a session** |
-| **Desktop UI State** | you change the frontend: which module owns what, and the rule each convention keeps |
-| **Desktop Themes** | you touch colours |
+| **桌面冒烟验证** | 你改动了任何 driver 看得见的东西（UI、事件、一条绑定、一条端到端流程）——**先看它那张路由表** |
+| **桌面构建与签名** | 你构建/打包这个应用（包括它随包发的 CLI 和 `no_workspace` tag），或者调通知/TCC |
+| **Linux 上的桌面（omarchy）** | 你在 Linux 上构建、打包或运行 desktop，或者碰托盘、打开文件、窗口边框、关窗行为——**那一节还列了那里故意没接上的东西（语音、BLE）** |
+| **徽章（设备连接与语音）** | `desktop/link/`、`desktop/badge.go` 或 `desktop/stt/` 下的任何东西——**读 `docs/agents/badge.md`，不是本文件** |
+| **桌面语音输入** | 你碰输入框的麦克风按钮或 `voice:*` 事件（`desktop/voice.go`、`composer.tsx` 里语音那一半） |
+| **桌面后端（绑定与路径）** | 你碰 `AgentService`——一个方法、一条绑定、一条会话路径、一个打开/显示动作 |
+| **桌面 MCP** | 你碰 MCP 授权、MCP 面板、设置页的 MCP 服务器编辑器，或延迟加载的工具那条池/提醒链路 |
+| **桌面会话树** | 你碰 skill 发现、权限，或者其他任何解析「这个会话在哪个树里干活」的东西 |
+| **桌面单轮历史** | 你碰一轮的历史是怎么拼起来、合并、续下去的 |
+| **桌面压缩** | 你碰压缩链路（`agent/compact.go`、`desktop/compaction.go`、`AgentEventAutoCompactDone` 那个 case）、`RunningSessions`，或者其他任何解析**哪个 run 拥有一个会话**的东西 |
+| **桌面 UI 状态** | 你改前端：哪个模块拥有什么，以及每条约定守住的那条规则 |
+| **桌面主题** | 你碰颜色 |
 
-## Desktop Smoke Verification (demo + mockllm)
+## 桌面冒烟验证（demo + mockllm）
 
-Desktop-only paths (Wails wiring, rendered UI, end-to-end flows) need the real window: unit tests and itest
-cannot see whether a binding's result reaches a card. **Use the in-repo suite** for anything touching desktop
-state, events or UI, and add a scenario when a fix deserves a regression test.
+只有桌面才有的那些路径（Wails 接线、渲染出来的 UI、端到端流程）需要真窗口：一条绑定的结果有没有真的落到卡片上，单元测试和 itest 都看不见。凡是碰桌面状态、事件或 UI 的，**用仓库里这套冒烟套件**；一个修复配得上回归测试时，就加一个场景。
 
 ```sh
 make desktop-smoke ARGS="-run send-now,perm-allow -v"   # the scenarios your change touches (see below)
-make desktop-smoke                                      # everything (~50 scenarios, minutes)
+make desktop-smoke                                      # everything (~76 scenarios, minutes)
 make desktop-smoke ARGS="-keep"                         # keep the sandbox after a pass (artifacts)
 ```
 
-**The suite runs on BOTH platforms**, and the two halves that know the difference are
-`itest/desktop/sandbox_darwin.go` and `sandbox_other.go` — macOS copies a `.app` bundle, re-identifies it and
-re-signs it before `open -g`; Linux copies the bare binary and starts it as a child. What that costs on Linux,
-and where it shows: a run is VISIBLE and the compositor may focus each window (GTK has no show-without-
-activating lever, and a HIDDEN window lays its page out at 0×0 — a driver would assert against zeroes), and the
-app's own stdout lands in the sandbox as `app.log` (`open` throws it away on macOS, so that artifact is
-Linux-only).
+**套件在两个平台上都跑**，平台差异只留在两半代码里：`itest/desktop/sandbox_darwin.go` 和 `sandbox_other.go`——macOS 拷一份 `.app` bundle，重新识别、重新签名，再 `open -g`；Linux 拷裸二进制，当子进程起。在 Linux 上这要付的代价是：运行是可见的，合成器可能顺手给每个窗口聚焦（GTK 没有「显示但不激活」这个杠杆，而被隐藏的窗口会把页面按 0×0 布局——driver 就会拿着零去断言）；而且应用自己的 stdout 会作为 `app.log` 留在沙箱里（macOS 上 `open` 会把它丢掉，所以那份产物只有 Linux 有）。
 
-**The sandbox HOME must SHADOW the parent's, not sit beside it** (`envWith`, sandbox_other.go): a duplicated
-`HOME` is resolved last-wins by Go and first-wins by the GLib/GTK stack under it, so whichever order the two
-copies are in, one of the two readers gets the real home. Measured: the suite drove the app against the user's
-own `~/.tachi`, created sessions in it and reported the result as UI failures.
+**沙箱的 HOME 必须遮蔽父进程的，而不是摆在它旁边**（`envWith`，sandbox_other.go）：重复的 `HOME`，Go 按后者胜解析，它下面的 GLib/GTK 栈按前者胜解析，所以不管这两份拷贝是哪个顺序，两个读取者里总有一个拿到真的 home。实测：套件曾让应用对着用户自己的 `~/.tachi` 跑、在里面建会话，然后把这些结果报成 UI 失败。
 
-### Which scenarios to run — run the touched ones, not the suite
+### 该跑哪些场景 —— 跑碰到的那些，不要跑整套
 
-**Pick from this table; a full run is for a change that reshapes the transcript or the event plumbing
-itself.** When two rows apply, run both. `-run` takes a comma-separated list.
+**从这张表里挑；整套跑是留给那种重塑了会话全文或事件管道本身的改动。** 两行都命中就跑两次。`-run` 吃一个逗号分隔的列表。
 
-| You changed | Run |
+| 你改了什么 | 跑什么 |
 | --- | --- |
-| transcript rendering / turn folding / process strip | `transcript`, `transcript-fold`, `transcript-live` |
-| tool cards (their own args and result, several calls of one tool in a turn) | `parallel-tools`, `transcript-fold` |
-| the live status line, its roll, or a row's geometry | `transcript-live`, `live-roll` |
-| a message bubble's own layout (long links, wrapping, the reader's own line breaks) | `bubble-wrap`, `bubble-lines` |
-| a REPLY's own markup — a code block (its header, the wrap toggle), a markdown image, a long unbreakable string in prose | `md-widgets` |
-| the rhythm between messages (a question and its answer vs two turns) or which message animates in | `md-widgets` |
-| a turn's controls on its footer (复制回答, the ⋯ menu, the entries inside it, the run's numbers) | `md-widgets`, `oneoff-footer` |
-| the reading size (⌘= / ⌘- / ⌘0, and the two stores it lands in) | `font-size`, `bubble-lines` |
-| composer, send/queue/steer routing | `send-now`, `steer-fold`, `composer-height` |
-| a key the composer has to claim itself (⌃U / ⌃D page the transcript from inside the box) | `composer-page-turn` |
-| the microphone button / the `voice:*` events (states, where the text lands) | `voice-input` |
-| scroll pinning, session switch, load, paged history (a turn across a page seam) | `switch-load`, `switch-scroll`, `turn-paging` |
-| sidebar rows, grouping, titles, type scale, carets, a compaction chain (folded, and with its other end gone) | `sessions`, `sidebar-text`, `switch-load`, `chain-orphan` |
-| the sidebar's width (drag, clamp, the choice surviving a restart) | `sidebar-width` |
-| pinning a session (order inside its group, the mark, the menu item) | `sessions`, `projects` |
-| the stop control / which session a status belongs to | `session-running` |
-| projects (groups, binding, panel, palette, forms) | `projects`, `project-palette`, `form-text` |
-| 会话搜索 ⌘K (which rows, what filters, IME composition, where Enter lands, a folded group) | `session-palette` |
-| the menu bar's 「新会话」 (the shell's `ui:new_session` request) | `tray-new-session` |
-| ⌘N / ⌘⇧N / ⌘⇧⌫ (which group a new session lands in, the delete confirmation) | `session-keys` |
-| the sidebar following the session on screen — a creation, ⌘K, ⌘P (the row scrolled into view, and the state it had to be in for that to mean anything) | `session-keys` |
-| the sidebar's row window (a group truncated, growing by scroll/click, and the reveal growing it to reach a row that was never rendered) | `sidebar-window` |
-| the ⌘? sheet (its rows scrolling while the title and 关闭 stay put, which bindings it lists) | `shortcut-sheet` |
-| permission cards / bash `ask` / session-wide allow | `perm-allow`, `perm-deny`, `perm-session`, `perm-unparseable` |
-| a FILE tool's ask (its own `files` kind and copy, and that a refusal refuses the call, not the turn) | `perm-files` |
-| the MCP search cost card (its copy, and a refusal sticking for the session) | `perm-mcp-budget` |
-| the AskUserQuestion form (options, the free-text field, the key that submits it) | `ask-form` |
-| a turn's *changes* (footer chip, diff pane, review scope) | `bash-diff`, `frozen-panel`, `multi-root` |
-| the diff overlay (file index, sections, drag, current row) | `file-index`, `multi-root`, `oneoff-footer` |
-| the diff's 上下/左右 layout (pairing, blank cells, column scroll, the choice surviving) | `diff-layout`, `review-all` |
-| review / commit side panel, report, findings | `oneoff-panel`, `oneoff-footer`, `oneoff-report`, `review-all` |
-| rewind / checkpoints | `rewind`, `compact` |
-| context meter, usage numbers, auto-compaction (the loop compacts on its own, mid-turn) | `ctx-ring`, `compact`, `auto-compact`, `compact-race` |
-| the compaction WINDOW (the child exists while the turn is still running: which row shows 运行中, what a send in the child does) | `compact-window` |
-| MCP panel, OAuth, deferred-tools reminder | `mcp-auth` |
-| skills discovery / the catalog | `skill-catalog`, `project-context` |
-| workspace roots (add/remove, git branch, @-files) | `roots-branch`, `multi-root`, `at-file-reload` |
+| 会话全文渲染 / 单轮折叠 / 过程条 | `transcript`、`transcript-fold`、`transcript-live` |
+| 工具卡片（它们自己的参数和结果、一轮里同一个工具被调好几次） | `parallel-tools`、`transcript-fold` |
+| 实时状态行、它的滚动，或某一行的几何 | `transcript-live`、`live-roll` |
+| 消息气泡自己的布局（长链接、折行、读者自己敲的换行） | `bubble-wrap`、`bubble-lines` |
+| 一条回答自己的标记——代码块（它的头部、折行开关）、markdown 图片、正文里一长串不可断的字符串 | `md-widgets` |
+| 消息之间的节奏（一问一答 vs 两轮）或哪条消息动效入场 | `md-widgets` |
+| 一轮在页脚上的那些控件（复制回答、⋯ 菜单、它里面的条目、这次 run 的数字） | `md-widgets`、`oneoff-footer` |
+| 阅读字号（⌘= / ⌘- / ⌘0，以及它落进去的两个存储） | `font-size`、`bubble-lines` |
+| 输入框、send/queue/steer 的路由 | `send-now`、`steer-fold`、`composer-height` |
+| 输入框必须自己占下的一枚键（⌃U / ⌃D 从框内翻会话全文） | `composer-page-turn` |
+| 麦克风按钮 / `voice:*` 事件（状态、文本落在哪儿） | `voice-input` |
+| 滚动钉住、会话切换、加载、分页历史（跨页缝的一轮） | `switch-load`、`switch-scroll`、`turn-paging` |
+| 侧栏的条、分组、标题、字号阶梯、折角、一条压缩链（已折叠，以及它的另一端没了） | `sessions`、`sidebar-text`、`switch-load`、`chain-orphan` |
+| 侧栏的宽度（拖、钳制、这个选择熬过一次重启） | `sidebar-width` |
+| 钉住一个会话（它在组内的顺序、那个标记、菜单项） | `sessions`、`projects` |
+| 停止控件 / 一个状态属于哪个会话 | `session-running` |
+| 项目（分组、绑定、面板、命令面板、表单） | `projects`、`project-palette`、`form-text` |
+| 会话搜索 ⌘K（哪些行、什么过滤、IME 组字、Enter 落在哪儿、一个折叠的组） | `session-palette` |
+| 菜单栏的「新会话」（shell 的 `ui:new_session` 请求） | `tray-new-session` |
+| ⌘N / ⌘⇧N / ⌘⇧⌫（新会话落在哪个组、删除确认） | `session-keys` |
+| 侧栏跟随屏幕上的会话——一次创建、⌘K、⌘P（那一行被滚进视野，以及它为此必须处在的状态） | `session-keys` |
+| 侧栏的行窗口（一个组被截断，靠滚动/点击长大，而 reveal 把它长大到能够够到一条从未渲染过的行） | `sidebar-window` |
+| ⌘? 面板（它的行滚动而标题和「关闭」不动，它列了哪些绑定） | `shortcut-sheet` |
+| 权限卡片 / bash 的 `ask` / 会话级放行 | `perm-allow`、`perm-deny`、`perm-session`、`perm-unparseable` |
+| 一个**文件**工具的 ask（它自己的 `files` 种类和文案，以及一次拒绝拒绝的是这次调用、不是整轮） | `perm-files` |
+| MCP 搜索成本卡片（它的文案，以及一次拒绝会为此会话一直生效） | `perm-mcp-budget` |
+| AskUserQuestion 表单（选项、自由文本框、提交它的那枚键） | `ask-form` |
+| 一轮的*改动*（页脚小片、diff 面板、评审范围） | `bash-diff`、`frozen-panel`、`multi-root` |
+| diff 浮层（文件索引、分节、拖拽、当前行） | `file-index`、`multi-root`、`oneoff-footer` |
+| diff 的上下/左右布局（配对、空格子、列滚动、这个选择熬不熬得过） | `diff-layout`、`review-all` |
+| 评审 / 提交侧面板、报告、发现 | `oneoff-panel`、`oneoff-footer`、`oneoff-report`、`review-all` |
+| rewind / 检查点 | `rewind`、`compact` |
+| 上下文计量环、用量数字、自动压缩（循环在单轮中途自己压缩） | `ctx-ring`、`compact`、`auto-compact`、`compact-race` |
+| 压缩 WINDOW（子会话在那一轮还在跑时就存在：哪一行显示「运行中」、往子会话里发一条会怎样） | `compact-window` |
+| MCP 面板、OAuth、延迟加载的工具的提醒 | `mcp-auth` |
+| skill 发现 / 目录 | `skill-catalog`、`project-context` |
+| 工作区根目录（加/删、git 分支、@-文件） | `roots-branch`、`multi-root`、`at-file-reload` |
 | 输入框的 `@session:` 引用（打进哪个命名空间、插进来的是什么、模型收到的是指针而不是正文） | `at-session` |
-| 子系统拥有的会话（行上的来源标签、只读横幅、被换掉的输入框），以及它被一个**正在跑的任务**持有时那条出路 | `managed-session`, `managed-session-busy` |
-| a previewed file / the viewer / lightbox / find | `file-find`, `zoom-fit`, `mermaid-zoom` |
-| ⌘F over the transcript (what it searches, where it lands) | `chat-find` |
-| a turn that fails mid-flight — its stream dies, or the request itself is rejected (what it keeps, what the next turn sends) | `stream-fail`, `api-error-mid-turn` |
-| a link in a reply, clicked — an ordinary URL (the system browser opens it and the webview stays put) | `external-link` |
-| a link in a reply that names a FILE on disk (preview opens in-app; a path that does not exist stays browser-only) | `file-link` |
-| a history REBUILT from disk rather than written live — a record seeded before the app started (`seedMessages`), an interrupted turn's leftovers | `orphan-tool-call`, `at-file-reload`, `image-reload` |
-| plans, `SavePlan`, the plan panel | `plan-writeback` |
-| the settings page (groups, a config list's card, a dropdown, a save, its type scale) | `settings` |
-| the settings page's MCP server editor (the one block that writes mcp.json instead of config.yaml) | `mcp-edit` |
-| sending/receiving files or images | `paste-image`, `image-reload` |
-| deleting sessions, running-session guards | `delete-running` |
-| whatever else — the transcript itself, session rows | `transcript`, `sessions` |
+| 子系统拥有的会话（行上的来源标签、只读横幅、被换掉的输入框），以及它被一个**正在跑的任务**持有时那条出路 | `managed-session`、`managed-session-busy` |
+| 一个预览的文件 / 查看器 / lightbox / 查找 | `file-find`、`zoom-fit`、`mermaid-zoom` |
+| 会话全文上的 ⌘F（它搜什么、落在哪儿） | `chat-find` |
+| 一轮中途失败——它的流断了，或者请求本身被拒（它保住了什么、下一轮发的是什么） | `stream-fail`、`api-error-mid-turn` |
+| 一条回答里的链接被点——一个普通 URL（系统浏览器打开它，webview 不动） | `external-link` |
+| 一条回答里指名磁盘上一个**文件**的链接（预览在应用内打开；一个不存在的路径就只走浏览器） | `file-link` |
+| 一份**从磁盘重建**而不是实时写下的历史——在应用启动前就播下的记录（`seedMessages`）、一轮被打断后留下的残余 | `orphan-tool-call`、`at-file-reload`、`image-reload` |
+| 计划、`SavePlan`、计划面板 | `plan-writeback` |
+| 设置页（分组、某个配置列表的卡片、一个下拉、一次保存、它的字号阶梯） | `settings` |
+| 设置页的 MCP 服务器编辑器（唯一往 mcp.json 而不是 config.yaml 写的那个 block） | `mcp-edit` |
+| 收发文件或图片 | `paste-image`、`image-reload` |
+| 删除会话、运行中会话的护栏 | `delete-running` |
+| 其他任何东西——会话全文本身、会话行 | `transcript`、`sessions` |
 
-The suite does not need its window in front, and does not take the front: demo mode keeps the page awake
-while another window covers it, and a run launches without activating itself — so a run can be left going
-while you work.
+套件不需要把窗口放在前面，也不会去抢焦点：demo 模式在别的窗口盖住它时照样让页面保持清醒，而一次运行启动时不激活自己——所以你可以在它跑的时候接着干活。
 
-### Shape of the suite
+### 套件的形状
 
-It is `itest/desktop/`: `main.go` (runner: sandbox, launch, verdict, report), `scenarios.go` (one
-conversation per scenario — the mock's steps plus the Go-side `after` assertions), `sandbox.go` (bundle prep,
-isolated HOME, launch/kill), `sink.go` (the loopback endpoint drivers report to), `drivers/` (harness.js +
-one script per scenario). Per run it builds a throwaway sandbox holding a private copy of the app (executable
-renamed `TachiSmoke` so no `pkill` can reach the user's own Tachi), an isolated HOME with a `config.yaml`
-pointing at the scripted model, the work dir, `driver.js`, `dom.html` (the page as the verdict found it) and
-`mock-requests.txt` (what the model was actually asked). **`desktop/bin/tachi-desktop.app` must exist**
-(`make -C desktop build`); the runner refreshes the executable inside it from `bin/tachi-desktop` on every run.
+它就是 `itest/desktop/`：`main.go`（runner：沙箱、启动、判定、报告）、`scenarios.go`（每个场景一段对话——mock 的步骤加上 Go 那一侧的 `after` 断言）、`sandbox.go`（bundle 准备、隔离的 HOME、启动/杀掉）、`sink.go`（driver 上报的那个 loopback 端点）、`drivers/`（harness.js + 每个场景一个脚本）。每次运行它都会搭一个一次性沙箱，里面装着应用的一份私有拷贝（可执行文件改名成 `TachiSmoke`，这样没有 `pkill` 能碰到用户自己的 Tachi）、一个隔离的 HOME，其中 `config.yaml` 指向那台脚本化的模型、工作目录、`driver.js`、`dom.html`（判定看到它时的那个页面）和 `mock-requests.txt`（模型实际上被问的是什么）。**`desktop/bin/tachi-desktop.app` 必须存在**（`make -C desktop build`）；runner 每次运行都会用 `bin/tachi-desktop` 刷新里面的那个可执行文件。
 
-A driver asserts what the UI **shows** (transcript shape, chips, buttons); the scenario's Go half asserts what
-actually **happened** (the prompt the model received, the files written) — a regression usually shows up in
-exactly one of the two, so write both. A new scenario is a `drivers/<name>.js` against the harness
-(`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`, plus
-`q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`, and `turnMenu`/`menuItem`/`turnMenuLabel` for a
-turn footer's ⋯ menu) plus its entry in `scenarios.go` (the mock's `steps`, the work-dir `files`, an `after`
-func), added to the routing table above. Keep both halves small: one behaviour per scenario, asserting what
-the user would notice.
+driver 断言 UI **显示**了什么（会话全文的形状、小片、按钮）；场景的 Go 那一半断言实际**发生了**什么（模型收到的提示词、写下的文件）——一个回归通常正好在二者之一里露出来，所以两边都要写。新场景是对着 harness 写一个 `drivers/<name>.js`（`smoke.waitFor`——绝不用固定 sleep——`smoke.check(label, ok, detail)`、`smoke.finish()`，外加 `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`，以及给一轮页脚的 ⋯ 菜单用的 `turnMenu`/`menuItem`/`turnMenuLabel`），再加上它在 `scenarios.go` 里的条目（mock 的 `steps`、工作目录的 `files`、一个 `after` 函数），并加进上面那张路由表。两边都保持小：每个场景一个行为，断言用户会注意到的东西。
 
-Four traps in the driver half, each of which fails a run that looks green:
+driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运行失败：
 
-- **A synthetic click cannot reach a FOCUS change, so a behaviour hung on `blur` has to be driven as a blur.**
-  `smoke.click()` (and any `el.click()`) fires the handler but moves no focus and visits no coordinates — an
-  untrusted event gets no default action. So "click somewhere else and the rename box closes" is not testable
-  as written: on a real click the ORDER is mousedown → focus moves (blur) → mouseup → click, and only the blur
-  half is in reach here (`smoke.q('.session-rename').blur()` — the `projects` scenario drives exactly that).
-  Worse, the composition's other half cannot be asserted at all: a synthetic click lands on its row whether or
-  not a text box is covering it, so that check passes in the broken state and is not a check. Assert the
-  contract that makes the gesture work, and say in the comment why the gesture itself is out of reach.
-- **Read a computed style only for the frame AFTER the one that changed it.** A scripted key changes
-  `--fs-scale` synchronously, but `getComputedStyle` keeps answering with the PREVIOUS frame's value until
-  WebKit's style recalc runs — so measuring right after the key reads the size from before it, and the next
-  `waitFor` compares against a baseline that is already the target. Wait for what you want to SEE — `waitFor`
-  polling the computed size — never for a sleep.
-- **A scenario whose LAST step is fire-and-forget must let the write land** (`smoke.sleep` before `finish()`).
-  The runner kills the app as soon as the driver reports, so a bound call still in flight — `⌘=`, a panel width,
-  a theme — is a file write that never happens, and the scenario's Go half reads the value from one step back.
-  This is the one legitimate fixed wait in a driver, because there is no state to wait for: the UI is already
-  correct, and what is owed is a side effect.
-- **The smoke bundle is signed with the LOCAL CERTIFICATE, not ad-hoc** (`smokeSignID` in `sandbox.go`), and it
-  has to be: desktop links the BLE package, whose adapter builds a `CBCentralManager` at package INIT, so this
-  bundle asks for Bluetooth permission whether or not a scenario goes near the badge. An ad-hoc signature's
-  identity IS the content hash, so every rebuild is a NEW app to macOS and the prompt returns on every run;
-  with the certificate macOS records the answer once. No certificate on the machine → ad-hoc, and the prompt
-  is back (the suite still runs).
+- **合成点击不会让焦点变化，所以挂在 `blur` 上的行为只能当作 blur 来驱动。** `smoke.click()`（以及任何 `el.click()`）会触发 handler，但不移动焦点、不走任何坐标——一个不受信任的事件拿不到默认动作。所以「点别处，重命名框就关上」照它写的那样不可测：在真实点击里顺序是 mousedown → 焦点移动（blur）→ mouseup → click，而这里够得到的只有 blur 那一半（`smoke.q('.session-rename').blur()`——`projects` 场景驱动的正是它）。更糟的是，这个组合的另一半根本断言不了：不管有没有一个文本框盖住它，合成点击都会落在它那一行上，所以那条检查在坏掉的状态里也通过，它就不是一条检查。去断言让那个手势成立的那个契约，并在注释里说清为什么手势本身够不到。
+- **计算样式要等改动落地之后的那一帧再读。** 一枚脚本键会同步改 `--fs-scale`，但 `getComputedStyle` 会一直拿前一帧的值作答，直到 WebKit 的样式重算跑过——所以按键后立刻测量读到的是按它之前的大小，而下一个 `waitFor` 拿一个已经是目标的基线去比。等你想**看到**的东西——`waitFor` 去轮询那个算出来的尺寸——绝不等一个 sleep。
+- **一个最后一步即发即弃的场景，必须让那次写入落地**（`finish()` 之前来一个 `smoke.sleep`）。driver 一上报，runner 就杀掉应用，所以一次仍在飞行的绑定调用——`⌘=`、一个面板宽度、一个主题——就是一次永远不会发生的文件写入，而场景的 Go 那一半会读到退后一步的值。这是 driver 里唯一正当的固定等待，因为没有任何状态可等：UI 已经正确，欠着的是一个副作用。
+- **冒烟 bundle 是用本地证书签的，不是 ad-hoc**（`sandbox.go` 里的 `smokeSignID`），而且必须如此：desktop 链接了 BLE 那个包，它的 adapter 在包 INIT 时就建一个 `CBCentralManager`，所以这个 bundle 不管场景有没有靠近徽章都会要蓝牙权限。一个 ad-hoc 签名的身份**就是**内容哈希，所以每次重建对 macOS 都是一个新应用，弹问每次运行都会回来；有了证书，macOS 把答案记一次。机器上没有证书 → ad-hoc，弹问又回来了（套件照样跑）。
 
-Fixtures exist where the real path needs something a driver cannot do:
-- `extraRoots` — additional workspace roots; seeded into the session, because the UI's only way in is a NATIVE
-  directory picker no driver can click. Reach a seeded root from the work dir as `../<name>/…`.
-- `config` — a YAML block appended to the generated `config.yaml` (how a parked-permission scenario gets its
-  `permissions.bash.ask` / `permissions.files.read.ask` rule).
-- `pricing` — the mock provider's own price table, for a scenario that asserts on MONEY (`perm-mcp-budget`'s
-  cost card). It cannot ride in `config`: prices live INSIDE the provider entry, and a second `providers:` key
-  would not load. Nil everywhere else — an unpriced model bills nothing, which keeps the other scenarios'
-  ¥/积分 figures at zero and out of their assertions.
-- `project` — a desktop project: `projects.json` and the session's `project_id` are seeded, same reason.
-- `seedMessages` / `seedSecond` — a transcript written before the app launches. A driver cannot produce a
-  reload by itself (switching sessions serves the in-memory copy), so this is how a restart-shaped assertion
-  is staged.
-- `orphanChain` — a session whose `compacted_parent_id` names a session that does **not** exist. A driver can
-  neither write a session record nor delete one, so this is the only way to stage "a compaction chain whose
-  other end is gone" — what a parent deleted by hand, or swept by session cleanup's `max_keep`, leaves behind.
-- **A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
-  so the session a driver asserts on has to be seeded LAST — otherwise the driver asserts on the wrong one,
-  which reads exactly like "the project does not drive its member".
+有些 fixture 存在，是因为真实路径需要 driver 做不到的东西：
+- `extraRoots` —— 额外的工作区根目录；种进会话里，因为 UI 唯一的入口是一个任何 driver 都点不了的原生目录选择器。从工作目录按 `../<name>/…` 够到一个种下的根目录。
+- `config` —— 一段追加到生成的 `config.yaml` 后面的 YAML（一个停车权限的场景是这样拿到它的 `permissions.bash.ask` / `permissions.files.read.ask` 规则的）。
+- `pricing` —— mock provider 自己的价格表，给一个对**钱**做断言的场景用（`perm-mcp-budget` 的成本卡片）。它没法搭 `config` 的车：价格住在 provider 条目**里面**，而第二个 `providers:` key 不会加载。其他地方都是 nil——一个没定价的模型不产生任何费用，这让其他场景的 ¥/积分 数字都停在零、落在它们的断言之外。
+- `project` —— 一个桌面项目：`projects.json` 和会话的 `project_id` 都被种下，同样的理由。
+- `seedMessages` / `seedSecond` —— 在应用启动之前写下的一份会话全文。driver 自己造不出一次重新加载（切换会话服务的是内存里的拷贝），所以「重启形状」的断言是这样搭起来的。
+- `orphanChain` —— 一个会话，它的 `compacted_parent_id` 指名了一个**不存在**的会话。driver 既写不了也删不了会话记录，所以这是搭出「一条另一端没了的压缩链」的唯一办法——一个手动删掉的、或者被会话清理的 `max_keep` 扫掉的父会话所留下的东西。
+- **一个 fixture 没有「当前会话」——应用打开的是最新的那个**（`ListSessions` 按 `CreatedAt` 排序），所以 driver 要断言的会话必须**最后**种下——否则 driver 就断言错了那一个，而它读起来跟「这个项目驱动不了它的成员」一模一样。
 
-### Rules and traps
+### 规则与陷阱
 
-- **Only one instance may run.** `open` on a live instance only hands the launch to the running process and
-  passes NO environment (the driver never runs and the previous scenario's app answers), and
-  `pkill -f "tachi-desktop.app/Contents/MacOS/tachi-desktop"` matches the user's own app. The unique executable name is what
-  makes `pkill -f TachiSmoke` safe. That pattern also matches the SANDBOX's own build (`codesign` carries it
-  on its command line), so a stray `pkill -f TachiSmoke` while a run is preparing kills the ad-hoc signing and
-  the scenario reports `codesign …: signal: terminated` before its app ever launches. Never kill a run in
-  flight: every sandbox app shares one bundle id, so the instance left behind is what the next `open` activates.
-- **Run one invocation at a time.** Each driver has a 1m30s budget and its assertions wait ~3s for a transient
-  state, so a starved webview misses both. An EMPTY `mock-requests.txt` in a failing scenario's sandbox is the
-  signature of a starved run rather than a broken app. Before believing a failure, check
-  `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the scenario on its own.
-- **A driver that does not PARSE fails as "the app did not start".** The payload is one `(function(){…})()`, so
-  a syntax error anywhere in it — the easy one is a `const` declared twice in the same IIFE — throws on EVERY
-  retry, and the app's own log stays clean (session dir created, no demo error). `node --check
-  itest/desktop/drivers/<name>.js` costs a second; a failing run's kept sandbox holds the copy that ran.
-- **A driver must find what it clicks by NAME, never by position.** The page draws one ＋ per declared list and
-  several `.set-elem` cards per block, so declaring a new list (or adding an item) MOVES the indices under an
-  existing driver: `smoke.qa('.set-add .btn')[0]` silently became the ＋ of `jev.pricing.bands` when that list
-  was declared, and the scenario then clicked a button belonging to another list — every later "the new card
-  appeared" assertion failed, on a page that looked fine. Scope by the label the element CARRIES (the ＋ that
-  says `＋ 添加 providers`, the card's own head, a row INSIDE that card) and by nothing else; the same rule
-  says a leaf's TAIL is not unique on a tab either (`jev.api_key` and `providers.0.api_key` are both
-  `api_key`, and only one of them has a value).
-- **The harness can read the DOM, not the PAINT.** Every assertion goes through `getComputedStyle`, geometry
-  or text, so a bug where WebKit simply does not paint something is INVISIBLE to a green run — the elements are
-  there, their box is right, their styles are right. Do not read "no spec fails" as "it renders correctly"; a
-  driver's job is to pin the MECHANISM that causes such a bug (see the `settings` scenario's
-  `.app-body[inert]` + sidebar-`visibility` pair).
-- **A driver's first gate is the app MOUNTED; the second is the app READY.** `.composer-input` exists — and looks
-  interactive — before a session is open, and a send in that window is refused by the backend and then wiped by
-  the switch that follows: the click vanishes with nothing on screen to show for it. `smoke.waitForSession()`
-  (the root's `data-session-id`) is the second gate every driver starts with; macOS boots fast enough that the
-  race never showed, and on Linux it landed inside the opening action of every sending scenario.
-- **Two things a driver must never spell for macOS: the shortcut modifier, and its printed name.** `smoke.key()`
-  turns `{metaKey: true}` — the gesture's name, which is how this codebase writes it everywhere — into the field
-  the platform actually presses (Ctrl off macOS), and a driver's real `ctrlKey` (⌃U/⌃D, Ctrl+N/P) is left alone;
-  `smoke.MOD` is the printed "⌘"/"Ctrl" for assertions on RENDERED keycaps. A driver that hard-coded `⌘ N`
-  passed on macOS and failed on Linux, where the shortcut sheet is right to say `Ctrl N`.
-- **A driver dispatches a synthetic key INTO THE PAGE, so it can never say whether the menu bar claims that
-  key** (`smoke.key` fires a `KeyboardEvent` on an element; the native menu is not in that path at all). A key
-  equivalent a menu ITEM owns is handled before the webview sees the event — which is why the reading size's
-  ⌘= / ⌘- / ⌘0 needed Wails' `View`→zoom items removed (`desktop/menu_darwin.go`) and why that half is pinned
-  by `desktop/menu_darwin_test.go` (asserting on ACCELERATORS, not on labels). `font-size` asserts what the keys
-  DO. Those two gate on darwin because the menu itself is macOS-only — see the Linux section.
-- **A launcher action is RECORDED in a scripted run, so a driver may click one — the argv is the assertion**
-  (`TACHI_DEMO_OPEN_LOG`, `desktop/demo.go`): the app appends what it would have handed to `open` / xdg-open to
-  the runner's own file (`opened.txt`, read back as `checkCtx.opened`) instead of launching it, for every
-  scenario. That is what keeps a run from opening a browser or a Finder window on the machine it happens on, and
-  it is what lets `external-link` prove the CLICK — the one fact a Go unit test cannot see — while
-  `TestOpenSessionDirOpensTheSessionDirectory` stays the half that pins the argv of a specific action. A
-  scenario that only wants the control asserted (打开会话目录 is asserted and deliberately not clicked) still pins it
-  that way.
-- **A control used as a TRIGGER for another behaviour pins neither** — a button and a page switch must not ride
-  on one click. And **an assertion belongs to the scenario that produces the fact**: a check that sat in
-  `oneoff-footer`'s `after` while the driver producing the fact is `oneoff-panel`'s read a default forever.
-- **Wait for the fact the action reads, not for a neighbour that correlates with it.** The 评审本轮改动
-  entry exists after its FIRST changed file, not its last, so a click on 「完整 diff」 that waits only for it
-  captures a one-file set.
-- **A turn footer's entries live BEHIND a trigger, so a driver opens it — and re-queries the entry at click
-  time.** 完整 diff, the two review scopes and the run's numbers are the footer's ⋯ menu (App.tsx's TurnMenu;
-  the state a reader sees without opening anything, 评审中… / 已评审, is on the TRIGGER). `smoke.turnMenu` /
-  `smoke.menuItem` are that gesture. Two traps, both of which cost a run: the rows arrive on the commit AFTER
-  the click, so a lookup must go through `waitFor` (a synchronous read in the same statement as the click
-  returns nothing), and clicking an entry UNMOUNTS the menu — a node captured before an intervening
-  interaction is detached, and `.click()` on it is a silent no-op.
-- **A transient state belongs to the trail; a steady state belongs to a direct read.** A UI state whose length
-  is the WORK's length (the 评审中… state) makes `waitFor` a coin flip — sample on a ~10ms timer, dedupe into a
-  trail, assert the trail CONTAINS the state. But read the END state off the element the wait returned.
-- **With Reduce motion ON, EVERY property change is a real transition** (`transition-duration: 0.01ms
-  !important` in base.css). 0.01ms is not zero: a driver that writes a style and reads
-  `getBoundingClientRect()` in the same task gets the OLD value, however correct the code is.
-- **A stale element swallows a gesture**: re-query the handle for EVERY synthetic drag, or the drag lands on a
-  detached node and passes against the previous value without dragging at all.
-- **A control run proves nothing until the build is PROVEN to carry it** (`make frontend && go build -o bin/tachi-desktop .`):
-  `npm run build` is `tsc && vite build`, so an edit that does not type-check skips the Go build via `&&` and
-  the run measures the PREVIOUS binary. Check `[ bin/tachi-desktop -nt <the edited source> ]`.
-- **A capture is not part of the suite** (the suite keeps `dom.html` + the assertion lines; a screenshot nobody
-  diffs rots). It IS possible BY HAND where the terminal holds the Screen Recording grant:
-  `screencapture -x -o -l <window id>` — the id via `CGWindowListCopyWindowInfo` — and `-R <x,y,w,h>` works too on
-  macOS 26. What a hand-run needs is its own HOME and a REAL bundle: the bare `bin/tachi-desktop` aborts in
-  `UserNotifications` (`bundleProxyForCurrentProcess is nil`), so refresh the bundle (`make build`) and launch
-  `open -n --env HOME=<a clone of ~/.tachi> bin/tachi-desktop.app` — an APFS clone (`cp -Rc`) so the user's own instance,
-  its session store and its TCC grants stay out of the loop. Leave `TACHI_DEMO_NO_ACTIVATE` unset (the window
-  comes to the front) and point `TACHI_DEMO_JS` at a script that clicks the app into the state to look at; env
-  reaches the app only through `open`'s own `--env`, which is why the launch goes through LaunchServices.
-- **The demo bootstrap and the page-awake switch are load-bearing; leave them alone unless you are fixing
-  them.** `TACHI_DEMO_LOAD_MS` (`demo.go`) is the driver's head start, the payload is re-issued for a 10s
-  window because a script injected into a loading document is dropped, and the repeats are safe because the
-  payload guards on `window.__tachiDriverStarted` (a scenario reporting TWICE means that guard is gone). The
-  demo starts from `ApplicationDidFinishLaunching`, never a sleep: a main-thread dispatch before `App.Run()`
-  builds the platform impl PANICS the process, which from outside is indistinguishable from "the app did not
-  start".
-- **A covered window is not a paused run — demo mode keeps the page awake, deliberately.** WebKit reads a
-  page's visibility off the WINDOW alone (on screen, not miniaturized, not occluded) and never off which app is
-  frontmost, so an ordinary covered window is a *hidden* page: frames stop, DOM timers clamp to 1Hz, and a run
-  can post NOTHING before the timeout. Read `等了 90s 没收到结果` as *the page was throttled*, not *the driver
-  hung*; the run's `页面节流已解除` line says whether the switch was lifted (`keepPageAwake`,
-  `webview_awake_darwin.go`). The harness asserts the outcome on EVERY scenario, so a Wails/WebKit update that
-  drops the SPI fails on one readable line.
-- **The smoke window does not ANIMATE: WebKit collapses transition durations to ~0 while the window is
-  occluded** (in the sandbox the toolbar's own `transition` reads `padding-left 0.00001s`, so a value read right
-  after the click is already the end state). `keepPageAwake` lifts the TIMER
-  throttling, not this. So a driver may assert an animation's two ENDS and that the property is transitioned,
-  never a middle frame — and "the sidebar slid open" is not assertable here at all.
-- **The console is part of the report**: the driver's `console.error` lines ride in `Result.Console`, printed
-  for passing runs too.
+- **只能有一个实例在跑。** 对一个活着的实例 `open` 只会把这次启动转交给那个正在跑的进程，并且**不**传任何环境（driver 永远不会跑，答话的是上一个场景的应用），而 `pkill -f "tachi-desktop.app/Contents/MacOS/tachi-desktop"` 会命中用户自己的应用。那个唯一的可执行文件名字，才是让 `pkill -f TachiSmoke` 安全的东西。那个模式也会命中**沙箱**自己的构建（`codesign` 把它带在命令行上），所以一次运行正在准备时来一发走火的 `pkill -f TachiSmoke` 会杀掉那次 ad-hoc 签名，于是场景在它的应用还没启动之前就报 `codesign …: signal: terminated`。绝不要在飞行中杀一次运行：每个沙箱应用共用一个 bundle id，所以留下的那个实例就是下一次 `open` 所激活的。
+- **同一时间只跑一次。** 每个 driver 有 1m30s 的预算，它的断言为一次瞬态等大约 3s，所以一个被饿着的 webview 两个都会错过。一个失败场景的沙箱里那份**空**的 `mock-requests.txt`，是一次被饿着的运行、而不是一个坏应用的签名。在相信一次失败之前，查 `pgrep -fl "itest/desktop|TachiSmoke"`，然后单独重跑那个场景。
+- **一个连解析都过不了的 driver，会以「应用没启动」的样子失败。** payload 是一个 `(function(){…})()`，所以里面任何地方有语法错误——最容易的一种是在同一个 IIFE 里把 `const` 声明两次——**每次**重试都会抛，而应用自己的日志一直干干净净（会话目录建了、没有 demo 错误）。`node --check itest/desktop/drivers/<name>.js` 只花一秒；一次失败运行保留的沙箱里放着跑过的那个拷贝。
+- **driver 必须按名字、绝不按位置找到它要点的东西。** 页面给每个声明的列表画一个 ＋，给每个 block 画好几张 `.set-elem` 卡片，所以声明一个新列表（或者加一个条目）会**移动**现有 driver 底下那些下标：那个列表被声明时，`smoke.qa('.set-add .btn')[0]` 悄没声地变成了 `jev.pricing.bands` 的 ＋，于是场景点了一个属于另一个列表的按钮——此后每一条「新卡片出现了」的断言都失败，而页面看着好好的。按元素**自身携带**的标签划定范围（那个写着 `＋ 添加 providers` 的 ＋、卡片自己的头、卡片**里面**的一行），别的都不算；同一条规则也说：一个叶子名字的尾段在一个 tab 上也不唯一（`jev.api_key` 和 `providers.0.api_key` 都是 `api_key`，而其中只有一个有值）。
+- **harness 能读 DOM，读不了 PAINT。** 每条断言都走 `getComputedStyle`、几何或文本，所以一个 WebKit 干脆没把某个东西画出来的 bug，对一次绿的运行是**看不见**的——元素都在，它们的盒子对，样式也对。别把「没有用例失败」读成「它渲染正确」；driver 的活是钉住造成这类 bug 的**机制**（见 `settings` 场景那一对 `.app-body[inert]` + 侧栏 `visibility`）。
+- **driver 的第一道门是应用「挂载」了；第二道是应用「就绪」了。** `.composer-input` 在一个会话打开之前就存在——而且看着能交互——在那个窗口里发一条会被后端拒掉、再被紧随其后的切换抹掉：点击消失了，屏幕上什么都不剩。`smoke.waitForSession()`（根节点上的 `data-session-id`）是每个 driver 起步的第二道门；macOS 启动快到那场竞态从没露过面，而在 Linux 上它落进了每个发送场景开局动作的里面。
+- **有两样东西 driver 绝不能替 macOS 拼出来：快捷键的修饰键，以及它印出来的名字。** `smoke.key()` 会把 `{metaKey: true}`——那个手势的名字，这个代码库到处都这么写它——变成平台真正按下的那个字段（非 macOS 上是 Ctrl），而 driver 真正的 `ctrlKey`（⌃U/⌃D、Ctrl+N/P）原样留着；`smoke.MOD` 是对**渲染出来的**键帽做断言时那个印出来的 "⌘"/"Ctrl"。一个把 `⌘ N` 写死的 driver 在 macOS 上过了、在 Linux 上失败，而那里的快捷键面板说 `Ctrl N` 是对的。
+- **driver 只是把一个合成按键派发进页面，所以它永远说不了菜单栏有没有占下那枚键**（`smoke.key` 在一个元素上发一个 `KeyboardEvent`；原生菜单完全不在这条路上）。一个菜单**项**拥有的键等价物会在 webview 看到这个事件之前被处理——这正是为什么阅读字号的 ⌘= / ⌘- / ⌘0 需要把 Wails 的 `View`→zoom 项删掉（`desktop/menu_darwin.go`），也正是为什么那一半由 `desktop/menu_darwin_test.go` 钉住（断言 **ACCELERATORS**，不是标签）。`font-size` 断言那些键**做了什么**。那两者在 darwin 上设门禁，因为菜单本身是 macOS 独有的——见 Linux 那一节。
+- **一次启动器动作在脚本化运行里是被「记录」下来的，所以 driver 可以点一个——argv 就是那条断言**（`TACHI_DEMO_OPEN_LOG`、`desktop/demo.go`）：对每个场景，应用都把它本来要交给 `open` / xdg-open 的东西追加到 runner 自己的文件里（`opened.txt`，读回来是 `checkCtx.opened`），而不是真的启动它。这正是让一次运行不会在它发生的那台机器上打开浏览器或 Finder 窗口的东西，也正是让 `external-link` 能证明那次**点击**——一个 Go 单元测试看不见的唯一事实——而 `TestOpenSessionDirOpensTheSessionDirectory` 仍是钉住某个具体动作的 argv 的那一半。一个只想断言那个控件的场景（「打开会话目录」被断言且故意不点）也照样那样钉住它。
+- **一个当作另一个行为的「触发器」用的控件，两边都钉不住**——一个按钮和一次页面切换不能骑在同一次点击上。而且**一条断言属于产生那个事实的场景**：一条坐在 `oneoff-footer` 的 `after` 里、而产出那个事实的 driver 是 `oneoff-panel` 的检查，会永远读到一个默认值。
+- **等你那次动作要读的那个事实，不要等一个与它相关的邻居。** 「评审本轮改动」这个条目在它**第一个**改动文件之后就存在、不是在最后一个之后，所以一次只等它的「完整 diff」点击抓到的是一份单文件集合。
+- **一轮页脚的条目住在一个触发器的「后面」，所以 driver 去打开它——并且在点击的时刻重新查询那个条目。** 「完整 diff」、两个评审范围、这次 run 的数字都是页脚的那个 ⋯ 菜单（App.tsx 的 TurnMenu；读者不打开任何东西就能看到的状态「评审中… / 已评审」在**触发器**上）。`smoke.turnMenu` / `smoke.menuItem` 就是那个手势。两个陷阱，每个都要花掉一次运行：那些行在点击**之后**的那次提交才到，所以一次查询必须走 `waitFor`（与点击同一条语句里的同步读取什么都拿不到），而点击一个条目会把菜单**卸载**——在一次插进来的交互之前抓到的节点已经脱离了，对它 `.click()` 是一个无声的空操作。
+- **一个瞬态属于轨迹，一个稳态属于一次直接读取。** 一个长度就是**工作**长度的 UI 状态（「评审中…」那个状态）会让 `waitFor` 变成抛硬币——按大约 10ms 的定时器采样、去重成一条轨迹、断言这条轨迹**包含**那个状态。但最终状态要从那次 wait 返回的元素上读。
+- **开着「减弱动态效果」时，每一次属性变化都是一次真实的过渡**（base.css 里的 `transition-duration: 0.01ms !important`）。0.01ms 不是零：一个写了样式又在同一个 task 里读 `getBoundingClientRect()` 的 driver 拿到的是**旧**值，不管代码多正确。
+- **一个陈旧的元素会吞掉一个手势**：每一次合成拖拽都要重新查询那个 handle，否则这次拖拽落在一个脱离的节点上、拿着上一个值就通过了，压根没拖。
+- **一次控件运行证明不了任何东西，除非构建被证明「带着」它**（`make frontend && go build -o bin/tachi-desktop .`）：`npm run build` 是 `tsc && vite build`，所以一次没有通过类型检查的编辑会经由 `&&` 跳过 Go 构建，而这次运行量的是**上一个**二进制。检查 `[ bin/tachi-desktop -nt <the edited source> ]`。
+- **一张截图不属于套件的一部分**（套件留的是 `dom.html` + 那些断言行；一张没人去 diff 的截图会烂掉）。它在终端握着录屏授权的地方**可以手工**做：`screencapture -x -o -l <window id>`——id 经由 `CGWindowListCopyWindowInfo`——而 `-R <x,y,w,h>` 在 macOS 26 上也管用。一次手工运行需要的是它自己的 HOME 和一个**真正的** bundle：裸的 `bin/tachi-desktop` 会在 `UserNotifications` 里 abort（`bundleProxyForCurrentProcess is nil`），所以刷新那个 bundle（`make build`）并启动 `open -n --env HOME=<a clone of ~/.tachi> bin/tachi-desktop.app`——一次 APFS 克隆（`cp -Rc`），这样用户自己的实例、它的会话存储和它的 TCC 授权都留在循环之外。把 `TACHI_DEMO_NO_ACTIVATE` 留着不设（窗口会到最前面），并让 `TACHI_DEMO_JS` 指向一个把应用点进你想看的状态的脚本；环境只能经由 `open` 自己的 `--env` 到达应用，这就是为什么这次启动要走 LaunchServices。
+- **demo 引导和那个让页面保持清醒的开关都是承重的；除非你在修它们，否则别碰。** `TACHI_DEMO_LOAD_MS`（`demo.go`）是 driver 的起跑优势，payload 会在一个 10s 的窗口里反复重发，因为注入到一个正在加载的文档里的脚本会被丢掉，而那些重发是安全的，因为 payload 对 `window.__tachiDriverStarted` 设了护栏（一个场景报了**两次**就意味着那个护栏没了）。demo 从 `ApplicationDidFinishLaunching` 起步，绝不是一次 sleep：`App.Run()` 之前的一次主线程派发会构建平台实现并**PANIC**整个进程，从外面看这与「应用没启动」无法区分。
+- **一个被盖住的窗口不是一次被暂停的运行——demo 模式故意让页面保持清醒。** WebKit 只从**窗口**（在屏幕上、没最小化、没被遮挡）读一个页面的可见性，从不从哪个应用在最前面读，所以一个普通被盖住的窗口是一个**隐藏**页面：帧停了、DOM 定时器钳到 1Hz，一次运行可能在超时之前**什么都**报不上来。把 `等了 90s 没收到结果` 读成**页面被节流了**，不是**driver 卡住了**；运行的 `页面节流已解除` 那一行说的是那个开关有没有被解除（`keepPageAwake`、`webview_awake_darwin.go`）。harness 对**每个**场景都断言这个结果，所以一次丢掉那个 SPI 的 Wails/WebKit 升级会在一行可读的话上失败。
+- **冒烟窗口「不做」动画：窗口被遮挡时 WebKit 会把过渡时长塌到约 0**（在沙箱里工具栏自己的 `transition` 读到 `padding-left 0.00001s`，所以点击后立刻读到的值已经是终态）。`keepPageAwake` 解除的是**定时器**节流，不是这个。所以 driver 可以断言一个动画的**两端**以及那个属性是过渡的，绝不断言中间帧——而「侧栏滑开了」在这里根本不可断言。
+- **控制台是报告的一部分**：driver 的 `console.error` 行坐在 `Result.Console` 里，对通过的运行也打印。
 
-## Desktop Build & Signing (macOS)
+## 桌面构建与签名（macOS）
 
-- **`make build` re-signs with the local certificate itself when one exists, and warns (leaving the bundle
-ad-hoc) when it does not; `make sign-local` is the manual re-sign for a bundle built without one.** macOS ties TCC grants
-  (notification permission included) to the bundle's code identity, and an ad-hoc identity is a content hash —
-  it changes on every rebuild, so a granted permission is forgotten and the native notification path can end up
-  refused for good (`Notifications are not allowed for this application`). `sign-local` re-signs with the local
-  self-signed identity `Tachi Local Code Signing` (login keychain, trusted for code signing), which is stable
-  across rebuilds. Build that cert once — `security find-identity -v -p codesigning` says whether one exists —
-  with `security` and **the system's own `/usr/bin/openssl`** — Homebrew's OpenSSL 3 writes a PKCS#12 whose
-  default algorithms macOS refuses to verify, so a script that reaches for `openssl` from `PATH` produces an
-  identity that will not import — and trust it for code signing.
-- **`make package` on macOS produces ONE installer (`.pkg`) — a bundle never puts anything on PATH.**
-  `create:pkg` (`pkgbuild` + `productbuild`, system tools) installs the app into `/Applications` and the CLI
-  into `/usr/local/bin/tachi`, the same path the Linux package uses, so both platforms answer "where does
-  `tachi` live" the same way. (`package:dmg` stays the drag-it-in form: it carries the CLI INSIDE the `.app`,
-  reachable only by full path.) Three things are load-bearing: the app payload goes through
-  `pkgbuild --component` (the form for a BUNDLE — `--root` describes a bare file tree) and must ALREADY be
-  signed, because the installer adds no signature of its own; the CLI payload is a `--root` staging tree
-  installed at `/`; and the `.pkg` is deliberately UNSIGNED — `productsign` wants a Developer ID **Installer**
-  certificate, which is not the code-signing identity the app carries, so a distributed one needs that
-  certificate (and notarization) while a local one installs as-is. `make -C desktop package` calls
-  `create:pkg` directly rather than `package:pkg`: the latter re-runs wails3's build, so the `.app` it packs
-  never got the local-identity re-sign above.
-- **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in
-  front proves nothing. The TUI's notifications are a different mechanism (`terminal-notifier` / `osascript`),
-  **but they can still be the desktop's fault**: the app is often launched from a herdr pane, inherits
-  `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook — so herdr, not Tachi,
-  raises a terminal notification for a window that has no pane. `DetectHerdr` therefore also requires stdout to
-  be a terminal. `log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"'` prints the TCC
-  attribution with the **responsible** process. `notifyTurnDone` is for the transcript lane only: a side-channel
-  run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone`, raised from
-  `commands.go`, where the outcome is known.
-- **The notifications service IS registered, and what gets registered is `desktop/notify.go`'s wrapper — never
-  `notifications.New()` itself.** Registration is the only thing that runs `ServiceStartup`, and on Linux THAT
-  call is what opens the D-Bus session connection the notifications travel on: unregistered, `SendNotification`
-  reaches godbus with a nil connection and PANICS the process — not an error, a dead app (it died on every turn
-  that ended while the window was unfocused). The raw service must not be registered either, because Wails
-  aborts the whole application when a registered service's `ServiceStartup` returns an error, which is exactly
-  what happens on a macOS build launched outside its `.app` bundle, or a Linux session with no bus. So
-  `notificationService` absorbs that error (logging `notifications unavailable`) and its `ready` gates the
-  POST — never the permission questions, which touch no connection.
-- **A signature change STRANDS the TCC rows it replaces: reset, then re-add — per service, by hand.** TCC
-  stores the requirement it matched at grant time (an ad-hoc build's is `cdhash H"…"`, which is why sign-local
-  exists), so re-signing leaves an entry that still reads as granted in the pane and fails every request —
-  `Failed to match existing code requirement for subject <bundle-id>`, in
-  `log show --last 10m --predicate 'eventMessage CONTAINS "kTCCServiceScreenCapture"'`, which prints both the
-  stored requirement and the app's current one. `tccutil reset <service> <bundle-id>` followed by re-adding the
-  app (系统设置 → 隐私与安全性 → 屏幕录制 → `+`, Finder's ⌘⇧G for the path) is the fix; screen recording
-  **never prompts** (`does not allow prompting; returning denied`), so a missed pane visit looks like a broken
-  build. Grants are judged against the **responsible** process, which for `open bin/tachi-desktop.app` (PPID 1) is
-  tachi-desktop.app itself: a screenshot the agent takes by shelling out `screencapture` needs the APP granted, never the
-  terminal it was launched from.
+- **`make build` 在本地证书存在时自己就用它重新签名，不存在时给出警告（让 bundle 停在 ad-hoc）；`make sign-local` 是给一个没有证书就建出来的 bundle 做的手工重签。** macOS 把 TCC 授权（含通知权限）绑到 bundle 的代码身份上，而一个 ad-hoc 身份是一个内容哈希——它每次重建都变，所以一个被授予的权限被忘掉，而原生通知那条路可能永远被拒（`Notifications are not allowed for this application`）。`sign-local` 用本地自签名身份 `Tachi Local Code Signing`（登录钥匙串、为代码签名而受信任）重签，它跨重建是稳定的。把那张证书建一次——`security find-identity -v -p codesigning` 说有没有——用 `security` 和**系统自带的 `/usr/bin/openssl`**——Homebrew 那个 OpenSSL 3 写出的 PKCS#12，其默认算法 macOS 拒绝验证，所以一个从 `PATH` 去够 `openssl` 的脚本产出的是一个导入不了的身份——并为代码签名信任它。
+- **macOS 上 `make package` 产出一个安装器（`.pkg`）——一个 bundle 从不往 PATH 上放任何东西。** `create:pkg`（`pkgbuild` + `productbuild`，系统工具）把应用装进 `/Applications`、把 CLI 装进 `/usr/local/bin/tachi`，跟 Linux 包用的是同一个路径，所以两个平台对「`tachi` 住在哪儿」答得一样。（`package:dmg` 仍是拖进去那种形态：它把 CLI 带在 `.app` **里面**，只有用完整路径才够得到。）有三件事是承重的：app 载荷走 `pkgbuild --component`（一个 **BUNDLE** 用的那种形式——`--root` 描述一棵裸文件树）而且必须**已经**签好名，因为安装器自己不添加任何签名；CLI 载荷是一棵 `--root` 暂存树，装到 `/`；而 `.pkg` 是故意**不签名**的——`productsign` 想要一张 Developer ID **Installer** 证书，那不是应用所携带的代码签名身份，所以一个要分发的 .pkg 需要那张证书（以及公证），而一个本地用的就照原样装。`make -C desktop package` 直接调 `create:pkg` 而不是 `package:pkg`：后者会重跑 wails3 的构建，于是它打包的那个 `.app` 从没拿到上面那次本地身份重签。
+- **通知只在窗口「没有」聚焦时才触发**（`desktop/notify.go`）：拿着应用在前台测什么都证明不了。TUI 的通知是另一套机制（`terminal-notifier` / `osascript`），**但它们仍然可能是 desktop 的锅**：应用常常从一个 herdr pane 启动，继承了 `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`，于是自动启用了 herdr hook——所以是 herdr、不是 Tachi，为一个没有 pane 的窗口升起一条终端通知。因此 `DetectHerdr` 还要求 stdout 是一个终端。`log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"'` 打印带**responsible** 进程的 TCC 归因。`notifyTurnDone` 只给会话全文那条车道：一次侧路 run（/review、/commit）屏幕上没有对应的一轮，所以它通过 `notifyOneOffDone` 拿到自己的文案，从 `commands.go` 升起——那里结果已知。
+- **通知服务「确实是」被注册的，而注册的是 `desktop/notify.go` 的包装，绝不是 `notifications.New()` 本身。** 注册是唯一会跑 `ServiceStartup` 的东西，而在 Linux 上**那**次调用正是打开那条通知所走的 D-Bus 会话连接的东西：不注册的话，`SendNotification` 拿着一个 nil 连接到达 godbus 并**PANIC**整个进程——不是报错，是一个死掉的应用（它在窗口未聚焦时结束的每一轮上都死）。那个裸服务也不该被注册，因为当一个被注册服务的 `ServiceStartup` 返回错误时，Wails 会中止整个应用——而这正是在 `.app` bundle 之外启动的一次 macOS 构建、或者一次没有 bus 的 Linux 会话上会发生的事。所以 `notificationService` 吸收那个错误（记一条 `notifications unavailable`），由它的 `ready` 给 POST 设门禁——绝不是给那些权限问题设门禁，那些不碰任何连接。
+- **一次签名变化会「遗弃」它所替换的那些 TCC 行：先重置，再重新添加——逐个服务、手工来。** TCC 存着它在授权时匹配的那个 requirement（一个 ad-hoc 构建的是 `cdhash H"…"`，这就是 sign-local 存在的原因），所以重新签名会留下一条在面板里仍读作已授权、却让每次请求都失败的条目——`Failed to match existing code requirement for subject <bundle-id>`，在 `log show --last 10m --predicate 'eventMessage CONTAINS "kTCCServiceScreenCapture"'` 里，它同时打印存着的那个 requirement 和应用当前的那个。`tccutil reset <service> <bundle-id>` 之后重新添加那个应用（系统设置 → 隐私与安全性 → 屏幕录制 → `+`，路径用 Finder 的 ⌘⇧G）就是那个修复；屏幕录制**从不弹问**（`does not allow prompting; returning denied`），所以漏掉一次面板拜访看起来就像一个坏掉的构建。授权是按 **responsible** 进程判定的，对 `open bin/tachi-desktop.app`（PPID 1）来说它就是 tachi-desktop.app 自己：agent 靠 shell 出去跑 `screencapture` 拍的一张截图需要**应用**被授权，绝不是启动它的那个终端。
 
-- **The CLI this package ships is the ROOT module's `tachi`, built with `GOWORK=off` like everything else here
-  — and the local-only channel plugins are NOT in that build.** `third_party_channels.go` (gitignored) is
-  resolved through `go.work`, which `GOWORK=off` turns off: the root Makefile therefore passes
-  `-tags no_workspace` whenever it builds with `GOWORK=off`, and that is what the file's `//go:build
-  !no_workspace` constraint keys on. A workspace-mode build still gets the plugins, so **adding a plugin import
-  must not require a `go.mod` entry** — the tag, not a dependency, is what keeps the two builds apart.
+- **这个包所发的 CLI 是根模块的 `tachi`，跟这里其他一切一样按 `GOWORK=off` 构建——而那批本地专用的 channel 插件「不在」这次构建里。** `third_party_channels.go`（gitignore 掉的）经由 `go.work` 解析，而 `GOWORK=off` 把它关掉了：因此根 Makefile 在按 `GOWORK=off` 构建时传 `-tags no_workspace`，那个文件的 `//go:build !no_workspace` 约束就是对着它取键的。workspace 模式下的构建仍能拿到那些插件，所以**加一个插件 import 绝不能要求一条 `go.mod` 条目**——把两次构建分开的是那个 tag，不是一条依赖。
 
-## Desktop on Linux (omarchy)
+## Linux 上的桌面（omarchy）
 
-- **Every platform difference lives behind a `_darwin.go` / `_other.go` pair — do not add a bare
-  `runtime.GOOS` branch to shared code.** What differs so far, and why: the BUILD (`make build` dispatches on
-  `uname` — macOS runs `wails3 package`, whose bundle assembly carries the CLI into `Contents/MacOS` BEFORE
-  the ad-hoc signature, and the Swift `stt-shim`; Linux is a plain `go build -o bin/tachi-desktop .` and skips
-  the shim, whose `swiftc` does not exist there); the TRAY icon
-  (`trayicon_*.go` — macOS gets the TEMPLATE icon, Linux gets the same monochrome shape TINTED, because only
-  macOS recolours a template image and a black glyph on a dark panel is invisible); file open/reveal
-  (`attach_*.go` — `open` / `open -R` vs. `xdg-open` / `FileManager1.ShowItems`); the shortcut modifier (see the
-  frontend's `src/platform.ts` — ⌘ on macOS, Ctrl elsewhere, for BOTH the handler and the on-screen keycaps).
-  Its `MOD_KEY` / `REVEAL_LABEL` are the two things a platform decides for RENDERED text; a string in this tree
-  that still spells ⌘ or "Finder" is either the gesture's own name in a comment or a bug.
-- **`make package` is Linux's packaging entry: deb / rpm / arch, through `wails3 package` → `linux:package`
-  → nfpm** (self-contained — no dpkg/rpmbuild on the host). It needs the wails3 CLI at `~/go/bin/wails3`,
-  which the Makefile's PATH already carries; `make build`/`test` deliberately do not. Five things in that chain
-  are load-bearing and easy to undo by accident: `APP_NAME` is `tachi-desktop` and is declared ONCE, in the
-  parent Taskfile — nfpm's `contents:`, the .desktop's `Exec`, the icon, the Makefile and the macOS bundle
-  DIRECTORY all say it, so a build that disagrees installs a binary nothing points at (a per-platform override
-  is exactly how that drifts: the Linux Taskfile used to override `APP_NAME`, and because an included Taskfile's
-  top-level vars land in the GLOBAL scope — linux is included after darwin — it silently renamed the macOS
-  bundle too, leaving `bin/tachi-desktop.app` whose `CFBundleExecutable` still named a `Tachi` that was not
-  there); the
-  PACKAGE name is a different thing again, `tachi.desktop` (nfpm's `name:` and the Taskfile's `PKG_NAME`, kept
-  in step BY HAND because nfpm cannot see a Taskfile variable — and `wails3 tool package -name` only names the
-  ARTIFACT, which is why `PKG_NAME` is what gets passed there); `common:generate:icons` and `generate:dotdesktop`
-  are REMOVED from the Linux deps (the first rewrites `build/darwin/icons.icns` and `build/windows/icon.ico` —
-  including them dirtied the tree on every Linux package build; the second would overwrite
-  `build/linux/tachi-desktop.desktop`, whose `StartupWMClass` line is the load-bearing part a generator cannot
-  know); and nfpm's metadata is written out by hand (`maintainer`, `homepage`) because the template's
-  `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` expand to nothing outside a git hook, which produced a deb
-  with an EMPTY Maintainer field. The fifth is the CLI/TUI's own presence: nfpm's `contents` installs
-  `bin/tachi` — the ROOT module's binary, at `/usr/local/bin/tachi` next to the desktop one — and `build:cli`
-  in the COMMON Taskfile (shared with darwin, whose bundle carries the same binary) is what puts it in `bin/`,
-  by calling the Makefile's `cli` (which calls the root Makefile) rather than repeating a `go build`: the
-  version stamp, `-trimpath` and the embedded web console (`web/frontend/dist`, gated by the root `web-check`)
-  live there, and a second copy of that recipe is exactly how the two binaries would come to disagree about
-  their version. It carries `run: once` (the three `create:*` formats would otherwise each compile it) and is a
-  HOST-ARCH build, so the cross-arch `build:docker` path would ship a wrong-arch CLI silently.
-- **The AppImage is NOT part of `make package` — it is `make package-appimage`, and it is host-dependent.**
-  linuxdeploy's GTK plugin wants a Debian-ish gdk-pixbuf layout (`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`);
-  Arch-family hosts have no such directory (gdk-pixbuf's loaders are built in), so bundling there dies after
-  its library pass with `Failed to run plugin: gtk`. That is a property of the plugin, not of this app — the
-  three nfpm formats install the distro's own GTK/WebKit through `depends:` instead of bundling them.
-- **The Linux twin of "closing the window does not quit" is `LinuxOptions.DisableQuitOnLastWindowClosed`.**
-  The close HOOK itself (`Hide` + `Cancel`, `desktop/main.go`) is the same on both, because Wails maps Linux's
-  `WindowDeleteEvent` onto `Common.WindowClosing`; without the option GTK quits the app with its last window,
-  and a tray-resident app loses its only way back. The macOS-only events do not fire on Linux and are replaced
-  by their Common equivalents (`Common.ApplicationStarted`, `Common.ThemeChanged`).
-- **A second launch is not a second Tachi — `Options.SingleInstance` is what makes that true, and it is set ONLY
-  off macOS** (`desktop/singleinstance_*.go`). Because closing the window only HIDES it, the process stays alive
-  with its tray icon; with no lock, launching the app again started a second process with a second tray icon and
-  a second writer of every file in `~/.tachi`. Wails implements it as a session-bus name (built from
-  `singleInstanceID`, the same `org.wails.tachi` identity the window and the `.desktop` file use): the first
-  instance exports it, the second finds it taken, hands over its argv and exits with code 0 — and the callback
-  `revealWindow`s the running window, which is what the launch meant. macOS returns nothing on purpose:
-  LaunchServices already activates the running app, and `open -n` — a deliberate second instance, which
-  `make -C desktop run` and the smoke suite use — has to keep working. **A scripted run opts out as well**
-  (`demoEnabled`): the smoke suite's app shares the user's session bus, so taking the name would swallow the
-  suite's launch into the user's own Tachi (raising that window mid-run) instead of starting the isolated
-  instance the run is about.
-- **The window's app_id is `org.wails.tachi` — `LinuxOptions.ProgramName` does NOT move it** (Wails builds the
-  GTK application id as `org.wails.<sanitized Name>`; `g_set_prgname` does not move WM_CLASS). The `.desktop`
-  file's `StartupWMClass` must say exactly that value — a mismatch gives the app a second, nameless task-bar
-  entry and breaks notification attribution. `ProgramName` IS set, for the one other thing it decides: the
-  window's TITLE. A frameless window never reaches `gtk_window_set_title` — Wails' Linux `setTitle` returns
-  early on exactly that condition — so GTK falls back to `g_get_prgname()`, the BINARY's name
-  (`tachi-desktop`), which is what the compositor's window list, its bar and any `title:` rule would show.
-- **On Linux the tray MENU is the only surface the state readout can reach INSIDE the app — and
-  `desktop_status.json` is the one outside it.** A tray host here shows neither `SetLabel` nor a tooltip, so
-  `refreshTray` writes the same strings to the macOS bar label AND to the `trayStatus` menu item, and mirrors the
-  same numbers to `$TACHI_HOME/desktop_status.json` for a consumer it cannot call (a quickshell bar widget reads
-  that file — see `desktop/barstatus.go` for its shape, which fields are OMITTED when unmeasured, why it is
-  written atomically, and why it is deleted on shutdown rather than heartbeated). The three surfaces are painted
-  from one repaint, so they cannot disagree. **The widget that reads it is in this repo too — `desktop/omarchy/`,
-  installed with `make -C desktop bar-widget`** (never hand-edited in `~/.config`: the repo copy is the master and
-  the target overwrites it), and its README carries the two traps: a QML change needs `omarchy restart shell` to
-  reach a live bar widget, and offering to place it (`omarchy bar put`) is the user's call, not the installer's.
-  And never register `OnClick → OpenMenu` off macOS: the framework's
-  `openMenu` is unimplemented on Linux, so the click is swallowed and every press logs
-  `openMenu not implemented on Linux`.
-- **There is NO application menu on Linux, and it is a `menu_darwin.go` / `menu_other.go` pair — never call
-  `app.Menu.SetApplicationMenu` from shared code.** Wails draws that menu as a GTK menu bar INSIDE the window and
-  its entries are macOS roles (App, Services, Hide, a Window menu), so the Linux window opened with a dead
-  File/Edit/View/Window/Help strip. It must be left UNSET rather than set to nil: Wails substitutes its own
-  default for a nil menu (linuxApp.setApplicationMenu), which is the same bar again. Leaving it unset is also
-  what keeps the default's accelerators off keys the page owns — the macOS half exists to trim exactly that, and
-  its 「⌘= / ⌘- / ⌘0 must reach the page」 assertion is why the pair's tests gate on darwin.
-- **The window is FRAMELESS off macOS, and that is what the app's own top strips are for.** Wails draws GTK's
-  default title bar above the webview, so a decorated window shows two stacked bars with the upper one saying
-  nothing the lower one does not; `window_frame_*.go` decides `Frameless` per platform (macOS keeps its native
-  frame — the traffic lights ARE its window controls). Two consequences, both in the frontend: every full-height
-  column (the sidebar, the settings rail) carries a `.window-strip` ELEMENT — the room macOS paints its lights
-  into, and off macOS the one drag handle a window with no bar has (a drag region has to be an element:
-  `--wails-draggable` inherits, so a draggable column would turn every click on a row into a window drag); and
-  the folded toolbar's clearance is the platform's value, `--titlebar-fold-pad` (the lights' 78px, or the bar's
-  own 16px). Resizing by the window's edges only exists while frameless — the runtime gates that path on the
-  same flag — and there is deliberately NO close button: a window-manager close (omarchy's `Super+W`) arrives as
-  `Common.WindowClosing`, which main.go's hook already turns into a hide, with the tray as the way back.
-- **Two halves are deliberately NOT wired up on Linux: voice input and the device link (BLE) — leave them.** Voice
-  is already stopped by `stt/stt_other.go` (`Available() == false`): the composer's button is not shown and
-  nothing ever asks for a permission. The BLE link (`desktop/link/ble.go`) runs on `tinygo`'s BlueZ backend,
-  whose write-chunking constants were tuned against macOS CoreBluetooth and never measured on BlueZ — so it stays
-  off until someone actually measures it. The serial half would work, but its port name is `/dev/ttyACM*` and the
-  user has to be in the `uucp` group.
+- **每一个平台差异都住在一对 `_darwin.go` / `_other.go` 后面——不要往共享代码里加一个裸的 `runtime.GOOS` 分支。** 到目前为止不一样的东西，以及为什么：**构建**（`make build` 按 `uname` 分派——macOS 跑 `wails3 package`，它的 bundle 装配把 CLI 带进 `Contents/MacOS` 是在那次 ad-hoc 签名**之前**，还有那个 Swift `stt-shim`；Linux 是一次普通的 `go build -o bin/tachi-desktop .` 并跳过那个 shim，它的 `swiftc` 在那里不存在）；**托盘**图标（`trayicon_*.go`——macOS 拿到 TEMPLATE 图标，Linux 拿到同一个单色形状**上色**，因为只有 macOS 会给一张 template 图重新上色，而一个深色面板上的黑色字形是看不见的）；文件打开/显示（`attach_*.go`——`open` / `open -R` vs. `xdg-open` / `FileManager1.ShowItems`）；快捷键的修饰键（见前端的 `src/platform.ts`——macOS 上是 ⌘，别处是 Ctrl，**处理器**和屏幕上键帽两处都是）。它的 `MOD_KEY` / `REVEAL_LABEL` 是一个平台为**渲染出来的**文本所决定的那两样东西；这棵树里一个仍然拼出 ⌘ 或 "Finder" 的字符串，要么是注释里那个手势自己的名字，要么是一个 bug。
+- **`make package` 是 Linux 的打包入口：deb / rpm / arch，走 `wails3 package` → `linux:package` → nfpm**（自足——宿主上不需要 dpkg/rpmbuild）。它需要 `~/go/bin/wails3` 处的 wails3 CLI，Makefile 的 PATH 已经带着它；`make build`/`test` 故意不带。那条链里有五件事是承重的、而且容易不小心被撤销：`APP_NAME` 是 `tachi-desktop` 且只声明**一次**，在父 Taskfile 里——nfpm 的 `contents:`、.desktop 的 `Exec`、图标、Makefile 和 macOS bundle 的**目录**都写着它，所以一次不一致的构建会装进去一个没人指向的二进制（一个按平台的 override 正是它漂移的方式：Linux Taskfile 曾经 override 过 `APP_NAME`，而因为一个被 include 的 Taskfile 的顶层变量会落进**全局**作用域——linux 是在 darwin 之后被 include 的——它悄没声地也把 macOS 的 bundle 改了名，留下一个 `bin/tachi-desktop.app`，其 `CFBundleExecutable` 仍指着一个不在那儿的 `Tachi`）；而**包**名又是另一回事，`tachi.desktop`（nfpm 的 `name:` 和 Taskfile 的 `PKG_NAME`，**手工**保持同步，因为 nfpm 看不见一个 Taskfile 变量——而 `wails3 tool package -name` 只给**产物**命名，这就是为什么传过去的是 `PKG_NAME`）；`common:generate:icons` 和 `generate:dotdesktop` 从 Linux 的 deps 里**移除**了（第一个会重写 `build/darwin/icons.icns` 和 `build/windows/icon.ico`——把它们含进来会在每次 Linux 出包时弄脏工作树；第二个会覆盖 `build/linux/tachi-desktop.desktop`，其 `StartupWMClass` 那一行是一个生成器不可能知道的承重部分）；而 nfpm 的 metadata 是手写出来的（`maintainer`、`homepage`），因为模板里的 `${GIT_COMMITTER_NAME}`/`${GIT_COMMITTER_EMAIL}` 在一个 git hook 之外会展开成空，产出一个 Maintainer 字段**为空**的 deb。第五件是 CLI/TUI 自己的存在：nfpm 的 `contents` 装 `bin/tachi`——根模块的二进制，在 `/usr/local/bin/tachi`，就在 desktop 那个旁边——而在 **COMMON** Taskfile 里的 `build:cli`（与 darwin 共享，它的 bundle 载着同一个二进制）是把它放进 `bin/` 的东西，靠调用 Makefile 的 `cli`（它调用根 Makefile）而不是重写一条 `go build`：版本戳、`-trimpath` 和内嵌的 web 控制台（`web/frontend/dist`，由根 `web-check` 设门禁）都住在那里，而那条 recipe 的第二份拷贝正是两个二进制会就版本打起来的方式。它带着 `run: once`（否则那三个 `create:*` 格式会各自编译它一次）而且是一次 **HOST-ARCH** 构建，所以跨架构的 `build:docker` 路径会悄没声地发一个架构不对的 CLI。
+- **AppImage「不属于」`make package`——它是 `make package-appimage`，而且它依赖宿主。** linuxdeploy 的 GTK 插件想要一套 Debian 式的 gdk-pixbuf 布局（`/usr/lib/<arch>/gdk-pixbuf-2.0/2.10.0`）；Arch 系宿主没有那样的目录（gdk-pixbuf 的 loaders 是内建的），所以在那里打包会在它的库处理阶段之后带着 `Failed to run plugin: gtk` 死掉。那是那个插件的性质，不是这个应用的性质——那三种 nfpm 格式改为通过 `depends:` 装发行版自己的 GTK/WebKit，而不是把它们捆进来。
+- **「关窗不退出」在 Linux 上的孪生兄弟是 `LinuxOptions.DisableQuitOnLastWindowClosed`。** 关窗 **HOOK** 本身（`Hide` + `Cancel`，`desktop/main.go`）两边一样，因为 Wails 把 Linux 的 `WindowDeleteEvent` 映射到 `Common.WindowClosing`；没有这个选项 GTK 会随它最后一个窗口退出应用，而一个驻留托盘的应用就丢了它唯一的回去之路。那些仅 macOS 的事件在 Linux 上不触发，由它们的 Common 等价物取代（`Common.ApplicationStarted`、`Common.ThemeChanged`）。
+- **一次二次启动不是第二个 Tachi——`Options.SingleInstance` 是让这句话成真的东西，而它「只在 macOS 之外」被设上**（`desktop/singleinstance_*.go`）。因为关窗只是把它**藏**起来，进程带着它的托盘图标还活着；没有锁的话，再次启动应用会起了第二个进程，带着第二个托盘图标和 `~/.tachi` 里每个文件的第二个写入者。Wails 把它实现为一个会话总线名字（由 `singleInstanceID` 构建，就是窗口和那个 `.desktop` 文件用的同一个 `org.wails.tachi` 身份）：第一个实例导出它，第二个发现它被占了，交出自己的 argv 并以退出码 0 退出——而那个回调会 `revealWindow` 把正在跑的那个窗口带出来，那正是这次启动的意思。macOS 故意什么都不返回：LaunchServices 已经会激活正在跑的应用，而 `open -n`——一次有意为之的第二个实例，`make -C desktop run` 和冒烟套件都用它——必须继续能用。**一次脚本化运行同样选择退出**（`demoEnabled`）：冒烟套件的应用与用户共享同一个会话总线，所以占下那个名字会把套件的启动吞进用户自己的 Tachi（在一次运行中途把那个窗口带出来），而不是起这次运行所要的那个隔离实例。
+- **窗口的 app_id 是 `org.wails.tachi`——`LinuxOptions.ProgramName`「挪不动」它**（Wails 把 GTK 应用 id 构建成 `org.wails.<sanitized Name>`；`g_set_prgname` 挪不动 WM_CLASS）。那个 `.desktop` 文件的 `StartupWMClass` 必须正好说那个值——不一致会给应用第二个、无名的任务栏条目并破坏通知归因。`ProgramName`「确实」被设上了，为它决定的另一件事：窗口的**标题**。一个无边框窗口永远到不了 `gtk_window_set_title`——Wails 的 Linux `setTitle` 正是在那个条件下提前返回——于是 GTK 退回到 `g_get_prgname()`，即**二进制**的名字（`tachi-desktop`），那正是合成器的窗口列表、它的 bar 和任何 `title:` 规则会显示的东西。
+- **在 Linux 上，托盘的「菜单」是状态读出能在应用「内部」够到的唯一表面——而 `desktop_status.json` 是它「外部」的那一个。** 这里的托盘宿主既不显示 `SetLabel` 也不显示 tooltip，所以 `refreshTray` 把同样的字符串写到 macOS 的 bar 标签**和** `trayStatus` 菜单项，并把同样的数字镜像到 `$TACHI_HOME/desktop_status.json`，给一个它调不到的消费者（一个 quickshell bar 控件读那个文件——它长什么样、哪些字段在没测量时被**省略**、为什么它是原子写入的、以及为什么它关闭时被删掉而不是心跳，见 `desktop/barstatus.go`）。（那三个表面由同一次重绘画出，所以它们不可能不一致。）**读它的那个控件也在这个仓库里——`desktop/omarchy/`，用 `make -C desktop bar-widget` 安装**（绝不要在 `~/.config` 里手改：仓库那份是母本，而这个目标会覆盖掉它），它的 README 载着两个陷阱：一次 QML 改动需要 `omarchy restart shell` 才能到达一个活着的 bar 控件，而提议把它放上去（`omarchy bar put`）是用户的决定，不是安装器的。并且绝不要在 macOS 之外注册 `OnClick → OpenMenu`：框架的 `openMenu` 在 Linux 上未实现，所以那一次点击被吞掉，每次按下都记一条 `openMenu not implemented on Linux`。
+- **Linux 上「没有」应用菜单，而这又是一对 `menu_darwin.go` / `menu_other.go`——绝不要从共享代码里调 `app.Menu.SetApplicationMenu`。** Wails 把那个菜单画成窗口**里面**的一条 GTK 菜单栏，它的条目是 macOS 角色（App、Services、Hide、一个 Window 菜单），于是 Linux 窗口开着一条死掉的 File/Edit/View/Window/Help 条打开。它必须留作**未设置**，而不是设成 nil：Wails 会为一个 nil 菜单替换上它自己的默认（linuxApp.setApplicationMenu），那又是同一条 bar。把它留着不设也正是让默认那套快捷键离开页面拥有的那些键的东西——macOS 那一半存在的意义正是修剪掉那些，而它那句「⌘= / ⌘- / ⌘0 必须到达页面」的断言，就是这一对的测试在 darwin 上设门禁的原因。
+- **窗口在 macOS 之外是「无边框」的，而那正是应用自己那几条顶部条存在的意义。** Wails 把 GTK 的默认标题栏画在 webview 上面，所以一个有装饰的窗口显示两条叠起来的 bar，上面那条说的下一条都没说；`window_frame_*.go` 按平台决定 `Frameless`（macOS 保留它的原生边框——那几颗红绿灯**就是**它的窗口控件）。两个后果，都在前端里：每一条通高的列（侧栏、设置栏）都带一个 `.window-strip` **元素**——macOS 把它那几颗灯画进去的那块地方，而在 macOS 之外，它是一个没有 bar 的窗口所拥有的唯一一个拖拽把手（一个拖拽区域必须是一个元素：`--wails-draggable` 会继承，所以一个可拖拽的列会把每一行上的每一次点击都变成一次窗口拖拽）；而折叠工具栏的留白是这个平台的值 `--titlebar-fold-pad`（那几颗灯的 78px，或者 bar 自己的 16px）。靠窗口边缘缩放只在无边框时存在——运行时把那条路设在同一个 flag 上——并且**故意没有**关闭按钮：一次窗口管理器的关闭（omarchy 的 `Super+W`）以 `Common.WindowClosing` 到达，main.go 的 hook 已经把它变成一次隐藏，回去的路是托盘。
+- **有两半在 Linux 上故意没接上：语音输入和设备连接（BLE）——别管它们。** 语音已经被 `stt/stt_other.go` 停住（`Available() == false`）：输入框那个按钮不显示，也没有任何东西会去要一个权限。BLE 那条链（`desktop/link/ble.go`）跑在 `tinygo` 的 BlueZ 后端上，它的分块写常量是照着 macOS CoreBluetooth 调的、从没在 BlueZ 上量过——所以在有人真去量之前它一直关着。串口那一半能行，但它的端口名是 `/dev/ttyACM*`，而用户得在 `uucp` 组里。
+## 徽章（设备连接与语音）
 
-## Badge (device link & voice)
+- **已拆出——读 `docs/agents/badge.md`**：BLE 传输的那些坑（分帧、存活轮询、写入上限、TCC）、语音/STT 那条路，以及设备端怎么构建、怎么烧录。
 
-- **Split out — read `docs/agents/badge.md`**: the BLE transport traps (framing, the liveness poll, the write
-  cap, TCC), the voice/STT path, and how the device side is built and flashed.
+## 桌面语音输入（输入框的麦克风按钮）
 
-## Desktop Voice Input (the composer's microphone button)
+- **它复用了徽章那条路的转写那一半，投递那一半一点没复用。** 转写是同一个调用（`stt.Transcribe`，同一批 zh-CN/en-US 模块，同一个 `Choose`，同一批「为什么失败了」的句子——`voiceFailureText` 同时服务两个调用方）；不同的是文本去哪：设备没有键盘，所以它的语音变成一条消息（`badge:voice` → 前端的 `submit`），而桌面有键盘，所以这里的语音变成一份草稿，在光标处拼进输入框（`voice:text`）。故意是两个事件——把它们合成一个，会让「发送」和「填进框里」变成同一个词。
+- **状态机（包括那 60s 看门狗）归后端所有**（`desktop/voice.go`：idle → preparing → recording → transcribing → idle）。按钮画的是 `voice:state`，点击只是请求一次状态转移——一个本地布尔量恰好会在最不该出错的那一刻和麦克风不一致（有史以来第一次授权窗口：在那里再点一下会「停掉」一段还没开始的录音）。看门狗的作用，是不让一段被遗弃的录音白白把麦克风占着、而屏幕上什么都不说。
+- **按钮和 ⌘⇧M 快捷键是同一个调用**（`ToggleVoiceInput`，不是 start/stop）：方向取决于麦克风是否开着，而这件事只有 Go 知道，所以这个决定不能活在两个读滞后事件调用方里。按钮读到的那个状态是给**绘制**用的（红色脉冲、禁用等待）——绝不用于做决定。**它故意是一个应用内按键**：系统级的那种（`app.GlobalShortcut`、Carbon 热键）会从其他所有应用手里夺走这个组合，而且要等到窗口能被唤回才划得来——那是另一步，不是这一步的放大版。它的键被选成菜单栏没用掉的（`TestApplicationMenuFreesTheFrontendKeys`）：菜单加速键是在页面看到事件**之前**处理的，所以撞键就是一个死键，任何前端测试都观察不到。
+- **麦克风是第二个 TCC 权限，有自己的 plist 键**，跟语音权限并列：一个包里没有 `NSMicrophoneUsageDescription`，打开麦克风时不会拿到错误——它会被杀掉（`docs/agents/badge.md` 里那个蓝牙坑，同一类失败）。它也是授予**应用包**的，所以这个按钮只能在一个包里被行使（`make -C desktop run`）；一个裸二进制、或者 `go test`，都拿不到这个授权——这就是为什么 `desktop/stt` 自己的测试只读授权**状态**、从不录音。
+- **一次冒烟运行绝不能碰麦克风**：`TACHI_DEMO_VOICE_TEXT` 顶替采集和识别（这个环境变量名在 `itest/desktop/sandbox.go` 里又抄了一遍，那个文件不能 import 应用自己的包）。真录音会在跑套件那台机器上弹出 TCC 提示、并把房间里的一切录下来——跟 MCP OAuth 那条路拿到一个 headless fetch 是同一个理由。这个替身换掉的是音频，绝不换那些状态或事件，所以 `voice-input` 断言的是与「音频从哪来」无关的那一半。
 
-- **It reuses the badge path's transcription HALF and none of its delivery.** The transcription is the same
-  call (`stt.Transcribe`, same zh-CN/en-US modules, same `Choose`, same "why it failed" sentences — `voiceFailureText`
-  serves both callers); what differs is where the text goes: the device has no keyboard, so its voice becomes a
-  message (`badge:voice` → the frontend's `submit`), while the desktop has one, so this voice becomes a DRAFT
-  spliced into the composer at the caret (`voice:text`). Two events, on purpose — collapsing them into one
-  would make "send" and "fill the box" the same word.
-- **The BACKEND owns the state machine, including the 60s watchdog** (`desktop/voice.go`: idle → preparing →
-  recording → transcribing → idle). The button draws `voice:state` and the click only asks for a transition —
-  a local boolean diverges from the microphone at exactly the wrong moment (the first-ever authorization
-  window, where a second click would "stop" a recording that has not started). The watchdog is what keeps an
-  abandoned recording from holding the microphone open with nothing on screen saying so.
-- **The button and the ⌘⇧M shortcut are ONE call** (`ToggleVoiceInput`, not start/stop): the direction
-  depends on whether the microphone is open, which only Go knows, so the decision cannot live in two callers
-  that read a lagging event. The state the button reads is for DRAWING (the red pulse, the disabled wait) —
-  never for deciding. **It is an app-local key on purpose**: a system-wide one (`app.GlobalShortcut`, Carbon
-  hotkeys) takes the combination away from every other app and only pays off once the window can be recalled —
-  a separate step, not a bigger version of this one. Its key is chosen to be unclaimed by the menu bar
-  (`TestApplicationMenuFreesTheFrontendKeys`): a menu accelerator is handled BEFORE the page sees the event, so a
-  collision is a dead key that no frontend test can observe.
-- **The microphone is a SECOND TCC permission, with its own plist key**, beside the speech one: a bundle
-  without `NSMicrophoneUsageDescription` does not get an error when it opens the mic — it is killed (the
-  Bluetooth trap in `docs/agents/badge.md`, same class of failure). It is also granted to the APP BUNDLE, so
-  the button can only be exercised in one (`make -C desktop run`); a bare binary, or `go test`, cannot be
-  granted it — that is why `desktop/stt`'s own test only reads the authorization STATUS and never records.
-- **A smoke run must never touch the microphone**: `TACHI_DEMO_VOICE_TEXT` stands in for capture and
-  recognition (the env var name is duplicated in `itest/desktop/sandbox.go`, which cannot import the app's
-  package). A real recording would raise a TCC prompt on the machine running the suite and capture the room —
-  the same reason the MCP OAuth flow gets a headless fetch. The stand-in replaces the audio, never the states
-  or the events, so what `voice-input` asserts is the half that has nothing to do with where audio comes from.
+## 桌面后端（绑定与路径）
 
-## Desktop Backend (bindings & paths)
+- **Wails 绑定是生成出来的、并且入库**（`frontend/bindings/github.com/monsterxx03/tachi/desktop/agentservice.ts`）。在 `AgentService` 上新增、改名或删除一个导出方法，就意味着要重跑 `cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i`（也就是 `build/Taskfile.yml` 的 `generate:bindings`，`make build` 会替你跑）。绝不手改一个：那个数字型的 `$Call.ByID(...)` 是从方法推导出来的，前端调用一个生成器没见过的方法会让 `tsc` 失败——那是唯一会给这次调用做类型检查的东西。
+- **一次桌面改动是四个面，不是一个**：Go 方法、重新生成的 TS 绑定、前端、冒烟驱动。绑定就是中间那两个不能跳过的原因（生成器没见过的调用编译不过），驱动就是「这个方法能用」不能由这里的改动单方面宣称的原因。
+- **只有 `desktop/` 是它自己的一个 Go module**（它**没有**列在仓库根的 `go.work` 里），所以它的每条 Go 命令都要带 `GOWORK=off`。**根目录的 `go test ./...` 不会编译 `desktop/` 的测试包**，根目录的 `make lint` 也覆盖不到它：动过 `desktop/` 之后，也要跑 `cd desktop && GOWORK=off go test ./...`。
+- **打包出来的应用必须用本地证书签名，不能用 ad-hoc。** `wails3 package` 会把 `bin/tachi-desktop.app` 留成 ad-hoc 签名，而一个 ad-hoc 身份就是一个内容哈希——每次重建都会变，于是 macOS 会把每个 TCC 权限（蓝牙、语音识别）重新弹问一遍，还可能永久性地拒绝通知。`desktop/Makefile` 的 `build` 目标**在身份存在时**会自动重签（`Tachi Local Code Signing`，`LOCAL_SIGN_ID`）；没有它，构建就打印一条警告、保留 ad-hoc 签名，而那恰好就是导致反复弹问的状态。用 `desktop/scripts/dev-cert.sh` 创建一次（⚠ 那个脚本必须用 `/usr/bin/openssl`，且 p12 密码非空——OpenSSL 3 默认的 p12 加密和空密码各自都会产生 `MAC verification failed during PKCS12 import`）。用 `codesign -dv --verbose=2 bin/tachi-desktop.app | grep -E "Authority|flags"` 验证：`flags=0x0` 加一行 `Authority=` 说明成了；`flags=0x2(adhoc)` 说明没成。
+- **根 module 的新直接依赖也必须加到 `desktop/go.mod` 里。** `desktop/` 是一个 `replace` 掉根 module 的独立 module，所以它为自己 import 的每一段根代码自带一套 `require`/`go.sum`：一个根开始 import 的包在根那边构建得好好的，`desktop/` 却会以 `missing go.sum entry for module providing package ...` 失败。修法：`cd desktop && GOWORK=off go mod tidy`。反过来也成立——在根上升级这样一个依赖，这里必须重新 tidy。
+- **`d.cfg` 在 `cfgMu` 下读，并且只通过一个入口写**（`agent.go` 里的 `desktopApp.config()` / `withConfig()`）。裸字段访问在这里是数据竞争，不只是风格选择：设置页写这个对象的同时，各轮在读它。
+- **⚠️ 绝不换掉 `d.cfg` 的指针；改现有对象。** 每个 provider 都被 `wrapForUsage` 包过，它的价格/额度解析器**闭包捕获**了那个 `*config.Config`，并在每次 LLM 调用时解引用它；每个会话的 agent 把它作为 `AgentConfig.FullConfig` 持有；共享的 MCP manager 及其刷新器也持有它。这些持有者都是**惰性**读的，这正是就地修改能一次生效到所有地方的原因——也正是换指针会一次静默地失败到所有地方的原因（用量账本按旧价格计费）。所以 `atomic.Pointer[config.Config]` 在这里是错的工具，不管它看起来多诱人。
+- **一次保存就是一个上锁的批**（`withConfig` 在写锁下运行）：`SaveSettings` 把整批在一次调用里交给 `config.ApplyUpdates`，全有或全无，所以没有读者能观察到只应用了一半的批。（`mcpServerByName` 仍然是唯一有记录的那个例外：一个就地写的 bool，在锁外。）
+- **一个配置键的「要做到什么才能让它生效」声明在 `desktop/settings.go` 里，`settingsTable` 里每键一行**（`applyLazy` = 读者本来就会重读它 / `applyPush` = 有东西必须重建，`Apply` 承担这件事 / `applyRestart` / `applyUnused` = 另一个入口模式拥有它）。`desktop/settings_test.go` 里的两个测试用反射把它钉到整个 `config.Config` 上，所以**新增一个配置字段会让构建失败，直到它有了自己那一行**；`settingApply.needsRestart()` 是**推导**出来的（`Apply == nil` 且不是 lazy/unused），从来不是一个要记住的标志。`TestTheLikelyEditsStayHot` 把用户改得最多的那些键圈起来：如果一次重构让其中某个又需要重启了，失败的是那个测试——不是一个搞糊涂的用户。
+  - **一行还要回答两件「值」说不出的、关于「形态」的事**：它画在哪个分组里（`Category`），以及一个空的 `string_list` 框拿什么当例子教人（`ListExample`，每行一个示例值）。两者都挂在行上而不是挂在控件类型上，因为同一个控件会被问两个不同的问题——`permissions.bash.ask` 收的是 shell glob，`permissions.files.read.ask` 收的是路径，只有那一行知道是哪个。所以前端渲染的是后端发来的那个例子（当一个列表的形态没有例子时，就什么都不渲染）；前端里硬编码一个例子，正是教会读者把命令敲进路径框里的原因。
+  - 一行的 `Apply` 只做 push 那一半——值本身由调用方写进 `d.cfg`——而任何必须到达每个会话的东西都要经过 `d.applyToLiveAgents(fn)`（`agent.go`），它返回带会话标题（或它的 id）标签的失败。一次 push 是 `agent/agent_reload.go` 里的一个 reload 方法，或者对某个既有方法的调用（`SetResolvedProvider`、`SetPermissionRoot`、`Setup*Provider`）：幂等、只做 push 那一半，并且它绝不替换前端注入过的东西（`AgentConfig.HookDispatcher` / `.SubagentRunner`）。
+  - **push 只在 `config.yaml` 写完之后跑**（一次保存由 `d.settingsMu` 串行化）：保存失败就什么都不 push，这正是回滚消息为真的原因——push 没有撤销。push 也绝不在一个运行中的轮次**底下**应用：扇出会把它排给那些 `r.running` 已置位的会话，由 `endTurn` 跑那个队列（`desktop/deferred_push.go`），这就是为什么在一轮中途做的保存回答的是 `K 项等这一轮结束生效（…）`，而不是宣称那个键已经生效。进程级和共享层的行（日志级别、清提示词缓存、manager 自己的限额、profile 切换、轮询器）**不会**被延迟。
+  - 整个家族共享两条不变量：一个提醒**不能**被替换（收集器只会追加），所以 agent 自己持有 `MemoryRecallReminder` 并把它重新指向（`SetBackend`）；以及一个拥有外部资源的重建会**先**拆掉旧的（`ReloadMemory` 在构建新的之前先解挂旧后端——装了一半的一对比没有还糟）。重建出来的子系统跟构造出来的并不一样：`ReloadMemory` 必须重新应用构造在 configure 之后加上去的那些接线，外加 `MemoryState.SkipRecall`——丢掉它们是静默退化，不是报错。
+  - 那两个绑定的方法是 `GetSettingsSchema`（把那张表按配置的叶子过滤——`config.PathsFor`——每个可编辑叶子一个字段）和 `SaveSettings`（整批拒绝、快照 + `config.ApplyUpdates` 全有或全无、用 `config.Save` 写**整份**配置，最后才 push：写失败就恢复成那个精确快照）。文件就是那个对象 marshal 出来的，所以这一页不拥有的键会原样跟着走，文件也就不再是一份手写文档（注释和排版不会保留；`config.Save` 会留一份副本作 `config.yaml.bak`）。值读写用的是跟文件同一个点路径，通过 `config.ReadPath`/`SetPath`。
+  - 有一行是整个对象写入的那个例外：`active_mcp_profile` 设置了 `OwnsWrite`，因为它的 push 就是那个写者（批会跳过这个叶子，`SaveSettings` 在那一次 marshal 时把它盖到对象上、之后又抬下来）——所以一次失败的切换绝不可能让这个字段指着一个服务器还没加载的 profile。
+- **设置页是那份声明的纯渲染器**（`frontend/src/settings.tsx` 里一个配置键都不持有），而它渲染的一切都是关于**路径**而非关于键的规则：一个 `Category` 把一个叶子放进左栏，一个顶层键的那些叶子归到一个标题下（它们共享的最长前缀，下面的行会把它丢掉），配置列表的一项折叠成一张卡片。还有三条声明随它一起：`settingChoices`（第二张表，给那些取值集合封闭的叶子用，按结构路径为键——`providers.*.type`——因为那个决定属于列表，不属于第 0 项）、`settingFoldedLists`（关于某一个**列表**的声明，给那些不论多大、条目都折叠着画的列表用），以及 `Optional`/`IsSet`（`config.DescribeLeaf`：一个未设置的指针说不出口的关于它自己的事，也正是让这一页能画「自动」而不是从一个值去猜的东西）。三条都由 `desktop/settings_test.go` 钉住。一个**拒绝**某个值的表单会强制把它那张卡打开、压过所有折叠规则——藏在折叠后面的错误是读者没法处理的错误。这一页的绘制顺序是一条渲染规则，所以钉住它的是 `itest/desktop/drivers/settings.js`。
+- **一个凭据叶子画成掩码，而「哪些叶子是凭据」不由这一页决定**（`config` 的 `secretLeafNames` → `LeafInfo.Secret` → `SettingFieldVO`/`SettingElementFieldVO.Secret` → `SecretInput`）：规则是叶子自己的 yaml 名（`api_key`，web_search/web_fetch provider 的 `key`），是写出来的而不是按模式匹配的——一条子串规则会把 `keyword_provider` 也吞进去、把一个读者专程来看的值藏起来。这个标志也挂在元素**模板**上，否则一个用 ＋ 做出来的卡片会给一个从零敲进去的键画一个明文框。掩码只是**显示**，别的什么都不是：揭示是那个框自己的状态，绝不是草稿——揭示不是一次编辑。
+- **「未设置」是一个有自己取值的状态**（`config.Unset` → 那个键干脆**不写**，因为每个可选叶子的 yaml tag 都是 `omitempty`；一个裸 `nil` 仍然被**拒绝**，因为那看起来就是一次忘了解引用的指针）。它是回到一个字段的自动/默认行为的唯一途径，它能往返，而 `Optional` 只对一个没有 `default:` tag 的指针为真。
+- **列表由这次保存来增删，而待处理项归这一页所有**：＋ 和 删除 是**这一页**的状态，跟草稿一模一样——服务器上没有任何暂存区——所以 `SaveSettings(updates, appends, removes)` 在一次调用里携带整份未保存状态。三个后果：后端交出「一个还不存在的条目」所需要的两件事实（`SettingListVO.Length`，新条目落在哪，以及 `.Element`，条目模板，这样 `GetSettingsSchema` 保持为配置的一个**纯**函数）；append 是**元素**路径，而 append 会拒绝一个不等于列表当前长度的下标（`validateRemovals` 拒绝同一类过期，包括**同一个元素出现两次**——删除是一条一条跑的，所以一个重复会静默地多删两项）；以及**一次保存内部的顺序就是那套机制**：先 append，再更新叶子，最后删除——一次删除会移动后面每个下标，所以放在它之后应用的更新会改错元素。删除本身是一次点击、而撤销才是重点（保存之前什么都不写），它发出的那一个调用 `SettingsRemovalWarning`，两个答案都是在卡片还在屏幕上时读的。
+- **保存前的预览是同一批经过同一个预检、然后 marshal 出来而不是写出去**（`PreviewSettings` / `resolveBatch`，`SaveSettings` 也调它），所以一次预览不可能承诺一件保存会拒绝的事。这个 diff 是「生成物对生成物」——绝不是磁盘上的字节，那些字节与 marshal 形式的差异还包括批没做的事——而 `Rewrites` 携带的正是它排除掉的东西（保存会重写整份文档；只有当真时才在页面上显示）。还有两条规则随它一起：预览绝不写，并在表单变了之后这么说（「这份预览是旧的」）；而且它**故意**逐字打印一个凭据——掩码字段是关于**表单**的显示选择，而这个面板回答的是「文件里会有什么」，`api_key: ***` 会让它唯一的那个答案不真实。
+- **设置页立起来的时候，应用主体是 `inert`，而那跟「隐藏」不是一回事**：这一页是固定且不透明的，所以它背后的东西只需要离开 tab 顺序和无障碍树——但它必须继续被**绘制**（一个 `visibility: hidden` 的子树永久丢掉了它省略号截断的侧栏标题，issue #27），并且必须保持**挂载**（这正是保住会话全文的滚动偏移和输入框草稿的东西）。`settings` 冒烟在两个方向上都钉住这套机制。
+- **设置页是一个视图，所以它自带进出的两条路**：`⌘,` 打开它，Esc 回到对话，跟侧栏的「返回对话」完全一样——一个脏表单**不是**留下来或弹问的理由。Esc 监听器**认领**这个键（`preventDefault` + `stopPropagation`）：聊天视图是 inert 而不是卸载的，所以它自己的 Esc 监听器还活着，一个没被认领的 Escape 会顺带关掉那扇不透明页面后面留下的任何面板。
+- **关掉主窗口是把它藏起来；只有「退出 Tachi Desktop」才让应用退出**（`desktop/main.go` 的 `WindowClosing` 钩子）。在 darwin 上，一次用户发起的关闭会**销毁**窗口、让每个句柄都指着空气、而应用还在跑——三条回去的路（托盘菜单的「打开主窗口」、点通知、点 Dock）会一起变成哑的。钩子在框架自己的监听器之前同步跑，而 `WindowEvent.Cancel` 会停掉其余的，这是唯一能把「关闭」变成「隐藏」的杠杆；关停那条路会穿过去（`desktopApp.quitting`）。隐藏是承重的，不是装饰：通知器、主题控制器和托盘都持有窗口指针，只有在没有东西销毁它时才安全。
+- **一个会话的目录是 `config.SessionDir()` + 一个路径元素**：`sessionDirPath(id)`（`sessiondir.go`）是唯一的解析器，它会**拒绝**一个 webview 可能发来的、不是单个名字的任何东西（`../..`、`a/b`、`.`、空）。`oneOffDir` 跟它共用。
+- **一个 GUI 进程的工作目录是 `/`——绝不从它推导工作区根目录。** 工作区根目录来自**会话**（`sess.WorkingDir` + `AdditionalDirs`），并且走同一个出口：`desktop/roots.go` 的 `sessionRoots` / `sessionRootsFrom`——那一轮的 `wdctx`、提示词、`@` 文件根、git diff 和 skill store 都读那个，所以它们在一次目录变更之后不可能彼此漂开。一个等于 `/`、`$HOME`、或者包含 `config.BaseDir()` 的根会被直接拒绝（Tachi 自己的状态绝不能坐在一个工作区根目录里）；`NewSession` 应用同一条规则。
+- **一个桌面项目拥有其成员的工作区，而会话记录变成一份快照。** `projects.json`（挨着 `desktop_ui.json`）存 `{名称, 主目录, 附加目录}`；一个成员只存 `project_id`，每次读取都通过同一个 `sessionRootsFrom` 解析——项目**驱动**这个会话时项目的根说了算，否则会话自己的字段就是答案。它是**一个**谓词（`projectTable.drives`），由解析器、写守卫和面板共用，所以一个会话绝不可能在读取上归项目所有、而在写入上可编辑。它只判断**主**根：一个消失的**附加**根是只关乎一个目录的事实（保留、报告 `exists=false`、被提示词和 @ 文件搜索跳过）。一个解析不了的 `projects.json` 读作「没有项目」，但**绝不**被覆盖写。编辑一个项目只写**一个**文件——不扇出进会话元数据——所以没有任何东西能覆盖掉一个运行中轮次的快照；skill store 是那个例外，因为它的扫描根在构建时就固定了，所以一次项目编辑会让每个活着的成员**失效**，各自在自己的下一轮上重新指向自己。
+- **绑定恰好发生在两个地方。** `NewSession(projectID)` 是唯一的**设置**方（`""` 是一个普通会话，否则把项目的根拷进来当快照——一个驱动不了会话的项目产出的是一个普通会话，绝不是绑定到空的一个）。`DeleteProject` 是唯一的**取消设置**方，而它做的是**解绑**：成员保留它们的工作区、快照被刷新，而只要有成员在轮次中途它就会被拒绝（运行检查与元数据写入共用一个临界区）。
+- **把路径交给系统的是 `attach.go`**：`OpenPath`（默认应用；一个目录打开它的 Finder 窗口）和 `RevealPath`，两者都先 `stat`，然后返回 `"ok"` 或原因。新的 open/reveal 动作复用它们，而一个测试替换那唯一的 `openFile` 变量来读 argv。
+- **正文里的一个链接以恰好两种方式离开应用，两者都是自点击起的同一条路**：前端的 `MdLink`（`frontend/src/markdown.tsx`），会话全文的 react-markdown 和评审面板的 `InlineMd` 都渲染它，它把一个 href 要么交给 `AgentService.OpenURL`——后端那个过了 `allowlist` 的启动器（`openFile`，因为 `open` / xdg-open 收 URL 跟收路径一样顺手）——要么，当这个 href 命名了一个**确实在磁盘上**的文件时，交给应用内预览（`FilePreviewOverlay`，附件卡和 diff 面板打开的是同一个）：这就是一条回复里的 `[desktop.md](desktop.md)` 的含义，而在它之前，点击什么都不做（issue #49）。**两者是哪一个，只有后端能回答**——由 `PreviewFile` 的 `missing` 种类决定，因为一个站点绝对 URL 路径（`[state](/concepts/state)`，回复里确实会有）和一个绝对磁盘路径在有东西去问磁盘之前是同一串字符；一个不存在的路径保留旧的「只交给浏览器」的行为。一个相对路径是相对会话的工作目录解析的（`linkTargetPath`，故意放在 `toLocalAsset` 旁边——一条链接和它旁边那张图是同一条规则）。这一页里一个朴素的 `<a href>` 是一扇单向门——webview 没有标签页、没有返回按钮，所以跟过去会把整个应用换成那个页面、什么也没留下可返回（issue #48）——因此在每次点击上 `preventDefault`，也因此**第二个渲染器带着它自己对链接的想法**正是其中一个变成死链的方式。**启动器的 scheme 仍然是一个 allowlist**（http/https/mailto），因为 URL 来自一个**模型**写的 markdown，而平台启动器会用它手里有任何处理器的方案去打开：`file:` 连一个组件都到不了（react-markdown 会丢掉它），就算到了也会被拒绝。冒烟：`external-link`（还钉住点击不会导航）、`file-link`（一个本地文件打开预览，一个不存在的路径不打开，且启动器从不被问）。
+- **工作区面板里的每个根都带着它的 git 分支**（`SessionRootVO.Branch`/`Detached`；`shutil.GitBranch`）：一个仓库的两份检出否则就是同一行。它在面板打开时**按根**探测（从不存储：一份检出会在你脚下移动），对缺失的根跳过，对一个不是工作树的根是**空**——「不是一个仓库」绝不被装扮成一个分支名。同一个探测也服务系统提醒里的 `Git branch` 那一行。
+- **一张粘贴的图片先被存下来，然后按引用附上——跟拖进来的文件走同一条路**（`SavePastedImage`）：一张截图是**没有路径的字节**，所以它写在**会话**自己的目录下（`pasted/`，这样这个文件随对话一起死掉，也绝不出现在用户工作区的 diff 里），而绑定用一条**绝对**的 `@` 引用作答。**那个存储是 `session.SavePastedImage`，不是这个包的**——TUI 也粘贴图片，走同一条路进同一个目录，所以这套布局只在 store 里陈述一次（[refs.md](refs.md) → 一次粘贴是无路径的字节）。答案是一个 VO，不是 `"ok"`/原因——一次静默什么都不做的粘贴，跟一条静默走丢的消息是同一类 bug。**那条 `@` 引用只展开一次，为它被发送时的那一轮**，而之后某一轮看到的是从记录来的：图片部分连同它的字节被持久化（`session.Message.Parts` + 会话的 `images/` blob——见 session-store.md），所以重新加载的历史重建出的是图片而不是占位符。`paste-image` 在 LLM 边界断言被粘贴的**字节**；`image-reload` 在一条种下的记录从磁盘加载之后再断言一次，而那正是重启做的事。
+- **一次发送会点名它的会话，而一次没有发生的发送会说出来**（`SendMessage` / `StopAndSend`）。id 来自**调用方**，而每次拒绝都是一个返回的字符串——绝不对一条没启动任何轮次的消息返回一个裸 `"ok"`，因为前端在调用**之前**就画了用户的泡泡和一个运行中的占位：一条被丢掉的消息会让读者看着自己的文本停在一个「正在…」下面、没有任何东西能清掉。两个坑：`sessionIsKnown` **不是**一个可用的守卫（它读的是**运行**表，所以对一个在磁盘上存在、还没被加载的会话它返回假——每一次首次发送都是这样），以及忙检查必须在 agent 构建**之前**。
+- **每个桌面 manager 都建在同一个 `FileStore`（`d.sessionStore()`）上。** `FileStore.ListSessions` 把会话列表记忆化，而用任何别的方式建出来的 manager（`session.NewManager(nil)`）持有自己的 store，它的快照没有任何东西能丢弃：一轮的写入跑在那个按运行实例的 manager 上，所以列表用的那个 manager 会一直供应轮次之前的标题（`TestEveryDesktopManagerSharesTheSessionStore`）。`LoadMeta` 故意保持不记忆化——它喂的是活记录，以及一次读-改-写的读那一半，而那里一次过期的读就是一次丢失的写。
+- **一条 bash `ask` 规则是给用户的问题，桌面用 ACP 的方式回答它——绝不加第四个 `PermissionMode`**：每个会话的 agent 都用 `agent.PermissionModeExternal` 加一个 `PermissionHandler` 构建，所以那一轮停在窗口上，决定从 `AnswerPermission` 回来。`PermissionModeSkip` 是错的姿态：它的 ask 分支是*无人值守*的那个（channel / subagent / `tachi -p`）——它会放行那条命令，而这是在一个有用户坐在窗口前、也有表单可弹问他的 GUI 里。`deny` 两种方式下行为一致；只有 `ask` 不同。四条性质：一次回答按**会话 + 工具调用 id**寻址，因为两段对话可能生成同一个 id；待处理条目由那个等待的 goroutine 自己丢弃，所以 Stop 不可能留下一个可放行的孤儿；一次旁路运行屏幕上没有轮次，所以 `commands.go` 标记它的 ctx，handler 就拒绝、而不是停住一次没人能回答的运行；而「本会话全部允许」是一个**会话**级决定，不是一条命令记忆。这个开关故意坐在那些 deny 检查**下面**——「别再问了我」绝不能变成「把我禁止过的跑起来」。
+- **设备链路（AI Passport，`desktop/link/`）是那张待处理表的第二个读者，绝不是第二条回答路径**：每一条「有一轮停在用户身上」的记录都住在同一张 map 里（`d.asks`，`asks.go`）——bash 的 ask 和 AskUserQuestion 一样——而窗口、设备和 TUI 都通过同样那两个函数作答（`answerPermission` / `answerAskUser`）。这样换来四件事，而第二条路径会把它们丢掉：那一行携带**要显示什么**（权限预览、那些问题），因为光凭等待的 channel 说不出在等什么；AskUser 那一半在这里**没有** channel（它的等待活在 agent 自己的 `AskUserResp` 上），所以在一轮被停掉时没有任何东西把它解开，由 `endTurn` 按种类把它扫掉；链路按每条连接的 `ref` 而不是工具调用 id 来给一次回答寻址，并且拒绝一个过期的回答，就跟卡片那条路拒绝一张过期的卡完全一样；而传输方式（今天 serial / TCP，以后 BLE）由 `badge` 配置块选择，所以协议和回答路径对传输方式无感。它默认**关**着——串口是共享资源，`idf.py monitor` 对它跟我们一样有主张——而 `TACHI_BADGE` 是**覆盖**那个块而不是顶替它：一个把应用指向假设备的调试通道，绝不能被那个文件挡住。两条路都落到同一个 `startBadge`，它会先停掉旧的监听器——一个进程里两条链路就是两个 Server 在抢同一个串口。**会话列表是有序的，不是随意的**：设备把第一条当作「我屏幕上的那条」，所以**被显示**的会话（`activeID`）被排在最前，其余保持它们稳定的 id 顺序（链路的去抖是逐字节比较快照的，所以这个顺序必须保持确定性）。**从设备来的回答也必须广播回前端**（`agent:ask_answered`，由回答路径自己发出）：窗口里的卡片是**前端**在**它**作答时清掉的，所以一个设备回答会让那张卡片立在那儿——还可以点，而点它现在会以「没有这样的待处理请求」被拒绝。两个前端共享的任何状态都需要同样的处理：谁改了它，就告诉另一个，否则第二个会继续渲染一件已经过期的事实。
 
-- **The Wails bindings are GENERATED and COMMITTED**
-  (`frontend/bindings/github.com/monsterxx03/tachi/desktop/agentservice.ts`). Adding, renaming or deleting an
-  exported method on `AgentService` means re-running
-  `cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i` (that is `build/Taskfile.yml`'s
-  `generate:bindings`, which `make build` runs for you). Never hand-edit one: the numeric `$Call.ByID(...)` is
-  derived from the method, and a frontend calling a method the generator has not seen fails `tsc` — the only
-  thing that type-checks the call at all.
-- **A desktop change is four surfaces, not one**: the Go method, the regenerated TS binding, the frontend, and
-  the smoke driver. The binding is why the middle two cannot be skipped (a call the generator has not seen does
-  not compile), and the driver is why "the method works" is not a claim a change here can make on its own.
-- **Only `desktop/` is a Go module of its own** (it is NOT listed in the repo-root `go.work`), so every Go
-  command for it runs with `GOWORK=off`. **The root `go test ./...` does NOT compile `desktop/`'s test
-  package**, and the root `make lint` does not cover it either: after touching `desktop/`, run
-  `cd desktop && GOWORK=off go test ./...` too.
-- **The packaged app must be signed with the LOCAL CERTIFICATE, not ad-hoc.** `wails3 package`
-  leaves `bin/tachi-desktop.app` ad-hoc signed, and an ad-hoc identity is a content hash — it changes on
-  every rebuild, so macOS re-asks every TCC permission (bluetooth, speech recognition) and may
-  deny notifications permanently. `desktop/Makefile`'s `build` target re-signs automatically
-  **when the identity exists** (`Tachi Local Code Signing`, `LOCAL_SIGN_ID`); without it the build
-  prints a warning and leaves the ad-hoc signature, which is exactly the state that causes the
-  repeated prompts. Create it once with `desktop/scripts/dev-cert.sh` (⚠ that script must use
-  `/usr/bin/openssl` and a NON-empty p12 password — OpenSSL 3's default p12 encryption and an
-  empty password each produce `MAC verification failed during PKCS12 import`). Verify with
-  `codesign -dv --verbose=2 bin/tachi-desktop.app | grep -E "Authority|flags"`: `flags=0x0` plus an
-  `Authority=` line means it worked; `flags=0x2(adhoc)` means it did not.
-- **A new direct dependency of the ROOT module must be added to `desktop/go.mod` too.** `desktop/` is a
-  separate module that `replace`s the root one, so it carries its own `require`/`go.sum` for everything the
-  root code imports: a package the root starts importing builds fine there while `desktop/` fails with
-  `missing go.sum entry for module providing package ...`. Fix: `cd desktop && GOWORK=off go mod tidy`. The
-  reverse holds too — bumping such a dependency at the root must be re-tidied here.
-- **`d.cfg` is read under `cfgMu` and written through ONE entry point** (`desktopApp.config()` /
-  `withConfig()`, in `agent.go`). Plain-field access is a data race here, not merely a style choice: the
-  settings page writes the object while turns read it.
-- **⚠️ Never swap the `d.cfg` POINTER; mutate the existing object.** Every provider is wrapped by
-  `wrapForUsage`, whose price/credit resolvers CLOSE OVER the `*config.Config` and dereference it per LLM call,
-  each session's agent holds it as `AgentConfig.FullConfig`, and the shared MCP manager and its refresher hold
-  it too. Those holders read LAZILY, which is what makes an in-place edit take effect everywhere at once — and
-  what makes a pointer swap fail everywhere at once, silently (the usage ledger bills at the old prices). So
-  `atomic.Pointer[config.Config]` is the wrong tool here, however tempting it looks.
-- **One SAVE is one locked batch** (`withConfig` runs under the write lock): `SaveSettings` passes the whole
-  batch to `config.ApplyUpdates` inside ONE call, all-or-nothing, so no reader can observe a half-applied
-  batch. (`mcpServerByName` is still the one documented exception: a single bool written in place, outside the
-  lock.)
-- **A config key's "what does it take to make this live" is declared in `desktop/settings.go`, one row per key
-  in `settingsTable`** (`applyLazy` = readers already re-read it / `applyPush` = something must be rebuilt,
-  `Apply` carries that / `applyRestart` / `applyUnused` = another entry mode owns it). Two tests in
-  `desktop/settings_test.go` hold it to the whole of `config.Config` by reflection, so **adding a config field
-  fails the build until it gets a row**; `settingApply.needsRestart()` is DERIVED (`Apply == nil` and not
-  lazy/unused), never a flag to remember. `TestTheLikelyEditsStayHot` fences the keys users edit most: if a
-  refactor makes one of them need a restart again, that test — not a confused user — is what fails.
-  - **A row also answers the two things the VALUE cannot say about the FORM**: which group it is drawn in
-    (`Category`) and what an empty `string_list` box teaches as its example (`ListExample`, one example value
-    per line). Both ride on the row rather than on the control kind, because the same control is asked two
-    different questions — `permissions.bash.ask` takes shell globs and `permissions.files.read.ask` takes
-    paths, and only the row knows which. The frontend therefore renders the example the backend sent (and
-    nothing at all when a list's shape has none); a hardcoded example in the frontend is what taught readers
-    to type a command into a path field.
-  - A row's `Apply` does only the PUSH half — the value itself is written into `d.cfg` by the caller — and
-    anything that has to reach every session goes through `d.applyToLiveAgents(fn)` (`agent.go`), which returns
-    failures labelled with the session's title (or its id). A push is a reload method from
-    `agent/agent_reload.go` or a call into an existing one (`SetResolvedProvider`, `SetPermissionRoot`,
-    `Setup*Provider`): idempotent, push half only, and it never replaces something a FRONTEND injected
-    (`AgentConfig.HookDispatcher` / `.SubagentRunner`).
-  - **PUSHES RUN ONLY AFTER `config.yaml` is written** (one save is serialized by `d.settingsMu`): a failed
-    save pushes nothing, which is what makes the rollback message true — a push has no undo. A push is also
-    never applied UNDER a running turn: the fan-out queues it for a session whose `r.running` is set and
-    `endTurn` runs the queue (`desktop/deferred_push.go`), which is why a save made mid-turn answers
-    `K 项等这一轮结束生效（…）` instead of claiming the key is live. Process-wide and shared-layer rows (log
-    level, prompt-cache clear, the manager's own limits, a profile switch, the poller) are NOT deferred.
-  - Two invariants the whole family shares: a REMINDER cannot be replaced (the collector only appends), so the
-    agent holds `MemoryRecallReminder` itself and re-points it (`SetBackend`); and a rebuild that owns an
-    external resource tears the old one down FIRST (`ReloadMemory` unhooks the old backend before building the
-    new one — a half-installed pair is worse than none). A rebuilt subsystem is not identical to a constructed
-    one: `ReloadMemory` must
-    re-apply the wirings construction adds AFTER configure plus `MemoryState.SkipRecall` — losing them is
-    silent degradation, not an error.
-  - The two bound methods are `GetSettingsSchema` (the table filtered through the CONFIG's leaves —
-    `config.PathsFor` — one field per editable leaf) and `SaveSettings` (refuse the whole batch, snapshot +
-    `config.ApplyUpdates` all-or-nothing, write the WHOLE config with `config.Save`, push LAST: a failed write
-    restores the exact snapshot). The file is that object marshalled, so a key this page does not own rides
-    along untouched and the file stops being a hand-written document (comments and layout do not survive;
-    `config.Save` keeps one copy as `config.yaml.bak`). Values are read and written by the SAME dot path as the
-    file, via `config.ReadPath`/`SetPath`.
-  - One row is the exception to the whole-object write: `active_mcp_profile` sets `OwnsWrite`, because its push
-    IS the writer (the batch skips the leaf, and `SaveSettings` lays it over the object for that one marshal
-    and lifts it again) — so a failed switch can never leave the field naming a profile whose servers are not
-    loaded.
-- **The settings page is a pure renderer of that declaration** (`frontend/src/settings.tsx` holds no config
-  key), and everything it renders is a rule about PATHS rather than about keys: a `Category` puts a leaf in the
-  left column, a top-level key's leaves go under one heading (the longest prefix they share, and the rows below
-  drop it), and a config list's item collapses into a card. Three more declarations ride with it, each pinned
-  by `desktop/settings_test.go`: `settingChoices` (a SECOND table for leaves with a closed value set, keyed by
-  the structural path — `providers.*.type` — because the decision belongs to the list, not to item 0),
-  `settingFoldedLists` (a declaration about a LIST, for the ones whose items are drawn folded whatever their
-  size), and `Optional`/`IsSet` (`config.DescribeLeaf`: what an unset pointer cannot say about itself, and what
-  lets the page draw 自动 instead of guessing from a value). A form REFUSING a value forces its card open over
-  every fold rule — an error behind a fold is one the reader cannot act on. The order the page draws in is a
-  rendering rule, so `itest/desktop/drivers/settings.js` is what pins it.
-- **A credential leaf is drawn masked, and the PAGE does not decide which leaves those are** (`config`'s
-  `secretLeafNames` → `LeafInfo.Secret` → `SettingFieldVO`/`SettingElementFieldVO.Secret` → `SecretInput`):
-  the rule is the leaf's own yaml name (`api_key`, a web_search/web_fetch provider's `key`), written out
-  rather than pattern-matched — a substring rule would also swallow `keyword_provider` and hide a value the
-  reader came to read. The flag rides on the element TEMPLATE too, or a card ＋ made would draw one plain box
-  for a key typed in from scratch. Masking is DISPLAY and nothing else: the reveal is the box's own state,
-  never a draft — a reveal is not an edit.
-- **「未设置」 is a state with its own value** (`config.Unset` → the key is simply NOT written, since every
-  optional leaf's yaml tag is `omitempty`; a bare `nil` stays REFUSED, because that is what a forgotten
-  pointer dereference looks like). It is the only way back to a field's auto/default behaviour, it
-  round-trips, and `Optional` is true only for a pointer with NO `default:` tag.
-- **A list is grown and shrunk by the SAVE, and the page owns the pending item**: ＋ and 删除 are THIS PAGE's
-  state, exactly like a draft — there is no staging area on the server — so `SaveSettings(updates, appends,
-  removes)` carries the whole unsaved state in one call. Three consequences: the backend hands over the two
-  facts an item that does not exist needs (`SettingListVO.Length`, where a new item lands, and `.Element`, the
-  item template, so `GetSettingsSchema` stays a PURE function of the config); the appends are ELEMENT paths and
-  the append refuses an index that is not the list's current length (`validateRemovals` refuses the same kind
-  of staleness, including **the same element twice** — removals run one by one, so a duplicate silently drops
-  two items); and **the order inside one save is the mechanism**: appends, then the leaf updates, then the
-  removals — a removal shifts every later index, so an update applied after it addresses the wrong element.
-  删除 itself is ONE click whose undo is the point (nothing is written until the save), and the one call it
-  makes, `SettingsRemovalWarning`, has both its answers read while the card is still on screen.
-- **保存前的预览 is the SAME batch put through the SAME pre-flight, and then marshalled instead of written**
-  (`PreviewSettings` / `resolveBatch`, which `SaveSettings` calls too), so a preview cannot promise something
-  the save refuses. The diff is generated-vs-generated — never the bytes on disk, whose differences from the
-  marshalled form include things the batch did not do — and `Rewrites` carries what that excludes (the save
-  rewrites the whole document; the page shows it only when true). Two rules ride with it: the preview never
-  writes and says so when the form moves on (「这份预览是旧的」), and it prints a credential VERBATIM on
-  purpose — a masked field is a display choice about a FORM, while this panel answers "what will be in the
-  file", and `api_key: ***` would make its one answer untrue.
-- **While the settings page is up the app body is `inert`, and that is NOT the same as hidden**: the page is
-  fixed and opaque, so what is behind it only has to leave the tab order and the accessibility tree — but it
-  must keep being PAINTED (a `visibility: hidden` subtree lost its ellipsised sidebar titles for good, issue
-  #27) and it must stay MOUNTED (that is what keeps the transcript's scroll offset and the composer's draft).
-  The `settings` smoke pins the mechanism in both directions.
-- **The settings page is a VIEW, so it owns its own two ways in and out**: `⌘,` opens it and Esc returns to
-  the conversation, exactly what the rail's 「返回对话」 does — a dirty form is NOT a reason to stay or to ask.
-  The Esc listener CLAIMS the key (`preventDefault` + `stopPropagation`): the chat view is inert rather than
-  unmounted, so its own Esc listeners are alive and an unclaimed Escape would also dismiss whatever panel was
-  left open behind the opaque page.
-- **Closing the main window HIDES it; only 退出 Tachi Desktop quits the app** (`desktop/main.go`'s
-  `WindowClosing` hook). On darwin a user-initiated close would DESTROY the window and leave every handle
-  pointing at nothing while the app kept running — all three ways back (the tray menu's 「打开主窗口」,
-  a notification click, a Dock click) going silent together. Hooks run synchronously before the
-  framework's own listeners and `WindowEvent.Cancel`
-  stops the rest, which is the only lever that turns the close into a hide; the shutdown path passes through
-  (`desktopApp.quitting`). The hide is load-bearing, not cosmetic: the notifier, the theme controller and the
-  tray all hold the window pointer, which is only safe while nothing destroys it.
-- **A session's directory is `config.SessionDir()` + ONE path element**: `sessionDirPath(id)`
-  (`sessiondir.go`) is the single resolver and it REFUSES anything a webview could send that is not a single
-  name (`../..`, `a/b`, `.`, empty). `oneOffDir` shares it.
-- **A GUI process's working directory is `/` — never derive a workspace root from it.** Workspace roots come
-  from the SESSION (`sess.WorkingDir` + `AdditionalDirs`) and go through ONE exit, `desktop/roots.go`'s
-  `sessionRoots` / `sessionRootsFrom`: the turn's `wdctx`, the prompt, the `@`-file root, git diff and the
-  skill store all read that, so they cannot drift apart after a directory change. A root that is `/`, `$HOME`,
-  or one that contains `config.BaseDir()` is refused outright (Tachi's own state must never sit inside a
-  workspace root); `NewSession` applies the same rule.
-- **A desktop project OWNS its members' workspaces, and the session record becomes a snapshot.**
-  `projects.json` (next to `desktop_ui.json`) holds `{名称, 主目录, 附加目录}`; a member stores only
-  `project_id`, and every read resolves through the same `sessionRootsFrom` — the project's roots win while the
-  project DRIVES the session, otherwise the session's own fields are the answer. It is ONE predicate
-  (`projectTable.drives`) shared by the resolver, the write guards and the panel, so a session can never be
-  project-owned for a read and editable for a write. It judges the PRIMARY only: a vanished ADDITIONAL root is
-  a fact about one directory (kept, reported `exists=false`, skipped by the prompt and the @-file search). A
-  `projects.json` that cannot be parsed reads as "no projects" but is NEVER written over. Editing a project
-  writes ONE file — no fan-out into session meta — so nothing can clobber a running turn's snapshot; the skill
-  store is the exception, since its scan roots are fixed when it is built, so a project edit INVALIDATES every
-  live member and each re-points itself at its own next turn.
-- **A binding is made in exactly two places.** `NewSession(projectID)` is the only SETTER (`""` is an ordinary
-  session, otherwise the project's roots are copied in as the snapshot — a project that cannot drive a session
-  yields an ordinary one, never one bound to nothing). `DeleteProject` is the only un-setter, and it DETACHES:
-  members keep their workspace with the snapshot refreshed, and it is refused while any member is mid-turn
-  (the running check and the meta writes share one critical section).
-- **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
-  window) and `RevealPath`, both `stat`-ing first and returning `"ok"` or the reason. New open/reveal actions
-  reuse them, and a test replaces the single `openFile` var to read the argv.
-- **A link in prose leaves the app in exactly two ways, and both are ONE path from the click**: the frontend's
-  `MdLink` (`frontend/src/markdown.tsx`), which the transcript's react-markdown AND the review panel's
-  `InlineMd` both render, hands an href either to `AgentService.OpenURL` — the backend's `allowlist`ed
-  launcher (`openFile`, since `open` / xdg-open take a URL as readily as a path) — or, when the href names a
-  file that IS on disk, to the in-app preview (`FilePreviewOverlay`, the same one an attachment card and the
-  diff panel open): that is what a reply's `[desktop.md](desktop.md)` means, and before it, the click did
-  nothing at all (issue #49). **Which of the two it is, only the BACKEND can answer** — `PreviewFile`'s
-  `missing` kind decides, because a site-absolute URL path (`[state](/concepts/state)`, which replies do
-  contain) and an absolute disk path are the same string until something asks the disk; a path that is not
-  there keeps the old browser-only behaviour. A relative path resolves against the session's working
-  directory (`linkTargetPath`, deliberately beside `toLocalAsset` — one rule for a link and for the image
-  next to it). A plain `<a href>` in this page is a one-way door — the webview has no tabs and no back
-  button, so following one replaced the whole app with the page and left nothing to go back to (issue #48)
-  — hence `preventDefault` on every click, and hence a SECOND renderer with its own idea of a link is how
-  one of them becomes dead. **The launcher's scheme is still an allowlist** (http/https/mailto) because the
-  URL comes from markdown a MODEL wrote and the platform launcher opens whatever it has a handler for:
-  `file:` never even reaches a component (react-markdown drops it) and would be refused if it did. Smoke:
-  `external-link` (also pins that clicking does not navigate), `file-link` (a local file opens the preview,
-  a path that does not exist does not, and the launcher is never asked).
-- **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`;
-  `shutil.GitBranch`): two checkouts of one repository are otherwise the same row. It is probed PER ROOT when
-  the panel opens (never stored: a checkout moves under you), skipped for a missing root, and EMPTY for one
-  that is not a work tree — "not a repository" is never dressed up as a branch name. One probe serves the
-  system reminder's `Git branch` line too.
-- **A pasted image is stored, then attached by reference — the same route a dropped file takes**
-  (`SavePastedImage`): a screenshot is BYTES with no path, so it is written under the SESSION's own directory
-  (`pasted/`, so the file dies with the conversation and never appears in the user's workspace diff) and the
-  binding answers with an ABSOLUTE `@`-reference. **That storage is `session.SavePastedImage`, not this
-  package's** — the TUI pastes images too and takes the same route into the same directory, so the layout is
-  stated once, in the store ([refs.md](refs.md) → A paste is BYTES with no path). The answer is a VO, not "ok"/reason — a paste that
-  silently does nothing is the same class of bug as a message that silently goes nowhere. **The
-  `@`-reference is expanded ONCE, for the turn it is sent with**, and what a later turn sees comes from the
-  record instead: the image part is persisted with its bytes (`session.Message.Parts` + the session's
-  `images/` blob — see session-store.md), so a reloaded history rebuilds the image rather than the
-  placeholder. `paste-image` asserts the pasted BYTES at the LLM boundary; `image-reload` asserts them again
-  after a seeded record is loaded from disk, which is what a restart does.
-- **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`). The
-  id comes from the CALLER, and every refusal is a returned string — never a bare `"ok"` for a message that
-  started no turn, because the frontend draws the user's bubble and a running placeholder BEFORE the call: a
-  dropped message would leave the reader looking at their own text under a 正在… nothing could clear. Two
-  traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN map, so it is false for a session that
-  exists on disk and has not been loaded — every first send), and the busy check has to come BEFORE the agent
-  build.
-- **Every desktop manager is built on ONE `FileStore` (`d.sessionStore()`).** `FileStore.ListSessions`
-  memoizes the session list, and a manager built any other way (`session.NewManager(nil)`) holds a store of
-  its own, whose snapshot nothing can drop: a turn's write runs on the per-run manager, so the listing manager
-  would keep serving the pre-turn title (`TestEveryDesktopManagerSharesTheSessionStore`). `LoadMeta` stays
-  un-memoized on purpose — it feeds the live record and the read half of a read-modify-write, where a stale
-  read is a lost write.
-- **A bash `ask` rule is a question for the USER, and the desktop answers it the way ACP does — never with a
-  fourth `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a
-  `PermissionHandler`, so the turn parks on the window and the decision comes back through
-  `AnswerPermission`. `PermissionModeSkip` is the wrong posture: its ask branch is the *unattended* one
-  (channel / subagent / `tachi -p`) — it approves the command, in a GUI that has a user sitting in front of a
-  window and a form to ask them with. `deny` behaves identically either way; only `ask` differs. Four properties: an answer is
-  addressed by **session + tool call id**, because two conversations can generate the same id; the pending
-  entry is dropped by the waiting goroutine itself, so Stop cannot leave an approvable orphan; a side-channel
-  run has no turn on screen, so `commands.go` marks its ctx and the handler refuses instead of parking a run
-  nobody could answer; and 「本会话全部允许」 is a **session** decision, not a command memory. The switch sits
-  BELOW the deny checks on purpose — "stop asking me" must never become "run what I forbade".
-- **The device link (AI Passport, `desktop/link/`) is a SECOND READER of that pending table, never a second
-  answer path**: every "a turn is parked on the user" record lives in ONE map (`d.asks`, `asks.go`) — a bash
-  ask and an AskUserQuestion alike — and the window, the device and the TUI all answer through the same two
-  functions (`answerPermission` / `answerAskUser`). Four things that buys, and that a second path would lose:
-  the row carries what to SHOW (the permission preview, the questions), because the waiting channel alone
-  could not say what was being waited for; the AskUser half has NO channel here (its wait lives on the agent's
-  own `AskUserResp`), so nothing unwinds it on a stopped turn and `endTurn` sweeps it by kind; the link
-  addresses an answer by a per-connection `ref` rather than the tool-call id, and refuses a stale one exactly
-  as the card path refuses a stale card; and the transport (serial / TCP today, BLE later) is chosen by the
-  `badge` config block, so the protocol and the answer path are transport-blind. It is OFF by default — the
-  serial port is a shared resource and `idf.py monitor` has as much claim to it as we do — and `TACHI_BADGE`
-  OVERRIDES the block rather than standing in for it: a debug channel that points the app at a fake device
-  must not be blocked by the file. Both routes land in ONE `startBadge`, which stops the old listener first —
-  two links in one process are two Servers racing for one serial port. **The session LIST is ordered, not
-  arbitrary**: the device takes the first entry as "the one on my screen", so the DISPLAYED session
-  (`activeID`) is sorted first while the rest keep their stable id order (the link's de-bounce compares
-  snapshots byte for byte, so the order must stay deterministic). **An answer that arrives from the
-  device must also be broadcast back to the frontend** (`agent:ask_answered`, emitted by the answer
-  path itself): the window's card is cleared by the FRONTEND when IT answers, so a device answer
-  leaves that card standing — still clickable, and clicking it now refuses with "no such pending
-  request". Any state two frontends share needs the same treatment: whoever changes it tells the
-  other one, or the second one keeps rendering a fact that expired.
+## 桌面 MCP
 
-## Desktop MCP
+- **MCP server 配置只有一个作用域：全局那个。** `config.LoadMCPConfig` 读 `~/.tachi/mcp.json` 加上 `~/.tachi/mcp.<profile>.json`，别的什么都不读——一个 `<tree>/.tachi/mcp.json` 不会被读，也没有按树重载可调。换一种做法都不可能：一个共享池、每个 server 一条连接服务每个会话，所以「屏幕上哪个树」没有能决定一个全局集合的答案（项目作用域只能靠挑一个树当赢家来解析）。这个集合只在 bootstrap 时加载一次（`agent.Bootstrap` → `cfg.LoadMCPServers()`），之后唯一改变它的是 profile 切换——`switchMCPProfileTo` 就是那条路。
+- **那些 mcp.json 文件只有一把写者锁（`desktopApp.mcpFileMu`），而每条碰到它们的路都要拿它。** 有三条：设置编辑器的保存/删除、面板的 `enabled` 开关，以及一次 profile 切换做的配置重读。每一条都是对整份文件的读-改-写，原子写能让**文件**完好无损而不用锁——但保不住那次**变更**：两条一起落地会让第二条的读早于第一条的写，而那次编辑就消失了、没有任何东西报告它。
+- **写一个 server 和安装它是两步，按这个顺序，中间没有回滚。** `AgentService.SaveMCPServerEntry` / `DeleteMCPServerEntry` 写文件，然后调 `installMCPConfig(a, profile)`——跟一次 profile 切换跑的是同一套「加载文件 → `ReconcileMCPServers` → 在 cfgMu 下写配置」，这就是为什么一次编辑只重连变了的东西。一个之后**连接**失败的 server 会被报告，绝不撤销：用户要的那个文件无论如何都在磁盘上，而回滚它就得去猜他要的是文件还是那条连接。
+- **编辑器读的是原始配置（`config.LoadMCPConfigRaw`），绝不是最终化过的那个** 加载器会填上那 10s 超时、`enabled: true` 和 OAuth 回调 host；一个读了这些的表单会在有人对一个只是看了一眼的条目按下保存的那一刻，把这个进程的**默认值**写进一份手写的文件。「缺席」必须在整个往返里保持缺席。
+- **一个没名字的 server 是文件坏了，不是某个 server 坏了：** `finalizeMCPServers` 对它报错，于是 `LoadMCPServers` 失败，于是 `agent.Bootstrap` 失败——没有 TUI，而桌面连配置都完全没有，只能手工修。所以 `config.UpsertServerInFile` 在门口就拒绝一个没名字的条目（桌面先用用户的话把同一件事说出来，给一条他能据以行动的消息）。那个文件的任何新写者都欠同样的拒绝。
+- **在两个文件里都点名的条目是同一个 server，而删掉 profile 里那份，就会露出 base 里那份。** 这就是按名字合并的含义；编辑器的列表显示了它。别通过「两边都删」来「修」它——那会让这次合并无法表示。
+- **编辑器的那个块由 schema 声明，而不是前端按名字匹配的。** `SettingsSchemaVO.MCPServerEditor` 点名它画在哪个分类里（`catMCP`），因为一样东西属于哪个分组是设置表拥有的主张——这一页不认识任何配置键，而前端里的一个常量会是第二张要保持同步的表。它也不是一行：MCP server 不是 config.yaml 的叶子（`MCPServers` 是 `yaml:"-"`），所以它按条目、立刻保存，而不是通过 `SaveSettings`。
+- **第一个 server 要到下次启动才会连上，编辑器也这么说。** 那个共享 manager 只在配置非空时于启动时被构建（`desktop/agent_driver.go`），而在它之前构建的每个 agent 都捕获了 `DisableMCP: d.mcp == nil`；没有任何东西会把一个 manager 挂到一个已经跑过 `configure` 的 agent 上。所以 `applySavedMCPConfig` 报告的是「已写入配置，重启后生效」，而不是拒绝。关掉这个缺口意味着要惰性地构建那个 manager，**并且**把 `configure` 里共享 MCP 那一半（搜索工具 + 那条提醒）给活着的 agent，而不只是一次 `SetSharedMCP` 调用。
+- **编辑器由冒烟场景 `mcp-edit` 端到端钉住**（去冒烟那一节的路由表里查它）。它通过表单加一个 server，而 Go 那一半读回沙箱的 `mcp.json`：本来就逐字节在那里的那个条目、新装上的那个，以及被解析成 `config.MCPServerConfig` 的文件——「UI 写了一个加载器会读的文件」就是那个需要两半都在的主张。它的 fixture 来自场景字段 `mcpServersJSON`，而里面每个 server 都是**禁用**的：一次冒烟运行发生在真机器上，而一个启用的 stdio server 是一个应用真的会去 spawn 的进程（同样也是驱动在保存前取消勾选「启用」的原因）。
+- **`enableMCPServer` 是唯一的启用路径**（面板的开关和一次授权的末尾都走它），所以一个被授权的 server 最终跟一个被开关打开的 server 完全一样地连着：工具进共享池 **并且**给每个活着的 agent `NotifyDeferredToolsAdded`。那条提醒每个会话最多触发一次，所以一个在会话中途连上的 server 没有那个脏标记就对模型不可见——只写池子就是那个 bug。开关是**全局**事实（一个池、每个会话一条连接），所以所有活着的 agent 都会被通知（`applyToLiveAgents()`），而禁用会跑 `UnregisterMCPServer`（注册表 + 每个会话的已发现集合），不是裸的从池里移除。[mcp.md](mcp.md) 携带那条通用规则。
+- **面板自己的状态来自后端，绝不来自猜测**：`MCPServerVO.NeedsAuth` 在任何一次连接尝试带着 `*mcp.OAuthRequiredError` 回来时被置上，因为一个想要 token 的 server 否则看起来跟一个挂掉的完全一样；面板每次打开都重读（没有别的东西会纠正一份过期快照），而 `agent:mcp_ready` 正是一个**已经**打开着的面板需要的东西，因为共享池只有在每个 server 都答复之后才被填满——「已连接 + 池子里还没有工具」是一段真实的、持续数秒的窗口。一个工具行按需打开它自己的契约（`GetMCPToolSchema`），绝不作为行列表的一部分，而池子里的工具无论这个会话有没有加载过都被**列出**——在 MCP 工具搜索下「没加载」是常态，而一行干脆消失会被读成一个缺失的工具。server 行把已加载的数数在已提供的上面（`n/m 工具`），而面板头部对它正在渲染的那些行求和，绝不用一个单独的后端数字。**已加载的行排在前面，排序由后端做**（`ListMCPServers` 把 VO 按已加载优先、稳定地排序，所以每一半都保持池子里的字母序）：读者打开面板要找的是已加载的那一行，而稳定排序正是让一次开关不会在他们眼皮底下重排行序的东西。面板渲染给它的那个顺序——`TestListMCPServersOrdersLoadedToolsFirst` 钉住它，stub 的两个工具被安排成**已加载**的那个恰好是排序最后的那个（在那里「已加载优先」不可能碰巧通过）。
+- **Tachi 用它正在服务的那个前端的工作区来回答 MCP 的 `roots` 能力**（`Manager.SetRootsFunc`；桌面在它的共享 manager 上接 `desktopApp.mcpRoots`，所以答案是它那些活会话工作区的**并集**，而 ACP 是按会话接的）。形态本身（file:// URI、只留存在的目录、去重、排序）是**一条**规则，`mcp.RootsForDirs`。它在实践上不是可选的：一个认识 roots 的 server 会把文件访问**限制**在它被告知的范围内，而官方的 chrome-devtools server 什么都不被告知，就只允许 OS 临时目录。`client.Start` 才是给**服务器**发来的请求（`roots/list`、sampling、elicitation）装 handler 的那个——不是 `transport.Start`，也不是 SDK 那些便利构造器；跳过它在 Tachi 这一侧是静默的。
+- **面板的一次开关会被写回 server 来自的那个 mcp.json**（`MCPServerConfig.SourceFile`；规则是「它来自的那个文件」，绝不是「当前 profile」，否则这次改动会在下次 profile 切换时丢掉）。这次编辑是**外科手术式**的（一个值的字节；缩进、键序和未知字段都活下来），因为 mcp.json 是手写的。**profile 切换保持只在运行时生效**——没有任何东西把 `active_mcp_profile` 写进 config.yaml，所以一个下拉框不可能静默地把某个 profile 变成之后每次启动的默认。
+- **`AuthorizeMCPServer(name)` 启动那条流并返回 "ok"；进度以 `agent:mcp_auth` 到达。** 它不得不这样：那条流需要一个浏览器，而且往往还需要一个人。`CompleteMCPServerAuth(name, url)` 是粘贴回来的那条路，它会**先取消**一条在飞的流——两条出路花的是同一个一次性授权码。那条流本身的三件事实：浏览器是一个变量（`mcp.BrowserOpener`），所以一次脚本化运行会替换它（`TACHI_DEMO_BROWSER_FETCH=1`——一次冒烟运行绝不能把它跑在的那台机器上开出一个窗口，而一次 demo **录制**必须）；回调地址在任何东西被注册或交换**之前**就固定了，因为 DCR 会发 redirect_uri，而 token 交换会再发一次；以及 state + PKCE verifier 在浏览器那条路上也被持久化，所以趁回调还挂着的时候从地址栏把 URL 粘出来是可行的。一个 401 无论怎么到达都是一个事实（`mcp.isAuthRequired` 在 `Initialize` 和 `ListTools` 两步上**都**映射两个传输哨兵值——只映射后面那个会让这样的 server 报一个普通的连接错误）。
+- **fixture 是 `itest/mcpauth/`，这个功能的两半都跑在它上面**（401 + `WWW-Authenticate` → PRM → AS 元数据 → DCR → `/authorize` → `/token` → 一个只认 bearer 的 MCP 端点）。桌面的单元测试在进程内驱动它；`mcp-auth` 在 runner 里启动它、并把沙箱的 `mcp.json` 指向它。`desktop/` 通过它的 module `replace` 到达它：一个假货，不是两个。
 
-- **MCP server config has exactly ONE scope: the global one.** `config.LoadMCPConfig` reads
-  `~/.tachi/mcp.json` plus `~/.tachi/mcp.<profile>.json`, and nothing else — a `<tree>/.tachi/mcp.json`
-  is not read, and there is no per-tree reload to call. It cannot be otherwise: one shared pool and one
-  connection per server serve every session, so "which tree is on screen" has no answer that could
-  decide a global set (a project scope could only ever be resolved by picking one tree to win). The set
-  is loaded once, at bootstrap (`agent.Bootstrap` → `cfg.LoadMCPServers()`), and a profile switch is the
-  only thing that changes it afterwards — `switchMCPProfileTo` is that path.
-- **The mcp.json files have ONE writer lock (`desktopApp.mcpFileMu`), and every path that touches them
-  takes it.** Three do: the settings editor's save/delete, the panel's `enabled` toggle, and the config
-  re-read a profile switch performs. Each is a read-modify-write of a whole file, and atomic writes keep
-  the FILE intact without the lock — but not the CHANGE: two of them landing together let the second
-  one's read predate the first one's write, and that edit disappears with nothing to report it.
-- **Writing a server and installing it are two steps, in that order and with no rollback between them.**
-  `AgentService.SaveMCPServerEntry` / `DeleteMCPServerEntry` write the file, then call
-  `installMCPConfig(a, profile)` — the same "load the files → `ReconcileMCPServers` → write the config
-  under cfgMu" that a profile switch runs, which is why an edit reconnects only what changed. A server
-  that then fails to CONNECT is reported, never undone: the file the user asked for is on disk either
-  way, and rolling it back would have to guess whether he meant the file or the connection.
-- **The editor reads the RAW config (`config.LoadMCPConfigRaw`), never the finalized one.** The loader
-  fills in the 10s timeout, `enabled: true` and the OAuth callback host; a form that read those would
-  write this process's DEFAULTS into a hand-written file the moment someone pressed save on an entry
-  they had only looked at. "Absent" has to stay absent through the round trip.
-- **A nameless server is a broken FILE, not a broken server.** `finalizeMCPServers` errors on one, so
-  `LoadMCPServers` fails, so `agent.Bootstrap` fails — no TUI, and a desktop with no config at all,
-  repairable only by hand. `config.UpsertServerInFile` therefore refuses a nameless entry at the door
-  (the desktop says the same thing in the user's words first, for a message they can act on). Any new
-  writer of that file owes the same refusal.
-- **An entry named in both files is ONE server, and deleting the profile's copy REVEALS the base's.**
-  That is what merging by name means; the editor's list shows it. Do not "fix" it by deleting from both
-  — that would make the merge unrepresentable.
-- **The editor's block is declared by the schema, not matched by name in the frontend.**
-  `SettingsSchemaVO.MCPServerEditor` names the category it is drawn in (`catMCP`), because which group a
-  thing belongs to is a claim the settings table owns — the page knows no config keys, and a frontend
-  constant would be a second list to keep in step. It is also not a row: MCP servers are not config.yaml
-  leaves (`MCPServers` is `yaml:"-"`), so it saves per entry and immediately instead of through
-  `SaveSettings`.
-- **A first server does not connect until the next launch, and the editor says so.** The shared manager
-  is built at startup only when the config was non-empty (`desktop/agent_driver.go`), and every agent
-  built before it captured `DisableMCP: d.mcp == nil`; nothing attaches a manager to an agent that
-  already ran `configure`. So `applySavedMCPConfig` reports "已写入配置，重启后生效" instead of refusing.
-  Closing this means building the manager lazily AND giving the live agents the shared-MCP half of
-  `configure` (the search tool + the reminder), not just a `SetSharedMCP` call.
-- **The editor is pinned end-to-end by the smoke scenario `mcp-edit`** (look it up in the smoke
-  section's routing table). It adds a server through the form, and the Go half reads the sandbox's
-  `mcp.json` back: the entry that was already there byte for byte, the new one installed, and the
-  file parsed into `config.MCPServerConfig` — "the UI wrote a file the loader reads" is the claim
-  that needs both halves. Its fixture comes from the scenario field `mcpServersJSON`, and every
-  server in it is DISABLED: a smoke run happens on a real machine, and an enabled stdio server is a
-  process the app really spawns (the same reason the driver unchecks 启用 before it saves).
-- **`enableMCPServer` is the ONE enable path** (the panel's toggle and the end of an authorization both go
-  through it), so an authorized server ends up exactly as connected as a toggled one: tools into the shared
-  pool AND `NotifyDeferredToolsAdded` for every live agent. That reminder fires at most once per session, so a
-  server connected mid-session is invisible to the model without the dirty mark — a pool write alone is the
-  bug. Toggling is a GLOBAL fact (one pool, one connection for every session), so all live agents are notified
-  (`applyToLiveAgents()`), and disabling runs `UnregisterMCPServer` (registry + every session's discovered
-  set), not a bare pool removal. [mcp.md](mcp.md) carries the general rule.
-- **The panel's own state comes from the BACKEND, never from a guess**: `MCPServerVO.NeedsAuth` is set wherever
-  a connect attempt came back `*mcp.OAuthRequiredError`, because a server that wants a token otherwise looks
-  exactly like one that is down; the panel re-reads on every open (nothing else would correct a stale
-  snapshot) and `agent:mcp_ready` is what a panel that was ALREADY open needs, since the shared pool is filled
-  only after every server has answered — "已连接 + 池子里还没有工具" is a real, seconds-wide window. A tool row
-  opens its own contract on demand (`GetMCPToolSchema`), never as part of the row list, and tools in the pool
-  are LISTED whether or not this session has loaded them — under MCP tool search "not loaded" is the normal
-  state, and a row that simply disappears reads as a missing tool. The server row counts loaded out of offered
-  (`n/m 工具`) and the panel head sums the rows it is rendering, never a separate backend number. **Loaded
-  rows come FIRST, and the BACKEND does the sorting** (`ListMCPServers` sorts the VO loaded-first, stable, so
-  each half keeps the pool's alphabetical order): the row a reader opens the panel for is a loaded one, and a
-  stable sort is what stops a toggle from reshuffling the rows around their eyes. The panel renders the order
-  it is given — `TestListMCPServersOrdersLoadedToolsFirst` pins it, with the stub's two tools arranged so the
-  LOADED one is the one that sorts last (where "loaded first" cannot pass by accident).
-- **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving**
-  (`Manager.SetRootsFunc`; the desktop wires `desktopApp.mcpRoots` on its shared manager, so the answer is the
-  UNION of its live sessions' workspaces, while ACP wires it per session). The shape itself (file:// URIs, only
-  directories that exist, deduplicated, sorted) is ONE rule, `mcp.RootsForDirs`. It is not optional in
-  practice: a roots-aware server CONFINes file access to what it is told, and the official chrome-devtools
-  server, told nothing, allows only the OS temp dir. `client.Start` is what installs the handler for requests
-  the SERVER sends (`roots/list`, sampling, elicitation) — not `transport.Start`, and not the SDK's convenience
-  constructors; skipping it is silent on Tachi's side.
-- **A panel toggle is written back into the mcp.json the server came from** (`MCPServerConfig.SourceFile`; the
-  rule is "the file it came from", never "the active profile", or the change is lost on the next profile
-  switch). The edit is SURGICAL (one value's bytes; indentation, key order and unknown fields survive), because
-  mcp.json is hand-written. The **profile SWITCH stays runtime-only** — nothing writes `active_mcp_profile`
-  into config.yaml, so a dropdown cannot silently make one profile the default for every future launch.
-- **`AuthorizeMCPServer(name)` starts the flow and returns "ok"; the progress arrives as `agent:mcp_auth`.** It
-  has to: the flow needs a browser and often a human. `CompleteMCPServerAuth(name, url)` is the paste-back
-  path, and it CANCELS an in-flight flow first — both ways out spend the same single-use authorization code.
-  Three facts of the flow itself: the browser is a variable (`mcp.BrowserOpener`) so a scripted run replaces it
-  (`TACHI_DEMO_BROWSER_FETCH=1` — a smoke run must never open a window on the machine it runs on, while a demo
-  RECORDING must); the callback address is fixed BEFORE anything is registered or exchanged, because DCR sends
-  the redirect_uri and the token exchange sends it again; and the state + PKCE verifier are persisted on the
-  browser path too, so pasting the URL out of the address bar works while the callback is still pending. A 401
-  is one fact however it arrives (`mcp.isAuthRequired` maps both transport sentinels at BOTH the `Initialize`
-  and the `ListTools` step — mapping only the later one left such a server reporting a plain connect error).
-- **The fixture is `itest/mcpauth/`, and both halves of the feature run against it** (401 + `WWW-Authenticate`
-  → PRM → AS metadata → DCR → `/authorize` → `/token` → a bearer-only MCP endpoint). The desktop's unit test
-  drives it in-process; `mcp-auth` starts it in the runner and points the sandbox's `mcp.json` at it. `desktop/`
-  reaches it through its module `replace`: one fake, not two.
+## 桌面会话树（每一条按树取值的路径都必须来自会话）
 
-## Desktop Session Tree (every path that is per-tree must come from the SESSION)
+- **进程的 cwd 是 `/`，绝不是答案。** 一个由 Finder/LaunchServices 启动的应用拿到的当前目录是文件系统根，而桌面本来就在不同的树里寄宿好几个会话——所以 `config.FindProjectRoot()` 什么有用的都不描述。任何必须解析「这段对话在哪个树里工作」的东西都走 `sessionRoots`/`sessionPrimaryDir`。失败模式永远一样、而且永远**静默**：一次在 `/.tachi/<file>` 下的查找什么都找不到，全局作用域照样能用，于是没有任何东西看起来是坏的。`config.FindProjectRootFrom(dir)` 是会话作用域的那个出口，而 `FindProjectRootFrom("")` 返回 ""（「没有项目」）——对一个还没有文件夹的会话，这才是正确答案。
+- **一个新的、解析树的调用点，除非走会话，否则就是这种形状的 bug**：skills（`sessionSkillStore`，作为 `AgentConfig.SkillStore` 注入——**默认**那条路才是坑，因为 `skill.NewStore(config.FindProjectRoot())` 扫的是 `/.tachi/skills`）和权限（`AIAgent.SetPermissionTrees`）。MCP 故意不在这个列表上：它的 server 只来自全局 mcp.json（见 桌面 MCP），所以对它们没有树可解析。
+- **一个会话在好几个树里工作，而权限策略读所有的树**：`SetPermissionTrees(primary, additional)` 把每个都通过 `config.ProjectRootsFrom` 解析（向上走到最近的 `.git`，按顺序去重），并把每个 `<tree>/.tachi/permissions.yaml` 的 deny/ask 规则并起来。只传 primary 正是这里补上的缺口——第二个仓库的绊线静默地不在，而这个失败的方向是坏的那个（用户写的一条规则干脆没触发）。`allow` 仍然只在全局，而权限树作用域遵循 skills 的规则：附加根是额外**干活**的地方，而一个树自己的 `.tachi/` 文件才是让它成为一个规则之家的东西——一个位于 primary 仓库内部的根解析到 primary 的那个文件，而不是第二个。
+- **Skills 是开着的。** `DisableSkills` 是给非交互模式用的旋钮；这个前端面前坐着一个人。作用域是这个会话的 git 根加上 `config.GlobalSkillsDir()`（注意**不是** `<base>/.tachi/skills`——为其中一个写的一份 fixture 对另一个是不可见的），而**附加根不会被扫描**：它们是额外读写的地方，不是第二个配置之家。这里没有 `/skill` 命令、也没有 skill UI——共享注册表的 `Modes` 排除了 `ModeDesktop`，所以告诉模型有什么存在的是那条目录提醒。`skill-catalog` 场景通过在**请求**上断言来钉住这次扫描。
 
-- **The process cwd is `/` and is never the answer.** A Finder/LaunchServices-launched app gets the filesystem
-  root as its working directory, and the desktop hosts several sessions in different trees anyway — so
-  `config.FindProjectRoot()` describes nothing useful. Anything that must resolve "which tree does this
-  conversation work in" goes through `sessionRoots`/`sessionPrimaryDir`. The failure mode is always the same
-  and always SILENT: a lookup under `/.tachi/<file>` finds nothing, the global scope still works, so nothing
-  looks broken. `config.FindProjectRootFrom(dir)` is the session-scoped exit, and `FindProjectRootFrom("")`
-  returns "" ("no project") — the correct answer for a session with no folder yet.
-- **A new call site that resolves a tree is a bug of this shape unless it goes through the session**: skills
-  (`sessionSkillStore`, injected as `AgentConfig.SkillStore` — the DEFAULT path is the trap, since
-  `skill.NewStore(config.FindProjectRoot())` scans `/.tachi/skills`) and permissions
-  (`AIAgent.SetPermissionTrees`). MCP is deliberately NOT on this list: its servers come from the global
-  mcp.json only (see Desktop MCP), so there is no tree to resolve for them.
-- **A session works in SEVERAL trees, and the permission policy reads ALL of them**:
-  `SetPermissionTrees(primary, additional)` resolves each through `config.ProjectRootsFrom` (walk up to the
-  nearest `.git`, de-duplicate in order) and unions every `<tree>/.tachi/permissions.yaml`'s deny/ask rules.
-  Passing only the primary is the gap this closed — the second repository's tripwires were silently absent, and
-  the direction of that failure is the bad one (a rule the user wrote simply did not fire). `allow` is still
-  global-only, and permission-tree scope follows skills' rule: additional roots are extra places to WORK, and a
-  tree's own `.tachi/` file is what makes it a rule home — a root inside the primary's repository resolves to
-  the primary's file, not a second one.
-- **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes; this frontend has a human in
-  front of it. The scope is the session's git root plus `config.GlobalSkillsDir()` (note NOT
-  `<base>/.tachi/skills` — a fixture written for one is invisible to the other), and **additional roots are
-  NOT scanned**: they are extra places to read and write, not a second configuration home. There is no `/skill`
-  command and no skill UI here — the shared registry's `Modes` exclude `ModeDesktop`, so the catalog reminder
-  is what tells the model what exists. The `skill-catalog` scenario pins the scan by asserting on the REQUEST.
+### 按树取值的状态：一个失效标记，只在 beginTurn 里重指
 
-### Tree-derived state: ONE stale flag, re-pointed in beginTurn
+- **构建时固定的输入，必须在会话移动时重新指向，而那件事只发生在 `beginTurn` 里，别处没有。** 一次文件夹变更和一次项目编辑只设置 `sessionRun.treeStale`：两者都跑在 UI goroutine 上，而那条 goroutine 证明不了一轮没在这个会话里跑，重新指向又会在正在读它的东西底下重写状态。`beginTurn` 是唯一能证明这个会话没有轮次在飞的地方。
+- **标志只有一个，它的成员一起移动**：`ReloadSkillsIn(sessionTree)` 和 `SetPermissionTrees(ctx, sessionTree, sessionAdditional)`，在同一个块里由同一个解析出来的 `sessionRootsFrom` 值喂（那个函数返回两半——附加根属于权限那一半，不是第二次查找）。再开第二个平行的「失效」标志，就是一个成员最终描述着另一个成员刚离开的那个树的方式；第三个按树取值的成员要去**那里**，而不是进一个新标志。`SetPermissionTrees` 之所以存在，是因为 `configure` 从进程 cwd 解析它的项目，所以 `permissions.bash` 的项目那一半（`<tree>/.tachi/permissions.yaml`）从没被找到，而全局规则照常生效——不可见的丢失。
+- **一个重建出来的策略会继承这个会话的放行**（`Policy.InheritSessionApprovals`）：「本会话全部允许」是一个用户回答，**必须**在一次重指里活下来，否则一次文件夹变更会重新弹问一个他已经回答过的问题。那些**规则**不跟着走——那正是重点——而 deny 在任何 ask 之前就被裁定，所以一个被继承的放行绝不可能复活一条被禁止的命令（`TestSetPermissionTrees_*`、`TestSessionTreeMove*`）。
+- **卡片的副标题是「为什么在问这条命令」的三种渲染之一**（一条匹配上的规则、那个解析不了的哨兵值，或者一个把它提出来的判断）：措辞是 agent 的（`askCause`），卡片逐字显示它——第二个渲染器会有自由去漂开，而一个错的理由会让读者去找一条他从没写过的规则。`docs/agents/permission.md` 拥有那三种（一次**文件**工具的 ask 有其中两种——一个路径总是能解析，所以哨兵值只属于命令那一半）；桌面拥有这张卡片、会话级的「本会话全部允许」按钮，以及设备链路转发的东西。冒烟：`perm-unparseable`、`perm-files`。
+- **卡片内容永远是 agent 的预览字符串**，绝不是桌面自己造的一个渲染，而 `kind` 只挑静态的外壳（标题/副标题/提示）。一次文件 ask 带着 `kind: files` 到达——没有那个 kind，它会渲染成一张 bash 卡片，而那张卡片的文案会请读者放行一条不在卡片上的命令（`permEventKind`、`permCopy`）。桌面**确实**从调用里解析出来的那一个字段是通知的主题行（`askSubjectOf`：Bash 是那条命令，文件工具是那个路径）。
 
-- **Inputs fixed at build time must be re-pointed when the session MOVES, and that happens in `beginTurn` and
-  NOWHERE ELSE.** A folder change and a project edit only set `sessionRun.treeStale`: both run on the UI
-  goroutine, which cannot prove the session is not mid-turn, and re-pointing rewrites state under whatever is
-  reading it. `beginTurn` is the one place that can prove no turn of this session is in flight.
-- **The flag is ONE, and its members move together**: `ReloadSkillsIn(sessionTree)` and
-  `SetPermissionTrees(ctx, sessionTree, sessionAdditional)`, fed from the same resolved `sessionRootsFrom` value
-  in the same block (which returns both halves — the additional roots are part of the permission half, not a
-  second lookup).
-  A second, parallel "stale" flag is how one member ends up describing the tree the other just left; a third
-  tree-derived member goes THERE, not into a new flag. `SetPermissionTrees` exists because `configure` resolves
-  its project from the process cwd, so the project half of `permissions.bash` (`<tree>/.tachi/permissions.yaml`)
-  was never found while global rules kept working — invisible loss.
-- **A rebuilt policy inherits the session's approvals** (`Policy.InheritSessionApprovals`): 「本会话全部允许」 is
-  a user answer and MUST survive a re-point, or a folder change re-asks a question they already answered. The
-  RULES do not carry over — that is the point — and deny is decided before any ask, so an inherited approval
-  can never resurrect a forbidden command (`TestSetPermissionTrees_*`, `TestSessionTreeMove*`).
-- **The card's subtitle is one of THREE renderings of why a command is being asked about** (a matched rule, the
-  unparseable sentinel, or a judgment that raised it): the wording is the agent's (`askCause`), and the card
-  shows it verbatim — a second renderer would be free to drift, and a wrong reason sends the reader hunting for a
-  rule they never wrote. `docs/agents/permission.md` owns the three (a FILE ask has two of them — a path always
-  parses, so the sentinel is the command half's alone); the desktop owns the card, the session-wide
-  「本会话全部允许」 button, and what the device link forwards. Smoke: `perm-unparseable`, `perm-files`.
-- **Card CONTENT is always the agent's preview string**, never a rendering the desktop builds, and the `kind`
-  only picks the static chrome (title/sub/hint). A file ask arrives with `kind: files` — without that kind it
-  renders as a bash card whose copy asks the reader to approve a command that is not on the card
-  (`permEventKind`, `permCopy`). The one field the desktop DOES parse out of the call is the notification's
-  subject line (`askSubjectOf`: the command for Bash, the path for a file tool).
+## 桌面单轮历史（被打断那轮的合并）
 
-## Desktop Turn History (the interrupted-turn merge)
+- **一轮的历史是转换后的形态，提醒块也在内**（`runHistory` 里按 `agent.ConvertSessionToLLMMessages` 构建的那样持有 `[]llm.Message`，`<system-reminder>` 块重新挂回它当初被存时的那条用户消息上），**所以任何把一条消息在轮次之间搬动的东西，都必须先把它解包。** 唯一这样的地方是 `mergeTrailingUserMessage`：逐字合并内容会把**上一轮**的块一起带过来——一个过期的 plan id、诊断和分支被当成当前的读下去，一轮接一轮往前走。它通过 `systemreminder.UnwrapUserMessage` 剥离，那是那个逆操作的唯一实现。
+- **一条除了块什么都没有的尾部消息会被留着——这是故意的。** 那里有两种形态看起来一模一样：循环在运行中途注入的一条提醒（过期的脚手架），以及一条尾部产物提醒，后者是转换**故意**当它自己的一条用户消息追加的，这样一次重载就不会把它丢掉。没有任何标记区分它们，所以丢掉那条消息会在清理第一种的时候弄坏第二种。
+- **那个状态只会由一次重载、或者一次时机刚好的 Stop 造成，普通的 Stop 到不了那里**（一次流中途的 stop 已经记下了那部分助手文本）。会产出一条带真实文本的尾部用户消息的，是一个在回复从没被记下之后就重新打开的会话——这就是为什么没有冒烟场景覆盖它，也是为什么 `desktop/agent_turn_test.go` 通过**真的**转换来搭它的 fixture。
 
-- **A turn's history is the CONVERTED form, reminder blocks included** (`runHistory` holds `[]llm.Message` as
-  `agent.ConvertSessionToLLMMessages` builds it, with the `<system-reminder>` block re-attached to the user
-  message it was stored with), **so anything that MOVES a message between turns must unwrap it first.** The one
-  such site is `mergeTrailingUserMessage`: merging the content verbatim would carry the PREVIOUS turn's block
-  along — a stale plan id, diagnostics and branch read as current, walking forward turn after turn. It strips
-  via `systemreminder.UnwrapUserMessage`, the single implementation of that inverse.
-- **A trailing message that is nothing but a block is left alone — deliberately.** Two shapes look identical
-  there: a reminder the loop injected mid-run (stale scaffolding) and a trailing artifact reminder, which the
-  conversion appends as its own user message ON PURPOSE so a reload cannot drop it. No marker separates them,
-  so dropping the message would break the second to tidy up the first.
-- **That state is reached by RELOAD or by a well-timed Stop, not by an ordinary Stop** (a stop mid-stream has
-  already recorded the partial assistant text). What produces a trailing user message with real text is a
-  session reopened after the reply was never recorded — which is why no smoke scenario covers it, and why
-  `desktop/agent_turn_test.go` builds its fixture through the REAL conversion.
+## 桌面压缩（子会话创建到本轮结束之间的窗口）
 
-## Desktop Compaction (the window between the child's creation and the turn's end)
+- **一次运行的会话键在本轮结束时才移动，可对话在压缩的时候就已经移动了**——`agent.FinalizeCompact` 跑在循环的中途，所以在 `endTurn` 到达 `followCompaction` 之前，一轮在往子会话里追加，而簿记仍然把它当作父会话的。**一个**解析器拥有这个事实：`ownerOfLocked`（经 `getRun` / `runOf` 到达）回答「这个会话是哪个运行的？」，而对那个子会话它回答的是正在往它里面产出的那个运行。**任何按会话 id 寻址的东西都走这个解析器，绝不走 `d.runs[id]`**——`startTurn`、`RunCommand`/`startCommand`、`Steer`、`StopAndSend`、`stopTurn`、`prepareSession`、`sessionRunning`、那些删除/项目守卫、`sessionTitle`、`updateSessionMetaLocked`。按子会话的 id 去读那张 map，正是一条发到那里的消息会在同一段对话上启动**第二个**轮次而不是撞上 `refuseTurnRunning` 的原因：两个轮次往同一个 `messages.jsonl` 里追加（记录交错，重建出来的历史里工具调用成不了对），一次 steer 回答「没在跑」而循环的 `steer_check` 超时，以及侧栏里两行都在转。
+- **`RunningSessions` 点出一次待处理压缩的两行**——这个运行被归档到的那个键（那一轮的流落进那个会话的会话全文，也就是读者正看着的那一行）和它正在往里产出的那个子会话。两个都要，因为侧栏渲染的是它自己那份会话列表里有的那一个，而**没有任何东西在本轮中途刷新那个列表**：只报子会话会让屏幕上唯一那一行在一个轮次跑着的时候没有标记。它们是同一段对话的两行（父会话挂在子会话下面、显示为「压缩前」、折叠着），这就是为什么链上的一个标记跟两个会话在跑不是一回事。
+- **`followCompaction` 拒绝从一个正在使用那个键的运行手里拿走子会话的键**（它自己的一轮活着——就是上面那个双写）。它记一条日志，然后两个运行都不动，而不是把那个轮次正在飞的运行丢掉（它的状态、steer channel 和忙守卫都活在那个条目上）；那个键上一个**空闲**的条目是某次加载跟压缩赛跑留下的过期簿记，会被替换掉、其 agent 被关闭。
+- **这个别名不需要清理、也不需要第二张表**：它是从 `sessionRun.compaction` 读出来的，而 `followCompaction` 消费它——自己开一张 map 会是一个事实的副本，而副本才是会过期的那个。手动的 `/compact` 那条路设置同一个记录，所以它不需要额外接线：它唯一的差别是谁决定要压缩。
+- **一次 `/compact` 轮次绝不能在自己脚下被自动压缩**，而那个地板在桌面的那一半是 `runCompactCommand` 在这个运行自己的流带过一个成功的 `AgentEventAutoCompactDone`（循环改而压缩了）时**不做**那次交接就返回：事件 handler 写下的那个记录才是 `followCompaction` 必须遵从的那个。`agent.CompactRunOptions` 才是让那条路从源头就不可达的东西——没有它，那条指令会从总结调用发出的请求里消失，回复就成了一次续写，而交接会把它存成第二个子会话的总结（一次 `/compact` 出来两行新的）。没有它 `compact-race` 失败；完整叙述（包括 TUI 的那一半）在 `docs/agents/compact.md`。
+- **这个窗口的前端那一半由 `compact-window` 钉住**，而它不只关乎那个转圈：读者在子会话里发的消息会排队，而结束这一轮的那个切换会在 flush 还在空中时从磁盘重读那个子会话——所以会话全文的 store 必须保住输入框放下的那些泡泡（见 桌面 UI 状态 下的 `holdLocal` 那一条）。两个请求的顺序是 Go 那一半的断言：那一行必须到达模型的那个请求，正是已经带着它排在后面的那条回复的那个请求。
+## 桌面 UI 状态
 
-- **A run's session KEY moves at the end of the turn, but the CONVERSATION moves at the
-  compaction** — `agent.FinalizeCompact` runs in the middle of the loop, so until `endTurn`
-  reaches `followCompaction` a turn is appending to the child while the bookkeeping still calls
-  it the parent's. ONE resolver owns that fact: `ownerOfLocked` (reached through `getRun` /
-  `runOf`) answers "which run is this session's?", and for that child it answers the run
-  producing into it. **Anything addressed by a session id goes through the resolver, never
-  through `d.runs[id]`** — `startTurn`, `RunCommand`/`startCommand`, `Steer`, `StopAndSend`,
-  `stopTurn`, `prepareSession`, `sessionRunning`, the delete/project guards, `sessionTitle`,
-  `updateSessionMetaLocked`. Reading the map by the child's id is what made a message sent there
-  start a SECOND turn on the same conversation instead of meeting `refuseTurnRunning`: two turns
-  appending to one `messages.jsonl` (interleaved records, a rebuilt history whose tool calls are
-  unpaired), a steer answering "not running" while the loop's `steer_check` timed out, and two
-  sidebar rows spinning.
-- **`RunningSessions` names BOTH rows of a pending compaction** — the key the run is filed under
-  (the turn's stream lands in that session's transcript, which is the row the reader is watching)
-  and the child it is producing into. Both, because the sidebar renders whichever of the two its
-  own session list holds and **nothing refreshes that list mid-turn**: reporting the child alone
-  leaves the only row on screen unmarked while a turn is running. They are two rows of ONE
-  conversation (the parent hangs under the child as 「压缩前」, collapsed), which is why a marker
-  on the chain is not the same thing as two sessions running.
-- **`followCompaction` refuses to take the child's key from a run that is USING it** (a live
-  turn of its own — the double-write above). It logs and leaves both runs alone, rather than
-  dropping the run whose turn is in flight (its state, steer channel and busy guard all live on
-  that entry); an IDLE entry on that key is stale bookkeeping from a load that raced the
-  compaction, and is replaced with its agent closed.
-- **The alias needs no clearing and no second table**: it is read off `sessionRun.compaction`,
-  which `followCompaction` consumes — a map of its own would be a copy of one fact, and the copy
-  is what goes stale. The manual `/compact` path sets that same record, so it needs no extra
-  wiring: it only differs in who decided to compact.
-- **A `/compact` turn must not be auto-compacted from under itself**, and the desktop's half of
-  that floor is `runCompactCommand` returning WITHOUT the hand-off when the run's own stream
-  carried a successful `AgentEventAutoCompactDone` (the loop compacted instead): the record the
-  event's handler wrote is the one `followCompaction` must honour. `agent.CompactRunOptions` is
-  what keeps that path unreachable in the first place — without it the instruction disappears from
-  the request the summarising call makes, the reply is a continuation, and the hand-off stores it
-  as the summary of a SECOND child session (two new rows for one `/compact`). `compact-race` fails
-  without it; the full account, including the TUI's half, is `docs/agents/compact.md`.
-- **The window's frontend half is pinned by `compact-window`**, and it is not only about the
-  spinner: the message the reader sends in the child queues, and the switch that ends the turn
-  re-reads that child from disk WHILE the flush is in the air — so the transcript store has to
-  keep the bubbles the composer placed (see the `holdLocal` bullet under Desktop UI State). The
-  order of the two requests is the Go half's assertion: the line has to reach the model in the
-  request that already carries the reply it was queued behind.
+每条 bullet 都是一条改动必须遵守的规则。它背后的机制在它点名的那个模块里。
 
-## Desktop UI State
+**归属 —— 新代码写在哪里**
 
-Each bullet is a rule a change must keep. The mechanism behind one lives in the module it names.
+- **会话全文是 `useTranscript.ts`**（每个会话的消息、运行标志、已加载的窗口 + 它的游标、按帧批处理的 delta 队列）。每个 mutator 都接收它所属的会话 —— `updateSession` 是那个唯一漏斗 —— 所以「这条属于某个对话」由签名来强制。App.tsx 不得自己声明按会话的状态；一个新的按会话需求就是那个 hook 里的一个新 op。
+- **从磁盘落地的页面不得吞掉前端自己放上去的消息**（`holdLocal`/`releaseLocal`，由任何乐观地放下气泡的代码调用 —— 输入框的发送、`/command` 与 立即发送 路径）。一次 reload 会**替换**窗口（一次回退依赖这一点），可那个页面可能在这些气泡出现之前就已经被**读过**了：一次自动压缩会把对话切进它的子会话，而它即将 flush 的队列还在半空中，于是这次切换自己对子会话的重新读取就是一份不含读者刚发出的那条消息的快照 —— 用这个页面替换窗口，就留下了一段回答了自己从未展示过的问题的会话全文（回复是走实时流到达的，所以别处看不出缺了什么）。被持有的消息按 ID 重新挂上去，而这个持有被第一次落地消费掉；`releaseLocal`（在会话的 `agent:idle` 上）是针对没有任何页面落上去的那个持有的兜底。`compact-window` 钉住它。
+- **输入框是 `composer.tsx`**（`useComposer` + `Composer` 元素）：输入框本体、@-选择器、「/」面板、一轮运行期间输入的消息队列，以及停放问题的表单。四者共享一个决策 —— `route`：现在发送、排到下一个 steer 点，还是作为 slash 命令派发。麦克风按钮也在这里，但它的**状态**不在这里：它画的是 `voice:state`（后端拥有麦克风和看门狗，见 桌面语音输入），点击只是请求一次转换。
+- **@-选择器有两套命名空间，由查询的前缀挑一套**：`@` 搜索文件（`SearchFiles`），`@session:` 搜索对话（`SearchSessions`）—— 同一个弹窗、同一批按键、同一种行形状，因为一行不过是一个待插入的引用。两边都从后端取引用的拼写（`atfile.RefForPath` / `RefForSession`），也只有后端知道它**展开成**什么：一个会话引用变成指向会话存储的**指针**（id、标题、大小、会话全文路径），绝不是会话全文本身 —— 内联另一个对话会把本会话的上下文花在没人要求读的文本上（[refs.md](refs.md)）。列表来自那个唯一的存储（见 session-store.md），所以选择器和展开读的是同一份快照。
+- **后端事件在 `agentEvents.ts` 里订阅。** 每个 payload 都点出自己的会话；只有在 UI 确实表示「在屏幕上」的地方才拿它和 `currentId` 比，绝不用它去寻址存储。
+- **侧栏的分组有一个交互契约**（`App.tsx` 的 `groups.map`）：整个项目 HEADER 切换这个分组（展开箭头只是表达方式之一，不是唯一方式 —— 而且一张唯一活点是一个 16px 箭头的 header，读起来就是个标签），所以它里一切属于控件的东西都要停掉传播（＋、重命名框），否则就会折叠它自己作用其上的那个分组；**一个被折叠的分组，若它的行里包含当前会话，就要说出来**（`.proj-current`，tooltip 里带该会话的标题 —— 一个光秃秃的点只会说「这里有东西」，而不是「你在这里」），因为被折叠的分组把它的行从 DOM 里拿走了；**重命名在失焦时结束**，不只在 Enter/Escape 时，因为一个还在等按键的框会一直压在那一行上，下一次点击就落进了文本框而不是它瞄准的东西上；**项目重命名是右键菜单的**（双击会在同一个手势上切换两次）。
+- **一个停放的权限也是输入框状态，按工具调用 id 匹配**（按会话为键，切会话时**不**清空 —— agent 仍被停放着 —— 在自动压缩时搬走，在 `agent:idle` 时清空）。按工具**名字**匹配才是陷阱：模型会在任何一个调用运行之前就发出一整批调用。
+- **一个由子系统拥有的会话可以打开，但在这里不能驱动**，桌面用一个字段从三处说明这一点：`SessionItem.kind`（会话记录自己的 `Kind`，见 docs/agents/node.md）驱动该行的 `.session-tag.is-managed`、会话全文上方的 `.managed-banner`，以及一个被 `.composer-readonly` **替换掉**的输入框 —— 是替换而不是禁用，因为置灰的字段仍然勾人点击。**横幅是内容列里的一行（header 的兄弟），不是 `.chat-wrap` 的子节点**：那个盒子是一个默认方向的 ROW flex 容器，它的职责是容纳滚动器加上挂到它身上的浮层（`.jump-latest`、`.find-bar.is-chat`），所以那儿出现第二个在流内的子节点就会排到会话全文旁边 —— 这正是实际发生的事，横幅的 `flex-shrink: 0` 让它占掉窗口左半边，并把每条消息都挤成右侧一条。冒烟场景钉住这个几何，因为布局出错时，它当时检查的只有存在性和措辞。
+- **拒绝不是前端的**：从这里发出的每次发送都被 agent 自己的入口（`agent/managed.go`）拒绝，这里有的只是不让读者一头撞上去的礼貌。标签文本与 TUI 和 Web 控制台的一致 —— 三个前端，一句话。`Kind` 是一个**绑定**：改 `SessionInfo` 就意味着重新生成 wails bindings。冒烟：`managed-session`。
+- **持有该会话的一个正在运行的执行有一条出路，它就在横幅里**：有任务持有该会话时删除会被拒绝，所以横幅 —— 原因已经写在那里的地方 —— 带着 `.managed-banner-stop` 并调用 `AgentService.EndSessionTask`。这个按钮只在 `SessionInfo.heldByTask` 这么说时才出现（由 `ListSessions` 从保留记录里读出，而不是读本进程的 run map：执行属于一个**节点**，它可能活在另一个进程里），点击经本地控制接口走到托管它的那一方（`node.OpenLocalClient` → `POST /local/v1/session:end`）。答复是 Go 侧自己的那句话，显示在横幅里：`"ok"`，或为什么不行 —— 而「本机没有 node 服务在跑」在冒烟沙箱里就是真实答案，所以 `managed-session-busy` 会点这个按钮并断言那句话，而不只是断言按钮存在。
 
-**Ownership — where new code goes**
+**跨所有界面都成立的规则**
 
-- **The transcript is `useTranscript.ts`** (messages per session, running flags, the loaded window + its cursor,
-  the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the one funnel
-  — so "this belongs to a conversation" is enforced by the signature. App.tsx must not declare its own
-  per-session state; a new per-session need is a new op in that hook.
-- **A page that lands from disk must not swallow a message the frontend placed on its own**
-  (`holdLocal`/`releaseLocal`, called by whichever code puts a bubble in optimistically — the composer's send,
-  `/command` and 立即发送 paths). A reload REPLACES the window (a rewind depends on that), but the page may have
-  been READ before those bubbles existed: an auto-compaction switches the conversation into its child while the
-  queue it is about to flush is still in the air, so the switch's own re-read of the child is a snapshot without
-  the message the reader just sent — replacing the window with it left a transcript that answered a question it
-  never showed (the reply arrives over the live stream, so nothing else is visibly missing). The held messages
-  are re-attached by ID and the hold is consumed by that first landing; `releaseLocal` (on the session's
-  `agent:idle`) is the backstop for a hold no page ever lands on. `compact-window` pins it.
-- **The composer is `composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker, the
-  "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share one
-  decision — `route`: send now, queue for the next steer point, or dispatch as a slash command. The microphone
-  button lives here too, but its STATE does not: it draws `voice:state` (the backend owns the microphone and the
-  watchdog, see Desktop Voice Input), and the click only asks for a transition.
-- **The @-picker has TWO namespaces, and the query's prefix picks one**: `@` searches files (`SearchFiles`),
-  `@session:` searches conversations (`SearchSessions`) — the SAME popup, the same keys, the same row shape,
-  because a row is nothing but a reference to insert. Both sides take the reference's spelling from the backend
-  (`atfile.RefForPath` / `RefForSession`), and only the backend knows what it EXPANDS to: a session reference
-  becomes a POINTER into the session store (id, title, size, transcript path), never the transcript itself —
-  inlining another conversation would spend this session's context on text nobody asked to read ([refs.md](refs.md)). The list comes
-  from THE ONE store (see session-store.md), so the picker and the expansion read the same snapshot.
-- **Backend events are subscribed in `agentEvents.ts`.** Each payload names its session; compare it against
-  `currentId` only where the UI genuinely means "on screen", never to address storage.
-- **The sidebar's groups have one interaction contract** (`App.tsx`'s `groups.map`): the whole
-  project HEADER toggles the group (the caret is one way to say it, not the only one — a header whose only
-  live spot is a 16px caret reads as a label), so everything inside it that is a control stops propagation
-  (＋, the rename box) or it would collapse the group it acts on; **a collapsed group whose rows include the
-  current session says so** (`.proj-current`, with the session's title in its tooltip — a bare dot would say
-  "something here", not "you are here"), because a collapsed group takes its rows out of the DOM; **renaming
-  ends on BLUR**, not only on Enter/Escape, since a box that waits for a key stays over the row and the next
-  click lands in a text box instead of on what it aimed at; and **project rename is the context menu's**
-  (double-click would toggle twice on the same gesture).
-- **A parked permission is composer state too, matched by tool CALL ID** (keyed by session, NOT cleared on
-  session switch — the agent is still parked — moved on auto-compaction, cleared on `agent:idle`). Matching by
-  tool NAME is the trap: a model emits a whole batch of calls before any of them runs.
-- **A session a SUBSYSTEM owns is openable but not drivable HERE**, and the desktop says so three ways from
-  one field: `SessionItem.kind` (the session record's own `Kind`, see docs/agents/node.md) drives the row's
-  `.session-tag.is-managed`, the `.managed-banner` above the transcript, and a composer REPLACED by
-  `.composer-readonly` — replaced, not disabled, because a greyed-out field still invites a click. **The banner
-  is a row of the CONTENT COLUMN (a sibling of the header), NOT a child of `.chat-wrap`**: that box is a
-  default-direction ROW flex container whose job is to hold the scroller plus the floats anchored to it
-  (`.jump-latest`, `.find-bar.is-chat`), so a second in-flow child there lays out BESIDE the transcript — which
-  is what happened, with the banner's `flex-shrink: 0` giving it the left half of the window and squeezing
-  every message into a right-hand strip. The smoke scenario pins that geometry, because presence and wording
-  were all it checked while the layout was wrong.
-- **The refusal is not the frontend's**: every send from here is refused by the agent's own entry
-  (`agent/managed.go`), and this is only the courtesy that keeps a reader from walking into it. The label text
-  matches the TUI's and the web console's — three frontends, one sentence. `Kind` is a BINDING: changing
-  `SessionInfo` means regenerating the wails bindings. Smoke: `managed-session`.
-- **A running execution holding that session gets a way out, and it is in the banner**: the delete is refused
-  while a task holds the session, so the banner — where the reason is already stated — carries
-  `.managed-banner-stop` and calls `AgentService.EndSessionTask`. The button appears only when
-  `SessionInfo.heldByTask` says so (read from the retention record by `ListSessions`, not from this process's
-  run map: the execution belongs to a NODE, which may live in another process), and the click goes through the
-  local control interface to whoever hosts it (`node.OpenLocalClient` → `POST /local/v1/session:end`). The
-  answer is the Go side's own sentence, shown in the banner: `"ok"`, or why not — and "this machine has no node
-  service running" is the TRUE answer in the smoke sandbox, which is why `managed-session-busy` clicks the
-  button and asserts that sentence rather than only the button's existence.
+- **按 ID 匹配，绝不按名字** —— 工具结果按工具调用的 id 匹配到它的卡片（`parallel-tools` 钉住它；按名字匹配会把每个参数都落到最新的那张未完成卡片上）。
+- **绝不在状态更新函数里跑副作用**：React 可能不止一次调用更新函数，所以那里的 fetch 会发两次，而 `if (prev[k]) return prev` 这样的守卫救不了。把在途记账放在 ref 里。
+- **一个状态标志必须由终结它的事实来终结**：`ReviewChanges` 只是开始那个 fork，所以在它返回时清掉一个「pending」标志，会在中间态能被看到之前就把它抹掉；那一轮自己的结束事件才是那个事实。
+- **任何按轮或按会话缓存的东西都必须以它为键**（一条记录的名字是它所在会话内的时间戳）。键说的是手里有什么，绝不是「我们问过一次了」—— 只存内容，并把一个面板为空的原因放在第二个、同样带键的状态里，因为空面板分不清「缺失」和「读不出来」。
+- **系统提醒是一个历史产物，不是一个活的东西**（`Message.reminder` 由 `buildTurns` 从存储自己的行设置）：在 LLM 边界上或通过一次重建来断言被注入的上下文，而不是靠等活消息上的那个可供性。
+- **重建出来的会话全文显示用户自己的话，不是发出去的东西**（`displayContent` 存的是键入的内容，而 `Content` 存的是 `@`-file 展开）—— 并且 **`Content` 对模型仍是权威的**，因为下一个请求是从它重建的：把原始文本写在那里会发出一个模型从未见过的前缀，并追溯性地改写历史声称自己被告知的内容。
+- **一个显示原始文本的界面自己负责它的换行**：用户气泡把消息按纯文本渲染（`UserBubble`），所以输入框的 Shift+Enter 和粘贴的多行块产生的换行，其行盒只来自 `.msg-user .msg-content` 自己的 `white-space`，别无其它 —— 在默认的 `normal` 下每一个都会塌成一个空格，整条消息读起来就是一段（`bubble-lines`）。
 
-**Rules that hold across every surface**
+**屏幕上的一轮**
 
-- **Match by ID, never by name** — a tool result is matched to its card by the tool call's id (`parallel-tools`
-  pins it; a name match lands every arg on the NEWEST unfinished card).
-- **Never run a side effect inside a state updater**: React may invoke an updater more than once, so a fetch
-  there fires twice and an `if (prev[k]) return prev` guard cannot help. Keep in-flight bookkeeping in a ref.
-- **A state flag must be ended by the fact that ends it**: `ReviewChanges` only STARTS the fork, so clearing a
-  "pending" flag on its return wipes the middle state before it can be seen; the run's own end event is the
-  fact.
-- **Anything cached per run or per session must be KEYED by it** (a record's name is a timestamp WITHIN its
-  session). The key says what is IN HAND, never "we asked once" — store only content, and keep the reason a pane
-  is empty in a second, equally keyed state, because an empty pane cannot tell "missing" from "unreadable".
-- **A system reminder is a HISTORY artifact, not a live one** (`Message.reminder` is set by `buildTurns`, from
-  the store's own rows): assert injected context at the LLM boundary or through a rebuild, not by waiting for
-  the affordance on a live message.
-- **A rebuilt transcript shows the user's OWN words, not what was SENT** (`displayContent` holds what was
-  typed, while `Content` holds the `@`-file expansion) — and **`Content` stays authoritative for the model**,
-  because the next request is rebuilt from it: writing the raw text there would send a prefix the model never
-  saw and retroactively rewrite what the history says it was told.
-- **A surface that shows RAW text owns its line breaks**: the user bubble renders the message as plain text
-  (`UserBubble`), so the newlines the composer's Shift+Enter and a pasted multi-line block produce get a line
-  box from `.msg-user .msg-content`'s own `white-space` and from nothing else — under the default `normal`
-  every one of them collapses into a space, and the message reads as one paragraph (`bubble-lines`).
+- **一轮只有一条状态行，而且它就是那条条带的。** 这一轮运行期间，条带报告此刻正在发生什么 —— 在途的调用（`正在 Bash · <title> · 第 N 步`）、多个同时运行时的计数、已用时钟 —— 而一旦结束，它报告发生了什么。正在写的正文下面那条第二状态行（正在思考…/正在执行…）已被移除：两行，一个事实，而且只要有工具运行，两行的措辞就不一致。因此条带从这一轮的第一帧就存在，并且它的高度在它的任何转换上都不能动（状态 ↔ 摘要、可折叠 ↔ 不可折叠）—— 会话全文是底部钉住的，所以一像素的增长就会挪动屏幕上的所有东西；它的行盒正因如此是一个被声明的长度，而不是 `normal`。回归：`transcript-live`（高度轨迹）、`live-roll`（滚动）、`file-find`（一轮已结算、只交付了一个文件的回合根本没有条带）。
+- **一轮的页脚是一行**：复制回答（模型自己的正文，绝不是工具参数）、🧾 改动 chip（不放菜单里 —— 它的数字正是读者扫一段会话全文要找的东西）、⋯ 菜单，以及时间戳。关于这一轮工作的条目 —— 完整 diff、评审本轮改动、评审所有改动、这一轮的数字 —— 是菜单的行，所以页脚不会在每个答案下面都背两句完整的评审范围。**评审的状态不用打开任何东西就留在屏幕上**：它搭在触发器上（评审中… / 已评审），而里面的那一行带着完整状态（已评审 N 条 · 查看）。被拒绝的评审其原因留在菜单之外 —— 它是对「我按了评审但什么都没发生」的回答。回归：`oneoff-footer`（状态机与轨迹）、`review-all`（每一轮提供哪个条目）、`multi-root` / `bash-diff` / `frozen-panel` / `file-index` / `diff-layout`（这些条目本身）。
+- **一轮由对话折叠，而不是由部件渲染器折叠**（`turnView()`，纯函数，被实时视图和重建的会话全文共用）：一条条带代指它的思考、工具卡片和中间消息，这一轮的最后一段正文，以及那些绝不能藏起来的部件 —— 一个失败的调用、权限卡片停在其上的那个调用、AskUserQuestion 表单等待的那个调用、notice，以及一个已交付的文件（它自己的卡片在这一轮的尾部；藏在折叠后面时它从 DOM 里消失，所以「把 X 发给我」把自己的答案藏了）。中间正文无论这轮失败与否都被折叠。**一次 steer 会切分这一轮，所以也会切分这个折叠。**「屏幕上没有工具卡片」从来不是「没有工具调用」的证据 —— 一个断言成功卡片的场景必须先把条带展开。
+- **一行若在两种状态间交替，就不能改变几何 —— 只有它的内容可以**（会话全文是底部钉住的，所以高度差会跳掉可见内容），而实时行自己的文本出于同样的原因会滚动。用 `box-shadow: inset` 而不是 border 来画状态；一个状态指示器在 Reduce motion 下保留它的动效，装饰性的东西则失去它。
 
-**A turn on screen**
+**滚动与宽度**
 
-- **A turn has ONE status line, and it is the strip's.** While the turn runs the strip reports what is
-  happening now — the call in flight (`正在 Bash · <title> · 第 N 步`), the count when several run at once, the
-  elapsed clock — and once it is over it reports what happened. A second status row under the prose being
-  written (正在思考…/正在执行…) was removed: two rows, one fact, and the two disagreed in wording whenever a
-  tool ran. The strip therefore exists from the turn's FIRST frame, and its height must not move on ANY of its
-  transitions (status ↔ summary, foldable ↔ not) — the transcript is bottom-pinned, so a pixel of growth
-  shifts everything on screen; its line box is a declared length for exactly that reason, not `normal`.
-  Regression: `transcript-live` (height trail), `live-roll` (the roll), `file-find` (a settled turn that only
-  delivered a file has no strip at all).
-- **A turn's footer is ONE row**: 复制回答 (the model's own prose, never the tool arguments), the 🧾 changes
-  chip (kept out of the menu — its numbers are the thing a reader scans a transcript for), the ⋯ menu, and the
-  timestamp. The entries about the turn's WORK — 完整 diff, 评审本轮改动, 评审所有改动, the run's numbers — are
-  the menu's rows, so the footer does not carry two whole sentences of review scope under every answer.
-  **A review's STATE stays on screen without opening anything**: it rides the trigger (评审中… / 已评审), and
-  the row inside carries the full state (已评审 N 条 · 查看). A refused review's reason stays OUTSIDE the menu —
-  it is the answer to "I pressed review and nothing happened". Regressions: `oneoff-footer` (the state machine
-  and the trail), `review-all` (which entry each turn offers), `multi-root` / `bash-diff` / `frozen-panel` /
-  `file-index` / `diff-layout` (the entries themselves).
-- **A turn is folded by the CONVERSATION, not by the part renderer** (`turnView()`, pure, shared by the live
-  view and a rebuilt transcript): one strip stands in for its thinking, tool cards and intermediate messages,
-  the turn's LAST prose, plus the parts that must never be hidden — a FAILED call, the call a permission card
-  is parked on, the call an AskUserQuestion form waits on, notices, and a DELIVERED file (its own card at the
-  turn's tail; behind the fold it was ABSENT from the DOM, so 「把 X 发给我」 hid its own answer). Intermediate
-  prose is folded whether or not the turn failed. **A steer splits the turn, and therefore the fold.** "No tool
-  cards on screen" is never evidence of "no tool calls" — a scenario asserting a successful card must expand
-  the strip first.
-- **A row that alternates between two states must not change GEOMETRY — only its content may** (the transcript
-  is bottom-pinned, so a height difference jumps the visible content), and the live line's own text ROLLS for
-  the same reason. Paint state with `box-shadow: inset` rather than a border; a status indicator keeps its
-  motion under Reduce motion, decorative things lose it.
+- **跟随底部必须能在异步高度变化中存活**（一张图画完、一张图片加载完、一张卡片展开）：盯住内容的盒子（在 `.chat-content` 包一层上挂 `ResizeObserver` —— 滚动口自己的盒子在它的内容增长时从不改变），并且 **只有读者结束跟随，增长从不结束跟随**：到底部的距离不是一个可用的判据，因为内容出现在视口下方看起来和一个离开的读者一模一样。记下钉住落到了哪里，并且只在读者移到它上方时才停。
+- **把挑定的数字和推导出的数字分开。** 读者挑的宽度会被持久化（而且 Go 在窗口存在之前就遵守它）；一个面板能显示多少，是那个数字被其它每个固定列留下的空间夹住的结果，在 resize 时重新测量、从 DOM 读取而不是假定。对话的份额是一个下限加上一份份额（`CHAT_MIN_WIDTH`、`CHAT_MIN_SHARE`）—— 一个光秃秃的下限会把对话钉在下限上，并把每一个多出来的像素都交给面板 —— 而阅读栏是一个 token（`--reading-width`），一个带下限和上限的、相对视口的 clamp，而不是一个固定数字，所以这一栏跟随窗口而不是按显示器重新调；被预览的文档取同一个 token，而 diff 面板保留自己的一个上限（`vw` 而不是百分比，因为会话全文和输入框盒子的父级不同，只有一个窗口相对的数字才能让输入与文本对齐）。
 
-**Scrolling and widths**
+**会话与侧栏**
 
-- **Following the bottom must survive async height changes** (a diagram finishing, an image loading, a card
-  expanding): watch the CONTENT's box (`ResizeObserver` on a `.chat-content` wrapper — the scrollport's own box
-  never changes when its content grows), and **only the READER ends following, never growth**: distance to the
-  bottom is not a usable test, because content arriving below the viewport looks exactly like a reader who
-  left. Record where the pin landed and stop only when the reader moves above it.
-- **Keep the CHOSEN number and the DERIVED one apart.** A width the reader picked is persisted (and Go honours
-  it before the window exists); what a pane can SHOW is that number clamped to the room left by every other
-  fixed column, re-measured on resize and read from the DOM rather than assumed. The conversation's share is a
-  floor PLUS a share (`CHAT_MIN_WIDTH`, `CHAT_MIN_SHARE`) — a bare floor pins the conversation AT the floor and
-  hands every extra pixel to the panel — and the reading column is one token (`--reading-width`), a
-  VIEWPORT-relative clamp with a floor and a ceiling rather than a fixed number, so the column follows the
-  window instead of being re-tuned per display; the previewed document takes that same token, and the diff
-  pane keeps a cap of its own (`vw` and not a percentage, because the transcript and the composer box have
-  different parents and only a window-relative number keeps the input lined up with the text).
+- **按会话的 UI 状态必须以会话为键，或在切换时重置**：一棵 React 树渲染每个会话，所以任何由当前会话推导出来的东西都会悄悄漏进下一个。任何按会话抓取的东西都必须无条件应用 —— `if (u)` 在 payload 为空时会留住陈旧值。
+- **agent 状态是按会话的，而且它的事件点出会话**（`agent:state` 带 `sessionId`），因为桌面在它自己的 goroutine 里跑每个会话的一轮，切会话不取消任何东西。唯一的全局界面是菜单栏，它反映被显示的那一个。只在某个会话被显示时才 emit 会同时产生四张面孔：停止控件跟着读者进到一个空闲会话里、一个后台轮次的结束从不被报告、一个陈旧的 busy 状态让输入框排队而不发送、以及一个 chip 在等邻居的轮次。一次挂载快照只能为还没有任何事件点过名的会话铺设初值。
+- **一个会话的「running」回答和说明它这一轮结束的事件不得互相矛盾**（`TestAFinishedTurnIsNotReportedAsRunning`）：从按会话的状态回答，绝不从 `sessionRun.running` 回答，因为一轮会发布它自己的 `turn_complete`、然后才退出到 `endTurn` —— 状态在事件之前被设置，所以它永远不会与事件矛盾。这个回答点的是哪个会话是第二条规则，而压缩窗口是两者不同的唯一情况（见 桌面压缩）。
+- **一轮在产出东西之后失败，会保留那段历史** —— 桌面采纳错误事件带来的任何东西，而 agent 在每一条确实有东西可交的退出路径上都附上那些部分消息（流中途死亡和被拒的请求都是「这一轮确实跑了」；只有在模型还从未被问过之前的失败才没有任何东西可交）。到那时它已经执行过工具调用，丢弃它们正是下一个请求缺掉模型做过的工作的原因。到达的是完整成对的消息，所以被采纳的历史永远是一个合法请求 —— 而状态仍然说 出错，因为保留历史不等于把这一轮称作成功。这个守卫在错误事件之后还会保持一小会儿（检查点正在被最终化），所以落进那个窗口的一次发送会按名字被拒绝。回归：`stream-fail` 与 `api-error-mid-turn`（两种形状），其判据是下一个请求携带那个已执行的步骤。
+- **复制走 `copyText`（`lib.ts`），绝不裸用 `navigator.clipboard`**：这个页面不是安全上下文，所以那个全局在那里是未定义的，可选链调用读起来就像一次无事发生的空操作，哪儿都不报错。运行时自己的剪贴板优先，所以一次复制要么成功，要么以失败可见。
+- **会话列表是一份对话的列表，不是一堆会话目录**：一条压缩链共用一个标题，所以原样渲染 `ListSessions` 会把压缩前的会话显示成第二条一模一样的行。形状由 `compactedParentId` 推出，而且 **一个父级不在列表里的链接仍然会得到一行**（一条注记，不是控件，用子会话记录下来的标题点它的名）—— 没有它，一个被手工删掉或被会话清理扫掉的父级就会悄悄抹掉这个事实。
+- **侧栏是分组的，而分组是一次纯 join**（`sessionGroups`，在 `sessionRows` 之前，所以一条链在自己的组内折叠）：每个项目一个 header（名字、计数、一个在它内部创建会话的 `＋`、一个右键菜单）加上最后一个 无项目 桶，一个 `projectId` 指向不在列表中的项目的会话也属于这个桶 —— 后端 resolver 对它做的就是这件事。**每个项目都会拿到一个组，包括还没有任何会话的**（header 带着创建第一个会话的那个 ＋）。一个组的行挂在一根可见的导轨上，因为单靠缩进说不出某一行属于哪个组。
+- **一个项目组默认是折叠的，唯一例外是持有应用启动时进入的那个会话的项目。** 状态记录的是**已展开**的分组，所以空默认无需按项目播种，一个后来才出现的项目也不可能一上来就漏成展开的；`revealProject` 是唯一会**打开**一个组的东西（启动、⌘P、⌘K、某个项目的 `＋`），而它从不关闭一个组。折叠是 DOM 级的，所以任何读取组内内容的东西 —— 包括驱动 —— 都必须先展开它。
+- **侧栏渲染每个组的一个窗口，绝不是整个组**（`SIDEBAR_WINDOW_ROWS` = 30，加上那条说「还有 N 条」的 `MoreRows` 行）：一个对话列表没有上界（本机自己的桶就有 100+ 个会话），而读者看的是最新的那几个，所以其余的是没人要求绘制出来的滚动。三条性质，每一条都承重：窗口是按组的（一个三个会话的项目不会被旁边的桶拖住）；它只在一个会话内增长（到达尾部 —— `MoreRows` 行上的 IntersectionObserver，或对它的一次点击 —— 再加一个窗口，而折叠是 `expandedProjects` 的事，不是它的事）；并且 **被选中和被渲染是同一条规则的两半** —— 窗口之外的行根本不在 DOM 里，所以下面的 reveal 效果会去增长它所属组的窗口，而不是去滚动一行根本不存在的行（折叠的组是另一半：增长帮不上忙，于是什么也不发生，由 header 的 ● 标记来回答）。别的任何东西都不读窗口：⌘K / ⌘P / `nextSessionAfter` / 启动时的开组全都在完整列表上工作。
+- **删除一个会话会把读者交给下一个 —— 并且只在被删的那个就是屏幕上的那个时**：它自己组里下面那一行，若它是那个组的最后一行则是上面那一行。删除任何**别的**行什么都不动；它不得把读者从他正在读的对话里拽出来。后继是在 reload 之前算出来的，那是「它下面那一行」唯一存在的时刻。
+- **置顶给一个组排序，而标记解释了顺序**：被置顶的会话去到它**自己**组的头部，绝不排到别的项目之上。排序发生在折叠之前，否则一条链的祖先会被从它挂着的子会话下面扯走。这个标志是会话**记录**的，这正是它能让顺序熬过重启、让该会话免于清理、并让压缩把它**转移**给子会话的原因（`TestFinalizeCompact_MovesThePin`）。
+- **每一条进入的路径都走 `newChat(projectId)`，而到底是哪个 id 决定分组**：侧栏的 `＋ 新建会话` 和 **⌘⇧N** 传 `''`（一个没有项目的会话 —— 这就是那个按钮为什么住在它要往里加行的 无项目 桶脚下），项目 header 的 `＋` 传那个项目，而 **⌘N 跟随屏幕上的会话** —— 「再来一个这类的」—— 传当前会话的 `projectId`，前提是那个项目仍在列表里（一个项目提供工作区、额外根目录和技能，所以「随便开一个新的」必须是一条独立的命令，而不是 ⌘N 自己的规则）。**菜单栏的「新会话」就是从 shell 里够到的 ⌘N 调用**：`desktop/tray.go` 发出 `ui:new_session`，由前端创建会话，所以这两者不可能走偏。它进来时还会顺手离开设置页，而 ⌘N 故意不这么做 —— 那道门禁管的是误触按键，而一次显式点击若留下那个不透明的页面还在上面，就会读起来像什么都没发生。
+- **屏幕上那个会话所在的行会被滚进视野，无论谁切换的它** —— ⌘K / ⌘P 挑一个对话，不管它在哪；一次创建把新行放到它组的头部，而 无项目 桶在列表的尾部；一次删除把读者交给邻居；压缩把对话挪到新的一行。触发的是 `currentId`（App.tsx：`revealRow` 请求，由一个监听它的 effect 设置），而**不是**手势 —— 侧栏只需知道一条规则。**这个请求在行被找到时被清掉，并且熬过其间的那些渲染**（`groups`、`expandedProjects` 和 `rowWindow` 是它的另外几个依赖，而它们恰恰是让那一行**存在**的三件事：列表本身、打开一个折叠的组、增长一个组的窗口 —— 否则一次切进折叠组的切换、或切到它窗口之外，都会根本找不到行，而那个待处理的请求会一直杵在那儿，直到某个无关的东西改了列表）：一次普通的重新渲染 —— 一个流式 delta、一个到达的标题、一次刷新 —— 绝不能把列表从读者手底下挪走，所以那个增长窗口的回调没有依赖任何东西、并被记忆化，因而不能为自己请求一次运行。滚动是 `block: 'nearest'`，绝不是居中：已经在屏幕上的行不能动分毫。回归：`sidebar-window`（窗口那一半）与 `session-keys`（折叠那一半）。
+- **`⌘⇧⌫` 为屏幕上的会话打开删除确认，自己绝不删除** —— 行的右键「删除」的键盘形式，走同一个后端调用，所以一个正在运行的会话的拒绝落进同一个盒子。**这个盒子会拿到焦点，靠的是对一个 ref 调 `focus()` —— `autoFocus` 在 div 上什么都没做**（它是 WebKit 只在表单控件上认的属性）：按键时插入符通常在输入框里，而留在那儿的 Enter 会**发出一条消息**而不是确认，这正是要抢焦点的全部理由。Enter 由盒子自己处理（`tabIndex={-1}` + `onKeyDown`），所以确认的那个键是盒子自己拥有的那个。
+- **`⌘P` 和 `⌘K` 是一个面板的两种用法**（项目 / 对话），各自关闭对方，各自有相同的输入、列表导航、Escape，以及把插入符交还给输入框。它们共享四条契约：过滤针对的是**已提交**的查询，绝不是字段的实时值（**中文输入法会在每一个候选键上重新渲染，而结束一次组合的那些键属于输入法自己** —— 盒子持有原始值，列表按已提交的值过滤，而 keydown 处理器在组合期间提前返回）；面板读的是侧栏已经渲染的那个列表，不发任何 fetch（一条重新读取的快捷键会在读者的光标底下给列表重排序）；一次被应用拒绝的挑选会**返回**原因，且只有 `""` 会关闭它；插入符回到输入框，因为 ⌘P 是唯一一个**在去会话的路上**关闭对话框的入口。⌘K 自己决定的事：行是按列表自己顺序排的对话（置顶被忽略 —— 置顶是在它**组**内给行排序），查询只匹配标题，而一行属于哪个项目是一个标签，而不是第二行文字。⌘P 自己决定的事：**它的行是读者所能落地的那些分组，所以 无项目 桶也是其中一行**（`ProjectChoice`，在最后，跟侧栏里一样）—— 面板是从键盘够到的，而 ⌘⇧N 创建的会话不属于任何项目，所以一份只有项目的列表会让那些会话无法到达；哪些会话属于这个桶是**侧栏**自己的成员规则（`looseMembers`，也就是 `liveProjectId` —— 没有 `projectId`，或有一个没有任何活项目认领的 `projectId`，与分组解析的是同一种悬空 id 情形），而查询只按它自己的名字够到这个桶。
+- **一次项目写入会重新读取读者**（`agent:workspace_changed`）：前端按值持有工作区和分组，所以一次重命名在用户切换会话之前不会在屏幕上挪动任何东西。
+- **删除一个有待运行轮次的会话会被拒绝，由后端拒绝**（这一轮拥有一个 goroutine，它的会话写入会无处可去，而它的 run-map 条目除那个 id 之外没有别的键）：运行标志的读取和 run 的移除在同一个临界区里完成，而前端在它发起删除的地方渲染原因，同时菜单项对一个正在运行的会话是 `disabled` 的。
+- **侧栏有一个字号下限，且只有一种箭头尺寸**（用文字字形画的展开箭头依赖字体；共享的 `<Caret>` 由一个 token 定尺寸）。
 
-**Sessions and the sidebar**
+**一轮的改动、diff 与评审**
 
-- **Session-scoped UI state must be keyed by session, or reset on switch**: one React tree renders every
-  session, so anything derived from the ACTIVE session silently leaks into the next one. Anything fetched per
-  session must be applied unconditionally — `if (u)` keeps stale values when the payload is empty.
-- **The agent status is per SESSION, and its event names the session** (`agent:state` carries `sessionId`),
-  because the desktop runs every session's turn in its own goroutine and switching sessions cancels nothing.
-  The only global surface is the menu bar, which reflects the DISPLAYED one. Emitting only while a session was
-  displayed produces four faces at once: the stop control follows the reader into an idle session, a background
-  turn's END is never reported, a stale busy state makes the composer queue instead of send, and a chip waits
-  on a neighbour's turn. A mount snapshot may only SEED a session no event has named yet.
-- **A session's "running" answer and the event that says its turn is over must not disagree**
-  (`TestAFinishedTurnIsNotReportedAsRunning`): answer from the per-session STATE, never from
-  `sessionRun.running`, because a turn publishes its own `turn_complete` and only THEN exits to `endTurn` — the
-  state is set before the event, so it can never contradict it. WHICH session the answer names is a
-  second rule, and the compaction window is the one case where they differ (see Desktop Compaction).
-- **A turn that fails after producing something keeps that history** — the desktop adopts whatever the error
-  event carries, and the agent attaches the partial messages on every exit that HAS them (a mid-stream death
-  and a rejected request are both "the turn RAN"; only a failure before the model was ever asked has nothing to
-  hand over). It has already EXECUTED tool calls by then, and dropping them is how the next request comes to be
-  missing work the model did. What arrives is complete pairs, so the adopted history is always a legal request —
-  and the STATE still says 出错, because keeping the history is not calling the turn a success. The guard also
-  stays held for a moment after the error event (the checkpoint is being finalized), so a send landing in that
-  window is refused by name. Regression: `stream-fail` and `api-error-mid-turn` (the two shapes), whose
-  criterion is that the NEXT request carries the executed step.
-- **Copying goes through `copyText` (`lib.ts`), never a bare `navigator.clipboard`**: the page is not a secure
-  context, so the global is UNDEFINED there and an optional-chain call reads as a no-op with nothing failing
-  anywhere. The runtime's own clipboard comes first, so a copy either works or is visible as a failure.
-- **A session list is a list of CONVERSATIONS, not of session dirs**: a compaction chain shares one title, so
-  rendering `ListSessions` raw shows the pre-compaction session as a second, identical-looking row. The shape
-  is derived from `compactedParentId`, and **a link whose parent is NOT in the list still gets a line** (a note,
-  not a control, naming it from the title the child recorded) — without it, a parent deleted by hand or swept
-  by session cleanup silently erased the fact.
-- **The sidebar is GROUPED, and the grouping is a pure join** (`sessionGroups`, before `sessionRows`, so a
-  chain folds inside its own group): one header per project (name, count, a `＋` that creates a session INSIDE
-  it, a right-click menu) plus one final 无项目 bucket, which is also where a session whose `projectId` names a
-  project not in the list belongs — the bucket is what the backend's resolver does with it. **EVERY project
-  gets a group, including one with no sessions yet** (the header carries the ＋ that makes the first one). A
-  group's rows hang off a visible rail, because indent alone does not say which group a row belongs to.
-- **A project group is FOLDED by default, and the ONE exception is the project holding the session the app
-  booted into.** The state records the EXPANDED groups, so an empty default needs no per-project seeding and a
-  project that appears later cannot leak open first; `revealProject` is the only thing that OPENS a group
-  (boot, ⌘P, ⌘K, a project's `＋`) and it never closes one. The fold is DOM-level, so anything reading inside a
-  group — a driver included — must expand it first.
-- **The sidebar renders a WINDOW of each group, never the whole group** (`SIDEBAR_WINDOW_ROWS` = 30, plus the
-  `MoreRows` line that says 「还有 N 条」): a conversation list has no upper bound (this machine's own bucket is
-  100+ sessions) and the reader is looking at the newest handful, so the rest is scroll nobody asked to paint.
-  Three properties, and each is load-bearing: the window is PER GROUP (a three-session project is not held back
-  by the bucket beside it); it only GROWS within a session (arriving at the tail — an IntersectionObserver on
-  the `MoreRows` line, or a click on it — adds one more window, and folding is `expandedProjects`' business,
-  not this one's); and **being selected and being RENDERED are two halves of one rule** — a row beyond the
-  window is not in the DOM at all, so the reveal effect below GROWS the owning group's window instead of
-  scrolling a row that does not exist (a folded group is the other half: growing cannot help, so nothing
-  happens and the header's ● marker answers instead). Nothing else reads a window: ⌘K / ⌘P / `nextSessionAfter`
-  / the boot's group-opening all work on the full list.
-- **Deleting a session hands the reader to the NEXT one — and only when the deleted session was the one on
-  screen**: the row below inside its own group, else the row above when it was that group's last one. Deleting
-  any OTHER row moves nothing; it must not yank the reader out of the conversation they are reading. The
-  successor is computed BEFORE the reload, which is the only moment "the row below it" exists.
-- **置顶 orders ONE group, and the mark explains the order**: a pinned session goes to the head of its OWN
-  group, never above another project. Sorting happens before folding, or a chain's ancestor is torn away from
-  the child it hangs under. The flag is the session RECORD's, which is what makes the order survive a restart,
-  exempts the session from cleanup, and lets compaction TRANSFER it to the child
-  (`TestFinalizeCompact_MovesThePin`).
-- **Every way in goes through `newChat(projectId)`, and WHICH id decides the group**: the sidebar's `＋ 新建会话`
-  and **⌘⇧N** pass `''` (a project-less session — that is why the button lives at the foot of the 无项目 bucket
-  it adds rows to), a project header's `＋` passes that project, and **⌘N follows the session on screen** —
-  "another one of these" — passing the current session's `projectId` while that project is still in the list
-  (a project supplies the workspace, the extra roots and the skills, so 「随便开一个新的」 must be a separate
-  command rather than ⌘N's own rule). **The menu bar's 「新会话」 is the ⌘N call reached from the shell**:
-  `desktop/tray.go` emits `ui:new_session` and the FRONTEND makes the session, so those two cannot drift apart.
-  It also leaves the settings page on its way in, which ⌘N deliberately does not — that gate is for a stray
-  keystroke, while an explicit click that left the opaque page up would read as nothing having happened.
-- **The row of the session ON SCREEN is scrolled into view, whoever switched it** — ⌘K / ⌘P pick a conversation
-  wherever it sits, a creation puts the new row at the HEAD of its group while the 无项目 bucket is at the FOOT of
-  the list, a delete hands the reader to a neighbour, compaction moves the conversation to a new row. The trigger
-  is `currentId` (App.tsx: the `revealRow` request, set by an effect watching it) and NOT the gesture — the
-  sidebar has to know only one rule. **The request is cleared when the row is FOUND, and it survives the renders
-  in between** (`groups`, `expandedProjects` and `rowWindow` are its other dependencies, and they are exactly
-  the three things that make the row EXIST: the list itself, opening a folded group, and growing a group's
-  window — a switch into a folded group, or past its window, would otherwise find no row at all, and the
-  pending request would sit there until something unrelated changed the list): an ordinary re-render — a
-  streamed delta, a title arriving, a refresh — must never move the list under the reader's hands, so the
-  callback that grows a window is memoized on nothing and cannot ask for a run of its own. The scroll is `block: 'nearest'`, never centre: a row already on screen must not
-  move at all. Regression: `sidebar-window` (the window's half) and `session-keys` (the fold's).
-- **`⌘⇧⌫` opens the delete confirmation for the session on screen and never deletes on its own** — the row's
-  right-click 「删除」 in keyboard form, through the same backend call, so a running session's refusal lands in
-  the same box. **The box TAKES focus, by calling `focus()` on a ref — `autoFocus` does nothing on a div** (it is
-  an attribute WebKit honours on form controls only): the caret is usually in the composer when the key is
-  pressed, and an Enter left there SENDS A MESSAGE instead of confirming, which is the whole reason the focus is
-  taken. Enter is handled on the box itself (`tabIndex={-1}` + `onKeyDown`), so the key that confirms is the one
-  the box owns.
-- **`⌘P` and `⌘K` are one palette in two uses** (projects / conversations), each closing the other, each with
-  the same input, list navigation, Escape and caret hand-back to the composer. Four contracts they share:
-  filtering is on the COMMITTED query, never the field's live value (**a Chinese IME composition re-renders on
-  every candidate key, and the keys that END a composition are the IME's own** — the box holds the raw value,
-  the list filters on the committed one, and the keydown handler returns early while composing); the palette
-  reads the list the sidebar already renders and issues NO fetch (a shortcut that re-reads re-orders the list
-  under the reader's cursor); a pick that the app refuses RETURNS the reason and only "" closes it; and the
-  caret goes back to the composer, because ⌘P is the only entry point that closes a dialog ON THE WAY to a
-  session. What ⌘K decides for itself: the rows are conversations in the list's own order (pins are ignored —
-  a pin orders a row inside its GROUP), the query matches the TITLE only, and which project a row belongs to is
-  a TAG rather than a second line of text. What ⌘P decides for itself: **its rows are the GROUPS a reader can
-  land in, so the 无项目 bucket is one of them** (`ProjectChoice`, last, as it is in the sidebar) — the palette
-  is reached from the keyboard, and ⌘⇧N creates sessions that belong to no project, so a list of projects only
-  would leave those unreachable; which sessions belong to the bucket is the SIDEBAR's own membership rule
-  (`looseMembers`, which is `liveProjectId` — no `projectId`, or one no live project answers to, the same
-  dangling-id case the grouping resolves), and the query reaches the bucket by its own name alone.
-- **A project write re-reads the reader** (`agent:workspace_changed`): the frontend holds workspaces and groups
-  BY VALUE, so a rename moves nothing on screen until the user switches sessions.
-- **Deleting a session with a turn in flight is REFUSED, by the backend** (the turn owns a goroutine whose
-  session writes would go nowhere and whose run-map entry is keyed by nothing but that id): the running flag is
-  read and the run removed in ONE critical section, and the frontend renders the reason where it raised the
-  delete while the menu entry is `disabled` for a running session.
-- **The sidebar has a type floor, and there is ONE caret size** (a disclosure caret drawn as a text glyph
-  depends on the font; the shared `<Caret>` is sized by one token).
+- **一轮的改动在每一个展示它们的地方都从它的检查点树读取**，所以一条 shell 命令写下的文件也算数，而答案不会随工作树变动；工具调用片段只是后备，并且界面必须说明是哪个来源回答的。四个陷阱：结束快照在 `turn_complete` 之前、在一个与该轮取消相分离的 context 上拍摄；一次被拒绝的结束以一条注记到达并把数字**清零**（回退到工具调用的数字）；一次被拒绝的结束只释放它**自己**的结束 ref，因为起始 ref 是下一轮的父级；而一轮的改动若来自 shell 命令，就**没有**任何工具声明的路径，所以任何在空路径列表上跳过工作的东西，恰好会把这种情况藏起来。
+- **`评审所有改动` 是唯一一个主体不是某一轮的评审入口**（每一个未提交文件，对着 HEAD 读），而它只搭在最新一轮的页脚上。有四样东西随这个范围同行，任何一样失守都是一句谎言：提示词里的来源说明句、那条记录、diff 本身，以及 chip 自己的状态（现在一个页脚带着两个条目，否则它们会互相报告对方的运行）。
+- **diff 里的每一条路径都带着它来自的根目录。** 路径是相对某一个根目录的，所以一条没有根目录的路径会对着主根目录解析 —— 而那里一个同名的文件就是 预览/打开 会悄悄展示的东西。一个分组用于 React key 和折叠状态的身份是 `(root, path)`；`GetTurnDiff` 对**每一个**根目录做 diff（额外根目录里的一条路径是**另一个**仓库，不是「仓库之外」）；按根目录的结果绝不能并成一份文本或一个路径集；并且 **只要其中一个必须带标签，每一行就都要带**，否则那条光秃秃的会读起来像不属于任何树。
+- **一个评审的窗格读的是评审者读过的那份 diff，按轮**：只按记录下来的路径列表抓取，是工作树对 HEAD，对于一个改动后来已被提交的评审来说那是一张空窗格 —— 而「重新评审」必须带上它要重跑的那一轮。
+- **一次回退只对读者仍在其中的那个对话提供** —— 一个已被压缩掉的会话会被拒绝，而且这个拒绝由**预览**发出，也由动作发出（只在确认时拒绝会造出一张提供一个不可能发生的回退的卡片）。
+- **会话全文的轮次时间戳覆盖一轮的每一条记录**，不只是它开头那条：一页是最新的 N 条记录，所以一个长轮次的开头记录落在**更早**的一页上，而精确解析边界正是让最长的轮次也带上时间戳的东西。
+- **一个条目的数据源必须属于该条目打开的那个界面**（打开时抓取、关闭时丢弃，所以它永远不可能变成一个陈旧的锚点），一个折叠默认值属于展示 diff 的那个界面，而一个唯一调用者已经没了的辅助函数要跟着它一起走。
+- **一个由某事件打开的面板不能假定那个事件宣告的东西已经在磁盘上了**：这一轮的 `start` 在 recorder 被打开**之前**发出，所以面板自己那次列表读取返回空，整个运行就藏在一个空状态后面。因此实时跟随也重新读取**列表**，并按名字比较，这样读者自己挑的那个不会被搅动。
 
-**A turn's changes, diffs and reviews**
+**浮层、面板与查找**
 
-- **A turn's changes are read from its CHECKPOINT trees, everywhere they are shown**, so a file a SHELL
-  command wrote counts and the answer does not move when the working tree does; the tool-call fragments are
-  only the FALLBACK, and the surface must say which source answered. Four traps: the end snapshot is taken
-  BEFORE `turn_complete` and on a context DETACHED from the turn's cancellation; a refused end arrives as a
-  note and ZEROES (fall back to the tool-call numbers); a refused end releases only its OWN end ref, because
-  the start ref is the next turn's parent; and a turn whose changes came from a shell command has NO
-  tool-declared paths, so anything that skips work on an empty path list hides exactly that case.
-- **`评审所有改动` is the ONE review entry whose subject is not a turn** (every uncommitted file, read against
-  HEAD), and it rides the LATEST turn's footer only. Four things travel with the scope and every one is a lie
-  if it lapses: the prompt's provenance sentence, the record, the diff itself, and the chip's own state (one
-  footer now carries two entries that would otherwise report each other's runs).
-- **Every path in a diff carries the ROOT it came from.** Paths are RELATIVE to one root, so a file without
-  its root resolves against the primary one — and a same-named file there is what 预览/打开 would show,
-  silently. A group's identity for React keys and fold state is `(root, path)`; `GetTurnDiff` diffs EVERY root
-  (a path in an additional root is a DIFFERENT repository, not "outside the repository"); the per-root results
-  must never be merged into one text or path set; and **every row is labelled as soon as ONE of them has to
-  be**, or the bare one reads as belonging to no tree at all.
-- **A review's PANE reads the same diff the reviewer read, by TURN**: fetching by the recorded PATH list alone
-  is the working tree against HEAD, which is an empty pane for a review whose changes have since been
-  committed — and 「重新评审」 must carry the turn it re-runs.
-- **A rewind is only offered for the conversation the reader is still IN** — a compacted-away session is
-  refused, and the refusal is raised by the PREVIEW as well as the action (refusing only on confirm would
-  build a card offering a rewind that cannot happen).
-- **The transcript's turn stamps cover every record of a turn**, not only its opening one: a page is the newest
-  N records, so a long turn's opening record sits on an EARLIER page, and resolving the boundary exactly is
-  what keeps the longest turns stamped.
-- **An entry's data source must belong to the surface the entry opens** (fetched on open, dropped on close, so
-  it can never become a stale anchor), a fold default belongs to the surface that shows the diff, and a helper
-  whose only caller is gone goes with it.
-- **A panel opened BY an event cannot assume what that event announces is on disk yet**: the run's `start` is
-  emitted BEFORE the recorder is opened, so a panel's own list read comes back empty and the whole run hides
-  behind an empty state. The live follow therefore re-reads the LIST too, and compares by name so the reader's
-  own pick is left alone.
+- **一个窗格只有一个滚动器。** 它内部那些钉住的东西（浮层的文件索引、它的头部）钉在那一个盒子里，并从 DOM 测量（`ResizeObserver`）而不是硬编码，因为头部会折行；一个嵌套的 `overflow: auto` 会让查找和查找遍历去搜错误的盒子。
+- **读者所在的那一行会被标记，而这个标记跟随滚动，不只是点击** —— 这条规则与跳转用的措辞相同（两端都需要一个兜底，否则高亮会在顶部和底部消失），而标记是一道竖条**加上**一层淡淡的水渍**加上** `aria-current`，绝不只靠颜色。
+- **一次拖拽直接写元素并只提交一次**（绝不每次 pointermove 都写 React 状态，那会把整个窗格重新排一遍），而读者的宽度被夹到剩余空间，绝不夹到窗格自己的盒子。**读者自己选的布局会被记住（`localStorage`），窗格推导出来的宽度则不会** —— 而这两个存储按谁必须读它们来分工：`desktop_ui.json` 是 Go 写的、由 `GetUIState` 回答的**持久**那一侧（一个宽度、面板的开合标志、阅读字号 —— 可手工编辑，且能熬过被清空的 webview 存储），而一个只有页面读的偏好可以只用 `localStorage`（diff 布局）。主题两边都有，因为启动那一帧在首次绘制之前就需要它，而 Go 在窗口存在之前就需要它。
+- **灯箱的 fit() 测量的是窗口，并且只会缩小**（舞台贴住它的内容，而两个方向的「尽量大」会在差异极大的尺寸下打开同一个手势）。
+- **⌘F 搜索的是一个界面，不是页面** —— 每个查看器搜索它**自己**的子树，键的拥有者在模块加载时安装一次，条只在打开期间挂载，而 `findable` 是按查看器选择性加入的。**会话全文的搜索使用一个显式的、正向的范围**（读者自己的话 + 模型的正文）：一个会话的文本大部分是工具参数和结果，而对整棵子树做搜索就是对文件转储做搜索。聊天的主机在栈里**最低**，所以一个预览或面板在它立着时保留 ⌘F —— 而设置页立着时查找条是关的，因为那个视图**盖住**了聊天。
+- **一次性面板的 × 承诺 Esc，而第一次按下归谁由焦点决定**：全局处理器不得无条件认领每一次 Escape，而面板只拒绝一个**已被认领**的键。
 
-**Overlays, the panel and find**
+**文本与对话框**
 
-- **A pane has ONE scroller.** The pinned things inside it (the overlay's file index, its head) pin within that
-  one box and are measured from the DOM (`ResizeObserver`) rather than hard-coded, because the head wraps; a
-  nested `overflow: auto` would leave find and the finding walk searching the wrong box.
-- **The row the reader is ON is marked, and the mark follows the SCROLL, not just the click** — the rule is
-  stated in the same terms as the jump (both ends need a fallback, or the highlight vanishes at the top and the
-  bottom), and the mark is a bar AND a wash AND `aria-current`, never colour alone.
-- **A drag writes the element directly and commits once** (never React state per pointermove, which lays the
-  whole pane out again), and the reader's width is clamped to the room left, never to the pane's own box. **A
-  layout the reader CHOSE is remembered (`localStorage`), a width the pane DERIVES is not** — and the two
-  stores split by what has to read them: `desktop_ui.json` is the DURABLE side Go writes and `GetUIState`
-  answers (a width, the panel's open flag, the reading size — hand-editable, and it survives a cleared webview
-  store), while a preference only the page reads can be `localStorage` alone (the diff layout). The theme is in
-  both, because the boot frame needs it before the first paint and Go needs it before the window exists.
-- **The lightbox's fit() measures the WINDOW and only ever SHRINKS** (the stage hugs its content, and "as large
-  as it fits" in both directions opens the same gesture at wildly different sizes).
-- **⌘F searches a SURFACE, not the page** — each viewer searches its OWN subtree, the key owner is installed
-  once at module load, the bar is mounted only while open, and `findable` is opt-in per viewer. **The
-  transcript's search uses an explicit, POSITIVE scope** (the reader's own words + the model's prose): most of
-  a session's text is tool arguments and results, and a search over the whole subtree is a search over file
-  dumps. The chat's host is the LOWEST in the stack, so a preview or the panel keeps ⌘F while it is
-  up — and the find bar is off while the settings page is up, because that view COVERS the chat.
-- **The one-off panel's × promises Esc, and who owns the FIRST press is decided by focus**: the global handler
-  must not claim every Escape unconditionally, and the panel refuses only an ALREADY-CLAIMED key.
+- **一个渲染某面板行的对话框继承那个面板的字号档 —— 也继承共享盒子的 max-width**，于是一个用紧凑弹出框的行搭出来的模态读起来就像一个缩水的对话框。把共享尺寸**限定**到对话框内抬高，并声明它自己的宽度。
+- **路径 trie 是按字节为键的：按字节遍历字符串，而不是 `for i := range s`**（`for i := range s` 走的是 rune 边界，所以 `s[i]` 只给出每个多字节字符的第一个字节）—— 否则中文文件名会从 @-file 索引里带着乱码回来。`pkg/container/pathtrie.go`。
+- **不要把「活动行」重新引到输入框上方**（一行随每一步出现又消失，会把消息区上下推），并且 **不要用 `requestAnimationFrame` 去补偿一次布局变化** —— 一个被遮住的窗口会停掉页面的帧。在布局 effect 里补偿。
+- **窗口的列属于侧栏，不属于那条栏**：侧栏跑**满**高度，红绿灯被画到它空着的顶部条带上（`--titlebar-h`，与 Wails 的 `InvisibleTitleBarHeight` 让原生拖拽手柄也用的那个 44px 相同 —— 保持两者相等），而工具栏属于它旁边的内容列。所以 `.titlebar` 是侧栏的**兄弟**，不是一条横跨窗口的栏，而红绿灯避让空间随折叠移动：侧栏展开时它条带上是 78px，在 `.app-body.sidebar-folded` 下则落在 `.titlebar` 自己身上，走同一条曲线，这样第一个控件永远不会滑到灯底下。设置页出于同样的理由**盖住整个窗口**（否则它会在上面留下一条对话自己的外壳），并用导轨自己的内边距支付它顶部避让空间的账。
+- **工具栏把它的控件放在一个簇里**（`titlebar-right`，顶在最边上）再加上会话的**标题**（取自 `sessions`，用侧栏自己的 未命名会话 兜底 —— 会话还没进列表时为空，这样一次启动不会闪出一个它马上要纠正的名字），而 agent 状态不在那里回显（侧栏行和回复已经说了 运行中）。被显示的会话 id 在应用根节点上可作为 `data-session-id` 读出来 —— 复制手势住在会话行的菜单里，而冒烟驱动读那个属性来区分「切换了会话」和「还是同一个」（标题做不到这一点：未命名会话 会重复）。
+- **上下文圆环锚在最后一次调用真实的提示词大小上，不锚在字符估算上**（估算是按字符类别做的，会低估混合了 CJK + JSON 的情形），分解按那个总量缩放，因为各部分必须加起来等于它们上方的数字，而修正是估算移动量的一个**比率** —— 带下限的加性 delta 会让圆环在一次压缩之后仍停在压缩前的数字上。自动压缩的**阈值**读同一个锚定值，所以触发点和仪表是一致的。
+- **圆环跟随每一次 API 调用，不是每一轮，而且它测量那次调用的提示词** —— 一条回复要到**下一轮**才进入它。一轮刷新一次的圆环停在那一轮开始时的地方，而弹出框（打开时抓取）已经显示当前值，所以一个关于「上下文变小了」的场景必须先把窗口填满，否则它什么都没断言。「这一轮结束了」和「这次调用结束了」是不同的刷新点，而两个描述同一个事实的界面必须从**一条**规则读它。
 
-**Text and dialogs**
+## 桌面主题（深色调色板）
 
-- **A dialog that renders a PANEL's rows inherits that panel's type scale — and the shared box's max-width**,
-  so a modal built from a compact popover's rows reads as a shrunken dialog. Raise the shared sizes SCOPED to
-  the dialog and declare its own width.
-- **Path tries are byte-keyed: iterate strings by BYTE, not `for i := range s`** (`for i := range s` walks rune
-  boundaries, so `s[i]` yields only the first byte of each multi-byte character) — otherwise Chinese file names
-  come back mangled from the @-file index. `pkg/container/pathtrie.go`.
-- **Do not reintroduce an "activity row" above the composer** (a row that appears and vanishes per step
-  shoves the message area up and down), and **do not compensate a layout change from a
-  `requestAnimationFrame`** — a covered window stops the page's frames. Compensate in a LAYOUT effect.
-- **The window's columns are the sidebar's, not the bar's**: the sidebar runs the FULL height with the traffic
-  lights painted onto its empty top strip (`--titlebar-h`, the same 44px Wails' `InvisibleTitleBarHeight` makes a
-  native drag handle — keep the two equal), and the toolbar belongs to the content column beside it. So
-  `.titlebar` is a SIBLING of the sidebar, not a window-wide row, and the traffic-light clearance moves with the
-  fold: 78px on the sidebar's strip while it is open, on `.titlebar` itself under `.app-body.sidebar-folded`, on
-  the same curve so the first control never slides under a light. The settings page covers the WHOLE window for
-  the same reason (it would otherwise leave a strip of the conversation's own chrome above it) and pays for its
-  rail's top clearance with the rail's own padding.
-- **The toolbar holds its controls in one cluster** (`titlebar-right`, held at the far edge) plus the session's
-  TITLE (from `sessions`, the sidebar's own 未命名会话 fallback — empty while the session has not reached the
-  list, so a launch does not flash a name it is about to correct), while the agent state is NOT echoed there
-  (the sidebar row and the reply already say 运行中). The displayed session id is readable as
-  `data-session-id` on the app root — the copy gesture lives in the session row's menu, and the smoke drivers
-  read that attribute to tell "switched session" from "still the same one" (a title cannot: 未命名会话 repeats).
-- **The context ring is ANCHORED on the last call's real prompt size, not on the character estimate** (the
-  estimate is character-class based and under-counts mixed CJK + JSON), the breakdown is scaled to that total
-  because the parts must add up to the number above them, and the correction is a RATIO of the estimate's
-  movement — an additive delta with a floor would leave the ring on the pre-compaction number after a
-  compaction. The auto-compact THRESHOLD reads the same anchored value, so the trigger and the meter agree.
-- **The ring follows each API CALL, not each turn, and it measures the PROMPT of that call** — a reply enters
-  it only on the NEXT turn. A ring refreshed per turn sits at what the turn started with while the popover
-  (fetched on open) already shows the current value, and a scenario about "the context got smaller" must fill
-  the window first or it asserts nothing. "The turn ended" and "the call ended" are different refresh points,
-  and two surfaces describing one fact must read it from ONE rule.
-
-## Desktop Themes (the dark palette)
-
-- **The dark theme is Ayu Mirage-derived and its contrast is low ON PURPOSE — do not "fix" it**: the family's
-  blue-grey planes lifted one step so the app reads as graphite rather than black, with the warm editor fg as
-  the CONTENT ink and the cool UI fg family as the CHROME ink.
-- **Every "go" button is ONE flat recipe — do not put the gradient back** (one solid accent fill, tuned in one
-  place), and a fill that carries white text always takes the `-strong` variant, because the plain accent and
-  `--red` are tuned as INK and put a white glyph below 4.5:1. Find hits are amber on purpose: a hit has to be
-  findable inside a diff (green/red already mean added/removed) and inside prose (the accent means a link).
-- **The reading surfaces take their sizes from ONE place** (`base.css`'s `--fs-prose` / `--fs-bubble` /
-  `--fs-finding`, and `--reading-width` for the column — the same measure a previewed document gets): "the text
-  is too small" is an edit there, not a hunt through four files. The scale is deliberately NOT a blanket
-  multiplier — labels, badges and metadata are chrome and keep their own sizes. What the READER adds on top is
-  a multiplier on the two message sizes and nothing else (`--fs-scale`, ⌘= / ⌘- / ⌘0 in `fontsize.ts`), and a
-  message's own markdown follows in em (`widgets.css`), so a bigger body keeps its hierarchy instead of growing
-  past a heading fixed in px.
-- **What bounds the palette is `--text-faint`'s contrast floor, not the main ink's** (it lands on the LIGHTEST
-  plane, so it pins both the ink and the top of the ladder): any "make it lighter" edit trades against that,
-  and a WCAG ratio check across every plane is how to verify it, not the eye. The pre-paint window colour
-  (`windowBgLight`/`windowBgDark`) is the same decision in a second place — move it with `--bg`.
-- **One definition per mode, in `frontend/public/base.css`**: the dark block, resolved by the boot script +
-  `src/theme.ts`. No frontend rule reads `prefers-color-scheme`, and no other file carries dark colours — the
-  highlighter's tokens map onto the semantic ones, so a palette edit covers code blocks for free.
-- **To SEE a palette change, render the tokens instead of capturing the app window** — a token page puts the
-  two variants side by side in one image (a window capture CAN be taken here: see the capture bullet under the
-  smoke suite's rules and traps): extract both blocks from base.css (next to `git show HEAD:desktop/frontend/public/base.css` for the
-  before) into a small HTML page whose swatches read `var(--token)`, one scope per variant, and screenshot
-  that.
+- **深色主题源自 Ayu Mirage，它的对比度低是故意的 —— 不要去「修」它**：这一族的蓝灰平面被抬高一档，让应用读起来像石墨而不是黑，编辑器那个暖色前景色当**内容**的墨，而冷的 UI 前景色一族当**外壳**的墨。
+- **每个「go」按钮都是一份配方 —— 不要把渐变放回来**（一份实心强调色填充，只在一处调校），而任何承载白字的填充总是取 `-strong` 变体，因为纯强调色和 `--red` 是按**墨**调校的，会让白色字形掉到 4.5:1 以下。查找命中是琥珀色的，这是故意的：一次命中必须能在 diff 里被找到（绿/红已经表示新增/删除），也能在正文里被找到（强调色表示链接）。
+- **阅读界面从一处取它们的字号**（`base.css` 的 `--fs-prose` / `--fs-bubble` / `--fs-finding`，以及那一栏的 `--reading-width` —— 与被预览的文档拿到的是同一个量度）：「字太小了」是在那里改，而不是去翻四个文件。这个字号档故意**不是**一刀切的倍数 —— 标签、徽章和元数据是外壳，保留自己的字号。**读者**在它之上加的是一个只作用于两个消息字号的倍数，别无其它（`--fs-scale`，⌘= / ⌘- / ⌘0 在 `fontsize.ts` 里），而一条消息自身的 markdown 以 em 跟随（`widgets.css`），所以更大的正文保住它的层级，而不是长得超过一个用 px 固定的标题。
+- **限定整个调色板的是 `--text-faint` 的对比度下限，不是主墨的**（它落在最浅的平面上，所以它同时钉住了墨和梯子的顶端）：任何「调亮一点」的改动都是在跟它做交易，而验证它靠的是跨每个平面跑一遍 WCAG 比率检查，不是眼睛。绘制前的窗口颜色（`windowBgLight`/`windowBgDark`）是同一个决定在第二个地方 —— 改 `--bg` 时一起把它挪过去。
+- **每种模式一个定义，在 `frontend/public/base.css` 里**：那个深色块，由启动脚本 + `src/theme.ts` 解析。没有任何前端规则读 `prefers-color-scheme`，也没有任何别的文件带深色 —— 高亮器的 token 映射到那些语义 token 上，所以一次调色板改动免费覆盖代码块。
+- **要看一次调色板改动就渲染 token，而不是去截应用窗口** —— 一个 token 页面把两个变体并排放在一张图里（窗口截图在这里**可以**截：见冒烟套件规则与陷阱下的截图那条）：从 base.css 里把两个块抽出来（比对前用 `git show HEAD:desktop/frontend/public/base.css`），放进一个小 HTML 页面，它的色块读 `var(--token)`，每个变体一个作用域，然后给那个截图。

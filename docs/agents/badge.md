@@ -1,250 +1,59 @@
-# Tachi — Badge Handbook (the AI Passport device link, split out of desktop.md)
+# Tachi —— 徽章手册（AI Passport 设备链路）
 
-The badge is a SECOND FRONTEND for the same sessions: a BLE (or serial) link, a small screen for asks, and a
-voice path that turns speech into a message. Its host half lives in `desktop/` (`link/`, `badge.go`, and the
-Swift shim in `stt/` — which the desktop's OWN microphone button also records through; that consumer's rules
-are in `docs/agents/desktop.md`); its device half is a different repository — `ai-passport` (this machine:
-`~/repos/ai-passport`, ESP-IDF at `~/esp/esp-idf-v5.5.3`) — which carries its own `AGENTS.md`, its own skills
-and its own gate.
+徽章是同一批会话的第二个前端：一条 BLE（或串口）链路、一块用来看询问的小屏，以及一条把语音变成消息的语音路径。它的主机半边在 `desktop/`（`link/`、`badge.go`，以及 `stt/` 里的 Swift 垫片——桌面自己的麦克风按钮也从它这里录；那个消费方的规则在 `docs/agents/desktop.md`）；它的设备半边是另一个仓库——`ai-passport`（本机：`~/repos/ai-passport`，ESP-IDF 在 `~/esp/esp-idf-v5.5.3`）——那个仓库自带自己的 `AGENTS.md`、自己的 skills 和自己的门禁。
 
-## Contents — read the section you need, not the file
+## 目录
 
-| Section | Read it when |
+| 章节 | 什么时候读 |
 | --- | --- |
-| **Badge Link over BLE** | you touch `desktop/link/`, the badge transport setting, or the Bluetooth Info.plist key — **or the link died and the badge screen stopped updating** |
-| **Badge Voice (speech → text)** | you touch `desktop/stt` or the voice path in `desktop/badge.go` — **or a transcription fails and you need to know why** |
-| **Mic capture (the shim's other half)** | you touch the RECORDING side of `desktop/stt` (`tachi_stt_record_start/stop`, i.e. the desktop's microphone button `desktop/voice.go`) — **especially when that button says 「没有听到内容」**: the capture traps are in the `Building desktop/stt` section below. Its own rules (events, the state machine, the smoke stand-in) are in `docs/agents/desktop.md` |
-| **Badge → the desktop window (its keys)** | you touch the `key` protocol message, the device's status-screen keys, or the host's `Key` mapping |
-| **Building `desktop/stt` (the Swift shim)** | you touch `shim.swift`, the shim fails to link, or a change to it does nothing — **the library is rebuilt by a build step, not by the compiler** |
-| **The Device Side** | you are about to change, build or flash the firmware — **or the host and the device disagree about the protocol** |
+| **BLE 徽章链路** | 你要动 `desktop/link/`、徽章的传输设置，或蓝牙那个 Info.plist 键——**或者链路断了、徽章屏幕不再更新** |
+| **徽章语音（语音 → 文本）** | 你要动 `desktop/stt` 或 `desktop/badge.go` 里的语音路径——**或者一次转写失败、你要知道为什么** |
+| **麦克风采集（垫片的另一半）** | 你要动 `desktop/stt` 的**录制**那半（`tachi_stt_record_start/stop`，也就是桌面自己的麦克风按钮 `desktop/voice.go`）——**尤其是那个按钮说「没有听到内容」时**：采集的陷阱在下面的「构建 `desktop/stt`」一节。它自己的规则（事件、状态机、冒烟替身）在 `docs/agents/desktop.md` |
+| **徽章 → 桌面窗口（它的按键）** | 你要动 `key` 这条协议消息、设备状态屏的按键，或主机侧的 `Key` 映射 |
+| **构建 `desktop/stt`（Swift 垫片）** | 你要动 `shim.swift`、垫片链接失败，或改了它却什么都没发生——**那个静态库是被一个构建步骤重编的，不是被编译器** |
+| **设备侧** | 你正要改、构建或刷写固件——**或者主机和设备对协议的说法不一致** |
 
-## Badge Link over BLE
+## BLE 徽章链路
 
-- **A connected-but-SILENT badge is the badge's own doing, and its serial log says which.** Two device-side
-  traps produce the exact symptom "the link is up, nothing arrives", both found only by capturing the badge's
-  console: (1) the badge must FRAME what it sends — `@@` + body + `\n` — or the host discards every line as
-  console noise, because GATT gives the sender message boundaries and the host a byte stream; (2) the badge
-  must not clear its `s_subscribed` flag on the CONNECT event, because on a bonded reconnect NimBLE announces
-  the NVS-restored subscription (`reason=RESTORE`) *before* that event, and the wipe mutes the badge for the
-  whole connection — its own guard log then reads `secured=1 subscribed=0`, every send is silently refused,
-  and the badge's "the host went quiet" rule tears the link down 30 seconds later. Take a capture of the badge
-  before theorising about which side is at fault (`main/badge_ble.c` in the ai-passport repo carries the
-  mechanisms).
-- **NOTHING tells the host the peer is gone, so the transport must ASK.** tinygo's darwin adapter keeps
-  `DidDisconnectPeripheral` to itself (it only feeds `Connect`'s own waiting channel), and `bleTransport.Read`
-  has no exit but `Close()` — so a peer-initiated disconnect (the badge's own "host went silent" rule firing, a
-  board reset, the radio going out of range) leaves `link.Server.Run` blocked forever: `badgeLoop` never Accepts
-  again, every later state push goes nowhere, and the badge screen freezes on its last frame with nothing
-  logged on either side. `Read` therefore polls `device.Connected()` (`bleLivenessEvery`) and returns
-  `errLinkGone` — that error's only job is to travel back through `Server.Run` to `badgeLoop`, which is what
-  makes a reconnect happen — and `Write` asks the same question FIRST, because a `without-response` write to a
-  gone peer polls for 10 seconds *per chunk* instead of failing. Do **not** re-implement this as a "no data for
-  N seconds" timeout: the badge's 10s `sync` is what makes silence readable, and that number belongs to the
-  firmware.
-- **A zero `bluetooth.Device` panics on EVERY method — `Disconnect` included.** A failed `Connect` returns a
-  zero Device *with a nil error*, so "did it connect" is the `Address == bluetooth.Address{}` check, not `err`;
-  disconnecting goes through the `disconnect()` helper for the same reason (`Close()` on a transport that never
-  got a device would otherwise take the app down). The unit test for the liveness watchdog is what caught this —
-  a fake `alive` is enough to exercise it, since that verdict is the one part of this layer that does not need
-  hardware.
-- **The desktop app logs through `pkg/logger`, never the std `log` package.** Std `log` writes to stderr, and an
-  app launched as a bundle has no reader there: those lines exist only in a terminal you may not have open. This
-  is what turned the first real "screen froze on its last frame" failure into a guess — `badge link: device
-  connected` / `device disconnected` / `waiting for device` are the only record of when the link came and went
-  (they land in `~/.tachi/logs/debug.log`), and they were going to stderr while it happened. `desktop/badge.go`
-  is migrated; the rest of `desktop/` still has ~13 std `log` call sites.
-- **`NSBluetoothAlwaysUsageDescription` is needed by anything that LINKS the package, and tccd judges the
-  RESPONSIBLE process — the threshold is far lower than "when you actually use Bluetooth".** `tinygo.org/x/bluetooth`'s
-  darwin adapter builds a `CBCentralManager` in a **package-level variable** (`adapter_darwin.go`'s `DefaultAdapter`),
-  so importing it is enough to touch CoreBluetooth — no call required. A responsible bundle without the key gets
-  `Refusing authorization request for service kTCCServiceBluetoothAlways … without NSBluetoothAlwaysUsageDescription
-  key` and `This app has crashed because it attempted to access privacy-sensitive data without a usage description`,
-  i.e. SIGABRT with no Go stack, arriving **asynchronously** (the CentralManager's callback thread), so it looks like
-  "the first test passed, the second one aborted". Both `build/darwin/Info.plist` and `Info.dev.plist` carry the key.
-  A `bin/tachi-desktop.app` built before that line will abort `go test ./desktop/...` launched from it, because the test
-  binary inherits tachi-desktop.app as its responsible process — rebuild the app and restart it before believing a desktop
-  test failure. Embedding an `__TEXT,__info_plist` section in the test binary does **not** help: tccd never looks at
-  the requesting process here (find the reason with
-  `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'`). The same mechanism is why
-  the smoke bundle is signed with the local certificate instead of ad-hoc: a fresh identity is a fresh app to
-  macOS, and it gets asked again on every run (see the smoke section in `docs/agents/desktop.md`).
-- **CoreBluetooth caps a `without-response` write at ~182 bytes and fails SILENTLY above it.** The cap is
-  `maximumWriteValueLength(for:.withoutResponse)`, which the library does not expose; `bleChunks` slices at
-  `bleWriteChunk` (180) and the badge reassembles at the newline. Short messages never reveal this — an 854-byte
-  state vanished whole while 131-byte ones looked perfectly healthy.
-- **`WriteWithoutResponse` on an authenticated characteristic is dropped with no error and no pairing prompt** — it
-  says nothing about whether the link is secure. `waitSecure` therefore forces the question with one **with-response**
-  write of a bare `\n` (the badge discards an empty line, so no protocol row is invented): that write blocks while
-  macOS runs pairing — the 6-digit code is on the badge screen, and it must be typed on the computer — and fails with
-  `Encryption is insufficient` while the link is still plaintext.
-- **macOS does not re-pair because the device forgot.** The badge stores one bond in NVS (`BLE_MAX_BONDS=1`); when its
-  key is gone but the Mac's row remains, the Mac encrypts with the stale key and drops the connection instead of
-  prompting — the device logs `断开 reason=531`. Only 系统设置 → 蓝牙 → Forget that device (or a fresh name/address)
-  gets past it; the device side is 长按上 twice on the status screen (`badge_ble_forget`), which also tells the user
-  the computer has to be dealt with separately. (长按确定 is not the forget gesture — it sends voice: **hold to talk**,
-  press starts the recording and release sends it, so the idle screen's footer rotates between the two hints.)
+- **一个连上了却一声不响的徽章是徽章自己干的，而它的串口日志会说清是哪一种。** 有两个设备侧的陷阱会产生一模一样的症状「链路是通的，什么都收不到」，两个都只有抓徽章的 Console 才能找到：(1) 徽章必须给它发出去的东西**成帧**——`@@` + 正文 + `\n`——否则主机会把每一行当控制台噪音丢掉，因为 GATT 给发方的是消息边界、给主机的却是字节流；(2) 徽章不能在 CONNECT 事件里清掉自己的 `s_subscribed` 标志，因为 bonded 重连时 NimBLE 会在那个事件*之前*宣告从 NVS 恢复的订阅（`reason=RESTORE`），这一清就让徽章整条连接都哑掉——它自己的守卫日志这时写着 `secured=1 subscribed=0`，每一次发送都被静默拒绝，而徽章的「主机没声音了」规则会在 30 秒后把链路断掉。在推理是哪一方的错之前，先抓一次徽章的日志（机制在 ai-passport仓库的 `main/badge_ble.c` 里）。
+- **没有任何东西会告诉主机对端没了，所以传输层必须自己问。** tinygo 的 darwin 适配器把 `DidDisconnectPeripheral` 自己留下了（它只喂给 `Connect` 自己那个等待通道），而 `bleTransport.Read` 除了 `Close()` 没有别的出口——于是对端发起的一次断开（徽章自己的「主机没声音了」规则触发、板子复位、无线电出范围）会让 `link.Server.Run` 永远阻塞在那里：`badgeLoop` 再也不 Accept，之后每一次状态推送都送不出去，徽章屏幕停在最后一帧，而两侧都没打一行日志。所以 `Read` 会轮询 `device.Connected()`（`bleLivenessEvery`）并返回 `errLinkGone`——那个错误唯一的职责就是沿着 `Server.Run` 传回 `badgeLoop`，重连正是靠它发生的——而 `Write` 会**先**问同一个问题，因为对一条已经没了的对端做 `without-response` 写会**每一片**轮询 10 秒，而不是直接失败。**不要**把它重新实现成一个「N 秒没有数据」的超时：让沉默变得可读的正是徽章那 10 秒一次的 `sync`，而那个数字属于固件。
+- **零值的 `bluetooth.Device` 在每一个方法上都会 panic —— `Disconnect` 也在内。** 失败的 `Connect` 返回的是零值 Device *加上一个 nil error*，所以「连上了没有」靠的是 `Address == bluetooth.Address{}` 这个判断，不是 `err`；断开之所以走 `disconnect()` 这个 helper 也是同一个道理（否则对一个从没拿到过 device 的传输调 `Close()` 会把整个 app 带下去）。盯这条存活性的单元测试就是抓住它的人——一个假的 `alive` 就够跑它，因为那个判断是这一层里唯一不需要硬件的那部分。
+- **桌面 app 走 `pkg/logger` 打日志，绝不用标准库那个 `log` 包。** 标准库的 `log` 写到 stderr，而一个以 bundle 方式起来的 app 在那里没有看客：那些行只存在于一个你未必打开的终端里。正是这一点把第一次真的「屏幕停在最后一帧」的失败变成了一次猜测——`badge link: device connected` / `device disconnected` /`waiting for device` 是链路何时来去的唯一记录（它们落在 `~/.tachi/logs/debug.log`），而在事情发生的那会儿它们正往 stderr 走。`desktop/badge.go` 已经迁过来了；`desktop/` 其余地方还有十几处标准库 `log` 调用点。
+- **凡是链接这个包的东西都需要 `NSBluetoothAlwaysUsageDescription`，而 tccd 判的是 RESPONSIBLE进程——这个门槛远比「你真的用蓝牙的时候」低。** `tinygo.org/x/bluetooth` 的 darwin 适配器在一个**包级变量**里就建了 `CBCentralManager`（`adapter_darwin.go` 的 `DefaultAdapter`），所以只要 import 它就已经碰了 CoreBluetooth——不需要任何调用。缺少那个键的 responsible bundle 会拿到 `Refusing authorization request for service kTCCServiceBluetoothAlways … without NSBluetoothAlwaysUsageDescription key` 和 `This app has crashed because it attempted to access privacy-sensitive data without a usage description`，即没有 Go 栈的 SIGABRT，而且是**异步**到达的（在 CentralManager 的回调线程上），所以看起来像「第一个测试通过了，第二个 abort 了」。`build/darwin/Info.plist` 和 `Info.dev.plist` 都带着这个键。在那行之前构建出来的 `bin/tachi-desktop.app` 会让从它里面启动的 `go test ./desktop/...` abort，因为那个测试二进制把 tachi-desktop.app 继承成了自己的 responsible process——在相信一次桌面测试失败之前，重建那个 app 并重启它。在测试二进制里嵌一个 `__TEXT,__info_plist` section **没有用**：这里的 tccd 从不看请求进程（用 `log show --last 5m --predicate 'eventMessage CONTAINS "kTCCServiceBluetoothAlways"'` 找原因）。同一个机制也正是冒烟 bundle 用本地证书签名而不是 ad-hoc 签名的原因：一个全新的身份对 macOS 就是一个全新的 app，它每次运行都会被再问一遍（见 `docs/agents/desktop.md` 的冒烟那节）。
+- **CoreBluetooth 把一次 `without-response` 写卡在约 182 字节，超过就静默失败。** 那个上限是 `maximumWriteValueLength(for:.withoutResponse)`，库没有把它暴露出来；`bleChunks` 按 `bleWriteChunk`（180）切片，徽章则在换行处重新拼起来。短消息永远暴露不出这件事——一条 854 字节的 state 整条消失，而 131 字节的那些看起来完全健康。
+- **对一个已认证特征做 `WriteWithoutResponse` 会被丢掉，既不报错也不弹配对框**——所以它说明不了链路安不安全。`waitSecure` 因此用一次**with-response** 的裸 `\n` 写来把这个问题逼出来（徽章会丢掉空行，所以不会凭空造出一行协议）：那次写会在 macOS 跑配对时一直阻塞——6 位码在徽章屏幕上，必须在电脑上敲进去——而链路还是明文时它会以 `Encryption is insufficient` 失败。
+- **macOS 不会因为设备忘了就重新配对。** 徽章在 NVS 里只存一个 bond（`BLE_MAX_BONDS=1`）；当它的密钥没了而 Mac 那边那行还在时，Mac 会用陈旧的密钥去加密并直接断开连接，而不是弹框——设备侧会记录 `断开 reason=531`。只有系统设置 → 蓝牙 → Forget that device（或者换一个全新的名字/地址）才能过去；设备侧是状态屏上长按上两次（`badge_ble_forget`），它也会告诉用户那台电脑得单独处理。（长按确定不是忘记手势——它发的是语音：**按住说话**，按下开始录、松开发送，所以空闲屏的底栏在这两条提示之间轮转。）
 
-## Badge Voice (speech → text)
+## 徽章语音（语音 → 文本）
 
-- **A failed transcription must say WHY, and `NULL` from the shim means only "it never ran".** `tachi_stt_transcribe`
-  returns NULL solely for the `#available` / bad-argument guards; every real failure comes back as JSON —
-  `{"error":"SFSpeechErrorDomain 4: No GeneralASR asset for language en","missing":[…],"installing":[…]}` — and
-  `ParseTranscription` turns the `error` field into a Go error while KEEPING `missing`/`installing` on the returned
-  `stt.Result`. `desktop/badge.go` needs them to choose the sentence the badge shows (`voiceFailureText`): 「缺离线
-  资产」is a machine state that heals itself, 「引擎坏了」is not, and collapsing both into one 「转写失败」makes them
-  indistinguishable from the log alone.
-- **`SpeechTranscriber` needs a per-language ASSET, macOS EVICTS it, and one missing language kills the other too.**
-  The asset is `com.apple.speech.asr.transcription.<lang>` under
-  `/System/Library/AssetsV2/com_apple_MobileAsset_UAF_Speech_AutomaticSpeechRecognition/purpose_auto/`; it is
-  downloaded on demand and dropped again once nothing uses it, so "installed once, stays forever" is false. With one
-  missing, the analyzer's input loop dies — `SFSpeechErrorDomain Code=4`, "No GeneralASR asset for language <lang>"
-  — and because the shim puts zh-CN and en-US in ONE analyzer, the other language's result dies with it. Two
-  mechanisms answer that: `shim.swift`'s `transcribe` retries the modules ONE AT A TIME when the pair fails (so the
-  usable language's text still gets delivered), and `installNeeded` asks `AssetInventory.assetInstallationRequest`
-  for what is missing and calls `downloadAndInstall()` in the background (never inline — that is a 100 MB+ download
-  on the "hold to talk" path). Two traps: `SpeechTranscriber.installedLocales` lists `en_US` even when its asset is
-  gone, and `AssetInventory.status(forModules:)` answers `.supported` for a language with no asset at all — neither
-  is the "can I use it" predicate, so do not add a pre-flight check built on them.
-  **When a transcription fails**: the app log carries the message we compose, and the framework's own line (plus the
-  asset downloads) is in the unified log —
-  `log show --last 30m --predicate 'process == "Tachi"' --info --debug | grep -i speech`.
-- **The badge screen gets a result either way.** `link.Server.VoiceText` carries a transcript, `VoiceError` a failure —
-  same `emit` path (own seq) because the transcription runs on its own goroutine, not the link's. The firmware renders
-  an `error`'s `message` as a 5-second notice and ignores its `id` (one recording at a time), so the host only has to
-  fit `BADGE_DETAIL_MAX` (96 bytes) — which is why `voiceFailureText` composes whole Chinese sentences rather than
-  passing the framework's English text through.
-- **`voice: chunk count mismatch` in the host log means an upload STARTED and then came apart, not a broken
-  link.** The firmware already discards a hold shorter than `BADGE_VOICE_MIN_MS` (400 ms) *before* `voice_begin`
-  goes out, so the two presses of a double-press never reach the wire; a line in the host log therefore means the
-  upload really did start (a real hold) and then lost chunks — `link/voice.go`'s parts check voids it and logs
-  the discard. Nothing to fix on the host side; look at the link (BLE retries, a serial port contention) if it
-  becomes frequent.
+- **一次失败的转写必须说清为什么，而垫片返回的 `NULL` 只有一个意思：「它压根没跑」。**`tachi_stt_transcribe` 只会在 `#available` / 参数不合法这两道守卫上返回 NULL；每一次真正的失败都是以 JSON 回来的——`{"error":"SFSpeechErrorDomain 4: No GeneralASR asset for language en","missing":[…],"installing":[…]}`——而 `ParseTranscription` 把 `error` 字段变成一个 Go error，同时把 `missing`/`installing` **留在**返回的 `stt.Result` 上。`desktop/badge.go` 需要它们来挑徽章屏幕上显示哪句话（`voiceFailureText`）：「缺离线资产」是一个会自己好的机器状态，「引擎坏了」不是，而把两者塌成一句「转写失败」会让它们光看日志分不出来。
+- **`SpeechTranscriber` 需要一份按语言分的离线资产，macOS 会把它清掉，而少一门语言会把另一门也一起带走。** 那份资产是 `/System/Library/AssetsV2/com_apple_MobileAsset_UAF_Speech_AutomaticSpeechRecognition/purpose_auto/` 下的 `com.apple.speech.asr.transcription.<lang>`；它按需下载，一旦没有使用者又会被丢掉，所以「装过一次就永远在」是假的。少一份时，analyzer 的输入循环会死——`SFSpeechErrorDomain Code=4`，「No GeneralASR asset for language <lang>」——而因为垫片把 zh-CN 和 en-US 放进**同一个** analyzer，另一门语言的结果也跟着死。有两个机制对付它：`shim.swift` 的 `transcribe` 在这对模块失败时**逐门**重试（于是还能用的那门语言的文本仍然交得出去），而 `installNeeded` 用 `AssetInventory.assetInstallationRequest` 问系统缺什么，并在后台调 `downloadAndInstall()`（**绝不**内联——那是一次 100 MB 以上的下载，压在「按住说话」那条路上）。两个陷阱：`SpeechTranscriber.installedLocales` 在 `en_US` 的资产已经没了时仍然列出它，而 `AssetInventory.status(forModules:)` 对一门根本没有资产的语言会答 `.supported`——两者都不是「我能不能用它」的判据，所以不要拿它们做预检。**当一次转写失败时**：app 日志里有我们拼出来的那条消息，而框架自己那行（加上资产下载的记录）在统一日志里——`log show --last 30m --predicate 'process == "Tachi"' --info --debug | grep -i speech`。
+- **徽章屏幕两条路都会拿到一个结果。** `link.Server.VoiceText` 带的是一段转写文本，`VoiceError` 带的是一次失败——同一条 `emit` 路径（自己算 seq），因为转写跑在它自己的 goroutine 上，不在链路那条上。固件把 `error` 的 `message` 渲染成一条 5 秒的提示，并忽略它的 `id`（一次只录一段），所以主机只需要塞得进 `BADGE_DETAIL_MAX`（96 字节）——这就是 `voiceFailureText` 拼整句中文、而不是把框架那句英文原样透传的原因。
+- **主机日志里的 `voice: chunk count mismatch` 意味着一次上传开始了而后散了架，不是链路坏了。** 固件在 `voice_begin` 发出去*之前*就已经丢掉了短于 `BADGE_VOICE_MIN_MS`（400 ms）的按住，所以双击确定的那两下永远到不了线上；因此主机日志里出现这一行意味着那次上传真的开始了（一次真的按住），然后丢了片——`link/voice.go` 的片数核对把它作废并记下这次丢弃。主机侧没什么要修的；如果它变得频繁，去看链路（BLE重试、串口争用）。
 
-## Badge → the desktop window (its keys)
+## 徽章 → 桌面窗口（它的按键）
 
-The badge drives the desktop WINDOW: the short up/down press turns the conversation half a page (the same
-action as Ctrl+U/Ctrl+D inside it) and a double press on 确定 flips the window between front and back — the
-first press answers "what did it just say" (the words are only in the window), the second one puts the app
-away so whatever was on screen before (usually a video) comes back. The device knows NOTHING about the
-window — it reports gestures and the host decides what they mean (`desktop/remote.go`; the device side is
-`main.c`'s key routing, and its footer hint still reads 「双击确定：切到电脑」).
+徽章驱动的是桌面**窗口**：上/下短按把会话翻半页（与窗口里的 Ctrl+U/Ctrl+D 是同一个动作），在确定上双击则把窗口在前台与后台之间翻一下——第一下回答的是「它刚才说了什么」（那些字只在窗口里），第二下把 app 收起来，让之前屏幕上的东西（通常是视频）回来。设备对窗口**一无所知**——它报的是手势，由主机决定那意味着什么（`desktop/remote.go`；设备侧是 `main.c` 里的按键路由，它的底栏提示仍然写着「双击确定：切到电脑」）。
 
-- **One protocol message carries the whole feature, and it is why `Proto` is 3** (the removed `hud` state is
-  what made it a breaking change): device → host `{"t":"key","key":"up|down|activate"}` (`link.Source.Key`),
-  mapped in `desktop/remote.go`'s `Key`. up/down emit `chat:scroll` at the main window and the FRONTEND does
-  the scrolling — `App.tsx`'s `scrollByHalfPage`, which Ctrl+U/Ctrl+D call as well, so 「翻页」 cannot mean
-  two things depending on where the finger is (how far a page is, and where the reader is, are DOM facts).
-  `activate` is a TOGGLE between front and back. The front test is `window.IsFocused()` (is the window key),
-  picked because its failure direction is safe: a key window implies an active app, so a wrong "no" costs one
-  redundant `Show()`/`Focus()`, while a wrong "yes" would hide what the user is looking at. Forward is
-  `App.Show()` + `Show()` + `Focus()` (the first is `[NSApp unhide:]`: hidden windows back, and activate);
-  back is `App.Hide()` (`[NSApp hide:]`, i.e. ⌘H: it hands the front to the previous app, usually the video
-  the user was watching). **The hidden state is nobody else's business**: `windowFocus` activates whenever
-  the app is not active, and activating a hidden app unhides it, so the tray's 「打开主窗口」 / a clicked
-  notification / a Dock click recover it unchanged. **`App.Hide`/`App.Show` are the two calls Wails does NOT
-  dispatch to the main thread itself, and this path runs on the link's goroutine** — they are therefore
-  wrapped in `application.InvokeSync` in `remote.go`.
-- **The version is checked in TWO places and nothing checks them against each other**: `link.Proto`
-  (host) and `BADGE_PROTO_VERSION` (`main/badge_proto.h`, written into `hello`) must move together. Bumping
-  one alone is silent on the host side (the mismatch is answered to the DEVICE as an `error` message and
-  never logged here) and shows on the badge as a 5-second notice — so the symptom is 「badge 连上了但什么
-  都不动」. Both were 1 while `info` was still in the protocol; changing only the host while flashing a
-  device is exactly how the two ends get out of step mid-upgrade, and the fix is the same on both sides.
-- **The device reports those gestures on the STATUS screen only** (no pending ask): on the ask screen the
-  same keys are the ANSWER (up/down move the cursor, 确定 submits — `badge_state_key`), and a window being
-  open on the computer is no reason to change what a key means while someone is waiting for an answer.
-- **A tap is not a recording, which is what lets one button mean two things** — and that rule is the firmware's
-  OWN, older one (`badge_voice.h`'s `BADGE_VOICE_MIN_MS`, 400 ms: a shorter hold never even sends `voice_begin`).
-  So press-and-hold still talks, while the two taps of a double press are free to be a key (the window toggle);
-  nothing stray goes on the wire for either.
+- **整个特性由一条协议消息承载，这也是 `Proto` 是 3 的原因**（删掉的 `hud` 状态把它变成了一次破坏性变更）：设备 → 主机 `{"t":"key","key":"up|down|activate"}`（`link.Source.Key`），在 `desktop/remote.go` 的 `Key` 里映射。up/down 在主窗口上发 `chat:scroll`，滚动是**前端**做的——`App.tsx` 的 `scrollByHalfPage`，Ctrl+U/Ctrl+D 调的也是它，所以「翻页」不会因为手指按在哪儿而有两个意思（一页有多远、读者现在在哪，都是 DOM 里的事实）。`activate` 是前台与后台之间的一个 **toggle**。判断「现在在前台吗」用的是 `window.IsFocused()`（这个窗口是不是 key window），选它是因为它错的方向是安全的：一个 key window 意味着应用是活动的，所以一次错的「否」只多花一次 `Show()`/`Focus()`，而一次错的「是」会把用户正在看的东西藏起来。往前是 `App.Show()` + `Show()` + `Focus()`（第一个是 `[NSApp unhide:]`：把藏起来的窗口放回来，并激活）；往后是 `App.Hide()`（`[NSApp hide:]`，即 ⌘H：它把前台交给上一个 app，通常正是用户在看的那个视频）。**隐藏这个状态不关别人的事**：托盘的「打开主窗口」与二次启动都走 `revealWindow`，被点开的通知走它自己那条路，两边用的都是上面那句 `App.Show()`——藏起来的窗口总被原样找回来。**`App.Hide`/`App.Show` 是 Wails 自己不往主线程派发的两个调用，而这条路径跑在链路自己的 goroutine 上**——所以它们在 `remote.go` 里被 `application.InvokeSync` 包了起来。
+- **版本号在两个地方各自校，而没有任何东西拿它们互相对过**：`link.Proto`（主机）和 `BADGE_PROTO_VERSION`（`main/badge_proto.h`，写进 `hello`）必须一起动。只动一个在主机侧是静默的（不匹配会以一条 `error` 消息回给**设备**，这边从不记日志），在徽章上表现为一条 5 秒的提示——所以症状是「badge 连上了但什么都不动」。`info` 还在协议里的时候两个都是 1；只改主机却去刷一台设备，正是两端在升级过程中走岔的方式，而两边的修法是一样的。
+- **设备只在状态屏上上报这些手势**（没有等着回答的询问）：在询问屏上，同样的按键就是**回答**（上/下移光标，确定提交——`badge_state_key`），而电脑上开着一个窗口，不是「有人正等着答案时改变一个键的含义」的理由。
+- **一次轻按不是一次录音，一个按键能有两个意思正是靠这条**——而这条规则是固件自己的、更早的那条（`badge_voice.h` 的 `BADGE_VOICE_MIN_MS`，400 ms：更短的按住连 `voice_begin` 都不发）。所以按住仍然在说话，而双击那两下轻按可以自由地当一个键（窗口 toggle）；两者都不会有多余的东西上到线上。
 
-## Building `desktop/stt` (the Swift shim)
+## 构建 `desktop/stt`（Swift 垫片）
 
-- **The package has TWO halves that answer to two different permissions, and the shim carries both.**
-  Transcription (`tachi_stt_transcribe`) needs the speech-recognition grant; capture
-  (`tachi_stt_record_start/stop`) needs the MICROPHONE one, `NSMicrophoneUsageDescription` — a second plist
-  key, in both `build/darwin/Info.plist` and `Info.dev.plist`, whose absence kills the app the moment the mic
-  is opened (the Bluetooth trap above, same class). **A HARDENED-RUNTIME build needs an ENTITLEMENT on top of the
-  key**, and neither the plists nor `build/darwin/Taskfile.yml` carries one today — so the locally signed
-  `make build` works while a notarized one (`wails3 tool sign --notarize`, whose default is
-  `-hardened-runtime`) would fail to open the mic (and to use Bluetooth) until
-  `com.apple.security.device.audio-input` / `com.apple.security.device.bluetooth` are signed in. Both callers of
-  `Transcribe` feed it the same shape — 16 kHz
-  mono Int16 — the device half by DECODING the uplink's ADPCM (`desktop/badge.go`), this half by resampling the
-  hardware's own buffers in the shim; that sameness is what lets the two consumers share every judgement above
-  it (`Choose`, the missing-asset degradation, the failure sentences). Capture is deliberately NOT gated on
-  macOS 26 (`AVCaptureSession` is far older) — the version gate belongs to transcribe, i.e. to `Available()`.
-- **Mic capture is `AVCaptureSession`, and that is a Bluetooth fact, not a preference — switching it back to
-  `AVAudioEngine` fails SILENTLY and only intermittently.** `AVAudioEngine`'s IO cycle takes its sample rate from
-  the OUTPUT device, while one headset can be 44.1 kHz out and 16 kHz in — so `inputNode.outputFormat` reports a
-  rate the input hardware does not have. Reading the format and installing the tap with it freezes that rate
-  *before* the headset leaves A2DP (idle: no usable input at all) for HFP, and that switch happens only during
-  `start()`: it returns without error, `isRunning` flips false, and the tap is **never called** — zero samples,
-  which the user sees as 「没有听到内容」. `AVCaptureSession.startRunning` instead WAITS for the
-  profile switch (measured ~57 ms) and every buffer carries its own format, so the shim resamples per buffer
-  (`RecordSink`) instead of committing up front. What makes this hard to catch by hand: it works whenever some
-  other app has already pulled the headset into HFP, so the same build is broken, then fine, with nothing
-  changed — the device's state is system-wide, not per-process. The one line that separates the two causes is
-  `desktop voice: transcribed`: a captured-but-empty take still logs it (`chars=0`), a take with no samples does
-  not. Also, the delegate is held WEAKLY by `setSampleBufferDelegate` — lose the strong `recordSink` reference
-  and the callbacks stop silently, with exactly the same symptom.
-- **`desktop/stt` is half Swift, and the Swift half is a BUILD STEP** (`stt/build_shim.sh` →
-  `stt/libtachi_stt.a`, NOT committed — `desktop/Makefile`'s `build`/`test` targets run it, and
-  `//go:generate ./build_shim.sh` is the source-level pointer to it). The reason it cannot follow the
-  repo's usual cgo pattern: macOS 26's transcriber API (`SpeechAnalyzer` / `SpeechTranscriber` /
-  `AssetInventory`) exists ONLY in Swift's module interface — the ObjC headers carry nothing but the old
-  `SFSpeechRecognizer` — so `webview_awake_darwin.go`'s inline-ObjC approach cannot express it. Three
-  consequences that are easy to get wrong:
-  - **Compile the shim for the app's deployment target (12.0), not for 26.0.** `swiftc -target …-macosx26.0`
-    makes the whole binary require 26.0 symbols, so the app stops LAUNCHING on macOS 15 rather than merely
-    losing the feature. At 12.0 the 26-only symbols come out weakly linked (`nm -m` shows `weak external`)
-    and every use is behind `#available(macOS 26.0, *)` — `stt.Available()` then answers false instead.
-  - **A missing `libtachi_stt.a` fails the whole PACKAGE build**, not one test, and cgo buries the cause
-    (`clang: error: no such file or directory: '…/libtachi_stt.a'`) at the end of a very long command line —
-    which is why the Makefile targets carry the step rather than a comment telling you to remember it.
-  - **The Go build cache does NOT see `libtachi_stt.a` change, so a rebuilt shim can be silently left out —
-    the build succeeds and the app runs the shim from before it.** cgo names the library only inside the LDFLAGS string
-    (a constant `-L` path), so its contents are not part of the build action's ID: rewrite `shim.swift`, rebuild
-    the `.a`, run `make build` — and if those exact build flags ran before the change, the previous LINK result
-    is reused. Zero warnings, and it looks exactly like "my fix does not work". **Ask the binary, not the build
-    log**: `nm -u bin/tachi-desktop | grep AVCapture` (an ObjC class reference is an undefined symbol, so it survives
-    `-ldflags="-w -s"`; `strings` does NOT show it). Pick a symbol that only the change under test could have
-    introduced — `AVCaptureSession` for the capture rewrite, while `AVCaptureDevice` proves nothing (the old
-    code referenced it too). The cure is `cd desktop && GOWORK=off go clean -cache`, then `make build`; a new
-    `go run ./something` package is built fresh and will therefore look fine while the app does not, which is
-    the trap's most misleading face.
-  - **The static library ALONE does not link, and it does not RUN either: a rpath is needed once
-    the shim uses Swift concurrency.** The link half: the Swift back-deployment libraries its
-    auto-link directives name live in the TOOLCHAIN, not the SDK — `stt/build_shim.sh` derives that
-    directory from `xcrun --find swiftc` and symlinks the libraries into `stt/`, and `stt_darwin.go`'s
-    LDFLAGS carry `-L${SRCDIR}`. The run half: `libswift_Concurrency.dylib` is found through
-    `@rpath`, which an app bundle has and a Go test binary does not — without
-    `-Wl,-rpath,/usr/lib/swift` the test binary aborts with
-    `Library not loaded: @rpath/libswift_Concurrency.dylib`, while the app itself is fine.
-  - **Do not conclude anything from `go test ./stt/ ./link/`.** An app-level regression that only
-    shows up when the whole binary is linked and RUN (the rpath above is exactly one) is invisible
-    to per-package tests. After touching `desktop/`, run `cd desktop && make test` — it builds the
-    shim first and then does `go test ./...`, which is the only command that links the real thing.
-    ⚠ **`go build ./stt` catches NONE of the above**: a library package compiles without linking, so a
-    broken stt link only surfaces in `go test` or in a build of the app.
+- **这个包有两半，各应答一个不同的权限，而垫片两半都扛着。** 转写（`tachi_stt_transcribe`）需要语音识别那项授权；采集（`tachi_stt_record_start/stop`）需要**麦克风**那项，`NSMicrophoneUsageDescription`——第二个 plist 键，`build/darwin/Info.plist` 和 `Info.dev.plist` 里都要有，少了它麦克风一被打开 app 就死（就是上面那个蓝牙陷阱，同一类）。**一个 hardened-runtime 构建在那个键之上还需要一条 entitlement**，而今天两条 plist 和 `build/darwin/Taskfile.yml` 都没有带——所以本地签名的 `make build` 能用，而一个公证过的（`wails3 tool sign --notarize`，它的默认值是 `-hardened-runtime`）在签进 `com.apple.security.device.audio-input` / `com.apple.security.device.bluetooth` 之前，会打不开麦克风（也用不了蓝牙）。`Transcribe` 的两个调用方喂给它的形状是同一个——16 kHz 单声道 Int16——设备那半是靠**解码**上行里的 ADPCM（`desktop/badge.go`），这半是在垫片里对硬件自己的 buffer 重采样；正是这份相同，让两个消费方能共用它上面所有的判断（`Choose`、缺资产的降级、那几句话）。采集是**刻意**不设 macOS 26 门禁的（`AVCaptureSession` 老得多）——版本门禁属于 transcribe，也就是属于 `Available()`。
+- **麦克风采集用 `AVCaptureSession`，那是一个蓝牙事实而不是偏好——换回 `AVAudioEngine` 会静默失败，而且只间歇性发生。** `AVAudioEngine` 的 IO 周期采样率取自**输出**设备，而一副耳机可能输出 44.1 kHz、输入 16 kHz——于是 `inputNode.outputFormat` 报的是一个输入硬件上并不存在的采样率。读那个格式并拿它装 tap，就把这个采样率在耳机离开 A2DP（空闲时：完全没有可用的输入）切到 HFP *之前*定死了，而那次切换只在 `start()` 期间发生：它不带错误地返回，`isRunning` 翻成 false，tap **一次都不会被调用**——零个采样，用户看到的就是「没有听到内容」。`AVCaptureSession.startRunning` 反过来会**等**这次 profile 切换（实测约57 ms），而且每一块 buffer 都自带自己的格式，所以垫片是**逐块**重采样（`RecordSink`），而不是提前定死。让这件事手工很难抓到的是：只要别的 app 已经把耳机拉进 HFP，同一份构建就是好的——什么都没改，坏一次、好一次——设备的状态是系统级的，不是按进程分的。把两种原因分开的就是那一行 `desktop voice: transcribed`：采到了但为空的这一条仍会打它（`chars=0`），一个采样都没有的那条不会。另外，`setSampleBufferDelegate` 是**弱**持有 delegate 的——丢掉那个强引用 `recordSink`，回调就会静默停下，症状一模一样。
+- **`desktop/stt` 有一半是 Swift，而那一半是一个构建步骤**（`stt/build_shim.sh` → `stt/libtachi_stt.a`，**不入库**——`desktop/Makefile` 的 `build`/`test` 目标会跑它，而 `//go:generate ./build_shim.sh` 是源码层面对它的指引）。它不能走仓库里寻常那套 cgo 写法的原因：macOS 26 的转写 API（`SpeechAnalyzer` /`SpeechTranscriber` / `AssetInventory`）**只**存在于 Swift 的模块接口里——ObjC 头文件里只有老的 `SFSpeechRecognizer`——所以 `webview_awake_darwin.go` 那种内联 ObjC 的写法表达不了它。五条容易弄错的后果：
+  - **垫片要按 app 的部署目标（12.0）编译，不是按 26.0。** `swiftc -target …-macosx26.0` 会让整个二进制都要求 26.0 的符号，于是 app 在 macOS 15 上会连**启动**都不行，而不只是丢掉这个功能。按 12.0 编，26-only的符号是弱链接进来的（`nm -m` 会显示 `weak external`），每一次使用都在 `#available(macOS 26.0, *)` 后面——这时 `stt.Available()` 会改为答 false。
+  - **缺一个 `libtachi_stt.a` 会让整个包编译不过**，不是一个测试失败，而 cgo 会把原因埋在一长串命令行的末尾（`clang: error: no such file or directory: '…/libtachi_stt.a'`）——这就是 Makefile 的目标自己带着这一步、而不是留一句注释让你记着的原因。
+  - **Go 构建缓存看不见 `libtachi_stt.a` 的变化，所以重编过的垫片可能被悄悄落下——构建成功，而 app 跑的还是改之前那个垫片。** cgo 只在 LDFLAGS 那个字符串里写了这个库（一个常量 `-L` 路径），所以它的内容不属于构建动作 ID 的一部分：改写 `shim.swift`、重编 `.a`、跑 `make build`——如果正是那套构建 flag 在这次改动之前跑过，上一次的**链接**结果就被复用了。零告警，而且看起来跟「我的修复不起作用」一模一样。**问二进制，别问构建日志**：`nm -u bin/tachi-desktop | grep AVCapture`（一个 ObjC 类引用是一个未定义符号，所以它能活过 `-ldflags="-w -s"`；`strings` 不显示它）。挑一个只有被测那项改动才可能引入的符号——采集重写就挑 `AVCaptureSession`，而 `AVCaptureDevice` 什么也证明不了（老代码也引用过它）。解法是 `cd desktop && GOWORK=off go clean -cache`，然后 `make build`；一个新写的 `go run ./something` 包是全新构建的，所以它会显得没问题，而 app 不是——这是这个陷阱最容易骗人的一面。
+  - **那个静态库单靠它自己链不上，也跑不起来：垫片一用 Swift 并发就需要一条 rpath。** 链接那半：它那些 auto-link 指令点名的 Swift back-deployment 库住在**toolchain** 里、不在 SDK 里——`stt/build_shim.sh` 从 `xcrun --find swiftc` 推出那个目录，把这些库软链接到 `stt/` 里，而 `stt_darwin.go` 的 LDFLAGS 带着 `-L${SRCDIR}`。运行那半：`libswift_Concurrency.dylib` 是通过 `@rpath` 找的，而 app bundle 有这条搜索路径、Go 测试二进制没有——没有 `-Wl,-rpath,/usr/lib/swift`，测试二进制会以 `Library not loaded: @rpath/libswift_Concurrency.dylib` abort，而 app 自己是好的。
+  - **不要从 `go test ./stt/ ./link/` 得出任何结论。** 一个只有把整个二进制链起来**跑**才会现身的 app 级回归（上面那条 rpath 正好就是一条）对按包跑的测试是隐形的。动过 `desktop/` 之后，跑 `cd desktop && make test`——它先建垫片，然后跑 `go test ./...`，那是唯一会链接真东西的命令。⚠ **`go build ./stt` 对上面这些一条都抓不到**：一个库包只编译不链接，所以一个坏掉的 stt 链接只会在 `go test` 里、或者在构建 app 时露出来。
 
-## The Device Side
+## 设备侧
 
-- **The firmware has its own repository, its own rules and its own gate — nothing on the host side covers it.**
-  `~/repos/ai-passport` is an ESP-IDF 5.5.3 project (`~/esp/esp-idf-v5.5.3`): read its `AGENTS.md` before changing
-  anything there (it routes to its own guides, requires its own skills, and mandates `./tools/validate.sh` — the
-  `--firmware` half needs that IDF activated). The host's `make lint` / `go test` say NOTHING about it.
-- **A dev flash must PRESERVE NVS, and the merged image does not.** Firmware and stored data are different things:
-  writing `FoloToy-AI-Passport-full.bin` from `0x0` (what `idf.py flash` would do with a merged image) can reset the
-  NVS and PHY regions — that is the badge's BLE bond, i.e. the pairing the Mac's row must match (see the re-pair trap
-  above). For a normal iteration write the three segments at their configured offsets instead
-  (`0x0` bootloader / `0x8000` partition table / `0x10000` app), which leaves NVS at `0x9000` alone; the boot log then
-  shows `订阅: notify=1（从 NVS 恢复）` and `加密后：安全状态变为 已认证加密`, which is the proof the bond survived.
-  `idf.py erase-flash` is a separate, destructive choice — never a default repair.
-- **The badge's serial console is the only device log, and the host shares that port.** `idf.py monitor` and the
-  host's serial transport contend for the same device (see the `TACHI_BADGE` note in `docs/agents/desktop.md`), and a
-  capture is the fastest way to tell a device-side trap from a host-side one. The host's own `@@` protocol lines
-  appear in that same capture.
-- **Where the rest of the badge lives.** The device is also a SECOND READER of the desktop's pending-ask table (never
-  a second answer path) — that property, and the `badge` config block / `TACHI_BADGE` override / session-order rules
-  it comes with, are in `docs/agents/desktop.md` (Desktop Backend).
+- **固件有它自己的仓库、自己的规则和自己的门禁——主机侧没有任何东西覆盖它。** `~/repos/ai-passport` 是一个 ESP-IDF 5.5.3 工程（`~/esp/esp-idf-v5.5.3`）：在那里改任何东西之前先读它的 `AGENTS.md`（它把人引向它自己的指南、要求它自己的 skills，并强制跑 `./tools/validate.sh`——`--firmware` 那一半需要先激活那个 IDF）。主机的 `make lint` / `go test` 对它**什么**都说明不了。
+- **一次开发刷写必须保住 NVS，而合并镜像做不到这一点。** 固件和存下来的数据是两回事：把 `FoloToy-AI-Passport-full.bin` 从 `0x0` 写下去（也就是 `idf.py flash` 对合并镜像会做的事）会把 NVS 和 PHY区重置掉——那就是徽章的 BLE bond，也就是 Mac 那边那行必须对得上的配对（见上面那个重新配对的陷阱）。正常迭代就按配置的偏移写这三个段（`0x0` bootloader / `0x8000` 分区表 / `0x10000` app），这样就把 `0x9000` 的 NVS 留着不动；启动日志随后会显示 `订阅: notify=1（从 NVS 恢复）` 和 `加密后：安全状态变为 已认证加密`，这就是 bond 活下来的证据。`idf.py erase-flash` 是另一个、破坏性的选择——永远不是一个默认的修复手段。
+- **徽章的串口控制台是唯一的设备日志，而主机也占着那个口。** `idf.py monitor` 和主机的串口传输争同一个设备（见 `docs/agents/desktop.md` 里那条 `TACHI_BADGE` 说明），而一次抓取是把设备侧陷阱和主机侧陷阱分开的最快办法。主机自己的 `@@` 协议行也出现在同一份抓取里。
+- **徽章其余部分住在哪。** 设备还是桌面那张待答表（pending-ask）的第二个**读者**（绝不是第二条回答路径）——这条性质，以及它带来的 `badge` 配置块 / `TACHI_BADGE` 覆盖 / 会话排序规则，都在 `docs/agents/desktop.md`（桌面后端）里。

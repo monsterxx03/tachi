@@ -1,87 +1,23 @@
-# Tachi — Session Store Handbook (split out of `.tachi.md`)
+# Tachi —— 会话存储手册
 
-Read this **before touching `session/store.go`, anything that reads the session list, or any path that writes
-`meta.json`** — every frontend's session list, the desktop sidebar, `--resume`, and the sidecar files a turn
-keeps beside a session all go through this one store.
+每一个读会话列表、写 `meta.json`、删会话的路径都经过这一份存储：每个前端的会话列表、桌面侧栏、`--resume`，以及一轮留在会话旁的附属文件。权威是 `session/store.go` 与 `session/retention.go`。
 
-`.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions that
-apply anywhere in the repo and points here for the rest. **New session-store lessons belong in THIS file, not
-back in `.tachi.md`** — and the rules that ride with that file (freshness in the same turn,
-convention-not-history, split + index when a subject grows) apply to this split too.
+## 列表是记忆化的
 
-## The list is memoized
+- **`ListSessions` 用一次目录遍历回答所有调用者；`LoadMeta` 则必须保持不记忆化。** 一次 UI 刷新会在同一口气里反复要「全部会话」——桌面侧栏先要它那几行，再要每个项目的成员数，然后要某个项目的成员，是三次独立调用——所以 `ListSessions` 拿一份快照把三次都答了（没命中就付一次遍历，几乎全是 open/read/close）。快照会被这个存储的每一次写入丢掉（`CreateSession` / `UpdateMeta` / `DeleteSession`，都在写入**之后**才丢），也会在基目录的 mtime 变动时丢掉——后者覆盖的正是**另一个**进程创建或删掉的会话。
+- **`LoadMeta` 绝不能记忆化**：它喂的是活记录，以及元数据「读-改-写」里读的那一半（`desktop/roots.go` 的 `updateSessionMeta` 会重写整份 `meta.json`），在那里读到一份旧的，就是丢掉一次写。`session/store.go` 的 `FileStore` 注释载着完整契约，包括它自己承认的那一个洞。
 
-- **`ListSessions` serves one directory walk to every caller; `LoadMeta` must stay un-memoized.** One UI
-  refresh needs "all sessions" several times over — the desktop's sidebar asks for its rows, then each
-  project's member count, then one project's members, as three separate calls — so `ListSessions` answers all
-  of them from one snapshot (a miss costs one walk: ~49ms per 1000 sessions, essentially all of it
-  open/read/close). The snapshot is dropped by every write the store makes (`CreateSession` / `UpdateMeta` /
-  `DeleteSession`, called AFTER the write) and by the base directory's mtime moving, which is what covers a
-  session created or deleted by ANOTHER process.
-- **`LoadMeta` must not be memoized**: it feeds the live record and the read half of a metadata
-  read-modify-write (`desktop/roots.go`'s `updateSessionMeta` rewrites the whole `meta.json`), where a stale
-  read becomes a lost write. `session/store.go`'s `FileStore` comment carries the full contract, including the
-  one hole it has.
+## 写入
 
-## Writes
+- **`meta.json` 是原子写的（tmp + rename）。** 保持这样：就地重写会让并发的读者——`--resume` 新开的存储、桌面侧栏、另一个进程——读到截断的文件，而 `scanSessions` 只能跳过解析不了的东西，于是一轮活着的回合会把自己的会话从别人的列表里悄悄丢掉。`session/store_test.go` 的 `TestListSessionsNeverMissesASessionBeingRewritten` 钉住它（对着 `os.WriteFile`，几百轮之内就会失败）。
+- **桌面把每个 manager 都建在同一个 store 上**（`d.sessionStore()`）：一轮通过它自己那个按轮的 manager 写入，而只有共享同一个 store，那次写入才能丢掉侧栏下一次读取本会被喂的那份快照。自己 new 一个 manager 就是那个错——它内部会另建一个 `NewFileStore`，拿不到 `d.sessionStore()` 那份快照（`desktop/` 下正确的写法是 `session.NewManagerWithStore(d.sessionStore(), nil)`）；[desktop.md](desktop.md)（桌面后端）有理由。
+- **图片字节在 `AppendMessage` 里离开记录，这也是它们安全的原因。** 多模态消息的 parts 落在记录上（`Message.Parts`），字节不在：`AppendMessage`——会话记录**唯一**的写入者——把每张图片搬进该会话的 `images/` 目录，作为内容寻址的 blob（解码后字节的 SHA-256，所以同一张图发两次只花一个文件），只留下引用。两条规则由此成立：别的东西不许写会话记录（subagent 和一次性记录器有自己的文件，它们调用 `DropUnstoredImageParts`——一条它们解析不了的引用，比没有这个 part 更糟），以及磁盘上的记录永不携带 base64——这正是让一个满是截图的会话，仍是 `LoadMessages` 扫描缓冲区里可读 JSONL 的原因。读的那一半是 `LoadImage`，经 manager 以 `agent.ImageResolver` 抵达；blob 没了只让那一个 part 降级，绝不让转换失败（[prompt-cache.md](prompt-cache.md) 讲了为什么重建必须逐字节一致）。
 
-- **`meta.json` is written ATOMICALLY (tmp + rename).** Keep it that way: an in-place rewrite lets a
-  concurrent reader — a fresh store under `--resume`, the desktop's sidebar, another process — read a
-  truncated file, and `scanSessions` can only skip what does not parse, so a live turn would silently drop its
-  own session from someone else's list. `session/store_test.go`'s
-  `TestListSessionsNeverMissesASessionBeingRewritten` pins it (against `os.WriteFile` it fails within a handful
-  of scans).
-- **The desktop builds EVERY manager on one store** (`d.sessionStore()`): a turn writes through its own
-  per-run manager, and only a shared store lets that write drop the snapshot the sidebar's next read would
-  otherwise be served from. `session.NewManager(nil)` under `desktop/` is the mistake —
-  [desktop.md](desktop.md) (Desktop Backend) has the reasoning.
-- **Image bytes leave the record inside `AppendMessage`, and that is what makes them safe.** A multi-modal
-  message's parts are persisted on the record (`Message.Parts`), but their bytes are not: `AppendMessage` —
-  the ONE writer a session record has — moves each image into the session's `images/` directory as a
-  content-addressed blob (the SHA-256 of the decoded bytes, so an image sent twice costs one file) and leaves
-  the reference behind. Two rules ride on that: nothing else may write a session record (the subagent and
-  one-off recorders own their files and call `DropUnstoredImageParts` — a reference they cannot resolve is
-  worse than no part), and a record on disk never carries base64, which is what keeps a conversation full of
-  screenshots a readable JSONL file inside `LoadMessages`' scanner buffer. The read half is `LoadImage`,
-  reached through the manager as `agent.ImageResolver`; a blob that is gone degrades that one part, it never
-  fails the conversion ([prompt-cache.md](prompt-cache.md) explains why the rebuild has to be byte-exact).
+## 清理允许删掉什么
 
-## What a cleanup may delete
+- **会话可以被持有，而这条持有在磁盘上，不在取它的那个 manager 的内存里。** `session/retention.go` 是权威：`<sessionDir>/retention/holds/` 下一个会话一个文件，每个写明 owner 和 reason，由同一对 (owner, ref) 释放。**理由只有一个——`task`，即此刻正在这个会话里跑的一次执行——每条删除路径问的是同一个问题、得到的是同一个答案**：`Manager.CleanupOldSessions` 跳过被持有的会话，`Manager.Delete` 用点名该结束什么的 `SessionHeldError` 拒绝，而删除会连同会话一起放开剩下的持有（`Retention.protected` 说了为什么）。曾经有第二个理由和两套策略：一个 `context` 持有把远端对话的会话留一个它自己的窗口，清理尊重它，而读者自己点的那下删除不尊重。窗口没了（`docs/2026-10-10-a2a-node-design.md` §9.4）：远端对话的会话就是普通会话，所以 `desktop.DeleteSession`、ACP 的删除和另一个进程里的清理，谁也绕不过这条规则。`Pinned`、`ThreadID`、`Kind` **不是**这个机制——pin 是读者自己的声明，抬掉它绝不能丢掉一个正在跑的任务（同一份设计文档 §9.4）。`Retention.BusySessions` 一次扫描就答出「哪些会话有正在跑的执行」，桌面侧栏要提供「停掉一个」靠的正是它。
+- **每个以删除收尾的决定，都在同一把跨进程锁下做出**（`<sessionDir>/retention/retention.lock`，`Retention.Lock`），它与节点的生命周期锁不是同一把，也从不共享路径：节点在线不得阻止另一个进程合法清理。候选在锁**外**枚举（目录扫描不该待在跨进程临界区里）；「它被持有吗、它还是当前的吗」的复查在锁**内**。锁文件释放时不删，和本仓库其它每一把 flock 一样。
+- **进程内锁排在第二。** 固定次序是文件锁 → `Manager`/store 锁，所以调用者去拿保留锁时不得持有 manager 的 mutex；`Manager.Delete` 和 `Manager.CleanupOldSessions` 就是这么写的，`Manager.New` 也是先放掉自己的锁再清理。反过来，就是清理与节点绑定 context 之间的死锁。
+- **一条持有还会说明它已经不可能知道的事。** 文件读不出来的持有，保留那个会话（跳过并上报），绝不释放：读不出来的保护不等于没有保护。持有生命周期的拥有者在启动时收拾残留（`node/runner.go` 的 `reconcile`），因为一次崩溃可能留下一个谁也不会再撤销的理由。**三种读法，不是两种**：读不出来 → 保留并上报；一个谁也没听说过的理由 → 保留并上报（更新的版本可能在持有它）；一个**已退休**的理由（`session.ReasonContextRetired`，退休的 `context`）→ 看得懂、什么也不保护，所以这一层回答的问题忽略它（`liveHolds`——读者的删除不会被一条写着「为这段对话的窗口保留」的记录挡住，侧栏也不会为一条不存在的执行去提供「停掉」），它的拥有者在下次启动时释放它，删除会带着会话一起拿走那条记录（`Manager.clearRetiredLocked`）。
 
-- **A session can be HELD, and the hold is on disk rather than in the memory of the manager that took it.**
-  `session/retention.go` is the authority: one file per session under
-  `<sessionDir>/retention/holds/`, each naming the owner and the reason, released by that same (owner, ref)
-  pair. **There is ONE reason — `task`, an execution running in this session right now — and every deletion
-  path asks the same question and gets the same answer**: `Manager.CleanupOldSessions` skips a held session,
-  `Manager.Delete` refuses it with a `SessionHeldError` naming what to end, and the delete
-  RELEASES the remaining holds with the session (`Retention.protected` says why). There used to be a second
-  reason and two policies: a `context` hold kept a remote conversation's session for a window of its own, the
-  sweep respected it and the reader's own click did not. The window is gone (design §9.4): a remote
-  conversation's session is an ordinary session, so `desktop.DeleteSession`, ACP's delete and a sweep in
-  another process cannot get round anything. `Pinned`, `ThreadID` and `Kind` are NOT the mechanism — a pin is
-  the reader's own statement and lifting it must not drop a running task (design
-  §9.4). `Retention.BusySessions` answers "which sessions have a running execution" in one scan, which is what
-  the desktop sidebar needs to offer to stop one.
-- **Every decision that ends in a deletion is made under ONE cross-process lock**
-  (`<sessionDir>/retention/retention.lock`, `Retention.Lock`), which is a different lock from the node's
-  lifecycle lock and never shares its path: a node being online must not stop another process from cleaning up
-  legally. Candidates are enumerated OUTSIDE the lock (a directory scan must not be inside a cross-process
-  critical section); the re-check of "is it held, is it still current" is INSIDE. The lock file is never
-  removed on release, like every other flock in this repo.
-- **The in-process lock comes SECOND.** The fixed order is file lock → `Manager`/store lock, so a caller must
-  not hold the manager's mutex when it reaches for the retention lock; `Manager.Delete` and
-  `Manager.CleanupOldSessions` are written that way, and `Manager.New` sweeps only after releasing its own lock.
-  The reverse order is a deadlock between a sweep and a node binding a context.
-- **A hold also says what it can no longer know.** A hold whose file cannot be read keeps the session (skipped
-  and reported), never releases it: unreadable protection is not the same as no protection. The owner of a
-  hold's lifetime reconciles leftovers at startup (`node/runner.go`'s `reconcile`), because a crash can leave
-  a reason nobody will ever withdraw. **Three readings, not two**: unreadable → keep and report; a reason
-  nobody has ever heard of → keep and report (a newer version may be holding it); a RETIRED reason
-  (`session.ReasonContextRetired`, retired `context`) → understood and protecting nothing, so the questions
-  this layer answers ignore it (`liveHolds` — the reader's delete is not blocked by a record saying "kept for
-  this conversation's window", and the sidebar is not offered a stop for an execution that does not exist),
-  its owner releases it at the next startup, and a delete takes the record with the session
-  (`Manager.clearRetiredLocked`).
-
-Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (Desktop Backend, the sidebar's reads),
-[checkpoints.md](checkpoints.md) (the sidecar files a turn writes under a session).
+Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md)（桌面后端、侧栏的读取路径）、[checkpoints.md](checkpoints.md)（一轮写在会话旁的附属文件）。

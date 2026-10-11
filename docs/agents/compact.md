@@ -1,70 +1,30 @@
-# Tachi — Compaction Handbook (split out of `.tachi.md`)
+# Tachi —— 压缩手册
 
-Read this **before touching the compaction path**: `agent/agent_compact.go` (`doCompact` / the auto-compact
-trigger), `agent/compact.go` (`CompleteCompact` / `FinalizeCompact`), `agent.CompactRunOptions`, **any
-frontend's `/compact`** (tui, desktop, acp, channel), or an `AgentEventAutoCompact*` handler.
+压缩这条路都在这份文件里：`agent/agent_compact.go`（`doCompact`）、`agent/agent_loop.go`（`maybeAutoCompact`，自动压缩的那次触发）、`agent/compact.go`（`CompleteCompact` / `FinalizeCompact`）、`agent.CompactRunOptions`、任何前端的 `/compact`（tui、desktop、acp、channel），以及 `AgentEventAutoCompact*` 的处理器。
 
-`.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions that
-apply anywhere in the repo and points here for the rest. **New compaction lessons belong in THIS file**, and
-the rules that ride with `.tachi.md` (freshness in the same turn, convention-not-history, split + index when a
-subject grows) apply to this split too.
+## 目录
 
-## Contents — read the section you need, not the file
-
-| Section | Read it when |
+| 章节 | 什么时候读 |
 | --- | --- |
-| **Two triggers, one mechanism** | you touch `/compact` in any frontend, the auto-compact trigger, or a run that hides every tool |
-| **The child's record** | you touch `FinalizeCompact`, or add a field to the session meta |
-| **What a frontend owes the hand-off** | you touch a frontend's compact command, or the `AgentEventAutoCompact*` handlers |
+| **两个触发器，一套机制** | 你动任何前端的 `/compact`、自动压缩那次触发，或一次把工具全藏起来的运行 |
+| **子会话的记录** | 你动 `FinalizeCompact`，或给会话 meta 加字段 |
+| **前端欠这次交接什么** | 你动某个前端的压缩命令，或 `AgentEventAutoCompact*` 的处理器 |
 
-## Two triggers, one mechanism
+## 两个触发器，一套机制
 
-- **A typed `/compact` is an ordinary conversation turn** whose user message IS the compact instruction
-  (`agent/commands.BuildCompactInstruction`) — the model has to SEE the whole history to summarise it, which a
-  side-channel call cannot do. The loop's auto-compact (`maybeAutoCompact`, threshold in `compact.threshold`)
-  is the other trigger. Both end at `FinalizeCompact`: the conversation moves into a CHILD session whose record
-  opens with the summary and 「请基于以上摘要继续对话。」, the parent keeps the pre-compaction history, and the
-  two link to each other (`compacted_child_id` / `compacted_parent_id`).
-- **A compact run carries `agent.CompactRunOptions()` — both halves, and the second one is the load-bearing
-  one.** Hidden tools keep the reply text; **switching the loop's own auto-compaction off** is what keeps the
-  instruction in front of the model. The trap: a compact run's history is over the threshold BY DEFINITION
-  (that is why the reader typed `/compact`), so the loop would otherwise compact at its own top, replace
-  `rs.Messages` with the summary — and the request no longer carries the instruction at all. The model answers
-  a continuation, and the frontend, which collects that reply as its summary, compacts a SECOND time: two new
-  sessions, and the one the reader lands on has a conversation fragment as its summary. Pinned by the desktop
-  smoke scenario `compact-race`.
-- **A request with every tool hidden can come back with the model's own tool-call markup as TEXT** (a
-  DeepSeek-family model emitting its native `｜｜DSML｜｜` block into ordinary content, which Tachi renders
-  verbatim — there is no sanitiser). A no-tools run has nothing to parse it against, so a no-tools run must be
-  one whose answer is text by construction; `WithNoTools()` alone is used for exactly one other purpose (the
-  node's managed-session refusal), and it is not what marks a run as a compaction.
+- **手打的 `/compact` 就是一轮普通对话**，它的用户消息本身就是压缩指令（`agent/commands.BuildCompactInstruction`）——模型必须**看见**整段历史才总结得出来，侧信道调用做不到这一点。循环的自动压缩（`maybeAutoCompact`，阈值在 `compact.threshold`）是另一个触发器。两者都止于 `FinalizeCompact`：对话搬进一个**子**会话，子会话的记录以摘要和「请基于以上摘要继续对话。」开头，父会话留着压缩前的历史，两者互链（`compacted_child_id` / `compacted_parent_id`）。
+- **一次压缩运行带着 `agent.CompactRunOptions()`——两半都要，而第二半才是承重的那半。** 隐藏工具让回复保持为文本；**把本循环自己的自动压缩关掉**才是让指令留在模型眼前的那一半。陷阱：压缩运行的历史**按定义**就已经越过阈值（不然读者也不会打 `/compact`），于是循环会先在自己这一轮的顶上压缩、用摘要替换掉 `rs.Messages`——请求里就再也没有那条指令了。模型于是回答一段延续，而前端把这个回复当成摘要收下，又压缩了**第二**次：两个新会话，读者最终落在的那个，摘要是对话的一个片段。桌面冒烟场景 `compact-race` 钉住它。
+- **一次把工具全藏起来的请求，可能连模型自己的工具调用标记都当文本收回来**（某款 DeepSeek 系模型会把它原生的 `｜｜DSML｜｜` 块写进普通内容，而 Tachi 逐字渲染——没有清洗器）。无工具的运行没东西拿它去解析，所以一次无工具运行必须是「答案按构造就是文本」的那一种；`WithNoTools()` 在全仓库只有 `CompactRunOptions` 一个调用点（另一类隐藏工具的运行——节点那次受管执行——限制工具集用的是 `WithToolSet(names…)`），而它并不是把一次运行标记为压缩的东西。
 
-## The child's record
+## 子会话的记录
 
-- **Every session-meta field `FinalizeCompact` does not copy is silently ZEROED** — not reported. Each one has
-  its own failure: `AdditionalDirs`/`ProjectID` (tools, prompt and checkpoints agreeing with each other in the
-  wrong tree), `Pinned` (invisible state on a folded-away row, plus a permanent exemption from session
-  cleanup), `Kind`/`SkipDream`/`SourceNodeID` (a remote task coming back as the user's own local conversation —
-  and, for the source, a record of somebody's work that no longer says whose). Adding a field to the meta means
-  deciding whether it travels with the conversation; `agent/compact_test.go` pins the path fields and
-  `agent/managed_test.go` the three that mark a session as a remote execution.
-- **`ThreadID` and `Pinned` MOVE rather than being copied** — the parent releases them in the same step. One
-  binding, held by the record it still means something on: a thread binding left on the parent makes
-  `FindByThreadID` resolve to the pre-compaction history, which is how every turn after a compaction used to
-  trigger another one.
+- **`FinalizeCompact` 不拷贝的会话 meta 字段，全都被悄悄置零**，而且不会报出来。每一个都有自己的坏法：`AdditionalDirs`/`ProjectID`（工具、提示词和检查点在一棵错的树里彼此自洽）、`Pinned`（折叠掉的那一行上有个看不见的状态，外加对会话清理的永久豁免）、`Kind`/`SkipDream`/`SourceNodeID`（一个远端任务回来时变成用户自己的本地对话——就来源而言，是一份不再说明是谁干的活的记录）。给 meta 加字段，就是要决定它随不随对话走：`agent/compact_test.go` 钉住路径字段，`agent/managed_test.go` 钉住那三个把会话标记为远端执行的字段。
+- **`ThreadID` 和 `Pinned` 是「搬走」，不是拷贝**——父会话在同一步把它们放开。一个绑定，只由它仍然有意义的那个记录持有：一份留在父会话上的 thread 绑定，会让 `FindByThreadID` 解析到压缩前的历史，压缩之后每一轮过去都会再触发一次压缩，就是这么来的。
 
-## What a frontend owes the hand-off
+## 前端欠这次交接什么
 
-- **A frontend's compact command must not complete a compaction whose session already moved.** All of them
-  share one shape — run the compact turn, take the reply as the summary, call `CompleteCompact` — and each one
-  has to refuse the second half when the loop compacted anyway:
-  - the desktop watches the run's own stream for a successful `AgentEventAutoCompactDone` and returns without
-    the hand-off; the record the event's handler already wrote is the one `endTurn`'s `followCompaction`
-    honours (`desktop/commands.go`);
-  - the TUI keeps `Model.autoCompacted` — set by that same event, cleared at turn start — and at `TurnComplete`
-    drops the pre-compaction `savedHistory` instead of restoring it (`tui/model_events.go`). Restoring it would
-    put the OLD history in front of a session that is the child on disk: the next request would send it and
-    cross the threshold again, so the reader's `/compact` would look like it did nothing.
-  With `CompactRunOptions` in place neither path can be reached; they are the floor under it, not the fix.
-- **`compact`, `compact-race` and `auto-compact` are the smoke scenarios for this path** — run all three for
-  any change here (`make desktop-smoke ARGS="-run compact,compact-race,auto-compact"`).
+- **前端的压缩命令，绝不能去完成一次会话已经搬走的压缩。** 它们共用一个形状——跑压缩那一轮、把回复当摘要、调 `CompleteCompact`——而当循环反正已经压缩过时，每一个都得拒绝后半段：
+  - desktop 盯着该 run 自己的流，等一个成功的 `AgentEventAutoCompactDone`，然后不做交接就返回；事件处理器已经写下的那条记录，就是 `endTurn` 的 `followCompaction` 认的那条（处理器在 `desktop/commands.go`，`followCompaction` 在 `desktop/compaction.go`）；
+  - TUI 留着 `Model.autoCompacted`——同一个事件置位，轮开始时清空——并在 `TurnComplete` 丢弃压缩前的 `savedHistory` 而不是恢复它（`tui/model_events.go`）。恢复就是把这**旧**历史摆到一个在磁盘上已是子会话的会话前面：下一个请求会把它发出去、再次越过阈值，读者的 `/compact` 看起来就像什么都没干。
+  有 `CompactRunOptions` 在，这两条路都到不了；它们是它底下的兜底，而不是那个修复。
+- **`compact`、`compact-race`、`auto-compact` 是这条路线的冒烟场景**——这里任何改动都要三个都跑（`make desktop-smoke ARGS="-run compact,compact-race,auto-compact"`）。

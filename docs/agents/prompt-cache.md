@@ -1,133 +1,75 @@
-# Prompt cache & hit rate (handbook)
+# Tachi —— 提示词缓存与命中率手册
 
-Read this **when a cache hit rate drops** — the user's or your own — or when a restart looks
-expensive, and **before changing anything that shapes a request's prefix**, `ConvertSessionToLLMMessages`
-included.
+什么会被缓存、那些数字在哪里、一次掉落下来该怎么读。改动任何决定请求前缀形状的东西时，该守的规则也在这份文件里——`ConvertSessionToLLMMessages` 在内。
 
-## Contents — read the section you need
+## 目录
 
-| Section | Read it when |
+| 章节 | 什么时候读 |
 | --- | --- |
-| **What actually caches** | you are about to change the system prompt, the tool list, or how a stored message is rendered |
-| **Where the numbers are** | you need the hit-rate data (or you are about to trust the desktop's ring) |
-| **Reading a drop** | a drop has been reported and you need to locate it |
-| **Baseline** | you want to know whether a number is normal |
-| **Practical notes** | you are about to run the analysis, or to write it up |
+| **什么真的会被缓存** | 你正要改 system prompt、工具列表，或者一条存档消息的渲染方式 |
+| **那些数字在哪** | 你要命中率数据（或者你正要相信桌面端那个环） |
+| **读一次掉下来** | 有掉下来的报告，你要定位它 |
+| **基线** | 你想知道某个数字算不算正常 |
+| **实际注意事项** | 你正准备跑那次分析，或者把它写出来 |
 
-Related: [`.tachi.md`](../../.tachi.md), [session-store.md](session-store.md) (the records and blobs a
-history is rebuilt from), [mcp.md](mcp.md) (the reminder piece the MCP pool renders).
+Related: [`.tachi.md`](../../.tachi.md), [session-store.md](session-store.md)（一段历史重建所用的那些记录与 blob）、[mcp.md](mcp.md)（MCP 池渲染的那条 reminder 片段）。
 
-## What actually caches
+## 什么真的会被缓存
 
-The hit that matters is the **provider's own prefix cache**, not the client's markers: `llm/anthropic.go`
-puts `cache_control` on the system prompt only (with a standing `FIXME`), yet long prefixes hit at ~99.9%
-and break exactly where the request's prefix diverges. The prefix is **tools → system → messages**, in that
-order.
+真正要紧的命中，是 **provider 自己的前缀缓存**，不是客户端的标记：`llm/anthropic.go` 只给 system prompt 打了 `cache_control`（旁边还留着一个常驻的 `FIXME`），可长前缀照样命中 ~99.9%，而且正好在请求前缀分叉的地方断掉。前缀的顺序是 **tools → system → messages**。
 
-What follows from that, and each one is a hard boundary rather than a preference:
+由这一点推出的每一件事，都是硬边界，不是偏好：
 
-- **Any tool-list change invalidates the whole message history.** Tools come first, so inserting, removing
-  or reordering one (MCP connect/disconnect, tool enable/disable, a new tool from an upgrade) makes
-  everything after it a miss. Moving dynamic tools to the end does not help — the messages are still behind
-  them. This one is structural: expect one full re-read, and say so rather than hunting for a bug.
-- **The rebuilt history must equal the history that was SENT, byte for byte.** Anything that renders a
-  stored message differently from how it went out (an extra newline at a reminder seam, a block in the
-  wrong position) shifts the prefix from that point on. `agent/session_convert_test.go` pins it.
-  The reminder block is where this is easiest to get wrong, and it has two shapes, told apart only by
-  POSITION (both are `MessageTypeReminder`): a wrapper for the NEXT user message — its next non-reminder
-  record IS a user message (artifacts, the date block, continuation prompts) — and a block the loop injected
-  mid-turn, which is its own message and must stay where it was sent. Mid-turn injection renders the fresh
-  pieces once and both appends that text and records it (`agent_loop.go`), so the two paths go through one
-  render.
-  **A block is stored as the text that was SENT** (`RenderPieces` output, recorded verbatim, and
-  `CollectPieces` renders each piece alone as the dedup key). That is what makes a change to `RenderPieces`
-  itself — its separators, its layout — NOT structural: existing records keep their bytes, and only the block
-  being built now renders differently, at the tail. It is also what makes a piece's own leading blank line a
-  bug rather than a style choice: the renderer already separates the pieces.
-- **A piece that renders a LIST has to say whose it is.** Every piece lands in the same block, separated by
-  one blank line and indented alike, so an unlabelled indented list is read as the CHILDREN of the piece above
-  it — this machine's skill catalogue, rendered under a peer's line, reads as that NODE's advertised skills. A
-  catalogue therefore gets a heading that names it and says how to use it (`本机可用的 skill（用
-  Skill(operation="view", name=…) 查看…）`), the way the peers and MCP reminders already do.
-- **A rebuilt history drops every tool call no result answers — PAIR BY PAIR, by tool call id.** The loop
-  records each call BEFORE it runs it and each result as it finishes (`agent/tool_executor.go`), so a process
-  killed mid-batch leaves a partly-answered assistant message, and one unpaired `tool_use` is enough for a
-  provider to reject the whole request. The all-or-nothing form of the check (「does any tool result follow
-  this message?」) kept the orphan for the rest of the conversation — the desktop reached it whenever it
-  reloaded such a session. Smoke: `orphan-tool-call`.
-- **An image part survives a reload: the record keeps the parts, the session's `images/` directory keeps the
-  bytes.** Both halves are single-write-path — the record sites attach the parts the request actually
-  carried (`agent.RecordParts`), and `session.FileStore.AppendMessage`, the only writer of a session record,
-  moves the bytes into a content-addressed blob and leaves the reference — so a rebuilt history carries the
-  images the live turn sent instead of a miss from the first image on. The read side is the `ImageResolver`
-  parameter of `ConvertSessionToLLMMessages`; nil there is a deliberate text-only conversion (token
-  estimates), and an unreadable blob drops that one part with a warning rather than failing the conversion.
-  Records written before this existed carry no parts and are NOT backfilled. Verify a session by converting
-  it (`agent.ConvertSessionToLLMMessages(store.LoadMessages(id), "anthropic", store)`) and counting the parts
-  against the `[Image: …]` / `[图片: …]` placeholders; `itest`'s `image-reload` scenario pins the route.
+- **工具列表一变，整段消息历史就都失效。** 工具在最前面，所以插入、删除或重排一个（MCP 连接/断开、工具启用/禁用、升级带来的新工具）都会让它后面的一切变成未命中。把动态工具挪到末尾也救不了——消息仍然在它们后面。这条是结构性的：预期一次整段重读、照实说清楚，而不是去找 bug。
+- **重建出来的历史，必须与当时真的发出去的那份逐字节相同。** 任何把存档消息渲染得与发出时不一样的东西（reminder 接缝处多一个换行、一个块落在错位置）都会从那一点起让前缀位移。`agent/session_convert_test.go` 钉住它。
+  reminder 块是最容易搞错的地方，它有两种形状，只能靠**位置**区分（两者都是 `MessageTypeReminder`）：一种是给下一条用户消息用的包装——它的下一条非 reminder 记录就是一条用户消息（artifacts、日期块、continuation prompts）——另一种是循环在某轮中途注入的块，它自己就是一条消息，必须留在它被发出去的位置。中途注入只渲染一次新鲜的片段，然后既 append 那段文本、又把它记录下来（`agent_loop.go`），两条路径共用同一次渲染。
+  **一个块的存档形式，就是当时真的发出去的那段文本**（`RenderPieces` 的输出，逐字记录；去重键是每个片段单独渲染的结果，见 `RunState.freshReminders`）。正因如此，改 `RenderPieces` 本身——它的分隔符、它的版式——才不算结构性改动：已有的记录保持自己的字节，只有此刻正在构建的那个块渲染得不同，而它在尾部。同样正因如此，某个片段自带的行首空行是 bug 而不是风格选择：渲染器已经替你把片段分隔开了。
+- **渲染列表的片段必须说明这列表是谁的。** 每个片段落在同一个块里，彼此隔一个空行、缩进也一样，于是一个没有归属的缩进列表会被读成它上面那个片段的**子项**——本机的 skill 目录渲染在某个对端的行下面，就会被读成那个**节点**对外宣告的 skill。所以目录要有一个标题，既点出自己的名字，又说明怎么用它（`本机可用的 skill（用 Skill(operation="view", name=…) 查看…）`），跟 peers 和 MCP 的 reminder 已经做的一样。
+- **重建出来的历史会丢掉所有没有结果应答的 tool call——按 tool call id 逐对配。** 循环在跑每个调用**之前**先把它记下来，在每个结果完成时记结果（`agent/tool_executor.go`），所以一个死在批次中间的进程会留下一条只被部分应答的 assistant 消息，而只要有一个没配对的 `tool_use`，provider 就会拒掉整个请求。这个检查要是写成「全有或全无」（「这条消息后面有任何 tool result 吗？」），那个孤儿就会在余下的整段对话里一直留着——桌面端每次重载这样一个会话都会撞上它。冒烟：`orphan-tool-call`。
+- **图片 part 熬得过一次重载：记录留着 parts，会话的 `images/` 目录留着字节。** 两半都只有一条写入路径——记录侧挂上请求真正携带的 parts（`agent.RecordParts`），而 `session.FileStore.AppendMessage`（会话记录唯一的写入者）把字节搬进一个内容寻址的 blob 并留下引用——所以重建出来的历史带着实时那一轮发过的图片，而不是从第一张图起就未命中。读的那一侧是 `ConvertSessionToLLMMessages` 的 `ImageResolver` 参数；那里为 nil 是有意的纯文本转换（token 估算），而一个读不出来的 blob 会丢掉那一个 part、记一条 warning，而不是让转换失败。这套机制存在之前写下的记录不带 parts，也不会被回填。核对一个会话的办法就是转换它（`agent.ConvertSessionToLLMMessages(store.LoadMessages(id), "anthropic", store)`）并把 part 数与 `[Image: …]` / `[图片: …]` 占位符对照；`itest` 的 `image-reload` 场景钉住这条路。
 
-## Where the numbers are
+## 那些数字在哪
 
-A session's directory (`~/.tachi/session/<id>/`) holds two files worth reading together:
+一个会话的目录（`~/.tachi/session/<id>/`）里有两个文件值得一起读：
 
-| File | Answers |
+| 文件 | 回答什么 |
 |---|---|
-| `api_requests.jsonl` | one record per API call: `timestamp` / `iteration` / `seq` / `system_prompt` / `user_prompt` / `tools` — **what changed in the prefix** |
-| `messages.jsonl` | the conversation; `type=assistant` records carry `usage` — **the per-call hit numbers** |
+| `api_requests.jsonl` | 每次 API 调用一条记录：`timestamp` / `iteration` / `seq` / `system_prompt` / `user_prompt` / `tools`——**前缀里什么变了** |
+| `messages.jsonl` | 对话本体；`type=assistant` 记录带 `usage`——**每次调用的命中数字** |
 
-`usage`, under the anthropic protocol: `input_tokens` = the **uncached** input, `cache_read_input_tokens` =
-the **cached** part; hit rate = `read / (read + input)`. Output tokens are not part of it.
+`usage`，在 anthropic 协议下：`input_tokens` = **未缓存**的输入，`cache_read_input_tokens` = **已缓存**的那部分；命中率 = `read / (read + input)`。输出 token 不算在内。
 
-Two more places, and one display trap:
+另外两个地方，外加一个显示上的陷阱：
 
-- `~/.tachi/usage/<date>.jsonl` is the ledger: per-call credit plus the price snapshot it was billed with.
-- **Credit ignores the cache** — it is charged on total tokens, so a cache collapse costs money (the ledger's
-  own prices are the truth) but barely moves 积分.
-- The desktop's cache ring (in the usage row under the composer, beside ¥cost and 积分) shows the **last
-  call**, not the session — `desktop/agent_usage.go` takes the final ledger row. Check the session total
-  before believing the ring.
+- `~/.tachi/usage/<date>.jsonl` 是账本：每次调用的积分，加上计费时用的那份价格快照。
+- **积分不看缓存**：它按总 token 计费，所以一次缓存崩塌照样花钱（账本里的价格才是真相），只是积分几乎不动。
+- 桌面端的缓存环（在输入框下面那一行用法信息里，紧挨着 ¥cost 和积分）显示的是**最后一次调用**，不是整个会话——`desktop/agent_usage.go` 取的是账本的最后一行。信那个环之前，先核对会话总计。
 
-## Reading a drop (three steps)
+## 读一次掉下来（三步）
 
-1. **Get the per-call sequence.** Walk `messages.jsonl`'s assistant records in time order and find where the
-   rate fell. Note the time of the bad call.
-2. **Compare `tools` and `system_prompt` byte for byte** between the last call before it and the bad one.
-   Names-changed → tool-set change (above). `system_prompt` differs → the prompt changed (working
-   directory, session id, capability declarations). Identical → the difference is in the messages:
-   a rebuild rendered one differently, or a record's image part could not be resolved (a session directory
-   whose `images/` blob is gone, or a record written before images were persisted — see above).
-3. **Read the breakpoint level.** The bad call's `cache_read_input_tokens` is how far the prefix matched.
-   Against the yardstick of *system + 16 tool schemas ≈ 7k tokens*:
+1. **拿到每次调用的序列。** 按时间顺序走 `messages.jsonl` 的 assistant 记录，找出比率是在哪掉下来的，记下那次坏调用的时间。
+2. **逐字节比较它前一次调用与那次坏调用的 `tools` 和 `system_prompt`。** 名字变了 → 工具集变化（见上）。`system_prompt` 不同 → 提示词变了（工作目录、会话 id、能力声明）。完全相同 → 差异在 messages 里：重建把某一条渲染得不一样了，或者某条记录的图片 part 解析不出来（`images/` 下 blob 已不在的会话目录，或者一条在图片被持久化之前写下的记录——见上）。
+3. **读断点层级。** 那次坏调用的 `cache_read_input_tokens` 就是前缀匹配到了多远。拿同一次会话里最近一次健康调用的同一个数当标尺——它就在账本行里——看这次断在哪一层：
 
-| Cached | Where the prefix broke | Meaning |
+| 命中 | 前缀断在哪 | 含义 |
 |---|---|---|
-| ≈ 0 | the very start | the whole request differs — model, provider, system prompt |
-| ≈ 3.5k | mid tool array | a tool was inserted or removed in the middle |
-| ≈ 7k | the first message | a tool at the end of the array changed, or the **first message** did |
-| far above 7k, below the previous total | inside the messages | **turns that ran since the last reload** were rebuilt differently (this family's signature) |
-| the same, with the break at a message that carried an image | the FIRST such message | that record's image part could not be rebuilt (the blob is gone, or the record predates image persistence — see above); the whole tail from that image re-reads |
-| the previous total | nowhere | nothing changed — the rate should be ~100% |
+| ≈ 0 | 最开头 | 整个请求都不一样——model、provider、system prompt |
+| 停在工具数组中间 | 工具数组中间 | 中间插入或删除了一个工具 |
+| 停在最后一条工具 schema 之后（system prompt 整段命中） | 第一条消息 | 数组末尾的工具变了，或者**第一条消息**变了 |
+| 超过工具与 system prompt 那一半、但低于上一次的总量 | messages 内部 | **自上次重载以来跑过的那些轮**重建得不一样（这一族的签名） |
+| 与上次相同，断点落在一条带图片的消息上 | 第一条这样的消息 | 那条记录的图片 part 重建不出来（blob 没了，或记录早于图片持久化——见上）；从那张图起的整条尾巴重读 |
+| 与上次相同 | 哪儿都没断 | 什么都没变——比率应该 ~100% |
 
-A **single** low call followed by recovery is a re-warm (normal). **Consecutive** low calls mean every turn
-is drifting — that is a new defect, not a re-warm.
+一次**单发**的低调用之后恢复，是一次重新预热（正常）。**连续**的低调用意味着每一轮都在漂——那是新缺陷，不是重新预热。
 
-## Baseline — compare against this instead of guessing
+## 基线 —— 拿它来对照，而不是靠猜
 
-- **Restart with an unchanged tool set**: the first call should hit almost everything; only this turn's own
-  reminder + message is new. An image in the conversation does not change that any more — its parts are
-  rebuilt from the session's `images/` blobs. A record whose image part cannot be rebuilt (pre-dates this,
-  or its blob is gone) is the one case that still re-reads the tail from there, and it says so in the log.
-- **The restart right after a prefix-shaping fix**: one full re-read is the migration cost, not a regression
-  — it recovers on the next call.
-- Cheap arithmetic for cost: `uncached × input_price` vs `cached × cache_read_price` from the ledger row
-  (the configured ratio is large, so the miss is where the money is).
+- **工具集不变的重启**：第一次调用应该几乎全部命中，新的只有本轮自己的 reminder 加消息。对话里有一张图片也不再改变这一点——它的 parts 从会话的 `images/` blob 重建。图片 part 重建不出来的那条记录（早于这套机制，或它的 blob 没了）是唯一仍会从那里起重读尾巴的情况，而且它会在日志里说明。
+- **前缀成形修复之后紧接的那次重启**：一次整段重读是迁移成本，不是回归——下一次调用就恢复。
+- 成本的粗略算术：从账本行取 `未命中 × input_price` 与 `命中 × cache_read_price` 相比（配好的比率很大，所以钱花在未命中上）。
 
-## Practical notes
+## 实际注意事项
 
-- **Write the analysis to a file and run it** (`python3 /tmp/probe.py`) rather than stacking nested quotes on
-  one command line. The unattended entry modes (`channel`, `-p`, subagent) treat a policy `ask` as a refusal,
-  and a command whose syntax is incomplete is conservatively an `ask` — there it is simply refused.
-- Diagnose in the order above: a drop's face does not identify its cause. A tool-set change, a seam drift
-  and a whole-history rebuild are indistinguishable at a glance — they all read as "1.x%".
-- When the drop is explained by a prefix change you just made, say so and quantify it — "this costs N tokens
-  once" is a very different report from "the cache is broken".
+- **把分析写进文件再跑**（`python3 /tmp/probe.py`），而不是在一行命令上叠嵌套引号。无人值守的入口模式（`channel`、`-p`、subagent）对策略的 `ask` 是**直接放行**的（`PermissionModeSkip`），而语法不完整的命令保守地算一次 `ask`、落进同一支——所以叠满嵌套引号的那行在那里会照跑，没有人会替你拦下来。
+- 按上面的顺序诊断：掉下来的表象不指认它的原因。工具集变化、接缝漂移和整段历史重建乍看无法区分——它们读起来都是「1.x%」。
+- 当这次掉落正是你刚做的前缀改动造成的，就照实说并量化它——「这一下一次性花 N token」跟「缓存坏了」是完全不同的报告。

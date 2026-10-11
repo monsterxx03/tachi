@@ -1,80 +1,32 @@
-# Tachi — Integration Test Handbook (split out of `.tachi.md`)
+# Tachi —— 集成测试手册
 
-Read this **before adding or editing a spec under `itest/`, or when one fails only on a loaded runner** (a
-flake here is usually a wait anchored on the wrong thing, not a product bug).
+`itest/` 下的套件、用例和 harness 都在这份文件里。最该先看的是**等待必须锚在什么上**：这里出现的偶发失败，多半是等待锚在了错的东西上，而不是产品 bug。
 
-`.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions that
-apply anywhere in the repo and points here for the rest. **New itest lessons belong in THIS file, not back in
-`.tachi.md`** — and the rules that ride with that file (freshness in the same turn, convention-not-history,
-split + index when a subject grows) apply to this split too.
+## 套件与 target
 
-## Suites and targets
+- 套件：`itest/run`、`itest/tui`、`itest/acp`、`itest/mockllm`（run/tui/acp 依赖 mockllm）。
+- `make itest`（先过 `web-check`，再 `make -j4` 跑四个套件；run/tui/acp 用 `ginkgo -p`，mockllm 那个跑的是 `go test`）；单个套件：`make itest-run|itest-tui|itest-acp|itest-mockllm`。
+- `itest/tui` 在进程内用 `tea.NewProgram` 驱动真实的 `tui.Model` + `AIAgent`（按键经 `p.Send(tea.KeyPressMsg)`）；ANSI 变化流经 `itest/tui/vt.go` 回放，所以 `Screen()` 等于真实终端。
 
-- Suites: `itest/run`, `itest/tui`, `itest/acp`, `itest/mockllm` (run/tui/acp depend on mockllm).
-- `make itest` (= `make -j4` + `ginkgo -p`); one suite: `make itest-run|itest-tui|itest-acp|itest-mockllm`.
-- `itest/tui` drives the real `tui.Model` + `AIAgent` in-process under `tea.NewProgram` (keys via
-  `p.Send(tea.KeyPressMsg)`); the ANSI diff stream is replayed through `itest/tui/vt.go`, so `Screen()` == a
-  real terminal.
+## 用例必须锚在什么上
 
-## What a spec must anchor on
+- **用例的等待锚在 AGENT 的单轮状态上，绝不只看屏幕**：driver 的 `WaitIdle`/`Stop` 等的是 `AIAgent.TurnInFlight()`（每次会话写入背后那条 run goroutine）清零。渲染出的 idle 帧滞后于状态机，而 mock 的请求计数在它自己的 goroutine 上增长，所以「请求已计数 + 屏幕看着仍 idle」在一轮中途是可达到的状态——照这两样等就会提前返回，接着打字（被排进 pending 而不是开新一轮）、退出程序、或列举会话的用例，就只在负载高的 runner 上随机失败。
+- **`config.SetBaseDir` / `tools.SetWorkingDir` 是进程级全局**——之所以安全，只是因为 ginkgo 的并行节点是独立进程、且用例串行；每个用例钉一个新的工作目录（目录被删掉会让 Bash 的 fork/exec 失败）。
+- **密闭**：harness 的配置禁用了 `herdr`；绝不碰真实的 `~/.tachi`。
 
-- **A spec's waits anchor on the AGENT's turn state, never on the screen alone**: the driver's
-  `WaitIdle`/`Stop` wait for `AIAgent.TurnInFlight()` (the run goroutine behind every session write) to clear.
-  A rendered idle frame lags the state machine and the mock's request counter rises on the mock's goroutine,
-  so "request counted + still-idle-looking screen" is reachable mid-turn — a wait on those two returns early,
-  and a spec that then types (queued as pending instead of a new turn), quits the program, or lists sessions
-  fails randomly on a loaded runner only.
-- **`config.SetBaseDir` / `tools.SetWorkingDir` are process globals** — safe only because ginkgo parallel
-  nodes are separate processes with serial specs; pin a fresh working dir per spec (a deleted `t.TempDir`
-  makes Bash fork/exec fail).
-- **Hermetic**: the harness config disables `herdr`; never touch the real `~/.tachi`.
+## harness
 
-## The harness
+- **`itest/harness.BuildBinary` 按 git HEAD 哈希缓存二进制**，放在 `os.TempDir()/tachi-itest-<hash>`；工作树脏了就退化成每次调用都构建——所以保持工作树干净。
+- **mockllm 讲 3 种线上协议**（openai / anthropic / openai-res）；再加一种要写 route + normalize + render + 契约测试。
+- **`run.Binary` 等进程，`run.Spawn` 不等。** 承载型入口（hosting）必须一直活着（它的节点服务随它一起死），所以和这类入口对话的用例用 `Spawn` 并自己持有那个进程——在 `DeferCleanup` 里 `Stop`；否则一个残留宿主占着节点锁，会让同一个 worker 的下一个用例因为毫不相干的原因失败。
 
-- **`itest/harness.BuildBinary` caches the binary by git HEAD hash** in `os.TempDir()/tachi-itest-<hash>`; a
-  dirty tree falls back to per-call builds → keep the tree clean.
-- **mockllm speaks 3 wire protocols** (openai / anthropic / openai-res); a new one needs route + normalize +
-  render + contract tests.
-- **`run.Binary` waits for the process; `run.Spawn` does not.** A HOSTING entry has to stay up (its node
-  service dies with it), so a spec that talks to one uses `Spawn` and owns the process — `Stop` in a
-  `DeferCleanup`, or a leftover host holding the node lock fails the NEXT spec of that worker for a reason
-  that has nothing to do with it.
+## 没有终端的节点（两个真进程）
 
-## A node with no terminal (two real processes)
+- **只有三个入口承载节点**（`node.StartOrAttachNode`：TUI、desktop、channel），且**只有 channel 入口能无头跑**——但没启用任何 channel 时它拒绝启动。`channel/mock` 就是满足这一条的惰性 channel：`Name`/`OnStart`/`Run`，其中 `Run` 阻塞到关闭为止。它不面向用户（只有 `main_channels.go` 读注册表，所以没有任何东西会列出或提供它）。
+- **fixture 必须自己写出 A2A 端口。** 承载进程的远端地址没有任何东西会公布——`local.json` 带的是本机控制地址、节点 id、实例 id 和令牌（外加 `pid`、`api_version`、`started_at`），没有任何远端地址——所以把对端放在独立进程里的用例要自己挑一个空闲端口（`0.0.0.0:<port>`，这同时让它离开 loopback、因而落在 mTLS 后面）并写进配置。
+- **等到 `local.json` 不等于等到了一个节点。** 这个文件按设计比它的写入者活得久（`Close` 会留下它，因为附着路径会重新核对实例 id 和握手，所以那里放着一份旧文件是无害的）——而一个刚发布完就死掉的入口也会把它留在原地。就绪 = 「文件出现了」且「端口上有人应答」（`net.Dial`；非 loopback 面上握手**本来就该**失败，所以能查的只有 TCP 连接）。进程在等待期间退出时，把它**自己的**输出报出来：「从未就绪」会让人往错的地方找，而答案——一个启用了却没注册的 channel、一个被占的端口——就摆在那儿。
+- 正是这一对让跨进程用例成为可能：两份身份、两份 TOFU pin 记录、两个数据目录、两份日志，各由自己的进程写出（`itest/run/node_host_test.go`）。**其余一切仍用进程内对端**：它不需要第二个进程就能证明 config→surface 这条路径，而只有进程边界才需要这套机制。
+- **那个文件里三个用例各自覆盖什么**，免得被重写：(1) 一个真进程承载，另一个真进程通过 mTLS 委派给它，两侧的记录都在磁盘上核对；(2) 同一 `--home` 上的第二个进程**附着**，而不是起第二套服务——断言落在它自己的 `attached to local node service` 那一行上（按 pid 归属，因为共享一个 home 的两个进程共享同一份日志），外加锁被别的进程持有、已发布的实例 id 是第一个进程的；(3) 一个宿主在某个任务停在问题上时被 `-9` 杀掉——下次启动取走被释放的锁（flock 随持有者一起死），把那个任务判为中断，并保住那个问题。保留期那把**协调锁**的争用测试仍**未做**（`node.md`）；这三个讲的是节点锁。
+- **这三个各有一种值得知道的坏法**：少了那个惰性 channel，宿主发布完就立刻退出（上面那个就绪陷阱）；少了 kill，重启就会附着，中断任务的断言永不触发；换一个 home，「第二个」进程就成了承载方，附着断言永不触发。三条都是靠把它们弄坏来核对的，而且每次失败都报进程自己的输出，不是一个不给原因的超时。
 
-- **Only three entries host a node** (`node.StartOrAttachNode`: the TUI, the desktop, the channel entry), and
-  **only the channel entry runs headless** — but it refuses to start with no channel enabled. `channel/mock`
-  is the inert channel that satisfies it: `Name`/`OnStart`/`Run`, where `Run` blocks until shutdown. It is not
-  user-facing (only `main_channels.go` reads the registry, so nothing lists or offers it).
-- **The fixture must NAME the A2A port.** Nothing publishes a hosting process's remote address — `local.json`
-  carries the LOCAL control address, the node id, the instance id and the token, and nothing else — so a spec
-  that keeps the peer in a separate process picks a free port (`0.0.0.0:<port>`, which also puts it off
-  loopback and therefore behind mTLS) and puts it in the config.
-- **Waiting for `local.json` is NOT waiting for a node.** The file outlives its writer by design (`Close`
-  leaves it, because the attach path re-checks the instance id and the handshake, so a stale file is harmless
-  there) — and an entry that dies right after publishing leaves it behind. Readiness is "the file appeared"
-  AND "something answers on the port" (`net.Dial`; the handshake is EXPECTED to fail on a non-loopback
-  surface, so a TCP connect is all that can be checked). When the process exits while waiting, report ITS
-  output: "never became ready" sends a reader looking in the wrong place while the answer — a channel that is
-  enabled but not registered, a taken port — sits right there.
-- That pair is what makes the cross-process specs possible at all: two identities, two TOFU pin records, two
-  data directories and two logs, each written by its own process (`itest/run/node_host_test.go`). **Keep the
-  in-process peer for everything else**: it proves the config→surface path without a second process, and only
-  the process boundary needs this machinery.
-- **What the three specs in that file cover**, so they are not rewritten: (1) a real process hosts and another
-  real process delegates to it over mTLS, with both sides' records checked on disk; (2) a second process on
-  the SAME `--home` ATTACHES instead of starting a second service — asserted on its own `attached to local
-  node service` line (pid-attributed, because two processes sharing a home share its log file) plus the lock
-  being held by someone else and the published instance id being the first process's; (3) a host killed with
-  `-9` while a task was parked on a question — the next start takes the freed lock (a flock dies with its
-  holder) and resolves the task as interrupted, keeping the question. The retention COORDINATION lock's
-  contention tests are still deferred (`node.md`); these are about the node lock.
-- **Each of those three breaks in a way worth knowing**: without the inert channel the host exits right after
-  publishing (the readiness trap above); without the kill, the restart attaches and the interrupted-task
-  assertions never fire; with a different home, the "second" process hosts and the attach assertions never
-  fire. All three were checked by breaking them, and each failure is reported with the process's own output
-  rather than as a timeout with no reason.
-
-Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md) (the smoke suite, which is a different
-harness), [prompt-cache.md](prompt-cache.md) (why a mock's request counter is not a turn boundary),
-[node.md](node.md) (what the node service does with the process it lives in).
+Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md)（冒烟套件，那是另一套 harness）、[prompt-cache.md](prompt-cache.md)（为什么 mock 的请求计数不是单轮边界）、[node.md](node.md)（节点服务怎么对待它所在的那个进程）。

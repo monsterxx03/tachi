@@ -1,234 +1,128 @@
-# Tachi — Channel Mode Handbook (split out of `.tachi.md`)
+# Tachi —— Channel 模式手册
 
-Read this **before changing anything under `channel/`**. Channel mode is the entry mode where the agent
-runs somewhere nobody is watching it: a message arrives from an IM backend, one `*Manager` decides what
-it means, and the answer goes back out. Most of its invariants are about *state that outlives a turn*
-(a per-thread agent, buffered ambient messages, a parked AskUser question) — which is exactly the state a
-careless change breaks in a way no single-turn test notices.
+Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消息从 IM 后端进来，一个 `*Manager` 判断它是什么意思，答案再发出去。它的不变量大多关于**活过一轮的状态**——按线程的 agent、缓存下来的 ambient 消息、被搁置的 AskUser 问题——这种状态一旦被粗心的改动弄坏，没有哪个单轮测试会发现。
 
-`.tachi.md` is injected WHOLE into the first message of every session, so it keeps only the conventions
-that apply anywhere in the repo and points here for the rest. **New channel lessons belong in THIS file**,
-not back in `.tachi.md` — and the rules that ride with that file (freshness in the same turn,
-convention-not-history, split + index when a subject grows) apply to this split too.
+## 目录
 
-## Contents — read the section you need, not the file
-
-| Section | Read it when |
+| 章节 | 什么时候读 |
 | --- | --- |
-| **Wiring: who builds what** | you touch startup, channel registration, or `MessageHandler` |
-| **The per-thread agent pool** | you touch the agent cache, eviction, `/new`, `/model`, `/cd`, or anything about lock order |
-| **Per-thread state besides the agent** | you add state that lives per thread, or touch whisper / AskUser / steer |
-| **Ambient (whisper) routing** | you touch group-chat handling, silence, or the batch window |
-| **Slash commands** | you add a command, change dispatch, or touch `/compact` |
-| **One-off commands (`/commit`, `/review`)** | you touch the side-channel runs or their cancellation |
-| **Cron notifications (`when_relevant`)** | you touch what a finished cron job delivers, or the `[SILENT]` marker |
+| **接线：谁造什么** | 你碰启动、channel 注册，或 `MessageHandler` 时 |
+| **按线程的 agent 池** | 你碰 agent 缓存、淘汰、`/new`、`/model`、`/cd`，或任何关于加锁顺序的东西时 |
+| **agent 之外、按线程的状态** | 你新增按线程存活的状态，或碰 whisper / AskUser / steer 时 |
+| **Ambient（whisper）路由** | 你碰群聊处理、沉默，或批处理窗口时 |
+| **斜杠命令** | 你新增命令、改分发，或碰 `/compact` 时 |
+| **一次性命令（`/commit`、`/review`）** | 你碰侧信道运行或它们的取消时 |
+| **cron 通知（`when_relevant`）** | 你碰一个跑完的 cron 任务投递什么，或 `[SILENT]` 标记时 |
 
-## Wiring: who builds what
+## 接线：谁造什么
 
-- **One `Manager` serves every channel.** `main_channels.go` builds it (`channelmgr.New(cfg)`), adds each
-  channel the config enables through the registry (`channel.Register` in `channel/discord`, `weixin`,
-  `github`, and `channel/mock` — the inert one a spec names to get a headless process that hosts a node:
-  [itest.md](itest.md)), and calls `mgr.Start(ctx)`. The manager hands each channel ONE handler — `buildHandler()`
-  (`agent_turn.go`) — so every routing decision in the product lives behind that closure. It is a short
-  sequence of four such decisions, each its own function: `routeGroupMessage` (ambient or dropped),
-  `classifyTurnInput` (which kind of turn, or a synchronous command), `activateDirectedTurn` +
-  `joinOrStartTurn` (claim the thread, then join a running turn or start one), `replyForTurnResult` (build
-  the reply, finalising `/compact`).
-- **The handler is synchronous per channel.** `channel.Channel.Run` calls it and waits for the
-  `HandlerResult`; a channel that wants concurrency spawns its own goroutines, but the manager already
-  runs the agent turn on a goroutine and blocks the handler on a result channel, so a slow turn does not
-  block the channel's read loop forever — it blocks only that thread's next message.
-- **`PermissionModeSkip` all the way down**: a channel agent APPROVES a bash `ask` rather than parking one —
-  nobody is at the console, so a rule that asks for a human is answered "run it" (`.tachi.md`'s entry-mode
-  table; `deny` still decides). The two exceptions both come from the *channel's* own capability, not
-  from the manager's choice:
-  - `AskUserQuestion` is unregistered for a non-interactive channel and **re-registered** in `buildAgent`
-    for one whose channel implements `InteractiveChannel` with `Interactive() == true`. `NewAIAgentWithConfig`
-    drops it when `PermissionModeSkip` is set and `AskUserEnabled` is false, so the re-registration is
-    what makes the tool exist — not a formality.
-  - A channel implementing `ToolProvider` / `ThreadReminderChannel` injects its own tools and a per-thread
-    reminder into the cached agent at build time (`buildAgent`), so both are per-thread by construction.
+- **一个 `Manager` 服务所有 channel。** `main_channels.go` 造出它（`channelmgr.New(cfg)`），把配置启用的每个 channel 经注册表加进来（`channel.Register` 写在 `channel/discord`、`weixin`、`github` 和 `channel/mock` 里——最后那个是惰性的那个，用例点名它来拿一个能承载 node 的无头进程：[itest.md](itest.md)），然后调 `mgr.Start(ctx)`。manager 给每个 channel 只有一个 handler——`buildHandler()`（`agent_turn.go`）——所以产品里每一个路由决策都活在那个闭包后面。它是一串很短的决策，四个，每个都是自己的函数：`routeGroupMessage`（ambient 还是丢弃）、`classifyTurnInput`（是哪种轮次，还是一条同步命令）、`activateDirectedTurn` + `joinOrStartTurn`（认领线程，然后加入一轮正在跑的轮次或起一轮）、`replyForTurnResult`（构造回复，收尾 `/compact`）。
+- **handler 对每个 channel 是同步的。** `channel.Channel.Run` 调用它并等 `HandlerResult`；想要并发的 channel 自己起 goroutine，但 manager 已经把 agent 轮次跑在一个 goroutine 上、并把 handler 阻塞在一个结果 channel 上，所以一轮慢的轮次不会永远卡住 channel 的读循环——它只卡住那个线程的下一条消息。
+- **`PermissionModeSkip` 一路到底**：channel 的 agent 会**放行**一个 bash `ask`，而不是把它搁置——控制台前没人，所以一条要人回答的规则得到的回答是「跑吧」（`.tachi.md` 的入口模式表；`deny` 仍然说了算）。两个例外都来自 *channel 自己*的能力，而不是 manager 的选择：
+  - 对非交互式 channel，`AskUserQuestion` 被注销；对实现了 `InteractiveChannel` 且 `Interactive() == true` 的 channel，它在 `buildAgent` 里被**重新注册**。`PermissionModeSkip` 设上、`AskUserEnabled` 为 false 时 `NewAIAgentWithConfig` 会把它丢掉，所以正是这次重新注册让这个工具存在——不是走过场。
+  - 实现了 `ToolProvider` / `ThreadReminderChannel` 的 channel 在构建时（`buildAgent`）把自己拥有的工具和一条按线程的提醒注入缓存 agent，所以这两样天生就是按线程的。
 
-## The per-thread agent pool
+## 按线程的 agent 池
 
-**One long-lived `*AIAgent` per ThreadID** (`agent_pool.go`), so the state worth keeping across turns —
-skill activation, the MCP discovered set, reminder cadence — survives them, while threads stay isolated.
-The agent is built lazily on a thread's first message and rebuilt when the provider changes or the thread
-is evicted (`/new`, `/model`, a compact's finalize).
+**每个 ThreadID 一个长命的 `*AIAgent`**（`agent_pool.go`），于是那些值得跨轮次留着的状态——skill 激活、MCP 已发现集合、提醒节奏——就这样活着跨过轮次，同时线程之间保持隔离。agent 在线程的第一条消息上惰性构建，并在 provider 变了或该线程被淘汰（`/new`、`/model`、一次压缩的收尾）时重建。
 
-**Three guards, and NONE of them is nested.** This is the invariant to keep:
+**三把守卫，没有一把嵌套在另一把里。** 这就是要守住的不变量：
 
-| Guard | Protects | Held for |
+| 守卫 | 保护 | 持有多久 |
 | --- | --- | --- |
-| `agentPool.mu` | the map only | microseconds: map read/write, never across a call into an agent |
-| `cachedAgent.mu` | that thread's turns (serializes them; `release` ends the turn) | a whole turn |
-| `cachedAgent.evicted` (atomic) | "this slot is dead" | set before the agent is closed, read by a waiter |
+| `agentPool.mu` | 只管那张 map | 微秒级：map 读/写，绝不跨进对 agent 的一次调用 |
+| `cachedAgent.mu` | 那个线程的轮次（把它们串行化；`release` 结束该轮） | 一整轮 |
+| `cachedAgent.evicted`（atomic） | 「这个槽位已死」 | 在 agent 被关闭之前设上，由等待者读取 |
 
-**No guard may be taken while another is held.** Nesting these two is an ABBA deadlock: a thread
-  acquiring thread T while another evicts T hangs both. The atomic `evicted` flag is what lets a waiter
-  refuse a doomed slot without touching the map, so neither direction is needed.
-  `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` pins it — it fails within seconds if the nesting
-  comes back.
+**持有一把锁时不得再取另一把。** 把两把嵌套起来就是 ABBA 死锁：一边正拿着线程 T 的槽位锁在 acquire，另一边在淘汰 T，两边都挂住。正是那个 atomic 的 `evicted` 标志，让等待者不必碰 map 就能拒掉一个注定要死的槽位，所以两个方向都不需要嵌套。`TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` 钉住它——嵌套一旦回来，它几秒内就失败。
 
-**The rest follows from that:**
+**其余的都是从这里推出来的：**
 
-- **A borrow must be released before an eviction on the same goroutine.** `acquireAgent` holds the slot
-  lock, and `evictAgent` waits for it — correct across goroutines (a running turn is not yanked), a
-  self-deadlock within one. The `/compact` finalize path is the one caller that must borrow AND evict, so
-  it releases inside a scope before evicting; `compact_deadlock_test.go` is that regression test.
-- **Nothing outside `agent_pool.go` touches the pool's guards.** Callers use `slot` (bookkeeping read, never
-  creates; a dead entry reads as absent), `ensure` (create-if-absent-or-dead; its closure must not call back
-  into the Manager — building the value first is what keeps the short lock from becoming an ordering
-  problem), `acquire`/`release`, `evict`/`evictAll`, `each` (snapshots, then calls out — a slow
-  `ReloadSkills` must not hold the map), `count`, and `withAgent` (runs a callback on a thread's agent under
-  the slot lock — how a slash command reaches an agent, instead of taking `ca.mu` itself and inventing an
-  order of its own).
-- **A failed build leaves a tombstone**: the slot is marked dead and stays in the map until the next caller
-  for that thread replaces it (removing it would mean taking the map lock with the slot lock held). It stays
-  INVISIBLE meanwhile — `slot` and `ensure` treat an evicted entry as absent, so `/cd` creates a live slot
-  instead of writing a directory into a dead one, and `getThreadWorkDir` falls back to the session rather
-  than answering with a value nothing will ever use (`TestAgentPool_TombstonesAreInvisible`). A slot that
-  already has an agent never becomes a tombstone in place: detach, `evictAll` and `acquire`'s phase 1 all
-  delete it in the same critical section that marks it, and the one that removes it owns the close — even
-  though it left the map, so `evict` can no longer find it (`TestAgentPool_ReplacedSlotClosesItsAgent`).
-- **`workDir` is the one field two lifecycles write**, so it carries its own LEAF lock (`cachedAgent.WorkDir`/
-  `SetWorkDir`) rather than the turn lock: a turn reads it at the start and may write it back from the
-  session's persisted value, while `/cd` — a stateless command that must not wait out a turn — writes it
-  directly. Guarding it with the turn lock would make `/cd` block for a whole turn, and with the map lock it
-  would be guarded by a lock that exists to protect the map.
+- **同一条 goroutine 上，一次借用必须在一次淘汰之前释放。** `acquireAgent` 持有槽位锁，`evictAgent` 等它——跨 goroutine 时这是对的（正在跑的轮次不会被硬拽走），在一条 goroutine 内则是自我死锁。`/compact` 的收尾路径是唯一必须既借用又淘汰的调用方，所以它在一个作用域里先释放、再淘汰；`compact_deadlock_test.go` 就是那个回归测试。
+- **`agent_pool.go` 之外没有任何东西碰这个池的守卫。** 调用方用 `slot`（记账式读取，绝不创建；一个死条目读作不存在）、`ensure`（不存在或已死就创建；它的闭包不得回调进 Manager——先把值造好，那把短锁才不会变成一个顺序问题）、`acquire`/`release`、`evict`/`evictAll`、`each`（先快照，再往外调用——一次慢的 `ReloadSkills` 不得占着 map）、`count`，以及 `withAgent`（在槽位锁下对一个线程的 agent 跑一个回调——一条斜杠命令够到一个 agent 走的就是它，而不是自己拿 `ca.mu`、自创一套顺序）。
+- **一次失败的构建留下一块墓碑**：槽位被标记为死，并留在 map 里，直到该线程的下一个调用方替换它（把它删掉，就等于持有槽位锁时去拿 map 锁）。它在这期间是**不可见的**——`slot` 和 `ensure` 把一个被淘汰的条目当作不存在，所以 `/cd` 会创建一个活槽位，而不是把一个目录写进死槽位；`getThreadWorkDir` 会回退到会话，而不是拿一个永远没人会用的值作答（`TestAgentPool_TombstonesAreInvisible`）。一个已经有 agent 的槽位永远不会原地变成墓碑：detach、`evictAll` 和 `acquire` 的 phase 1 都在标记它的同一个临界区里把它删掉，而删掉它的那一方拥有关闭权——哪怕它已经离开 map、`evict` 再也找不到它（`TestAgentPool_ReplacedSlotClosesItsAgent`）。
+- **`workDir` 是两个生命周期都会写的唯一字段**，所以它自带一把叶子锁（`cachedAgent.WorkDir`/`SetWorkDir`），而不是用轮次锁：一轮在开头读它，并可能从会话里持久化的值把它写回，而 `/cd`——一条不得等一整轮跑完的无状态命令——直接写它。用轮次锁守它，`/cd` 就要阻塞一整轮；用 map 锁守它，就是拿一把为保护 map 而存在的锁去守别的东西。
 
-## Per-thread state besides the agent
+## agent 之外、按线程的状态
 
-**ONE table, one lock** (`thread_state.go`): `threadTable.byID[threadID] → *threadState`, holding
+**一张表，一把锁**（`thread_state.go`）：`threadTable.byID[threadID] → *threadState`，装着
 
-- **`ch`** — the channel owning the thread, so `buildAgent` can ask the right channel about
-  interactivity, tools and reminders. Written once, by the per-channel handler wrapper on the first
-  message.
-- **`defaults`** — workdir/provider defaults from platform metadata (a group announcement), applied when
-  a FRESH session is created. Empty fields fall back to the usual defaults.
-- **`turn`** — the LIVE turn: steer queue + steer response channel, the result channel the handler blocks
-  on, cancel func, `isCompact`, Ask User state, and the whisper ambient state. Created by `beginTurn`,
-  dropped by `endTurn`.
+- **`ch`**——拥有该线程的 channel，好让 `buildAgent` 能问对的那个 channel 要交互性、工具和提醒。由按 channel 的 handler 包装器在第一条消息上写一次。
+- **`defaults`**——来自平台元数据（比如一条群公告）的 workdir/provider 默认值，在创建一个**全新**会话时应用。空字段回退到通常的默认值。
+- **`turn`**——那个**活着**的轮次：steer 队列 + steer 响应 channel、handler 阻塞在其上的结果 channel、cancel 函数、`isCompact`、AskUser 状态，以及 whisper 的 ambient 状态。由 `beginTurn` 创建，由 `endTurn` 丢掉。
 
-**One record, one LEAF lock, and its methods never call out:**
+**一条记录，一把叶子锁，它的方法从不往外调用：**
 
-- **The table lock is a LEAF**: nothing is taken while holding it, and its methods never call out.
-  `beginTurn`'s `make` callback only allocates for that reason — a provider lookup inside it would nest
-  the thread-defaults lock.
-- **A second message JOINS the running turn** (`beginTurn` returns the live activation); the caller reads
-  the activation's own marker to tell "I started it" from "I am steering it". A rival activation would
-  mean two cancels, two steer queues and two AskUser slots for one thread.
-- **`endTurn` clears only its OWN activation** (pointer equality). A handler goroutine that finishes after
-  `/stop` took the turn must not drop the activation the next message installed —
-  `TestThreadTable_EndTurnOnlyClearsItsOwnTurn`. `takeTurn` hands the activation back so the CANCELLATION
-  happens outside the table lock: `cancel()` unwinds the turn goroutine.
-- **Read-only lookups never create a record**: `channelFor` / `defaults` / `turn` are what stateless
-  commands and the ambient timer call on threads that may never have been seen.
-- **The turn's internals keep their own lock** (`threadActivation.mu`) — that object is shared with a
-  running goroutine, so it is not a field of the record. `cancelled` is an atomic: `/stop` writes it from
-  the command goroutine while the turn goroutine reads it.
-- **`oneoffCancels`** (Mutex) + **`oneoffSem`** (Semaphore) stay separate: one-off runs have no activation
-  and no agent slot, so they are not part of a thread record.
+- **表锁是一把叶子锁**：持有它时不取任何东西，它的方法也从不往外调用。`beginTurn` 的 `make` 回调之所以只做分配，就是这个原因——里面一次 provider 查找会嵌套进 thread-defaults 锁。
+- **第二条消息会加入正在跑的那一轮**（`beginTurn` 返回那个活着的 activation）；调用方读 activation 自己的标记来区分「是我起的」和「我在 steer 它」。两个对立的 activation 意味着一个线程有两套 cancel、两个 steer 队列、两个 AskUser 槽位。
+- **`endTurn` 只清掉它自己的那个 activation**（指针相等）。一条在 `/stop` 拿走该轮之后才完成的 handler goroutine，不得丢掉下一条消息装上的 activation——`TestThreadTable_EndTurnOnlyClearsItsOwnTurn`。`takeTurn` 把 activation 交出来，于是**取消**发生在表锁之外：`cancel()` 收拾那个轮次 goroutine。
+- **只读查找从不创建记录**：`channelFor` / `defaults` / `turn` 正是无状态命令和 ambient 定时器会在一个可能从没见过的线程上调用的东西。
+- **轮次的内部自带一把锁**（`threadActivation.mu`）——那个对象与一条正在跑的 goroutine 共享，所以它不是记录的一个字段。`cancelled` 是一个 atomic：`/stop` 从命令 goroutine 写它，轮次 goroutine 读它。
+- **`oneoffCancels`**（Mutex）与 **`oneoffSem`**（Semaphore）保持分开：一次性运行既没有 activation 也没有 agent 槽位，所以它们不是线程记录的一部分。
 
-A new per-thread need goes INTO `threadState`; a fifth map is the moment to stop and ask why.
+一项新的按线程需求，加进 `threadState`；等出现第五张 map 的时候，就是停下来问为什么的时候。
 
-## Ambient (whisper) routing
+## Ambient（whisper）路由
 
-One feature, THREE entry points — a change to any of them has to consider the other two:
+一个功能，三个入口点——改动其中任何一个，都得考虑另外两个：
 
-1. **`routeGroupMessage`**, called first by `buildHandler` (`agent_turn.go`), decides whether a message is
-   ambient at all: non-directed + group chat + whisper enabled → `handleAmbientMessage`; non-directed +
-   group chat + whisper OFF → dropped silently (never an agent turn).
-2. **`handleAmbientMessage`** (same file) buffers the message on the thread activation and (re)arms the
-   batch timer; a directed message instead cancels the pending ambient turn, transfers the buffered messages
-   as steer context, and resets the silence backoff.
-3. **`ambient.go`** runs the batch: `flushAmbientBatch` → `runAmbientTurn` → the `[SILENT]` decision, whose
-   consecutive count drives the exponential batch window (`ambientBatchWindow`).
+1. **`routeGroupMessage`**，由 `buildHandler`（`agent_turn.go`）最先调用，判断一条消息到底算不算 ambient：非指向 + 群聊 + whisper 开启 → `handleAmbientMessage`；非指向 + 群聊 + whisper 关闭 → 静默丢弃（永远不会变成一轮 agent 轮次）。
+2. **`handleAmbientMessage`**（同一个文件）把消息缓存在线程 activation 上，并（重新）装上批处理定时器；而一条指向消息会取消待处理的 ambient 轮次，把缓存的消息作为 steer 上下文转过去，并重置沉默退避。
+3. **`ambient.go`** 跑这一批：`flushAmbientBatch` → `runAmbientTurn` → `[SILENT]` 判定，其连续计数驱动指数级的批处理窗口（`ambientBatchWindow`）。
 
-The reply itself is the primary product of that turn, so a change that moves the silence decision (a gate
-before generation, say) also changes where the backoff counter is fed.
+回复本身就是那一轮的主要产物，所以任何挪动沉默判定的改动（比如在生成之前加一道门禁），也会挪动退避计数器是在哪里被喂进去的。
 
-## Slash commands
+## 斜杠命令
 
-Three places, and they must agree:
+三个地方，必须彼此一致：
 
-- **`agent/commands` is the registry** (name, description, modes, input hint) — metadata only. It is what
-  the unknown-command help lists and what a frontend builds its autocomplete from.
-- **`executeSlashCommand` (`commands.go`) is the dispatch** — a switch, one case per command, all returning
-  `(text, error)` through `textHandlerResult`.
-- **`/compact` and skill activation are special**: `classifyTurnInput` — the second decision
-  `buildHandler` makes — sends them down the AGENT TURN road (they need the live session context), so they
-  never reach the switch; every other command is answered synchronously by `executeSlashCommand`.
+- **`agent/commands` 是注册表**（名字、描述、模式、输入提示）——只是元数据。未知命令的帮助列的就是它，前端也从它构建自己的补全。
+- **`executeSlashCommand`（`commands.go`）是分发**——一个 switch，每个命令一个 case，全都通过 `textHandlerResult` 返回 `(text, error)`。
+- **`/compact` 和 skill 激活是特殊的**：`classifyTurnInput`——`buildHandler` 做的第二个决策——把它们送上 **agent 轮次**那条路（它们需要活着的会话上下文），所以它们永远到不了那个 switch；其余每个命令都由 `executeSlashCommand` 同步作答。
 
-`TestEveryChannelCommandIsHandled` (`agent_pool_test.go`) holds the three together: a command declared for
-channel mode with neither a case nor a documented special path fails the build. It is a source check —
-invoking every handler would need a live session per command and would run the destructive ones
-(`/restart` calls systemctl, `/new` ends a conversation).
+`TestEveryChannelCommandIsHandled`（`agent_pool_test.go`）把这三者绑在一起：一个为 channel 模式声明的命令，若既没有 case、也没有一条被记录在案的特殊路径，构建就会失败。这是一项源码检查——逐个调用每个 handler 会要求每个命令都有一个活着的会话，还会跑起那些有破坏性的命令（`/restart` 调 systemctl，`/new` 结束一段对话）。
 
-## One-off commands (`/commit`, `/review`)
+## 一次性命令（`/commit`、`/review`）
 
-They are not turns: they do not create a `threadActivation`, do not touch the agent cache, and are tracked
-in `oneoffCancels` so `/stop` and `/new` can cancel them. `oneoffSem` caps how many run at once globally
-(a burst of `/review N` would otherwise saturate provider quotas — a full fork per run), and a command that
-cannot get a slot is REFUSED with a hint rather than queued silently.
+它们不是轮次：不创建 `threadActivation`，不碰 agent 缓存，并被记录在 `oneoffCancels` 里，好让 `/stop` 和 `/new` 能取消它们。`oneoffSem` 封顶全局同时能跑几个（一阵 `/review N` 否则会撑爆 provider 配额——每次运行都是一次完整 fork），拿不到槽位的命令会被**拒绝**并给出提示，而不是静默排队。
 
-## Cron notifications (`when_relevant`)
+## cron 通知（`when_relevant`）
 
-**A finished job's result reaches the channel through ONE decision, in `judgeNotify`
-(`notify_gate.go`) — not through the branch that happens to deliver.** Every cron run goes through it,
-`notify=always` included, so the policy has exactly one home. What it decides:
+**一个跑完的任务的结果，靠 `judgeNotify`（`notify_gate.go`）里的一个决策抵达 channel——而不是靠碰巧投递它的那个分支。** 每一次 cron 运行都经过它，`notify=always` 也在内，所以这条策略只有一个家。它决定的是：
 
-| Situation | Outcome | Decider |
+| 情形 | 结果 | 决定者 |
 | --- | --- | --- |
-| `notify=always` | deliver the report (nothing when the turn failed) | `always` |
-| `when_relevant`, nothing reported | suppress, no call | `none` |
-| `when_relevant`, the report IS `[SILENT]` | suppress, no call | `marker` |
-| `when_relevant`, judged p ≥ `cron.jev_threshold` | deliver, leading marker stripped | `jev` |
-| `when_relevant`, judged p < threshold | suppress | `jev` |
-| no gate (matcher `marker`, or no usable `jev` block), or no judgment (error, timeout, unanswered) | `cron.Job.ShouldSuppressResult` — the marker | `marker` |
+| `notify=always` | 投递报告（轮次失败时什么都不投） | `always` |
+| `when_relevant`，什么都没报 | 抑制，不调用 | `none` |
+| `when_relevant`，报告**就是** `[SILENT]` | 抑制，不调用 | `marker` |
+| `when_relevant`，判定 p ≥ `cron.jev_threshold` | 投递，剥掉开头标记 | `jev` |
+| `when_relevant`，判定 p < 阈值 | 抑制 | `jev` |
+| 没有门禁（matcher 为 `marker`，或没有可用的 `jev` 块），或没有判定（出错、超时、未作答） | `cron.Job.ShouldSuppressResult`——那个标记 | `marker` |
 
-Four things about it are easy to undo by accident:
+关于它有四件事很容易被无意中弄反：
 
-- **The appended prompt policy follows the DECIDER, and `buildCronPrompt` owns both wordings.** While the
-  gate answers, the agent is told to REPORT (`gateNotificationPolicy`) — an agent that has already judged
-  a finding unworthy hands the gate nothing to judge, and that pre-filtering is exactly what a job like
-  "开市了就总结" cannot survive (`market-open-flat` in the case set is that job). While the gate is absent
-  or has stopped answering (`degraded`, recomputed per judgment), the agent gets its ORIGINAL instruction
-  back (`markerNotificationPolicy`), because the fallback is a marker and a marker has to be asked for.
-  Do not merge the two texts, and do not drop the second one: an installation without a `jev` block has to
-  behave exactly as it did before the gate existed.
-- **The fast path is deliberately tighter than the fallback.** `isMarkerOnly` asks whether the report
-  *is* the marker; the fallback still uses `ShouldSuppressResult`'s loose `strings.Contains`. Do not
-  "unify" them: the loose reading is the behaviour the gate exists to replace, and the fallback has to
-  be the old one or a degraded service would silently change what "suppressed" means.
-- **"No judgment" means the marker, never "deliver".** The opposite of the MCP tool-search gate, whose
-  missing answer means "do not offer" — a cluttered tool list is the cost there, a swallowed
-  notification is the cost here.
-- **A failed turn is judged like any other**, and the state carries the failure, because the turn error
-  is what the user asked to hear about. The fallback stays silent on it (that is the pre-gate
-  behaviour, and the scheduler owns a failed run: it records the status and retries). So the gate
-  changes what a failed run does, which is why it is opt-in behind the `jev` block.
+- **追加的提示词跟着决定者走，两套措辞都由 `buildCronPrompt` 拥有。** 门禁在作答期间，agent 被告知要**报告**（`gateNotificationPolicy`）——一个已经把一个发现判为不值得提的 agent，交给门禁去判的东西就是零，而这种预过滤恰恰是「开市了就总结」这类任务活不下来的原因（用例集里的 `market-open-flat` 就是那个任务）。门禁缺席、或已停止作答（`degraded`，每次判定重新算）期间，agent 拿回它**原来**的指令（`markerNotificationPolicy`），因为兜底是一个标记，而一个标记必须被点名要求。不要把两段文字合并，也不要丢掉第二段：一个没有 `jev` 块的安装，必须表现得同门禁存在之前一模一样。
+- **快路径是刻意比兜底更紧的。** `isMarkerOnly` 问的是报告*是不是*那个标记；兜底仍用 `ShouldSuppressResult` 那套宽松的 `strings.Contains`。不要把两者「统一」：那套宽松读法正是门禁要替换掉的行为，兜底必须是旧的那套，否则一个降级的服务会悄悄改变「被抑制」的含义。
+- **「没有判定」意味着标记，绝不是「投递」。** 这与 MCP 工具搜索那道门禁相反——那里缺失答案意味着「不要提供」，因为代价是工具列表被塞满，而这里的代价是一条被吞掉的通知。
+- **失败的轮次和任何别的轮次一样被判定**，而且状态里带着这个失败，因为轮次出错正是用户想听到的事。兜底在它上面保持沉默（那是门禁之前的行为，而且失败的运行归调度器：它记下状态并重试）。所以门禁改变了失败运行的行为，这就是它被放在 `jev` 块后面、作为可选项的原因。
 
-Every call is one Info line (`channel: cron notify judged`, probability last) and one `llm.UsageKindJev`
-ledger row through `llm.RecordJevUsage` — the same writer the tool search uses, so a gate cannot make
-its cost invisible. The question, the state and the threshold's provenance belong to
-`channel/manager/notifygate` and `docs/agents/jev.md`; read the latter before touching the question.
+每次调用留一行 Info（`channel: cron notify judged`，概率在最后）和一行 `llm.UsageKindJev` 账本记录，经由 `llm.RecordJevUsage`——与工具搜索用的是同一个写入者，所以一道门禁无法把自己的成本变得不可见。问题、状态和阈值的出处属于 `channel/manager/notifygate` 和 [jev.md](jev.md)；碰那个问题之前先读后者。
 
-## Tests
+## 测试
 
 ```sh
 go test -race ./channel/manager/     # the package is written for -race; the field-level races it covers are real
 ```
 
-| Test | Pins |
+| 测试 | 钉住 |
 | --- | --- |
-| `agent_pool_test.go` `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` | the pool nests no guards (fails in seconds if the nesting returns) |
-| `agent_pool_test.go` `TestAgentPool_EachDoesNotHoldThePoolLock` | `each` calls out with the map lock released |
-| `agent_pool_test.go` `TestAgentPool_TombstonesAreInvisible` | a dead slot reads as absent, so `/cd` lands on a live one |
-| `agent_pool_test.go` `TestAgentPool_ReplacedSlotClosesItsAgent` | a slot acquire replaces is still closed (it left the map) |
-| `agent_pool_test.go` `TestEveryChannelCommandIsHandled` | registry ↔ dispatch ↔ special paths |
-| `compact_deadlock_test.go` | borrow-then-evict must release first; evict waits for a held agent |
-| `usage_race_test.go` | `/usage` reading an agent while its turn runs |
-| `agent_cache_test.go` | workDir precedence (cached agent wins over the persisted session) |
-| `askuser_regression_test.go` `TestHandler_AskUserAnswerRouting` | the three ways a message answers a parked AskUser wait (structured / raw fallback / cancel) reach the wait and never become a turn |
-| `notify_gate_test.go` | the notify decision's order and direction: always-jobs never judged, the tight fast path, "no judgment" meaning the marker, a leading marker stripped before delivery |
+| `agent_pool_test.go` `TestAgentPool_ConcurrentAcquireEvictDoesNotDeadlock` | 这个池不嵌套任何守卫（嵌套一旦回来，几秒内就失败） |
+| `agent_pool_test.go` `TestAgentPool_EachDoesNotHoldThePoolLock` | `each` 在 map 锁已释放的情况下往外调用 |
+| `agent_pool_test.go` `TestAgentPool_TombstonesAreInvisible` | 一个死槽位读作不存在，所以 `/cd` 落在活的那个上 |
+| `agent_pool_test.go` `TestAgentPool_ReplacedSlotClosesItsAgent` | 被 acquire 替换掉的槽位仍会被关闭（它已离开 map） |
+| `agent_pool_test.go` `TestEveryChannelCommandIsHandled` | 注册表 ↔ 分发 ↔ 特殊路径 |
+| `compact_deadlock_test.go` | 先借用再淘汰必须先释放；淘汰会等一个被持有的 agent |
+| `usage_race_test.go` | `/usage` 在一轮正在跑时读它的 agent |
+| `agent_cache_test.go` | workDir 的优先级（缓存 agent 胜过持久化的会话） |
+| `askuser_regression_test.go` `TestHandler_AskUserAnswerRouting` | 一条消息回答被搁置的 AskUser 等待的三种方式（结构化 / 原始文本兜底 / 取消）抵达那个等待，且永不变成一轮 |
+| `notify_gate_test.go` | 通知决策的顺序和方向：always 任务从不被判定、那条紧的快路径、「没有判定」意味着标记、投递前剥掉开头标记 |
