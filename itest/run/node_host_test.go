@@ -54,7 +54,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			),
 		})
 
-		peerPort := freePort(ginkgo.GinkgoT())
+		peerPort := nodePort(ginkgo.GinkgoT())
 		peerWorkspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
@@ -143,7 +143,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 	ginkgo.It("同 --home 的第二个进程附着，而不是起第二套服务", func() {
 		peerMock := mockllm.NewServer()
 		ginkgo.DeferCleanup(peerMock.Close)
-		peerPort := freePort(ginkgo.GinkgoT())
+		peerPort := nodePort(ginkgo.GinkgoT())
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
@@ -205,7 +205,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			mockllm.Done(),
 		)})
 
-		peerPort := freePort(ginkgo.GinkgoT())
+		peerPort := nodePort(ginkgo.GinkgoT())
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeListen("127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
@@ -287,17 +287,52 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 	})
 })
 
-// freePort asks the kernel for a free port and gives it back. The fixture has to NAME the port
-// because nothing publishes a hosting process's A2A address (see the file comment) — so the
-// window between closing this listener and the peer binding it is a real, tiny race, and a spec
-// that loses it fails with the peer's own "address already in use".
-func freePort(t ginkgo.GinkgoTInterface) int {
+// nodePort picks the port a hosting process will bind. The fixture has to NAME it because
+// nothing publishes a hosting process's A2A address (see the file comment) — so what this
+// function must not do is ask the kernel for one.
+//
+// Asking (`:0`, then close) is a race a loader on a busy runner loses: the number comes out of
+// the EPHEMERAL range, which is the same pool every outbound connection on the machine draws
+// its source port from, so between closing the probe and the host binding, a dial anywhere can
+// be handed the very same number. The host then fails to bind, and because the channel entry
+// point survives a node failure by design (it logs "node service unavailable" and keeps serving
+// channels) nothing ever listens — a readiness wait that times out with the reason sitting in
+// the node's own log. Hence a per-worker block BELOW the ephemeral range (Linux 32768-60999,
+// macOS 49152-65535): the kernel never hands one of these to a dialer, and no two ginkgo workers
+// ask for the same one.
+func nodePort(t ginkgo.GinkgoTInterface) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	port := ln.Addr().(*net.TCPAddr).Port
-	gomega.Expect(ln.Close()).To(gomega.Succeed())
-	return port
+	base := nodePortBase + ginkgo.GinkgoParallelProcess()*nodePortBlockSize
+	for port := base; port < base+nodePortBlockSize; port++ {
+		if portIsFree(port) {
+			return port
+		}
+	}
+	t.Fatalf("no free port in %d..%d (worker %d)", base, base+nodePortBlockSize-1,
+		ginkgo.GinkgoParallelProcess())
+	return 0
+}
+
+const (
+	// nodePortBase sits below every platform's ephemeral range — see nodePort.
+	nodePortBase = 21000
+	// nodePortBlockSize is one worker's share: room for the handful of ports a worker needs, and
+	// small enough that the blocks of the workers that exist do not overlap.
+	nodePortBlockSize = 100
+)
+
+// portIsFree reports whether a port can be bound right now. Inside the reserved block this is
+// only ever about a port somebody else already has (nothing else is asking for these), so the
+// close-then-bind window that makes the same trick unusable on an ephemeral port is harmless.
+// The probe is on 0.0.0.0 because that is the stricter question: it fails if anything holds the
+// port on ANY interface, which is what a host binding 0.0.0.0 needs.
+func portIsFree(port int) bool {
+	ln, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
 }
 
 // waitForNodeHost waits until the hosting process is really serving, and reports its own output
@@ -315,7 +350,9 @@ func freePort(t ginkgo.GinkgoTInterface) int {
 //
 // A process that EXITS while we wait is reported with its output: "never became ready" sends a
 // reader looking in the wrong place, and the answer (an enabled channel that is not registered, a
-// taken port, a bad config) is sitting in that output.
+// taken port, a bad config) is sitting in that output. The node's OWN reason reaches the log file
+// and not stderr — a node service that fails leaves the channel entry point serving channels —
+// so every failure here reports those lines too, and one that gave up fails at once.
 func waitForNodeHost(t ginkgo.GinkgoTInterface, d *run.Daemon, home string, port int) {
 	t.Helper()
 	deadline := time.Now().Add(nodeHostTimeout)
@@ -325,15 +362,38 @@ func waitForNodeHost(t ginkgo.GinkgoTInterface, d *run.Daemon, home string, port
 			return
 		}
 		if exited, err := d.Exited(); exited {
-			t.Fatalf("the hosting process exited before it was ready (%v)\nstdout:\n%s\nstderr:\n%s",
-				err, d.Stdout(), d.Stderr())
+			t.Fatalf("the hosting process exited before it was ready (%v)\nstdout:\n%s\nstderr:\n%s\nlog:\n%s",
+				err, d.Stdout(), d.Stderr(), processLog(home, d.PID()))
+		}
+		// A node service that GAVE UP is not a slow start: the channel entry point keeps the
+		// process alive after one (by design), so nothing will ever listen. Report the reason now
+		// rather than spend the whole budget on a process that is done trying.
+		if log := processLog(home, d.PID()); strings.Contains(log, nodeServiceGaveUp) {
+			t.Fatalf("the hosting process is up but its node service gave up, so nothing serves on %d\nlog:\n%s",
+				port, log)
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the node is not serving after %s\nstdout:\n%s\nstderr:\n%s",
-				nodeHostTimeout, d.Stdout(), d.Stderr())
+			t.Fatalf("the node is not serving after %s\nstdout:\n%s\nstderr:\n%s\nlog:\n%s",
+				nodeHostTimeout, d.Stdout(), d.Stderr(), processLog(home, d.PID()))
 		}
 		time.Sleep(nodeHostPollInterval)
 	}
+}
+
+// nodeServiceGaveUp is the line main_channels.go writes when the node service could not start.
+// Nothing on stderr says so — the process carries on serving channels — which is exactly why a
+// readiness wait has to read the log to have anything to report.
+const nodeServiceGaveUp = "node service unavailable"
+
+// processLog is one process's own lines out of a log several processes may append to, read
+// without failing when the file is not there: it is only ever called on failure paths, where a
+// missing file must not mask the reason.
+func processLog(home string, pid int) string {
+	raw, err := os.ReadFile(filepath.Join(home, "logs", "debug.log"))
+	if err != nil {
+		return ""
+	}
+	return linesWithPid(string(raw), strconv.Itoa(pid))
 }
 
 // portAnswers reports whether anything accepts a connection on a local port. A TCP connection is

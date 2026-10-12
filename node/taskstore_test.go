@@ -85,6 +85,18 @@ func TestAcceptedTaskIsOnDiskBeforeTheWorkRuns(t *testing.T) {
 	h := startWith(t, dir, func(o *Options) { o.Executor = parked })
 	client := newTestClient(t, h)
 
+	// Release the parked task before the test returns and wait for it to land: an execution
+	// still in flight writes into the data dir, and those writes would race the temp-dir
+	// cleanup (see TestAMessageNamingARunningTaskIsRefused).
+	var taskID a2a.TaskID
+	t.Cleanup(func() {
+		close(parked.release)
+		require.Eventually(t, func() bool {
+			got, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: taskID})
+			return err == nil && got.Status.State == a2a.TaskStateCompleted
+		}, waitForWork, pollInterval, "the released task must reach its terminal state before teardown")
+	})
+
 	const messageID = "msg-persisted"
 	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
 		Message: messageWithID(messageID, "persist me"),
@@ -92,6 +104,7 @@ func TestAcceptedTaskIsOnDiskBeforeTheWorkRuns(t *testing.T) {
 	})
 	require.NoError(t, err)
 	task := result.(*a2a.Task)
+	taskID = task.ID
 
 	<-parked.started // the task is really being worked on, not merely accepted
 

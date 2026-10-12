@@ -228,9 +228,13 @@ func TestReturnImmediatelyHandsBackARunningTask(t *testing.T) {
 
 	<-parked.started // the task is really being worked on, not merely accepted
 
-	got, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: task.ID})
-	require.NoError(t, err)
-	require.Equal(t, a2a.TaskStateWorking, got.Status.State)
+	// WORKING has to be WAITED for: the executor running and the store SAYING it is running are
+	// two different moments — the execution publishes its status on a queue of its own, so a
+	// handle read the instant the executor starts may still legitimately say SUBMITTED.
+	require.Eventually(t, func() bool {
+		got, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: task.ID})
+		return err == nil && got.Status.State == a2a.TaskStateWorking
+	}, waitForWork, pollInterval, "the handle must read as WORKING once the execution has said so")
 
 	close(parked.release)
 	require.Eventually(t, func() bool {
