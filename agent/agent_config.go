@@ -80,7 +80,7 @@ type AgentConfig struct {
 	//     SetContextWindow 运行时改写的影响）；
 	//   - nil：NewAIAgentWithConfig 经 FullConfig.DefaultProvider() 构造
 	//     default provider（FullConfig 为 nil 时才退化为空 ResolvedProvider，
-	//     即无主 provider——Fork / github / dream 等裸 agent 总是显式传入）。
+	//     即无主 provider——Fork / dream 等裸 agent 总是显式传入）。
 	Resolved *llm.ResolvedProvider
 
 	// --- 基础行为 ---
@@ -90,7 +90,7 @@ type AgentConfig struct {
 	// SkipConfigure keeps the agent "bare": NewAIAgentWithConfig skips the
 	// configure step (built-in tool registration, skills, reminder collector,
 	// subagent tool — everything AgentSystemConfig drives). Used by
-	// Fork / dream / github agents that register explicit tool whitelists or
+	// Fork / dream agents that register explicit tool whitelists or
 	// inherit tools from a parent, and by minimal test agents. With it set,
 	// SystemConfig is ignored and NewAIAgentWithConfig never returns an error.
 	SkipConfigure bool

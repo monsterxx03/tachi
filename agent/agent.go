@@ -197,7 +197,7 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	//   - nil: resolved from FullConfig's default provider, so callers that
 	//     only need the default provider skip the build dance entirely;
 	//   - nil + no FullConfig: an empty ResolvedProvider (no main provider —
-	//     bare agents like Fork / github / dream always pass one explicitly).
+	//     bare agents like Fork / dream always pass one explicitly).
 	if cfg.Resolved == nil {
 		if cfg.FullConfig != nil {
 			rp, err := llm.DefaultProvider(cfg.FullConfig)
@@ -1319,7 +1319,7 @@ func (a *AIAgent) UsageRecorder() *llm.UsageRecorder {
 // WrapProviderForUsage wraps p with the process-wide usage ledger recorder,
 // resolving price snapshots via cfg. Idempotent — an already-wrapped provider
 // passes through unchanged. This is the escape hatch for bare-agent call
-// sites (dream runner, github bot, channel /model compact) that construct
+// sites (dream runner, channel /model compact) that construct
 // providers outside NewAIAgentWithConfig: wrapping here keeps their LLM calls
 // billed even though kind/session tagging happens at RunOneOffStream. The
 // ledger row's provider name comes from the provider itself.

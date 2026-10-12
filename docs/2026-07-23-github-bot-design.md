@@ -1,5 +1,10 @@
 # GitHub Bot — AI Agent for Issue-Driven Development (Polling Mode)
 
+> ⚠️ **已废弃（2026-10-12）：GitHub channel 已从代码中整体删除** —— `channel/github/` 包（9 个文件）、
+> `main.go` 的注册导入、`llm.UsageKindGithubDiscussion` / `llm.UsageKindGithubPR` 两个用量种类、
+> 以及 `go.mod` 里的 go-github / go-querystring / golang-jwt / x/oauth2 依赖都不再存在。
+> 本文只作为当时的设计记录留存，其中描述的配置项、包结构与文件路径均已失效；读取时请以代码为准。
+
 > Date: 2026-07-23
 > Status: Draft (rev2 — 已根据 code review 修订：scheduler 生命周期、agent 创建模式、Bash 白名单语义、首次运行 seed、状态机恢复、PR 门控、token 处理)
 

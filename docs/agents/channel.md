@@ -17,7 +17,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 ## 接线：谁造什么
 
-- **一个 `Manager` 服务所有 channel。** `main_channels.go` 造出它（`channelmgr.New(cfg)`），把配置启用的每个 channel 经注册表加进来（`channel.Register` 写在 `channel/discord`、`weixin`、`github` 和 `channel/mock` 里——最后那个是惰性的那个，用例点名它来拿一个能承载 node 的无头进程：[itest.md](itest.md)），然后调 `mgr.Start(ctx)`。manager 给每个 channel 只有一个 handler——`buildHandler()`（`agent_turn.go`）——所以产品里每一个路由决策都活在那个闭包后面。它是一串很短的决策，四个，每个都是自己的函数：`routeGroupMessage`（ambient 还是丢弃）、`classifyTurnInput`（是哪种轮次，还是一条同步命令）、`activateDirectedTurn` + `joinOrStartTurn`（认领线程，然后加入一轮正在跑的轮次或起一轮）、`replyForTurnResult`（构造回复，收尾 `/compact`）。
+- **一个 `Manager` 服务所有 channel。** `main_channels.go` 造出它（`channelmgr.New(cfg)`），把配置启用的每个 channel 经注册表加进来（`channel.Register` 写在 `channel/discord`、`weixin` 和 `channel/mock` 里——最后那个是惰性的那个，用例点名它来拿一个能承载 node 的无头进程：[itest.md](itest.md)），然后调 `mgr.Start(ctx)`。manager 给每个 channel 只有一个 handler——`buildHandler()`（`agent_turn.go`）——所以产品里每一个路由决策都活在那个闭包后面。它是一串很短的决策，四个，每个都是自己的函数：`routeGroupMessage`（ambient 还是丢弃）、`classifyTurnInput`（是哪种轮次，还是一条同步命令）、`activateDirectedTurn` + `joinOrStartTurn`（认领线程，然后加入一轮正在跑的轮次或起一轮）、`replyForTurnResult`（构造回复，收尾 `/compact`）。
 - **handler 对每个 channel 是同步的。** `channel.Channel.Run` 调用它并等 `HandlerResult`；想要并发的 channel 自己起 goroutine，但 manager 已经把 agent 轮次跑在一个 goroutine 上、并把 handler 阻塞在一个结果 channel 上，所以一轮慢的轮次不会永远卡住 channel 的读循环——它只卡住那个线程的下一条消息。
 - **`PermissionModeSkip` 一路到底**：channel 的 agent 会**放行**一个 bash `ask`，而不是把它搁置——控制台前没人，所以一条要人回答的规则得到的回答是「跑吧」（`.tachi.md` 的入口模式表；`deny` 仍然说了算）。两个例外都来自 *channel 自己*的能力，而不是 manager 的选择：
   - 对非交互式 channel，`AskUserQuestion` 被注销；对实现了 `InteractiveChannel` 且 `Interactive() == true` 的 channel，它在 `buildAgent` 里被**重新注册**。`PermissionModeSkip` 设上、`AskUserEnabled` 为 false 时 `NewAIAgentWithConfig` 会把它丢掉，所以正是这次重新注册让这个工具存在——不是走过场。
@@ -113,7 +113,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 **agent 在任何一个入口（tui / desktop / acp / `-p` / channel）都能主动给用户发一条 IM 私信** —— 不是回答某条消息，而是「结果要送到人手上」。三条事实撑起这条路，改其中任何一条都要重新读这一节：
 
-- **挂载条件是三件事的合取，只有一处判定**：channel 在 `ActiveChannels()` 里（即启用）、它自己的配置子树里 `notify: true`、并且工厂造出的实例实现了 `channel.NotificationChannel`。判定在 `pkg/channel/notify.go` 的 `NotifiersFromConfig`，**挂载点在 `agent.RegisterTools`**（所以 `SkipConfigure` 的裸 agent——fork / 子代理 / dream / github pr——天然没有这个工具），**卸载点在 `ReloadTools`**：`RegisterTools` 只加不减，开关关掉后不显式 `UnregisterTool` 就会留一个必然失败的工具（与 WebSearch 同一形状）。
+- **挂载条件是三件事的合取，只有一处判定**：channel 在 `ActiveChannels()` 里（即启用）、它自己的配置子树里 `notify: true`、并且工厂造出的实例实现了 `channel.NotificationChannel`。判定在 `pkg/channel/notify.go` 的 `NotifiersFromConfig`，**挂载点在 `agent.RegisterTools`**（所以 `SkipConfigure` 的裸 agent——fork / 子代理 / dream——天然没有这个工具），**卸载点在 `ReloadTools`**：`RegisterTools` 只加不减，开关关掉后不显式 `UnregisterTool` 就会留一个必然失败的工具（与 WebSearch 同一形状）。
 - **解析要构造实例，但构造不连接**：这是整条路的前提（channel 在 `Run()` 才连）。所以挂载不带网络副作用，代价是「到底能不能发」只有第一次调用才知道 —— 于是失败一律从工具冒泡（没有目标、平台拒绝、无凭据），绝不静默成功。工厂拒绝配置 / 名字没注册 / 接口没实现，都只是跳过 + 一条 warning：缺一个通知通道不该让 agent 起不来。
 - **通道顺序按名字升序，不许依赖 map 顺序**：`ActiveChannels()` 是 map，不排序的话「第一个能成功的通道」和工具 schema 里的通道名都会随进程变（工具在最前缀，见 [prompt-cache.md](prompt-cache.md)）。
 
@@ -123,7 +123,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 | --- | --- | --- |
 | weixin（`channel/weixin/notify.go`） | 从 state dir 现读凭据，**自己的 `client`**，发给登录者本人（`ch.userID`） | 不碰 `ch.cli` / `ch.accountID`（`Run` 会写它们 → 数据竞争）、不 QR 登录、不发 `notifyStart`/`notifyStop`、不轮询 |
 | discord（`channel/discord/notify.go`） | 已经有 session（channel 模式）就用它，否则 `discordgo.New` 建一个**不 `Open()`** 的 REST-only session；目标是 `allowed_users[0]` 的私信，先 `UserChannelCreate` 再发 | 不开网关（无 presence、不消费事件）；不猜收件人 —— 没配 `allowed_users` 就报错 |
-| github / mock | 不实现接口 | 永远不是通知通道 |
+| mock | 不实现接口 | 永远不是通知通道 |
 
 两个容易踩的坑：**discord 的 `sendTextWithReference` 在没有 session 时是静默返回 nil**（回复路径要这个行为，通知路径绝对不能要——那会把没发出去说成发出去了），所以通知走 `sendTextOn(sess, …)` 那个显式接受 session 的版本；**legacy weixin 路径（`channel.weixin.enabled`）的 `notify` 开关必须出现在 `ActiveChannels()` 合成的 map 里**（`config/config.go`），否则那一行配置会被静默忽略。
 

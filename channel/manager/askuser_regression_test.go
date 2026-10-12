@@ -44,7 +44,7 @@ func TestBuildAgent_InteractiveChannelRegistersAskUser(t *testing.T) {
 }
 
 // TestBuildAgent_NonInteractiveChannelUnregistersAskUser verifies the
-// default behavior for plain channels (weixin/github): AskUserQuestion is
+// default behavior for plain channels (weixin): AskUserQuestion is
 // unregistered so the LLM never tries to use it.
 func TestBuildAgent_NonInteractiveChannelUnregistersAskUser(t *testing.T) {
 	mgr := newTestManagerWithProvider(t)

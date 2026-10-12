@@ -378,7 +378,7 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		// Set up one-off recorder via WithOneOffMeta when the caller wants
-		// a sidecar transcript (e.g. /commit, /review, github, dream).
+		// a sidecar transcript (e.g. /commit, /review, dream).
 		if params != nil && params.oneoffMeta != nil {
 			params.oneoffMeta.SystemPrompt = systemPrompt
 			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, provider)

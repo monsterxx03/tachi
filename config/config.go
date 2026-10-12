@@ -1263,7 +1263,7 @@ func (b BadgeConfig) AlertsEnabled() bool { return b.Alert == nil || *b.Alert }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files
 // capturing the full execution of side-channel LLM runs (/commit, /review,
-// channel ambient, dream, github bot) without touching the main session
+// channel ambient, dream) without touching the main session
 // history. See docs/2026-07-24-oneoff-transcript-design.md.
 type OneoffConfig struct {
 	Enabled       *bool `yaml:"enabled" default:"true"`      // master switch; false = restore old behavior (no recording)
@@ -1550,7 +1550,7 @@ func SessionDir() (string, error) {
 }
 
 // OneoffDir 返回旁路执行记录（one-off transcript）的全局存储目录。
-// 仅用于无会话上下文的旁路执行（tachi -c、github bot、dream）；
+// 仅用于无会话上下文的旁路执行（tachi -c、dream）；
 // 有会话上下文的记录在 <SessionDir>/<id>/oneoff/ 下。
 func OneoffDir() string {
 	return filepath.Join(configDir(), oneoffDirName)

@@ -19,7 +19,7 @@ const defaultContextWindow int64 = 128_000
 
 // ErrProviderNotFound is returned by BuildProvider when the requested name is
 // empty or not present in the providers list. Callers decide between silent
-// fallback (dedicated providers) and fail-fast (/model switch, github).
+// fallback (dedicated providers) and fail-fast (/model switch).
 var ErrProviderNotFound = errors.New("provider not found")
 
 // NewProviderFromConfig constructs a Provider from a config.ProviderConfig
@@ -63,7 +63,7 @@ func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 
 // BuildProvider resolves a named provider and constructs the Provider —
 // the single home of the ProviderConfig → NewProvider dance that used to be
-// hand-copied across frontends (channel /model, github, tui selectors, acp,
+// hand-copied across frontends (channel /model, tui selectors, acp,
 // main). An empty name resolves to the DEFAULT provider (same as
 // DefaultProvider). Returns ErrProviderNotFound when neither the name nor
 // the default resolves; resolution/construction errors are wrapped with

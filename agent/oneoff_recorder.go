@@ -19,14 +19,14 @@ import (
 
 // One-off transcript recording — sidecar JSONL files capturing the full
 // execution of side-channel LLM runs (/commit, /review, channel ambient,
-// dream, github bot) without touching the main session history.
+// dream) without touching the main session history.
 // See docs/2026-07-24-oneoff-transcript-design.md.
 
 // OneOffMeta describes a one-off (side-channel) execution to be recorded.
 // An empty Kind disables recording entirely.
 type OneOffMeta struct {
 	// Kind classifies the execution: one of the llm.UsageKind constants
-	// (commit, review, ambient, dream, github-*, ...). Type-aligned with the
+	// (commit, review, ambient, dream, ...). Type-aligned with the
 	// usage ledger so kind strings can never drift between the two.
 	Kind llm.UsageKind
 
@@ -40,8 +40,8 @@ type OneOffMeta struct {
 	// review false negatives. RunOneOffStream fills it from its own arg.
 	SystemPrompt string
 
-	// Extra holds optional kind-specific context (e.g. dream domain,
-	// github repo) recorded in the meta header line.
+	// Extra holds optional kind-specific context (e.g. dream domain)
+	// recorded in the meta header line.
 	Extra map[string]string
 }
 
