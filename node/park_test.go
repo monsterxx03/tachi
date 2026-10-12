@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -152,6 +154,35 @@ func askArgs(t *testing.T, question string, options ...string) string {
 	})
 	require.NoError(t, err)
 	return string(raw)
+}
+
+// cancelParkedTask asks the node to stop a parked task, and tolerates the one way that ask can
+// come back refused while the work in fact stops.
+//
+// The window is the SDK's, not this node's. A blocking message/send returns the moment
+// INPUT_REQUIRED reaches it (the SDK treats that state as final for a subscription), while the
+// SDK is still finishing the bookkeeping of the execution that produced it. A cancel landing
+// inside that window takes the SDK's "there IS a concurrent execution" path: it writes the
+// cancel into that execution and waits for ITS result — which is the parked task — so the
+// cancel resolves to ErrTaskNotCancelable (a2a-go's local_manager.go carries a TODO for exactly
+// this case). The turn here really was stopped (nodeExecutor.Cancel runs before any of this),
+// so the same ask a moment later finds nothing running and resolves the task to CANCELED.
+//
+// Retried, not papered over: what the caller asserts afterwards still fails if a cancel never takes.
+func cancelParkedTask(t *testing.T, client *a2aclient.Client, id a2a.TaskID) *a2a.Task {
+	t.Helper()
+
+	var (
+		task *a2a.Task
+		err  error
+	)
+	require.Eventually(t, func() bool {
+		task, err = client.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: id})
+		return err == nil || !errors.Is(err, a2a.ErrTaskNotCancelable)
+	}, waitForWork, pollInterval,
+		"the cancel kept being refused as not-cancelable: the SDK never let go of the finished execution")
+	require.NoError(t, err)
+	return task
 }
 
 // askThenReply is a model that asks one question, and — only if the answer really reached
@@ -468,8 +499,7 @@ func TestCancelingAParkedTaskEndsItAndItsQuestion(t *testing.T) {
 	task := first.(*a2a.Task)
 	require.Equal(t, a2a.TaskStateInputRequired, task.Status.State)
 
-	canceled, err := client.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: task.ID})
-	require.NoError(t, err)
+	canceled := cancelParkedTask(t, client, task.ID)
 	require.Equal(t, a2a.TaskStateCanceled, canceled.Status.State,
 		"a parked turn is the one a cancel can only end from here: the SDK's execution for it is over")
 

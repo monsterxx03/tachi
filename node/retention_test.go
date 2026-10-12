@@ -201,8 +201,7 @@ func TestARunningTaskHoldsItsSessionAndReleasesOnlyItsOwnHold(t *testing.T) {
 
 	// The task ends, and with it the only reason the session was held: nothing is left on the
 	// record, so the ordinary lifecycle owns the session again.
-	_, err = client.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: task.ID})
-	require.NoError(t, err)
+	cancelParkedTask(t, client, task.ID)
 
 	require.Eventually(t, func() bool { return len(holdsFor(t, held)) == 0 }, waitForWork, pollInterval)
 }
