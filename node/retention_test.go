@@ -248,9 +248,12 @@ func TestTheOwnerEndsASessionsWorkThroughTheLocalInterface(t *testing.T) {
 	require.Equal(t, a2a.TaskStateCanceled, got.Status.State)
 	require.Contains(t, messageText(got.Status.Message), "owner")
 
-	// The execution's hold went with the execution: nothing holds the session any more, so what
-	// the owner could not do while the task was running — delete it — is allowed now.
-	require.Eventually(t, func() bool { return len(holdsFor(t, held)) == 0 }, waitForWork, pollInterval)
+	// The hold goes with the execution's WORK, not merely with the order to stop, and the stop does
+	// not return before that: the agent loop writes its own session files while it unwinds, so a
+	// delete that overlapped those writes would fail on a directory somebody is still filling.
+	// Asserted directly — no waiting — because an eventually here would be exactly the mask this
+	// held the bug behind: it passed on a fast machine and failed on a loaded one.
+	require.Empty(t, holdsFor(t, held), "the stop must not return while the turn still holds the session")
 	desktop := otherManager(t)
 	require.NoError(t, desktop.Delete(held),
 		"with no execution running the owner's delete must go through")
@@ -259,6 +262,49 @@ func TestTheOwnerEndsASessionsWorkThroughTheLocalInterface(t *testing.T) {
 	ended, err = h.Client().EndSessionWork(context.Background(), held)
 	require.NoError(t, err)
 	require.Equal(t, 0, ended)
+}
+
+// What the hold covers, exactly: the turn's WRITES, which outlive "the turn ended".
+//
+// A turn ends as an EVENT (the executor's publish calls forgetTurn for a finish, a cancel, an
+// expired question) while the agent loop still has its own session files to write — the tail of
+// the stream, which is where the checkpoint bookkeeping and the final messages land. So a release
+// at that moment would let a delete walk a directory somebody is still filling: RemoveAll fails on
+// a non-empty directory, and the owner's delete reports that as a refusal for a session that is, in
+// fact, over. That is the shape a loaded runner used to hit by luck; this test takes the luck out.
+func TestEndingATurnDoesNotDropItsHoldBeforeTheTurnHasUnwound(t *testing.T) {
+	base := nodeHome(t)
+	mock := mockllm.NewServer()
+	t.Cleanup(mock.Close)
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.ToolCallStart("ask_1", tools.ToolNameAskUser, askArgs(t, "检查照片还是文档？", "照片")),
+		mockllm.Finish("tool_calls"),
+		mockllm.Done(),
+	)})
+
+	h := startRealNode(t, nodeConfig(t, mock, filepath.Join(base, "ws")))
+	client := newTestClient(t, h)
+	result, err := client.SendMessage(context.Background(), sendRequest("检查备份", false))
+	require.NoError(t, err)
+	task := result.(*a2a.Task)
+	held := boundSession(t, base, task.ContextID)
+	require.Len(t, holdsFor(t, held), 1, "a parked task is a running execution, and that is a reason")
+
+	runner := nodeRunner(t, h)
+	turn, ok := runner.turn(task.ID)
+	require.True(t, ok, "the parked task is a live turn")
+
+	// The turn is forgotten — that is the event-side end every path goes through — and the session
+	// is STILL held: the loop has not written its last files yet, and it is about to.
+	runner.forgetTurn(task.ID)
+	require.Len(t, holdsFor(t, held), 1,
+		"the hold describes a turn writing into the session, and the loop is still writing")
+
+	// Read the stream to its end — what the drain does — and the hold goes, no later than that.
+	turn.stop()
+	<-turn.unwound
+	require.Empty(t, holdsFor(t, held),
+		"the hold goes with the turn's work: dropped by then, and not before")
 }
 
 // A compaction with nothing running: the conversation MOVES (the binding follows it), and nothing

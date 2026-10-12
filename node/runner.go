@@ -192,9 +192,13 @@ type liveTurn struct {
 	cancel context.CancelFunc
 	events <-chan agent.AgentEvent
 
-	// done is called once, when this turn's stream has been read to its end (see
-	// runner.unwound). It is the turn's side of "the loop has finished".
-	done func()
+	// settle is the turn's own end of work, run once the stream has been read to its END — which
+	// is where the agent loop finishes what it has left (the session writes and the checkpoint
+	// bookkeeping that follow the last event). It drops the task's hold on the session FIRST,
+	// because that hold is the claim "a turn is writing here", and then marks the turn unwound —
+	// see the drain in drainIfIdle for why that order is the point.
+	settle  func()
+	unwound chan struct{}
 
 	mu       sync.Mutex
 	stopped  bool
@@ -293,10 +297,12 @@ func (r *runner) taskHold(sessionID string, taskID a2a.TaskID) session.Hold {
 // state says nothing about another execution still running in the same session, nor about any
 // other owner's hold (design §9.4).
 //
-// It is also called when a turn is stopped rather than finished — a cancel, a deadline, or
-// this node shutting down. In every one of those the EXECUTION is over, which is what the hold
-// was protecting, and a task the process leaves behind is resolved as interrupted (with the
-// session it no longer needs) at the next start.
+// It is called when the turn's own WORK is over — its stream read to the end, the session writes
+// done (liveTurn.settle) — whichever way the turn ended: finished, cancelled, expired, or this node
+// shutting down. That is what the hold describes, so it must not be dropped earlier: a delete that
+// overlaps the writes finds a non-empty directory. The one exception is the owner ending work that
+// will not finish, where the order stands and the hold is dropped anyway (EndSessionWork's bounded
+// wait), plus the paths where the turn never ran at all.
 func (r *runner) releaseTaskHold(cr *contextRun, taskID a2a.TaskID) error {
 	if cr == nil || taskID == "" {
 		return nil
@@ -615,7 +621,8 @@ func (r *runner) beginTurn(
 		cancel:    cancel,
 		events:    events,
 		handed:    handed,
-		done:      r.unwound.Done,
+		settle:    r.settleTurn(taskID, contextID),
+		unwound:   make(chan struct{}),
 	}
 	r.unwound.Add(1)
 
@@ -845,8 +852,14 @@ const ownerEndedReason = "the machine's owner stopped this execution; side effec
 // Nothing about it is available to a caller: it is reached through the loopback control interface.
 //
 // The state is written HERE because the stopper owns it (nodeExecutor.publish: a stopped turn
-// keeps nothing to say about itself), and stopTurn has already withdrawn the task's hold — the
-// turn's ending is what releases it, exactly as it does for a caller's cancel.
+// keeps nothing to say about itself), and the turn's hold on the session goes when the turn's work
+// is over — not here, because the loop is still writing into that session while it unwinds.
+//
+// It waits for that work before returning: what the owner does next is DELETE the session this was
+// holding, and a delete that overlaps the loop's own writes fails on a directory somebody is still
+// filling. The wait is bounded like every other one here, and a turn that will not finish does not
+// keep the session hostage either — its hold is dropped when the wait runs out (§3.4: the order
+// stands, and a session that cannot be stopped must still be one that can be deleted).
 func (r *runner) EndSessionWork(ctx context.Context, sessionID string) (int, error) {
 	binding, ok := r.contexts.bySession(sessionID)
 	if !ok {
@@ -865,8 +878,10 @@ func (r *runner) EndSessionWork(ctx context.Context, sessionID string) (int, err
 	r.mu.Unlock()
 
 	ended := 0
+	stopped := make([]*liveTurn, 0, len(taskIDs))
 	for _, id := range taskIDs {
-		if !r.stopTurn(id) {
+		lt, ok := r.turn(id)
+		if !ok || !r.stopTurn(id) {
 			continue // already gone between the snapshot and here
 		}
 		if err := r.tasks.endByOwner(id, ownerEndedReason); err != nil {
@@ -874,32 +889,90 @@ func (r *runner) EndSessionWork(ctx context.Context, sessionID string) (int, err
 				err, "task", string(id))
 			continue
 		}
+		stopped = append(stopped, lt)
 		ended++
 	}
+	r.awaitStopped(ctx, stopped)
 	return ended, nil
+}
+
+// awaitStopped waits, bounded by shutdownGrace, for the turns the owner just stopped to be over —
+// their sessions written and their holds dropped. It is the same wait, and the same bound, that
+// Close gives the turns it stops, and for the same reason: "told to stop" is not "stopped".
+//
+// A turn that does not finish in time has its hold dropped here anyway. That is the ONE place the
+// hold is released before the work is over, and it is deliberate: the owner's escape hatch exists
+// for exactly the execution that will not end by itself, so it must not be defeated by the hold it
+// is trying to remove. It is logged, because a session that is still being written to while a
+// delete walks it is a failure this process caused.
+func (r *runner) awaitStopped(ctx context.Context, turns []*liveTurn) {
+	if len(turns) == 0 {
+		return
+	}
+	deadline := time.Now().Add(shutdownGrace)
+	for _, lt := range turns {
+		select {
+		case <-lt.unwound:
+			continue
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Until(deadline)):
+			r.logger.Warn(ctx, "node: a turn the owner stopped did not finish; dropping its session hold",
+				"task", string(lt.taskID), "waited", shutdownGrace.String())
+			r.releaseHeldTurn(lt)
+		}
+	}
+}
+
+// releaseHeldTurn drops a turn's hold without waiting for the turn: the owner's order stands.
+func (r *runner) releaseHeldTurn(lt *liveTurn) {
+	r.mu.Lock()
+	cr := r.runs[lt.contextID]
+	r.mu.Unlock()
+	if cr == nil {
+		return
+	}
+	if err := r.releaseTaskHold(cr, lt.taskID); err != nil {
+		r.logger.Error(context.Background(), "node: could not release the task's session hold",
+			err, "task", string(lt.taskID))
+	}
 }
 
 // forgetTurn drops a turn that has ended and any question it was waiting on.
 //
-// It also withdraws the TASK's reason to keep the session — the execution is over, whatever
-// ended it — and leaves the conversation's own hold exactly where it is (design §9.4).
+// The TASK's hold on the session is deliberately NOT dropped here. "The turn ended" (as an event,
+// which is what every caller of this means) and "the work is over" are two different moments: the
+// agent loop writes its own session files while it unwinds, after the last event. The hold is the
+// claim that a turn is writing into that session, so it is the turn's settling that ends it — see
+// liveTurn.settle — and a release here would let a delete in that window fail on a directory
+// somebody is still filling.
 func (r *runner) forgetTurn(taskID a2a.TaskID) {
 	r.parking.forget(taskID)
 
 	r.mu.Lock()
-	contextID := ""
-	if lt, ok := r.turns[taskID]; ok {
-		contextID = lt.contextID
-	}
 	delete(r.turns, taskID)
-	cr := r.runs[contextID]
 	r.mu.Unlock()
+}
 
-	if cr != nil {
-		if err := r.releaseTaskHold(cr, taskID); err != nil {
-			r.logger.Error(context.Background(), "node: could not release the task's session hold",
-				err, "task", string(taskID))
+// settleTurn is what a turn runs when its stream has been read to its end: it drops the task's hold
+// on the session the turn was working in, and marks one more turn as unwound.
+//
+// The run is looked up FRESH rather than captured, because a context's run can be replaced while
+// its turn is still in flight — and then it is the run that CURRENTLY holds the task's reason that
+// has to let go of it (compaction moves that hold to the successor session; node/retention.go).
+func (r *runner) settleTurn(taskID a2a.TaskID, contextID string) func() {
+	return func() {
+		r.mu.Lock()
+		cr := r.runs[contextID]
+		r.mu.Unlock()
+
+		if cr != nil {
+			if err := r.releaseTaskHold(cr, taskID); err != nil {
+				r.logger.Error(context.Background(), "node: could not release the task's session hold",
+					err, "task", string(taskID))
+			}
 		}
+		r.unwound.Done()
 	}
 }
 
@@ -1058,9 +1131,15 @@ func (lt *liveTurn) drainIfIdle() {
 	go func() {
 		for range lt.events {
 		}
-		if lt.done != nil {
-			lt.done()
+		// This is the turn's end of work, and the ORDER is the point: the task's hold on the
+		// session goes first — it is the claim that a turn is writing into that session, so it
+		// must not be gone while the writes are still going, nor outlive them — and only then is
+		// the turn marked unwound, so anyone waiting on this turn (the owner's stop, whose next
+		// act is deleting the session) wakes up to a directory nobody is writing into.
+		if lt.settle != nil {
+			lt.settle()
 		}
+		close(lt.unwound)
 	}()
 }
 
