@@ -299,7 +299,13 @@ func (m *Manager) HasCurrent() bool {
 
 // New creates a new session
 func (m *Manager) New(providerName, workingDir string) (*Session, error) {
+	// newLocked is named for what it does — `m.current` is manager state — so the lock it documents
+	// has to be taken here. It cannot stay held across the cleanup below: the sweep takes the
+	// cross-process coordination lock first and this manager's second (see retention.go), and
+	// holding it while acquiring that one would invert the order.
+	m.mu.Lock()
 	session, err := m.newLocked(providerName, workingDir)
+	m.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
