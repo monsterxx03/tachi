@@ -17,7 +17,7 @@
 
   const initial = box()
   const chat0 = chatH()
-  smoke.check('输入框有默认高度', initial >= 40, `${initial}px`)
+  smoke.check('输入框默认就是一行高', initial >= 20 && initial <= 30, `${initial}px`)
 
   const x = () => {
     const r = smoke.q('.composer-resizer').getBoundingClientRect()
@@ -94,6 +94,19 @@
   const beforePlain = box()
   keyIn('ArrowDown', { metaKey: true })
   smoke.check('单独的 ⌘↓ 不动高度（光标手势留给文本框）', box() === beforePlain, `${beforePlain} → ${box()}px`)
+
+  // The box hugs its text: a couple more lines make it taller with nobody dragging, and emptying
+  // the draft puts it back on the floor. That self-sizing is what lets the resting box be ONE line
+  // tall — without it a one-line box would either scroll a long draft away or reserve a second
+  // line it is not using, which is the blank under the text this replaced.
+  smoke.type('.composer-input', '一行\n两行\n三行')
+  const grewWithText = await smoke.waitFor(() => box() > initial + 20, '多行草稿让输入框自己长高', 3000)
+  smoke.check('草稿变多时输入框自己长高（不用拖）', !!grewWithText, `${initial} → ${box()}px`)
+  smoke.type('.composer-input', '')
+  const backToFloor = await smoke.waitFor(() => Math.abs(box() - initial) <= 1, '清空草稿后回到一行高', 3000)
+  smoke.check('清空草稿后回到一行高（默认高度只有一个）', !!backToFloor, `${box()} vs ${initial}px`)
+  smoke.check('回到一行高后不再留内联高度', !smoke.q('.composer-input').style.height,
+    `inline="${smoke.q('.composer-input').style.height}"`)
 
   smoke.finish()
 })()

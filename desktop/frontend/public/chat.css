@@ -479,11 +479,22 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  padding: 10px 10px 8px;
+  /* The top padding is also where the resize strip lives — that strip is an overlay
+     (see .composer-resizer), so it costs the box no height of its own. */
+  padding: 8px 10px 10px;
   box-shadow: var(--shadow-1);
   transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
   /* Anchors the @-file picker, which floats above the input. */
   position: relative;
+}
+/* The box's one row: the input, and the controls BESIDE it instead of on a row of their own.
+   That second row charged every draft its height — on a one-line message the blank it left
+   under the text was the taller half of the box. Bottom-aligned, so as the box grows with the
+   draft the controls ride the last line the way they do in every other composer. */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 /* Focus ring instead of a bare border colour swap — the accent halo is the
    macOS convention for "this field is live". */
@@ -496,31 +507,35 @@
   border: none;
   outline: none;
   resize: none;
-  /* Wrapped in .composer-input-wrap since the stop-button refactor: no longer
-     a direct flex child of .composer-box, so stretch no longer sizes it —
-     width must be explicit or it collapses to the UA default (~185px), which
-     made only the left sliver of the input area focusable/typeable. */
+  /* A flex item of .composer-row now, and it HUGS what it holds: composer.tsx grows it to the
+     text's own height (up to max-height, where the text starts to scroll), so the resting box is
+     ONE line tall and there is no dead space under a short draft. Width must still be explicit —
+     a textarea's UA default (~185px) is narrower than the box it sits in. */
   width: 100%;
   color: var(--text);
   font-size: 14.5px;
   line-height: 1.55;
   font-family: inherit;
-  min-height: 46px;
+  /* One line. The floor mirrors COMPOSER_INPUT_MIN_H in composer.tsx, so "dragged back down" and
+     "never dragged" are the same look; `rows={1}` on the element and a padding of zero are what
+     make the UA's own textarea box agree with that floor (a bare textarea is two rows tall with
+     its own 2px inset, which is exactly the dead space that used to sit under a short draft). */
+  min-height: 24px;
   max-height: 200px;
-  /* Room for the inline stop button (spinning ring) in the top-right corner. */
-  padding-right: 42px;
+  padding: 0;
 }
 .composer-input::placeholder { color: var(--text-faint); }
-.composer-input-wrap { position: relative; }
-/* The grab strip at the top of the composer box (the first child of .composer-box, above the
-   textarea). It is where the reader says "this message needs more room": drag up to grow, arrow
-   keys work too (it is a real separator, not a decoration). The visible affordance is a small
-   pill rather than the whole strip — an 8px hit area is easy to miss, and a permanently visible
-   handle would be a decoration on every keystroke. */
+.composer-input-wrap { flex: 1 1 auto; min-width: 0; }
+/* The grab strip on the box's top edge, drawn INSIDE the box's top padding: it is a real
+   focusable separator (the keyboard resizes too), and 8px of pointer target is what a drag
+   needs. As a row of its own it charged the box 10px of height — the other half of the blank
+   above the first line — so it is an overlay, and the pill it draws lives in the padding. */
 .composer-resizer {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   height: 8px;
-  margin: 0 0 2px;
   cursor: row-resize;
   touch-action: none;
 }
@@ -545,24 +560,24 @@
 body.is-resizing-y { cursor: row-resize; user-select: none; }
 /* Round stop button: a spinning ring around a square — reads as "generating,
    click to stop" (like iOS/claude desktop). The ring rotates on ::before so
-   the center glyph stays upright. */
+   the center glyph stays upright. It is a flex item of .composer-actions now
+   (it used to float over the input's top-right corner, which was the blank
+   under the text when it was the only thing up there). */
 .stop-btn {
-  position: absolute;
-  top: 6px;
-  right: 8px;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 26px;
   padding: 0;
+  flex-shrink: 0;
   border-radius: 50%;
   border: 1px solid var(--red-line);
   background: var(--panel-solid);
   color: var(--red);
   cursor: pointer;
   box-shadow: var(--shadow-2);
-  z-index: 1;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .stop-btn::before {
@@ -586,8 +601,8 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
 .composer-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  margin-top: 6px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .send-btn {
   display: flex;
@@ -597,7 +612,8 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   background: var(--accent-strong);
   color: var(--on-accent);
   border: none;
-  padding: 7px 15px;
+  /* Sized to sit in the input's own row: as tall as the mic circle beside it. */
+  padding: 6px 14px;
   border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 580;
@@ -621,10 +637,10 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin-right: 8px;
+  width: 28px;
+  height: 28px;
   padding: 0;
+  flex-shrink: 0;
   border: 1px solid var(--border-2);
   border-radius: 50%;
   background: transparent;

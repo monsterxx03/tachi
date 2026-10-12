@@ -8,7 +8,7 @@
 // feeds is what stops the two from drifting apart; the queue is also the state that has to
 // follow its own conversation (keyed by session, moved on auto-compaction).
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { Events } from '@wailsio/runtime'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -40,17 +40,24 @@ import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
 import { oneOffDoneLabel } from './oneoff'
 
-// The input box's height, when the reader drags its top edge.
+// The input box's height.
 //
-// COMPOSER_INPUT_MIN_H mirrors .composer-input's min-height in chat.css (46px) — the floor is
-// the stylesheet's own height, so "dragged back down" and "never dragged" are the same look.
-// The ceiling is a FRACTION of the window rather than a pixel count: the box may grow to be
+// The box HUGS its text: with nothing in it the box is one line tall (the stylesheet's
+// min-height, mirrored by COMPOSER_INPUT_MIN_H, so "dragged back down" and "never dragged" are
+// the same look), and it grows with what is typed up to COMPOSER_INPUT_MAX_H — the stylesheet's
+// max-height — where the text starts to scroll instead. A textarea does not size itself, so that
+// measurement is one layout pass per keystroke (see the effect in useComposer).
+//
+// The READER can override all of it by dragging the box's top edge; their number then wins, and
+// its ceiling is a FRACTION of the window rather than a pixel count: the box may grow to be
 // comfortable, never to swallow the conversation it is written into, and that ratio is what
 // holds on a small screen too.
 //
-// Nothing here is persisted, deliberately — unlike the side panel's width, which is a layout
-// choice the reader makes once. The box's height is about the message being written now.
-const COMPOSER_INPUT_MIN_H = 46
+// The reader's own number is not persisted, deliberately — unlike the side panel's width, which
+// is a layout choice the reader makes once. The box's height is about the message being written
+// now; what the box does on its own is about the same message.
+const COMPOSER_INPUT_MIN_H = 24
+const COMPOSER_INPUT_MAX_H = 200
 const COMPOSER_INPUT_MAX_FRACTION = 0.6
 const COMPOSER_INPUT_KEY_STEP = 24
 
@@ -853,23 +860,52 @@ export function useComposer(deps: ComposerDeps) {
     return () => off?.()
   }, [sendText, takePending, clearAsk, clearPerm, releaseLocal])
 
-  // ── Height (the reader drags the box's top edge) ───────────────────────────
-  // null = the stylesheet's default. One number serves both the height and the ceiling: the
-  // stylesheet's max-height exists to stop the DEFAULT from eating the transcript, and a reader
-  // who deliberately asks for a taller box has already answered that question.
+  // ── Height (the box hugs its text; the reader drags the top edge to overrule it) ──────
+  // inputHeight: the reader's own box height (drag / arrow keys), null while they have not asked
+  // for one. measuredH: what the draft itself needs. One number serves both the height and the
+  // ceiling in the reader's case: the stylesheet's max-height exists to stop the DEFAULT from
+  // eating the transcript, and a reader who deliberately asks for a taller box has already
+  // answered that question.
   const [inputHeight, setInputHeight] = useState<number | null>(null)
+  const [measuredH, setMeasuredH] = useState<number | null>(null)
   const [heightDragging, setHeightDragging] = useState(false)
   const heightDragRef = useRef<{ y: number; h: number } | null>(null)
   const heightDetachRef = useRef<(() => void) | null>(null)
+  // measureInput: how tall the draft itself needs to be, right now — read from the element with
+  // the height it is about to be given taken OFF (otherwise the box's own height answers instead
+  // of the text's), and put back afterwards so React keeps owning that property (see inputStyle).
+  const measureInput = useCallback(() => {
+    const el = composerRef.current
+    if (!el) return
+    const prev = el.style.height
+    el.style.height = ''
+    const need = el.scrollHeight
+    el.style.height = prev
+    setMeasuredH(need > COMPOSER_INPUT_MIN_H ? Math.min(need, COMPOSER_INPUT_MAX_H) : null)
+  }, [])
   // The composer can be unmounted mid-drag (a session switch re-renders the footer); then
   // nothing would ever remove the window listeners.
   useEffect(() => () => heightDetachRef.current?.(), [])
-  // A shrunken window must not leave a box taller than its share of the screen.
+  // A shrunken window must not leave a box taller than its share of the screen — and the box's
+  // own WIDTH moved with it, so the measurement has to be redone too (a draft that wraps onto two
+  // lines at the old width may fit in one at the new one).
   useEffect(() => {
-    const reclamp = () => setInputHeight((h) => (h === null ? h : Math.min(h, composerInputMaxH())))
-    window.addEventListener('resize', reclamp)
-    return () => window.removeEventListener('resize', reclamp)
-  }, [])
+    const onResize = () => {
+      setInputHeight((h) => (h === null ? h : Math.min(h, composerInputMaxH())))
+      measureInput()
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [measureInput])
+  // Measure the draft. A textarea never sizes itself, so without this a long message would type
+  // itself out inside a one-line window; with it, the box is as tall as what it holds and there
+  // is no dead space under a short one. Layout effect, so the frame that paints the new text
+  // already has the box that fits it. The reader's height wins while they have one (a drag is a
+  // decision, and it comes back here the moment they drag back to the floor).
+  useLayoutEffect(() => {
+    if (inputHeight !== null) return
+    measureInput()
+  }, [input, inputHeight, measureInput])
 
   const startHeightDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -927,8 +963,13 @@ export function useComposer(deps: ComposerDeps) {
     e.preventDefault()
     nudgeHeight(dir)
   }
-  // Height and max-height together, and only once the reader has resized.
-  const inputStyle = inputHeight ? { height: inputHeight, maxHeight: inputHeight } : undefined
+  // Height and max-height together for the reader's number, and only once they have resized;
+  // otherwise the measured height (which the stylesheet's own max-height already caps).
+  const inputStyle = inputHeight
+    ? { height: inputHeight, maxHeight: inputHeight }
+    : measuredH
+      ? { height: measuredH }
+      : undefined
 
   // ── Focus ─────────────────────────────────────────────────────────────────  // The two halves of the UI hand focus to each other (Esc leaves the composer, a new
   // session enters it), and those callers sit in dependency lists — so both get a stable
@@ -1046,9 +1087,10 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
       )}
       <div className="composer-box" data-file-drop-target="true">
         {/* The grab strip along the box's top edge: a real focusable separator, and the only way
-            the reader says "I need more room to write this than a one-liner". It sits INSIDE the
-            box so the drag target moves with it, and it must not swallow the box's own focus
-            (a click on it never focuses the textarea — that is what preventDefault is for). */}
+            the reader says "I need more room to write this than the text itself asks for". It sits
+            INSIDE the box — as an overlay on its top padding, so it costs the box no height — and
+            it must not swallow the box's own focus (a click on it never focuses the textarea:
+            that is what preventDefault is for). */}
         <div className={`composer-resizer${heightDragging ? ' is-dragging' : ''}`} role="separator"
           aria-orientation="horizontal" aria-label="调整输入框高度" tabIndex={0}
           title="向上拖动加高输入框（↑ ↓ 也可以）"
@@ -1073,116 +1115,124 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
             onHover={(i) => setAt((p) => (p ? { ...p, idx: i } : p))}
           />
         )}
-        <div className="composer-input-wrap">
-          <textarea className="composer-input" ref={composerRef} value={input} style={inputStyle}
-            onChange={(e) => { setInput(e.target.value); syncAtRef(e.target.value, e.target.selectionStart ?? e.target.value.length) }}
-            onSelect={(e) => { const el = e.currentTarget; syncAtRef(el.value, el.selectionStart ?? el.value.length) }}
-            onBlur={() => closeAt()}
-            onCompositionStart={() => { composingRef.current = true }}
-            onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
-            onKeyDown={(e) => {
-              const ime = composingRef.current || imeActive(e)
-              // ⌃U / ⌃D page the transcript, and they work HERE too — the caret is usually in this
-              // box when someone wants to look back up at what was just said. The message area's own
-              // handler cannot do it for us: it refuses keys targeted at a field, by design, and a
-              // keydown born here never passes through it anyway. So the composer claims the pair and
-              // hands it to the same half-page scroll the badge's gesture uses. That takes the two
-              // away from WebKit's own text handling in this field (macOS gives ⌃D a caret meaning —
-              // delete forward): a key that means different things depending on where the focus is is
-              // the worse deal, and paging the conversation is what the pair means everywhere else.
-              if (!ime && e.ctrlKey && (e.key === 'u' || e.key === 'd')) {
+        {/* One row: the text, and the controls beside it (bottom-aligned). The buttons used to get
+            a row of their own under the text — height charged to every message, and the blank it
+            left under a one-line draft was the taller half of the box. */}
+        <div className="composer-row">
+          <div className="composer-input-wrap">
+            <textarea className="composer-input" ref={composerRef} rows={1} value={input} style={inputStyle}
+              onChange={(e) => { setInput(e.target.value); syncAtRef(e.target.value, e.target.selectionStart ?? e.target.value.length) }}
+              onSelect={(e) => { const el = e.currentTarget; syncAtRef(el.value, el.selectionStart ?? el.value.length) }}
+              onBlur={() => closeAt()}
+              onCompositionStart={() => { composingRef.current = true }}
+              onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
+              onKeyDown={(e) => {
+                const ime = composingRef.current || imeActive(e)
+                // ⌃U / ⌃D page the transcript, and they work HERE too — the caret is usually in this
+                // box when someone wants to look back up at what was just said. The message area's own
+                // handler cannot do it for us: it refuses keys targeted at a field, by design, and a
+                // keydown born here never passes through it anyway. So the composer claims the pair and
+                // hands it to the same half-page scroll the badge's gesture uses. That takes the two
+                // away from WebKit's own text handling in this field (macOS gives ⌃D a caret meaning —
+                // delete forward): a key that means different things depending on where the focus is is
+                // the worse deal, and paging the conversation is what the pair means everywhere else.
+                if (!ime && e.ctrlKey && (e.key === 'u' || e.key === 'd')) {
+                  e.preventDefault()
+                  onPageTurn(e.key === 'd' ? 1 : -1)
+                  return
+                }
+                // ⌘⇧↑/⌘⇧↓ resize the box from INSIDE the field — the handle's own ↑↓ and the drag stay
+                // as they are. Deliberately not a window-level binding: ⌥↑/⌥↓ already walks the diff
+                // pane's findings, and a global handler would have to out-guess which pane is focused.
+                // Plain ⌘↑/⌘↓ keep the text system's caret gestures (and still select, with ⇧, to the
+                // ends of the box).
+                if (!ime && isMod(e) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                  e.preventDefault()
+                  nudgeHeight(e.key === 'ArrowUp' ? 1 : -1)
+                  return
+                }
+                // While the @-picker is open it owns the navigation keys; an IME composing
+                // (candidate selection) owns them first.
+                if (!ime && at) {
+                  // ↑↓ / Ctrl+N·P move the highlight (see listNav); the picker clamps at the ends.
+                  const delta = listNav(e)
+                  if (delta) {
+                    e.preventDefault()
+                    setAt((p) => (p && p.items.length
+                      ? { ...p, idx: Math.max(0, Math.min(p.items.length - 1, p.idx + delta)) }
+                      : p))
+                    return
+                  }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                    // Tab/Enter accept the highlighted match; with no match, Enter still sends
+                    // (Tab just dismisses the picker).
+                    if (at.items.length > 0) { e.preventDefault(); acceptAt(at.items[at.idx]); return }
+                    if (e.key === 'Tab') { e.preventDefault(); closeAt(); return }
+                  }
+                  if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
+                }
+                // The "/" palette owns the navigation keys while it is open (the @-picker cannot
+                // be open at the same time: one is triggered by "@", the other by a leading "/").
+                if (!ime && cmdOpen) {
+                  const delta = listNav(e)
+                  if (delta) {
+                    e.preventDefault()
+                    setCmdIdx((i) => Math.max(0, Math.min(cmdMatches.length - 1, i + delta)))
+                    return
+                  }
+                  if (e.key === 'Tab') { e.preventDefault(); acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)]); return }
+                  if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(cmdQuery); return }
+                  // Enter completes rather than sends while the name is still partial:
+                  // "/rev" + Enter must not run the wrong command.
+                  if (e.key === 'Enter' && !e.shiftKey && cmdMatches.length > 0) {
+                    e.preventDefault()
+                    acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)])
+                    return
+                  }
+                }
+                // Esc hands the focus to the message area (the Vim-like keys live there). Not
+                // listed in the shortcut sheet on purpose: it is a focus affordance, not a
+                // feature shortcut.
+                if (e.key === 'Escape') { e.preventDefault(); focusTranscript(); return }
+                if (e.key !== 'Enter' || e.shiftKey) return
+                // Enter while an IME is composing confirms the candidate (选词), it must not send
+                // the message.
+                if (ime) return
                 e.preventDefault()
-                onPageTurn(e.key === 'd' ? 1 : -1)
-                return
-              }
-              // ⌘⇧↑/⌘⇧↓ resize the box from INSIDE the field — the handle's own ↑↓ and the drag stay
-              // as they are. Deliberately not a window-level binding: ⌥↑/⌥↓ already walks the diff
-              // pane's findings, and a global handler would have to out-guess which pane is focused.
-              // Plain ⌘↑/⌘↓ keep the text system's caret gestures (and still select, with ⇧, to the
-              // ends of the box).
-              if (!ime && isMod(e) && e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-                e.preventDefault()
-                nudgeHeight(e.key === 'ArrowUp' ? 1 : -1)
-                return
-              }
-              // While the @-picker is open it owns the navigation keys; an IME composing
-              // (candidate selection) owns them first.
-              if (!ime && at) {
-                // ↑↓ / Ctrl+N·P move the highlight (see listNav); the picker clamps at the ends.
-                const delta = listNav(e)
-                if (delta) {
-                  e.preventDefault()
-                  setAt((p) => (p && p.items.length
-                    ? { ...p, idx: Math.max(0, Math.min(p.items.length - 1, p.idx + delta)) }
-                    : p))
-                  return
-                }
-                if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                  // Tab/Enter accept the highlighted match; with no match, Enter still sends
-                  // (Tab just dismisses the picker).
-                  if (at.items.length > 0) { e.preventDefault(); acceptAt(at.items[at.idx]); return }
-                  if (e.key === 'Tab') { e.preventDefault(); closeAt(); return }
-                }
-                if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
-              }
-              // The "/" palette owns the navigation keys while it is open (the @-picker cannot
-              // be open at the same time: one is triggered by "@", the other by a leading "/").
-              if (!ime && cmdOpen) {
-                const delta = listNav(e)
-                if (delta) {
-                  e.preventDefault()
-                  setCmdIdx((i) => Math.max(0, Math.min(cmdMatches.length - 1, i + delta)))
-                  return
-                }
-                if (e.key === 'Tab') { e.preventDefault(); acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)]); return }
-                if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(cmdQuery); return }
-                // Enter completes rather than sends while the name is still partial:
-                // "/rev" + Enter must not run the wrong command.
-                if (e.key === 'Enter' && !e.shiftKey && cmdMatches.length > 0) {
-                  e.preventDefault()
-                  acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)])
-                  return
-                }
-              }
-              // Esc hands the focus to the message area (the Vim-like keys live there). Not
-              // listed in the shortcut sheet on purpose: it is a focus affordance, not a
-              // feature shortcut.
-              if (e.key === 'Escape') { e.preventDefault(); focusTranscript(); return }
-              if (e.key !== 'Enter' || e.shiftKey) return
-              // Enter while an IME is composing confirms the candidate (选词), it must not send
-              // the message.
-              if (ime) return
-              e.preventDefault()
-              send()
-            }}
-            onPaste={onPaste}
-            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，#a: 选节点，#s: 选会话）'} />
-          {running && (
-            <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
-              <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+                send()
+              }}
+              onPaste={onPaste}
+              placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，#a: 选节点，#s: 选会话）'} />
+          </div>
+          <div className="composer-actions">
+            {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，
+                因为它产出的东西就落在旁边那个输入框里——两件事是同一个动作的两半。 */}
+            {voiceAvailable && (
+              <button
+                className={`mic-btn${voiceState === 'recording' ? ' is-recording' : ''}`}
+                onClick={toggleVoice}
+                disabled={voiceState === 'preparing' || voiceState === 'transcribing'}
+                title={voiceLabel} aria-label={voiceLabel}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="3" width="6" height="11" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0" />
+                  <line x1="12" y1="18" x2="12" y2="21" />
+                </svg>
+              </button>
+            )}
+            {/* The stop control sits in this cluster rather than floating over the input: while a
+                turn runs it is one of the two things this box can do (stop it, or queue behind it),
+                and floating it over a one-line box was exactly the blank the box carried. */}
+            {running && (
+              <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
+                <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+              </button>
+            )}
+            <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+              <span>{running ? '排队' : '发送'}</span>
             </button>
-          )}
-        </div>
-        <div className="composer-actions">
-          {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，
-              因为它产出的东西就落在上面那个输入框里——两件事是同一个动作的两半。 */}
-          {voiceAvailable && (
-            <button
-              className={`mic-btn${voiceState === 'recording' ? ' is-recording' : ''}`}
-              onClick={toggleVoice}
-              disabled={voiceState === 'preparing' || voiceState === 'transcribing'}
-              title={voiceLabel} aria-label={voiceLabel}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="3" width="6" height="11" rx="3" />
-                <path d="M5 11a7 7 0 0 0 14 0" />
-                <line x1="12" y1="18" x2="12" y2="21" />
-              </svg>
-            </button>
-          )}
-          <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-            <span>{running ? '排队' : '发送'}</span>
-          </button>
+          </div>
         </div>
       </div>
     </>
