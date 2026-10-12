@@ -167,7 +167,17 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 
 	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAI))
 	mock.Script(sc.steps...)
-	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.config); err != nil {
+	// The peers a scenario declares: the answering one is served by the runner itself, so its URL is
+	// only known here — which is why the `peers:` block is rendered now and appended to the
+	// scenario's own config rather than hand-written in it.
+	peersYAML, peerFixtures, err := startPeerFixtures(sc.peers)
+	if err != nil {
+		return report(sc.name, nil, []Line{{Label: "peer fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+	}
+	for _, f := range peerFixtures {
+		defer f.Close()
+	}
+	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.config+peersYAML); err != nil {
 		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -296,9 +306,10 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	ctx := &checkCtx{
 		scenario: sc.name, dir: dir, home: sb.home, work: sb.work,
 		requests: mock.Requests(), mockErr: mock.Error(), lines: &lines,
-		mcp:             mcpFixture,
-		mcpConfigBefore: string(sb.mcpConfig),
-		opened:          sb.openedByTheApp(),
+		mcp:              mcpFixture,
+		mcpConfigBefore:  string(sb.mcpConfig),
+		peerCardRequests: peerCardReads(peerFixtures),
+		opened:           sb.openedByTheApp(),
 	}
 	if sc.after != nil {
 		sc.after(ctx)

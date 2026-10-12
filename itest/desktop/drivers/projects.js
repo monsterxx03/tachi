@@ -106,6 +106,14 @@
   const headFor = (name) => smoke.qa('.proj-head').find((h) => smoke.text(h.querySelector('.proj-name')) === name)
   const isOpen = (h) => h.querySelector('.proj-toggle').getAttribute('aria-expanded') === 'true'
 
+  // 聚焦规则：屏幕上那个会话在哪个组，就只有那个组开着。第 1 步里 driver 亲手把 smoke-empty 也打开了
+  // （那是读者自己的动作，规则不管它），而从那里点进项目成员那一行是一次**切换** —— 切换这一刻它把
+  // 另一个项目收起来。这一条与「展开是读者的事」不矛盾：规则只在切换的那一刻说话。
+  const emptyHeadNow = headFor('smoke-empty')
+  smoke.check('点进项目里的行：另一个项目自己收起来（只留一组）',
+    !!emptyHeadNow && !isOpen(emptyHeadNow),
+    emptyHeadNow ? 'aria-expanded=' + emptyHeadNow.querySelector('.proj-toggle').getAttribute('aria-expanded') : '(没有那一组)')
+
   // 点组头本身（不是那个 16px 的箭头）就要折叠 —— 组头本来就 role=button，只让箭头活等于把
   // 一整行做成标签。顺便钉住收起时的位置提示：组一收行就整批从 DOM 里摘掉，此时读者唯一能知道
   // 「我的会话在这一组里」的地方就是组头自己。

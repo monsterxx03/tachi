@@ -34,7 +34,10 @@
   const selected = () => smoke.text('.palette-row.is-sel .palette-name')
   const sessionId = () => smoke.q('.app').getAttribute('data-session-id')
   const activeTitle = () => smoke.text('.session.active .session-title')
-  const sidebarRows = () => smoke.qa('.session').length
+  // 侧栏里有多少条会话：**不能数 `.session`** —— 同时只开一组（聚焦规则），所以那只数得到展开那一组
+  // 的行。数的是每个组头自己报的数（项目是它的成员数，桶是 looseMembers）—— 折着的组也读得到。
+  const sidebarTotal = () => smoke.qa('.proj-count')
+    .reduce((n, el) => n + (parseInt(smoke.text(el).replace(/[^0-9]/g, ''), 10) || 0), 0)
   const focusedComposer = () => document.activeElement === smoke.q('.composer-input')
   const activeDesc = () => {
     const a = document.activeElement
@@ -69,15 +72,16 @@
   const bootTitle = activeTitle()
   smoke.check('起手：打开的是最新的那个会话', boot !== '' && bootTitle !== '', boot + ' / ' + bootTitle)
 
-  // 「无项目」那一组的行也是这个场景数着的（下面两次「没有增删会话」数的是侧栏的行），而它起手
-  // 是折叠的（当前会话在项目里）—— 折叠是 DOM 级的，先展开它，那些断言才真的在数东西。
-  const looseHead = await smoke.waitFor('.proj-head.is-loose', '侧栏出现「无项目」组头', 10000)
-  if (!looseHead) return smoke.finish()
-  if (looseHead.querySelector('.proj-toggle').getAttribute('aria-expanded') !== 'true')
-    smoke.click(looseHead.querySelector('.proj-toggle'))
-  if (!(await smoke.waitFor(() => (smoke.qa('.proj-rows.is-loose .session').length === 2 ? true : null),
-    '「无项目」组展开出它的两个会话', 6000))) return smoke.finish()
-  smoke.check('起手：「无项目」那一组是折叠的，展开后两行都在', sidebarRows() === 3, sidebarRows() + ' 行')
+  // 起手的分组状态本身就是一条断言：屏幕上那个会话在项目里，所以只有项目组开着 —— 桶折着不是因为
+  // 它空，而是因为读者不在里面（聚焦规则）。
+  //
+  // 它也是下面两次「没有增删会话」为什么不数 `.session` 的答案：同时只开一组，行数只是「展开那一组
+  // 的行数」，而组头自己报的数（sidebarTotal）在折着的时候也读得到。
+  smoke.check('起手：当前会话所在的项目组开着、「无项目」折着（同时只留一组）',
+    expandedOf(PROJECT) && !expandedOf('无项目'),
+    '项目=' + expandedOf(PROJECT) + ' · 桶=' + expandedOf('无项目'))
+  smoke.check('起手：各组头报的会话数加起来是三个（下面两次「没有增删」的基准）',
+    sidebarTotal() === 3, sidebarTotal() + ' 条')
 
   // ── 1. ⌘K 打开：列的是对话，一行一个，顺序就是列表自身的顺序 ──────────────────
   smoke.key(document.body, 'k', { metaKey: true })
@@ -161,50 +165,46 @@
   smoke.check('选完浮层就关掉，不留着挡路', !smoke.q('.palette-box'), boxLabel() || '(已关)')
   const refocused = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框', 3000)
   smoke.check('切完会话焦点落在输入框（可以直接打字）', !!refocused, activeDesc())
-  smoke.check('⌘K 全程没有增删会话', sidebarRows() === 3, sidebarRows() + ' 行')
+  smoke.check('⌘K 全程没有增删会话', sidebarTotal() === 3, sidebarTotal() + ' 条')
 
-  // ── 5. 折叠的组：⌘K 进去之后它必须自己展开（项目与无项目桶各一次） ─────────────
+  // ── 5. 送读者进一个折着的组：那一组自己打开，别的组收起来 ────────────────────
+  // 聚焦规则（屏幕上那个会话在哪个组，就只有那个组开着）在这一节被两个方向夹住。它同时证明了那条
+  // 规则**不需要读者配合**：上一节把读者切到了桶里，所以项目组此刻本来就是折着的，而一个折着的组
+  // 里那些行根本不在 DOM 里 —— 于是「⌘K 读的是会话列表，不是 DOM」这句话也有了着力点。
+  const expandedLabel = (name) => {
+    const h = headOf(name)
+    return h ? 'aria-expanded=' + h.querySelector('.proj-toggle').getAttribute('aria-expanded') : '(没有这一组)'
+  }
   const head = headOf(PROJECT)
   if (!head) return smoke.fail('找到项目组头', smoke.allText('.proj-name').join(' | '))
-  head.querySelector('.proj-toggle').click()
-  const folded = await smoke.waitFor(() => (expandedOf(PROJECT) ? null : true), '手动折叠项目组', 4000)
-  smoke.check('先手动把项目组收起来（组头说自己收起了）', !!folded,
-    'aria-expanded=' + (folded ? 'false' : 'true'))
-  if (!folded) return smoke.finish()
-  smoke.check('收起后它的行不再留在 DOM 里', rowsOf(PROJECT).length === 0,
-    rowsOf(PROJECT).length + ' 行（折叠时容器被摘掉）')
+  smoke.check('读者在桶里：项目组自己是折着的，它的行也不在 DOM 里',
+    !expandedOf(PROJECT) && rowsOf(PROJECT).length === 0,
+    expandedLabel(PROJECT) + ' · 行 ' + rowsOf(PROJECT).length)
+  smoke.check('而读者所在的那一组是开着的（同时只留一组）', expandedOf('无项目'), expandedLabel('无项目'))
 
   smoke.key(document.body, 'k', { metaKey: true })
   if (!(await smoke.waitFor(() => (boxOpen() ? true : null), '⌘K 再次打开', 8000))) return smoke.finish()
-  smoke.check('折叠的组里那一行照样在列表里（⌘K 读的是会话列表，不是 DOM）',
+  smoke.check('折着的组里那一行照样在列表里（⌘K 读的是会话列表，不是 DOM）',
     names().indexOf('冒烟会话') >= 0, names().join(' | '))
   smoke.type('.palette-input', '冒烟')
   if (!(await smoke.waitFor(() => (rowCount() === 1 ? true : null), '过滤到成员会话', 4000))) return smoke.finish()
   smoke.key('.palette-input', 'Enter')
   const revealed = await smoke.waitFor(() => (expandedOf(PROJECT) ? true : null), '⌘K 打开后项目组展开', 8000)
-  smoke.check('⌘K 选中的会话在折叠的组里，那个组自己展开', !!revealed, rowsOf(PROJECT).length + ' 行')
+  smoke.check('⌘K 送进折着的那一组：那一组自己打开', !!revealed, rowsOf(PROJECT).length + ' 行')
+  smoke.check('…而桶跟着收起来（同时只留一组）', !expandedOf('无项目'), expandedLabel('无项目'))
   smoke.check('展开之后 active 就是那一行', activeTitle() === '冒烟会话', activeTitle())
 
-  // 「无项目」那一组走同一条规则（它是最后一个组，也是唯一没有项目的那个）：折叠它，再让 ⌘K 把
-  // 读者送到里面的一行去。一条会话属于哪个组由 sessionGroupKey 一处算出来，这一半钉的就是它 ——
-  // 少了那一句，⌘K 会把行选中却让组一直折着，屏上什么都看不见。
-  const looseToggle = () => {
-    const h = headOf('无项目')
-    return h && h.querySelector('.proj-toggle')
-  }
-  if (!looseToggle()) return smoke.fail('找到「无项目」的组头', smoke.allText('.proj-name').join(' | '))
-  looseToggle().click()
-  const bucketFolded = await smoke.waitFor(() => (expandedOf('无项目') ? null : true), '手动折叠「无项目」组', 4000)
-  smoke.check('先把「无项目」收起来', !!bucketFolded, 'aria-expanded=' + (bucketFolded ? 'false' : 'true'))
-  if (!bucketFolded) return smoke.finish()
+  // 「无项目」那一组走同一条规则（它排在最后，也是唯一没有项目的那个）：这一半钉的是
+  // `sessionGroupKey` —— 少了那一句，⌘K 会把行选中却让那一组一直折着，屏上什么都看不见。
   smoke.key(document.body, 'k', { metaKey: true })
   if (!(await smoke.waitFor(() => (boxOpen() ? true : null), '⌘K 再次打开（送进桶里）', 8000))) return smoke.finish()
   smoke.type('.palette-input', '无项目会话')
   if (!(await smoke.waitFor(() => (rowCount() === 1 ? true : null), '过滤到桶里的那个会话', 4000))) return smoke.finish()
   smoke.key('.palette-input', 'Enter')
   const bucketRevealed = await smoke.waitFor(() => (expandedOf('无项目') ? true : null), '⌘K 打开后「无项目」组也展开', 8000)
-  smoke.check('⌘K 选中的会话在折叠的「无项目」组里，那一组自己展开',
+  smoke.check('⌘K 送进折着的「无项目」组：那一组自己打开',
     !!bucketRevealed, rowsOf('无项目').length + ' 行')
+  smoke.check('…而项目组收起来了（同时只留一组）', !expandedOf(PROJECT), expandedLabel(PROJECT))
   smoke.check('展开之后 active 就是桶里那一行', activeTitle() === '无项目会话', activeTitle())
 
   // ── 6. ⌘P / ⌘K 互斥；Esc 什么都不做 ────────────────────────────────────────
@@ -220,7 +220,7 @@
   await smoke.waitGone('.palette-box', 'Esc 关闭浮层', 4000)
   smoke.check('Esc 关掉了浮层', !smoke.q('.palette-box'), boxLabel() || '(已关)')
   smoke.check('Esc 没有切会话', sessionId() === idBefore, sessionId())
-  smoke.check('Esc 没有增删会话', sidebarRows() === 3, sidebarRows() + ' 行')
+  smoke.check('Esc 没有增删会话', sidebarTotal() === 3, sidebarTotal() + ' 条')
 
   smoke.finish()
 })()

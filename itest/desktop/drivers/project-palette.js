@@ -209,28 +209,32 @@
   const refocusedNew = await smoke.waitFor(() => (focusedComposer() ? true : null), '焦点回到输入框（新建那一路）', 3000)
   smoke.check('新建出来的会话焦点也在输入框', !!refocusedNew, activeDesc())
 
-  // ── 6. 折叠的项目组：⌘P 进去之后它必须自己展开 ──────────────────────────
-  // ⌘P 的意思是「带我去那个项目」，而读者的下一个动作是看侧栏：折叠的组只剩一个组头，刚变 active
-  // 的那一行藏在里面，等于没送到。但折叠是读者自己按出来的，所以这条规则只属于 ⌘P 这条入口——别的
-  // 路径进来不该替他展开，否则「把正在用的项目收起来」就永远做不到。
+  // ── 6. 送读者进一个折着的组：⌘P 进去之后它自己打开、别的组收起来 ──────────
+  // 聚焦规则：屏幕上那个会话在哪个组，就只有那个组开着。上一步在 smoke-pal-empty 里建的会话把读者
+  // 留在了那个项目里，所以 smoke-pal 此刻**本来就是折着的** —— 这正是这条规则要看的状态，不必让读者
+  // 先按一下（按一下反而会把规则要验的那件事做掉：一个折着的组里那些行根本不在 DOM 里）。
   const head = headOf('smoke-pal')
   if (!head) return smoke.fail('找到 smoke-pal 的组头', smoke.allText('.proj-name').join(' | '))
-  smoke.check('起手时该项目是展开的', expandedOf('smoke-pal'), 'aria-expanded=' + head.querySelector('.proj-toggle').getAttribute('aria-expanded'))
-  head.querySelector('.proj-toggle').click()
-  const folded = await smoke.waitFor(() => (expandedOf('smoke-pal') ? null : true), '手动折叠该项目', 4000)
-  smoke.check('先手动把项目收起来（组头说自己收起了）', !!folded, 'aria-expanded=' + (folded ? 'false' : 'true'))
-  if (!folded) return smoke.finish()
-  smoke.check('收起后它的行不再留在 DOM 里', rowsOf('smoke-pal').length === 0,
-    rowsOf('smoke-pal').length + ' 行（折叠时容器被摘掉）')
+  const expandedLabel = (name) => {
+    const h = headOf(name)
+    return h ? 'aria-expanded=' + h.querySelector('.proj-toggle').getAttribute('aria-expanded') : '(没有这一组)'
+  }
+  smoke.check('读者落在别的项目里：smoke-pal 自己收起来了',
+    !expandedOf('smoke-pal') && rowsOf('smoke-pal').length === 0,
+    expandedLabel('smoke-pal') + ' · 行 ' + rowsOf('smoke-pal').length)
+  smoke.check('而读者落进的那个项目是开着的（同时只留一组）', expandedOf('smoke-pal-empty'),
+    expandedLabel('smoke-pal-empty'))
 
   smoke.key(document.body, 'p', { metaKey: true })
   if (!(await smoke.waitFor('.palette-box', '浮层第六次打开', 8000))) return smoke.finish()
   if (selectedName() !== 'smoke-pal') return smoke.fail('高亮在 smoke-pal 上（回车才会打开它）', selectedName())
   smoke.key('.palette-input', 'Enter')
   const revealed = await smoke.waitFor(() => (expandedOf('smoke-pal') ? true : null), '⌘P 打开后项目展开', 8000)
-  smoke.check('⌘P 打开的项目组自动展开', !!revealed, rowsOf('smoke-pal').length + ' 行')
+  smoke.check('⌘P 送进折着的那一组，那一组自己打开', !!revealed, rowsOf('smoke-pal').length + ' 行')
   smoke.check('展开之后行又看得见（2 个成员）', rowsOf('smoke-pal').length === 2, rowsOf('smoke-pal').length + ' 行')
   smoke.check('展开之后 active 就在那一组里', activeIndex('smoke-pal') === 0, 'active 下标 ' + activeIndex('smoke-pal'))
+  smoke.check('…而它换掉的那一组收起来了（同时只留一组）', !expandedOf('smoke-pal-empty'),
+    expandedLabel('smoke-pal-empty'))
 
   smoke.finish()
 })()

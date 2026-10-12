@@ -1433,6 +1433,7 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
         {peers.map((p) => {
           const isOpen = !!expanded[p.alias]
           const card = p.card
+          const skills = card?.skills || []
           return (
             <div className="mcp-server" key={p.alias}>
               <div className="mcp-server-row" onClick={() => setExpanded((prev) => ({ ...prev, [p.alias]: !isOpen }))}>
@@ -1468,12 +1469,24 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
                           <span className="agents-v agents-mono">{i.url}（{i.protocolBinding} {i.protocolVersion}）</span>
                         </div>
                       ))}
-                      {(card.skills || []).map((s) => (
-                        <div className="agents-line" key={s.name}>
+                      {/* The skills are entries of ONE list, so the label is written once and every
+                          entry hangs under it (the same hanging indent every other field gets) —
+                          repeating 技能 per line spent a column of a narrow panel saying nothing new.
+                          The name carries the brighter ink and its description follows, which is
+                          also what makes the list scannable: five skills are five NAMES to read. */}
+                      {skills.length ? (
+                        <div className="agents-line">
                           <span className="agents-k">技能</span>
-                          <span className="agents-v">{s.name}{s.description ? ` — ${s.description}` : ''}</span>
+                          <span className="agents-v">
+                            {skills.map((s) => (
+                              <span className="agents-skill" key={s.name}>
+                                <span className="agents-skill-name">{s.name}</span>
+                                {s.description ? ` — ${s.description}` : ''}
+                              </span>
+                            ))}
+                          </span>
                         </div>
-                      ))}
+                      ) : null}
                     </>
                   ) : (
                     <div className="agents-line">

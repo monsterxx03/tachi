@@ -585,18 +585,22 @@ function App() {
   // The direction matters: a set of COLLAPSED ids would need every project pre-filled at load
   // time, and the ones that arrive later (a new project, a list still loading) would leak open.
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
-  // revealGroup opens one group, for the paths that SWITCH or CREATE a session without a click on a
-  // row: the session the app boots into, and ＋ / ⌘P / ⌘K landing inside a folded group. A folded
-  // group answers with a header and nothing under it, so without this the row that just became
-  // active is hidden — the same as not having gone there. A click on a row cannot need it (a
-  // folded group has no rows to click), and it never closes anything: 收起你正坐着的那个组 stays
-  // the reader's call.
+  // focusGroup decides which ONE group is open: the one holding the session on screen. Every way of
+  // landing in a session — a click on a row, ⌘K / ⌘P, a creation, the session restored at boot —
+  // asks for that group, and the others fold. The list is then a list of that conversation's
+  // neighbours: the reader who has just moved elsewhere is not reading the project they left, and a
+  // sidebar that keeps the old group open spends the screen on rows nobody is looking at.
   //
-  // It takes a KEY, not a project id: the 无项目 bucket is a group on the same terms, so a session
-  // created without a project (⌘⇧N, the bucket's own ＋) has to open it exactly like a project one.
-  const revealGroup = useCallback((key?: string) => {
+  // It REPLACES the map rather than adding a key, which is the whole rule. Two consequences worth
+  // stating: a group the reader opened by hand (they may open a second one to look around) survives
+  // until their next switch — opening a group is their own doing, and nothing here closes one that
+  // no switch touched; and 收起你正坐着的那个组 stays their call, because folding a group is not a
+  // switch and this function only runs on one.
+  //
+  // It takes a KEY, not a project id: the 无项目 bucket is a group on the same terms.
+  const focusGroup = useCallback((key?: string) => {
     if (!key) return
-    setExpandedProjects((p) => (p[key] ? p : { ...p, [key]: true }))
+    setExpandedProjects((p) => (p[key] && Object.keys(p).length === 1 ? p : { [key]: true }))
   }, [])
   // Bringing the row of the session ON SCREEN into view is the sidebar's own job: "the active row"
   // and "a row the reader can see" are two different things, and every way of switching sessions can
@@ -1536,13 +1540,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     // row must be visible" rule needs, since at boot the reader has chosen nothing yet.
     if (cur && !bootOpenedGroup.current) {
       bootOpenedGroup.current = true
-      revealGroup(cur.projectId || LOOSE_GROUP_KEY)
+      focusGroup(cur.projectId || LOOSE_GROUP_KEY)
     }
     setLoading(false)
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput, revealGroup])
+  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput, focusGroup])
   // openRewindMenu asks the backend where this session's turns begin and opens the
   // bubble's menu. The list is fetched per open rather than cached: a running turn keeps
   // adding boundaries, and a stale list would resolve a bubble to the wrong turn.
@@ -1602,6 +1606,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     setCurrentId(id)
     setCurrentTitle(sessions.find((s) => s.id === id)?.title || 'Tachi')
     setSessions((prev) => prev.map((s) => ({ ...s, active: s.id === id })))
+    // Landing in a session decides the one open group (see focusGroup), and it is asked of the
+    // session's RECORD rather than of the id that was picked: a conversation whose project is gone
+    // is grouped under 无项目, and this is the same rule the grouping uses (sessionGroupKey).
+    //
+    // Every switch funnels through here — the row's own click, both palettes' picks, and the
+    // successor a delete hands the reader to — so the rule cannot be missing from one of them.
+    const arrived = sessions.find((s) => s.id === id)
+    if (arrived) focusGroup(sessionGroupKey(arrived, projects))
     // Always sync the backend's active session (cheap) so provider/thinking
     // selectors reflect this session even when its messages are already cached.
     await (AgentService as any).ActivateSession?.(id).catch(() => {})
@@ -1620,7 +1632,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     refreshProvider()
     refreshMCP()
     refreshWorkspace(id)
-  }, [sessions, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
+  }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
 
   // confirmDelete deletes for real and hands the reader to the NEXT session — the row below the
   // deleted one inside its own group, or the row above when it was that group's last (nextSessionAfter).
@@ -1674,10 +1686,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     const ns = await AgentService.NewSession(projectID).catch(() => null)
     if (ns) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
-      // The group it lands in opens, since the ＋ that made it lives on a header that may well be
-      // the only thing a folded group shows: the new row is the active one, and a group that stays
-      // folded after creating a session in it hides the very thing the click produced.
-      revealGroup(projectID || LOOSE_GROUP_KEY)
       openSession(ns.id)
       clearUsage(); resetTps()
       // The new session is an empty conversation, so the caret belongs in the composer and
@@ -1691,9 +1699,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       void refreshProjects()
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
+      // The group the new session ACTUALLY landed in opens, asked of the record just read back: a
+      // project that cannot drive a session produces a 无项目 one (the backend binds nothing), and
+      // focusing the requested project's group would fold the only group holding a row — the one
+      // the ＋ just made. The requested id is the fallback for a list read that came back without
+      // it, because the group it names is where the session was meant to be.
+      const created = list.find((s) => s.id === ns.id)
+      focusGroup(created ? sessionGroupKey(created, projects) : projectID || LOOSE_GROUP_KEY)
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, revealGroup])
+  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, focusGroup, projects])
 
   // newChatLikeCurrent makes another conversation like the one on screen: if that session belongs
   // to a project, its successor starts INSIDE it — the project is what supplies the workspace, the
@@ -1766,21 +1781,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   //     session made is the project-less one (newChat('')), the same one the sidebar's ＋ and ⌘⇧N
   //     make. Nothing about it can be unusable, since it needs no workspace of anyone's.
   //
-  // The way IN also opens the group it lands in. ⌘P means 「带我去那个项目」, and the reader's next
-  // move is to look at the sidebar — a collapsed group answers with a header and nothing under it,
-  // hiding the row that just became active, which is the same as not having gone there. The rule is
-  // this entry point's own: a collapse is the reader's own doing, and forcing the group open from
-  // every path would make collapsing the one you are sitting in impossible. A refusal expands
-  // nothing, since nothing was switched.
+  // The way IN also decides which group is open — but it does not do that here: opening the group
+  // the reader lands in belongs to the two functions that land them (clickSession for an existing
+  // conversation, newChat for a new one), and this entry point is one of the several that reach
+  // them. A second copy here is how ⌘P's group comes to disagree with the row's own click.
   //
-  // The bucket is a group on the same terms (it folds like any project — see the sidebar), so it is
-  // revealed by the same rule: both branches below open the group they are about to land in, whether
-  // they open an existing session or make one.
+  // A refusal expands nothing, because nothing was switched.
   const pickProject = useCallback((c: ProjectChoice) => {
     if (c.kind === 'loose') {
       const latest = newestOf(looseMembers(sessions, projects))
       if (latest) {
-        revealGroup(LOOSE_GROUP_KEY)
         void clickSession(latest.id)
         focusAfterPalette()
         return ''
@@ -1790,10 +1800,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       return ''
     }
     const p = c.project
-    const reveal = () => revealGroup(p.id)
     const latest = latestSessionOf(sessions, p.id)
     if (latest) {
-      reveal()
       void clickSession(latest.id)
       focusAfterPalette()
       return ''
@@ -1801,26 +1809,22 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (!p.rootsUsable) {
       return `「${p.name}」的主目录已不可用，不能在这里新建会话；请先在项目组上右键「编辑目录」修好它`
     }
-    reveal()
     void newChat(p.id)
     focusAfterPalette()
     return ''
-  }, [sessions, projects, clickSession, newChat, focusAfterPalette, revealGroup])
+  }, [sessions, projects, clickSession, newChat, focusAfterPalette])
 
   // pickSession answers the ⌘K palette (see palette.tsx): switch to the chosen conversation.
   // Nothing can refuse it — ⌘P's reason string exists for the projects that cannot be opened into
   // anything — so the palette closes on the pick, and the caret goes to the composer for the same
   // reason it does there.
   //
-  // It expands the target's group, on the same argument ⌘P makes above: ⌘K means 「带我去那次对话」,
-  // and a folded group answers with a header and nothing under it, hiding the row that just became
-  // active. WHICH group that is comes from one place (`sessionGroupKey`): a conversation whose
-  // projectId names no live project lands in the 无项目 bucket, which folds like any other group.
+  // Which group that opens is clickSession's business (⌘K means 「带我去那次对话」, and the switch is
+  // the switch) — this palette picks the conversation and nothing else.
   const pickSession = useCallback((s: SessionItem) => {
-    revealGroup(sessionGroupKey(s, projects))
     void clickSession(s.id)
     focusAfterPalette()
-  }, [projects, clickSession, focusAfterPalette, revealGroup])
+  }, [clickSession, focusAfterPalette])
 
   // The app body is INERT while the settings page is up: the page is fixed, opaque and covers the
   // window (settings.css), so what is behind it needs to leave the tab order and the accessibility

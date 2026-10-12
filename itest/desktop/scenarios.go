@@ -75,6 +75,11 @@ type scenario struct {
 	// Every server in it must be DISABLED (`"enabled": false`): a smoke run happens on a real
 	// machine, and an enabled stdio server is a process the app really spawns.
 	mcpServersJSON string
+	// peers are the other Tachi nodes this machine may delegate to, written into the sandbox's
+	// config.yaml. Structured rather than a YAML string in `config` because an ANSWERING peer's URL
+	// only exists once the runner's fixture is up (see peerSeed), and because both halves of what the
+	// Agents panel has to say — a card to draw, and a peer that never answered — belong to one list.
+	peers []peerSeed
 	// voiceText stands in for the microphone: the app is told to answer a finished recording
 	// with this text instead of opening the mic and running the recognizer (TACHI_DEMO_VOICE_TEXT,
 	// read in desktop/voice.go). It exists for the same reason browserFetch does — a run must not
@@ -163,6 +168,10 @@ type checkCtx struct {
 	// mcpConfigBefore is the sandbox's mcp.json as it was seeded, for asserting that a
 	// panel toggle edited it by exactly one line.
 	mcpConfigBefore string
+	// peerCardRequests is how many Agent Card reads the scenario's peer fixtures saw (0 when the
+	// scenario declared no answering peer). 「面板画的是缓存」 and 「面板问了那个节点」 look the same
+	// on screen, so the count is the only place that difference shows.
+	peerCardRequests int
 	// opened is what the app asked the SYSTEM to open (one entry per launcher call, the argv
 	// space-joined): a link clicked in the transcript, a 打开 button. Read from the sandbox's own
 	// artifact, where TACHI_DEMO_OPEN_LOG points the app (desktop/demo.go) — a run must never really
@@ -1018,15 +1027,29 @@ func scenarios() []scenario {
 			},
 		},
 		//
-		// agents-panel: 状态栏的 Agents 按钮与节点面板（drivers/agents-panel.js）。沙箱配了一个
-		// 连不上的 peer（127.0.0.1:1，立刻被拒），所以面板能显示的三件事都是真的：本机配的别名、
-		// 本机 pin 的身份（从没连过 → 「身份未记录」）、上次探测的结论。刷新是一次真往返。
+		// agents-panel: 状态栏的 Agents 按钮与节点面板（drivers/agents-panel.js）。沙箱配了**两个**
+		// peer，各代表面板要说的一半：
 		//
+		//   - 连不上的一个（127.0.0.1:1，立刻被拒，不是等超时）：行里三件事实各就各位 —— 本机配的
+		//     别名、本机 pin 的身份（从没连过 → 「身份未记录」）、上次探测的结论；展开后说的是「它没有
+		//     回答」，而不是编一个名字。刷新是一次真往返。
+		//   - **会答话**的一个（runner 起 fixture 服务它的 Agent Card，见 peerfixture.go）：另一半只有
+		//     答话才看得到 —— 自称、能力、入口，以及技能那张 LIST（三条，所以「第二行长什么样」也在
+		//     断言里）。少了它，卡片上任何字段的排版都没人看：这正是一个每条都重复「技能」两个字的
+		//     列表能留在树里的原因。
+		//
+		// 两个 peer 一份 `peers:`（peerSeed）—— 同一个 YAML 里第二个 `peers:` key 会顶掉第一个。
 		{
 			name: "agents-panel",
-			config: "peers:\n  - name: smoke-nas\n    url: https://127.0.0.1:1\n    note: 沙箱里没有这台机器\n",
+			peers: []peerSeed{
+				{name: "smoke-nas", url: "https://127.0.0.1:1", note: "沙箱里没有这台机器"},
+				{name: "smoke-peer", answers: true, note: "沙箱里的假节点"},
+			},
 			after: func(c *checkCtx) {
 				c.check("只看面板，不该产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
+				// 屏幕上那张卡片只能来自一次真的读取：面板画的是缓存还是刚问来的，DOM 上看不出来。
+				c.check("面板向会答话的节点要过 Agent Card", c.peerCardRequests > 0,
+					strconv.Itoa(c.peerCardRequests)+" 次卡片读取")
 			},
 		},
 		// sidebar-window: 侧栏每个组只渲染「窗口」那么多行（App.tsx 的 rowWindow + components.tsx
