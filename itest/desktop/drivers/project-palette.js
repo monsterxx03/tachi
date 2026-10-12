@@ -139,9 +139,9 @@
   const del = await smoke.waitFor('.confirm-box', '⌘⇧⌫ 开出删除确认框', 5000)
   if (!del) return smoke.finish()
   smoke.key(del, 'Enter')
-  const emptied = await smoke.waitFor(() => (smoke.qa('.session-list > .session').length === 0 ? true : null),
+  const emptied = await smoke.waitFor(() => (smoke.qa('.proj-rows.is-loose .session').length === 0 ? true : null),
     '桶里那个会话被删掉（无项目组空了）', 8000)
-  smoke.check('删掉之后桶空了', !!emptied, smoke.qa('.session-list > .session').length + ' 行')
+  smoke.check('删掉之后桶空了', !!emptied, smoke.qa('.proj-rows.is-loose .session').length + ' 行')
 
   smoke.key(document.body, 'p', { metaKey: true })
   if (!(await smoke.waitFor('.palette-box', '浮层第三次打开（桶空）', 8000))) return smoke.finish()
@@ -156,9 +156,9 @@
     emptyBucket ? smoke.text(emptyBucket) : '(没有这一行)')
   const beforeCreate = sessionId()
   smoke.key('.palette-input', 'Enter')
-  const made = await smoke.waitFor(() => (smoke.qa('.session-list > .session').length === 1 ? true : null),
+  const made = await smoke.waitFor(() => (smoke.qa('.proj-rows.is-loose .session').length === 1 ? true : null),
     '桶里建出新会话', 10000)
-  smoke.check('桶空时回车建出一个会话', !!made, smoke.qa('.session-list > .session').length + ' 行')
+  smoke.check('桶空时回车建出一个会话', !!made, smoke.qa('.proj-rows.is-loose .session').length + ' 行')
   smoke.check('新建的会话就是当前会话（未命名）',
     sessionId() !== beforeCreate && activeTitle() === '未命名会话',
     'session-id ' + sessionId() + ' · 标题 ' + activeTitle())

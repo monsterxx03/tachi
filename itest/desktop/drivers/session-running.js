@@ -35,7 +35,7 @@
   const fixtureId = sessionId()
   const fixtureTitle = smoke.text('.session.active .session-title')
 
-  if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => sessionId() !== fixtureId, '新建会话', 10000))) return smoke.finish()
   const otherId = sessionId()
   const otherTitle = smoke.text('.session.active .session-title')
@@ -78,7 +78,7 @@
   smoke.click('.send-btn')
   if (!(await smoke.waitFor('.stop-btn', '第二个回合开始', 15000))) return smoke.finish()
   const runningId = sessionId()
-  if (!smoke.click('.new-chat')) return smoke.fail('运行中点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('运行中点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => sessionId() !== runningId, '运行中切到新会话', 10000))) return smoke.finish()
   smoke.check('运行中新建会话：新会话没有停止按钮', !smoke.q('.stop-btn'), '')
   smoke.check('运行中的会话仍带运行标记', !!smoke.q('.spin-dot'), '')

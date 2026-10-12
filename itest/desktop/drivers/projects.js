@@ -19,15 +19,17 @@
 
   // 启动的默认折叠：只有「启动时恢复的那个会话」所在的项目是展开的，其余（包括那个还没有会话的）
   // 一律折叠。项目一多，侧栏先给一排组头；而「活动行必须看得见」这条规矩在启动这一刻仍然成立，
-  // 因为读者还没做过任何选择 —— 这是它唯一的例外，别的入口各自 reveal（见 App.tsx 的 revealProject）。
+  // 因为读者还没做过任何选择 —— 这是它唯一的例外，别的入口各自 reveal（见 App.tsx 的 revealGroup）。
+  // 「无项目」那一组是一条组，规则跟项目一样：眼前这个会话在项目里，所以它此刻是折叠的（下面那条
+  // 只展开一个的断言就覆盖了这一点，因为 heads 里也有它的组头）。
   const expandedNames = () => heads
     .filter((h) => h.querySelector('.proj-toggle') && h.querySelector('.proj-toggle').getAttribute('aria-expanded') === 'true')
     .map((h) => smoke.text(h.querySelector('.proj-name')))
   const bootOpen = expandedNames()
   smoke.check('启动时只展开一个项目', bootOpen.length === 1, bootOpen.join(' | ') || '(全都折叠了)')
   smoke.check('展开的就是当前会话所在的那一组（active 行在组里可见）',
-    smoke.qa('.proj-rows .session.active').length === 1,
-    bootOpen.join(' | ') + ' · 组内 active 行 ' + smoke.qa('.proj-rows .session.active').length)
+    smoke.qa('.proj-rows:not(.is-loose) .session.active').length === 1,
+    bootOpen.join(' | ') + ' · 组内 active 行 ' + smoke.qa('.proj-rows:not(.is-loose) .session.active').length)
   smoke.check('还没有会话的项目启动时也是折叠的',
     !bootOpen.some((n) => n.indexOf('smoke-empty') >= 0), bootOpen.join(' | '))
 
@@ -43,16 +45,16 @@
   }
   if (!(await openGroup('smoke-proj'))) return smoke.finish()
 
-  const memberRows = smoke.qa('.proj-rows .session')
+  const memberRows = smoke.qa('.proj-rows:not(.is-loose) .session')
   smoke.check('成员会话挂在项目组下', memberRows.length === 1, memberRows.length + ' 行')
-  const sections = smoke.allText('.session-section')
+  const sections = smoke.allText('.proj-head.is-loose')
   smoke.check('没有项目的会话单独成组', sections.some((t) => t.indexOf('无项目') >= 0), sections.join(' | ') || '(没有分组标题)')
 
   // 空项目(刚建出来、还没有会话的那个)必须看得见:它是用户按下「保存」之后唯一能确认
   // 「项目建好了」的地方,也是它自己的 ＋ / 右键菜单的唯一入口。曾经被分组规则滤掉,
   // 症状就是「新建了项目,左边什么都没有」。
-  smoke.check('两个项目都占组头（含还没有会话的那个）', smoke.qa('.proj-head').length === 2,
-    smoke.allText('.proj-head').join(' | '))
+  smoke.check('两个项目都占组头（含还没有会话的那个）', smoke.qa('.proj-head:not(.is-loose)').length === 2,
+    smoke.allText('.proj-head:not(.is-loose)').join(' | '))
   const emptyHead = smoke.qa('.proj-head').find((h) => smoke.text(h).indexOf('smoke-empty') >= 0)
   smoke.check('空项目显示成员数 0', !!emptyHead && smoke.text(emptyHead).indexOf('(0)') >= 0,
     emptyHead ? smoke.text(emptyHead) : '(没有空项目的组头)')
@@ -60,38 +62,39 @@
   smoke.check('空项目说明还没有会话', smoke.text('.proj-empty').indexOf('还没有会话') >= 0,
     smoke.text('.proj-empty') || '(没有提示)')
 
-  // 新建会话按钮的位置与分量：它造出来的行属于「无项目」这一组，所以它长在项目组之后、无项目
-  // 标题之前 —— 也就是它自己那一组的头上，而不是像以前那样挂在侧栏最顶上。顶上那个位置是全宽的
-  // 着色药丸，比会话本身还抢眼，读起来像整页的主操作。
-  const newBtn = smoke.q('.new-chat')
-  const looseTitle = smoke.q('.session-section')
-  if (!newBtn || !looseTitle) {
-    return smoke.fail('找到新建会话按钮与无项目标题',
-      '按钮=' + (newBtn ? '有' : '无') + ' 无项目标题=' + (looseTitle ? '有' : '无'))
+  // ＋ 的位置：它造出来的行属于「无项目」那一组，所以它长在那一组自己的组头右端 —— 跟项目的 ＋
+  // 同一个位置、同一个控件，而不是像以前那样挂在侧栏最顶上（顶上那个位置是全宽的着色药丸，比
+  // 会话本身还抢眼，读起来像整页的主操作）。
+  const newBtn = smoke.q('.proj-head.is-loose .proj-add')
+  const looseHead = smoke.q('.proj-head.is-loose')
+  if (!newBtn || !looseHead) {
+    return smoke.fail('找到「无项目」组头与它的 ＋',
+      '＋=' + (newBtn ? '有' : '无') + ' 组头=' + (looseHead ? '有' : '无'))
   }
-  smoke.check('新建会话在项目组之后', !!(smoke.qa('.proj-head').slice(-1)[0].compareDocumentPosition(newBtn)
-    & Node.DOCUMENT_POSITION_FOLLOWING),
+  const lastProjHead = smoke.qa('.proj-head:not(.is-loose)').slice(-1)[0]
+  smoke.check('「无项目」是最后一组（排在所有项目之后）',
+    !!(lastProjHead.compareDocumentPosition(looseHead) & Node.DOCUMENT_POSITION_FOLLOWING),
     smoke.allText('.session-list > *').slice(0, 6).join(' | '))
-  smoke.check('新建会话在无项目标题之上', !!(newBtn.compareDocumentPosition(looseTitle)
-    & Node.DOCUMENT_POSITION_FOLLOWING), smoke.text(looseTitle))
-  smoke.check('新建会话在会话列表里（不再占侧栏顶部）', newBtn.closest('.session-list') !== null,
+  smoke.check('＋ 长在「无项目」那一组的组头里（就是它自己那一组的头）',
+    newBtn.closest('.proj-head.is-loose') === looseHead,
+    newBtn.parentElement ? newBtn.parentElement.className : '(没有父节点)')
+  smoke.check('＋ 在会话列表里（不再占侧栏顶部）', newBtn.closest('.session-list') !== null,
     newBtn.parentElement ? newBtn.parentElement.className : '(没有父节点)')
 
-  // 分量：不是着色按钮，字号也比它造出来的行小 —— 安静到不再和会话本身抢注意力。
+  // 分量：不是着色按钮，而且跟项目的那个 ＋ 是**同一个控件**——两个创建入口不该各写一遍外观。
   const btnStyle = getComputedStyle(newBtn)
-  smoke.check('新建会话没有 accent 底色', btnStyle.backgroundColor === 'rgba(0, 0, 0, 0)',
+  smoke.check('组头的 ＋ 没有 accent 底色', btnStyle.backgroundColor === 'rgba(0, 0, 0, 0)',
     'background=' + btnStyle.backgroundColor)
-  const sessionSize = parseFloat(getComputedStyle(smoke.q('.session-title')).fontSize)
-  const projSize = parseFloat(getComputedStyle(heads[0].querySelector('.proj-name')).fontSize)
-  const btnSize = parseFloat(btnStyle.fontSize)
-  smoke.check('新建会话字号比会话标题小', btnSize < sessionSize,
-    btnSize + 'px vs ' + sessionSize + 'px')
-  smoke.check('新建会话字号比项目名小', btnSize < projSize, btnSize + 'px vs ' + projSize + 'px')
+  const projAdd = smoke.q('.proj-head:not(.is-loose) .proj-add')
+  smoke.check('桶与项目的 ＋ 是同一个控件（同一档字号同一套外观）',
+    !!projAdd && getComputedStyle(projAdd).fontSize === btnStyle.fontSize
+    && getComputedStyle(projAdd).backgroundColor === btnStyle.backgroundColor,
+    projAdd ? btnStyle.fontSize + ' vs ' + getComputedStyle(projAdd).fontSize : '(项目组头没有 ＋)')
 
   // ── 2. 进成员会话，chip 说的是项目而不是目录 ────────────────────────────
   // 显式点进去：fixture 里有两个会话，谁被启动时选中是 fixture 的顺序细节，不该成为断言的前提。
-  const member = smoke.q('.proj-rows .session')
-  if (!member) return smoke.fail('找到项目组里的成员行', '没有 .proj-rows .session')
+  const member = smoke.q('.proj-rows:not(.is-loose) .session')
+  if (!member) return smoke.fail('找到项目组里的成员行', '没有 .proj-rows:not(.is-loose) .session')
   member.click()
   const chipProject = await smoke.waitFor(
     () => (smoke.text('.work-dir').indexOf('smoke-proj') >= 0 ? true : null),
@@ -112,8 +115,8 @@
   const collapsed = await smoke.waitFor(
     () => (isOpen(memberHead) ? null : true), '点组头折叠', 4000)
   smoke.check('点组头（非箭头）即折叠', !!collapsed, 'aria-expanded=' + memberHead.querySelector('.proj-toggle').getAttribute('aria-expanded'))
-  smoke.check('折叠时组内的行确实不在 DOM 里', smoke.qa('.proj-rows .session').length === 0,
-    smoke.qa('.proj-rows .session').length + ' 行还在')
+  smoke.check('折叠时组内的行确实不在 DOM 里', smoke.qa('.proj-rows:not(.is-loose) .session').length === 0,
+    smoke.qa('.proj-rows:not(.is-loose) .session').length + ' 行还在')
   const hint = memberHead.querySelector('.proj-current')
   smoke.check('折叠后组头标出「当前会话在这一组里」', !!hint,
     hint ? hint.getAttribute('title') : smoke.text(memberHead))
@@ -123,7 +126,7 @@
   // 再点一次展开：提示就不该再出现（那是展开时 active 行的活），行也要回来 —— 后面几步都要读组内。
   memberHead.click()
   const reopened = await smoke.waitFor(() => (isOpen(memberHead) ? true : null), '再点组头展开', 4000)
-  smoke.check('再点组头即展开', !!reopened, smoke.qa('.proj-rows .session').length + ' 行回来了')
+  smoke.check('再点组头即展开', !!reopened, smoke.qa('.proj-rows:not(.is-loose) .session').length + ' 行回来了')
   smoke.check('展开后不再显示折叠提示', !memberHead.querySelector('.proj-current'),
     memberHead.querySelector('.proj-current') ? '提示还在' : '(没有提示)')
 
@@ -141,35 +144,35 @@
   // 红（它这样红了一阵子）。真机上一次点击的顺序是 mousedown → 焦点移动（blur）→ mouseup → click，
   // 能测的是把它拆开的那一半，也正是让整件事成立的那一半：**丢掉焦点就退出**。另一半（点击落在
   // 它瞄准的行上）不要写成断言——合成点击绕开坐标，坏状态下它照样会过。
-  const memberRow = smoke.qa('.proj-rows .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
-  if (!memberRow) return smoke.fail('找到成员行', smoke.allText('.proj-rows .session').join(' | '))
+  const memberRow = smoke.qa('.proj-rows:not(.is-loose) .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
+  if (!memberRow) return smoke.fail('找到成员行', smoke.allText('.proj-rows:not(.is-loose) .session').join(' | '))
   memberRow.querySelector('.session-title').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
   if (!(await smoke.waitFor('.session-rename', '双击进入会话重命名', 3000))) return smoke.finish()
   smoke.q('.session-rename').blur()
   await smoke.sleep(300)
   smoke.check('失焦即退出重命名（不需要 Enter/Esc）', !smoke.q('.session-rename'),
     smoke.q('.session-rename') ? '编辑框还在' : '(编辑框已退出)')
-  smoke.check('改名框退出后行还在', smoke.qa('.proj-rows .session').length >= 1,
-    smoke.qa('.proj-rows .session').length + ' 行')
+  smoke.check('改名框退出后行还在', smoke.qa('.proj-rows:not(.is-loose) .session').length >= 1,
+    smoke.qa('.proj-rows:not(.is-loose) .session').length + ' 行')
   // 把当前会话点回项目里的那一行：后面 2b 的判据是「⌘N 的新行落在项目组里」，前提是当前会话属于项目。
   memberRow.click()
-  await smoke.waitFor(() => (smoke.qa('.proj-rows .session.active').length === 1 ? true : null),
+  await smoke.waitFor(() => (smoke.qa('.proj-rows:not(.is-loose) .session.active').length === 1 ? true : null),
     '当前会话回到项目里', 5000)
 
   // ── 2b. ⌘N：当前会话属于项目，就在项目里新建 ─────────────────────────────
   // ⌘N 的语义是「再来一个跟眼前这个一样的」。项目供的是工作区、附加根和技能，掉到项目外等于
   // 静默换掉一整套环境，所以判据是「新行落在项目组里 + 新会话是当前会话」——只数行数看不出它
   // 落在哪一组，而无项目组里也有行。
-  const memberRowsBefore = smoke.qa('.proj-rows .session').length
+  const memberRowsBefore = smoke.qa('.proj-rows:not(.is-loose) .session').length
   smoke.key(document.body, 'n', { metaKey: true })
   const grew = await smoke.waitFor(
-    () => (smoke.qa('.proj-rows .session').length === memberRowsBefore + 1 ? true : null),
+    () => (smoke.qa('.proj-rows:not(.is-loose) .session').length === memberRowsBefore + 1 ? true : null),
     '⌘N 之后项目组里多一行', 10000)
   smoke.check('⌘N 在项目内新建会话', !!grew,
-    smoke.qa('.proj-rows .session').length + ' 行（项目内）/' + memberRowsBefore + ' 行（之前）')
+    smoke.qa('.proj-rows:not(.is-loose) .session').length + ' 行（项目内）/' + memberRowsBefore + ' 行（之前）')
   smoke.check('新会话是当前会话且属于项目',
-    smoke.qa('.proj-rows .session.active').length === 1,
-    smoke.qa('.proj-rows .session.active').length + ' 行 active')
+    smoke.qa('.proj-rows:not(.is-loose) .session.active').length === 1,
+    smoke.qa('.proj-rows:not(.is-loose) .session.active').length + ' 行 active')
   const chipAfterCmdN = await smoke.waitFor(
     () => (smoke.text('.work-dir').indexOf('smoke-proj') >= 0 ? true : null),
     '⌘N 之后 chip 还是项目', 8000)
@@ -179,9 +182,9 @@
   // 置顶的语义是「排到本组最前」：项目里的会话在项目里排，不会越到别的组头上，也不重排项目本身。
   // 此刻项目里有两行（fixture 的老成员 + 刚 ⌘N 建的新会话），无项目组里也有行 —— 所以两个方向都
   // 能断言：老成员升到项目组第一行，而侧栏第一行仍在项目组内部。
-  const memberTitles = () => smoke.qa('.proj-rows .session').map((r) => smoke.text(r.querySelector('.session-title')))
+  const memberTitles = () => smoke.qa('.proj-rows:not(.is-loose) .session').map((r) => smoke.text(r.querySelector('.session-title')))
   const beforePin = memberTitles()
-  const pinTarget = smoke.qa('.proj-rows .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
+  const pinTarget = smoke.qa('.proj-rows:not(.is-loose) .session').find((r) => smoke.text(r.querySelector('.session-title')) === '冒烟会话')
   if (!pinTarget) return smoke.fail('找到项目里的老成员行', beforePin.join(' | '))
   smoke.check('置顶前老成员不在项目组第一行', beforePin[0] !== '冒烟会话', beforePin.join(' | '))
   pinTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
@@ -193,13 +196,13 @@
     () => (memberTitles()[0] === '冒烟会话' ? memberTitles() : null), '置顶的成员升到项目组第一行', 5000)
   smoke.check('置顶的成员升到项目组第一行', !!memberFirst, (memberFirst || memberTitles()).join(' | '))
   const firstRow = smoke.q('.session-list .session')
-  smoke.check('置顶没有跨组：侧栏第一行仍在项目组内',
-    !!firstRow && !!firstRow.closest('.proj-rows'),
-    firstRow ? (firstRow.closest('.proj-rows') ? '在项目组内' : '跑到了项目组外') : '(没有行)')
+  const inProjRows = firstRow && !!firstRow.closest('.proj-rows:not(.is-loose)')
+  smoke.check('置顶没有跨组：侧栏第一行仍在项目组内', !!inProjRows,
+    firstRow ? (inProjRows ? '在项目组内' : '跑到了项目组外') : '(没有行)')
   smoke.check('置顶不重排项目（第一个组头还是 smoke-proj）',
-    smoke.text(smoke.qa('.proj-head')[0]).indexOf('smoke-proj') >= 0,
-    smoke.allText('.proj-head').join(' | '))
-  const pinnedMember = smoke.qa('.proj-rows .session')[0]
+    smoke.text(smoke.qa('.proj-head:not(.is-loose)')[0]).indexOf('smoke-proj') >= 0,
+    smoke.allText('.proj-head:not(.is-loose)').join(' | '))
+  const pinnedMember = smoke.qa('.proj-rows:not(.is-loose) .session')[0]
   smoke.check('置顶标记落在项目内的那一行', !!pinnedMember && !!pinnedMember.querySelector('.session-pin'),
     pinnedMember ? pinnedMember.innerHTML.slice(0, 80) : '(没有行)')
   // 留着这个置顶跑到结尾：detach（第 6 步删项目）必须原样保留会话记录上的 pinned，Go 侧也断言
@@ -212,7 +215,7 @@
   //   ② 删掉一个不是当前的行 → 选中一步都不动（错误实现会落到它下面那一行）；
   //   ③ 删掉组里最后一行的当前会话 → 落到上面那一行（错误实现会跨到别的组/回到默认）。
   // 行的标题三行都一样，身份只能靠**下标 + 置顶标记**认。
-  const rowsNow = () => smoke.qa('.proj-rows .session')
+  const rowsNow = () => smoke.qa('.proj-rows:not(.is-loose) .session')
   const activeAt = () => rowsNow().findIndex((r) => r.classList.contains('active'))
   // ⌘N 两次，**一次一等**。同一 tick 连按两次 ⌘N 会让两个 NewSession 同时起飞，而每一次完成都会
   // 先 re-list 再 setSessions：行数先到 4、active 却可能还停在前一个上（实测随机复现：连按两次，
@@ -278,7 +281,7 @@
     rowsNow().length + ' 行，第一行' + (rowsNow()[0] && rowsNow()[0].querySelector('.session-pin') ? '带' : '不带') + '置顶标记')
   smoke.check('组里只剩一行，且它是当前会话', !!handedUp && activeAt() === 0,
     rowsNow().length + ' 行，active 下标 ' + activeAt())
-  smoke.check('跨组没有被动过：无项目那一组还在原处', !!smoke.q('.session-section'), smoke.text('.session-section'))
+  smoke.check('跨组没有被动过：无项目那一组还在原处', !!smoke.q('.proj-head.is-loose'), smoke.text('.proj-head.is-loose'))
 
   // ── 3. 工作区面板只读,并指向项目 ────────────────────────────────────────
   smoke.click('.work-dir')
@@ -303,7 +306,7 @@
 
   // ── 5. 组头右键菜单 ──────────────────────────────────────────────────────
   const openProjectMenu = async (label) => {
-    const h = smoke.q('.proj-head')
+    const h = smoke.q('.proj-head:not(.is-loose)')
     if (!h) {
       smoke.fail(label, '没有 .proj-head')
       return null
@@ -359,11 +362,11 @@
   if (!confirmDel) return smoke.fail('确认框里有「删除项目」', smoke.allText('.confirm-box .btn').join(' | '))
   confirmDel.click()
   const leftHeads = await smoke.waitFor(
-    () => (smoke.qa('.proj-head').length === 1 ? smoke.qa('.proj-head') : null),
+    () => (smoke.qa('.proj-head:not(.is-loose)').length === 1 ? smoke.qa('.proj-head:not(.is-loose)') : null),
     '被删项目的组头消失（另一个空项目还在）', 10000)
   smoke.check('删除后只剩那个还没会话的项目',
     !!leftHeads && smoke.text(leftHeads[0]).indexOf('smoke-empty') >= 0,
-    smoke.allText('.proj-head').join(' | ') || '(没有组头)')
+    smoke.allText('.proj-head:not(.is-loose)').join(' | ') || '(没有组头)')
   // detach 之后会话是普通会话：chip 回到自己的目录（快照已刷成项目主目录）、面板重新可编辑。
   const chipDetached = await smoke.waitFor(
     () => (smoke.text('.work-dir').indexOf('project-root') >= 0 ? true : null),

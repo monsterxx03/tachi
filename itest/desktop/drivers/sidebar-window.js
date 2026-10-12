@@ -16,9 +16,10 @@
   if (!(await smoke.waitForSession())) return smoke.finish()
 
   const nav = () => smoke.q('.session-list')
-  // 无项目桶的行是 nav 的直接子元素（项目行缩在 .proj-rows 里）——与 session-keys.js 同一个判据。
-  const looseRows = () => smoke.qa('.session-list > .session')
-  const projRows = () => smoke.qa('.proj-rows .session')
+  // 两组行各自的容器（与 session-keys.js 同一个判据）：项目行在 .proj-rows 里，无项目桶的在
+  // .proj-rows.is-loose 里 —— 桶是一个组，跟项目走同一套壳（它自己的组头、自己的 ＋、自己的折叠）。
+  const looseRows = () => smoke.qa('.proj-rows.is-loose .session')
+  const projRows = () => smoke.qa('.proj-rows:not(.is-loose) .session')
   const more = () => smoke.q('.session-more')
   const sessionId = () => { const el = smoke.q('.app'); return (el && el.getAttribute('data-session-id')) || '' }
   // 行尾那句「还有 N 条 ▾」里的 N。它和画出来的行数必须自洽，否则那句话就是假的。
@@ -36,13 +37,24 @@
     return r.top >= box.top - 1 && r.bottom <= box.bottom + 1
   }
 
+  // ── 0. 先把「无项目」那一组打开 ───────────────────────────────────────────
+  // fixture 里当前会话是项目成员，而分组默认是折叠的（只有当前会话所在的那一组会被启动打开），
+  // 所以桶起手是折的。这个场景量的每一样东西都在那个桶里，先展开它 —— 折叠是 DOM 级的：一组折着，
+  // 它的行根本不在页面上。
+  const looseHead = await smoke.waitFor('.proj-head.is-loose', '侧栏出现「无项目」组头', 10000)
+  if (!looseHead) return smoke.finish()
+  if (looseHead.querySelector('.proj-toggle').getAttribute('aria-expanded') !== 'true')
+    smoke.click(looseHead.querySelector('.proj-toggle'))
+  if (!(await smoke.waitFor(() => (looseRows().length > 0 ? true : null), '「无项目」组展开出它的行', 6000)))
+    return smoke.finish()
+
   // ── 1. 截断是诚实的，而且只发生在长的那个组上 ─────────────────────────────
   // fixture：无项目桶 101 条（100 个批量 + 无项目会话），项目组 1 条（冒烟会话）。
   const first = await smoke.waitFor(
     () => (looseRows().length > 0 && !!more() ? true : null), '长的那组出现行尾的「还有 N 条」', 10000)
   smoke.check('桶比窗口长时，行尾说还有多少条', !!first, foot())
   smoke.check('画出来的 + 行尾说的 = 桶里真实的条数（101）', bucketTotal() === 101, foot())
-  smoke.check('短的组照旧完整、也没有行尾', projRows().length === 1 && !smoke.q('.proj-rows .session-more'),
+  smoke.check('短的组照旧完整、也没有行尾', projRows().length === 1 && !smoke.q('.proj-rows:not(.is-loose) .session-more'),
     projRows().length + ' 行')
 
   // ── 2. 滚到尾部：自己续一段，但不是一次画完 ──────────────────────────────

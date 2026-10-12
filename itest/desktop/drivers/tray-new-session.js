@@ -28,10 +28,10 @@
 
   // 显示中的会话 id：标题栏不再写了之后，它是页面上唯一读得到的地方（挂在 app 根上）。
   const curID = () => (smoke.q('.app') ? smoke.q('.app').getAttribute('data-session-id') : '') || ''
-  const projRows = () => smoke.qa('.proj-rows .session')
+  const projRows = () => smoke.qa('.proj-rows:not(.is-loose) .session')
 
   // 起手：当前会话是 fixture 的「冒烟会话」——项目成员，项目组默认展开。
-  const head = await smoke.waitFor('.proj-head', '侧栏出现项目组头', 10000)
+  const head = await smoke.waitFor('.proj-head:not(.is-loose)', '侧栏出现项目组头', 10000)
   if (!head) return smoke.finish()
   const toggle = head.querySelector('.proj-toggle')
   if (!toggle) return smoke.fail('组头上有折叠开关', smoke.text(head))
@@ -67,7 +67,7 @@
   smoke.check('新会话落在当前会话所属的项目组里', !!grew, projRows().length + ' 行')
   smoke.check('新会话那一行是 active（不是底下多了一行、选中还停在原地）',
     !!(grew && projRows().some((r) => r.classList.contains('active'))),
-    smoke.qa('.proj-rows .session.active').length + ' 行 active')
+    smoke.qa('.proj-rows:not(.is-loose) .session.active').length + ' 行 active')
 
   // 3. 它是一段空对话，且工作区还是那个项目 —— 「再来一个跟眼前这个一样的」的全部含义。
   const welcome = await smoke.waitFor('.welcome', '空对话的欢迎页', 6000)

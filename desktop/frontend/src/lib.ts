@@ -292,6 +292,17 @@ function liveProjectId(s: { projectId?: string }, known: Set<string>): string {
   return pid && known.has(pid) ? pid : ''
 }
 
+// sessionGroupKey answers which GROUP a session lands in — the key `expandedProjects` files a fold
+// state under (App.tsx's `groupKey` for the group it renders). It is the same rule as the join
+// above, one step further along, and it exists for the paths that reveal a group without a click on
+// a row: ⌘K picks a conversation wherever it sits, and a conversation whose project is gone lands in
+// the bucket like any other project-less one. Spelling that rule a second time at the call site is
+// how a switch into a folded group stops opening it — and a folded group answers with a header and
+// nothing under it, which is the same as not having gone there.
+export function sessionGroupKey(s: { projectId?: string }, projects: ProjectVO[]): string {
+  return liveProjectId(s, new Set(projects.map((p) => p.id))) || LOOSE_GROUP_KEY
+}
+
 // sessionGroups renders the sidebar's grouping (design §7.1): one group per project, plus a
 // final bucket for the sessions no live project owns.
 //
@@ -307,6 +318,11 @@ function liveProjectId(s: { projectId?: string }, known: Set<string>): string {
 // or deletes the project. Dropping empty groups made a newly created project invisible (the
 // reader sees nothing after the create, and cannot reach it to make a session), which is a bug
 // the reader reports as "I made a project and nothing happened".
+//
+// The 无项目 bucket gets one on the same terms, empty included: it is a group like any other (its
+// own header, its own ＋, its own fold state), and it is where the sidebar's "make one that
+// belongs to no project" action lives. Dropping it while empty is what took that action off the
+// screen for a reader whose every conversation happens to sit in a project.
 //
 // The order inside a group is the order it came in (ListSessions: newest first), except that a
 // pinned session goes to the head of its own group (see pinnedFirst).
@@ -337,7 +353,7 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
     project: p,
     rows: sessionRows(pinnedFirst(byProject.get(p.id) ?? [])),
   }))
-  if (loose.length > 0) groups.push({ project: null, rows: sessionRows(pinnedFirst(loose)) })
+  groups.push({ project: null, rows: sessionRows(pinnedFirst(loose)) })
   return groups
 }
 

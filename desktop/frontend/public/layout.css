@@ -153,49 +153,10 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 .sidebar-toggle:hover { background: var(--accent-soft); color: var(--accent-2); }
 
-/* The sidebar's own ＋ — which is also the 无项目 bucket's action, since that is the group whose
-   rows it makes. It is a row-height ghost button, sized below the rows it adds: it used to be a
-   full-width tinted pill pinned to the top of the sidebar, where it was the loudest thing on
-   screen, sitting above the conversations that are the actual content, so it read as the page's
-   primary action rather than as "one more row here". Nothing about it is accent-tinted at REST —
-   that is what keeps it from competing with the rows.
-   Its HOVER is the sidebar's ACTION hover (accent-soft + accent ink), the one 新建项目 and the
-   titlebar toggles wear — not the neutral wash the rows and the project headers use. The two are
-   the same gesture ("＋ 新建 X", sitting at opposite ends of the list and reading as siblings), so
-   hovering one and then the other must not give two different kinds of feedback; and `--hover` vs
-   accent is the real axis: a row answers "yes, this is clickable", an action answers "this is
-   something that will happen". */
-.new-chat {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 8px;
-  margin-top: 6px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.16s var(--ease), color 0.16s var(--ease);
-}
-.new-chat:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The ＋ glyph inside the sidebar's labelled create button (新建项目). It is a size of its own because
+   that button carries text: the glyph sits beside the label at the same 14px the group headers draw
+   their own ＋ at (.proj-add) — one gesture, "＋ 新建 X", at two ends of the list. */
 .new-chat-plus { font-size: 14px; }
-
-/* The 无项目 bucket's heading. It sits at the same LEVEL as a project's header (both are
-   groups of rows), so it is sized to be read as one — just quieter, since there is nothing
-   to click, name or manage here. No uppercase: the label is Chinese, where the transform
-   does nothing but the wide letter-spacing still made it look like a stray caption. */
-.session-section {
-  font-size: 13px;
-  letter-spacing: 0.2px;
-  font-weight: 600;
-  color: var(--text-dim);
-  padding: 8px 8px 2px;
-}
 
 .session-list {
   flex: 1;
@@ -245,17 +206,12 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
-.session-empty {
-  padding: 6px 8px;
-  font-size: 12.5px;
-  color: var(--text-faint);
-}
 
 /* ── Project groups (design §7.1) ────────────────────────────────────────── */
-/* The sidebar's top action now that 新建会话 moved down into the list: a dashed box, the only
-   thing on the first screen that offers a way to organise the conversations. Its text, its ＋ and
-   its hover all match .new-chat, so the two read as siblings even though they sit at opposite ends
-   of the list. */
+/* The sidebar's top action: a dashed box, the only thing on the first screen that offers a way to
+   organise the conversations. Its ＋ (.new-chat-plus) and its hover are the sidebar's ACTION pair —
+   the same ones every group header's own ＋ wears — so the two create gestures read as siblings even
+   though they sit at opposite ends of the list. */
 .new-project {
   display: flex;
   align-items: center;
@@ -365,15 +321,17 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-size: 12px;
   color: var(--red);
 }
-/* A project's rows are indented one step, inside their own container: a header-relative
-   sibling selector would also indent the 无项目 bucket that follows every group.
+/* A group's rows are indented one step, inside their own container: a header-relative sibling
+   selector would also indent whatever follows the group. EVERY group has one of these — a project's
+   and the 无项目 bucket's alike (that one carries is-loose, for the two places that need to tell the
+   groups apart: a driver's selector, and the docs).
 
    They also hang off a RAIL, because indentation alone does not say 「these rows are in that
-   group」: 12px of extra left margin is the only thing that separated a project's row from a
-   无项目 one, and at a glance that is just a slightly narrower row in the same list. The rail is
-   2px of --border-2 — the same weight as .session-chain's bar — so a conversation hangs off its
-   project exactly the way its 压缩前 nodes hang off it. The margin and the padding are split
-   around the border (6 + 2 + 4 = the 12px indent the rows had before), so nothing moved. */
+   group」: the rows of one group and of another are otherwise the same box, and 12px of extra left
+   margin reads as nothing more than a slightly narrower row in the same list. The rail is 2px of
+   --border-2 — the same weight as .session-chain's bar — so a conversation hangs off its group
+   exactly the way its 压缩前 nodes hang off it. The margin and the padding are split around the
+   border (6 + 2 + 4 = the 12px indent the rows had before), so nothing moved. */
 .proj-rows {
   margin-left: 6px;
   padding-left: 4px;

@@ -60,7 +60,7 @@
   }, 16)
 
   // Away: a brand-new session (its own empty transcript).
-  if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') !== runningTitle, '切到新会话', 10000))) return smoke.finish()
 
   // Back: the running session's row.

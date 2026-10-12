@@ -35,7 +35,7 @@
 
   smoke.q('.chat').focus()
   const fixtureId = sessionId()
-  if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('点击新建会话', '按钮找不到')
   // The SWITCH is what has to be waited for, not the 欢迎屏: this scenario's fixture session is
   // empty too, so the welcome screen is already on screen the instant it is asked for — a send
   // that raced the switch ran its turn in the OLD session (correctly leaving the new one empty,

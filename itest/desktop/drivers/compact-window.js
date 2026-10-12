@@ -38,7 +38,7 @@
 
   // 窗口期侧栏列的还是一分钟前那份列表（回合中途没人刷新它），所以要看到这条对话的那一行，读者得先
   // 做点什么。新建会话是用户真会做的那件事，它顺带刷一次列表 —— 报的那个 bug 就是这么被撞见的。
-  if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => (sessionId() !== fixtureId ? true : null), '新建会话', 10000))) return smoke.finish()
   const blankId = sessionId()
 

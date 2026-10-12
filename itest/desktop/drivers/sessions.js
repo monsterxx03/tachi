@@ -35,7 +35,7 @@
   // proves anything if the composer was NOT focused beforehand.
   smoke.q('.chat').focus()
 
-  if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  if (!smoke.click('.proj-head.is-loose .proj-add')) return smoke.fail('点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') !== oldTitle, '切到新会话', 10000))) return smoke.finish()
   // Focus was moved off the composer above, so this says the app did it, not that it was
   // already there. No waitFor: the composer is focused before the sidebar is refreshed, so

@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, sessionGroupKey, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
@@ -576,23 +576,27 @@ function App() {
   } | null>(null)
   // Deleting a project DETACHES its members, so the box says how many sessions that is.
   const [confirmDelProject, setConfirmDelProject] = useState<{ id: string; name: string; count: number; error?: string } | null>(null)
-  // Which groups are OPEN, by project id. EMPTY means every group is folded, and that is the
-  // startup state: with several projects the sidebar opens as a list of headers, and a project
-  // created later starts folded too — because the default IS the empty map, not a seeded one.
-  // Memory only, like openChains: a reopened window is folded again.
+  // Which groups are OPEN, by group key (a project id, or LOOSE_GROUP_KEY for the 无项目 bucket).
+  // EMPTY means every group is folded, and that is the startup state: with several projects the
+  // sidebar opens as a list of headers, and a project created later starts folded too — because the
+  // default IS the empty map, not a seeded one. Memory only, like openChains: a reopened window is
+  // folded again.
   //
   // The direction matters: a set of COLLAPSED ids would need every project pre-filled at load
   // time, and the ones that arrive later (a new project, a list still loading) would leak open.
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({})
-  // revealProject opens one group, for the paths that SWITCH or CREATE a session without a click
-  // on a row: the session the app boots into, and ＋ / ⌘P / ⌘K landing inside a folded group. A folded
+  // revealGroup opens one group, for the paths that SWITCH or CREATE a session without a click on a
+  // row: the session the app boots into, and ＋ / ⌘P / ⌘K landing inside a folded group. A folded
   // group answers with a header and nothing under it, so without this the row that just became
   // active is hidden — the same as not having gone there. A click on a row cannot need it (a
   // folded group has no rows to click), and it never closes anything: 收起你正坐着的那个组 stays
   // the reader's call.
-  const revealProject = useCallback((id?: string) => {
-    if (!id) return
-    setExpandedProjects((p) => (p[id] ? p : { ...p, [id]: true }))
+  //
+  // It takes a KEY, not a project id: the 无项目 bucket is a group on the same terms, so a session
+  // created without a project (⌘⇧N, the bucket's own ＋) has to open it exactly like a project one.
+  const revealGroup = useCallback((key?: string) => {
+    if (!key) return
+    setExpandedProjects((p) => (p[key] ? p : { ...p, [key]: true }))
   }, [])
   // Bringing the row of the session ON SCREEN into view is the sidebar's own job: "the active row"
   // and "a row the reader can see" are two different things, and every way of switching sessions can
@@ -616,13 +620,19 @@ function App() {
   // looking at the newest handful — the rest is scroll nobody asked to paint. `rowWindow` is how
   // many rows of ONE group are shown, keyed the way the groups are (project id, or the bucket's own
   // key), memory only, and it only ever GROWS within a session: folding is expandedProjects'
-  // business (see toggleProject), and a reader who has scrolled to the end of a group did not ask
+  // business (see toggleGroup), and a reader who has scrolled to the end of a group did not ask
   // for it to be re-hidden. `MoreRows` (components.tsx) is the line that grows it.
   //
   // The grouping is memoized because the reveal effect below reads it: `sessionGroups` builds a
   // fresh array every call, and a dependency that changes on every render would run that effect (and
   // its DOM query) on every render — during a turn, on every streamed frame.
   const groups = useMemo(() => sessionGroups(sessions, projects), [sessions, projects])
+  // The 无项目 bucket's own count: a project carries its member count in its record, the bucket has
+  // no record of its own to ask, so it counts the sessions the sidebar files under it. That is
+  // `looseMembers` — the same membership ⌘P's 无项目 row shows — so the two surfaces cannot report
+  // two different sizes for the one group (and it is memoized because this renders during a turn,
+  // on every streamed frame, over a list with no upper bound).
+  const looseCount = useMemo(() => looseMembers(sessions, projects).length, [sessions, projects])
   const [rowWindow, setRowWindow] = useState<Record<string, number>>({})
   const shownRows = (g: SessionGroup<SessionItem>) => {
     const n = rowWindow[groupKey(g)] ?? SIDEBAR_WINDOW_ROWS
@@ -1526,13 +1536,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     // row must be visible" rule needs, since at boot the reader has chosen nothing yet.
     if (cur && !bootOpenedGroup.current) {
       bootOpenedGroup.current = true
-      revealProject(cur.projectId)
+      revealGroup(cur.projectId || LOOSE_GROUP_KEY)
     }
     setLoading(false)
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput, revealProject])
+  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput, revealGroup])
   // openRewindMenu asks the backend where this session's turns begin and opens the
   // bubble's menu. The list is fetched per open rather than cached: a running turn keeps
   // adding boundaries, and a stale list would resolve a bubble to the wrong turn.
@@ -1667,7 +1677,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // The group it lands in opens, since the ＋ that made it lives on a header that may well be
       // the only thing a folded group shows: the new row is the active one, and a group that stays
       // folded after creating a session in it hides the very thing the click produced.
-      revealProject(projectID)
+      revealGroup(projectID || LOOSE_GROUP_KEY)
       openSession(ns.id)
       clearUsage(); resetTps()
       // The new session is an empty conversation, so the caret belongs in the composer and
@@ -1683,7 +1693,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, revealProject])
+  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput, revealGroup])
 
   // newChatLikeCurrent makes another conversation like the one on screen: if that session belongs
   // to a project, its successor starts INSIDE it — the project is what supplies the workspace, the
@@ -1761,12 +1771,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // hiding the row that just became active, which is the same as not having gone there. The rule is
   // this entry point's own: a collapse is the reader's own doing, and forcing the group open from
   // every path would make collapsing the one you are sitting in impossible. A refusal expands
-  // nothing, since nothing was switched — and the bucket has no fold to open (the sidebar never
-  // folds it), so there is nothing to reveal for it.
+  // nothing, since nothing was switched.
+  //
+  // The bucket is a group on the same terms (it folds like any project — see the sidebar), so it is
+  // revealed by the same rule: both branches below open the group they are about to land in, whether
+  // they open an existing session or make one.
   const pickProject = useCallback((c: ProjectChoice) => {
     if (c.kind === 'loose') {
       const latest = newestOf(looseMembers(sessions, projects))
       if (latest) {
+        revealGroup(LOOSE_GROUP_KEY)
         void clickSession(latest.id)
         focusAfterPalette()
         return ''
@@ -1776,7 +1790,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       return ''
     }
     const p = c.project
-    const reveal = () => revealProject(p.id)
+    const reveal = () => revealGroup(p.id)
     const latest = latestSessionOf(sessions, p.id)
     if (latest) {
       reveal()
@@ -1791,23 +1805,22 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     void newChat(p.id)
     focusAfterPalette()
     return ''
-  }, [sessions, projects, clickSession, newChat, focusAfterPalette, revealProject])
+  }, [sessions, projects, clickSession, newChat, focusAfterPalette, revealGroup])
 
   // pickSession answers the ⌘K palette (see palette.tsx): switch to the chosen conversation.
   // Nothing can refuse it — ⌘P's reason string exists for the projects that cannot be opened into
   // anything — so the palette closes on the pick, and the caret goes to the composer for the same
   // reason it does there.
   //
-  // It expands the target's group when that group belongs to a live project, on the same argument
-  // ⌘P makes above: ⌘K means 「带我去那次对话」, and a folded group answers with a header and nothing
-  // under it, hiding the row that just became active. A conversation whose projectId names no live
-  // project has no group to open — the sidebar files such a row under 无项目 — so there is nothing
-  // to reveal and nothing to force open.
+  // It expands the target's group, on the same argument ⌘P makes above: ⌘K means 「带我去那次对话」,
+  // and a folded group answers with a header and nothing under it, hiding the row that just became
+  // active. WHICH group that is comes from one place (`sessionGroupKey`): a conversation whose
+  // projectId names no live project lands in the 无项目 bucket, which folds like any other group.
   const pickSession = useCallback((s: SessionItem) => {
-    if (s.projectId && projects.some((p) => p.id === s.projectId)) revealProject(s.projectId)
+    revealGroup(sessionGroupKey(s, projects))
     void clickSession(s.id)
     focusAfterPalette()
-  }, [projects, clickSession, focusAfterPalette, revealProject])
+  }, [projects, clickSession, focusAfterPalette, revealGroup])
 
   // The app body is INERT while the settings page is up: the page is fixed, opaque and covers the
   // window (settings.css), so what is behind it needs to leave the tab order and the accessibility
@@ -2101,11 +2114,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return () => { off?.() }
   }, [updateSession, setSessionPage, composer])
 
-  // toggleProject opens/closes a project group. The header owns the click; the caret button
-  // keeps its own handler (stopping propagation) so a pointer already aimed at the caret still
-  // toggles exactly once, while a click meant for ＋ or the rename box never toggles at all.
-  const toggleProject = useCallback((id: string) => {
-    setExpandedProjects((p) => ({ ...p, [id]: !p[id] }))
+  // toggleGroup opens/closes a sidebar group — a project's, or the 无项目 bucket's, which is why it
+  // takes a group KEY and not a project id. The header owns the click; the caret button keeps its
+  // own handler (stopping propagation) so a pointer already aimed at the caret still toggles exactly
+  // once, while a click meant for ＋ or the rename box never toggles at all.
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedProjects((p) => ({ ...p, [key]: !p[key] }))
   }, [])
 
   // activeInGroup returns the session the CURRENT conversation is, when it hangs in this group —
@@ -2240,21 +2254,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // backend answers for it, which is the same path every other stale target takes.
   const menuSession = menu ? sessions.find((s) => s.id === menu.sid) : undefined
 
-  // The sidebar's own ＋ makes a session that belongs to NO project, so it sits at the head of
-  // the 无项目 bucket — directly above the label of the group whose rows it adds to — rather than
-  // at the top of the sidebar. Up there it was a full-width tinted pill: the loudest thing on
-  // screen, sitting above the conversations that are the actual content, so it read as the
-  // page's primary action instead of "one more row here".
-  //
-  // It is built once because two places render it: the head of the loose bucket, and the tail of
-  // the list when no loose bucket exists yet. A control that vanishes the moment its bucket is
-  // empty would have to be hunted for exactly when the user has nothing else to click.
-  const newSessionButton = (
-    <button className="new-chat" onClick={() => void newChat()} title="新建一个不属于任何项目的会话">
-      <span className="new-chat-plus">＋</span> 新建会话
-    </button>
-  )
-
   return (
     // data-session-id is the ONLY place the displayed session's id is readable now that the
     // titlebar stopped showing it: the smoke drivers use it to tell "switched to another session"
@@ -2277,8 +2276,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
               rather than hiding the feature until a session happens to be bound. This is the
-              sidebar's top-level action; the plain 新建会话 button is NOT up here — it belongs
-              with the rows it makes (see newSessionButton). */}
+              sidebar's top-level action; the ＋ that makes a project-LESS session is NOT up
+              here — it belongs with the rows it makes (the 无项目 bucket's own header). */}
           <button className="new-project" onClick={() => openProjectEditor()}
             title="新建项目：一组会话共用工作区的容器">
             <span className="new-chat-plus">＋</span> 新建项目
@@ -2293,25 +2292,38 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               // What THIS group's window shows, and what it does not (see rowWindow above). The
               // window is per group, so a short group (a project with three sessions) is never held
               // back by the hundred-row bucket beside it.
+              const key = groupKey(group)
+              const open = !!expandedProjects[key]
               const shown = shownRows(group)
               const hidden = group.rows.length - shown.length
+              const active = activeInGroup(group)
+              // A group is either a project (a record with a name, a working directory and a member
+              // count) or the 无项目 bucket — which is a group on the same terms and has none of
+              // those, so the few places the two differ are each spelled out where they differ.
+              const count = group.project ? group.project.sessionCount : looseCount
               return (
-              <Fragment key={groupKey(group)}>
+              <Fragment key={key}>
                 {/* The WHOLE header toggles (the caret is one way to say it, not the only one):
                     role=button already covered the row for the keyboard, and a header whose only
                     live spot is a 16px caret reads as a label. The controls inside stopPropagation,
-                    or ＋ would collapse the group it creates a session in. */}
-                {group.project ? (
-                  <div className="proj-head" role="button" tabIndex={0}
-                    onClick={() => toggleProject(group.project!.id)}
-                    onKeyDown={actOnKey(() => toggleProject(group.project!.id))}
-                    onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ id: group.project!.id, x: e.clientX, y: e.clientY }) }}>
-                    <button type="button" className="proj-toggle" aria-expanded={!!expandedProjects[group.project.id]}
-                      title={expandedProjects[group.project.id] ? '收起该项目' : '展开该项目'}
-                      onClick={(e) => { e.stopPropagation(); toggleProject(group.project!.id) }}>
-                      <Caret open={!!expandedProjects[group.project.id]} />
-                    </button>
-                    {editingProject?.id === group.project.id ? (
+                    or ＋ would collapse the group it creates a session in.
+
+                    The 无项目 bucket wears the same header as a project (is-loose is the whole
+                    difference). It IS a group of rows like any other — it folds, it counts, and its
+                    ＋ makes a row that lands in it — so a reader reads it with the same eye. What it
+                    has no header for is what only a project has: a name of its own to rename, a
+                    working directory, a menu to edit or delete it. */}
+                <div className={`proj-head${group.project ? '' : ' is-loose'}`} role="button" tabIndex={0}
+                  onClick={() => toggleGroup(key)}
+                  onKeyDown={actOnKey(() => toggleGroup(key))}
+                  onContextMenu={group.project ? (e) => { e.preventDefault(); setProjectMenu({ id: group.project!.id, x: e.clientX, y: e.clientY }) } : undefined}>
+                  <button type="button" className="proj-toggle" aria-expanded={open}
+                    title={`${open ? '收起' : '展开'}${group.project ? '该项目' : `「${LOOSE_LABEL}」`}`}
+                    onClick={(e) => { e.stopPropagation(); toggleGroup(key) }}>
+                    <Caret open={open} />
+                  </button>
+                  {group.project ? (
+                    editingProject?.id === group.project.id ? (
                       <input className="project-rename" autoFocus value={editingProject.name}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setEditingProject({ id: group.project!.id, name: e.target.value })}
@@ -2328,69 +2340,50 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       <span className="proj-name" title={`主目录：${group.project.workingDir}`}>
                         {group.project.name}
                       </span>
-                    )}
-                    <span className="proj-count" title={`${group.project.sessionCount} 个会话`}>({group.project.sessionCount})</span>
-                    {/* A COLLAPSED group hides its rows, so a reader whose conversation is in
-                        there cannot see where they are — the marker says so and names the session
-                        (a bare dot would say "something here", not "you are here"). Collapsed
-                        only: expanded, the row's own highlight says it. */}
-                    {!expandedProjects[group.project.id] && activeInGroup(group)
-                      ? <span className="proj-current" title={`当前会话「${activeInGroup(group)!.title || '未命名会话'}」在这个项目里`}>●</span>
-                      : null}
-                    {group.project.rootsUsable ? null : (
-                      <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>
-                    )}
-                    <button type="button" className="proj-add" title="在该项目里新建会话"
-                      onClick={(e) => { e.stopPropagation(); void newChat(group.project!.id) }}>＋</button>
-                  </div>
-                ) : (
-                  <>
-                    {/* The button sits directly above the label of the bucket it adds rows to:
-                        it is the 无项目 group's own ＋, spelled out — the written-out mirror of
-                        the small ＋ a project keeps at the end of its header. */}
-                    {newSessionButton}
-                    <div className="session-section">{LOOSE_LABEL}</div>
-                  </>
-                )}
+                    )
+                  ) : (
+                    /* The bucket's name is a constant, not a record — the app's one word for 「a
+                       conversation that belongs to no project」, spelled the same way in the two
+                       palettes (LOOSE_LABEL). */
+                    <span className="proj-name" title="不属于任何项目的会话">{LOOSE_LABEL}</span>
+                  )}
+                  <span className="proj-count" title={`${count} 个会话`}>({count})</span>
+                  {/* A COLLAPSED group hides its rows, so a reader whose conversation is in
+                      there cannot see where they are — the marker says so and names the session
+                      (a bare dot would say "something here", not "you are here"). Collapsed
+                      only: expanded, the row's own highlight says it. */}
+                  {!open && active
+                    ? <span className="proj-current" title={`当前会话「${active.title || '未命名会话'}」在${group.project ? '这个项目' : `「${LOOSE_LABEL}」这一组`}里`}>●</span>
+                    : null}
+                  {group.project && !group.project.rootsUsable ? (
+                    <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>
+                  ) : null}
+                  <button type="button" className="proj-add"
+                    title={group.project ? '在该项目里新建会话' : '新建一个不属于任何项目的会话'}
+                    onClick={(e) => { e.stopPropagation(); void newChat(group.project?.id ?? '') }}>＋</button>
+                </div>
                 {projectNotice && projectNotice.id === group.project?.id ? (
                   <div className="proj-notice">⚠ {projectNotice.msg}</div>
                 ) : null}
-                {group.project && !expandedProjects[group.project.id] ? null : (
-                  group.project
-                    ? (
-                      // is-empty: an EMPTY group gets no rail (see .proj-rows in layout.css) — the
-                      // rail says 「the group's rows hang here」, and there are none to hang.
-                      <div className={`proj-rows${group.rows.length === 0 ? ' is-empty' : ''}`}>
-                        {group.rows.length === 0
-                          // A project with no sessions yet is a normal state (it was just made, or
-                          // its last session was deleted): the header above is where its first
-                          // session is created, and this line says why the group is empty rather
-                          // than leaving the reader wondering whether the project even exists.
-                          ? <div className="proj-empty">还没有会话，点上面的 ＋ 在这个项目里新建</div>
-                          : groupRows(shown)}
-                        {hidden > 0 ? <MoreRows hidden={hidden} onGrow={() => growRows(group)} /> : null}
-                      </div>
-                    )
-                    : (
-                      // The bucket has no container of its own (its label and button hang directly
-                      // on the nav), so its window's tail is a sibling of its rows.
-                      <>
-                        {groupRows(shown)}
-                        {hidden > 0 ? <MoreRows hidden={hidden} onGrow={() => growRows(group)} /> : null}
-                      </>
-                    )
+                {!open ? null : (
+                  // is-empty: an EMPTY group gets no rail (see .proj-rows in layout.css) — the rail
+                  // says 「the group's rows hang here」, and there are none to hang.
+                  <div className={`proj-rows${group.rows.length === 0 ? ' is-empty' : ''}${group.project ? '' : ' is-loose'}`}>
+                    {group.rows.length === 0
+                      // A group with no sessions yet is a normal state (a project was just made, or
+                      // a group's last session was deleted): the header above is where its first
+                      // session is created, and this line says why the group is empty rather than
+                      // leaving the reader wondering whether the group even exists.
+                      ? <div className="proj-empty">{group.project
+                          ? '还没有会话，点上面的 ＋ 在这个项目里新建'
+                          : '还没有会话，点上面的 ＋ 新建一个'}</div>
+                      : groupRows(shown)}
+                    {hidden > 0 ? <MoreRows hidden={hidden} onGrow={() => growRows(group)} /> : null}
+                  </div>
                 )}
               </Fragment>
               )
             })}
-            {/* No loose bucket yet (nothing project-less, or no sessions at all) — the button
-                still has to be there, and it still belongs at the foot of the list: the rows it
-                makes will land right below it the moment they exist. */}
-            {groups.every((g) => g.project) ? newSessionButton : null}
-            {/* Only when there is no group at all: with a project on screen, that project's own
-                header already says it has no sessions yet, and a second "暂无会话" underneath
-                would describe the list as empty while the reader is looking at a group. */}
-            {groups.length === 0 && <div className="session-empty">暂无会话</div>}
           </nav>
           <footer className="sidebar-footer">
             {/* 设置 opens the settings page (a whole view, not a panel — see view in App).

@@ -20,17 +20,17 @@
   // 显示中的会话 id：标题栏不再写了之后，它是页面上唯一读得到的地方（挂在 app 根上）。
   const curID = () => (smoke.q('.app') ? smoke.q('.app').getAttribute('data-session-id') : '') || ''
   const nav = () => smoke.q('.session-list')
-  // 项目组里的行 vs「无项目」组的行：无项目那个组没有容器（它的 label 和按钮就挂在 nav 上，
-  // 行是 nav 的直接子元素），项目行缩在 .proj-rows 里。
-  const projRows = () => smoke.qa('.proj-rows .session')
-  const looseRows = () => smoke.qa('.session-list > .session')
+  // 两组行各自的容器：「无项目」桶跟项目走同一套壳（它自己的组头、折叠、导轨），所以两组的行都在
+  // 各自的 .proj-rows 里，靠 is-loose 分开。
+  const projRows = () => smoke.qa('.proj-rows:not(.is-loose) .session')
+  const looseRows = () => smoke.qa('.proj-rows.is-loose .session')
   const rowOf = (id) => smoke.qa('.session').find((r) => r.getAttribute('data-sid') === id) || null
   const hasRow = (rows, id) => rows.some((r) => r.getAttribute('data-sid') === id)
   const focusedComposer = () => document.activeElement === smoke.q('.composer-input')
   const keyBoth = (k) => smoke.key(document.body, k, { metaKey: true, shiftKey: true })
 
   // 起手：当前会话是 fixture 的项目成员（app 打开列表里最新的那个），它的组是展开的。
-  const head = await smoke.waitFor('.proj-head', '侧栏出现项目组头', 10000)
+  const head = await smoke.waitFor('.proj-head:not(.is-loose)', '侧栏出现项目组头', 10000)
   if (!head) return smoke.finish()
   const toggle = head.querySelector('.proj-toggle')
   if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click()
@@ -39,15 +39,16 @@
   smoke.check('起手：当前会话是项目里的那一行',
     hasRow(projRows(), curID()) && projRows().some((r) => r.classList.contains('active')), 'id=' + curID())
 
-  // 把列表撑过一屏。侧栏的 ＋ 建的就是无项目会话，它们全堆在「无项目」组里 —— 组头在列表最
-  // 下方，所以行越多，新建的那一行（组的头部）离视野越远。
+  // 把列表撑过一屏。无项目那一组的 ＋ 建的就是无项目会话，它们全堆在那个组里 —— 组头在列表最
+  // 下方，所以行越多，新建的那一行（组的头部）离视野越远。（这个 ＋ 住在桶的组头里，跟项目的 ＋
+  // 同一个位置；点它建出来的会话会让那个组自己展开。）
   //
   // 门槛是**新行的落点真的在视野之外**，不是"能滚一点点"：无项目组的头一行就在列表上方约
   // 160px 处，只滚得动 40px 的话，滚到底它照样在视野里 —— 那样这条场景对"没把行滚到眼前"是瞎的。
   const OVERFLOW_NEEDED = 300
   let clicked = 0
   while (clicked < 25 && nav().scrollHeight <= nav().clientHeight + OVERFLOW_NEEDED) {
-    if (!smoke.click('.new-chat'))
+    if (!smoke.click('.proj-head.is-loose .proj-add'))
       return smoke.fail('侧栏有「新建会话」按钮', smoke.allText('.session-list').join(' | ').slice(0, 120))
     const grown = await smoke.waitFor(
       () => (looseRows().length === clicked + 2 ? true : null), '第 ' + (clicked + 1) + ' 个会话出现', 8000)
