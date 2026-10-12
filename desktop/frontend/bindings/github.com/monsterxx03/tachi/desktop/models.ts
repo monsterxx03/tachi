@@ -869,6 +869,14 @@ export interface RewindPreviewVO {
     "rootMismatch"?: string;
 
     /**
+     * ConversationOnly says this rewind moves ONLY the conversation: every file stays
+     * where it is, so Roots is what a FULL rewind would change, not what this one
+     * will. Set on the result of ApplyRewind (the card knows the mode it asked for);
+     * the notice composed from it must say the file half did not move.
+     */
+    "conversationOnly"?: boolean;
+
+    /**
      * Blocked is why this rewind cannot run at all (no checkpoint for that turn,
      * another turn in flight). Non-empty means the card is the whole answer.
      */

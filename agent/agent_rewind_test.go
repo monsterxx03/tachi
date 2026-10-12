@@ -119,6 +119,61 @@ func TestRewindRestoresFilesAndCutsTheConversation(t *testing.T) {
 	assert.Greater(t, a.conv.tokens(), int64(0), "the remaining history still has a size")
 }
 
+// TestRewindConversationOnlyLeavesTheWorkspaceAlone is the other half of the
+// feature: the SAME turn and the same cut, against a disk that must not move. It
+// pins the three things that make the mode honest — the conversation goes back,
+// every file stays exactly as it is (the created one is not removed, the edited
+// one is not restored), and the result SAYS so. That last one is not decoration:
+// ConversationOnly is the only thing keeping "the conversation went back" from
+// reading as "the work was undone".
+func TestRewindConversationOnlyLeavesTheWorkspaceAlone(t *testing.T) {
+	a, work, ctx, fake := rewindTestAgent(t, 4)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "keep.txt"), []byte("original"), 0o644))
+
+	rs := &RunState{}
+	a.beginCheckpointTurn(ctx, rs, "把导出改成流式", boundary(2, 1))
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, "WriteFile"))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "keep.txt"), []byte("modified"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "new.txt"), []byte("created"), 0o644))
+	for i := 0; i < 3; i++ {
+		require.NoError(t, fake.AppendMessage(&session.Message{Type: session.MessageTypeAssistant, Content: "后来的记录"}))
+	}
+	a.beginCheckpointTurn(ctx, &RunState{}, "再改一处", boundary(5, 2))
+	require.NoError(t, fake.AppendAPIRequest(&session.APIRequest{Seq: 1, SystemPrompt: "sys"}))
+	require.NoError(t, fake.AppendAPIRequest(&session.APIRequest{Seq: 2, SystemPrompt: "sys"}))
+	a.conv.setPromptAnchor(9999, 1)
+
+	// The preview a caller reads FIRST carries no mode: it describes the file half as
+	// what a FULL rewind would touch, which is exactly the hint the card shows while the
+	// reader decides. The mode belongs to the action, so PreviewRewind cannot know it.
+	p, err := a.PreviewRewind(ctx, 1)
+	require.NoError(t, err)
+	assert.False(t, p.ConversationOnly)
+	require.Len(t, p.Roots, 1)
+	assert.Equal(t, []string{"new.txt"}, p.Roots[0].Added, "the hint is the full rewind's file half")
+
+	res, err := a.RewindConversationOnly(ctx, 1)
+	require.NoError(t, err)
+
+	// Nothing on disk moved — in either direction.
+	assert.Equal(t, "modified", readWorkFile(t, work, "keep.txt"), "no file may be restored")
+	assert.True(t, workFileExists(work, "new.txt"), "no file may be deleted")
+
+	// The conversation half is the full rewind's: the same cut, the same tag, and the
+	// state that described the discarded history dropped with it.
+	require.Len(t, fake.truncations, 1)
+	assert.Equal(t, 2, fake.truncations[0].KeepMessages)
+	assert.Equal(t, 1, fake.truncations[0].KeepAPI)
+	assert.Contains(t, fake.truncations[0].Tag, "turn-1")
+	assert.Len(t, res.History, 2)
+	assert.Zero(t, a.conv.lastPromptReal, "the anchor must not outlive the history it measured")
+
+	// And the mode travels back with the result, because the notice composed from it has
+	// to say the file half did not move.
+	assert.True(t, res.Preview.ConversationOnly)
+	assert.Contains(t, describeRewindPreview(res.Preview), "只回退对话")
+}
+
 // TestRewindRefusesWhileATurnIsRunning pins the one race that cannot be made
 // safe: truncating the conversation under a live turn.
 func TestRewindRefusesWhileATurnIsRunning(t *testing.T) {

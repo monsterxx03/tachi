@@ -371,6 +371,10 @@
 /* Rewind preview: what a rewind would restore, and — the part that matters — what it
    would DELETE. The file list is capped in the markup; the counts always are not. */
 .rewind-roots { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+/* In conversation-only mode the list is a HINT, not a promise: what a full rewind would
+   have changed. It is labelled at the top so the counts under it are not read as work
+   this rewind is about to do. */
+.rewind-roots-head { font-size: 12px; color: var(--text-faint); }
 .rewind-root { font-size: 12px; color: var(--text-dim); }
 .rewind-root-head { color: var(--text-faint); font-family: var(--mono, monospace); word-break: break-all; }
 .rewind-root-counts { margin-top: 2px; color: var(--text-dim); }
@@ -379,6 +383,13 @@
    Dim, because it is a fact rather than a warning — the file lists above are the
    destructive half and the red line is the "nothing was restored" one. */
 .rewind-note { margin-top: 10px; font-size: 12.5px; color: var(--text-faint); }
+/* The scope toggle: whether the workspace goes back with the conversation. Sits between
+   the sentence and the file hint, because it is what decides how to read that hint. */
+.rewind-scope {
+  display: flex; align-items: center; gap: 7px; margin-top: 12px;
+  font-size: 12.5px; color: var(--text-dim); cursor: pointer; user-select: none;
+}
+.rewind-scope input { margin: 0; cursor: pointer; accent-color: var(--red); }
 .rewind-added {
   margin: 4px 0 0; padding-left: 16px;
   font-family: var(--mono, monospace); font-size: 11.5px; color: var(--text-faint);

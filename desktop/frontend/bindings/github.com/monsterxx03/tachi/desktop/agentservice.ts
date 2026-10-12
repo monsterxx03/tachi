@@ -67,9 +67,14 @@ export function AnswerQuestion(sessionID: string, answers: { [_ in string]?: str
  * session's run, so the next turn sends it rather than the history the rewind
  * just discarded. Returns "ok", or the reason it refused (the desktop's
  * convention for a mutating call: the frontend renders the string as it is).
+ * 
+ * conversationOnly keeps the workspace exactly as it is and moves only the
+ * conversation (see agent.RewindConversationOnly): the edits survive a question
+ * the reader wants to ask again. It is a plain bool rather than an options struct
+ * because a binding has no other knob, and the card states the choice it made.
  */
-export function ApplyRewind(id: string, turn: number): $CancellablePromise<string> {
-    return $Call.ByID(1079397011, id, turn);
+export function ApplyRewind(id: string, turn: number, conversationOnly: boolean): $CancellablePromise<string> {
+    return $Call.ByID(1079397011, id, turn, conversationOnly);
 }
 
 /**

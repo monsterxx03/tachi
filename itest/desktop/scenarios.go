@@ -941,10 +941,16 @@ func scenarios() []scenario {
 				// this turn writes nothing — the shape whose rewind must work anyway and say
 				// that the workspace needs no restoring.
 				{Reply: textStream("第三轮回复。", 800)},
+				// Turn 4, sent after the second rewind: a turn that writes a file through
+				// BASH, so the conversation-only rewind that follows has a REAL change to
+				// leave alone. "Nothing was touched" is only evidence when there was
+				// something that would have been.
+				{Reply: bashStream("echo conv-only > convonly.txt", "call_c")},
+				{Reply: textStream("又写好了。", 800)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("三轮共四次调用", len(c.requests) == 4, requestCount(c.requests))
+				c.check("四轮共六次调用", len(c.requests) == 6, requestCount(c.requests))
 
 				// The shell command's changes are the ones a rewind has to undo. These run
 				// AFTER the read-only turn's own rewind too, so they also say that a turn with
@@ -953,6 +959,15 @@ func scenarios() []scenario {
 				c.check("回退删掉了 shell 新建的文件", os.IsNotExist(statErr), statErrText(statErr))
 				content, readErr := os.ReadFile(filepath.Join(c.work, "keep.txt"))
 				c.check("回退还原了 shell 改过的文件", readErr == nil && string(content) == "original\n", string(content))
+
+				// …and the conversation-only rewind's file must be THE OPPOSITE: the last
+				// turn wrote it through bash, and a rewind that kept the conversation only
+				// has to leave it exactly where it was. The UI can only prove the card said
+				// so; this is the half that proves the workspace really did not move.
+				convonly, convErr := os.ReadFile(filepath.Join(c.work, "convonly.txt"))
+				c.check("只回退对话没有动工作区（那一轮写的文件仍在）",
+					convErr == nil && string(convonly) == "conv-only\n",
+					fmt.Sprintf("err=%v content=%q", convErr, convonly))
 			},
 		},
 		//

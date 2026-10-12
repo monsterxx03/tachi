@@ -1,11 +1,13 @@
 // rewind — "回退到这里" on a user bubble must put the workspace AND the conversation
-// back to the start of that turn.
+// back to the start of that turn — and, with the card's「只回退对话」option on, the
+// conversation alone.
 //
 // The file the agent wrote is written through BASH, because that is the coverage this
 // feature exists for: no other agent's checkpoints see a shell command's changes. The
 // Go half of this scenario (scenarios.go) then reads the working directory and asserts
 // the file it created is GONE and the one it edited is back — the UI half here can only
-// prove the card said so.
+// prove the card said so. The conversation-only leg is the mirror image of that pair:
+// its bash-written file must still be THERE.
 //
 // The prompt that started the rewound turn comes back into the composer, which is the
 // point of going back to it: you edit what you asked and send again.
@@ -249,6 +251,54 @@
 
   smoke.key(document.body, 'Escape')
   if (!(await smoke.waitFor(() => !smoke.q('.rewind-chain'), 'Esc 关闭（结尾）', 3000))) return smoke.finish()
+
+  // ── 只回退对话：工作区必须原地不动 ──────────────────────────────────────
+  // 这一轮用 bash 新写了一个文件，所以它是一个「本来会被回退删掉」的真实改动 —— 只有存在
+  // 那样一个改动，「没动工作区」才是证据而不是空话。两半分开断言：Go 侧查那个文件还在不在
+  // （UI 证不了），driver 侧查卡片与提示有没有把这件事说清楚。
+  if (!(await runTurn('再写一次文件', '又写好了。'))) return smoke.finish()
+  const scopeBubbles = smoke.qa('.msg-user')
+  smoke.check('回退之后还能再来一轮（这次写了文件）', scopeBubbles.length === 1, String(scopeBubbles.length))
+  if (scopeBubbles.length !== 1) return smoke.finish()
+  scopeBubbles[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 260 }))
+  if (!(await smoke.waitFor('.ctx-menu', '回退菜单出现（写文件的那一轮）', 5000))) return smoke.finish()
+  const scopeItem = smoke.qa('.ctx-menu .ctx-item')[0]
+  if (!scopeItem || scopeItem.disabled) return smoke.finish()
+  scopeItem.click()
+
+  if (!(await smoke.waitFor('.confirm-box', '回退确认卡出现（写文件的那一轮）', 5000))) return smoke.finish()
+  const scopeCard = smoke.text('.confirm-box')
+  smoke.check('默认仍是两半一起退（会说撤销工作）',
+    scopeCard.indexOf('会撤销这一轮之后的全部工作') >= 0, scopeCard.slice(0, 200))
+  smoke.check('这张卡的破坏性那半就是会删掉刚写的文件', scopeCard.indexOf('删除 1') >= 0, scopeCard.slice(0, 200))
+  const scope = smoke.q('.confirm-box .rewind-scope input')
+  if (!scope) return smoke.fail('找到「只回退对话」开关', '没有 .rewind-scope input')
+  smoke.check('开关默认是关的', !scope.checked, String(scope.checked))
+  scope.click()
+  await smoke.sleep(200)
+  const scopedCard = smoke.text('.confirm-box')
+  smoke.check('勾上后卡片明说文件保留、不改动', scopedCard.indexOf('文件保留不改动') >= 0, scopedCard.slice(0, 260))
+  smoke.check('勾上后文件清单降级成「本次不动」的提示',
+    scopedCard.indexOf('如果一并回退文件') >= 0, scopedCard.slice(0, 260))
+  smoke.check('勾上后不再说会撤销工作', scopedCard.indexOf('会撤销这一轮之后的全部工作') < 0, scopedCard.slice(0, 260))
+  const scopeGo = smoke.qa('.confirm-box .btn.danger')[0]
+  smoke.check('按钮跟着改成「只回退对话」',
+    !!scopeGo && smoke.text(scopeGo).indexOf('只回退对话') >= 0, scopeGo ? smoke.text(scopeGo) : '(找不到按钮)')
+  if (!scopeGo) return smoke.finish()
+  scopeGo.click()
+
+  const scopedGone = await smoke.waitFor(() => smoke.qa('.msg-user').length === 0, '只回退对话（对话回到该轮之前）', 15000)
+  smoke.check('对话照样退回到了该轮之前', scopedGone, String(smoke.qa('.msg-user').length))
+  // The notice's body is folded behind its own 摘要 toggle (the same part the compaction
+  // notices use) — and this is the LAST of three rewind notices, so it is the last toggle.
+  // It has to say the file half did not move: 「还原 X · 删除 Y」 in the one mode that
+  // touched no file is exactly the lie the whole option has to avoid.
+  const toggles = smoke.qa('.notice-toggle')
+  if (toggles.length) toggles[toggles.length - 1].click()
+  await smoke.sleep(200)
+  const scopedChat = smoke.text('.chat-content')
+  smoke.check('提示说清了只有对话动了',
+    scopedChat.indexOf('只回退对话，工作区文件保持不动') >= 0, scopedChat.slice(-200))
 
   smoke.finish()
 })()

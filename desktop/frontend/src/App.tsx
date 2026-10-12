@@ -449,7 +449,7 @@ function App() {
   // it opens) and the confirmation card that shows what would be restored and — more to
   // the point — what would be DELETED, before anything moves.
   const [rewindMenu, setRewindMenu] = useState<{ x: number; y: number; msg: Message; sid: string; turns: RewindTurnVO[] | null } | null>(null)
-  const [rewindCard, setRewindCard] = useState<{ sid: string; turn: number; preview: RewindPreviewVO; error?: string } | null>(null)
+  const [rewindCard, setRewindCard] = useState<{ sid: string; turn: number; conversationOnly: boolean; preview: RewindPreviewVO; error?: string } | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   // ⌘P / ⌘K: the two palettes. Neither is about the session on screen — they are the way to GET
   // to one — so they hold no per-opening state here (each palette owns its query, its highlight
@@ -1573,7 +1573,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // is exactly what the reader needs.
       preview = { turn, target: turn, blocked: `读取回退预览失败：${String(e)}` } as RewindPreviewVO
     }
-    setRewindCard({ sid, turn, preview })
+    // The card opens on the DEFAULT scope: the files move with the conversation. The
+    // conversation-only choice is made in the card, and the preview above is the same
+    // either way — it describes what a FULL rewind would touch, which is exactly the hint
+    // the toggle needs to be an informed one. So flipping the toggle is local, not a
+    // re-fetch: nothing about the file half changes when the reader decides not to act on it.
+    setRewindCard({ sid, turn, conversationOnly: false, preview })
   }, [])
 
   // openChain lists the session's rewind points. The list comes from the manifest, so it covers
@@ -1596,8 +1601,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // confirmRewind runs it. A refusal (a running turn, a pruned checkpoint, an
   // unavailable snapshot) lands in the card that asked, next to the button that was
   // pressed — the backend has the last word, so it is shown verbatim.
-  const confirmRewind = useCallback(async (card: { sid: string; turn: number }) => {
-    const res = await AgentService.ApplyRewind(card.sid, card.turn).catch((e) => String(e))
+  const confirmRewind = useCallback(async (card: { sid: string; turn: number; conversationOnly: boolean }) => {
+    const res = await AgentService.ApplyRewind(card.sid, card.turn, card.conversationOnly).catch((e) => String(e))
     if (res === 'ok') { setRewindCard(null); return }
     setRewindCard((c) => (c ? { ...c, error: res } : c))
   }, [])
@@ -2094,16 +2099,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         deleted += r.deleted?.length || 0
         added += r.added?.length || 0
       }
-      // The three outcomes of the workspace half, said out loud in the same words the
-      // card used — a rewind whose files did not move must never read as one whose
-      // files did. The root note rides along: the tree that was restored is not
-      // always the one on screen, and the notice is the last thing the reader sees.
-      const summary = (p.noFiles
-        ? `未还原任何文件：${p.noFiles}`
-        : p.filesUnchanged
-          ? '这一轮之后没有文件改动，工作区无需还原'
-          : added + changed + deleted === 0 ? '文件无变化'
-            : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`)
+      // The outcomes of the workspace half, said out loud in the same words the card
+      // used — a rewind whose files did not move must never read as one whose files did.
+      // ConversationOnly comes FIRST because it outranks them: it is not a file state at
+      // all but the mode the reader chose, and in it the counts below would describe work
+      // that deliberately did not happen. The root note rides along: the tree that was
+      // restored is not always the one on screen, and the notice is the last thing the
+      // reader sees.
+      const summary = (p.conversationOnly
+        ? '只回退对话，工作区文件保持不动'
+        : p.noFiles
+          ? `未还原任何文件：${p.noFiles}`
+          : p.filesUnchanged
+            ? '这一轮之后没有文件改动，工作区无需还原'
+            : added + changed + deleted === 0 ? '文件无变化'
+              : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`)
         + (p.rootMismatch ? `（${p.rootMismatch}）` : '')
       // Appended as its own message rather than through applyToSession: after a rewind the
       // transcript can be EMPTY (every turn was undone), and applyToSession only attaches to
@@ -2701,18 +2711,39 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               {rewindCard.preview.blocked
                 ? `不能回退：${rewindCard.preview.blocked}`
                 : rewindCard.preview.userText
-                  ? `会撤销这一轮之后的全部工作，并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
-                  : '会撤销这一轮之后的全部工作，并把该轮的提示词放回输入框。'}
+                  ? rewindCard.conversationOnly
+                    ? `只把对话退到这一轮之前（工作区文件不动），并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
+                    : `会撤销这一轮之后的全部工作，并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
+                  : rewindCard.conversationOnly
+                    ? '只把对话退到这一轮之前（工作区文件不动），并把该轮的提示词放回输入框。'
+                    : '会撤销这一轮之后的全部工作，并把该轮的提示词放回输入框。'}
             </div>
+            {/* The one thing a reader may want to change about a rewind: whether the
+                workspace goes back with it. Off by default (a rewind moves both), and the
+                file hint below stays visible either way — 「这些会被改动」 is what makes
+                the choice an informed one. Only offered when the rewind can run at all: a
+                toggle on a card that refuses would be a control that cannot do anything. */}
+            {!rewindCard.preview.blocked ? (
+              <label className="rewind-scope">
+                <input type="checkbox" checked={rewindCard.conversationOnly}
+                  onChange={(e) => setRewindCard((c) => (c ? { ...c, conversationOnly: e.target.checked } : c))} />
+                只回退对话，工作区文件保持不动
+              </label>
+            ) : null}
             {/* The workspace half is a three-way answer and the card has to say which one
                 it is BEFORE the button: files to restore (the list below), nothing to
                 restore because nothing wrote (a fact, not a warning), or nothing WAS
                 restored (the conversation moves back and the workspace does not — the one
-                outcome a reader must never discover afterwards). */}
-            {!rewindCard.preview.blocked && rewindCard.preview.filesUnchanged ? (
+                outcome a reader must never discover afterwards). The first two are about
+                an action this rewind will NOT take when the reader picked
+                conversation-only, so they are said only in the mode that takes it. */}
+            {!rewindCard.preview.blocked && rewindCard.conversationOnly ? (
+              <div className="rewind-note">文件保留不改动：不会还原，也不会删除任何文件。</div>
+            ) : null}
+            {!rewindCard.preview.blocked && !rewindCard.conversationOnly && rewindCard.preview.filesUnchanged ? (
               <div className="rewind-note">这一轮及之后没有文件改动，工作区无需还原。</div>
             ) : null}
-            {!rewindCard.preview.blocked && rewindCard.preview.noFiles ? (
+            {!rewindCard.preview.blocked && !rewindCard.conversationOnly && rewindCard.preview.noFiles ? (
               <div className="confirm-error">
                 ⚠ 不会还原任何文件：{rewindCard.preview.noFiles}。对话照样回退，工作区保持现状。
               </div>
@@ -2720,14 +2751,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             {/* The tree that would be restored is not always the one on screen: the
                 session may have been pointed elsewhere since that turn. Saying it here,
                 above the list, is what keeps "the workspace went back" from reading as
-                "the files I am looking at moved". */}
-            {!rewindCard.preview.blocked && rewindCard.preview.rootMismatch ? (
+                "the files I am looking at moved" — and it is about a tree that only a
+                FULL rewind writes, so it is dropped in conversation-only. */}
+            {!rewindCard.preview.blocked && !rewindCard.conversationOnly && rewindCard.preview.rootMismatch ? (
               <div className="rewind-note">
                 ⚠ {rewindCard.preview.rootMismatch}。回退的是那一轮所在的工作区。
               </div>
             ) : null}
             {rewindCard.preview.roots?.length ? (
               <div className="rewind-roots">
+                {rewindCard.conversationOnly ? (
+                  <div className="rewind-roots-head">如果一并回退文件，会改动这些（本次不动）：</div>
+                ) : null}
                 {rewindCard.preview.roots.map((r) => (
                   <div key={r.root} className="rewind-root">
                     <div className="rewind-root-head">{r.root}</div>
@@ -2749,7 +2784,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setRewindCard(null)}>取消</button>
               <button className="btn danger" disabled={!!rewindCard.preview.blocked}
-                onClick={() => { void confirmRewind(rewindCard) }}>回退</button>
+                onClick={() => { void confirmRewind(rewindCard) }}>{rewindCard.conversationOnly ? '只回退对话' : '回退'}</button>
             </div>
           </div>
         </div>

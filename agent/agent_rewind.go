@@ -15,11 +15,18 @@ import (
 // Rewind: put the workspace AND the conversation back to the start of a turn.
 // Design: docs/2026-09-14-session-checkpoint-rewind-design.md.
 //
-// Both halves move together or neither does. A conversation without its files
-// leaves the model believing work is undone that is still on disk; files without
-// their conversation leave it acting on results it can no longer see. There is
-// deliberately no way to do one without the other (the design's decision 7):
-// that granularity is plain git, which the reader already has.
+// By DEFAULT both halves move together — that is what "back to that moment"
+// means. A conversation without its files leaves the model believing work is
+// undone that is still on disk; files without their conversation leave it acting
+// on results it can no longer see. The file-only direction stays unavailable for
+// good (the design's decision 7): that granularity is plain git.
+//
+// RewindConversationOnly is the ONE exception, and it belongs to the reader: the
+// conversation goes back while every file stays exactly where it is, for the
+// answer that was wrong while the edits are wanted. It is never silent — the
+// preview and the notice carry ConversationOnly, and say the file half did not
+// move — because "the conversation went back" must not read as "the work was
+// undone".
 //
 // The rewind is IN PLACE — same session, same id — and the discarded tail is
 // moved into the session's rewound/ directory rather than deleted, so the
@@ -60,6 +67,13 @@ type RewindPreview struct {
 	// rather than implying the workspace moved with it (the design's "must not
 	// silently report success").
 	NoFiles string `json:"noFiles,omitempty"`
+	// ConversationOnly, when set, says this rewind moves ONLY the conversation: the
+	// workspace is left exactly as it is, so Roots above is what a FULL rewind would
+	// change rather than what this one will. It is stamped by the mode the caller
+	// chose (Rewind vs RewindConversationOnly), never inferred from the file state —
+	// it is the one fact that keeps an untouched workspace from reading as a rewound
+	// one, and it is a CHOICE, not a shortfall: nothing went wrong.
+	ConversationOnly bool `json:"conversationOnly,omitempty"`
 	// RootMismatch, when set, says the files this rewind would restore belong to a
 	// different workspace than the session has now: the checkpoint's roots are not
 	// the current ones (the session was pointed at another folder, a root was added
@@ -157,13 +171,40 @@ func (a *AIAgent) PreviewRewind(ctx context.Context, turn int) (RewindPreview, e
 	return out, nil
 }
 
-// Rewind puts the workspace and the conversation back to the start of a turn.
+// Rewind puts the workspace AND the conversation back to the start of a turn.
 //
 // Order matters and is deliberate: the files are restored first (the step that
 // can fail on a slow or large tree), then the conversation is cut, then the
 // state is rebuilt. A failure after the files have moved is reported as such —
 // the caller must not present a half-finished rewind as a whole one.
 func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
+	return a.rewind(ctx, turn, false)
+}
+
+// RewindConversationOnly moves the conversation back to the start of a turn and
+// leaves the workspace exactly as it is: nothing is restored, nothing is deleted.
+//
+// It is for the reader who wants the ANSWER again without losing the edits — the
+// wrong question, asked again, while the code stays. The cost is real and is
+// stated rather than hidden: the conversation no longer describes the disk, so
+// the model re-reads files it does not know it wrote. The preview and the notice
+// therefore carry ConversationOnly, and the card shows the files a full rewind
+// WOULD have changed as a hint rather than as a promise.
+//
+// Everything else is unchanged, including the parts that are not about files:
+// the conversation is cut, the turns after it have their checkpoints dropped (so
+// a later rewind cannot file-restore a branch whose conversation is gone — see
+// the DropAfter note in rewind), and an irreversible side effect is still
+// reported.
+func (a *AIAgent) RewindConversationOnly(ctx context.Context, turn int) (RewindResult, error) {
+	return a.rewind(ctx, turn, true)
+}
+
+// rewind is the one implementation, with the file half optional. The conversation
+// half and the index bookkeeping are deliberately NOT optional: they are what makes
+// this a rewind rather than a stray file checkout, and a caller that wanted neither
+// would not be calling here.
+func (a *AIAgent) rewind(ctx context.Context, turn int, conversationOnly bool) (RewindResult, error) {
 	if err := a.rewindAllowed(); err != nil {
 		return RewindResult{}, err
 	}
@@ -171,6 +212,10 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 	if err != nil {
 		return RewindResult{}, err
 	}
+	// Stamped onto the preview the caller gets back, so the card and the notice it
+	// composes from it say which half moved. PreviewRewind cannot know on its own:
+	// the mode belongs to the ACTION, not to the reading.
+	preview.ConversationOnly = conversationOnly
 	if preview.Blocked != "" {
 		return RewindResult{Preview: preview}, nil
 	}
@@ -179,8 +224,13 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 		return RewindResult{}, err
 	}
 
-	if _, err := m.Restore(ctx, turn); err != nil {
-		return RewindResult{Preview: preview}, fmt.Errorf("还原文件失败（部分文件可能已被改动），会话未改动: %w", err)
+	// The file half only. In ConversationOnly it is skipped whole: no checkout, no
+	// removal, no touching of the workspace — which is the point, and which also
+	// takes the slow step (a large tree) out of the path entirely.
+	if !conversationOnly {
+		if _, err := m.Restore(ctx, turn); err != nil {
+			return RewindResult{Preview: preview}, fmt.Errorf("还原文件失败（部分文件可能已被改动），会话未改动: %w", err)
+		}
 	}
 
 	sm := a.Config.SessionManager
@@ -189,7 +239,21 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 	}
 	msgs, reqs, err := sm.TruncateTo(preview.Records, preview.APIRecords, rewindTag(turn))
 	if err != nil {
+		if conversationOnly {
+			// Nothing had moved yet in this mode, so the honest message names no file
+			// (the truncation is the first step here — see the mode's doc comment).
+			return RewindResult{Preview: preview}, fmt.Errorf("截断会话失败: %w", err)
+		}
 		return RewindResult{Preview: preview}, fmt.Errorf("已还原文件但截断会话失败（可用 git 自行恢复）: %w", err)
+	}
+
+	// Where a failure from here on leaves the reader. Both modes have cut the
+	// conversation by now, but only one has touched the workspace — and the message
+	// is exactly what a reader reads to find out what state their disk is in, so it
+	// must not say "已还原文件" in the mode that restored none.
+	moved := "已还原文件并截断会话"
+	if conversationOnly {
+		moved = "已回退对话（工作区文件未动）"
 	}
 
 	// The conversation now ends at this turn, so the checkpoints AFTER it index a
@@ -201,14 +265,14 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 	// the rewind itself has happened either way.
 	if dropped, derr := m.DropAfter(turn); derr != nil {
 		return RewindResult{Preview: preview}, fmt.Errorf(
-			"已还原文件并截断会话，但检查点索引未同步（被撤销的轮次仍可被回退）: %w", derr)
+			"%s，但检查点索引未同步（被撤销的轮次仍可被回退）: %w", moved, derr)
 	} else if dropped > 0 {
 		a.Config.Logger.Info(ctx, "Agent: dropped checkpoints left behind by the rewind", "turn", turn, "dropped", dropped)
 	}
 
 	history, err := a.LoadSessionHistory()
 	if err != nil {
-		return RewindResult{Preview: preview}, fmt.Errorf("已还原文件并截断会话，但重建历史失败: %w", err)
+		return RewindResult{Preview: preview}, fmt.Errorf("%s，但重建历史失败: %w", moved, err)
 	}
 	a.reestimateAfterRewind(ctx, history)
 	a.Config.Logger.Info(ctx, "Agent: rewound",
@@ -392,6 +456,11 @@ func sidecarPaths(results ...session.TruncateResult) []string {
 func describeRewindPreview(p RewindPreview) string {
 	if p.Blocked != "" {
 		return "不能回退：" + p.Blocked
+	}
+	if p.ConversationOnly {
+		// The Roots list is what a FULL rewind would change, so it is deliberately not
+		// summarised here: this line describes what happened, and no file happened.
+		return "回退：只回退对话，工作区文件保持不动"
 	}
 	if p.NoFiles != "" {
 		return "回退（未还原任何文件：" + p.NoFiles + "）"

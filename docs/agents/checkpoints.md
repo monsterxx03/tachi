@@ -10,4 +10,10 @@
 
 - **一轮的检查点绑定是会话级的，而自动压缩会在轮中途把会话换掉。** manifest 在会话自己的目录下，所以在父会话里开始的那一轮，对子会话等于不存在：这一轮剩下的时间里，每个能写的工具都被拒绝（「turn N was never begun」，设计使然——没被记下来的写，就是回退收不回来的写），直到这一轮结束。所以 `maybeAutoCompact` 在它刷新其他会话级取值（SDK session id）的地方顺手把这一轮重新绑定（`rebindCheckpointTurn`）；只换根目录不需要这一步，因为 manifest 本来就是每个会话共用的。`TestCheckpointRebindsAfterCompaction` 钉住它。
 
+## 回退默认动两半，conversation-only 是唯一例外
+
+- **`Rewind` 把工作区文件与对话一起退；`RewindConversationOnly` 只退对话、工作区一动不动**（新增文件不删、改过的文件不还原）。它是给「答案不对、但改好的代码要留着」的读者用的，是一条**显式的**路，不是失败模式的伪装。
+- **这个模式必须由动作自己打戳**：`RewindPreview.ConversationOnly` 在 `Rewind`/`RewindConversationOnly` 里写上去——`PreviewRewind` 不知道（模式属于动作，不属于读取），而卡片与 `agent:rewound` 的提示都只认这个字段。两处都不能让「对话退回去了」读成「工作被撤销了」；文件那一半的失败文案也随模式改口（conv-only 根本没有「已还原文件」这回事）。
+- **裁索引（`DropAfter`）与截断对话两半照旧属于 conv-only**：这是决定 17 的同一条不变量——对话已经不在，那些轮次就不能再被文件回退，否则就是「文件跳到放弃分支、对话截断是空操作、却报成功」。代价（之后不能把文件单独退回那几轮）是明知故犯。
+
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md)（项目与根集：桌面后端、桌面会话树）、[session-store.md](session-store.md)（一个会话的文件住在哪）。

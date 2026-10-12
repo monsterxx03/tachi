@@ -26,6 +26,9 @@ func TestRewindPreviewVOCarriesEverythingTheCardShows(t *testing.T) {
 		APIRecords:     12,
 		Irreversible:   []string{commit},
 		FilesUnchanged: true,
+		// The mode: the notice composed from this VO is what says the file half did not
+		// move, so a dropped ConversationOnly here is a notice that lies about the disk.
+		ConversationOnly: true,
 		Roots: []checkpoint.RootPreview{{
 			Root:    "/repo",
 			Added:   []string{"new.txt"},
@@ -40,6 +43,9 @@ func TestRewindPreviewVOCarriesEverythingTheCardShows(t *testing.T) {
 	}
 	if !vo.FilesUnchanged {
 		t.Errorf("the benign workspace answer must reach the card: %+v", vo)
+	}
+	if !vo.ConversationOnly {
+		t.Errorf("the mode the reader chose must reach the notice: %+v", vo)
 	}
 	if len(vo.Irreversible) != 1 || vo.Irreversible[0] != commit {
 		t.Errorf("irreversible = %v, want [%s] (the card renders this as 无法撤销)", vo.Irreversible, commit)

@@ -83,6 +83,11 @@ type RewindPreviewVO struct {
 	// the directory on screen is not the one being written — otherwise "the
 	// workspace went back" reads as "the files I am looking at moved".
 	RootMismatch string `json:"rootMismatch,omitempty"`
+	// ConversationOnly says this rewind moves ONLY the conversation: every file stays
+	// where it is, so Roots is what a FULL rewind would change, not what this one
+	// will. Set on the result of ApplyRewind (the card knows the mode it asked for);
+	// the notice composed from it must say the file half did not move.
+	ConversationOnly bool `json:"conversationOnly,omitempty"`
 	// Blocked is why this rewind cannot run at all (no checkpoint for that turn,
 	// another turn in flight). Non-empty means the card is the whole answer.
 	Blocked string `json:"blocked,omitempty"`
@@ -182,7 +187,12 @@ func (s *AgentService) PreviewRewind(id string, turn int) RewindPreviewVO {
 // session's run, so the next turn sends it rather than the history the rewind
 // just discarded. Returns "ok", or the reason it refused (the desktop's
 // convention for a mutating call: the frontend renders the string as it is).
-func (s *AgentService) ApplyRewind(id string, turn int) string {
+//
+// conversationOnly keeps the workspace exactly as it is and moves only the
+// conversation (see agent.RewindConversationOnly): the edits survive a question
+// the reader wants to ask again. It is a plain bool rather than an options struct
+// because a binding has no other knob, and the card states the choice it made.
+func (s *AgentService) ApplyRewind(id string, turn int, conversationOnly bool) string {
 	d := s.desk
 	ag, refuse := d.agentOf(id)
 	if refuse != "" {
@@ -194,7 +204,11 @@ func (s *AgentService) ApplyRewind(id string, turn int) string {
 		return why
 	}
 
-	res, err := ag.Rewind(context.Background(), turn)
+	rewind := ag.Rewind
+	if conversationOnly {
+		rewind = ag.RewindConversationOnly
+	}
+	res, err := rewind(context.Background(), turn)
 	if err != nil {
 		return err.Error()
 	}
@@ -244,14 +258,15 @@ func (d *desktopApp) sessionRunning(id string) (bool, string) {
 // toRewindPreviewVO flattens the agent's preview into the binding's shape.
 func toRewindPreviewVO(p agent.RewindPreview) RewindPreviewVO {
 	out := RewindPreviewVO{
-		Turn:           p.Turn,
-		Target:         p.Target,
-		UserText:       p.UserText,
-		FilesUnchanged: p.FilesUnchanged,
-		NoFiles:        p.NoFiles,
-		RootMismatch:   p.RootMismatch,
-		Irreversible:   p.Irreversible,
-		Blocked:        p.Blocked,
+		Turn:             p.Turn,
+		Target:           p.Target,
+		UserText:         p.UserText,
+		FilesUnchanged:   p.FilesUnchanged,
+		NoFiles:          p.NoFiles,
+		RootMismatch:     p.RootMismatch,
+		Irreversible:     p.Irreversible,
+		ConversationOnly: p.ConversationOnly,
+		Blocked:          p.Blocked,
 	}
 	for _, r := range p.Roots {
 		out.Roots = append(out.Roots, RewindRootVO{
