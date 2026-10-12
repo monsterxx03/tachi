@@ -201,6 +201,11 @@ func TestARemoteTurnIsOfferedTheDefaultToolSet(t *testing.T) {
 	// asserted against an empty view. (The two it does not satisfy are named where they matter:
 	// WebSearch needs a search provider, and the memory pair needs memory configured —
 	// TestARemoteTurnIsOfferedTheHostsMemory covers the second.)
+	//
+	// MCP is the one capability this assertion cannot see, and the reason is the rule itself: those
+	// tools are named at runtime, so the run admits them by SHAPE (agent.WithMCPTools) rather than
+	// from the list every name here comes from. This config has no MCP server, so nothing of that
+	// shape exists — TestARemoteTurnUsesTheHostsMCPTools runs the same chain for real.
 	for _, name := range []string{tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite,
 		tools.ToolNameGrep, tools.ToolNameGlob, tools.ToolNameBash, tools.ToolNameWebFetch,
 		tools.ToolNameSkill, tools.ToolNameAskUser, tools.ToolNameSendFile} {

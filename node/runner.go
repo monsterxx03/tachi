@@ -1139,6 +1139,12 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 		// External + a handler that refuses: a remote turn has no human attached, and an
 		// ask with nobody to answer it must be a refusal rather than a silent approval.
 		PermissionMode: agent.PermissionModeExternal,
+		// ...and the same fact for the gate that is NOT about safety: the MCP search cost card
+		// (agent/mcp_budget.go). That refusal above is about what may RUN on this machine; asking
+		// the caller "may this machine spend ¥2" is a question with no one able to answer it, so
+		// the search proceeds and the amount is logged instead (design §10.1 and the gate's own
+		// file comment).
+		NoCostAsks: true,
 		// No title generation: a remote task has no window to title, and the extra model
 		// call would be charged to this node for nothing.
 		TitleGenEnabled: ptr(false),
@@ -1196,6 +1202,11 @@ func (r *runner) contextRun(ctx context.Context, callerID, contextID string) (*c
 // (MemoryRecall/RecordMemory, and the recall reminder): a node's memory is the operator's own
 // long-term store, shared with their local conversations, and they asked for their machines to work
 // as one agent rather than as a stranger with a file system.
+//
+// MCP is the one capability this list does NOT enumerate, and it is not an omission: those tools
+// are named at runtime (mcp__server__tool), so the run admits them by SHAPE instead
+// (agent.WithMCPTools, see toolViewOption). This list stays the answer to "which of this software's
+// own tools", which is a thing a name can state.
 var remoteTaskTools = []string{
 	tools.ToolNameRead,
 	tools.ToolNameEdit,
@@ -1215,12 +1226,22 @@ var remoteTaskTools = []string{
 
 // toolViewOption turns the node's tool policy into the run's tool view.
 //
+// Two options, and the second is not a second policy: the name list says which of this software's
+// tools a caller may use, while WithMCPTools admits MCP **by shape** — what the pool holds is a
+// runtime fact (servers connect in the background, a profile switch adds and removes them), so no
+// name list could name it. A remote turn therefore gets MCP exactly as a local conversation does:
+// the search tool loads a deferred tool, the loaded tool is callable on the next request, and
+// which servers exist at all is this machine's own config.
+//
 // AskUserQuestion is in that list and is not an exception to anything: the list says what this node
 // may DO to the machine it runs on, and asking the caller a question does nothing to it. Leaving
 // asking out would tie the one form of interaction a remote task has to a capability decision
 // (§10.2) — and the operator would then have to open a tool to be asked a question.
 func (r *runner) toolViewOption() []agent.RunOption {
-	return []agent.RunOption{agent.WithToolSet(remoteTaskTools...)}
+	return []agent.RunOption{
+		agent.WithToolSet(remoteTaskTools...),
+		agent.WithMCPTools(),
+	}
 }
 
 // denyRemoteAsk refuses every permission ask on a remote turn. The refusal is RETURNED as

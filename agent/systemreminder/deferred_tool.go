@@ -51,6 +51,23 @@ type DeferredToolTracker interface {
 	Contains(name string) bool
 }
 
+// DeferredToolGate is the optional third question a provider may answer: may THE
+// RUN the reminder is being generated for use deferred MCP tools at all?
+//
+// It exists because the reminder belongs to the AGENT while the tool view belongs
+// to a RUN. One agent serves an ordinary conversation (which can search and call)
+// and restricted runs that cannot — /commit, /review, a remote turn before this
+// rule existed — and a block listing tools the run cannot call is worse than no
+// block: the model spends a turn on a tool that answers "unknown tool", and the
+// reader of the transcript learns nothing about why.
+//
+// A provider that does not implement it is treated as "yes": the reminder has always
+// been registered by agents whose runs can call what it advertises, and a caller that
+// cannot say gets the old behaviour rather than silence.
+type DeferredToolGate interface {
+	AdmitsDeferredTools(ctx context.Context) bool
+}
+
 // serverLegend labels the lines that name a server, in both shapes of the block.
 //
 // It exists because those lines were read as anything but server names: a
@@ -221,6 +238,14 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	}
 	// Fire at most once per session, unless marked Dirty (new tools added mid-session).
 	if !r.shouldFire() {
+		return nil
+	}
+	// A run that cannot use deferred MCP tools is not told about them — and it does NOT count as
+	// the fire: the guard is per agent, while this answer is per run, so letting a run that cannot
+	// load anything consume it would keep the ordinary conversation (the one that CAN) uninformed
+	// for the rest of the session. Placed before markFired for exactly that reason, and it leaves
+	// `dirty` alone for the same one.
+	if gate, ok := r.Provider.(DeferredToolGate); ok && !gate.AdmitsDeferredTools(ctx) {
 		return nil
 	}
 	// Don't inject at tool-result boundaries — not meaningful there.

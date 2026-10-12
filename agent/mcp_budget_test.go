@@ -350,6 +350,13 @@ func TestMCPSearchBudget_LogsWhyItDidNotAsk(t *testing.T) {
 		{"non-interactive", "non-interactive mode", func(a *AIAgent) {
 			a.SetPermissionMode(PermissionModeSkip)
 		}},
+		// The second shape of "nobody to ask": an agent whose asks DO reach a handler, which
+		// refuses them all (an a2a remote turn's denyRemoteAsk). Asking there would silently
+		// become "an operator with a budget never lets a caller load a tool", decided by a
+		// handler whose job is the SAFETY asks.
+		{"no one attached", "no one attached to answer a cost question", func(a *AIAgent) {
+			a.Config.NoCostAsks = true
+		}},
 		{"no price estimate", "no price estimate", func(a *AIAgent) {
 			a.Config.FullConfig.Providers = nil
 		}},

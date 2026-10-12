@@ -111,6 +111,15 @@ type AgentConfig struct {
 	DisableSkills          bool  // 只读配置：跳过 skill store 扫描与 skill 工具注册（非交互模式如 `tachi -p` / `tachi commit`）
 	AskUserEnabled         bool  // 只读配置：即使 PermissionModeSkip 也保留 AskUserQuestion（desktop 等交互式前端）
 
+	// NoCostAsks 表示这个 agent 的 run **没有人可以回答花钱的问题**——今天只有 a2a 远端一轮
+	// （node/runner.go）会设它。它只影响**成本**门禁（目前就是 MCPSearchTools 的 cache_budget
+	// 那张卡）：那里没人回答时放行，并把金额记进日志，因为「要不要花这笔钱」在没人可问时不是
+	// 一个问题（agent/mcp_budget.go 开头那段论证）。
+	//
+	// 它**不**碰安全类 ask：远端一轮仍然用 PermissionModeExternal + denyRemoteAsk 拒掉 bash 与
+	// 文件权限的询问，调用方对问题的回答也永远不会变成一次批准。两者是两件事，所以是两个字段。
+	NoCostAsks bool
+
 	// --- 独立 Provider（构造输入；nil = fallback 到主 provider）---
 	TitleProvider    llm.Provider
 	CommitProvider   llm.Provider

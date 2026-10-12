@@ -229,7 +229,12 @@ func (a *AIAgent) EstimateAndUpdateTokens(rs *RunState, messages []llm.Message) 
 	// Resolve the session for per-session MCP tool filtering. Called from
 	// within a run (session exists) or from tests outside one (empty ID →
 	// auto-load tools only, which is fine for an estimate).
-	schemas := a.filterActiveSchemas(a.currentSessionID(), a.Config.ToolRegistry.GetSchemas())
+	// The resolver is the unrestricted one on purpose: this is the size of the tool
+	// list an ordinary conversation would send, which is the number the statusbar and
+	// the auto-compact decision quote. A restricted run's smaller list is not what
+	// this estimate is about, and its own turn does not read this figure.
+	res := toolResolver{reg: a.Config.ToolRegistry} // no view: the ordinary run's list
+	schemas := a.filterActiveSchemas(a.currentSessionID(), res, a.Config.ToolRegistry.GetSchemas())
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content

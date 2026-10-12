@@ -22,6 +22,11 @@ type deferredToolProviderAdapter struct {
 	pool *mcp.DeferredPool
 }
 
+// The reminder asks this per run (DeferredToolGate) and silently falls back to "yes" when the
+// provider cannot answer, so a rename here would quietly stop silencing the block for runs that
+// cannot use MCP. Checked at compile time for that reason.
+var _ systemreminder.DeferredToolGate = (*deferredToolProviderAdapter)(nil)
+
 // Summaries is the per-server half of the reminder, offered only while the
 // search reads sentences (the Jev matcher). Under the keyword matcher a reader
 // needs the tool NAMES — they are what it matches on — so the reminder keeps
@@ -48,6 +53,19 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 		}
 	}
 	return records
+}
+
+// AdmitsDeferredTools answers the run's half of the reminder (systemreminder.DeferredToolGate):
+// may the run this block is being built for use MCP at all?
+//
+// The run's tool view is the answer, and it is read from the CONTEXT because that is where a run's
+// view lives — this adapter belongs to the agent, which serves restricted runs (a /commit, a
+// remote turn) and ordinary conversations alike. Both halves are required and that is one question
+// here: the search tool loads a deferred tool and the loaded tool is only reachable through it, so
+// advertising the pool to a run holding one half would be advertising a mechanism it cannot
+// finish (toolView.admitsMCP states the same thing where the rule lives).
+func (a *deferredToolProviderAdapter) AdmitsDeferredTools(ctx context.Context) bool {
+	return toolViewFrom(ctx).admitsMCP()
 }
 
 // configure wires up all agent sub-systems from the extracted system config.

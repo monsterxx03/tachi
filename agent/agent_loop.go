@@ -347,6 +347,13 @@ func (a *AIAgent) RunOneOffStream(
 
 		params := applyRunOptions(ropts)
 
+		// The run's tool view goes on the context HERE rather than only in runLoop, because the
+		// reminders below are generated before the loop starts — and a reminder must know what
+		// this run may actually call (a restricted run is not told about deferred MCP tools it
+		// cannot use; see DeferredToolGate). runLoop applies the same view again, which is a
+		// no-op: one value, set twice from the same params.
+		ctx = withToolView(ctx, buildToolView(params))
+
 		if provider == nil {
 			provider = a.Provider()
 		}
@@ -444,6 +451,11 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		defer close(ch)
 
 		params := applyRunOptions(ropts)
+
+		// The run's tool view goes on the context before the reminders are built — see the
+		// comment in RunOneOffStream. This is the path /commit and /review take, i.e. exactly the
+		// restricted runs that must not be told about MCP tools they cannot call.
+		ctx = withToolView(ctx, buildToolView(params))
 
 		if opts.MaxTokens <= 0 {
 			opts.MaxTokens = DefaultMaxTokens
@@ -883,8 +895,10 @@ func (a *AIAgent) runLoop(
 		// newly discovered MCP tools are added to the list, enabling the LLM
 		// to call them. The tool list is monotonic (only grows), minimizing
 		// prompt cache invalidations. A per-run tool view (if set) narrows
-		// this to the run's allowed subset.
-		llmTools := buildLLMTools(a.filterActiveSchemas(tools.SessionIDFromCtx(ctx), a.resolve(ctx).schemas()))
+		// this to the run's allowed subset — one resolver serves both steps,
+		// so "what this run sees" has a single answer.
+		res := a.resolve(ctx)
+		llmTools := buildLLMTools(a.filterActiveSchemas(tools.SessionIDFromCtx(ctx), res, res.schemas()))
 		// Record the request start so the api_requests entry (written once the
 		// stream finishes) can carry both its true start time and wall-clock
 		// duration. Best-effort: failures are logged, never fatal.
@@ -1425,7 +1439,13 @@ func (a *AIAgent) handleStopFinish(
 //
 // When ToolSearch is not active (no MCP manager, e.g. no MCP servers),
 // every schema is returned unchanged.
-func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) []tools.Schema {
+//
+// res is the run's resolver, and it is consulted for BOTH directions of this
+// filter. A run that does not admit MCP (a /commit run, a remote turn before this
+// rule existed) must not be handed MCP schemas whose tools it cannot call: the
+// model would spend a turn on a tool that answers "unknown tool", and the request's
+// tool list — the cacheable prefix — would carry a name that changes nothing.
+func (a *AIAgent) filterActiveSchemas(sessionID string, res toolResolver, schemas []tools.Schema) []tools.Schema {
 	// MCP ToolSearch filtering
 	pool := a.DeferredPool()
 	set := a.discoveredSetFor(sessionID)
@@ -1438,6 +1458,9 @@ func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) 
 
 	for _, s := range schemas {
 		name := s.Name
+		if !res.admits(name) {
+			continue
+		}
 		switch {
 		case !tools.IsMCPSchema(name):
 			active = append(active, s)
@@ -1454,7 +1477,11 @@ func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) 
 
 	if set != nil {
 		for _, name := range set.List() {
-			if seen.Has(name) {
+			// The view is asked HERE too, and this is the loop that made the rule worth
+			// stating: these schemas come straight out of the pool rather than out of the
+			// already-filtered list above, so a check missing here is a run being handed
+			// tools its own view hides.
+			if seen.Has(name) || !res.admits(name) {
 				continue
 			}
 			dt := pool.Get(name)

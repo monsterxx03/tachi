@@ -49,6 +49,16 @@ type toolView struct {
 	restrict bool
 	allow    map[string]bool
 
+	// mcp admits this agent's MCP tools BY SHAPE rather than by name: the deferred tools
+	// ("mcp__server__tool") and the search tool that loads them.
+	//
+	// A name set cannot express them, and that is the whole reason this field exists: what the
+	// pool holds is a RUNTIME fact — servers connect in the background, a profile switch or a
+	// toggle adds and removes them — so a run that wanted them would have to freeze a list that
+	// is wrong a moment later. Off by default: a restricted run stays exactly as narrow as the
+	// names it was given unless it asks for these (WithMCPTools).
+	mcp bool
+
 	// extra holds run-scoped tools that are not in the agent's registry, e.g.
 	// channel mode's per-turn SendFileTool, whose callback closure captures a
 	// fresh attachment sink and so cannot be shared across turns.
@@ -144,6 +154,58 @@ func WithToolSet(names ...string) RunOption {
 		for _, n := range names {
 			p.allow[n] = true
 		}
+	}
+}
+
+// admits is the ONE answer to "may this run use this name", and it is what
+// visible, schemas, isParallel and the MCP request filter all consult. Three
+// copies of the rule is how they stop agreeing — and the copy that drifts is
+// always the one nobody looks at.
+//
+// A nil view (the common, unrestricted run) admits everything. Names come from
+// the run's own set; MCP names additionally come from the shape rule when the
+// run asked for them.
+func (v *toolView) admits(name string) bool {
+	if v == nil || !v.restrict {
+		return true
+	}
+	if v.allow[name] {
+		return true
+	}
+	return v.mcp && (tools.IsMCPSchema(name) || tools.IsMCPSearchTool(name))
+}
+
+// admitsMCP reports whether this run can use MCP at all: it may search for a deferred
+// tool AND call what the search hands back.
+//
+// Only the shape rule answers yes, and that is the point rather than strictness: the
+// capability is the PAIR. A run that named the search tool alone would be allowed to
+// search while its own view drops every loaded schema, so a reminder built from "it
+// named the search tool" would advertise a mechanism with a missing second half. (An
+// explicitly named MCP tool is usable without any of this — it just cannot be searched
+// for, and there is nothing to advertise about the rest of the pool.)
+//
+// It is what a reminder asks before describing the pool (DeferredToolGate), and it is
+// stated once here so the reminder and the request filter cannot disagree.
+func (v *toolView) admitsMCP() bool {
+	if v == nil || !v.restrict {
+		return true
+	}
+	return v.mcp
+}
+
+// WithMCPTools admits this agent's MCP tools into a restricted run: the deferred
+// tools of the pool, and the search tool that loads them.
+//
+// It is what a run that must DO work with this machine's integrations asks for —
+// the a2a remote turn (node/runner.go) is the one that does. It composes with
+// WithToolSet (the sets union), so a caller states the ordinary names it wants
+// and adds this for the shape it cannot name. On a run with no restriction it
+// changes nothing, and says so rather than pretending: every tool is already
+// admitted there, and buildToolView drops the view entirely (see its rule).
+func WithMCPTools() RunOption {
+	return func(p *runParams) {
+		p.mcp = true
 	}
 }
 
@@ -317,10 +379,22 @@ func (r toolResolver) visible(name string) bool {
 	if r.hasExtra(name) {
 		return true
 	}
-	if r.view != nil && r.view.restrict && !r.view.allow[name] {
+	if !r.view.admits(name) {
 		return false
 	}
 	return r.reg.GetTool(name) != nil
+}
+
+// admits reports whether this run may use the name AT ALL — the view's rule, plus
+// the run's own extras, which the registry never sees.
+//
+// It differs from visible in exactly one way, and the difference is load-bearing:
+// it does not require the tool to be in the registry yet. The request builder
+// (filterActiveSchemas) needs that, because a deferred MCP tool is admitted
+// BEFORE its first call registers it — that registration is what lazyRegisterMCPTool
+// does at invocation time.
+func (r toolResolver) admits(name string) bool {
+	return r.hasExtra(name) || r.view.admits(name)
 }
 
 // schemas returns the tool schemas visible to this run: registry tools (filtered
@@ -341,10 +415,10 @@ func (r toolResolver) schemas() []tools.Schema {
 	case !r.view.restrict:
 		out = make([]tools.Schema, 0, len(all)+1)
 		out = append(out, all...)
-	case len(r.view.allow) > 0:
+	case len(r.view.allow) > 0 || r.view.mcp:
 		out = make([]tools.Schema, 0, len(r.view.allow)+1)
 		for _, s := range all {
-			if r.view.allow[s.Name] {
+			if r.view.admits(s.Name) {
 				out = append(out, s)
 			}
 		}

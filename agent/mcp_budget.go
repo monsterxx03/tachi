@@ -28,7 +28,11 @@ import (
 //   - PermissionModeSkip does not gate at all. Nobody is at the console in
 //     channel / `tachi -p` / subagents, and "would you like to spend ¥2" with no
 //     one to answer is not a question — it is a hang. The pre-gate behaviour
-//     (search proceeds) is the one that stays.
+//     (search proceeds) is the one that stays. agent.AgentConfig.NoCostAsks is the
+//     same answer for the same reason in the one place the mode does not say it:
+//     a run whose asks reach a handler that refuses them all (an a2a remote turn,
+//     where that refusal is about SAFETY asks and would otherwise silently become
+//     "an operator with a budget never lets a caller load a tool").
 //   - A refusal feeds the model an error and lets the turn CONTINUE, unlike the
 //     bash ask, whose refusal aborts the turn (errCancelled). The point of a
 //     refusal here is to tell the model why the tools are gone, and a dead turn
@@ -189,6 +193,20 @@ func (a *AIAgent) checkMCPSearchBudget(ctx context.Context, tc llm.ToolCall, ch 
 	// is still logged — that is the number this search WOULD have been charged for.
 	if a.Config.PermissionMode == PermissionModeSkip {
 		trace("proceed", "non-interactive mode")
+		return tools.ToolResult{}, false, nil
+	}
+	// The other shape of "nobody to ask", and it is NOT the same one: an agent whose runs have no
+	// human attached while its permission mode still reports asks to a handler (agent.
+	// PermissionModeExternal + a handler that refuses — a2a remote turns, node/runner.go).
+	//
+	// A refusal there would mean "an operator who set a budget never lets a caller load a tool",
+	// decided by a question that was never asked, answered by a handler whose whole job is to say
+	// no to SAFETY asks. The gate's own argument applies (see the file comment): a cost question
+	// with nobody to answer is not a question — the pre-gate behaviour (the search proceeds) is
+	// what stays. The estimate is logged, so "what this cost the machine's owner" remains
+	// answerable after the fact, which is what the budget was for.
+	if a.Config.NoCostAsks {
+		trace("proceed", "no one attached to answer a cost question")
 		return tools.ToolResult{}, false, nil
 	}
 	if a.PermState.MCPSearchBlocked {
