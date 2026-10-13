@@ -2352,6 +2352,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               // rows themselves mark with, so the header and the rows can never disagree about
               // who is waiting.
               const waiting = group.rows.map((r) => r.session).filter((s) => waitingOf(s.id))
+              // …and the members still working. Also read from the rows' own source (runningSet),
+              // for the same reason: two facts, one answer each.
+              const running = group.rows.map((r) => r.session).filter((s) => runningSet.has(s.id))
               // A group is either a project (a record with a name, a working directory and a member
               // count) or the 无项目 bucket — which is a group on the same terms and has none of
               // those, so the few places the two differ are each spelled out where they differ.
@@ -2410,11 +2413,27 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   {!open && active
                     ? <span className="proj-current" title={`当前会话「${active.title || '未命名会话'}」在${group.project ? '这个项目' : `「${LOOSE_LABEL}」这一组`}里`}>●</span>
                     : null}
+                  {/* A COLLAPSED group hides the rows that carry the running spinner, so the group
+                      says it instead — the SAME spinner, brought up to the header, because a
+                      reader who folded a group away still needs to know something in there is
+                      working. The count appears once more than one session is running: a spinner
+                      already says "here", where the waiting badge beside it says how many.
+                      Running and waiting are two facts and both can stand at once — folding the
+                      second one away would hide exactly what the reader folded the group to keep
+                      an eye on. */}
+                  {!open && running.length > 0
+                    ? (
+                      <span className="proj-run"
+                        title={`在运行：${running.map((s) => s.title || '未命名会话').join('；')}`}>
+                        <span className="spin-dot" />
+                        {running.length > 1 ? running.length : null}
+                      </span>
+                    )
+                    : null}
                   {/* A COLLAPSED group hides its rows, so a conversation waiting on the reader
                       would disappear with them — and the count is the whole answer to "is there
                       anything here for me?". Collapsed only, like the marker beside it: expanded,
-                      the row's own mark says it, and the tooltip names which conversation wants
-                      what. */}
+                      the row's own mark says it. */}
                   {!open && waiting.length > 0
                     ? (
                       <span className="proj-wait"

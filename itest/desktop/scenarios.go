@@ -2199,6 +2199,43 @@ permissions:
 			},
 		},
 		//
+		// sidebar-run: 一个会话还在跑，而它所在的分组被折起来时，表头要说出来。
+		//
+		// 与 sidebar-wait 是同一条规矩的第二次应用（折叠把行拿走了，所以那句话只能落在表头上），
+		// 但说的是另一件事：那一条是「有人在等你」，这一条是「有东西还在跑」——行上那只转圈的
+		// 搬到了表头上，两者可以同时成立（一个会话完全可能在等你，同时另一轮在跑）。
+		//
+		// 这一轮用 mock 的 pause 撑着（长到 driver 能在窗口里折叠、断言、等它结束），回合真的跑完
+		// 之后标记必须自己消失 —— 那是一个稳态，所以 driver 可以直接等它不在。
+		{
+			name: "sidebar-run",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sidebar-run scenario's STALE snapshot directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-run",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe sidebar-run scenario's project directory\n",
+				},
+			},
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("这一轮要跑一会儿："),
+					mockllm.Pause(longTurn),
+					mockllm.Text("还在跑。"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("跑完了。"),
+					mockllm.Finish("stop"),
+					mockllm.Usage(1200, 40),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("这一轮真的跑过（一次调用）", len(c.requests) == 1, requestCount(c.requests))
+			},
+		},
+		//
 		// 权限确认（文件工具）: the FILE rules' one ask path — a ReadFile that
 		// matched an ask rule the frontend must show before anything is read.
 		//
