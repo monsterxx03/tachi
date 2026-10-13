@@ -65,14 +65,14 @@
   const bgRow = rowByTitle(fixtureTitle)
   const bgStyle = getComputedStyle(bgRow)
   smoke.check('后台在跑的会话那一行带上了高亮（不只是 meta 行里那只转圈）',
-    bgRow.classList.contains('is-running') && painted(bgStyle.backgroundColor),
+    bgRow.classList.contains('is-unseen') && painted(bgStyle.backgroundColor),
     bgRow.className + ' / ' + bgStyle.backgroundColor)
   const rail = getComputedStyle(bgRow, '::before')
   smoke.check('高亮还带一条细的强调色导轨（与当前会话那条同形、更弱）',
     parseFloat(rail.width) > 0 && painted(rail.backgroundColor), rail.width + ' / ' + rail.backgroundColor)
   const onScreenRow = rowByTitle(otherTitle)
   smoke.check('屏幕上那个会话没有这层高亮（它有自己的卡片，在跑的也不是它）',
-    !onScreenRow.classList.contains('is-running'), onScreenRow.className)
+    !onScreenRow.classList.contains('is-unseen'), onScreenRow.className)
 
   // The background turn ends while THIS session is on screen. The sidebar marker is the fact
   // (it clears on the run's own end event), so wait for it before judging the composer.

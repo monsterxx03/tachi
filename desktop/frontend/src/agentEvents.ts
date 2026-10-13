@@ -73,6 +73,55 @@ export function useAgentStatus(currentId: string): { state: AgentState; byId: Re
   return { state: byId[currentId] || AGENT_IDLE, byId }
 }
 
+// ── Conversations that finished while the reader was elsewhere ──────────────
+// A turn ending in the conversation on screen is not news (the reply appears right there, live);
+// one ending in ANOTHER conversation is, and it stays news until that conversation is looked at.
+// That is the one thing the running spinner cannot say — it stops exactly when the work does — so
+// the sidebar's highlight outlives the turn.
+//
+// Session-scoped, deliberately not focus-scoped: window focus is the notification's business (see
+// desktop/notify.go), and a marker that depended on it would light up for whatever happened to end
+// while the reader was in another app — including the conversation already on screen, which has
+// nothing to catch up on. So a conversation on screen can never be unseen.
+//
+// In memory on purpose: this is "since you last looked", and the app coming back up onto a
+// conversation IS a look at it.
+export function useUnseenSessions(currentId: string): Record<string, true> {
+  const [unseen, setUnseen] = useState<Record<string, true>>({})
+  useEffect(() => {
+    // `current` is computed in Go at the moment the turn ended — the authoritative answer to "was
+    // the reader looking at this one?", which is why it is read from the payload and not compared
+    // here (a switch landing in between would otherwise mark the session being opened).
+    const off = Events.On('agent:idle', (event) => {
+      const d = event.data as { sessionId?: string; current?: boolean }
+      if (!d || !d.sessionId || d.current) return
+      setUnseen((prev) => ({ ...prev, [d.sessionId as string]: true }))
+    })
+    return () => off?.()
+  }, [])
+
+  // Looking at a conversation is what clears it. Every way of arriving at one ends up setting
+  // currentId — the row's click, both palettes, the successor a delete hands over, the session the
+  // app opens with — so one rule covers all of them. It re-runs on the MAP as well: a turn ending
+  // in the same instant the reader switches to its conversation must not leave that row marked.
+  useEffect(() => {
+    if (!currentId) return
+    setUnseen((prev) => {
+      if (!prev[currentId]) return prev
+      const next = { ...prev }
+      delete next[currentId]
+      return next
+    })
+  }, [unseen, currentId])
+
+  // The map that goes out never contains the conversation on screen, so a row cannot be marked
+  // "unseen" for even the frame it takes the effect above to catch up.
+  if (!currentId || !unseen[currentId]) return unseen
+  const out = { ...unseen }
+  delete out[currentId]
+  return out
+}
+
 // ── The active session's numbers ────────────────────────────────────────────
 // Cumulative cost/credit ("积分") from the usage ledger, the cache-hit rate behind the ring,
 // the output rate, and the context-window estimate behind the context ring. Session-scoped as

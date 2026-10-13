@@ -2236,6 +2236,46 @@ permissions:
 			},
 		},
 		//
+		// sidebar-unseen: 一个回合在你看别处的时候跑完了，那一行要保持高亮 —— 直到你看它为止；而它
+		// 所在的分组还折着时，那句话落在表头上。
+		//
+		// 这是「在跑」那条标记的延续：转圈在活干完的那一刻就没了，而「有事在那等你读」不会自己消失，
+		// 所以状态得由前端留着（`agent:idle` 里 Go 判的 `current` 是「结束那一刻读者在不在看它」的
+		// 权威答案）。清零点只有一个：这个会话成为屏幕上那一个 —— 行的点击、两个面板、删除交给读者的
+		// 下一条，全都汇到 currentId 上。
+		//
+		// 一次新的、切换过去用的会话（无项目桶的 ＋）是 fixture 的一部分：不切走就没有「在别处」，
+		// 而没有它，跑完的会话仍然是屏幕上那个，按定义就不该标。
+		{
+			name: "sidebar-unseen",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sidebar-unseen scenario's STALE snapshot directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-unseen",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe sidebar-unseen scenario's project directory\n",
+				},
+			},
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("这一轮要跑一会儿："),
+					mockllm.Pause(longTurn),
+					mockllm.Text("还没看完呢。"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("跑完了。"),
+					mockllm.Finish("stop"),
+					mockllm.Usage(1200, 40),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 看那个会话本身是读内存里的那一段，不该再问模型一次。
+				c.check("这一轮只问过模型一次（回看不再产生请求）", len(c.requests) == 1, requestCount(c.requests))
+			},
+		},
+		//
 		// 权限确认（文件工具）: the FILE rules' one ask path — a ReadFile that
 		// matched an ask rule the frontend must show before anything is read.
 		//

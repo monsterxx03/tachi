@@ -35,7 +35,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
 
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, useUnseenSessions } from './agentEvents'
 import { useComposer, Composer } from './composer'
 // CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
 // prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
@@ -543,6 +543,9 @@ function App() {
   // nor keeps a second ledger of "who is waiting" — the state is already per conversation, and
   // it arrives for a session nobody is looking at.
   const waitingOf = (id: string) => agentStates[id]?.waiting || ''
+  // 还没看过的会话（`agent:idle` 里 Go 判的 `current`:在它结束的那一刻读者看的不是它）。它由这个
+  // hook 拥有，因为它跟状态一样是后端事件推出来的按会话事实，而「看过」的清零点在它自己手里。
+  const unseen = useUnseenSessions(currentId)
   // The statusbar's numbers (cost/credit/缓存环/速率/上下文环) belong to the session on
   // screen; they are cleared before the next session's ledger is read (see useSessionUsage).
   const {
@@ -2191,7 +2194,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   const sessionRow = (s: SessionItem, compacted: boolean) => (
     /* Row (not a <button>): it hosts a rename <input> and a context
        menu, so it takes role/tabIndex + Enter/Space instead. */
-    <div key={s.id} className={`session ${s.active ? 'active' : ''}${runningSet.has(s.id) ? ' is-running' : ''}${compacted ? ' is-compacted' : ''}`}
+    <div key={s.id} className={`session ${s.active ? 'active' : ''}${runningSet.has(s.id) || unseen[s.id] ? ' is-unseen' : ''}${compacted ? ' is-compacted' : ''}`}
       data-sid={s.id}
       onClick={() => clickSession(s.id)}
       role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
@@ -2355,6 +2358,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               // …and the members still working. Also read from the rows' own source (runningSet),
               // for the same reason: two facts, one answer each.
               const running = group.rows.map((r) => r.session).filter((s) => runningSet.has(s.id))
+              // …and the members whose work finished while the reader was elsewhere (useUnseenSessions).
+              const unseenMembers = group.rows.map((r) => r.session).filter((s) => unseen[s.id])
               // A group is either a project (a record with a name, a working directory and a member
               // count) or the 无项目 bucket — which is a group on the same terms and has none of
               // those, so the few places the two differ are each spelled out where they differ.
@@ -2439,6 +2444,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       <span className="proj-wait"
                         title={`在等你：${waiting.map((s) => `${s.title || '未命名会话'}（${waitingOf(s.id)}）`).join('；')}`}>
                         {waiting.length}
+                      </span>
+                    )
+                    : null}
+                  {/* …and the finished-but-unlooked-at ones. A third chip rather than folded into
+                      either of the other two: "还在跑" and "跑完了你还没看" are different answers, and
+                      the whole point of this one is that it OUTLIVES the turn — the spinner beside it
+                      stops when the work does, this does not. */}
+                  {!open && unseenMembers.length > 0
+                    ? (
+                      <span className="proj-unseen"
+                        title={`还没看：${unseenMembers.map((s) => s.title || '未命名会话').join('；')}`}>
+                        {unseenMembers.length}
                       </span>
                     )
                     : null}

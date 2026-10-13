@@ -191,14 +191,16 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: linear-gradient(180deg, var(--accent-3), var(--accent-2));
 }
 .session.active .session-title { color: var(--text); font-weight: 560; }
-/* A turn in flight in a conversation that is NOT the one on screen. This is the one case where
+/* A turn in flight in a conversation that is NOT the one on screen — or one whose work finished
+   while the reader was elsewhere and which they have not opened since. This is the one case where
    nothing else on screen reports that work: the transcript belongs to another conversation, the
    spinner is a 14px detail in the meta line, and the menu bar only counts. It borrows the active
    row's rail — the sidebar's own "this row matters" language — in a thinner, softer weight, plus a
    faint wash, so it cannot be read as the card of the conversation you are in (that one is a filled
-   gradient plane behind a 3px rail, and it keeps it: :not(.active) is the whole difference). */
-.session.is-running:not(.active) { background: var(--accent-softer); }
-.session.is-running:not(.active)::before {
+   gradient plane behind a 3px rail, and it keeps it: :not(.active) is the whole difference).
+   Which of the two it is, the spinner says: the highlight outlives the turn, the spinner does not. */
+.session.is-unseen:not(.active) { background: var(--accent-softer); }
+.session.is-unseen:not(.active)::before {
   content: "";
   position: absolute;
   left: 0;
@@ -325,6 +327,20 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   line-height: 1.35;
   color: var(--amber);
   border: 1px solid var(--amber);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+/* "N conversations in this (collapsed) group finished while you were elsewhere": the same chip in
+   the accent family, because it is the same kind of news the row highlight carries (an accent wash
+   and rail) rather than the action the amber chip asks for. Two numbered chips side by side are
+   told apart by that colour and by the tooltip that names the conversations. */
+.proj-unseen {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--accent-2);
+  border: 1px solid var(--accent-2);
   border-radius: 999px;
   padding: 0 5px;
 }
