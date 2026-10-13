@@ -57,6 +57,23 @@
   smoke.check('切到没在跑的会话后停止按钮消失', !!away,
     '残留的按钮会一直转，而且点它没有任何效果（Stop 作用在屏幕上的会话）')
 
+  // 后台在跑的那一行：这是唯一「屏幕上别处什么都没说」的处境（会话全文属于另一个会话、菜单栏只
+  // 报个数），所以那一行要把这件事说两遍 —— meta 行里那只转圈，加上一层高亮：一层很淡的强调色
+  // 水洗 + 一条细导轨（当前会话那条导轨的弱化版；读者自己那个会话仍旧是填充卡片，所以两者不会被
+  // 认错）。断言打在**不在屏幕上**的那一行上，这正是这件事的意义。
+  const painted = (c) => !!c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)'
+  const bgRow = rowByTitle(fixtureTitle)
+  const bgStyle = getComputedStyle(bgRow)
+  smoke.check('后台在跑的会话那一行带上了高亮（不只是 meta 行里那只转圈）',
+    bgRow.classList.contains('is-running') && painted(bgStyle.backgroundColor),
+    bgRow.className + ' / ' + bgStyle.backgroundColor)
+  const rail = getComputedStyle(bgRow, '::before')
+  smoke.check('高亮还带一条细的强调色导轨（与当前会话那条同形、更弱）',
+    parseFloat(rail.width) > 0 && painted(rail.backgroundColor), rail.width + ' / ' + rail.backgroundColor)
+  const onScreenRow = rowByTitle(otherTitle)
+  smoke.check('屏幕上那个会话没有这层高亮（它有自己的卡片，在跑的也不是它）',
+    !onScreenRow.classList.contains('is-running'), onScreenRow.className)
+
   // The background turn ends while THIS session is on screen. The sidebar marker is the fact
   // (it clears on the run's own end event), so wait for it before judging the composer.
   const ended = await smoke.waitGone('.spin-dot', '后台回合结束（侧栏运行标记消失）', 30000)

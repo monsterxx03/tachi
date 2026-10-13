@@ -2191,7 +2191,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   const sessionRow = (s: SessionItem, compacted: boolean) => (
     /* Row (not a <button>): it hosts a rename <input> and a context
        menu, so it takes role/tabIndex + Enter/Space instead. */
-    <div key={s.id} className={`session ${s.active ? 'active' : ''}${compacted ? ' is-compacted' : ''}`}
+    <div key={s.id} className={`session ${s.active ? 'active' : ''}${runningSet.has(s.id) ? ' is-running' : ''}${compacted ? ' is-compacted' : ''}`}
       data-sid={s.id}
       onClick={() => clickSession(s.id)}
       role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}

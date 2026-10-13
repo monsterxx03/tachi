@@ -21,6 +21,31 @@
   // 前提：这一轮确实在跑（行上的转圈出来了），否则下面折起来之后既没有标记可言、也证明不了什么。
   if (!(await smoke.waitFor('.session.active .spin-dot', '在跑的会话那一行出现转圈', 30000))) return smoke.finish()
 
+  // 这只转圈要「一眼看得出来」，那是机制问题不是观感问题，所以两件事在这一侧钉住：
+  //   * 动的那部分是整整 3/4 圈（被 mask 成环的 conic 渐变），而不是一格细薄的弧 —— 弧长和对比度
+  //     才是它在视野边缘还能被看见的原因；实心点或者 1/4 圈都是「凑近了才看得见」；
+  //   * 它待在 meta 行自己的盒子里：一次运行开始/结束不能让这一行的高度变化，否则整列会话会跟着
+  //     挪一下（下面在回合结束后复量同一个高度）。
+  const dot = smoke.q('.session.active .spin-dot')
+  const dotStyle = getComputedStyle(dot)
+  const maskImage = dotStyle.maskImage || dotStyle.webkitMaskImage || ''
+  smoke.check('转圈画成一个环（conic 渐变 + mask），不是一个实心点',
+    /conic-gradient/.test(dotStyle.backgroundImage) && maskImage !== '',
+    dotStyle.backgroundImage.slice(0, 52) + ' / mask=' + maskImage.slice(0, 34))
+  smoke.check('它确实在转（动画与时长都对）',
+    dotStyle.animationName === 'spin-dot' && parseFloat(dotStyle.animationDuration) > 0,
+    dotStyle.animationName + ' ' + dotStyle.animationDuration)
+  smoke.check('直径与环的粗细都是可读的那个量级',
+    parseFloat(dotStyle.width) >= 14 && /calc\(100% - 3px\)/.test(maskImage),
+    dotStyle.width + ' / ' + maskImage.slice(0, 40))
+  // 当前会话不需要那层高亮：它本来就是填充卡片 + 强调色导轨，再叠一层只会让「你在哪」变糊。
+  // 后台在跑的那一行才有（由 session-running 断言，那里屏幕上的会话是另一个）。
+  const activeStyle = getComputedStyle(smoke.q('.session.active'))
+  smoke.check('当前会话那一行只留转圈，不再叠一层高亮',
+    !activeStyle.backgroundColor || activeStyle.backgroundColor === 'rgba(0, 0, 0, 0)',
+    activeStyle.backgroundColor)
+  const runningRowHeight = smoke.q('.session.active').getBoundingClientRect().height
+
   // ── 折叠它所在的那一组：行离开 DOM，标记录到表头上 ────────────────────────
   const head = headOf(PROJECT)
   if (!head) return smoke.fail('项目的表头存在', '找不到 ' + PROJECT)
@@ -52,6 +77,13 @@
     (smoke.q('.session.active') || {}).textContent)
   smoke.check('这一轮的回复还在屏幕上（消失的是标记，不是那一轮）',
     smoke.text('.chat-content').indexOf('跑完了') >= 0, smoke.text('.chat-content').slice(-80))
+
+  // 几何：转圈出现和消失都不许改变这一行的高度 —— 它只在 meta 行自己的盒子里，所以回合开始/结束
+  // 不会让整列会话挪一下（这一条在转圈变大之后尤其容易破）。
+  const idleRowHeight = smoke.q('.session.active').getBoundingClientRect().height
+  smoke.check('转圈出现与消失都没有改变行高（列表不会跟着挪）',
+    Math.abs(idleRowHeight - runningRowHeight) < 0.5,
+    '运行中 ' + runningRowHeight.toFixed(1) + 'px / 结束后 ' + idleRowHeight.toFixed(1) + 'px')
 
   smoke.finish()
 })()

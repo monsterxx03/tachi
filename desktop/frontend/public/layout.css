@@ -191,6 +191,24 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: linear-gradient(180deg, var(--accent-3), var(--accent-2));
 }
 .session.active .session-title { color: var(--text); font-weight: 560; }
+/* A turn in flight in a conversation that is NOT the one on screen. This is the one case where
+   nothing else on screen reports that work: the transcript belongs to another conversation, the
+   spinner is a 14px detail in the meta line, and the menu bar only counts. It borrows the active
+   row's rail — the sidebar's own "this row matters" language — in a thinner, softer weight, plus a
+   faint wash, so it cannot be read as the card of the conversation you are in (that one is a filled
+   gradient plane behind a 3px rail, and it keeps it: :not(.active) is the whole difference). */
+.session.is-running:not(.active) { background: var(--accent-softer); }
+.session.is-running:not(.active)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 42%;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-line);
+}
 .session-title {
   font-size: 14px;
   color: var(--text-dim);
@@ -281,8 +299,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 /* "Something in this (collapsed) group is still working": the rows that carry the running spinner
    are folded away, so the header shows the SAME spinner (with the count once more than one session
-   is running — a spinner already says "here"). It really is the row's .spin-dot, so it keeps its
-   reduce-motion exception without a second declaration; only its size is trimmed to the header. */
+   is running — a spinner already says "here"). It really is the row's .spin-dot — same size, same
+   animation, so it keeps its reduce-motion exception without a second declaration — with only the
+   row's trailing gap dropped. */
 .proj-run {
   flex-shrink: 0;
   display: inline-flex;
@@ -293,8 +312,6 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--accent-2);
 }
 .proj-run .spin-dot {
-  width: 10px;
-  height: 10px;
   margin-right: 0;
 }
 /* "N conversations in this (collapsed) group are waiting on you": a folded group hides the

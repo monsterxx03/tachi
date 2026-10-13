@@ -402,16 +402,31 @@
 }
 .tool-copy:hover { background: var(--accent-soft); color: var(--accent-2); }
 
-/* Running session spinner in the sidebar */
+/* Running session spinner in the sidebar.
+   THREE quarters of the ring is the moving part. It used to be the border trick — a full ring in
+   --accent-soft with only the top edge in the accent — which is a 2px quarter-arc on a 12px
+   circle: legible only when looked at directly, which is the opposite of what a status indicator
+   is for. A conic gradient masked into a ring costs the same one element and gives the arc enough
+   sweep and contrast to read from the corner of an eye (the track is --accent-ring, not the
+   fainter -soft, so the circle itself is visible too).
+   The size stays inside the meta line's own box (14px against 12.5px text with its line-height),
+   so a turn starting or ending cannot change a row's height and shift the list under the reader —
+   pinned by the sidebar-run scenario. */
 .spin-dot {
   display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 5px;
-  border: 2px solid var(--accent-soft);
-  border-top-color: var(--accent);
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  /* The layout box is deliberately SMALLER than the painted one. An inline-block this size with
+     vertical-align: middle inflates its line's box by a fraction of a pixel (14px against 12.5px
+     text), and a turn starting or ending must not shift the rows around it. Symmetric negative
+     margins cancel that contribution without moving the ring: the border box stays centred exactly
+     where a 14px box would have been. */
+  margin: -3px 5px -3px 0;
   vertical-align: middle;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) 0.72turn, var(--accent-ring) 0.72turn);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
   animation: spin-dot 0.8s linear infinite;
 }
 @keyframes spin-dot { to { transform: rotate(360deg); } }
