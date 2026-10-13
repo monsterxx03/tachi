@@ -606,3 +606,31 @@ func (m *Manager) TruncateTo(keepMessages, keepAPIRequests int, tag string) (Tru
 	_ = m.store.UpdateMeta(m.current)
 	return msgs, reqs, nil
 }
+
+// sessionForker is the optional half of a Store: one that can copy a
+// conversation's head into a new session. FileStore can; a test double that keeps
+// its sessions in memory has nothing to copy into. Asked as an interface rather
+// than added to Store so that "a store can be written for a test" stays cheap
+// (the same way retention is reached — see NewManagerWithStore).
+type sessionForker interface {
+	ForkSession(src *Session, keepRecords, keepAPI int, title string) (*Session, error)
+}
+
+// Fork copies the CURRENT session's history up to a record count into a new
+// session and returns that new session. The current session is not modified, and
+// it stays current: a fork is a new conversation, and which session a manager is
+// on is a decision its owner makes (the desktop loads the fork explicitly).
+//
+// The counts are records, not turns — see FileStore.ForkSession, which owns the
+// copy and carries the reasoning for what a fork does and does not take with it.
+func (m *Manager) Fork(keepRecords, keepAPI int, title string) (*Session, error) {
+	src := m.Current()
+	if src == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+	forker, ok := m.store.(sessionForker)
+	if !ok {
+		return nil, fmt.Errorf("this session store cannot fork a session")
+	}
+	return forker.ForkSession(src, keepRecords, keepAPI, title)
+}

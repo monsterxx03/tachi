@@ -25,6 +25,7 @@ export type {
     FileMatchVO,
     FilePreviewVO,
     FindingVO,
+    ForkResultVO,
     MCPServerEntryVO,
     MCPServerVO,
     MCPToolParamVO,

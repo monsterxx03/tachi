@@ -370,6 +370,24 @@ export interface FindingVO {
 }
 
 /**
+ * ForkResultVO is what a fork did: the new session, ready to be opened, or why it
+ * did not happen.
+ * 
+ * It is a VO rather than the "ok"/reason string the other mutating bindings use
+ * because the reader needs the new session's ID to switch to it — and a bare
+ * SessionInfo would have no way to say why the row they expected never appeared.
+ */
+export interface ForkResultVO {
+    /**
+     * Session is a POINTER: a struct value would still be marshalled when empty (omitempty does not
+     * apply to structs), and the frontend reads "no session" as "this did not happen" — the shape a
+     * refusal must have, since Error is what it renders.
+     */
+    "session"?: SessionInfo | null;
+    "error"?: string;
+}
+
+/**
  * MCPServerEntryVO is one server as the editor handles it: the RAW contents of the file
  * (config.LoadMCPConfigRaw — an absent field stays absent, so pressing save on an entry the user
  * only looked at does not write this process's defaults into a file he wrote by hand) plus the

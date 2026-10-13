@@ -586,22 +586,17 @@ func (s *FileStore) TruncateAPIRequests(id string, keep int, tag string) (Trunca
 // was cut from, and dies with it.
 const rewoundDirName = "rewound"
 
-// truncateJSONL keeps the first keep lines of src and moves the remainder to
-// dst, byte for byte.
+// splitJSONLAt splits a JSONL blob at its keep-th record: head is the first keep
+// records (with their newlines — the bytes a reader must get back verbatim), tail
+// the rest, and total how many records the blob holds.
 //
-// The order is deliberate: the sidecar is written BEFORE the source is
-// rewritten, so a crash in between leaves the records duplicated rather than
-// lost. A rewind can be retried; a lost branch cannot.
-func truncateJSONL(src, dst string, keep int) (TruncateResult, error) {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return TruncateResult{}, nil // nothing recorded yet
-		}
-		return TruncateResult{}, fmt.Errorf("read %s: %w", filepath.Base(src), err)
-	}
-
-	offset, total := 0, 0
+// It is the ONE statement of "where does record number N start", because two
+// features cut the same file at a record count: a rewind moves the tail into a
+// sidecar (truncateJSONL) and a fork copies the head into a new session
+// (FileStore.ForkSession). A second implementation is how the two would come to
+// disagree about a file whose last line carries no newline.
+func splitJSONLAt(data []byte, keep int) (head, tail []byte, total int) {
+	offset := 0
 	for i := 0; i < len(data); i++ {
 		if data[i] != '\n' {
 			continue
@@ -618,6 +613,25 @@ func truncateJSONL(src, dst string, keep int) (TruncateResult, error) {
 			offset = len(data)
 		}
 	}
+	return data[:offset], data[offset:], total
+}
+
+// truncateJSONL keeps the first keep lines of src and moves the remainder to
+// dst, byte for byte.
+//
+// The order is deliberate: the sidecar is written BEFORE the source is
+// rewritten, so a crash in between leaves the records duplicated rather than
+// lost. A rewind can be retried; a lost branch cannot.
+func truncateJSONL(src, dst string, keep int) (TruncateResult, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return TruncateResult{}, nil // nothing recorded yet
+		}
+		return TruncateResult{}, fmt.Errorf("read %s: %w", filepath.Base(src), err)
+	}
+
+	head, tail, total := splitJSONLAt(data, keep)
 	if total <= keep {
 		return TruncateResult{Kept: total}, nil
 	}
@@ -625,10 +639,10 @@ func truncateJSONL(src, dst string, keep int) (TruncateResult, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return TruncateResult{}, fmt.Errorf("create rewound dir: %w", err)
 	}
-	if err := fileutil.AtomicWriteFilePrivate(dst, data[offset:]); err != nil {
+	if err := fileutil.AtomicWriteFilePrivate(dst, tail); err != nil {
 		return TruncateResult{}, fmt.Errorf("write sidecar: %w", err)
 	}
-	if err := fileutil.AtomicWriteFilePrivate(src, data[:offset]); err != nil {
+	if err := fileutil.AtomicWriteFilePrivate(src, head); err != nil {
 		return TruncateResult{}, fmt.Errorf("rewrite %s: %w", filepath.Base(src), err)
 	}
 	return TruncateResult{Kept: keep, Removed: total - keep, Sidecar: dst}, nil

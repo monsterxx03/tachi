@@ -59,6 +59,14 @@ type SessionManager interface {
 	// The usage ledger is NOT truncated: those tokens were really spent.
 	TruncateTo(keepMessages, keepAPIRequests int, tag string) (session.TruncateResult, session.TruncateResult, error)
 
+	// Fork copies the current session's history up to a record count into a NEW
+	// session and returns it. It is the other half of what a turn boundary is good
+	// for: a rewind moves this conversation BACK to one, a fork starts another
+	// conversation that ENDS at one, leaving this one and the workspace alone.
+	//
+	// The counts are records (see TruncateTo); the new session is not made current.
+	Fork(keepRecords, keepAPI int, title string) (*session.Session, error)
+
 	// AppendArtifact records an isolated-workflow artifact (deep research,
 	// review, …) into the current session history as a reminder block, so
 	// the LLM can read the artifact file when the user follows up on it.

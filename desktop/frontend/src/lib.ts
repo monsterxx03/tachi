@@ -490,10 +490,24 @@ export function looseMatches(query: string): boolean {
 // the app rather than two that agree by accident. Pins are deliberately NOT applied: a pin lifts a
 // row to the head of its own GROUP, and a flat list has no group to lift it inside — typing is the
 // way to bring a pinned conversation up here.
+//
+// `busy` (when given) lifts one more class of row to the head: the conversations that are WORKING, or
+// that are parked ON THE READER — an approval card or a question waiting for an answer. Asking for
+// something is the one reason a reader opens this palette at all with a query they cannot type (they
+// do not know the title of the conversation that just stopped for them), and "most recently written
+// to" does not put those first: a conversation that is parked wrote nothing since it parked, so a
+// long-running one falls below whatever finished in the meantime. The reader's own list order is kept
+// inside each part — the two facts are one bucket on purpose, because which of them is more urgent is
+// not something this list can know, and the row already says which one it is (see SessionPalette).
 export function sessionChoices<T extends { id: string; compactedParentId?: string; compactedParentTitle?: string }>(
   list: T[],
+  busy?: (id: string) => boolean,
 ): T[] {
-  return sessionRows(list).map((r) => r.session)
+  const rows = sessionRows(list).map((r) => r.session)
+  if (!busy) return rows
+  const active = rows.filter((s) => busy(s.id))
+  if (active.length === 0 || active.length === rows.length) return rows
+  return active.concat(rows.filter((s) => !busy(s.id)))
 }
 
 // sessionMatches reports whether a conversation answers the ⌘K query: a case-insensitive

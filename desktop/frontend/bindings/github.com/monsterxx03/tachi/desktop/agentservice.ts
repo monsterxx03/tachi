@@ -204,6 +204,21 @@ export function EndSessionTask(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * ForkSession copies the conversation up to the start of `turn` into a new session
+ * and returns it ("ok" is implied by Error being empty). Nothing about the source
+ * session, the workspace or the checkpoints moves: see session.FileStore.ForkSession
+ * for what the fork does and does not take with it.
+ * 
+ * The fork is NOT made active here. Making a session active means preparing its
+ * agent, its manager and the frontend's whole transcript — which lives in the
+ * frontend (currentId, the group it opens, the page it loads), so the new session's
+ * ID travels back and the frontend switches the way it does for any other session.
+ */
+export function ForkSession(id: string, turn: number): $CancellablePromise<$models.ForkResultVO> {
+    return $Call.ByID(443148612, id, turn);
+}
+
+/**
  * GetContextInfo returns the context-usage breakdown for the session the ring
  * belongs to. An unknown session (or one whose agent is not built yet) yields
  * the zero value, which the frontend renders as "not measured yet".

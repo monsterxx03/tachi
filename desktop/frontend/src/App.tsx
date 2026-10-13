@@ -1617,17 +1617,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     setRewindCard((c) => (c ? { ...c, error: res } : c))
   }, [])
 
-  const clickSession = useCallback(async (id: string) => {
-    setCurrentId(id)
-    setCurrentTitle(sessions.find((s) => s.id === id)?.title || 'Tachi')
-    setSessions((prev) => prev.map((s) => ({ ...s, active: s.id === id })))
+
+  const clickSession = useCallback(async (id: string, row?: SessionItem) => {
     // Landing in a session decides the one open group (see focusGroup), and it is asked of the
     // session's RECORD rather than of the id that was picked: a conversation whose project is gone
     // is grouped under 无项目, and this is the same rule the grouping uses (sessionGroupKey).
     //
-    // Every switch funnels through here — the row's own click, both palettes' picks, and the
-    // successor a delete hands the reader to — so the rule cannot be missing from one of them.
-    const arrived = sessions.find((s) => s.id === id)
+    // Every switch funnels through here — the row's own click, both palettes' picks, the successor a
+    // delete hands the reader to, and a session that was just forked — so the rule cannot be missing
+    // from one of them.
+    //
+    // `row` is for the caller that has a FRESHER record than this component is rendering: a fork's
+    // new session is not in `sessions` yet (setSessions has been called, but this callback still
+    // closes over the old array), and leaving the title and the group to a lookup that misses would
+    // show the wrong name AND leave the new row inside a folded group — indistinguishable from a
+    // fork that was never created.
+    const arrived = row || sessions.find((s) => s.id === id)
+    setCurrentId(id)
+    setCurrentTitle(arrived?.title || 'Tachi')
+    setSessions((prev) => prev.map((s) => ({ ...s, active: s.id === id })))
     if (arrived) focusGroup(sessionGroupKey(arrived, projects))
     // Always sync the backend's active session (cheap) so provider/thinking
     // selectors reflect this session even when its messages are already cached.
@@ -1648,6 +1656,36 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     refreshMCP()
     refreshWorkspace(id)
   }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
+
+  // forkFrom copies the conversation up to the start of `turn` into a NEW session and lands in it.
+  //
+  // It is the rewind's sibling, and the difference is the whole point of having both: a rewind takes
+  // THIS conversation (and the workspace) back to that point, a fork leaves both exactly as they are
+  // and starts another conversation that ends there. The prompt that began the turn goes back into
+  // the composer, for the same reason it does after a rewind — re-asking it is what the reader came
+  // for — and the ORIGINAL stays where it is, one click away.
+  //
+  // Where it lands is decided by the record the backend just created (`row`): see clickSession.
+  const forkFrom = useCallback(async (sid: string, turn: number, userText: string) => {
+    const res: { session?: SessionItem; error?: string } =
+      await (AgentService as any).ForkSession?.(sid, turn).catch((e: unknown) => ({ error: String(e) }))
+    if (!res?.session?.id) {
+      // A refusal (a turn still running, a pruned checkpoint, no checkpoints at all) is shown where
+      // the reader is looking. Appended as its own notice rather than through applyToSession — the
+      // same shape the rewind's notice uses, and for the same reason: the transcript may be
+      // anything at all at this moment, and applyToSession only attaches to a RUNNING assistant.
+      updateSession(sid, (list) => [...list, {
+        id: `notice-fork-${Date.now()}`, role: 'assistant',
+        parts: [{ type: 'notice', label: '没有创建分支', summary: res?.error || '未知原因', done: true }],
+      }])
+      return
+    }
+    const list = ((await AgentService.ListSessions().catch(() => null)) || []) as SessionItem[]
+    setSessions(list.map((s) => ({ ...s, active: s.id === res.session!.id })))
+    const created = list.find((s) => s.id === res.session!.id) || res.session
+    await clickSession(res.session.id, created)
+    if (userText) composer.setInput(userText)
+  }, [updateSession, clickSession, composer])
 
   // confirmDelete deletes for real and hands the reader to the NEXT session — the row below the
   // deleted one inside its own group, or the row above when it was that group's last (nextSessionAfter).
@@ -2782,14 +2820,29 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       {rewindMenu && (() => {
         // The menu is built here rather than inline so the target resolution reads in one
         // place: which turn contains this bubble, and whether it can start a rewind at all.
+        // A fork asks the SAME question of the same list — one gesture, one answer: the two
+        // items differ in what they do to the conversation, never in which turn they mean.
         const rt = rewindTargetForMessage(rewindMenu.msg, rewindMenu.turns || [])
+        const why = rt.kind === 'steer'
+          ? '插话不单独成检查点：请用本轮开头那条消息'
+          : rt.kind === 'none' ? '这一轮没有检查点（可能已被裁剪）' : undefined
+        const target = rt.kind === 'ok' && rt.turn != null
+          ? rewindMenu.turns?.find((t) => t.turn === rt.turn)
+          : undefined
         return (
           <div className="ctx-menu" role="menu" style={{ left: rewindMenu.x, top: rewindMenu.y }} onMouseLeave={() => setRewindMenu(null)}>
             <button className="ctx-item" role="menuitem" disabled={rt.kind !== 'ok'}
-              title={rt.kind === 'steer'
-                ? '插话不单独成检查点：请用本轮开头那条消息回退'
-                : rt.kind === 'none' ? '这一轮没有检查点（可能已被裁剪）' : undefined}
+              title={why}
               onClick={() => { if (rt.kind === 'ok' && rt.turn != null) void openRewindCard(rewindMenu.sid, rt.turn) }}>回退到这里</button>
+            {/* 从这里分支：把这条消息**之前**的对话拷成一个新会话（工作区、检查点、原会话一律不动）。 */}
+            <button className="ctx-item" role="menuitem" disabled={rt.kind !== 'ok'}
+              title={why || '把这一轮之前的对话复制成一个新会话（工作区和这次对话都不动）'}
+              onClick={() => {
+                if (rt.kind !== 'ok' || rt.turn == null) return
+                const sid = rewindMenu.sid
+                setRewindMenu(null)
+                void forkFrom(sid, rt.turn, target?.userText || '')
+              }}>从这里分支…</button>
           </div>
         )
       })()}
@@ -3018,6 +3071,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       )}
       {sessionPaletteOpen && (
         <SessionPalette sessions={sessions} projects={projects} activeId={currentId}
+          waitingOf={waitingOf} running={runningSet}
           onPick={pickSession} onClose={() => setSessionPaletteOpen(false)} />
       )}
       {shortcutsOpen && (

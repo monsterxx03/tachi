@@ -25,6 +25,11 @@ type fakeSessionManager struct {
 	// is covered where it lives, in the session package).
 	truncations []truncateCall
 
+	// forks records what Fork was asked for (and, in forked, the head it handed
+	// over), for the same reason: the agent's job is to resolve WHERE a fork cuts.
+	forks  []forkCall
+	forked []session.Message
+
 	// appendErr, when non-nil, is returned by every AppendMessage call.
 	// Set this to test how the agent loop handles session write failures.
 	appendErr error
@@ -171,6 +176,38 @@ func (f *fakeSessionManager) TruncateTo(keepMessages, keepAPIRequests int, tag s
 	f.messages = f.messages[:keepM]
 	f.apiRequests = f.apiRequests[:keepR]
 	return msgs, reqs, nil
+}
+
+// forkCall is one invocation of Fork.
+type forkCall struct {
+	KeepRecords int
+	KeepAPI     int
+	Title       string
+}
+
+// Fork mirrors the real manager's contract in memory: the current session's head
+// becomes a new session, and the current one is left alone. Tests that need the
+// copied BYTES (and the image blobs) live in the session package, where the
+// filesystem is real.
+func (f *fakeSessionManager) Fork(keepRecords, keepAPI int, title string) (*session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forks = append(f.forks, forkCall{KeepRecords: keepRecords, KeepAPI: keepAPI, Title: title})
+	if f.current == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+	head := func(n, keep int) int {
+		if keep >= n {
+			return n
+		}
+		return keep
+	}
+	keepM := head(len(f.messages), keepRecords)
+	fork := &session.Session{ID: "fork-1", Title: title, WorkingDir: f.current.WorkingDir}
+	forked := make([]session.Message, keepM)
+	copy(forked, f.messages[:keepM])
+	f.forked = forked
+	return fork, nil
 }
 
 // AppendArtifact records the artifact as a reminder message (no merging —

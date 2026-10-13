@@ -213,21 +213,31 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
 //
 // Three things it decides for itself:
 //   • which rows there are — one per CONVERSATION (`sessionChoices`: a compaction chain folds under
-//     its newest link, exactly as the sidebar folds it), in the list's own order, with the query
-//     matched against the TITLE only (`sessionMatches`).
+//     its newest link, exactly as the sidebar folds it), in the list's own order with the working and
+//     the parked-on-you conversations lifted to the head (see sessionChoices), and the query matched
+//     against the TITLE only (`sessionMatches`).
 //   • what a row says — the project it belongs to as a TAG (the one fact about a conversation that
 //     its title cannot carry; a project the list does not know reads as 无项目, the same bucket the
-//     sidebar puts such a row in) and when it was last written to, which is what makes the order
-//     legible instead of arbitrary.
+//     sidebar puts such a row in), when it was last written to, and — for the rows the order lifted —
+//     the SAME two markers the sidebar row carries (the amber 在等你 dot, the running spinner). Both
+//     halves are load-bearing: an order a reader cannot explain reads as a bug in the list, and one
+//     marker for two different states would make 「要我做什么」 and 「它还在忙」 the same sentence.
 //   • which row is 「当前」 — the one the app is showing, marked so the list has an anchor.
 //
 // Unlike ⌘P there is no refusal to report: opening a conversation always works (a workspace that is
 // gone shows up IN the conversation, not here), so a pick closes the box unconditionally — the
 // reason string ⌘P's `onPick` returns exists for the projects that cannot be opened into anything.
-export function SessionPalette({ sessions, projects, activeId, onPick, onClose }: {
+export function SessionPalette({ sessions, projects, activeId, waitingOf, running, onPick, onClose }: {
   sessions: SessionItem[]
   projects: ProjectVO[]
   activeId: string
+  // waitingOf answers WHO is parked on the reader and WHAT for: the sentence the agent wrote into
+  // that conversation's own state (AgentState.Waiting — an approval card, a question). It is read
+  // here for the order and shown on the row, exactly as the sidebar reads it: one source for "who is
+  // waiting", so the two views cannot disagree about it.
+  waitingOf: (id: string) => string
+  // running is the sidebar's own running set (the session's turn is in flight in this process).
+  running: Set<string>
   // onPick opens the chosen conversation. It has no refusal to answer with (see above).
   onPick: (s: SessionItem) => void
   onClose: () => void
@@ -237,7 +247,10 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
   const listRef = useRef<HTMLDivElement>(null)
   const { committed: query, composingRef, inputProps } = usePaletteInput()
 
-  const rows = useMemo(() => sessionChoices(sessions).filter((s) => sessionMatches(s, query)), [sessions, query])
+  const rows = useMemo(
+    () => sessionChoices(sessions, (id) => running.has(id) || !!waitingOf(id)).filter((s) => sessionMatches(s, query)),
+    [sessions, running, waitingOf, query],
+  )
 
   // Focus the box on mount: moving this dialog with the keyboard without a text field in front of
   // it would make typing filter nothing.
@@ -307,7 +320,17 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
               onClick={() => { onPick(s); onClose() }}>
               <div className="palette-main">
                 <div className="palette-name">{s.title || '未命名会话'}</div>
-                <div className="palette-sub">{projectTag(s)}</div>
+                <div className="palette-sub">
+                  {/* The two markers the sidebar row carries, in the same order and for the same
+                      reason: the amber dot asks for something (it is the one mark here that does),
+                      the spinner says the turn is still going. They are what explains a row that
+                      sorted to the head — an unexplained jump reads as a bug in the list. */}
+                  {waitingOf(s.id)
+                    ? <span className="wait-dot" role="img" aria-label={waitingOf(s.id)} title={waitingOf(s.id)} />
+                    : null}
+                  {running.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
+                  {projectTag(s)}
+                </div>
               </div>
               <div className="palette-side">
                 <div className="palette-meta">{fmtTime(s.updatedAt)}</div>
@@ -316,7 +339,7 @@ export function SessionPalette({ sessions, projects, activeId, onPick, onClose }
             </div>
           ))}
         </div>
-        <div className="palette-hint">↑↓ 选择 · Enter 打开 · Esc 关闭（按最近更新排序）</div>
+        <div className="palette-hint">↑↓ 选择 · Enter 打开 · Esc 关闭（进行中、在等你的会话排最前）</div>
       </div>
     </div>
   )

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -2892,6 +2893,128 @@ permissions:
 					titles["冒烟会话"] && titles["无项目会话"] && titles["另一个会话"],
 					fmt.Sprintf("%d 个标题", len(titles)))
 				c.check("成员会话仍然绑在项目上（⌘K 没有动过绑定）", bound == "冒烟会话", bound)
+			},
+		},
+		//
+		// session-palette-busy: ⌘K 里「在跑 / 在等你」的会话排最前面 —— 打开这个浮层最常见的理由，
+		// 正是「刚才停下来等我的那次对话叫什么来着」：读者打不出那个标题，而「最近更新」也不会把
+		// 它顶上来（被 park 的那一轮自 park 之后就没再写过，中途跑完的对话反而更新）。
+		//
+		// fixture 让这条规则**可判**：一个停在权限授权上的会话（冒烟会话，启动时打开的那个），
+		// 加上读者随后真的在里面发过一次消息、并且跑完的无项目会话（它因此成为最近更新的那个）。
+		// 于是「⌘K 第一行是冒烟会话」只可能来自新规则 —— Go 那一半读磁盘上的 updated_at 把这句话
+		// 的地基钉死：被 park 的确实更旧，否则 driver 那条断言在旧实现下也照样绿。
+		{
+			name: "session-palette-busy",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-palette-busy scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-busypal",
+				files: map[string]string{
+					"perm-fixture.txt": "PALETTE-BUSY-FIXTURE-CONTENT\n",
+				},
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				// 冒烟会话那一轮：一条命中 ask 规则的命令，于是这一轮停在读者身上（在等你）。
+				{Reply: bashStream("cat perm-fixture.txt", "call_pb1")},
+				// 读者切到无项目会话之后的那个回合：它跑完，于是那个会话成为最近更新的那一个。
+				{Reply: textStream("桶里的回答。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两个回合各一次调用（⌘K 自己一个请求都不花）", len(c.requests) == 2, requestCount(c.requests))
+				parked, other := c.sessionByTitle("冒烟会话"), c.sessionByTitle("无项目会话")
+				older, detail := false, "(磁盘上缺少 meta)"
+				if parked != nil && other != nil {
+					older = parked.UpdatedAt.Before(other.UpdatedAt)
+					detail = parked.UpdatedAt.Format(time.RFC3339Nano) + " < " + other.UpdatedAt.Format(time.RFC3339Nano)
+				}
+				c.check("停在授权上的会话确实是较旧的那一个（所以它不是靠最近更新排第一的）", older, detail)
+			},
+		},
+		//
+		//
+		// fork: 在一条 user 消息上右键「从这里分支」—— 把这一轮**之前**的对话拷成一个新会话，
+		// 工作区、检查点与原会话一律不动。它与 rewind 是同一条切线上的两个方向，所以 fixture 也是
+		// 那种形状（一轮用 bash 写文件，工作区是真的动过），只是要证明的东西相反。
+		//
+		// 三件事界面上看不见，只有 Go 侧读得到，所以这一半必须查：
+		//   * 分支的 messages.jsonl 是原会话那一份的**逐字节前缀**（拷贝绝不能是重放 —— 重放会把
+		//     Timestamp 改成现在，而桌面分页按时间戳严格比较，同一戳的一批记录会被整段跳过）；
+		//   * 分支目录里**没有** checkpoints/（「不动检查点」就是它没有），而原会话有；
+		//   * 工作区没动：第一轮用 bash 写的那个文件仍在（回退会把它删掉，分支不能）。
+		{
+			name: "fork",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe fork scenario's STALE snapshot directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-fork",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe fork scenario's project directory\n",
+				},
+			},
+			steps: []mockllm.Step{
+				{Reply: bashStream("echo made > made.txt", "call_fk1")},
+				{Reply: textStream("写好了。", 800)},
+				// 第二轮是纯文本：分叉点选在它身上，于是「分支里不该有它」有东西可查。
+				{Reply: textStream("第二轮回复。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三个回合各一次调用（分支自己一个请求都不发）", len(c.requests) == 3, requestCount(c.requests))
+
+				store, err := session.NewFileStore(filepath.Join(c.home, ".tachi", "session"))
+				if err != nil {
+					c.check("打开沙箱的会话存储", false, err.Error())
+					return
+				}
+				src, fork := c.sessionByTitle("冒烟会话"), c.sessionByTitle("冒烟会话 · 分支")
+				if src == nil || fork == nil {
+					c.check("磁盘上有原会话与它的分支", false,
+						fmt.Sprintf("src=%v fork=%v", src != nil, fork != nil))
+					return
+				}
+				c.check("磁盘上多出一个会话（原会话 + 无项目桶 + 分支）", c.sessionCount() == 3,
+					fmt.Sprintf("%d 个", c.sessionCount()))
+				c.check("分支继承了工作区绑定（同一个项目）", fork.ProjectID == "smoke-project",
+					"project_id="+fork.ProjectID)
+				c.check("原会话的绑定没有被改写", src.ProjectID == "smoke-project", src.ProjectID)
+
+				srcBytes, rerr := os.ReadFile(filepath.Join(store.BaseDir(), src.ID, "messages.jsonl"))
+				forkBytes, ferr := os.ReadFile(filepath.Join(store.BaseDir(), fork.ID, "messages.jsonl"))
+				c.check("分支的历史是原会话那一份的逐字节前缀（拷贝不是重放）",
+					rerr == nil && ferr == nil && len(forkBytes) > 0 && bytes.HasPrefix(srcBytes, forkBytes),
+					fmt.Sprintf("fork=%dB src=%dB", len(forkBytes), len(srcBytes)))
+
+				forkMsgs, _ := store.LoadMessages(fork.ID)
+				srcMsgs, _ := store.LoadMessages(src.ID)
+				heldSecond := false
+				for _, m := range forkMsgs {
+					if strings.Contains(m.Content, "第二轮回复。") {
+						heldSecond = true
+					}
+				}
+				c.check("分支止于分叉点之前（第二条回答不在里面）", !heldSecond,
+					fmt.Sprintf("分支 %d 条 / 原会话 %d 条", len(forkMsgs), len(srcMsgs)))
+				c.check("原会话的记录一条没少", len(srcMsgs) > len(forkMsgs),
+					fmt.Sprintf("原 %d 条 / 分支 %d 条", len(srcMsgs), len(forkMsgs)))
+
+				_, fck := os.Stat(filepath.Join(store.BaseDir(), fork.ID, "checkpoints"))
+				_, sck := os.Stat(filepath.Join(store.BaseDir(), src.ID, "checkpoints"))
+				c.check("分支不拷检查点（原会话那边有，所以这条不是空着通过）",
+					os.IsNotExist(fck) && sck == nil,
+					fmt.Sprintf("fork err=%v src err=%v", fck, sck))
+
+				_, werr := os.Stat(filepath.Join(c.projectRoot(), "made.txt"))
+				c.check("分支没有动工作区（第一轮用 bash 写的文件仍在）", werr == nil, errText(werr))
 			},
 		},
 		//
