@@ -2700,6 +2700,27 @@ permissions:
 			},
 		},
 		//
+		// notify-open-session: 点一条通知要落到它说的那个会话。
+		//
+		// 通知本身（一次原生点击）驱动不了 —— 判据里有一半是焦点，而且它由系统投递 —— 所以这条
+		// 驱动的是那次点击落到页面上的那一半：`ui:open_session` 由 Go 发出（desktop/notify.go 的
+		// openSession），前端在 App.tsx 里接住它并走 clickSession。driver 用 Wails 交给页面的
+		// 那个入口派发同一个事件，于是它钉住的是「前端真的照做了」：切到了那个会话，并且真的把它
+		// 从磁盘读了出来（另一个会话的转写此前从没被显示过）。
+		//
+		// Go 那一半查的是「什么都没发生」：切换是一次读取，不该向模型发出任何请求。
+		//
+		{
+			name: "notify-open-session",
+			seedSecond: []session.Message{
+				{Type: session.MessageTypeUser, Content: "另一个会话里的问题"},
+				{Type: session.MessageTypeAssistant, Content: "另一个会话里的答案。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("切换到通知说的那个会话没有惊动模型", len(c.requests) == 0, requestCount(c.requests))
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+			},
+		},
 		//
 		// session-palette: ⌘K 搜会话标题 —— ⌘P 的兄弟面板（同一个框，另一个面板）。它一个 token
 		// 都不该花（导航不碰模型），也不该改任何会话记录 —— 这两条界面上看不出来，只有 Go 侧读得到；

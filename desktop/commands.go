@@ -501,9 +501,10 @@ func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewed
 			}
 			d.emitOneOff(id, payload)
 			// …and the same fact as a notification. A side-channel run has nothing on screen to
-			// watch, so when the window is not focused this is the ONLY signal that it is over —
-			// and it names the run and its outcome, which is why it is not notifyTurnDone.
-			d.notify.notifyOneOffDone(d.sessionTitle(id), name, findings, endReason)
+			// watch, so while the reader is looking elsewhere (another app, or another
+			// conversation) this is the ONLY signal that it is over — and it names the run and
+			// its outcome, which is why it is not notifyTurnDone.
+			d.notify.notifyOneOffDone(id, name, findings, endReason)
 		}
 	}()
 	return ""

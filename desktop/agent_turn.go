@@ -546,12 +546,12 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			})
 		}
 		// The turn cannot proceed without the user, so tell them — unless they
-		// are already looking at the window (see notifier).
+		// are looking at this conversation already (see watching).
 		questions := make([]string, 0, len(ev.Questions))
 		for _, q := range ev.Questions {
 			questions = append(questions, q.Question)
 		}
-		d.notify.notifyAsk(d.sessionTitle(id), questions)
+		d.notify.notifyAsk(id, questions)
 	case agent.AgentEventAutoCompactStart:
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩上下文…"})
 		// Compaction is an LLM call of its own and takes a while, so the
@@ -649,13 +649,13 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			})
 		}
 		// The other moment worth interrupting for (see notifier): the turn is
-		// done and nobody is looking at the window. A user-initiated stop is
+		// done and the user is not looking at this conversation. A user-initiated stop is
 		// excluded — announcing "回合完成" right after the user hit stop is noise.
 		// A one-off run ends here too — the command lane forwards its last TurnComplete — but it
 		// has its own notification, raised where its outcome is known (see notifyOneOffDone):
 		// announcing 「回合完成」 for a run with no turn on screen says nothing useful.
 		if lane == laneTranscript && ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
-			d.notify.notifyTurnDone(d.sessionTitle(id), ev.Result.IterationsUsed, ev.Result.Duration)
+			d.notify.notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
 			// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
 			// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
 			d.alertIfUnwatched(id, link.AlertKindDone)

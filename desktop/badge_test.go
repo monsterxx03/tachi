@@ -344,32 +344,6 @@ func TestAMisconfiguredBadgeLinkIsRefusedQuietly(t *testing.T) {
 	}
 }
 
-// 提示音的判据：窗口不在前台，或者这件事不属于你正开着的那个会话。
-//
-// 它决定的是「会不会吵到人」，所以每种组合都值得在主机上钉住——真机上试这些的代价是
-// 每次都跑到设备跟前按一下。
-func TestAlertWantedFollowsFocusAndTheActiveSession(t *testing.T) {
-	cases := []struct {
-		name      string
-		focused   bool
-		active    string
-		event     string
-		wantAlert bool
-	}{
-		{"前台 + 就是当前会话", true, "s1", "s1", false},
-		{"前台但是别的会话", true, "s1", "s2", true},
-		{"不在前台", false, "s1", "s1", true},
-		{"不在前台 + 别的会话", false, "s1", "s2", true},
-		{"前台但没开着任何会话", true, "", "s1", true},
-	}
-	for _, c := range cases {
-		if got := alertWanted(c.focused, c.active, c.event); got != c.wantAlert {
-			t.Errorf("%s: alertWanted(%v, %q, %q) = %v, want %v",
-				c.name, c.focused, c.active, c.event, got, c.wantAlert)
-		}
-	}
-}
-
 // 两件事共用同一条判据：出现了一条等待，以及一个回合跑完了。判出来的结果必须真的进
 // 到那条队列里——link 层从那里取（见 badge.go 的 TakeAlerts）。
 func TestBothEventsQueueAnAlert(t *testing.T) {

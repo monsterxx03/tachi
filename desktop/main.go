@@ -65,6 +65,11 @@ func init() {
 	// Theme switches from the titlebar: the frontend sends the theme it just
 	// applied (see desktop/uitheme.go).
 	application.RegisterEvent[string](uiThemeEventName)
+	// A clicked notification asks the frontend to open the conversation that
+	// notification was about; the payload is its id (see desktop/notify.go's
+	// openSession). Registered rather than emitted bare, like ui:theme: that is
+	// what gives the frontend a typed handler.
+	application.RegisterEvent[string](openSessionEventName)
 }
 
 // localAssetRoute is the prefix the webview uses to reach files on disk (see
@@ -281,10 +286,13 @@ func main() {
 	})
 
 	// Native notifications for the two moments the app waits on the user (a
-	// finished turn, a parked AskUserQuestion). They are posted only while the
-	// window is unfocused; permission is asked once, in the background, so the
-	// prompt is not tied to the first notification. See desktop/notify.go.
-	desk.notify = newNotifier(notifyService, window)
+	// finished turn, a parked permission or question) plus the end of a
+	// side-channel run. They are posted while the user is looking somewhere else
+	// — another application, or another conversation (see notify.go's watching),
+	// which is why the notifier is handed the displayed session; a click on one
+	// goes to the conversation it named (openSession). Permission is asked once,
+	// in the background, so the prompt is not tied to the first notification.
+	desk.notify = newNotifier(notifyService, window, desk)
 	desk.notify.onNotificationClick()
 	go desk.notify.requestAuthorization()
 

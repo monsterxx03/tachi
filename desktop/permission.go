@@ -157,7 +157,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 			Preview:   preview,
 		})
 	}
-	d.notify.notifyPermission(d.sessionTitle(sessionID), askSubjectOf(toolName, args))
+	d.notify.notifyPermission(sessionID, askSubjectOf(toolName, args))
 
 	select {
 	case decision := <-answer:

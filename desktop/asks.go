@@ -45,15 +45,6 @@ type pendingAsk struct {
 	answer chan string
 }
 
-// alertWanted 说出「这件事要不要让设备响一声」。
-//
-// 一个条件而已，两个来源的「你大概不在看」：窗口不在前台，或者这件事不属于你正开着的
-// 那个会话。写成纯函数是为了能在主机上试——它决定的是「会不会吵到人」，而真机上试这些
-// 组合的代价是每次都跑到设备跟前按一下。
-func alertWanted(focused bool, activeSessionID, eventSessionID string) bool {
-	return !focused || eventSessionID != activeSessionID
-}
-
 // registerAsk 登记一条等待，并叫醒 link 层。
 func (d *desktopApp) registerAsk(a *pendingAsk) {
 	d.mu.Lock()
@@ -62,22 +53,22 @@ func (d *desktopApp) registerAsk(a *pendingAsk) {
 	}
 	d.asks[permKey(a.sessionID, a.toolID)] = a
 	d.mu.Unlock()
-	// 提示音在**登记这一刻**判一次（见 alertWanted）：你正看着这个会话、窗口也在前台就
+	// 提示音在**登记这一刻**判一次（见 watching）：你正看着这个会话、窗口也在前台就
 	// 不出声。之后你切走了也不补响——那会把一条已经看过的等待再说一遍。
 	d.alertIfUnwatched(a.sessionID, link.AlertKindAsk)
 	d.notifyLink()
 }
 
-// alertIfUnwatched 在「你大概不在看」时攒下一次提示音请求。
+// alertIfUnwatched 在「你不在看」时攒下一次提示音请求。
 //
-// 两件事共用它：出现了一条等待（权限 / 提问），以及一个回合跑完了。判据与 macOS 通知
-// 同源（失焦），但更宽一点——通知只在失焦时发，而提示音还认「不是当前活跃会话」那种
-// 「你在看别处」。用哪个由用户决定：它决定的是「会不会吵到人」。
+// 判据与 macOS 通知是同一条（notify.go 的 watching）：窗口失焦，或者你看的是别的会话。
+// 它决定的是「会不会吵到人」，所以判错的方向要是「多响一声」，而不是「人在别处、什么都
+// 没发生」——那正是这个功能要消灭的情况。
 func (d *desktopApp) alertIfUnwatched(sessionID, kind string) {
 	if !d.alertsEnabled() {
 		return
 	}
-	if !alertWanted(d.windowFocused(), d.activeID, sessionID) {
+	if watching(d.windowFocused(), d.activeSessionID(), sessionID) {
 		return
 	}
 	d.enqueueAlert(kind)
@@ -90,7 +81,8 @@ func (d *desktopApp) alertsEnabled() bool {
 	return cfg == nil || cfg.Badge.AlertsEnabled()
 }
 
-// windowFocused 说窗口现在有没有焦点——设备的提示音与 macOS 通知共用这一个判据。
+// windowFocused 说窗口现在有没有焦点——watching 的一半（另一半是「看的是哪个会话」），
+// 设备的提示音与 macOS 通知都读它。
 //
 // 拿不到窗口句柄时返回 false（当作「没在看」）：一块提示音的代价是被多响一声，而
 // 猜错的另一个方向是「人在别处、什么都没发生」——那正是这个功能要消灭的情况。

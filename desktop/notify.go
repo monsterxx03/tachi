@@ -4,10 +4,11 @@ package main
 // somewhere else: a turn has finished, the agent is parked on an AskUserQuestion, or a
 // side-channel run (/review, /commit) is over.
 //
-// All of them are posted ONLY while the window does not have focus. A notification for
-// something you are already watching is noise — the transcript, the status
-// badge and the menu-bar item all say the same thing — so focus, not the turn
-// itself, is what decides.
+// "Somewhere else" has two shapes, and `watching` is the single rule that names both:
+// another application (the window does not have focus), and another conversation (it has
+// focus, but is showing a different session). A notification for what is already on
+// screen — that conversation, not merely the window — would only repeat the transcript,
+// the status badge and the menu-bar item.
 //
 // The Wails notification service is REGISTERED with the application (`Options.Services`
 // in main.go), because that is the only thing that runs its ServiceStartup — and on Linux
@@ -26,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -61,6 +63,21 @@ const (
 	// would push the rest of the notification out of view.
 	notifyPermBodyMaxRune = 80
 )
+
+// watching reports whether the user is looking at this conversation right now: the window
+// has focus AND it is showing that session.
+//
+// It is ONE rule with two readers, and they must not drift apart — the OS notification
+// (notify, below) and the device's beep (asks.go's alertIfUnwatched) are the two ways this
+// app interrupts somebody, and both exist to reach a user who is looking elsewhere. Written
+// as a pure function so the combinations can be pinned on the host: trying them for real
+// costs a notification, a session switch, and a walk to the device.
+//
+// An empty active id means no conversation is open (a fresh window, before anything is
+// loaded). That is "elsewhere": there is no transcript on screen the news would repeat.
+func watching(focused bool, activeSessionID, eventSessionID string) bool {
+	return focused && eventSessionID == activeSessionID
+}
 
 // notificationService owns the one Wails notification backend and the two rules
 // this app adds to it: startup may not abort the process, and nothing is posted
@@ -140,16 +157,70 @@ func (s *notificationService) onResponse(callback func(notifications.Notificatio
 	s.svc.OnNotificationResponse(callback)
 }
 
+// notificationTarget is the part of the app the notifier reasons about: what the window is
+// showing, what to call that conversation, and how to take the reader to one. An interface
+// rather than a *desktopApp so this file names only what it uses.
+type notificationTarget interface {
+	// activeSessionID is the conversation the window is showing ("" when none is loaded).
+	activeSessionID() string
+	// sessionTitle is a conversation's display title ("" when unknown).
+	sessionTitle(sessionID string) string
+	// openSession takes the reader to a conversation (see onNotificationClick).
+	openSession(sessionID string)
+}
+
+// notifyRecall is one posted notification, kept only so that clicking it can go to the
+// conversation it was about.
+type notifyRecall struct {
+	id        string
+	sessionID string
+}
+
+// notifyRecallDepth bounds that memory. A notification nobody ever clicks must not
+// accumulate state for the life of the process, and an id that has aged out degrades to
+// what every click did before notifications named a session: bring the window forward.
+const notifyRecallDepth = 64
+
 type notifier struct {
 	svc    *notificationService
 	window *application.WebviewWindow
+	target notificationTarget
 	// seq makes every notification ID unique, so consecutive ones stack in
 	// Notification Center instead of replacing each other.
 	seq atomic.Uint64
+
+	// mu guards recall, which the posting goroutine writes and the response callback reads.
+	mu sync.Mutex
+	// recall holds the last few posted notifications, newest last.
+	recall []notifyRecall
 }
 
-func newNotifier(svc *notificationService, window *application.WebviewWindow) *notifier {
-	return &notifier{svc: svc, window: window}
+func newNotifier(svc *notificationService, window *application.WebviewWindow, target notificationTarget) *notifier {
+	return &notifier{svc: svc, window: window, target: target}
+}
+
+// remember records which conversation a notification was about, dropping the oldest once
+// the list is full (identity of the id → session pair is what the click needs).
+func (n *notifier) remember(id, sessionID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.recall = append(n.recall, notifyRecall{id: id, sessionID: sessionID})
+	if len(n.recall) > notifyRecallDepth {
+		n.recall = n.recall[len(n.recall)-notifyRecallDepth:]
+	}
+}
+
+// sessionForID resolves a notification's id back to the conversation it was about. "" means
+// "not one of ours, or long forgotten" — the window still comes forward.
+func (n *notifier) sessionForID(id string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for i := len(n.recall) - 1; i >= 0; i-- {
+		if n.recall[i].id == id {
+			return n.recall[i].sessionID
+		}
+	}
+	return ""
 }
 
 // requestAuthorization asks for notification permission once, at startup, in a
@@ -174,10 +245,14 @@ func (n *notifier) requestAuthorization() {
 	}
 }
 
-// onNotificationClick brings the window back when a notification is actioned.
-// macOS already activates an app when its notification is clicked; this makes
-// sure the window is actually up and key (the app can be sitting in the menu
-// bar with its window hidden).
+// onNotificationClick brings the window back when a notification is actioned, and goes to
+// the conversation that notification was about. macOS already activates an app when its
+// notification is clicked; this makes sure the window is actually up and key (the app can be
+// sitting in the menu bar with its window hidden).
+//
+// The session half is what makes a background notification worth clicking: it named a
+// conversation the reader was NOT looking at, so stopping at the window would land them
+// somewhere else than the thing they clicked.
 func (n *notifier) onNotificationClick() {
 	if n == nil {
 		return
@@ -192,24 +267,33 @@ func (n *notifier) onNotificationClick() {
 		}
 		n.window.Show()
 		n.window.Focus()
+		if sessionID := n.sessionForID(result.Response.ID); sessionID != "" && n.target != nil {
+			n.target.openSession(sessionID)
+		}
 	})
 }
 
-// notify posts a notification unless the window has the user's attention.
-// Fire-and-forget: SendNotification blocks until the OS acknowledges (up to
-// 5s), and callers sit on the agent's event loop, which must not stall.
-func (n *notifier) notify(title, subtitle, body string) {
+// notify posts a notification about one session unless the user is already looking at that
+// conversation (watching). Fire-and-forget: SendNotification blocks until the OS
+// acknowledges (up to 5s), and callers sit on the agent's event loop, which must not stall
+// — the decision is made at posting time for the same reason, one moment after the event.
+func (n *notifier) notify(sessionID, title, body string) {
 	if n == nil || n.window == nil {
 		return
 	}
 	go func() {
-		if n.window.IsFocused() {
+		if watching(n.window.IsFocused(), n.active(), sessionID) {
 			return
 		}
+		id := fmt.Sprintf("tachi-%d", n.seq.Add(1))
+		n.remember(id, sessionID)
 		n.svc.post(notifications.NotificationOptions{
-			ID:       fmt.Sprintf("tachi-%d", n.seq.Add(1)),
-			Title:    title,
-			Subtitle: truncateRunes(subtitle, notifySubtitleMaxRune), // macOS/Linux only
+			ID:    id,
+			Title: title,
+			// The conversation's title says WHICH one this is about. With the window focused
+			// on another session it is the one thing this notification can tell the reader
+			// that the screen does not already say.
+			Subtitle: truncateRunes(n.subtitleFor(sessionID), notifySubtitleMaxRune), // macOS/Linux only
 			Body:     body,
 			// Group them so Notification Center shows one Tachi stack.
 			ThreadID: "tachi",
@@ -217,25 +301,41 @@ func (n *notifier) notify(title, subtitle, body string) {
 	}()
 }
 
+// active and subtitleFor reach the window's state through the target; a notifier built
+// without one (a test) has no session on screen, which is the "elsewhere" side of watching.
+func (n *notifier) active() string {
+	if n.target == nil {
+		return ""
+	}
+	return n.target.activeSessionID()
+}
+
+func (n *notifier) subtitleFor(sessionID string) string {
+	if n.target == nil {
+		return ""
+	}
+	return n.target.sessionTitle(sessionID)
+}
+
 // notifyTurnDone reports a finished turn: just the fact, plus how much work it
 // took — no excerpt of the reply (see the copy comment above).
-func (n *notifier) notifyTurnDone(sessionTitle string, iterations int, took time.Duration) {
-	n.notify(notifyAppTitle, sessionTitle, turnDoneBody(iterations, took))
+func (n *notifier) notifyTurnDone(sessionID string, iterations int, took time.Duration) {
+	n.notify(sessionID, notifyAppTitle, turnDoneBody(iterations, took))
 }
 
 // notifyAsk reports a turn parked on a question. The question text stays in the
 // window on purpose: the body only says that the agent is blocked and how many
 // questions are waiting.
-func (n *notifier) notifyAsk(sessionTitle string, questions []string) {
-	n.notify(notifyAskTitle, sessionTitle, askBody(len(questions)))
+func (n *notifier) notifyAsk(sessionID string, questions []string) {
+	n.notify(sessionID, notifyAskTitle, askBody(len(questions)))
 }
 
 // notifyPermission reports a turn parked on a bash permission decision. Unlike a
 // question, the thing being decided is one command — so the body names it (the
 // user is being asked to approve THAT, and "something is waiting" would send them
 // back for a detail the ping could have carried).
-func (n *notifier) notifyPermission(sessionTitle, command string) {
-	n.notify(notifyPermTitle, sessionTitle, permBody(command))
+func (n *notifier) notifyPermission(sessionID, command string) {
+	n.notify(sessionID, notifyPermTitle, permBody(command))
 }
 
 // permBody is the one-line body for a parked ask. An unparsable command (empty)
@@ -249,12 +349,12 @@ func permBody(command string) string {
 }
 
 // notifyOneOffDone reports a finished side-channel run (/review, /commit). It gets its own copy
-// rather than notifyTurnDone for two reasons: a run has no turn on screen to look at, so when
-// the window is not focused this is the ONLY signal that it is over — and what came of it
+// rather than notifyTurnDone for two reasons: a run has no turn on screen to look at, so while
+// the reader is looking elsewhere this is the ONLY signal that it is over — and what came of it
 // (a review's findings, or that it failed) is the part the reader would otherwise have to come
 // back for.
-func (n *notifier) notifyOneOffDone(sessionTitle, kind string, findings int, outcome string) {
-	n.notify(notifyAppTitle, sessionTitle, oneOffDoneBody(kind, findings, outcome))
+func (n *notifier) notifyOneOffDone(sessionID, kind string, findings int, outcome string) {
+	n.notify(sessionID, notifyAppTitle, oneOffDoneBody(kind, findings, outcome))
 }
 
 // oneOffDoneBody is the one-line body for a finished run. `outcome` is the command lane's end
@@ -307,8 +407,9 @@ func askBody(questions int) string {
 	return notifyAskWaiting
 }
 
-// sessionTitle returns the session's display title ("" when unknown), used as
-// the notification subtitle so a background session is identifiable.
+// sessionTitle returns the session's display title ("" when unknown). It is the notifier's
+// subtitle callback (see notifyTarget): naming the conversation is what makes a notification
+// about one the reader is NOT looking at actionable rather than puzzling.
 func (d *desktopApp) sessionTitle(id string) string {
 	d.mu.Lock()
 	r := d.ownerOfLocked(id)
@@ -320,6 +421,21 @@ func (d *desktopApp) sessionTitle(id string) string {
 		return cur.Title
 	}
 	return ""
+}
+
+// openSessionEventName is Go→frontend: 「打开那个会话」——一条被点开的通知说的就是这句话。
+//
+// 与托盘那条 ui:new_session（tray.go）同一个壳，理由也一样：一条从应用外面来的请求只能落在
+// 前端，因为 currentId、分组展开、滚进视野和那几份刷新都住在那儿；Go 自己改 activeID 只会让
+// 两边说法不一致。
+const openSessionEventName = "ui:open_session"
+
+// openSession 请前端切到某个会话（见 n.onNotificationClick）。
+func (d *desktopApp) openSession(sessionID string) {
+	if d.app == nil {
+		return
+	}
+	d.app.Event.Emit(openSessionEventName, sessionID)
 }
 
 // truncateRunes cuts s to at most max runes, appending an ellipsis when

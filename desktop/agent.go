@@ -123,9 +123,9 @@ type desktopApp struct {
 	// from the one the shutdown path performs on its way out (which must go through). Without
 	// it the hook would be the app's own exit being cancelled.
 	quitting atomic.Bool
-	// notify posts native notifications for turns that finish (or questions that
-	// appear) while the window is unfocused. Set once during startup, before any
-	// turn can run (see newNotifier).
+	// notify posts native notifications about a conversation the user is not looking at —
+	// another application, or another conversation (see watching). Set once during startup,
+	// before any turn can run (see newNotifier).
 	notify *notifier
 
 	// sm is a stable session manager (no bound current) used to list on-disk
@@ -561,6 +561,14 @@ func (d *desktopApp) activeRun() *sessionRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.ownerOfLocked(d.activeID)
+}
+
+// activeSessionID returns the id of the session the window is showing ("" when none is
+// loaded). Read side of d.activeID, which is guarded by mu.
+func (d *desktopApp) activeSessionID() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.activeID
 }
 
 // prepareSession lazily builds (or returns) the per-session agent + manager for

@@ -1760,6 +1760,29 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return () => off?.()
   }, [newChatLikeCurrent])
 
+  // A clicked notification arrives as ui:open_session with the conversation it was about
+  // (desktop/notify.go): the reader asked for THAT one, so it takes the same funnel every
+  // other switch uses — clickSession, which owns the group that opens, the scroll into view
+  // and the refreshes a landed-on conversation needs. The window is already in front by
+  // then; the click did that.
+  //
+  // A session that is no longer in the list is skipped, not opened: it was deleted (or the
+  // list is older than the notification), and switching to an id the sidebar does not have
+  // would leave the view on a conversation with no row — the window coming forward is the
+  // whole answer then. The settings page gets out of the way for the same reason
+  // ui:new_session does it: an explicit request from outside the app must not land behind
+  // an opaque page, where it looks like nothing happened.
+  useEffect(() => {
+    const off = Events.On('ui:open_session', (event) => {
+      const sessionId = event.data
+      if (!sessionId || sessionId === currentId) return
+      if (!sessions.some((s) => s.id === sessionId)) return
+      setView('chat')
+      void clickSession(sessionId)
+    })
+    return () => off?.()
+  }, [clickSession, currentId, sessions])
+
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
   // focusAfterPalette puts the caret in the composer once the palette is gone — the two palettes are
