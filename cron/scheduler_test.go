@@ -376,21 +376,25 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 	go scheduler.fire(oneshotJob)
 	go scheduler.fire(recurJob)
 
-	// Wait for both to complete.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for both HANDLERS to have run — which is the moment the runs STARTED, not the moment they
+	// finished: fire still has to write last_run and then delete the oneshot job, and nothing in this
+	// test synchronizes with those two steps. A fixed sleep only bets they are faster than it; on a
+	// loaded runner they are not, and the assertion then sees exactly the state in between (last_run
+	// already "success", the job still there).
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(triggered) == 2
+	}, 5*time.Second, 10*time.Millisecond, "both jobs should execute")
 
-	mu.Lock()
-	count := len(triggered)
-	mu.Unlock()
-	assert.Equal(t, 2, count, "both jobs should execute")
+	// The cleanup is waited for as the postcondition it is, for the same reason.
+	require.Eventually(t, func() bool {
+		got, err := scheduler.Get("cr_oneshot1")
+		return err == nil && got == nil
+	}, 5*time.Second, 10*time.Millisecond, "oneshot job should be auto-deleted after execution")
 
-	// Verify oneshot job is gone from store.
-	got, err := scheduler.Get("cr_oneshot1")
-	require.NoError(t, err)
-	assert.Nil(t, got, "oneshot job should be auto-deleted after execution")
-
-	// Verify recurring job still exists.
-	got, err = scheduler.Get("cr_recur1")
+	// The recurring job is the control: it must still be there.
+	got, err := scheduler.Get("cr_recur1")
 	require.NoError(t, err)
 	assert.NotNil(t, got, "recurring job should still exist")
 }
