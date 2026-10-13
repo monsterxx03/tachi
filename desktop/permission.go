@@ -146,7 +146,8 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 
 	// The turn is parked on the user, so say so — the same status the parked
 	// AskUserQuestion uses (setSessionState only reaches the UI when this IS the
-	// displayed session, so a background ask cannot hijack the foreground).
+	// displayed session, so a background ask cannot hijack the foreground). The marker on
+	// this session's row comes from the ask registered above (see waitingSentence).
 	d.setSessionState(sessionID, AgentState{Status: StatusBusy, Label: "授权", Detail: "等待确认"})
 	if d.app != nil {
 		d.app.Event.Emit("agent:permission", PermissionEvent{

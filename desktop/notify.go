@@ -41,14 +41,16 @@ import (
 // question text and every detail are one click away, and quoting them would turn
 // a glanceable ping into a wall of text.
 const (
-	notifyAppTitle   = "Tachi"
-	notifyAskTitle   = "Tachi 需要你的回答"
-	notifyAskWaiting = "等待你的回答"
-	// A bash ask parks the turn on the user, so it is announced like a question —
-	// but the command IS the decision, and one line of it fits, so the body says
-	// which command rather than only that something is waiting.
+	notifyAppTitle = "Tachi"
+	notifyAskTitle = "Tachi 需要你的回答"
+	// A parked session's own sentence, shared with the sidebar's marker (asks.go's
+	// waitingQuestion / waitingPermission): the notification body and the row say the same
+	// thing about the same wait, so they read it from one constant instead of keeping two
+	// copies in step by hand. The notification composes around it — the body for a question
+	// appends the count, the one for a command names the command.
+	notifyAskWaiting  = waitingQuestion
 	notifyPermTitle   = "Tachi 等待你的授权"
-	notifyPermWaiting = "等待你的授权"
+	notifyPermWaiting = waitingPermission
 	notifyTurnDone    = "回合完成"
 	// A side-channel run is announced by WHAT it was, not as 回合完成: it never had a turn on
 	// screen, so the name is the part the reader does not already know.

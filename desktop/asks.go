@@ -17,6 +17,16 @@ const (
 	askKindAskUser pendingAskKind = "ask_user"
 )
 
+// 一个会话「在等人」时侧栏那枚标记说的话（AgentState.Waiting）。写在这里，跟那两类等待
+// 放在一起：标记要回答的是「等我做什么」，而这句话只有造出这次等待的地方说得对——
+// 与菜单栏的 Label/Detail 同一条规矩，前端只渲染，不自己拼。
+//
+// 它也是 macOS 通知正文的前缀（notify.go 读同一对常量），因为那两处说的是同一件事。
+const (
+	waitingPermission = "等待你的授权"
+	waitingQuestion   = "等待你的回答"
+)
+
 // pendingAsk 是一条「一个 turn 停在这里等人」的记录。
 //
 // 为什么一张表管两件事：这张表有两个读者——回答它的前端（用 answer 唤醒 agent），
@@ -45,7 +55,40 @@ type pendingAsk struct {
 	answer chan string
 }
 
+// waitingSentence 说出一个会话该不该带「在等你」那枚标记，以及那句话是什么（"" 表示不必带）。
+//
+// 判据有两半，两半都要：
+//
+//   - **等待表里确有这个会话的一条等待**（d.asks）。表就是「一个 turn 停在这里等人」这件事本身
+//     —— 谁在等、等什么，只有它说得准。它也是唯一个不会错序的来源：park 由工具自己的 goroutine
+//     写下，工具事件走事件通道，所以同一调用的 ToolCallArgs（「执行 · 调用 Bash」）可能晚于 park
+//     到达；把这句话交给调用方传进状态，就等于让后到的那条状态把它抹掉 —— 一个确实停在用户身上
+//     的会话看起来没人在等，而那条晚到的状态还可能正是那个调用的参数。
+//   - **这一轮还在跑**（st.Status.busy()）。「在等你」蕴含着一轮停在中途，而一个回合结束/出错
+//     的状态可能抢在等待被注销之前到达（权限那条是工具 goroutine 自己 defer 注销的），所以只看
+//     表的话，一次「停掉正等着的这一轮」会留下一个再也不会被清掉的标记 —— 那个方向的错不能犯。
+func (d *desktopApp) waitingSentence(id string, st AgentState) string {
+	if !st.Status.busy() {
+		return ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, a := range d.asks {
+		if a.sessionID != id {
+			continue
+		}
+		if a.kind == askKindPermission {
+			return waitingPermission
+		}
+		return waitingQuestion
+	}
+	return ""
+}
+
 // registerAsk 登记一条等待，并叫醒 link 层。
+//
+// 登记必须发生在**这个会话的下一条状态之前**（permission 与 AskUserQuestion 各自都做到了）：
+// 状态里的标记是照着这张表填的（waitingSentence），所以先写状态后登记，那一瞬间就没有标记。
 func (d *desktopApp) registerAsk(a *pendingAsk) {
 	d.mu.Lock()
 	if d.asks == nil {

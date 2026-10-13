@@ -534,8 +534,15 @@ function App() {
     refreshRunning, markRunning, enqueueDelta, flushDeltas,
   } = useSessionTranscript(currentId, scrollToBottom)
   // The displayed session's own status (useAgentStatus keeps one per conversation), plus this
-  // frontend's own running set.
-  const state = useAgentStatus(currentId)
+  // frontend's own running set. `agentStates` is that same per-conversation map: the sidebar
+  // marks EVERY session waiting on the reader, not only the one on screen — a background
+  // conversation parked on a question is precisely the case the mark exists for.
+  const { state, byId: agentStates } = useAgentStatus(currentId)
+  // Whether a conversation is waiting on the reader: Go writes that sentence into the park's
+  // own state (AgentState.Waiting), so the sidebar neither decides which kind of wait this is
+  // nor keeps a second ledger of "who is waiting" — the state is already per conversation, and
+  // it arrives for a session nobody is looking at.
+  const waitingOf = (id: string) => agentStates[id]?.waiting || ''
   // The statusbar's numbers (cost/credit/缓存环/速率/上下文环) belong to the session on
   // screen; they are cleared before the next session's ledger is read (see useSessionUsage).
   const {
@@ -2209,6 +2216,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         <div className="session-title" onDoubleClick={() => { setEditingId(s.id); setEditTitle(s.title || ''); setMenu(null) }}>{s.title || '未命名会话'}</div>
       )}
       <div className="session-meta">
+        {/* A conversation parked on the reader says so on its row — FIRST in the meta line,
+            because it is the one mark here that asks for something. It is not the spinner's
+            twin: a parked turn IS running (the spinner spins beside it), but "running" and
+            "waiting for YOU" are different facts, and only the second is actionable. */}
+        {waitingOf(s.id)
+          ? <span className="wait-dot" role="img" aria-label={waitingOf(s.id)} title={waitingOf(s.id)} />
+          : null}
         {runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
         {/* A pinned row says so on its own line: the list is sorted pinned-first, and a row that
             jumped to the top with no mark would read as an arbitrary order. The title states the
@@ -2334,6 +2348,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               const shown = shownRows(group)
               const hidden = group.rows.length - shown.length
               const active = activeInGroup(group)
+              // The members parked on the reader. Read from the same per-conversation state the
+              // rows themselves mark with, so the header and the rows can never disagree about
+              // who is waiting.
+              const waiting = group.rows.map((r) => r.session).filter((s) => waitingOf(s.id))
               // A group is either a project (a record with a name, a working directory and a member
               // count) or the 无项目 bucket — which is a group on the same terms and has none of
               // those, so the few places the two differ are each spelled out where they differ.
@@ -2391,6 +2409,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       only: expanded, the row's own highlight says it. */}
                   {!open && active
                     ? <span className="proj-current" title={`当前会话「${active.title || '未命名会话'}」在${group.project ? '这个项目' : `「${LOOSE_LABEL}」这一组`}里`}>●</span>
+                    : null}
+                  {/* A COLLAPSED group hides its rows, so a conversation waiting on the reader
+                      would disappear with them — and the count is the whole answer to "is there
+                      anything here for me?". Collapsed only, like the marker beside it: expanded,
+                      the row's own mark says it, and the tooltip names which conversation wants
+                      what. */}
+                  {!open && waiting.length > 0
+                    ? (
+                      <span className="proj-wait"
+                        title={`在等你：${waiting.map((s) => `${s.title || '未命名会话'}（${waitingOf(s.id)}）`).join('；')}`}>
+                        {waiting.length}
+                      </span>
+                    )
                     : null}
                   {group.project && !group.project.rootsUsable ? (
                     <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>

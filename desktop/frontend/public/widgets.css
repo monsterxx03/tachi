@@ -416,6 +416,20 @@
 }
 @keyframes spin-dot { to { transform: rotate(360deg); } }
 
+/* 一个会话在等人（权限 / 提问；Go 写进它状态的 AgentState.Waiting）：侧栏里唯一一枚
+   「有人在等你」的标记，所以取确认卡标题那个琥珀色。它不靠动效表达任何东西 —— 被 park 的
+   那一轮本来就是 busy，旁边那只转圈说「在跑」，这一只是静态的一个点说「在等你」，两件事不能
+   混成一个（所以这里也不需要 reduce-motion 的那条例外）。 */
+.wait-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+  vertical-align: middle;
+}
+
 /* Message timestamp */
 .msg-ts {
   display: block;

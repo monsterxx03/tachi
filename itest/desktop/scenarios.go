@@ -2153,6 +2153,52 @@ permissions:
 			},
 		},
 		//
+		// sidebar-wait: 一个会话在等你，侧栏要说出来 —— 而它所在的分组被折起来时，那句话只能
+		// 落在表头上（行已经被折叠拿走了）。
+		//
+		// 标记不是前端自己判断的：Go 在 park 的那一刻把「等你做什么」写进这个会话的状态
+		// （AgentState.Waiting，见 permission.go / agent_turn.go），前端只渲染。一次等待的
+		// 两种形态都在这条里过一遍（bash 授权 / 模型提问），因为它们的措辞不同，而「标记在答复
+		// 之后消失」是两半共用的同一条规矩：终结这次等待的事实写下下一个状态，标记随之清掉。
+		//
+		// 项目组是承重的 fixture：有项目才有「折叠一个组」这件事，而成员会话的工作目录由项目
+		// 驱动，所以 perm-fixture.txt 种在项目目录里。
+		{
+			name: "sidebar-wait",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sidebar-wait scenario's STALE snapshot directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-wait",
+				files: map[string]string{
+					"perm-fixture.txt": "SIDEBAR-WAIT-FIXTURE-CONTENT\n",
+				},
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("cat perm-fixture.txt", "call_sw1")},
+				// 两次 park 之间要有一次真的在跑、又什么都不问的工具调用：它是 driver 唯一能
+				// 稳定观察到「标记已经没了」的窗口（一秒），而背靠背的两次等待之间那个间隔短到
+				// 一次轮询就会错过。纯文本回复不行 —— 那会直接结束这一轮。
+				{Reply: bashStream("sleep 1", "call_sw2")},
+				{Reply: askStream("call_sw3", "还要继续吗？")},
+				{Reply: textStream("都收到了。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 两次等待都被真的答复过：命令跑了（输出回喂给模型），提问的答案也回去了。
+				_, ran := c.requestSeen("SIDEBAR-WAIT-FIXTURE-CONTENT")
+				c.check("答复授权后命令真的执行了", ran, requestCount(c.requests))
+				_, answered := c.requestSeen("按你写的来")
+				c.check("答复提问后答案真的回到了模型", answered, requestCount(c.requests))
+			},
+		},
+		//
 		// 权限确认（文件工具）: the FILE rules' one ask path — a ReadFile that
 		// matched an ask rule the frontend must show before anything is read.
 		//

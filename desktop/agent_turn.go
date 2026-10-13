@@ -528,16 +528,16 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// AgentService.AnswerQuestion (the TUI does the same through
 		// RespondToAskUser).
 		d.tpsReset(id)
-		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
-		// Record it as a pending ask so the device link sees the same question the
-		// window does (asks.go). Registering BEFORE the emit is not important — both
-		// readers are told, and the link's snapshot is rebuilt from this table.
+		// Record it as a pending ask BEFORE the state is written: the marker this session
+		// carries (AgentState.Waiting) is read from this table at emission (waitingSentence),
+		// so registering after it would leave that one state without a marker.
 		d.registerAsk(&pendingAsk{
 			kind:      askKindAskUser,
 			sessionID: id,
 			toolID:    ev.ToolID,
 			questions: ev.Questions,
 		})
+		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
 		if d.app != nil {
 			d.app.Event.Emit("agent:ask", AskEvent{
 				SessionID: id,
@@ -779,6 +779,9 @@ func (d *desktopApp) countToolCall(id string) {
 
 func (d *desktopApp) setSessionState(id string, st AgentState) {
 	st.SessionID = id
+	// The sidebar's marker is filled HERE, from the ask table — never taken from the caller
+	// (see waitingSentence in asks.go for the race that makes a caller-supplied field wrong).
+	st.Waiting = d.waitingSentence(id, st)
 	d.mu.Lock()
 	r := d.getRun(id)
 	r.state = st

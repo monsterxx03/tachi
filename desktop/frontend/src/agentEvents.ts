@@ -36,9 +36,13 @@ import { pushPart, finishToolPart, updateToolPart, closeOpenToolParts } from './
 // not changed state in this process is idle, so the fallback is idle and never busy — the
 // safe direction (a spinner that shows up late is a nuisance; one that cannot be cleared is
 // the bug). It carries no session id on purpose: it describes no session.
-const AGENT_IDLE: AgentState = { sessionId: '', status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪' }
+const AGENT_IDLE: AgentState = { sessionId: '', status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪', waiting: '' }
 
-export function useAgentStatus(currentId: string): AgentState {
+// The caller gets the session on screen's own state AND the whole map: the sidebar marks
+// EVERY session's row (a background conversation waiting on the reader is exactly the case
+// the mark is for), and two subscriptions to one event would be two copies of the same
+// fact, kept in step by hand.
+export function useAgentStatus(currentId: string): { state: AgentState; byId: Record<string, AgentState> } {
   const [byId, setById] = useState<Record<string, AgentState>>({})
   useEffect(() => {
     // An unnamed payload cannot be filed — and would otherwise be applied to whatever is on
@@ -66,7 +70,7 @@ export function useAgentStatus(currentId: string): AgentState {
     AgentService.GetState().then(seed).catch(() => {})
     return () => off?.()
   }, [])
-  return byId[currentId] || AGENT_IDLE
+  return { state: byId[currentId] || AGENT_IDLE, byId }
 }
 
 // ── The active session's numbers ────────────────────────────────────────────

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
@@ -142,6 +144,69 @@ func TestSessionForIDRemembersPostedNotifications(t *testing.T) {
 	}
 	if held := len(n.recall); held > notifyRecallDepth {
 		t.Errorf("recall holds %d entries, want at most %d", held, notifyRecallDepth)
+	}
+}
+
+// 一个会话被 park 在用户身上时，它自己的状态里带着「在等你做什么」——侧栏那枚标记的唯一来源
+// （AgentState.Waiting）。它由**等待表**在发状态的那一刻填出来（waitingSentence），所以这里钉的
+// 是那条判据的两半：
+//
+//   - 表里有一条等待，且这一轮还在跑 → 带那句话；
+//   - 等待被注销（答复、或回合结束时扫掉）→ 之后任何状态都不再带它；
+//   - 回合结束的状态即使抢在注销之前到达，也不带它（「在等你」蕴含这一轮还在跑）。
+//
+// 前两条合起来才是「标记的寿命就是这次等待的寿命」；第二条是必需的，因为 park 与工具事件来自
+// 两条路，谁先到不由调用方决定（冒烟 sidebar-wait 在真窗口上验的是同一个事实的渲染）。
+func TestAParkedSessionCarriesItsWaitingSentence(t *testing.T) {
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type:      agent.AgentEventAskUser,
+		ToolID:    "call_1",
+		Questions: []tools.Question{{Question: "用哪个方案？"}},
+	}, laneTranscript)
+
+	d.mu.Lock()
+	parked := d.getRun("s1").state
+	d.mu.Unlock()
+	if parked.Waiting != waitingQuestion {
+		t.Fatalf("提问停住时的 Waiting = %q, want %q", parked.Waiting, waitingQuestion)
+	}
+
+	// 回合结束（或用户答复）会注销这条等待；注销之后，工具接着跑的那条状态不再带标记。
+	d.dropAsks("s1", askKindAskUser)
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventToolCallStart, ToolName: "Bash",
+	}, laneTranscript)
+
+	d.mu.Lock()
+	resumed := d.getRun("s1").state
+	d.mu.Unlock()
+	if resumed.Waiting != "" {
+		t.Errorf("等待注销之后 Waiting = %q, want empty（标记没有跟着这次等待一起结束）", resumed.Waiting)
+	}
+}
+
+// 另一半：表里还留着一条等待，但这一轮已经结束了 —— 标记仍然不该出现。
+//
+// 这不是假想的顺序问题：权限那条等待由工具自己的 goroutine 在 defer 里注销，而回合结束的状态
+// 由事件通道那边写下，两者谁先到不由谁决定。落在「已经空闲、还挂着在等你」上的标记没有任何东西
+// 会再来清掉它，而那是这个功能唯一不能错的方向。
+func TestAFinishedTurnNeverCarriesTheWaitingSentence(t *testing.T) {
+	d := &desktopApp{runs: map[string]*sessionRun{}}
+	d.registerAsk(&pendingAsk{
+		kind: askKindPermission, sessionID: "s1", toolID: "call_1",
+		preview: "$ ls", answer: make(chan string, 1),
+	})
+
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventTurnComplete, Result: &agent.RunResult{},
+	}, laneTranscript)
+
+	d.mu.Lock()
+	finished := d.getRun("s1").state
+	d.mu.Unlock()
+	if finished.Waiting != "" {
+		t.Errorf("回合结束后的 Waiting = %q, want empty（一个已经空闲的会话不能说有人在等你）", finished.Waiting)
 	}
 }
 

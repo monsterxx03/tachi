@@ -54,6 +54,17 @@ type AgentState struct {
 	Status    AgentStatus `json:"status"`
 	Label     string      `json:"label"`  // short menu-bar text, e.g. "思考"
 	Detail    string      `json:"detail"` // one-line human description
+	// Waiting is the sentence a session parked on the user carries — "" when nothing is
+	// being asked of them. It is FILLED AT EMISSION from the ask table (waitingSentence in
+	// asks.go), not passed in by a caller: the park is registered by the tool's own
+	// goroutine while tool events travel the event channel, so a state that carried its own
+	// sentence could be overwritten — out of order — by a ToolCallArgs event for the very
+	// call that is parked.
+	//
+	// A sentence rather than a flag because the sidebar's marker has to answer "what am I
+	// needed for?", and that wording belongs where the wait is created, next to Label and
+	// Detail.
+	Waiting string `json:"waiting"`
 }
 
 // AgentService is a Wails-bound service. In S2 it drives the REAL tachi agent
