@@ -40,7 +40,7 @@ func (t *DelegateTaskTool) Description() string {
 	return `Delegate a task to another Tachi node and get its result back. The node runs a real turn on ITS machine: its own workspace, its own tools, its own model. Use it when the work belongs somewhere else — files that live on that machine, or a long job you do not want to block on.
 
 How to choose (never guess from "the last conversation"):
-- New independent work: give "node" — the alias the reminder lists, or the node id it shows beside it. That opens a NEW conversation on that node.
+- New independent work: give "node" — the node id the reminder prints beside the name (a unique prefix of one is enough). That opens a NEW conversation on that node. A NAME is not accepted: a name is what its owner says it is, so it would decide where work goes by whoever claimed it.
 - A follow-up to work you already delegated: give "continue_from" with the task_id from a previous result. That continues the SAME remote conversation; do not repeat the context the earlier task established.
 - Exactly one of "node" and "continue_from" is required.
 
@@ -55,7 +55,7 @@ func (t *DelegateTaskTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"node": {
 			Type:        "string",
-			Description: `Which node to delegate to: the alias the peers reminder lists, or its node id (a unique prefix of one is enough). Required unless "continue_from" is given.`,
+			Description: `Which node to delegate to, by its node id (a unique prefix of one is enough) — the value the peers reminder prints in parentheses after the name. Required unless "continue_from" is given.`,
 		},
 		"continue_from": {
 			Type:        "string",

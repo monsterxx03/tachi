@@ -82,7 +82,24 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	if executor == nil {
 		executor = echoExecutor{}
 	}
-	card := newAgentCard(o.Name, advertisedURL(o.PublicURL, ln.Addr().String(), encrypted), o.Description, o.Skills, encrypted)
+	// Where callers can reach this node, which is not the same fact as where it binds. Deriving it can
+	// FAIL, and that failure is the start's problem rather than something to work around: a wildcard
+	// address names no host, so a Card built from it would carry no interface URL at all, and the
+	// machines that read Cards use those as the addresses to try. A node that serves others and cannot
+	// say where it is has nothing to announce and nothing to answer with — better to refuse to start
+	// and say how to fix it than to run as a surface nobody can find (design §一.13).
+	advertised := advertisedURL(o.PublicURL, ln.Addr().String(), encrypted)
+	if advertised == "" {
+		// The port is named in the fix because it is the one part of the address this process knows
+		// and the operator does not (a listener on port 0 was given one by the kernel).
+		_, port, _ := net.SplitHostPort(ln.Addr().String())
+		_ = ln.Close()
+		return nil, fmt.Errorf("node: node.listen is %s, a wildcard address, so this node cannot say "+
+			"where callers reach it — and a node that serves other machines has to be able to. Set "+
+			"node.public_url (e.g. https://<this-machine>:%s) or bind node.listen to a concrete address",
+			o.RemoteListen, port)
+	}
+	card := newAgentCard(o.Name, advertised, o.Description, o.Skills, encrypted)
 	// The store is opened by the host, which is AFTER the executor is built (the store owns
 	// the startup recovery, so there is exactly one). An executor that keeps state outside a
 	// request — a question waiting for an answer, and its deadline — needs it, and this is the
@@ -213,10 +230,11 @@ func (s *a2aSurface) close(log *logger.Logger) {
 // advertisedURL is what the Card tells a caller to dial.
 //
 // `public_url` wins when the operator set it (a mesh name, a port forwarder, a real host name are
-// all facts this process cannot derive). Otherwise the bound address is used — unless it is
-// unspecified, in which case NOTHING is advertised: 0.0.0.0 is not an address anyone can call,
-// and a Card that named it would send every caller somewhere that does not answer, which is worse
-// than a Card that admits it does not know (design §4.2).
+// all facts this process cannot derive). Otherwise the bound address is used — and when the bound
+// address is unspecified there is nothing to derive, which the CALLER treats as a startup failure:
+// 0.0.0.0 is not an address anyone can call, and a Card that named it would send every caller
+// somewhere that does not answer, which is worse than a Card that admits it does not know (design
+// §4.2, §一.13).
 func advertisedURL(publicURL, boundAddr string, https bool) string {
 	if u := strings.TrimSpace(publicURL); u != "" {
 		return u

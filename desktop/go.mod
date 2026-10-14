@@ -25,8 +25,10 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
+	github.com/libp2p/zeroconf/v2 v2.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
+	github.com/miekg/dns v1.1.43 // indirect
 	github.com/openai/openai-go/v3 v3.49.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/saltosystems/winrt-go v0.0.0-20260317170058-9c2fec580d96 // indirect

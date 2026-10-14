@@ -97,7 +97,10 @@ func TestTheDelegationRemindersAreRegisteredAndFollowTheRun(t *testing.T) {
 	a.buildReminderCollectorFrom(SystemReminderConfig{})
 
 	provider := &delegationProvider{
-		peers: []tools.PeerSummary{{Name: "nas", Description: "家里的 NAS", Reachable: true}},
+		peers: []tools.PeerSummary{{
+			Name: "nas", NodeID: "aaaa1111aaaa1111aaaa1111aaaa1111",
+			Description: "家里的 NAS", Reachable: true,
+		}},
 		tasks: []tools.RemoteTaskInfo{{ID: "d_1", Node: "nas", Title: "检查备份", State: "working"}},
 	}
 
@@ -121,7 +124,7 @@ func TestTheDelegationRemindersAreRegisteredAndFollowTheRun(t *testing.T) {
 	for _, p := range withDelegation {
 		joined += strings.Join(p.Lines, "\n") + "\n"
 	}
-	if !strings.Contains(joined, "可以委派工作的节点") || !strings.Contains(joined, "- nas：家里的 NAS") {
+	if !strings.Contains(joined, "可以委派工作的节点") || !strings.Contains(joined, "- nas (aaaa1111)：家里的 NAS") {
 		t.Errorf("the peers reminder must reach the collector:\n%s", joined)
 	}
 	if !strings.Contains(joined, "d_1 | nas | 检查备份") {
@@ -131,7 +134,10 @@ func TestTheDelegationRemindersAreRegisteredAndFollowTheRun(t *testing.T) {
 
 func TestARunGivenDelegationCarriesTheReminderToTheModel(t *testing.T) {
 	provider := &delegationProvider{
-		peers: []tools.PeerSummary{{Name: "nas", Description: "家里的 NAS", Reachable: true}},
+		peers: []tools.PeerSummary{{
+			Name: "nas", NodeID: "aaaa1111aaaa1111aaaa1111aaaa1111",
+			Description: "家里的 NAS", Reachable: true,
+		}},
 	}
 	runner := &recordingProvider{sequences: [][]llm.StreamEvent{textSeq("好")}}
 	a := newTestAgent(t, runner, withFakeSession())

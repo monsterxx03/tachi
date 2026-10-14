@@ -58,6 +58,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		peerWorkspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL("https://127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
 			harness.WithNodeWorkspace(peerWorkspace),
 			harness.WithNodeService(),
@@ -69,6 +70,9 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		ginkgo.DeferCleanup(func() { _ = peer.Stop() })
 		waitForNodeHost(ginkgo.GinkgoT(), peer, peerHome, peerPort)
+
+		// 模型点名的是身份：它出自对端的密钥，脚本要在对端把这个文件写下之后才写得出来。
+		peerID := nodeIdentity(ginkgo.GinkgoT(), peerHome)
 
 		// 它真的是**另一个进程** —— 这条断言是整条 spec 的立足点，而 local.json 里就写着它的 pid。
 		var info struct {
@@ -87,7 +91,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		sutMock.Script(
 			mockllm.Step{Reply: mockllm.Stream(
 				mockllm.ToolCallStart("call_p1", tools.ToolNameDelegateTask,
-					`{"node":"nas","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
+					`{"node":"`+peerID.NodeID+`","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
 				mockllm.Finish("tool_calls"),
 				mockllm.Done(),
 			)},
@@ -115,7 +119,6 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 
 		// ---- 两份身份：各由各的进程写出，互不相同 ----
 		sutID := nodeIdentity(ginkgo.GinkgoT(), sutHome)
-		peerID := nodeIdentity(ginkgo.GinkgoT(), peerHome)
 		gomega.Expect(peerID.NodeID).NotTo(gomega.Equal(sutID.NodeID))
 
 		// ---- 发起侧：pin 住的是对端进程的身份，记录绑定的也是身份 ----
@@ -146,6 +149,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		peerPort := nodePort(ginkgo.GinkgoT())
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL("https://127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
 			harness.WithNodeWorkspace(filepath.Join(ginkgo.GinkgoT().TempDir(), "ws")),
 			harness.WithChannel("mock"),
@@ -207,7 +211,8 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 
 		peerPort := nodePort(ginkgo.GinkgoT())
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
-			harness.WithNodeListen("127.0.0.1:"+strconv.Itoa(peerPort)),
+			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL("https://127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@headless"),
 			harness.WithNodeWorkspace(filepath.Join(ginkgo.GinkgoT().TempDir(), "ws")),
 			harness.WithNodeService(),
@@ -219,6 +224,9 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		ginkgo.DeferCleanup(func() { _ = host.Stop() })
 		waitForNodeHost(ginkgo.GinkgoT(), host, peerHome, peerPort)
 
+		// 点名用身份，所以脚本要等对端把自己的密钥写下来（见上面那条 spec）。
+		peerID := nodeIdentity(ginkgo.GinkgoT(), peerHome)
+
 		// The caller asks for work, the peer parks on its question, and the answer comes back as
 		// the state it is in — the delegation does NOT hang (§6.2, §7.4).
 		sutMock := mockllm.NewServer()
@@ -226,7 +234,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 		sutMock.Script(
 			mockllm.Step{Reply: mockllm.Stream(
 				mockllm.ToolCallStart("call_q1", tools.ToolNameDelegateTask,
-					`{"node":"nas","prompt":"检查一下备份"}`),
+					`{"node":"`+peerID.NodeID+`","prompt":"检查一下备份"}`),
 				mockllm.Finish("tool_calls"),
 				mockllm.Done(),
 			)},
@@ -237,7 +245,7 @@ var _ = ginkgo.Describe("delegation to another process", func() {
 			)},
 		)
 		sutHome := harness.NewHome(ginkgo.GinkgoT(), sutMock,
-			harness.WithPeers("nas", "http://127.0.0.1:"+strconv.Itoa(peerPort)),
+			harness.WithPeers("nas", "https://127.0.0.1:"+strconv.Itoa(peerPort)),
 			harness.WithNodeName("tachi@mac"),
 		)
 		workdir := harness.SeedWorkDir(ginkgo.GinkgoT(), nil)

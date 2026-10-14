@@ -16,6 +16,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,8 +41,15 @@ var _ = ginkgo.Describe("delegation", func() {
 		)})
 
 		peerWorkspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")
+		// 0.0.0.0 是本进程里唯一能安全地「离开本机」的方式：活到这个 spec 结束，而它对外那一面在回答
+		// 任何东西之前先要一张客户端证书。这也是被委派的**前提**：身份出自证书，而没有身份的对端，工具
+		// 入参根本点不了名（node/peers.go）。端口先挑好，因为通配地址推不出可连地址（node/a2a.go）。
+		peerPort := nodePort(ginkgo.GinkgoT())
+		peerURL := "https://127.0.0.1:" + strconv.Itoa(peerPort)
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
 			harness.WithNodeWorkspace(peerWorkspace),
+			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL(peerURL),
 			harness.WithNodeService(),
 		)
 		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
@@ -53,22 +61,24 @@ var _ = ginkgo.Describe("delegation", func() {
 		gomega.Expect(peerHandle.Hosting()).To(gomega.BeTrue())
 		ginkgo.DeferCleanup(func() { _ = peerHandle.Close() })
 
-		// 同一个 Card 的另一面：这个对端绑在 loopback 上，所以它不加密、也不要证书 —— 于是
-		// 什么 scheme 都不声明。开关是地址而不是配置项（node/a2a.go），两半合起来才是那句话，
-		// 离开本机的那一半在 itest/run/delegation_tls_test.go。
-		gomega.Expect(peerHandle.Card().SecuritySchemes).To(gomega.BeEmpty())
+		// 同一张 Card 的另一面：绑通配地址时地址来自 public_url（0.0.0.0 不是任何东西能拨的地方，
+		// 而说不清自己在哪儿的节点根本不启动），而它对外那一面是真加密、真要求证书的——因为开关是
+		// 地址而不是配置项（node/a2a.go）。
+		gomega.Expect(peerHandle.Card().SecuritySchemes).To(gomega.HaveLen(1))
 		gomega.Expect(peerHandle.Card().SupportedInterfaces).To(gomega.HaveLen(1))
-		gomega.Expect(peerHandle.Card().SupportedInterfaces[0].URL).To(gomega.HavePrefix("http://"),
-			"loopback 上这份 Card 说的是 http，因为它真的就只是一个 http 面")
+		gomega.Expect(peerHandle.Card().SupportedInterfaces[0].URL).To(gomega.Equal(peerURL))
 
 		// ---- the caller: the real binary, with the peer in its peers: ----
+		//
+		// 模型点名的是**身份**，不是 `peers:` 里那个名字 —— 名字是给人看的，而身份是对端在握手时
+		// 证明的、谁都冒充不了的那一样（设计 §一.6）。所以脚本要在对端起来之后才写得出。
 		sutMock := mockllm.NewServer()
 		ginkgo.DeferCleanup(sutMock.Close)
 		sutMock.Script(
 			// The model decides to delegate. The prompt is what the other machine reads.
 			mockllm.Step{Reply: mockllm.Stream(
 				mockllm.ToolCallStart("call_d1", tools.ToolNameDelegateTask,
-					`{"node":"peer","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
+					`{"node":"`+peerHandle.NodeID()+`","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
 				mockllm.Finish("tool_calls"),
 				mockllm.Done(),
 			)},
@@ -85,7 +95,7 @@ var _ = ginkgo.Describe("delegation", func() {
 		)
 
 		sutHome := harness.NewHome(ginkgo.GinkgoT(), sutMock,
-			harness.WithPeers("peer", "http://"+peerHandle.RemoteAddr()),
+			harness.WithPeers("peer", peerURL),
 		)
 		workdir := harness.SeedWorkDir(ginkgo.GinkgoT(), nil)
 
@@ -118,7 +128,10 @@ var _ = ginkgo.Describe("delegation", func() {
 		body := string(raw)
 		gomega.Expect(body).To(gomega.ContainSubstring(`"remote_task_id"`),
 			"the record has to name the remote task, or a follow-up cannot reference it")
-		gomega.Expect(body).To(gomega.ContainSubstring(`"peer": "peer"`))
+		gomega.Expect(body).To(gomega.ContainSubstring(`"peer": "peer"`),
+			"记录里那个名字是标签，给人看的")
+		gomega.Expect(body).To(gomega.ContainSubstring(`"peer_node_id": "`+peerHandle.NodeID()+`"`),
+			"而真正绑住这台机器的是身份：改名换址都不改归属")
 		gomega.Expect(body).To(gomega.ContainSubstring(`"state": "TASK_STATE_COMPLETED"`))
 		gomega.Expect(body).To(gomega.ContainSubstring("不修改文件"),
 			"the request itself is kept: a retry after a lost response has to send the same thing")
@@ -134,7 +147,11 @@ var _ = ginkgo.Describe("delegation", func() {
 			mockllm.Step{Reply: mockllm.Stream(mockllm.Text("备份正常"), mockllm.Finish("stop"), mockllm.Done())},
 		)
 
+		peerPort := nodePort(ginkgo.GinkgoT())
+		peerURL := "https://127.0.0.1:" + strconv.Itoa(peerPort)
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
+			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL(peerURL),
 			harness.WithNodeWorkspace(filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")))
 		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -148,7 +165,8 @@ var _ = ginkgo.Describe("delegation", func() {
 		sutMock.Script(
 			// Run 1: delegate.
 			mockllm.Step{Reply: mockllm.Stream(
-				mockllm.ToolCallStart("call_a", tools.ToolNameDelegateTask, `{"node":"peer","prompt":"检查备份"}`),
+				mockllm.ToolCallStart("call_a", tools.ToolNameDelegateTask,
+					`{"node":"`+peerHandle.NodeID()+`","prompt":"检查备份"}`),
 				mockllm.Finish("tool_calls"), mockllm.Done(),
 			)},
 			mockllm.Step{Reply: mockllm.Stream(mockllm.Text("交给 peer 了。"), mockllm.Finish("stop"), mockllm.Done())},
@@ -168,7 +186,7 @@ var _ = ginkgo.Describe("delegation", func() {
 			},
 		)
 		sutHome := harness.NewHome(ginkgo.GinkgoT(), sutMock,
-			harness.WithPeers("peer", "http://"+peerHandle.RemoteAddr()))
+			harness.WithPeers("peer", peerURL))
 		workdir := harness.SeedWorkDir(ginkgo.GinkgoT(), nil)
 
 		first := run.Binary(bin, workdir, "--home", sutHome, "-p", "让 peer 查一下备份", "-o", "json-stream")

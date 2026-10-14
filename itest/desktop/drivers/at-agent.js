@@ -2,10 +2,10 @@
 //
 // 沙箱没有配任何 peer（隔离 HOME 下没有 peers 段），所以这里钉的是**路由与措辞**：'#' 先给出两个
 // 命名空间、Tab 把它展开成 '#a:' 并把弹窗留在节点命名空间、那个命名空间空的时候说的是人话
-// （「没有配好的节点」，而不是把读者扔进文件搜索），以及 '#include' 这类普通文本压根不弹窗。
+// （「没有可点名的节点」，而不是把读者扔进文件搜索），以及 '#include' 这类普通文本压根不弹窗。
 //
 // 「行里显示什么」由 Go 侧断（tui/at_file_test.go 的 TestAtAgentCompletion、以及 desktop 的
-// SearchAgents 测试）：别名、本机 pin 住的身份、上次探测的结果 —— 三个前端同一句话。
+// SearchAgents 测试）：本机怎么称呼它、pin 住的身份、上次探测的结果 —— 三个前端同一句话。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
   if (!(await smoke.waitForSession())) return smoke.finish()
@@ -36,9 +36,10 @@
   smoke.check('标题跟着换成节点命名空间', smoke.text('.at-picker-title').indexOf('# 节点') >= 0,
     smoke.text('.at-picker-head'))
 
-  // 沙箱没配 peer：说"没有配好的节点"，而不是退回去搜文件，也不是一句空白。
-  if (!(await smoke.waitText('.at-picker-empty', '没有配好的节点', 10000))) return smoke.finish()
-  smoke.check('没有配 peer 时说的是人话', true, smoke.text('.at-picker-empty'))
+  // 沙箱没配 peer：说的是「没有可点名的节点」，而不是退回去搜文件，也不是一句空白。措辞覆盖两种
+  // 空：一台都没配，与配了但还没跟任何一台握过手（没有身份就没有可插入的引用，agentref.Search）。
+  if (!(await smoke.waitText('.at-picker-empty', '没有可点名的节点', 10000))) return smoke.finish()
+  smoke.check('没有可点名的节点时说的是人话', true, smoke.text('.at-picker-empty'))
 
   // ── 3. 不是引用的 '#' 是普通文本 ────────────────────────────────────────────
   // '#' 只认两个前缀，所以 C 指令、issue 号、标题都不会把弹窗叫出来 —— 这是那个规则在界面上的

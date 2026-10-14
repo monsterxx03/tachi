@@ -94,8 +94,10 @@ const (
 // only the mark. Each is a two-character alias rather than a word because these
 // references are typed inline, in the middle of a sentence.
 const (
-	// AgentRefPrefix names a node this machine may delegate work to: "#a:<alias>". The alias is
-	// the configured peer name — the same string DelegateTask's `node` argument takes.
+	// AgentRefPrefix names a node this machine may delegate work to: "#a:<node id>". The id — the
+	// identity the node proved in a handshake — is the same string DelegateTask's `node` argument
+	// takes, so a reference and the tool call it expands into spell the machine the same way. A
+	// label is NOT accepted here: it is a display string its owner chooses.
 	AgentRefPrefix = "a:"
 	// SessionRefPrefix names another conversation: "#s:<id>". It used to live under '@', and the
 	// mark moved with the split: '@' names paths, and a session is not one.
@@ -107,9 +109,9 @@ const (
 // never disagree about what is inserted.
 func RefForSession(id string) string { return string(HashRefMark) + SessionRefPrefix + id }
 
-// RefForAgent renders the reference text for a node alias, for the same reason
+// RefForAgent renders the reference text for a node id, for the same reason
 // RefForSession exists: a picker row inserts this, and the scan reads it back.
-func RefForAgent(alias string) string { return string(HashRefMark) + AgentRefPrefix + alias }
+func RefForAgent(nodeID string) string { return string(HashRefMark) + AgentRefPrefix + nodeID }
 
 // HashNamespace is what a '#' reference's query is asking about. The pickers route
 // on it, and both of them route through HashQueryNamespace rather than each
@@ -224,9 +226,12 @@ type SessionResolver interface {
 // pointer are both built from, so the two cannot tell different stories about one
 // node.
 type AgentTarget struct {
-	// Alias is this machine's name for the node (config `peers[].name`). It is what the model
-	// must hand to DelegateTask, so the pointer spells it exactly.
-	Alias string
+	// Label is this machine's name for the node (config `peers[].name`, which is optional). It is
+	// shown on the row and in the pointer's prose, and it is NOT what names the machine.
+	Label string
+	// Name is what to call the node in a sentence: the label when there is one, otherwise what the
+	// node calls itself, otherwise its short id (node/peerdir.go owns the rule).
+	Name string
 	// NodeID is the identity the node proved when this machine first reached it out of band
 	// (TOFU — node/knownpeers.go). It is EMPTY when this machine has never called that node:
 	// only outbound contact pins an identity, so a node that has only ever called US has no
@@ -246,13 +251,14 @@ type AgentTarget struct {
 	Checked   bool
 }
 
-// AgentResolver turns the alias (or id) in a #a: reference into the node it names.
+// AgentResolver turns the node id in a #a: reference into the node it names.
 // A nil resolver leaves agent references verbatim, which is what an entry point
 // that cannot delegate gets.
 type AgentResolver interface {
-	// Resolve accepts a configured alias, or a node id — the id is what a reader who saw one in
-	// a transcript would paste back. It reports false when nothing matches.
-	Resolve(alias string) (AgentTarget, bool)
+	// Resolve accepts a node id, or an unambiguous prefix of one — which is what a reader who saw
+	// an id in a transcript, or copied the front of one off a row, would paste back. It reports
+	// false when nothing matches, and a label deliberately does not.
+	Resolve(ref string) (AgentTarget, bool)
 }
 
 // Options is what an expansion needs beyond the root its file references resolve
@@ -375,8 +381,8 @@ func Expand(root, message string, opts Options) Result {
 					refs++
 					continue
 				}
-			} else if alias, ok := strings.CutPrefix(ref, AgentRefPrefix); ok {
-				if expandAgentRef(&b, opts.Agents, alias) {
+			} else if id, ok := strings.CutPrefix(ref, AgentRefPrefix); ok {
+				if expandAgentRef(&b, opts.Agents, id) {
 					refs++
 					continue
 				}
@@ -519,11 +525,11 @@ func sessionPointer(t SessionTarget) string {
 // expandAgentRef writes the pointer for a single agent reference. It reports
 // whether the reference resolved — false leaves the caller to write it verbatim,
 // exactly like a path that does not exist.
-func expandAgentRef(b *strings.Builder, resolver AgentResolver, alias string) bool {
+func expandAgentRef(b *strings.Builder, resolver AgentResolver, id string) bool {
 	if resolver == nil {
 		return false
 	}
-	target, ok := resolver.Resolve(alias)
+	target, ok := resolver.Resolve(id)
 	if !ok {
 		return false
 	}
@@ -533,32 +539,43 @@ func expandAgentRef(b *strings.Builder, resolver AgentResolver, alias string) bo
 
 // agentPointer renders the single line a #a: reference becomes.
 //
-// It carries three things and no fourth. The ALIAS, because that is the string DelegateTask takes
-// — a pointer that named the node only by id would leave the model to guess the argument it must
-// actually pass. The NODE ID, because it is the one fact about a peer that cannot be claimed by
-// anyone else, so it is what makes the reference checkable against what the reader expected
-// (design §4.2); when this machine has never called that node there is no pinned id, and the line
-// says so instead of filling the field with the node's SELF-REPORTED name, which any key can
-// claim. And what to DO with it, because the reference exists to get work onto that machine.
+// It carries the IDENTITY, and that is the whole change from carrying a name: the identity is what
+// DelegateTask takes, what the reference itself spells, and the one fact about a peer that cannot be
+// claimed by anyone else (design §4.2).
 //
-// What it does NOT carry is reachability. "It was up when the message was written" would sit in
-// the conversation's history for the rest of the session, read later as if it were still true;
-// the picker shows that about now, which is the only thing a moment can be.
+// A machine this machine holds no identity for is the one exception, and it is rendered as a
+// NEGATIVE: what to call it, and that it cannot be named yet. Neither a reference nor a tool
+// argument is offered, because a reference carries an identity and there is none to carry — a
+// `#a:` with nothing after it is a mark that only looks like something a reader could use. Only
+// outbound contact writes an identity, so this is what a config line nobody has reached looks like;
+// no resolver that runs today can hand one back (agentref refuses them at the row, atfile keeps the
+// text visible), which is why this is written as a statement rather than as a fix-up.
+//
+// What it does NOT carry is reachability. "It was up when the message was written" would sit in the
+// conversation's history for the rest of the session, read later as if it were still true; the picker
+// shows that about now, which is the only thing a moment can be.
 func agentPointer(t AgentTarget) string {
 	var b strings.Builder
 	b.WriteString("[")
-	b.WriteString(RefForAgent(t.Alias))
-	if t.NodeID != "" {
-		fmt.Fprintf(&b, " | node_id=%s", t.NodeID)
+	if t.NodeID == "" {
+		fmt.Fprintf(&b, "%s | %s", t.Name, noIdentityPointerNote)
 	} else {
-		b.WriteString(" | node_id 未知（本机还没跟它连过，身份在第一次出站接触时才记下）")
+		fmt.Fprintf(&b, "%s | %s", RefForAgent(t.NodeID), t.Name)
 	}
 	if what := firstNonEmpty(t.Description, t.Note); what != "" {
 		fmt.Fprintf(&b, " | %s", strutil.TruncateFitted(strutil.FirstLine(what), maxAgentNoteRunes))
 	}
-	fmt.Fprintf(&b, "; 用 DelegateTask(node=%q) 把活派过去]", t.Alias)
+	if t.NodeID != "" {
+		fmt.Fprintf(&b, "; 用 DelegateTask(node=%q) 把活派过去", t.NodeID)
+	}
+	b.WriteString("]")
 	return b.String()
 }
+
+// noIdentityPointerNote is what an expanded reference says about a machine this machine cannot name
+// yet — stated once, because the picker's row and the board's identity column say the other half of
+// the same fact (agentref.NoIdentityLabel).
+const noIdentityPointerNote = "身份未记录（本机还没跟它连过，身份在第一次出站接触时才记下，那时它才能被点名）"
 
 // firstNonEmpty returns the first non-blank value; the nodes' own description wins over the
 // configured human line, because one is what the machine says about itself and the other is what

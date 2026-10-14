@@ -35,32 +35,125 @@ type DelegatorCache struct {
 	log     *logger.Logger
 	// ownName is what this machine calls itself, sent with every delegation so a peer's records
 	// can say who asked (node.name).
-	ownName  string
-	openFunc func(peers []config.PeerConfig, ownName string, log *logger.Logger) (*Sender, error)
+	ownName string
+	// discovery is how this machine FINDS nodes on its own, and it is held HERE rather than in a
+	// sender because a sender is rebuilt whenever the peer list changes while the network underneath
+	// it is the same network: one browser per process, one UDP socket, one set of sightings.
+	discovery Discovery
+	// browser is that browser, started the first time anyone asks for a sender. Nil while discovery
+	// is off, which is the default.
+	browser *mdnsBrowser
+	// closed is set by Close and read under mu, and it is what makes Close terminal: a sender asked
+	// for after it must come back nil rather than start a second browser (the cache is not rebuilt by
+	// then — an entry point is on its way out, and a goroutine still winding down may still ask).
+	closed   bool
+	openFunc func(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error)
 }
 
-// NewDelegatorCache returns a cache that builds senders with OpenSender.
-func NewDelegatorCache(ownName string, log *logger.Logger) *DelegatorCache {
-	return &DelegatorCache{ownName: strings.TrimSpace(ownName), log: log, openFunc: OpenSender}
+// DiscoveryOf is the discovery settings a config asks for, in the sending side's own terms: the one
+// place the two spellings of "on, on these interfaces" meet, so no entry point has to remember which
+// key maps to which field.
+func DiscoveryOf(cfg *config.Config) Discovery {
+	if cfg == nil {
+		return Discovery{}
+	}
+	m := cfg.Node.Discovery.Mdns
+	return Discovery{Enabled: m.Enabled, Interfaces: append([]string(nil), m.Interfaces...)}
+}
+
+// Discovery is how this machine looks for nodes on its own (config `node.discovery.mdns`).
+//
+// It is a plain value rather than the config struct so that a cache does not have to be handed a
+// Config, and so that "off" is the zero value: every existing caller gets the behaviour it had.
+type Discovery struct {
+	Enabled    bool
+	Interfaces []string
+}
+
+// NewDelegatorCache returns a cache that builds senders with OpenSender, and — when discovery is on
+// — browses for nodes as those senders come and go.
+func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger) *DelegatorCache {
+	return &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, openFunc: OpenSender}
+}
+
+// Close stops discovery, and it is TERMINAL: nothing asked of this cache afterwards starts a browser
+// or hands out a sender. It is what an entry point calls on its way out, because the browser holds
+// UDP sockets and a goroutine that outlive every sender — and because the senders already handed out
+// belong to turns that are winding down, this one is called with no lock held on the caller's side.
+func (c *DelegatorCache) Close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.closed = true
+	// The switch goes off with it, so that the two ways of asking "may discovery run" agree: the flag
+	// is what stops a sender being built, this is what makes the value itself true.
+	c.discovery.Enabled = false
+	browser := c.browser
+	c.browser = nil
+	c.current = nil
+	c.mu.Unlock()
+	if browser != nil {
+		browser.Close()
+	}
+}
+
+// startBrowser brings the browser up the first time it is needed, and returns nil while discovery is
+// off. Called with c.mu held.
+//
+// A browser that cannot start is NOT an error the caller has to handle: the deployment it fails in
+// (no multicast-capable interface, the port taken by the system responder) is a real one, and the
+// answer to it is the state before discovery existed — this machine has to be told about peers. It
+// is said once in the log, and discovery stays off for this process.
+func (c *DelegatorCache) startBrowser(ctx context.Context) *mdnsBrowser {
+	if c.browser != nil || !c.discovery.Enabled {
+		return c.browser
+	}
+	// This machine's own identity, read HERE rather than by the caller: it is a disk read (and a key
+	// and certificate the first time), it is only needed by a browser that is actually going to run,
+	// and the sender built below reads the same file anyway. An identity that cannot be read turns
+	// discovery off (selfID) — a browser that cannot tell its own announcements from a stranger's is
+	// not a browser this machine should run.
+	self := c.selfID()
+	if self == "" {
+		return nil
+	}
+	browser, err := newMDNSBrowser(self, config.MdnsDiscoveryConfig{
+		Enabled:    c.discovery.Enabled,
+		Interfaces: c.discovery.Interfaces,
+	}, c.log)
+	if err != nil {
+		if c.log != nil {
+			c.log.Warn(ctx, "node: discovery is on but cannot start; you will have to configure peers",
+				"cause", err)
+		}
+		c.discovery.Enabled = false
+		return nil
+	}
+	browser.Start(context.WithoutCancel(ctx))
+	c.browser = browser
+	return browser
 }
 
 // For returns the sending side for this peer list, as the TOOL layer sees it, rebuilding it when the
 // list changed.
 //
-// It returns nil — meaning "this process cannot delegate" — in two cases, and both are states
+// It returns nil — meaning "this process cannot delegate" — in three cases, and all are states
 // the entry points should simply live with rather than report per turn:
 //
 //   - no peers are configured: there is nothing to delegate to, and `RemoteTask` on its own
 //     could only show records this machine can no longer reach;
 //   - the records directory cannot be opened: a broken disk must not cost the user their local
 //     chat (the entry points log it), and the next turn tries again rather than caching the
-//     failure, so a transient problem heals itself.
+//     failure, so a transient problem heals itself;
+//   - the cache has been closed: an entry point on its way out asks no more, and a sender built
+//     then would start a browser (Close).
 //
 // It returns a genuinely nil INTERFACE when there is nothing: returning a typed nil *Sender would
 // make `if d == nil` false at every call site, which is how a "no peers" machine starts to look like
 // an available one.
-func (c *DelegatorCache) For(peers []config.PeerConfig) tools.RemoteDelegator {
-	if sender := c.ForSender(peers); sender != nil {
+func (c *DelegatorCache) For(ctx context.Context, peers []config.PeerConfig) tools.RemoteDelegator {
+	if sender := c.ForSender(ctx, peers); sender != nil {
 		return sender
 	}
 	return nil
@@ -70,23 +163,37 @@ func (c *DelegatorCache) For(peers []config.PeerConfig) tools.RemoteDelegator {
 // the tool-layer contract — the address this machine dials, and each peer's card — and that contract
 // is deliberately blind to both (see the comment on RemoteDelegator). Callers that only delegate
 // should ask For instead.
-func (c *DelegatorCache) ForSender(peers []config.PeerConfig) *Sender {
-	if c == nil || len(peers) == 0 {
+func (c *DelegatorCache) ForSender(ctx context.Context, peers []config.PeerConfig) *Sender {
+	if c == nil {
 		return nil
 	}
-	key := peerSignature(peers)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Closed is the end of it: an entry point is on its way out, and a sender built now would start a
+	// second browser (node/delegatorcache.go Close).
+	if c.closed {
+		return nil
+	}
+	// With no configured peers there is still work to do when discovery is on: the whole point of it
+	// is a node that has no config line.
+	//
+	// Read under the lock, like every other read of discovery: startBrowser and selfID WRITE
+	// discovery.Enabled when the browser cannot come up, and the entry points ask this from several
+	// goroutines (a turn, the picker, a background probe).
+	if len(peers) == 0 && !c.discovery.Enabled {
+		return nil
+	}
+	key := peerSignature(peers) + "\x02" + discoverySignature(c.discovery)
 	if c.current != nil && c.key == key {
 		return c.current
 	}
 
+	browser := c.startBrowser(ctx)
 	open := c.openFunc
 	if open == nil {
 		open = OpenSender
 	}
-	sender, err := open(peers, c.ownName, c.log)
+	sender, err := open(peers, c.ownName, c.log, browser)
 	if err != nil {
 		if c.log != nil {
 			c.log.Warn(context.Background(), "delegation is unavailable this turn", "cause", err)
@@ -95,6 +202,33 @@ func (c *DelegatorCache) ForSender(peers []config.PeerConfig) *Sender {
 	}
 	c.current, c.key = sender, key
 	return sender
+}
+
+// selfID is this machine's own node id, loaded (or created) so that a browser can recognise its own
+// announcements. It is called by startBrowser and nothing else, so the disk read happens only when a
+// browser is actually going to run. It is the same identity the sending side uses — the one file,
+// read twice — and a failure here is not fatal: discovery stays off rather than running without
+// knowing what "not me" means.
+func (c *DelegatorCache) selfID() string {
+	identity, err := LoadOrCreateIdentity(config.A2ADir())
+	if err != nil {
+		if c.log != nil {
+			c.log.Warn(context.Background(), "node: cannot read this machine's identity; discovery off",
+				"cause", err)
+		}
+		c.discovery.Enabled = false
+		return ""
+	}
+	return identity.NodeID
+}
+
+// discoverySignature is the part of a rebuild key that belongs to discovery: the switch, and which
+// interfaces it browses on.
+func discoverySignature(d Discovery) string {
+	if !d.Enabled {
+		return "off"
+	}
+	return "on:" + strings.Join(d.Interfaces, ",")
 }
 
 // peerSignature is what a rebuild is keyed by.

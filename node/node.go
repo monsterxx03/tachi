@@ -34,6 +34,10 @@ type Handle struct {
 	ln      net.Listener
 	srv     *http.Server
 	remote  *a2aSurface
+	// advertise is the announcement this process made, or nil when it is not announcing. It lives on
+	// the HANDLE rather than beside the surface because withdrawal has to happen in one particular
+	// order relative to everything else the handle owns (see Close).
+	advertise *mdnsAdvertiser
 
 	info   *localInfo
 	client *Client
@@ -142,6 +146,21 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		return nil, err
 	}
 
+	// The announcement comes LAST of the three steps that make this machine reachable, and that order
+	// is the point: it is the one step that tells OTHER machines to come and look, so it may only
+	// happen once there is something to find (design §5: 远端面起来之后才公告). Everything below it
+	// is either this machine's own business or already up.
+	var advertise *mdnsAdvertiser
+	if o.Advertise {
+		advertise, err = startAdvertising(o, remote.Addr(), identity)
+		if err != nil {
+			remote.close(o.Logger)
+			_ = ln.Close()
+			_ = lock.Release()
+			return nil, err
+		}
+	}
+
 	info := &localInfo{
 		InstanceID: newRandomHex(16),
 		NodeID:     identity.NodeID,
@@ -152,6 +171,7 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		StartedAt:  time.Now().UTC(),
 	}
 	if err := publishLocalInfo(o.DataDir, info); err != nil {
+		advertise.Close()
 		remote.close(o.Logger)
 		_ = ln.Close()
 		_ = lock.Release()
@@ -172,17 +192,18 @@ func host(ctx context.Context, o Options, identity *Identity, lock *flock.Lock) 
 		"data_dir", o.DataDir, "addr", info.Addr, "instance", info.InstanceID, "node_id", identity.NodeID)
 
 	return &Handle{
-		dataDir:  o.DataDir,
-		identity: identity,
-		logger:   o.Logger,
-		hosting:  true,
-		lock:     lock,
-		store:    store,
-		ln:       ln,
-		srv:      srv,
-		remote:   remote,
-		info:     info,
-		client:   newClient(o.DataDir, info),
+		dataDir:   o.DataDir,
+		identity:  identity,
+		logger:    o.Logger,
+		hosting:   true,
+		lock:      lock,
+		store:     store,
+		ln:        ln,
+		srv:       srv,
+		remote:    remote,
+		advertise: advertise,
+		info:      info,
+		client:    newClient(o.DataDir, info),
 	}, nil
 }
 
@@ -308,9 +329,16 @@ func (h *Handle) Close() error {
 	}
 	h.hosting = false
 
-	// Both listeners go down before the lock is released: a caller that finds the lock free
-	// may start hosting, and it must not have to race a service that is still answering on
-	// the old instance.
+	// The order is fixed, and each step exists because of the next one (design §5):
+	//
+	//  1. the announcement goes FIRST, while the surface is still answering: peers that heard it are
+	//     being told to stop coming, and a goodbye sent after the door is shut is a goodbye they
+	//     would have to discover was too late;
+	//  2. then the listeners go down — before the lock is released, because a caller that finds the
+	//     lock free may start hosting, and it must not have to race a service that is still answering
+	//     on the old instance;
+	//  3. and the lock last, because holding it is what says this process is the host.
+	h.advertise.Close()
 	shutdownGraceful(h.srv, h.logger, "local interface")
 	h.remote.close(h.logger)
 

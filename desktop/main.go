@@ -283,6 +283,11 @@ func main() {
 		// And the bar's copy of the readout is withdrawn: a consumer that keeps drawing it
 		// would be reporting a process that no longer exists (see barstatus.go).
 		removeDesktopStatus()
+		// The discovery browser holds UDP sockets and a goroutine that outlive every sender: it is
+		// stopped here rather than left to the process teardown, the same way the node service is.
+		if cache := desk.delegator; cache != nil {
+			cache.Close()
+		}
 	})
 
 	// Native notifications for the two moments the app waits on the user (a

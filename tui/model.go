@@ -1130,5 +1130,12 @@ func Run(cfg ModelConfig) error {
 	m := NewModel(cfg)
 	p := tea.NewProgram(m)
 	_, err := p.Run()
+	// The sending side's discovery browser holds a UDP socket and a goroutine of its own, and both
+	// outlive every sender (node/delegatorcache.go Close): the entry point that built the cache is the
+	// one that stops it. Nil when this run never asked for a sender — a machine with no peers and
+	// discovery off — which is why it is guarded rather than assumed.
+	if m.delegators != nil {
+		m.delegators.Close()
+	}
 	return err
 }

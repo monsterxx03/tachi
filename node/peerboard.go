@@ -56,14 +56,28 @@ type PeerSkill struct {
 // that proves the machine on the other end is speaking A2A right now. It is a fact about a MOMENT,
 // so a caller renders it with when it was taken.
 type PeerReport struct {
-	Alias string
-	// URL is where THIS machine dials the peer (config `peers[].url`), not what the card claims.
-	URL  string
-	Note string
-	// NodeID is the identity pinned on first outbound contact; empty when this machine has never
-	// called that node (only outbound contact pins one).
-	NodeID    string
-	Reachable bool
+	// Key is how a probe's answer is matched to the picker's row: the identity when the node has one,
+	// the configured address otherwise. It is plumbing between two views of one directory read, and it
+	// is never displayed — the two reads happen at different moments, so matching them by POSITION
+	// would start labelling one machine with another's answer as soon as the list changed.
+	Key string
+	// Label is the name a config line gave the node, empty when it gave none.
+	Label string
+	// Name is what to call the node: the label, else what it calls itself, else the front of its id.
+	Name string
+	// NodeID is the identity pinned on first outbound contact; empty when this machine holds none —
+	// which is what a config line nobody has reached yet looks like, and the reason such a node
+	// cannot be named in a tool argument.
+	NodeID string
+	// URL is where THIS machine will dial first, which is the address the peer advertises about itself
+	// when it advertises one and the configured address otherwise (node/peerdir.go prependAddrs).
+	URL string
+	// Configured and Discovered say where the entry came from; a node the config names AND the network
+	// announces has both.
+	Configured bool
+	Discovered bool
+	Note       string
+	Reachable  bool
 	// Card is nil when the node did not answer.
 	Card *PeerCard
 	// Err is why there is no card (empty when there is one). An unreachable peer is NOT an error
@@ -71,7 +85,7 @@ type PeerReport struct {
 	Err string
 }
 
-// PeerReports describes every configured peer, asking the network only when force asks it to.
+// PeerReports describes every peer in the directory, asking the network only when force asks it to.
 //
 // force (the board's refresh button) also throws away the card cache: a human pressed a button and
 // is waiting, and answering that with a five-minute-old cached card would be answering a different
@@ -87,17 +101,20 @@ func (s *Sender) PeerReports(ctx context.Context, force bool) []PeerReport {
 	if force {
 		s.peers.forgetCards()
 	}
-	pinned := pinnedNodeIDs()
 	snapshot := s.peers.Snapshot(ctx)
 	out := make([]PeerReport, 0, len(snapshot))
 	for _, p := range snapshot {
 		report := PeerReport{
-			Alias:     p.Name,
-			URL:       p.URL,
-			Note:      p.Note,
-			NodeID:    pinned[p.Name],
-			Reachable: p.Card != nil,
-			Card:      summarizeCard(p.Card),
+			Key:        p.key(),
+			Label:      p.Label,
+			Name:       p.Name(),
+			NodeID:     p.Identity,
+			URL:        firstAddr(p),
+			Configured: p.Configured,
+			Discovered: p.Discovered,
+			Note:       p.Note,
+			Reachable:  p.Reachable(),
+			Card:       summarizeCard(p.Card),
 		}
 		if p.Err != nil {
 			report.Err = p.Err.Error()
@@ -105,6 +122,20 @@ func (s *Sender) PeerReports(ctx context.Context, force bool) []PeerReport {
 		out = append(out, report)
 	}
 	return out
+}
+
+// firstAddr is the address this machine will dial first: the rule that decides the order lives in
+// node/peerdir.go prependAddrs, and this is only how a view states it.
+func firstAddr(e peerEntry) string {
+	if addrs := e.dialAddrs(); len(addrs) > 0 {
+		return addrs[0]
+	}
+	// Nothing dialable: the board shows the address it was told about anyway, because "where this
+	// machine was pointed" is what a person is looking for when a row says unreachable.
+	if len(e.Addrs) == 0 {
+		return ""
+	}
+	return e.Addrs[0]
 }
 
 // summarizeCard projects an Agent Card onto what the board shows, dropping the parts that are

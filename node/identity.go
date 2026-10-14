@@ -39,6 +39,30 @@ func NodeIDFor(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// NodeIDHexLen is how many characters a node id has: sha256 truncated to 16 bytes, hex encoded.
+const NodeIDHexLen = 32
+
+// IsNodeID reports whether s has the SHAPE of a node id — 32 lowercase hex characters. It is a
+// shape check and nothing more: it cannot say whether the id belongs to any machine, only that a
+// string claiming to be one is spelled the way this program spells them.
+//
+// It exists for one job: telling a record this program wrote from one it did not. The identity
+// record is keyed by node id, and the version before it was keyed by ALIAS — where every key was a
+// name like "nas", which is a perfectly valid thing to find in the wrong file. Reading that file as
+// though its keys were identities would make every identity check miss silently, so the check is on
+// the key's shape rather than on whether the entries "look right" (node/knownpeers.go).
+func IsNodeID(s string) bool {
+	if len(s) != NodeIDHexLen {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // LoadOrCreateIdentity returns the identity in dir, creating one on first use.
 //
 // The file is written atomically with private permissions (0700 dir, 0600 file):

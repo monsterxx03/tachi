@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -114,6 +115,28 @@ func FirstLine(s string) string {
 // via Truncate to max runes with an ellipsis if needed.
 func FirstLineOrTruncate(s string, max int) string {
 	return Truncate(FirstLine(s), max)
+}
+
+// OneLine makes untrusted text safe to put in a single-line place: control
+// characters are dropped (newlines, tabs, ESC — anything that would let the text
+// move the cursor, forge a second line, or carry a terminal escape into a UI) and
+// the result is bounded to maxRunes.
+//
+// It exists for text that came from ANOTHER machine — a peer's self-declared name,
+// a discovered instance name — which is why the control characters go rather than
+// being escaped: the readers are a reminder line, a picker row and a terminal, and
+// none of them has a way to show an escape sequence as itself.
+func OneLine(s string, maxRunes int) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return TruncateFitted(strings.TrimSpace(s), maxRunes)
 }
 
 // IsCJK reports whether r is a CJK character (Chinese/Japanese/Korean).

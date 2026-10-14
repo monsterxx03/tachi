@@ -16,6 +16,7 @@ require (
 	github.com/creasty/defaults v1.8.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.4.2
+	github.com/libp2p/zeroconf/v2 v2.2.0
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/onsi/ginkgo/v2 v2.32.0
@@ -60,6 +61,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
+	github.com/miekg/dns v1.1.43 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect

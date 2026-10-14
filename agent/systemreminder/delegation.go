@@ -90,7 +90,13 @@ func (r RemoteTasksReminder) Generate(ctx context.Context, rctx Context) []strin
 	lines := make([]string, 0, len(shown)+2)
 	lines = append(lines, "当前对话关联的远程任务（有限摘要；状态是上次观察到的时间点，不保证节点此刻可达）：")
 	for _, t := range shown {
-		line := fmt.Sprintf("- %s | %s | %s | %s", t.ID, t.Node, t.Title, stateLabel(t))
+		where := t.Node
+		if t.NodeID != "" {
+			// The identity, because it is what a follow-up can name: the label beside it is a
+			// display string that may have been changed since the record was made.
+			where = fmt.Sprintf("%s (%s)", t.Node, agentref.ShortID(t.NodeID))
+		}
+		line := fmt.Sprintf("- %s | %s | %s | %s", t.ID, where, t.Title, stateLabel(t))
 		if t.Waiting() {
 			line += fmt.Sprintf(" | question_id=%s", t.QuestionID)
 		}
@@ -136,7 +142,7 @@ func (r *PeersReminder) Generate(ctx context.Context, rctx Context) []string {
 	}
 
 	lines := make([]string, 0, len(peers)+2)
-	lines = append(lines, "可以委派工作的节点（用 DelegateTask，node 参数填名字或它的身份；prompt 要写清在它那台机器上做什么）：")
+	lines = append(lines, "可以委派工作的节点（用 DelegateTask，node 参数填括号里那段身份——名字只是给人看的；prompt 要写清在它那台机器上做什么）：")
 	for _, p := range peers {
 		what := p.Description
 		if what == "" {
@@ -151,13 +157,15 @@ func (r *PeersReminder) Generate(ctx context.Context, rctx Context) []string {
 			// may still accept work, and a reminder may not claim otherwise (§8.6).
 			state = "（上次联系不上；描述来自配置）"
 		}
-		// The identity goes beside the name for two reasons: it is the one fact about a peer that
-		// nobody else can claim — so a name the reader may be unsure about becomes checkable — and
-		// it is a second way to name this node in a tool argument, which matters for a machine the
-		// reader knows by its id rather than by this config's word for it.
+		// The identity is the ADDRESS the model must use — a tool argument takes nothing else — and
+		// it is also the one fact about a peer that nobody else can claim, which is what makes a
+		// name the reader may be unsure about checkable. So a node this machine holds no identity for
+		// is listed with the reason instead: it exists, and it cannot be named yet.
 		identity := ""
 		if p.NodeID != "" {
 			identity = fmt.Sprintf(" (%s)", agentref.ShortID(p.NodeID))
+		} else {
+			identity = "（身份未记录，暂时点不了名：本机还没跟它握手过）"
 		}
 		line := fmt.Sprintf("- %s%s：%s%s", p.Name, identity, what, state)
 		// The node's OWN skills, named as its claim rather than as a fact: this is the Card talking,

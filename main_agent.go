@@ -212,7 +212,11 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// (§10.2.1) — the difference is what a run is given, not a switch somewhere. The one-off
 	// command runs (--commit, --review and friends) take their own paths and get none of this.
 	runOpts := []agent.RunOption{}
-	if delegator := node.NewDelegatorCache(cfg.Node.Name, logger.New("run")).For(cfg.Peers); delegator != nil {
+	// Discovery is passed OFF, and deliberately: a one-off run has no reminder to be told about a
+	// node it found (this entry runs with reminders switched off by construction), so a machine that
+	// appeared on the network would be one this run could not name — browsing for it would spend a
+	// socket and a goroutine per run to learn something it cannot use.
+	if delegator := node.NewDelegatorCache(cfg.Node.Name, node.Discovery{}, logger.New("run")).For(ctx, cfg.Peers); delegator != nil {
 		runOpts = append(runOpts, agent.WithDelegation(delegator))
 	}
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg), llm.ChatOptions{

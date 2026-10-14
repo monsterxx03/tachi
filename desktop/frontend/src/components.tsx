@@ -1081,7 +1081,11 @@ function AtFilePicker({ mark, query, items, selected, loading, refCount, onPick,
     ? ns === 'agents' ? '# 节点' : ns === 'sessions' ? '# 会话' : '# 引用'
     : '@ 文件'
   const empty = mark === HASH_REF_MARK
-    ? ns === 'agents' ? '没有配好的节点' : '无匹配会话'
+    // The node namespace lists what this machine can NAME, which is not the same as what is
+    // configured: a peer that has never been reached outbound has no identity to insert, so an empty
+    // list here is not "nothing is configured" — that would be the one thing a list of nodes may not
+    // imply (agentref.Search). One sentence that is true of both.
+    ? ns === 'agents' ? '没有可点名的节点（身份出自一次握手，本机还没连上过任何一台）' : '无匹配会话'
     : '无匹配文件'
   // Keep the highlighted row in view while arrowing through a long list.
   useEffect(() => {
@@ -1383,10 +1387,12 @@ function AgentsIcon() {
 // about itself.
 //
 // Three rows of information per node, and they are deliberately NOT merged, because apart each one
-// means something different: the alias and the address are what THIS machine asked for (config), the
-// identity is what the handshake proved (the one thing a peer cannot claim), and the card's name and
-// description are what the node says about ITSELF (which any key can claim). The panel labels the
-// last one 自称 so a reader is not left to guess which of the three is evidence.
+// means something different: the name and the address are what THIS machine chose to call it and
+// where it was told to look (config), the identity is what the handshake proved (the one thing a peer
+// cannot claim), and the card's name and description are what the node says about ITSELF (which any
+// key can claim). The panel labels the last one 自称 so a reader is not left to guess which of the
+// three is evidence. Which of the three an ADDRESS is, when the peer has also said one about itself,
+// is the backend's call (node/peerdir.go): the row shows where this machine will dial FIRST.
 //
 // It keeps no state of its own beyond which rows are open: what it draws is what the backend last
 // said, so a panel reopened after a refresh agrees with a live one.
@@ -1431,17 +1437,22 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
       <div className="mcp-body">
         {peers.length === 0 && <div className="mcp-empty">没有配置可委派的节点（config.yaml 的 peers）</div>}
         {peers.map((p) => {
-          const isOpen = !!expanded[p.alias]
+          // Rows are keyed and remembered by identity, not by name: a name is what the node is
+          // CALLED (two machines may call themselves the same thing), and it may change while the
+          // panel is open — the key must not. A row with no identity yet falls back to its name,
+          // which is the only handle it has.
+          const rowKey = p.nodeId || p.name
+          const isOpen = !!expanded[rowKey]
           const card = p.card
           const skills = card?.skills || []
           return (
-            <div className="mcp-server" key={p.alias}>
-              <div className="mcp-server-row" onClick={() => setExpanded((prev) => ({ ...prev, [p.alias]: !isOpen }))}>
+            <div className="mcp-server" key={rowKey}>
+              <div className="mcp-server-row" onClick={() => setExpanded((prev) => ({ ...prev, [rowKey]: !isOpen }))}>
                 <span className={`mcp-server-state ${p.reachable ? 'on' : p.checked ? 'off' : ''}`}>
                   {p.reachable ? '●' : p.checked ? '○' : '·'}
                 </span>
-                <span className="mcp-server-name">{p.alias}</span>
-                {/* The identity, right beside the alias: it is what makes "which machine is this"
+                <span className="mcp-server-name">{p.name}</span>
+                {/* The identity, right beside the name: it is what makes "which machine is this"
                     answerable, and it is never the name the node reports about itself. */}
                 <span className="agents-id" title={p.nodeId || '本机还没跟它连过，身份在第一次出站接触时才记下'}>
                   {p.nodeIdLabel}
@@ -1494,10 +1505,16 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
                       <span className="agents-v">{p.checked ? (p.err || '它没有回答') : '还没检查（点刷新）'}</span>
                     </div>
                   )}
-                  <div className="agents-line">
-                    <span className="agents-k">引用</span>
-                    <span className="agents-v agents-mono">{p.ref}</span>
-                  </div>
+                  {/* The reference is offered only when the backend has one to offer: a node this
+                      machine holds no identity for has none (the identity line above says why), and
+                      rendering an empty `#a:` would hand the reader something to insert that the
+                      expansion cannot resolve. */}
+                  {p.ref ? (
+                    <div className="agents-line">
+                      <span className="agents-k">引用</span>
+                      <span className="agents-v agents-mono">{p.ref}</span>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>

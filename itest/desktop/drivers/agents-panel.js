@@ -4,16 +4,17 @@
 // peerfixture.go）：
 //
 //   - **连不上的那个**（`smoke-nas` → https://127.0.0.1:1，那个端口上没人听，所以探测是立刻被拒而
-//     不是等超时）。它给面板三样东西可看，而且每一样都不能靠猜：行里三件事实各就各位（本机配的别名、
-//     本机 pin 的身份 —— 这里从来没有连过，所以是「身份未记录」、上次探测的结论）；展开后的详情里有
-//     本机用来够它的地址（配置的，不是 card 自称的）、它自己的说法（这里没有，因为它没回答）、以及
-//     它在这条消息里该怎么被引用（`#a:smoke-nas`）；刷新是一次真往返，所以它最终说得出「联系不上」，
-//     而不是永远停在「检查中…」。
+//     不是等超时）。它给面板三样东西可看，而且每一样都不能靠猜：行里是**本机怎么称呼它**、本机 pin
+//     的身份 —— 这里从来没有连过，所以是「身份未记录」、以及上次探测的结论；展开后的详情里有本机用来
+//     够它的地址（配置的，不是 card 自称的）、它自己的说法（这里没有，因为它没回答），而**没有引用那一
+//     行** —— 引用携带身份，而本机手里没有身份，给一个空的 `#a:` 只会让读者多删一次。刷新是一次真往返，
+//     所以它最终说得出「联系不上」，而不是永远停在「检查中…」。
 //
 //   - **会答话的那个**（`smoke-peer`，runner 起的 fixture）。另一半只有答话才看得到，而它是**卡片自己
 //     的字段**：自称（名字 + 版本）、描述、能力、入口，以及技能那张**列表**。列表那三条断言都是排版
 //     上的主张 —— 标签只写一次、每条技能一行、名字在行首更亮 —— 也正是没有这个 peer 时没人看得见的
-//     东西（一个每条都重复「技能」两个字的版本就这样留在树里）。
+//     东西（一个每条都重复「技能」两个字的版本就这样留在树里）。它还答了那次探测，于是本机 pin 下了它的
+//     身份：它的引用那一行因此**有内容**，而且那内容就是身份本身。
 //
 // 「联系不上」与「技能只写一次」是这一场景的两个关键断言：一个点完刷新仍然停在原地的面板会让读者以为
 // 是自己的问题；一个把列表标签按行重复的面板会把每一行的宽度花在重复的话上。
@@ -25,25 +26,35 @@
   if (!(await smoke.waitFor('.agents-panel', 'Agents 面板打开'))) return smoke.finish()
   smoke.check('面板标题是 Agents', smoke.text('.mcp-title').indexOf('Agents') >= 0, smoke.text('.mcp-head'))
 
-  // 一个 peer 一块（`.mcp-server`），按别名找它 —— 两个 peer 都在屏幕上，按位置取会读到另一个的字段。
-  const boxOf = (alias) => smoke.qa('.agents-panel .mcp-server').find((box) => {
+  // 一个 peer 一块（`.mcp-server`），按**名字**找它 —— 两个 peer 都在屏幕上，按位置取会读到另一个的
+  // 字段。（名字就是本机怎么称呼它，可能跟它自称的不一样：面板那一栏说的是前者。）
+  const boxOf = (peer) => smoke.qa('.agents-panel .mcp-server').find((box) => {
     const row = box.querySelector('.mcp-server-row')
-    return !!row && smoke.text(row).indexOf(alias) >= 0
+    return !!row && smoke.text(row).indexOf(peer) >= 0
   }) || null
-  const rowText = (alias) => {
-    const box = boxOf(alias)
+  const rowText = (peer) => {
+    const box = boxOf(peer)
     return box ? smoke.text(box.querySelector('.mcp-server-row')) : '(没有这一行)'
   }
-  // 展开某一行的详情。details 是按 alias 记的，所以两块可以同时开着 —— 每次只开自己要读的那个。
-  const detailOf = (alias) => {
-    const box = boxOf(alias)
+  // 展开某一行的详情。details 是按行的 key 记的（身份），所以两块可以同时开着 —— 每次只开自己要读的那个。
+  const detailOf = (peer) => {
+    const box = boxOf(peer)
     return box ? box.querySelector('.agents-detail') : null
   }
-  const expand = async (alias) => {
-    const box = boxOf(alias)
+  // detailLine 读详情里某个字段那一行（「身份」「引用」…）的**值**，没有那一行时返回 null：一行在不在，
+  // 本身就是要断言的事实（没有身份的对端没有引用可给）。
+  const detailLine = (peer, key) => {
+    const detail = detailOf(peer)
+    if (!detail) return null
+    const line = Array.from(detail.querySelectorAll('.agents-line'))
+      .find((el) => smoke.text(el.querySelector('.agents-k')) === key)
+    return line ? smoke.text(line.querySelector('.agents-v')) : null
+  }
+  const expand = async (peer) => {
+    const box = boxOf(peer)
     if (!box) return null
-    if (!detailOf(alias)) box.querySelector('.mcp-server-row').click()
-    return smoke.waitFor(() => detailOf(alias), '展开 ' + alias, 4000)
+    if (!detailOf(peer)) box.querySelector('.mcp-server-row').click()
+    return smoke.waitFor(() => detailOf(peer), '展开 ' + peer, 4000)
   }
 
   if (!(await smoke.waitText('.agents-panel', 'smoke-nas', 10000))) return smoke.finish()
@@ -59,11 +70,14 @@
     rowText('smoke-nas').indexOf('检查中') >= 0 && rowText('smoke-peer').indexOf('检查中') >= 0,
     rowText('smoke-nas') + ' / ' + rowText('smoke-peer'))
 
-  // ── 连不上的那一个：地址是配置的，引用是选择器会插的那种拼写 ───────────────
+  // ── 连不上的那一个：地址是配置的，而引用根本不在（没有身份就没有可插入的东西） ─────
   if (!(await expand('smoke-nas'))) return smoke.finish()
   const detail = smoke.text(detailOf('smoke-nas'))
   smoke.check('展开后给出本机够它的地址', detail.indexOf('https://127.0.0.1:1') >= 0, detail)
-  smoke.check('展开后给出该用的引用拼写', detail.indexOf('#a:smoke-nas') >= 0, detail)
+  // 身份那一栏在**行**上（上面那条断言读过它），所以详情里该没有的那一行是「引用」：引用携带身份，
+  // 手里没有身份就没有可插入的东西，给一个空的 `#a:` 只会让读者多删一次。
+  smoke.check('没有身份就没有引用那一行（空的 #a: 只是个看着像引用的记号）',
+    detailLine('smoke-nas', '引用') === null && detail.indexOf('#a:') < 0, detail)
 
   // ── 刷新是一次真的往返：两个节点各自拿到结论（一个有卡、一个没有） ─────────
   smoke.click('.agents-refresh')
@@ -98,6 +112,11 @@
   smoke.check('能力按 card 声明的那两项翻成中文', cardText.indexOf('流式响应') >= 0 && cardText.indexOf('推送通知') >= 0,
     cardText.slice(0, 240))
   smoke.check('入口带着 card 的地址与协议', cardText.indexOf('HTTP+JSON 1.0') >= 0, cardText.slice(0, 300))
+  // 它答了那次探测，所以本机在握手时 pin 下了它的身份 —— 引用因此有内容，而内容就是那个身份本身：
+  // 面板给出的拼写与工具入参要填的是同一个字符串（八位短形式照抄不出全串，所以这里给全串）。
+  const peerRef = detailLine('smoke-peer', '引用')
+  smoke.check('答过话的对端，引用就是它的身份（#a:<node id>）',
+    /^#a:[0-9a-f]{32}$/.test(peerRef || ''), String(peerRef))
 
   // 技能是一张 LIST：标签只写一次，每条技能自己一行，名字在行首更亮。
   const keys = Array.from(card.querySelectorAll('.agents-k')).map((el) => smoke.text(el))

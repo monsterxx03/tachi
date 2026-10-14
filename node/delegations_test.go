@@ -131,70 +131,131 @@ func TestAnUnknownIDIsRefusedRatherThanGuessed(t *testing.T) {
 	require.Contains(t, err.Error(), "list", "the refusal has to say how to find the right id")
 }
 
-func TestPeerNamesMustIdentifyOneNode(t *testing.T) {
+func TestPeerLabelsMustNameOneMachine(t *testing.T) {
+	// A duplicated LABEL is refused because it is a display rule: a tool argument names a machine by
+	// identity, so two rows reading "home-nas" would be resolvable and unreadable — which is the
+	// whole point of a label, defeated.
 	_, err := newPeerDirectory([]config.PeerConfig{
-		{Name: "home-nas", URL: "http://127.0.0.1:1234"},
-		{Name: "home-nas", URL: "http://127.0.0.1:5678"},
+		{Name: "home-nas", URL: "https://127.0.0.1:1234"},
+		{Name: "home-nas", URL: "https://127.0.0.1:5678"},
 	})
-	require.Error(t, err, "a name that resolves to two nodes makes every delegation ambiguous")
+	require.Error(t, err, "a label that names two machines reads as the same machine twice")
 	require.Contains(t, err.Error(), "configured twice")
 
-	_, err = newPeerDirectory([]config.PeerConfig{{Name: "", URL: "http://127.0.0.1:1234"}})
-	require.Error(t, err)
+	// The label is OPTIONAL now: a config line is an address, and the label is a convenience.
+	_, err = newPeerDirectory([]config.PeerConfig{{URL: "https://127.0.0.1:1234"}})
+	require.NoError(t, err, "a peer without a label is a peer")
 
 	_, err = newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: ""}})
-	require.Error(t, err)
+	require.Error(t, err, "a delegation needs an address to reach")
 }
 
-func TestAnUnknownPeerRefusalListsTheConfiguredOnes(t *testing.T) {
+func TestAnUnknownNodeRefusalListsTheOnesThisMachineCanName(t *testing.T) {
 	dir, err := newPeerDirectory([]config.PeerConfig{
-		{Name: "hk-vps", URL: "http://127.0.0.1:1"},
-		{Name: "home-nas", URL: "http://127.0.0.1:2", Note: "家里的 NAS"},
+		{Name: "hk-vps", URL: "https://127.0.0.1:1"},
+		{Name: "home-nas", URL: "https://127.0.0.1:2", Note: "家里的 NAS"},
 	})
 	require.NoError(t, err)
 
-	_, err = dir.Lookup(t.Context(), "nas")
+	_, err = dir.Lookup(t.Context(), "deadbeef")
 	var unknown *UnknownPeerError
 	require.ErrorAs(t, err, &unknown)
-	require.Equal(t, []string{"hk-vps", "home-nas"}, unknown.Known, "sorted, so the answer reads the same twice")
+	// Neither machine has been reached, so neither has an identity, and the refusal says that in
+	// words rather than leaving a hole where the identity would be.
+	require.Equal(t, []string{"hk-vps (身份未记录)", "home-nas (身份未记录)"}, unknown.Known,
+		"sorted, so the answer reads the same twice")
 	require.Contains(t, err.Error(), "home-nas")
+}
+
+// A label is the mistake a reader WILL make — it is what the reminder and the rows show — so it gets
+// an answer of its own rather than "no such node": one that says where the id would have come from.
+func TestALabelRefusalSaysWhatToUseInstead(t *testing.T) {
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: "https://127.0.0.1:2"}})
+	require.NoError(t, err)
+
+	_, err = dir.Lookup(t.Context(), "home-nas")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "label")
+	require.Contains(t, err.Error(), "identity")
+	require.NotContains(t, err.Error(), "is not a node this machine knows",
+		"a label this machine configured is not an unknown node")
+}
+
+// A node becomes nameable when a handshake proves its identity, and not before: the identity is what
+// a tool argument takes, so there is nothing to pass until there is one (design §八 验收:
+// 配置来的对端在这轮探测成功之后可被点名).
+func TestAConfiguredNodeBecomesNameableAfterOneContact(t *testing.T) {
+	const id = "3f2a1b4c3f2a1b4c3f2a1b4c3f2a1b4c"
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: "https://127.0.0.1:2"}})
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+
+	_, err = dir.Lookup(t.Context(), id)
+	require.Error(t, err, "before the first contact there is no identity to name")
+
+	// The handshake is what pins it (node/tls.go confirm), and this is where that leaves the entry.
+	require.NoError(t, dir.known.confirm("home-nas", "https://127.0.0.1:2", id))
+
+	got, err := dir.Lookup(t.Context(), id[:8])
+	require.NoError(t, err, "a unique prefix is enough")
+	require.Equal(t, id, got.Identity)
+	require.Equal(t, "home-nas", got.Name(), "the label is what the row calls it")
+	require.Equal(t, "home-nas ("+id[:8]+")", got.Display())
+}
+
+// An identity pinned for a machine this machine can no longer place is refused with the reason, not
+// silently sent somewhere: the pin outlives the config line and says so.
+func TestAPinnedNodeWithNoEntryIsRefusedWithItsReason(t *testing.T) {
+	dir, err := newPeerDirectory(nil)
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+	const gone = "aaaa1111aaaa1111aaaa1111aaaa1111"
+	require.NoError(t, dir.known.confirm("old-nas", "https://127.0.0.1:9", gone))
+
+	_, err = dir.Lookup(t.Context(), gone[:8])
+	require.Error(t, err, "nothing in the directory carries that identity any more")
+
+	client := &remoteClient{peers: dir, known: dir.known}
+	_, err = client.peerOf(&Delegation{ID: "d_1", Peer: "old-nas", PeerNodeID: gone})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Configure that node again")
 }
 
 func TestAnUnreachablePeerIsReportedNotInvented(t *testing.T) {
 	dir, err := newPeerDirectory([]config.PeerConfig{
-		{Name: "home-nas", URL: "http://127.0.0.1:9", Note: "家里的 NAS"},
+		{Name: "home-nas", URL: "https://127.0.0.1:9", Note: "家里的 NAS"},
 	})
 	require.NoError(t, err)
-	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
-		return nil, errors.New("connection refused")
+	calls := 0
+	dir.resolveEntry = func(context.Context, peerEntry) (*a2a.AgentCard, string, error) {
+		calls++
+		return nil, "", errors.New("connection refused")
 	}
 
-	got, err := dir.Lookup(t.Context(), "home-nas")
-	require.NoError(t, err, "an unreachable peer is a fact about the network, not a bad alias")
+	snapshot := dir.Snapshot(t.Context())
+	require.Len(t, snapshot, 1, "an unreachable peer is listed: not listed would read as not configured")
+	got := snapshot[0]
 	require.Nil(t, got.Card)
 	require.Error(t, got.Err, "…and the failure travels with the entry")
 	require.Equal(t, "家里的 NAS", got.Note, "the configured line is what is left to say about it")
+	require.Equal(t, "home-nas (身份未记录)", got.Display())
+	require.Equal(t, 1, calls)
 
 	// The card is cached, failure included: a peer that is down must not cost a timeout per turn.
-	calls := 0
-	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
-		calls++
-		return nil, errors.New("still down")
-	}
-	_, _ = dir.Lookup(t.Context(), "home-nas")
-	require.Zero(t, calls, "the failure is remembered for the card TTL")
+	dir.Snapshot(t.Context())
+	require.Equal(t, 1, calls, "the failure is remembered for the card TTL")
 }
 
 func TestAReachablePeerIsDescribedByItsOwnCard(t *testing.T) {
-	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: "http://127.0.0.1:9"}})
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "home-nas", URL: "https://127.0.0.1:9"}})
 	require.NoError(t, err)
-	dir.resolve = func(context.Context, string, string) (*a2a.AgentCard, error) {
-		return &a2a.AgentCard{Name: "Tachi", Description: "一台节点的自述"}, nil
+	dir.resolveEntry = func(context.Context, peerEntry) (*a2a.AgentCard, string, error) {
+		return &a2a.AgentCard{Name: "Tachi", Description: "一台节点的自述"}, "http://127.0.0.1:9", nil
 	}
 
-	got, err := dir.Lookup(t.Context(), "home-nas")
-	require.NoError(t, err)
-	require.NoError(t, got.Err)
-	require.Equal(t, "一台节点的自述", got.Card.Description)
-	require.Len(t, dir.Snapshot(t.Context()), 1)
+	snapshot := dir.Snapshot(t.Context())
+	require.Len(t, snapshot, 1)
+	require.NoError(t, snapshot[0].Err)
+	require.Equal(t, "一台节点的自述", snapshot[0].Card.Description)
+	require.True(t, snapshot[0].Reachable())
 }

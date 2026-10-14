@@ -363,7 +363,7 @@ func TestAFileTheRemoteAgentSendsComesBackAndLandsHere(t *testing.T) {
 	require.NoError(t, os.WriteFile(report, []byte("the peer's own bytes\n"), 0o600))
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "把报告发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
+		Peer: peerRef(t, sender), Prompt: "把报告发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "completed", view.State, "note=%q", view.Note)
@@ -399,7 +399,7 @@ func TestAFileFromAPeerWithNoSessionGoesBesideTheToolResults(t *testing.T) {
 
 	// No session in the context: this is the shape a run with no conversation has.
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "把笔记发给我", LogicalID: "", Wait: 5 * time.Second,
+		Peer: peerRef(t, sender), Prompt: "把笔记发给我", LogicalID: "", Wait: 5 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "completed", view.State, "note=%q", view.Note)
@@ -436,7 +436,7 @@ func TestAFileTheNodeWillNotSendFailsTheToolCall(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "把这个大文件发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
+		Peer: peerRef(t, sender), Prompt: "把这个大文件发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "completed", view.State, "note=%q", view.Note)
@@ -476,7 +476,7 @@ func TestAFileFromAPeerIsStoredOnlyOnce(t *testing.T) {
 	// The real shape: the delegation tool runs inside a turn, whose context names the session.
 	ctx := tools.WithSessionID(context.Background(), sessionID)
 	view, err := sender.Delegate(ctx, tools.DelegationRequest{
-		Peer: "peer", Prompt: "把报告发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
+		Peer: peerRef(t, sender), Prompt: "把报告发给我", LogicalID: "conv-1", Wait: 5 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Contains(t, view.Result, "Files the peer sent back:")

@@ -219,7 +219,7 @@ func verifyCallerCertificate(rawCerts [][]byte, log *logger.Logger) error {
 }
 
 // peerTLSConfig is the CLIENT half: reach the peer over TLS, present our own certificate, and
-// refuse to talk to a machine whose key is not the one this alias is remembered by.
+// refuse to talk to a machine whose key is not the one this address is remembered by.
 //
 // Verification is ours rather than the system's, and that is the point rather than a shortcut: the
 // certificate is self-signed and the address is one the operator typed, so a CA chain would fail
@@ -227,7 +227,11 @@ func verifyCallerCertificate(rawCerts [][]byte, log *logger.Logger) error {
 // checked instead is the identity the TOFU record holds — the node id derived from the presented
 // key — which makes the SECOND conversation as verified as a pin, and the first one only as
 // trustworthy as the path that led to it (a mesh that authenticates devices, or loopback).
-func peerTLSConfig(ourCert tls.Certificate, p *knownPeers, alias string) *tls.Config {
+//
+// label and addr are what a FIRST contact files the pin under, and they are passed in rather than
+// looked up afterwards because this callback is where the identity is proved: looking it up later
+// would mean a contact that proved an identity and then could not say where it happened.
+func peerTLSConfig(ourCert tls.Certificate, p *knownPeers, label, addr string) *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		// Our own identity, presented so the peer can read the caller out of it. This is the whole
@@ -240,30 +244,31 @@ func peerTLSConfig(ourCert tls.Certificate, p *knownPeers, alias string) *tls.Co
 		// Nothing it does is being skipped in spirit: none of it is the check this node makes.
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			return verifyPeerCertificate(p, alias, rawCerts)
+			return verifyPeerCertificate(p, label, addr, rawCerts)
 		},
 	}
 }
 
-// verifyPeerCertificate is the whole check: readable, current, and the identity this alias is
+// verifyPeerCertificate is the whole check: readable, current, and the identity this peer is
 // remembered by.
-func verifyPeerCertificate(p *knownPeers, alias string, rawCerts [][]byte) error {
+func verifyPeerCertificate(p *knownPeers, label, addr string, rawCerts [][]byte) error {
+	who := peerWords(label, addr)
 	if len(rawCerts) == 0 {
-		return fmt.Errorf("node: %s presented no certificate", alias)
+		return fmt.Errorf("node: %s presented no certificate", who)
 	}
 	leaf, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
-		return fmt.Errorf("node: %s presented an unreadable certificate: %w", alias, err)
+		return fmt.Errorf("node: %s presented an unreadable certificate: %w", who, err)
 	}
 	now := time.Now()
 	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
 		return fmt.Errorf("node: %s presented a certificate that is not valid now (notBefore=%s notAfter=%s)",
-			alias, leaf.NotBefore.Format(time.RFC3339), leaf.NotAfter.Format(time.RFC3339))
+			who, leaf.NotBefore.Format(time.RFC3339), leaf.NotAfter.Format(time.RFC3339))
 	}
 	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
 	if !ok {
-		return fmt.Errorf("node: %s presented a %T key; this node pins ed25519 identities", alias, leaf.PublicKey)
+		return fmt.Errorf("node: %s presented a %T key; this node pins ed25519 identities", who, leaf.PublicKey)
 	}
 
-	return p.confirm(alias, NodeIDFor(pub))
+	return p.confirm(label, addr, NodeIDFor(pub))
 }

@@ -1,10 +1,13 @@
 package node
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -113,8 +116,34 @@ func TestTheCardNamesTheNodeAndTheSchemeItChecks(t *testing.T) {
 	_, required := card.SecurityRequirements[0][authSchemeName]
 	require.True(t, required, "the requirement names that scheme")
 
-	require.Empty(t, card.SupportedInterfaces,
-		"a wildcard listener advertises NO interface rather than an address nobody can dial")
+	// The Card names where callers reach this node, and for a wildcard bind that is the address the
+	// OPERATOR supplied: 0.0.0.0 is not an address anyone can dial, so a node bound to one that cannot
+	// say where it is refuses to start at all (see TestAWildcardBindWithoutAPublicURLRefusesToStart).
+	require.Len(t, card.SupportedInterfaces, 1)
+	require.Equal(t, publicURLFor(t, portOfListen(t, authed.RemoteAddr())), card.SupportedInterfaces[0].URL,
+		"the Card carries the address the operator named, and it is one a caller can dial")
+}
+
+// A wildcard bind with nothing to say about where callers reach the node is a REFUSAL, and the
+// refusal has to name both ways out: the design's rule is that a node serving other machines must be
+// able to say where it is, because the machines that read its Card use that address to dial it
+// (design §一.13).
+func TestAWildcardBindWithoutAPublicURLRefusesToStart(t *testing.T) {
+	dir := t.TempDir()
+	opts := testOptions(dir)
+	opts.RemoteListen = "0.0.0.0:0"
+
+	_, err := StartOrAttach(context.Background(), opts)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "wildcard")
+	require.Contains(t, err.Error(), "public_url", "one way out: say where callers reach it")
+	require.Contains(t, err.Error(), "concrete address", "the other: bind an address you can name")
+
+	// And the refusal is not a half-started node: the lock is free again, so a corrected config starts.
+	opts.PublicURL = "https://this-machine:7080"
+	h, err := StartOrAttach(context.Background(), opts)
+	require.NoError(t, err)
+	require.NoError(t, h.Close())
 }
 
 // The address no longer decides whether a caller may come in — only how the surface is protected.
@@ -207,7 +236,9 @@ func TestAnAuthenticatedCallerReachesTheRunner(t *testing.T) {
 
 	caller := newSenderIdentity(t)
 	cfg := nodeConfig(t, mock, filepath.Join(base, "ws"))
-	cfg.Node.Listen = "0.0.0.0:0"
+	port := freeWildcardPort(t)
+	cfg.Node.Listen = net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	cfg.Node.PublicURL = publicURLFor(t, port)
 	cfg.Node.Name = "tachi@mac"
 	h := startRealNode(t, cfg)
 

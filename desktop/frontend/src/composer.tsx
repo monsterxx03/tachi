@@ -84,9 +84,13 @@ function sessionAtMatch(s: SessionMatchVO): AtMatch {
 // agentAtMatch maps a backend node match into a popup row. Everything it shows is
 // already worded by the backend (idLabel, reach): the TUI shows the same two facts about the same
 // node, and this must not become the place where they start being phrased differently.
+//
+// The row's text is what the NODE IS CALLED (a.name): the label config gave it, else what it calls
+// itself, else the front of its identity. What the row INSERTS is a.ref, which carries the identity
+// — a name names nothing (agentref), so the two are deliberately different strings.
 function agentAtMatch(a: AgentMatchVO): AtMatch {
   return {
-    path: a.alias,
+    path: a.name,
     isDir: false,
     ref: a.ref,
     kind: 'agent',
@@ -356,7 +360,7 @@ export function useComposer(deps: ComposerDeps) {
     const dir = !!match.isDir
     const opens = dir || match.kind === 'prefix'
     // The backend decides the reference form (relative under the primary root,
-    // absolute under an additional one, "#a:<alias>" for a node, "#s:<id>" for a conversation);
+    // absolute under an additional one, "#a:<node id>" for a node, "#s:<id>" for a conversation);
     // Path is only what the row displays. A row that OPENS a namespace gets no trailing space: the
     // reference is not finished, and a space would end it on the spot.
     const text = (match.ref || '@' + match.path) + (dir ? '/' : opens ? '' : ' ')

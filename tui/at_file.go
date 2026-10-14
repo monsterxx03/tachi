@@ -98,13 +98,12 @@ func (m *Model) syncAgentSource() {
 		m.input.SetAgentSource(nil)
 		return
 	}
-	peers := m.cfg.Peers
 	var probe func(ctx context.Context, force bool) []node.PeerReport
 	if sender := m.sender(); sender != nil {
 		probe = sender.PeerReports
 	}
 	m.input.SetAgentSource(newAgentSource(node.NewPeerList(
-		func() []config.PeerConfig { return peers }, probe, m.agent.Logger())))
+		node.RowsOf(m.sender), probe, m.agent.Logger())))
 }
 
 // sender is this machine's sending side as the CONCRETE sender type, for the callers that need more
@@ -115,9 +114,9 @@ func (m *Model) sender() *node.Sender {
 		return nil
 	}
 	if m.delegators == nil {
-		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, m.agent.Logger())
+		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, node.DiscoveryOf(m.cfg), m.agent.Logger())
 	}
-	return m.delegators.ForSender(m.cfg.Peers)
+	return m.delegators.ForSender(context.Background(), m.cfg.Peers)
 }
 
 // atRowsFor routes one popup query to its namespace: the mark says which kind of
@@ -172,7 +171,7 @@ func (i *InputArea) atAgentRows(query string) []atMatch {
 	rows := make([]atMatch, len(targets))
 	for idx, t := range targets {
 		rows[idx] = atMatch{
-			Ref:   atfile.RefForAgent(t.Alias),
+			Ref:   atfile.RefForAgent(t.NodeID),
 			Label: agentRowLabel(t),
 			Note:  agentref.RowNote(t, 0),
 			Agent: true,
@@ -181,15 +180,17 @@ func (i *InputArea) atAgentRows(query string) []atMatch {
 	return rows
 }
 
-// agentRowLabel is what a node row shows: the alias (the string DelegateTask takes), the identity
-// this machine pinned for it, and whether the last look found it up.
+// agentRowLabel is what a node row shows: what the node is called, the identity this machine pinned
+// for it — the string a tool argument takes, so the row is where it is read from — and whether the
+// last look found it up.
 //
 // The identity is spelled out rather than omitted, and it is NEVER the name the node reports about
 // itself: it is the one fact a peer cannot choose, which is exactly what makes it worth a column. A
 // node this machine has never called outbound has no pinned id, and the row says so — the two
-// machines may well be able to reach each other, but this one has no record of who is there.
+// machines may well be able to reach each other, but this one has no record of who is there, and
+// without one the node cannot be named at all.
 func agentRowLabel(t atfile.AgentTarget) string {
-	return fmt.Sprintf("%s  %s  %s", t.Alias, agentref.IDLabel(t), agentref.ReachWord(t))
+	return fmt.Sprintf("%s  %s  %s", t.Name, agentref.IDLabel(t), agentref.ReachWord(t))
 }
 // this stays cheap enough to run on every keystroke.
 func (i *InputArea) searchAtFiles(query string) ([]fileindex.Match, error) {

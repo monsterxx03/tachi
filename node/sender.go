@@ -34,7 +34,7 @@ type Sender struct {
 //
 // It is called once per entry point rather than once per turn: the records are files, and a
 // tool call must not pay a directory scan.
-func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (*Sender, error) {
+func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
 	records, err := openDelegationStore(config.DelegationsDir())
 	if err != nil {
 		return nil, err
@@ -44,17 +44,13 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 		return nil, err
 	}
 	// What each peer proved the first time this machine reached it (§4.2: TOFU remembers the first
-	// identity it saw, and says so). Keyed by alias, which is what a config entry is keyed by.
-	urls := make(map[string]string, len(peers))
-	for _, p := range peers {
-		urls[p.Name] = p.URL
-	}
-	known, err := openKnownPeers(config.PeerIdentitiesPath(), urls, log)
+	// identity it saw, and says so). Keyed by identity — which is what a config line finds its own
+	// record through, by the address the pin was filed under.
+	known, err := openKnownPeers(config.PeerIdentitiesPath(), log)
 	if err != nil {
 		return nil, err
 	}
-	// The directory resolves an identity through the record, so it needs it (Lookup: a name OR a
-	// node id, whichever the caller has).
+	// The directory resolves identities through the pin record, so it needs it.
 	directory.known = known
 	// Our own identity, and the certificate it signs: what we present to a peer so it can read
 	// WHO is calling out of the TLS handshake. It lives in the NODE's data dir even on a machine
@@ -85,14 +81,22 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger) (
 	// Tachi node serves is self-signed, so no system verifier accepts it, and on an mTLS surface
 	// the card needs a client certificate as well. The library's default resolver can read
 	// neither — through it every peer would look unreachable and the reminder would say so.
-	directory.resolve = func(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
-		return client.fetchCard(ctx, alias, baseURL)
+	directory.resolveEntry = client.fetchCard
+	// Discovery feeds the directory, and the directory feeds discovery's verifier: a sighting enters
+	// only after that connection has proved an identity, and the same client is what makes it — the
+	// card it reads is cached where the directory will find it (node/peers.go attachCard).
+	if browser != nil {
+		directory.discover = browser.Sightings
+		browser.setVerifier(client.verifierOf())
 	}
 	return &Sender{peers: directory, records: records, client: client, known: known}, nil
 }
 
-// Peers describes every configured node, never failing: an unreachable one is reported as such
-// rather than dropped, because "not listed" would read as "not configured" (§8.6).
+// Peers describes every node in the directory, never failing: an unreachable one is reported as such
+// rather than dropped, because "not listed" would read as "not configured" (§8.6). A node that
+// discovery found is described here too — it is a node this machine may delegate to — and a node this
+// machine holds no identity for is listed and marked, because the alternative is a reader who cannot
+// tell "not configured" from "not reachable yet".
 func (s *Sender) Peers(ctx context.Context) []tools.PeerSummary {
 	if s == nil {
 		return nil
@@ -100,14 +104,7 @@ func (s *Sender) Peers(ctx context.Context) []tools.PeerSummary {
 	snapshot := s.peers.Snapshot(ctx)
 	out := make([]tools.PeerSummary, 0, len(snapshot))
 	for _, p := range snapshot {
-		info := tools.PeerSummary{Name: p.Name, Note: p.Note, Reachable: p.Card != nil}
-		// The identity this machine holds, when it holds one: it is what makes a name checkable, and
-		// what a follow-up may name the peer by instead.
-		if s.known != nil {
-			if id, ok := s.known.nodeID(p.Name); ok {
-				info.NodeID = id
-			}
-		}
+		info := tools.PeerSummary{Name: p.Name(), NodeID: p.Identity, Note: p.Note, Reachable: p.Card != nil}
 		if p.Card != nil {
 			info.Description = p.Card.Description
 			// The peer's OWN claim about what it can do. Names only: the reminder is a list the model
@@ -205,17 +202,17 @@ func (s *Sender) RemoteTasks(logicalID string) []tools.RemoteTaskInfo {
 	return out
 }
 
-// displayName is the name to SHOW for the peer a record belongs to: the alias this machine uses
-// NOW, when the record's identity is still configured under one.
+// displayName is the name to SHOW for the peer a record belongs to: the name this machine uses NOW,
+// resolved through the identity the record binds.
 //
-// A record keeps the alias it was created with, and after a rename that stale name is one the
-// config no longer knows — the model would read it in a reminder and then have its tool call
-// refused as an unknown peer. The identity is what the record really binds (see
-// remoteClient.currentAliasFor), so it is what resolves the current name.
+// A record keeps the name it was created with, and after a rename that stale name is one the config
+// no longer knows — the reader would see a machine that is not configured anywhere. The identity is
+// what the record really binds, so it is what resolves the current name (and it costs nothing: the
+// directory is keyed by identity).
 func (s *Sender) displayName(d *Delegation) string {
-	if s != nil && s.client != nil {
-		if cur := s.client.currentAliasFor(d.PeerNodeID); cur != "" {
-			return cur
+	if s != nil {
+		if e, ok := s.peers.byIdentity(d.PeerNodeID); ok {
+			return e.Name()
 		}
 	}
 	return d.Peer
@@ -229,6 +226,7 @@ func (s *Sender) viewOf(d *Delegation, note string) tools.RemoteTaskInfo {
 	view := tools.RemoteTaskInfo{
 		ID:       d.ID,
 		Node:     s.displayName(d),
+		NodeID:   d.PeerNodeID,
 		Title:    d.Title,
 		State:    viewState(d.LastKnown.State),
 		Result:   d.LastKnown.Text,

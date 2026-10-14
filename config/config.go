@@ -424,25 +424,72 @@ type WeixinConfig struct {
 // not under `node`: `node:` describes what THIS machine offers to others, and a machine that
 // only delegates (its own node service switched off) still has peers to delegate to.
 //
-// The URL is where that node's A2A interface answers; its Agent Card is resolved from there,
-// and the card is what tells this machine what the peer actually does (§8.6: the reminder
-// describes available nodes, and a peer that cannot be reached is reported as unknown rather
-// than described from a guess).
+// A config line is an ADDRESS and a LABEL, and the label is the weaker half: it is what a person
+// calls that machine, used for display only. The model addresses a peer by its IDENTITY — the
+// node id it proved in the TLS handshake — so nothing here decides which machine a delegation
+// reaches, and a label that is wrong costs a confusing row rather than work sent elsewhere.
+//
+// The URL is where that node's A2A interface answers; its Agent Card is resolved from there and
+// tells this machine what the peer actually does (§8.6: the reminder describes available nodes,
+// and a peer that cannot be reached is reported as unknown rather than described from a guess).
+// It is also how a config line is joined to the identity pinned for it: before the first contact
+// there IS no identity, so the address both sides share is what the record is filed under.
 type PeerConfig struct {
-	// Name is the alias the model uses, and the only thing a tool argument carries. It has to
-	// be unique across the list: a name that resolved to two nodes would make every delegation
-	// ambiguous, so a duplicate is refused when the node is wired (node/peers.go).
-	Name string `yaml:"name"`
+	// Name is the optional label a person gave this machine ("家里的 NAS" in an identifier's
+	// clothes). It is display only now — a tool argument names a peer by node id — but it still
+	// has to be unique across the list: two rows reading "nas" in the picker, the board and the
+	// reminder would be the whole point of a label defeated, so a duplicate is refused when the
+	// directory is built (node/peers.go). It may be empty, in which case the display falls back to
+	// what the peer calls itself, and then to its short id.
+	Name string `yaml:"name,omitempty"`
 	// URL is the base address of the peer's A2A interface, e.g. "https://100.64.0.3:7080".
 	//
-	// It must be https unless the host is loopback, and that is a rule rather than a habit
-	// (node/peers.go refuses the rest): a delegation carries the prompt and the answer, so
-	// plaintext to another machine is not a smaller version of an encrypted one, it is the same
-	// conversation read aloud on the way.
+	// It must be https, and that is a rule rather than a habit (node/peers.go refuses the rest,
+	// loopback included): a delegation carries the prompt and the answer, so plaintext to another
+	// machine is not a smaller version of an encrypted one, it is the same conversation read aloud on
+	// the way. The loopback case used to be exempt — nothing can read it off a network — and the
+	// exemption is gone for the reason the identity is what names a peer: a plaintext connection
+	// presents no certificate, this machine therefore pins no identity for it, and a peer it holds no
+	// identity for cannot be named by a tool argument at all. A `http://` line would be a row that
+	// looks like an open door and opens nothing, so it is refused while it can still be fixed.
 	URL string `yaml:"url"`
-	// Note is an optional human line ("家里的 NAS"), carried by the peers reminder when the
-	// card cannot be read and there is nothing factual to say about the node.
+	// Note is an optional human line, carried by the peers reminder when the card cannot be read
+	// and there is nothing factual to say about the node.
 	Note string `yaml:"note,omitempty"`
+}
+
+// DiscoveryConfig holds how this machine FINDS other nodes on its own, as opposed to being told
+// about them in `peers:`.
+//
+// Discovery is off by default and it is a leaf, so a deployment that never turns it on behaves
+// exactly as it did before discovery existed. What it can never do is decide that something is
+// trustworthy: a discovered node still has to prove an identity over TLS before this machine will
+// name it, because anything on a local network can send a multicast packet (design §5).
+type DiscoveryConfig struct {
+	Mdns MdnsDiscoveryConfig `yaml:"mdns"`
+}
+
+// MdnsDiscoveryConfig is DNS-SD discovery over multicast DNS (`_tachi._tcp.local`).
+//
+// Multicast does not cross routers, is often blocked in containers and on guest WiFi, and has to
+// share port 5353 with the system's own responder, which is why nothing about correctness may
+// depend on it: it only ever produces the idea "go and try this address". A node this machine
+// cannot see this way is not a node this machine cannot reach — it is a node it has to be told
+// about, which is what `peers:` is for.
+type MdnsDiscoveryConfig struct {
+	// Enabled turns browsing on. Zero value (off) is the default, and the key exists so that a
+	// network where discovery is noise can say no without touching the peers list.
+	Enabled bool `yaml:"enabled"`
+	// Advertise turns announcing this machine on. It only ever does anything in the process that
+	// HOLDS the node service — the one with a remote A2A surface to talk about — and it is separate
+	// from Enabled on purpose: a machine may want to find others without publishing itself, and a
+	// machine on a network where its own name is noise may want the reverse.
+	Advertise bool `yaml:"advertise"`
+	// Interfaces names the network interfaces to browse (and, when Advertise is on, to announce on).
+	// Empty means every multicast-capable interface, which is what a machine on one network wants;
+	// naming them is for a machine on several, where broadcasting a name onto the wrong one is the
+	// thing to avoid.
+	Interfaces []string `yaml:"interfaces,omitempty"`
 }
 
 // PeerIdentitiesPath is where this machine records which key each peer presented the first time
@@ -488,6 +535,11 @@ type NodeConfig struct {
 	// certificate (node/options.go isLoopbackListen). Loopback is plaintext and names nobody;
 	// anything else encrypts and identifies every caller, which is why pointing this at a public
 	// address is also a statement about what may reach it.
+	//
+	// A wildcard address (`0.0.0.0:7080`) is a valid thing to bind and an impossible thing to
+	// advertise, so it comes with one requirement: `public_url` must say where callers reach this
+	// machine. Without it the node refuses to start, and says so; binding the wildcard and hoping is
+	// the one combination this file will not accept.
 	Listen string `yaml:"listen" default:"127.0.0.1:0"`
 
 	// PublicURL is the address this node ADVERTISES in its Agent Card, e.g.
@@ -496,8 +548,11 @@ type NodeConfig struct {
 	// published 0.0.0.0 (or a port behind a forwarder) would send callers somewhere that does
 	// not answer.
 	//
-	// Empty means "derive it from Listen when that is possible" (a concrete host), and
-	// otherwise publish no interface URL at all rather than a wrong one.
+	// Empty means "derive it from Listen when that is possible" — a concrete host gives
+	// `https://<host>:<port>` — and when it is NOT possible, because Listen is a wildcard address,
+	// there is nothing to derive and this node refuses to START (see below). A node that serves other
+	// machines has to be able to say where it is: its Card carries that address, and the machines
+	// that read Cards use them as the addresses to try.
 	PublicURL string `yaml:"public_url,omitempty"`
 
 	// Name is what this node CALLS ITSELF: a human-readable line, published as the Agent Card's
@@ -546,6 +601,14 @@ type NodeConfig struct {
 	// Reaching it does not refuse new WORK: the running turn is told its question could not be
 	// asked and finishes with what it has.
 	MaxParked int `yaml:"max_parked" default:"16"`
+
+	// Discovery is how this machine finds other nodes on its own, without a `peers:` line.
+	//
+	// It sits under `node:` because that is where a machine's own settings live, even though what
+	// it configures is the SENDING half: whether this machine goes looking. (The publishing half —
+	// announcing this machine to a network — is a separate switch with its own consequences, and
+	// it only ever happens in the process that actually serves the remote interface.)
+	Discovery DiscoveryConfig `yaml:"discovery"`
 }
 
 // WorkspaceDir is where remote tasks work: the configured workspace with "~" expanded to

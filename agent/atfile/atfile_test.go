@@ -403,54 +403,63 @@ func TestExpandSessionRefMarksAManagedSession(t *testing.T) {
 	assert.NotContains(t, res.Text, "execution record")
 }
 
-// staticAgents is an AgentResolver over a fixed set of targets.
+// staticAgents is an AgentResolver over a fixed set of targets, keyed the way the one that runs is
+// keyed: by identity.
 type staticAgents map[string]AgentTarget
 
-func (s staticAgents) Resolve(alias string) (AgentTarget, bool) {
-	t, ok := s[alias]
+func (s staticAgents) Resolve(id string) (AgentTarget, bool) {
+	t, ok := s[id]
 	return t, ok
 }
 
 // TestExpandAgentRefBecomesAPointer pins what #a: expands to. Three things have to be in that one
-// line, and each is a way the feature fails without it: the ALIAS (it is the string DelegateTask
-// takes, so the model does not have to guess it), the NODE ID (the peer's unforgeable identity,
-// which is what makes the reference checkable), and what to DO with it (the reference exists to
-// get work onto that machine).
+// line, and each is a way the feature fails without it: the IDENTITY (it is what a tool argument
+// takes, so the model does not have to guess it, and it is also the reference itself), what to CALL
+// the machine (for a reader), and what to DO with it (the reference exists to get work onto that
+// machine).
 func TestExpandAgentRefBecomesAPointer(t *testing.T) {
 	dir := t.TempDir()
+	const ugreenID = "cd726b446c34386ece70d88fdd5fbf2a"
 	ugreen := AgentTarget{
-		Alias:       "ugreen-nas",
-		NodeID:      "cd726b446c34386ece70d88fdd5fbf2a",
+		Label:       "ugreen-nas",
+		Name:        "ugreen-nas",
+		NodeID:      ugreenID,
 		Note:        "家里的 NAS",
 		Description: "A Tachi node that runs on the machine that owns it",
 	}
 
-	res := Expand(dir, "把这活儿交给 #a:ugreen-nas 去做", Options{Agents: staticAgents{"ugreen-nas": ugreen}})
+	res := Expand(dir, "把这活儿交给 #a:"+ugreenID+" 去做", Options{Agents: staticAgents{ugreenID: ugreen}})
 
-	assert.Equal(t, "把这活儿交给 [#a:ugreen-nas | node_id=cd726b446c34386ece70d88fdd5fbf2a | "+
-		"A Tachi node that runs on the machine that owns it; 用 DelegateTask(node=\"ugreen-nas\") 把活派过去] 去做",
+	assert.Equal(t, "把这活儿交给 [#a:"+ugreenID+" | ugreen-nas | "+
+		"A Tachi node that runs on the machine that owns it; 用 DelegateTask(node=\""+ugreenID+"\") 把活派过去] 去做",
 		res.Text)
 	assert.Equal(t, 1, res.Refs)
 }
 
-// A node this machine has never called outbound has no pinned identity (only outbound contact
-// writes one), and the pointer says so rather than filling the field with the name the node calls
-// itself — any key can claim any name, so that would be a fact the reference appears to prove and
-// does not.
+// A node this machine has never called outbound has no pinned identity (only outbound contact writes
+// one), and the pointer says so rather than filling the field with the name the node calls itself —
+// any key can claim any name, so that would be a fact the reference appears to prove and does not.
+//
+// What it must NOT do is offer a spelling: there is no `#a:` to insert (a reference carries an
+// identity, and there is none) and no `DelegateTask(node=…)` line (there is no argument to pass).
+// The resolver below is keyed by IDENTITY, like the one that runs: a name resolves nothing, so what
+// is under test is the state "the directory knows this machine and has no identity for it".
 func TestExpandAgentRefWithoutAPinnedIdentitySaysSo(t *testing.T) {
 	dir := t.TempDir()
-	fresh := AgentTarget{Alias: "hk-vps", Note: "香港的机器"}
+	const knownID = "aa11bb22cc33dd44aa11bb22cc33dd44"
+	fresh := AgentTarget{Label: "hk-vps", Name: "hk-vps", Note: "香港的机器"}
 
-	res := Expand(dir, "#a:hk-vps", Options{Agents: staticAgents{"hk-vps": fresh}})
+	res := Expand(dir, "#a:"+knownID, Options{Agents: staticAgents{knownID: fresh}})
 
-	assert.Contains(t, res.Text, "node_id 未知")
+	assert.Contains(t, res.Text, "身份未记录")
 	assert.Contains(t, res.Text, "香港的机器", "the configured line is what describes it when there is no card")
-	assert.Contains(t, res.Text, `用 DelegateTask(node="hk-vps")`)
+	assert.NotContains(t, res.Text, "#a:", "a machine with no identity has no reference to point with")
+	assert.NotContains(t, res.Text, "DelegateTask", "and no argument to pass")
 	assert.Equal(t, 1, res.Refs)
 }
 
-// An agent reference nothing can resolve stays exactly as typed — an alias this machine does not
-// know is a mistake to show the reader, not one to half-resolve.
+// An agent reference nothing can resolve stays exactly as typed — a name this machine does not
+// resolve to an identity is a mistake to show the reader, not one to half-resolve.
 func TestExpandAgentRefUnresolvedStaysVerbatim(t *testing.T) {
 	dir := t.TempDir()
 
@@ -459,7 +468,7 @@ func TestExpandAgentRefUnresolvedStaysVerbatim(t *testing.T) {
 		opts Options
 	}{
 		{"no resolver", Options{}},
-		{"unknown alias", Options{Agents: staticAgents{}}},
+		{"nothing in the directory", Options{Agents: staticAgents{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := Expand(dir, "交给 #a:nope 去做", tc.opts)
@@ -470,7 +479,7 @@ func TestExpandAgentRefUnresolvedStaysVerbatim(t *testing.T) {
 }
 
 func TestRefForAgent(t *testing.T) {
-	assert.Equal(t, "#a:ugreen-nas", RefForAgent("ugreen-nas"))
+	assert.Equal(t, "#a:cd726b446c34386ece70d88fdd5fbf2a", RefForAgent("cd726b446c34386ece70d88fdd5fbf2a"))
 }
 
 // The '#' namespaces are opened by their prefix and by nothing else. This is the rule that keeps
@@ -484,7 +493,7 @@ func TestHashRefOnlyMeansSomethingWithAKnownPrefix(t *testing.T) {
 	// being recognized.
 	opts := Options{
 		Sessions: staticSessions{"abc12345": {ID: "abc12345", Transcript: "/tmp/m.jsonl"}},
-		Agents:   staticAgents{"nas": {Alias: "nas", NodeID: "aa11"}},
+		Agents:   staticAgents{"aa11": {Label: "nas", Name: "nas", NodeID: "aa11"}},
 	}
 
 	for _, tc := range []struct {
@@ -509,9 +518,9 @@ func TestHashRefOnlyMeansSomethingWithAKnownPrefix(t *testing.T) {
 
 	// And the two real prefixes still resolve, so the refusals above are about the prefix and not
 	// about the resolver.
-	res := Expand(dir, "#a:nas 和 #s:abc12345", opts)
+	res := Expand(dir, "#a:aa11 和 #s:abc12345", opts)
 	assert.Equal(t, 2, res.Refs)
-	assert.Contains(t, res.Text, `DelegateTask(node="nas")`)
+	assert.Contains(t, res.Text, `DelegateTask(node="aa11")`)
 	assert.Contains(t, res.Text, "transcript /tmp/m.jsonl")
 }
 
@@ -522,19 +531,19 @@ func TestManyReferencesInOneMessageExpandIndependently(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "notes.md", []byte("file text"))
 
-	res := Expand(dir, "@notes.md 交给 #a:nas 和 #a:vps 看看 #s:abc12345",
+	res := Expand(dir, "@notes.md 交给 #a:aa11 和 #a:bb22 看看 #s:abc12345",
 		Options{
 			Sessions: staticSessions{"abc12345": {ID: "abc12345", Transcript: "/tmp/m.jsonl"}},
 			Agents: staticAgents{
-				"nas": {Alias: "nas", NodeID: "aa11"},
-				"vps": {Alias: "vps", NodeID: "bb22"},
+				"aa11": {Label: "nas", Name: "nas", NodeID: "aa11"},
+				"bb22": {Label: "vps", Name: "vps", NodeID: "bb22"},
 			},
 		})
 
 	assert.Equal(t, 4, res.Refs)
 	assert.Contains(t, res.Text, "file text")
-	assert.Contains(t, res.Text, `DelegateTask(node="nas")`)
-	assert.Contains(t, res.Text, `DelegateTask(node="vps")`)
+	assert.Contains(t, res.Text, `DelegateTask(node="aa11")`)
+	assert.Contains(t, res.Text, `DelegateTask(node="bb22")`)
 	assert.Contains(t, res.Text, "transcript /tmp/m.jsonl")
 }
 

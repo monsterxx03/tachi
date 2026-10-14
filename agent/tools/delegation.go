@@ -51,9 +51,15 @@ func LogicalConversation(ctx context.Context) string {
 // The shape is the design's (§8.1, §8.2): a local id the model can refer to, the node it went
 // to, a title, a state, and whatever came back — an answer, or a question to answer.
 type RemoteTaskInfo struct {
-	ID    string `json:"task_id"`
-	Node  string `json:"node"`
-	Title string `json:"title"`
+	ID string `json:"task_id"`
+	// Node is what to CALL the machine the work went to — a label, a peer's own name for itself, or
+	// the front of its id. For a reader.
+	Node string `json:"node"`
+	// NodeID is the identity of that machine, and it is what actually identifies it: the name beside
+	// it may have been changed since the record was made, and this cannot. Empty only for work
+	// delegated before this machine named peers by identity.
+	NodeID string `json:"node_id,omitempty"`
+	Title  string `json:"title"`
 	State string `json:"state"`
 	// Result is the answer (or, for a failed task, why it failed).
 	Result string `json:"result,omitempty"`
@@ -79,11 +85,14 @@ func (r RemoteTaskInfo) InFlight() bool {
 
 // PeerSummary is one node the model may delegate to, as the peers reminder lists it.
 type PeerSummary struct {
+	// Name is what to CALL the node — the label a person gave it, else what the node calls itself,
+	// else the front of its id (node/peerdir.go owns the rule). It is for a reader, not for a tool
+	// argument.
 	Name string `json:"name"`
-	// NodeID is the identity THIS machine pinned for the peer on first contact, and it is empty
-	// when it has never reached that node outbound. The model does not need it to delegate — but it
-	// is the one fact about a peer nobody else can claim, it makes a name checkable, and it is
-	// therefore also what the tool's `node` argument may carry instead of the name.
+	// NodeID is the identity THIS machine pinned for the peer on first contact, and it is empty when
+	// it has never reached that node outbound. It is the ONLY thing the tool's `node` argument
+	// takes: the identity cannot be claimed by anyone else, while a name is whatever its owner says
+	// it is (and every machine's default name is the same word).
 	NodeID string `json:"node_id,omitempty"`
 	// Description is the peer's own account of itself, empty when it could not be reached.
 	Description string `json:"description,omitempty"`
@@ -103,7 +112,8 @@ type PeerSummary struct {
 // described: nothing about this conversation travels with it (§8.1 — a delegation does not copy
 // the local session).
 type DelegationRequest struct {
-	// Peer is the configured node alias. Empty when ContinueFrom names the conversation.
+	// Peer names the machine: a node id, or an unambiguous prefix of one. Empty when ContinueFrom
+	// names the conversation. A label is NOT accepted — it decides nothing about where work goes.
 	Peer string
 	// ContinueFrom continues an existing delegated conversation (a local task id).
 	ContinueFrom string

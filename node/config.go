@@ -60,8 +60,12 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 		// (see checkRemoteListen), and every caller is still identified by its certificate.
 		RemoteListen: cfg.Node.Listen,
 		PublicURL:    cfg.Node.PublicURL,
-		Name:         cfg.Node.Name,
-		Description:  cfg.Node.Description,
+		// Announcing is the operator's decision and it is separate from browsing: a machine may want
+		// to find others without publishing itself, or the reverse.
+		Advertise:           cfg.Node.Discovery.Mdns.Advertise,
+		AdvertiseInterfaces: append([]string(nil), cfg.Node.Discovery.Mdns.Interfaces...),
+		Name:                cfg.Node.Name,
+		Description:         cfg.Node.Description,
 		// What this machine's agent can do, published beside the node's own capability of running
 		// a remote turn. Read here, once, because a Card is a description published at startup.
 		Skills:   MachineSkills(),

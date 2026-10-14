@@ -34,12 +34,18 @@ type PeerBoardVO struct {
 
 // PeerBoardRowVO is one node as the panel draws it.
 type PeerBoardRowVO struct {
-	Alias string `json:"alias"`
+	// Label is the name a config line gave the node, empty when it gave none.
+	Label string `json:"label"`
+	// Name is what to call it on the row: the label, else what the node calls itself, else the front
+	// of its id. The row shows this, and never shows the node's own name as though it were known.
+	Name string `json:"name"`
 	// NodeID/NodeIDLabel are the pinned identity: full for a tooltip, short for the row. Empty and
 	// "身份未记录" when this machine has never called that node outbound.
 	NodeID      string `json:"nodeId"`
 	NodeIDLabel string `json:"nodeIdLabel"`
-	// URL is where this machine dials the peer (config), never what the card claims.
+	// URL is where this machine will dial FIRST — the address the node advertises about itself when
+	// it advertises one, the configured address otherwise. Never what the card claims as the only
+	// truth: it is one candidate among the ones this machine holds.
 	URL  string `json:"url"`
 	Note string `json:"note"`
 	// Reach and Reachable are the last look's verdict, in the same words the picker uses.
@@ -53,7 +59,10 @@ type PeerBoardRowVO struct {
 	// Err says why there is no card (hidden while there is one).
 	Err string `json:"err"`
 	// Ref is the reference that names this node in a message (atfile.RefForAgent), so the panel can
-	// offer the same spelling the picker inserts.
+	// offer the same spelling the picker inserts. It is EMPTY for a node this machine holds no
+	// identity for, and that is the same answer the picker gives (agentref.Search): there is nothing
+	// to insert, and a bare "#a:" would be a mark that only looks like one. The identity column
+	// beside it says why.
 	Ref string `json:"ref"`
 }
 
@@ -108,13 +117,26 @@ func (s *AgentService) RefreshPeerBoard() PeerBoardVO {
 	return boardVO(list)
 }
 
+// refForRow is the reference a panel row offers: the node's identity, or NOTHING when this machine
+// holds none for it. An empty identity rendered as a reference would be `#a:` — a mark with nothing
+// after it, which inserts text the expansion cannot resolve and the reader would only have to delete
+// (the picker refuses such a row for the same reason, agentref.Search). The row's identity column
+// says the fact instead.
+func refForRow(nodeID string) string {
+	if nodeID == "" {
+		return ""
+	}
+	return atfile.RefForAgent(nodeID)
+}
+
 func boardVO(list *node.PeerList) PeerBoardVO {
 	details := list.Details()
 	out := PeerBoardVO{Peers: make([]PeerBoardRowVO, 0, len(details))}
 	var checked time.Time
 	for _, d := range details {
 		row := PeerBoardRowVO{
-			Alias:       d.Alias,
+			Label:       d.Label,
+			Name:        d.Name,
 			NodeID:      d.NodeID,
 			NodeIDLabel: agentref.IDLabel(atfile.AgentTarget{NodeID: d.NodeID}),
 			URL:         d.URL,
@@ -123,7 +145,11 @@ func boardVO(list *node.PeerList) PeerBoardVO {
 			Checked:     d.Checked,
 			Err:         d.Err,
 			Card:        cardVO(d.Card),
-			Ref:         atfile.RefForAgent(d.Alias),
+			// The reference names the node by IDENTITY, because that is what a tool argument takes;
+			// the label rides along only as something to read. A node with no identity has no
+			// reference to give — the panel leaves the field empty rather than handing out a `#a:`
+			// with nothing after it, which is what the picker does too (agentref.Search).
+			Ref: refForRow(d.NodeID),
 			// The words come from agentref, the same ones the picker's rows use: one fact, one
 			// phrase, three frontends.
 			Reach: agentref.ReachWord(atfile.AgentTarget{Reachable: d.Reachable, Checked: d.Checked}),

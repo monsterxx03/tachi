@@ -170,10 +170,13 @@ func (t *RemoteTaskTool) list(conversation, node string) (string, error) {
 	// The conversation filter comes from the RUN, never from a model argument: a `list` that
 	// could be widened by the model would show another conversation's work (§8.5).
 	views := t.delegator.RemoteTasks(conversation)
-	if node != "" {
+	if ref := strings.TrimSpace(node); ref != "" {
 		kept := make([]RemoteTaskInfo, 0, len(views))
 		for _, v := range views {
-			if v.Node == node {
+			// This is a FILTER over work this conversation already has, not a way to reach a machine:
+			// a wrong answer hides rows rather than sending anything anywhere, which is why a name is
+			// accepted here beside the identity. Nothing else in the tool layer resolves by name.
+			if v.NodeID != "" && strings.HasPrefix(v.NodeID, ref) || v.Node == ref {
 				kept = append(kept, v)
 			}
 		}

@@ -112,7 +112,9 @@ const (
 
 // SubmitRequest is one thing to ask a peer for.
 type SubmitRequest struct {
-	// Peer is the configured alias.
+	// Peer names the machine the work is for: a node id, or an unambiguous prefix of one. NOT a
+	// label — a label is a display string that its owner chooses, and this one decides where work
+	// goes (node/peers.go Lookup).
 	Peer string
 	// Prompt is the request text. It is what the peer's agent sees, and it is stored with the
 	// record so a retry can send the SAME content (§9.2).
@@ -278,17 +280,20 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 		req.Peer = peer
 	}
 
-	// The alias is the only thing checked here: a peer whose CARD could not be read is not
-	// necessarily unable to work (the card is how this machine describes a node, not how it
-	// reaches one), and refusing on it would turn a slow well-known fetch into "cannot delegate".
-	// Whether the peer is there is decided by the request itself — and if it is not, the record
-	// says the outcome is unknown rather than inventing a refusal (§9.2).
+	// The identity is the only thing checked here: a peer whose CARD could not be read is not
+	// necessarily unable to work (the card is how this machine describes a node, not how it reaches
+	// one), and refusing on it would turn a slow well-known fetch into "cannot delegate". Whether the
+	// peer is there is decided by the request itself — and if it is not, the record says the outcome
+	// is unknown rather than inventing a refusal (§9.2).
+	// The prompt is checked FIRST, because an empty one is the caller's own mistake: refusing it
+	// after resolving a machine would make the answer depend on which machine was named, and this
+	// one is true whatever was named.
+	if strings.TrimSpace(req.Prompt) == "" {
+		return nil, errors.New("node: a delegation needs a prompt")
+	}
 	p, err := c.peers.Lookup(ctx, req.Peer)
 	if err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		return nil, errors.New("node: a delegation needs a prompt")
 	}
 
 	contextID, reference := "", ""
@@ -297,24 +302,18 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 		if err != nil {
 			return nil, err
 		}
-		// A follow-up continues the conversation it belongs to: sending it to another MACHINE
-		// would be a different conversation wearing the same words (§8.5). The check is on the
-		// identity the record holds, not on the local alias, because the alias is this machine's
-		// name for a peer and may be pointed somewhere else tomorrow (design §4.1: 持久化远端绑定
-		// 使用 node_id). That is what lets a rename stay a rename.
-		if prev.PeerNodeID != "" {
-			got, err := c.verifyPeerIdentity(ctx, req.Peer)
-			if err != nil {
-				return nil, err
-			}
-			if got != "" && got != prev.PeerNodeID {
-				return nil, fmt.Errorf("node: %s belongs to node %s, but %s is node %s",
-					prev.ID, prev.PeerNodeID, req.Peer, got)
-			}
-		} else if prev.Peer != req.Peer {
-			// No identity to compare — a plaintext peer (loopback), where there is nothing else to
-			// go on. The alias is all this record ever had.
-			return nil, fmt.Errorf("node: %s was delegated to %s, not to %s", prev.ID, prev.Peer, req.Peer)
+		// A follow-up continues the conversation it belongs to: sending it to another MACHINE would
+		// be a different conversation wearing the same words (§8.5). The comparison is on identities —
+		// the one thing a record and a request can both be certain of — and it costs nothing, because
+		// the request's peer was resolved BY identity in the first place (design §4.1).
+		if prev.PeerNodeID == "" {
+			return nil, fmt.Errorf("node: %s was delegated to %s before this machine named peers by "+
+				"identity, so there is no record of which machine holds that conversation; a record made "+
+				"now would have one", prev.ID, peerWords(prev.Peer, ""))
+		}
+		if prev.PeerNodeID != p.Identity {
+			return nil, fmt.Errorf("node: %s belongs to node %s, but %s is node %s",
+				prev.ID, prev.PeerNodeID, p.Display(), p.Identity)
 		}
 		if prev.RemoteContextID == "" {
 			// Either the submission's fate is unknown, or the peer answered it directly without
@@ -337,7 +336,11 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 	if title == "" {
 		title = deriveTitle(req.Prompt)
 	}
-	d := newDelegation(p.Name, req.LogicalID, title, req.Prompt, a2a.NewMessageID())
+	d := newDelegation(p.Name(), req.LogicalID, title, req.Prompt, a2a.NewMessageID())
+	// The record is bound to a MACHINE, not to a name, and the binding is written here because it is
+	// already known: the request named a peer by identity, so nothing has to be discovered later. A
+	// rename, a re-pointed config line or a takeover of the old name cannot move this record (§4.1).
+	d.PeerNodeID = p.Identity
 	d.RemoteContextID = contextID
 	if err := c.delegations.put(d); err != nil {
 		return nil, err
@@ -373,45 +376,29 @@ func (c *remoteClient) Submit(ctx context.Context, req SubmitRequest) (*Delegati
 // peerForContinuation is which machine a follow-up belongs to, asked of the RECORD rather than the
 // caller — the whole reason a continuation does not have to name a peer (Submit).
 //
-// It resolves in three steps, cheapest first, and each one exists because the others cannot cover
-// the case it does:
+// It is ONE step now, not three, and that is what keying the directory on identity bought: the record
+// holds the identity it was bound to, and the directory is keyed by identity, so "where is that
+// conversation" is a lookup rather than a search. The version before this one had to walk aliases and
+// ask peers who they were, because a name was all a record could hold.
 //
-//  1. the pin record: if this identity has been reached under an alias, that alias is the name the
-//     config uses NOW (no request);
-//  2. the alias the record was created with: the everyday case, where nothing was renamed;
-//  3. asking the configured peers which one this identity is — the only way a RENAME can be
-//     followed, because a record stores the alias it was made with and the new alias is a word
-//     only the config knows. One authenticated card request per peer (the same one the
-//     confirmation below makes anyway), on a path that only runs after a rename.
-//
-// The identity is what makes 1 and 3 possible at all, which is why the ORDER matters: asking the
-// recorded alias first would turn a rename into "not configured any more" and lose a conversation
-// that is still there (§4.1: 别名变化不能改变任务归属).
-//
-// What this does NOT do is decide whether the machine is still the right one: that comparison
-// happens in Submit, before any message is sent (§8.1).
+// A machine that is neither configured nor announcing itself any more is a REFUSAL rather than a
+// guess: there is no fallback to a name, because a name is not what a record binds (design §4.1 —
+// 别名变化不能改变任务归属, and a name pointed at another machine must not adopt the work).
 func (c *remoteClient) peerForContinuation(ctx context.Context, id string) (string, error) {
 	prev, err := c.delegations.find(id)
 	if err != nil {
 		return "", err
 	}
-	if current := c.currentAliasFor(prev.PeerNodeID); current != "" {
-		return current, nil
+	if prev.PeerNodeID == "" {
+		return "", fmt.Errorf("node: %s predates this machine naming peers by identity, so there is no "+
+			"record of which machine holds it; it cannot be continued", id)
 	}
-	if _, ok := c.peers.configOnly(prev.Peer); ok {
-		return prev.Peer, nil
+	if _, ok := c.peers.byIdentity(prev.PeerNodeID); !ok {
+		return "", fmt.Errorf("node: %s belongs to node %s, which this machine cannot reach any more: it is "+
+			"neither configured nor announcing itself. Configure that node again to continue it",
+			id, prev.PeerNodeID)
 	}
-	if prev.PeerNodeID != "" {
-		for _, alias := range c.peers.configOnlyNames() {
-			if got, err := c.verifyPeerIdentity(ctx, alias); err == nil && got == prev.PeerNodeID {
-				return alias, nil
-			}
-		}
-		return "", fmt.Errorf("node: %s belongs to node %s, which no configured peer answers as; "+
-			"configure that node again to continue it", id, prev.PeerNodeID)
-	}
-	// A plaintext (loopback) record has no identity to look for and only ever had the alias.
-	return "", fmt.Errorf("node: %s was delegated to %q, which is not a configured peer any more", id, prev.Peer)
+	return prev.PeerNodeID, nil
 }
 
 // sendResult is what one message:send answered with: the task the peer created, OR a direct
@@ -497,7 +484,6 @@ func (c *remoteClient) recordDirectAnswer(ctx context.Context, d *Delegation, ms
 	// A direct Message cannot carry an answer back into the node's question slot, so whatever
 	// question this machine was holding is over with it: there is no task left to answer into.
 	next.QuestionID = ""
-	c.stampPeerIdentity(&next)
 	if msg.ContextID != "" {
 		next.RemoteContextID = msg.ContextID
 	}
@@ -505,22 +491,6 @@ func (c *remoteClient) recordDirectAnswer(ctx context.Context, d *Delegation, ms
 		return d, err
 	}
 	return &next, nil
-}
-
-// stampPeerIdentity records WHICH machine this record's peer turned out to be.
-//
-// The value comes from the TLS handshake (node/tls.go), which is the only thing that verified it —
-// so it is a fact this machine checked rather than one a peer claimed, and the record keeps it for
-// the reason the field exists: an alias reconfigured to another machine must not silently adopt
-// the tasks of the old one. A plaintext (loopback) peer has no verified identity, and the field
-// stays empty rather than being filled with a guess.
-func (c *remoteClient) stampPeerIdentity(next *Delegation) {
-	if c.known == nil {
-		return
-	}
-	if id, ok := c.known.nodeID(next.Peer); ok {
-		next.PeerNodeID = id
-	}
 }
 
 // noHandle explains why an action has nothing to act on, and the TWO reasons are different facts:
@@ -573,7 +543,6 @@ func (c *remoteClient) record(ctx context.Context, d *Delegation, task *a2a.Task
 		Text:  c.boundAnswer(d.ID, text),
 		At:    now,
 	}
-	c.stampPeerIdentity(&next)
 	if task.Status.State == a2a.TaskStateInputRequired {
 		if q := QuestionID(task.Status.Message); q != "" {
 			next.QuestionID = q
@@ -647,25 +616,86 @@ func (c *remoteClient) storeFile(ctx context.Context, d *Delegation, f filePart)
 	return path, nil
 }
 
+// peerOf is the machine a RECORD belongs to, looked up by the identity the record was bound to.
+//
+// The record is the reason the sending side never needs a name to reach a peer: the identity it
+// holds cannot be re-pointed, and it is what `continue_from` really continues (§4.1).
+func (c *remoteClient) peerOf(d *Delegation) (peerEntry, error) {
+	if d == nil || d.PeerNodeID == "" {
+		return peerEntry{}, fmt.Errorf("node: delegation %s predates this machine naming peers by identity, "+
+			"so there is no record of which machine holds it; it cannot be reached", d.ID)
+	}
+	e, ok := c.peers.byIdentity(d.PeerNodeID)
+	if !ok {
+		return peerEntry{}, fmt.Errorf("node: %s is node %s, which this machine cannot reach any more: it is "+
+			"neither configured nor announcing itself. Configure that node again to reach it", d.ID, d.PeerNodeID)
+	}
+	return e, nil
+}
+
+// firstAttemptTimeout bounds one attempt at an address that is NOT the last one worth trying.
+//
+// The addresses are ordered with what a peer says about itself first and the configured address
+// last (node/peerdir.go prependAddrs), which is right for a machine that moved and costly for one that did
+// not: a laptop away from home tries its peer's LAN address and waits for a connection that cannot
+// work. This is how much of that wait is spent — and it is a small number on purpose, because the
+// fallback is one attempt away.
+const firstAttemptTimeout = 2 * time.Second
+
 // do performs one request and classifies what came back.
 //
-// Every non-2xx is turned into a PeerRefusal carrying whatever reason the peer's answer had —
-// our own domain included, which is the reason this client exists at all.
+// Every non-2xx is turned into a PeerRefusal carrying whatever reason the peer's answer had — our
+// own domain included, which is the reason this client exists at all.
 func (c *remoteClient) do(ctx context.Context, d *Delegation, method, path string, body []byte) ([]byte, error) {
-	pc, ok := c.peers.configOnly(d.Peer)
-	if !ok {
-		// The record names a peer that is no longer configured. Refused rather than sent
-		// unsigned: an unsigned request to whatever now answers at that address would be a
-		// delegation to a machine this node does not know.
-		return nil, &UnknownPeerError{Name: d.Peer}
-	}
-	base, err := url.Parse(pc.URL)
+	e, err := c.peerOf(d)
 	if err != nil {
-		return nil, fmt.Errorf("node: peer %s has an unusable address: %w", d.Peer, err)
+		return nil, err
+	}
+	return c.request(ctx, e, method, path, body)
+}
+
+// request sends one request to a peer, trying each address it is known by until one answers.
+//
+// Falling through to the next address happens ONLY when nothing was reached: a refusal means the
+// request arrived at a machine and that machine said no, so the remaining addresses are not
+// candidates for the same request — they would be other machines.
+func (c *remoteClient) request(ctx context.Context, e peerEntry, method, path string, body []byte) ([]byte, error) {
+	addrs := e.dialAddrs()
+	if len(addrs) == 0 {
+		return nil, &PeerRefusal{Transport: true, Peer: e.Display(),
+			Message: "this machine holds no address for it that can prove an identity (a peer must be https)"}
+	}
+	var last error
+	for i, addr := range addrs {
+		budget := c.requestTimeout
+		if i < len(addrs)-1 {
+			budget = firstAttemptTimeout
+		}
+		payload, err := c.attempt(ctx, e, addr, method, path, body, budget)
+		if err == nil {
+			return payload, nil
+		}
+		last = err
+		var refusal *PeerRefusal
+		if errors.As(err, &refusal) && !refusal.Transport {
+			return nil, err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, last
+}
+
+// attempt is one request to one address.
+func (c *remoteClient) attempt(ctx context.Context, e peerEntry, addr, method, path string, body []byte, budget time.Duration) ([]byte, error) {
+	base, err := url.Parse(addr)
+	if err != nil {
+		return nil, fmt.Errorf("node: %s has an unusable address %q: %w", e.Display(), addr, err)
 	}
 	base.Path = strings.TrimSuffix(base.Path, "/") + path
 
-	ctx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	var reader io.Reader
@@ -685,21 +715,21 @@ func (c *remoteClient) do(ctx context.Context, d *Delegation, method, path strin
 		req.Header.Set(nodeNameHeader, c.ourName)
 	}
 
-	resp, err := c.clientFor(pc).Do(req)
+	resp, err := c.clientFor(e, addr).Do(req)
 	if err != nil {
 		// Nothing about the request was considered: "we do not know", not a refusal.
-		return nil, &PeerRefusal{Transport: true, Message: err.Error(), Peer: d.Peer}
+		return nil, &PeerRefusal{Transport: true, Message: err.Error(), Peer: e.Display()}
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &PeerRefusal{Transport: true, Message: err.Error(), Peer: d.Peer}
+		return nil, &PeerRefusal{Transport: true, Message: err.Error(), Peer: e.Display()}
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return payload, nil
 	}
-	return nil, parseRefusal(resp.StatusCode, payload, d.Peer)
+	return nil, parseRefusal(resp.StatusCode, payload, e.Display())
 }
 
 // PeerRefusal is a refusal a peer made, in the peer's own terms.
@@ -929,74 +959,74 @@ func deriveTitle(prompt string) string {
 	return line
 }
 
-// verifyPeerIdentity establishes which machine answers at a peer's configured address, WITHOUT
-// sending it any work.
+// verifierOf answers the one question discovery has about a candidate: which identity does the
+// machine at this address prove?
 //
-// It exists for the one decision that must be made before a message leaves: whether the node the
-// caller named is the one a record belongs to (see Submit). The proof is the same handshake every
-// call goes through — the card request is just the cheapest authenticated request there is — and
-// the answer comes out of the TOFU record, which is written by the handshake and by nothing else.
-//
-// An empty answer means the peer has no identity to prove: a plaintext (loopback) address, where
-// the caller falls back to the alias.
-func (c *remoteClient) verifyPeerIdentity(ctx context.Context, alias string) (string, error) {
-	if _, err := c.fetchCard(ctx, alias, ""); err != nil {
-		return "", err
+// It is a card read, because that is the cheapest authenticated request there is, and the answer does
+// not come from the card: it comes from the TLS handshake underneath it, out of the pin record the
+// handshake writes (node/tls.go). A candidate that presents no certificate, or whose card cannot be
+// read, is a candidate that proves nothing — which is an ordinary outcome for a machine still
+// starting up, and the browser retries rather than believing the packet.
+func (c *remoteClient) verifierOf() func(ctx context.Context, addrs []string) (string, error) {
+	return func(ctx context.Context, addrs []string) (string, error) {
+		e := peerEntry{Addrs: append([]string(nil), addrs...)}
+		_, served, err := c.fetchCard(ctx, e)
+		if err != nil {
+			return "", err
+		}
+		// The pin is filed under the address that ANSWERED, which is not necessarily the first one
+		// tried — so the identity is read back from there rather than assumed.
+		id, _ := c.known.pinnedIdentityAt(served)
+		return id, nil
 	}
-	id, _ := c.known.nodeID(alias)
-	return id, nil
 }
 
-// currentAliasFor is the name this machine NOW uses for a node id, or "" when the configuration has
-// no entry for it any more.
-//
-// It exists so a rename reads as a rename everywhere: a record keeps the alias it was created with,
-// and showing that stale name would have the model (and the reader) calling a peer by a name the
-// config no longer knows (node/peers.go would refuse it as unknown).
-//
-// It is ONE lookup now, not a scan of the configuration: the TOFU record is keyed by identity, so
-// "which id is this alias" is a question nobody has to ask here any more. What is still checked is
-// that the name the record carries is one the CONFIGURATION has — a record is written by a
-// handshake, and a handshake can outlive the config line it used.
-func (c *remoteClient) currentAliasFor(nodeID string) string {
-	if nodeID == "" || c.known == nil {
-		return ""
-	}
-	alias, ok := c.known.aliasFor(nodeID)
-	if !ok {
-		return ""
-	}
-	if _, configured := c.peers.configOnly(alias); !configured {
-		return ""
-	}
-	return alias
-}
-
-// fetchCard reads one peer's Agent Card over that peer's own TLS client.
+// fetchCard reads one peer's Agent Card, and answers with the address that served it.
 //
 // It is a hand-written GET rather than agentcard.DefaultResolver for the reason in OpenSender: the
 // resolver verifies the peer's certificate the way the system does, which a self-signed node
 // certificate never passes, and it presents no client certificate either. Both of those are the
 // POINT of this node's TLS, so the card has to travel over the same connection a delegation does.
-func (c *remoteClient) fetchCard(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
-	pc, ok := c.peers.configOnly(alias)
-	if !ok {
-		return nil, &UnknownPeerError{Name: alias}
+//
+// The address is answered rather than assumed because the card is CACHED under it: a peer that
+// answered from an address it did not have to be told about must be remembered that way, or the
+// next turn asks the address that just failed.
+func (c *remoteClient) fetchCard(ctx context.Context, e peerEntry) (*a2a.AgentCard, string, error) {
+	addrs := e.dialAddrs()
+	if len(addrs) == 0 {
+		return nil, "", fmt.Errorf("node: %s has no address this machine can ask over TLS", e.Display())
 	}
-	if pc.URL == "" {
-		pc.URL = baseURL
+	var last error
+	for i, addr := range addrs {
+		budget := c.requestTimeout
+		if i < len(addrs)-1 {
+			budget = firstAttemptTimeout
+		}
+		card, err := c.cardAt(ctx, e, addr, budget)
+		if err == nil {
+			return card, addr, nil
+		}
+		last = err
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	return nil, "", last
+}
+
+// cardAt is one card request to one address.
+func (c *remoteClient) cardAt(ctx context.Context, e peerEntry, addr string, budget time.Duration) (*a2a.AgentCard, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimSuffix(pc.URL, "/")+a2asrv.WellKnownAgentCardPath, nil)
+		strings.TrimSuffix(addr, "/")+a2asrv.WellKnownAgentCardPath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("node: %w", err)
 	}
 	req.Header.Set(a2aVersionHdr, string(a2a.Version))
 
-	resp, err := c.clientFor(pc).Do(req)
+	resp, err := c.clientFor(e, addr).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1006,41 +1036,48 @@ func (c *remoteClient) fetchCard(ctx context.Context, alias, baseURL string) (*a
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("node: %s answered the card request with %d", alias, resp.StatusCode)
+		return nil, fmt.Errorf("node: %s answered the card request with %d", e.Display(), resp.StatusCode)
 	}
 	var card a2a.AgentCard
 	if err := json.Unmarshal(body, &card); err != nil {
-		return nil, fmt.Errorf("node: %s answered the card request with something unreadable: %w", alias, err)
+		return nil, fmt.Errorf("node: %s answered the card request with something unreadable: %w", e.Display(), err)
 	}
 	if card.Name == "" {
-		return nil, fmt.Errorf("node: %s served an empty card", alias)
+		return nil, fmt.Errorf("node: %s served an empty card", e.Display())
 	}
 	return &card, nil
 }
 
-// clientFor returns the HTTP client for one peer: the shared one for plaintext loopback, and a
-// per-peer client carrying its TLS pin for anything else.
+// clientFor returns the HTTP client for one peer at one address: the shared one for plaintext
+// loopback, and a per-address client carrying its TLS pin for anything else.
 //
-// The pin is read ONCE per peer per process. A peer's KEY changing at runtime is not a
-// case worth handling (the sender is rebuilt when the peer list changes — node/delegatorcache.go,
-// and a re-keyed peer is a mismatch the pin refuses by design), and re-reading it per request
-// would put a lock and a map lookup in front of every poll.
-func (c *remoteClient) clientFor(pc peer) *http.Client {
-	u, err := url.Parse(pc.URL)
+// The key is the identity AND the address, because the TLS configuration is about both: a
+// certificate pin is a statement about who answers at an address, and the label and address the
+// handshake files its first contact under (node/tls.go) belong to the pair rather than to either
+// half. Two entries reaching one address — which is what a machine that moved looks like from here —
+// therefore get their own clients rather than sharing the first one's idea of who is there.
+//
+// The pin is read ONCE per client per process. A peer's KEY changing at runtime is not a case worth
+// handling (the sender is rebuilt when the peer set changes — node/delegatorcache.go, and a re-keyed
+// peer is a mismatch the pin refuses by design), and re-reading it per request would put a lock and a
+// map lookup in front of every poll.
+func (c *remoteClient) clientFor(e peerEntry, addr string) *http.Client {
+	u, err := url.Parse(addr)
 	if err != nil || u.Scheme != "https" {
 		return c.http
 	}
+	key := e.Identity + "@" + addr
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.clients == nil {
 		c.clients = make(map[string]*http.Client, 1)
 	}
-	if cl, ok := c.clients[pc.Name]; ok {
+	if cl, ok := c.clients[key]; ok {
 		return cl
 	}
 	cl := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: peerTLSConfig(c.ourCert, c.known, pc.Name),
+		TLSClientConfig: peerTLSConfig(c.ourCert, c.known, e.Name(), pinAddr(e, addr)),
 	}}
-	c.clients[pc.Name] = cl
+	c.clients[key] = cl
 	return cl
 }

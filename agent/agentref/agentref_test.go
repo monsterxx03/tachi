@@ -13,61 +13,96 @@ func staticPeers(peers ...Peer) PeerList {
 	return func() []Peer { return peers }
 }
 
-// The picker's opening list is every configured node, in alias order. A node missing from it
+// The picker's opening list is every node this machine knows, in name order. A node missing from it
 // would read as "not configured", which is the one thing a list of nodes may not imply.
-func TestSearchListsEveryNodeInAliasOrder(t *testing.T) {
+func TestSearchListsEveryNameableNodeInNameOrder(t *testing.T) {
 	src := New(staticPeers(
-		Peer{Alias: "ugreen-nas", Note: "家里的 NAS", NodeID: "aa11", Reachable: true, Checked: true},
-		Peer{Alias: "hk-vps", Note: "香港的机器"},
+		Peer{Label: "ugreen-nas", Name: "ugreen-nas", Note: "家里的 NAS", NodeID: "aa11aa11aa11aa11", Reachable: true, Checked: true},
+		Peer{Label: "hk-vps", Name: "hk-vps", Note: "香港的机器", NodeID: "bb22bb22bb22bb22"},
 	))
 
 	targets := src.Search("", 0)
 
 	assert.Len(t, targets, 2)
-	assert.Equal(t, "hk-vps", targets[0].Alias)
-	assert.Equal(t, "ugreen-nas", targets[1].Alias)
-	assert.Equal(t, "aa11", targets[1].NodeID)
+	assert.Equal(t, "hk-vps", targets[0].Name)
+	assert.Equal(t, "ugreen-nas", targets[1].Name)
+	assert.Equal(t, "aa11aa11aa11aa11", targets[1].NodeID)
 	assert.True(t, targets[1].Checked)
 	assert.False(t, targets[0].Checked, "a node nobody has probed is not 'checked and unreachable'")
 }
 
-// A match on the alias outranks a match on prose, because the alias is what the reader is typing.
-func TestSearchRanksAliasHitsAboveProse(t *testing.T) {
+// A node this machine holds no identity for is not offered as a REFERENCE, and it is not hidden
+// either: this picker inserts identity-carrying references, so a row it offered would leave a
+// dangling "#a:" in the message. The machines this machine knows are still listed — by the reminder
+// and on the board — with the reason they cannot be pointed at yet.
+func TestSearchSkipsNodesWithNoIdentity(t *testing.T) {
 	src := New(staticPeers(
-		Peer{Alias: "mac", Description: "runs on the nas if it is up"},
-		Peer{Alias: "nas", Note: "the box in the closet"},
-		Peer{Alias: "ugreen-nas", Note: "家里的 NAS"},
+		Peer{Name: "nobody-has-reached-it", Note: "configured, never contacted"},
+		Peer{Name: "known", NodeID: "cc33cc33cc33cc33"},
+	))
+
+	targets := src.Search("", 0)
+
+	assert.Len(t, targets, 1, "only the machine that can be named")
+	assert.Equal(t, "known", targets[0].Name)
+	assert.Empty(t, src.Search("nobody", 0), "and it cannot be searched into existence either")
+}
+
+// A match on the name outranks a match on prose, because the name is what the reader is typing.
+func TestSearchRanksNameHitsAboveProse(t *testing.T) {
+	src := New(staticPeers(
+		Peer{Name: "mac", NodeID: "aa00aa00aa00aa00", Description: "runs on the nas if it is up"},
+		Peer{Name: "nas", NodeID: "bb00bb00bb00bb00", Note: "the box in the closet"},
+		Peer{Name: "ugreen-nas", NodeID: "cc00cc00cc00cc00", Note: "家里的 NAS"},
 	))
 
 	targets := src.Search("nas", 0)
 
-	assert.Equal(t, []string{"nas", "ugreen-nas", "mac"}, aliases(targets),
-		"exact alias, then alias substring, then a mention in the description")
+	assert.Equal(t, []string{"nas", "ugreen-nas", "mac"}, names(targets),
+		"exact name, then name substring, then a mention in the description")
 }
 
-// An unknown name resolves to nothing. A near miss would point the reference at a DIFFERENT
-// machine, which is worse than leaving it visible.
-func TestResolveIsExactOrNothing(t *testing.T) {
+// A node whose row shows its own self-declared name still matches when the reader types the identity
+// off that row: the identity is the string they are told to use.
+func TestSearchMatchesTheIdentityToo(t *testing.T) {
 	src := New(staticPeers(
-		Peer{Alias: "ugreen-nas", NodeID: "cd726b446c34386ece70d88fdd5fbf2a"},
-		Peer{Alias: "hk-vps", NodeID: "bb22"},
+		Peer{Name: "Tachi", NodeID: "aa11bb22cc33dd44aa11bb22cc33dd44"},
+		Peer{Name: "其它", NodeID: "99887766554433229988776655443322"},
 	))
 
-	// The alias, and case-insensitively: it is typed by hand in two places.
-	target, ok := src.Resolve("ugreen-nas")
+	targets := src.Search("aa11bb22", 0)
+
+	assert.Len(t, targets, 1)
+	assert.Equal(t, "aa11bb22cc33dd44aa11bb22cc33dd44", targets[0].NodeID)
+}
+
+// An unknown id resolves to nothing. A near miss would point the reference at a DIFFERENT machine,
+// which is worse than leaving it visible.
+func TestResolveIsExactOrNothing(t *testing.T) {
+	src := New(staticPeers(
+		Peer{Label: "ugreen-nas", Name: "ugreen-nas", NodeID: "cd726b446c34386ece70d88fdd5fbf2a"},
+		Peer{Label: "hk-vps", Name: "hk-vps", NodeID: "bb22"},
+	))
+
+	// The identity, whole.
+	target, ok := src.Resolve("cd726b446c34386ece70d88fdd5fbf2a")
 	assert.True(t, ok)
 	assert.Equal(t, "cd726b446c34386ece70d88fdd5fbf2a", target.NodeID)
 
-	_, ok = src.Resolve("UGREEN-NAS")
-	assert.True(t, ok, "the same machine spelled with different case")
+	// A LABEL does not resolve, even when it is exactly what the row shows: a name is what its owner
+	// says it is, and a reference that quietly pointed elsewhere would be worse than one that stays
+	// visible and unexpanded.
+	_, ok = src.Resolve("ugreen-nas")
+	assert.False(t, ok, "a label is not a way to name a machine")
 
-	// The node id, which is what a reader who saw one in a pointer would paste back.
-	target, ok = src.Resolve("cd726b446c34386ece70d88fdd5fbf2a")
+	// The front of an id, which is what a reader who saw one on a row would copy.
+	target, ok = src.Resolve("cd726b44")
 	assert.True(t, ok)
-	assert.Equal(t, "ugreen-nas", target.Alias)
+	assert.Equal(t, "ugreen-nas", target.Name)
 
-	_, ok = src.Resolve("ugreen")
-	assert.False(t, ok, "a prefix of an alias is not the alias")
+	// A prefix that names no machine is not a near miss.
+	_, ok = src.Resolve("ffff")
+	assert.False(t, ok, "a prefix of an id that matches nothing resolves to nothing")
 	_, ok = src.Resolve("")
 	assert.False(t, ok)
 	_, ok = src.Resolve("   ")
@@ -112,10 +147,10 @@ func TestRowNotePrefersTheNodesOwnWords(t *testing.T) {
 	assert.Equal(t, "", RowNote(atfile.AgentTarget{}, 0))
 }
 
-func aliases(targets []atfile.AgentTarget) []string {
+func names(targets []atfile.AgentTarget) []string {
 	out := make([]string, len(targets))
 	for i, t := range targets {
-		out[i] = t.Alias
+		out[i] = t.Name
 	}
 	return out
 }
@@ -127,13 +162,13 @@ func aliases(targets []atfile.AgentTarget) []string {
 // gets: the reference stays visible and unexpanded rather than quietly pointing at the wrong machine.
 func TestResolveAcceptsAnIdentityPrefix(t *testing.T) {
 	src := New(staticPeers(
-		Peer{Alias: "home-nas", NodeID: "abcd1111abcd1111abcd1111abcd1111"},
-		Peer{Alias: "hk-vps", NodeID: "abcd2222abcd2222abcd2222abcd2222"},
+		Peer{Name: "home-nas", NodeID: "abcd1111abcd1111abcd1111abcd1111"},
+		Peer{Name: "hk-vps", NodeID: "abcd2222abcd2222abcd2222abcd2222"},
 	))
 
 	target, ok := src.Resolve("abcd1111")
 	assert.True(t, ok, "a unique prefix of an id names a machine")
-	assert.Equal(t, "home-nas", target.Alias)
+	assert.Equal(t, "home-nas", target.Name)
 
 	_, ok = src.Resolve("abcd")
 	assert.False(t, ok, "a prefix that names two machines is refused, not guessed")

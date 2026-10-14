@@ -3,14 +3,17 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,12 +25,17 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
-// The sending side, against a REAL receiving node: the peer here is the same node this
-// machine serves, reached over its own loopback listener. Nothing is stubbed except the model
-// behind the peer, so what is under test is the actual conversation — our client's requests
-// against our server's answers, refusals included.
+// The sending side, against a REAL receiving node: the peer here is the same node this machine
+// serves, reached over TLS. Nothing is stubbed except the model behind the peer, so what is under
+// test is the actual conversation — our client's requests against our server's answers, refusals
+// included.
+//
+// The peer must be reachable over TLS for a delegation to reach it AT ALL: the identity a tool
+// argument names comes out of a certificate, and a peer serving plaintext has none to give
+// (node/peers.go checkPeerURL, and what the loopback exemption costs).
 
 // startPeer brings up a receiving node whose model is scripted, and returns a sender pointing
 // at it. The sender's own home is a DIFFERENT base dir: it does not host a node at all, which
@@ -41,17 +49,77 @@ func startPeer(t *testing.T, mock *mockllm.Server, tools ...string) (*Sender, *H
 	config.SetBaseDir(peerHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	peer := startRealNode(t, nodeConfig(t, mock, filepath.Join(peerHome, "ws")))
+	peerCfg := nodeConfig(t, mock, filepath.Join(peerHome, "ws"))
+	// An address off loopback is the ONE switch that makes this node serve TLS and require a client
+	// certificate (node/options.go isLoopbackListen) — and a certificate is the only thing a peer can
+	// prove an identity with, so a delegation can only reach a peer that has left loopback.
+	//
+	// The port is named here rather than left to the kernel because leaving loopback means binding a
+	// wildcard, and a node bound to a wildcard must be able to say where callers reach it (node/a2a.go).
+	peerPort := freeWildcardPort(t)
+	peerCfg.Node.Listen = net.JoinHostPort("0.0.0.0", strconv.Itoa(peerPort))
+	peerCfg.Node.PublicURL = publicURLFor(t, peerPort)
+	peer := startRealNode(t, peerCfg)
 
 	// The sender's home: another base dir, with a peer entry pointing at the receiver. Only one
 	// process-global base dir exists, so this is built in two steps — records written under the
 	// sender's dir, addresses taken from the receiver that is already up.
-	return openSenderFor(t, "http://"+peer.RemoteAddr()), peer
+	//
+	// 0.0.0.0 is not an address anything can dial: the kernel's port is, and on this machine that is
+	// loopback — which the PEER still considers outside itself, which is why it serves TLS.
+	return openSenderFor(t, "https://"+dialableAddr(t, peer.RemoteAddr())), peer
+}
+
+// dialableAddr turns a listening address into one a test can dial: the wildcard host becomes
+// loopback, and the port is kept.
+func dialableAddr(t *testing.T, addr string) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	return net.JoinHostPort("127.0.0.1", port)
+}
+
+// peerRef is the identity a test names the peer by: a tool argument takes nothing else, and the
+// PROBE is what pins it (the same card read the reminder makes before the model acts). A test that
+// forgot to make its peer reachable over TLS fails here, with that as the reason.
+func peerRef(t *testing.T, s *Sender) string {
+	t.Helper()
+	for _, p := range s.Peers(context.Background()) {
+		if p.NodeID != "" {
+			return p.NodeID
+		}
+	}
+	t.Fatal("the peer proved no identity; a peer that serves plaintext cannot be delegated to at all")
+	return ""
 }
 
 // openSenderFor points a sender at a peer URL, in its OWN home — the sender hosts no node, which
 // is the case this whole half of the package exists for. Split out from startPeer so a test can
 // aim it at something other than the receiver itself (a proxy in front of one, say).
+// tlsStub is a stub peer: an HTTPS server whose certificate is a real NODE's — self-signed from a
+// generated identity — and that answers (url, node id).
+//
+// It is what a test needs when the shape under test is the RESPONSE rather than the node: only a
+// stub can answer with a direct Message, and only a stub's route can be a proxy. It has to be TLS
+// all the same: a peer that proves no identity cannot be named by a tool argument, and a plaintext
+// stub would be testing a deployment shape this program no longer has (node/peers.go checkPeerURL's
+// loopback exemption, and what it costs).
+func tlsStub(t *testing.T, h http.Handler) (*httptest.Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	identity, err := LoadOrCreateIdentity(dir)
+	require.NoError(t, err)
+	cert, err := loadOrCreateCertificate(dir, identity)
+	require.NoError(t, err)
+
+	srv := httptest.NewUnstartedServer(h)
+	// StartTLS keeps a certificate already in place and only adds one of its own when there is none.
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv, identity.NodeID
+}
+
 func openSenderFor(t *testing.T, peerURL string) *Sender {
 	t.Helper()
 	senderHome := t.TempDir()
@@ -59,7 +127,7 @@ func openSenderFor(t *testing.T, peerURL string) *Sender {
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}}, "", nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}}, "", nil, nil)
 	require.NoError(t, err)
 	return sender
 }
@@ -73,7 +141,7 @@ func TestASubmissionReachesThePeerAndItsAnswerComesBack(t *testing.T) {
 	require.NotNil(t, peer)
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer:      "peer",
+		Peer:      peerRef(t, sender),
 		Prompt:    "检查昨天的备份是否完整，返回异常清单，不修改文件。",
 		LogicalID: "conv-1",
 	})
@@ -111,7 +179,7 @@ func TestAParkedPeerQuestionComesBackAndIsAnsweredThroughTheSameRecord(t *testin
 	sender, _ := startPeer(t, mock, "ReadFile")
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "检查昨天的备份", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "检查昨天的备份", LogicalID: "conv-1",
 		Wait: 5 * time.Second, // the peer asks instead of finishing; the wait ends at the question
 	})
 	require.NoError(t, err)
@@ -145,18 +213,28 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 	config.SetBaseDir(peerHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	peer := startWith(t, filepath.Join(peerHome, "a2a"), func(o *Options) { o.Executor = parked })
+	peerPort := freeWildcardPort(t)
+	peer := startWith(t, filepath.Join(peerHome, "a2a"), func(o *Options) {
+		o.Executor = parked
+		// Off loopback is the one switch that makes this surface serve TLS — and a peer that serves
+		// no TLS proves no identity, so nothing can be delegated to it at all. A wildcard bind has to
+		// name where it is reachable, which is why the port is picked first (node/a2a.go).
+		o.RemoteListen = net.JoinHostPort("0.0.0.0", strconv.Itoa(peerPort))
+		o.PublicURL = publicURLFor(t, peerPort)
+	})
 	senderHome := t.TempDir()
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: "http://" + peer.RemoteAddr()}}, "", nil)
+	sender, err := OpenSender([]config.PeerConfig{
+		{Name: "peer", URL: "https://" + dialableAddr(t, peer.RemoteAddr())},
+	}, "", nil, nil)
 	require.NoError(t, err)
 
 	// First submission: the peer accepts it and keeps working. The short wait is deliberate —
 	// the caller gets the handle, which is what §6.2 is for.
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "长活儿", LogicalID: "conv-1", Wait: 200 * time.Millisecond,
+		Peer: peerRef(t, sender), Prompt: "长活儿", LogicalID: "conv-1", Wait: 200 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	require.True(t, first.InFlight(), "the handle comes back while the peer works: %+v", first)
@@ -166,7 +244,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 	// the refusal the sending side has to be able to read — the SDK's own client would drop the
 	// domain and leave only a sentence.
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "再顺便看看", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: peerRef(t, sender), Prompt: "再顺便看看", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	var refusal *PeerRefusal
 	require.ErrorAs(t, err, &refusal)
@@ -191,11 +269,20 @@ func TestAnUnreachablePeerIsUnknownRatherThanRefused(t *testing.T) {
 
 	// Nothing listens here. The difference matters: the peer never considered the request, so
 	// "it said no" would be a lie — and the record must say what we actually know.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: "http://127.0.0.1:1"}}, "", nil)
+	//
+	// The machine has to be one this machine can NAME, though, which is what the pin below is for:
+	// an identity is what a tool argument takes, and a machine reached once before is one whose
+	// identity this machine holds even while it is not answering.
+	const ghostID = "77777777777777777777777777777777"
+	const ghostURL = "https://127.0.0.1:1"
+	require.NoError(t, fileutil.AtomicWriteJSON(config.PeerIdentitiesPath(),
+		map[string]knownPeer{ghostID: {Alias: "ghost", URL: ghostURL}}, 0o700, 0o600))
+
+	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: ghostURL}}, "", nil, nil)
 	require.NoError(t, err)
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "ghost", Prompt: "有人吗", LogicalID: "conv-1",
+		Peer: ghostID, Prompt: "有人吗", LogicalID: "conv-1",
 	})
 	var refusal *PeerRefusal
 	require.ErrorAs(t, err, &refusal)
@@ -244,14 +331,14 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "第一轮", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
 	// A follow-up names the record it continues, and the peer answers in the SAME remote
 	// conversation (§8.1): same contextId, new task.
 	second, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: peerRef(t, sender), Prompt: "第一轮", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.NoError(t, err)
 	require.NotEqual(t, first.ID, second.ID, "a follow-up is new work: new local record, new remote task")
@@ -263,9 +350,10 @@ func TestAFollowUpStaysInTheConversationItBelongsTo(t *testing.T) {
 	require.NotEqual(t, firstRecord.RemoteTaskID, secondRecord.RemoteTaskID)
 
 	// Asking for work in a conversation that belongs to another peer is refused rather than
-	// quietly sent somewhere else (§8.5).
+	// quietly sent somewhere else (§8.5). No such machine exists here at all, which is as wrong as
+	// naming one — and it is refused before anything leaves.
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "other-node", Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: "ffffffffffffffffffffffffffffffff", Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.Error(t, err)
 }
@@ -286,7 +374,7 @@ func TestAFollowUpWithoutANodeTakesTheMachineFromTheRecord(t *testing.T) {
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "第一轮", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
@@ -313,7 +401,7 @@ func TestAFollowUpWhoseMachineIsGoneSaysSo(t *testing.T) {
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "第一轮", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
@@ -322,13 +410,14 @@ func TestAFollowUpWhoseMachineIsGoneSaysSo(t *testing.T) {
 	// Another peer IS configured — the point is which alias is missing, not that the list is empty.
 	stripped, err := OpenSender([]config.PeerConfig{
 		{Name: "someone-else", URL: "https://127.0.0.1:1"},
-	}, "tachi@mac", nil)
+	}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	_, err = stripped.Delegate(context.Background(), tools.DelegationRequest{
 		Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not a configured peer any more")
+	require.Contains(t, err.Error(), "Configure that node again",
+		"the refusal has to say what to do about a machine that is not there any more")
 	require.Contains(t, err.Error(), first.ID, "the refusal names the record the caller must act on")
 }
 
@@ -402,7 +491,7 @@ func TestALongRemoteAnswerSurvivesOnThisMachinesDisk(t *testing.T) {
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "查磁盘", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "查磁盘", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
@@ -443,7 +532,7 @@ func TestAFollowUpReferencesThePreviousRemoteTask(t *testing.T) {
 	require.NoError(t, err)
 	var mu sync.Mutex
 	var sent []map[string]any
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	proxy, _ := tlsStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -477,15 +566,14 @@ func TestAFollowUpReferencesThePreviousRemoteTask(t *testing.T) {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 	}))
-	t.Cleanup(proxy.Close)
 
 	sender := openSenderFor(t, proxy.URL)
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第一轮", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "第一轮", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 	second, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "第二轮", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: peerRef(t, sender), Prompt: "第二轮", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.NoError(t, err)
 
@@ -517,7 +605,7 @@ func TestAQuestionWithoutAnOpenQuestionIsRefusedLocally(t *testing.T) {
 
 	sender, _ := startPeer(t, mock, "ReadFile")
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "什么都不问的活", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "什么都不问的活", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "completed", view.State, "note=%q result=%q", view.Note, view.Result)
@@ -553,24 +641,29 @@ func TestTheModelViewIsTheDesignsShape(t *testing.T) {
 }
 
 func TestAToolLayerFailureIsNotAFabricatedTask(t *testing.T) {
-	// Every submission that reached a peer produced a record; one that could not even be built
-	// (an unknown alias) produces none, and the caller is told why instead of getting a view of
-	// a task that never existed.
+	// Every submission that reached a peer produced a record; one that could not even be built (a
+	// machine this one cannot name) produces none, and the caller is told why instead of getting a
+	// view of a task that never existed.
 	previous := config.BaseDir()
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender(nil, "", nil)
+	sender, err := OpenSender(nil, "", nil, nil)
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "nobody", Prompt: "hi"})
 	var unknown *UnknownPeerError
 	require.ErrorAs(t, err, &unknown)
 	require.Empty(t, unknown.Known)
-	require.Contains(t, err.Error(), "no peers are configured")
+	require.Contains(t, err.Error(), "knows none at all")
 
-	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "peer", Prompt: "   "})
+	// An empty prompt is refused whatever machine was named — the caller's own mistake, and it is
+	// decided before anything is looked up, so a machine that does not exist does not change it.
+	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
+		Peer: "ffffffffffffffffffffffffffffffff", Prompt: "   ",
+	})
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "needs a prompt")
 
 	if errors.Is(err, context.Canceled) {
 		t.Fatal("unreachable")
@@ -614,7 +707,7 @@ func messageAnswerPeer(t *testing.T, contextID string) (*Sender, func() int, fun
 	t.Helper()
 	var mu sync.Mutex
 	var bodies []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := tlsStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "message:send") {
 			http.NotFound(w, r)
 			return
@@ -638,7 +731,6 @@ func messageAnswerPeer(t *testing.T, contextID string) (*Sender, func() int, fun
 		w.Header().Set("Content-Type", a2aMediaType)
 		_, _ = w.Write(raw)
 	}))
-	t.Cleanup(srv.Close)
 	sender := openSenderFor(t, srv.URL)
 	return sender,
 		func() int { mu.Lock(); defer mu.Unlock(); return len(bodies) },
@@ -649,7 +741,7 @@ func TestAPeerThatAnswersWithAMessageIsRecordedAsAnAnswer(t *testing.T) {
 	sender, requests, _ := messageAnswerPeer(t, "ctx-direct")
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "检查备份", LogicalID: "conv-1",
 	})
 	require.NoError(t, err, "a direct message is an answer, not a failure")
 	require.Equal(t, "completed", view.State,
@@ -688,12 +780,12 @@ func TestAFollowUpContinuesTheConversationADirectAnswerNamed(t *testing.T) {
 	sender, _, bodies := messageAnswerPeer(t, "ctx-direct")
 
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "检查备份", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "缺失的那两个目录呢", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: peerRef(t, sender), Prompt: "缺失的那两个目录呢", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.NoError(t, err)
 
@@ -713,12 +805,12 @@ func TestADirectAnswerWithoutAContextCannotBeContinued(t *testing.T) {
 	sender, _, _ := messageAnswerPeer(t, "")
 
 	first, err := sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "检查备份", LogicalID: "conv-1",
+		Peer: peerRef(t, sender), Prompt: "检查备份", LogicalID: "conv-1",
 	})
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "peer", Prompt: "接着说", LogicalID: "conv-1", ContinueFrom: first.ID,
+		Peer: peerRef(t, sender), Prompt: "接着说", LogicalID: "conv-1", ContinueFrom: first.ID,
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "answered directly")

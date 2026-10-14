@@ -11,158 +11,120 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 
 	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/netutil"
 )
 
-// The peer directory: which other Tachi nodes this machine may delegate to.
+// peerDirectory is this machine's view of the other Tachi nodes it knows about: where they came
+// from, what it calls them, and which identity each one proved.
 //
-// Two sources make one shape. The CONFIGURED entry is the alias the model uses and the address
-// to reach it; the node's own Agent Card is what says what that node actually does. Both are
-// kept apart in the struct rather than merged, because they fail differently: an unknown alias
-// is a model mistake to refuse, while a configured peer that cannot be reached is a fact about
-// the network — the design's rule is that a reminder may not describe a node it could not ask,
-// so "unreachable / not resolved yet" is a state this directory reports (§8.6).
+// It is ONE shape over three sources, and the merge itself lives in peerdir.go. What is here is the
+// part that costs something: resolving a peer for a tool call, and asking a peer for its Agent Card.
 //
-// The card is resolved lazily and cached: resolving on every turn would put an HTTP request in
-// front of every model call, and the card changes only when the peer is reconfigured. A failed
-// resolution is cached for the same reason it is reported — so a peer that is down does not
-// cost a timeout per turn.
+// The card is resolved lazily and cached: resolving on every turn would put an HTTP request in front
+// of every model call, and a card changes only when the peer is reconfigured. A failed resolution is
+// cached for the same reason it is reported — so a peer that is down does not cost a timeout per
+// turn.
 type peerDirectory struct {
 	peers []config.PeerConfig
-	// known is the TOFU record, and it is here for ONE thing: resolving a machine by its IDENTITY
-	// (a node id, or an unambiguous prefix of one), which is how a reader — and, once nodes are
-	// discovered rather than configured, the sender itself — names a peer. nil means no record to
-	// read, and then only names resolve. Set at construction (node/sender.go).
+	// known is the pin record, and it is here for two things: telling a config line which identity it
+	// has already proved (so a row can show it before the two have spoken in this process), and being
+	// the set of identities a tool argument may name. nil means no record to read.
 	known *knownPeers
+	// discover is the live view of what mDNS has seen, or nil when discovery is off. It is called on
+	// the CHEAP path (build), so it must answer from memory and never wait for the network.
+	discover func() []discoveredPeer
 
 	mu    sync.Mutex
 	cards map[string]*peerCard
 
-	// resolve is the card lookup, injected so a test can answer without a live peer. Nil means
-	// the SDK's own resolver, which is what a real node uses.
-	resolve func(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error)
+	// resolveEntry reads one peer's Agent Card over the addresses the entry lists, and answers with
+	// the address that did. Injected so a test can answer without a live peer; nil means no card can
+	// be read, which is what a directory with no sending side behind it looks like.
+	resolveEntry func(ctx context.Context, e peerEntry) (*a2a.AgentCard, string, error)
 
 	// cardTTL bounds how long a resolved card is trusted, and how long a FAILURE is remembered.
 	// A peer that was down is retried after this; a card that was read is re-read after it.
 	cardTTL time.Duration
 }
 
-// peerCard is what we know about one peer: the card, or the failure, and when.
+// peerCard is what we know about one peer's address: the card, or the failure, and when.
 type peerCard struct {
 	card *a2a.AgentCard
 	err  error
 	at   time.Time
 }
 
-// peer is the directory's answer about one node — what the tools and the reminder both need.
-type peer struct {
-	Name string
-	URL  string
-	// Card is the peer's own description of itself, nil when it could not be read.
-	Card *a2a.AgentCard
-	// Note is the configured human line, used when there is no card to describe the node.
-	Note string
-	// Err is why the card is missing (nil when the card was read).
-	Err error
-}
-
-// UnknownPeerError is the refusal a tool argument gets for an alias this machine does not know.
-// It lists what IS configured: the model picked a name, and the useful answer is the set it
-// could have picked from.
+// UnknownPeerError is the refusal a tool argument gets for something this machine cannot name. It
+// lists what it CAN name: the model asked for a machine, and the useful answer is the set it could
+// have asked for — by identity, in the one spelling a tool argument takes.
 type UnknownPeerError struct {
-	Name  string
+	Ref   string
 	Known []string
 }
 
 func (e *UnknownPeerError) Error() string {
 	if len(e.Known) == 0 {
-		return fmt.Sprintf("node: %q is not a configured peer, and no peers are configured at all", e.Name)
+		return fmt.Sprintf("node: %q is not a node this machine knows, and it knows none at all", e.Ref)
 	}
-	return fmt.Sprintf("node: %q is not a configured peer; configured peers are: %s",
-		e.Name, strings.Join(e.Known, ", "))
+	return fmt.Sprintf("node: %q is not a node this machine knows; it can name: %s",
+		e.Ref, strings.Join(e.Known, ", "))
 }
 
 const defaultPeerCardTTL = 5 * time.Minute
 
-// configOnly returns one configured peer WITHOUT touching the network.
+// checkPeerURL refuses a peer address this machine must not delegate over, and the rule is https for
+// EVERY host — including loopback, which used to be exempt.
 //
-// Separate from Lookup on purpose: Lookup resolves the Agent Card, which is a request, and the
-// request path needs the connection facts (address, credential, pin) on every call while it must
-// not pay for a card fetch it did not ask for. The card is a DESCRIPTION of the peer; this is how
-// to REACH it.
-func (d *peerDirectory) configOnly(name string) (peer, bool) {
-	if d == nil {
-		return peer{}, false
-	}
-	for _, p := range d.peers {
-		if p.Name == name {
-			return peer{Name: p.Name, URL: p.URL, Note: p.Note}, true
-		}
-	}
-	return peer{}, false
-}
-
-// configOnlyNames lists the configured aliases, sorted (the same order Names() gives, from the
-// config rather than from a network round trip).
-func (d *peerDirectory) configOnlyNames() []string {
-	if d == nil {
-		return nil
-	}
-	out := make([]string, 0, len(d.peers))
-	for _, p := range d.peers {
-		out = append(out, p.Name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// checkPeerURL refuses a peer address this machine must not delegate over.
+// The exemption is gone because of what naming a peer by identity means: an identity comes out of a
+// certificate, and a peer reached in plaintext presents none, so this machine can pin nothing for it
+// — and a peer it can pin nothing for is a peer no tool argument can name. An http line was therefore
+// a configuration entry that could never be used, which is a trap rather than a choice: the reader
+// would see a row, no identity beside it, and no way to make the delegation the line looks like it
+// offers. Refusing the line says so at the moment it can still be fixed.
 //
-// The rule is about what a delegation carries: the prompt and the answer ARE the conversation, so
-// plaintext to another machine is not a smaller version of an encrypted one — it is the same
-// conversation read aloud on the way. Loopback is exempt because there is no network to read it
-// from (and because every deployment starts there), and https is accepted for any host because
-// the pin, not the scheme, is what says which machine answered (node/tls.go).
-func checkPeerURL(name, raw string) error {
+// https is accepted for any HOST, including loopback: the certificate is self-signed and the pin,
+// not a hostname, is what says which machine answered (node/tls.go). So a peer on this very machine
+// can be delegated to — it just has to serve TLS, which it does as soon as its listen address leaves
+// loopback (node/options.go isLoopbackListen).
+func checkPeerURL(who, raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return fmt.Errorf("node: peer %q has no url: a delegation needs an address to reach", name)
+		return fmt.Errorf("node: %s has no url: a delegation needs an address to reach", who)
 	}
 	u, err := url.Parse(trimmed)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("node: peer %q has no usable url: %q", name, raw)
+		return fmt.Errorf("node: %s has no usable url: %q", who, raw)
 	}
 	if u.Scheme == "https" {
 		return nil
 	}
-	if u.Scheme == "http" && netutil.IsLoopbackHost(u.Hostname()) {
-		return nil
-	}
-	return fmt.Errorf("node: peer %q is %q: a delegation carries the prompt and its answer, so a peer "+
-		"must be https — http is allowed only on loopback", name, raw)
+	return fmt.Errorf("node: %s is %q: a peer must be https. A delegation carries the prompt and its "+
+		"answer, so plaintext is the same conversation read aloud on the way — and a peer reached in "+
+		"plaintext proves no identity, which is the only thing a delegation can name it by", who, raw)
 }
 
 // newPeerDirectory validates a peer list and returns the directory over it.
 //
-// Validation is here rather than at config load because these are the SENDER's constraints: a
-// duplicate alias, an empty name or an address that is not a URL would each make a delegation
-// ambiguous or impossible, and the machine that has to refuse them is the one about to delegate.
+// Validation is here rather than at config load because these are the SENDER's constraints, and the
+// machine that has to refuse them is the one about to delegate. A duplicated LABEL is refused, and
+// that is a display rule rather than a resolution one: a tool argument names a peer by identity, so
+// two machines sharing a label would be resolvable and still unreadable — two rows called "nas" in
+// the picker, the board and the reminder is the entire point of having a label, defeated.
 func newPeerDirectory(peers []config.PeerConfig) (*peerDirectory, error) {
 	seen := make(map[string]bool, len(peers))
 	for i, p := range peers {
-		name := strings.TrimSpace(p.Name)
-		if name == "" {
-			return nil, fmt.Errorf("node: peers[%d] has no name; the model addresses a peer by name", i)
+		label := strings.TrimSpace(p.Name)
+		if label != "" {
+			key := strings.ToLower(label)
+			if seen[key] {
+				return nil, fmt.Errorf("node: peer name %q is configured twice; a label must name one "+
+					"machine, or it reads as the same one twice", label)
+			}
+			seen[key] = true
 		}
-		if seen[name] {
-			return nil, fmt.Errorf("node: peer name %q is configured twice; a name must resolve to one node", name)
-		}
-		seen[name] = true
-		if err := checkPeerURL(name, p.URL); err != nil {
+		if err := checkPeerURL(configPeerWords(i, label), p.URL); err != nil {
 			return nil, err
 		}
 	}
@@ -173,131 +135,197 @@ func newPeerDirectory(peers []config.PeerConfig) (*peerDirectory, error) {
 	}, nil
 }
 
-// Names lists the configured aliases, sorted so a refusal (and a reminder) reads the same way
-// twice — Go's map iteration is random, and "which peers could I have used" must not shuffle.
-func (d *peerDirectory) Names() []string {
+// configPeerWords names a config line in a sentence about it: its label when it has one, and its
+// position when it does not (the label is optional, so "the peer called ”" has to not happen).
+func configPeerWords(index int, label string) string {
+	if label != "" {
+		return fmt.Sprintf("peers[%d] (%q)", index, label)
+	}
+	return fmt.Sprintf("peers[%d]", index)
+}
+
+// Entries is the whole merged directory, cheapest possible: config lines, whatever has been pinned
+// for them, and what discovery has just seen. No network, ever.
+func (d *peerDirectory) Entries() []peerEntry {
 	if d == nil {
 		return nil
 	}
-	out := make([]string, 0, len(d.peers))
-	for _, p := range d.peers {
-		out = append(out, p.Name)
-	}
-	sort.Strings(out)
-	return out
+	return d.build()
 }
 
-// Lookup returns one peer by NAME (its configured alias) or by IDENTITY (a node id, or an
-// unambiguous prefix of one), resolving its card if that has not been done recently.
+// Lookup resolves a TOOL ARGUMENT to a peer: a node id, or an unambiguous prefix of one.
 //
-// Two ways in, because two different callers name a machine in two different ways: a model copies
-// the alias the reminder listed, while a reader — and, once nodes are discovered rather than
-// configured, the sender itself — knows a machine by the id it proved. The id path goes through the
-// TOFU record (node/knownpeers.go), which is the only place that knows which name this machine last
-// used for an identity.
+// Only identities are resolved. A name is not a second way in, and the reason is that a name is not
+// a fact: it is what its owner says it is (and every machine's default is the same word), so a
+// delegation that went wherever a name pointed would be a delegation to whoever claimed it most
+// recently. The identity comes out of a TLS handshake and cannot be claimed.
 //
-// An unreachable peer is NOT an error here: the caller gets the configured identity plus why the
-// card is missing, because "we cannot describe this node right now" and "there is no such peer"
-// lead to different actions (report vs. pick another name).
-func (d *peerDirectory) Lookup(ctx context.Context, name string) (peer, error) {
+// A ref that IS a configured label gets its own answer, because that is the mistake a reader will
+// actually make — the reminder shows labels — and "no such node" would send them looking for a typo.
+//
+// An unreachable peer is NOT refused here: whether the machine is up is decided by the request
+// itself, and a card that could not be read is not evidence that work cannot be accepted (§8.6).
+func (d *peerDirectory) Lookup(ctx context.Context, ref string) (peerEntry, error) {
 	if d == nil {
-		return peer{}, &UnknownPeerError{Name: name}
+		return peerEntry{}, &UnknownPeerError{Ref: ref}
 	}
-	name = strings.TrimSpace(name)
+	ref = strings.TrimSpace(ref)
+	entries := d.build()
 
-	// A configured alias first: that is what the reminder lists and what a tool argument carries.
-	for _, p := range d.peers {
-		if p.Name == name {
-			return d.describe(ctx, p), nil
+	if entries, err := d.resolveRef(entries, ref); err != nil || entries.Identity != "" {
+		return entries, err
+	}
+
+	// Not in the directory yet — and it may be a machine this one has never MET, whose identity is
+	// therefore not in the directory yet either. The one place that can change is a connection, and
+	// the door it opens is the whole reason this is worth doing: the model can only name a machine by
+	// an identity it read somewhere, and an entry point with no reminder (the pipe) is never told
+	// one by anything else. So the candidates are asked ONCE (the card read that pins them, cached
+	// like any card), and the resolution is retried against what came back.
+	if d.probeStrangers(ctx) {
+		if e, err := d.resolveRef(d.build(), ref); err != nil || e.Identity != "" {
+			return e, err
 		}
 	}
 
-	// Then an identity. A record can name a machine this configuration no longer has an entry for
-	// (it was renamed, and the rename has not been reached yet) — that is a different answer from
-	// "never heard of it", and it says so, because the fix is different too.
-	if alias, nodeID, err := d.byNodeID(name); err != nil {
-		return peer{}, err
-	} else if alias != "" {
-		for _, p := range d.peers {
-			if p.Name == alias {
-				return d.describe(ctx, p), nil
-			}
+	if d.known != nil && d.known.has(ref) {
+		// A pinned identity with no entry: this machine HAS talked to that machine and is not being
+		// offered it now — its config line is gone and nothing announces it. That is a different
+		// answer from "never heard of it", and the fix is different too.
+		return peerEntry{}, fmt.Errorf("node: %s is pinned as a machine this one has reached, but it is "+
+			"neither configured nor announcing itself any more; configure that node again to reach it", ref)
+	}
+	if e, ok := d.byLabel(entries, ref); ok {
+		what := "it has not been reached over TLS in this process, so no identity is pinned for it yet — " +
+			"a node is named by its id, and it has one once a handshake has proved it"
+		if e.Identity == "" {
+			return peerEntry{}, fmt.Errorf("node: %q is the label of %s, and %s", ref, e.Display(), what)
 		}
-		return peer{}, fmt.Errorf("node: %s is the identity last reached as %q, which is no longer a "+
-			"configured peer; configure that node again to reach it", nodeID, alias)
+		return peerEntry{}, fmt.Errorf("node: %q is a label, not an identity; %s is %s", ref, e.Display(), what)
 	}
-
-	return peer{}, &UnknownPeerError{Name: name, Known: d.describedNames()}
+	return peerEntry{}, &UnknownPeerError{Ref: ref, Known: describeEntries(entries)}
 }
 
-// describe reads one configured peer's card, for a Lookup that already found the entry.
-func (d *peerDirectory) describe(ctx context.Context, p config.PeerConfig) peer {
-	out := peer{Name: p.Name, URL: p.URL, Note: p.Note}
-	card, err := d.card(ctx, p)
-	out.Card, out.Err = card, err
-	return out
-}
-
-// byNodeID resolves a node id (or a unique prefix of one) to the name this machine last used for
-// it, via the TOFU record. An empty alias with no error means "no record of that identity".
-func (d *peerDirectory) byNodeID(ref string) (alias, nodeID string, err error) {
-	if d == nil || d.known == nil || ref == "" {
-		return "", "", nil
-	}
-	identities := d.known.identities()
-	ids := make([]string, 0, len(identities))
-	for id := range identities {
-		ids = append(ids, id)
+// resolveRef is the identity half of Lookup, over a directory it is given: the entry the ref names, or
+// an error, or an empty entry meaning "nothing here carries that identity" (which the caller may be
+// able to change by connecting).
+func (d *peerDirectory) resolveRef(entries []peerEntry, ref string) (peerEntry, error) {
+	ids := make([]string, 0, len(entries))
+	byID := make(map[string]int, len(entries))
+	for i, e := range entries {
+		if e.Identity == "" {
+			continue
+		}
+		ids = append(ids, e.Identity)
+		byID[e.Identity] = i
 	}
 	resolved, ok, err := agentref.ResolveID(ref, ids)
-	if err != nil || !ok {
-		return "", "", err
+	if err != nil {
+		// Ambiguous: named more than one machine, which must be refused rather than guessed at —
+		// a guess sends the work to a different machine.
+		return peerEntry{}, fmt.Errorf("node: %w; name the node by more of its id", err)
 	}
-	return identities[resolved], resolved, nil
+	if !ok {
+		return peerEntry{}, nil
+	}
+	return entries[byID[resolved]], nil
 }
 
-// describedNames lists the configured peers the way a refusal should read: the alias, and the
-// identity beside it when this machine holds one. "Which peers could I have used" is only useful if
-// the answer is something the caller can act on, and both of those are names they can.
-func (d *peerDirectory) describedNames() []string {
-	if d == nil {
-		return nil
+// probeStrangers reads the card of every entry this machine holds no identity for, and reports
+// whether it had anything to do.
+//
+// It is the expensive half of Lookup and it runs only on the MISS path: a ref that resolved, and a
+// ref that turns out to be a label, are both answered without a packet. What it buys is the case the
+// design calls out — a configured peer is nameable once it has been reached, and the reaching has to
+// happen SOMEWHERE; in an interactive turn the reminder's own probe does it, and in the pipe entry
+// there is no reminder, so the delegation itself is what connects (design §二: 启动后/刷新时去读一次
+// 卡片). The read is the ordinary card read, so its result and its failure are cached for the card
+// TTL: a wrong identity costs one round of requests, not one per attempt.
+func (d *peerDirectory) probeStrangers(ctx context.Context) bool {
+	if d == nil || d.resolveEntry == nil {
+		return false
 	}
-	out := make([]string, 0, len(d.peers))
-	for _, p := range d.peers {
-		if d.known != nil {
-			if id, ok := d.known.nodeID(p.Name); ok {
-				out = append(out, fmt.Sprintf("%s (%s)", p.Name, agentref.ShortID(id)))
-				continue
-			}
+	asked := false
+	for _, e := range d.build() {
+		if e.Identity != "" || len(e.Addrs) == 0 {
+			continue
 		}
-		out = append(out, p.Name)
+		asked = true
+		if _, err := d.card(ctx, e); err != nil {
+			continue
+		}
 	}
-	sort.Strings(out)
-	return out
+	return asked
 }
 
-// Snapshot describes every configured peer, for the reminder and the node picker. It never fails:
-// each entry carries its own resolution state.
+// byLabel is the one lookup names still answer, and it exists only so a refusal can be specific. It
+// is not a way to DELEGATE: nothing resolves a peer for a request this way.
+func (d *peerDirectory) byLabel(entries []peerEntry, ref string) (peerEntry, bool) {
+	for _, e := range entries {
+		if e.Label != "" && strings.EqualFold(e.Label, ref) {
+			return e, true
+		}
+	}
+	return peerEntry{}, false
+}
+
+// byIdentity resolves a node id EXACTLY to its entry, which is how a RECORD reaches its peer: a
+// record holds the identity it was bound to, so this lookup costs nothing and cannot be redirected
+// by a rename, a re-pointed config line, or a name someone else claimed.
+//
+// A pinned identity with no entry is a real answer: it means the machine is no longer in the
+// directory — its config line was removed and it is not announcing itself — and the caller says so
+// rather than inventing a fallback. The pin itself is untouched (node/knownpeers.go).
+func (d *peerDirectory) byIdentity(nodeID string) (peerEntry, bool) {
+	if d == nil || nodeID == "" {
+		return peerEntry{}, false
+	}
+	for _, e := range d.build() {
+		if e.Identity == nodeID {
+			return e, true
+		}
+	}
+	return peerEntry{}, false
+}
+
+// Snapshot describes every peer, resolving the cards it has not read recently. It never fails: each
+// entry carries its own resolution state, because an unreachable peer is one of the answers (§8.6 —
+// "not listed" would read as "not configured").
 //
 // The peers are asked IN PARALLEL, and that is not a micro-optimization: the failures are what cost
 // time. A peer that is down is one that does not answer, so a sequential walk pays every peer's
-// timeout one after another — a fleet of three unreachable nodes would hold the picker (and the
-// turn that triggered the reminder) for as long as their timeouts add up to, for an answer that was
-// "none of them" from the first one. Each goroutine writes its own slot, so the result keeps the
-// configured order, which is the order a reminder reads in.
-func (d *peerDirectory) Snapshot(ctx context.Context) []peer {
+// timeout one after another — a fleet of three unreachable nodes would hold the picker (and the turn
+// that triggered the reminder) for as long as their timeouts add up to, for an answer that was "none
+// of them" from the first one. Each goroutine writes its own slot, so the result keeps the order the
+// entries were merged in, which is the order a reminder reads in.
+func (d *peerDirectory) Snapshot(ctx context.Context) []peerEntry {
 	if d == nil {
 		return nil
 	}
-	out := make([]peer, len(d.peers))
+	entries := d.build()
+	out := make([]peerEntry, len(entries))
 	var wg sync.WaitGroup
-	for i, p := range d.peers {
+	for i, e := range entries {
 		wg.Go(func() {
-			// d.card does its own locking (the card cache is shared), so concurrent callers are
-			// what it is written for.
-			card, err := d.card(ctx, p)
-			out[i] = peer{Name: p.Name, URL: p.URL, Note: p.Note, Card: card, Err: err}
+			card, err := d.card(ctx, e)
+			e.Card, e.Err = card, err
+			// The contact is where the identity comes from — the handshake that just ran, whether or
+			// not the card itself could be read — so the entry picks it up HERE rather than on the
+			// next rebuild. That is what makes a configured node nameable in the same turn that
+			// discovered it, instead of one turn later (design §八 验收: 配置来的对端在这轮探测成功
+			// 之后可被点名).
+			if e.Identity == "" {
+				if id, ok := d.known.pinnedIdentityAt(e.configAddr()); ok {
+					e.Identity = id
+				}
+			}
+			if card != nil {
+				// The peer's own name for itself, and the addresses IT says it can be reached at —
+				// which are tried in front of everything else (node/peerdir.go dialAddrs).
+				e.SelfName = cardName(card)
+				e.Addrs = prependAddrs(e.Addrs, cardAddrs(card))
+			}
+			out[i] = e
 		})
 	}
 	wg.Wait()
@@ -307,8 +335,8 @@ func (d *peerDirectory) Snapshot(ctx context.Context) []peer {
 // forgetCards drops every cached card, so the next Snapshot really asks the network.
 //
 // It exists for the board's refresh button: a card cache is what makes the reminder and the picker
-// cheap, and a person who pressed 刷新 has asked for the cards as they are NOW — answering that
-// with a cached read would be answering a question they did not ask. Failures are dropped with the
+// cheap, and a person who pressed 刷新 has asked for the cards as they are NOW — answering that with
+// a cached read would be answering a question they did not ask. Failures are dropped with the
 // successes, so a node that was down a second ago gets a fresh chance.
 func (d *peerDirectory) forgetCards() {
 	if d == nil {
@@ -319,37 +347,60 @@ func (d *peerDirectory) forgetCards() {
 	d.mu.Unlock()
 }
 
-// card returns the peer's Agent Card, from the cache when it is fresh.
-func (d *peerDirectory) card(ctx context.Context, p config.PeerConfig) (*a2a.AgentCard, error) {
+// cachedCard reads one address's cached answer, fresh or not — the caller decides what "fresh"
+// means, because the cheap path (build) is happy with whatever is there and the expensive one
+// (Snapshot) is not.
+func (d *peerDirectory) cachedCard(addr string) (*peerCard, bool) {
+	if d == nil || addr == "" {
+		return nil, false
+	}
 	d.mu.Lock()
-	cached, ok := d.cards[p.Name]
-	d.mu.Unlock()
-	if ok && time.Since(cached.at) < d.cardTTL {
-		return cached.card, cached.err
+	defer d.mu.Unlock()
+	cached, ok := d.cards[addr]
+	return cached, ok
+}
+
+// card returns the peer's Agent Card, from the cache when it is fresh.
+//
+// The cache is keyed by ADDRESS, not by identity: a card is what answered at an address, and before
+// the first contact there is no identity to key by at all. Keying by identity would also mean the
+// read this very call performs — which is where the identity comes from — could not find its own
+// result on the next turn.
+func (d *peerDirectory) card(ctx context.Context, e peerEntry) (*a2a.AgentCard, error) {
+	for _, addr := range e.Addrs {
+		if cached, ok := d.cachedCard(addr); ok && time.Since(cached.at) < d.cardTTL {
+			return cached.card, cached.err
+		}
+	}
+	addrs := e.dialAddrs()
+	if d.resolveEntry == nil || len(addrs) == 0 {
+		return nil, errors.New("this machine has no address for that peer it could ask over TLS")
 	}
 
-	card, err := d.resolveCard(ctx, p.Name, p.URL)
-
-	d.mu.Lock()
-	d.cards[p.Name] = &peerCard{card: card, err: err, at: time.Now()}
-	d.mu.Unlock()
-
+	card, addr, err := d.resolveEntry(ctx, e)
+	key := addr
+	if key == "" {
+		key = addrs[0]
+	}
+	if key != "" {
+		d.mu.Lock()
+		d.cards[key] = &peerCard{card: card, err: err, at: time.Now()}
+		d.mu.Unlock()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("node: peer %s (%s) did not answer with a card: %w", p.Name, p.URL, err)
+		return nil, fmt.Errorf("node: %s did not answer with a card: %w", e.Display(), err)
 	}
 	return card, nil
 }
 
-func (d *peerDirectory) resolveCard(ctx context.Context, alias, baseURL string) (*a2a.AgentCard, error) {
-	if d.resolve != nil {
-		return d.resolve(ctx, alias, baseURL)
+// describeEntries lists the peers a refusal should read: how each is SHOWN (a label or a name, and
+// always an identity). "Which nodes could I have named" is only useful if the answer is something
+// the caller can act on, and that is the identity.
+func describeEntries(entries []peerEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Display())
 	}
-	card, err := agentcard.DefaultResolver.Resolve(ctx, baseURL)
-	if err != nil {
-		return nil, err
-	}
-	if card == nil {
-		return nil, errors.New("the resolver returned no card")
-	}
-	return card, nil
+	sort.Strings(out)
+	return out
 }

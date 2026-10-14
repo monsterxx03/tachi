@@ -4,41 +4,43 @@ import (
 	"context"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/config"
 )
 
-// A peer can be named two ways, and both have to work.
+// A peer is named ONE way: its identity. Not a label, not a rule with exceptions — a label is a
+// string its owner chooses, and a delegation must not go wherever a name currently points.
 //
-// The NAME is what the reminder lists and what a tool argument usually carries; the IDENTITY is
-// what a reader pastes back from a transcript or from a picker row, and — once nodes are discovered
-// rather than configured — what the sender itself will have. A unique PREFIX of an id works too,
-// because nobody copies thirty-two hex characters when eight will do.
-func TestLookupAcceptsANameAnIdentityOrAPrefix(t *testing.T) {
+// A unique PREFIX of an id works, because nobody copies thirty-two hex characters when eight will
+// do, and an ambiguous prefix is refused rather than guessed at.
+func TestLookupResolvesAnIdentityOrAUniquePrefixOfOne(t *testing.T) {
 	usePinnedBase(t)
 	writePinned(t, `{
-  "abcd1111abcd1111abcd1111abcd1111": {"alias": "home-nas", "first_seen": "2026-10-01T00:00:00Z"},
-  "abcd2222abcd2222abcd2222abcd2222": {"alias": "hk-vps", "first_seen": "2026-10-02T00:00:00Z"}
+  "abcd1111abcd1111abcd1111abcd1111": {"alias": "home-nas", "url": "https://127.0.0.1:1", "first_seen": "2026-10-01T00:00:00Z"},
+  "abcd2222abcd2222abcd2222abcd2222": {"alias": "hk-vps", "url": "https://127.0.0.1:2", "first_seen": "2026-10-02T00:00:00Z"}
 }`)
+	// Two DIFFERENT addresses: the address is what a config line's pin is filed under, so two lines
+	// sharing one would be two lines pointing at one machine (which the directory merges).
 	dir, err := newPeerDirectory([]config.PeerConfig{
 		{Name: "home-nas", URL: "https://127.0.0.1:1"},
-		{Name: "hk-vps", URL: "https://127.0.0.1:1"},
+		{Name: "hk-vps", URL: "https://127.0.0.1:2"},
 	})
 	require.NoError(t, err)
-	known, err := openKnownPeers(config.PeerIdentitiesPath(), nil, nil)
+	known, err := openKnownPeers(config.PeerIdentitiesPath(), nil)
 	require.NoError(t, err)
 	dir.known = known
 
 	ctx := context.Background()
 	for _, ref := range []string{
-		"home-nas",
 		"abcd1111abcd1111abcd1111abcd1111",
 		"abcd1111abcd1111abcd1111abcd1111"[:12],
 	} {
 		by, err := dir.Lookup(ctx, ref)
 		require.NoError(t, err, "looking up %q", ref)
-		require.Equal(t, "home-nas", by.Name, "looking up %q", ref)
+		require.Equal(t, "home-nas", by.Name(), "looking up %q", ref)
+		require.Equal(t, "abcd1111abcd1111abcd1111abcd1111", by.Identity)
 	}
 
 	// An ambiguous prefix is refused rather than guessed: sending work to the wrong machine is worse
@@ -47,21 +49,75 @@ func TestLookupAcceptsANameAnIdentityOrAPrefix(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "matches 2 nodes")
 
-	// An unknown name gets the configured set back, WITH the identities this machine holds — the
-	// useful answer is the list it could have picked from.
-	_, err = dir.Lookup(ctx, "nope")
+	// A LABEL is refused, and the refusal names the identity to use instead — the mistake a reader
+	// will actually make, since a label is what every row and the reminder show.
+	_, err = dir.Lookup(ctx, "home-nas")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "label")
+	require.Contains(t, err.Error(), "abcd1111", "the answer has to include what to use")
+
+	// An unknown id gets the whole directory back, shown the way a reader sees it, so the model can
+	// pick something real.
+	_, err = dir.Lookup(ctx, "ffff")
 	var unknown *UnknownPeerError
 	require.ErrorAs(t, err, &unknown)
 	require.Equal(t, []string{"hk-vps (abcd2222)", "home-nas (abcd1111)"}, unknown.Known)
+}
 
-	// An identity this machine HAS a record for, but whose name is no longer configured, is a
-	// different answer from "never heard of it" — and the fix is different too.
-	writePinned(t, `{"abcd3333abcd3333abcd3333abcd3333": {"alias": "retired", "first_seen": "2026-10-01T00:00:00Z"}}`)
-	known2, err := openKnownPeers(config.PeerIdentitiesPath(), nil, nil)
+// A tool argument can name a machine this one has never met, and naming it is what connects: the
+// resolution asks the entry that holds no identity yet, and the handshake that comes back is what
+// makes the name resolvable.
+//
+// This is the pipe entry's only way in. An interactive turn is told the identities by the reminder's
+// own probe, but `-p` runs with reminders off by construction, so without this a delegation from a
+// one-off run could never be addressed at all (design §二: 启动后/刷新时去读一次卡片).
+func TestNamingAMachineThisOneHasNotMetIsWhatConnectsToOne(t *testing.T) {
+	const id = "99998888999988889999888899998888"
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:2"}})
 	require.NoError(t, err)
-	dir.known = known2
-	_, err = dir.Lookup(ctx, "abcd3333abcd3333abcd3333abcd3333")
+	dir.known = emptyPins(t)
+
+	reads := 0
+	dir.resolveEntry = func(_ context.Context, e peerEntry) (*a2a.AgentCard, string, error) {
+		reads++
+		// The contact: the handshake proves the identity, and the card is what it reads on the way.
+		require.Equal(t, "https://127.0.0.1:2", e.Addrs[0])
+		require.NoError(t, dir.known.confirm("nas", "https://127.0.0.1:2", id))
+		return &a2a.AgentCard{Name: "Tachi"}, "https://127.0.0.1:2", nil
+	}
+
+	got, err := dir.Lookup(context.Background(), id)
+	require.NoError(t, err, "the machine was reached by being named")
+	require.Equal(t, id, got.Identity)
+	require.Equal(t, "nas", got.Name())
+	require.Equal(t, 1, reads)
+
+	// And now it is a machine like any other: the answer is in the directory, so the next lookup
+	// costs nothing.
+	again, err := dir.Lookup(context.Background(), id[:8])
+	require.NoError(t, err)
+	require.Equal(t, id, again.Identity)
+	require.Equal(t, 1, reads, "a machine once reached is not reached again to be named")
+}
+
+// A pin whose machine is no longer anywhere in the directory is a real answer, and the one `Lookup`
+// gives is the same one `byIdentity` would: the machine cannot be reached, because there is no entry
+// to reach it at.
+func TestLookupRefusesAnIdentityWithNoEntry(t *testing.T) {
+	usePinnedBase(t)
+	writePinned(t, `{"abcd3333abcd3333abcd3333abcd3333": {"alias": "retired", "first_seen": "2026-10-01T00:00:00Z"}}`)
+	dir, err := newPeerDirectory(nil)
+	require.NoError(t, err)
+	known, err := openKnownPeers(config.PeerIdentitiesPath(), nil)
+	require.NoError(t, err)
+	dir.known = known
+
+	// The pin is there, and it is not an entry: nothing configured names it, nothing announced it.
+	_, ok := dir.byIdentity("abcd3333abcd3333abcd3333abcd3333")
+	require.False(t, ok)
+
+	_, err = dir.Lookup(context.Background(), "abcd3333abcd3333abcd3333abcd3333")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "last reached as \"retired\"")
-	require.NotErrorAs(t, err, &unknown, "that is not the unknown-name answer")
+	var unknown *UnknownPeerError
+	require.NotErrorAs(t, err, &unknown, "the identity IS known — it is the machine that is missing")
 }

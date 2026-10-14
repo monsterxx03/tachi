@@ -54,6 +54,8 @@ func configYAML(o *options, baseURL string) (string, error) {
 		NodeSection:   o.nodeSection(),
 		NodeEnabled:   o.nodeEnabled,
 		NodeListen:    o.nodeListen,
+		NodePublicURL: o.nodePublicURL,
+		NodeDiscovery: o.nodeDiscovery,
 		NodeName:      o.nodeName,
 		NodeWorkspace: o.nodeWorkspace,
 		Peers:         o.peers,
@@ -81,11 +83,20 @@ type configData struct {
 	// under it, so the block is rendered when ANY of its keys has something to say.
 	NodeSection bool
 	NodeEnabled bool // render `enabled: true` in that block
+	// NodePublicURL is where callers reach this node (config `node.public_url`). Required whenever
+	// NodeListen is a wildcard address, because that is the one combination a node refuses to start
+	// with: it cannot derive an address from 0.0.0.0, and its Card has to name one a caller can dial
+	// (node/a2a.go).
+	NodePublicURL string
 	// NodeListen is the REMOTE A2A surface's address, and the only switch that decides whether
 	// this node serves TLS: off loopback it encrypts and requires a client certificate
 	// (node/options.go isLoopbackListen, node/a2a.go). A spec that exercises mTLS therefore has
 	// to name a non-loopback address here.
 	NodeListen string
+	// NodeDiscovery turns mDNS browsing on (config `node.discovery.mdns.enabled`): the SENDING
+	// side's switch, and independent of the node service — a machine may look for others without
+	// serving anything itself.
+	NodeDiscovery bool
 	// NodeName is what this node calls itself. It is a LABEL and travels as one — in the Card
 	// and in the header a peer files under `self_reported_name` — so it is also the only way to
 	// assert, from the other machine's disk, which node asked for the work.
@@ -167,6 +178,14 @@ node:
 {{- if .NodeListen}}
   listen: "{{.NodeListen}}"
 {{- end}}
+{{- if .NodePublicURL}}
+  public_url: "{{.NodePublicURL}}"
+{{- end}}
+{{- if .NodeDiscovery}}
+  discovery:
+    mdns:
+      enabled: true
+{{- end}}
 {{- if .NodeName}}
   name: "{{.NodeName}}"
 {{- end}}
@@ -197,13 +216,20 @@ type TB interface {
 type Option func(*options)
 
 type options struct {
-	protocol      mockllm.Protocol
-	bashAllow     bool
-	bashAsk       bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
-	timeout       time.Duration // spec.timeout injected into the provider fixture
-	secondModel   string        // 第二个 provider 的 model（/model 切换场景）
-	nodeEnabled   bool          // node.enabled: true — 节点服务开关（默认关闭）
-	nodeListen    string        // node.listen — 远程 A2A 面的地址（loopback 之外就serve TLS）
+	protocol    mockllm.Protocol
+	bashAllow   bool
+	bashAsk     bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
+	timeout     time.Duration // spec.timeout injected into the provider fixture
+	secondModel string        // 第二个 provider 的 model（/model 切换场景）
+	nodeEnabled bool          // node.enabled: true — 节点服务开关（默认关闭）
+	nodeListen  string        // node.listen — 远程 A2A 面的地址（loopback 之外就 serve TLS）
+	// nodePublicURL is where callers reach this node. A node bound to a WILDCARD address (which is how
+	// a test leaves loopback) has to be told, or it refuses to start: it cannot derive an address from
+	// 0.0.0.0, and a Card that named one would send callers nowhere (node/a2a.go).
+	nodePublicURL string
+	// nodeDiscovery renders `node.discovery.mdns.enabled: true` — the SENDING side's browse switch,
+	// which is not the same thing as a node service: a machine can look for others without serving.
+	nodeDiscovery bool
 	nodeName      string        // node.name — 这个节点对自己的称呼
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
 	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
@@ -212,7 +238,7 @@ type options struct {
 
 // nodeSection reports whether the fixture needs a `node:` block at all. See configData.
 func (o *options) nodeSection() bool {
-	return o.nodeEnabled || o.nodeListen != "" || o.nodeName != "" || o.nodeWorkspace != ""
+	return o.nodeEnabled || o.nodeListen != "" || o.nodePublicURL != "" || o.nodeName != "" || o.nodeWorkspace != ""
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -256,6 +282,24 @@ func WithSecondProvider(model string) Option {
 // means, so this is opt-in.
 func WithNodeEnabled() Option {
 	return func(o *options) { o.nodeEnabled = true }
+}
+
+// WithNodeDiscovery turns mDNS browsing on (config `node.discovery.mdns.enabled`).
+//
+// It is the sending side's switch and independent of the node service: the spec that wants to SEE
+// another machine through discovery has no `peers:` line at all, because being found is the whole
+// point.
+func WithNodeDiscovery() Option {
+	return func(o *options) { o.nodeDiscovery = true }
+}
+
+// WithNodePublicURL says where callers reach this node (config `node.public_url`).
+//
+// It goes with WithNodeListen whenever the listen address is a wildcard: that is the one combination
+// a node refuses to start with, because 0.0.0.0 is not an address anything can dial and this node
+// would have nothing truthful to put in its Card (node/a2a.go).
+func WithNodePublicURL(url string) Option {
+	return func(o *options) { o.nodeEnabled = true; o.nodePublicURL = url }
 }
 
 // WithNodeListen switches the node service on and points its REMOTE A2A surface at addr.

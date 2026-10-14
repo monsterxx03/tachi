@@ -250,7 +250,7 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	return &Manager{
 		cfg:                     cfg,
-		delegator:               node.NewDelegatorCache(cfg.Node.Name, logger.New("channel")),
+		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel")),
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
 		agents:                  newAgentPool(),
@@ -651,6 +651,11 @@ func (m *Manager) Close() {
 	// Stop system scheduler first (may have in-flight jobs).
 	if m.systemScheduler != nil {
 		m.systemScheduler.Stop()
+	}
+	// The discovery browser holds UDP sockets and a goroutine of its own; it is stopped with the
+	// manager rather than left to the process teardown (node/delegatorcache.go Close).
+	if m.delegator != nil {
+		m.delegator.Close()
 	}
 
 	m.evictAllAgents()

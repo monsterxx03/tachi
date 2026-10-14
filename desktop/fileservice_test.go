@@ -205,14 +205,16 @@ func useTestConfigBase(t *testing.T) {
 }
 
 // TestSearchAgentsDescribesEachNode pins what a #a: row says, because THREE frontends have to say
-// the same thing about the same node: the alias the model must hand to DelegateTask, the identity
-// only THIS machine can vouch for, and what the last look found.
+// the same thing about the same node: what the node is CALLED, the identity only THIS machine can
+// vouch for — which is also what the row's reference and a tool argument carry — and what the last
+// look found.
 //
 // Two of the three are refused when they are guessed. The identity comes from the TOFU record
-// (written by a TLS handshake on an outbound call and nothing else), so a node this machine has
-// never called has NO identity — and the row says that, rather than showing the name the node
-// reports about itself, which any key can claim. Reachability is a fact about a moment and nobody
-// has looked yet, so the row says "检查中…" and never "offline".
+// (written by a TLS handshake on an outbound call and nothing else), and a node this machine has
+// never called has none — which is why such a node is not offered as a reference at all
+// (agentref.Search), rather than being shown with the name the node reports about itself, which any
+// key can claim. Reachability is a fact about a moment and nobody has looked yet, so the row says
+// "检查中…" and never "offline".
 func TestSearchAgentsDescribesEachNode(t *testing.T) {
 	useTestConfigBase(t)
 	cfg := config.DefaultConfig()
@@ -220,8 +222,11 @@ func TestSearchAgentsDescribesEachNode(t *testing.T) {
 		{Name: "ugreen-nas", URL: "https://100.64.0.3:7080", Note: "家里的 NAS"},
 		{Name: "hk-vps", URL: "https://100.64.0.9:7080"},
 	}
+	// Both machines have been reached, so both have an identity: the record is keyed by identity, and
+	// a config line finds its own by the ADDRESS the pin was filed under.
 	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
+  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "url": "https://100.64.0.3:7080", "first_seen": "2026-10-01T00:00:00Z"},
+  "ab12cd34ab12cd34ab12cd34ab12cd34": {"alias": "hk-vps", "url": "https://100.64.0.9:7080", "first_seen": "2026-10-02T00:00:00Z"}
 }`)); err != nil {
 		t.Fatalf("write peer identities: %v", err)
 	}
@@ -232,19 +237,19 @@ func TestSearchAgentsDescribesEachNode(t *testing.T) {
 
 	rows := svc.SearchAgents("", 0)
 	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want one per configured peer (a missing row reads as \"not configured\")", len(rows))
+		t.Fatalf("got %d rows, want one per nameable peer (a missing row reads as \"not configured\")", len(rows))
 	}
-	byAlias := map[string]AgentMatchVO{}
+	byName := map[string]AgentMatchVO{}
 	for _, r := range rows {
-		byAlias[r.Alias] = r
+		byName[r.Name] = r
 	}
 
-	nas, ok := byAlias["ugreen-nas"]
+	nas, ok := byName["ugreen-nas"]
 	if !ok {
 		t.Fatalf("no row for ugreen-nas: %+v", rows)
 	}
-	if nas.Ref != "#a:ugreen-nas" {
-		t.Errorf("ref = %q, want the reference the expansion reads back", nas.Ref)
+	if nas.Ref != "#a:cd726b446c34386ece70d88fdd5fbf2a" {
+		t.Errorf("ref = %q, want the identity the expansion reads back", nas.Ref)
 	}
 	if nas.NodeID != "cd726b446c34386ece70d88fdd5fbf2a" || nas.IDLabel != "cd726b44" {
 		t.Errorf("identity = %q/%q, want the pinned id and its short form", nas.NodeID, nas.IDLabel)
@@ -256,19 +261,19 @@ func TestSearchAgentsDescribesEachNode(t *testing.T) {
 		t.Errorf("reach = %q, want %q — nobody has probed yet", nas.Reach, agentref.ReachWord(atfile.AgentTarget{}))
 	}
 
-	vps, ok := byAlias["hk-vps"]
+	vps, ok := byName["hk-vps"]
 	if !ok {
 		t.Fatalf("no row for hk-vps: %+v", rows)
 	}
-	if vps.NodeID != "" || vps.IDLabel != "身份未记录" {
-		t.Errorf("never called outbound: got %+v, want no identity claimed", vps)
+	if vps.NodeID != "ab12cd34ab12cd34ab12cd34ab12cd34" || vps.IDLabel != "ab12cd34" {
+		t.Errorf("identity = %q/%q, want the pinned id and its short form", vps.NodeID, vps.IDLabel)
 	}
-	if vps.Ref != "#a:hk-vps" {
-		t.Errorf("ref = %q", vps.Ref)
+	if vps.Ref != "#a:ab12cd34ab12cd34ab12cd34ab12cd34" {
+		t.Errorf("ref = %q, want the identity", vps.Ref)
 	}
 
-	// A query narrows by alias, and the row's alias is what gets searched.
-	if narrowed := svc.SearchAgents("ugreen", 0); len(narrowed) != 1 || narrowed[0].Alias != "ugreen-nas" {
+	// A query narrows by name, and the row's name is what gets searched.
+	if narrowed := svc.SearchAgents("ugreen", 0); len(narrowed) != 1 || narrowed[0].Name != "ugreen-nas" {
 		t.Errorf("SearchAgents(ugreen) = %+v, want just that node", narrowed)
 	}
 }
@@ -284,7 +289,7 @@ func TestPeerBoardShowsWhatThisMachineKnows(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Peers = []config.PeerConfig{{Name: "ugreen-nas", URL: "https://127.0.0.1:1", Note: "家里的 NAS"}}
 	if err := fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
+  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "url": "https://127.0.0.1:1", "first_seen": "2026-10-01T00:00:00Z"}
 }`)); err != nil {
 		t.Fatalf("write peer identities: %v", err)
 	}
@@ -298,8 +303,8 @@ func TestPeerBoardShowsWhatThisMachineKnows(t *testing.T) {
 		t.Fatalf("board has %d rows, want one per configured peer: %+v", len(board.Peers), board)
 	}
 	row := board.Peers[0]
-	if row.Alias != "ugreen-nas" || row.Ref != "#a:ugreen-nas" {
-		t.Errorf("row = %+v, want the configured alias and its reference", row)
+	if row.Name != "ugreen-nas" || row.Ref != "#a:cd726b446c34386ece70d88fdd5fbf2a" {
+		t.Errorf("row = %+v, want what the node is called and the identity a tool argument takes", row)
 	}
 	if row.URL != "https://127.0.0.1:1" {
 		t.Errorf("url = %q, want the address THIS machine dials (from the config)", row.URL)

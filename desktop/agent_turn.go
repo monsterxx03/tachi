@@ -1147,7 +1147,7 @@ func (d *desktopApp) delegatorCache(cfg *config.Config) *node.DelegatorCache {
 	}
 	d.delegatorMu.Lock()
 	if d.delegator == nil {
-		d.delegator = node.NewDelegatorCache(cfg.Node.Name, logger.New("desktop"))
+		d.delegator = node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("desktop"))
 	}
 	cache := d.delegator
 	d.delegatorMu.Unlock()
@@ -1165,7 +1165,7 @@ func (d *desktopApp) senderFor(cfg *config.Config) *node.Sender {
 	// The cache is asked with no app lock held: it does its own locking, and the rule this codebase
 	// follows is one lock at a time (a disk read under mu is how the desktop's own turn goroutines
 	// would start queueing behind the sidebar's).
-	return cache.ForSender(cfg.Peers)
+	return cache.ForSender(context.Background(), cfg.Peers)
 }
 
 // delegatorFor returns the sending side for this configuration, rebuilt when the peer list
@@ -1175,5 +1175,5 @@ func (d *desktopApp) delegatorFor(cfg *config.Config) tools.RemoteDelegator {
 	if cache == nil {
 		return nil
 	}
-	return cache.For(cfg.Peers)
+	return cache.For(context.Background(), cfg.Peers)
 }

@@ -115,12 +115,10 @@ func (d *desktopApp) peerList() *node.PeerList {
 	defer d.peersMu.Unlock()
 	if d.peers == nil {
 		d.peers = node.NewPeerList(
-			func() []config.PeerConfig {
-				if cfg := d.config(); cfg != nil {
-					return cfg.Peers
-				}
-				return nil
-			},
+			// The rows come from the sending side's directory, resolved per read: it holds the
+			// configured machines AND the ones discovery has found, and a captured list would go
+			// stale the moment either changed.
+			node.RowsOf(func() *node.Sender { return d.senderFor(d.config()) }),
 			func(ctx context.Context, force bool) []node.PeerReport {
 				// Resolved per probe, not captured at construction: the peers are a config leaf the
 				// settings UI edits in place, and a captured sender would keep asking the machines
@@ -157,7 +155,10 @@ type SessionMatchVO struct {
 // fact in the TUI, and two frontends each deciding how to phrase them is how one window ends up
 // saying "offline" while the other says "checking".
 type AgentMatchVO struct {
-	Alias string `json:"alias"`
+	Label string `json:"label"`
+	// Name is what to call the node on the row: the label when there is one, else what the node calls
+	// itself, else the front of its id.
+	Name string `json:"name"`
 	// NodeID is the identity pinned on first outbound contact, empty when this machine has never
 	// called that node. It is never the name the node reports about itself.
 	NodeID string `json:"nodeId"`
@@ -197,12 +198,13 @@ func (s *AgentService) SearchAgents(query string, limit int) []AgentMatchVO {
 	matches := make([]AgentMatchVO, len(targets))
 	for i, t := range targets {
 		matches[i] = AgentMatchVO{
-			Alias:   t.Alias,
+			Label:   t.Label,
+			Name:    t.Name,
 			NodeID:  t.NodeID,
 			IDLabel: agentref.IDLabel(t),
 			Reach:   agentref.ReachWord(t),
 			Note:    agentref.RowNote(t, 0),
-			Ref:     atfile.RefForAgent(t.Alias),
+			Ref:     atfile.RefForAgent(t.NodeID),
 		}
 	}
 	return matches

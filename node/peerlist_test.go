@@ -9,75 +9,50 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/agent/agentref"
 )
 
-// useTempConfigBase points the config paths at a temp dir. Every test in this file reads the pin
-// record through config.PeerIdentitiesPath, and none of them may touch the real one.
-func useTempConfigBase(t *testing.T) string {
-	t.Helper()
-	base := t.TempDir()
-	config.SetBaseDir(base)
-	t.Cleanup(func() { config.SetBaseDir("") })
-	return base
-}
+const ugreenID = "cd726b446c34386ece70d88fdd5fbf2a"
 
-// peers is the provider a PeerList reads through: the shape a real entry point passes, where the
-// peer list comes from a config the reader can edit while the process runs.
-func peers() func() []config.PeerConfig {
-	return func() []config.PeerConfig {
-		return []config.PeerConfig{
-			{Name: "ugreen-nas", URL: "https://100.64.0.3:7080", Note: "家里的 NAS"},
-			{Name: "hk-vps", URL: "https://100.64.0.9:7080"},
-		}
+// rows is the provider a PeerList reads through: the shape a real entry point passes, which is the
+// sending side's DIRECTORY — configured machines and discovered ones alike, with whatever identity
+// this machine holds for each.
+func rows() []agentref.Peer {
+	return []agentref.Peer{
+		{Key: ugreenID, Label: "ugreen-nas", Name: "ugreen-nas", NodeID: ugreenID,
+			Addr: "https://100.64.0.3:7080", Note: "家里的 NAS"},
+		// A machine nobody has reached in this process: listed, because "not listed" would read as
+		// "not configured", and marked as having no identity yet.
+		{Key: "@https://100.64.0.9:7080", Name: "hk-vps", Note: "香港的机器"},
 	}
 }
 
-// The picker's opening list is every CONFIGURED node — a node missing from it would read as "not
-// configured" — with the identity this machine pinned for it, which only outbound contact writes.
-func TestPeerListSnapshotIsEveryConfiguredNode(t *testing.T) {
-	useTempConfigBase(t)
-	require.NoError(t, fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte(`{
-  "cd726b446c34386ece70d88fdd5fbf2a": {"alias": "ugreen-nas", "first_seen": "2026-10-01T00:00:00Z"}
-}`)))
-
-	list := NewPeerList(peers(), nil, nil)
+// The picker's opening list is every node in the directory — a node missing from it would read as
+// "not configured" — with the identity this machine holds for each (if it holds one).
+func TestPeerListSnapshotIsEveryKnownNode(t *testing.T) {
+	list := NewPeerList(rows, nil, nil)
 	snapshot := list.Snapshot()
 
-	require.Len(t, snapshot, 2, "the configured list is the list")
-	assert.Equal(t, "ugreen-nas", snapshot[0].Alias)
+	require.Len(t, snapshot, 2, "the directory is the list")
+	assert.Equal(t, "ugreen-nas", snapshot[0].Name)
 	assert.Equal(t, "家里的 NAS", snapshot[0].Note)
-	assert.Equal(t, "cd726b446c34386ece70d88fdd5fbf2a", snapshot[0].NodeID)
+	assert.Equal(t, ugreenID, snapshot[0].NodeID)
 	assert.False(t, snapshot[0].Checked, "nothing has looked yet, which is not the same as 'down'")
 
-	assert.Equal(t, "hk-vps", snapshot[1].Alias)
-	assert.Empty(t, snapshot[1].NodeID, "never called outbound, so this machine holds no identity for it")
-}
-
-// An unreadable record costs the row its identity and nothing else: a picker that does not open is
-// worse than one that says "unknown".
-func TestPeerListSnapshotSurvivesAnUnreadablePinRecord(t *testing.T) {
-	useTempConfigBase(t)
-	require.NoError(t, fileutil.WriteFilePrivate(config.PeerIdentitiesPath(), []byte("{not json")))
-
-	snapshot := NewPeerList(peers(), nil, nil).Snapshot()
-
-	require.Len(t, snapshot, 2)
-	assert.Empty(t, snapshot[0].NodeID)
+	assert.Equal(t, "hk-vps", snapshot[1].Name)
+	assert.Empty(t, snapshot[1].NodeID, "never reached, so this machine holds no identity for it")
 }
 
 // A probe runs in the background and its answer shows up in a LATER snapshot — the ordering the
 // picker depends on, since the keystroke that triggers the probe has already been drawn.
 func TestProbeAnswersInALaterSnapshot(t *testing.T) {
-	useTempConfigBase(t)
 	probed := make(chan struct{}, 1)
 
-	list := NewPeerList(peers(), func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
 		defer func() { probed <- struct{}{} }()
 		return []PeerReport{
-			{Alias: "ugreen-nas", Reachable: true, Card: &PeerCard{Description: "A Tachi node that runs on its own machine"}},
-			{Alias: "hk-vps"},
+			{Key: ugreenID, Reachable: true, Card: &PeerCard{Description: "A Tachi node that runs on its own machine"}},
+			{Key: "@https://100.64.0.9:7080"},
 		}
 	}, nil)
 
@@ -101,13 +76,12 @@ func TestProbeAnswersInALaterSnapshot(t *testing.T) {
 // A peer the probe never got to is "not looked at", not "down": only what the probe actually said
 // about a node may be recorded about it.
 func TestProbeRecordsOnlyWhatItWasTold(t *testing.T) {
-	useTempConfigBase(t)
 	done := make(chan struct{})
 
-	list := NewPeerList(peers(), func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
 		defer close(done)
 		// Only one of the two answered — a cancelled context looks exactly like this.
-		return []PeerReport{{Alias: "ugreen-nas", Reachable: true}}
+		return []PeerReport{{Key: ugreenID, Reachable: true}}
 	}, nil)
 
 	list.Probe()
@@ -121,10 +95,9 @@ func TestProbeRecordsOnlyWhatItWasTold(t *testing.T) {
 
 // The picker calls Probe on every keystroke; the network may not be asked that often.
 func TestProbeCoalescesKeystrokes(t *testing.T) {
-	useTempConfigBase(t)
 	var calls atomic.Int32
 
-	list := NewPeerList(peers(), func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
 		calls.Add(1)
 		return nil
 	}, nil)
@@ -142,9 +115,7 @@ func TestProbeCoalescesKeystrokes(t *testing.T) {
 // A process that cannot delegate still knows which nodes exist, so the picker still lists them.
 // Nothing is checked, and nothing is claimed.
 func TestPeerListWithoutAProbeStillListsPeers(t *testing.T) {
-	useTempConfigBase(t)
-
-	list := NewPeerList(peers(), nil, nil)
+	list := NewPeerList(rows, nil, nil)
 	list.Probe() // must not panic, and must not claim anything
 
 	snapshot := list.Snapshot()
@@ -155,10 +126,9 @@ func TestPeerListWithoutAProbeStillListsPeers(t *testing.T) {
 
 // No peers configured means nothing to offer and nothing to probe.
 func TestPeerListEmptyConfiguration(t *testing.T) {
-	useTempConfigBase(t)
 	var calls atomic.Int32
 
-	list := NewPeerList(func() []config.PeerConfig { return nil }, func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(func() []agentref.Peer { return nil }, func(ctx context.Context, force bool) []PeerReport {
 		calls.Add(1)
 		return nil
 	}, nil)
@@ -178,18 +148,17 @@ func TestNilPeerList(t *testing.T) {
 // The board's refresh is synchronous and honest about it: a person pressed a button, so the answer
 // is there when the call returns — and two presses must not become two rounds of requests.
 func TestRefreshWaitsForItsAnswerAndDoesNotStack(t *testing.T) {
-	useTempConfigBase(t)
 	release := make(chan struct{})
 	var calls atomic.Int32
 	var forced atomic.Bool
 
-	list := NewPeerList(peers(), func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
 		calls.Add(1)
 		if force {
 			forced.Store(true)
 		}
 		<-release // hold the round open, so the assertions below are about a real in-flight probe
-		return []PeerReport{{Alias: "ugreen-nas", Reachable: true}}
+		return []PeerReport{{Key: ugreenID, Reachable: true}}
 	}, nil)
 
 	first := make(chan struct{})
@@ -216,13 +185,15 @@ func TestRefreshWaitsForItsAnswerAndDoesNotStack(t *testing.T) {
 // Details is the board's projection of the same probe the picker reads: one round of answers, two
 // views of it, so the panel and the '#' list cannot disagree about what is up.
 func TestDetailsAndSnapshotShareOneProbe(t *testing.T) {
-	useTempConfigBase(t)
 	done := make(chan struct{})
 
-	list := NewPeerList(peers(), func(ctx context.Context, force bool) []PeerReport {
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
 		defer close(done)
 		return []PeerReport{{
-			Alias:     "ugreen-nas",
+			Key:       ugreenID,
+			Label:     "ugreen-nas",
+			Name:      "ugreen-nas",
+			NodeID:    ugreenID,
 			URL:       "https://100.64.0.3:7080",
 			Reachable: true,
 			Card:      &PeerCard{Name: "tachi@home-nas", Description: "家里的节点", Version: "1.2.3"},
@@ -234,8 +205,12 @@ func TestDetailsAndSnapshotShareOneProbe(t *testing.T) {
 	require.Eventually(t, func() bool { return list.Details()[0].Checked }, time.Second, 5*time.Millisecond)
 
 	detail := list.Details()[0]
-	assert.Equal(t, "ugreen-nas", detail.Alias)
-	assert.Equal(t, "https://100.64.0.3:7080", detail.URL, "the address THIS machine dials, from the config")
+	assert.Equal(t, "ugreen-nas", detail.Name)
+	assert.Equal(t, ugreenID, detail.NodeID)
+	// The address and the note come from the DIRECTORY, not from the probe: the board has them before
+	// anybody has asked anything, and only the answer below waits for a round trip.
+	assert.Equal(t, "https://100.64.0.3:7080", detail.URL, "the address THIS machine dials first")
+	assert.Equal(t, "家里的 NAS", detail.Note)
 	require.NotNil(t, detail.Card)
 	assert.Equal(t, "家里的节点", detail.Card.Description)
 
@@ -244,7 +219,8 @@ func TestDetailsAndSnapshotShareOneProbe(t *testing.T) {
 	assert.True(t, snapshot[0].Checked)
 	assert.True(t, snapshot[0].Reachable)
 	assert.Equal(t, "家里的节点", snapshot[0].Description)
-	// ...and NOT the name the node reports about itself: that is not an identity, and this list
-	// shows none of it (node/knownpeers.go).
-	assert.NotContains(t, snapshot[0].Description, "tachi@home-nas")
+	// ...and the row keeps showing what to CALL the node, not the name it reports about itself: that
+	// is not an identity, so it does not become a row's label either (node/peerdir.go Name).
+	assert.Equal(t, "ugreen-nas", snapshot[0].Name)
+	assert.NotEqual(t, "tachi@home-nas", snapshot[0].Name)
 }

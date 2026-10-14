@@ -133,9 +133,11 @@ func TestTheTaskReminderKeepsTheProvidersOrderInsideAGroup(t *testing.T) {
 }
 
 func TestThePeersReminderSpeaksOncePerConversation(t *testing.T) {
+	// Each node carries the identity this machine pinned for it, which is what a tool argument takes
+	// — a node the reminder cannot give an identity for is one the model cannot name at all.
 	provider := &fakeProvider{peers: []tools.PeerSummary{
-		{Name: "nas", Description: "家里的 NAS", Reachable: true},
-		{Name: "vps", Note: "香港的小机器", Reachable: false},
+		{Name: "nas", NodeID: "aaaa1111aaaa1111aaaa1111aaaa1111", Description: "家里的 NAS", Reachable: true},
+		{Name: "vps", NodeID: "bbbb2222bbbb2222bbbb2222bbbb2222", Note: "香港的小机器", Reachable: false},
 	}}
 	reminder := &PeersReminder{}
 	rctx := Context{Delegator: provider, LogicalConversation: "conv-1"}
@@ -145,10 +147,12 @@ func TestThePeersReminderSpeaksOncePerConversation(t *testing.T) {
 		t.Fatal("a run that may delegate must be told which nodes exist")
 	}
 	body := strings.Join(first, "\n")
-	if !strings.Contains(body, "nas：家里的 NAS") {
-		t.Errorf("a reachable node is described by its own card:\n%s", body)
+	// The identity rides beside the name because it is the string the model has to pass: a line that
+	// showed only a name would be naming a node by something its own tool call refuses.
+	if !strings.Contains(body, "nas (aaaa1111)：家里的 NAS") {
+		t.Errorf("a reachable node is described by its own card, with the identity a tool argument takes:\n%s", body)
 	}
-	if !strings.Contains(body, "vps：香港的小机器（上次联系不上") {
+	if !strings.Contains(body, "vps (bbbb2222)：香港的小机器（上次联系不上") {
 		t.Errorf("an unreachable node says so, and falls back to the configured note:\n%s", body)
 	}
 
@@ -158,7 +162,9 @@ func TestThePeersReminderSpeaksOncePerConversation(t *testing.T) {
 	}
 
 	// A node added is a change the model has to hear.
-	provider.peers = append(provider.peers, tools.PeerSummary{Name: "buildbox", Description: "编译机", Reachable: true})
+	provider.peers = append(provider.peers, tools.PeerSummary{
+		Name: "buildbox", NodeID: "cccc3333cccc3333cccc3333cccc3333", Description: "编译机", Reachable: true,
+	})
 	if changed := reminder.Generate(t.Context(), rctx); len(changed) == 0 {
 		t.Error("a changed peer list must be told again")
 	}
@@ -177,7 +183,9 @@ func TestThePeersReminderIsSilentWithNoPeersOrNoDelegator(t *testing.T) {
 	}
 	// A run with no conversation is still told which nodes exist: the list is a fact about the
 	// MACHINE, and a pipe run has the tool but no other way to learn a node's name.
-	withPeers := &fakeProvider{peers: []tools.PeerSummary{{Name: "nas", Reachable: true}}}
+	withPeers := &fakeProvider{peers: []tools.PeerSummary{{
+		Name: "nas", NodeID: "aaaa1111aaaa1111aaaa1111aaaa1111", Reachable: true,
+	}}}
 	if got := reminder.Generate(t.Context(), Context{Delegator: withPeers}); len(got) == 0 {
 		t.Error("a sessionless run must be told which nodes it may delegate to")
 	}

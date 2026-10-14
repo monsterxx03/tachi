@@ -1,0 +1,321 @@
+package node
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/monsterxx03/tachi/config"
+)
+
+const (
+	discoveredID = "dddd4444dddd4444dddd4444dddd4444"
+	claimedID    = "eeee5555eeee5555eeee5555eeee5555"
+)
+
+func testBrowser(t *testing.T) *mdnsBrowser {
+	t.Helper()
+	b, err := newMDNSBrowser(nasID, config.MdnsDiscoveryConfig{}, nil)
+	require.NoError(t, err)
+	return b
+}
+
+// txtAnnouncement is one announcement the way a well-behaved Tachi node sends it.
+func txtAnnouncement(instance, id string, addrs ...string) announcement {
+	return announcement{
+		Instance: instance,
+		TXT: map[string]string{
+			mdnsTXTIdentity: id,
+			mdnsTXTAPIVer:   "1",
+			mdnsTXTScheme:   mdnsScheme,
+		},
+		Addrs: addrs,
+		Seen:  time.Now(),
+	}
+}
+
+// An announcement is only ever a CLAIM, and the checks that need no connection are about its SHAPE.
+// Nothing is dialled for a packet that does not claim to be a node this machine could talk to: the
+// network is shared with everything else on it, and a `_tachi._tcp` from something else must cost
+// nothing (design §5 预筛).
+func TestAnAnnouncementIsNotDialledUnlessItClaimsThisProgram(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(announcement) announcement
+		why  string
+	}{
+		{"no identity", func(a announcement) announcement { delete(a.TXT, mdnsTXTIdentity); return a }, "id"},
+		{"an identity that is not a node id", func(a announcement) announcement {
+			a.TXT[mdnsTXTIdentity] = "nas"
+			return a
+		}, "id"},
+		{"another API version", func(a announcement) announcement { a.TXT[mdnsTXTAPIVer] = "2"; return a }, "version"},
+		{"no version at all", func(a announcement) announcement { delete(a.TXT, mdnsTXTAPIVer); return a }, "version"},
+		{"a scheme that is not https", func(a announcement) announcement { a.TXT[mdnsTXTScheme] = "http"; return a }, "scheme"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := testBrowser(t)
+			cand, why := b.decide(tc.mut(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080")))
+			require.Nil(t, cand, "nothing may be dialled on this announcement")
+			require.Contains(t, why, tc.why, "and the reason names the field that was wrong")
+		})
+	}
+}
+
+// This machine's own announcement is not a peer, and it is not worth a line in the log either: every
+// node on the network hears itself.
+func TestAnAnnouncementOfThisVeryMachineIsNotAPeer(t *testing.T) {
+	b := testBrowser(t)
+	cand, why := b.decide(txtAnnouncement("this-machine", nasID, "https://192.168.1.9:7080"))
+	require.Nil(t, cand)
+	require.Empty(t, why, "silence: it is us")
+}
+
+// A multicast announcement that resolves to a public address is a machine asking to be dialled from
+// wherever — and dialling outwards on a stranger's word is not a thing discovery does.
+func TestAnAnnouncementWithOnlyPublicAddressesIsNotDialled(t *testing.T) {
+	b := testBrowser(t)
+	cand, why := b.decide(txtAnnouncement("nas-dddd4444", discoveredID, "https://8.8.8.8:7080"))
+	require.Nil(t, cand)
+	require.Contains(t, why, "local network")
+}
+
+// A machine that announces several addresses keeps all of them: one identity, more than one place it
+// can be reached, which is the ordinary shape of a machine on a LAN and a mesh at once.
+func TestEveryLocalAddressOfAnAnnouncementBecomesACandidate(t *testing.T) {
+	b := testBrowser(t)
+	cand, why := b.decide(txtAnnouncement("nas-dddd4444", discoveredID,
+		"https://192.168.1.9:7080", "https://8.8.8.8:7080", "https://100.64.0.3:7080"))
+	require.Empty(t, why)
+	require.NotNil(t, cand)
+	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, cand.Addrs,
+		"the public one is dropped, the local ones are kept in the order they came in")
+}
+
+// THE rule of this file: an announcement becomes a sighting only after this machine has connected and
+// the identity the peer PROVED is the one the packet claimed. A packet that named one identity while
+// another answers at that address is a lie, and the candidate goes.
+func TestASightingNeedsTheProvenIdentityToMatchTheClaim(t *testing.T) {
+	b := testBrowser(t)
+	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
+	require.Empty(t, b.Sightings(), "an announcement is not a sighting")
+
+	// The machine at that address proves a DIFFERENT identity than the one announced.
+	b.setVerifier(func(context.Context, []string) (string, error) { return claimedID, nil })
+	require.True(t, b.verifyDue(context.Background()))
+	require.Empty(t, b.Sightings(), "a claim that the handshake refutes is not a machine this one may list")
+	require.False(t, b.verifyDue(context.Background()), "and it is dropped rather than retried forever")
+
+	// The honest announcement, on the other hand, becomes one.
+	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7081"))
+	b.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	require.True(t, b.verifyDue(context.Background()))
+	sightings := b.Sightings()
+	require.Len(t, sightings, 1)
+	require.Equal(t, discoveredID, sightings[0].Identity)
+	require.Equal(t, []string{"https://192.168.1.9:7081"}, sightings[0].Addrs)
+}
+
+// A candidate that does not answer yet is ordinary — a node announces itself before it can serve —
+// so it is kept for another try rather than forgotten, and the retry is not immediate.
+func TestACandidateThatDoesNotAnswerYetIsRetried(t *testing.T) {
+	b := testBrowser(t)
+	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
+	attempts := 0
+	b.setVerifier(func(context.Context, []string) (string, error) {
+		attempts++
+		return "", errors.New("connection refused")
+	})
+
+	require.True(t, b.verifyDue(context.Background()))
+	require.Equal(t, 1, attempts)
+	require.False(t, b.verifyDue(context.Background()), "not immediately: the retry has a delay")
+	require.Empty(t, b.Sightings())
+
+	b.now = func() time.Time { return time.Now().Add(discoveryRetry) }
+	require.True(t, b.verifyDue(context.Background()))
+	require.Equal(t, 2, attempts, "the machine was tried again after the delay")
+}
+
+// A candidate nobody can verify (a plaintext peer, something else entirely) is dropped rather than
+// retried: there is no identity there to find, and asking again is a connection spent on a known
+// answer.
+func TestACandidateWithNoIdentityToProveIsDropped(t *testing.T) {
+	b := testBrowser(t)
+	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
+	b.setVerifier(func(context.Context, []string) (string, error) { return "", nil })
+
+	require.True(t, b.verifyDue(context.Background()))
+	require.False(t, b.verifyDue(context.Background()))
+}
+
+// A machine that went quiet stops being a sighting — an hour after it was last seen — without
+// anything having to sweep it.
+func TestASightingExpiresAnHourAfterItWasLastSeen(t *testing.T) {
+	b := testBrowser(t)
+	at := time.Now()
+	b.now = func() time.Time { return at }
+	// The announcement is stamped by the same clock the browser reads, so "when it was seen" and
+	// "when to try it" are the same instant rather than two.
+	a := txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080")
+	a.Seen = at
+	b.observe(a)
+	b.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	require.True(t, b.verifyDue(context.Background()))
+	require.Len(t, b.Sightings(), 1)
+
+	b.now = func() time.Time { return at.Add(discoveryTTL - time.Minute) }
+	require.Len(t, b.Sightings(), 1, "still inside the window")
+
+	b.now = func() time.Time { return at.Add(discoveryTTL + time.Minute) }
+	require.Empty(t, b.Sightings(), "outside it, the machine is no longer an entry")
+}
+
+// A machine that announces two addresses keeps both once it is confirmed, no matter which one
+// answered: the announcement resolved to both, and both are places this machine may try. ONE pass
+// verifies the whole machine — its addresses are tried in order inside that pass, not as separate
+// machines queued behind each other.
+func TestAConfirmedMachineKeepsEveryAddressItAnnounced(t *testing.T) {
+	b := testBrowser(t)
+	b.observe(txtAnnouncement("nas-dddd4444", discoveredID,
+		"https://192.168.1.9:7080", "https://100.64.0.3:7080"))
+
+	var asked []string
+	b.setVerifier(func(_ context.Context, addrs []string) (string, error) {
+		asked = append([]string(nil), addrs...)
+		return discoveredID, nil
+	})
+
+	require.True(t, b.verifyDue(context.Background()))
+	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, asked,
+		"one machine, one pass, its addresses in the order the announcement gave them")
+	require.False(t, b.verifyDue(context.Background()), "and nothing is left queued")
+
+	sightings := b.Sightings()
+	require.Len(t, sightings, 1)
+	require.ElementsMatch(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, sightings[0].Addrs)
+}
+
+// An announcement that resolves to an IPv6 LINK-LOCAL address only is not dialled: those addresses
+// need a zone to mean anything, and nothing here can name one — so a dial can only ever fail, and on
+// a machine with a dozen interfaces they used to stand in front of the address that works.
+func TestAnAnnouncementWithOnlyUnreachableAddressesIsNotDialled(t *testing.T) {
+	b := testBrowser(t)
+	parsed := []net.IP{
+		net.ParseIP("fe80::1"),
+		net.ParseIP("fe80::e469:b3ff:fe28:8117"),
+	}
+	require.Empty(t, addressesFor(7080, parsed),
+		"a link-local address without a zone is not an address this machine can dial")
+	require.Empty(t, addressesFor(0, []net.IP{net.ParseIP("192.168.1.9")}),
+		"and a port the kernel has not given yet names nothing either")
+
+	// IPv4 first, then IPv6: the same machine here had thirteen IPv6 addresses and one IPv4 one, and
+	// the order decides what is tried first.
+	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080", "https://[fd7a:115c:a1e0::482c:ef4c]:7080"},
+		addressesFor(7080, []net.IP{
+			net.ParseIP("fe80::1"),
+			net.ParseIP("fd7a:115c:a1e0::482c:ef4c"),
+			net.ParseIP("192.168.1.9"),
+			net.ParseIP("100.64.0.3"),
+		}))
+
+	// And an announcement whose surviving addresses are none becomes no candidate at all.
+	cand, why := b.decide(txtAnnouncement("nas-dddd4444", discoveredID, "https://[fe80::1]:7080"))
+	require.Nil(t, cand)
+	require.NotEmpty(t, why)
+}
+
+// ── the directory over a discovery source ────────────────────────────────────
+
+// One machine with a config line AND an announcement is ONE row, and the config's label is the one
+// shown: the identity is the key, which is the whole reason the directory is keyed by it.
+func TestAConfiguredMachineThatAnnouncesItselfIsOneEntry(t *testing.T) {
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://100.64.0.3:7080"}})
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+	require.NoError(t, dir.known.confirm("nas", "https://100.64.0.3:7080", discoveredID))
+
+	dir.discover = func() []discoveredPeer {
+		return []discoveredPeer{{
+			Identity: discoveredID,
+			Addrs:    []string{"https://192.168.1.9:7080"},
+			Seen:     time.Now(),
+		}}
+	}
+
+	entries := dir.Entries()
+	require.Len(t, entries, 1, "the same machine is one entry, however many ways this one knows it")
+	require.Equal(t, "nas", entries[0].Name(), "and the config's label is the one a person reads")
+	require.Equal(t, discoveredID, entries[0].Identity)
+	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, entries[0].Addrs,
+		"what the machine says about itself is tried first, the configured address last")
+	require.True(t, entries[0].Configured && entries[0].Discovered)
+}
+
+// A machine only discovery found expires; a configured one does not, however long it has been quiet
+// — a person put that line there, and "it did not answer" is not a reason to hide it (design §三).
+func TestOnlyDiscoveredMachinesExpire(t *testing.T) {
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://100.64.0.3:7080"}})
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+	dir.discover = func() []discoveredPeer {
+		return []discoveredPeer{
+			{Identity: discoveredID, Addrs: []string{"https://192.168.1.9:7080"}, Seen: time.Now()},
+		}
+	}
+
+	found, ok := dir.byIdentity(discoveredID)
+	require.True(t, ok, "a machine discovery found is an entry, keyed by the identity it proved")
+	require.Equal(t, "dddd4444", found.Name(), "it has no label and no card, so its row reads as its short id")
+	require.True(t, found.Discovered && !found.Configured)
+
+	// The source stops reporting it — the browser is what expires a sighting (node/discovery.go), and
+	// the directory follows it: the configured line stays, the found machine goes.
+	dir.discover = func() []discoveredPeer { return nil }
+	entries := dir.Entries()
+	require.Len(t, entries, 1)
+	require.Equal(t, "nas", entries[0].Name())
+}
+
+// The discovered half is capped, because anyone on the network can multicast: a table that grew with
+// a stranger's packet rate would have no bound at all. Configured entries are a person's, and are
+// never counted against it.
+func TestTheDiscoveredHalfIsCapped(t *testing.T) {
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://100.64.0.3:7080"}})
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+
+	now := time.Now()
+	found := make([]discoveredPeer, 0, maxDiscoveredPeers+8)
+	for i := range maxDiscoveredPeers + 8 {
+		// distinct identities, oldest first, so the cap has an order to go by
+		id := strings.Repeat("a", 30) + fmtTwoDigits(i)
+		found = append(found, discoveredPeer{
+			Identity: id,
+			Addrs:    []string{"https://192.168.1.9:7080"},
+			Seen:     now.Add(-time.Duration(maxDiscoveredPeers+8-i) * time.Minute),
+		})
+	}
+	dir.discover = func() []discoveredPeer { return found }
+
+	entries := dir.Entries()
+	require.Len(t, entries, maxDiscoveredPeers+1, "the cap plus the configured line")
+	require.True(t, entries[0].Configured, "the configured machine is still there")
+	oldest := found[0].Identity
+	for _, e := range entries {
+		require.NotEqual(t, oldest, e.Identity, "the machine that announced longest ago is the one to lose")
+	}
+}
+
+// fmtTwoDigits spells i as exactly two decimal digits, so the ids above are all 32 hex characters
+// long (IsNodeID's shape) and differ from one another.
+func fmtTwoDigits(i int) string {
+	const digits = "0123456789"
+	return string([]byte{digits[(i/10)%10], digits[i%10]})
+}

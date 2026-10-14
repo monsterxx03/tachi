@@ -20,7 +20,13 @@ import * as linediff$0 from "../pkg/linediff/models.js";
  * saying "offline" while the other says "checking".
  */
 export interface AgentMatchVO {
-    "alias": string;
+    "label": string;
+
+    /**
+     * Name is what to call the node on the row: the label when there is one, else what the node calls
+     * itself, else the front of its id.
+     */
+    "name": string;
 
     /**
      * NodeID is the identity pinned on first outbound contact, empty when this machine has never
@@ -762,7 +768,16 @@ export interface PathStateVO {
  * PeerBoardRowVO is one node as the panel draws it.
  */
 export interface PeerBoardRowVO {
-    "alias": string;
+    /**
+     * Label is the name a config line gave the node, empty when it gave none.
+     */
+    "label": string;
+
+    /**
+     * Name is what to call it on the row: the label, else what the node calls itself, else the front
+     * of its id. The row shows this, and never shows the node's own name as though it were known.
+     */
+    "name": string;
 
     /**
      * NodeID/NodeIDLabel are the pinned identity: full for a tooltip, short for the row. Empty and
@@ -772,7 +787,9 @@ export interface PeerBoardRowVO {
     "nodeIdLabel": string;
 
     /**
-     * URL is where this machine dials the peer (config), never what the card claims.
+     * URL is where this machine will dial FIRST — the address the node advertises about itself when
+     * it advertises one, the configured address otherwise. Never what the card claims as the only
+     * truth: it is one candidate among the ones this machine holds.
      */
     "url": string;
     "note": string;
@@ -801,7 +818,10 @@ export interface PeerBoardRowVO {
 
     /**
      * Ref is the reference that names this node in a message (atfile.RefForAgent), so the panel can
-     * offer the same spelling the picker inserts.
+     * offer the same spelling the picker inserts. It is EMPTY for a node this machine holds no
+     * identity for, and that is the same answer the picker gives (agentref.Search): there is nothing
+     * to insert, and a bare "#a:" would be a mark that only looks like one. The identity column
+     * beside it says why.
      */
     "ref": string;
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -48,13 +49,16 @@ func tlsPeer(t *testing.T, id *Identity) string {
 //
 // The switch is the address, deliberately (node/options.go): leaving the machine is what makes
 // encryption and identification necessary. So exercising the mTLS path at all means going off
-// loopback, and "0.0.0.0:0" is the only safe way to do that in a test — a kernel-chosen port, held
-// for the test's duration, and the surface requires a client certificate before it answers
-// anything.
+// loopback, and a wildcard bind is the only safe way to do that in a test. It comes with its own
+// requirement, which is the point of the pair below: a node that binds a wildcard has to SAY where
+// callers reach it, or it will not start (node/a2a.go) — so the test picks a port, names it in
+// public_url, and the Card then carries an address that really answers.
 func tlsNode(t *testing.T, dir string, mutate func(*Options)) *Handle {
 	t.Helper()
+	port := freeWildcardPort(t)
 	return startWith(t, dir, func(o *Options) {
-		o.RemoteListen = "0.0.0.0:0"
+		o.RemoteListen = net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+		o.PublicURL = publicURLFor(t, port)
 		if mutate != nil {
 			mutate(o)
 		}
@@ -160,11 +164,27 @@ func delegateTo(t *testing.T, sender *Sender, prompt string) (tools.RemoteTaskIn
 	return delegateToNamed(t, sender, "peer", prompt)
 }
 
-func delegateToNamed(t *testing.T, sender *Sender, peer, prompt string) (tools.RemoteTaskInfo, error) {
+func delegateToNamed(t *testing.T, sender *Sender, label, prompt string) (tools.RemoteTaskInfo, error) {
 	t.Helper()
 	return sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: peer, Prompt: prompt, LogicalID: "conv-1",
+		Peer: pinAndName(t, sender, label), Prompt: prompt, LogicalID: "conv-1",
 	})
+}
+
+// pinAndName names a peer the way the MODEL does — by identity — after making the machine prove one.
+//
+// The probe is the same card read the reminder performs before the model acts, and it is what pins
+// the identity (node/peerdir.go). A test that passed the LABEL instead would be using a path this
+// program does not have: a label decides nothing about where work goes.
+func pinAndName(t *testing.T, sender *Sender, label string) string {
+	t.Helper()
+	for _, p := range sender.Peers(context.Background()) {
+		if p.Name == label && p.NodeID != "" {
+			return p.NodeID
+		}
+	}
+	t.Fatalf("no peer named %q proved an identity; a peer that serves plaintext proves none", label)
+	return ""
 }
 
 func TestTheCertificateIsTheNodesOwnIdentity(t *testing.T) {
@@ -205,7 +225,7 @@ func TestAPeerIsPinnedOnFirstContactAndCheckAfter(t *testing.T) {
 	realURL := tlsPeer(t, real)
 
 	// First contact: nothing is pinned yet, so the key is recorded and the request goes through.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil)
 	require.NoError(t, err)
 	view, err := delegateTo(t, sender, "hi")
 	require.NoError(t, err)
@@ -223,34 +243,54 @@ func TestAPeerIsPinnedOnFirstContactAndCheckAfter(t *testing.T) {
 	require.Equal(t, realURL, pinned[real.NodeID].URL, "and so is where it was made")
 
 	// The same machine again — a NEW sender, so this reads the record rather than a cache.
-	again, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil)
+	again, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil)
 	require.NoError(t, err)
 	_, err = delegateTo(t, again, "hi again")
 	require.NoError(t, err)
 
-	// A DIFFERENT machine answering at that alias: refused, and the refusal says where the pin is
-	// so the operator has somewhere to go. (This is the whole protection TOFU offers, and it is
-	// the second conversation onwards — the first one is only as trustworthy as the path to it.)
+	// A DIFFERENT machine answering AT that address: refused, and the refusal says where the pin is
+	// so the operator has somewhere to go. This is the second conversation onwards — the first one
+	// is only as trustworthy as the path to it.
+	//
+	// It is the one protection TOFU keeps under identity-keying, and the shape it takes is "one
+	// ADDRESS, one identity" rather than the old "one name, one identity": a name stopped being a
+	// key when a tool argument started naming machines by identity, while an address is still where
+	// this machine was told to look. A different machine at a different address is simply another
+	// machine (the design's rule), and the record keeps both.
 	impostor, err := LoadOrCreateIdentity(t.TempDir())
 	require.NoError(t, err)
-	other, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: tlsPeer(t, impostor)}}, "", nil)
-	require.NoError(t, err)
-	_, err = delegateTo(t, other, "hi")
-	require.Error(t, err, "a changed key is exactly what the pin exists to catch")
+	err = sender.known.confirm("peer", realURL, impostor.NodeID)
+	require.ErrorIs(t, err, ErrIdentityMismatch, "a changed key at a known address is what the pin catches")
 	require.Contains(t, err.Error(), "was pinned as node")
+	require.Contains(t, err.Error(), real.NodeID, "both ids, so the operator can tell which is which")
+	require.Contains(t, err.Error(), impostor.NodeID)
 	require.Contains(t, err.Error(), filepath.Base(config.PeerIdentitiesPath()),
 		"the refusal has to say which file to edit to pair again")
-	require.Contains(t, err.Error(), impostor.NodeID)
+
+	// And the impostor is not recorded: a refusal that wrote the record anyway would have spent the
+	// check it just made.
+	require.NoError(t, fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned))
+	require.Equal(t, realURL, pinned[real.NodeID].URL)
+	_, recorded := pinned[impostor.NodeID]
+	require.False(t, recorded)
 }
 
 // A delegation carries the prompt and its answer, so where it may travel is a rule rather than a
-// preference: https anywhere, http only where there is no network to read it from.
-func TestAPeerMustBeHTTPSOrLoopback(t *testing.T) {
+// preference — and the rule is https for EVERY host, loopback included.
+//
+// The exemption loopback used to have is gone because of what naming a peer by identity means: a peer
+// reached in plaintext presents no certificate, so no identity can be pinned for it, so no tool
+// argument can name it. An http line was a configuration entry that could never be used — a row
+// offering a delegation it could not make — and refusing it says so while it can still be fixed.
+func TestAPeerMustBeHTTPS(t *testing.T) {
 	require.NoError(t, checkPeerURL("nas", "https://nas.example:7080"))
-	require.NoError(t, checkPeerURL("local", "http://127.0.0.1:7080"))
-	require.NoError(t, checkPeerURL("local6", "http://[::1]:7080"))
+	require.NoError(t, checkPeerURL("local", "https://127.0.0.1:7080"),
+		"https is accepted for ANY host: the pin, not a hostname, says which machine answered")
 
-	for _, bad := range []string{"http://nas.example:7080", "http://10.0.0.10:7080", "nas.example:7080", "", "ftp://nas.example"} {
+	for _, bad := range []string{
+		"", "http://127.0.0.1:7080", "http://[::1]:7080", "http://nas.example:7080", "http://10.0.0.10:7080",
+		"nas.example:7080", "://x", "ftp://nas.example",
+	} {
 		require.Error(t, checkPeerURL("nas", bad), "%q must be refused", bad)
 	}
 	require.Contains(t, checkPeerURL("nas", "http://nas.example:7080").Error(), "https",
@@ -263,19 +303,18 @@ func TestAPeerMustBeHTTPSOrLoopback(t *testing.T) {
 func TestACallerIntroducesItselfOnEveryCall(t *testing.T) {
 	var mu sync.Mutex
 	var seen []http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A TLS peer, because a peer has to be one to be named at all — and the name still travels on
+	// every binding, which is what is under test here rather than the transport.
+	srv, _ := tlsStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		seen = append(seen, r.Header.Clone())
 		mu.Unlock()
 		w.Header().Set("Content-Type", a2aMediaType)
 		_, _ = w.Write([]byte(`{"task":{"id":"t-1","contextId":"c-1","status":{"state":"TASK_STATE_COMPLETED"}}}`))
 	}))
-	t.Cleanup(srv.Close)
 
-	// A plain HTTP peer: the name travels on every binding, and what is under test here is the
-	// header rather than the transport.
 	withBaseDir(t)
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: srv.URL}}, "tachi@mac", nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: srv.URL}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	_, err = delegateTo(t, sender, "hi")
 	require.NoError(t, err)
@@ -329,17 +368,17 @@ func TestARenamedPeerIsStillTheSameMachine(t *testing.T) {
 	require.NoError(t, err)
 	url, sends := cardAndTaskPeer(t, machine)
 
-	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil)
+	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	started, err := delegateToNamed(t, first, "nas", "第一轮")
 	require.NoError(t, err)
 
 	// Same machine, same address, NEW local name — and with the identity the record holds, the
 	// follow-up still belongs to it (design §4.1: 别名变化不能改变任务归属).
-	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil)
+	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	_, err = renamed.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "home-nas", Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
+		Peer: pinAndName(t, renamed, "home-nas"), Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
 	})
 	require.NoError(t, err, "a renamed peer is the same peer")
 
@@ -367,14 +406,14 @@ func TestAFollowUpWithoutANodeFindsItsMachineAfterARename(t *testing.T) {
 	require.NoError(t, err)
 	url, sends := cardAndTaskPeer(t, machine)
 
-	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil)
+	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	started, err := delegateToNamed(t, first, "nas", "第一轮")
 	require.NoError(t, err)
 	require.Equal(t, machine.NodeID, mustPeerNodeID(t, first.records, started.ID),
 		"the record really does bind the identity — this whole path rests on it")
 
-	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil)
+	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 	continued, err := renamed.Delegate(context.Background(), tools.DelegationRequest{
 		Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
@@ -412,14 +451,14 @@ func TestAContinuationIsRefusedBeforeAMessageReachesAnotherMachine(t *testing.T)
 	sender, err := OpenSender([]config.PeerConfig{
 		{Name: "nas", URL: homeURL},
 		{Name: "hk-vm", URL: otherURL},
-	}, "tachi@mac", nil)
+	}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 
 	started, err := delegateToNamed(t, sender, "nas", "第一轮")
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{
-		Peer: "hk-vm", Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
+		Peer: pinAndName(t, sender, "hk-vm"), Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
 	})
 	require.Error(t, err, "a conversation with the NAS cannot continue on the VPS")
 	require.Contains(t, err.Error(), home.NodeID, "the refusal names the node the record belongs to")
@@ -448,7 +487,7 @@ func TestTwoRealNodesTalkOverTLS(t *testing.T) {
 
 	// The caller is a machine of its own: the identity OpenSender makes under this base dir is what
 	// the server reads, and it must be a DIFFERENT key than the server's.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
 	require.NoError(t, err)
 
 	view, err := delegateToNamed(t, sender, "nas", "echo this back")

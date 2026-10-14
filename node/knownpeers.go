@@ -28,18 +28,19 @@ import (
 // (an earlier slice had one, and it was removed along with the caller whitelist it served:
 // callers are identified, not authorised — node/options.go checkRemoteListen).
 //
-// THE TABLE IS KEYED BY IDENTITY, and the alias is a field. That is what lets a rename be a
-// rename: the key never moves, so the record follows the machine rather than the word this config
-// happens to use for it (design §4.1), and a node discovered rather than configured — mDNS or
-// gossip, where there is no config line and therefore no alias to key by — has somewhere to live.
-// The other direction (an alias, or a prefix of an id, arriving as a tool argument) is a LOOKUP
-// over this table, not a second source of truth (node/peers.go Lookup).
+// THE TABLE IS KEYED BY IDENTITY. That is what lets a rename be a rename (the key never moves, so
+// the record follows the machine rather than the word a config happens to use for it), and what
+// gives a node discovered rather than configured — mDNS, where there is no config line and
+// therefore no name to key by — somewhere to live.
+//
+// The label and the address are BOOKKEEPING, not keys: `alias` is the label this machine used when
+// the record was last written, `url` the address it reaches that machine at. Neither is checked
+// against anything — they are here so a person can read the file and see what this machine knows,
+// and so a config line can find the identity pinned for it before the two have spoken in this
+// process (node/peerdir.go joins on the address).
 type knownPeers struct {
 	path string
 	log  *logger.Logger
-	// urls is where each alias is configured to be reached — used for the pin's record of where
-	// it was made, never for the check itself (the check is the key).
-	urls map[string]string
 
 	mu    sync.Mutex
 	items map[string]knownPeer
@@ -47,37 +48,38 @@ type knownPeers struct {
 
 // knownPeer is one peer's record, stored under the identity it proved.
 type knownPeer struct {
-	// Alias is the name THIS machine used for it when the record was last written. A LABEL, and
-	// refreshed on every successful handshake, so a rename follows without anyone editing a file:
-	// the record is written by the handshake, and the handshake happens under the current name.
-	Alias string `json:"alias"`
-	// URL is where this machine reached it when the record was last written, kept because it is the
-	// fact an operator needs when a peer is reconfigured: "we pinned THIS identity while talking to
-	// THAT address" is what makes an unexplained mismatch diagnosable.
+	// Alias is the label this machine used for the peer when the record was last written. It is a
+	// LABEL, refreshed on every successful handshake — so a rename follows without anyone editing a
+	// file, and it may be EMPTY, because a config line's label is optional.
+	Alias string `json:"alias,omitempty"`
+	// URL is the address this machine reaches that machine at — the configured one when there is a
+	// config line, otherwise the address this machine dialled. It is kept because it is the fact an
+	// operator needs when a peer is reconfigured ("we pinned THIS identity while talking to THAT
+	// address"), and because it is how a config line finds its identity before the first contact in
+	// this process.
 	URL       string    `json:"url,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 }
 
 // openKnownPeers loads the record; nothing is written until the first pin.
-func openKnownPeers(path string, urls map[string]string, log *logger.Logger) (*knownPeers, error) {
+func openKnownPeers(path string, log *logger.Logger) (*knownPeers, error) {
 	if log == nil {
 		log = logger.New("node")
 	}
-	p := &knownPeers{path: path, log: log, urls: urls, items: make(map[string]knownPeer)}
+	p := &knownPeers{path: path, log: log, items: make(map[string]knownPeer)}
 	err := fileutil.ReadJSON(path, &p.items)
 	switch {
 	case err == nil:
-		// Entries with no name are not a shape this program writes any more: it is the file as it
-		// was keyed before (by alias), or a damaged one. Either way it must NOT be read as "a record
-		// whose name we do not know" — the aliases are the KEYS there, so every check this file
-		// exists for would silently miss, and the next contact would be pinned afresh. That is a new
-		// first-contact window, which is the one thing the record is for. So: refuse, and say what
-		// to do about it.
-		if stale := len(p.items) - p.namedCount(); stale > 0 {
-			return nil, fmt.Errorf("node: %s holds %d entries with no name — it was written before this "+
-				"file was keyed by node id (or it is damaged). Delete it and reach that peer once more: "+
-				"the identity is then pinned again and reported as UNVERIFIED, because a first contact "+
-				"is a first contact", path, stale)
+		// Every key must LOOK like a node id. A file whose keys are names is the version before
+		// this one, which keyed by alias (or it is damaged). Either way it must NOT be read as "a
+		// record whose ids happen to be words": every identity check this file exists for would
+		// silently miss, and the next contact would be pinned afresh — a new first-contact window,
+		// the one thing the record is for. So: refuse, and say what to do about it.
+		if bad := p.miskeyedCount(); bad > 0 {
+			return nil, fmt.Errorf("node: %s holds %d entries keyed by something that is not a node "+
+				"id — it was written before this file was keyed by identity (or it is damaged). Delete "+
+				"it and reach those peers once more: each identity is then pinned again and reported as "+
+				"UNVERIFIED, because a first contact is a first contact", path, bad)
 		}
 		return p, nil
 	case errors.Is(err, os.ErrNotExist):
@@ -92,25 +94,25 @@ func openKnownPeers(path string, urls map[string]string, log *logger.Logger) (*k
 	}
 }
 
-// namedCount counts the entries that carry a name, which is every entry of a record this program
-// writes: an entry without one is the older shape (or damage), and openKnownPeers refuses it.
-func (p *knownPeers) namedCount() int {
-	n := 0
-	for _, peer := range p.items {
-		if peer.Alias != "" {
-			n++
+// miskeyedCount counts entries whose key is not spelled like a node id, which is every entry of a
+// record written before identity became the key.
+func (p *knownPeers) miskeyedCount() int {
+	bad := 0
+	for key := range p.items {
+		if !IsNodeID(key) {
+			bad++
 		}
 	}
-	return n
+	return bad
 }
 
-// PeerAliases returns the peer name this machine has PINNED for each node id it has reached.
+// PeerAliases returns the peer label this machine has PINNED for each node id it has reached.
 //
 // The direction a reader needs is the opposite of the config's: a session records WHO opened it (the
 // caller's node id, out of its certificate — the one thing a peer cannot choose), and the question
 // is "which of my machines is that". Only the pinned record answers it. The caller's own name never
-// does: any key can claim any name, which is why the name this node CALLS a peer is the local
-// alias and nothing from the other side (design §4.2).
+// does: any key can claim any name, which is why the name this node CALLS a peer is the local label
+// and nothing from the other side (design §4.2).
 //
 // Only OUTBOUND contact writes that record, so an id this machine has never talked to has no answer
 // here. That is a correct answer rather than a failure — the UI says so in its own words — and a
@@ -142,11 +144,11 @@ func readPinnedPeers() map[string]knownPeer {
 	if err := fileutil.ReadJSON(config.PeerIdentitiesPath(), &pinned); err != nil {
 		return nil
 	}
-	for key, peer := range pinned {
-		if peer.Alias == "" {
-			// A table in the older shape (or a damaged one): its keys are aliases, so nothing here
-			// is keyed by an identity. A label is not worth guessing at, and this path cannot
-			// repair anything — openKnownPeers refuses the file outright and says what to do.
+	for key := range pinned {
+		if !IsNodeID(key) {
+			// A table in the older shape (or a damaged one): its keys are labels, so nothing here is
+			// keyed by an identity. A label is not worth guessing at, and this path cannot repair
+			// anything — openKnownPeers refuses the file outright and says what to do.
 			delete(pinned, key)
 		}
 	}
@@ -156,66 +158,75 @@ func readPinnedPeers() map[string]knownPeer {
 // confirm checks a peer's presented identity against what was recorded, and records it on first
 // contact.
 //
-// Two rules, and the second is the one the old shape used to get for free by keying on the alias:
+// It is called from the TLS handshake (node/tls.go) and from nowhere else, which is what makes the
+// pin unskippable: every way this machine talks to a peer over TLS goes through it.
 //
-//   - the IDENTITY is the key, so the same machine presenting the same key under a NEW alias is a
-//     rename — accepted, and the record's alias follows it;
-//   - the same ALIAS may not belong to two identities. That is the protection this table exists for:
-//     a config line pointed at a different machine (or an impostor claiming a known name) has to be
-//     refused, naming both ids, rather than silently accepted as "a new peer".
-func (p *knownPeers) confirm(alias, nodeID string) error {
+// The single rule is the key: the IDENTITY is what is remembered, and the same machine presenting
+// the same key under a new label — or at a new address — is the same machine. (The version before
+// this one keyed by label, and so had to refuse "a label that belongs to two identities"; with the
+// label demoted to a display string there is nothing left for that rule to protect, and a config
+// line moved to a different machine is now simply a second machine.)
+func (p *knownPeers) confirm(label, configuredAddr, nodeID string) error {
+	if !IsNodeID(nodeID) {
+		// The id comes from a hash of the presented key, so this can only be a bug this side. It is
+		// refused rather than stored: a record keyed by something that is not an id is a record
+		// nothing will ever match.
+		return fmt.Errorf("node: refusing to record %q as an identity: it is not a node id", nodeID)
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if owner, ok := p.byAliasLocked(alias); ok && owner != nodeID {
-		known := p.items[owner]
-		return fmt.Errorf("%w: %s was pinned as node %s (%s, first seen %s) but presented %s. "+
-			"If that peer really was reinstalled, remove its entry from %s and pair again",
-			ErrIdentityMismatch, alias, owner, known.URL,
-			known.FirstSeen.Format(time.RFC3339), nodeID, p.path)
+	// One ADDRESS may not belong to two identities — the shape of the protection the old "one name,
+	// one identity" rule gave, kept in the form that still means something now that the record is
+	// keyed by identity. A key this machine has never seen answering at an address it HAS reached
+	// before is exactly the case TOFU exists for: either the machine was reinstalled (the operator
+	// deletes the entry, and the refusal says so) or something else is answering there.
+	//
+	// It is checked only for an address the record actually carries (a pin made at no address —
+	// impossible today, but the field is optional in the file — has nothing to compare), and only
+	// when the identity is NEW: the same key at the same address is the ordinary repeat.
+	if configuredAddr != "" {
+		if _, ok := p.items[nodeID]; !ok {
+			if owner, held := p.byURLLocked(configuredAddr); held {
+				known := p.items[owner]
+				return fmt.Errorf("%w: %s was pinned as node %s (%s, first seen %s) and now presents %s. "+
+					"If that peer really was reinstalled, remove its entry from %s and pair again",
+					ErrIdentityMismatch, peerWords(known.Alias, configuredAddr), owner,
+					configuredAddr, known.FirstSeen.Format(time.RFC3339), nodeID, p.path)
+			}
+		}
 	}
 
 	if known, ok := p.items[nodeID]; ok {
-		// The same machine. Refresh the label and the address it was reached at; the first sighting
+		// The same machine: refresh what it is called and where it was reached. The first sighting
 		// is the one fact that must never move.
-		url := p.urls[alias]
-		if known.Alias == alias && known.URL == url {
-			return nil
+		if known.Alias != label || known.URL != configuredAddr {
+			known.Alias, known.URL = label, configuredAddr
+			p.items[nodeID] = known
+			return p.saveLocked()
 		}
-		known.Alias, known.URL = alias, url
-		p.items[nodeID] = known
-		return p.saveLocked()
+		return nil
 	}
 
 	// First contact. The identity is remembered and SAID OUT LOUD, because this is the one moment
-	// TOFU cannot protect: if the operator did not expect a new pin here, that is the signal — and
-	// a silent record would have spent it.
-	p.items[nodeID] = knownPeer{Alias: alias, FirstSeen: time.Now().UTC(), URL: p.urls[alias]}
+	// TOFU cannot protect: if the operator did not expect a new pin here, that is the signal — and a
+	// silent record would have spent it.
+	p.items[nodeID] = knownPeer{Alias: label, URL: configuredAddr, FirstSeen: time.Now().UTC()}
 	if err := p.saveLocked(); err != nil {
 		// The pin is what the NEXT conversation is checked against, so a pin that did not reach
 		// disk must not count as verified.
 		delete(p.items, nodeID)
-		return fmt.Errorf("node: record the identity of %s: %w", alias, err)
+		return fmt.Errorf("node: record the identity of %s: %w", peerWords(label, configuredAddr), err)
 	}
 	p.log.Warn(context.Background(), "node: pinned a peer identity on first contact "+
 		"(UNVERIFIED — trust on first use only remembers the first key it saw)",
-		"peer", alias, "node_id", nodeID)
+		"peer", peerWords(label, configuredAddr), "node_id", nodeID)
 	return nil
 }
 
-// nodeID returns the identity recorded for an alias, which is by construction the VERIFIED one: it
-// is written by the TLS handshake (node/tls.go) and by nothing else, so a peer this machine has only
-// ever reached in plaintext has no entry here — and a record therefore must not invent one.
-//
-// The scan is over the configured peers (a handful); this is not a table to index until discovery
-// makes it thousands of entries wide.
-func (p *knownPeers) nodeID(alias string) (string, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.byAliasLocked(alias)
-}
-
-// aliasFor returns the name this machine last used for an identity, or "" when it holds no record.
+// aliasFor returns the label this machine last used for an identity, or "" when it holds no record
+// (or holds one whose label was empty, which a config line's optional label makes ordinary).
 func (p *knownPeers) aliasFor(nodeID string) (string, bool) {
 	if p == nil || nodeID == "" {
 		return "", false
@@ -226,30 +237,56 @@ func (p *knownPeers) aliasFor(nodeID string) (string, bool) {
 	return known.Alias, ok && known.Alias != ""
 }
 
-// identities returns a copy of the record as node id → alias, for callers that resolve identities
-// rather than names (the node picker's rows, a tool argument naming a machine).
-func (p *knownPeers) identities() map[string]string {
-	if p == nil {
-		return nil
+// pinnedIdentityAt is the identity this machine has pinned for a peer it reaches AT that address,
+// which is how a config line meets the identity it will be showing before the two have spoken in
+// this process.
+//
+// Addresses are not keys here and nothing is ever looked up BY one after this: a peer's addresses
+// change, and more than one address can belong to one machine — this answers "have we been here
+// before", and the answer is only used to label a row.
+//
+// More than one identity pinned at the same address means the address changed hands; the most
+// recently first seen one wins, which is the machine actually there now.
+func (p *knownPeers) pinnedIdentityAt(addr string) (string, bool) {
+	if p == nil || addr == "" {
+		return "", false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make(map[string]string, len(p.items))
-	for nodeID, peer := range p.items {
-		if peer.Alias != "" {
-			out[nodeID] = peer.Alias
+	best, found := "", false
+	for nodeID, known := range p.items {
+		if known.URL != addr {
+			continue
+		}
+		if !found || known.FirstSeen.After(p.items[best].FirstSeen) {
+			best, found = nodeID, true
 		}
 	}
-	return out
+	return best, found
 }
 
-func (p *knownPeers) byAliasLocked(alias string) (string, bool) {
-	for nodeID, peer := range p.items {
-		if peer.Alias == alias {
+// byURLLocked is the address → identity direction, used by confirm to refuse an address that has
+// already been pinned to somebody else. Locked half: confirm holds mu.
+func (p *knownPeers) byURLLocked(addr string) (string, bool) {
+	for nodeID, known := range p.items {
+		if known.URL == addr {
 			return nodeID, true
 		}
 	}
 	return "", false
+}
+
+// has reports whether this machine holds a pin for an identity — the record itself, not a reachable
+// machine: a pin outlives the config line it was made under, which is why a refusal can say "this is
+// a machine I have reached" while the directory has no entry for it.
+func (p *knownPeers) has(nodeID string) bool {
+	if p == nil || nodeID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.items[nodeID]
+	return ok
 }
 
 // saveLocked writes the record atomically, ids sorted so the file reads the same twice. It is the
@@ -266,4 +303,17 @@ func (p *knownPeers) saveLocked() error {
 		ordered[nodeID] = p.items[nodeID]
 	}
 	return fileutil.AtomicWriteJSON(p.path, ordered, 0o700, 0o600)
+}
+
+// peerWords names a peer in a sentence: the label a person gave it when there is one, and the
+// address otherwise — because a config line's label is optional, and a message about "the peer
+// called ”" helps nobody.
+func peerWords(label, addr string) string {
+	if label != "" {
+		return label
+	}
+	if addr != "" {
+		return addr
+	}
+	return "a peer"
 }

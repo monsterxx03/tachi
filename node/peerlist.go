@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/agentref"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -29,10 +28,11 @@ import (
 // the pinned peers — building a second one here would duplicate that work and, worse, would CREATE
 // an identity and a self-signed certificate just to draw a list.
 type PeerList struct {
-	// peers is the configured list, read through a provider rather than captured: the peers are a
-	// config leaf the reader can edit while the process runs, and a picker still offering a machine
-	// the config no longer names would be lying about what this machine can reach.
-	peers func() []config.PeerConfig
+	// rows is the peer DIRECTORY, read through a provider rather than captured: a picker still
+	// offering a machine that is no longer configured — or missing one that just announced itself —
+	// would be lying about what this machine can reach. It reads the directory and nothing else: no
+	// network, so a keystroke cannot wait on one.
+	rows func() []agentref.Peer
 	// probe asks the network about every configured node. It is called from a goroutine and must be
 	// safe there — an entry point resolves its sender per call rather than closing over state that
 	// only its own thread may touch. force is the board's refresh travelling down.
@@ -75,20 +75,20 @@ const (
 // picker and the board still offer them — in which case reachability is never checked. Its force
 // argument is the board's refresh button travelling down: the implementation is what knows whether
 // a cached card may be answered with.
-func NewPeerList(peers func() []config.PeerConfig, probe func(ctx context.Context, force bool) []PeerReport, log *logger.Logger) *PeerList {
+func NewPeerList(rows func() []agentref.Peer, probe func(ctx context.Context, force bool) []PeerReport, log *logger.Logger) *PeerList {
 	if log == nil {
 		log = logger.New("node")
 	}
-	return &PeerList{peers: peers, probe: probe, log: log}
+	return &PeerList{rows: rows, probe: probe, log: log}
 }
 
-// configuredPeers reads the provider, tolerating a list that is not there at all (an entry point
-// that has not loaded its config yet).
-func (l *PeerList) configuredPeers() []config.PeerConfig {
-	if l == nil || l.peers == nil {
+// directoryRows reads the provider, tolerating a list that is not there at all (an entry point that
+// cannot delegate at all, or one that has not loaded its config yet).
+func (l *PeerList) directoryRows() []agentref.Peer {
+	if l == nil || l.rows == nil {
 		return nil
 	}
-	return l.peers()
+	return l.rows()
 }
 
 // Snapshot is the list as it stands, as the PICKER needs it: every configured node, with the
@@ -98,34 +98,27 @@ func (l *PeerList) Snapshot() []agentref.Peer {
 	if l == nil {
 		return nil
 	}
-	pinned := pinnedNodeIDs()
-	peers := l.configuredPeers()
+	rows := l.directoryRows()
 
 	l.mu.Lock()
 	probed := make(map[string]probed, len(l.probed))
-	for alias, p := range l.probed {
-		probed[alias] = p
+	for key, p := range l.probed {
+		probed[key] = p
 	}
 	l.mu.Unlock()
 
-	out := make([]agentref.Peer, 0, len(peers))
-	for _, p := range peers {
-		peer := agentref.Peer{
-			Alias: p.Name,
-			Note:  p.Note,
-			// Absent from the record means this machine has never reached that node outbound.
-			// The picker says so in its own words; what it must not do is show the name the node
-			// reports about itself (node/knownpeers.go).
-			NodeID: pinned[p.Name],
-		}
-		if got, ok := probed[p.Name]; ok {
-			peer.Checked = true
-			peer.Reachable = got.report.Reachable
+	out := make([]agentref.Peer, 0, len(rows))
+	for _, row := range rows {
+		// A node this machine holds no identity for is still a row: the picker says why in its own
+		// words rather than hiding it (node/peerdir.go Display).
+		if got, ok := probed[row.Key]; ok {
+			row.Checked = true
+			row.Reachable = got.report.Reachable
 			if got.report.Card != nil {
-				peer.Description = got.report.Card.Description
+				row.Description = got.report.Card.Description
 			}
 		}
-		out = append(out, peer)
+		out = append(out, row)
 	}
 	return out
 }
@@ -136,7 +129,8 @@ func (l *PeerList) Snapshot() []agentref.Peer {
 // It is the same probe as Snapshot's, projected differently — one map of answers serves both, so
 // opening the board and typing '#' cannot disagree about what is up.
 type PeerDetail struct {
-	Alias string
+	Label string
+	Name  string
 	// NodeID is the pinned identity, empty when this machine has never called that node.
 	NodeID string
 	URL    string
@@ -150,30 +144,36 @@ type PeerDetail struct {
 	Err       string
 }
 
-// Details is the board's view: configuration, pinned identity and the last answer, per node.
+// Details is the board's view: what this machine knows about each node, and the last answer about it.
 func (l *PeerList) Details() []PeerDetail {
 	if l == nil {
 		return nil
 	}
-	pinned := pinnedNodeIDs()
-	peers := l.configuredPeers()
+	rows := l.directoryRows()
 
 	l.mu.Lock()
 	probed := make(map[string]probed, len(l.probed))
-	for alias, p := range l.probed {
-		probed[alias] = p
+	for key, p := range l.probed {
+		probed[key] = p
 	}
 	l.mu.Unlock()
 
-	out := make([]PeerDetail, 0, len(peers))
-	for _, p := range peers {
+	out := make([]PeerDetail, 0, len(rows))
+	for _, row := range rows {
 		detail := PeerDetail{
-			Alias:  p.Name,
-			NodeID: pinned[p.Name],
-			URL:    p.URL,
-			Note:   p.Note,
+			Label: row.Label,
+			Name:  row.Name,
+			// The identity THIS machine pinned, empty when it holds none. The board shows the
+			// difference, because it is the difference between "reachable at that address" and
+			// "known to be THAT machine".
+			NodeID: row.NodeID,
+			// Where this machine will dial, and the line the config wrote about the node: both are
+			// facts the DIRECTORY holds, so the board has them before anyone has asked anything —
+			// only the answer below has to wait for a probe.
+			URL:  row.Addr,
+			Note: row.Note,
 		}
-		if got, ok := probed[p.Name]; ok {
+		if got, ok := probed[row.Key]; ok {
 			detail.Checked = true
 			detail.CheckedAt = got.at
 			detail.Reachable = got.report.Reachable
@@ -205,7 +205,7 @@ func (l *PeerList) ProbeNow() { l.probeAsync(true) }
 // flight rather than starting its own — two people pressing 刷新 must not put two rounds of requests
 // on the wire to learn the same thing.
 func (l *PeerList) Refresh(ctx context.Context) {
-	if l == nil || l.probe == nil || len(l.configuredPeers()) == 0 {
+	if l == nil || l.probe == nil || len(l.directoryRows()) == 0 {
 		return
 	}
 
@@ -237,7 +237,7 @@ func (l *PeerList) Refresh(ctx context.Context) {
 }
 
 func (l *PeerList) probeAsync(force bool) {
-	if l == nil || l.probe == nil || len(l.configuredPeers()) == 0 {
+	if l == nil || l.probe == nil || len(l.directoryRows()) == 0 {
 		return
 	}
 
@@ -271,7 +271,7 @@ func (l *PeerList) store(reports []PeerReport) {
 	now := time.Now()
 	next := make(map[string]probed, len(reports))
 	for _, r := range reports {
-		next[r.Alias] = probed{report: r, at: now}
+		next[r.Key] = probed{report: r, at: now}
 	}
 
 	l.mu.Lock()
@@ -295,17 +295,38 @@ func countReachable(reports []PeerReport) int {
 	return n
 }
 
-// pinnedNodeIDs inverts the TOFU record into alias → node id, which is the direction a picker row
-// needs (it shows the identity beside the name). It answers with an empty map when the record cannot
-// be read: this is a label on a row, and a row that says "unknown" beats a picker that does not open
-// (PeerAliases, the other direction, has the full reasoning).
-func pinnedNodeIDs() map[string]string {
-	pinned := readPinnedPeers()
-	out := make(map[string]string, len(pinned))
-	for nodeID, peer := range pinned {
-		if peer.Alias != "" {
-			out[peer.Alias] = nodeID
+// RowsOf turns the sending side — or the absence of one — into the picker's row provider.
+//
+// It exists so the two frontends that offer the '#' picker spell "the directory, if this process can
+// delegate at all" the same way: with no sending side there are no peers by definition, and an empty
+// list is the honest answer rather than one frontend inventing a config-only view the other lacks.
+func RowsOf(sender func() *Sender) func() []agentref.Peer {
+	return func() []agentref.Peer {
+		s := sender()
+		if s == nil {
+			return nil
 		}
+		return s.DirectoryRows()
+	}
+}
+
+// DirectoryRows is the directory as the picker needs it: one row per machine, with the identity this
+// machine holds for it (if any). It reads nothing from the network.
+func (s *Sender) DirectoryRows() []agentref.Peer {
+	if s == nil {
+		return nil
+	}
+	entries := s.peers.Entries()
+	out := make([]agentref.Peer, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, agentref.Peer{
+			Key:    e.key(),
+			Label:  e.Label,
+			Name:   e.Name(),
+			NodeID: e.Identity,
+			Addr:   firstAddr(e),
+			Note:   e.Note,
+		})
 	}
 	return out
 }

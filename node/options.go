@@ -133,9 +133,21 @@ type Options struct {
 
 	// PublicURL is what the Agent Card advertises as the way to reach this node, when that is
 	// not simply the address the socket bound (a mesh address, a port forwarder, a real host
-	// name). Empty means "derive it from the bound address, or advertise none at all if it is
-	// not connectable" — a Card pointing at 0.0.0.0 sends callers nowhere.
+	// name). Empty means "derive it from the bound address" — and where nothing can be derived,
+	// because RemoteListen is a wildcard, the start REFUSES rather than publishing a Card that
+	// sends callers nowhere (node/a2a.go).
 	PublicURL string
+
+	// Advertise is whether this node announces itself on the local network (design §一.2). It only
+	// ever happens in the process hosting the remote surface — that is the only process with
+	// something to announce.
+	Advertise bool
+
+	// AdvertiseInterfaces names the interfaces to announce on. Empty means every multicast-capable
+	// one; naming them is for a machine on several networks, where announcing its name onto the
+	// wrong one is what the setting exists to prevent — so a name that is not an interface here is an
+	// error rather than a fallback.
+	AdvertiseInterfaces []string
 
 	// Executor is the receiving side's agent: it turns an accepted task into events.
 	// Nil means the built-in placeholder that echoes the task text — the seam a test

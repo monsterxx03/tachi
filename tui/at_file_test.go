@@ -143,7 +143,9 @@ func TestAtFileCompletionNotTriggeredMidWord(t *testing.T) {
 func TestHashOpensWithBothNamespaces(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
-	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas", NodeID: "cd726b44aa11bb22"}))
+	i.SetAgentSource(staticAgentSource(agentref.Peer{
+		Label: "nas", Name: "nas", NodeID: "cd726b44aa11bb22",
+	}))
 
 	i.textarea.SetValue("#")
 	i.updateCompletions()
@@ -171,38 +173,38 @@ func TestHashOpensWithBothNamespaces(t *testing.T) {
 	assert.Contains(t, i.atMatches[0].Label, "nas")
 }
 
-// A node row carries the three things a reader needs to tell machines apart: the alias the model
-// must hand to DelegateTask, the identity THIS machine pinned, and what the last look found.
+// A node row carries the three things a reader needs to tell machines apart: what the node is
+// called, the identity THIS machine pinned — which is the string the model must hand to
+// DelegateTask, and therefore what the row's reference inserts — and what the last look found.
 func TestAtAgentCompletion(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
 	i.SetAgentSource(staticAgentSource(
-		agentref.Peer{Alias: "ugreen-nas", NodeID: "cd726b446c34386e", Note: "家里的 NAS",
-			Description: "A Tachi node", Reachable: true, Checked: true},
-		agentref.Peer{Alias: "hk-vps"},
+		agentref.Peer{Label: "ugreen-nas", Name: "ugreen-nas", NodeID: "cd726b446c34386e",
+			Note: "家里的 NAS", Description: "A Tachi node", Reachable: true, Checked: true},
+		agentref.Peer{Name: "hk-vps"},
 	))
 
 	i.textarea.SetValue("#a:")
 	i.updateCompletions()
-	require.Len(t, i.atMatches, 2)
+	// Only the machine this machine can NAME is offered: this picker inserts references, and a
+	// reference carries an identity (agentref.Search).
+	require.Len(t, i.atMatches, 1)
 
-	assert.Equal(t, "#a:hk-vps", i.atMatches[0].Ref, "rows are ordered by alias")
-	assert.Contains(t, i.atMatches[0].Label, "身份未记录",
-		"never called, so this machine holds no identity for it — and the row says so")
-	assert.Contains(t, i.atMatches[0].Label, "检查中…")
-	assert.Contains(t, i.atMatches[0].Label, "hk-vps")
-
-	assert.Equal(t, "#a:ugreen-nas", i.atMatches[1].Ref)
-	assert.Contains(t, i.atMatches[1].Label, "cd726b44", "the pinned identity, truncated for the row")
-	assert.Contains(t, i.atMatches[1].Label, "可用")
-	assert.Equal(t, "A Tachi node", i.atMatches[1].Note)
+	// The reference IS the identity: that is what the tool argument takes, and the scan reads back
+	// exactly what the row inserts.
+	assert.Equal(t, "#a:cd726b446c34386e", i.atMatches[0].Ref)
+	assert.Contains(t, i.atMatches[0].Label, "ugreen-nas", "the row says what the node is called")
+	assert.Contains(t, i.atMatches[0].Label, "cd726b44", "the pinned identity, truncated for the row")
+	assert.Contains(t, i.atMatches[0].Label, "可用")
+	assert.Equal(t, "A Tachi node", i.atMatches[0].Note)
 
 	// A query narrows it, and Tab finishes the reference with a space.
 	i.textarea.SetValue("#a:ugreen")
 	i.updateCompletions()
 	require.Len(t, i.atMatches, 1)
 	i, _ = i.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	assert.Equal(t, "#a:ugreen-nas ", i.textarea.Value())
+	assert.Equal(t, "#a:cd726b446c34386e ", i.textarea.Value())
 }
 
 // A '#' that opens no namespace is ordinary text: no popup, and nothing to expand. This is what
@@ -210,7 +212,7 @@ func TestAtAgentCompletion(t *testing.T) {
 func TestHashWithoutANamespaceIsPlainText(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
-	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas"}))
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Name: "nas", NodeID: "aa11bb22aa11bb22aa11bb22aa11bb22"}))
 
 	for _, value := range []string{"#include", "#123", "#x:y", "C#a:nas"} {
 		i.textarea.SetValue(value)
@@ -224,7 +226,7 @@ func TestHashWithoutANamespaceIsPlainText(t *testing.T) {
 func TestSeveralReferencesFollowTheCaret(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
-	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas"}))
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Name: "nas", NodeID: "aa11bb22aa11bb22aa11bb22aa11bb22"}))
 
 	i.textarea.SetValue("#a:nas 和 @readme")
 	i.textarea.CursorEnd()
@@ -245,7 +247,7 @@ func TestSeveralReferencesFollowTheCaret(t *testing.T) {
 func TestPickerRowsInsertSpellingTheScannerKnows(t *testing.T) {
 	seedAtFileDir(t)
 	i := NewInputArea(10, "", nil)
-	i.SetAgentSource(staticAgentSource(agentref.Peer{Alias: "nas", NodeID: "aa11bb22"}))
+	i.SetAgentSource(staticAgentSource(agentref.Peer{Name: "nas", NodeID: "aa11bb22aa11bb22"}))
 
 	i.textarea.SetValue("#")
 	i.updateCompletions()

@@ -604,7 +604,7 @@ export const FILE_REF_MARK = '@'
 export const HASH_REF_MARK = '#'
 
 // HASH_AGENT_PREFIX and HASH_SESSION_PREFIX mirror agent/atfile.AgentRefPrefix and SessionRefPrefix:
-// "#a:<alias>" names a node this machine may delegate to, "#s:<id>" another conversation. The
+// "#a:<node id>" names a node this machine may delegate to, "#s:<id>" another conversation. The
 // spelling has to match the Go side exactly — the popup inserts it and the expansion reads it back —
 // and only the backend knows what a reference expands to (a pointer, never the content).
 export const HASH_AGENT_PREFIX = 'a:'

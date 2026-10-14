@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -145,7 +147,11 @@ func TestTheReceivingSessionRecordsWhoseWorkItHolds(t *testing.T) {
 	mock.Script(append(oneMessageScript("第一件活儿"), oneMessageScript("第二件活儿")...)...)
 
 	cfg := nodeConfig(t, mock, filepath.Join(base))
-	cfg.Node.Listen = "0.0.0.0:0"
+	// Off loopback, so this node serves TLS and identifies its callers — which means a wildcard bind,
+	// which means it has to be told where callers reach it (node/a2a.go).
+	port := freeWildcardPort(t)
+	cfg.Node.Listen = net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	cfg.Node.PublicURL = publicURLFor(t, port)
 	h := startRealNode(t, cfg)
 
 	first, err := LoadOrCreateIdentity(t.TempDir())

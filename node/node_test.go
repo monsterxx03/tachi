@@ -3,10 +3,12 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +27,41 @@ func testOptions(dir string) Options {
 		AttachTimeout: 3 * time.Second,
 		Logger:        logger.New("node-test"),
 	}
+}
+
+// freeWildcardPort asks the kernel for a free port and hands it back, for the tests that must bind a
+// WILDCARD address.
+//
+// Leaving loopback is the only way to exercise TLS in-process (node/options.go isLoopbackListen), and
+// a wildcard bind is the only way to do that without naming a machine that may not exist. But a node
+// bound to a wildcard must also be able to say where callers reach it, or it refuses to start
+// (node/a2a.go) — and with an ephemeral port there would be nothing to say. So the port is picked
+// first and named in both halves. The window between picking and binding is the usual small race
+// every test of this shape has.
+func freeWildcardPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
+}
+
+// publicURLFor is the address a test says its node is reachable at, for a node bound to a wildcard on
+// that port: 0.0.0.0 is not an address anyone can dial, and 127.0.0.1 is.
+func publicURLFor(t *testing.T, port int) string {
+	t.Helper()
+	return "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// portOfListen is the port a node is bound to, read off its own listening address.
+func portOfListen(t *testing.T, addr string) int {
+	t.Helper()
+	_, portStr, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	return port
 }
 
 // start brings up a handle for dir and closes it when the test ends. Close is

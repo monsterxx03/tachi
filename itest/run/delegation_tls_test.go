@@ -18,9 +18,9 @@ package run_test
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,10 +54,14 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		})
 
 		peerWorkspace := filepath.Join(ginkgo.GinkgoT().TempDir(), "peer-ws")
+		// 0.0.0.0 是本进程里唯一能安全地「离开本机」的方式：活到这个 spec 结束，而它对外那一面在回答
+		// 任何东西之前先要一张客户端证书。端口是这里先挑好的，因为绑一个通配地址就推不出可连地址，而
+		// 一个说不清自己在哪儿的节点拒绝启动（node/a2a.go）。
+		peerPort := nodePort(ginkgo.GinkgoT())
+		peerURL := "https://127.0.0.1:" + strconv.Itoa(peerPort)
 		peerHome := harness.NewHome(ginkgo.GinkgoT(), peerMock,
-			// 0.0.0.0 是本进程里唯一能安全地「离开本机」的方式：内核挑端口，活到这个 spec 结束，
-			// 而它对外那一面在回答任何东西之前先要一张客户端证书。
-			harness.WithNodeListen("0.0.0.0:0"),
+			harness.WithNodeListen("0.0.0.0:"+strconv.Itoa(peerPort)),
+			harness.WithNodePublicURL(peerURL),
 			harness.WithNodeName("tachi@home-nas"),
 			harness.WithNodeWorkspace(peerWorkspace),
 			harness.WithNodeService(),
@@ -70,12 +74,6 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		gomega.Expect(peerHandle.Hosting()).To(gomega.BeTrue())
 		ginkgo.DeferCleanup(func() { _ = peerHandle.Close() })
 
-		// 0.0.0.0 不是任何东西能拨的地址：内核挑的那个端口才是，而在这台机器上就是 loopback。
-		// 对端仍然认为自己在 loopback 之外，那正是它对外这一面走 TLS 的原因。
-		_, port, err := net.SplitHostPort(peerHandle.RemoteAddr())
-		gomega.Expect(err).NotTo(gomega.HaveOccurred())
-		peerURL := "https://" + net.JoinHostPort("127.0.0.1", port)
-
 		// Card 是这台机器对自己「实际做了什么」的声明：它对外提供 TLS 并要求调用方出示证书，
 		// 所以就声明 mTLS —— 而不是声明一个更宽松、它并不执行的方案。名字来自 node.name。
 		card := peerHandle.Card()
@@ -86,9 +84,10 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 			To(gomega.BeAssignableToTypeOf(a2a.MutualTLSSecurityScheme{}))
 		gomega.Expect(card.SecurityRequirements).To(gomega.HaveLen(1))
 		gomega.Expect(card.SecurityRequirements[0]).To(gomega.HaveKey(a2a.SecuritySchemeName("mtls")))
-		// 绑在通配地址上就没什么可宣告的：Card 里写 0.0.0.0 会把每一个调用方送到一个不回答的
-		// 地方 —— 比自己承认不知道更糟。
-		gomega.Expect(card.SupportedInterfaces).To(gomega.BeEmpty())
+		// 绑在通配地址上，所以 Card 里的地址来自配置：0.0.0.0 不是任何东西能拨的地方，而一个说不清
+		// 自己在哪儿的节点根本不会启动 —— 它说的那句必须是运维者给的、真的能拨的那一个。
+		gomega.Expect(card.SupportedInterfaces).To(gomega.HaveLen(1))
+		gomega.Expect(card.SupportedInterfaces[0].URL).To(gomega.Equal(peerURL))
 
 		// ---- 本机：真二进制，节点服务关着，只配了一条 https 的 peer ----
 		sutMock := mockllm.NewServer()
@@ -96,7 +95,7 @@ var _ = ginkgo.Describe("delegation to another machine", func() {
 		sutMock.Script(
 			mockllm.Step{Reply: mockllm.Stream(
 				mockllm.ToolCallStart("call_t1", tools.ToolNameDelegateTask,
-					`{"node":"nas","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
+					`{"node":"`+peerHandle.NodeID()+`","prompt":"检查昨天的备份是否完整，返回异常清单，不修改文件。"}`),
 				mockllm.Finish("tool_calls"),
 				mockllm.Done(),
 			)},

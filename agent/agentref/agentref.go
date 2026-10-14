@@ -4,8 +4,8 @@
 //
 // Two facts make up an answer, and they come from two different places on purpose:
 //
-//   - the ALIAS and the note are configuration — this machine's own name for a peer, the string
-//     DelegateTask takes;
+//   - the LABEL and the note are configuration — this machine's own name for a peer, shown on a row
+//     and nothing more;
 //   - the NODE ID is a record (config.PeerIdentitiesPath), written only by a TLS handshake on an
 //     OUTBOUND call. A node this machine has never called therefore has no identity here, and
 //     that is a correct answer rather than missing data: the alternative — the name the peer
@@ -32,11 +32,27 @@ const DefaultLimit = 20
 
 // Peer is one node this machine may delegate to, as the picker needs it.
 type Peer struct {
-	// Alias is the configured peer name — the model's argument to DelegateTask.
-	Alias string
+	// Label is the name a config line gave the node, if it gave one. It is DISPLAY ONLY: a node is
+	// named by its NodeID, in a reference and in a tool argument alike.
+	Label string
+	// Name is what to call the node in a sentence: the label when there is one, otherwise what the
+	// node calls itself, otherwise the short form of its id. It is computed by the sending side
+	// (node/peerdir.go) rather than here, because it is one rule about a peer directory and this
+	// package would be a second copy of it.
+	Name string
 	// NodeID is the identity pinned on first outbound contact; empty when this machine has never
-	// called that node.
+	// called that node. It is also the ONLY thing that may name the node: a reference carries it, and
+	// so does the tool argument the reference expands into.
 	NodeID string
+	// Key matches this row to the last probe's answer about the same machine. It is plumbing between
+	// two reads of one directory (the probe goes out and answers later), never displayed and never
+	// used to name anything.
+	Key string
+	// Addr is where this machine will dial FIRST — the address the node advertises about itself when
+	// it advertises one, the configured one otherwise. A picker row does not show it; the node board
+	// does, because "which address did this machine try" is the first question about a row that says
+	// unreachable.
+	Addr string
 	// Note is the configured human line, used when the node has no description to offer.
 	Note string
 	// Description is the node's own account of itself, empty when its card could not be read.
@@ -80,10 +96,17 @@ func (s *Source) Warm() {
 	s.list()
 }
 
-// Search ranks the nodes whose alias, note or description matches query — an alias
-// hit first, because the alias is the thing being typed. An empty query keeps every
-// node: that is the picker's opening list, and a node missing from it would read as
-// "not configured".
+// Search ranks the nodes whose name, note or description matches query — a name hit
+// first, because the name is the thing being typed. An empty query keeps every node
+// this machine can NAME: that is the picker's opening list, and a node missing from
+// it would read as "not configured".
+//
+// A node this machine holds no identity for is deliberately not offered here, and that is not the
+// "never hide a peer" rule being broken (that rule is the REMINDER's and the board's, which list it
+// with the reason): this picker exists to INSERT a reference, a reference carries an identity, and a
+// row whose selection could only leave a dangling "#a:" in the message would be worse than no row —
+// the reader would have to delete it. The machine is one probe away from being nameable, and the
+// probe is exactly what opening this picker starts (Warm).
 func (s *Source) Search(query string, limit int) []atfile.AgentTarget {
 	if s == nil || s.list == nil {
 		return nil
@@ -96,19 +119,22 @@ func (s *Source) Search(query string, limit int) []atfile.AgentTarget {
 	}
 	ranked := make([]scored, 0, len(peers))
 	for _, p := range peers {
+		if p.NodeID == "" {
+			continue
+		}
 		score, ok := matchScore(query, p)
 		if !ok {
 			continue
 		}
 		ranked = append(ranked, scored{target: p.target(), score: score})
 	}
-	// Ties break on the alias, not on insertion order: the list comes from configuration, where
-	// nothing promises an order, and a picker whose rows shuffle between keystrokes is unusable.
+	// Ties break on the name, not on insertion order: the list is whatever the directory merged,
+	// and a picker whose rows shuffle between keystrokes is unusable.
 	slices.SortStableFunc(ranked, func(a, b scored) int {
 		if a.score != b.score {
 			return b.score - a.score
 		}
-		return strings.Compare(a.target.Alias, b.target.Alias)
+		return strings.Compare(a.target.Name, b.target.Name)
 	})
 
 	if limit = normalizeLimit(limit); len(ranked) > limit {
@@ -121,37 +147,24 @@ func (s *Source) Search(query string, limit int) []atfile.AgentTarget {
 	return targets
 }
 
-// Resolve returns the node a reference names: a configured alias, or a node id — in full, or as an
-// unambiguous PREFIX of one, because a reader who saw an id in a transcript or on a picker row may
-// well have copied only its front.
+// Resolve returns the node a #a: reference names: a node id, in full or as an unambiguous PREFIX of
+// one, because a reader who saw an id in a transcript or on a picker row may well have copied only
+// its front.
 //
-// An unknown name resolves to nothing rather than to a near miss: the reader typed something this
-// machine does not know, and a reference quietly pointing at a DIFFERENT machine is worse than one
-// that stays visible and unexpanded. A prefix that names two machines is refused for the same
-// reason (see ResolveID) — the ambiguity is the caller's to fix by typing more.
-func (s *Source) Resolve(name string) (atfile.AgentTarget, bool) {
+// ONLY identities resolve, and that is the same rule a tool argument follows (node/peers.go Lookup):
+// a label belongs to whoever wrote the config, it may be changed, and a reference that quietly
+// pointed at a DIFFERENT machine would be worse than one that stays visible and unexpanded — which
+// is exactly what an unresolvable reference does (atfile). A prefix that names two machines is
+// refused for the same reason; the ambiguity is the reader's to fix by typing more.
+func (s *Source) Resolve(ref string) (atfile.AgentTarget, bool) {
 	if s == nil || s.list == nil {
 		return atfile.AgentTarget{}, false
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
 		return atfile.AgentTarget{}, false
 	}
 	peers := s.list()
-	for _, p := range peers {
-		if p.Alias == name || (p.NodeID != "" && p.NodeID == name) {
-			return p.target(), true
-		}
-	}
-	// Case only: a config alias is typed by hand in two places (the config file and
-	// the message), and "NAS" for "nas" is the same machine.
-	for _, p := range peers {
-		if strings.EqualFold(p.Alias, name) {
-			return p.target(), true
-		}
-	}
-
-	// Then an identity, by unique prefix.
 	ids := make([]string, 0, len(peers))
 	byID := make(map[string]atfile.AgentTarget, len(peers))
 	for _, p := range peers {
@@ -161,7 +174,7 @@ func (s *Source) Resolve(name string) (atfile.AgentTarget, bool) {
 		ids = append(ids, p.NodeID)
 		byID[p.NodeID] = p.target()
 	}
-	if id, ok, err := ResolveID(name, ids); err == nil && ok {
+	if id, ok, err := ResolveID(ref, ids); err == nil && ok {
 		return byID[id], true
 	}
 	return atfile.AgentTarget{}, false
@@ -171,7 +184,8 @@ func (s *Source) Resolve(name string) (atfile.AgentTarget, bool) {
 // purpose (atfile.AgentTarget carries it for the picker only) — see the package doc.
 func (p Peer) target() atfile.AgentTarget {
 	return atfile.AgentTarget{
-		Alias:       p.Alias,
+		Label:       p.Label,
+		Name:        p.Name,
 		NodeID:      p.NodeID,
 		Note:        p.Note,
 		Description: p.Description,
@@ -181,20 +195,21 @@ func (p Peer) target() atfile.AgentTarget {
 }
 
 // matchScore ranks one node against a query, higher first. An empty query matches
-// everything at the same (lowest) score, which leaves the alias ordering to the sort.
+// everything at the same (lowest) score, which leaves the ordering to the sort. A query that could
+// be the front of an identity is ranked as one, which is what makes a row's short form copyable.
 func matchScore(query string, p Peer) (int, bool) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return 0, true
 	}
 	q := strings.ToLower(query)
-	alias := strings.ToLower(p.Alias)
+	name := strings.ToLower(p.Name)
 	switch {
-	case alias == q:
+	case name == q || strings.EqualFold(p.NodeID, query):
 		return 4, true
-	case strings.HasPrefix(alias, q):
+	case strings.HasPrefix(name, q) || strings.HasPrefix(strings.ToLower(p.NodeID), q):
 		return 3, true
-	case strings.Contains(alias, q):
+	case strings.Contains(name, q):
 		return 2, true
 	case strings.Contains(strings.ToLower(p.Note), q),
 		strings.Contains(strings.ToLower(p.Description), q):
@@ -271,10 +286,16 @@ const idLabelChars = 8
 // cell (only outbound contact pins an identity).
 func IDLabel(p atfile.AgentTarget) string {
 	if p.NodeID == "" {
-		return "身份未记录"
+		return NoIdentityLabel
 	}
 	return ShortID(p.NodeID)
 }
+
+// NoIdentityLabel is what every frontend says for a peer this machine holds no identity for, in one
+// place so the picker row, the reference pointer and the peer directory's own rows cannot drift into
+// three spellings of the same fact. It is a real answer rather than an empty cell: only outbound
+// contact pins an identity, so a peer that has only ever called US has none here.
+const NoIdentityLabel = "身份未记录"
 
 // ShortID is how a node id is shown where a whole one would not fit: its first characters. An empty
 // id stays empty — "no identity" is a state, not a short one.
