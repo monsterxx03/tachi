@@ -12,14 +12,16 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { fmtBytes, toLocalAsset, toLocalPath } from './lib'
+import { revealFileInTree } from './filereveal'
 import { REVEAL_LABEL } from './platform'
 import { MarkdownBlock } from './markdown'
 import { CloseButton, ImageViewer, ViewerOverlay } from './viewer'
 import type { AttachmentInfo } from './types'
 
-// KIND_ICON is the glyph the card leads with. The card shows one before the
-// backend has answered, so the plain-document icon is also the fallback.
-const KIND_ICON: Record<string, string> = {
+// KIND_ICON is the glyph a kind leads with. The card shows one before the backend has answered, so
+// the plain-document icon is also the fallback — and the file tree draws the SAME map, which is what
+// keeps two columns from spelling one file type two ways.
+export const KIND_ICON: Record<string, string> = {
   image: '🖼',
   markdown: '📝',
   html: '🌐',
@@ -74,6 +76,93 @@ function needsText(kind: string): boolean {
   return kind === 'markdown' || kind === 'text' || kind === 'csv'
 }
 
+// FileBodyVariant is WHICH surface is rendering the file. It decides nothing about the file and
+// everything about the frame around it: a card in the transcript, the full-screen viewer, or the
+// file view that takes the content column.
+export type FileBodyVariant = 'card' | 'viewer' | 'view'
+
+// The classes each surface gives the two things a previewed file needs: the paper column a
+// DOCUMENT sits on, and the frame the /local kinds are drawn in. Documents are exactly the
+// needsText set — which kinds those are is answered once, above.
+const BODY_FRAMES: Record<FileBodyVariant, { doc: string; frame: string; img: string; table: string }> = {
+  card: { doc: 'file-preview-doc', frame: 'file-preview-frame', img: 'file-preview-img', table: '' },
+  viewer: { doc: 'viewer-doc', frame: 'viewer-frame', img: 'viewer-image', table: 'is-table' },
+  view: { doc: 'fileview-doc', frame: 'fileview-frame', img: 'fileview-img', table: 'is-table' },
+}
+
+// FileBody renders one previewed file's CONTENT: the one place where a kind decides how a file is
+// drawn. The attachment card, the full-screen viewer and the file view all render this, so a kind
+// cannot work in one of them and be missing in another — and preview.go's tables stay the single
+// answer to what a file IS (the tree's icon hint is only a hint; this is where it is settled).
+//
+// What each surface adds around it stays with that surface: the card's 预览/收起 button, the
+// viewer's own controls and findability, the file view's header and width. `onExpand` is the one
+// optional gesture a content kind may offer outwards (the card's ⤢, the file view's lightbox).
+export function FileBody({ meta, path, name, variant = 'card', onExpand }: {
+  meta: FilePreviewVO
+  path: string
+  name: string
+  variant?: FileBodyVariant
+  onExpand?: () => void
+}) {
+  const frame = BODY_FRAMES[variant]
+  const note = meta.truncated ? <TruncatedNotice meta={meta} /> : null
+  const expand = onExpand ? <ExpandButton onFull={onExpand} /> : null
+  if (meta.error) return <div className="file-preview-note">无法读取：{meta.error}</div>
+
+  switch (meta.kind) {
+    case 'image':
+      return (
+        <>
+          <img className={frame.img} src={toLocalAsset(path, '')} alt={name}
+            title="点击全屏查看" onClick={onExpand} />
+          {expand}
+        </>
+      )
+    case 'html':
+      return (
+        <>
+          {/* Sandboxed with scripts allowed but WITHOUT allow-same-origin: a
+              generated report's charts run, while the document itself sits in an
+              opaque origin and can reach neither this page, the Wails bridge, nor
+              read anything back out of /local. */}
+          <iframe className={frame.frame} src={toLocalPath(path)} title={name} sandbox="allow-scripts" />
+          {expand}
+        </>
+      )
+    case 'pdf':
+      return (
+        <>
+          {/* No sandbox: the frame IS the webview's own PDF viewer (PDFKit), which
+              needs the frame unrestricted to lay the pages out. A PDF cannot run
+              script here — WebKit's viewer has no script engine — so the frame has
+              nothing to isolate it from. */}
+          <iframe className={`${frame.frame} is-pdf`} src={toLocalPath(path)} title={name} />
+          {expand}
+        </>
+      )
+    case 'csv':
+      return (
+        <div className={`${frame.doc}${frame.table ? ' ' + frame.table : ''}`.trim()}>
+          {note}
+          <CSVTable meta={meta} />
+          {expand}
+        </div>
+      )
+    case 'markdown':
+    case 'text':
+      return (
+        <div className={frame.doc}>
+          {note}
+          <AttachmentText path={path} meta={meta} />
+          {expand}
+        </div>
+      )
+    default:
+      return <div className="file-preview-note">该类型不支持预览</div>
+  }
+}
+
 // FileCard is the attachment itself. `workDir` is the session's working
 // directory, used to resolve a relative SendFile path.
 export const FileCard = memo(function FileCard({ file, workDir }: { file: AttachmentInfo; workDir: string }) {
@@ -101,6 +190,9 @@ export const FileCard = memo(function FileCard({ file, workDir }: { file: Attach
   const toggle = useCallback(() => {
     const next = !open
     setOpen(next)
+    // Opening the preview is also the moment to show the reader where this file lives, if they have the
+    // tree open (filereveal.ts). It is a select and an expand, never a view switch.
+    if (next) revealFileInTree(path)
     if (!next || body || !meta || !needsText(meta.kind)) return
     setBusy(true)
     AgentService.PreviewFile(path, true)
@@ -139,9 +231,10 @@ export const FileCard = memo(function FileCard({ file, workDir }: { file: Attach
   )
 })
 
-// FilePreviewBody is the card's inline preview. Every kind is bounded in height by
-// CSS and scrolls inside the card; the ⤢ button (or clicking an image) opens the
-// same content in the lightbox.
+// FilePreviewBody is the card's inline preview: the content through FileBody, plus the one state
+// that is about the READ rather than the file (a fetch still in flight). Every kind is bounded in
+// height by CSS and scrolls inside the card; the ⤢ button (or clicking an image) opens the same
+// content in the lightbox.
 function FilePreviewBody({ file, path, meta, busy, onFull }: {
   file: AttachmentInfo
   path: string
@@ -150,64 +243,21 @@ function FilePreviewBody({ file, path, meta, busy, onFull }: {
   onFull: () => void
 }) {
   if (busy) return <div className="file-preview-note">读取中…</div>
-  if (meta.error) return <div className="file-preview-note">无法读取：{meta.error}</div>
-
-  switch (meta.kind) {
-    case 'image':
-      return (
-        <div className="file-preview-body">
-          <img className="file-preview-img" src={toLocalAsset(path, '')} alt={file.name}
-            title="点击全屏查看" onClick={onFull} />
-          <ExpandButton onFull={onFull} />
-        </div>
-      )
-    case 'html':
-      return (
-        <div className="file-preview-body">
-          {/* Sandboxed with scripts allowed but WITHOUT allow-same-origin: a
-              generated report's charts run, while the document itself sits in an
-              opaque origin and can reach neither this page, the Wails bridge, nor
-              read anything back out of /local. */}
-          <iframe className="file-preview-frame" src={toLocalPath(path)} title={file.name} sandbox="allow-scripts" />
-          <ExpandButton onFull={onFull} />
-        </div>
-      )
-    case 'pdf':
-      return (
-        <div className="file-preview-body">
-          {/* No sandbox: the frame IS the webview's own PDF viewer (PDFKit), which
-              needs the frame unrestricted to lay the pages out. A PDF cannot run
-              script here — WebKit's viewer has no script engine — so the frame has
-              nothing to isolate it from. */}
-          <iframe className="file-preview-frame is-pdf" src={toLocalPath(path)} title={file.name} />
-          <ExpandButton onFull={onFull} />
-        </div>
-      )
-    case 'csv':
-      return (
-        <div className="file-preview-body">
-          <CSVTable meta={meta} />
-          <ExpandButton onFull={onFull} />
-          {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
-        </div>
-      )
-    case 'markdown':
-    case 'text':
-      return (
-        <div className="file-preview-body">
-          <div className="file-preview-doc"><AttachmentText path={path} meta={meta} /></div>
-          <ExpandButton onFull={onFull} />
-          {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
-        </div>
-      )
-    default:
-      return <div className="file-preview-note">该类型不支持预览</div>
-  }
+  return (
+    // The card's own box: the border the preview hangs under, the plane it sits on, and the
+    // positioned ancestor the ⤢ button anchors to.
+    <div className="file-preview-body">
+      <FileBody meta={meta} path={path} name={file.name} variant="card" onExpand={onFull} />
+    </div>
+  )
 }
 
 // FileFullscreen shows one attachment in the lightbox. Images and HTML get the
 // whole viewport; the text kinds sit on a paper card with a reading measure,
 // because a README in the full width of a 27" display is unreadable.
+//
+// The content itself comes from FileBody (variant 'viewer'), so the lightbox and the file view
+// cannot disagree about how a kind is drawn — only about the frame around it.
 function FileFullscreen({ file, path, meta, onClose }: {
   file: AttachmentInfo
   path: string
@@ -223,18 +273,14 @@ function FileFullscreen({ file, path, meta, onClose }: {
         <button className="viewer-btn" title="用系统默认应用打开" onClick={() => { AgentService.OpenPath(path).catch(() => {}) }}>打开</button>
         <CloseButton onClose={onClose} />
       </>}>
-        <iframe className={`viewer-frame${meta.kind === 'pdf' ? ' is-pdf' : ''}`} src={toLocalPath(path)} title={file.name}
-          sandbox={meta.kind === 'html' ? 'allow-scripts' : undefined} />
+        <FileBody meta={meta} path={path} name={file.name} variant="viewer" />
       </ViewerOverlay>
     )
   }
   if (meta.kind === 'csv') {
     return (
       <ViewerOverlay label={`${file.name} — 表格`} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
-        <div className="viewer-doc is-table">
-          {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
-          <CSVTable meta={meta} />
-        </div>
+        <FileBody meta={meta} path={path} name={file.name} variant="viewer" />
       </ViewerOverlay>
     )
   }
@@ -242,10 +288,7 @@ function FileFullscreen({ file, path, meta, onClose }: {
   // inside an iframe, a different document this one cannot reach into (see FileViewer above).
   return (
     <ViewerOverlay label={file.name} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
-      <div className="viewer-doc">
-        {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
-        <AttachmentText path={path} meta={meta} />
-      </div>
+      <FileBody meta={meta} path={path} name={file.name} variant="viewer" />
     </ViewerOverlay>
   )
 }

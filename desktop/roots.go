@@ -45,6 +45,11 @@ var errNoSessionManager = errors.New("no session manager")
 // SessionRootVO is one additional root as the UI sees it.
 type SessionRootVO struct {
 	Path string `json:"path"`
+	// Label is how this root is NAMED wherever a path has to be attributed to a tree: its base name,
+	// or the full path when two additional roots share one (rootLabels). It is the same string the
+	// @-picker, the diff panel and the file tree show, served from here so no frontend has to
+	// re-derive the rule — a second implementation is how one root ends up with two names.
+	Label string `json:"label,omitempty"`
 	// Exists is false when the directory has since been removed or unmounted: the
 	// UI greys the entry out, and the prompt no longer advertises it.
 	Exists bool `json:"exists"`
@@ -104,8 +109,13 @@ func (s *AgentService) GetSessionRoots(id string) SessionRootsVO {
 		primaryVO := rootVO(primary)
 		vo.PrimaryBranch, vo.PrimaryDetached = primaryVO.Branch, primaryVO.Detached
 	}
+	// The labels are resolved ONCE for the whole set, because that is what the rule needs: a label
+	// only degrades to a full path when TWO roots share a base name, which no single root can know.
+	labels := rootLabels(primary, additional)
 	for _, dir := range additional {
-		vo.Additional = append(vo.Additional, rootVO(dir))
+		root := rootVO(dir)
+		root.Label = labels[dir]
+		vo.Additional = append(vo.Additional, root)
 	}
 	if sess != nil && sess.ProjectID != "" {
 		vo.ProjectID = sess.ProjectID

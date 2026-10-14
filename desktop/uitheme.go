@@ -80,6 +80,19 @@ type uiState struct {
 	// support question reads, what a hand edit changes, and what answers GetUIState when the
 	// webview's own storage is gone. 0 = never touched.
 	ReadingFontScale int `json:"readingFontScale,omitempty"`
+	// FileTreeOpen is whether the file-tree column was open last time (design §5.3). Same kind of
+	// preference as the side panel's: "I keep it open" has to survive a restart.
+	FileTreeOpen bool `json:"fileTreeOpen,omitempty"`
+	// FileTreeWidth is that column's width in CSS pixels (0 = never dragged), with the same bargain
+	// as the other two columns: what is STORED is what the reader chose, what can be SHOWN is
+	// derived from the room there is, and the setter refuses a hand-edited value no layout could
+	// honour (validFileTreeWidth, filetree.go).
+	FileTreeWidth int `json:"fileTreeWidth,omitempty"`
+	// FileTreeMemo is the remembered expansion state, keyed by WORKSPACE rather than by session —
+	// the tree's identity is the trees, not the conversation, so every session of one project sees
+	// the same expansion (filetree.go's fileTreeKey). It carries a write time so the table can drop
+	// the oldest workspaces; both bounds are clamped on write AND re-checked on read.
+	FileTreeMemo map[string]fileTreeMemo `json:"fileTreeMemo,omitempty"`
 }
 
 // The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it

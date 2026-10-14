@@ -172,6 +172,40 @@ export interface ContextPartVO {
 }
 
 /**
+ * DirListingVO is one directory's worth of rows.
+ */
+export interface DirListingVO {
+    "path": string;
+
+    /**
+     * Root is the workspace root this layer belongs to, and Label is how that root is named ("" = the
+     * session's primary root, else its base name, or the full path when two roots share one — the
+     * same rule and the same strings as rootLabels, so the tree, the file view's path line and the
+     * diff panel cannot spell a root three ways).
+     */
+    "root": string;
+    "label"?: string;
+
+    /**
+     * Entries are the rows, directories first then names (case-insensitive), .git skipped.
+     */
+    "entries": FileNodeVO[] | null;
+
+    /**
+     * Total is how many entries the directory really holds (before the cap), Truncated says the cap
+     * bit. The "另有 N 项未显示" line is Total - len(Entries), never a made-up number.
+     */
+    "total": number;
+    "truncated"?: boolean;
+
+    /**
+     * Error is "this whole directory could not be read" (permission, deleted a moment ago). It is
+     * mutually exclusive with Entries and must be SHOWN — a silent empty directory is a lie.
+     */
+    "error"?: string;
+}
+
+/**
  * DroppedFileVO describes one dropped file as it will be referenced.
  */
 export interface DroppedFileVO {
@@ -296,6 +330,48 @@ export interface FileMatchVO {
 }
 
 /**
+ * FileNodeVO is one row of the tree.
+ */
+export interface FileNodeVO {
+    "name": string;
+
+    /**
+     * Path is absolute: /local, OpenPath, RevealPath and an @-reference all take it as it is.
+     */
+    "path": string;
+    "isDir": boolean;
+
+    /**
+     * Link marks the entry itself as a symbolic link. Its name says so, and a link pointing at a
+     * directory is still a directory here (IsDir is os.Stat's answer, which follows it) — the flag is
+     * what lets the reader see that they are on one.
+     */
+    "link"?: boolean;
+
+    /**
+     * bytes; 0 for directories
+     */
+    "size"?: number;
+
+    /**
+     * Kind is the icon/preview HINT, decided by extension alone (treeKindHint). "unknown" does not
+     * mean "cannot be previewed": that question is answered by PreviewFile, which reads content.
+     */
+    "kind": string;
+
+    /**
+     * Ignored is non-empty when git hides this entry, and holds the rule that does it
+     * (".gitignore:12: dist/") — one field answering both "grey it" and "because of what".
+     */
+    "ignored"?: string;
+
+    /**
+     * Error is this entry's own problem (a broken link, a stat failure). The row still appears.
+     */
+    "error"?: string;
+}
+
+/**
  * FilePreviewVO describes one attachment to its card. It is served in two
  * stages: metadata alone when the card mounts, then the same struct with Text
  * filled once the user expands the preview.
@@ -354,6 +430,24 @@ export interface FilePreviewVO {
      * says what it would have been.
      */
     "error": string;
+}
+
+/**
+ * FileTreeMemoVO is what one workspace remembers: which directories were expanded, and the file the
+ * reader was looking at. Key is the workspace key the backend derived — the frontend never builds
+ * one, so "what counts as the same workspace" has a single definition (fileTreeKey).
+ */
+export interface FileTreeMemoVO {
+    "key": string;
+
+    /**
+     * Found says this workspace HAD a memo. It is what tells "nothing was ever remembered here"
+     * (start from the defaults, primary expanded) from "the reader remembers it with everything
+     * collapsed" — a difference an empty Dirs list cannot express.
+     */
+    "found": boolean;
+    "dirs": string[] | null;
+    "file"?: string;
 }
 
 /**
@@ -651,6 +745,17 @@ export interface OneOffVO {
 export interface PastedImageVO {
     "ref"?: string;
     "error"?: string;
+}
+
+/**
+ * PathStateVO is one path as it stands right now, for the auto-refresh poll.
+ */
+export interface PathStateVO {
+    "path": string;
+    "exists": boolean;
+    "isDir"?: boolean;
+    "size"?: number;
+    "mtimeMs"?: number;
 }
 
 /**
@@ -1194,6 +1299,14 @@ export interface SessionRootVO {
     "path": string;
 
     /**
+     * Label is how this root is NAMED wherever a path has to be attributed to a tree: its base name,
+     * or the full path when two additional roots share one (rootLabels). It is the same string the
+     * @-picker, the diff panel and the file tree show, served from here so no frontend has to
+     * re-derive the rule — a second implementation is how one root ends up with two names.
+     */
+    "label"?: string;
+
+    /**
      * Exists is false when the directory has since been removed or unmounted: the
      * UI greys the entry out, and the prompt no longer advertises it.
      */
@@ -1586,6 +1699,7 @@ export interface TurnDiffVO {
  * 
  * The frontend keeps its own copy (React state drives the frame) and reads this once at
  * mount: the file is the durable half, not the source of truth for what is on screen.
+ * UIStateVO is the desktop UI state the frontend restores on launch (see GetUIState).
  */
 export interface UIStateVO {
     /**
@@ -1608,4 +1722,10 @@ export interface UIStateVO {
      * 0 means "never changed".
      */
     "readingFontScale"?: number;
+
+    /**
+     * FileTreeOpen / FileTreeWidth are the file-tree column's half of the same preferences.
+     */
+    "fileTreeOpen": boolean;
+    "fileTreeWidth"?: number;
 }

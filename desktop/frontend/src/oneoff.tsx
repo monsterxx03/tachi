@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentService, type FilePreviewVO, type OneOffDetailVO, type OneOffRequestVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { buildTurns, fmtDur, fmtTime } from './lib'
+import { buildTurns, fmtDur, fmtTime, panelRoom as panelRoomFor, clampPanelWidth as clampSharedWidth } from './lib'
 import { TurnPart } from './parts'
 import { DiffFindingsPane } from './diff'
 import { MarkdownBlock } from './markdown'
@@ -28,40 +28,17 @@ const ONE_OFF_LIVE_POLL_MS = 1200
 // oneOffPanelMinWidth/MaxWidth), which refuses to store a width outside them — a preference
 // file is editable by hand, and a number the layout cannot honour is worse than the default.
 export const ONE_OFF_PANEL_DEFAULT_WIDTH = 420
-const ONE_OFF_PANEL_MIN_WIDTH = 320
+export const ONE_OFF_PANEL_MIN_WIDTH = 320
 const ONE_OFF_PANEL_MAX_WIDTH = 1000
-// The conversation never gives up more than this, whatever the window size: the panel is a
-// side channel, and a side channel that swallows the main thing is a bug.
-const CHAT_MIN_WIDTH = 560
-// …and on a window with room to spare the space is SHARED rather than handed over: the panel's
-// room stops at half the content area. A bare floor is not enough — it pins the conversation AT
-// the floor and lets the panel take every extra pixel, so a reader who dragged the panel wide
-// saw 480px of prose beside an 840px diff on a 1600px window. Above ~1600 the two columns grow
-// together; below it the floor is what protects the conversation.
-const CHAT_MIN_SHARE = 0.5
 // One arrow-key press on the handle (a drag is not the only way to resize).
 const ONE_OFF_PANEL_KEY_STEP = 24
 
-// panelRoom is the widest the panel may be shown: the content area (the window, less the sidebar
-// — the other column that never shrinks) less what the conversation keeps, capped at
-// ONE_OFF_PANEL_MAX_WIDTH. Read from the DOM rather than assumed from the CSS, so a folded
-// sidebar hands its room back. In a window too narrow to honour both minimums the panel's own
-// floor wins: something has to give there, and the conversation is what yields.
-function panelRoom(): number {
-  if (typeof window === 'undefined') return ONE_OFF_PANEL_MAX_WIDTH
-  const sidebar = document.querySelector('.sidebar')
-  const used = sidebar ? sidebar.getBoundingClientRect().width : 0
-  const content = window.innerWidth - used
-  const keep = Math.max(CHAT_MIN_WIDTH, Math.round(content * CHAT_MIN_SHARE))
-  return Math.max(ONE_OFF_PANEL_MIN_WIDTH, Math.min(ONE_OFF_PANEL_MAX_WIDTH, content - keep))
-}
-
-// clampPanelWidth limits a requested width to the room there is. The result is DISPLAY-ONLY:
-// what gets stored stays the width the reader chose, so a narrow window limits what is shown
-// without overwriting the choice — and widening the window gives the chosen width back.
-function clampPanelWidth(px: number, room: number): number {
-  return Math.max(ONE_OFF_PANEL_MIN_WIDTH, Math.min(room, Math.round(px)))
-}
+// The room this panel may have, and the clamp applied to what it shows, are the SHARED right-column
+// rule (lib.ts's panelRoom / clampPanelWidth): the file tree occupies the same edge with the same
+// bargain, and two copies of "how much of the window is left" is how the two panels end up
+// disagreeing about the conversation's floor.
+const panelRoom = () => panelRoomFor(ONE_OFF_PANEL_MIN_WIDTH, ONE_OFF_PANEL_MAX_WIDTH)
+const clampPanelWidth = (px: number, room: number) => clampSharedWidth(px, room, ONE_OFF_PANEL_MIN_WIDTH)
 
 // oneOffKindLabel names a run in the reader's words. The kind is the recorded one
 // (review / review-round-N / commit), which is the same string the usage ledger uses.

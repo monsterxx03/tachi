@@ -228,6 +228,24 @@ export function GetContextInfo(id: string): $CancellablePromise<$models.ContextI
 }
 
 /**
+ * GetFileTreeMemo returns what the session's WORKSPACE remembers: the expanded directories and the
+ * file that was being read.
+ * 
+ * Two things make the answer different from what is stored. The key is derived here (fileTreeKey),
+ * so the frontend cannot have its own idea of what a workspace is. And the paths are FILTERED on the
+ * way out: a directory that is no longer inside any root, or is no longer a directory, is dropped —
+ * a deleted directory must not leave a ghost row, and a root that was re-pointed (a project edited
+ * to another checkout) should simply start from the default expansion. The filter is a stat per
+ * path (hundreds at most).
+ * 
+ * The result is not written back: that would cost a file write every time a panel opens, and what
+ * was stored was only ever valid when it was stored.
+ */
+export function GetFileTreeMemo(sessionID: string): $CancellablePromise<$models.FileTreeMemoVO> {
+    return $Call.ByID(956658080, sessionID);
+}
+
+/**
  * GetMCPToolSchema returns one pool tool's contract for the panel, or the zero value when the
  * name is not in the pool (an unknown tool is not an error here: the panel is showing a list
  * it fetched earlier, and a name that has since left the pool just has nothing to show).
@@ -446,6 +464,18 @@ export function ListSessions(): $CancellablePromise<$models.SessionInfo[] | null
 }
 
 /**
+ * ListWorkspaceDir lists ONE layer of a directory inside the session's workspace.
+ * 
+ * path must be inside one of the session's roots (§3.2); the root itself is how its top level is
+ * listed. Everything it can go wrong with comes back as a sentence in Error rather than as an
+ * empty listing, because "nothing here" and "I would not look" are different facts and the reader
+ * is the one who has to act on them.
+ */
+export function ListWorkspaceDir(sessionID: string, path: string): $CancellablePromise<$models.DirListingVO> {
+    return $Call.ByID(216732944, sessionID, path);
+}
+
+/**
  * LoadOneOff reads one run: its messages (in the transcript's own shape) plus the API-call
  * summaries. Prompt text is left out — see OneOffRequestVO.
  */
@@ -537,6 +567,19 @@ export function OpenURL(rawURL: string): $CancellablePromise<string> {
  */
 export function PeerBoard(): $CancellablePromise<$models.PeerBoardVO> {
     return $Call.ByID(3089054336);
+}
+
+/**
+ * PollWorkspacePaths reports the current state of a batch of paths — what the frontend's refresh
+ * timer asks about. It deliberately makes NO judgement about what a change MEANS (a directory's
+ * mtime moving means its entries changed; a file's size or mtime moving means its content did):
+ * that reading belongs to the half that has to show it.
+ * 
+ * A session with no roots has nothing to poll, and says so with an empty answer rather than a list
+ * of "does not exist" for paths nobody listed.
+ */
+export function PollWorkspacePaths(sessionID: string, paths: string[] | null): $CancellablePromise<$models.PathStateVO[] | null> {
+    return $Call.ByID(345355062, sessionID, paths);
 }
 
 /**
@@ -875,6 +918,31 @@ export function SearchSessions(exclude: string, query: string, limit: number): $
  */
 export function SendMessage(sessionID: string, text: string): $CancellablePromise<string> {
     return $Call.ByID(729126489, sessionID, text);
+}
+
+/**
+ * SetFileTreeMemo records one workspace's expansion state and the file on screen. The frontend
+ * debounces its calls (an expand/collapse/toggle is not worth a whole-file rewrite) and calls once
+ * more when the panel closes; this side only clamps, and settles which key it belongs to.
+ */
+export function SetFileTreeMemo(sessionID: string, dirs: string[] | null, file: string): $CancellablePromise<void> {
+    return $Call.ByID(1053131228, sessionID, dirs, file);
+}
+
+/**
+ * SetFileTreeOpen records whether the file-tree column is open. Written on every toggle and best
+ * effort, like the rest of uiState: a failure costs the next launch the column's position.
+ */
+export function SetFileTreeOpen(open: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3992350990, open);
+}
+
+/**
+ * SetFileTreeWidth records how wide the reader made the column, refusing a value outside the bounds
+ * above (a hand-editable file, and a width the layout cannot honour is worse than the default).
+ */
+export function SetFileTreeWidth(px: number): $CancellablePromise<void> {
+    return $Call.ByID(2956409994, px);
 }
 
 /**

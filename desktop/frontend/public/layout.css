@@ -91,6 +91,229 @@
    resize cursor stays even where the strip is not under the pointer. */
 body.is-resizing { cursor: col-resize; user-select: none; }
 
+/* ── File tree（右列的另一位占用者） ────────────────────────────────────────
+   同一个边上的镜像：通高、宽度是读者拖出来的、和旁路面板互斥（一列只站一个，见 App.tsx）。
+   对话保持 `min-width: 0`，把地方让出来；能给多少由那唯一一份共用规则算（lib.ts 的 panelRoom）。 */
+.filetree-panel {
+  width: 340px;      /* 默认值；读者拖过的宽度由 App 内联写在 style 上 */
+  min-width: 240px;  /* 与 FILE_TREE_MIN_WIDTH / Go 的 fileTreeMinWidth 一致 */
+  position: relative;  /* 拖拽把手锚在这条边上 */
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+/* 与 .oneoff-resizer 同一套：把手在面板内（面板自己裁溢出），6px 是因为指针要落得上去。 */
+.filetree-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s var(--ease);
+}
+.filetree-resizer:hover,
+.filetree-resizer:focus-visible,
+.filetree-resizer.is-dragging { background: var(--accent-line-soft); }
+.filetree-resizer:focus-visible { outline: none; }
+
+.filetree-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.filetree-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.filetree-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.filetree-icon:hover { background: var(--accent-soft); color: var(--accent-2); }
+
+/* 只有一个滚动器：这个盒子自己滚，别的东西不嵌套一个 overflow（查找会去搜错误的盒子）。 */
+.filetree-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+  outline: none;
+}
+.filetree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 一行的字号是**名字**那一档（侧栏的会话名 14px、diff 的文件行 12.5px）：这一列是读者要扫的
+     文件名清单，不是某个面板的第二行元信息，所以它取前者那一侧。行高跟着字号走 —— 13.5px 的字
+     塞在 24px 的盒子里会比侧栏的行显得更挤。 */
+  height: 26px;
+  padding-right: 8px;
+  font-size: 13.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.filetree-row:hover { background: var(--hover); }
+/* 选中的东西 = 内容列正在显示它。 */
+.filetree-row.is-selected { background: var(--accent-soft); color: var(--text); }
+/* 键盘所在的行是一道左侧竖条，不是第二层底色：选中与"光标在这儿"是两件不同的事，
+   而它们可以同时成立（读者用方向键走过自己正在读的那个文件）。 */
+.filetree-row.is-cursor { box-shadow: inset 2px 0 0 var(--accent-2); }
+.filetree-row.is-ignored { color: var(--text-faint); }
+.filetree-row.is-missing { color: var(--text-faint); opacity: 0.7; }
+.filetree-row.is-note { color: var(--text-faint); cursor: default; font-size: 12px; }
+.filetree-caret { width: var(--caret-size); display: grid; place-items: center; color: var(--text-faint); flex-shrink: 0; }
+.filetree-caret.is-none { visibility: hidden; }
+.filetree-ico { width: 15px; text-align: center; font-size: 12.5px; flex-shrink: 0; }
+.filetree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filetree-label,
+.filetree-ignored,
+.filetree-size { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
+.filetree-branch { flex-shrink: 0; font-size: 11.5px; color: var(--accent-2); }
+.filetree-ignored { border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 0 4px; }
+.filetree-size { font-variant-numeric: tabular-nums; }
+.filetree-link { font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
+/* 变化标记：短促的一点（见 useFileTree 的 DIRTY_MARK_MS），点它重新读这一层。 */
+.filetree-dirty {
+  border: none;
+  background: transparent;
+  color: var(--accent-2);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.filetree-empty { padding: 18px 14px; color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
+.filetree-hint { margin-top: 6px; font-size: 12px; }
+
+/* ── File view（内容列换成文件） ───────────────────────────────────────────
+   会话那一列的另一个视图，与设置页同一条规则：被它盖住的那一半（`.chat-covered`）保持挂载、
+   只是 inert。它是绝对定位盖上去的，不是 display:none、也不是 hidden —— 那两个都会把会话的滚动
+   位置和输入框草稿丢掉（issue #27）。
+   ⚠ inert 落在 `.chat-covered` 上，不落在这个盒子的祖先上：inert 子树不参与命中测试，套在文件
+   视图外面会让它自己变成"看得见、滚不动"。 */
+.chat-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+/* 被文件视图盖住的那一半：它才是 `inert` 的落点（见 App.tsx）。它必须和 `.chat-column` 一样是一个
+   纵向 flex 容器，否则会话全文与输入框的布局会变（`chat-wrap` / `.composer` 都是它的直接子节点）。 */
+.chat-covered {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.file-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  /* 与 .app、.settings-view 同一张平面（--app-bg）：第三块不透明的面盖在内容列上，它跟旁边那块
+     必须是同一个底色，否则一眼就能看出"这块是贴上去的"。 */
+  background: var(--app-bg);
+}
+.fileview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 10px 16px 8px;
+}
+.fileview-back {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-solid);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.fileview-back:hover { color: var(--accent-2); border-color: var(--accent-line); }
+.fileview-name {
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fileview-size { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
+.fileview-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* 这一行是一条脱离了树的路径文本，"同一个仓库的两份检出"正是会撞名字的情形——所以它带根标签，
+   绝对路径留在 tooltip 里（与 diff 面板"只要其中一个必须带标签，每一行就都要带"同一个理由）。 */
+.fileview-path {
+  flex-shrink: 0;
+  padding: 0 16px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 「文件已更新」是一条提议，不是一个动作：读者点了才重新读（§8.4）。 */
+.fileview-stale {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 7px 16px;
+  background: var(--wash);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fileview-reload {
+  padding: 2px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-solid);
+  color: var(--accent-2);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.fileview-reload:hover { border-color: var(--accent-line); }
+/* 正文是这一个盒子的滚动器：浮在它上面的查找条因此锚在它内部。 */
+.fileview-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+/* 文档取与被预览的文档同一个阅读量度（base.css 的 --reading-width），不是它的一个副本。 */
+.fileview-doc { max-width: var(--reading-width); margin: 0 auto; padding: 24px 32px 48px; }
+/* 表格不是散文：阅读量度会把它压扁，所以它拿整列（与灯箱里的 .viewer-doc.is-table 同一条理由）。 */
+.fileview-doc.is-table { max-width: 100%; padding: 16px 20px 32px; }
+.fileview-frame { display: block; width: 100%; height: 100%; min-height: 70vh; border: 0; }
+.fileview-img { display: block; max-width: 100%; margin: 0 auto; padding: 14px 0; cursor: zoom-in; }
+.fileview-empty { padding: 40px 24px; color: var(--text-faint); font-size: 13px; line-height: 1.7; }
+.fileview-hint { margin-top: 6px; font-size: 12px; }
+.find-bar.is-view { position: absolute; top: 10px; right: 22px; z-index: 6; }
+
 .oneoff-head {
   display: flex;
   align-items: center;

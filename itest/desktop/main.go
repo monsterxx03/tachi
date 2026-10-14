@@ -119,6 +119,11 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	}
 	// The project fixture comes BEFORE the sessions: binding one of them needs its id.
 	projectID := ""
+	// The desktop_ui.json fixture (see seedUIState): written before launch, because the app reads it
+	// once at mount and a scenario that asserts a restart shape has to have it in place by then.
+	if err := sb.seedUIState(sc.uiState); err != nil {
+		return report(sc.name, nil, []Line{{Label: "ui state fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+	}
 	if sc.project != nil {
 		id, err := sb.seedProject(sc.project)
 		if err != nil {
@@ -626,11 +631,56 @@ func (sb *sandbox) seedProject(p *projectSeed) (string, error) {
 	return id, nil
 }
 
+// fileTreeKeyForWork is the key the BACKEND would derive for a memo about this fixture's workspace: a
+// session with no project remembers its expansion under "d:" + its primary directory
+// (desktop/filetree.go's fileTreeKey). The runner cannot call that function — desktop/ is its own module
+// and is not imported here — so the spelling is repeated in the one fixture that has to agree with it,
+// and the scenario's Go half reads the file back to confirm the app used the same key.
+func fileTreeKeyForWork(work string) string { return "d:" + work }
+
+// seedUIState writes desktop_ui.json — the durable half of the desktop's layout preferences — before
+// the app launches, for the scenarios that assert a RESTART shape: a column that was open, a width the
+// reader chose, a tree that was expanded on a particular file. A driver can produce the interactions,
+// but not the restart.
+//
+// The shape is the app's own on-disk struct (desktop/uitheme.go's uiState) spelled here, because the
+// runner cannot import that module: only the fields a scenario needs are written, and the app's own
+// defaults fill in the rest. The memo's key and paths are absolute and only exist at runtime, which is
+// why this is a fixture rather than a checked-in file.
+func (sb *sandbox) seedUIState(st *uiStateSeed) error {
+	if st == nil {
+		return nil
+	}
+	dirs := make([]string, 0, len(st.treeDirs))
+	for _, dir := range st.treeDirs {
+		dirs = append(dirs, filepath.Join(sb.work, dir))
+	}
+	body, err := json.MarshalIndent(map[string]any{
+		"fileTreeOpen":  st.fileTreeOpen,
+		"fileTreeWidth": st.fileTreeWidth,
+		"fileTreeMemo": map[string]any{
+			fileTreeKeyForWork(sb.work): map[string]any{
+				"dirs": dirs,
+				"file": filepath.Join(sb.work, st.treeFile),
+				"at":   time.Now().UTC().Format(time.RFC3339Nano),
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(sb.home, ".tachi", "desktop_ui.json"), body, 0o600)
+}
+
 // seedExtraRoots creates the additional workspace roots a scenario declares: one directory per
 // entry under the sandbox, holding that entry's files. They live beside the primary work dir
 // (not inside it), so a relative path cannot reach the other root by accident — and a scenario
 // can still reach it from the work dir as "../<name>/…", which is how a scripted bash command
 // touches a root whose absolute path it cannot know.
+//
+// A name may contain a slash ("vendor/shared-lib"): that is how a scenario seeds two roots whose BASE
+// NAMES collide, which is the one case where the label a root is shown under degrades to its full path
+// (rootLabels — the file tree's rows and the diff panel's badges read the same answer).
 func (sb *sandbox) seedExtraRoots(roots map[string]map[string]string) error {
 	for _, name := range sortedKeys(roots) {
 		dir := filepath.Join(sb.dir, name)

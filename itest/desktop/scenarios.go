@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -106,6 +107,11 @@ type scenario struct {
 	// the load-on-first-visit path (the 加载会话… placeholder), which a session that is merely
 	// re-selected never takes: switching inside one process serves the in-memory copy.
 	seedSecond []session.Message
+	// uiState seeds desktop_ui.json before the app launches (see sb.seedUIState). It exists for the one
+	// shape a driver cannot produce: a RESTART. A driver can toggle a column and expand a directory, but
+	// nothing it does makes the app read those preferences off disk — and "the tree came back the way I
+	// left it, from the file" is a claim about exactly that read.
+	uiState *uiStateSeed
 	// orphanChain seeds a conversation that WAS compacted whose pre-compaction half is no longer in
 	// the list — the state a deleted (or max_keep-swept) parent leaves behind, and the one shape a
 	// driver cannot produce: a driver cannot write a session record, and deleting one is the other
@@ -139,6 +145,19 @@ type scenario struct {
 	sessionHeldByTask bool
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
+}
+
+// uiStateSeed is the desktop_ui.json fixture (seeded by sandbox.seedUIState) — the durable half of the
+// desktop's layout preferences, which App reads once at mount.
+type uiStateSeed struct {
+	fileTreeOpen  bool
+	fileTreeWidth int
+	// treeDirs are directories under the work dir that were expanded when the app was last closed, and
+	// treeFile is the file that was being read. Both go into the workspace memo under the key the
+	// BACKEND would derive for this fixture (the work dir is the session's primary root, so "d:"+path —
+	// see sandbox.fileTreeKeyForWork for why the spelling is repeated there).
+	treeDirs []string
+	treeFile string
 }
 
 // projectSeed describes the desktop-project fixture: the project's primary directory (created
@@ -915,6 +934,94 @@ func scenarios() []scenario {
 					c.check("两个 root 的 notes.md 都被改过: "+p, err == nil && strings.Contains(string(data), "-change"),
 						fmt.Sprintf("err=%v content=%q", err, truncate(string(data), 40)))
 				}
+			},
+		},
+		//
+		//
+		// file-tree: 右列的文件树 + 内容列的文件视图（docs/2026-10-13-desktop-file-tree-design.md）。
+		//
+		// 这个场景覆盖的都是「一条绑定/一次渲染」之外的东西：树是从会话的工作区根长出来的（两个根、
+		// 同名根退化成全路径、git 分支），一层是惰性列的（展开一个目录才要一层），忽略的文件照样显示
+		// 只是灰掉，文件在**会话那一列**打开而树还在（这正是它不复用旁路面板宽度的原因），会话在文件
+		// 视图盖着时保持挂载（草稿还在），以及 agent 写完文件后树自己更新。
+		//
+		// uiState fixture 是「重启形状」的那一半：展开态和正在看的文件都是从盘上读回来的，不是这次
+		// 运行里点出来的；Go 那一半再把运行中被写回的 memo 读一遍。
+		{
+			name: "file-tree",
+			// A repository with a committed tree: the root row carries its branch, and `dist/` is
+			// genuinely ignored (so the row's grey mark is exercised by git, not by a fixture flag).
+			gitInit: true,
+			files: map[string]string{
+				"README.md":              "# smoke\n\n顶层说明。\n",
+				".gitignore":             "dist/\n*.log\n",
+				"main.go":                "package main\n\nfunc main() { println(\"tree\") }\n",
+				"pic.png":                smokePNG,
+				"blob.bin":               "\x00\x01\x02binary\n",
+				"docs/agents/desktop.md": "# 桌面手册\n\n文件视图要渲染的标题。\n",
+				// 比阅读区高的一份文档：驱动靠它断言「这个盒子是滚动器」——一份短文件看不出
+				// body 忘了 overflow:auto（内容不够高时，坏掉的盒子和好的盒子长得一模一样）。
+				"long.md": longMarkdown(60),
+				"dist/app.js":            "console.log(1)\n",
+				"run.log":                "noise\n",
+			},
+			// Two roots whose BASE NAMES collide: the label a root is shown under then degrades to its
+			// full path (rootLabels), and the frontend cannot derive that itself — it has to be the
+			// backend's answer.
+			extraRoots: map[string]map[string]string{
+				"shared-lib":        {"notes.md": "lib\n"},
+				"vendor/shared-lib": {"readme.txt": "vendor\n"},
+			},
+			uiState: &uiStateSeed{
+				fileTreeOpen:  true,
+				fileTreeWidth: 360,
+				treeDirs:      []string{"docs/agents"},
+				treeFile:      "docs/agents/desktop.md",
+			},
+			steps: []mockllm.Step{
+				// The agent writes a NEW file into a directory the driver has expanded: the tree has to
+				// grow a row for it on its own (the poll, or the end of the turn).
+				{Reply: bashStream("printf 'from the agent\\n' > docs/agent-notes.md", "call_ft1")},
+				{Reply: textStream("写好了。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("一次对话共两次调用", len(c.requests) == 2, requestCount(c.requests))
+
+				// The file the agent wrote really is there (a DOM assertion about a row would otherwise
+				// pass on a row that was already on screen).
+				written := filepath.Join(c.work, "docs", "agent-notes.md")
+				data, err := os.ReadFile(written)
+				c.check("agent 真的写了新文件: docs/agent-notes.md", err == nil && strings.Contains(string(data), "from the agent"),
+					fmt.Sprintf("err=%v", err))
+
+				// The memo was written BACK: the expansion the driver produced (docs/dist…, whichever it
+				// opened) and the file it was last reading are on disk under the key the backend derived
+				// for this workspace. This is the "reopen the panel / next launch" half of the feature,
+				// and the key is the part a frontend could get wrong on its own.
+				var st struct {
+					FileTreeOpen  bool `json:"fileTreeOpen"`
+					FileTreeWidth int  `json:"fileTreeWidth"`
+					FileTreeMemo  map[string]struct {
+						Dirs []string `json:"dirs"`
+						File string   `json:"file"`
+					} `json:"fileTreeMemo"`
+				}
+				if err := readJSON(filepath.Join(c.home, ".tachi", "desktop_ui.json"), &st); err != nil {
+					c.check("运行后的 desktop_ui.json 可读", false, err.Error())
+					return
+				}
+				memo, ok := st.FileTreeMemo[fileTreeKeyForWork(c.work)]
+				c.check("memo 落在后端推导的那个键上", ok, fmt.Sprintf("%v", keysOfMemo(st.FileTreeMemo)))
+				if !ok {
+					return
+				}
+				// 展开态里有运行中打开过的目录（docs 或它下面的 agents，取决于驱动点了哪一层）。
+				expandedTarget := slices.Contains(memo.Dirs, filepath.Join(c.work, "docs", "agents")) ||
+					slices.Contains(memo.Dirs, filepath.Join(c.work, "docs"))
+				c.check("展开态被写回（docs/agents 在内）", expandedTarget, strings.Join(memo.Dirs, " | "))
+				c.check("正在看的文件被写回", strings.HasPrefix(memo.File, c.work+string(filepath.Separator)), memo.File)
+				c.check("宽度偏好仍是从 fixture 来的那个", st.FileTreeWidth == 360, fmt.Sprint(st.FileTreeWidth))
 			},
 		},
 		//
@@ -3912,6 +4019,41 @@ permissions:
 
 // mcpEditSeed is the mcp.json the mcp-edit scenario starts from. The server is DISABLED: a smoke
 // run happens on a real machine, and an enabled stdio server is a process the app really spawns.
+// smokePNG is a real 1×1 PNG on disk (decoded from the same bytes paste-imageBase64 carries): the
+// file-tree scenario's image row has to be an image the webview can actually render, or 「点开图片」 would
+// be asserting on a broken <img> — and a text file named .png is exactly that.
+var smokePNG = func() string {
+	raw, err := base64.StdEncoding.DecodeString(pasteImageB64)
+	if err != nil {
+		panic("smokePNG: " + err.Error())
+	}
+	return string(raw)
+}()
+
+// longMarkdown is a document tall enough to overflow the file view's reading area, for the scenario
+// that asserts the box is a real SCROLLER (a short file cannot tell a working one from a broken one).
+func longMarkdown(sections int) string {
+	var b strings.Builder
+	b.WriteString("# 长文档\n\n")
+	for i := 1; i <= sections; i++ {
+		fmt.Fprintf(&b, "## 第 %d 节\n\n这是第 %d 节的一段普通文字，用来把这份文档撑得比阅读区高。\n\n", i, i)
+	}
+	return b.String()
+}
+
+// keysOfMemo lists the workspaces a desktop_ui.json memo table holds, for a failure message that says
+// what WAS there instead of only that the expected key was missing.
+func keysOfMemo(memo map[string]struct {
+	Dirs []string `json:"dirs"`
+	File string   `json:"file"`
+}) []string {
+	out := make([]string, 0, len(memo))
+	for key := range memo {
+		out = append(out, key)
+	}
+	return out
+}
+
 const mcpEditSeed = `{
   "servers": [
     {

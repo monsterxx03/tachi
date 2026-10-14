@@ -815,3 +815,40 @@ export function managedReadOnlyNote(kind: string, sourceNodeId?: string, sourceN
   return `这段对话由子系统（${kind}）驱动${from}，不归本窗口：可以在这里查看，但不能继续、回退或重试。` +
     `要基于它继续研究，请新建一段会话。`
 }
+
+// ── The right-hand columns' width rule ────────────────────────────────────────
+// Two columns can occupy the right edge (the side-channel panel and the file tree), and they are
+// the same layout problem: a width the reader chose, a window that may not have room for it, and a
+// conversation that must keep a floor of its own. So the arithmetic lives here ONCE — each panel
+// brings its own bounds.
+
+// The conversation never gives up more than this, whatever the window size: a side panel that
+// swallows the main thing is a bug.
+const CHAT_MIN_WIDTH = 560
+// …and on a window with room to spare the space is SHARED rather than handed over: the panel's room
+// stops at half the content area. A bare floor is not enough — it pins the conversation AT the floor
+// and lets the panel take every extra pixel, so a reader who dragged the panel wide saw 480px of
+// prose beside an 840px diff on a 1600px window. Above ~1600 the two columns grow together; below
+// it the floor is what protects the conversation.
+const CHAT_MIN_SHARE = 0.5
+
+// panelRoom is the widest a right-hand column may be SHOWN: the content area (the window, less the
+// sidebar — the other column that never shrinks) less what the conversation keeps, capped at max.
+// Read from the DOM rather than assumed from the CSS, so a folded sidebar hands its room back. In a
+// window too narrow to honour both minimums the panel's own floor wins: something has to give there,
+// and the conversation is what yields.
+export function panelRoom(min: number, max: number): number {
+  if (typeof window === 'undefined') return max
+  const sidebar = document.querySelector('.sidebar')
+  const used = sidebar ? sidebar.getBoundingClientRect().width : 0
+  const content = window.innerWidth - used
+  const keep = Math.max(CHAT_MIN_WIDTH, Math.round(content * CHAT_MIN_SHARE))
+  return Math.max(min, Math.min(max, content - keep))
+}
+
+// clampPanelWidth limits a requested width to the room there is. The result is DISPLAY-ONLY: what
+// gets stored stays the width the reader chose, so a narrow window limits what is shown without
+// overwriting the choice — and widening the window gives the chosen width back.
+export function clampPanelWidth(px: number, room: number, min: number): number {
+  return Math.max(min, Math.min(room, Math.round(px)))
+}

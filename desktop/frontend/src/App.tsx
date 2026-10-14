@@ -18,6 +18,9 @@ import {
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
+import { FileTreePanel, FILE_TREE_DEFAULT_WIDTH } from './filetree'
+import { FileView } from './fileview'
+import { useFileTree, type OpenFile } from './useFileTree'
 import { RewindChainOverlay } from './rewindchain'
 import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
 import type { OneOffRun } from './agentEvents'
@@ -564,6 +567,12 @@ function App() {
   // popover is only mounted while open, so its own outside-click/Esc handling is
   // not running behind the scenes.
   const [roots, setRoots] = useState<SessionRootsVO | null>(null)
+  // rootsFor names the session the roots above describe. It is separate state because a session switch
+  // sets the id a moment BEFORE the roots arrive: the file tree's remembered paths are absolute and can
+  // only be attributed to a root once the RIGHT root set is in hand, so "these are the roots of THAT
+  // session" has to be stated rather than assumed. Every other reader only looks at the roots while that
+  // session is on screen, so the pairing costs nothing there.
+  const [rootsFor, setRootsFor] = useState('')
   const [rootsOpen, setRootsOpen] = useState(false)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
@@ -754,15 +763,16 @@ function App() {
   // restarts (desktop_ui.json). See sidebar.tsx — the number under the pointer during a drag is NOT
   // state, and what is shown is the chosen width clamped to the room the window has.
   const sidebarW = useSidebarWidth(sidebarCollapsed)
-  // Which of the two top-level views is on screen. It is App's state, not a route, and the chat
-  // view is HIDDEN rather than unmounted while settings is up: a conversation holds more local
-  // state than a route could rebuild (collapsed project groups, the composer's draft, the
-  // transcript's scroll offset), and coming back from a settings page must not cost any of it.
-  const [view, setView] = useState<'chat' | 'settings'>('chat')
+  // Which of the three top-level views is on screen. It is App's state, not a route, and the chat view
+  // is HIDDEN rather than unmounted while either of the other two is up: a conversation holds more
+  // local state than a route could rebuild (collapsed project groups, the composer's draft, the
+  // transcript's scroll offset), and coming back must not cost any of it. The file view takes the
+  // CONTENT COLUMN (the chat is inert under it); the settings page covers the whole window.
+  const [view, setView] = useState<'chat' | 'settings' | 'file'>('chat')
   // ⌘F over the conversation. It is the LOWEST host in find.tsx's stack (the chat mounts first), so
-  // any overlay or panel on top keeps the key for itself — the rule that lets a preview or a review's
-  // pane search its own text. No root while the settings page is up: that view COVERS the chat (the
-  // body is only inert), and a bar opening behind it would be a search nobody can see.
+  // any overlay or panel on top keeps the key for itself — the rule that lets a preview, a review's
+  // pane or the file view search its own text. No root while either other view is up: they COVER the
+  // chat, and a bar opening behind one would be a search nobody can see.
   const chatFind = useFind(view === 'chat' ? chatRef : null, CHAT_FIND_SCOPE)
   // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
   // active theme to Go, which owns the window colour outside the webview.
@@ -781,6 +791,12 @@ function App() {
   // docs/2026-09-12-desktop-oneoff-panel-design.md. The panel is a reader over the same
   // records the findings panel reads, so it needs no live stream of its own until P2.
   const [oneoffOpen, setOneoffOpen] = useState(false)
+  // ── The file tree (the right column's OTHER occupant) ──────────────────────
+  // The two columns are mutually exclusive: both are 300px+ of chrome pinned to the same edge, and the
+  // conversation has a floor of its own. Opening one is therefore also CLOSING the other, which is what
+  // makes the two titlebar toggles self-explaining (one lights up, the other goes out).
+  const [fileTreeOpen, setFileTreeOpen] = useState(false)
+  const [fileTreeWidth, setFileTreeWidth] = useState(FILE_TREE_DEFAULT_WIDTH)
   // What the backend reports about the session's side-channel runs: `live` while one is
   // running, `result` once it ended (see agentEvents.ts). The panel needs the first, the
   // conversation's one-line anchor the second.
@@ -797,13 +813,23 @@ function App() {
         if (st?.oneOffPanelOpen) setOneoffOpen(true)
         // 0 = never dragged. Anything the layout cannot honour is refused by the backend too.
         if (st?.oneOffPanelWidth) setOneoffWidth(st.oneOffPanelWidth)
+        // The file tree's half: same file, same bargain. Both persisted "open" flags are read, and
+        // the tree wins the right column when both say yes — the two are exclusive by construction in
+        // the UI, so this only settles what a hand-edited file asked for.
+        if (st?.fileTreeOpen) { setFileTreeOpen(true); setOneoffOpen(false) }
+        if (st?.fileTreeWidth) setFileTreeWidth(st.fileTreeWidth)
       })
       .catch(() => { /* an unreadable preference just means the defaults */ })
   }, [])
   const setOneOffOpen = useCallback((open: boolean) => {
     setOneoffOpen(open)
-    // Best effort, like every other uiState write: a failure costs the next launch the
-    // panel's position, nothing more.
+    // The two right-hand columns share the edge (see the file-tree state above), so opening this one
+    // closes the other. Best effort, like every other uiState write: a failure costs the next launch
+    // the panel's position, nothing more.
+    if (open) {
+      setFileTreeOpen(false)
+      AgentService.SetFileTreeOpen(false).catch(() => {})
+    }
     AgentService.SetOneOffPanelOpen(open).catch(() => {})
   }, [])
   // The width follows the pointer during a drag (state only) and is written when the drag ends:
@@ -811,6 +837,19 @@ function App() {
   const commitOneOffWidth = useCallback((px: number) => {
     setOneoffWidth(px)
     AgentService.SetOneOffPanelWidth(px).catch(() => {})
+  }, [])
+
+  const setFileTreeVisible = useCallback((open: boolean) => {
+    setFileTreeOpen(open)
+    if (open) {
+      setOneoffOpen(false)
+      AgentService.SetOneOffPanelOpen(false).catch(() => {})
+    }
+    AgentService.SetFileTreeOpen(open).catch(() => {})
+  }, [])
+  const commitFileTreeWidth = useCallback((px: number) => {
+    setFileTreeWidth(px)
+    AgentService.SetFileTreeWidth(px).catch(() => {})
   }, [])
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpLoading, setMcpLoading] = useState<Record<string, boolean>>({})
@@ -994,6 +1033,63 @@ function App() {
     chatRef,
   })
 
+  // The file tree's state: expansion, per-directory listings, the file on screen, and what the poll
+  // saw. The hook is about ONE session's workspace (see useFileTree.ts) — App owns only the column's
+  // open flag, its width and which view is on screen.
+  //
+  // `treeRoots` is null until the roots of the session ON SCREEN have arrived: the hook applies the
+  // remembered expansion against them, and roots from the session the reader just left would attribute
+  // every remembered path to nothing (see rootsFor).
+  const treeRoots = rootsFor === currentId ? roots : null
+  const tree = useFileTree({
+    sessionId: currentId, roots: treeRoots,
+    // Either surface being on screen is a reason to poll (see the hook): the tree's rows, or the
+    // 「文件已更新」 line over a document that is open in the file view.
+    open: fileTreeOpen, fileVisible: view === 'file',
+  })
+
+  // Opening a row puts the content column on the file view. Selecting WITHOUT that switch (the reveal
+  // from a conversation link) goes through the hook directly: the reader already opened that file in
+  // the overlay they clicked, and the tree's answer is where it lives — not a second surface for it.
+  const openTreeFile = useCallback((file: OpenFile) => {
+    tree.openFile(file, file.root, file.label)
+    setView('file')
+  }, [tree])
+
+  // 插入 @ 引用: the tree hands over a path, the backend spells the reference (atfile.RefForPath,
+  // through the same binding a dropped file uses), and the composer puts it at the caret. Nothing here
+  // composes a reference by hand — that spelling lives in one place, on the Go side.
+  const insertTreeRef = useCallback(async (path: string) => {
+    const root = roots?.primary || ''
+    try {
+      const files = (await AgentService.ResolveDroppedPaths(currentId, [path])) || []
+      const ref = files[0]?.ref || (path.startsWith(root) && root ? '@' + path.slice(root.length).replace(/^\/+/, '') : '@' + path)
+      composer.insertRef(ref)
+    } catch {
+      // A backend that cannot answer still gets the reference in the box: the absolute form is always
+      // valid, and an @-reference that fails to expand is a message the reader will see at send time.
+      composer.insertRef('@' + path)
+    }
+  }, [composer, currentId, roots])
+
+  // A reply's file link (or an attachment card) opened a preview: if the tree is up, show WHERE that
+  // file lives. The gesture is published by markdown.tsx / filepreview.tsx through filereveal.ts — a
+  // module-level slot rather than a context, because the app has exactly one tree and the subscribers
+  // are deep inside react-markdown's component map.
+
+  // A turn ended in the session on screen: re-read what is expanded. An agent is the most frequent
+  // writer in its own workspace, and the moment it stops is the moment the reader looks (design §8.2) —
+  // the two-second poll would get there anyway, and this is what makes it instant rather than "shortly".
+  // It is a re-read of DIRECTORY listings only: the file view still waits to be asked (§8.4).
+  const lastAgentStatus = useRef(state.status)
+  useEffect(() => {
+    const was = lastAgentStatus.current
+    lastAgentStatus.current = state.status
+    if (!fileTreeOpen || was === 'idle' || was === 'error') return
+    if (state.status !== 'idle') return
+    tree.refresh()
+  }, [state.status, fileTreeOpen, tree])
+
   const refreshProvider = useCallback(async () => {
     try {
       const info = await (AgentService as any).GetProviderInfo?.()
@@ -1017,7 +1113,8 @@ function App() {
     } catch { /* ignore */ }
     try {
       setRoots((await AgentService.GetSessionRoots(id)) || null)
-    } catch { setRoots(null) }
+      setRootsFor(id)
+    } catch { setRoots(null); setRootsFor(id) }
   }, [])
 
   // refreshProjects re-reads the project table for the sidebar's groups. It is a separate call
@@ -1914,6 +2011,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     appBodyRef.current?.toggleAttribute('inert', view === 'settings')
   }, [view])
 
+  // The chat surfaces are INERT while the file view is up, for exactly the same reason and by exactly
+  // the same mechanism as the settings page: that view covers them, so they must leave the tab order and
+  // the accessibility tree — while staying MOUNTED and PAINTED, which is what keeps the scroll offset,
+  // the composer's draft and a streaming reply alive. `visibility: hidden` was the bug here once
+  // (issue #27: WebKit never repaints the ellipsis runs it skipped); `display: none` would throw the
+  // scroll position away.
+  //
+  // ⚠ The element this lands on is the COVERED half, never the column that also holds the file view:
+  // an `inert` subtree is skipped by hit testing, so a scroller inside it cannot be scrolled by the
+  // reader — a file view nested under this attribute is a document you can look at but not move.
+  const chatCoveredRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    chatCoveredRef.current?.toggleAttribute('inert', view === 'file')
+  }, [view])
+
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Cmd+N starts a new session like the one on screen, Cmd+Shift+N one that belongs to no
   // project, Cmd+P searches projects, Cmd+K searches conversations. (No native menu binds
@@ -1962,6 +2074,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); bumpFontScale(-1) }
       else if (e.key === '0') { e.preventDefault(); resetFontScale() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
+      // ⌘E is the file tree: the right column's navigator, and the way into the file view. It works in
+      // the file view too (that is how a reader gets back to the tree without leaving what they are
+      // reading) and on the settings page it does not, which is the `view === 'settings'` guard above.
+      else if (e.key.toLowerCase() === 'e' && !e.shiftKey) {
+        e.preventDefault()
+        setFileTreeVisible(!fileTreeOpen)
+      }
       // The two palettes are the same box in the same place, so opening one closes the other —
       // and each is a toggle, so its own key closes it again.
       else if (e.key.toLowerCase() === 'p' && !e.shiftKey && !paletteUp) {
@@ -2011,6 +2130,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, newChatLikeCurrent, askDeleteCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
     projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view,
+    // ⌘E carries the column's own state (it is a toggle), so both halves are dependencies.
+    fileTreeOpen, setFileTreeVisible,
     // Listed because it is captured by value: availability arrives once, after mount, and a closure
     // from the first render would hold `false` forever (⌘⇧M would be a dead key). `composer` itself
     // is deliberately absent — every method this handler calls is a stable useCallback.
@@ -2559,6 +2680,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             </button>
             <div className="titlebar-title" title={sessionTitle || undefined}>{sessionTitle}</div>
             <div className="titlebar-right no-drag">
+              <button className={`sidebar-toggle filetree-toggle no-drag ${fileTreeOpen ? '' : 'is-collapsed'}`}
+                onClick={() => setFileTreeVisible(!fileTreeOpen)}
+                title={fileTreeOpen ? '收起文件树' : `展开文件树（${MOD_KEY}E）：工作区目录，点文件在会话这一列打开`}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 2.5h6l3 3v8h-9z"/><path d="M6 7h4M6 9.5h4M6 12h2.5"/></svg>
+              </button>
               <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
                 onClick={() => setOneOffOpen(!oneoffOpen)}
                 title={oneoffOpen ? '收起旁路面板' : '展开旁路面板（评审 / 提交的过程）'}>
@@ -2568,6 +2694,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             </div>
           </header>
 
+          {/* The chat column: the conversation (banner, transcript, composer) plus the file view that
+              may be covering it. Two nested boxes, and the split between them is load-bearing:
+              `.chat-covered` is everything the file view COVERS (that is what goes `inert`), while
+              `.chat-column` is the positioning context the covering view is laid out in — putting the
+              attribute on the column would make the file view itself inert, and an inert subtree is
+              skipped by hit testing, i.e. a scroller inside it cannot be scrolled by the reader. */}
+          <div className="chat-column">
+          <div className="chat-covered" ref={chatCoveredRef}>
           {/* A read-only banner at the top of the transcript: the row in the sidebar marks the
               session, but a reader who came straight to the window never saw that row. The composer
               below is replaced by the same reason, so the two say one thing.
@@ -2808,8 +2942,28 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               </div>
             </div>
           </footer>
+          </div>
+          {/* The file view covers the conversation (CSS), and it is rendered INSIDE the column it
+              covers — as the SIBLING of `.chat-covered`, never a child of it: that box is the one
+              carrying `inert`, and an inert subtree is out of reach of the reader's pointer (a
+              document in there could be read but not scrolled). It takes the whole column: a document
+              needs the width the conversation was using, which is the whole reason it is not a panel
+              in the right-hand column (design §1). */}
+          {view === 'file' ? (
+            <FileView api={tree} sessionId={currentId} onBack={() => setView('chat')} />
+          ) : null}
+          </div>
         </main>
-        {oneoffOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
+        {/* The right column holds ONE of the two: the file tree (navigation) or the side-channel panel
+            (a /review or /commit running). Both are 300px+ on the same edge and the conversation has a
+            floor, so opening one closes the other (see setFileTreeVisible / setOneOffOpen). */}
+        {fileTreeOpen ? (
+          <FileTreePanel api={tree} roots={treeRoots} width={fileTreeWidth}
+            onResizeCommit={commitFileTreeWidth} onOpenFile={openTreeFile}
+            onInsertRef={(path) => void insertTreeRef(path)}
+            onClose={() => setFileTreeVisible(false)} />
+        ) : null}
+        {oneoffOpen && !fileTreeOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
           onResizeCommit={commitOneOffWidth} onSend={sendFindings}
           /* The re-run asks the SAME question the record says was asked: a whole-tree run is
              re-run as a whole-tree run (re-reading the working tree, which is the point — the
@@ -3095,6 +3249,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} B</kbd><span>折叠 / 展开侧栏</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} E</kbd><span>文件树（右侧的工作区目录；点一个文件就在会话这一列打开它）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} ?</kbd><span>显示本快捷键列表</span></div>
               <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
               <div className="shortcut-row"><kbd>{MOD_KEY} F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>

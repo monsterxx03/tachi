@@ -10,6 +10,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { CopyIcon } from './components'
 import { copyText, actOnKey, linkTargetPath, toLocalAsset } from './lib'
+import { revealFileInTree } from './filereveal'
 import { FilePreviewOverlay } from './filepreview'
 import { useThemeSnapshot } from './theme'
 import { CloseButton, ImageViewer, ViewerOverlay, ZoomControls, useViewerZoomKeys, useZoomPan } from './viewer'
@@ -72,7 +73,13 @@ export function MdLink({ href, children, title, workDir }: ComponentPropsWithout
     // answers for directories and unreadable files too — an overlay that explains the kind is
     // the right place for those; only "there is nothing at this path" goes to the browser.
     AgentService.PreviewFile(local, false)
-      .then((vo) => { if (vo.kind === 'missing') asBrowser(); else setPreview(local) })
+      .then((vo) => {
+        if (vo.kind === 'missing') { asBrowser(); return }
+        setPreview(local)
+        // …and if the reader has the file tree open, show them where this file lives (filereveal.ts).
+        // It is the same sentence as the "open in the tree" gesture, asked from the other side.
+        revealFileInTree(local)
+      })
       .catch(asBrowser)
   }
   return (

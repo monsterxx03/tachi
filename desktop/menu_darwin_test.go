@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -60,6 +61,40 @@ func TestApplicationMenuFreesTheZoomKeys(t *testing.T) {
 		if menu.FindByLabel(want) == nil {
 			t.Errorf("menu item %q is missing from the app menu", want)
 		}
+	}
+}
+
+// TestApplicationMenuFreesTheFileTreeKey pins the same mechanism for ⌘E, the file tree's toggle.
+//
+// The menu is where a key can go to die: an accelerator is handled BEFORE the webview sees the event,
+// so a menu item that claimed ⌘E would make `setFileTreeVisible` unreachable in a way no frontend test
+// (and no smoke driver — a driver dispatches a synthetic key straight into the page) could observe.
+//
+// The accelerator is spelled out ("Cmd+E") because Wails exposes no constructor for an arbitrary key:
+// the zoom items in the test above can be built through their own constructors, and this one cannot.
+// The walk below therefore also asserts that it saw the modifier spelled that way at all, so a Wails
+// upgrade that renamed the convention fails here instead of making this test vacuous.
+func TestApplicationMenuFreesTheFileTreeKey(t *testing.T) {
+	application.New(application.Options{Name: "Tachi"})
+
+	const fileTreeKey = "Cmd+E"
+	sawCmdKey := false
+	walkMenuItems(applicationMenu(), func(item *application.MenuItem) {
+		acc := item.GetAccelerator()
+		if strings.HasPrefix(acc, "Cmd+") {
+			sawCmdKey = true
+		}
+		if acc == fileTreeKey {
+			t.Errorf("menu item %q claims %s — the file tree's toggle would never reach the page", item.Label(), fileTreeKey)
+		}
+	})
+	if !sawCmdKey {
+		t.Fatalf("walked no Cmd+ accelerator at all — Wails' spelling changed, so this test proves nothing")
+	}
+	// The item NAME, not just the accelerator: a Wails upgrade renaming the file menu would otherwise
+	// leave a ⌘E claimed by something this test could not point at.
+	if item := applicationMenu().FindByLabel("Open File"); item != nil && item.GetAccelerator() != "" {
+		t.Errorf("a menu item named 打开文件 came back claiming %s", item.GetAccelerator())
 	}
 }
 

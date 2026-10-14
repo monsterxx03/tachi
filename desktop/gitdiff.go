@@ -300,9 +300,12 @@ func rootWorkingTreeChanges(root, label string, paths []string) rootChanges {
 	return rc
 }
 
-// ignoredPaths returns the requested paths that git ignores, with the rule that hides them
-// (from `git check-ignore -v`, which prints "<source>:<line>:<pattern>\t<path>").
-func ignoredPaths(root string, paths []string) []string {
+// checkIgnoreLines runs `git check-ignore -v` for a set of paths and returns its output lines
+// ("<source>:<line>:<pattern>\t<path>"). It is the ONE reader of that command: the diff panel wants
+// the lines (its note names the first rule), the file tree wants a path → rule map
+// (ignoredRuleMap), and both must read the same invocation the same way. Not being in a repository
+// (or having no git at all) is not an error — it is simply nothing to report.
+func checkIgnoreLines(root string, paths []string) []string {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -318,6 +321,29 @@ func ignoredPaths(root string, paths []string) []string {
 		}
 	}
 	return lines
+}
+
+// ignoredRuleMap turns those lines into path → "<source>:<line>:<pattern>": the rule that hides a
+// path, which is what a tree row shows in its tooltip (the pattern is the actionable part).
+func ignoredRuleMap(lines []string) map[string]string {
+	if len(lines) == 0 {
+		return nil
+	}
+	rules := make(map[string]string, len(lines))
+	for _, line := range lines {
+		source, path, ok := strings.Cut(line, "\t")
+		if !ok || path == "" {
+			continue
+		}
+		rules[path] = source
+	}
+	return rules
+}
+
+// ignoredPaths returns the requested paths that git ignores, with the rule that hides them
+// (from `git check-ignore -v`, which prints "<source>:<line>:<pattern>\t<path>").
+func ignoredPaths(root string, paths []string) []string {
+	return checkIgnoreLines(root, paths)
 }
 
 // ignoredNote is the user-facing sentence for ignored paths: how many, and the rule behind the

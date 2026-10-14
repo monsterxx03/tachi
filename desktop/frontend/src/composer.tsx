@@ -977,6 +977,17 @@ export function useComposer(deps: ComposerDeps) {
   const focusInput = useCallback(() => composerRef.current?.focus(), [])
   const focusTranscript = useCallback(() => chatRef.current?.focus(), [chatRef])
 
+  // insertRef puts a reference into the draft at the caret and focuses the box — the way the FILE TREE
+  // pastes a file (its context menu's 插入 @ 引用) and the same path a native drop takes. The
+  // reference itself is the backend's spelling (atfile.RefForPath, through ResolveDroppedPaths), so
+  // what lands here is exactly what a drop would have inserted.
+  const insertRef = useCallback((text: string) => {
+    if (!text) return
+    closeAt()
+    insertAtCaret(text, true, false)
+    composerRef.current?.focus()
+  }, [closeAt, insertAtCaret])
+
   // The "/" palette is DERIVED from the input rather than stored, so it can never disagree
   // with what would actually be dispatched: it is open while the input is a bare command name
   // still being typed (a space means arguments follow, an exact name means it is complete),
@@ -987,7 +998,7 @@ export function useComposer(deps: ComposerDeps) {
 
   return {
     // input box
-    input, setInput, composerRef, composingRef, syncAtRef, closeAt, focusInput, focusTranscript,
+    input, setInput, composerRef, composingRef, syncAtRef, closeAt, focusInput, focusTranscript, insertRef,
     // input box height (drag / arrow keys; never persisted)
     inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight,
     // @-picker + "/" palette

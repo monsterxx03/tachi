@@ -1,6 +1,9 @@
 # Desktop 文件树与预览面板设计
 
-> 版本: 0.1 | 日期: 2026-10-13 | 状态: 设计待确认（未实现）
+> 版本: 0.1 | 日期: 2026-10-13 | 状态: **已实现（P0–P4）**——实现见 `desktop/filetree.go`、
+> `desktop/frontend/src/{filetree,fileview,useFileTree}.tsx|ts`，端到端证据是冒烟场景 `file-tree`
+> （59 项断言）。本文是设计当时的样子；**现在为真的约定在 [docs/agents/desktop.md](../agents/desktop.md)**，
+> 其中与本文不同的两处：⌘E 未被菜单占用（已由 `menu_darwin_test.go` 钉住），右列的两个占用者互斥（§13.2 取互斥）。
 > 原型: [2026-10-13-desktop-file-tree-prototype.html](./2026-10-13-desktop-file-tree-prototype.html)（单文件假数据，可点）
 > 关联: [preview.go](../desktop/preview.go)、[roots.go](../desktop/roots.go)、[fileservice.go](../desktop/fileservice.go)、
 >       [gitdiff.go](../desktop/gitdiff.go)、[oneoff.go](../desktop/oneoff.go)（`uiState`/`UIStateVO`）、

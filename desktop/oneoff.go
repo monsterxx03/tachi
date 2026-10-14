@@ -496,6 +496,7 @@ func oneOffPath(sessionID, name string) (string, error) {
 //
 // The frontend keeps its own copy (React state drives the frame) and reads this once at
 // mount: the file is the durable half, not the source of truth for what is on screen.
+// UIStateVO is the desktop UI state the frontend restores on launch (see GetUIState).
 type UIStateVO struct {
 	// OneOffPanelOpen is whether the side-channel panel was open last time.
 	OneOffPanelOpen bool `json:"oneOffPanelOpen"`
@@ -506,6 +507,9 @@ type UIStateVO struct {
 	// ReadingFontScale is the reading surfaces' size as a percent of the stylesheet's own (100);
 	// 0 means "never changed".
 	ReadingFontScale int `json:"readingFontScale,omitempty"`
+	// FileTreeOpen / FileTreeWidth are the file-tree column's half of the same preferences.
+	FileTreeOpen  bool `json:"fileTreeOpen"`
+	FileTreeWidth int  `json:"fileTreeWidth,omitempty"`
 }
 
 func (s *AgentService) GetUIState() UIStateVO {
@@ -515,6 +519,8 @@ func (s *AgentService) GetUIState() UIStateVO {
 		OneOffPanelWidth: st.OneOffPanelWidth,
 		SidebarWidth:     st.SidebarWidth,
 		ReadingFontScale: st.ReadingFontScale,
+		FileTreeOpen:     st.FileTreeOpen,
+		FileTreeWidth:    st.FileTreeWidth,
 	}
 }
 

@@ -55,6 +55,10 @@ const (
 	kindBinary   = "binary"
 	kindDir      = "dir"
 	kindMissing  = "missing"
+	// kindUnknown is what the file TREE answers for an extension it does not recognise
+	// (treeKindHint): an icon hint, never a verdict — previewKind decides by content when the
+	// file is actually opened, which is how an extensionless README is still recognised.
+	kindUnknown = "unknown"
 )
 
 // imageExts are the extensions the WEBVIEW renders inline. Deliberately not
