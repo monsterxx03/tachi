@@ -578,19 +578,34 @@ var settingsTable = []settingApply{
 	{Key: "logs", Category: catAdvanced, Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
 	{Key: "debug.pprof", Category: catAdvanced, Mode: applyRestart, Note: "启动即绑端口"},
 	{Key: "herdr", Category: catAdvanced, Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
-	// node: 入口启动时起/停本机节点服务（StartOrAttachNode），关掉开关也是启动时才生效。
-	// 运行中切换需要能起停服务本身（还要处理它与本地聊天互不影响的那套语义），首版不做 ——
-	// 所以是 ⟳ 而不是热改。
+	// node: 入口启动时起/停本机节点服务（StartOrAttachNode），运行中切换需要能起停服务本身，
+	// 首版不做 —— 所以这一整块是 ⟳ 而不是热改。
 	//
-	// workspace 与 tools 是**远程任务的**工作目录与工具白名单（不是本机聊天的）：前者空着
-	// 就拒绝远程任务，后者空着就是"没有工具"（AskUserQuestion 不看这个列表 —— 问调用者不碰
-	// 本机）。question_timeout / max_parked 是停放中的追问的上限：到点任务判 FAILED（问题留在
-	// 状态里），超过数量上限则该次提问失败、让模型用现有信息收尾。节点会话**没有单独的保留期**：
-	// 它和普通会话同一个池子（数量上限、置顶、显式删除），只有"里面正在跑的执行"能挡住删除。
-	// ListExample 是给空列表的提示 —— 推荐的起点是只读那三个。
-	{Key: "node", Category: catAdvanced, Mode: applyRestart,
-		ListExample: "ReadFile\nGrep\nGlob",
-		Note:        "入口启动即起/停节点服务；workspace/tools 是远程任务的工作目录与工具白名单，question_timeout/max_parked 是追问的时限与并发上限；节点会话没有单独保留期（与普通会话同池），均重启生效"},
+	// **每个键各有一行**，这不是啰嗦：一条块级说明会印在它覆盖的**每一个**字段下面，于是读者
+	// 在 `listen` 底下读到的是 `workspace` 的事。块里字段各说各话时，就得到叶子
+	// （settings_test.go 的 TestANoteIsSharedOnlyWithinOneBlock 钉着这条）。
+	{Key: "node.enabled", Category: catAdvanced, Mode: applyRestart,
+		Note: "承载节点服务：别的机器可以把远程任务发给本机（默认关，关着连数据目录、锁、监听都不碰）。运行中起停需要能控制服务本身，首版没做"},
+	{Key: "node.listen", Category: catAdvanced, Mode: applyRestart,
+		Note: "远端 A2A 面绑的地址，启动时绑定；离开 loopback 就自动变成 mTLS、要求调用方出示证书。绑通配地址必须同时填 public_url，否则拒绝启动"},
+	{Key: "node.public_url", Category: catAdvanced, Mode: applyRestart,
+		Note: "调用方能拨到的地址，进 Card 也进发现公告；留空从 listen 推 —— 绑通配地址时推不出来，那时必须填"},
+	{Key: "node.name", Category: catAdvanced, Mode: applyRestart,
+		Note: "本机自称的名字：进 Card、随每次调用带给对端（对端只当「自报」记）。不可冒充的是密钥推出来的 node_id"},
+	{Key: "node.description", Category: catAdvanced, Mode: applyRestart,
+		Note: "一句话说明这台机器是干什么的，进 Card、对端的面板里读得到；留空用内置那句。Card 是启动时发布的自述，所以要重启"},
+	{Key: "node.workspace", Category: catAdvanced, Mode: applyRestart,
+		Note: "远程任务的工作目录（默认 ~/workspace，~ 会展开、首次用到时才建）；留空这个节点起不来"},
+	{Key: "node.question_timeout", Category: catAdvanced, Mode: applyRestart,
+		Note: "一个远程提问等多久才判失败：到点这一轮判 FAILED、问题留在状态里；0 表示不限时。时限在建 runner 时定下"},
+	{Key: "node.max_parked", Category: catAdvanced, Mode: applyRestart,
+		Note: "同时挂住几个提问（每个都占一条会话和一轮 turn）；到上限是「这次问不出去」，不是拒绝新活儿"},
+	{Key: "node.discovery.mdns.enabled", Category: catAdvanced, Mode: applyRestart,
+		Note: "本机去找别人（浏览），与 advertise 是各自独立的开关；第一次要用发送侧时才起浏览器"},
+	{Key: "node.discovery.mdns.advertise", Category: catAdvanced, Mode: applyRestart,
+		Note: "把本机公告到网络上：只有承载节点服务的进程会做；开了别人就能发现它，不用在你这边写配置行"},
+	{Key: "node.discovery.mdns.interfaces", Category: catAdvanced, Mode: applyRestart,
+		Note: "在哪些网卡上浏览/公告，如 en0、eth0；留空＝自动挑能用的那几个（排除 loopback、VPN 隧道、虚拟机网桥、只有 link-local 地址的网卡）"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},

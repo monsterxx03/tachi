@@ -596,6 +596,45 @@ func TestTheLikelyEditsStayHot(t *testing.T) {
 	}
 }
 
+// TestANoteIsSharedOnlyWithinOneBlock pins where a note may be REPEATED.
+//
+// A note is what a reader sees under a field, so the same sentence under two fields of the same
+// block is that block saying one thing about all of them ("review 的每个键都是命令时现读") — but
+// the same sentence under fields of DIFFERENT blocks means one field's explanation is being printed
+// on another field's row. The node block was exactly that: one paragraph about eleven keys (and it
+// had outlived `node.tools`, which it still described) sat under every one of them.
+func TestANoteIsSharedOnlyWithinOneBlock(t *testing.T) {
+	cfg := config.DefaultConfig()
+	// note → the parent paths it is shown under (the block a field belongs to).
+	parents := map[string]map[string][]string{}
+	for _, key := range config.PathsFor(cfg) {
+		row, ok := settingFor(key)
+		if !ok || !row.offered() || row.Note == "" {
+			continue
+		}
+		parent := ""
+		if i := strings.LastIndex(key, "."); i >= 0 {
+			parent = key[:i]
+		}
+		if parents[row.Note] == nil {
+			parents[row.Note] = map[string][]string{}
+		}
+		parents[row.Note][parent] = append(parents[row.Note][parent], key)
+	}
+	for note, byParent := range parents {
+		if len(byParent) < 2 {
+			continue
+		}
+		var where []string
+		for parent, keys := range byParent {
+			where = append(where, fmt.Sprintf("%s: %s", parent, strings.Join(keys, " ")))
+		}
+		slices.Sort(where)
+		t.Errorf("one note is shown under fields of %d different blocks — write it per field:\n"+
+			"    note: %s\n    %s", len(byParent), note, strings.Join(where, "\n    "))
+	}
+}
+
 // TestTheRestartOnlyKeysSayWhy is the other half: the keys that genuinely cannot be hot declare
 // it WITH a reason, because a page that offers a switch nothing reads (or promises a restart the
 // code cannot honour) is worse than one that admits the limit.
