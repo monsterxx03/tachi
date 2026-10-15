@@ -118,6 +118,27 @@
   smoke.check('每行都写着上次更新的时间（顺序才不是凭空的）',
     times.length === 3 && times.every((t) => t.length > 0), times.join(' | '))
 
+  // 输入框下面没有分隔线：框和列表是同一块面（框只是坐在这块面的最上面），一条细线会把浮层切成两半。
+  // 这条只有 computed style 看得见 —— 它不影响任何文本或几何，所以没有这条检查的话，谁把它加回来
+  // 都不会有东西响。
+  const inputBorder = getComputedStyle(smoke.q('.palette-input')).borderBottomStyle
+  smoke.check('搜索框下面没有分隔线（框和列表是同一块面）', inputBorder === 'none', inputBorder)
+
+  // 高亮是**两重信号**：实心块 + 提亮的标题（没有左侧强调竖条）。两重都要在，因为一条靠键盘走的
+  // 列表里，块本身只是一层淡填充 —— 在深色的面板上它与邻行的差别只有一点点，而「哪一行」是读者
+  // 唯一要在这张列表上读出来的东西。这是「绝不只靠颜色（一层填充）」那条规则的机器可读形式：两条
+  // 都按**相对**比较（选中 vs 邻行），所以它不锁住任何具体色值，换主题、调色都照过。
+  const rowsEls = smoke.qa('.palette-row')
+  const selEl = rowsEls.find((r) => r.classList.contains('is-sel'))
+  const plainEl = rowsEls.find((r) => !r.classList.contains('is-sel'))
+  const bgOf = (el) => (el ? getComputedStyle(el).backgroundColor : '(没有这一行)')
+  const inkOf = (el) => (el ? getComputedStyle(el.querySelector('.palette-name')).color : '(没有这一行)')
+  smoke.check('选中的行是一个实心块：填充与邻行不同，且不是透明的',
+    !!selEl && !!plainEl && bgOf(selEl) !== 'rgba(0, 0, 0, 0)' && bgOf(selEl) !== bgOf(plainEl),
+    bgOf(selEl) + ' vs ' + bgOf(plainEl))
+  smoke.check('…而它的标题同时被提亮（两重信号，不是「换一层底色」而已）',
+    !!selEl && !!plainEl && inkOf(selEl) !== inkOf(plainEl), inkOf(selEl) + ' vs ' + inkOf(plainEl))
+
   // ── 2. 过滤的是**标题**；项目名不是标题 ────────────────────────────────────
   smoke.type('.palette-input', '冒烟')
   const hit = await smoke.waitFor(() => (rowCount() === 1 ? true : null), '按标题过滤到一个会话', 4000)

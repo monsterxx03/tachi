@@ -471,10 +471,12 @@
   overflow: hidden;
   animation: panel-in 0.2s var(--ease) both;
 }
+/* No rule under the field: the box's own top edge already says where the field is, and a hairline
+   there cuts the panel in two — the field and the list are one surface, the field simply sits at the
+   top of it. (The footer's line, which closes the list off from the key hints, stays.) */
 .palette-input {
   width: 100%;
   border: none;
-  border-bottom: 1px solid var(--border);
   background: transparent;
   color: var(--text);
   font-size: 14px;
@@ -489,16 +491,25 @@
   align-items: center;
   gap: 14px;
   padding: 8px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
 }
-/* The selected row is marked by a bar AND a wash — never by colour alone. The bar
-   is an inset shadow so selecting a row cannot change its height (this list is
-   scrolled by keyboard, and a row that grew by a border would move the whole
-   list under the reader's eyes). */
-.palette-row.is-sel { background: var(--veil); box-shadow: inset 2px 0 0 var(--accent); }
+/* The selected row is a solid, rounded BLOCK: the fill itself is the mark, and the row's own title
+   is lifted a step at the same time (`.is-sel .palette-name` below) — a wash plus ink, never colour
+   alone, and no leading accent bar. The accent belongs to the state a reader ACTS on (「当前会话」,
+   the sidebar's own rails); which row the keyboard is on is navigation, and the two must not read as
+   the same fact. The fill is a plain plane, never a border: this list is scrolled by keyboard, and a
+   row that grew by a pixel would move the whole list under the reader's eyes. (The row's radius is a
+   step rounder than the other lists' rows — a filled 8px block at this height reads as a rectangle;
+   nothing about the row's box, and so nothing about a row's height, depends on it.) */
+.palette-row.is-sel { background: var(--hover-2); }
 .palette-main { min-width: 0; flex: 1 1 auto; }
-.palette-name { font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Unselected titles sit one step down and the selected one is lifted — the difference between 「this
+   one」 and 「the rest」 is the whole job of a block that has no rail to point with. Read at 13.5px
+   against --panel-solid, --text-dim still clears 4.5:1 in both themes (the light theme by a wide
+   margin), so nothing here is being traded for the effect. */
+.palette-name { font-size: 13.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-row.is-sel .palette-name { color: var(--text); }
 /* The row's second line. Its HEIGHT is fixed here rather than by its content: the two palettes put
    different things in it (⌘P a path, ⌘K a tag — a box taller than the plain word next to it), and a
    line sized by its content would make one row taller than its neighbours — in a list walked and
