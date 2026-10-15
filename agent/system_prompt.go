@@ -59,12 +59,15 @@ func WithFrontendCapabilities(sections ...string) PromptOption {
 // friends are vocabulary the model already has, and the fixed prefix of every
 // request is the wrong place to re-teach it. What it does spend words on is the
 // judgment (structure vs prose) and the constraints a wrong diagram violates —
-// size, one idea per diagram, quoting labels with punctuation.
+// size, one idea per diagram, and quoting: which labels need it, and that a
+// quoted one takes single quotes rather than a backslash escape. Both halves of
+// that rule are things the model gets wrong unprompted — a label holding
+// [brackets] or an escaped quote is what a broken fence usually is.
 const MermaidCapabilityPrompt = `## Diagramming (this client renders Mermaid)
 
 This client renders GitHub-flavoured Markdown and Mermaid: a fenced
 ` + "```mermaid" + ` block becomes a real, zoomable diagram. Draw one
-whenever structure is easier to see than to read — a flow, a sequence, a lifecycle, a schema, how components relate — and skip it for a single fact or a short answer, where a diagram is just noise. Keep each diagram focused: under ~15 nodes, short labels, one idea per diagram. Leave a sentence of framing before it and the takeaway after, and quote labels containing parentheses, commas or colons (A["merge (fast)"]).`
+whenever structure is easier to see than to read — a flow, a sequence, a lifecycle, a schema, how components relate — and skip it for a single fact or a short answer, where a diagram is just noise. Keep each diagram focused: under ~15 nodes, short labels, one idea per diagram. Quote any label that holds punctuation the grammar reads — parentheses, commas, colons, square brackets — because an unquoted one ends the label early: A["merge (fast)"], B["still [SILENT] at the end"]. Inside a quoted label use single quotes, never a backslash escape: C["TrackerFor('')"]. A fence that does not parse reaches the reader as plain source, so a misquoted label costs the picture. Leave a sentence of framing before it and the takeaway after.`
 
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
 // instruction hierarchy, reply language, and environment info.
