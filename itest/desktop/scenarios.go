@@ -2046,10 +2046,13 @@ func scenarios() []scenario {
 			},
 		},
 		//
-		// ⌘F in a previewed FILE — the third surface that hosts find, next to the diff and the
-		// report. The file repeats one line so the driver can name the count, and it arrives as an
-		// attachment because that is how a file gets a card, and the card is what has the ⤢ that
-		// opens the document viewer.
+		// ⌘F in a file the reader is looking at. The diff and the report are the other two
+		// surfaces that host find (oneoff-footer / oneoff-report); this scenario covers the two
+		// that show a FILE: the document viewer over an attachment card (how a file gets a card,
+		// and the card is what has the ⤢), and then the SAME file in the content column's file
+		// view — two hosts with the conversation still mounted underneath, which is the state the
+		// ownership rule can get wrong. The file repeats one line so the driver can name the
+		// count. The Go half is the usual two-call script.
 		{
 			name: "file-find",
 			files: map[string]string{

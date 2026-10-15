@@ -771,9 +771,11 @@ function App() {
   const [view, setView] = useState<'chat' | 'settings' | 'file'>('chat')
   // ⌘F over the conversation. It is the LOWEST host in find.tsx's stack (the chat mounts first), so
   // any overlay or panel on top keeps the key for itself — the rule that lets a preview, a review's
-  // pane or the file view search its own text. No root while either other view is up: they COVER the
-  // chat, and a bar opening behind one would be a search nobody can see.
-  const chatFind = useFind(view === 'chat' ? chatRef : null, CHAT_FIND_SCOPE)
+  // pane or the file view search its own text. While either other view is up the chat is not the
+  // surface — it is COVERED, and a bar opening behind one would be a search nobody can see — but it
+  // says so with `active`, never by handing over no root: the host has to keep its place in the
+  // stack, because re-registering is what puts it above the view that covers it (find.tsx).
+  const chatFind = useFind(chatRef, CHAT_FIND_SCOPE, view === 'chat')
   // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
   // active theme to Go, which owns the window colour outside the webview.
   const [theme, toggleTheme] = useTheme()

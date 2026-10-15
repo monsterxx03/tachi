@@ -1,14 +1,22 @@
-// file-find — ⌘F inside a previewed FILE, the third surface that hosts find.
+// file-find — ⌘F inside a file the reader is looking at: the surfaces that host find are surveyed
+// by oneoff-footer / oneoff-report (a diff, a review's report), and this scenario covers the two
+// that show a FILE — the document viewer over an attachment card, and the content column's file
+// view behind it.
 //
-// The other two (a diff, a review's report) are pinned by oneoff-footer and oneoff-report; this
-// one needs a file CARD to get to: the card's 预览 unfolds the inline preview and its ⤢ opens the
-// document viewer, which is the surface that owns the find bar. The file repeats one line, so the
-// count is a number this driver can name — and the walk has somewhere to walk to.
+// The first half needs a file CARD to get to: the card's 预览 unfolds the inline preview and its
+// ⤢ opens the document viewer, which is the surface that owns the find bar. The file repeats one
+// line, so the count is a number this driver can name — and the walk has somewhere to walk to.
+//
+// The second half opens the SAME file in the file view (⌘E for the tree, then its row). That is a
+// second host with the conversation still mounted under it, which is the state the ownership rule
+// can get wrong — a host that wins the key without owning the text opens a bar the reader cannot
+// see, and the only symptom is a shortcut that does nothing.
 //
 // What is pinned, in order: ⌘F opens the bar and focuses the field; typing counts what is really
 // there; the hits are PAINTED (the CSS Custom Highlight registry, not just a counter); Enter walks
 // them; and Esc closes the BAR without closing the viewer behind it — the ownership rule that the
-// whole find surface is built on.
+// whole find surface is built on. Then the same file in the file view, where the bar must be that
+// view's and Esc must walk back out through bar → view → conversation.
 ;(async () => {
   const LINE = '一行笔记，用来被查找。'
   const HITS = 12
@@ -119,6 +127,45 @@
   esc()
   const closed = await smoke.waitFor(() => !smoke.q('.viewer-overlay'), '第二次 Esc 关掉浮层', 3000)
   smoke.check('第二次 Esc 关掉预览浮层', !!closed, '')
+
+  // ── The same file in the content column: a second surface, a second host ────
+  // The tree opens it in the file view, which is a top-level view — the conversation stays MOUNTED
+  // under it (only covered), so at that moment TWO hosts are registered and exactly one of them may
+  // own ⌘F. The text on screen is the file's, so it has to be the file view's. That is what makes
+  // this half worth pinning separately from the viewer above: the ownership is decided by the order
+  // the hosts registered in, and nothing on screen shows which one won — a host that took the key
+  // without owning the text opens its bar somewhere the reader cannot see, so the only visible
+  // symptom is a shortcut that does nothing.
+  smoke.key(document.body, 'e', { metaKey: true })
+  if (!(await smoke.waitFor('.filetree-panel', '文件树面板打开（⌘E）', 8000))) return smoke.finish()
+  // By NAME, never by position: the tree's order is a sorting rule's answer.
+  const row = await smoke.waitFor(
+    () => smoke.qa('.filetree-row').find((r) => smoke.text(r.querySelector('.filetree-name')) === 'LONG.md') || null,
+    '树里有 LONG.md 这一行', 8000)
+  if (!row) return smoke.finish()
+  row.click()
+  if (!(await smoke.waitFor('.file-view', '文件在内容列打开（文件视图）', 8000))) return smoke.finish()
+
+  cmdF()
+  const viewBar = await smoke.waitFor('.file-view .find-bar', '⌘F 在文件视图里打开它自己的查找条', 5000)
+  smoke.check('⌘F 在文件视图里打开查找条', !!viewBar, '')
+  smoke.check('开的是文件视图自己的条，不是被它盖住的会话那条',
+    !!viewBar && !smoke.q('.find-bar.is-chat'), smoke.allText('.find-bar').join(' | '))
+  smoke.type('.find-bar .find-input', LINE)
+  const countedInView = await smoke.waitFor(
+    () => (smoke.text('.find-count') === '1/' + HITS ? smoke.text('.find-count') : null),
+    '文件视图里的查找条也数出 ' + HITS + ' 处', 8000)
+  smoke.check('文件视图里搜的是文件自己的正文（' + HITS + ' 处）', !!countedInView, smoke.text('.find-count'))
+  smoke.check('命中同样被画出来（高亮注册表 ' + HITS + ' 段）', hits() === HITS, String(hits()))
+
+  // Esc belongs to the bar first, the view second — the same two-step as the viewer above.
+  esc()
+  const barGone = await smoke.waitFor(() => !smoke.q('.find-bar'), 'Esc 关掉查找条', 3000)
+  smoke.check('Esc 关掉查找条', !!barGone, '')
+  smoke.check('Esc 只关了条，文件视图还在', !!smoke.q('.file-view'), '')
+  esc()
+  const viewGone = await smoke.waitFor(() => !smoke.q('.file-view'), '第二次 Esc 回到会话', 3000)
+  smoke.check('第二次 Esc 回会话（视图自带两条出路）', !!viewGone, '')
 
   smoke.finish()
 })()

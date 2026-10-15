@@ -18,6 +18,14 @@
 // added FIRST runs first. So the owner is installed once, at module load, before any component's
 // effect; a key it consumes is stopped with stopImmediatePropagation, which is what lets Esc
 // close the bar instead of the overlay behind it.
+//
+// WHICH host owns the key is the order they registered in — mounting IS stacking here — so a
+// registered host may not re-register to say "I am the surface now": a PARENT's effect runs after
+// its children's, so a host that came back to claim the key a second time lands ON TOP of a view
+// that mounts over it. That is exactly how the chat's host used to take ⌘F away from the file
+// view the reader had just opened — the chat reported "covered" by passing no ref, which changed
+// its identity and re-registered it. A surface that comes and goes without unmounting says so
+// with `active` instead, which is read when the key arrives (see useFind).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
@@ -119,7 +127,7 @@ export type Find = {
   close: () => void
 }
 
-export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: string): Find {
+export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: string, active = true): Find {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [ranges, setRanges] = useState<Range[]>([])
@@ -130,12 +138,20 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: s
   // re-created (and re-registered) on every keystroke.
   const rangesRef = useRef<Range[]>([])
   rangesRef.current = ranges
+  // `active` is a host saying "I am the surface on screen RIGHT NOW" — a fact that changes
+  // without the host mounting or unmounting (the chat is covered by the file view or the settings
+  // page and stays mounted the whole time). It is read from a ref, so it never reaches the
+  // registration effect below: re-registering would move this host to the TOP of the stack, and a
+  // parent's host would then sit above a view that mounts over it. Refs also keep the value
+  // current for the module-level key handler, which outlives every render.
+  const activeRef = useRef(active)
+  activeRef.current = active
 
   // The query changed (or the bar opened): collect, start at the first hit, and show it. A
   // reader who types expects to be taken to what they typed.
   useEffect(() => {
     const root = rootRef?.current
-    if (!root || !open || !query) {
+    if (!root || !active || !open || !query) {
       setRanges([])
       setIndex(0)
       return
@@ -144,7 +160,7 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: s
     setRanges(next)
     setIndex(0)
     if (next.length) window.requestAnimationFrame(() => scrollRangeIntoView(next[0]))
-  }, [rootRef, open, query, scope])
+  }, [rootRef, active, open, query, scope])
 
   // The CONTENT changed under a query that is already typed (a re-render, a report landing, a
   // diff arriving): collect again and keep the reader's place. Debounced by a short timer rather
@@ -154,7 +170,7 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: s
   // than a count that lags a moment.
   useEffect(() => {
     const root = rootRef?.current
-    if (!root || !open || !query) return
+    if (!root || !active || !open || !query) return
     let timer = 0
     const collect = () => {
       const next = findRanges(root, query, scope)
@@ -170,7 +186,7 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: s
       window.clearTimeout(timer)
       observer.disconnect()
     }
-  }, [rootRef, open, query, scope])
+  }, [rootRef, active, open, query, scope])
 
   // Paint the hits. The current one is a second highlight: the registry paints in registration
   // order, so the later name wins wherever the ranges overlap.
@@ -222,16 +238,18 @@ export function useFind(rootRef: RefObject<HTMLElement | null> | null, scope?: s
   // The module-level owner's view of this host. Refs + a stable identity: that owner outlives
   // every render and must always see the current bar. A host with no searchable root (an image
   // or PDF viewer) still OWNS the key — it is the surface on top, and letting ⌘F through would
-  // open the bar of the panel dimmed behind it — it just has nothing to do with it.
+  // open the bar of the panel dimmed behind it — it just has nothing to do with it. The same goes
+  // for a host that is not `active` right now: it keeps the key from falling to what is behind it,
+  // and it acts on neither key.
   const handle = useMemo<FindHandle>(() => ({
-    claimed: () => !!barRef.current,
+    claimed: () => activeRef.current && !!barRef.current,
     close,
     // Always through openBar: it shows the bar (a no-op when it is already up) and focuses the
     // field with its text selected, which is what pressing ⌘F twice does natively. Branching on
     // "the field already exists" is the trap here — a bar that is MOUNTED but closed would look
     // open to this handle, and the state behind it would never start collecting.
     call: () => {
-      if (!rootRef) return
+      if (!rootRef || !activeRef.current) return
       openBar()
     },
   }), [close, openBar, rootRef])
