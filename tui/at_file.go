@@ -121,7 +121,7 @@ func (m *Model) sender() *node.Sender {
 		return nil
 	}
 	if m.delegators == nil {
-		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, node.DiscoveryOf(m.cfg), m.agent.Logger())
+		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, node.DiscoveryOf(m.cfg), m.agent.Logger(), nil)
 	}
 	return m.delegators.ForSender(context.Background(), m.cfg.Peers)
 }

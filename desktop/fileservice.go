@@ -127,6 +127,10 @@ func (d *desktopApp) warmPeers() {
 
 // peerList is the app's ONE node list, shared by the '#' picker and the node board: one probe, one
 // rate limit, one set of answers, so the two cannot disagree about what is up.
+//
+// It is also what tells the frontend that the reading moved (peerboard.go's notifyPeersChanged): the
+// board and the count on its trigger are snapshots nobody re-reads by themselves, and a probe's
+// answers land long after whoever asked for them was answered.
 func (d *desktopApp) peerList() *node.PeerList {
 	d.peersMu.Lock()
 	defer d.peersMu.Unlock()
@@ -147,6 +151,10 @@ func (d *desktopApp) peerList() *node.PeerList {
 			},
 			logger.New("desktop"),
 		)
+		// Told, never polled: whoever draws this reading hears that it moved (see the event in
+		// peerboard.go). Wired here, under the same lock that built the list, so no caller can hold
+		// it before the listener is in place.
+		d.peers.SetOnChange(d.notifyPeersChanged)
 	}
 	return d.peers
 }

@@ -21,6 +21,47 @@ import (
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
+// peersChangedEvent is what the frontend listens for: the node reading moved, so everything drawn
+// from it — the panel and the count on its trigger — is out of date. The event carries NOTHING, and
+// that is deliberate: a payload would be a second copy of a row, read at a slightly different moment
+// than the board itself (PeerBoard), and the two would disagree for no reason.
+const peersChangedEvent = "agent:peers_changed"
+
+// notifyPeersChanged says that the reading moved.
+//
+// It exists because the two views of this reading are snapshots nobody re-reads by themselves: the
+// panel reads once when it opens and knows no other moment, and the count on its trigger reads with
+// it. So without this, a machine discovery had just found showed up only after the panel was reopened
+// — and the probe the open kicked off (whose answers are what turn 检查中 into a verdict) landed with
+// nobody listening, leaving the row on 检查中… until 刷新 was pressed.
+//
+// What decides "moved" is the reading itself, never a clock: node.PeerList calls this only for a
+// round of answers that differs from the last one, and the discovery browser only for a machine that
+// entered the directory (or told this one it lives somewhere new). A repeating announcement, or a
+// probe that says what the last one said, is silence — otherwise every re-read would ask for another
+// probe and the pair would tick for ever.
+func (d *desktopApp) notifyPeersChanged() {
+	if d.app == nil {
+		return
+	}
+	d.app.Event.Emit(peersChangedEvent, map[string]any{})
+}
+
+// peerDiscovered is what the discovery browser says when a machine it had not listed enters the
+// directory — see node.DelegatorCache's onSighting.
+//
+// Two things follow, and both are about a reader who is already looking somewhere: the views are
+// re-read (the row appears, as 检查中… — nothing has asked it anything yet), and the new machine is
+// asked who it is, so that its verdict follows a moment later instead of waiting for a manual 刷新.
+// The probe is the same rate-limited one the picker uses, so a chatty network cannot turn
+// announcements into a request per announcement.
+func (d *desktopApp) peerDiscovered() {
+	d.notifyPeersChanged()
+	if list := d.peerList(); list != nil {
+		list.Probe()
+	}
+}
+
 // PeerBoardVO is the whole panel: this machine's nodes, and when they were last looked at.
 type PeerBoardVO struct {
 	Peers []PeerBoardRowVO `json:"peers"`

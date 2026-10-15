@@ -66,7 +66,8 @@
   smoke.check('身份未记录（本机还没跟它连过）', row.indexOf('身份未记录') >= 0, row)
   // 打开面板只读一次，而**入口启动时已经问过一遍**（desktop/main.go 的 warmPeers → 同一个
   // PeerList），所以刚打开时两行都带着结论：一个「联系不上」（那个端口上没人听，立刻被拒），一个
-  // 「可用」。面板自己不轮询，让它变新的是那个按钮，下面就按它。
+  // 「可用」。面板自己不轮询：让它变新的是那个按钮，或者后端推来的 `agent:peers_changed`（读数变了
+  // 才有——这个场景里两个 peer 早就在目录里了，所以那次推送随后就安静了）。下面是按钮那条路。
   const settled = (peer) => {
     const t = rowText(peer)
     return t.indexOf('检查中') < 0 && (t.indexOf('联系不上') >= 0 || t.indexOf('可用') >= 0)

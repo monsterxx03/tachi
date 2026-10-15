@@ -508,3 +508,19 @@ export function useMCPReady(onReady: () => void): void {
     return () => off?.()
   }, [])
 }
+
+// ── the node reading moved ─────────────────────────────────────────────────
+// The node board and the count on its trigger are snapshots nobody re-reads by themselves: the
+// panel reads once when it opens, and the probe that read kicks off answers LATER — so a node
+// discovery had just found would sit on 检查中… until 刷新 was pressed, and the count would not move
+// at all. The backend says when the reading changed (a machine entered the directory, or a round of
+// answers came back different), and this is what re-reads; it is deliberately not a payload, so the
+// event and the read can never disagree about a row.
+export function usePeersChanged(onChanged: () => void): void {
+  const ref = useRef(onChanged)
+  ref.current = onChanged
+  useEffect(() => {
+    const off = Events.On('agent:peers_changed', () => ref.current())
+    return () => off?.()
+  }, [])
+}

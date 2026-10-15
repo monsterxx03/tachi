@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"time"
 
@@ -38,12 +39,21 @@ type PeerList struct {
 	// only its own thread may touch. force is the board's refresh travelling down.
 	probe func(ctx context.Context, force bool) []PeerReport
 	log   *logger.Logger
+	// onChange is called when a round of answers CHANGES the reading, and never otherwise (store).
+	// It exists for the views drawn from this list that nobody re-reads by themselves: the node board
+	// and the count beside its trigger. Optional — an entry point whose only reader is a picker (which
+	// asks again on every keystroke anyway) leaves it nil.
+	onChange func()
 
 	mu sync.Mutex
 	// probed is the last thing the network said about each alias, keyed by alias. Entries for
 	// peers that have since been removed from the configuration stay until the next probe
 	// replaces the map — the snapshot only ever reads aliases it is currently listing.
 	probed map[string]probed
+	// asked is the row set the last round went out ABOUT, in the same key space. It is what tells a
+	// machine that has just appeared (probeAsync's interval yields to it) from a round whose answers
+	// were lost (which asked, and must not become a reason to ask again on every keystroke).
+	asked map[string]bool
 	// lastProbe bounds how often Probe actually goes out: a keystroke per probe would put an
 	// HTTP request behind the picker for as long as the reader keeps typing.
 	lastProbe time.Time
@@ -80,6 +90,23 @@ func NewPeerList(rows func() []agentref.Peer, probe func(ctx context.Context, fo
 		log = logger.New("node")
 	}
 	return &PeerList{rows: rows, probe: probe, log: log}
+}
+
+// SetOnChange registers the listener told whenever a round of answers changes the reading (store).
+//
+// It is what a view drawn from this list needs and cannot get by itself: a probe's answers land long
+// after the caller that asked for the probe was answered, so there is no moment a reader could poll
+// for. A picker has no use for it (it asks again on the next keystroke); the node board and the count
+// on its trigger do.
+//
+// The builder wires this before it hands the list out, and that ordering is the whole contract — the
+// desktop's one construction site does it under the same lock that creates the list, so no caller can
+// hold it before this is set.
+func (l *PeerList) SetOnChange(fn func()) {
+	if l == nil {
+		return
+	}
+	l.onChange = fn
 }
 
 // directoryRows reads the provider, tolerating a list that is not there at all (an entry point that
@@ -225,28 +252,46 @@ func (l *PeerList) Refresh(ctx context.Context) {
 	l.probing = true
 	l.mu.Unlock()
 
+	// changed is read by the defer below, which is where the telling happens: a listener that reacts by
+	// asking for another round must not be told one is running by the round that just ended — which is
+	// exactly what l.probing still says until that defer has run.
+	var changed bool
 	defer func() {
 		l.mu.Lock()
 		l.refreshing = nil
 		l.probing = false
 		l.mu.Unlock()
 		close(inflight) // after the state is settled: a waiter must see the new answers
+		l.notifyChanged(changed)
 	}()
 
-	l.store(l.probe(ctx, true))
+	changed = l.store(l.probe(ctx, true))
 }
 
 func (l *PeerList) probeAsync(force bool) {
-	if l == nil || l.probe == nil || len(l.directoryRows()) == 0 {
+	rows := l.directoryRows()
+	if l == nil || l.probe == nil || len(rows) == 0 {
 		return
 	}
 
 	l.mu.Lock()
-	if l.probing || (!force && time.Since(l.lastProbe) < probeInterval) {
+	// keys is this directory as a set, and it is compared with the set the last round went out about:
+	// a node the last round did NOT ask about is a machine that has just appeared, and it is why the
+	// interval yields. The interval exists to stop REPEATING a round (a keystroke must not become a
+	// request), and asking a brand-new node is not a repeat — without this, a machine discovery had
+	// just found would sit on 检查中… until the reader happened to do something else, and the read that
+	// follows a sighting is exactly this call.
+	//
+	// What the comparison is NOT about is whether the answers came back: a round whose answers were
+	// lost (a cancelled context) still asked, and treating those nodes as unasked would let a burst of
+	// keystrokes bypass the interval for as long as the failures lasted.
+	keys := rowKeys(rows)
+	if l.probing || (!force && time.Since(l.lastProbe) < probeInterval && !hasNewKey(l.asked, keys)) {
 		l.mu.Unlock()
 		return
 	}
 	l.probing = true
+	l.asked = keys
 	l.mu.Unlock()
 
 	go func() {
@@ -255,19 +300,21 @@ func (l *PeerList) probeAsync(force bool) {
 		// Called with NO lock held: the probe reaches into the entry point's sender, which does its
 		// own locking, and the rule this codebase follows is one lock at a time.
 		reports := l.probe(ctx, force)
-		l.store(reports)
+		changed := l.store(reports)
 		l.log.Debug(context.Background(), "peer list: probed the configured nodes",
 			"peers", len(reports), "reachable", countReachable(reports), "forced", force)
+		l.notifyChanged(changed)
 	}()
 }
 
-// store records one round of answers and clears the in-flight marker.
+// store records one round of answers, clears the in-flight marker, and answers whether the reading
+// actually changed — which is what decides whether anyone gets told about it (notifyChanged).
 //
 // A peer that answered with nothing at all is NOT recorded as unreachable here: the sender promises
 // an entry per configured peer, and a missing one means the probe did not get to it (a cancelled
 // context, a peer removed mid-flight) — which is "not looked at yet", not "down". Leaving the alias
 // out of the map is exactly that answer.
-func (l *PeerList) store(reports []PeerReport) {
+func (l *PeerList) store(reports []PeerReport) bool {
 	now := time.Now()
 	next := make(map[string]probed, len(reports))
 	for _, r := range reports {
@@ -275,10 +322,64 @@ func (l *PeerList) store(reports []PeerReport) {
 	}
 
 	l.mu.Lock()
+	changed := !sameAnswers(l.probed, next)
 	l.probed = next
 	l.probing = false
 	l.lastProbe = now
 	l.mu.Unlock()
+	return changed
+}
+
+// sameAnswers reports whether two rounds of answers say the same thing about the same nodes.
+//
+// What counts is what a reader SEES: which nodes were answered about, and what each answer said (a
+// card, a reason, or nothing at all). WHEN an answer was taken does not, and that is the point of
+// comparing at all: a round that repeats the last one is not news, and calling it news would turn
+// "tell me when the reading changes" into a heartbeat — a re-read per probe, for ever, because the
+// read itself asks for the next probe.
+func sameAnswers(have, next map[string]probed) bool {
+	if len(have) != len(next) {
+		return false
+	}
+	for key, p := range next {
+		prev, ok := have[key]
+		if !ok || !reflect.DeepEqual(prev.report, p.report) {
+			return false
+		}
+	}
+	return true
+}
+
+// notifyChanged tells whoever asked to hear that the reading moved. Called with NO lock held: the
+// listener is another layer — an entry point emitting to a frontend, which reads again.
+func (l *PeerList) notifyChanged(changed bool) {
+	if changed && l.onChange != nil {
+		l.onChange()
+	}
+}
+
+// hasNewKey reports whether the directory holds a node the given round did not ask about — a machine
+// that has appeared since.
+//
+// Read with the list's lock held, like every other read of asked, and it is what probeAsync's interval
+// yields to.
+func hasNewKey(asked, keys map[string]bool) bool {
+	for key := range keys {
+		if !asked[key] {
+			return true
+		}
+	}
+	return false
+}
+
+// rowKeys is the directory's keys as a set: the rows a round is about, which is what "a machine
+// appeared" is asked of. It says nothing about the answers — see probeAsync.
+func rowKeys(rows []agentref.Peer) map[string]bool {
+	out := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		out[row.Key] = true
+	}
+	return out
 }
 
 // RefreshTimeout bounds one synchronous refresh (the board's button). The work itself is the same

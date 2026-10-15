@@ -216,7 +216,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// node it found (this entry runs with reminders switched off by construction), so a machine that
 	// appeared on the network would be one this run could not name — browsing for it would spend a
 	// socket and a goroutine per run to learn something it cannot use.
-	if delegator := node.NewDelegatorCache(cfg.Node.Name, node.Discovery{}, logger.New("run")).For(ctx, cfg.Peers); delegator != nil {
+	if delegator := node.NewDelegatorCache(cfg.Node.Name, node.Discovery{}, logger.New("run"), nil).For(ctx, cfg.Peers); delegator != nil {
 		runOpts = append(runOpts, agent.WithDelegation(delegator))
 	}
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg), llm.ChatOptions{

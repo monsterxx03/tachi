@@ -22,7 +22,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
-	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 
 	first := cache.For(t.Context(), peers)
 	require.NotNil(t, first)
@@ -42,7 +42,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 func TestNoPeersMeansNoDelegator(t *testing.T) {
 	// Empty is a state, not a broken one: with nothing to delegate to, the tools are absent
 	// rather than present and always failing.
-	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 	require.Nil(t, cache.For(t.Context(), nil))
 	require.Nil(t, cache.For(t.Context(), []config.PeerConfig{}))
 }
@@ -54,7 +54,7 @@ func TestDiscoveryAloneStillYieldsASender(t *testing.T) {
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil)
+	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil)
 	require.NotNil(t, cache.For(t.Context(), nil), "a machine with discovery on can still delegate")
 	cache.Close()
 }
@@ -66,7 +66,7 @@ func TestAFailedOpenIsNotCached(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	attempts := 0
-	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
 		attempts++
 		if attempts == 1 {
@@ -104,7 +104,7 @@ func TestWarmUpAsksEveryPeerWithoutWaitingForIt(t *testing.T) {
 		return nil, "", errors.New("nothing answered at that address")
 	}
 
-	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
 		return &Sender{peers: dir}, nil
 	}
@@ -138,7 +138,7 @@ func TestWarmUpOnAClosedCacheOpensNothing(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://nas.example:8443"}}
 	opens := 0
-	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 	opened := make(chan struct{}, 1)
 	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
 		opens++
@@ -165,7 +165,7 @@ func TestAClosedCacheHandsOutNothing(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	opens := 0
-	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil)
+	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil)
 	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
 		opens++
 		return OpenSender(p, "", nil, browser)

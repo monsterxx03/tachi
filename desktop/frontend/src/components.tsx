@@ -1435,7 +1435,7 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
         <button className="mcp-close" onClick={onClose}>✕</button>
       </div>
       <div className="mcp-body">
-        {peers.length === 0 && <div className="mcp-empty">没有配置可委派的节点（config.yaml 的 peers）</div>}
+        {peers.length === 0 && <div className="mcp-empty">还没有可委派的节点</div>}
         {peers.map((p) => {
           // Rows are keyed and remembered by identity, not by name: a name is what the node is
           // CALLED (two machines may call themselves the same thing), and it may change while the

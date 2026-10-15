@@ -46,8 +46,13 @@ type DelegatorCache struct {
 	// closed is set by Close and read under mu, and it is what makes Close terminal: a sender asked
 	// for after it must come back nil rather than start a second browser (the cache is not rebuilt by
 	// then — an entry point is on its way out, and a goroutine still winding down may still ask).
-	closed   bool
-	openFunc func(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error)
+	closed bool
+	// onSighting is called when the browser VERIFIES a machine the directory did not have, and it
+	// belongs to the entry point rather than to this cache: the cache holds the network, and the entry
+	// point is what holds the views somebody is looking at. Nil is the common case — three of the four
+	// entry points have no such view.
+	onSighting func()
+	openFunc   func(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error)
 }
 
 // DiscoveryOf is the discovery settings a config asks for, in the sending side's own terms: the one
@@ -72,8 +77,12 @@ type Discovery struct {
 
 // NewDelegatorCache returns a cache that builds senders with OpenSender, and — when discovery is on
 // — browses for nodes as those senders come and go.
-func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger) *DelegatorCache {
-	return &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, openFunc: OpenSender}
+//
+// onSighting, when it is not nil, is called (from the browser's own goroutine) every time discovery
+// verifies a machine the directory did not have: a row that has appeared, and the one moment a reader
+// who is already looking needs to be told (see mdnsBrowser.onSighting).
+func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger, onSighting func()) *DelegatorCache {
+	return &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, onSighting: onSighting, openFunc: OpenSender}
 }
 
 // Close stops discovery, and it is TERMINAL: nothing asked of this cache afterwards starts a browser
@@ -130,6 +139,9 @@ func (c *DelegatorCache) startBrowser(ctx context.Context) *mdnsBrowser {
 		c.discovery.Enabled = false
 		return nil
 	}
+	// The hook is handed over BEFORE the browser starts: a sighting is what it is about, and a loop
+	// that was already running could verify one with nowhere to say so.
+	browser.onSighting = c.onSighting
 	browser.Start(context.WithoutCancel(ctx))
 	c.browser = browser
 	return browser

@@ -38,7 +38,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
 
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, useUnseenSessions } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, usePeersChanged, useUnseenSessions } from './agentEvents'
 import { useComposer, Composer } from './composer'
 // CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
 // prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
@@ -1532,10 +1532,16 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     finally { setAgentsBusy(false) }
   }, [])
 
-  // Opening the panel reads once; it does not poll. What makes a reading current is the button.
+  // Opening the panel reads once; it does not poll. What makes a reading current is the backend
+  // saying it moved (below) or the button.
   useEffect(() => {
     if (agentsOpen) void loadAgents()
   }, [agentsOpen, loadAgents])
+  // The backend says when the node reading moved: a machine discovery just found, or a round of
+  // answers that came back different from the last. Both are moments the panel has no other way to
+  // hear about — the probe that opening the panel kicks off lands after the read that kicked it —
+  // and the count on the trigger is drawn from the same snapshot, so a closed panel follows too.
+  usePeersChanged(loadAgents)
   const { auth: mcpAuth, setAuth: setMCPAuth, clearAuth: clearMCPAuth } = useMCPAuth(refreshMCP)
   // ...and once more when the backend says its pool is settled: a panel that was already open
   // while the servers were still coming up would otherwise keep the empty snapshot it read.

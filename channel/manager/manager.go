@@ -250,7 +250,7 @@ func New(cfg *config.Config) (*Manager, error) {
 	}
 	return &Manager{
 		cfg:                     cfg,
-		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel")),
+		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil),
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
 		agents:                  newAgentPool(),

@@ -224,3 +224,92 @@ func TestDetailsAndSnapshotShareOneProbe(t *testing.T) {
 	assert.Equal(t, "ugreen-nas", snapshot[0].Name)
 	assert.NotEqual(t, "tachi@home-nas", snapshot[0].Name)
 }
+
+// The listener hears about a CHANGE, and only about a change: that is what lets the node board (and
+// the count on its trigger) follow a reading nobody re-reads by itself without turning into a
+// heartbeat — every re-read asks the entry point for the next probe, so a round that repeated the
+// last answers and still reported itself would tick for ever.
+func TestPeerListTellsItsListenerOnlyWhenTheAnswersChange(t *testing.T) {
+	reachable := true
+	answers := func() []PeerReport {
+		return []PeerReport{
+			{Key: ugreenID, Reachable: reachable, Card: &PeerCard{Name: "home-nas"}},
+			{Key: "@https://100.64.0.9:7080"},
+		}
+	}
+
+	told := make(chan string, 8)
+	list := NewPeerList(rows, func(context.Context, bool) []PeerReport { return answers() }, nil)
+	list.SetOnChange(func() { told <- "changed" })
+
+	// The first round is news: before it, nothing had been asked.
+	list.Probe()
+	<-told
+
+	// The second says exactly what the first one did, so there is nothing to tell.
+	list.ProbeNow()
+	select {
+	case <-told:
+		t.Fatal("a round that repeated the last answers reported itself as news")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// A peer that goes down IS news, and it arrives on the same listener.
+	reachable = false
+	list.ProbeNow()
+	select {
+	case <-told:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a peer that stopped answering is a change the listener has to hear")
+	}
+}
+
+// The button's round tells the listener too — and tells it once the round is over in every sense, so
+// a listener that reacts by reading (or asking for another round) is not answered with "one is
+// already running" by the round that just finished.
+func TestRefreshTellsTheListenerAfterItsAnswerLanded(t *testing.T) {
+	list := NewPeerList(rows, func(context.Context, bool) []PeerReport {
+		return []PeerReport{{Key: ugreenID, Reachable: true, Card: &PeerCard{Name: "home-nas"}}}
+	}, nil)
+	seen := make(chan struct{}, 1)
+	list.SetOnChange(func() {
+		// Read from inside the listener: what a frontend's re-read does. A Refresh still marked as
+		// running would send this round nowhere (PeerList.probeAsync refuses to stack).
+		require.True(t, list.Details()[0].Checked, "the listener must be told after the answers are stored")
+		seen <- struct{}{}
+	})
+
+	list.Refresh(context.Background())
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatal("the refresh's answers were a change nobody heard about")
+	}
+}
+
+// A machine that has just appeared is asked even when a round just happened — that is the whole
+// reason the interval yields — while a round of keystrokes still coalesces (the node above pins that
+// half, and this one pins the other).
+func TestProbeAsksAMachineThatJustAppearedEvenInsideTheInterval(t *testing.T) {
+	asked := make(chan int, 8)
+	directory := rows()
+	list := NewPeerList(func() []agentref.Peer { return directory }, func(context.Context, bool) []PeerReport {
+		asked <- 1
+		return nil
+	}, nil)
+
+	list.Probe()
+	select {
+	case <-asked:
+	case <-time.After(time.Second):
+		t.Fatal("the first probe never went out")
+	}
+	// Inside probeInterval, and now the directory holds a node the round did not ask about.
+	directory = append(rows(), agentref.Peer{Key: discoveredID, Name: "nas-b"})
+	list.Probe()
+	select {
+	case <-asked:
+	case <-time.After(time.Second):
+		t.Fatal("a machine that just appeared waited for the interval instead of being asked")
+	}
+}
