@@ -486,9 +486,12 @@ type MdnsDiscoveryConfig struct {
 	// machine on a network where its own name is noise may want the reverse.
 	Advertise bool `yaml:"advertise"`
 	// Interfaces names the network interfaces to browse (and, when Advertise is on, to announce on).
-	// Empty means every multicast-capable interface, which is what a machine on one network wants;
-	// naming them is for a machine on several, where broadcasting a name onto the wrong one is the
-	// thing to avoid.
+	// Empty means the ones that could actually carry a LAN multicast packet, which is a filter rather
+	// than "everything the OS calls multicast-capable" — a tunnel, a VM bridge, or a NIC with no
+	// usable address is left out, because the library sends on the interfaces it is given ONE AFTER
+	// ANOTHER and one that cannot take the packet stalls the whole round without a word
+	// (node/discovery.go lanInterfaces says what the filter is). Naming them is for a machine on
+	// several networks, where publishing a name onto the wrong one is the thing to avoid.
 	Interfaces []string `yaml:"interfaces,omitempty"`
 }
 

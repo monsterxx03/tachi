@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -112,9 +113,10 @@ type candidate struct {
 type mdnsBrowser struct {
 	// self is this machine's own node id, and the one announcement that is never a peer.
 	self string
-	// ifaces is which interfaces to browse on. Empty means every multicast-capable one, which is what
-	// a machine on one network wants; naming them is what a machine on several needs, because a name
-	// announced onto the wrong network is a name published to strangers.
+	// ifaces is which interfaces to browse on, already resolved (resolveInterfaces: the configured
+	// names, or the LAN set lanInterfaces picks when the operator named none). It is empty only in a
+	// test that drives the browser's decisions directly — newMDNSBrowser refuses to build over an
+	// empty set, because the library would read that as "every multicast-capable interface".
 	ifaces []net.Interface
 	log    *logger.Logger
 
@@ -140,14 +142,29 @@ type mdnsBrowser struct {
 	once   sync.Once
 }
 
-// newMDNSBrowser builds a browser over the given interfaces. Nothing starts until start is called.
+// newMDNSBrowser builds a browser over the interfaces the config names — or, when it names none, over
+// the ones lanInterfaces picks. Nothing starts until Start is called.
+//
+// It refuses to build over an empty set, and that is the one thing that must not be quietly ignored:
+// the library reads an empty list as "every multicast-capable interface", which is exactly the set
+// lanInterfaces exists to keep away from it.
 func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Logger) (*mdnsBrowser, error) {
-	if log == nil {
-		log = logger.New("node")
-	}
 	ifaces, err := resolveInterfaces(cfg.Interfaces)
 	if err != nil {
 		return nil, err
+	}
+	if len(ifaces) == 0 {
+		return nil, errNoLANInterface
+	}
+	return browserOver(ifaces, self, log), nil
+}
+
+// browserOver builds the browser over interfaces that are already resolved: what newMDNSBrowser does
+// once the answer is in hand, and what a test that drives the browser's decisions directly wants (no
+// network, and no opinion about the machine it runs on).
+func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsBrowser {
+	if log == nil {
+		log = logger.New("node")
 	}
 	return &mdnsBrowser{
 		self:    self,
@@ -157,7 +174,25 @@ func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Log
 		pending: make(map[string]candidate),
 		seen:    make(map[string]discoveredPeer),
 		done:    make(chan struct{}),
-	}, nil
+	}
+}
+
+// errNoLANInterface is the answer when this machine has no interface that could carry a multicast
+// packet to another machine. It is an error rather than an empty list because the library expands an
+// empty list BACK to "every multicast-capable interface" — the very set that cannot work here.
+var errNoLANInterface = errors.New("node: this machine has no interface on a local network (only " +
+	"loopback, tunnels, VM bridges, or addresses that are link-local); name one in " +
+	"node.discovery.mdns.interfaces")
+
+// nonLANInterfacePrefixes are the name prefixes of interfaces that are never the LAN this machine is
+// on: L2 bridges and the links virtual machines hang off. They are excluded BY NAME for one reason —
+// the operating system hands them to us as ordinary ethernet-shaped interfaces, with the same flags
+// and private addresses as a real NIC (macOS: the VM framework's `bridgeN`/`vmenetN`; Linux: the
+// container and VM bridges below), so there is no fact about them to test. The alternative is
+// lanInterfaces' own comment.
+var nonLANInterfacePrefixes = []string{
+	"bridge", "vmenet", "vmnet", // macOS VM networking
+	"docker", "br-", "virbr", "veth", "vmbr", "cni", "flannel", // Linux containers and VMs
 }
 
 // resolveInterfaces turns configured names into interfaces, refusing a name that is not a network
@@ -166,6 +201,9 @@ func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Log
 // Refusing rather than ignoring is the point: a name that does not resolve means the operator
 // believes discovery is running somewhere it is not, and a browser that silently fell back to every
 // interface would publish this machine's name onto a network the config says to keep it off.
+//
+// An EMPTY list is a different thing from a chosen one: nobody picked, so this function picks — and
+// what it picks is the subset that could carry a LAN packet (lanInterfaces), never "everything".
 func resolveInterfaces(names []string) ([]net.Interface, error) {
 	var out []net.Interface
 	for _, name := range names {
@@ -180,7 +218,97 @@ func resolveInterfaces(names []string) ([]net.Interface, error) {
 		}
 		out = append(out, *iface)
 	}
+	if len(out) == 0 {
+		return lanInterfaces()
+	}
 	return out, nil
+}
+
+// lanInterfaces is the set discovery uses when the operator named none: the interfaces that could
+// carry a multicast packet between two machines on a LAN.
+//
+// It is deliberately NOT "every multicast-capable interface", which is what the library picks for
+// itself from an empty list — and on a machine with VPN tunnels and virtual machines that set is a
+// trap, because the library sends on it ONE INTERFACE AFTER ANOTHER (zeroconf's per-interface
+// `WriteTo` loop). A single interface that cannot take the packet — a tunnel, a VM bridge, a NIC
+// that never got a lease — stalls that round for good: the announcement never goes out, the query is
+// never sent, and nothing anywhere says so. Three of the four rules are about the interface itself:
+//
+//   - up, multicast-capable, and not loopback. A down link carries nothing, an interface without the
+//     multicast flag cannot carry this at all, and loopback is this machine talking to itself (two
+//     Tachis on one machine coordinate through the node lock, not through mDNS);
+//   - not point-to-point: that is what a VPN tunnel is, and announcing on one publishes this
+//     machine's name onto somebody else's network;
+//   - it has an address a peer could actually be handed (hasLANAddress). An interface with nothing but
+//     link-local addresses — an IPv4 one that never got a lease, or an IPv6 one that means nothing
+//     without a zone — has nothing to put in an announcement.
+//
+// L2 bridges are the fourth case and the only one that needs a name (nonLANInterfacePrefixes): the OS
+// gives them no flag to test, and they are both unable to carry this and wrong to publish onto. Asking
+// each interface whether it can actually take a multicast packet — a fact rather than a name — would
+// catch anything these rules miss, and it costs a packet and a timeout on every machine, including the
+// ones where the default is already right. Worth revisiting the day a broken interface shows up that
+// these rules miss.
+func lanInterfaces() ([]net.Interface, error) {
+	all, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("node: cannot list this machine's interfaces: %w", err)
+	}
+	out := make([]net.Interface, 0, len(all))
+	for _, iface := range all {
+		if !lanShape(iface) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			// An interface whose addresses cannot be read is one nothing can be announced on.
+			continue
+		}
+		if !hasLANAddress(addrs) {
+			continue
+		}
+		out = append(out, iface)
+	}
+	if len(out) == 0 {
+		return nil, errNoLANInterface
+	}
+	return out, nil
+}
+
+// lanShape reports whether an interface has the shape of one that could carry a LAN multicast packet:
+// the flags, and the name kinds the OS does not give a flag for. See lanInterfaces.
+func lanShape(iface net.Interface) bool {
+	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 ||
+		iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagPointToPoint != 0 {
+		return false
+	}
+	for _, prefix := range nonLANInterfacePrefixes {
+		if strings.HasPrefix(iface.Name, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasLANAddress reports whether an interface carries at least one address a peer could actually be
+// handed. The test is the same pair the BROWSING side applies to an address it is given — is it on a
+// local network (netutil.IsReservedIP) and could it be dialled (isDialableIP) — read from the other
+// end, because an announcement only makes sense if the address in it is one the reader will accept.
+//
+// It is what keeps an interface with nothing but link-local addresses out of the default set: an IPv6
+// link-local address means nothing without a zone nothing can name, and an IPv4 one (169.254/16) is a
+// machine that never got a lease.
+func hasLANAddress(addrs []net.Addr) bool {
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if netutil.IsReservedIP(ipnet.IP) && isDialableIP(ipnet.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 // setVerifier is how the sending side teaches the browser to check a candidate. Called with the

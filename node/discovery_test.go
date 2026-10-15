@@ -18,11 +18,12 @@ const (
 	claimedID    = "eeee5555eeee5555eeee5555eeee5555"
 )
 
+// testBrowser is a browser with no interfaces and no socket at all: these tests drive its decisions
+// directly (observe/decide/Sightings), so what this machine's network looks like must not enter into
+// them — and newMDNSBrowser would refuse to build without a LAN interface, rightly (browserOver).
 func testBrowser(t *testing.T) *mdnsBrowser {
 	t.Helper()
-	b, err := newMDNSBrowser(nasID, config.MdnsDiscoveryConfig{}, nil)
-	require.NoError(t, err)
-	return b
+	return browserOver(nil, nasID, nil)
 }
 
 // txtAnnouncement is one announcement the way a well-behaved Tachi node sends it.
@@ -318,4 +319,96 @@ func TestTheDiscoveredHalfIsCapped(t *testing.T) {
 func fmtTwoDigits(i int) string {
 	const digits = "0123456789"
 	return string([]byte{digits[(i/10)%10], digits[i%10]})
+}
+
+// The default set: which interfaces discovery uses when the operator named none.
+//
+// What makes this worth a test rather than a line of code is what the library does with an empty
+// list — it expands it back to "every multicast-capable interface" and then sends on them ONE AFTER
+// ANOTHER, so one interface that cannot take the packet stalls the whole round in silence. So the
+// rules that keep an interface out are the feature, and each one is pinned here on its own.
+func TestLANShapeRefusesAnythingThatCannotCarryALANPacket(t *testing.T) {
+	live := net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning
+	cases := []struct {
+		name  string
+		iface net.Interface
+		want  bool
+	}{
+		{"a NIC on a live network", net.Interface{Name: "en0", Flags: live}, true},
+		{"a wireless NIC", net.Interface{Name: "wlan0", Flags: live}, true},
+		// A NIC with only a link-local address is dropped by the ADDRESS rule, not by shape: shape is
+		// about what the interface is, the address rule is about what it could be announced as.
+		{"a NIC that got no lease", net.Interface{Name: "en8", Flags: live}, true},
+		{"a link that is down", net.Interface{Name: "en1", Flags: net.FlagBroadcast | net.FlagMulticast}, false},
+		{"an interface that cannot multicast", net.Interface{Name: "ppp0", Flags: net.FlagUp}, false},
+		{"loopback", net.Interface{Name: "lo0", Flags: live | net.FlagLoopback}, false},
+		{"a VPN tunnel", net.Interface{Name: "utun3", Flags: net.FlagUp | net.FlagPointToPoint | net.FlagMulticast}, false},
+		{"a tun device", net.Interface{Name: "tun0", Flags: net.FlagUp | net.FlagPointToPoint | net.FlagMulticast}, false},
+		// The bridges: ethernet-shaped, private addresses, and no flag to tell them from a NIC — which
+		// is why the name list exists.
+		{"a macOS VM bridge", net.Interface{Name: "bridge100", Flags: live}, false},
+		{"a macOS VM link", net.Interface{Name: "vmenet0", Flags: live}, false},
+		{"a docker bridge", net.Interface{Name: "docker0", Flags: live}, false},
+		{"a libvirt bridge", net.Interface{Name: "virbr0", Flags: live}, false},
+		{"a veth pair", net.Interface{Name: "veth1a2b3c", Flags: live}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, lanShape(tc.iface))
+		})
+	}
+}
+
+// hasLANAddress is the other half of the filter, and it is the same question the BROWSING side asks
+// about an address it is handed: one a peer could be given and would accept.
+func TestHasLANAddressAsksWhatAPeerCouldBeHanded(t *testing.T) {
+	ipnet := func(s string) net.Addr {
+		ip, network, err := net.ParseCIDR(s)
+		require.NoError(t, err)
+		network.IP = ip
+		return network
+	}
+	cases := []struct {
+		what string
+		addr net.Addr
+		want bool
+	}{
+		{"a private IPv4 address", ipnet("10.5.178.101/21"), true},
+		{"a home-network IPv4 address", ipnet("192.168.1.5/24"), true},
+		// Skipped by SHAPE rather than here: lo0 is refused as an interface, so what its address would
+		// have scored never comes up. Reading it as diallable is honest — it is, from this machine.
+		{"loopback", ipnet("127.0.0.1/8"), true},
+		// Reserved, and still not handed to anybody: an IPv4 link-local address is a machine that never
+		// got a lease, and an IPv6 one means nothing without a zone.
+		{"an IPv4 address that never got a lease", ipnet("169.254.60.225/16"), false},
+		{"an IPv6 link-local address", ipnet("fe80::1cee:e68:70f3:fd1/64"), false},
+		// What an IPv6-only LAN looks like, and it counts: ULA is private, so a peer accepts it.
+		{"a unique-local IPv6 address", ipnet("fd07:b51a:cc66::1/64"), true},
+		{"a public IPv6 address", ipnet("2001:4860:4860::8888/128"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.what, func(t *testing.T) {
+			require.Equal(t, tc.want, hasLANAddress([]net.Addr{tc.addr}))
+		})
+	}
+	require.False(t, hasLANAddress(nil), "an interface with no addresses has nothing to announce")
+}
+
+// The default set on the machine the test runs on: whatever it is, it is a FILTER. The assertions are
+// deliberately about the property rather than about a name — a test that named en0 would be a test
+// about the developer's laptop — and a machine with no LAN interface at all is a real answer, not a
+// failure (it is the one that makes the browser refuse to start instead of sending into a void).
+func TestTheDefaultInterfaceSetIsFilteredRatherThanEveryInterface(t *testing.T) {
+	ifaces, err := resolveInterfaces(nil)
+	if errors.Is(err, errNoLANInterface) {
+		return
+	}
+	require.NoError(t, err)
+	require.NotEmpty(t, ifaces)
+	for _, iface := range ifaces {
+		require.True(t, lanShape(iface), "%s is in the default set and must have the shape", iface.Name)
+		addrs, err := iface.Addrs()
+		require.NoError(t, err)
+		require.True(t, hasLANAddress(addrs), "%s is in the default set and must carry an address a peer could be handed", iface.Name)
+	}
 }

@@ -57,16 +57,27 @@ func startAdvertising(o Options, boundAddr string, identity *Identity) (*mdnsAdv
 	if err != nil || port <= 0 {
 		return nil, fmt.Errorf("node: cannot announce this node: %q names no port to announce", boundAddr)
 	}
+	log := o.Logger
+	if log == nil {
+		log = logger.New("node")
+	}
+
 	// Resolved BEFORE anything is announced, so a mistyped interface refuses the start rather than
 	// silently announcing on every network this machine is on — which is the one outcome the setting
 	// exists to prevent.
 	ifaces, err := resolveInterfaces(o.AdvertiseInterfaces)
-	if err != nil {
+	switch {
+	case errors.Is(err, errNoLANInterface):
+		// Nothing to announce ON, which is not the same as a node that cannot be reached: this machine
+		// still serves A2A, and a peer that was TOLD about it still finds it (`peers:` is the
+		// introduction that never depended on multicast). So hosting goes on, minus the announcement —
+		// where the SAME answer puts browsing off for good, because a browser with no interface has
+		// nothing to browse on at all (node/delegatorcache.go startBrowser).
+		log.Warn(context.Background(), "node: this machine has no interface on a local network to "+
+			"announce on; peers will have to be told about it in config")
+		return nil, nil
+	case err != nil:
 		return nil, err
-	}
-	log := o.Logger
-	if log == nil {
-		log = logger.New("node")
 	}
 
 	instance := instanceName(o.Name, identity.NodeID)

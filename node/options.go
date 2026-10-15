@@ -143,10 +143,13 @@ type Options struct {
 	// something to announce.
 	Advertise bool
 
-	// AdvertiseInterfaces names the interfaces to announce on. Empty means every multicast-capable
-	// one; naming them is for a machine on several networks, where announcing its name onto the
-	// wrong one is what the setting exists to prevent — so a name that is not an interface here is an
-	// error rather than a fallback.
+	// AdvertiseInterfaces names the interfaces to announce on. Empty means the ones this machine could
+	// actually carry a LAN announcement on, which is a FILTER rather than "everything"
+	// (node/discovery.go lanInterfaces: a tunnel, a VM bridge or a NIC with no usable address is left
+	// out, because the library sends on the interfaces one after another and one that cannot take the
+	// packet stalls the round in silence). Naming them is for a machine on several networks, where
+	// announcing its name onto the wrong one is what the setting exists to prevent — so a name that is
+	// not an interface here is an error rather than a fallback.
 	AdvertiseInterfaces []string
 
 	// Executor is the receiving side's agent: it turns an accepted task into events.

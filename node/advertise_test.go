@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -127,8 +128,21 @@ func TestAnAnnouncementIsVisibleOnTheNetwork(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
+
+	// Browse on the SAME interfaces the announcement went out on. That is what makes this smoke test
+	// work on a machine with tunnels and virtual machines: the library's own default is every
+	// multicast-capable interface, and its browse side sends a query per interface one after another,
+	// so an interface that cannot take the packet hangs the query before it is ever sent — the same
+	// trap that node/discovery.go lanInterfaces keeps away from the product.
+	ifaces, err := resolveInterfaces(nil)
+	if errors.Is(err, errNoLANInterface) {
+		t.Skip("this machine has no interface on a local network to browse on")
+	}
+	require.NoError(t, err)
 	entries := make(chan *zeroconf.ServiceEntry)
-	go func() { _ = zeroconf.Browse(ctx, mdnsServiceType, mdnsDomain, entries) }()
+	go func() {
+		_ = zeroconf.Browse(ctx, mdnsServiceType, mdnsDomain, entries, zeroconf.SelectIfaces(ifaces))
+	}()
 
 	// The channel is the LIBRARY's to close (it does, when the browse ends), so nothing here closes it
 	// a second time — and the deadline is what ends the loop when no announcement arrives.
