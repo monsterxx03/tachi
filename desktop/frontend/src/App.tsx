@@ -2165,17 +2165,36 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     reconcileFontScale()
   }, [])
 
+  // The model picker's options, and the active provider's own facts. `providers` is a config LIST, and
+  // the picker is its one consumer holding a copy — while the settings page EDITS that list (see
+  // onSaved below), so this read has to be callable again, not just run once at launch: a provider
+  // added and saved otherwise only shows up after a restart.
+  const refreshProviders = useCallback(async () => {
+    try {
+      const ps = (await (AgentService as any).ListProviders?.()) || []
+      setProviders(ps)
+    } catch { /* ignore */ }
+  }, [])
+
   useEffect(() => {
     const loadProv = async () => {
+      await refreshProviders()
       try {
-        const ps = (await (AgentService as any).ListProviders?.()) || []
-        setProviders(ps)
         const info = await (AgentService as any).GetProviderInfo?.()
         if (info) { setProviderName(info.provider) }
       } catch { /* ignore */ }
     }
     loadProv()
-  }, [])
+  }, [refreshProviders])
+
+  // A save can change more than the page that made it: the provider list is the one config value the
+  // conversation holds a copy of. A save that WROTE tells the picker to re-read, together with the
+  // active provider's own facts (a rename or a deleted provider moves the select's value too) — and
+  // only a save that wrote, because a refused one changed nothing anywhere (SaveSettingsResultVO).
+  const onSettingsSaved = useCallback(() => {
+    void refreshProviders()
+    void refreshProvider()
+  }, [refreshProviders, refreshProvider])
 
   // The generated title arrives as an event; the sidebar renders a list fetched at
   // load/switch, so the row has to be patched in place or it keeps saying 未命名会话.
@@ -3290,7 +3309,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           rather than unmounted. Nothing here is worth keeping across a visit, and a fresh read
           of the schema on the way in is exactly what makes the values on screen the values in
           the file. */}
-      {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} /> : null}
+      {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} onSaved={onSettingsSaved} /> : null}
     </div>
   )
 }

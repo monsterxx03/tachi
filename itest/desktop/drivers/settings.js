@@ -480,6 +480,16 @@
   smoke.check('保存后新条目成为真条目（名字来自刚填的值），删掉的那一项不在了',
     !!afterSave, afterSave ? afterSave.join(' / ') : smoke.allText('.set-elem-head').join(' / '))
 
+  // ── 那次保存加出来的 provider，对话那边的选择器也得跟着有 ────────────────────
+  // `providers` 是配置里的一份**列表**，而它有两个消费者：这一页（保存后自己重读 schema），和对话
+  // 工具条上那个「模型」选择器。第二个只在启动时读过一次，所以保存之后读者回到对话，选择器里看不到刚
+  // 加的模型 —— 只有重启应用才会出现。选择器在设置页盖着的时候也挂在页面上（这一页是盖住它，不是卸
+  // 载它），所以「保存」与「对面跟着变」是同一次运行里的两半，读的就是工具条上那个下拉自己。
+  const picker = smoke.q('.provider-picker .provider-select')
+  const pickerOpts = picker ? Array.prototype.map.call(picker.options, (o) => smoke.text(o)) : []
+  smoke.check('保存后对话的模型选择器里就有刚加的 provider（不用重启）',
+    pickerOpts.indexOf('added-by-smoke') >= 0, pickerOpts.join(' / ') || '(没有选项)')
+
   // 再把它改回「自动」并保存：界面上唯一能表达"没有值"的状态，落到文件里是那个键不出现。
   // 这一条必须落在**还活着的**元素上（上一步把 fixture 里那个删掉了），所以问的是刚加的那个。
   const savedCard = cardByHead('added-by-smoke')

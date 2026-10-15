@@ -418,7 +418,7 @@ function pendingText(dirty: number, addCount: number, removeCount: number): stri
   return parts.join(' · ')
 }
 
-export function SettingsPage({ onBack }: { onBack: () => void }) {
+export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?: () => void }) {
   const [schema, setSchema] = useState<SettingsSchemaVO | null>(null)
   const [loadError, setLoadError] = useState('')
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
@@ -697,9 +697,13 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
       // diff of the past next to a form that no longer holds those edits.
       setPreview(null)
       await load()
+      // A save can change MORE than this page: `providers` is a config list the conversation's
+      // model picker holds its own copy of. This page re-reads its schema; that copy has to be told
+      // (see onSaved) — otherwise the picker only catches up on the next launch.
+      onSaved?.()
     }
     setNotice({ bad: res.ok !== true, text: res.summary || '' })
-  }, [collectBatch, load, dirty, adds, removes])
+  }, [collectBatch, load, dirty, adds, removes, onSaved])
 
   // rowProps is every row's wiring, in one place: a standalone row and a row inside a card must
   // behave identically (same dirty rule, same draft, same reset), and the only thing that
