@@ -76,6 +76,22 @@
     !!broken && smoke.text(broken).indexOf('图片无法加载') >= 0,
     broken ? smoke.text(broken) : '(没有 .md-img-failed)')
 
+  // ── 画不出来的 mermaid ─────────────────────────────────────────────────────
+  // 和取不到的图同一条规矩：说不出来就退回源码，读者至少能看到图里写了什么。而**多出来的一件事**是
+  // 那张报错卡：mermaid 解析失败时会自己画一张卡（「Syntax error in text / mermaid version …」）插到
+  // <body> 上，然后才抛错 —— 我们的 catch 只把正文换成源码，删不掉它。于是它不属于任何一条消息、
+  // 谁也清不掉，会一直浮在窗口底部，压在你之后打开的每一个会话上（实测：一次 282 块的渲染留下 4 个
+  // 这样的野节点）。修法在 markdown.tsx 的 suppressErrorRendering。
+  const pending = await smoke.waitFor('.assistant-text .mermaid-pending', '画不出来的那块退回源码', 10000)
+  smoke.check('解析不过去的 mermaid 退回源码（不是一片空白）',
+    !!pending && smoke.text(pending).indexOf('[SILENT] 保持') >= 0,
+    pending ? smoke.text(pending).slice(0, 60) : '(没有 .mermaid-pending)')
+  // 渲染 id 是 `mermaid-<随机>`，mermaid 给它的临时容器加一个 d 前缀后直接挂在 body 上 —— 所以这个
+  // 选择器既是"它真的没留下东西"，也不会被别的界面的节点碰巧命中。
+  const strays = smoke.qa('body > div[id^="dmermaid-"]')
+  smoke.check('mermaid 的报错卡没有留在页面上（它是挂在 body 上的野节点，会浮在所有会话下面）',
+    strays.length === 0, strays.length + ' 个野节点: ' + strays.map((n) => n.id).join(', '))
+
   // ── 正文里的长串不许冲出阅读列 ─────────────────────────────────────────────
   // 模型写下的东西没有"一定有空格"这回事：路径、URL、长标识符都能是一整个词。默认的换行规则会
   // 让它横着跑出阅读列（阅读列是 flex 的，跑出去就是被裁掉，读者看不到尾巴）。

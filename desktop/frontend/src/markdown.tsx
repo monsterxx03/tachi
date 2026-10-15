@@ -232,7 +232,17 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: str
     const timer = window.setTimeout(async () => {
       try {
         const mermaid = (await import('mermaid')).default
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' })
+        // suppressErrorRendering: without it, a diagram that does not parse makes mermaid DRAW its
+        // own error card ("Syntax error in text / mermaid version …") into a temporary node appended
+        // to <body>, and only then throw — where this component's catch turns the reply into the
+        // source below. That card is therefore outside the message, it is never removed, and it
+        // outlives the conversation it came from: it floats at the bottom of the window over every
+        // session opened afterwards. With the flag on, mermaid removes its temp nodes and throws, so
+        // the degradation below is the only thing the reader sees.
+        mermaid.initialize({
+          startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
+          theme: dark ? 'dark' : 'default',
+        })
         const { svg: out } = await mermaid.render(`mermaid-${Math.random().toString(36).slice(2, 10)}`, code)
         if (alive) { setSvg(out); setFailed(false) }
       } catch {

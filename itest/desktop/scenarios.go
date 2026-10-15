@@ -473,7 +473,9 @@ func textStreamPrompt(text string, cacheRead, prompt int) mockllm.ReplyFunc {
 }
 
 // mdWidgetsReply 是 md-widgets 那一场的回答：一段带语言的代码块（其中一行故意很长）、一张内联的
-// SVG（data URI，不碰磁盘，必成），和一张指向不存在路径的图（要落到"图片无法加载"那一态）。
+// SVG（data URI，不碰磁盘，必成）、一张指向不存在路径的图（要落到"图片无法加载"那一态），以及一块
+// **画不出来的 mermaid**（标签里有个没引号的方括号，解析这一步就过不去）——正文里三种"控件"各自的
+// 正常态与失败态都在这里。
 //
 // 长行是折行开关的判据：不折行时它必须横向溢出，开了折行之后不能 —— 那是读者的观感，`white-space`
 // 只是手段。
@@ -483,6 +485,8 @@ func mdWidgetsReply() string {
 		"再看两张图：\n\n" +
 		"![dot](data:image/svg+xml;base64," + mdWidgetsDot + ")\n\n" +
 		"![missing](nope/missing.png)\n\n" +
+		"再画一张图（这张是坏的）：\n\n" +
+		"```mermaid\nflowchart LR\n  A[到点] --> B[跑一轮]\n  B --> C[判定<br/>[SILENT] 保持]\n```\n\n" +
 		"最后是一个没有空格的长串：`" + long + "`\n"
 }
 
