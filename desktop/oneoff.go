@@ -112,36 +112,12 @@ type OneOffVO struct {
 	Findings int `json:"findings,omitempty"`
 }
 
-// OneOffRequestVO is one LLM call inside a run. The summary (LoadOneOff) carries the
-// metadata and the tool NAMES; the full version (LoadOneOffRequest) adds the prompts.
-//
-// The prompts are the reason this is separate: a record averages ~16KB of request payload
-// per call (the system prompt and tool schemas are resent every iteration), which is over
-// half the file. The panel should not pay for it to open a run, and a reader who asks
-// "what was the reviewer actually told" should get it on demand.
-type OneOffRequestVO struct {
-	Seq          int      `json:"seq"`
-	Iteration    int      `json:"iteration,omitempty"`
-	Timestamp    string   `json:"timestamp,omitempty"`
-	Provider     string   `json:"provider,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Thinking     string   `json:"thinking,omitempty"`
-	DurationMs   int64    `json:"durationMs,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
-	SystemPrompt string   `json:"systemPrompt,omitempty"`
-	UserPrompt   string   `json:"userPrompt,omitempty"`
-	// Notice explains a failure of the lazy fetch (the summaries never carry one).
-	Notice string `json:"notice,omitempty"`
-}
-
 // OneOffDetailVO is one run's replayable content.
 type OneOffDetailVO struct {
 	Header OneOffVO `json:"header"`
 	// Messages are the run's raw messages in the same shape the transcript uses, so the
 	// frontend renders them with the same bubbles and tool cards.
 	Messages []SessionMessage `json:"messages"`
-	// Requests are the API-call summaries (no prompt text — see OneOffRequestVO).
-	Requests []OneOffRequestVO `json:"requests,omitempty"`
 	// Findings are the ReportFinding calls THIS run made — the run's own, not "the newest
 	// review in the session" (see GetReviewFindings for that other question). It is what the
 	// panel's findings pane shows for whichever run the reader selected.
@@ -231,8 +207,13 @@ type oneOffEntry struct {
 	at time.Time
 }
 
-// LoadOneOff reads one run: its messages (in the transcript's own shape) plus the API-call
-// summaries. Prompt text is left out — see OneOffRequestVO.
+// LoadOneOff reads one run: its messages, in the transcript's own shape, plus the findings it
+// recorded. It is what the side-channel panel replays.
+//
+// The record also carries an `api_request` line per LLM call (the payloads: system prompt, tool
+// schemas, user prompt). Those are NOT read here — the panel shows what the run DID, and the
+// request bodies are over half of a record's bytes. They stay on disk (the recorder writes them)
+// and a reader who wants them opens the record, or the web console's inspector.
 func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
 	path, err := oneOffPath(sessionID, name)
 	if err != nil {
@@ -251,7 +232,6 @@ func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
 
 	var (
 		msgs     []session.Message
-		requests []OneOffRequestVO
 		findings []FindingVO
 	)
 	sc := newOneOffScanner(f)
@@ -268,12 +248,7 @@ func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
 		case oneOffLineMeta:
 			continue // already read as the header
 		case oneOffLineAPIRequest:
-			var req session.APIRequest
-			if err := json.Unmarshal(line, &req); err != nil {
-				continue
-			}
-			requests = append(requests, oneOffRequest(req, false))
-			continue
+			continue // a request PAYLOAD, not a message: see this function's comment
 		}
 		var msg session.Message
 		if err := json.Unmarshal(line, &msg); err != nil {
@@ -299,71 +274,8 @@ func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
 		// Offset 0: a one-off transcript is its own file, so its message indices
 		// are positions in that file. Nothing rewinds a side channel.
 		Header: header, Messages: buildSessionMessages(msgs, 0, nil),
-		Requests: requests, Findings: findings,
+		Findings: findings,
 	}
-}
-
-// LoadOneOffRequest returns one LLM call in full, prompts included, by its Seq. It is a
-// separate call because the prompts are over half of a record's bytes and only a reader
-// who asked for them should pay for them.
-func (s *AgentService) LoadOneOffRequest(sessionID, name string, seq int) OneOffRequestVO {
-	path, err := oneOffPath(sessionID, name)
-	if err != nil {
-		return OneOffRequestVO{Notice: err.Error()}
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return OneOffRequestVO{Notice: "读取旁路记录失败：" + err.Error()}
-	}
-	defer f.Close()
-
-	sc := newOneOffScanner(f)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		if t, err := oneOffLineTypeOf(line); err != nil || t != oneOffLineAPIRequest {
-			continue
-		}
-		var req session.APIRequest
-		if err := json.Unmarshal(line, &req); err != nil {
-			continue
-		}
-		if req.Seq == seq {
-			return oneOffRequest(req, true)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return OneOffRequestVO{Notice: "读取旁路记录中断：" + err.Error()}
-	}
-	return OneOffRequestVO{Seq: seq, Notice: fmt.Sprintf("记录里没有第 %d 次请求", seq)}
-}
-
-// oneOffRequest maps a recorded API call. withPrompts decides whether the prompt text is
-// carried — the list of summaries deliberately leaves it out.
-func oneOffRequest(req session.APIRequest, withPrompts bool) OneOffRequestVO {
-	vo := OneOffRequestVO{
-		Seq:        req.Seq,
-		Iteration:  req.Iteration,
-		Provider:   req.Provider,
-		Model:      req.Model,
-		Thinking:   req.Thinking,
-		DurationMs: req.DurationMs,
-	}
-	if !req.Timestamp.IsZero() {
-		vo.Timestamp = req.Timestamp.Format(time.RFC3339)
-	}
-	// Tool NAMES only: the schema is boilerplate that repeats in every request, and the
-	// question "what was this run actually told to do" is answered by the prompts.
-	for _, t := range req.Tools {
-		vo.Tools = append(vo.Tools, t.Name)
-	}
-	if withPrompts {
-		vo.SystemPrompt = req.SystemPrompt
-		vo.UserPrompt = req.UserPrompt
-	}
-	return vo
 }
 
 // readOneOffHeader reads a record's meta line and file metadata: what the list needs, and

@@ -9,9 +9,9 @@
 // Design: docs/2026-09-12-desktop-oneoff-panel-design.md §5
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AgentService, type FilePreviewVO, type OneOffDetailVO, type OneOffRequestVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type FilePreviewVO, type OneOffDetailVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
-import { buildTurns, fmtDur, fmtTime, panelRoom as panelRoomFor, clampPanelWidth as clampSharedWidth } from './lib'
+import { buildTurns, fmtTime, panelRoom as panelRoomFor, clampPanelWidth as clampSharedWidth } from './lib'
 import { TurnPart } from './parts'
 import { DiffFindingsPane } from './diff'
 import { MarkdownBlock } from './markdown'
@@ -111,9 +111,6 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   const [listLoading, setListLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
-  // requests: the lazily fetched prompt text, keyed by the request's Seq. A record keeps
-  // its prompts per call (over half of its bytes), so they are fetched only when asked for.
-  const [requests, setRequests] = useState<Record<number, OneOffRequestVO | 'loading'>>({})
   // tab: which pane is showing. It starts on 过程 (what the run DID); 意见 is a click on the tab.
   const [tab, setTab] = useState<OneOffTab>('flow')
   const [diff, setDiff] = useState<TurnDiffVO | null>(null)
@@ -194,7 +191,6 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
       setDetail(null)
       return
     }
-    setRequests({})
     void loadDetail(selected)
   }, [open, sessionId, selected, loadDetail])
 
@@ -244,29 +240,6 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
     }
     wasLive.current = !!live
   }, [open, live, sessionId, refresh, loadDetail])
-
-  // Fetching is a side effect, so it must NOT live inside a state updater: React may invoke an
-  // updater more than once for the same update (StrictMode does, and concurrent re-basing can),
-  // and both runs would fire a request — the `prev[seq]` guard cannot help, since both see the
-  // same pre-update state. The in-flight set is what makes one click one request.
-  const inflight = useRef<Set<number>>(new Set())
-  useEffect(() => { inflight.current = new Set() }, [sessionId, selected])
-  const loadRequest = useCallback((seq: number) => {
-    if (inflight.current.has(seq)) return
-    inflight.current.add(seq)
-    setRequests((prev) => (prev[seq] ? prev : { ...prev, [seq]: 'loading' }))
-    // The reply belongs to the run that was showing when the row was clicked: a reader who
-    // switches mid-fetch must not get the old prompt attached to the new run.
-    const asked = selected
-    const settle = (vo: OneOffRequestVO) => {
-      inflight.current.delete(seq)
-      if (selectedRef.current !== asked) return
-      setRequests((prev) => ({ ...prev, [seq]: vo }))
-    }
-    AgentService.LoadOneOffRequest(sessionId, asked, seq)
-      .then(settle)
-      .catch((e) => settle({ seq, notice: String(e) } as OneOffRequestVO))
-  }, [sessionId, selected])
 
   // Everything cached per run is tagged with the SESSION as well as the run — a record's name is
   // a timestamp within its session, so two sessions can hold the same one.
@@ -397,12 +370,12 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   // re-render the whole transcript on every streaming delta.
   const refreshCurrent = useCallback(() => void refresh(sessionId), [refresh, sessionId])
   return useMemo(() => ({
-    items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, runTurn, wholeTree, diff,
+    items, note, selected, detail, listLoading, detailLoading, error, live,
+    select: setSelected, refresh: refreshCurrent, tab, setTab, pathsKey, runTurn, wholeTree, diff,
     diffLoading, diffError, reportText, reportNote, openReport, reloadReport, runKey,
   }), [
-    items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, runTurn, wholeTree, diff, diffLoading, diffError, reportText, reportNote,
+    items, note, selected, detail, listLoading, detailLoading, error, live,
+    refreshCurrent, tab, pathsKey, runTurn, wholeTree, diff, diffLoading, diffError, reportText, reportNote,
     openReport, reloadReport, runKey,
   ])
 }
@@ -436,7 +409,7 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   onRerun?: (turn: number, paths: string[], reviewedMsg: string, wholeTree: boolean) => void
   onClose: () => void
 }) {
-  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, runTurn, wholeTree, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
+  const { items, note, selected, detail, listLoading, detailLoading, error, live, select, refresh, tab, setTab, pathsKey, runTurn, wholeTree, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
   // Whether this run recorded a scope at all: a typed /review covers the whole tree and has
   // nothing to name, which is a different thing from "the scope could not be read". A TURN is a
   // scope too — a turn whose changes came from a shell command declared no paths, and saying "no
@@ -655,56 +628,19 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
 
             {shown === 'flow' ? (
               <>
-                {turns.map((m) => (
-              m.role === 'user'
-                ? <UserBubble key={m.id}>{m.text}</UserBubble>
-                : (
-                  <div className="msg msg-assistant oneoff-turn" key={m.id}>
-                    <div className="msg-content">
-                      <div className="turn-parts">
-                        {(m.parts || []).map((p, i) => <TurnPart key={i} part={p} workDir={workDir} />)}
+                {turns.map((m) =>
+                  m.role === 'user'
+                    ? <UserBubble key={m.id}>{m.text}</UserBubble>
+                    : (
+                      <div className="msg msg-assistant oneoff-turn" key={m.id}>
+                        <div className="msg-content">
+                          <div className="turn-parts">
+                            {(m.parts || []).map((p, i) => <TurnPart key={i} part={p} workDir={workDir} />)}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                )
-            ))}
-
-            {detail.requests?.length ? (
-              <div className="oneoff-reqs">
-                <div className="oneoff-req-title">本次请求 {detail.requests.length} 次（懒加载正文）</div>
-                {detail.requests.map((r) => {
-                  const full = requests[r.seq]
-                  return (
-                    <div className="oneoff-req" key={r.seq}>
-                      <button type="button" className="oneoff-req-row" onClick={() => loadRequest(r.seq)}>
-                        <span className="oneoff-req-seq">#{r.seq}</span>
-                        <span className="oneoff-req-tools">{r.tools?.length ? `${r.tools.length} 个工具` : ''}</span>
-                        <span className="oneoff-req-dur">{r.durationMs ? fmtDur(r.durationMs) : ''}</span>
-                        {r.timestamp ? <span className="oneoff-req-ts">{fmtTime(r.timestamp)}</span> : null}
-                      </button>
-                      {full === 'loading' ? <div className="oneoff-empty">读取中…</div> : null}
-                      {full && full !== 'loading' ? (
-                        full.notice
-                          ? <div className="oneoff-empty">{full.notice}</div>
-                          : (
-                            <>
-                              {full.userPrompt ? (
-                                <pre className="oneoff-pre" title="这一轮的用户消息（评审的作用域就在里面）">{full.userPrompt}</pre>
-                              ) : null}
-                              {full.systemPrompt ? (
-                                <details className="oneoff-sys">
-                                  <summary>system prompt</summary>
-                                  <pre className="oneoff-pre">{full.systemPrompt}</pre>
-                                </details>
-                              ) : null}
-                            </>
-                          )
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-                ) : null}
+                    )
+                )}
               </>
             ) : null}
 
@@ -741,7 +677,7 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
                 <>
                   <div className="oneoff-meta">
                     <span title={detail.header.report}>{(detail.header.report || '').split('/').pop()}</span>
-                    <button type="button" className="oneoff-req-row oneoff-open-report" title="用系统默认应用打开"
+                    <button type="button" className="oneoff-open-report" title="用系统默认应用打开"
                       onClick={() => { if (detail.header.report) AgentService.OpenPath(detail.header.report).catch(() => {}) }}>
                       打开
                     </button>

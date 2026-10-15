@@ -47,11 +47,20 @@
   smoke.check('回放里有用户消息（这次评审收到的 prompt）', body.indexOf('Perform a thorough code review') >= 0,
     body.indexOf('Perform a thorough code review') >= 0 ? '' : body.slice(0, 120))
   smoke.check('回放里有模型回复', body.indexOf('评审完成：本次改动没有发现问题。') >= 0, '')
-  // The CARD itself, not a loose `[class*=tool]` sweep: the request-summary rows render
-  // `oneoff-req-tools` in the 过程 pane for any run that made a request, so the old fallback
-  // held whether or not a tool card was replayed — the very claim this line exists to pin.
+  // The CARD itself, not a loose `[class*=tool]` sweep: this pane renders the replay's own
+  // parts, so the assertion names what a reader sees rather than any element whose class happens
+  // to contain "tool".
   smoke.check('回放里有工具卡（Bash）', !!smoke.q('.oneoff-body .msg-assistant .tool-card'),
     smoke.qa('.oneoff-body .tool-card').map((e) => e.className).join('|').slice(0, 80))
+
+  // …and the pane shows the PROCESS and nothing else. The record also carries one `api_request`
+  // line per LLM call (system prompt, tool schemas, user prompt — over half of a record's bytes),
+  // and the panel deliberately does not render them: a reader opened this pane to see what the run
+  // DID. What a driver can assert is the PANE, not the absent read — so this is written as
+  // "nothing here offers a request payload", by the classes that section used to carry.
+  const reqLeftovers = smoke.qa('.oneoff-body .oneoff-reqs, .oneoff-body .oneoff-req-row, .oneoff-body .oneoff-pre')
+  smoke.check('过程面板里没有「请求详情」（只有这次运行的执行过程）', reqLeftovers.length === 0,
+    reqLeftovers.map((e) => e.className).join(' | ') || '')
 
   // P2's other half: the CONVERSATION. The review's own words must not be in it — and what is
   // left is the user's line plus one notice naming what happened and where to look.
@@ -61,19 +70,6 @@
   const anchored = await smoke.waitFor(() => smoke.text('.chat .notice-block').indexOf('已完成') >= 0, '主对话留下一行锚点', 10000)
   smoke.check('占位气泡降级成一行锚点（指向面板）', !!anchored,
     smoke.text('.chat .notice-block') || '(没有 notice)')
-
-  // The requests a run made are summarised, and the prompt text is fetched only when asked
-  // for (a record is over half request payloads). One click must bring the正文 in.
-  const reqRows = smoke.qa('.oneoff-req-row')
-  smoke.check('列出了这次运行的 API 请求', reqRows.length >= 1, String(reqRows.length))
-  if (reqRows.length) {
-    reqRows[0].click()
-    const promptShown = await smoke.waitFor(
-      () => smoke.qa('.oneoff-pre').some((p) => p.textContent.indexOf('## Your task') >= 0),
-      '按需取回请求正文', 8000)
-    smoke.check('点开后取回了这次请求的正文（懒加载）', !!promptShown,
-      smoke.qa('.oneoff-pre').map((p) => p.textContent.length).join(','))
-  }
 
   // The panel's width is the reader's to drag, and it is remembered. Driving it here also pins
   // its bounds: 320px is the floor (mirrored by ONE_OFF_PANEL_MIN_WIDTH in oneoff.tsx), and the

@@ -476,20 +476,16 @@ export function ListWorkspaceDir(sessionID: string, path: string): $CancellableP
 }
 
 /**
- * LoadOneOff reads one run: its messages (in the transcript's own shape) plus the API-call
- * summaries. Prompt text is left out — see OneOffRequestVO.
+ * LoadOneOff reads one run: its messages, in the transcript's own shape, plus the findings it
+ * recorded. It is what the side-channel panel replays.
+ * 
+ * The record also carries an `api_request` line per LLM call (the payloads: system prompt, tool
+ * schemas, user prompt). Those are NOT read here — the panel shows what the run DID, and the
+ * request bodies are over half of a record's bytes. They stay on disk (the recorder writes them)
+ * and a reader who wants them opens the record, or the web console's inspector.
  */
 export function LoadOneOff(sessionID: string, name: string): $CancellablePromise<$models.OneOffDetailVO> {
     return $Call.ByID(1996979929, sessionID, name);
-}
-
-/**
- * LoadOneOffRequest returns one LLM call in full, prompts included, by its Seq. It is a
- * separate call because the prompts are over half of a record's bytes and only a reader
- * who asked for them should pay for them.
- */
-export function LoadOneOffRequest(sessionID: string, name: string, seq: number): $CancellablePromise<$models.OneOffRequestVO> {
-    return $Call.ByID(2847462494, sessionID, name, seq);
 }
 
 /**

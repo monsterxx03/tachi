@@ -1740,27 +1740,14 @@ button.work-dir {
 }
 .oneoff-tab:hover { color: var(--text); }
 .oneoff-tab.active { color: var(--accent-2); border-bottom-color: var(--accent-2); }
-/* The report pane reuses .oneoff-meta for its file line, where the 打开 button carries the
-   request-row look without stretching to the full width. */
-.oneoff-open-report { width: auto; margin-left: auto; }
-
-/* The requests a run made. Only the SUMMARY arrives with the run: a record's request
-   payloads are over half of its bytes (system prompt and tool schemas repeat in every
-   call), so a row fetches its own text when the reader opens it. */
-.oneoff-reqs {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border);
-}
-.oneoff-req-title { font-size: 11px; color: var(--text-faint); margin-bottom: 3px; }
-.oneoff-req { display: flex; flex-direction: column; gap: 4px; }
-.oneoff-req-row {
+/* The report pane reuses .oneoff-meta for its file line, and 打开 is the one button in it:
+   it sits at the far end rather than stretching across the row. */
+.oneoff-open-report {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  width: auto;
+  margin-left: auto;
   padding: 3px 6px;
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
@@ -1771,24 +1758,4 @@ button.work-dir {
   text-align: left;
   cursor: pointer;
 }
-.oneoff-req-row:hover { border-color: var(--border-2); color: var(--text); }
-.oneoff-req-seq { color: var(--text); font-variant-numeric: tabular-nums; }
-.oneoff-req-tools, .oneoff-req-dur, .oneoff-req-ts { color: var(--text-faint); font-variant-numeric: tabular-nums; }
-.oneoff-req-ts { margin-left: auto; }
-
-.oneoff-pre {
-  margin: 0;
-  padding: 6px 8px;
-  max-height: 260px;
-  overflow: auto;
-  background: var(--wash);
-  border-radius: var(--radius-xs);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-dim);
-}
-.oneoff-sys summary { font-size: 11px; color: var(--text-faint); cursor: pointer; }
-.oneoff-sys[open] summary { margin-bottom: 4px; }
+.oneoff-open-report:hover { border-color: var(--border-2); color: var(--text); }

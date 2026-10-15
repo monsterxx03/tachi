@@ -66,6 +66,9 @@ func messageLine(t *testing.T, msg session.Message) string {
 
 // requestLine builds one api_request line: the recorder embeds session.APIRequest under a
 // "type" field, which flattens into the same JSON object.
+//
+// The panel does not render these (see LoadOneOff), but a real record is full of them, so the
+// fixtures keep one: the replay has to SKIP a line that is not a message rather than choke on it.
 func requestLine(t *testing.T, req session.APIRequest, toolNames ...string) string {
 	t.Helper()
 	for _, name := range toolNames {
@@ -244,8 +247,8 @@ func TestListOneOffsWithoutRecords(t *testing.T) {
 }
 
 // TestLoadOneOffReplaysRecord walks the whole reader: a record replayed into the SAME
-// SessionMessage shape a session's transcript uses, the findings counted, and the request
-// split into a prompt-free summary plus an on-demand full fetch.
+// SessionMessage shape a session's transcript uses, the findings counted, and the api_request
+// line — which the panel does not render — skipped rather than replayed as a message.
 func TestLoadOneOffReplaysRecord(t *testing.T) {
 	dir := oneOffTestDir(t, oneOffTestSession)
 	name := "review-20260912-193535-bc05.jsonl"
@@ -255,6 +258,8 @@ func TestLoadOneOffReplaysRecord(t *testing.T) {
 	writeOneOffFile(t, dir, name,
 		metaLine(t, "review", oneOffTestSession, report, ts),
 		messageLine(t, session.Message{Type: session.MessageTypeUser, Content: "review these files", Timestamp: ts}),
+		// A request PAYLOAD line, not a message — the shape every real record carries. It must
+		// not show up in the replay (roles below are the assertion for that).
 		requestLine(t, session.APIRequest{
 			Seq: 1, Iteration: 1, Timestamp: ts, Provider: "anthropic", Model: "test-model",
 			SystemPrompt: "SYSTEM PROMPT TEXT", UserPrompt: "review these files", DurationMs: 42,
@@ -311,24 +316,6 @@ func TestLoadOneOffReplaysRecord(t *testing.T) {
 		t.Errorf("tool_result not mapped: %+v", tr)
 	}
 
-	if len(got.Requests) != 1 {
-		t.Fatalf("requests = %d, want 1", len(got.Requests))
-	}
-	sum := got.Requests[0]
-	if sum.Seq != 1 || sum.DurationMs != 42 || strings.Join(sum.Tools, ",") != "Bash,"+tools.ToolNameReportFinding {
-		t.Errorf("request summary = %+v", sum)
-	}
-	if sum.SystemPrompt != "" || sum.UserPrompt != "" {
-		t.Error("the summary must not carry prompt text: it is over half of a record's bytes")
-	}
-
-	full := (&AgentService{}).LoadOneOffRequest(oneOffTestSession, name, 1)
-	if full.SystemPrompt != "SYSTEM PROMPT TEXT" || full.UserPrompt != "review these files" {
-		t.Errorf("lazy request fetch = %+v", full)
-	}
-	if miss := (&AgentService{}).LoadOneOffRequest(oneOffTestSession, name, 99); miss.Notice == "" {
-		t.Error("a missing request must say so rather than return an empty one")
-	}
 }
 
 // TestOneOffPathsAreUntrusted: both the session id and the record name arrive from the

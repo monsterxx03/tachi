@@ -36,7 +36,6 @@ export type {
     MCPToolVO,
     OneOffDetailVO,
     OneOffListVO,
-    OneOffRequestVO,
     OneOffVO,
     PastedImageVO,
     PathStateVO,

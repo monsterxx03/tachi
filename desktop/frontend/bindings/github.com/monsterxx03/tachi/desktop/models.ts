@@ -593,11 +593,6 @@ export interface OneOffDetailVO {
     "messages": SessionMessage[] | null;
 
     /**
-     * Requests are the API-call summaries (no prompt text — see OneOffRequestVO).
-     */
-    "requests"?: OneOffRequestVO[] | null;
-
-    /**
      * Findings are the ReportFinding calls THIS run made — the run's own, not "the newest
      * review in the session" (see GetReviewFindings for that other question). It is what the
      * panel's findings pane shows for whichever run the reader selected.
@@ -625,33 +620,6 @@ export interface OneOffListVO {
      * different facts, and a silent empty list tells the reader neither.
      */
     "note"?: string;
-}
-
-/**
- * OneOffRequestVO is one LLM call inside a run. The summary (LoadOneOff) carries the
- * metadata and the tool NAMES; the full version (LoadOneOffRequest) adds the prompts.
- * 
- * The prompts are the reason this is separate: a record averages ~16KB of request payload
- * per call (the system prompt and tool schemas are resent every iteration), which is over
- * half the file. The panel should not pay for it to open a run, and a reader who asks
- * "what was the reviewer actually told" should get it on demand.
- */
-export interface OneOffRequestVO {
-    "seq": number;
-    "iteration"?: number;
-    "timestamp"?: string;
-    "provider"?: string;
-    "model"?: string;
-    "thinking"?: string;
-    "durationMs"?: number;
-    "tools"?: string[] | null;
-    "systemPrompt"?: string;
-    "userPrompt"?: string;
-
-    /**
-     * Notice explains a failure of the lazy fetch (the summaries never carry one).
-     */
-    "notice"?: string;
 }
 
 /**
