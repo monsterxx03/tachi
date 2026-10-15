@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/libp2p/zeroconf/v2"
+
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -410,5 +412,173 @@ func TestTheDefaultInterfaceSetIsFilteredRatherThanEveryInterface(t *testing.T) 
 		addrs, err := iface.Addrs()
 		require.NoError(t, err)
 		require.True(t, hasLANAddress(addrs), "%s is in the default set and must carry an address a peer could be handed", iface.Name)
+	}
+}
+
+// What a browse asks the library to carry is settled from the interfaces rather than chosen, and the
+// reason is not tidiness: a type the interfaces cannot carry does not skip that type, it stops the
+// browse altogether (see trafficFor). Each family is pinned on its own, and so is the refusal.
+func TestTheTrafficTypesFollowWhatTheInterfacesCarry(t *testing.T) {
+	ipnet := func(s string) net.Addr {
+		ip, network, err := net.ParseCIDR(s)
+		require.NoError(t, err)
+		network.IP = ip
+		return network
+	}
+	cases := []struct {
+		what    string
+		addrs   []net.Addr
+		want    zeroconf.IPType
+		wantErr error
+	}{
+		{"a Wi-Fi lease with IPv4 only", []net.Addr{ipnet("192.168.71.173/24")}, zeroconf.IPv4, nil},
+		{"a LAN carrying both", []net.Addr{ipnet("192.168.71.173/24"), ipnet("fd07:b51a:cc66::1/64")},
+			zeroconf.IPv4AndIPv6, nil},
+		// The other shape of one family: an IPv6-only LAN must not be handed a doomed IPv4 join.
+		{"a ULA-only LAN", []net.Addr{ipnet("fd07:b51a:cc66::1/64")}, zeroconf.IPv6, nil},
+		{"an interface that never got a lease", []net.Addr{ipnet("169.254.60.225/16")}, zeroconf.IPv4, nil},
+		{"an interface with no address at all", nil, 0, errNoBrowseTraffic},
+	}
+	for _, tc := range cases {
+		t.Run(tc.what, func(t *testing.T) {
+			got, err := trafficForAddrs(tc.addrs)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// The whole-machine half of the same rule: whatever interfaces this machine has, the browse asks for
+// exactly the families those interfaces hold — no more (a family nothing can carry kills the browse)
+// and no less (discovery would be silently blind to one family).
+func TestTheDefaultSetAsksOnlyForTrafficItCanCarry(t *testing.T) {
+	ifaces, err := resolveInterfaces(nil)
+	if errors.Is(err, errNoLANInterface) {
+		return
+	}
+	require.NoError(t, err)
+
+	traffic, err := trafficFor(ifaces)
+	require.NoError(t, err)
+
+	have4, have6 := false, false
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		require.NoError(t, err)
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipnet.IP.To4() != nil {
+				have4 = true
+			} else {
+				have6 = true
+			}
+		}
+	}
+	require.Equal(t, have4, traffic&zeroconf.IPv4 != 0, "%v holds IPv4 addresses: %v", ifaces, addrsOf(ifaces))
+	require.Equal(t, have6, traffic&zeroconf.IPv6 != 0, "%v holds IPv6 addresses: %v", ifaces, addrsOf(ifaces))
+}
+
+// Close must not depend on the library having closed the channel it was handed. A browse that fails
+// in its OWN SETUP returns before a single entry was handed over and never closes that channel, so a
+// browser that waited for the channel alone would make Close wait for ever — and Close is what an
+// entry point calls on its way out, so that is a process that cannot quit (an IPv4-only Wi-Fi lease
+// is enough to get there: see trafficFor).
+//
+// The interface named here exists on no machine, so the library cannot join a multicast group on it
+// and both families fail — the same shape as the real one, without touching the real network.
+func TestCloseReturnsEvenWhenBrowsingNeverStarted(t *testing.T) {
+	nowhere := net.Interface{
+		Name:  "tachi-test-nowhere",
+		Index: 1 << 20,
+		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
+	}
+	b := browserOver([]net.Interface{nowhere}, nasID, nil)
+	b.Start(context.Background())
+
+	closed := make(chan struct{})
+	go func() {
+		b.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close() waited for an entries channel that will never be closed")
+	}
+}
+
+// addrsOf is what a failure message needs: the addresses behind a set of interfaces, so that "this
+// machine has no IPv6 address" can be checked by eye against the assertion that just failed.
+func addrsOf(ifaces []net.Interface) map[string][]string {
+	out := make(map[string][]string, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			out[iface.Name] = append(out[iface.Name], addr.String())
+		}
+	}
+	return out
+}
+
+// A machine ENTERING the directory is the one change nothing else would ever report: a view drawn
+// from the directory has no way to notice, so the browser is the only one who can say it.
+//
+// And it says it once per machine, not once per announcement: announcements repeat every couple of
+// minutes, the listener re-reads the directory (and asks the entry point for a probe), so reporting
+// a repeat would turn discovery into a heartbeat. A machine that MOVED — one announcing an address
+// this process had not learned — is a change again, because there is somewhere new to dial.
+func TestTheBrowserReportsAMachineOnlyWhenItEntersTheDirectory(t *testing.T) {
+	b := browserOver(nil, nasID, nil)
+	entered := make(chan string, 8)
+	b.onSighting = func() { entered <- "sighting" }
+
+	cand := candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.168:9990"}}
+	b.confirm(cand)
+	assertSighting(t, entered, "the first sighting of a machine")
+
+	// The same machine, announcing the same address: already listed, nothing to say.
+	b.confirm(cand)
+	assertNoSighting(t, entered)
+
+	// The same machine at an address it had not named before: a new place to dial, so it is news.
+	b.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990"}})
+	assertSighting(t, entered, "a machine that moved to an address this process had not learned")
+
+	// And an announcement that brings back the FIRST address alongside the new one reports nothing
+	// new either: the address is one it already knows, whatever order it arrives in.
+	b.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990",
+		"https://192.168.71.168:9990"}})
+	assertNoSighting(t, entered)
+
+	// A different machine is a different entry, whatever it announces.
+	b.confirm(candidate{Identity: claimedID, Addrs: []string{"https://192.168.71.168:9990"}})
+	assertSighting(t, entered, "a second machine")
+}
+
+func assertSighting(t *testing.T, seen chan string, what string) {
+	t.Helper()
+	select {
+	case <-seen:
+	case <-time.After(time.Second):
+		t.Fatalf("%s: the browser did not report it", what)
+	}
+}
+
+func assertNoSighting(t *testing.T, seen chan string) {
+	t.Helper()
+	select {
+	case <-seen:
+		t.Fatal("the browser reported a machine that was already in the directory")
+	case <-time.After(100 * time.Millisecond):
 	}
 }

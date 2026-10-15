@@ -118,7 +118,11 @@ type mdnsBrowser struct {
 	// test that drives the browser's decisions directly — newMDNSBrowser refuses to build over an
 	// empty set, because the library would read that as "every multicast-capable interface".
 	ifaces []net.Interface
-	log    *logger.Logger
+	// traffic is which traffic types the library is asked to carry, and it is settled from the
+	// addresses these interfaces actually hold (trafficFor) rather than picked: asking for a family
+	// they cannot carry does not skip that family, it stops the browse altogether.
+	traffic zeroconf.IPType
+	log     *logger.Logger
 
 	// now is the clock, injectable so a test can age a sighting without waiting an hour.
 	now func() time.Time
@@ -132,6 +136,17 @@ type mdnsBrowser struct {
 	// address (the client's own rule: short for the ones with a fallback behind them) rather than a
 	// dial per tick in whatever order a map hands them over.
 	verify func(ctx context.Context, addrs []string) (string, error)
+
+	// onSighting is called when a machine ENTERS the directory — a verified sighting that is new, or
+	// one that named an address this machine had not learned. It is the entry point's hook (set by
+	// the sending side while building this browser), and it exists because membership is the one
+	// change nothing else would ever report: a view drawn from the directory has no way to notice.
+	//
+	// A machine that merely re-announces itself says nothing new and is NOT reported, and that is
+	// what keeps this from being a heartbeat — announcements repeat every couple of minutes. Nor is a
+	// DEPARTURE: nothing announces "I am going away", so a reader finds out on its next read, which is
+	// where the sighting TTL is applied (Sightings).
+	onSighting func()
 
 	mu      sync.Mutex
 	pending map[string]candidate      // identity → candidate, awaiting verification
@@ -156,12 +171,23 @@ func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Log
 	if len(ifaces) == 0 {
 		return nil, errNoLANInterface
 	}
-	return browserOver(ifaces, self, log), nil
+	// What to ask the library for is settled HERE, from the interfaces themselves, and it can refuse:
+	// an interface carrying no address of either family is one nothing can be browsed over (trafficFor).
+	traffic, err := trafficFor(ifaces)
+	if err != nil {
+		return nil, err
+	}
+	b := browserOver(ifaces, self, log)
+	b.traffic = traffic
+	return b, nil
 }
 
 // browserOver builds the browser over interfaces that are already resolved: what newMDNSBrowser does
 // once the answer is in hand, and what a test that drives the browser's decisions directly wants (no
 // network, and no opinion about the machine it runs on).
+//
+// The traffic types default to the library's own, and that is only because such a test never starts
+// the browser: newMDNSBrowser replaces the value with the one the interfaces justify (trafficFor).
 func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsBrowser {
 	if log == nil {
 		log = logger.New("node")
@@ -169,6 +195,7 @@ func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsB
 	return &mdnsBrowser{
 		self:    self,
 		ifaces:  ifaces,
+		traffic: zeroconf.IPv4AndIPv6,
 		log:     log,
 		now:     time.Now,
 		pending: make(map[string]candidate),
@@ -183,6 +210,58 @@ func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsB
 var errNoLANInterface = errors.New("node: this machine has no interface on a local network (only " +
 	"loopback, tunnels, VM bridges, or addresses that are link-local); name one in " +
 	"node.discovery.mdns.interfaces")
+
+// errNoBrowseTraffic is the answer when the interfaces discovery was given carry no address of either
+// family, which is a browse with nothing to send it over.
+var errNoBrowseTraffic = errors.New("node: none of the interfaces discovery may browse on carries an " +
+	"IPv4 or an IPv6 address")
+
+// trafficFor is which traffic types a browse over these interfaces may ask the library for.
+//
+// It is not a preference, and the reason is in the library's own client: it joins the multicast group
+// of EVERY type it is asked for, on the interfaces it is given, and gives up on the first type it
+// cannot join anywhere — returning before it ever fills the entries channel it was handed (a channel
+// whose other end browseLoop has to survive: see the drain there). So asking for IPv6 on interfaces
+// that hold no IPv6 address does not skip IPv6, it buys NO browse at all — a browse that never runs,
+// and whose reason only survives if browseLoop says it before it waits. An IPv4-only Wi-Fi lease is
+// exactly that case, and it is worth naming because the answer is not "give up on discovery": it is
+// to ask for what the interfaces actually carry.
+//
+// Nothing is a preference the other way either: an interface with an address of both families gets
+// both, and one with only an IPv6 address (a ULA LAN) gets IPv6 alone rather than a doomed IPv4 join.
+func trafficFor(ifaces []net.Interface) (zeroconf.IPType, error) {
+	var addrs []net.Addr
+	for _, iface := range ifaces {
+		// An interface whose addresses cannot be read is one nothing can be browsed over, the same
+		// answer lanInterfaces gives it.
+		if a, err := iface.Addrs(); err == nil {
+			addrs = append(addrs, a...)
+		}
+	}
+	return trafficForAddrs(addrs)
+}
+
+// trafficForAddrs is the half of trafficFor that holds the rule, and it is separate so that the rule
+// can be told about a machine's addresses without running on a machine (the default set is a fact
+// about the network the test happens to sit on).
+func trafficForAddrs(addrs []net.Addr) (zeroconf.IPType, error) {
+	var traffic zeroconf.IPType
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipnet.IP.To4() != nil {
+			traffic |= zeroconf.IPv4
+		} else {
+			traffic |= zeroconf.IPv6
+		}
+	}
+	if traffic == 0 {
+		return 0, errNoBrowseTraffic
+	}
+	return traffic, nil
+}
 
 // nonLANInterfacePrefixes are the name prefixes of interfaces that are never the LAN this machine is
 // on: L2 bridges and the links virtual machines hang off. They are excluded BY NAME for one reason —
@@ -379,31 +458,47 @@ func (b *mdnsBrowser) Sightings() []discoveredPeer {
 	return out
 }
 
-// browseLoop is the mDNS half: the library's Browse blocks until the context is done, and the
-// channel it fills is closed when it returns.
+// browseLoop is the mDNS half: the library's Browse blocks until the context is done, and reports a
+// browse that never got going as an error instead.
+//
+// The one thing to know about it is that Browse closes the entries channel ONLY on its way out of a
+// browse that ran: a failure in its own setup returns before anything was ever handed over, leaving
+// the channel open for good. So the drain below leaves on the CONTEXT as well as on the channel —
+// without that, a browser whose multicast setup failed would leave Close waiting for a channel nobody
+// will ever close, and Close is what an entry point calls on its way out. That is a process that
+// cannot quit, which is what this shape cost once.
 func (b *mdnsBrowser) browseLoop(ctx context.Context) {
 	defer close(b.done)
 	entries := make(chan *zeroconf.ServiceEntry)
 	browseDone := make(chan struct{})
 	go func() {
 		defer close(browseDone)
-		for entry := range entries {
-			b.observe(announcementOf(entry, b.now()))
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case entry, ok := <-entries:
+				if !ok {
+					return
+				}
+				b.observe(announcementOf(entry, b.now()))
+			}
 		}
 	}()
 
-	opts := []zeroconf.ClientOption{zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6)}
+	opts := []zeroconf.ClientOption{zeroconf.SelectIPTraffic(b.traffic)}
 	if len(b.ifaces) > 0 {
 		opts = append(opts, zeroconf.SelectIfaces(b.ifaces))
 	}
 	err := zeroconf.Browse(ctx, mdnsServiceType, mdnsDomain, entries, opts...)
-	<-browseDone
+	// Said BEFORE the wait, because the failure that makes that wait long is this one — its reason is
+	// known here and nowhere else. And said once, not retried: the reasons for it are all about the
+	// network (multicast blocked, the port taken, no interface), and none is fixed by asking again.
 	if err != nil && ctx.Err() == nil {
-		// Said once, and not retried: the reasons for this are all about the network (multicast
-		// blocked, the port taken, no interface), and none of them is fixed by asking again.
 		b.log.Warn(ctx, "node: mDNS browsing stopped; this machine has to be told about peers in config",
 			"error", err)
 	}
+	<-browseDone
 	b.mu.Lock()
 	clear(b.pending)
 	clear(b.seen)
@@ -565,18 +660,47 @@ func (b *mdnsBrowser) forget(id string) {
 // resolved to travels with it, because they are all places this machine may try (design §三).
 func (b *mdnsBrowser) confirm(cand candidate) {
 	b.mu.Lock()
+	prev, had := b.seen[cand.Identity]
 	next := discoveredPeer{Identity: cand.Identity, Addrs: append([]string(nil), cand.Addrs...), Seen: b.now()}
-	if prev, ok := b.seen[cand.Identity]; ok {
+	if had {
 		// An address once learned is not dropped, only reordered: what said "I am here" most recently
 		// goes first (the same rule the directory applies to a card, node/peerdir.go).
 		next.Addrs = prependAddrs(next.Addrs, prev.Addrs)
 	}
 	b.seen[cand.Identity] = next
 	delete(b.pending, cand.Identity)
+	// A machine this list did not have, or one that told it about an address it did not know: either
+	// way a reader has a row to draw or an address to try that it did not have a moment ago. The
+	// ORDER is deliberately not part of it — it is "who spoke last", which changes on every
+	// announcement, while what a reader cares about is whether there is somewhere new to dial.
+	entered := !had || !sameAddrs(prev.Addrs, next.Addrs)
 	b.mu.Unlock()
 
 	b.log.Info(context.Background(), "node: discovered a node and proved its identity",
 		"node_id", cand.Identity, "addrs", cand.Addrs)
+
+	if entered && b.onSighting != nil {
+		b.onSighting()
+	}
+}
+
+// sameAddrs reports whether two address lists are the same set of addresses, whatever order they came
+// in. Both lists are built by prependAddrs, so neither holds a duplicate and comparing the lengths is
+// enough to go with containment.
+func sameAddrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]bool, len(a))
+	for _, addr := range a {
+		seen[addr] = true
+	}
+	for _, addr := range b {
+		if !seen[addr] {
+			return false
+		}
+	}
+	return true
 }
 
 // announcementOf turns one library entry into the shape this file works in.
