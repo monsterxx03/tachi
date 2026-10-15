@@ -108,6 +108,23 @@ func (d *desktopApp) agentSource() *agentref.Source {
 	})
 }
 
+// warmPeers asks this machine's nodes who they are, in the background, as the app starts.
+//
+// The picker's list IS the warmup: its probe is asynchronous and rate-limited (node.PeerList), the
+// answers it lands are the rows a person sees the moment they type '#', and those rows are read
+// through the sending side — which is also what brings the discovery browser up, so a machine that
+// has nothing configured but can find nodes is already listening when the reader arrives. The same
+// round leaves the pins and the card cache behind that the first turn's reminder reads
+// (node.DelegatorCache.WarmUp, the same round without a list to land in).
+//
+// Nothing here waits, and a machine with no peers and discovery off costs nothing: the list has
+// nothing to ask and the sending side is never built.
+func (d *desktopApp) warmPeers() {
+	if list := d.peerList(); list != nil {
+		list.Probe()
+	}
+}
+
 // peerList is the app's ONE node list, shared by the '#' picker and the node board: one probe, one
 // rate limit, one set of answers, so the two cannot disagree about what is up.
 func (d *desktopApp) peerList() *node.PeerList {

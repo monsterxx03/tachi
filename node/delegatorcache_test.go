@@ -1,9 +1,12 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/config"
@@ -77,6 +80,79 @@ func TestAFailedOpenIsNotCached(t *testing.T) {
 	require.Nil(t, cache.For(t.Context(), peers))
 	require.NotNil(t, cache.For(t.Context(), peers))
 	require.Equal(t, 2, attempts)
+}
+
+// WarmUp is the startup warmup, and the two halves of it are exactly the two halves of the rule it
+// serves: the round really happens with nobody asking for it (the FIRST turn's reminder is what
+// needs a peer's identity, and every identity comes out of a handshake), and the entry point does
+// not wait for it (a peer that is down, slow, or gone must not hold a window).
+func TestWarmUpAsksEveryPeerWithoutWaitingForIt(t *testing.T) {
+	previous := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(previous) })
+
+	peers := []config.PeerConfig{{Name: "nas", URL: "https://nas.example:8443"}}
+	dir, err := newPeerDirectory(peers)
+	require.NoError(t, err)
+
+	// A node that takes its time answering: the network is the reason nothing here may block.
+	asked := make(chan string, 1)
+	release := make(chan struct{})
+	dir.resolveEntry = func(ctx context.Context, e peerEntry) (*a2a.AgentCard, string, error) {
+		asked <- e.Label
+		<-release
+		return nil, "", errors.New("nothing answered at that address")
+	}
+
+	cache := NewDelegatorCache("", Discovery{}, nil)
+	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
+		return &Sender{peers: dir}, nil
+	}
+
+	returned := make(chan struct{})
+	go func() { cache.WarmUp(t.Context(), peers); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WarmUp waited for a node that had not answered: a peer would hold up startup")
+	}
+
+	// ...and the round happens on its own, which is the other half: without it this would be a
+	// no-op that returns quickly, proving nothing.
+	select {
+	case got := <-asked:
+		require.Equal(t, "nas", got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the warmup never asked the node: the first turn would pay for the handshake")
+	}
+	close(release)
+}
+
+// A cache that has been closed warms nothing: Close is terminal, and the round it would start is a
+// sender and a browser the entry point is in the middle of shutting down (see
+// TestAClosedCacheHandsOutNothing).
+func TestWarmUpOnAClosedCacheOpensNothing(t *testing.T) {
+	previous := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(previous) })
+
+	peers := []config.PeerConfig{{Name: "nas", URL: "https://nas.example:8443"}}
+	opens := 0
+	cache := NewDelegatorCache("", Discovery{}, nil)
+	opened := make(chan struct{}, 1)
+	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
+		opens++
+		opened <- struct{}{}
+		return &Sender{peers: nil}, nil
+	}
+
+	cache.Close()
+	cache.WarmUp(t.Context(), peers)
+	select {
+	case <-opened:
+		t.Fatalf("a closed cache opened %d senders; it must open none", opens)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 // Close is terminal, and the OPEN is what carries the side effects: an entry point calls it on its

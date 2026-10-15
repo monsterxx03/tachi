@@ -204,6 +204,50 @@ func (c *DelegatorCache) ForSender(ctx context.Context, peers []config.PeerConfi
 	return sender
 }
 
+// WarmUp asks every node this machine knows who it is, in the background, and returns at once.
+//
+// It exists because the first thing that wants a peer's IDENTITY is something a reader is waiting
+// on: the delegation reminder reads the directory on the very first turn, and the node picker draws
+// its rows. An identity only exists once a handshake has happened — and reading the card is the
+// cheapest request that proves one — so the offer is to pay for that while the window is still
+// drawing, rather than making the first '#' or the first turn wait for a round trip per node.
+//
+// What it warms is the sending side's own state: the pins written for the peers that answer (so a
+// config line can name its identity, and the reminder speaks in identities), the card cache (so the
+// first read is a read and not a request), and — with discovery on — the browser, which ForSender is
+// what starts. A node that does not answer is remembered as not answering for the same cardTTL, so
+// warming a dead peer cannot become a per-turn cost either.
+//
+// The entry points that have a picker do the same round through the list they already own, because
+// it is the same round: node.PeerList.Probe is what fills their rows, and those rows are read
+// through the sending side this cache hands out. This one is for the entry point that has no list.
+//
+// NOTHING waits for it, and that is the point: startup must not be held by a peer that is slow,
+// absent, or on a network that no longer exists. A round that fails is therefore silent — the first
+// turn reports the same failure, with a reader in front of it.
+func (c *DelegatorCache) WarmUp(ctx context.Context, peers []config.PeerConfig) {
+	if c == nil {
+		return
+	}
+	go func() {
+		// Bounded, so that a peer which never answers cannot outlive the startup it belongs to; the
+		// caller's context still ends it sooner (that process is going away, and so is this round).
+		ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+		defer cancel()
+
+		sender := c.ForSender(ctx, peers)
+		if sender == nil {
+			// Nothing to warm: no peers and discovery off, or this cache is already closed.
+			return
+		}
+		reports := sender.PeerReports(ctx, false)
+		if c.log != nil {
+			c.log.Debug(ctx, "node: asked every node who it is before a turn needed the answer",
+				"peers", len(reports), "reachable", countReachable(reports))
+		}
+	}()
+}
+
 // selfID is this machine's own node id, loaded (or created) so that a browser can recognise its own
 // announcements. It is called by startBrowser and nothing else, so the disk read happens only when a
 // browser is actually going to run. It is the same identity the sending side uses — the one file,

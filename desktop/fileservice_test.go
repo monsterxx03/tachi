@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
@@ -337,5 +338,46 @@ func TestPeerBoardShowsWhatThisMachineKnows(t *testing.T) {
 	}
 	if !refreshed.AnyChecked || refreshed.CheckedAt == "" {
 		t.Errorf("the board must stamp when it looked: %+v", refreshed)
+	}
+}
+
+// TestWarmPeersAsksTheNodesBeforeAnyoneLooks pins the startup warmup: a desktop that has just come
+// up asks its configured nodes who they are, with nobody opening the picker or the board.
+//
+// The reason it matters is what reads a node's identity FIRST — the delegation reminder on the very
+// first turn, and the rows of the picker someone is about to open — and that an identity only ever
+// comes out of a handshake. Whether anyone has asked is a fact about a moment (Checked), which is
+// what lets this test tell the warmup apart from a list that has been sitting there.
+//
+// The node points at 127.0.0.1:1, where nothing listens: refused at once, so the round finishes
+// inside this test rather than timing out, and "asked, and it did not answer" is still an answer
+// that was asked for (the same trick TestPeerBoardShowsWhatThisMachineKnows uses).
+func TestWarmPeersAsksTheNodesBeforeAnyoneLooks(t *testing.T) {
+	useTestConfigBase(t)
+	cfg := config.DefaultConfig()
+	cfg.Peers = []config.PeerConfig{{Name: "ugreen-nas", URL: "https://127.0.0.1:1"}}
+
+	app := newTestApp()
+	app.setConfig(cfg)
+
+	before := app.peerList().Details()
+	if len(before) != 1 || before[0].Checked {
+		t.Fatalf("nobody has looked yet, so the list claims nothing: %+v", before)
+	}
+
+	app.warmPeers()
+
+	// Asynchronous by construction — startup must not wait for a node that is down, slow, or gone —
+	// so the answer lands in a later read of the same list.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		details := app.peerList().Details()
+		if len(details) == 1 && details[0].Checked {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the warmup has to ask every node on its own: %+v", details)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

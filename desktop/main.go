@@ -359,6 +359,12 @@ func main() {
 		}
 	}
 
+	// Ask this machine's nodes who they are, in the background. Nothing waits for the answer — a
+	// peer that is down must not hold up a window — but the first '#' and the first turn's
+	// delegation reminder both need an identity, and an identity only comes out of a handshake
+	// (desk.warmPeers).
+	desk.warmPeers()
+
 	// The device link (badge.go): a screen the agent's questions can reach when nobody is
 	// looking at the window. It is off unless config or TACHI_BADGE names a transport.
 	// After initAgent, because the config it reads belongs to the app that just booted.

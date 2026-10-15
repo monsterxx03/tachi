@@ -279,6 +279,14 @@ func (m *Manager) Add(ch channel.Channel) {
 func (m *Manager) Start(ctx context.Context) error {
 	// New already resolved the provider — reaching Start means it succeeded.
 
+	// The sending side warms itself here, off the critical path (node.DelegatorCache.WarmUp): this
+	// entry has no picker to read the directory, so what the round is for is the FIRST turn's
+	// delegation reminder — a peer's identity only exists after a handshake, and nobody should have
+	// to wait for one inside a turn.
+	if m.cfg != nil && m.delegator != nil {
+		m.delegator.WarmUp(ctx, m.cfg.Peers)
+	}
+
 	// Initialize cron scheduler if enabled.
 	if m.cfg != nil && m.cfg.Cron.IsEnabled() {
 		if err := m.initCron(ctx); err != nil {

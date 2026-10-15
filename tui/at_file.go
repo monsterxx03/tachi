@@ -102,8 +102,15 @@ func (m *Model) syncAgentSource() {
 	if sender := m.sender(); sender != nil {
 		probe = sender.PeerReports
 	}
-	m.input.SetAgentSource(newAgentSource(node.NewPeerList(
-		node.RowsOf(m.sender), probe, m.agent.Logger())))
+	peers := node.NewPeerList(node.RowsOf(m.sender), probe, m.agent.Logger())
+	// Ask the nodes who they are NOW, in the background, and this is the whole of the startup
+	// warmup: the first '#' opens on rows that were already answered (Probe is asynchronous and
+	// rate-limited — node.PeerList), and reading those rows is what resolves the sending side, so
+	// the discovery browser comes up with them. What the round also leaves behind is the pins and
+	// the card cache the first turn's reminder reads (node.DelegatorCache.WarmUp, the same round
+	// without a list to land in).
+	peers.Probe()
+	m.input.SetAgentSource(newAgentSource(peers))
 }
 
 // sender is this machine's sending side as the CONCRETE sender type, for the callers that need more

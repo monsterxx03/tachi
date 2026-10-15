@@ -64,10 +64,15 @@
   smoke.check('行里有本机配的别名', row.indexOf('smoke-nas') >= 0, row)
   // 从来没有出站连过它，所以本机没有可展示的身份 —— 而那个"未知"是如实回答，不是缺数据。
   smoke.check('身份未记录（本机还没跟它连过）', row.indexOf('身份未记录') >= 0, row)
-  // 打开面板只读一次（后台那次探测是给它下一次读用的），所以刚打开时行说的是「检查中…」——
-  // 那是真的：此刻本机手里还没有结论。让它变新的是那个按钮，下面就按它。
-  smoke.check('刚打开时行如实说「检查中…」（面板不轮询，结论要等一次刷新）',
-    rowText('smoke-nas').indexOf('检查中') >= 0 && rowText('smoke-peer').indexOf('检查中') >= 0,
+  // 打开面板只读一次，而**入口启动时已经问过一遍**（desktop/main.go 的 warmPeers → 同一个
+  // PeerList），所以刚打开时两行都带着结论：一个「联系不上」（那个端口上没人听，立刻被拒），一个
+  // 「可用」。面板自己不轮询，让它变新的是那个按钮，下面就按它。
+  const settled = (peer) => {
+    const t = rowText(peer)
+    return t.indexOf('检查中') < 0 && (t.indexOf('联系不上') >= 0 || t.indexOf('可用') >= 0)
+  }
+  smoke.check('刚打开的两行都已经有结论（启动预热问过了：面板不是第一个提问的人）',
+    settled('smoke-nas') && settled('smoke-peer'),
     rowText('smoke-nas') + ' / ' + rowText('smoke-peer'))
 
   // ── 连不上的那一个：地址是配置的，而引用根本不在（没有身份就没有可插入的东西） ─────

@@ -167,7 +167,9 @@ type Model struct {
 
 	cfg *config.Config
 	// delegators is this machine's sending side for delegated work (peers + the records of what
-	// was delegated). It is nil until a user turn needs it: a TUI with no peers never builds one.
+	// was delegated). It is built on the first ask — the '#' picker's wiring at startup and a user
+	// turn are both that ask — and stays nil while this machine has nothing to delegate to (no
+	// peers configured and discovery off, so there is no sending side to build).
 	// Only the Update goroutine touches it (see delegator()).
 	delegators     *node.DelegatorCache
 	providerItems  []config.ProviderConfig
