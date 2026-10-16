@@ -490,7 +490,7 @@ type MdnsDiscoveryConfig struct {
 	// than "everything the OS calls multicast-capable" — a tunnel, a VM bridge, or a NIC with no
 	// usable address is left out, because the library sends on the interfaces it is given ONE AFTER
 	// ANOTHER and one that cannot take the packet stalls the whole round without a word
-	// (node/discovery.go lanInterfaces says what the filter is). Naming them is for a machine on
+	// (node/discovery.go LANInterfaces says what the filter is). Naming them is for a machine on
 	// several networks, where publishing a name onto the wrong one is the thing to avoid.
 	Interfaces []string `yaml:"interfaces,omitempty"`
 }

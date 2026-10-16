@@ -7,6 +7,7 @@
 - 套件：`itest/run`、`itest/tui`、`itest/acp`、`itest/mockllm`（run/tui/acp 依赖 mockllm）。
 - `make itest`（先过 `web-check`，再 `make -j4` 跑四个套件；run/tui/acp 用 `ginkgo -p`，mockllm 那个跑的是 `go test`）；单个套件：`make itest-run|itest-tui|itest-acp|itest-mockllm`。
 - `itest/tui` 在进程内用 `tea.NewProgram` 驱动真实的 `tui.Model` + `AIAgent`（按键经 `p.Send(tea.KeyPressMsg)`）；ANSI 变化流经 `itest/tui/vt.go` 回放，所以 `Screen()` 等于真实终端。
+- **`itest/` 只在 `-tags=integration` 下编译**：`go test ./...`（CI 的 test job）和 build job 都不看它。所以改了 `node/`、`agent/` 那类被四个入口共用的**导出签名**时，`make test` 全绿也不代表 CI 会绿 —— 编译这道门在 `make itest` 里。改这类签名后至少跑一次 `go vet -tags=integration ./itest/...`。
 
 ## 用例必须锚在什么上
 
@@ -29,5 +30,6 @@
 - **那个文件里三个用例各自覆盖什么**，免得被重写：(1) 一个真进程承载，另一个真进程通过 mTLS 委派给它，两侧的记录都在磁盘上核对；(2) 同一 `--home` 上的第二个进程**附着**，而不是起第二套服务——断言落在它自己的 `attached to local node service` 那一行上（按 pid 归属，因为共享一个 home 的两个进程共享同一份日志），外加锁被别的进程持有、已发布的实例 id 是第一个进程的；(3) 一个宿主在某个任务停在问题上时被 `-9` 杀掉——下次启动取走被释放的锁（flock 随持有者一起死），把那个任务判为中断，并保住那个问题。保留期那把**协调锁**的争用测试仍**未做**（`node.md`）；这三个讲的是节点锁。
 - **这三个各有一种值得知道的坏法**：少了那个惰性 channel，宿主发布完就立刻退出（上面那个就绪陷阱）；少了 kill，重启就会附着，中断任务的断言永不触发；换一个 home，「第二个」进程就成了承载方，附着断言永不触发。三条都是靠把它们弄坏来核对的，而且每次失败都报进程自己的输出，不是一个不给原因的超时。
 - **第四个用例（`itest/run/warmup_test.go`）借的是同一套 fixture，问的是另一个问题**：入口**启动的时候**会不会自己把配置里的节点问一遍（预热，见 [node.md](node.md) 的发送侧）。断言写成「谁都没要求过它」：SUT 一条 IM 消息都没收到、模型一次都没被调用，而 `a2a/peer-identities.json` 里已经写着对端的身份——把那次 `WarmUp` 关掉它就是红的（核对过一次）。它**测不了**「不阻塞启动」：一个在回答的对端，在进程这一层分不出「等了」和「没等」，那一条是 node 包单测（`node/delegatorcache_test.go`）钉的。
+- **`itest/run/discovery_test.go` 是唯一靠真组播的用例，开头有一道环境闸**：先用**库本身**（`zeroconf` 注册一次 + 浏览一次，走的就是 `node.LANInterfaces` 给的那批接口 —— 它是为这道闸导出的）证明这台机器能收到组播，证明不了就 `Skip` 并把试过的接口名字说出来；闸过了再等不到公告就是**失败**。探针必须是库而不是 Tachi 的浏览：用被测代码当探针，「这个网络不行」和「我们坏了」就分不开了，而闸要分的正是这两件事。系统解析器也不是答案——macOS 的 mDNSResponder 在进程自己拿不到组播的机器上照样看得见整个网络。（这台开发机现在就是闸门拦下的那种：裸库在 `en0` 和 `lo0` 上都收不到自己的组播，所以本地看到的是 skip，CI 上它会真跑。）
 
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md)（冒烟套件，那是另一套 harness）、[prompt-cache.md](prompt-cache.md)（为什么 mock 的请求计数不是单轮边界）、[node.md](node.md)（节点服务怎么对待它所在的那个进程）。

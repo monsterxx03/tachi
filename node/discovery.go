@@ -114,7 +114,7 @@ type mdnsBrowser struct {
 	// self is this machine's own node id, and the one announcement that is never a peer.
 	self string
 	// ifaces is which interfaces to browse on, already resolved (resolveInterfaces: the configured
-	// names, or the LAN set lanInterfaces picks when the operator named none). It is empty only in a
+	// names, or the LAN set LANInterfaces picks when the operator named none). It is empty only in a
 	// test that drives the browser's decisions directly — newMDNSBrowser refuses to build over an
 	// empty set, because the library would read that as "every multicast-capable interface".
 	ifaces []net.Interface
@@ -158,11 +158,11 @@ type mdnsBrowser struct {
 }
 
 // newMDNSBrowser builds a browser over the interfaces the config names — or, when it names none, over
-// the ones lanInterfaces picks. Nothing starts until Start is called.
+// the ones LANInterfaces picks. Nothing starts until Start is called.
 //
 // It refuses to build over an empty set, and that is the one thing that must not be quietly ignored:
 // the library reads an empty list as "every multicast-capable interface", which is exactly the set
-// lanInterfaces exists to keep away from it.
+// LANInterfaces exists to keep away from it.
 func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Logger) (*mdnsBrowser, error) {
 	ifaces, err := resolveInterfaces(cfg.Interfaces)
 	if err != nil {
@@ -233,7 +233,7 @@ func trafficFor(ifaces []net.Interface) (zeroconf.IPType, error) {
 	var addrs []net.Addr
 	for _, iface := range ifaces {
 		// An interface whose addresses cannot be read is one nothing can be browsed over, the same
-		// answer lanInterfaces gives it.
+		// answer LANInterfaces gives it.
 		if a, err := iface.Addrs(); err == nil {
 			addrs = append(addrs, a...)
 		}
@@ -268,7 +268,7 @@ func trafficForAddrs(addrs []net.Addr) (zeroconf.IPType, error) {
 // the operating system hands them to us as ordinary ethernet-shaped interfaces, with the same flags
 // and private addresses as a real NIC (macOS: the VM framework's `bridgeN`/`vmenetN`; Linux: the
 // container and VM bridges below), so there is no fact about them to test. The alternative is
-// lanInterfaces' own comment.
+// LANInterfaces' own comment.
 var nonLANInterfacePrefixes = []string{
 	"bridge", "vmenet", "vmnet", // macOS VM networking
 	"docker", "br-", "virbr", "veth", "vmbr", "cni", "flannel", // Linux containers and VMs
@@ -282,7 +282,7 @@ var nonLANInterfacePrefixes = []string{
 // interface would publish this machine's name onto a network the config says to keep it off.
 //
 // An EMPTY list is a different thing from a chosen one: nobody picked, so this function picks — and
-// what it picks is the subset that could carry a LAN packet (lanInterfaces), never "everything".
+// what it picks is the subset that could carry a LAN packet (LANInterfaces), never "everything".
 func resolveInterfaces(names []string) ([]net.Interface, error) {
 	var out []net.Interface
 	for _, name := range names {
@@ -298,13 +298,18 @@ func resolveInterfaces(names []string) ([]net.Interface, error) {
 		out = append(out, *iface)
 	}
 	if len(out) == 0 {
-		return lanInterfaces()
+		return LANInterfaces()
 	}
 	return out, nil
 }
 
-// lanInterfaces is the set discovery uses when the operator named none: the interfaces that could
+// LANInterfaces is the set discovery uses when the operator named none: the interfaces that could
 // carry a multicast packet between two machines on a LAN.
+//
+// It is exported for the one caller that has to ask the SAME question this set is about: the
+// integration spec probes multicast over these interfaces and skips when the machine cannot carry it,
+// and a probe over a set this machine would never browse on answers a question nobody asked
+// (itest/run/discovery_test.go).
 //
 // It is deliberately NOT "every multicast-capable interface", which is what the library picks for
 // itself from an empty list — and on a machine with VPN tunnels and virtual machines that set is a
@@ -328,7 +333,7 @@ func resolveInterfaces(names []string) ([]net.Interface, error) {
 // catch anything these rules miss, and it costs a packet and a timeout on every machine, including the
 // ones where the default is already right. Worth revisiting the day a broken interface shows up that
 // these rules miss.
-func lanInterfaces() ([]net.Interface, error) {
+func LANInterfaces() ([]net.Interface, error) {
 	all, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("node: cannot list this machine's interfaces: %w", err)
@@ -355,7 +360,7 @@ func lanInterfaces() ([]net.Interface, error) {
 }
 
 // lanShape reports whether an interface has the shape of one that could carry a LAN multicast packet:
-// the flags, and the name kinds the OS does not give a flag for. See lanInterfaces.
+// the flags, and the name kinds the OS does not give a flag for. See LANInterfaces.
 func lanShape(iface net.Interface) bool {
 	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 ||
 		iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagPointToPoint != 0 {

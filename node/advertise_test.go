@@ -133,7 +133,7 @@ func TestAnAnnouncementIsVisibleOnTheNetwork(t *testing.T) {
 	// work on a machine with tunnels and virtual machines: the library's own default is every
 	// multicast-capable interface, and its browse side sends a query per interface one after another,
 	// so an interface that cannot take the packet hangs the query before it is ever sent — the same
-	// trap that node/discovery.go lanInterfaces keeps away from the product.
+	// trap that node/discovery.go LANInterfaces keeps away from the product.
 	ifaces, err := resolveInterfaces(nil)
 	if errors.Is(err, errNoLANInterface) {
 		t.Skip("this machine has no interface on a local network to browse on")
