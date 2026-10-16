@@ -341,9 +341,9 @@ func prependAddrs(have, fresh []string) []string {
 // capDiscovered bounds how many machines the discovered half of the directory will hold at all.
 //
 // Expiry is NOT here, and that is a decision about where the rule lives: what "last seen" means is
-// something only the browser knows (it is the component that observes and the one that re-observes),
-// so it is the browser that forgets — a sighting it stops reporting simply stops being an entry
-// (node/discovery.go discoveryTTL). A second clock here would be a second answer to "how long is a
+// something only the store knows (it is what observes a machine and re-observes it, and it holds the
+// one clock), so the store forgets — a sighting it stops reporting simply stops being an entry
+// (node/sightings.go discoveryTTL). A second clock here would be a second answer to "how long is a
 // machine that went quiet kept", and the two would drift.
 //
 // The cap is different in kind: it is a limit on a LIST, which is this type's business, and it exists
@@ -392,9 +392,10 @@ func (d *peerDirectory) sightings() []discoveredPeer {
 	out := make([]discoveredPeer, 0, len(found))
 	for _, seen := range found {
 		// A sighting with no identity cannot be keyed, merged or checked, so it is not an entry
-		// this machine can hold. Dropping it here is not a policy about the network: the browser is
-		// what accepted the announcement, and an announcement without a usable identity is one the
-		// browser already refused to act on (node/discovery.go).
+		// this machine can hold. Dropping it here is not a policy about the network: the store is
+		// what accepts a candidate, and one without a usable identity is already refused at that
+		// door (node/sightings.go feed). This is the boundary the DIRECTORY insists on, spelled out
+		// where the directory reads, so a source added later cannot get its shape past it.
 		if !IsNodeID(seen.Identity) {
 			continue
 		}

@@ -25,7 +25,7 @@ const (
 // them — and newMDNSBrowser would refuse to build without a LAN interface, rightly (browserOver).
 func testBrowser(t *testing.T) *mdnsBrowser {
 	t.Helper()
-	return browserOver(nil, nasID, nil)
+	return browserOver(nil, nasID, nil, newSightingsStore(nil))
 }
 
 // txtAnnouncement is one announcement the way a well-behaved Tachi node sends it.
@@ -106,19 +106,19 @@ func TestEveryLocalAddressOfAnAnnouncementBecomesACandidate(t *testing.T) {
 func TestASightingNeedsTheProvenIdentityToMatchTheClaim(t *testing.T) {
 	b := testBrowser(t)
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
-	require.Empty(t, b.Sightings(), "an announcement is not a sighting")
+	require.Empty(t, b.store.sightings(), "an announcement is not a sighting")
 
 	// The machine at that address proves a DIFFERENT identity than the one announced.
-	b.setVerifier(func(context.Context, []string) (string, error) { return claimedID, nil })
-	require.True(t, b.verifyDue(context.Background()))
-	require.Empty(t, b.Sightings(), "a claim that the handshake refutes is not a machine this one may list")
-	require.False(t, b.verifyDue(context.Background()), "and it is dropped rather than retried forever")
+	b.store.setVerifier(func(context.Context, []string) (string, error) { return claimedID, nil })
+	require.True(t, b.store.verifyDue(context.Background()))
+	require.Empty(t, b.store.sightings(), "a claim that the handshake refutes is not a machine this one may list")
+	require.False(t, b.store.verifyDue(context.Background()), "and it is dropped rather than retried forever")
 
 	// The honest announcement, on the other hand, becomes one.
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7081"))
-	b.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
-	require.True(t, b.verifyDue(context.Background()))
-	sightings := b.Sightings()
+	b.store.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	require.True(t, b.store.verifyDue(context.Background()))
+	sightings := b.store.sightings()
 	require.Len(t, sightings, 1)
 	require.Equal(t, discoveredID, sightings[0].Identity)
 	require.Equal(t, []string{"https://192.168.1.9:7081"}, sightings[0].Addrs)
@@ -130,18 +130,18 @@ func TestACandidateThatDoesNotAnswerYetIsRetried(t *testing.T) {
 	b := testBrowser(t)
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
 	attempts := 0
-	b.setVerifier(func(context.Context, []string) (string, error) {
+	b.store.setVerifier(func(context.Context, []string) (string, error) {
 		attempts++
 		return "", errors.New("connection refused")
 	})
 
-	require.True(t, b.verifyDue(context.Background()))
+	require.True(t, b.store.verifyDue(context.Background()))
 	require.Equal(t, 1, attempts)
-	require.False(t, b.verifyDue(context.Background()), "not immediately: the retry has a delay")
-	require.Empty(t, b.Sightings())
+	require.False(t, b.store.verifyDue(context.Background()), "not immediately: the retry has a delay")
+	require.Empty(t, b.store.sightings())
 
-	b.now = func() time.Time { return time.Now().Add(discoveryRetry) }
-	require.True(t, b.verifyDue(context.Background()))
+	b.store.now = func() time.Time { return time.Now().Add(discoveryRetry) }
+	require.True(t, b.store.verifyDue(context.Background()))
 	require.Equal(t, 2, attempts, "the machine was tried again after the delay")
 }
 
@@ -151,10 +151,10 @@ func TestACandidateThatDoesNotAnswerYetIsRetried(t *testing.T) {
 func TestACandidateWithNoIdentityToProveIsDropped(t *testing.T) {
 	b := testBrowser(t)
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
-	b.setVerifier(func(context.Context, []string) (string, error) { return "", nil })
+	b.store.setVerifier(func(context.Context, []string) (string, error) { return "", nil })
 
-	require.True(t, b.verifyDue(context.Background()))
-	require.False(t, b.verifyDue(context.Background()))
+	require.True(t, b.store.verifyDue(context.Background()))
+	require.False(t, b.store.verifyDue(context.Background()))
 }
 
 // A machine that went quiet stops being a sighting — an hour after it was last seen — without
@@ -162,21 +162,21 @@ func TestACandidateWithNoIdentityToProveIsDropped(t *testing.T) {
 func TestASightingExpiresAnHourAfterItWasLastSeen(t *testing.T) {
 	b := testBrowser(t)
 	at := time.Now()
-	b.now = func() time.Time { return at }
+	b.store.now = func() time.Time { return at }
 	// The announcement is stamped by the same clock the browser reads, so "when it was seen" and
 	// "when to try it" are the same instant rather than two.
 	a := txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080")
 	a.Seen = at
 	b.observe(a)
-	b.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
-	require.True(t, b.verifyDue(context.Background()))
-	require.Len(t, b.Sightings(), 1)
+	b.store.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	require.True(t, b.store.verifyDue(context.Background()))
+	require.Len(t, b.store.sightings(), 1)
 
-	b.now = func() time.Time { return at.Add(discoveryTTL - time.Minute) }
-	require.Len(t, b.Sightings(), 1, "still inside the window")
+	b.store.now = func() time.Time { return at.Add(discoveryTTL - time.Minute) }
+	require.Len(t, b.store.sightings(), 1, "still inside the window")
 
-	b.now = func() time.Time { return at.Add(discoveryTTL + time.Minute) }
-	require.Empty(t, b.Sightings(), "outside it, the machine is no longer an entry")
+	b.store.now = func() time.Time { return at.Add(discoveryTTL + time.Minute) }
+	require.Empty(t, b.store.sightings(), "outside it, the machine is no longer an entry")
 }
 
 // A machine that announces two addresses keeps both once it is confirmed, no matter which one
@@ -189,17 +189,17 @@ func TestAConfirmedMachineKeepsEveryAddressItAnnounced(t *testing.T) {
 		"https://192.168.1.9:7080", "https://100.64.0.3:7080"))
 
 	var asked []string
-	b.setVerifier(func(_ context.Context, addrs []string) (string, error) {
+	b.store.setVerifier(func(_ context.Context, addrs []string) (string, error) {
 		asked = append([]string(nil), addrs...)
 		return discoveredID, nil
 	})
 
-	require.True(t, b.verifyDue(context.Background()))
+	require.True(t, b.store.verifyDue(context.Background()))
 	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, asked,
 		"one machine, one pass, its addresses in the order the announcement gave them")
-	require.False(t, b.verifyDue(context.Background()), "and nothing is left queued")
+	require.False(t, b.store.verifyDue(context.Background()), "and nothing is left queued")
 
-	sightings := b.Sightings()
+	sightings := b.store.sightings()
 	require.Len(t, sightings, 1)
 	require.ElementsMatch(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, sightings[0].Addrs)
 }
@@ -499,7 +499,7 @@ func TestCloseReturnsEvenWhenBrowsingNeverStarted(t *testing.T) {
 		Index: 1 << 20,
 		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
 	}
-	b := browserOver([]net.Interface{nowhere}, nasID, nil)
+	b := browserOver([]net.Interface{nowhere}, nasID, nil, newSightingsStore(nil))
 	b.Start(context.Background())
 
 	closed := make(chan struct{})
@@ -537,31 +537,31 @@ func addrsOf(ifaces []net.Interface) map[string][]string {
 // minutes, the listener re-reads the directory (and asks the entry point for a probe), so reporting
 // a repeat would turn discovery into a heartbeat. A machine that MOVED — one announcing an address
 // this process had not learned — is a change again, because there is somewhere new to dial.
-func TestTheBrowserReportsAMachineOnlyWhenItEntersTheDirectory(t *testing.T) {
-	b := browserOver(nil, nasID, nil)
+func TestAMachineIsReportedOnlyWhenItEntersTheDirectory(t *testing.T) {
+	s := newSightingsStore(nil)
 	entered := make(chan string, 8)
-	b.onSighting = func() { entered <- "sighting" }
+	s.onSighting = func() { entered <- "sighting" }
 
 	cand := candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.168:9990"}}
-	b.confirm(cand)
+	s.confirm(cand)
 	assertSighting(t, entered, "the first sighting of a machine")
 
 	// The same machine, announcing the same address: already listed, nothing to say.
-	b.confirm(cand)
+	s.confirm(cand)
 	assertNoSighting(t, entered)
 
 	// The same machine at an address it had not named before: a new place to dial, so it is news.
-	b.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990"}})
+	s.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990"}})
 	assertSighting(t, entered, "a machine that moved to an address this process had not learned")
 
 	// And an announcement that brings back the FIRST address alongside the new one reports nothing
 	// new either: the address is one it already knows, whatever order it arrives in.
-	b.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990",
+	s.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990",
 		"https://192.168.71.168:9990"}})
 	assertNoSighting(t, entered)
 
 	// A different machine is a different entry, whatever it announces.
-	b.confirm(candidate{Identity: claimedID, Addrs: []string{"https://192.168.71.168:9990"}})
+	s.confirm(candidate{Identity: claimedID, Addrs: []string{"https://192.168.71.168:9990"}})
 	assertSighting(t, entered, "a second machine")
 }
 

@@ -34,7 +34,7 @@ type Sender struct {
 //
 // It is called once per entry point rather than once per turn: the records are files, and a
 // tool call must not pay a directory scan.
-func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
+func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 	records, err := openDelegationStore(config.DelegationsDir())
 	if err != nil {
 		return nil, err
@@ -85,9 +85,12 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, b
 	// Discovery feeds the directory, and the directory feeds discovery's verifier: a sighting enters
 	// only after that connection has proved an identity, and the same client is what makes it — the
 	// card it reads is cached where the directory will find it (node/peers.go attachCard).
-	if browser != nil {
-		directory.discover = browser.Sightings
-		browser.setVerifier(client.verifierOf())
+	//
+	// What the directory reads is the store, not one of its sources: the store is what holds the
+	// confirmed set (node/sightings.go), a browser is only one of the things that fill it.
+	if store != nil {
+		directory.discover = store.sightings
+		store.setVerifier(client.verifierOf())
 	}
 	return &Sender{peers: directory, records: records, client: client, known: known}, nil
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,25 +18,26 @@ import (
 	"github.com/monsterxx03/tachi/pkg/netutil"
 )
 
-// Discovery: finding other Tachi nodes on the local network instead of being told about them.
+// Discovery over multicast DNS: finding other Tachi nodes on the local network instead of being told
+// about them.
 //
-// The browse side is DNS-SD over multicast DNS (`_tachi._tcp`), and what it produces is a stream of
-// CLAIMS — anyone on the same network can send a multicast packet, and the instance name, the TXT
-// records and the addresses in it are all text a stranger wrote. So nothing here decides anything a
-// later step relies on:
+// This file is the mDNS HALF of it — browsing (`_tachi._tcp`), and the checks an announcement gets
+// before it costs a connection. What the browse produces is a stream of CLAIMS: anyone on the same
+// network can send a multicast packet, and the instance name, the TXT records and the addresses in it
+// are all text a stranger wrote. So a claim is filtered on nothing but its SHAPE (does it claim to be
+// a Tachi node of this API version, at an address that could be on this network), and a shape check
+// is not trust: it exists so that a stray `_tachi._tcp` from something else does not cost a
+// connection attempt.
 //
-//   - an announcement is filtered on nothing but its SHAPE (does it claim to be a Tachi node of this
-//     API version, at an address that could be on this network), and a shape check is not trust: it
-//     exists so that a stray `_tachi._tcp` from something else does not cost a connection attempt;
-//   - a candidate becomes a SIGHTING only after this machine has connected to it over TLS and read a
-//     card — which is where an identity comes from, because it is that handshake, not the packet,
-//     that proves which key is answering there;
-//   - the identity the handshake proves must be the one the packet claimed, or the packet was a lie
-//     and the candidate is dropped with a line in the log.
+// What happens to a claim after that is not this file's business. It goes to the sightings store
+// (node/sightings.go), which connects ONCE, learns the identity the handshake PROVES — the packet's
+// claim about it is only what the connection is checked against, and a disagreement is a lie worth a
+// line in the log — and then publishes the machine as a sighting. The store is also where the second
+// kind of claim arrives (a peer's word, with gossip): one queue, one verification, one answer to
+// "which machines has this process proved". Design §5.
 //
-// Design §5. What discovery therefore produces is one thing: a machine this machine may now TRY,
-// with an identity it has already verified. Nothing about correctness depends on the multicast ever
-// working — a network where it does not is a network where `peers:` is how nodes are introduced.
+// Nothing about correctness depends on the multicast ever working — a network where it does not is a
+// network where `peers:` is how nodes are introduced.
 
 const (
 	// The service type this program advertises and browses. The `_tcp` suffix is what says "we speak a
@@ -75,6 +75,10 @@ const (
 	discoveryTick = 2 * time.Second
 )
 
+// The sightings store is where the three numbers above are spent: it owns the candidate queue, the
+// confirmed set and the verification loop, and mDNS is only one of the things that feed it
+// (node/sightings.go).
+
 // announcement is one DNS-SD announcement as it ARRIVED. Every field is untrusted text from whoever
 // sent the packet, and the shape of this type says so: nothing here is used without another check.
 type announcement struct {
@@ -88,28 +92,16 @@ type announcement struct {
 	Seen  time.Time
 }
 
-// candidate is an announcement that passed the checks which need no connection, waiting to be
-// verified by one.
-//
-// It is keyed by IDENTITY and carries every address the announcement resolved to, because that is
-// what verifying means: a machine has several addresses, one of them answers, and the others are
-// not separate machines to be discovered. Treating each address as its own candidate is what made
-// the first version of this take half a minute on a machine with a dozen IPv6 addresses — one dial
-// per two-second tick, in map order, and the address that worked could be the twelfth.
-type candidate struct {
-	Identity string
-	Addrs    []string
-	// Next is when to try verifying it: a failure schedules a retry rather than a removal, because a
-	// node announcing itself before it can answer is the ordinary case for a machine starting up.
-	Next time.Time
-}
-
-// mdnsBrowser finds other Tachi nodes by browsing `_tachi._tcp` on the local network, and publishes
-// the ones it has VERIFIED.
+// mdnsBrowser finds other Tachi nodes by browsing `_tachi._tcp` on the local network, and hands what
+// it sees to the store that decides what is real (node/sightings.go).
 //
 // One browser per process, owned by whoever owns the sending side (node/delegatorcache.go): it holds
 // UDP sockets and goroutines, and the sending side is rebuilt every time the peer list changes
 // while the network underneath it is the same network.
+//
+// It is a PRODUCER and nothing else. Everything it can see is a claim — a multicast packet anyone on
+// the network could have sent — so its whole job is to decide "this is worth one connection" and hand
+// the candidate over. The connection, and the only write to the confirmed set, happen in the store.
 type mdnsBrowser struct {
 	// self is this machine's own node id, and the one announcement that is never a peer.
 	self string
@@ -124,33 +116,12 @@ type mdnsBrowser struct {
 	traffic zeroconf.IPType
 	log     *logger.Logger
 
-	// now is the clock, injectable so a test can age a sighting without waiting an hour.
-	now func() time.Time
-
-	// verify connects to a candidate's addresses and answers with the identity the peer PROVED there,
-	// which is the only thing that turns an announcement into a sighting. It is set by the sending
-	// side as it is built (it needs that side's client and certificate), and a browser without one
-	// publishes nothing: a candidate nobody can verify is a candidate nobody should believe.
-	//
-	// It takes the WHOLE address list, so that trying one machine is one pass with one deadline per
-	// address (the client's own rule: short for the ones with a fallback behind them) rather than a
-	// dial per tick in whatever order a map hands them over.
-	verify func(ctx context.Context, addrs []string) (string, error)
-
-	// onSighting is called when a machine ENTERS the directory — a verified sighting that is new, or
-	// one that named an address this machine had not learned. It is the entry point's hook (set by
-	// the sending side while building this browser), and it exists because membership is the one
-	// change nothing else would ever report: a view drawn from the directory has no way to notice.
-	//
-	// A machine that merely re-announces itself says nothing new and is NOT reported, and that is
-	// what keeps this from being a heartbeat — announcements repeat every couple of minutes. Nor is a
-	// DEPARTURE: nothing announces "I am going away", so a reader finds out on its next read, which is
-	// where the sighting TTL is applied (Sightings).
-	onSighting func()
-
-	mu      sync.Mutex
-	pending map[string]candidate      // identity → candidate, awaiting verification
-	seen    map[string]discoveredPeer // identity → verified sighting, with when it was last seen
+	// store is what this browser feeds, and the only thing it does with what it sees: a candidate goes
+	// in there, and is believed only after a connection has proved who is answering at one of its
+	// addresses. The store is NOT the browser's — it outlives it and has other sources
+	// (node/delegatorcache.go) — and it carries the discovery side's one clock, which is why
+	// browseLoop asks IT what time it is.
+	store *sightingsStore
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -163,7 +134,7 @@ type mdnsBrowser struct {
 // It refuses to build over an empty set, and that is the one thing that must not be quietly ignored:
 // the library reads an empty list as "every multicast-capable interface", which is exactly the set
 // LANInterfaces exists to keep away from it.
-func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Logger) (*mdnsBrowser, error) {
+func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Logger, store *sightingsStore) (*mdnsBrowser, error) {
 	ifaces, err := resolveInterfaces(cfg.Interfaces)
 	if err != nil {
 		return nil, err
@@ -177,7 +148,7 @@ func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Log
 	if err != nil {
 		return nil, err
 	}
-	b := browserOver(ifaces, self, log)
+	b := browserOver(ifaces, self, log, store)
 	b.traffic = traffic
 	return b, nil
 }
@@ -188,7 +159,7 @@ func newMDNSBrowser(self string, cfg config.MdnsDiscoveryConfig, log *logger.Log
 //
 // The traffic types default to the library's own, and that is only because such a test never starts
 // the browser: newMDNSBrowser replaces the value with the one the interfaces justify (trafficFor).
-func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsBrowser {
+func browserOver(ifaces []net.Interface, self string, log *logger.Logger, store *sightingsStore) *mdnsBrowser {
 	if log == nil {
 		log = logger.New("node")
 	}
@@ -197,9 +168,7 @@ func browserOver(ifaces []net.Interface, self string, log *logger.Logger) *mdnsB
 		ifaces:  ifaces,
 		traffic: zeroconf.IPv4AndIPv6,
 		log:     log,
-		now:     time.Now,
-		pending: make(map[string]candidate),
-		seen:    make(map[string]discoveredPeer),
+		store:   store,
 		done:    make(chan struct{}),
 	}
 }
@@ -395,17 +364,6 @@ func hasLANAddress(addrs []net.Addr) bool {
 	return false
 }
 
-// setVerifier is how the sending side teaches the browser to check a candidate. Called with the
-// newest client each time the sending side is rebuilt.
-func (b *mdnsBrowser) setVerifier(verify func(ctx context.Context, addrs []string) (string, error)) {
-	if b == nil {
-		return
-	}
-	b.mu.Lock()
-	b.verify = verify
-	b.mu.Unlock()
-}
-
 // Start runs the browser until the context is canceled or Close is called.
 //
 // It never fails the caller: a network where mDNS cannot be used at all (no multicast-capable
@@ -419,11 +377,12 @@ func (b *mdnsBrowser) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	b.cancel = cancel
 	go b.browseLoop(ctx)
-	go b.verifyLoop(ctx)
 }
 
-// Close stops browsing. The sightings go with it, and so do the rows: a machine this process found
-// and can no longer see is not an entry it may keep listing.
+// Close stops browsing: the socket and the goroutine go away.
+//
+// What it does NOT do is drop the sightings — they are the store's, and the store outlives this
+// browser (it has other sources). Whoever brought both up closes both (node/delegatorcache.go).
 func (b *mdnsBrowser) Close() {
 	if b == nil {
 		return
@@ -434,33 +393,6 @@ func (b *mdnsBrowser) Close() {
 		}
 		<-b.done
 	})
-}
-
-// Sightings is the browser's answer for the directory: the machines it has VERIFIED and seen
-// recently, in a stable order.
-//
-// It reads memory and nothing else — the directory's cheap path calls it on every keystroke — and it
-// applies the TTL on read, so a machine that went quiet stops being an entry without anything having
-// to sweep it.
-func (b *mdnsBrowser) Sightings() []discoveredPeer {
-	if b == nil {
-		return nil
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.now()
-	out := make([]discoveredPeer, 0, len(b.seen))
-	for _, s := range b.seen {
-		if now.Sub(s.Seen) > discoveryTTL {
-			delete(b.seen, s.Identity)
-			continue
-		}
-		out = append(out, s)
-	}
-	// Sorted so a rebuild of the directory produces the same list twice: Go's map order is random,
-	// and rows that shuffle between keystrokes are unusable (node/peerdir.go).
-	slices.SortFunc(out, func(a, b discoveredPeer) int { return strings.Compare(a.Identity, b.Identity) })
-	return out
 }
 
 // browseLoop is the mDNS half: the library's Browse blocks until the context is done, and reports a
@@ -486,7 +418,9 @@ func (b *mdnsBrowser) browseLoop(ctx context.Context) {
 				if !ok {
 					return
 				}
-				b.observe(announcementOf(entry, b.now()))
+				// The STORE's clock, not one of the browser's: a sighting's age is read against that
+				// one, and two clocks would be two answers to "how old is this" (node/sightings.go).
+				b.observe(announcementOf(entry, b.store.clock()))
 			}
 		}
 	}()
@@ -504,77 +438,14 @@ func (b *mdnsBrowser) browseLoop(ctx context.Context) {
 			"error", err)
 	}
 	<-browseDone
-	b.mu.Lock()
-	clear(b.pending)
-	clear(b.seen)
-	b.mu.Unlock()
 }
 
-// verifyLoop turns candidates into sightings, one at a time.
+// observe applies the checks that need no connection to one announcement, and hands what survives to
+// the store as a candidate.
 //
-// One at a time on purpose: each verification is a TLS connection to a machine that may be a
-// stranger's, and the rate at which announcements arrive is chosen by whoever is on the network. A
-// loop that took the next due candidate each tick bounds that rate at one connection per tick, per
-// machine, whatever the network does.
-func (b *mdnsBrowser) verifyLoop(ctx context.Context) {
-	ticker := time.NewTicker(discoveryTick)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			b.verifyDue(ctx)
-		}
-	}
-}
-
-// verifyDue verifies the earliest candidate whose retry time has come, and reports whether it did.
-func (b *mdnsBrowser) verifyDue(ctx context.Context) bool {
-	b.mu.Lock()
-	verify := b.verify
-	now := b.now()
-	id, cand, found := "", candidate{}, false
-	for machine, c := range b.pending {
-		if c.Next.After(now) {
-			continue
-		}
-		if !found || c.Next.Before(cand.Next) {
-			id, cand, found = machine, c, true
-		}
-	}
-	b.mu.Unlock()
-	if !found || verify == nil {
-		return false
-	}
-
-	// The connection happens with no lock held: it is a network round trip, and the rule this
-	// codebase follows is one lock at a time.
-	proved, err := verify(ctx, cand.Addrs)
-	switch {
-	case err != nil:
-		b.reschedule(id, cand, err)
-	case proved == "":
-		// No identity to prove: nothing at those addresses is serving a TLS surface this machine can
-		// read (it may be plaintext, or something else entirely). Not an error worth a line per
-		// attempt — it is a candidate that will never verify, so it is dropped rather than retried for
-		// ever.
-		b.forget(id)
-	case proved != cand.Identity:
-		// The packet named one identity and the machine at those addresses proved another: the
-		// announcement lied. Said out loud, because it is the one case where something on the network
-		// deliberately misled this machine.
-		b.log.Warn(ctx, "node: a discovery announcement named an identity the machine at that address "+
-			"did not prove; dropping the candidate", "claimed", cand.Identity, "proved", proved,
-			"addrs", cand.Addrs)
-		b.forget(id)
-	default:
-		b.confirm(cand)
-	}
-	return true
-}
-
-// observe decides what to do with one announcement, without connecting to anything.
+// It decides one thing and no more: that this is worth ONE connection. What comes back from that
+// connection is what says whether the claim was true (node/sightings.go verifyDue), and this file
+// never learns the answer — a producer here has no opinion about what is real.
 func (b *mdnsBrowser) observe(a announcement) {
 	cand, why := b.decide(a)
 	if cand == nil {
@@ -584,19 +455,7 @@ func (b *mdnsBrowser) observe(a announcement) {
 		}
 		return
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	next := candidate{Identity: cand.Identity, Addrs: cand.Addrs, Next: a.Seen}
-	if prev, ok := b.pending[cand.Identity]; ok {
-		// Already waiting: keep the earliest retry (so a machine that announces once a second does not
-		// keep pushing its own verification out of reach) and the addresses learned since, because an
-		// announcement is a claim about where a machine IS and the next one may be the one that works.
-		if prev.Next.Before(next.Next) {
-			next.Next = prev.Next
-		}
-		next.Addrs = prependAddrs(next.Addrs, prev.Addrs)
-	}
-	b.pending[cand.Identity] = next
+	b.store.feed(*cand)
 }
 
 // decide applies every check that needs no connection, and answers with a candidate or the reason
@@ -638,74 +497,6 @@ func (b *mdnsBrowser) decide(a announcement) (*candidate, string) {
 		return nil, "it resolved to no address on a local network"
 	}
 	return &candidate{Identity: id, Addrs: local, Next: a.Seen}, ""
-}
-
-// reschedule keeps a candidate that could not be verified, for another attempt later.
-func (b *mdnsBrowser) reschedule(id string, cand candidate, err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if _, ok := b.pending[id]; !ok {
-		return // forgotten while the attempt was in flight
-	}
-	cand.Next = b.now().Add(discoveryRetry)
-	b.pending[id] = cand
-	b.log.Debug(context.Background(), "node: a discovered node did not answer yet; will try again",
-		"node_id", id, "addrs", cand.Addrs, "error", err.Error())
-}
-
-// forget drops one candidate for good: nothing at those addresses will ever verify, so asking again
-// is a connection spent on a known answer.
-func (b *mdnsBrowser) forget(id string) {
-	b.mu.Lock()
-	delete(b.pending, id)
-	b.mu.Unlock()
-}
-
-// confirm records a verified machine: it entered the directory, and every address its announcement
-// resolved to travels with it, because they are all places this machine may try (design §三).
-func (b *mdnsBrowser) confirm(cand candidate) {
-	b.mu.Lock()
-	prev, had := b.seen[cand.Identity]
-	next := discoveredPeer{Identity: cand.Identity, Addrs: append([]string(nil), cand.Addrs...), Seen: b.now()}
-	if had {
-		// An address once learned is not dropped, only reordered: what said "I am here" most recently
-		// goes first (the same rule the directory applies to a card, node/peerdir.go).
-		next.Addrs = prependAddrs(next.Addrs, prev.Addrs)
-	}
-	b.seen[cand.Identity] = next
-	delete(b.pending, cand.Identity)
-	// A machine this list did not have, or one that told it about an address it did not know: either
-	// way a reader has a row to draw or an address to try that it did not have a moment ago. The
-	// ORDER is deliberately not part of it — it is "who spoke last", which changes on every
-	// announcement, while what a reader cares about is whether there is somewhere new to dial.
-	entered := !had || !sameAddrs(prev.Addrs, next.Addrs)
-	b.mu.Unlock()
-
-	b.log.Info(context.Background(), "node: discovered a node and proved its identity",
-		"node_id", cand.Identity, "addrs", cand.Addrs)
-
-	if entered && b.onSighting != nil {
-		b.onSighting()
-	}
-}
-
-// sameAddrs reports whether two address lists are the same set of addresses, whatever order they came
-// in. Both lists are built by prependAddrs, so neither holds a duplicate and comparing the lengths is
-// enough to go with containment.
-func sameAddrs(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	seen := make(map[string]bool, len(a))
-	for _, addr := range a {
-		seen[addr] = true
-	}
-	for _, addr := range b {
-		if !seen[addr] {
-			return false
-		}
-	}
-	return true
 }
 
 // announcementOf turns one library entry into the shape this file works in.

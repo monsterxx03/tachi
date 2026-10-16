@@ -40,6 +40,12 @@ type DelegatorCache struct {
 	// sender because a sender is rebuilt whenever the peer list changes while the network underneath
 	// it is the same network: one browser per process, one UDP socket, one set of sightings.
 	discovery Discovery
+	// store is what every source of discovery feeds — the candidate queue, the confirmed set and the
+	// verification loop (node/sightings.go). It is held here, beside the sources, because it outlives
+	// each of them: a browser comes and goes with the sending side, and the store is what the
+	// directory reads (node/sender.go OpenSender hands it over) and what a second source will feed.
+	// Nil while discovery is off, which is the default.
+	store *sightingsStore
 	// browser is that browser, started the first time anyone asks for a sender. Nil while discovery
 	// is off, which is the default.
 	browser *mdnsBrowser
@@ -52,7 +58,7 @@ type DelegatorCache struct {
 	// point is what holds the views somebody is looking at. Nil is the common case — three of the four
 	// entry points have no such view.
 	onSighting func()
-	openFunc   func(peers []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error)
+	openFunc   func(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error)
 }
 
 // DiscoveryOf is the discovery settings a config asks for, in the sending side's own terms: the one
@@ -98,53 +104,64 @@ func (c *DelegatorCache) Close() {
 	// The switch goes off with it, so that the two ways of asking "may discovery run" agree: the flag
 	// is what stops a sender being built, this is what makes the value itself true.
 	c.discovery.Enabled = false
-	browser := c.browser
-	c.browser = nil
+	browser, store := c.browser, c.store
+	c.browser, c.store = nil, nil
 	c.current = nil
 	c.mu.Unlock()
+	// The producer first, then what it fed. Neither wait is on anything another package owns, so this
+	// is bounded by one in-flight connection at worst.
 	if browser != nil {
 		browser.Close()
 	}
+	if store != nil {
+		store.Close()
+	}
 }
 
-// startBrowser brings the browser up the first time it is needed, and returns nil while discovery is
-// off. Called with c.mu held.
+// startDiscovery brings the discovery side up the first time it is needed — the store every source
+// feeds (node/sightings.go), and with mDNS on, the browser that is its first source. Called with
+// c.mu held, and safe to call when it is already up.
 //
-// A browser that cannot start is NOT an error the caller has to handle: the deployment it fails in
+// Discovery that cannot start is NOT an error the caller has to handle: the deployment it fails in
 // (no multicast-capable interface, the port taken by the system responder) is a real one, and the
 // answer to it is the state before discovery existed — this machine has to be told about peers. It
 // is said once in the log, and discovery stays off for this process.
-func (c *DelegatorCache) startBrowser(ctx context.Context) *mdnsBrowser {
-	if c.browser != nil || !c.discovery.Enabled {
-		return c.browser
+func (c *DelegatorCache) startDiscovery(ctx context.Context) {
+	if c.store != nil || !c.discovery.Enabled {
+		return
 	}
 	// This machine's own identity, read HERE rather than by the caller: it is a disk read (and a key
-	// and certificate the first time), it is only needed by a browser that is actually going to run,
+	// and certificate the first time), it is only needed by discovery that is actually going to run,
 	// and the sender built below reads the same file anyway. An identity that cannot be read turns
 	// discovery off (selfID) — a browser that cannot tell its own announcements from a stranger's is
 	// not a browser this machine should run.
 	self := c.selfID()
 	if self == "" {
-		return nil
+		return
 	}
+	store := newSightingsStore(c.log)
 	browser, err := newMDNSBrowser(self, config.MdnsDiscoveryConfig{
 		Enabled:    c.discovery.Enabled,
 		Interfaces: c.discovery.Interfaces,
-	}, c.log)
+	}, c.log, store)
 	if err != nil {
 		if c.log != nil {
 			c.log.Warn(ctx, "node: discovery is on but cannot start; you will have to configure peers",
 				"cause", err)
 		}
 		c.discovery.Enabled = false
-		return nil
+		return
 	}
-	// The hook is handed over BEFORE the browser starts: a sighting is what it is about, and a loop
-	// that was already running could verify one with nowhere to say so.
-	browser.onSighting = c.onSighting
+	// The hook is handed over BEFORE anything starts: a sighting is what it is about, and a loop that
+	// was already running could verify one with nowhere to say so.
+	store.onSighting = c.onSighting
+	// Started together, and only once both could be built: a store with nothing feeding it and a
+	// browser with nowhere to put what it finds are each half of one thing. A second source is what
+	// will change this guard (it has to be able to start the store on its own); what it must not
+	// change is there being ONE store.
+	store.Start(context.WithoutCancel(ctx))
 	browser.Start(context.WithoutCancel(ctx))
-	c.browser = browser
-	return browser
+	c.store, c.browser = store, browser
 }
 
 // For returns the sending side for this peer list, as the TOOL layer sees it, rebuilding it when the
@@ -200,12 +217,12 @@ func (c *DelegatorCache) ForSender(ctx context.Context, peers []config.PeerConfi
 		return c.current
 	}
 
-	browser := c.startBrowser(ctx)
+	c.startDiscovery(ctx)
 	open := c.openFunc
 	if open == nil {
 		open = OpenSender
 	}
-	sender, err := open(peers, c.ownName, c.log, browser)
+	sender, err := open(peers, c.ownName, c.log, c.store)
 	if err != nil {
 		if c.log != nil {
 			c.log.Warn(context.Background(), "delegation is unavailable this turn", "cause", err)

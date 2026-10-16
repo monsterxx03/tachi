@@ -67,12 +67,12 @@ func TestAFailedOpenIsNotCached(t *testing.T) {
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	attempts := 0
 	cache := NewDelegatorCache("", Discovery{}, nil, nil)
-	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
+	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, errors.New("the records directory is not writable")
 		}
-		return OpenSender(p, "", nil, browser)
+		return OpenSender(p, "", nil, store)
 	}
 
 	// A failure must not be remembered: the next turn tries again, so a transient problem heals
@@ -105,7 +105,7 @@ func TestWarmUpAsksEveryPeerWithoutWaitingForIt(t *testing.T) {
 	}
 
 	cache := NewDelegatorCache("", Discovery{}, nil, nil)
-	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
+	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *sightingsStore) (*Sender, error) {
 		return &Sender{peers: dir}, nil
 	}
 
@@ -140,7 +140,7 @@ func TestWarmUpOnAClosedCacheOpensNothing(t *testing.T) {
 	opens := 0
 	cache := NewDelegatorCache("", Discovery{}, nil, nil)
 	opened := make(chan struct{}, 1)
-	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *mdnsBrowser) (*Sender, error) {
+	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *sightingsStore) (*Sender, error) {
 		opens++
 		opened <- struct{}{}
 		return &Sender{peers: nil}, nil
@@ -166,9 +166,9 @@ func TestAClosedCacheHandsOutNothing(t *testing.T) {
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	opens := 0
 	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil)
-	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, browser *mdnsBrowser) (*Sender, error) {
+	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 		opens++
-		return OpenSender(p, "", nil, browser)
+		return OpenSender(p, "", nil, store)
 	}
 	require.NotNil(t, cache.For(t.Context(), peers))
 	require.Equal(t, 1, opens)

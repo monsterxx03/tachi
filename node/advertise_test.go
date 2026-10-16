@@ -65,7 +65,7 @@ func TestTheAnnouncementSaysThreeFactsAndNothingElse(t *testing.T) {
 		announced.TXT[key] = value
 	}
 	// A browser of a DIFFERENT machine, because this machine's own announcement is one it must ignore.
-	other, err := newMDNSBrowser("ffffffffffffffffffffffffffffffff", config.MdnsDiscoveryConfig{}, nil)
+	other, err := newMDNSBrowser("ffffffffffffffffffffffffffffffff", config.MdnsDiscoveryConfig{}, nil, newSightingsStore(nil))
 	require.NoError(t, err)
 	cand, why := other.decide(announcement{
 		Instance: "some-machine",
