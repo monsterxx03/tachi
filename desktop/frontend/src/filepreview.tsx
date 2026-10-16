@@ -9,12 +9,13 @@
 // are loaded from disk by the /local asset route, so a 20MB screenshot never
 // travels through the IPC channel.
 
-import { memo, useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { fmtBytes, toLocalAsset, toLocalPath } from './lib'
 import { revealFileInTree } from './filereveal'
 import { REVEAL_LABEL } from './platform'
 import { MarkdownBlock } from './markdown'
+import { SelectionAsk } from './selask'
 import { CloseButton, ImageViewer, ViewerOverlay } from './viewer'
 import type { AttachmentInfo } from './types'
 
@@ -242,12 +243,19 @@ function FilePreviewBody({ file, path, meta, busy, onFull }: {
   busy: boolean
   onFull: () => void
 }) {
+  // 选中文本的菜单（selask.tsx）挂在这个盒子上。ref 必须声明在下面那次提前返回之前：hook
+  // 不能是条件性的，而「读取中」那一帧就直接返回了。
+  const bodyRef = useRef<HTMLDivElement>(null)
   if (busy) return <div className="file-preview-note">读取中…</div>
   return (
     // The card's own box: the border the preview hangs under, the plane it sits on, and the
     // positioned ancestor the ⤢ button anchors to.
-    <div className="file-preview-body">
+    <div className="file-preview-body" ref={bodyRef}>
       <FileBody meta={meta} path={path} name={file.name} variant="card" onExpand={onFull} />
+      {/* 来源是绝对路径：它要写进发出去的那条消息里，模型据此去读整个文件；同时它也是收起
+          这张卡时「哪些待提问跟着走」的依据（见 selask.tsx）。会话里的卡片预览和文件视图给
+          的是同一句话，因为它们是一回事。 */}
+      <SelectionAsk hostRef={bodyRef} source={path} />
     </div>
   )
 }

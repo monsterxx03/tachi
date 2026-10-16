@@ -451,12 +451,15 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
    put while the reader scrolls the diff under it) and every viewer (floating at the
    stage's top-right, where a find bar is looked for). Matches are painted with the
    CSS Custom Highlight API — src/find.tsx says why they are not <mark> elements —
-   and these two names are the only thing the paint rules need to know. */
+   and these two names are all find's paint rules need to know. */
 ::highlight(tachi-find) { background-color: var(--find-hit); }
 ::highlight(tachi-find-current) {
   background-color: var(--find-hit-current);
   color: var(--find-hit-current-ink);
 }
+/* 选中一段文字「提问」的那几行（src/selask.tsx）。它不能靠浏览器自己的选区：点「提问」之后
+   焦点进了输入框，那个选区就没了 —— 而读者问的正是屏幕上这几行，不该在他眼前消失。 */
+::highlight(tachi-ask) { background-color: var(--accent-tint-a); }
 .find-bar {
   display: flex;
   align-items: center;

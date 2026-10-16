@@ -15,6 +15,9 @@
 //   - THE BODY IS NEVER REWRITTEN FROM THE POLL. When the file moves on disk the reader gets a line
 //     offering to re-read it; re-reading on its own would reflow a document under their eyes, in the
 //     one place they chose to look (design §8.4).
+//   - A SELECTION is a thing the reader can act on: 复制, or ask the conversation about it
+//     (selask.tsx). The menu is the same one the attachment card's preview gets, because the text
+//     under the pointer is the same text.
 
 import { useEffect, useRef, useState } from 'react'
 import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
@@ -22,6 +25,7 @@ import { FileBody } from './filepreview'
 import { FindBar, FindButton, useFind } from './find'
 import { copyText, fmtBytes, toLocalAsset } from './lib'
 import { REVEAL_LABEL } from './platform'
+import { SelectionAsk } from './selask'
 import { ImageViewer } from './viewer'
 import type { FileTreeApi } from './useFileTree'
 
@@ -160,6 +164,11 @@ export function FileView({ api, sessionId, onBack }: {
 						)}
 			</div>
 			{zoom && path ? <ImageViewer src={toLocalAsset(path, '')} alt={selected?.name || ''} onClose={() => setZoom(false)} /> : null}
+			{/* 选中的文字可以复制、也可以就它提问。宿主是正文那一块（不是整个视图）：查找条、
+			    头部按钮上的选中都不该弹出这个菜单。来源用绝对路径——它要落在消息里给模型看，
+			    而模型去读那个文件时不受谁的工作目录影响；同时它也是关掉这个视图时「哪些待提问
+			    跟着走」的依据（见 selask.tsx）。 */}
+			<SelectionAsk hostRef={bodyRef} source={path} />
 		</section>
 	)
 }

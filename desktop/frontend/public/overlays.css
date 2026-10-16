@@ -1276,3 +1276,187 @@
   font-family: inherit;
 }
 .rewind-chain-hint { margin-left: auto; }
+
+/* ── 选中文字的菜单（复制 / 提问） ────────────────────────────────────────── */
+/* Portal 到 body 上、position: fixed —— 它浮在选中文字旁边，而选区矩形给的是视口坐标，
+   宿主（文件视图的正文、卡片展开的预览盒）自己却是滚动容器；挂在宿主里就得把那份偏移
+   再算一遍。坐标由组件按菜单自身的尺寸贴着视口收进来（selask.tsx），这里只管长相。
+   层级让开全屏浮层（viewer 那一族）——它只在正文里出现，两者不会同时在屏幕上。 */
+.sel-ask {
+  position: fixed;
+  z-index: 62;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  animation: panel-in 0.16s var(--ease) both;
+}
+.sel-ask-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.sel-ask-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* 提问是这个菜单存在的理由，复制只是顺手 —— 但它不是一枚实心按钮：两个动作都是轻的，
+   而一块填充色会让菜单看着像「只有它一个能点」。 */
+.sel-ask-btn.is-ask { color: var(--accent-2); }
+.sel-ask-input {
+  width: 208px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 5px 9px;
+  outline: none;
+}
+.sel-ask-input::placeholder { color: var(--text-faint); }
+
+/* ── 待提问队列（选中几段文字，一起问） ───────────────────────────────────── */
+/* 浮在右下角：正文是居中的一栏（--reading-width），右下角那块通常是空的，而队列本身不该压在
+   正在读的行上。它和 .sel-ask 同源（都 portal 到 body、fixed 定位），层级也一样。 */
+.ask-queue {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 62;
+  width: 340px;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-4);
+  animation: panel-in 0.18s var(--ease) both;
+}
+.ask-q-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.ask-q-count { color: var(--text-faint); font-size: 10.5px; }
+/* 一屏塞得下的是一个列表，不是一个滚动的盒子：项数通常只有两三。 */
+.ask-q-list { overflow: auto; padding: 4px; display: flex; flex-direction: column; }
+/* 两级分组：同一份文件的那几段归在一个组里、来源只写一次（组标题），组里同一句问题也只写一次
+   （它下面的几段原文各占一行，问题就是那个输入框）。面板上的结构就是发出去的那条消息的结构。 */
+.ask-q-group + .ask-q-group { border-top: 1px solid var(--border); }
+.ask-q-where {
+  padding: 6px 8px 1px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-q-askgroup { padding: 2px 8px 7px; }
+.ask-q-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: var(--radius-xs);
+}
+.ask-q-line:hover { background: var(--hover); }
+.ask-q-text {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-q-ask {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 7px;
+  margin-top: 4px;
+  outline: none;
+}
+.ask-q-ask:focus { border-color: var(--accent-line); }
+.ask-q-ask::placeholder { color: var(--text-faint); }
+.ask-q-del {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 6px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.ask-q-del:hover { background: var(--red-wash); color: var(--red); }
+.ask-q-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+/* 清空是破坏性的（攒了半天的几段一下就没了），所以它在左、是轻的，而「发送」在右、是实心的
+   那个 —— 两个按钮里谁会丢东西，不必读文字就能看出来。 */
+.ask-q-clear {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.ask-q-clear:hover { background: var(--red-wash); color: var(--red); }
+/* 白字必须坐在 --strong 那一档上（纯强调色是按「墨」调的，白字会掉到 4.5:1 以下）。 */
+.ask-q-send {
+  border: none;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: filter 0.15s var(--ease);
+}
+.ask-q-send:hover { filter: brightness(1.08); }
+
+/* 选区菜单里的「加入待提问」：跟回车同一条路，留个看得见的入口。轻样式而不是实心按钮 ——
+   真正发出去的是 Shift+回车和面板上的「发送」，这一枚只是把这一段攒起来。 */
+.sel-ask-add {
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 9px;
+  margin-left: 2px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+}
+.sel-ask-add:hover { background: var(--accent-ring); }

@@ -215,6 +215,19 @@ func requestHasText(r *mockllm.RecordedRequest, want string) bool {
 	return false
 }
 
+// lastUserText is the LAST user message of one request. "这一段和那一段在同一条消息里" has to be asked
+// of this one: requestHasText only asks "did it appear somewhere", and the earlier turns' messages
+// are in the same request — a batch sent as three separate messages looks exactly like one message
+// to it.
+func lastUserText(r *mockllm.RecordedRequest) string {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		if r.Messages[i].Role == "user" {
+			return r.Messages[i].Content
+		}
+	}
+	return ""
+}
+
 // requestTail is the last few messages of a request, for a failure's detail: "what did the model
 // actually see" is the question both of these helpers exist for.
 func requestTail(r *mockllm.RecordedRequest) string {
@@ -440,6 +453,21 @@ const (
 	// halves can name the number of hits instead of settling for "some".
 	fileFindLine = "一行笔记，用来被查找。"
 	fileFindHits = 12
+
+	// selection-ask 的被选中文字与问题。driver 按这些字找那一段、找队列里的那一行，Go 这一半按
+	// 它们断言模型收到的正文 —— 两边拼的是同一串字，所以它们只写一次。ChatLine1/2 是场景里 agent
+	// 的一句回答（两段），会话全文那一半选中的就是它们；DefaultAsk 是那句默认问题，两半都拿它数
+	// 「写了几次」。
+	selectionAskLineA      = "这段文字是拿来被选中提问的。"
+	selectionAskLineB      = "第二段也有它自己的问题。"
+	selectionAskLineC      = "第三段用自己写的问题。"
+	selectionAskLineD      = "第四段入队之后会被删掉。"
+	selectionAskAskC       = "这一段是干什么的？"
+	selectionAskAskC2      = "这一段到底是干什么的（改过）？"
+	selectionAskChatLine1  = "就这一段的回答。"
+	selectionAskChatLine2  = "旁边这句也能选。"
+	selectionAskChatAsk    = "这句是什么意思？"
+	selectionAskDefaultAsk = "解释一下？"
 )
 
 // smokeReportMarkdown is the report body the mock writes: the marker plus enough prose that the
@@ -2069,6 +2097,74 @@ func scenarios() []scenario {
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("一轮对话两次调用（送文件 + 收尾）", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
+		//
+		// 选中一段文字问当前会话：菜单浮出来的三个宿主各走一遍（附件卡片展开的预览、文件视图、
+		// 会话全文），而 Go 这一半断言的是**模型到底收到什么** —— UI 上看起来都对、发出去的却
+		// 少了来源行或拼错了地方，是这个场景存在的理由。
+		//
+		// 提问先收进「待提问」队列（回车入队，发送才出去），所以「批」这件事只能在这里断言：
+		// 同一份文件只写一次来源，同一句问题只写一次（几段的原文并列在它下面），而删掉的那一段
+		// 一个字节都不该出现 —— 分几条发出去在 requestHasText 眼里和拼成一条一模一样。
+		//
+		// 三条出路各覆盖一次：回车/「加入待提问」把段落攒进队列（卡片那一半），会话全文那一半
+		// 走 Shift+回车那条捷径（真的当场发），文件视图那一半把四段收进队列、改掉一组的问题、
+		// 删掉一段，再点发送。问答本身还覆盖「清空」、「关掉预览只带走它那份来源的项」、以及
+		// 「会话里攒的不会被打开一个文件毁掉」。
+		{
+			name: "selection-ask",
+			files: map[string]string{
+				"NOTE.md": "# smoke\n\n" + selectionAskLineA + "\n\n" + selectionAskLineB + "\n\n" +
+					selectionAskLineC + "\n\n" + selectionAskLineD + "\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: sendFileStream("NOTE.md", "call_send")},
+				// 这一条回答里带着会话全文那一半要选的两句：它得在司机去选之前就已经在屏幕上。
+				{Reply: textStream("已经把 NOTE.md 发给你了。\n\n"+selectionAskChatLine1+"\n\n"+selectionAskChatLine2, 900)},
+				{Reply: textStream("对话里那一段的回答。", 900)},
+				{Reply: textStream("一起问的那几条的回答。", 900)},
+				{Reply: textStream("两句一起问的回答。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 五个请求：第一条用户消息、它的工具续轮、一次直接发送、两次整队列发送。
+				c.check("五次调用（送文件 + 一次直发 + 两次批量）", len(c.requests) == 5, requestCount(c.requests))
+				if len(c.requests) < 5 {
+					return
+				}
+				shortcut, batch := lastUserText(c.requests[2]), lastUserText(c.requests[3])
+				chatBatch := lastUserText(c.requests[4])
+				source := "文件：" + filepath.Join(c.work, "NOTE.md")
+				c.check("Shift+回车那一条带着原文和读者写的问题，且不带文件来源",
+					strings.Contains(shortcut, "“"+selectionAskChatLine1+"”") &&
+						strings.Contains(shortcut, selectionAskChatAsk) &&
+						!strings.Contains(shortcut, "文件："), strutil.Truncate(shortcut, 140))
+				c.check("队列拼成的是同一条消息（三段的原文都在最后这一条里）",
+					strings.Contains(batch, selectionAskLineA) && strings.Contains(batch, selectionAskLineB) &&
+						strings.Contains(batch, selectionAskLineC), strutil.Truncate(batch, 240))
+				c.check("同一份文件的来源只写了一次",
+					strings.Count(batch, source) == 1, strconv.Itoa(strings.Count(batch, source))+" 次")
+				c.check("同一句默认问题只写了一次（两段原文共用它）",
+					strings.Count(batch, selectionAskDefaultAsk) == 1,
+					strconv.Itoa(strings.Count(batch, selectionAskDefaultAsk))+" 次")
+				c.check("原文被引号引起来（哪段是文件里的、哪句是读者问的分得开）",
+					strings.Contains(batch, "“"+selectionAskLineA+"”") &&
+						strings.Contains(batch, "“"+selectionAskLineB+"”"), strutil.Truncate(batch, 240))
+				c.check("改过的问题算数（发出去的是改后的那句）",
+					strings.Contains(batch, selectionAskAskC2) && !strings.Contains(batch, selectionAskAskC),
+					strutil.Truncate(batch, 240))
+				c.check("删掉的那一段一个字节都没发出去",
+					!strings.Contains(batch, selectionAskLineD), strutil.Truncate(batch, 240))
+				// 从对话里选中的那两段：没有文件可指，所以不该凭空多出一行来源。
+				c.check("对话里选的两段都在同一条消息里",
+					strings.Contains(chatBatch, "“"+selectionAskChatLine1+"”") &&
+						strings.Contains(chatBatch, "“"+selectionAskChatLine2+"”"), strutil.Truncate(chatBatch, 160))
+				c.check("对话里选的两段共用同一句默认问题",
+					strings.Count(chatBatch, selectionAskDefaultAsk) == 1,
+					strconv.Itoa(strings.Count(chatBatch, selectionAskDefaultAsk))+" 次")
+				c.check("从对话里选的那一条没有文件来源那一行",
+					!strings.Contains(chatBatch, "文件："), strutil.Truncate(chatBatch, 160))
 			},
 		},
 		//

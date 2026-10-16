@@ -20,6 +20,7 @@ import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { FileTreePanel, FILE_TREE_DEFAULT_WIDTH } from './filetree'
 import { FileView } from './fileview'
+import { onAskSelection, SelectionAsk, AskQueuePanel } from './selask'
 import { useFileTree, type OpenFile } from './useFileTree'
 import { RewindChainOverlay } from './rewindchain'
 import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
@@ -1057,6 +1058,17 @@ function App() {
     tree.openFile(file, file.root, file.label)
     setView('file')
   }, [tree])
+
+  // 选中一段文字就能「问当前会话」：菜单浮出来的地方有两个（文件视图、附件卡片展开的预览，
+  // 见 selask.tsx），而把那条消息送进会话的只有这里 —— 所以「发给谁」由 App 说了算（屏幕上这个
+  // 会话）。发完把人带回会话：回答流在会话全文里，站在文件上看不见它。
+  //
+  // 走 composer.submit 而不是直连绑定：一轮还在跑时它会排队等下一个插话点，而 sendMessage 会
+  // 被当场拒掉 —— 跟评审面板的「发给 agent」是同一条路、同一个理由。
+  useEffect(() => onAskSelection((text) => {
+    composer.submit(text)
+    setView('chat')
+  }), [composer.submit])
 
   // 插入 @ 引用: the tree hands over a path, the backend spells the reference (atfile.RefForPath,
   // through the same binding a dropped file uses), and the composer puts it at the caret. Nothing here
@@ -2760,6 +2772,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 down at the moment the reader is trying to read one. */}
             {chatFind.open ? <FindBar find={chatFind} className="is-chat" /> : null}
             <div className="chat" ref={chatRef} onScroll={handleScroll} tabIndex={0} onKeyDown={onChatKey}>
+            {/* 会话全文里选中的文字照样可以「提问」（host 就是这个滚动容器）。来源为空：这些字
+                本来就在这次对话的历史里，模型自己看得见，不必写「文件：」那一行。 */}
+            <SelectionAsk hostRef={chatRef} source="" />
             {/* The transcript's own box, and the thing follow-the-bottom watches: the
                 SCROLLPORT's box does not change when its content grows, so the observer has to
                 sit on the content. See the ResizeObserver effect. */}
@@ -3316,6 +3331,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           of the schema on the way in is exactly what makes the values on screen the values in
           the file. */}
       {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} onSaved={onSettingsSaved} /> : null}
+      {/* 待提问队列唯一的渲染者：三个宿主各有自己的选中菜单，但队列只有一份、面板只有一个
+          （见 selask.tsx）—— 面板挂在应用上而不是某个宿主里，正是为了让这件事只有一种形态。 */}
+      <AskQueuePanel />
     </div>
   )
 }
