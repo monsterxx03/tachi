@@ -109,6 +109,61 @@
   esc()
   if (!(await smoke.waitFor(() => (!smoke.q('.sel-ask') ? true : null), 'Esc 收起菜单', 3000))) return smoke.finish()
 
+  // ── 点在选中的那几行里：这次选中被放掉 ──────────────────────────────────────
+  // 浏览器默认会留着选区等你拖它，所以那次 mouseup 又把菜单和高亮画了回来 —— 屏幕上就是「点了
+  // 一下，什么都没变」。这条断言钉的是「点自身也算取消」。合成的 mousedown 不会改浏览器选区，
+  // 所以它证明的正是「由我们主动结束掉」这件事。
+  selectIn(probe)
+  if (!(await smoke.waitFor('.sel-ask', '再选一次，菜单回来', 3000))) return smoke.finish()
+  smoke.check('点自身之前，那几行是亮着的', askPainted() >= 1, String(askPainted()))
+  const selRect = (() => {
+    const sel = window.getSelection()
+    const rect = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).getClientRects()[0] : null
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null
+  })()
+  smoke.check('拿得到选中区域的坐标（下面两条断言的前提）', !!selRect, '')
+  if (!selRect) return smoke.finish()
+  const hit = (type) => probe.dispatchEvent(new MouseEvent(type,
+    { bubbles: true, clientX: selRect.x, clientY: selRect.y }))
+  hit('mousedown')
+  hit('mouseup')
+  // 菜单是被 React 的状态更新摘掉的，所以要等一次提交 —— 同步读会读到还没重画的那一帧。
+  const selfGone = await smoke.waitFor(() => (!smoke.q('.sel-ask') ? true : null),
+    '点自身之后菜单消失', 3000)
+  smoke.check('点在选中的那几行里，菜单收起', !!selfGone, '')
+  smoke.check('点在选中的那几行里，高亮也撤了（不用点别处）',
+    askPainted() === 0, String(askPainted()))
+
+  // ── 点在两行之间的缝里：同样算「放掉这次选中」 ──────────────────────────────
+  // 缝既不在任何一个字的矩形里，读者的手也未必落在字上 —— 所以「点在哪」不该决定这次选中留不留。
+  // 这里造一个跨两段的选区，两个矩形之间就是那条缝。
+  const seam = (() => {
+    const first = paraIn('.file-preview-doc p', LINE_A)
+    const second = paraIn('.file-preview-doc p', LINE_B)
+    if (!first || !second || !first.firstChild || !second.firstChild) return null
+    const range = document.createRange()
+    range.setStart(first.firstChild, 0)
+    range.setEnd(second.firstChild, second.firstChild.length)
+    const sel = window.getSelection()
+    sel.removeAllRanges()
+    sel.addRange(range)
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0)
+    if (rects.length < 2) return null
+    return { x: rects[0].left + 4, y: (rects[0].bottom + rects[1].top) / 2, host: first.parentElement }
+  })()
+  smoke.check('造得出一个「两行之间的缝」（下面两条断言的前提）', !!seam, '')
+  if (!seam) return smoke.finish()
+  seam.host.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  if (!(await smoke.waitFor('.sel-ask', '跨两行的选区也弹菜单', 3000))) return smoke.finish()
+  const seamHit = (type) => seam.host.dispatchEvent(new MouseEvent(type,
+    { bubbles: true, clientX: seam.x, clientY: seam.y }))
+  seamHit('mousedown')
+  seamHit('mouseup')
+  const seamGone = await smoke.waitFor(() => (!smoke.q('.sel-ask') ? true : null),
+    '点缝里之后菜单消失', 3000)
+  smoke.check('点在两行之间的缝里，菜单收起', !!seamGone, '')
+  smoke.check('点在两行之间的缝里，高亮也撤了', askPainted() === 0, String(askPainted()))
+
   // ── 放弃：点别处关掉提问框，那几行也该放下 ──────────────────────────────────
   // 提问框关了却还留着一块底色，会读成「这段还攥在手里」。driver 够不到真的按下-松开，所以派发
   // 一次真的 mousedown（dismiss 就挂在它上面；合成的 el.click() 不产生 mousedown，见
@@ -281,10 +336,21 @@
     smoke.qa('.ask-q-askgroup').length === 2 && smoke.qa('.ask-q-ask').length === 2,
     smoke.qa('.ask-q-askgroup').length + ' 个问题组')
 
-  // 一组的问题是可以改的（改的是共用这句话的那几段）。
+  // 一组的问题是可以改的（改的是共用这句话的那几段）。**逐次**敲，中途还要断言那个输入框还是
+  // 同一个 DOM 节点：一个会变的 key（比如拿问题文本当 key）会让 React 把它卸载重建 —— 屏幕上
+  // 看到的就是「打一个字母光标就跳出去」（driver 够不到真的键盘焦点，节点身份是同一件事的机制）。
   const askC = askOf(LINE_C)
   smoke.check('队列里一行一段（每行一个问题组的输入框）', !!askC, '')
   if (!askC) return smoke.finish()
+  smoke.type(askC, ASK_C2.slice(0, 2))
+  smoke.check('打了两个字，那个输入框还是同一个节点（光标不会被甩出去）',
+    askOf(LINE_C) === askC, '')
+  // 空格要留得住：分组按 trim 后的那句话归组，但输入框显示的必须是读者敲的原文 —— 否则句尾
+  // 一按空格就被抹掉，写不了句子（下面这行断言就是这个）。
+  smoke.type(askC, '两 个 词 ')
+  smoke.check('编辑框里的空格留得住（含句尾那个）',
+    !!askOf(LINE_C) && askOf(LINE_C).value === '两 个 词 ',
+    askOf(LINE_C) ? JSON.stringify(askOf(LINE_C).value) : '(没有输入框)')
   smoke.type(askC, ASK_C2)
   const edited = await smoke.waitFor(
     () => (askOf(LINE_C) && askOf(LINE_C).value === ASK_C2 ? true : null), '改掉那一组的问题', 3000)

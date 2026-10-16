@@ -314,6 +314,13 @@ export function SelectionAsk({ hostRef, source }: {
 		const onDown = (e: MouseEvent) => {
 			const target = e.target as Node
 			if (boxRef.current?.contains(target) || isAskPanel(target)) return
+			// 这一下点在菜单外面：这次选中到此为止，**连浏览器自己的选区一起清掉**。
+			//
+			// 少了这一句，紧接着的那次 mouseup 又会把菜单和高亮画回来：点在选中的文字上、点在两行
+			// 之间的缝里，浏览器都不会塌陷选区（前者是「等你拖这段字」，后者按包围盒算在选区里），
+			// 于是那次 mouseup 读到的仍是「一次有效的选中」。所以这里不猜点在哪，一律结束 ——
+			// 想重新选，松开鼠标再拖就是了（拖动会从头产生一个新的选区）。
+			window.getSelection()?.removeAllRanges()
 			dismiss()
 		}
 		window.addEventListener('mousedown', onDown, true)
@@ -424,18 +431,21 @@ export function AskQueuePanel() {
 	// 两级分组：来源 → 问题。**同一个问题只出现一次**（尤其是那句默认的：它作为输入框的
 	// placeholder 出现，而不是每一行都印一遍），它下面的几段原文各占一行。这跟发出去的那条消息
 	// 是同一套分组规则，所以读者在面板上看到的结构就是模型将读到的结构。顺序按首次出现的次序。
+	//
+	// 组的键是 `question.trim()`（「空着」与「敲了几个空格」是同一件事），而输入框显示的是组内
+	// 首项的原文 —— **显示也用键的话，句尾一按空格就被立刻抹掉**（打不了「一句话 的 空格」）。
 	const groups = useMemo(() => {
-		const out: { source: string; asks: { question: string; items: AskItem[] }[] }[] = []
+		const out: { source: string; asks: { key: string; items: AskItem[] }[] }[] = []
 		for (const it of queue) {
 			let group = out.find((g) => g.source === it.source)
 			if (!group) {
 				group = { source: it.source, asks: [] }
 				out.push(group)
 			}
-			const question = it.question.trim()
-			let ask = group.asks.find((a) => a.question === question)
+			const key = it.question.trim()
+			let ask = group.asks.find((a) => a.key === key)
 			if (!ask) {
-				ask = { question, items: [] }
+				ask = { key, items: [] }
 				group.asks.push(ask)
 			}
 			ask.items.push(it)
@@ -457,7 +467,10 @@ export function AskQueuePanel() {
 						    也没人看 —— 它留在 title 里，而发出去的消息用的是完整的那一份。 */}
 						<div className="ask-q-where" title={g.source}>{g.source ? baseName(g.source) : '对话'}</div>
 						{g.asks.map((a) => (
-							<div className="ask-q-askgroup" key={a.question || '(default)'}>
+							// key 用组内首项的 id，**不是**问题文本：拿文本当 key 的话，读者敲下第一个
+							// 字母 key 就变了，React 会把这个输入框卸载重建 —— 屏幕上就是「打一个字光标
+							// 就跳出去」（这条由冒烟里「还是同一个 DOM 节点」那条断言钉着）。
+							<div className="ask-q-askgroup" key={a.items[0] ? a.items[0].id : a.key}>
 								{a.items.map((it) => (
 									<div className="ask-q-line" key={it.id}>
 										<span className="ask-q-text" title={it.text}>{it.text}</span>
@@ -467,9 +480,11 @@ export function AskQueuePanel() {
 									</div>
 								))}
 								{/* 一个问题一个输入框：改它，这一组（共用这句话的那几段）一起改 —— 它们本来就
-								    是同一个问题。清空就又回到那句默认的。 */}
-								<input className="ask-q-ask" value={a.question} placeholder={DEFAULT_ASK}
-									aria-label="这一组要问的问题"
+								    是同一个问题。清空就又回到那句默认的。
+								    值取组内首项的**原文**（不是分组用的 trim 过的那个）：分组按 trim 后的
+								    那句话归组，但输入框要显示读者敲的东西，否则句尾一按空格就被抹掉。 */}
+								<input className="ask-q-ask" value={a.items[0] ? a.items[0].question : ''}
+									placeholder={DEFAULT_ASK} aria-label="这一组要问的问题"
 									onChange={(e) => {
 										const next = e.target.value
 										const ids = new Set(a.items.map((x) => x.id))
