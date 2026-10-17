@@ -72,6 +72,10 @@ type PeerList struct {
 	// a keystroke, the panel on opening — so the answer only ever arrived when the reader happened to
 	// open the very panel they were reading the count from.
 	pending bool
+	// retrying is true while a request that found nothing to ask about is waiting for a sending side
+	// (retryWhenReady). One cascade at a time, so a burst of such requests is one wait rather than one
+	// timer each.
+	retrying bool
 }
 
 // probed is one peer as the last probe found it, and when.
@@ -291,7 +295,19 @@ func (l *PeerList) Refresh(ctx context.Context) {
 
 func (l *PeerList) probeAsync(force bool) {
 	rows := l.directoryRows()
-	if l == nil || l.probe == nil || len(rows) == 0 {
+	if l == nil || l.probe == nil {
+		return
+	}
+	if len(rows) == 0 {
+		// Nothing to ask about RIGHT NOW: this machine has no sending side here — an entry point that
+		// cannot delegate, or one whose config/sending side is not there yet (the desktop sets its
+		// config as the app boots). Whoever asked knew something (a machine entered the directory), and
+		// no other party will ask again, so the request is remembered and retried a few times rather
+		// than dropped: a probe that silently vanishes is a reading that stays wrong for as long as
+		// nobody touches the UI, which is exactly how a count on screen goes stale without saying so.
+		l.log.Info(context.Background(), "peer list: asked to probe with nothing to ask about yet; "+
+			"will try again shortly")
+		l.retryWhenReady()
 		return
 	}
 
@@ -326,6 +342,9 @@ func (l *PeerList) probeAsync(force bool) {
 	l.asked = keys
 	l.mu.Unlock()
 
+	l.log.Info(context.Background(), "peer list: asking the nodes who they are",
+		"peers", len(rows), "forced", force)
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		defer cancel()
@@ -333,10 +352,58 @@ func (l *PeerList) probeAsync(force bool) {
 		// own locking, and the rule this codebase follows is one lock at a time.
 		reports := l.probe(ctx, force)
 		changed := l.store(reports)
-		l.log.Debug(context.Background(), "peer list: probed the configured nodes",
-			"peers", len(reports), "reachable", countReachable(reports), "forced", force)
 		l.notifyChanged(changed)
 		l.runPending()
+	}()
+}
+
+// probeRetries and probeRetryDelay bound the retry of a request that could not be served because there
+// was nothing to ask about yet (probeAsync): a few attempts, close together, and then silence. Bounded
+// on purpose — this is not a poll. Each attempt is made because a caller ASKED for a look and could not
+// be served, and the moment the sending side is there the first attempt succeeds.
+const (
+	probeRetries    = 5
+	probeRetryDelay = 2 * time.Second
+)
+
+// retryWhenReady runs one more probe a little later, up to probeRetries times over.
+//
+// It exists for the one request this type cannot serve when it arrives: the directory is not readable
+// yet, because the entry point has no sending side at that instant (node/delegatorcache.go ForSender
+// returns nil while a config is being installed, or when this process simply cannot delegate). The
+// caller asked because something happened — a machine entered the directory — and nothing else will ask
+// on its own, so the request waits for the sending side instead of vanishing.
+//
+// The retries are attempts, not a schedule: the first one that finds rows runs the probe and the rest
+// are dropped by the ordinary gates (a round was just answered, so the interval refuses a repeat).
+func (l *PeerList) retryWhenReady() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.retrying {
+		// One cascade at a time: a burst of requests with nothing to ask about is one thing to wait
+		// for, not one timer per request.
+		l.mu.Unlock()
+		return
+	}
+	l.retrying = true
+	l.mu.Unlock()
+
+	go func() {
+		defer func() {
+			l.mu.Lock()
+			l.retrying = false
+			l.mu.Unlock()
+		}()
+		for range probeRetries {
+			time.Sleep(probeRetryDelay)
+			if len(l.directoryRows()) > 0 {
+				l.probeAsync(false)
+				return
+			}
+		}
+		l.log.Info(context.Background(), "peer list: gave up waiting for a sending side to probe with")
 	}()
 }
 
@@ -381,13 +448,12 @@ func (l *PeerList) store(reports []PeerReport) bool {
 	l.probing = false
 	l.lastProbe = now
 	l.mu.Unlock()
-	if changed {
-		// Said out loud because it is what the board and the trigger draw, and because the count on
-		// that trigger is read as "who is up" with nothing on screen saying when it was taken: a line
-		// here is how a stale count is told apart from a matching one after the fact.
-		l.log.Info(context.Background(), "peer list: the node reading changed",
-			"peers", len(next), "reachable", countReachable(reports))
-	}
+	// Said out loud on every round, and not only when the reading moved: what the board and the
+	// trigger draw is this map, and a round whose answers are the same as the last one is invisible
+	// everywhere else — which is exactly the shape a "the count never updated" report takes. One line
+	// per round is affordable because rounds are not a heartbeat: nothing polls (see probeAsync).
+	l.log.Info(context.Background(), "peer list: the nodes answered",
+		"peers", len(next), "reachable", countReachable(reports), "changed", changed)
 	return changed
 }
 

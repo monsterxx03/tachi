@@ -215,6 +215,38 @@ func TestARepeatRequestWhileARoundIsOutIsStillRefused(t *testing.T) {
 		"a request about rows already being asked about is not a second round")
 }
 
+// A request that finds nothing to ASK about is not dropped either: this machine may have no sending
+// side yet (an entry point installs its config as it boots, and ForSender answers nil in between), and
+// whoever asked knew something — a machine entered the directory — while nothing else will ask again.
+// Losing it is a reading that stays wrong for as long as nobody touches the UI.
+func TestAProbeIsNotLostWhenThereIsNothingToAskAboutYet(t *testing.T) {
+	var mu sync.Mutex
+	var directory []agentref.Peer // no sending side yet: the directory cannot be read at all
+	var calls atomic.Int32
+
+	list := NewPeerList(
+		func() []agentref.Peer {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]agentref.Peer(nil), directory...)
+		},
+		func(context.Context, bool) []PeerReport {
+			calls.Add(1)
+			return nil
+		}, nil)
+
+	list.Probe()
+	require.Zero(t, calls.Load(), "there was nothing to ask about")
+
+	// The sending side arrives a moment later, with the machine that was found in it.
+	mu.Lock()
+	directory = rows()
+	mu.Unlock()
+
+	require.Eventually(t, func() bool { return calls.Load() > 0 }, 15*time.Second, 20*time.Millisecond,
+		"the request has to survive until there is something to ask about")
+}
+
 // A process that cannot delegate still knows which nodes exist, so the picker still lists them.
 // Nothing is checked, and nothing is claimed.
 func TestPeerListWithoutAProbeStillListsPeers(t *testing.T) {
