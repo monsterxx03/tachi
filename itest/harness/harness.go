@@ -43,23 +43,25 @@ import (
 func configYAML(o *options, baseURL string) (string, error) {
 	var buf bytes.Buffer
 	if err := configTmpl.Execute(&buf, configData{
-		Protocol:      o.protocol.String(),
-		BaseURL:       baseURL,
-		Timeout:       o.timeout,
-		HasTimeout:    o.timeout > 0,
-		SecondModel:   o.secondModel,
-		BashAllow:     o.bashAllow,
-		BashAsk:       o.bashAsk,
-		Permissions:   o.bashAllow || o.bashAsk,
-		NodeSection:   o.nodeSection(),
-		NodeEnabled:   o.nodeEnabled,
-		NodeListen:    o.nodeListen,
-		NodePublicURL: o.nodePublicURL,
-		NodeDiscovery: o.nodeDiscovery,
-		NodeName:      o.nodeName,
-		NodeWorkspace: o.nodeWorkspace,
-		Peers:         o.peers,
-		Channels:      o.channels,
+		Protocol:         o.protocol.String(),
+		BaseURL:          baseURL,
+		Timeout:          o.timeout,
+		HasTimeout:       o.timeout > 0,
+		SecondModel:      o.secondModel,
+		BashAllow:        o.bashAllow,
+		BashAsk:          o.bashAsk,
+		Permissions:      o.bashAllow || o.bashAsk,
+		NodeSection:      o.nodeSection(),
+		NodeEnabled:      o.nodeEnabled,
+		NodeListen:       o.nodeListen,
+		NodePublicURL:    o.nodePublicURL,
+		NodeDiscovery:    o.nodeDiscovery,
+		NodeGossip:       o.nodeGossip,
+		NodeDiscoveryAny: o.nodeDiscovery || o.nodeGossip,
+		NodeName:         o.nodeName,
+		NodeWorkspace:    o.nodeWorkspace,
+		Peers:            o.peers,
+		Channels:         o.channels,
 	}); err != nil {
 		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
@@ -97,6 +99,14 @@ type configData struct {
 	// side's switch, and independent of the node service — a machine may look for others without
 	// serving anything itself.
 	NodeDiscovery bool
+	// NodeGossip turns the hearsay half on (config `node.discovery.gossip.enabled`): the sending
+	// side ASKS the peers it knows who else they can vouch for, and — in a process that hosts a node
+	// service — answers the same question. One switch for both directions, and independent of mDNS
+	// and of whether this machine serves anything itself.
+	NodeGossip bool
+	// NodeDiscoveryAny renders the `discovery:` block at all: it holds two independently optional
+	// halves, and a block with nothing under it is not a block.
+	NodeDiscoveryAny bool
 	// NodeName is what this node calls itself. It is a LABEL and travels as one — in the Card
 	// and in the header a peer files under `self_reported_name` — so it is also the only way to
 	// assert, from the other machine's disk, which node asked for the work.
@@ -181,10 +191,16 @@ node:
 {{- if .NodePublicURL}}
   public_url: "{{.NodePublicURL}}"
 {{- end}}
-{{- if .NodeDiscovery}}
+{{- if .NodeDiscoveryAny}}
   discovery:
+{{- if .NodeDiscovery}}
     mdns:
       enabled: true
+{{- end}}
+{{- if .NodeGossip}}
+    gossip:
+      enabled: true
+{{- end}}
 {{- end}}
 {{- if .NodeName}}
   name: "{{.NodeName}}"
@@ -232,6 +248,9 @@ type options struct {
 	// itself. The specs here that render it never host a node service, so what they exercise is the
 	// browsing half (a machine can look for others without serving).
 	nodeDiscovery bool
+	// nodeGossip renders `node.discovery.gossip.enabled: true`, the hearsay half: this process asks
+	// the peers it knows who else they can vouch for, and (hosting a node service) answers.
+	nodeGossip    bool
 	nodeName      string        // node.name — 这个节点对自己的称呼
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
 	peers         []peerFixture // peers: — 本机可以向哪些节点委派（发送方目录）
@@ -240,7 +259,8 @@ type options struct {
 
 // nodeSection reports whether the fixture needs a `node:` block at all. See configData.
 func (o *options) nodeSection() bool {
-	return o.nodeEnabled || o.nodeListen != "" || o.nodePublicURL != "" || o.nodeName != "" || o.nodeWorkspace != ""
+	return o.nodeEnabled || o.nodeListen != "" || o.nodePublicURL != "" || o.nodeName != "" ||
+		o.nodeWorkspace != "" || o.nodeDiscovery || o.nodeGossip
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -294,6 +314,16 @@ func WithNodeEnabled() Option {
 // point.
 func WithNodeDiscovery() Option {
 	return func(o *options) { o.nodeDiscovery = true }
+}
+
+// WithGossipDiscovery turns the hearsay half on (config `node.discovery.gossip.enabled`).
+//
+// It is a switch of its own: this process asks the peers it already knows who else they can vouch
+// for, and — in a process that hosts a node service — answers the same question about its own
+// neighbours. mDNS and gossip are two independent ways to be found-or-find, and a machine may have
+// either without the other.
+func WithGossipDiscovery() Option {
+	return func(o *options) { o.nodeGossip = true }
 }
 
 // WithNodePublicURL says where callers reach this node (config `node.public_url`).

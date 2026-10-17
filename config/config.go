@@ -511,6 +511,48 @@ type GossipDiscoveryConfig struct {
 	// ask it who it knows (the node's stance on who MAY reach that port is unchanged: the network
 	// decides, and every caller is identified by its certificate).
 	Enabled bool `yaml:"enabled"`
+
+	// Period is how often this machine asks its neighbours who they can vouch for — the steady
+	// cadence, one round per this (node/gossip.go gossipPeriod). Zero means the built-in default
+	// (three minutes).
+	//
+	// It is a heartbeat rather than a reaction: it is what keeps a machine known only by hearsay from
+	// falling out of anybody's table, and the arithmetic it has to satisfy is
+	// `Period × pool / Fanout < contact_ttl` — a neighbour in a pool too large for this cadence is
+	// never reached in time to be refreshed. A longer Period is also a longer wait for a machine this
+	// one cannot hear about any other way.
+	Period time.Duration `yaml:"period,omitempty"`
+
+	// Fanout is how many neighbours ONE round asks (node/gossip.go gossipFanout). Zero means the
+	// built-in default (two).
+	//
+	// It is the other half of that arithmetic, and it is a cost as well as a speed: each one is a
+	// request to a peer this machine has decided to trust with its neighbour list.
+	Fanout int `yaml:"fanout,omitempty"`
+
+	// Nudge is when the next round moves to once something changed — a machine this one has just
+	// proved (node/gossip.go gossipNudge). Zero means the built-in default (ten seconds).
+	//
+	// It is not a broadcast: it is this machine asking somebody sooner, and it is where convergence
+	// comes from. The floor between two nudges is twice this, applied automatically: a machine that
+	// arrives in a burst must not pin the cadence to this number forever (node/gossip.go observe).
+	Nudge time.Duration `yaml:"nudge,omitempty"`
+
+	// Timeout bounds ONE exchange, addresses and body together (node/gossip.go gossipTimeout). Zero
+	// means the built-in default (five seconds).
+	//
+	// It is deliberately short — a round is a heartbeat, so one neighbour that is switched off must
+	// not hold the loop for the delegation request timeout — and it is shared out among a peer's
+	// addresses rather than spent on the first one (node/remoteclient.go attemptBudget). A value
+	// shorter than a TLS handshake to that peer turns every round into a failed one, which is a mute.
+	Timeout time.Duration `yaml:"timeout,omitempty"`
+
+	// Mute is how long a neighbour whose round failed is skipped (node/gossip.go gossipMute). Zero
+	// means the built-in default (five minutes).
+	//
+	// It is what makes a configured machine that is switched off cost one timeout every so often
+	// rather than one every time its turn comes round.
+	Mute time.Duration `yaml:"mute,omitempty"`
 }
 
 // MdnsDiscoveryConfig is DNS-SD discovery over multicast DNS (`_tachi._tcp.local`).

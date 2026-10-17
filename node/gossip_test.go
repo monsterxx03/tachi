@@ -295,19 +295,23 @@ type fakeSide struct {
 	asked    []string        // the neighbours asked, in order
 	sent     []gossipPayload // what went out, in the same order
 	received []candidate     // what the answers handed to the queue
+	// budgets is the budget each round was given, in the same order as asked: the loop's `timeout`,
+	// which is the one number the sending side does NOT own (node/gossip.go gossipSide.exchange).
+	budgets []time.Duration
 }
 
 func (f *fakeSide) neighbours() []peerEntry   { return f.entries }
 func (f *fakeSide) vouches() []gossipEntry    { return f.said }
 func (f *fakeSide) receive(cands []candidate) { f.received = append(f.received, cands...) }
 
-func (f *fakeSide) exchange(_ context.Context, e peerEntry, payload []byte) ([]byte, error) {
+func (f *fakeSide) exchange(_ context.Context, e peerEntry, payload []byte, budget time.Duration) ([]byte, error) {
 	var sent gossipPayload
 	if err := json.Unmarshal(payload, &sent); err != nil {
 		return nil, err
 	}
 	f.asked = append(f.asked, e.key())
 	f.sent = append(f.sent, sent)
+	f.budgets = append(f.budgets, budget)
 	if err := f.exchangeErr[e.key()]; err != nil {
 		return nil, err
 	}
@@ -320,9 +324,10 @@ func gossipPeer(id string, addrs ...string) peerEntry {
 }
 
 // quietLoop is a loop over a fake side with the timing a test can reason about: no jitter, and
-// otherwise the numbers the process itself runs with.
+// otherwise the numbers the process itself runs with (the tuning a caller with no config gives it:
+// zero, which is "the shipped default").
 func quietLoop(side gossipSide) *gossipLoop {
-	l := newGossipLoop(side, "", nil, contactTTL, nil)
+	l := newGossipLoop(side, "", nil, contactTTL, gossipTuning{}, nil)
 	l.jitter = func(d time.Duration) time.Duration { return d }
 	return l
 }
@@ -412,6 +417,61 @@ func TestARoundSkipsThisMachineAndMutedNeighbours(t *testing.T) {
 	require.Contains(t, side.asked, gossipB, "the mute expired on its own")
 }
 
+// The loop runs the numbers the operator asked for, and the shipped default wherever they asked for
+// nothing — the defaults live in node/gossip.go and nowhere else (gossipTuning.orDefault), so there is
+// one place to read what "unconfigured" means.
+func TestTheLoopRunsTheConfiguredNumbersAndDerivesTheFloor(t *testing.T) {
+	shipped := newGossipLoop(&fakeSide{}, "", nil, contactTTL, gossipTuning{}, nil)
+	require.Equal(t, gossipPeriod, shipped.period)
+	require.Equal(t, gossipFanout, shipped.fanout)
+	require.Equal(t, gossipNudge, shipped.nudge)
+	require.Equal(t, gossipTimeout, shipped.timeout)
+	require.Equal(t, gossipMute, shipped.mute)
+	require.Equal(t, 2*gossipNudge, shipped.debounce,
+		"the floor between nudges is derived, not a setting of its own")
+
+	tuned := newGossipLoop(&fakeSide{}, "", nil, contactTTL, gossipTuning{
+		Period:  90 * time.Second,
+		Fanout:  5,
+		Nudge:   3 * time.Second,
+		Timeout: time.Second,
+		Mute:    time.Minute,
+	}, nil)
+	require.Equal(t, 90*time.Second, tuned.period)
+	require.Equal(t, 5, tuned.fanout)
+	require.Equal(t, 3*time.Second, tuned.nudge)
+	require.Equal(t, time.Second, tuned.timeout)
+	require.Equal(t, time.Minute, tuned.mute)
+	require.Equal(t, 6*time.Second, tuned.debounce, "and it follows the CONFIGURED nudge, not the shipped one")
+
+	// A value that could only be a mistake keeps the shipped one: nothing here is a way to say "never",
+	// and a loop that never rounds again is not what a typo should buy.
+	broken := newGossipLoop(&fakeSide{}, "", nil, contactTTL, gossipTuning{
+		Period:  -time.Minute,
+		Fanout:  -1,
+		Nudge:   -time.Second,
+		Timeout: -time.Second,
+		Mute:    -time.Minute,
+	}, nil)
+	require.Equal(t, gossipPeriod, broken.period)
+	require.Equal(t, gossipFanout, broken.fanout)
+	require.Equal(t, gossipNudge, broken.nudge)
+	require.Equal(t, gossipTimeout, broken.timeout)
+	require.Equal(t, gossipMute, broken.mute)
+}
+
+// The budget travels with EVERY round: it belongs to the loop (it is a property of the round rather
+// than of the sending side), so a configured timeout reaches the client on each exchange instead of
+// being read once, when a sending side happened to be built.
+func TestEveryRoundCarriesTheLoopsOwnBudget(t *testing.T) {
+	side := &fakeSide{entries: []peerEntry{gossipPeer(gossipA, lanAddr)}}
+	l := quietLoop(side)
+	l.timeout = 250 * time.Millisecond
+
+	l.round(t.Context(), time.Now(), side.entries)
+	require.Equal(t, []time.Duration{250 * time.Millisecond}, side.budgets)
+}
+
 // "Who sees something I cannot" is measured rather than assumed (§四): with the round-robin unable to
 // separate two neighbours, the one whose last answer taught this machine machines goes first.
 func TestANeighbourThatBroughtSomethingIsAskedFirst(t *testing.T) {
@@ -464,6 +524,15 @@ func TestOnlyAContentChangeBringsTheNextRoundForward(t *testing.T) {
 	newer := later.Add(l.debounce)
 	l.step(t.Context(), newer)
 	require.Equal(t, newer.Add(l.nudge), l.next, "a new address is content as much as a new machine")
+
+	// The ORDER of those addresses, though, is not content at all: it says who spoke last, and that
+	// changes on every announcement, while the set of places this machine may dial does not
+	// (contentKey sorts them). Without that, a peer that merely re-announced itself would look like a
+	// machine that moved.
+	l.next = newer.Add(l.period)
+	side.entries = []peerEntry{gossipPeer(gossipA, lanAddr2, lanAddr)}
+	l.step(t.Context(), newer.Add(l.debounce))
+	require.Equal(t, newer.Add(l.period), l.next, "the same addresses in another order are the same content")
 }
 
 // Changes arrive as a string rather than one at a time — a round brings back several machines and they

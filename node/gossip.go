@@ -371,6 +371,13 @@ entries:
 // It runs for as long as the process does, and it runs quietly. "Quiet" is the only steady state this
 // system has, and it is defined by the loop itself: a round that changes nothing moves nothing.
 
+// The numbers below are the defaults for this loop, and every one of them is configurable
+// (`node.discovery.gossip.period` / `fanout` / `nudge` / `timeout` / `mute`, node/delegatorcache.go
+// gossipTuning): the defaults live HERE rather than in the config struct, because the code that spends
+// them is what knows what they mean — the config only says "a value nobody set keeps the default"
+// (the same arrangement as the store's two windows in node/sightings.go).
+//
+// A zero — or a value that could only be a mistake — keeps what is written here.
 const (
 	// gossipPeriod is the steady cadence: one round per this, asking gossipFanout neighbours.
 	//
@@ -389,6 +396,10 @@ const (
 	// gossipNudge is when the next round moves to once something changed — a machine this one has just
 	// proved, or its own addresses changing. It is not a broadcast: it is this machine asking somebody
 	// sooner, and it is where convergence comes from (§四).
+	//
+	// The floor between two nudges is twice this and is not a setting of its own (the debounce, in
+	// observe): a machine that arrives in a burst must not pin the cadence to this number forever, and
+	// a floor that could be set independently of the nudge would be a second way to say the same thing.
 	gossipNudge = 10 * time.Second
 
 	// gossipTimeout bounds ONE exchange, addresses and body together. It is short on purpose: a round
@@ -400,19 +411,42 @@ const (
 	// card cache (cardTTL), for the same reason: a configured machine that is switched off would
 	// otherwise cost one timeout every time its turn came round.
 	gossipMute = 5 * time.Minute
-
-	// gossipDebounce is the floor between two nudges. Changes arrive as a STRING rather than one at a
-	// time — a round can bring back five machines, and they are proved one verification tick apart — so
-	// without a floor that string would pin the cadence to the fast one and it would never settle.
-	//
-	// It is measured from the last nudge that was APPLIED, and that is what its size has to answer for:
-	// it must still be running when the round a nudge brought forward has come and gone, or the machine
-	// proved right after that round pulls the next one in again — and the cadence is the fast one after
-	// all. That is why it is a multiple of gossipNudge rather than of the tick: the nudge is what the
-	// round's arrival is scheduled by, and one tick (the interval the stages of a string are spread
-	// over) would be over before the round had even happened.
-	gossipDebounce = 2 * gossipNudge
 )
+
+// gossipTuning is this loop's numbers as the operator gave them, with zero standing for "whatever
+// node/gossip.go ships with" (node/delegatorcache.go gossipTuning is the one place config becomes
+// this). It is a value rather than five arguments so that a caller cannot get their order wrong.
+type gossipTuning struct {
+	Period time.Duration
+	Nudge  time.Duration
+	// Timeout is the budget ONE exchange is given (node/remoteclient.go Exchange).
+	Timeout time.Duration
+	Mute    time.Duration
+	// Fanout is a count, which is why it is not with the durations.
+	Fanout int
+}
+
+// orDefault answers the values this loop runs with: what the operator set, and the shipped number
+// wherever that is zero or negative. A negative duration is not a way to say "never" anywhere in this
+// package — it is a typo, and a loop that never rounds again is not what a typo should buy.
+func (g gossipTuning) orDefault() gossipTuning {
+	if g.Period <= 0 {
+		g.Period = gossipPeriod
+	}
+	if g.Nudge <= 0 {
+		g.Nudge = gossipNudge
+	}
+	if g.Timeout <= 0 {
+		g.Timeout = gossipTimeout
+	}
+	if g.Mute <= 0 {
+		g.Mute = gossipMute
+	}
+	if g.Fanout <= 0 {
+		g.Fanout = gossipFanout
+	}
+	return g
+}
 
 // gossipSide is the process a loop runs in, as the loop needs to see it. It exists so that every rule
 // below (who to ask, when to ask again, what counts as a change) can be driven by hand in a test: a
@@ -424,8 +458,11 @@ type gossipSide interface {
 	// itself. A machine that arrived by hearsay is NOT here until its own handshake has happened,
 	// which is the whole of the "rumours do not spread" rule read from the other side.
 	neighbours() []peerEntry
-	// exchange runs one round trip with one neighbour and answers with its reply.
-	exchange(ctx context.Context, e peerEntry, payload []byte) ([]byte, error)
+	// exchange runs one round trip with one neighbour, within budget, and answers with its reply. The
+	// budget belongs to the LOOP rather than to the sending side because it is a property of the round
+	// (which must not hold the loop), and it is passed in so that a configured timeout reaches the
+	// client every time rather than once, when the sending side happens to be built.
+	exchange(ctx context.Context, e peerEntry, payload []byte, budget time.Duration) ([]byte, error)
 	// vouches is what this machine may say about others: the machines it has proved itself, recently
 	// enough to stand behind (node/sightings.go contactWindow).
 	vouches() []gossipEntry
@@ -452,10 +489,13 @@ type gossipLoop struct {
 	// question is asked of this machine's clock.
 	contactWindow time.Duration
 
-	// The numbers above, as fields: a test runs the same logic at millisecond scale, and nothing else
-	// varies them. fanout is a count, which is why it is not with the durations.
-	period, nudge, mute, debounce time.Duration
-	fanout                        int
+	// The numbers above, as fields: what the operator set, or the shipped default where they set
+	// nothing (gossipTuning.orDefault), and a test runs the same logic at millisecond scale. `timeout`
+	// is the budget each exchange is given (gossipSide.exchange), and `debounce` is derived rather than
+	// configured: it is twice `nudge`, because the floor's whole job is to outlast the round a nudge
+	// brought forward, and that round is scheduled by `nudge`.
+	period, nudge, timeout, mute, debounce time.Duration
+	fanout                                int
 	// clock is the loop's only time source: it stamps what a neighbour contributed and decides when the
 	// next round is due.
 	clock func() time.Time
@@ -491,26 +531,29 @@ type gossipLoop struct {
 	once   sync.Once
 }
 
-// newGossipLoop returns a loop over one process's sending side, with the shipped numbers and the wall
-// clock. It is not running: Start is what launches it.
-func newGossipLoop(side gossipSide, self string, selfAddrs []string, contactWindow time.Duration, log *logger.Logger) *gossipLoop {
+// newGossipLoop returns a loop over one process's sending side, running the numbers the operator asked
+// for (with the shipped default wherever they asked for nothing) and the wall clock. It is not
+// running: Start is what launches it.
+func newGossipLoop(side gossipSide, self string, selfAddrs []string, contactWindow time.Duration, tuning gossipTuning, log *logger.Logger) *gossipLoop {
 	if log == nil {
 		log = logger.New("node")
 	}
 	if contactWindow <= 0 {
 		contactWindow = contactTTL
 	}
+	tuning = tuning.orDefault()
 	return &gossipLoop{
 		side:          side,
 		log:           log,
 		self:          self,
 		selfAddrs:     append([]string(nil), selfAddrs...),
 		contactWindow: contactWindow,
-		period:        gossipPeriod,
-		fanout:        gossipFanout,
-		nudge:         gossipNudge,
-		mute:          gossipMute,
-		debounce:      gossipDebounce,
+		period:        tuning.Period,
+		fanout:        tuning.Fanout,
+		nudge:         tuning.Nudge,
+		timeout:       tuning.Timeout,
+		mute:          tuning.Mute,
+		debounce:      2 * tuning.Nudge,
 		clock:         time.Now,
 		jitter:        defaultGossipJitter,
 		asked:         make(map[string]time.Time),
@@ -755,7 +798,7 @@ func (l *gossipLoop) ask(ctx context.Context, e peerEntry, now time.Time, known 
 		l.log.Warn(ctx, "node: could not build a gossip exchange", "cause", err)
 		return
 	}
-	raw, err := l.side.exchange(ctx, e, payload)
+	raw, err := l.side.exchange(ctx, e, payload, l.timeout)
 	if err != nil {
 		l.mutedUntil[key] = now.Add(l.mute)
 		l.log.Debug(ctx, "node: a gossip round failed; that neighbour is skipped for a while",

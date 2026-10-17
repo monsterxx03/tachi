@@ -74,10 +74,21 @@ func DiscoveryOf(cfg *config.Config) Discovery {
 		return Discovery{}
 	}
 	m := cfg.Node.Discovery.Mdns
+	g := cfg.Node.Discovery.Gossip
 	d := Discovery{
 		Enabled:    m.Enabled,
 		Interfaces: append([]string(nil), m.Interfaces...),
-		Gossip:     cfg.Node.Discovery.Gossip.Enabled,
+		Gossip:     g.Enabled,
+		// The loop's own numbers, verbatim: zero means "whatever node/gossip.go ships with", and the
+		// loop is what decides that (gossipTuning.orDefault) — the same arrangement as the two windows
+		// below, so a default lives in exactly one place.
+		GossipTuning: gossipTuning{
+			Period:  g.Period,
+			Fanout:  g.Fanout,
+			Nudge:   g.Nudge,
+			Timeout: g.Timeout,
+			Mute:    g.Mute,
+		},
 		TTL:        cfg.Node.Discovery.TTL,
 		ContactTTL: cfg.Node.Discovery.ContactTTL,
 	}
@@ -126,6 +137,11 @@ type Discovery struct {
 	Interfaces []string
 	// Gossip is the hearsay half (config `node.discovery.gossip.enabled`).
 	Gossip bool
+	// GossipTuning is that half's own numbers (config `node.discovery.gossip.period` / `fanout` /
+	// `nudge` / `timeout` / `mute`), carried as one value so that turning one of them into a field on
+	// this struct does not mean turning all five into fields. Zero means the built-in default
+	// (node/gossip.go), which is what an unconfigured deployment and a hand-built Discovery both get.
+	GossipTuning gossipTuning
 	// SelfAddrs is where this machine says it can be reached, sent as `self.addrs` with every gossip
 	// exchange (config `node.public_url`, and DiscoveryOf is the only place that mapping happens).
 	//
@@ -171,9 +187,11 @@ func (c *DelegatorCache) Close() {
 	}
 	c.mu.Lock()
 	c.closed = true
-	// The switch goes off with it, so that the two ways of asking "may discovery run" agree: the flag
-	// is what stops a sender being built, this is what makes the value itself true.
-	c.discovery.Enabled = false
+	// Every switch goes off with it, so that the two ways of asking "may discovery run" agree (the
+	// value's own account, and `any`): the flag is what stops a sending side being built, and this is
+	// what makes the value itself true. BOTH halves, because gossip is one of the two ways discovery
+	// can be on, and leaving it true would say a closed cache still looks for nodes.
+	c.discovery.Enabled, c.discovery.Gossip = false, false
 	browser, store, gossip := c.browser, c.store, c.gossip
 	c.browser, c.store, c.gossip = nil, nil, nil
 	c.current = nil
@@ -271,14 +289,15 @@ func (c *DelegatorCache) neighbours() []peerEntry {
 }
 
 // exchange runs one round trip through the sending side's own client, so that the gossip route inherits
-// the TLS pin, the address order and the per-attempt deadlines every other call has (the only thing of
-// its own is the budget, node/remoteclient.go Exchange).
-func (c *DelegatorCache) exchange(ctx context.Context, e peerEntry, payload []byte) ([]byte, error) {
+// the TLS pin, the address order and the per-attempt deadlines every other call has. The budget belongs
+// to the round rather than here (node/gossip.go gossipSide.exchange): it is a property of the loop, and
+// the loop passes the number the operator configured.
+func (c *DelegatorCache) exchange(ctx context.Context, e peerEntry, payload []byte, budget time.Duration) ([]byte, error) {
 	s := c.senderNow()
 	if s == nil {
 		return nil, errors.New("node: no sending side to gossip from")
 	}
-	return s.client.Exchange(ctx, e, payload, gossipTimeout)
+	return s.client.Exchange(ctx, e, payload, budget)
 }
 
 // senderNow is the sending side this cache last built, under the lock: what the loop and the two
@@ -363,7 +382,7 @@ func (c *DelegatorCache) startDiscovery(ctx context.Context) {
 				"an https address on a private, link-local or CGNAT network — so gossip will not "+
 				"introduce this machine", "public_url", c.discovery.SelfAddrs[0])
 		}
-		loop := newGossipLoop(c, self, selfAddrs, store.contactWindow(), c.log)
+		loop := newGossipLoop(c, self, selfAddrs, store.contactWindow(), c.discovery.GossipTuning, c.log)
 		loop.Start(context.WithoutCancel(ctx))
 		c.gossip = loop
 	}

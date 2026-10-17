@@ -215,6 +215,31 @@ func TestGossipComesUpAndGoesDownWithTheCache(t *testing.T) {
 	}
 	require.Nil(t, cache.gossip, "and the cache holds neither half afterwards")
 	require.Nil(t, cache.store)
+	require.False(t, cache.discovery.any(),
+		"and both switches read as off: gossip is a way discovery can be on, so a closed cache must "+
+			"not still say it looks for nodes")
+}
+
+// 五个 gossip 数字从配置走到发送侧：零值也原样带过去，由循环决定默认（默认值只写在 node/gossip.go
+// 一处，这里不替它填）。
+func TestTheConfiguredGossipNumbersReachTheSendingSide(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Node.Discovery.Gossip.Enabled = true
+	cfg.Node.Discovery.Gossip.Period = 90 * time.Second
+	cfg.Node.Discovery.Gossip.Fanout = 5
+	cfg.Node.Discovery.Gossip.Nudge = 3 * time.Second
+	cfg.Node.Discovery.Gossip.Timeout = time.Second
+	cfg.Node.Discovery.Gossip.Mute = time.Minute
+
+	d := DiscoveryOf(cfg)
+	require.True(t, d.Gossip)
+	require.Equal(t, gossipTuning{
+		Period: 90 * time.Second, Fanout: 5, Nudge: 3 * time.Second,
+		Timeout: time.Second, Mute: time.Minute,
+	}, d.GossipTuning)
+
+	// 一行都不写就是零：循环用它自己的默认。
+	require.Equal(t, gossipTuning{}, DiscoveryOf(&config.Config{}).GossipTuning)
 }
 
 // Where this machine introduces itself by gossip is a claim like every other one, and the receiving end
