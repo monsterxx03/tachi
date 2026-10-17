@@ -167,7 +167,10 @@ func (s *FileStore) discardFork(dir string) {
 // thinking level (otherwise the copied prefix stops matching the provider's prompt
 // cache on the first request), the roots and the project binding (otherwise the
 // conversation's paths do not resolve), and SkipDream, which is the reader's own
-// standing choice about that conversation.
+// standing choice about that conversation. SkipApproval is the same kind of
+// standing choice — a branch of a conversation being worked in 「无需审批」 stays
+// that way — and it is the one field here that a COMPACTION does not carry (see
+// agent/compact.go): a compacted conversation is a different one.
 func forkedSession(src *Session, title string) *Session {
 	now := time.Now()
 	return &Session{
@@ -179,6 +182,7 @@ func forkedSession(src *Session, title string) *Session {
 		ProjectID:      src.ProjectID,
 		ThinkingLevel:  src.ThinkingLevel,
 		SkipDream:      src.SkipDream,
+		SkipApproval:   src.SkipApproval,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

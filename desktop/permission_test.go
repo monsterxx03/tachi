@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -452,5 +453,83 @@ func TestAskSubjectOf(t *testing.T) {
 		if got := askSubjectOf(tc.tool, tc.args); got != "" {
 			t.Errorf("askSubjectOf(%q, %q) = %q, want empty", tc.tool, tc.args, got)
 		}
+	}
+}
+
+// SetSkipApproval is the desktop's per-session approval MODE (the composer's dropdown). Both halves
+// have to move, and each half is what some reader consults:
+//
+//   - the session RECORD (session.Session.SkipApproval) is what survives a restart and what the
+//     dropdown reads back — a toggle that only touched the agent would silently forget the answer
+//     at the next launch;
+//   - the live agent's session-wide approval is what the ask path reads — a toggle that only wrote
+//     the record would keep raising cards until the session was reopened.
+//
+// The rules half is read back through CheckBash rather than through PermState: those are the two
+// readers of one answer, and a retraction that reached only one of them is the bug the one-setter
+// rule exists for.
+func TestSetSkipApprovalPersistsAndApplies(t *testing.T) {
+	sm := newSessionManagerForTest(t, t.TempDir())
+	sid := sm.Current().ID
+	a := newPermissionTestAgent(t)
+	p := permission.NewPolicy(permission.Rules{Ask: []string{"git push*"}}, permission.Rules{})
+	a.SetPermissionPolicy(p)
+
+	d := newTestApp()
+	d.cfg = &config.Config{Language: "en"}
+	d.sm = sm
+	r := d.getRun(sid)
+	r.sm, r.agent = sm, a
+	d.activeID = sid
+	svc := &AgentService{desk: d}
+
+	if svc.GetSkipApproval() {
+		t.Error("a session asks by default")
+	}
+	if got := svc.SetSkipApproval(true); got != "ok" {
+		t.Fatalf("SetSkipApproval(true) = %q, want ok", got)
+	}
+	if !svc.GetSkipApproval() {
+		t.Error("「无需审批」 was not read back")
+	}
+	if !mustLoad(t, sm, sid).SkipApproval {
+		t.Error("「无需审批」 did not reach the session record")
+	}
+	if !a.PermState.AllowAllAsks {
+		t.Error("「无需审批」 did not reach the live agent")
+	}
+	if dec, _ := p.CheckBash("git push origin main"); dec != permission.DecisionAllow {
+		t.Errorf("the ask rule still fires in this session: %v", dec)
+	}
+
+	// 翻回去：两半一起翻，而且规则重新开始问（用户明确选了「需要审批」）。
+	if got := svc.SetSkipApproval(false); got != "ok" {
+		t.Fatalf("SetSkipApproval(false) = %q, want ok", got)
+	}
+	if mustLoad(t, sm, sid).SkipApproval {
+		t.Error("「需要审批」 did not reach the session record")
+	}
+	if a.PermState.AllowAllAsks {
+		t.Error("「需要审批」 did not reach the live agent")
+	}
+	if dec, _ := p.CheckBash("git push origin main"); dec != permission.DecisionAsk {
+		t.Errorf("the ask rule must fire again, got %v", dec)
+	}
+}
+
+// Without a session there is nothing to write the mode onto, and the frontend shows that answer
+// rather than a control that pretends to have taken it.
+func TestSetSkipApprovalWithoutASession(t *testing.T) {
+	d := newTestApp()
+	svc := &AgentService{desk: d}
+	if got := svc.SetSkipApproval(true); got != "agent not ready" {
+		t.Errorf("without config: %q", got)
+	}
+	d.cfg = &config.Config{Language: "en"}
+	if got := svc.SetSkipApproval(true); got != refuseNoSession {
+		t.Errorf("without a session: %q, want %q", got, refuseNoSession)
+	}
+	if svc.GetSkipApproval() {
+		t.Error("no session means the asking mode")
 	}
 }

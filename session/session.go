@@ -41,6 +41,24 @@ type Session struct {
 	// identically.
 	Pinned    bool `json:"pinned,omitempty"`
 	SkipDream bool `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	// SkipApproval is this session's answer to 「bash 与文件工具要不要先问你」: the desktop's
+	// composer dropdown writes it, and the desktop reads it back (desktop/permission.go) every
+	// time it builds an agent for the session. false — the asking mode — is what every session
+	// has by default and what an old meta.json reads back as.
+	//
+	// A record rather than reader state, because the answer has to mean the same thing to every
+	// PROCESS that opens the session: the desktop restarting must not forget that this
+	// conversation was set to not ask.
+	//
+	// The field is desktop-only in the same way ProjectID is — no other entry point reads it,
+	// and the TUI (which has no such control, and its own prompt for the same questions) builds
+	// its agent from its own configuration. So a session left in this mode asks again under the
+	// TUI; that is an asymmetry of the frontends, not a promise this field makes.
+	//
+	// It travels with a FORK (the same standing choice about the same conversation as SkipDream)
+	// and deliberately NOT into a compaction's child: a compacted conversation is a different
+	// one, and nobody was asked whether it wants the asks off.
+	SkipApproval bool `json:"skip_approval,omitempty"`
 
 	// Kind marks a session that a SUBSYSTEM owns rather than the person at the keyboard:
 	// today only a receiving node's A2A execution (KindA2AExecution) — design §2.2. Empty

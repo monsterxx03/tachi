@@ -33,6 +33,7 @@ func forkSource(t *testing.T, s *FileStore) *Session {
 		ProjectID:      "p1",
 		ThinkingLevel:  "high",
 		SkipDream:      true,
+		SkipApproval:   true,
 		// The fields a fork must NOT carry: they describe the source's situation.
 		ThreadID:             "guild:1:channel:2",
 		Kind:                 "a2a_execution",
@@ -143,6 +144,7 @@ func TestForkSessionCopiesOnlyWhatMakesItTheSamePlaceToWork(t *testing.T) {
 	assert.Equal(t, "p1", fork.ProjectID)
 	assert.Equal(t, "high", fork.ThinkingLevel)
 	assert.True(t, fork.SkipDream, "the reader's own standing choice follows the conversation")
+	assert.True(t, fork.SkipApproval, "a branch of a conversation worked in 「无需审批」 stays that way")
 
 	assert.Empty(t, fork.ThreadID, "a channel thread belongs to the session it was opened for")
 	assert.Empty(t, fork.Kind, "the fork is an ordinary conversation, not a subsystem's")

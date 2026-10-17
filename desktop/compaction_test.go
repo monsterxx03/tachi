@@ -258,3 +258,46 @@ func TestEndTurnSettlesTheConversationOntoTheChild(t *testing.T) {
 		t.Errorf("runOf(child) = %v, want the settled run", got)
 	}
 }
+
+// TestFollowCompactionDropsTheApprovalMode — 审批模式属于**会话**，而搬家的那个 agent 是同一个对象。
+//
+// 新会话的记录是新的，而压缩的白名单**故意**不带走 skip_approval（agent/compact.go）：它只是不
+// 带过去。agent 那一半不会自己知道这件事，于是一个「无需审批」的会话压缩之后，屏幕上那条新行顶着
+// 一个「需要审批」的下拉框，而工具照旧不问 —— 控件和它的行为说两件事。
+//
+// 这里走的是真的 FinalizeCompact：白名单有没有带走这个字段，正是这条断言要问的事。
+func TestFollowCompactionDropsTheApprovalMode(t *testing.T) {
+	dir := t.TempDir()
+	sm := newSessionManagerForTest(t, dir)
+	sid := sm.Current().ID
+	parent := mustLoad(t, sm, sid)
+	parent.SkipApproval = true
+	if err := sm.UpdateMeta(parent); err != nil {
+		t.Fatalf("seed the parent's mode: %v", err)
+	}
+	a := newPermissionTestAgent(t)
+	a.SetAllowAllAsksForSession(true) // 父会话答过「无需审批」
+
+	d := newTestApp()
+	d.runs[sid] = &sessionRun{sm: sm, agent: a}
+	d.activeID = sid
+
+	if _, err := agent.FinalizeCompact(sm, "sys", "摘要"); err != nil {
+		t.Fatalf("FinalizeCompact: %v", err)
+	}
+	child := sm.Current()
+	if child == nil || child.ID == sid {
+		t.Fatal("compaction did not move the conversation into a child session")
+	}
+	if child.SkipApproval {
+		t.Error("压缩出来的新会话不该继承这个模式")
+	}
+
+	d.runs[sid].compaction = &compactionRecord{SessionID: child.ID}
+	if got := d.followCompaction(sid); got != child.ID {
+		t.Fatalf("followCompaction() = %q, want the child", got)
+	}
+	if a.PermState.AllowAllAsks {
+		t.Error("搬到子会话后 agent 还在放行：新会话说「需要审批」，行为却是不问")
+	}
+}

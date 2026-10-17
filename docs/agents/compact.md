@@ -18,7 +18,7 @@
 
 ## 子会话的记录
 
-- **`FinalizeCompact` 不拷贝的会话 meta 字段，全都被悄悄置零**，而且不会报出来。每一个都有自己的坏法：`AdditionalDirs`/`ProjectID`（工具、提示词和检查点在一棵错的树里彼此自洽）、`Pinned`（折叠掉的那一行上有个看不见的状态，外加对会话清理的永久豁免）、`Kind`/`SkipDream`/`SourceNodeID`（一个远端任务回来时变成用户自己的本地对话——就来源而言，是一份不再说明是谁干的活的记录）。给 meta 加字段，就是要决定它随不随对话走：`agent/compact_test.go` 钉住路径字段，`agent/managed_test.go` 钉住那三个把会话标记为远端执行的字段。
+- **`FinalizeCompact` 不拷贝的会话 meta 字段，全都被悄悄置零**，而且不会报出来。每一个都有自己的坏法：`AdditionalDirs`/`ProjectID`（工具、提示词和检查点在一棵错的树里彼此自洽）、`Pinned`（折叠掉的那一行上有个看不见的状态，外加对会话清理的永久豁免）、`Kind`/`SkipDream`/`SourceNodeID`（一个远端任务回来时变成用户自己的本地对话——就来源而言，是一份不再说明是谁干的活的记录）。给 meta 加字段，就是要决定它随不随对话走：`agent/compact_test.go` 钉住路径字段，`agent/managed_test.go` 钉住那三个把会话标记为远端执行的字段。 `SkipApproval` 是**故意**不跟着走的那一个（一次新的对话，没人被问过它要不要审批），而它的坏法是反过来的：agent 那一半不会自己知道记录变了，于是新会话顶着「需要审批」却被照旧放行——所以它由**桌面**在搬家那一刻重新指向（`followCompaction`），钉在 `desktop/compaction_test.go`。
 - **`ThreadID` 和 `Pinned` 是「搬走」，不是拷贝**——父会话在同一步把它们放开。一个绑定，只由它仍然有意义的那个记录持有：一份留在父会话上的 thread 绑定，会让 `FindByThreadID` 解析到压缩前的历史，压缩之后每一轮过去都会再触发一次压缩，就是这么来的。
 
 ## 前端欠这次交接什么

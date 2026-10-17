@@ -561,6 +561,10 @@ function App() {
   const [providers, setProviders] = useState<any[]>([])
   const [providerName, setProviderName] = useState('')
   const [thinkingLevel, setThinkingLevel] = useState('none')
+  // 这个会话的审批模式：开启（默认，bash 与文件工具命中 ask 规则就弹卡）还是无需审批。它是会话记录
+  // 自己的一半（session.Session.SkipApproval），另一半是 agent 上的会话级放行 —— Go 侧在每次为一个
+  // 会话建 agent 时从记录里取回来（desktop/permission.go 的 Get/SetSkipApproval）。
+  const [skipApproval, setSkipApproval] = useState(false)
   // The levels the active provider's endpoint accepts: from the backend
   // (GetProviderInfo), falling back to the full list until a session answers.
   const [thinkingLevels, setThinkingLevels] = useState<string[]>(THINKING_LEVELS)
@@ -1115,6 +1119,13 @@ function App() {
       if (Array.isArray(lvs) && lvs.length > 0) setThinkingLevels(lvs)
       const lv = await (AgentService as any).GetThinkingLevel?.()
       if (lv) setThinkingLevel(lv)
+      // This session's approval mode, read HERE because this is the callback that runs
+      // whenever the session on screen changes (it is the active session's own facts, of which
+      // the provider is only the first) — and read UNCONDITIONALLY, since `false` is a real
+      // answer: keeping the previous session's value on a falsy payload is exactly how a
+      // control ends up describing a conversation it is not looking at.
+      const sk = await (AgentService as any).GetSkipApproval?.()
+      setSkipApproval(!!sk)
     } catch { /* ignore */ }
   }, [])
 
@@ -2943,6 +2954,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       to this endpoint): a select whose value has no option
                       renders blank, which would hide what is actually set. */}
                   {(thinkingLevels.includes(thinkingLevel) ? thinkingLevels : [thinkingLevel, ...thinkingLevels]).map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+                {/* 权限审批：bash 与文件工具命中 ask 规则时要不要先弹卡。默认「需要审批」（现状），
+                    另外一个选项直接放行这类询问 —— 它翻的就是会话级放行那个开关（agent 侧
+                    SetAllowAllAsksForSession 的两个读者），deny 规则照旧先生效。这个选择
+                    住在会话记录里，所以换个会话、重启应用都跟着它；压缩出来的新会话不带过去。
+                    被拒时就重读（跟旁边那个思考级别选择器同一条规矩），免得控件显示一个并不
+                    生效的模式。 */}
+                <select className="provider-select approval-select" value={skipApproval ? 'skip' : 'ask'}
+                  disabled={!currentId}
+                  aria-label="权限审批"
+                  title="权限审批：bash 与文件工具命中 ask 规则时是否先让你确认"
+                  onChange={async (e) => {
+                    const skip = e.target.value === 'skip'
+                    const res = await (AgentService as any).SetSkipApproval?.(skip)
+                    if (res && res !== 'ok') { refreshProvider(); return }
+                    setSkipApproval(skip)
+                  }}>
+                  <option value="ask">需要审批</option>
+                  <option value="skip">无需审批</option>
                 </select>
                 <ContextMeter sessionId={currentId} estimate={ctxEstimate} window={ctxWindow} />
                 <span className="usage-meta">

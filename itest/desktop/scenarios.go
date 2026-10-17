@@ -2751,6 +2751,78 @@ permissions:
 				}
 			},
 		},
+		// 无需审批（会话级的审批**模式**）: 输入框上方那行状态栏里的下拉框写进会话记录的模式。它与
+		// perm-session 的「本会话全部允许」翻的是同一个开关（agent 侧的会话级放行 + 策略那一半），
+		// 区别是这个选择**持久**在 meta.json 里 —— 换个会话、重启应用都跟着它，所以这条同时钉住
+		// "不用问"和"写到盘上"。
+		//
+		// 顺序是承重的：第一轮先用同一个下拉框的默认值证明规则**本来会问**（一次命中**文件** read
+		// 规则的读取弹出卡片、点「允许一次」），第二轮切到「无需审批」之后，一条命中 bash ask 规则的
+		// 命令和一次命中文件规则的读取都不该再弹卡。少了第一轮，一条"没有弹卡"的场景什么也证明不了
+		// —— 规则根本没命中也一样看不见卡片。两半各来一次，因为这个开关对两半都成立；第一轮用文件
+		// 那条（bash 那条由 perm-allow/perm-session 证着），第二轮两条一起上。
+		//
+		// config 里两条规则的形式不同是有原因的：bash 规则匹配命令，文件规则匹配 **canonical 绝对
+		// 路径**，而全局层的相对模式锚定在 $HOME 上（沙箱的 work 目录没开 gitInit，不是一棵树），
+		// 所以文件那条只能写成"任何目录下的这个名字"（与 perm-files 同一个写法）。
+		{
+			name: "perm-approval-off",
+			files: map[string]string{
+				"README.md":             "# smoke\n\nthe perm-approval-off scenario's working directory\n",
+				"perm-fixture.txt":      "PERM-FIXTURE-CONTENT\n",
+				"perm-fixture-read.txt": "PERM-FIXTURE-READ-CONTENT\n",
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+  files:
+    read:
+      ask:
+        - "*/perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				// 第一轮：一次命中**文件** read ask 规则的读取 —— 默认模式下它必须弹卡（这一步是
+				// 第二轮那条"文件工具也不再问"的前提）。
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_ao1", "ReadFile", `{"path":"perm-fixture-read.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 60, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("读过文件了。", 1200)},
+				// 切到「无需审批」之后的第二轮：一条命中 bash ask 规则的命令 + 一次命中文件规则的
+				// 读取，两条都不该再打断它。
+				{Reply: mockllm.Stream(
+					mockllm.ToolCallStart("call_ao2", "Bash", `{"command":"cat perm-fixture.txt"}`),
+					mockllm.ToolCallStart("call_ao3", "ReadFile", `{"path":"perm-fixture-read.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 60, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("两条都跑完了。", 1200)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 两半的**结果**各自回喂给了模型：命令的输出（bash）与文件的内容（ReadFile）。两个
+				// 标记不同，所以这一条分得清"哪一半跑了"—— 也就是这个开关对两半都成立。
+				for _, marker := range []string{"PERM-FIXTURE-CONTENT", "PERM-FIXTURE-READ-CONTENT"} {
+					_, ran := c.requestSeen(marker)
+					c.check("无需审批后调用真的执行了："+marker, ran, requestCount(c.requests))
+				}
+				// 持久化就是"重启之后还算数"的那一半：模式写在会话记录里，而且是**恰好一个**会话
+				// 写着它（两个会话都写着，说明什么地方把它当成了全局开关）。
+				flagged := 0
+				for _, m := range c.sessionMetas() {
+					if skip, _ := m["skip_approval"].(bool); skip {
+						flagged++
+					}
+				}
+				c.check("「无需审批」写进了会话 meta.json（恰好一个会话）", flagged == 1,
+					fmt.Sprintf("%d 个", flagged))
+			},
+		},
 		//
 		// 会话树里的 skill：desktop 的 store 按会话的工作目录建，所以工作目录下 .tachi/skills 的
 		// 项目级 skill 会被发现，技能目录随第一条消息进入模型上下文。断言落在模型收到的请求上而不是

@@ -843,3 +843,24 @@ func TestFileGateSkipsAnAllowRule(t *testing.T) {
 	require.NotNil(t, note)
 	assert.Equal(t, noteByApproval, note.By)
 }
+
+// TestFileGateAsksAgainAfterTheModeIsRetracted — the same retraction read from the FILE side.
+//
+// The file gate has no rules half to consult (a path always parses), so what this pins is the one
+// reader it does have: PermState.AllowAllAsks sits after deny and before the judgment, and clearing
+// it has to put the judgment back in the path. `askGateAgent`'s twin is over there; this is the
+// half the desktop's per-session approval mode also covers — 「无需审批」 is not about commands.
+func TestFileGateAsksAgainAfterTheModeIsRetracted(t *testing.T) {
+	judge := &fakeAskJudge{p: 0.94} // over this agent's 0.70 threshold
+	a := fileGateAgent(t, judge, nil)
+	a.SetAllowAllAsksForSession(true)
+	a.SetAllowAllAsksForSession(false)
+	a.ConfirmTool(ConfirmAllowOnce) // fail fast, never park
+
+	_, handled, note, err := callForCheck(t, a, newFileCall(t, tools.ToolNameRead, "/Users/someone/.ssh/id_rsa", ""))
+	require.NoError(t, err)
+	assert.False(t, handled)
+	require.NotNil(t, note, "the session is asking again, so the decision is reported")
+	assert.Equal(t, noteByApproval, note.By)
+	assert.Equal(t, 1, judge.callCount(), "the judgment gate must be consulted again")
+}

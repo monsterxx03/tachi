@@ -321,6 +321,13 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 	// because the handler reaches back into the agent for 「本会话全部允许」 (which
 	// flips the session-wide switch on this agent's own policy).
 	a.SetPermissionHandler(d.permissionHandler(sessionID, a))
+	// This session's own approval mode, out of its record: 「无需审批」 puts the agent in the
+	// state the card's 「本会话全部允许」 leaves behind (SetAllowAllAsksForSession — one setter,
+	// both readers), so no ask reaches the handler for a bash command or a file call. A denied
+	// command is still denied: the rules answer before either reader does.
+	if cur := sm.Current(); cur != nil {
+		a.SetAllowAllAsksForSession(cur.SkipApproval)
+	}
 	if sm != nil {
 		a.SetSessionManager(sm)
 	}

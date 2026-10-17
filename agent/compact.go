@@ -141,6 +141,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// memory by the next Dream pass (design §2.2, §2.3).
 	newSess.Kind = oldSess.Kind
 	newSess.SkipDream = oldSess.SkipDream
+	// SkipApproval is deliberately NOT copied, and that is the one entry in this block that is
+	// here to say so: it is the parent's answer about the asks in the conversation the reader was
+	// sitting in, and the child is a different conversation that nobody was asked about. The
+	// desktop re-points the live agent at the child's record when it re-homes the run
+	// (followCompaction) — without that, the agent would keep approving what the child's record
+	// says must be asked about.
 	// The source node travels too, and unlike Pinned this is a COPY rather than a move: the
 	// parent is still a remote execution record and stays one (it is readable, and a reader
 	// has to be able to tell whose work it was), while the child is the row the conversation

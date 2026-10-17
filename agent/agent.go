@@ -725,6 +725,12 @@ func (a *AIAgent) SessionManager() SessionManager {
 // AllowAllAsksForSession records 「本会话全部允许」: from here this session is not asked about
 // another command or file call — not by an ask rule, and not by either judgment gate.
 //
+// It is the answer-verb (a human just said yes to the whole session); SetAllowAllAsksForSession
+// is the same switch as a mode, for the callers that set it from a stored preference.
+func (a *AIAgent) AllowAllAsksForSession() { a.SetAllowAllAsksForSession(true) }
+
+// SetAllowAllAsksForSession sets or clears the session-wide approval.
+//
 // It is the ONE setter, because the answer has two readers: the policy (which owns the rules half,
 // and is the copy a forked child shares with its parent) and PermState (which owns the gates half,
 // and is the only place that exists when a session has no policy at all). Flipping just one of them
@@ -732,11 +738,22 @@ func (a *AIAgent) SessionManager() SessionManager {
 //
 // Deny rules are untouched, and are still decided before either reader is reached: "stop asking me"
 // can never become "run what my rules forbid".
-func (a *AIAgent) AllowAllAsksForSession() {
+//
+// false is not a retraction of anything the RULES say — it puts the session back in the asking
+// mode, which is where every session starts.
+func (a *AIAgent) SetAllowAllAsksForSession(allow bool) {
 	if a.Config.PermissionPolicy != nil {
-		a.Config.PermissionPolicy.AllowAllAsksForSession()
+		if allow {
+			a.Config.PermissionPolicy.AllowAllAsksForSession()
+		} else {
+			a.Config.PermissionPolicy.ResetSessionApprovals()
+		}
 	}
-	a.PermState.AllowAllAsks = true
+	// A hand-built agent has no session state at all (PermState is nil) — a fixture, not a
+	// session — and there is nothing to switch on it: it has no gates and no handler.
+	if a.PermState != nil {
+		a.PermState.AllowAllAsks = allow
+	}
 }
 
 // ClearSession ends the current session so a new one will be created on the next message.

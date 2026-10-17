@@ -323,6 +323,22 @@ export function GetSettingsSchema(): $CancellablePromise<$models.SettingsSchemaV
 }
 
 /**
+ * GetSkipApproval reports whether the displayed session is in the 「无需审批」 mode: a bash command
+ * or a file call that matches an ask rule runs without a card. It is the session RECORD's own field
+ * (session.Session.SkipApproval), which is the durable half of the mode — the live half is the
+ * agent's session-wide approval, derived from the record every time an agent is built for it (see
+ * buildAgentForSession).
+ * 
+ * It deliberately does NOT report a 「本会话全部允许」 answered on a card earlier in this process:
+ * that answer is about the questions this session has already raised, it lives on the agent and
+ * dies with the process. This control says what the session's MODE is, and the mode is what the
+ * record holds, so what it shows is what a restart will do.
+ */
+export function GetSkipApproval(): $CancellablePromise<boolean> {
+    return $Call.ByID(3494597132);
+}
+
+/**
  * GetState returns the current agent state — the DISPLAYED session's, named by that
  * session's id so the frontend can file it under the conversation it belongs to.
  */
@@ -1042,6 +1058,18 @@ export function SetSessionWorkingDir(id: string, dir: string): $CancellablePromi
  */
 export function SetSidebarWidth(px: number): $CancellablePromise<void> {
     return $Call.ByID(701485564, px);
+}
+
+/**
+ * SetSkipApproval writes that mode onto the displayed session's record and applies it to the live
+ * agent. It answers "ok" or the reason it could not, and the frontend re-reads on a refusal rather
+ * than leaving a control claiming a mode that is not in force.
+ * 
+ * The record is written FIRST and applied second: a write that fails puts the record's copy back
+ * and touches no agent, so the two halves cannot end up describing different modes.
+ */
+export function SetSkipApproval(skip: boolean): $CancellablePromise<string> {
+    return $Call.ByID(3229788544, skip);
 }
 
 /**

@@ -538,3 +538,37 @@ func TestAskGateSkipsAnAllowRule(t *testing.T) {
 	require.NotNil(t, note)
 	assert.Equal(t, noteByApproval, note.By)
 }
+
+// TestSetAllowAllAsksForSessionRetracts — the setter's OTHER direction: a session put back into the
+// asking mode asks again, and both readers move together.
+//
+// It is a direction nothing in the agent layer used to reach (the answer-verb only ever said yes),
+// and the desktop now does: its composer control stores a session's approval MODE, so turning it
+// back to 「需要审批」 has to retract what 「无需审批」 granted. Half a retraction is the bug the
+// one-setter rule exists for — the policy's copy alone would still let a matched ask rule through
+// silently, and PermState alone would leave the judgment gate quiet while the rules asked.
+func TestSetAllowAllAsksForSessionRetracts(t *testing.T) {
+	tc := llm.ToolCall{ID: "c1", Function: llm.ToolCallFunction{
+		Name: "Bash", Arguments: `{"command":"git push origin +main"}`,
+	}}
+	judge := &fakeAskJudge{p: 0.94} // over this agent's 0.70 threshold
+	a := askGateAgent(t, judge, nil)
+	a.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
+	a.SetAllowAllAsksForSession(true)
+	a.SetAllowAllAsksForSession(false)
+	// Answered before the call, so a regression fails on the assertions below instead of parking
+	// the ask and hanging the run until the test timeout.
+	a.ConfirmTool(ConfirmAllowOnce)
+
+	_, handled, note, err := a.checkBashPermission(t.Context(), tc, make(chan AgentEvent, 4))
+	require.NoError(t, err)
+	require.False(t, handled)
+	require.NotNil(t, note, "the session is asking again, so the decision is reported")
+	assert.Equal(t, noteByApproval, note.By)
+	assert.Equal(t, 1, judge.callCount(), "the judgment gate must be consulted again")
+	// The rules half, read directly: a retraction that only reached PermState would leave this at
+	// Allow, and every later command of this shape would run without a card.
+	d, _ := a.Config.PermissionPolicy.CheckBash("git push origin dev")
+	assert.Equal(t, permission.DecisionAsk, d)
+}

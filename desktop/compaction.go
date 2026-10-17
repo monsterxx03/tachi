@@ -95,6 +95,18 @@ func (d *desktopApp) followCompaction(id string) string {
 		}
 	}
 
+	// The approval mode is the SESSION's, and the agent carrying it is the same object across the
+	// move — so a mode left in place would outlive the record it came from: the child starts at
+	// 「需要审批」 (FinalizeCompact's whitelist does not carry skip_approval, and nobody was asked
+	// whether the new conversation wants the asks off), while the agent would go on approving what
+	// the child's record says must be asked about. Re-point it, exactly like the tree-scoped state
+	// beginTurn re-points: the two halves describe ONE session, and here the session changed.
+	if r.agent != nil && r.sm != nil {
+		if cur := r.sm.Current(); cur != nil {
+			r.agent.SetAllowAllAsksForSession(cur.SkipApproval)
+		}
+	}
+
 	if d.app != nil {
 		d.app.Event.Emit("agent:session_switched", map[string]any{
 			"previousId": id,
