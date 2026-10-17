@@ -45,22 +45,26 @@
     sizes['桶组头 .proj-head.is-loose .proj-name'] === sizes['组头 .proj-name'],
     `${sizes['桶组头 .proj-head.is-loose .proj-name']}px vs ${sizes['组头 .proj-name']}px`)
 
-  // Which group a row belongs to has to be visible, not inferred from a 12px difference in left
-  // margin ("项目里的会话和无项目的会话看不出区别"): EVERY group's rows hang off a RAIL, and that rail
-  // belongs to the group's own container. Measured on the row's own parent, because that is where
-  // the rail lives — the rows themselves are the same box in every group, which is exactly why a
-  // margin-only difference was ambiguous. Intent, not a number: the rail has to EXIST.
-  const railOf = (el) => {
+  // Which group a row belongs to is read from the INDENT, and nothing else: every group's rows sit
+  // one step inside their container, and the container is the only thing that says whose they are.
+  //
+  // There used to be a rail here as well (2px of --border-2 down the left of .proj-rows), on the
+  // argument that indentation alone is ambiguous. It was removed on 2026-10-17: in a dense list it
+  // drew a vertical line down the whole sidebar, one per group, which read as a second column of
+  // separators rather than as grouping. So what this pins is that the indent EXISTS and is a real
+  // step (not 1–2px), measured on the row's own parent — the rows themselves are the same box in
+  // every group, which is exactly why a margin-only difference was once called ambiguous.
+  const indentOf = (el) => {
     const p = el.parentElement
-    return p ? parseFloat(getComputedStyle(p).borderLeftWidth) : 0
+    return p ? parseFloat(getComputedStyle(p).marginLeft) : 0
   }
   const projRows = smoke.qa('.sidebar .proj-rows:not(.is-loose) .session')
-  smoke.check('项目组的行挂在一根竖线上', projRows.length > 0 && projRows.every((r) => railOf(r) > 0),
-    `${projRows.length} 行，竖线 ${projRows.map((r) => railOf(r)).join('/')}px`)
-  smoke.check('竖线是实线、够粗（不是一根看不清的发丝线）',
+  smoke.check('项目组的行缩进了一档（读得出它属于这个组）', projRows.length > 0 && projRows.every((r) => indentOf(r) >= 8),
+    `${projRows.length} 行，缩进 ${projRows.map((r) => indentOf(r)).join('/')}px`)
+  smoke.check('组容器上没有竖线（2026-10-17 去掉了那条导轨）',
     projRows.length > 0 && (() => {
       const rail = getComputedStyle(smoke.qa('.sidebar .proj-rows')[0])
-      return rail.borderLeftStyle === 'solid' && parseFloat(rail.borderLeftWidth) >= 2
+      return !rail.borderLeftStyle || rail.borderLeftStyle === 'none' || parseFloat(rail.borderLeftWidth) === 0
     })(),
     projRows.length ? getComputedStyle(smoke.qa('.sidebar .proj-rows')[0]).borderLeftWidth : '没有项目组')
 
@@ -87,10 +91,10 @@
     }, '在「无项目」组里建出一条会话', 8000)
   smoke.check('桶的 ＋ 建出的行就落在桶里（那一组自己展开）',
     !!created, (created ? created.length + ' 行' : '没有那一行') + '，当前会话 ' + shownId())
-  smoke.check('无项目桶的行也挂在自己那根竖线上（跟项目组是同一套壳）',
-    !!created && created.every((r) => railOf(r) > 0),
-    created ? created.map((r) => railOf(r)).join('/') + 'px' : '(没有行)')
-  smoke.check('一行挂的是它自己那组的导轨（没串到别的组）',
+  smoke.check('无项目桶的行也缩进了一档（跟项目组是同一套壳）',
+    !!created && created.every((r) => indentOf(r) >= 8),
+    created ? created.map((r) => indentOf(r)).join('/') + 'px' : '(没有行)')
+  smoke.check('一行挂的是它自己那组的容器（没串到别的组）',
     !!created && created.every((r) => r.closest('.proj-rows').classList.contains('is-loose')),
     created && created[0].closest('.proj-rows')
       ? created[0].closest('.proj-rows').className : '(没有行)')
@@ -124,13 +128,18 @@
   // The other half of the rail rule: an EMPTY group keeps the indent but has no rail to hang rows
   // off. Its group is folded at boot (nothing was ever in it — only the boot session's project is
   // revealed), so it has to be opened first.
+  // The empty group: no rows to indent, so the container must not draw anything of its own either
+  // (that was the rail's old exception — with the rail gone, the check is that no group draws one).
   const emptyHead = smoke.qa('.sidebar .proj-head')
     .find((h) => smoke.text(h.querySelector('.proj-name')) === 'sidebar-empty')
   if (emptyHead) emptyHead.querySelector('.proj-toggle').click()
   const emptyHint = await smoke.waitFor('.sidebar .proj-rows:not(.is-loose) .proj-empty', '空项目展开', 4000)
-  smoke.check('空项目的「还没有会话」旁边没有竖线（没有行可挂）',
-    !!emptyHint && getComputedStyle(emptyHint.parentElement).borderLeftColor.replace(/\s/g, '') === 'rgba(0,0,0,0)',
-    emptyHint ? getComputedStyle(emptyHint.parentElement).borderLeftColor : '(没展开)')
+  smoke.check('空项目的容器上也没有竖线',
+    !!emptyHint && (() => {
+      const rail = getComputedStyle(emptyHint.parentElement)
+      return !rail.borderLeftStyle || rail.borderLeftStyle === 'none' || parseFloat(rail.borderLeftWidth) === 0
+    })(),
+    emptyHint ? getComputedStyle(emptyHint.parentElement).borderLeftWidth : '(没展开)')
 
   smoke.finish()
 })()

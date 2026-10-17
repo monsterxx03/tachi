@@ -9,12 +9,12 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, sessionGroupKey, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
+import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, sessionGroupKey, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedChip, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
   ProviderPicker,
-  SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
+  SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -2440,10 +2440,17 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         <div className="session-title" onDoubleClick={() => { setEditingId(s.id); setEditTitle(s.title || ''); setMenu(null) }}>{s.title || '未命名会话'}</div>
       )}
       <div className="session-meta">
-        {/* A conversation parked on the reader says so on its row — FIRST in the meta line,
-            because it is the one mark here that asks for something. It is not the spinner's
-            twin: a parked turn IS running (the spinner spins beside it), but "running" and
-            "waiting for YOU" are different facts, and only the second is actionable. */}
+        {/* The time leads the meta line, and the state marks follow it. Two reasons for that order:
+            the timestamp is the one thing on EVERY row (so it is the column that lines up down the
+            list, which is what a reader scans), while the marks appear and disappear — putting them
+            first would shift the time on every row whose state changed. fmtTime is the app's short
+            form (23:52 today, 10/15 23:01 otherwise): a full date with seconds in a 280px column is
+            a wall of digits where a time was wanted. */}
+        <span className="session-when">{fmtTime(s.updatedAt)}</span>
+        {/* A conversation parked on the reader says so on its row — FIRST of the marks, because it
+            is the one mark here that asks for something. It is not the spinner's twin: a parked turn
+            IS running (the spinner spins beside it), but "running" and "waiting for YOU" are
+            different facts, and only the second is actionable. */}
         {waitingOf(s.id)
           ? <span className="wait-dot" role="img" aria-label={waitingOf(s.id)} title={waitingOf(s.id)} />
           : null}
@@ -2457,11 +2464,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         {/* A session a subsystem owns says so too, and for a stronger reason than 压缩前: its
             title came from a REMOTE prompt, so an unmarked row reads as a conversation the
             reader had. Opening it is allowed (the transcript is worth reading) — the mark is
-            what stops it being mistaken for one more row of their own. */}
+            what stops it being mistaken for one more row of their own. The chip is short (只读 ·
+            某台机器) and the full sentence is its title: see managedChip in lib.ts. */}
         {s.kind ? (
-          <span className="session-tag is-managed" title="子系统驱动的执行记录：只能查看，不能在这里继续">{managedLabel(s.kind, s.sourceNodeId, s.sourceNode)}</span>
+          <span className="session-tag is-managed" title={managedLabel(s.kind, s.sourceNodeId, s.sourceNode)}>{managedChip(s.kind, s.sourceNodeId, s.sourceNode)}</span>
         ) : null}
-        {new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}
       </div>
     </div>
   )
@@ -2548,15 +2555,39 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               It stays empty either way: no brand, no controls. Whether it is a drag region is the
               platform's answer (macOS has one already, at the window level). */}
           <div className={`window-strip${IS_MAC ? '' : ' drag-region'}`} aria-hidden="true" />
-          {/* Projects group the list (design §7.1). A project that exists but has no members
-              yet still needs an entry point, so the sidebar opens the create form directly
-              rather than hiding the feature until a session happens to be bound. This is the
-              sidebar's top-level action; the ＋ that makes a project-LESS session is NOT up
-              here — it belongs with the rows it makes (the 无项目 bucket's own header). */}
-          <button className="new-project" onClick={() => openProjectEditor()}
-            title="新建项目：一组会话共用工作区的容器">
-            <span className="new-chat-plus">＋</span> 新建项目
+          {/* The sidebar's own top row: the app's name, and ONE button — search.
+              The strip above stays empty on purpose (it is the traffic lights' room off macOS and
+              the window's drag handle), so this is where the sidebar's own chrome begins.
+
+              Search earns the space: ⌘K has always opened the conversation palette, and until now
+              nothing on screen offered it. A reader looking for one conversation among a hundred
+              rows had to know the key. The palette itself is unchanged — this only names it. */}
+          <div className="sidebar-top">
+            <span className="sidebar-brand">Tachi</span>
+            <button className="sidebar-search" aria-label="搜索会话" title="搜索会话（⌘K）"
+              onClick={() => { setPaletteOpen(false); setSessionPaletteOpen(true) }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="10.8" cy="10.8" r="6.6" /><path d="m16 16 4 4" /></svg>
+            </button>
+          </div>
+          {/* 新会话 — the sidebar's own create button, and the only one that is not tied to a
+              group. Until now a new conversation was reachable from a group header's ＋ (which is
+              how a session gets BOUND to a project) or from ⌘N; there was no plain 「start a
+              conversation」 on screen, which is the most repeated action in the app.
+
+              It goes to `newChat('')` — a session belonging to no project, the same thing ⌘⇧N does,
+              because a project is a workspace decision and this button is only 「一个空的开始」. A
+              reader who wants the current conversation's project already has ⌘N (「再来一个这类的」)
+              and that project's own ＋. */}
+          <button className="new-chat" onClick={() => { void newChat('') }}
+            title="新建会话（不绑定项目；⌘N 是「再来一个当前这类」，⌘⇧N 同这个按钮）">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h8" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z" /></svg>
+            <span>新会话</span>
           </button>
+          {/* The list, then the organising action under it: 新建项目 is how a reader groups
+              conversations, which is not what they do every day — the top of the sidebar was the
+              wrong place for it (a dashed box above the list competing with the conversations it
+              organises). It stays a real button and keeps its class, so the form-text driver and a
+              reader both still find it; only its weight and position changed. */}
           <nav className="session-list" ref={sessionListRef}>
             {/* Groups, not one flat list (design §7.1): a project's sessions hang under its
                 header, and everything no live project owns — including a session whose
@@ -2710,15 +2741,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               )
             })}
           </nav>
+          {/* The organising action, under the list it organises. It keeps its own class and its own
+              word (「新建项目」) so the form-text driver and a reader both still find it; what changed
+              is its weight and position (it used to be a dashed box above the conversations). */}
+          <button className="new-project" onClick={() => openProjectEditor()}
+            title="新建项目：一组会话共用工作区的容器">
+            <span className="new-chat-plus">＋</span> 新建项目
+          </button>
           <footer className="sidebar-footer">
-            {/* 设置 opens the settings page (a whole view, not a panel — see view in App).
-                用量 is still a placeholder: disabled (and dimmed) rather than a
-                clickable-looking no-op. */}
+            {/* 设置 opens the settings page (a whole view, not a panel — see view in App). The footer
+                used to also carry a 用量 entry, disabled: a dimmed row that names a feature which does
+                not exist yet is a promise the sidebar cannot keep, so it is gone rather than greyed. */}
             <button className="footer-item" onClick={() => setView('settings')}
               title="设置：config.yaml 里的可配置项">
               <span className="footer-ico"><SettingsIcon /></span> 设置
             </button>
-            <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><UsageIcon /></span> 用量</button>
           </footer>
           {/* The grab strip along the sidebar's right edge — inside it, like the panel's, because the
               sidebar clips its own overflow and a handle hanging outside would be cut off. A real

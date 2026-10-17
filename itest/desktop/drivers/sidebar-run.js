@@ -38,12 +38,22 @@
   smoke.check('直径与环的粗细都是可读的那个量级',
     parseFloat(dotStyle.width) >= 14 && /calc\(100% - 3px\)/.test(maskImage),
     dotStyle.width + ' / ' + maskImage.slice(0, 40))
-  // 当前会话不需要那层高亮：它本来就是填充卡片 + 强调色导轨，再叠一层只会让「你在哪」变糊。
-  // 后台在跑的那一行才有（由 session-running 断言，那里屏幕上的会话是另一个）。
-  const activeStyle = getComputedStyle(smoke.q('.session.active'))
-  smoke.check('当前会话那一行只留转圈，不再叠一层高亮',
-    !activeStyle.backgroundColor || activeStyle.backgroundColor === 'rgba(0, 0, 0, 0)',
-    activeStyle.backgroundColor)
+  // 当前会话那一行不叠「还没看过」那层水洗：它在跑，所以它自己也带着 is-unseen（还在跑就是
+  // 「还没看」的一种），但屏幕上这一行不需要第二层水洗 —— 只会把「你在哪」弄糊。那层是给后台
+  // 会话的，由 session-running 断言，那里屏幕上的会话是另一个。
+  //
+  // 断言的是「这层没画到它身上」，用 CSS 自己那个选择器来说：.session.is-unseen:not(.active)。
+  // 拿 matches() 而不是复述底色像素值 —— 底色是设计的事，会变；而「未读的水洗排除当前行」是
+  // 必须保持为真的那条。有人把 :not(.active) 去掉，这里就红。
+  const activeRow = smoke.q('.session.active')
+  const paintedUnseen = (row) => !!row && row.matches('.session.is-unseen:not(.active)')
+  const otherUnseen = smoke.qa('.session.is-unseen:not(.active)')[0]
+  smoke.check('当前会话那一行只留转圈，不叠「还没看过」那层水洗',
+    !!activeRow && !paintedUnseen(activeRow)
+      && (!otherUnseen || getComputedStyle(activeRow).backgroundColor !== getComputedStyle(otherUnseen).backgroundColor),
+    'is-unseen=' + (activeRow && activeRow.classList.contains('is-unseen'))
+      + ' · 命中未读水洗=' + paintedUnseen(activeRow)
+      + ' · 底色=' + (activeRow && getComputedStyle(activeRow).backgroundColor))
   const runningRowHeight = smoke.q('.session.active').getBoundingClientRect().height
 
   // ── 折叠它所在的那一组：行离开 DOM，标记录到表头上 ────────────────────────

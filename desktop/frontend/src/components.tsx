@@ -666,10 +666,6 @@ function SettingsIcon() {
   return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="8" x2="20" y2="8" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="8" r="2.2" /><circle cx="15" cy="16" r="2.2" /></svg>)
 }
 
-function UsageIcon() {
-  return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="5" /><line x1="18" y1="20" x2="18" y2="15" /></svg>)
-}
-
 function MCPIcon() {
   return (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v6" /><path d="M15 3v6" /><path d="M6 9h12v3a6 6 0 0 1-12 0V9z" /><path d="M12 18v3" /></svg>)
 }
@@ -1716,4 +1712,4 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }

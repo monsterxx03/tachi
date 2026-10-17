@@ -858,6 +858,22 @@ export function managedLabel(kind?: string, sourceNodeId?: string, sourceNode?: 
   return `子系统执行记录 ${kind}${from} · 只读`
 }
 
+/**
+ * The SAME fact as a sidebar-row chip: 只读, and which machine it came from when this one knows.
+ *
+ * It is a separate string because the row is 260px wide and the sentence above wrapped to five
+ * lines in it (a bordered box taller than the title, in a list of conversations). The sentence is
+ * not lost — it is the row's `title`, and the banner over the transcript still says all of it. What
+ * the chip has to carry is the one thing that cannot wait for a hover: this row is not a
+ * conversation the reader started. For a compaction half there is a precedent — `压缩前`, three
+ * characters, no sentence.
+ */
+export function managedChip(kind?: string, sourceNodeId?: string, sourceNode?: string): string {
+  if (!kind) return ''
+  const name = managedSourceName(sourceNodeId, sourceNode)
+  return name ? `只读 · ${name}` : '只读'
+}
+
 /** 只读会话里代替输入框的那句话。 */
 export function managedReadOnlyNote(kind: string, sourceNodeId?: string, sourceNode?: string): string {
   const name = managedSourceName(sourceNodeId, sourceNode)

@@ -10,16 +10,29 @@
   if (!(await smoke.waitForSession())) return smoke.finish()
 
   // ── 1. 侧栏那一行 ───────────────────────────────────────────────────────
+  //
+  // 行上是一个**短标签**（只读 · 某台机器），不是那一整句话：侧栏一行只有 260px 宽，把这句
+  // 「子系统执行记录 a2a_execution · 来自 … · 只读」塞进去会折成五行、带个比标题还高的边框，
+  // 在一列对话里格外扎眼。句子没有丢 —— 它是这一行的 title，下面的横幅也照样说全。行上留的
+  // 是唯一不能等 hover 的那件事：这一行不是读者自己开的对话。
   const tags = smoke.qa('.session .session-tag.is-managed')
   smoke.check('侧栏行上有来源标注', tags.length === 1, tags.length + ' 个')
   const tagText = tags.length ? smoke.text(tags[0]) : ''
-  smoke.check('标注写的是子系统的执行记录', tagText.indexOf('子系统执行记录') >= 0, tagText)
-  smoke.check('标注带 kind', tagText.indexOf('a2a_execution') >= 0, tagText)
   smoke.check('标注说明只读', tagText.indexOf('只读') >= 0, tagText)
   // 来源：本机 pin 过的对端才有名字，而沙箱没有对端目录，所以这一行说的是「未知节点 + id 前 8 位」。
   // 那句话本身就是要点：名字只能来自本机 pin 住的记录（对端自报的名字不算数），而没有记录时如实
   // 说不知道，比编一个名字或干脆不提都强。
-  smoke.check('标注写明来自哪台机器', tagText.indexOf('来自 未知节点 cd726b44') >= 0, tagText)
+  smoke.check('标注写明来自哪台机器', tagText.indexOf('未知节点 cd726b44') >= 0, tagText)
+  smoke.check('标签只有一行：它不许把行撑高', (() => {
+    const el = tags[0]
+    if (!el) return false
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 18
+    return el.getBoundingClientRect().height <= lh * 1.6 && getComputedStyle(el).whiteSpace === 'nowrap'
+  })(), tags[0] ? `高 ${tags[0].getBoundingClientRect().height.toFixed(0)}px · white-space=${getComputedStyle(tags[0]).whiteSpace}` : '(没有标签)')
+  // …而整句话仍然是这一行的提示（悬停能看到 kind 和「子系统执行记录」），没有因为缩成标签而丢。
+  smoke.check('完整那句话留在行的 title 上', tags.length > 0
+    && (tags[0].getAttribute('title') || '').indexOf('子系统执行记录 a2a_execution') >= 0,
+    tags.length ? tags[0].getAttribute('title') : '')
 
   // ── 2. 顶部横幅（读者可能根本没看侧栏）────────────────────────────────────
   const banner = await smoke.waitFor('.managed-banner', '只读横幅出现')

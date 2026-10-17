@@ -387,21 +387,25 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin: 0 -4px;
 }
 
+/* One conversation. The row is two lines — the title, then a meta line — and the point of the
+   layout is that the meta line carries TWO kinds of thing at its two ends: what is happening
+   (a marker, a tag) on the left, when it happened on the right. It used to be one run of text
+   where the state and the timestamp were indistinguishable neighbours. */
 .session {
   position: relative;
-  padding: 10px 11px;
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
   transition: background 0.14s var(--ease);
 }
 .session:hover { background: var(--hover); }
-/* Active session: filled card + an accent rail on the leading edge, so the
-   selection survives being read at a glance. */
-.session.active {
-  background: linear-gradient(180deg, var(--panel-veil-a), var(--panel-veil-b));
-  box-shadow: var(--shadow-1);
-}
+/* Active session. A single quiet fill rather than the old filled card plus accent rail: the row
+   already says which one you are in by being the only one with that wash, and the rail's job
+   (a second signal for the same fact) is what made the list look heavier than its content. The
+   rail stays for ONE case — a conversation whose turn finished while the reader was elsewhere —
+   because that row is otherwise identical to an idle one. */
+.session.active { background: var(--accent-soft); }
 .session.active::before {
   content: "";
   position: absolute;
@@ -411,17 +415,17 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   width: 3px;
   height: 62%;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--accent-3), var(--accent-2));
+  background: var(--accent-line);
 }
 .session.active .session-title { color: var(--text); font-weight: 560; }
 /* A turn in flight in a conversation that is NOT the one on screen — or one whose work finished
    while the reader was elsewhere and which they have not opened since. This is the one case where
    nothing else on screen reports that work: the transcript belongs to another conversation, the
-   spinner is a 14px detail in the meta line, and the menu bar only counts. It borrows the active
-   row's rail — the sidebar's own "this row matters" language — in a thinner, softer weight, plus a
-   faint wash, so it cannot be read as the card of the conversation you are in (that one is a filled
-   gradient plane behind a 3px rail, and it keeps it: :not(.active) is the whole difference).
-   Which of the two it is, the spinner says: the highlight outlives the turn, the spinner does not. */
+   spinner is a 14px detail in the meta line, and the menu bar only counts. It keeps the rail (the
+   sidebar's own "this row matters" language) plus a faint wash, so it cannot be read as the
+   conversation you are in (that one is a stronger wash behind a 3px rail, and it keeps both:
+   :not(.active) is the whole difference). Which of the two it is, the spinner says: the highlight
+   outlives the turn, the spinner does not. */
 .session.is-unseen:not(.active) { background: var(--accent-softer); }
 .session.is-unseen:not(.active)::before {
   content: "";
@@ -441,46 +445,115 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* The row's second line. The timestamp is what the reader scans for, and 11.5px of --text-faint
-   was the smallest text in the window. */
+/* The row's second line: the WHEN first, the state marks after it. Two ends because they answer two
+   different questions — the time is the per-row constant a reader scans down the list, the marks say
+   what is happening right now — and one run of text answered neither at a glance. The time keeps
+   --text-faint, which is the lightest grey that still clears 4.5:1 as small text (see base.css), and
+   the size stays 12.5px because this line was already the smallest text in the window at 11.5. */
 .session-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12.5px;
   color: var(--text-faint);
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
+/* The timestamp leads: tabular figures and a reserved width so the times line up down the list even
+   when the marks beside them differ from row to row. Never shrunk — a truncated time is a number
+   the reader cannot use, and it is the one field every row has. */
+.session-when { flex: none; }
 
 /* ── Project groups (design §7.1) ────────────────────────────────────────── */
-/* The sidebar's top action: a dashed box, the only thing on the first screen that offers a way to
-   organise the conversations. Its ＋ (.new-chat-plus) and its hover are the sidebar's ACTION pair —
-   the same ones every group header's own ＋ wears — so the two create gestures read as siblings even
-   though they sit at opposite ends of the list. */
+/* The sidebar's own top row, below the window strip: the app's name and the one entry point the
+   sidebar was missing (search, ⌘K). The name sits here rather than on the strip because the strip
+   is the window's — it carries the traffic lights off macOS and is the window's drag handle, and
+   nothing of the app's belongs in it. */
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px 6px 11px;
+}
+.sidebar-brand {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+.sidebar-search {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.sidebar-search:hover { background: var(--hover); color: var(--accent-2); }
+
+/* 新会话: the sidebar's own create row, under the search. It is the most repeated action in the
+   app, so it gets a full-width row with a word on it rather than a ＋ — the ＋ belongs to a group
+   (it makes a session IN that project, which is a binding, not just a create). A plain line, not a
+   filled button: the sidebar is a list, and a solid block above it competes with the conversations. */
+.new-chat {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: calc(100% - 6px);
+  margin: 0 3px 10px;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.new-chat:hover { background: var(--hover); color: var(--text); }
+.new-chat svg { flex: none; color: var(--text-faint); }
+.new-chat:hover svg { color: var(--accent-2); }
+
+/* The sidebar's organising action, at the foot of the list: a quiet line, not a dashed box. It was
+   a box above the conversations — the most prominent thing on the first screen, for the action a
+   reader takes least often (a project is made once and then holds conversations for weeks). It keeps
+   the ＋ that every group header wears, so the two create gestures still read as siblings. */
 .new-project {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  padding: 9px 12px;
-  margin-bottom: 12px;
+  width: auto;
+  padding: 5px 10px;
+  margin: 2px 0 0 9px;
   background: transparent;
-  border: 1px dashed var(--border-2);
-  color: var(--text-dim);
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  border: none;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
   font-family: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), color 0.16s var(--ease);
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
-.new-project:hover { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-2); }
+.new-project:hover { background: var(--hover); color: var(--accent-2); }
 
+/* A group header: one row, no heavier than a session row. It used to be a taller box carrying a
+   bigger name — which read as a second kind of list, above the conversations, for what is only a
+   way of sorting them. The name is still larger than a row's title (see the note below) and the
+   whole header still toggles, but the header now competes with the rows for space instead of
+   standing over them. */
 .proj-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* A touch taller than a session row's padding: the header carries a bigger name, and a
-     group has to look like a group before its rows are read. */
-  padding: 8px;
-  margin-top: 8px;
+  padding: 6px 8px;
+  margin-top: 6px;
   border-radius: var(--radius-sm);
 }
 .proj-head:hover { background: var(--hover); }
@@ -504,9 +577,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   min-width: 0;
   /* A group heading, and the parent of the rows below it: it has to read LARGER than
      .session-title (14px), or the sidebar looks like two levels of the same size. 14 vs 13.5 was
-     that failure — true on paper, invisible on screen. */
-  font-size: 15px;
-  font-weight: 620;
+     that failure — true on paper, invisible on screen. The gap is smaller than it was (15 vs 14)
+     because the header is no longer a card standing over the list; what has to survive is that it
+     reads as a level above, not that it reads as a different component. */
+  font-size: 14.5px;
+  font-weight: 600;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -614,21 +689,15 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    and the 无项目 bucket's alike (that one carries is-loose, for the two places that need to tell the
    groups apart: a driver's selector, and the docs).
 
-   They also hang off a RAIL, because indentation alone does not say 「these rows are in that
-   group」: the rows of one group and of another are otherwise the same box, and 12px of extra left
-   margin reads as nothing more than a slightly narrower row in the same list. The rail is 2px of
-   --border-2 — the same weight as .session-chain's bar — so a conversation hangs off its group
-   exactly the way its 压缩前 nodes hang off it. The margin and the padding are split around the
-   border (6 + 2 + 4 = the 12px indent the rows had before), so nothing moved. */
+   The indent is the whole of it now. It used to also hang off a 2px RAIL, on the argument that
+   indentation alone does not say 「these rows are in that group」 — true in the abstract, but in a
+   list this dense the rail drew a second column of verticals down the whole sidebar, one per group,
+   competing with the rows it was supposed to group. The nesting is read from the header above it
+   (a name, a count, a ＋) and from every row being at the same step, which is what indentation is
+   for. */
 .proj-rows {
-  margin-left: 6px;
-  padding-left: 4px;
-  border-left: 2px solid var(--border-2);
+  margin-left: 12px;
 }
-/* An empty group keeps the indent but loses the rail: the rail says 「the group's rows hang
-   here」, and a bracket drawn around the 「还没有会话」 hint would say the group is holding
-   something after all. */
-.proj-rows.is-empty { border-left-color: transparent; }
 /* A project with no sessions yet: the header above is where the first one is created, so the
    group says so instead of looking broken (and instead of being hidden, which is worse). */
 .proj-empty {
@@ -695,13 +764,22 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    its own meta says so — the title alone cannot tell the two apart. */
 .session.is-compacted { margin-left: 12px; }
 .session.is-compacted .session-title { font-size: 13px; color: var(--text-faint); }
+/* A state chip in the row's meta line (压缩前 / 只读 · 某台机器). One line, always: it is a label,
+   not a sentence — the sentence is the row's tooltip. `flex: 0 1 auto` + ellipsis means a long node
+   name gives way to the timestamp rather than wrapping the row to five lines (which is exactly what
+   happened when the whole 「子系统执行记录 a2a_execution · 来自 … · 只读」 sentence lived here). */
 .session-tag {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-right: 6px;
   padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   font-size: 12px;
   color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* A session a SUBSYSTEM drives (today a receiving node's A2A execution). It carries the same
    weight as 压缩前 beside it — a state marker, not a button — but in accent ink: unlike a
