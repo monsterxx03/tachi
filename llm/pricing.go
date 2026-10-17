@@ -342,6 +342,17 @@ func ResolveModelPriceFrom(schedule *config.PricingConfig, usdToCNY float64, sou
 		}
 	}
 
+	// The block says its own currency, AFTER the bands are built: prices copied off a vendor
+	// page are USD and the ledger's unit is CNY, and every number in the block — the four flat
+	// ones and each band's own — is quoted in that same currency. Converting at the end (the
+	// order GetBuiltinModelPriceAt uses for its usdPrices records) is what lets a band INHERIT a
+	// converted flat price instead of inheriting one already in CNY while its own explicit fields
+	// are still USD. Only an override block converts; a schedule with no prices of its own took
+	// the built-in path, which already did.
+	if schedule != nil && schedule.USD && schedule.HasAny() {
+		convertUSDToCNY(&resolved, usdToCNY)
+	}
+
 	snapshot, bandName := resolved.PriceAt(at)
 	return ResolvedPrice{Price: snapshot, Band: bandName}
 }

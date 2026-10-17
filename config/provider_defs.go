@@ -97,12 +97,26 @@ type PriceOverrides interface {
 // Timezone anchors band selection (IANA name, e.g. "Asia/Shanghai");
 // empty = the instant's own local timezone.
 type PricingConfig struct {
-	InputPrice              *float64        `yaml:"input_price,omitempty"`
-	OutputPrice             *float64        `yaml:"output_price,omitempty"`
-	CacheReadInputPrice     *float64        `yaml:"cache_read_input_price,omitempty"`
-	CacheCreationInputPrice *float64        `yaml:"cache_creation_input_price,omitempty"`
-	Timezone                string          `yaml:"timezone,omitempty"`
-	Bands                   []PriceBandSpec `yaml:"bands,omitempty"`
+	InputPrice              *float64        `yaml:"input_price,omitempty" json:"input_price,omitempty"`
+	OutputPrice             *float64        `yaml:"output_price,omitempty" json:"output_price,omitempty"`
+	CacheReadInputPrice     *float64        `yaml:"cache_read_input_price,omitempty" json:"cache_read_input_price,omitempty"`
+	CacheCreationInputPrice *float64        `yaml:"cache_creation_input_price,omitempty" json:"cache_creation_input_price,omitempty"`
+	Timezone                string          `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+	Bands                   []PriceBandSpec `yaml:"bands,omitempty" json:"bands,omitempty"`
+
+	// USD says the prices in THIS block (the four flat ones and every band's) are quoted in
+	// USD per 1M tokens, not CNY. The ledger's unit is CNY, so the resolver converts them at
+	// the configured rate (usd_to_cny, else llm.DefaultUSDToCNY) when it reads them out.
+	//
+	// It exists because most vendors — and every page a price is copied from — quote in USD,
+	// and copying a USD figure into a CNY field is a silent factor-of-seven error in the one
+	// direction nobody notices (the bill looks cheap). Writing the number as it appears on the
+	// page and saying which currency it is keeps the two in step, and makes a rate change
+	// reprice every row without re-editing the files.
+	//
+	// Unlike the built-in table's usdPrices (a flag on the MODEL, in code), this is a field of
+	// the user's override block — the two mean the same thing about the same numbers.
+	USD bool `yaml:"usd,omitempty" json:"usd,omitempty"`
 }
 
 // HasAny reports whether at least one flat override is set — when none is,
@@ -128,12 +142,12 @@ func (p *PricingConfig) Apply(dst PriceOverrides) {
 // empty = every day. Days with a band miss the weekday → the flat price
 // applies (e.g. a workday-only peak band leaves weekends fully off-peak).
 type PriceBandSpec struct {
-	Name                    string   `yaml:"name,omitempty"` // band name written to the ledger row ("" = unnamed)
-	Days                    []int    `yaml:"days,omitempty"` // 1=周一 … 7=周日；空 = 每天
-	Start                   string   `yaml:"start"`
-	End                     string   `yaml:"end"`
-	InputPrice              *float64 `yaml:"input_price,omitempty"`
-	OutputPrice             *float64 `yaml:"output_price,omitempty"`
-	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price,omitempty"`
-	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty"`
+	Name                    string   `yaml:"name,omitempty" json:"name,omitempty"` // band name written to the ledger row ("" = unnamed)
+	Days                    []int    `yaml:"days,omitempty" json:"days,omitempty"` // 1=周一 … 7=周日；空 = 每天
+	Start                   string   `yaml:"start" json:"start"`
+	End                     string   `yaml:"end" json:"end"`
+	InputPrice              *float64 `yaml:"input_price,omitempty" json:"input_price,omitempty"`
+	OutputPrice             *float64 `yaml:"output_price,omitempty" json:"output_price,omitempty"`
+	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price,omitempty" json:"cache_read_input_price,omitempty"`
+	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty" json:"cache_creation_input_price,omitempty"`
 }

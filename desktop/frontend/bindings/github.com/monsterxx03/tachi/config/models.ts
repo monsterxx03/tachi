@@ -225,18 +225,18 @@ export interface PriceBandSpec {
     /**
      * band name written to the ledger row ("" = unnamed)
      */
-    "Name": string;
+    "name"?: string;
 
     /**
      * 1=周一 … 7=周日；空 = 每天
      */
-    "Days": number[] | null;
-    "Start": string;
-    "End": string;
-    "InputPrice": number | null;
-    "OutputPrice": number | null;
-    "CacheReadInputPrice": number | null;
-    "CacheCreationInputPrice": number | null;
+    "days"?: number[] | null;
+    "start": string;
+    "end": string;
+    "input_price"?: number | null;
+    "output_price"?: number | null;
+    "cache_read_input_price"?: number | null;
+    "cache_creation_input_price"?: number | null;
 }
 
 /**
@@ -252,12 +252,28 @@ export interface PriceBandSpec {
  * empty = the instant's own local timezone.
  */
 export interface PricingConfig {
-    "InputPrice": number | null;
-    "OutputPrice": number | null;
-    "CacheReadInputPrice": number | null;
-    "CacheCreationInputPrice": number | null;
-    "Timezone": string;
-    "Bands": PriceBandSpec[] | null;
+    "input_price"?: number | null;
+    "output_price"?: number | null;
+    "cache_read_input_price"?: number | null;
+    "cache_creation_input_price"?: number | null;
+    "timezone"?: string;
+    "bands"?: PriceBandSpec[] | null;
+
+    /**
+     * USD says the prices in THIS block (the four flat ones and every band's) are quoted in
+     * USD per 1M tokens, not CNY. The ledger's unit is CNY, so the resolver converts them at
+     * the configured rate (usd_to_cny, else llm.DefaultUSDToCNY) when it reads them out.
+     * 
+     * It exists because most vendors — and every page a price is copied from — quote in USD,
+     * and copying a USD figure into a CNY field is a silent factor-of-seven error in the one
+     * direction nobody notices (the bill looks cheap). Writing the number as it appears on the
+     * page and saying which currency it is keeps the two in step, and makes a rate change
+     * reprice every row without re-editing the files.
+     * 
+     * Unlike the built-in table's usdPrices (a flag on the MODEL, in code), this is a field of
+     * the user's override block — the two mean the same thing about the same numbers.
+     */
+    "usd"?: boolean;
 }
 
 /**

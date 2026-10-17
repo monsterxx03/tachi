@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -179,4 +180,74 @@ func TestResolveModelPriceAtIsResolveModelPriceFromOfTheProviderSchedule(t *test
 			t.Errorf("ResolveModelPriceAt(nil cfg) = %+v, want the built-in-only resolution %+v", got, want)
 		}
 	})
+}
+
+// A schedule may say its prices are USD — the currency every vendor page quotes in — and the
+// resolver converts them at the rate it was given. The point is that the number in the file can be
+// the number on the page: copying 0.15 out of a USD table into a CNY field would otherwise be a
+// silent factor-of-seven error, and one in the direction nobody notices (the bill looks cheap).
+func TestResolveModelPriceFromConvertsAUSDSchedule(t *testing.T) {
+	schedule := &config.PricingConfig{
+		InputPrice:              f64(0.15),
+		OutputPrice:             f64(0.60),
+		CacheReadInputPrice:     f64(0.003),
+		CacheCreationInputPrice: f64(0),
+		USD:                     true,
+	}
+	got := ResolveModelPriceFrom(schedule, 7.0, testSource, "not-in-the-builtin-table", atHour(10))
+
+	if math.Abs(got.Price.InputPrice-0.15*7) > 1e-9 {
+		t.Errorf("InputPrice = %v, want 1.05 (USD 0.15 at 7.0)", got.Price.InputPrice)
+	}
+	if math.Abs(got.Price.OutputPrice-0.60*7) > 1e-9 {
+		t.Errorf("OutputPrice = %v, want 4.2", got.Price.OutputPrice)
+	}
+	if math.Abs(got.Price.CacheReadInputPrice-0.003*7) > 1e-9 {
+		t.Errorf("CacheReadInputPrice = %v, want 0.021", got.Price.CacheReadInputPrice)
+	}
+	// An explicit 0 is still 0: free stays free through the conversion.
+	if got.Price.CacheCreationInputPrice != 0 {
+		t.Errorf("CacheCreationInputPrice = %v, want 0 (explicitly free)", got.Price.CacheCreationInputPrice)
+	}
+}
+
+// The same schedule WITHOUT the flag is already CNY and must not be converted — the other half of
+// what the flag means, and the one a careless implementation would break (converting everything).
+func TestResolveModelPriceFromLeavesACNYAScheduleAlone(t *testing.T) {
+	schedule := &config.PricingConfig{InputPrice: f64(0.15)}
+	got := ResolveModelPriceFrom(schedule, 7.0, testSource, "not-in-the-builtin-table", atHour(10))
+	if got.Price.InputPrice != 0.15 {
+		t.Errorf("InputPrice = %v, want 0.15 unchanged (the block did not say USD)", got.Price.InputPrice)
+	}
+}
+
+// A band's own prices are quoted in the block's currency too, and a field the band does NOT set
+// inherits the flat price — which must therefore have been converted as well. Converting the flat
+// price up front and the bands behind it (or one and not the other) would mix two currencies in one
+// snapshot; this pins the outcome instead of the order that produces it.
+func TestResolveModelPriceFromConvertsUSDBandsAndInheritance(t *testing.T) {
+	schedule := &config.PricingConfig{
+		InputPrice:  f64(0.15),
+		OutputPrice: f64(0.60),
+		Timezone:    "Asia/Shanghai",
+		USD:         true,
+		Bands: []config.PriceBandSpec{
+			// input only: output must inherit the (converted) flat price.
+			{Name: "peak", Start: "09:00", End: "12:00", InputPrice: f64(0.30)},
+		},
+	}
+	inBand := ResolveModelPriceFrom(schedule, 7.0, testSource, "not-in-the-builtin-table", atHour(10))
+	if inBand.Band != "peak" {
+		t.Fatalf("band = %q, want peak (the fixture's window is 09:00–12:00)", inBand.Band)
+	}
+	if math.Abs(inBand.Price.InputPrice-0.30*7) > 1e-9 {
+		t.Errorf("in-band InputPrice = %v, want 2.1 (the band's own USD 0.30)", inBand.Price.InputPrice)
+	}
+	if math.Abs(inBand.Price.OutputPrice-0.60*7) > 1e-9 {
+		t.Errorf("in-band OutputPrice = %v, want 4.2 (inherited from the converted flat price)", inBand.Price.OutputPrice)
+	}
+	offBand := ResolveModelPriceFrom(schedule, 7.0, testSource, "not-in-the-builtin-table", atHour(14))
+	if offBand.Band != "" || math.Abs(offBand.Price.InputPrice-0.15*7) > 1e-9 {
+		t.Errorf("off-band = %+v (band %q), want the converted flat price", offBand.Price, offBand.Band)
+	}
 }
