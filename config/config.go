@@ -521,21 +521,24 @@ type GossipDiscoveryConfig struct {
 // cannot see this way is not a node this machine cannot reach — it is a node it has to be told
 // about, which is what `peers:` is for.
 type MdnsDiscoveryConfig struct {
-	// Enabled turns browsing on. Zero value (off) is the default, and the key exists so that a
-	// network where discovery is noise can say no without touching the peers list.
+	// Enabled is the whole of multicast discovery: this machine looks for others on its local
+	// network, and — in the process that HOLDS the node service, which is the only one with a remote
+	// surface to talk about — others can find it. One switch for the two halves because they are one
+	// decision about one network: a machine that may speak to its neighbours on it may be spoken to
+	// about on it. Zero value (off) is the default, and the key exists so that a network where
+	// discovery is noise can say no without touching the peers list.
+	//
+	// This key used to be paired with `advertise`, and dropping that one is a SILENT change: yaml
+	// parsing ignores unknown fields, so a deployment that wrote `enabled: true, advertise: false`
+	// announces itself from now on, and "announce without browsing" is no longer expressible.
 	Enabled bool `yaml:"enabled"`
-	// Advertise turns announcing this machine on. It only ever does anything in the process that
-	// HOLDS the node service — the one with a remote A2A surface to talk about — and it is separate
-	// from Enabled on purpose: a machine may want to find others without publishing itself, and a
-	// machine on a network where its own name is noise may want the reverse.
-	Advertise bool `yaml:"advertise"`
-	// Interfaces names the network interfaces to browse (and, when Advertise is on, to announce on).
-	// Empty means the ones that could actually carry a LAN multicast packet, which is a filter rather
-	// than "everything the OS calls multicast-capable" — a tunnel, a VM bridge, or a NIC with no
-	// usable address is left out, because the library sends on the interfaces it is given ONE AFTER
-	// ANOTHER and one that cannot take the packet stalls the whole round without a word
-	// (node/discovery.go LANInterfaces says what the filter is). Naming them is for a machine on
-	// several networks, where publishing a name onto the wrong one is the thing to avoid.
+	// Interfaces names the network interfaces to browse and announce on. Empty means the ones that
+	// could actually carry a LAN multicast packet, which is a filter rather than "everything the OS
+	// calls multicast-capable" — a tunnel, a VM bridge, or a NIC with no usable address is left out,
+	// because the library sends on the interfaces it is given ONE AFTER ANOTHER and one that cannot
+	// take the packet stalls the whole round without a word (node/discovery.go LANInterfaces says what
+	// the filter is). Naming them is for a machine on several networks, where publishing a name onto
+	// the wrong one is the thing to avoid.
 	Interfaces []string `yaml:"interfaces,omitempty"`
 }
 

@@ -227,8 +227,10 @@ type options struct {
 	// a test leaves loopback) has to be told, or it refuses to start: it cannot derive an address from
 	// 0.0.0.0, and a Card that named one would send callers nowhere (node/a2a.go).
 	nodePublicURL string
-	// nodeDiscovery renders `node.discovery.mdns.enabled: true` — the SENDING side's browse switch,
-	// which is not the same thing as a node service: a machine can look for others without serving.
+	// nodeDiscovery renders `node.discovery.mdns.enabled: true`, the one switch for multicast
+	// discovery: it turns browsing on, and — in a process that HOSTS a node service — announcing
+	// itself. The specs here that render it never host a node service, so what they exercise is the
+	// browsing half (a machine can look for others without serving).
 	nodeDiscovery bool
 	nodeName      string        // node.name — 这个节点对自己的称呼
 	nodeWorkspace string        // node.workspace — 远程任务的工作目录
@@ -284,10 +286,11 @@ func WithNodeEnabled() Option {
 	return func(o *options) { o.nodeEnabled = true }
 }
 
-// WithNodeDiscovery turns mDNS browsing on (config `node.discovery.mdns.enabled`).
+// WithNodeDiscovery turns multicast discovery on (config `node.discovery.mdns.enabled`).
 //
-// It is the sending side's switch and independent of the node service: the spec that wants to SEE
-// another machine through discovery has no `peers:` line at all, because being found is the whole
+// One key for both halves, so whoever hosts a node service with this on also announces itself; the
+// specs that use it do not host one, and what they need it for is the other half: a machine that has
+// to SEE another through discovery has no `peers:` line at all, because being found is the whole
 // point.
 func WithNodeDiscovery() Option {
 	return func(o *options) { o.nodeDiscovery = true }

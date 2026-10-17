@@ -73,8 +73,9 @@ var _ = ginkgo.Describe("discovery", func() {
 			harness.WithNodeService(),
 		)
 		peerCfg := harness.Config(ginkgo.GinkgoT(), peerHome)
-		// 公告只在承载的那个进程里做，所以这一句加在**对端**身上（node/discovery.go 那一侧）。
-		peerCfg.Node.Discovery.Mdns.Advertise = true
+		// 一个开关管两半：开了就既浏览、又公告自己，而公告只发生在承载节点服务的那个进程里 ——
+		// 也就是对端这个进程（node/discovery.go 那一侧）。它没有发送侧，所以这里真正生效的只有公告。
+		peerCfg.Node.Discovery.Mdns.Enabled = true
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		ginkgo.DeferCleanup(cancel)

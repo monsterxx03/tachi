@@ -138,9 +138,12 @@ type Options struct {
 	// sends callers nowhere (node/a2a.go).
 	PublicURL string
 
-	// Advertise is whether this node announces itself on the local network (design §一.2). It only
-	// ever happens in the process hosting the remote surface — that is the only process with
-	// something to announce.
+	// Advertise is whether this node announces itself on the local network, and it is the SAME switch
+	// that turns browsing on (config node.discovery.mdns.enabled): the two halves are one decision
+	// about one network, so a machine that may look for others on it may be looked for on it. Like
+	// browsing, this only ever amounts to anything in the process hosting the remote surface — that is
+	// the only process with something to find (node/discovery.go is the browsing half, and it lives on
+	// the sending side, which a process without a node service still has).
 	Advertise bool
 
 	// AdvertiseInterfaces names the interfaces to announce on. Empty means the ones this machine could

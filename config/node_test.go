@@ -40,6 +40,24 @@ func TestWorkspaceDirRefusesAnEmptyValue(t *testing.T) {
 	}
 }
 
+// Multicast discovery has ONE switch: `enabled` covers both looking and being looked for, because a
+// machine that may speak to its neighbours on a network may be spoken to about on it. That is a
+// decision a second key would quietly undo — and a second key is exactly what a reader would add
+// back after reading the old comments — so the shape is asserted here rather than left to review.
+func TestMulticastDiscoveryHasOneSwitch(t *testing.T) {
+	leaves := make(map[string]bool)
+	for _, path := range YAMLPaths() {
+		leaves[path] = true
+	}
+	if !leaves["node.discovery.mdns.enabled"] {
+		t.Error("node.discovery.mdns.enabled is not a leaf of the config")
+	}
+	if leaves["node.discovery.mdns.advertise"] {
+		t.Error("node.discovery.mdns.advertise is back: announcing is the same switch as browsing, " +
+			"and a machine that can find others without being findable is not a thing this config says")
+	}
+}
+
 // The default is a path of the node's own, not the process's cwd — the whole point of
 // taking the workspace from config.
 func TestWorkspaceDefaultIsNotTheProcessCwd(t *testing.T) {

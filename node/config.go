@@ -60,9 +60,11 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 		// (see checkRemoteListen), and every caller is still identified by its certificate.
 		RemoteListen: cfg.Node.Listen,
 		PublicURL:    cfg.Node.PublicURL,
-		// Announcing is the operator's decision and it is separate from browsing: a machine may want
-		// to find others without publishing itself, or the reverse.
-		Advertise:           cfg.Node.Discovery.Mdns.Advertise,
+		// Discovery is ONE switch, and it covers announcing too: a machine that looks for others on
+		// this network may be looked for on it (config node.discovery.mdns.enabled). This is the
+		// process that decides whether it happens at all, because it is the one hosting the surface
+		// there would be something to find on.
+		Advertise:           cfg.Node.Discovery.Mdns.Enabled,
 		AdvertiseInterfaces: append([]string(nil), cfg.Node.Discovery.Mdns.Interfaces...),
 		// Discovery by hearsay, and how old a claim it will act on. Both are the operator's: the
 		// switch decides whether this node answers at all, the window decides when a peer's word about

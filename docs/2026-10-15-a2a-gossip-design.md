@@ -271,7 +271,7 @@ type mesh interface {
 | `node/a2a.go` | 远端 mux 上加一条 `/node/v1/gossip`（`a2asrv.WellKnownAgentCardPath` 的兄弟）；loopback 面拒绝；`enabled` 关时拒绝这条路由 |
 | `node/sightings.go`（新，从 `node/discovery.go` 抽出） | 「已证实集合 + 候选队列」收敛成一处：browser 与 gossip 都往里写。候选加来源，同 tick 的优先序靠它。**`peerDirectory.discover` 一行不用改** |
 | `node/delegatorcache.go` | `startBrowser` → `startDiscovery`（起两条腿）；`Close` 一起停；登记 / 撤销 `mesh`；维护挑选需要的三个小表：「最近接触过谁」（`contactTTL`，一次成功的交换或读通一次卡片都刷新它）、「上次问过谁」（轮转）、「谁刚失败过」（跳过）；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射）；缓存记住「最后一次被问到的 peers」给循环用（发送侧会随对端列表重建，循环需要一个稳定的访问点） |
-| `config/config.go` | **已落地**：`GossipDiscoveryConfig{ enabled }` 与两个窗口（`ttl` / `contact_ttl`，零值即 `node/sightings.go` 里的默认）挂在 `node.discovery` 下，gossip 默认关。**还没做**：删掉 `MdnsDiscoveryConfig.Advertise`（§一.8：两处都只留 `enabled`）并把 mDNS 那一段的注释（讲「想找不想被找到」的那段）重写——删字段只会踩到一处：`itest/run/discovery_test.go` 里那句 `Mdns.Advertise = true` |
+| `config/config.go` | **已落地**：`GossipDiscoveryConfig{ enabled }` 与两个窗口（`ttl` / `contact_ttl`，零值即 `node/sightings.go` 里的默认）挂在 `node.discovery` 下，gossip 默认关；**`MdnsDiscoveryConfig.Advertise` 也已删**（§一.8），两处都只留 `enabled`——mDNS 那一段讲「想找不想被找到」的注释随之重写，唯一按字段取值的地方（`itest/run/discovery_test.go`）改成了 `Mdns.Enabled`，桌面设置页里 `mdns.advertise` 那一行一并删掉 |
 | `node/peerdir.go` | `prependAddrs` 一家加一档（§三）；面板要显示来源，所以来源要能区分三个词（`local` 配置写的 / `mDNS` 本机看到的 / `gossip` 从邻居听来的，一台机器可以同时是前两个），并跟着 `discoveredPeer` 一起传上去 |
 | `node/peerboard.go` + Wails bindings | 面板那一列显示来源词：`local` / `mDNS` / `gossip`，可以是组合（`local · mDNS`）；**不显示具体是从哪台机器听来的**——那是日志的事（日志里写清 node id）。提醒那行**不加**——每轮都在付这笔 token |
 | `docs/agents/node.md` | 落地时同轮改：「发现（mDNS）」一节改成两条腿；写清转述只说自己证明过的、以及单向性为什么没被打破 |
