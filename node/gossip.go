@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -255,6 +256,10 @@ func gossipHandler(enabled bool, self string, contactWindow time.Duration, log *
 //     connection instead of a retry schedule. The address may well still be good, so refusing to try
 //     it would lose a real machine; retrying it forever on the strength of a stale claim would let a
 //     peer own this machine's dial budget.
+//
+// Every candidate it produces says where it came from (SourceGossip), which is how the queue knows
+// to prefer a machine still announcing itself when both are due at once, and how the directory can
+// tell a reader that this row is here because a peer named it.
 func gossipCandidates(payload gossipPayload, caller, self string, contactWindow time.Duration, log *logger.Logger) []candidate {
 	if contactWindow <= 0 {
 		// Nobody told this node how old is too old (config node.discovery.contact_ttl unset): the
@@ -268,7 +273,7 @@ func gossipCandidates(payload gossipPayload, caller, self string, contactWindow 
 	// This is how a machine that only ever CALLS becomes known to the one it calls.
 	if payload.Self != nil && caller != self {
 		if addrs := gossipAddrs(payload.Self.Addrs); len(addrs) > 0 {
-			out = append(out, candidate{Identity: caller, Addrs: addrs})
+			out = append(out, candidate{Identity: caller, Addrs: addrs, Source: agentref.SourceGossip})
 		}
 	}
 	for _, entry := range payload.Peers {
@@ -293,6 +298,7 @@ func gossipCandidates(payload gossipPayload, caller, self string, contactWindow 
 			Identity: entry.ID,
 			Addrs:    []string{entry.Addr},
 			Stale:    entry.Age > int(contactWindow.Seconds()),
+			Source:   agentref.SourceGossip,
 		})
 	}
 	return out
@@ -495,7 +501,7 @@ type gossipLoop struct {
 	// configured: it is twice `nudge`, because the floor's whole job is to outlast the round a nudge
 	// brought forward, and that round is scheduled by `nudge`.
 	period, nudge, timeout, mute, debounce time.Duration
-	fanout                                int
+	fanout                                 int
 	// clock is the loop's only time source: it stamps what a neighbour contributed and decides when the
 	// next round is due.
 	clock func() time.Time

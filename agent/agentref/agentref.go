@@ -15,6 +15,10 @@
 // MOMENT, so it is refreshed in the background and read as a snapshot (see node.PeerList). A
 // picker row may show it; the text a reference expands into may not, because that text outlives
 // the moment.
+//
+// A fourth — HOW this machine came to know the peer (PeerSource) — rides along for the node board
+// and is not part of an answer a picker gives: it is a property of the row's existence rather than
+// of the machine, and a reference has nothing to do with it.
 package agentref
 
 import (
@@ -53,6 +57,10 @@ type Peer struct {
 	// does, because "which address did this machine try" is the first question about a row that says
 	// unreachable.
 	Addr string
+	// Source is how this machine came to know the node, every way at once. A picker row does not
+	// show it; the node board does, because "why is this row here at all" is the question a reader
+	// has about a machine nobody configured.
+	Source PeerSource
 	// Note is the configured human line, used when the node has no description to offer.
 	Note string
 	// Description is the node's own account of itself, empty when its card could not be read.
@@ -255,6 +263,49 @@ func PrefixCandidates() []PrefixCandidate {
 			Note:  "session：另一段对话（只引用它的位置，不内联全文）",
 		},
 	}
+}
+
+// PeerSource says how this machine came to know a peer, one bit per way — because the ways are not
+// exclusive, and a reader asking "how do you know about it" wants all the answers there are: a
+// machine can be written in the config AND be announcing itself, or have been found on the local
+// network AND been vouched for by a neighbour.
+//
+// The three are the three suppliers of discovery candidates (docs/2026-10-15-a2a-gossip-design.md
+// §一.1), and the words for them live here beside ReachWord's for the same reason: one fact, one
+// phrase, every frontend.
+type PeerSource uint8
+
+const (
+	// SourceConfigured: a person wrote this machine into this one's config. It is the only way a
+	// peer is known WITHOUT evidence — the other two are things a network said — and the reason a
+	// configured row never expires.
+	SourceConfigured PeerSource = 1 << iota
+	// SourceMDNS: this machine heard it announce itself on the local network, and reached it.
+	SourceMDNS
+	// SourceGossip: a peer this machine has itself reached named it. Note what is NOT here: which
+	// peer said so. That is a log's business, not a panel's — a row has to stay one line, and the
+	// identity that vouched rotates as the rounds go by.
+	SourceGossip
+)
+
+// SourceWord is the source as a row states it: every way this machine knows the peer, in a fixed
+// order, joined so that one row reads as one line. It is empty when there is nothing to state,
+// which is the honest answer for a peer whose entries carry no source at all.
+//
+// The order is config-first because that is the one a reader can act on: a machine somebody put in
+// the config is a machine somebody meant to have, and the two network ways are how it was found.
+func SourceWord(s PeerSource) string {
+	words := make([]string, 0, 3)
+	if s&SourceConfigured != 0 {
+		words = append(words, "配置")
+	}
+	if s&SourceMDNS != 0 {
+		words = append(words, "mDNS")
+	}
+	if s&SourceGossip != 0 {
+		words = append(words, "gossip")
+	}
+	return strings.Join(words, " · ")
 }
 
 // ReachWord is how a picker row states what the last look found — the same word in

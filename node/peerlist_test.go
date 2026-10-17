@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,6 +111,108 @@ func TestProbeCoalescesKeystrokes(t *testing.T) {
 		list.Probe()
 	}
 	require.Never(t, func() bool { return calls.Load() > 1 }, 100*time.Millisecond, 10*time.Millisecond)
+}
+
+// A machine that appears while a round is already out is asked about as soon as that round lands.
+//
+// The round in flight was composed from the directory as it stood when it went out
+// (Sender.PeerReports walks the entries then), so it cannot answer about a machine that arrived since —
+// and a machine that has just arrived is exactly what a request at that moment is about. Nothing else
+// asks on its own (the picker asks on a keystroke, the panel on opening), so dropping the request is
+// what left such a machine drawn as 检查中… with the count on the trigger unmoved — until the reader
+// opened the very panel they were reading that count from.
+func TestAMachineThatArrivesDuringARoundIsAskedWhenItLands(t *testing.T) {
+	// Both ways a round can be out, because both compose their round the same way: the caller's own
+	// probe (the picker's keystroke, a sighting, the panel opening) and a person pressing 刷新.
+	for _, tc := range []struct {
+		name  string
+		start func(*PeerList)
+	}{
+		{name: "a probe already out", start: func(l *PeerList) { l.Probe() }},
+		{name: "刷新 already out", start: func(l *PeerList) { go l.Refresh(context.Background()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The directory as discovery sees it: one machine, and then two — with the round held open
+			// between the two, so the assertions are about a real in-flight probe.
+			var mu sync.Mutex
+			directory := rows()[:1]
+			asked := make(chan []string, 4)
+			release := make(chan struct{})
+
+			list := NewPeerList(
+				func() []agentref.Peer {
+					mu.Lock()
+					defer mu.Unlock()
+					return append([]agentref.Peer(nil), directory...)
+				},
+				func(ctx context.Context, force bool) []PeerReport {
+					mu.Lock()
+					keys := make([]string, 0, len(directory))
+					for _, p := range directory {
+						keys = append(keys, p.Key)
+					}
+					mu.Unlock()
+					asked <- keys
+					<-release
+					reports := make([]PeerReport, 0, len(keys))
+					for _, key := range keys {
+						reports = append(reports, PeerReport{Key: key, Reachable: true})
+					}
+					return reports
+				}, nil)
+
+			tc.start(list)
+			assert.Equal(t, []string{ugreenID}, <-asked, "the first round asked about the one machine there was")
+
+			// Discovery finds a second machine and says so — this is that call (desktop/peerboard.go
+			// peerDiscovered → Probe).
+			mu.Lock()
+			directory = rows()
+			mu.Unlock()
+			list.Probe()
+
+			close(release)
+
+			select {
+			case second := <-asked:
+				assert.ElementsMatch(t, []string{ugreenID, rows()[1].Key}, second,
+					"the request that arrived mid-round is a round of its own once the first one lands")
+			case <-time.After(2 * time.Second):
+				t.Fatal("the request made while a round was in flight was dropped: the new machine is " +
+					"never asked, and nothing else will ask on its own")
+			}
+
+			require.Eventually(t, func() bool {
+				details := list.Details()
+				return len(details) == 2 && details[1].Checked
+			}, time.Second, 5*time.Millisecond, "and its answer has to reach the board")
+		})
+	}
+}
+
+// The line above must not turn the rate limit into no limit: a request that asks about the same rows
+// the round in flight is already asking about is still refused (TestProbeCoalescesKeystrokes). What is
+// remembered is a row NOBODY has asked about.
+func TestARepeatRequestWhileARoundIsOutIsStillRefused(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+
+	list := NewPeerList(rows, func(ctx context.Context, force bool) []PeerReport {
+		calls.Add(1)
+		<-release
+		return nil
+	}, nil)
+
+	list.Probe()
+	require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+
+	// The same directory, over and over: nothing new, so nothing to remember.
+	for range 10 {
+		list.Probe()
+	}
+	close(release)
+	require.Never(t, func() bool { return calls.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
+		"a request about rows already being asked about is not a second round")
 }
 
 // A process that cannot delegate still knows which nodes exist, so the picker still lists them.

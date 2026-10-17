@@ -125,6 +125,30 @@
   color: var(--text-faint);
   flex-shrink: 0;
 }
+/* HOW this machine came to know the node (配置 / mDNS / gossip, several joined), on the FOLDED row
+   because it is a property of the row and not of the machine: it answers "why is this row here at
+   all", which is the first question a reader has about a machine nobody configured. Boxed so it reads
+   as a tag rather than as one more grey word beside the identity, and never shrunk — three words is
+   its worst case and half of one would say nothing. */
+.agents-src {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 5px;
+  white-space: nowrap;
+}
+/* The one thing on an agents row that can be as long as its owner likes (a self-declared name is up
+   to 40 runes), so it is the one thing that gives way: with the tag beside it the row would otherwise
+   push the verdict and the caret — the parts a reader needs — out of a 360px panel. */
+.agents-panel .mcp-server-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
 .agents-detail {
   display: flex;
   flex-direction: column;

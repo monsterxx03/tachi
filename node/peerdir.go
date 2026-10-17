@@ -61,17 +61,18 @@ type peerEntry struct {
 	// same word. Read it as a claim, never as an identification.
 	SelfName string
 	// Addrs is where this machine may dial the peer, in the order it should try them: what the peer
-	// says about itself first, the config line last (the rule is stated once, in prependAddrs and
-	// combineEntries).
+	// says about itself first, then the address this machine has itself got through on, then the
+	// rest of what it learned, and the config line last (the rule is stated once, in prependAddrs).
 	Addrs []string
 	// cfgAddr is the address a config line names, when one does. Kept apart from Addrs because it
 	// is a different fact: Addrs is where the machine might BE, this is where this machine was told
 	// to look — and it is the address the pin is filed under (node/knownpeers.go pinnedIdentityAt).
 	cfgAddr string
-	// Configured and Discovered say where this entry came from, and they are not exclusive: one
-	// machine that has a config line AND is announcing itself is a single entry with both set.
-	Configured bool
-	Discovered bool
+	// Source is how this machine came to know the peer — every way at once, because they are not
+	// exclusive: one machine that has a config line AND is announcing itself is a single entry with
+	// both bits set. It is what a panel states as a word (agentref.SourceWord) and what decides
+	// whether the entry may expire (capDiscovered).
+	Source agentref.PeerSource
 	// LastSeen is when discovery last saw it, which is what the discovered half expires on.
 	LastSeen time.Time
 	// Card is the peer's own description of itself, nil when it could not be read.
@@ -165,9 +166,15 @@ type discoveredPeer struct {
 	// Served is the address that ANSWERED when this machine proved the identity — not necessarily the
 	// first one tried, and not necessarily any of the addresses above a moment later. It is kept for
 	// the one thing only evidence can support: saying where this machine actually reached the machine
-	// it is vouching for (node/gossip.go quotes it), and saying it in the log line that records the
-	// proof.
+	// it is vouching for (node/gossip.go quotes it), saying it in the log line that records the
+	// proof, and putting it in FRONT of the other addresses when the directory orders them (build) —
+	// an address this machine got through on outranks the ones that were only claimed.
 	Served string
+	// Source is how discovery came to hear about this machine: announced on the local network, or
+	// named by a peer. Kept because a reader asks (agentref.PeerSource) and because the directory
+	// prefers what this machine SAW over what it was told (node/sightings.go verifyDue). It is a set:
+	// a machine first announced and later vouched for carries both.
+	Source agentref.PeerSource
 	// Seen is when this was last observed.
 	Seen time.Time
 }
@@ -186,12 +193,12 @@ func (d *peerDirectory) build() []peerEntry {
 		// none — the address is all either side shares — and the row says so.
 		identity, _ := d.known.pinnedIdentityAt(p.URL)
 		b.merge(peerEntry{
-			Identity:   identity,
-			Label:      strings.TrimSpace(p.Name),
-			Note:       p.Note,
-			Addrs:      []string{p.URL},
-			cfgAddr:    p.URL,
-			Configured: true,
+			Identity: identity,
+			Label:    strings.TrimSpace(p.Name),
+			Note:     p.Note,
+			Addrs:    []string{p.URL},
+			cfgAddr:  p.URL,
+			Source:   agentref.SourceConfigured,
 		})
 	}
 	// 2. What discovery has seen just now. Merged BY IDENTITY, so a machine that is both configured
@@ -199,10 +206,10 @@ func (d *peerDirectory) build() []peerEntry {
 	// identity rather than on a name (design §一.5).
 	for _, seen := range d.sightings() {
 		b.merge(peerEntry{
-			Identity:   seen.Identity,
-			Addrs:      append([]string(nil), seen.Addrs...),
-			Discovered: true,
-			LastSeen:   seen.Seen,
+			Identity: seen.Identity,
+			Addrs:    sightingAddrs(seen),
+			Source:   seen.Source,
+			LastSeen: seen.Seen,
 		})
 	}
 	entries := b.entries
@@ -212,6 +219,22 @@ func (d *peerDirectory) build() []peerEntry {
 		d.attachCard(&entries[i])
 	}
 	return capDiscovered(entries)
+}
+
+// sightingAddrs is one sighting's addresses in the order the rule puts them: the address this machine
+// actually got through on first, then the rest of what the sighting came with.
+//
+// The two are different kinds of thing and that is the whole point of the order (design §三): the one
+// that SERVED is evidence — it answered a certificate-carrying handshake — while the others are
+// wherever a machine was said to be. A machine with a dozen announced addresses used to be tried in
+// announcement order, so the one that worked last time could sit third and every dial spent two
+// attempts rediscovering that. It stays ONE tier above the config line, which is last of all because
+// it is a person's intention rather than anything the network proved.
+func sightingAddrs(seen discoveredPeer) []string {
+	if seen.Served == "" {
+		return seen.Addrs
+	}
+	return prependAddrs(seen.Addrs, []string{seen.Served})
 }
 
 // dirBuilder accumulates entries keyed by identity, which is the one key that survives a rename, an
@@ -255,8 +278,10 @@ func combineEntries(have, add peerEntry) peerEntry {
 	if out.cfgAddr == "" {
 		out.cfgAddr = add.cfgAddr
 	}
-	out.Configured = out.Configured || add.Configured
-	out.Discovered = out.Discovered || add.Discovered
+	// Both ways this machine knows the machine are kept: a peer that is in the config AND was found
+	// on the network is one entry that came by both, and a reader asking how this machine knows it
+	// wants both answers rather than whichever happened to be looked at first.
+	out.Source |= add.Source
 	if add.LastSeen.After(out.LastSeen) {
 		out.LastSeen = add.LastSeen
 	}
@@ -315,17 +340,22 @@ func (e peerEntry) dialAddrs() []string {
 // prependAddrs puts `fresh` in front of `have` in their given order, dropping anything already
 // present.
 //
-// This IS the address order rule (design §三), and it lives in one place so it cannot drift:
+// The address order rule (design §三) is four tiers, best first, and each caller contributes one of
+// them rather than the rule being spread out as an accident of call order:
 //
-//  1. the addresses the peer advertised most recently — the ones it says about itself;
-//  2. the configured address, kept last because it is the entry of first contact and is never
-//     deleted.
+//  1. the addresses the peer advertises about ITSELF (attachCard) — what it says about where it is;
+//  2. the address this machine has itself GOT THROUGH ON, in front of the rest of the sighting it
+//     came with (sightingAddrs) — evidence outranks a claim;
+//  3. the rest of what discovery learned, whichever way it learned it (combineEntries);
+//  4. the configured address, last because it is the entry of first contact and is never deleted.
 //
-// Trying the self-advertised one first is what lets a machine that moved be found again without
-// anyone editing a file. The price is real and worth stating: a laptop away from home tries its
-// peer's LAN address first and waits for a connection that cannot work — which is why, when there is
-// more than one address to try, every attempt but the last gets a SHORT deadline
-// (remoteClient.dialAddrs) instead of the full request budget.
+// Each caller prepends a whole group, so the tiers cannot interleave: a peer's own account is always
+// ahead of anything discovered, and a config line is always behind both. Trying the self-advertised
+// one first is what lets a machine that moved be found again without anyone editing a file. The price
+// is real and worth stating: a laptop away from home tries its peer's LAN address first and waits for
+// a connection that cannot work — which is why, when there is more than one address to try, every
+// attempt but the last gets a SHORT deadline (remoteClient.dialAddrs) instead of the full request
+// budget.
 func prependAddrs(have, fresh []string) []string {
 	if len(fresh) == 0 {
 		return have
@@ -356,13 +386,14 @@ func prependAddrs(have, fresh []string) []string {
 // because anyone on a network can multicast — the number of machines discovery can add is not
 // something this machine chooses.
 //
-// Configured entries are never dropped and never counted: a person put them there, and "it did not
-// answer" is not a reason to hide a machine somebody asked this one to know about.
+// Configured entries are never dropped and never counted — an entry with the CONFIGURED bit, whatever
+// else it also carries: a person put it there, and "it did not answer" is not a reason to hide a
+// machine somebody asked this one to know about.
 func capDiscovered(entries []peerEntry) []peerEntry {
 	kept := entries[:0]
 	discovered := make([]int, 0, len(entries))
 	for _, e := range entries {
-		if e.Discovered && !e.Configured {
+		if e.Source&agentref.SourceConfigured == 0 {
 			discovered = append(discovered, len(kept))
 		}
 		kept = append(kept, e)

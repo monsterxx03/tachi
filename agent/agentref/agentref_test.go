@@ -176,3 +176,19 @@ func TestResolveAcceptsAnIdentityPrefix(t *testing.T) {
 	_, ok = src.Resolve("ffff")
 	assert.False(t, ok, "an id this machine does not know resolves to nothing")
 }
+
+// How a peer became known is a SET, and a row states all of it: the two network ways fill different
+// gaps (one crosses no router, the other cannot see a machine nobody pointed it at), so a machine that
+// arrived by both is one row that came by both. The order is fixed — config first, because that is the
+// one a reader can act on — so the same set is the same words everywhere, and an empty set says
+// nothing rather than guessing at something.
+func TestTheSourceWordStatesEveryWayAMachineIsKnown(t *testing.T) {
+	assert.Equal(t, "", SourceWord(0), "a peer with no source says nothing")
+	assert.Equal(t, "配置", SourceWord(SourceConfigured))
+	assert.Equal(t, "mDNS", SourceWord(SourceMDNS))
+	assert.Equal(t, "gossip", SourceWord(SourceGossip))
+	assert.Equal(t, "配置 · mDNS", SourceWord(SourceConfigured|SourceMDNS))
+	assert.Equal(t, "mDNS · gossip", SourceWord(SourceMDNS|SourceGossip))
+	assert.Equal(t, "配置 · mDNS · gossip", SourceWord(SourceConfigured|SourceMDNS|SourceGossip),
+		"all three at once, in the order a reader acts on them")
+}

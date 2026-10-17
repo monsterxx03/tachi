@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/monsterxx03/tachi/agent/agentref"
 )
 
 // What the node board shows. It exists because two different questions get asked about a peer, and
@@ -72,12 +74,11 @@ type PeerReport struct {
 	// URL is where THIS machine will dial first, which is the address the peer advertises about itself
 	// when it advertises one and the configured address otherwise (node/peerdir.go prependAddrs).
 	URL string
-	// Configured and Discovered say where the entry came from; a node the config names AND the network
-	// announces has both.
-	Configured bool
-	Discovered bool
-	Note       string
-	Reachable  bool
+	// Source is how this machine came to know the peer — every way at once, because they are not
+	// exclusive. A node the config names AND the network announces has both.
+	Source    agentref.PeerSource
+	Note      string
+	Reachable bool
 	// Card is nil when the node did not answer.
 	Card *PeerCard
 	// Err is why there is no card (empty when there is one). An unreachable peer is NOT an error
@@ -105,16 +106,15 @@ func (s *Sender) PeerReports(ctx context.Context, force bool) []PeerReport {
 	out := make([]PeerReport, 0, len(snapshot))
 	for _, p := range snapshot {
 		report := PeerReport{
-			Key:        p.key(),
-			Label:      p.Label,
-			Name:       p.Name(),
-			NodeID:     p.Identity,
-			URL:        firstAddr(p),
-			Configured: p.Configured,
-			Discovered: p.Discovered,
-			Note:       p.Note,
-			Reachable:  p.Reachable(),
-			Card:       summarizeCard(p.Card),
+			Key:       p.key(),
+			Label:     p.Label,
+			Name:      p.Name(),
+			NodeID:    p.Identity,
+			URL:       firstAddr(p),
+			Source:    p.Source,
+			Note:      p.Note,
+			Reachable: p.Reachable(),
+			Card:      summarizeCard(p.Card),
 		}
 		if p.Err != nil {
 			report.Err = p.Err.Error()

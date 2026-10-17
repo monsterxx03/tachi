@@ -1,6 +1,6 @@
 # Tachi 多节点协作：gossip 发现（转述）
 
-状态：**阶段 0、1、2、3 已全部落地**（2026-10-17：`node/sightings.go` 的共享账本、`node/gossip.go` 的服务端路由与客户端循环，以及组成用例 `itest/run/gossip_test.go`）。**本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
+状态：**阶段 0、1、2、3 已全部落地，§六 与 §八 的表格也已全部落完**（2026-10-17：`node/sightings.go` 的共享账本、`node/gossip.go` 的服务端路由与客户端循环、组成用例 `itest/run/gossip_test.go`；随后补上地址顺序那一档、候选的来源与同刻优先序，以及面板上那一列来源词）。**本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
 
 > 这是日期方案，不是行为手册；配置形状与接口是设计示意。落地后把稳定下来的部分回写 `docs/agents/node.md`。
 
@@ -244,7 +244,7 @@ type mesh interface {
 | 队列不被挤爆 | 候选队列与请求体各自设上限，**复用现成的 `maxDiscoveredPeers`（64）**，不新增魔法数。**已落地**：请求体那半是 `maxGossipEntries`，队列那半是 `store.feed` 里的 `maxPendingCandidates`（满了拒新身份）。 |
 | 失败有尽头 | 一个候选最多被拨 `maxCandidateAttempts`（5）次就丢，**已落地**（`store.reschedule`）：它还在就再公告一次，以全新候选、满额预算回来，所以是「有界」而不是「被拉黑」。没有这一条，任何一次失败的候选都是一条永不结束的重试。 |
 | 一条条目带几个地址 | `self.addrs` 是 64 KiB 里的自由文本，**已落地**：一条条目最多 `maxGossipAddrs`（8）个地址，多的丢掉——否则一条条目就能递来一张上千个地址、每个一次带本机证书的连接的拨号表。 |
-| 先手压流言 | 同一 tick 有多个到期时，**本地看到的那条优先于转述来的**。排序规则是同一个道理的两次应用 |
+| 先手压流言 | 同一 tick 有多个到期时，**本地看到的那条优先于转述来的**。排序规则是同一个道理的两次应用。**已落地**：`candidate.Source` 记下来源，`verifyDue` 的挑选（`dueFirst`）先比到期时刻、同刻再比「是不是本机自己听到的」 |
 | 应答不做工作 | 纯内存读，见 §五 |
 | 转述的新鲜度 | 只转述 `contactTTL` 窗口内接触过的机器（§三）。**对外说的话要比自己的表更保守**：表里的行能活 1 小时，但替它背书只在这个更紧的窗口内 |
 
@@ -269,11 +269,11 @@ type mesh interface {
 | `node/gossip.go`（新） | **已落地**：服务端 handler 与它的 400/403/405/413、负载编解码、`gossipPath` / `maxGossipEntries` / `maxGossipBodyBytes` / `maxGossipAddrs`、注册口 `mesh`，以及客户端循环 `gossipLoop`（挑邻居、一轮交换、退避、`Close`）与那批常量 `gossipPeriod` / `gossipFanout` / `gossipNudge` / `gossipTimeout` / `gossipMute` / `gossipDebounce`。**这六个数现在是默认值**：前五个可以在 `node.discovery.gossip.*` 下改（零值即默认），`gossipDebounce` 是 `nudge` 的两倍、不单列 |
 | `node/remoteclient.go` | **已落地**：`Exchange(ctx, e, payload, budget)` 复用 `requestAt` 与 `clientFor`（TLS pin、地址顺序、首字节超时）；预算由调用方给（缓存给的是 `gossipTimeout`），而它在多个地址之间怎么分是 `attemptBudget` 的事——一个短预算不能全花在前面几个死地址上，最后那个（配置入口）要留下一次尝试的量。**成功即一次「接触」**（`contact` → `sightingsStore.touch`：身份从那一次握手刚写下的 pin 读回，地址是应答的那个），读通一次卡片同样算（`fetchCard`），「一次成功的交换必须算作一次接触」（§三）由此落地 |
 | `node/a2a.go` | 远端 mux 上加一条 `/node/v1/gossip`（`a2asrv.WellKnownAgentCardPath` 的兄弟）；loopback 面拒绝；`enabled` 关时拒绝这条路由 |
-| `node/sightings.go`（新，从 `node/discovery.go` 抽出） | 「已证实集合 + 候选队列」收敛成一处：browser 与 gossip 都往里写。候选加来源，同 tick 的优先序靠它。**`peerDirectory.discover` 一行不用改** |
+| `node/sightings.go`（新，从 `node/discovery.go` 抽出） | 「已证实集合 + 候选队列」收敛成一处：browser 与 gossip 都往里写。**已落地**：候选加来源（`candidate.Source` / `discoveredPeer.Source`，同 tick 的优先序靠它），`confirm` 与 `feed` 把它**或**起来（一台机器两条来源都算）。**`peerDirectory.discover` 一行不用改** |
 | `node/delegatorcache.go` | **已落地**：`startBrowser` → `startDiscovery`（起两条腿）；`Close` 先停循环、再停浏览器与 store；登记 / 撤销 `mesh`；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射），出口先过一遍接收侧那道形状检查（`gossipSelfAddrs` → `isGossipAddr`），拨不通的形状（域名、公网地址）在启动时 warn 一行而不是静默失效。**与设计不同的一处**：挑选用的三个小表（最近问过谁、谁贡献过、谁刚失败过）不在缓存里，而在 `gossipLoop` 自己身上；循环的邻居池与客户端也不另存一份，而是直接读缓存最后一次建出来的那个 sender（`senderNow` → `peers.Entries()` / `client.Exchange`），所以「循环需要一个稳定的访问点」这条要求由「缓存里那一个 `current`」满足，没有第三份状态。**补的一处**：`Discovery` 是纯值、拿不到 logger，所以「拒绝了一个地址要说一声」落在 `startDiscovery`，`peerDirectory` 那几行不变 |
 | `config/config.go` | **已落地**：`GossipDiscoveryConfig{ enabled, period, fanout, nudge, timeout, mute }` 与两个窗口（`ttl` / `contact_ttl`，零值即 `node/sightings.go` 里的默认）挂在 `node.discovery` 下，gossip 默认关；**五个循环参数也是零值即默认**（默认在 `node/gossip.go`），桌面设置页各有独立一行（`applyRestart`，与两个窗口同）；**`MdnsDiscoveryConfig.Advertise` 也已删**（§一.8），两处都只留 `enabled`——mDNS 那一段讲「想找不想被找到」的注释随之重写，唯一按字段取值的地方（`itest/run/discovery_test.go`）改成了 `Mdns.Enabled`，桌面设置页里 `mdns.advertise` 那一行一并删掉 |
-| `node/peerdir.go` | `prependAddrs` 一家加一档（§三）；面板要显示来源，所以来源要能区分三个词（`local` 配置写的 / `mDNS` 本机看到的 / `gossip` 从邻居听来的，一台机器可以同时是前两个），并跟着 `discoveredPeer` 一起传上去 |
-| `node/peerboard.go` + Wails bindings | 面板那一列显示来源词：`local` / `mDNS` / `gossip`，可以是组合（`local · mDNS`）；**不显示具体是从哪台机器听来的**——那是日志的事（日志里写清 node id）。提醒那行**不加**——每轮都在付这笔 token |
+| `node/peerdir.go` | **已落地**：`prependAddrs` 一家加一档（§三，由 `sightingAddrs` 把「我亲手拨通过的那个」提到同一档的前面）；来源能区分三个词（`agentref.PeerSource`：配置写的 / mDNS 本机看到的 / gossip 从邻居听来的，一台机器可以同时有多个），`peerEntry.Source` 跟着 `discoveredPeer` 一路传上去，并**取代**了原先那两个布尔（`Configured`/`Discovered`）——同一件事不该有第二个说法 |
+| `node/peerboard.go` + Wails bindings | **已落地**：面板显示来源词（实际用词是「配置 / mDNS / gossip」，`agentref.SourceWord`），可以是组合（`配置 · mDNS`），落在**收起的那一行**上——它是这一行的性质，不是这台机器的；**不显示具体是从哪台机器听来的**——那是日志的事（日志里写清 node id）。提醒那行**不加**——每轮都在付这笔 token |
 | `docs/agents/node.md` | 落地时同轮改：「发现（mDNS）」一节改成两条腿；写清转述只说自己证明过的、以及单向性为什么没被打破 |
 
 ## 九、阶段

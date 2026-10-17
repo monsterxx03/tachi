@@ -61,6 +61,17 @@ type PeerList struct {
 	// refresh closes when its answer has landed (nil when none is running).
 	probing    bool
 	refreshing chan struct{}
+	// pending is a round that was ASKED FOR while one was already out.
+	//
+	// A round is composed from the directory as it stood when it went out (Sender.PeerReports walks the
+	// entries at that moment), so it cannot answer about a machine that appeared since — and a machine
+	// that has just appeared is exactly what a request at that moment is about (probeAsync's
+	// hasNewKey). Dropping the request instead of remembering it is what leaves such a machine unasked:
+	// the board draws it as 检查中… for ever, and the count on the trigger does not move, which reads as
+	// "nothing else is up" rather than "nobody asked". Nothing else asks on its own — the picker asks on
+	// a keystroke, the panel on opening — so the answer only ever arrived when the reader happened to
+	// open the very panel they were reading the count from.
+	pending bool
 }
 
 // probed is one peer as the last probe found it, and when.
@@ -162,6 +173,10 @@ type PeerDetail struct {
 	NodeID string
 	URL    string
 	Note   string
+	// Source is how this machine came to know the node — the config, the local network, a peer's
+	// word, or several of them. The board states it as a word (agentref.SourceWord), because it is
+	// the answer to "why is this row here at all" for a machine nobody configured.
+	Source agentref.PeerSource
 	// Reachable/Checked/Card/Err are the last probe's answer, and Checked false means nobody has
 	// asked yet — which the board shows as such, never as "down".
 	Reachable bool
@@ -199,6 +214,9 @@ func (l *PeerList) Details() []PeerDetail {
 			// only the answer below has to wait for a probe.
 			URL:  row.Addr,
 			Note: row.Note,
+			// Where the row came from is a fact about the DIRECTORY, like the address and the note:
+			// it is known before anything has been asked, and it is why the row exists at all.
+			Source: row.Source,
 		}
 		if got, ok := probed[row.Key]; ok {
 			detail.Checked = true
@@ -263,6 +281,9 @@ func (l *PeerList) Refresh(ctx context.Context) {
 		l.mu.Unlock()
 		close(inflight) // after the state is settled: a waiter must see the new answers
 		l.notifyChanged(changed)
+		// A machine that appeared while this round was out still has nobody to ask about it: the
+		// refresh was composed before it existed, exactly like any other round.
+		l.runPending()
 	}()
 
 	changed = l.store(l.probe(ctx, true))
@@ -286,7 +307,18 @@ func (l *PeerList) probeAsync(force bool) {
 	// lost (a cancelled context) still asked, and treating those nodes as unasked would let a burst of
 	// keystrokes bypass the interval for as long as the failures lasted.
 	keys := rowKeys(rows)
-	if l.probing || (!force && time.Since(l.lastProbe) < probeInterval && !hasNewKey(l.asked, keys)) {
+	if l.probing {
+		// A round is already out, and whether it will answer about these rows is not knowable from here.
+		// A request that brings something the round in flight did NOT ask about is therefore REMEMBERED
+		// rather than refused (pending): the alternative is what left a machine discovered mid-probe
+		// showing 检查中… until something else asked. It runs when that round lands (runPending).
+		if hasNewKey(l.asked, keys) {
+			l.pending = true
+		}
+		l.mu.Unlock()
+		return
+	}
+	if !force && time.Since(l.lastProbe) < probeInterval && !hasNewKey(l.asked, keys) {
 		l.mu.Unlock()
 		return
 	}
@@ -304,7 +336,29 @@ func (l *PeerList) probeAsync(force bool) {
 		l.log.Debug(context.Background(), "peer list: probed the configured nodes",
 			"peers", len(reports), "reachable", countReachable(reports), "forced", force)
 		l.notifyChanged(changed)
+		l.runPending()
 	}()
+}
+
+// runPending starts the round that was asked for while one was already out. Called with NO lock held,
+// right after a round has finished recording its answers.
+//
+// The round it starts is composed from the directory as it is NOW, so it does ask about the machine
+// that arrived during the last one — and probeAsync's own gate lets it through for the same reason it
+// lets any round about a new machine through (hasNewKey). It is what makes the rate limit a DELAY
+// rather than a refusal: what the limit is for is stopping a REPEAT (a keystroke must not become a
+// request), and a row nobody has asked about is not a repeat.
+func (l *PeerList) runPending() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	pending := l.pending
+	l.pending = false
+	l.mu.Unlock()
+	if pending {
+		l.probeAsync(false)
+	}
 }
 
 // store records one round of answers, clears the in-flight marker, and answers whether the reading
@@ -327,6 +381,13 @@ func (l *PeerList) store(reports []PeerReport) bool {
 	l.probing = false
 	l.lastProbe = now
 	l.mu.Unlock()
+	if changed {
+		// Said out loud because it is what the board and the trigger draw, and because the count on
+		// that trigger is read as "who is up" with nothing on screen saying when it was taken: a line
+		// here is how a stale count is told apart from a matching one after the fact.
+		l.log.Info(context.Background(), "peer list: the node reading changed",
+			"peers", len(next), "reachable", countReachable(reports))
+	}
 	return changed
 }
 
@@ -427,6 +488,7 @@ func (s *Sender) DirectoryRows() []agentref.Peer {
 			NodeID: e.Identity,
 			Addr:   firstAddr(e),
 			Note:   e.Note,
+			Source: e.Source,
 		})
 	}
 	return out

@@ -89,6 +89,11 @@ type PeerBoardRowVO struct {
 	// truth: it is one candidate among the ones this machine holds.
 	URL  string `json:"url"`
 	Note string `json:"note"`
+	// Source is how this machine came to know the node, in words: 配置, mDNS, gossip, or several of
+	// them joined. It is the answer to "why is this row here at all" for a machine nobody configured,
+	// and it says nothing about WHICH neighbour named it — that is a log's business, and a row has to
+	// stay one line.
+	Source string `json:"source"`
 	// Reach and Reachable are the last look's verdict, in the same words the picker uses.
 	Reach     string `json:"reach"`
 	Reachable bool   `json:"reachable"`
@@ -182,6 +187,7 @@ func boardVO(list *node.PeerList) PeerBoardVO {
 			NodeIDLabel: agentref.IDLabel(atfile.AgentTarget{NodeID: d.NodeID}),
 			URL:         d.URL,
 			Note:        d.Note,
+			Source:      agentref.SourceWord(d.Source),
 			Reachable:   d.Reachable,
 			Checked:     d.Checked,
 			Err:         d.Err,

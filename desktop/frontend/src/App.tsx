@@ -1549,6 +1549,17 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   useEffect(() => {
     if (agentsOpen) void loadAgents()
   }, [agentsOpen, loadAgents])
+  // And ONCE when the view first appears, because the count on the TRIGGER is drawn from this same
+  // snapshot: a snapshot nobody has read yet is an empty badge, and an empty badge reads as "this
+  // machine has nobody to delegate to" rather than as "nobody has looked yet" — the reader has no way
+  // to tell those apart from the trigger.
+  //
+  // It is also the one gap the event below cannot close by itself: the startup warm-up
+  // (desktop/main.go warmPeers) probes before this webview exists, so the round of answers it lands
+  // with can be reported to nobody — and the event is not replayed. This read picks up whatever that
+  // warm-up learned, and the event covers everything after it. (The MCP panel's count is read at boot
+  // the same way, inside loadAll — this is that house rule, not a second mechanism.)
+  useEffect(() => { void loadAgents() }, [loadAgents])
   // The backend says when the node reading moved: a machine discovery just found, or a round of
   // answers that came back different from the last. Both are moments the panel has no other way to
   // hear about — the probe that opening the panel kicks off lands after the read that kicked it —
@@ -2945,7 +2956,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     <span className="agents-ico"><AgentsIcon /></span>
                     {/* The count is the number of nodes that ANSWERED the last probe, not the number
                         configured: a machine that cannot delegate to anybody should read as an empty
-                        badge, not as "2". */}
+                        badge, not as "2". The reading is kept fresh by the BACKEND (desktop
+                        keepPeersFresh), not by this component: nobody opens the board on the badge's
+                        behalf, and a number that ages in place cannot be told from a current one. */}
                     <span className="agents-count">{(agentsBoard?.peers || []).filter((p) => p.reachable).length || ''}</span>
                   </button>
                   {agentsOpen && (

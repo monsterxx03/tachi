@@ -16,11 +16,28 @@
 //     东西（一个每条都重复「技能」两个字的版本就这样留在树里）。它还答了那次探测，于是本机 pin 下了它的
 //     身份：它的引用那一行因此**有内容**，而且那内容就是身份本身。
 //
+// 两个 peer 都是**配置里写下的**，所以收起的那一行上那个来源记号该说的是「配置」，不多不少 —— 这一条
+// 钉的是「面板说的是理由」：一个把 mDNS 或 gossip 也贴到配置行上的版本，会让读者以为自己旁边有台机器
+// 是自动冒出来的（沙箱里没有任何机器公告自己，也没有邻居可问）。
+//
+// 还有一条在**点开面板之前**：触发器上的那个数字。它和面板画的是同一份快照，所以那份快照必须在视图出现
+// 时就被读过一次 —— 否则徽标一直是空的，而空徽标读起来是「没有可委派的节点」。
+//
 // 「联系不上」与「技能只写一次」是这一场景的两个关键断言：一个点完刷新仍然停在原地的面板会让读者以为
 // 是自己的问题；一个把列表标签按行重复的面板会把每一行的宽度花在重复的话上。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
   if (!(await smoke.waitForSession())) return smoke.finish()
+
+  // 点开**之前**先看触发器上那个数字：它画的是与面板**同一份快照**，所以那份快照必须在视图出现时就被
+  // 读过一次，而不是等到有人点开面板。少了那一次读，启动预热（它发生在这个 webview 存在之前）那一轮
+  // 答案就永远没有听众 —— 徽标一直是空的，而空徽标读起来是「没有可委派的节点」，不是「还没人看过」。
+  // 两个 peer 里有一个会答话，所以这里该是 1。
+  const badge = await smoke.waitFor(
+    () => (smoke.text('.agents-count').indexOf('1') >= 0 ? true : null),
+    '没点开之前徽标里就有数字', 15000)
+  smoke.check('触发器上的数字在面板打开前就是对的（2 个 peer 里 1 个可达）', !!badge,
+    smoke.text('.agents-count'))
 
   smoke.click('.agents-btn')
   if (!(await smoke.waitFor('.agents-panel', 'Agents 面板打开'))) return smoke.finish()
@@ -64,6 +81,17 @@
   smoke.check('行里有本机配的别名', row.indexOf('smoke-nas') >= 0, row)
   // 从来没有出站连过它，所以本机没有可展示的身份 —— 而那个"未知"是如实回答，不是缺数据。
   smoke.check('身份未记录（本机还没跟它连过）', row.indexOf('身份未记录') >= 0, row)
+  // 行上还有第四个记号：这台机器**是怎么**被知道的（配置 / mDNS / gossip）。沙箱里两个 peer 都是配置
+  // 里写下的，所以两个都该说「配置」—— 这一条钉的是「面板说的是理由」：一个把三种来源都画一遍的版本会
+  // 让读者以为自己旁边有台机器是自动冒出来的。
+  const srcOf = (peer) => {
+    const box = boxOf(peer)
+    const el = box ? box.querySelector('.agents-src') : null
+    return el ? smoke.text(el) : ''
+  }
+  smoke.check('两行都说得出它为什么在这儿（配置里写的）',
+    srcOf('smoke-nas') === '配置' && srcOf('smoke-peer') === '配置',
+    srcOf('smoke-nas') + ' | ' + srcOf('smoke-peer'))
   // 打开面板只读一次，而**入口启动时已经问过一遍**（desktop/main.go 的 warmPeers → 同一个
   // PeerList），所以刚打开时两行都带着结论：一个「联系不上」（那个端口上没人听，立刻被拒），一个
   // 「可用」。面板自己不轮询：让它变新的是那个按钮，或者后端推来的 `agent:peers_changed`（读数变了

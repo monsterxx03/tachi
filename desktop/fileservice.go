@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
@@ -122,6 +123,77 @@ func (d *desktopApp) agentSource() *agentref.Source {
 func (d *desktopApp) warmPeers() {
 	if list := d.peerList(); list != nil {
 		list.Probe()
+	}
+}
+
+// peerReadingRefresh is how long the node reading may go without a fresh look.
+//
+// One minute is well inside the sender's card cache (node/peers.go defaultPeerCardTTL, five minutes),
+// so a round that finds nothing new answers from memory: what it costs per tick is a walk of the
+// directory, not a dial. What it buys is that "the last look" is never older than the reader can
+// imagine — a count drawn from a probe an hour ago is indistinguishable on screen from one drawn now.
+const peerReadingRefresh = time.Minute
+
+// keepPeersFresh asks the nodes who they are, over and over, for as long as the app runs.
+//
+// WHY IT EXISTS. Everything else that probes does it because somebody asked for something: the picker
+// probes on a keystroke, the board when it is opened, 刷新 when it is pressed, and a machine entering
+// the directory probes once (node/delegatorcache.go onSighting). The count on the Agents trigger
+// answers none of those moments — it is on screen the whole time — so without this loop it shows
+// whatever the startup round happened to find, and keeps showing it for as long as the app is left
+// alone. A machine that comes up, moves, or is discovered later then reads as absent, and no reader
+// can tell that "0/1" is an old answer rather than the truth.
+//
+// The delegation reminder is NOT a substitute: it does read every node's card on every turn
+// (node/sender.go Peers), but it reads them for the MODEL, and says nothing to the board — an idle
+// app has no turns at all, which is exactly when the badge sits there being wrong.
+//
+// Probe (not ProbeNow) on purpose: the rate limit that keeps a keystroke from being a request is also
+// what keeps this loop from being one whenever the sender's cache is already warm.
+func (d *desktopApp) keepPeersFresh(every time.Duration) {
+	if d == nil || every <= 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.peersRefreshMu.Lock()
+	prev := d.peersRefreshStop
+	d.peersRefreshStop = cancel
+	d.peersRefreshMu.Unlock()
+	if prev != nil {
+		// Started twice: the older loop is stopped rather than left to keep asking (and to keep
+		// holding a ticker) beside this one.
+		prev()
+	}
+
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if list := d.peerList(); list != nil {
+					list.Probe()
+				}
+			}
+		}
+	}()
+}
+
+// stopPeersFresh stops the refresh loop. Called from the app's shutdown (main.go) and safe on an app
+// that never started one: what it must never do is wait for a tick to finish, since a tick is a
+// probe and a probe is a network round trip.
+func (d *desktopApp) stopPeersFresh() {
+	if d == nil {
+		return
+	}
+	d.peersRefreshMu.Lock()
+	cancel := d.peersRefreshStop
+	d.peersRefreshStop = nil
+	d.peersRefreshMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

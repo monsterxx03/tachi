@@ -1394,6 +1394,13 @@ function AgentsIcon() {
 // three is evidence. Which of the three an ADDRESS is, when the peer has also said one about itself,
 // is the backend's call (node/peerdir.go): the row shows where this machine will dial FIRST.
 //
+// A fourth mark rides on the folded row: HOW this machine came to know the node (配置 / mDNS /
+// gossip). It is not a fourth kind of evidence — it is a property of the ROW rather than of the
+// machine, which is why it sits on the folded row instead of inside the detail: it is the answer to
+// "why is this row here at all", and for a machine nobody configured that question is the first one a
+// reader has. Which neighbour named it is deliberately not shown (that is a log's business, and the
+// identity that vouched rotates as the rounds go by).
+//
 // It keeps no state of its own beyond which rows are open: what it draws is what the backend last
 // said, so a panel reopened after a refresh agrees with a live one.
 function AgentsPanel({ board, busy, onClose, onRefresh }: {
@@ -1457,6 +1464,18 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
                 <span className="agents-id" title={p.nodeId || '本机还没跟它连过，身份在第一次出站接触时才记下'}>
                   {p.nodeIdLabel}
                 </span>
+                {/* HOW this machine came to know it: 配置 / mDNS / gossip, several joined. It sits
+                    beside the identity because together they answer the question the row raises —
+                    "which machine is this, and why is it in my list at all" — while the identity
+                    alone cannot: a machine nobody configured has no other explanation for being
+                    here. The visible words are the protocol's (that is what the backend states);
+                    the tooltip is what they mean to a person. Not rendered at all when there is
+                    nothing to state, rather than an empty chip. */}
+                {p.source ? (
+                  <span className="agents-src" title="这台机器是怎么被知道的：配置里写的 / 局域网里自己听到的 / 邻居告诉的">
+                    {p.source}
+                  </span>
+                ) : null}
                 <span className="mcp-toolcount">{p.reach}</span>
                 <span className="mcp-caret"><Caret /></span>
               </div>

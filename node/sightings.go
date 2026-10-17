@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -123,6 +124,14 @@ type candidate struct {
 	// machine keeps the HIGHER count, because relaxing it there is what would let whoever keeps
 	// talking about an address reset the budget that bounds this machine's dials.
 	Attempts int
+	// Source is which of discovery's suppliers handed this candidate over: an announcement heard on
+	// the local network, or a peer's word. It is a SET because one machine can arrive both ways, and
+	// it has two readers: the queue prefers what this machine saw itself when two candidates are due
+	// at the same moment (verifyDue), and the directory says where a row came from (peerEntry.Source).
+	//
+	// SourceConfigured can never appear here, and that is not an omission: a config line is not a
+	// claim to be verified but a person's decision, which is why there is no queue to put it in.
+	Source agentref.PeerSource
 }
 
 // The numbers below decide how long a sighting is worth something, how fast candidates are verified,
@@ -316,7 +325,7 @@ func (s *sightingsStore) verifyDue(ctx context.Context) bool {
 		if c.Next.After(now) {
 			continue
 		}
-		if !found || c.Next.Before(cand.Next) {
+		if !found || dueFirst(c, cand) {
 			id, cand, found = machine, c, true
 		}
 	}
@@ -359,6 +368,26 @@ func (s *sightingsStore) verifyDue(ctx context.Context) bool {
 	return true
 }
 
+// dueFirst reports whether a is the better candidate to spend this tick's one connection on than b.
+//
+// Two rules, in this order: the retry time that came first, and — for two that are due at the very
+// same moment — the one this machine heard about ITSELF before the one it was told about (design §六,
+// 先手压流言). The tie-break matters more than it looks: a gossip answer can make a whole batch due at
+// once (feed stamps them all with the same clock), and without it the order would be whatever a map
+// happened to hand over — while a machine still announcing itself on the local network is the more
+// useful connection of the two, because its announcement is fresh evidence rather than somebody's
+// memory of it.
+func dueFirst(a, b candidate) bool {
+	if !a.Next.Equal(b.Next) {
+		return a.Next.Before(b.Next)
+	}
+	return heardDirectly(a) && !heardDirectly(b)
+}
+
+// heardDirectly reports whether this machine heard about the machine from the machine — an
+// announcement on the local network, as opposed to a peer's word about it.
+func heardDirectly(c candidate) bool { return c.Source&agentref.SourceMDNS != 0 }
+
 // feed adds one candidate to the queue, merging it with one already waiting for the same identity.
 //
 // This is where a SOURCE hands over what it saw, and the only thing it decides is that this is worth
@@ -395,6 +424,10 @@ func (s *sightingsStore) feed(c candidate) {
 		// Two sources disagreeing is resolved towards the fresher reading: a peer's word about a
 		// machine this machine has itself just reached is not a reason to stop retrying it.
 		c.Stale = c.Stale && prev.Stale
+		// The ways this machine heard about the machine are collected rather than replaced: a machine
+		// announced on the network and later named by a peer is one machine this machine knows both
+		// ways, and a reader asking "how do you know it" wants both answers.
+		c.Source |= prev.Source
 		// The attempts spent so far are not refunded by a new claim about the same machine: that is
 		// the budget which keeps a claim from costing this machine dials forever.
 		if prev.Attempts > c.Attempts {
@@ -453,12 +486,17 @@ func (s *sightingsStore) confirm(cand candidate, served string) {
 		Identity: cand.Identity,
 		Addrs:    append([]string(nil), cand.Addrs...),
 		Served:   served,
+		Source:   cand.Source,
 		Seen:     s.clock(),
 	}
 	if had {
 		// An address once learned is not dropped, only reordered: what said "I am here" most recently
 		// goes first (the same rule the directory applies to a card, node/peerdir.go).
 		next.Addrs = prependAddrs(prev.Addrs, next.Addrs)
+		// And every way this machine has heard about the machine is kept, for the same reason: the
+		// two suppliers fill different gaps, and a machine that came by one of them did not stop
+		// having come by the other.
+		next.Source |= prev.Source
 	}
 	s.seen[cand.Identity] = next
 	delete(s.pending, cand.Identity)
@@ -497,6 +535,11 @@ func (s *sightingsStore) confirm(cand candidate, served string) {
 // Nothing calls onSighting: a machine that just answered a request from here is one the directory
 // already has a row for (its config line, or the sighting it entered by), so no reader is looking at
 // something that appeared.
+//
+// It adds no SOURCE either, and that is deliberate: reaching a machine outbound is not a way of
+// coming to know it (there is nothing to learn — this machine picked the address). A machine that is
+// in the config keeps saying so, and one that was announced keeps saying that; a touch only makes
+// what this machine has proved fresh enough to stand behind.
 func (s *sightingsStore) touch(identity, served string) {
 	if s == nil || !IsNodeID(identity) || served == "" {
 		return

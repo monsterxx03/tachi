@@ -12,12 +12,16 @@ import (
 
 	"github.com/libp2p/zeroconf/v2"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/config"
 )
 
 const (
 	discoveredID = "dddd4444dddd4444dddd4444dddd4444"
 	claimedID    = "eeee5555eeee5555eeee5555eeee5555"
+	// gossipID is a machine this machine was only ever TOLD about, as opposed to discoveredID, which
+	// these tests use for one it saw for itself.
+	gossipID = "cccc3333cccc3333cccc3333cccc3333"
 )
 
 // testBrowser is a browser with no interfaces and no socket at all: these tests drive its decisions
@@ -77,6 +81,17 @@ func TestAnAnnouncementOfThisVeryMachineIsNotAPeer(t *testing.T) {
 	cand, why := b.decide(txtAnnouncement("this-machine", nasID, "https://192.168.1.9:7080"))
 	require.Nil(t, cand)
 	require.Empty(t, why, "silence: it is us")
+}
+
+// What an announcement claims is not trust, but WHERE the claim came from is a fact about this
+// machine's own reading — it heard this itself — and it is what decides the queue's order when two
+// candidates are due at once (node/sightings.go dueFirst) and what the panel says about the row.
+func TestAnAnnouncementIsMarkedAsSomethingThisMachineHeardItself(t *testing.T) {
+	b := testBrowser(t)
+	cand, why := b.decide(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
+	require.Empty(t, why)
+	require.NotNil(t, cand)
+	require.Equal(t, agentref.SourceMDNS, cand.Source, "heard on the local network, not told by a peer")
 }
 
 // A multicast announcement that resolves to a public address is a machine asking to be dialled from
@@ -256,6 +271,7 @@ func TestAConfiguredMachineThatAnnouncesItselfIsOneEntry(t *testing.T) {
 		return []discoveredPeer{{
 			Identity: discoveredID,
 			Addrs:    []string{"https://192.168.1.9:7080"},
+			Source:   agentref.SourceMDNS,
 			Seen:     time.Now(),
 		}}
 	}
@@ -266,7 +282,10 @@ func TestAConfiguredMachineThatAnnouncesItselfIsOneEntry(t *testing.T) {
 	require.Equal(t, discoveredID, entries[0].Identity)
 	require.Equal(t, []string{"https://192.168.1.9:7080", "https://100.64.0.3:7080"}, entries[0].Addrs,
 		"what the machine says about itself is tried first, the configured address last")
-	require.True(t, entries[0].Configured && entries[0].Discovered)
+	require.Equal(t, agentref.SourceConfigured|agentref.SourceMDNS, entries[0].Source,
+		"both ways this machine knows it, because the row came by both")
+	require.Equal(t, "配置 · mDNS", agentref.SourceWord(entries[0].Source),
+		"and the panel says so in words a reader sees")
 }
 
 // A machine only discovery found expires; a configured one does not, however long it has been quiet
@@ -277,14 +296,14 @@ func TestOnlyDiscoveredMachinesExpire(t *testing.T) {
 	dir.known = emptyPins(t)
 	dir.discover = func() []discoveredPeer {
 		return []discoveredPeer{
-			{Identity: discoveredID, Addrs: []string{"https://192.168.1.9:7080"}, Seen: time.Now()},
+			{Identity: discoveredID, Addrs: []string{"https://192.168.1.9:7080"}, Source: agentref.SourceMDNS, Seen: time.Now()},
 		}
 	}
 
 	found, ok := dir.byIdentity(discoveredID)
 	require.True(t, ok, "a machine discovery found is an entry, keyed by the identity it proved")
 	require.Equal(t, "dddd4444", found.Name(), "it has no label and no card, so its row reads as its short id")
-	require.True(t, found.Discovered && !found.Configured)
+	require.Equal(t, agentref.SourceMDNS, found.Source, "and the row says where it came from")
 
 	// The source stops reporting it — the browser is what expires a sighting (node/discovery.go), and
 	// the directory follows it: the configured line stays, the found machine goes.
@@ -294,9 +313,58 @@ func TestOnlyDiscoveredMachinesExpire(t *testing.T) {
 	require.Equal(t, "nas", entries[0].Name())
 }
 
-// The discovered half is capped, because anyone on the network can multicast: a table that grew with
-// a stranger's packet rate would have no bound at all. Configured entries are a person's, and are
-// never counted against it.
+// The address this machine has itself GOT THROUGH ON is tried before the rest of what a sighting came
+// with, and all of it is behind what the peer says about itself and ahead of the person's line
+// (design §三). It is the difference between evidence and a claim: a machine with a dozen announced
+// addresses used to be tried in announcement order, so the one that answered last time could sit
+// third and every dial spent two attempts rediscovering that.
+func TestTheAddressThisMachineGotThroughOnIsTriedBeforeTheOthers(t *testing.T) {
+	const third = "https://192.168.71.169:7080"
+	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://100.64.0.3:7080"}})
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+	require.NoError(t, dir.known.confirm("nas", "https://100.64.0.3:7080", discoveredID))
+
+	dir.discover = func() []discoveredPeer {
+		return []discoveredPeer{{
+			Identity: discoveredID,
+			// Announced in this order; the THIRD one is the address that answered the handshake.
+			Addrs:  []string{lanAddr, lanAddr2, third},
+			Served: third,
+			Source: agentref.SourceMDNS,
+			Seen:   time.Now(),
+		}}
+	}
+
+	entries := dir.Entries()
+	require.Len(t, entries, 1)
+	require.Equal(t, []string{third, lanAddr, lanAddr2, "https://100.64.0.3:7080"}, entries[0].Addrs,
+		"the address that answered first among what discovery brought, and the person's line last")
+}
+
+// A sighting that names no served address keeps the order it came with, and one that names one it did
+// not list still gets it — both are states the store can hand over (a contact this machine made, and a
+// candidate whose answering address was not the one first tried).
+func TestASightingWithoutAServedAddressKeepsItsOrder(t *testing.T) {
+	dir, err := newPeerDirectory(nil)
+	require.NoError(t, err)
+	dir.known = emptyPins(t)
+	dir.discover = func() []discoveredPeer {
+		return []discoveredPeer{
+			{Identity: discoveredID, Addrs: []string{lanAddr, lanAddr2}, Source: agentref.SourceMDNS},
+			{Identity: claimedID, Addrs: []string{lanAddr}, Served: lanAddr2},
+		}
+	}
+
+	byID := make(map[string][]string, 2)
+	for _, e := range dir.Entries() {
+		byID[e.Identity] = e.Addrs
+	}
+	require.Equal(t, []string{lanAddr, lanAddr2}, byID[discoveredID], "nothing to reorder, so nothing moved")
+	require.Equal(t, []string{lanAddr2, lanAddr}, byID[claimedID],
+		"and an address it got through on is carried even when the sighting did not list it")
+}
+
 func TestTheDiscoveredHalfIsCapped(t *testing.T) {
 	dir, err := newPeerDirectory([]config.PeerConfig{{Name: "nas", URL: "https://100.64.0.3:7080"}})
 	require.NoError(t, err)
@@ -317,7 +385,7 @@ func TestTheDiscoveredHalfIsCapped(t *testing.T) {
 
 	entries := dir.Entries()
 	require.Len(t, entries, maxDiscoveredPeers+1, "the cap plus the configured line")
-	require.True(t, entries[0].Configured, "the configured machine is still there")
+	require.True(t, entries[0].Source&agentref.SourceConfigured != 0, "the configured machine is still there")
 	oldest := found[0].Identity
 	for _, e := range entries {
 		require.NotEqual(t, oldest, e.Identity, "the machine that announced longest ago is the one to lose")

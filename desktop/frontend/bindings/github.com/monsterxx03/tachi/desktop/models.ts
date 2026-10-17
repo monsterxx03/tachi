@@ -763,6 +763,14 @@ export interface PeerBoardRowVO {
     "note": string;
 
     /**
+     * Source is how this machine came to know the node, in words: 配置, mDNS, gossip, or several of
+     * them joined. It is the answer to "why is this row here at all" for a machine nobody configured,
+     * and it says nothing about WHICH neighbour named it — that is a log's business, and a row has to
+     * stay one line.
+     */
+    "source": string;
+
+    /**
      * Reach and Reachable are the last look's verdict, in the same words the picker uses.
      */
     "reach": string;

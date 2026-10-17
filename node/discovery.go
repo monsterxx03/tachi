@@ -13,6 +13,7 @@ import (
 
 	"github.com/libp2p/zeroconf/v2"
 
+	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/netutil"
@@ -480,7 +481,10 @@ func (b *mdnsBrowser) decide(a announcement) (*candidate, string) {
 	if len(local) == 0 {
 		return nil, "it resolved to no address on a local network"
 	}
-	return &candidate{Identity: id, Addrs: local, Next: a.Seen}, ""
+	// Source is what makes this candidate different from one a peer named, and the difference is
+	// evidence: this machine heard the machine itself, so it is preferred when two candidates are due
+	// at once (node/sightings.go dueFirst) and the row says mDNS rather than gossip.
+	return &candidate{Identity: id, Addrs: local, Next: a.Seen, Source: agentref.SourceMDNS}, ""
 }
 
 // announcementOf turns one library entry into the shape this file works in.

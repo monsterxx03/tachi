@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/monsterxx03/tachi/agent/agentref"
 )
 
 // fakeMesh is a discovery side a test drives by hand: what it would say, and what it was handed.
@@ -133,6 +135,9 @@ func TestAClaimBecomesACandidateOrNothing(t *testing.T) {
 			require.Equal(t, []string{tc.entry.Addr}, got[0].Addrs)
 			require.Equal(t, tc.stale, got[0].Stale,
 				"an old claim is worth one connection rather than a retry schedule")
+			require.Equal(t, agentref.SourceGossip, got[0].Source,
+				"and every one of these came from a peer's word, which is what the queue and the "+
+					"panel both read")
 		})
 	}
 }
@@ -148,6 +153,9 @@ func TestTheAskerCanIntroduceItself(t *testing.T) {
 	require.Len(t, got, 1, "the reachable address and not the one nothing could dial")
 	require.Equal(t, caller, got[0].Identity)
 	require.Equal(t, []string{lanAddr}, got[0].Addrs)
+	require.Equal(t, agentref.SourceGossip, got[0].Source,
+		"the identity is proved, the address is not — and the way this machine heard it is the same "+
+			"either way")
 
 	// Two Tachis on one machine share an identity (one data dir), so a sibling process calling this
 	// one must not be introduced to itself.
@@ -383,7 +391,7 @@ func TestARoundAsksTheMachinesItHasNotAskedLately(t *testing.T) {
 // (the handshake behind it files the pin) — and "recently contacted" is never a condition of being in
 // the pool: a machine that dropped out when it was not refreshed could never be refreshed (§四).
 func TestAConfiguredLineNobodyHasContactedIsStillAsked(t *testing.T) {
-	line := peerEntry{Addrs: []string{lanAddr}, cfgAddr: lanAddr, Configured: true}
+	line := peerEntry{Addrs: []string{lanAddr}, cfgAddr: lanAddr, Source: agentref.SourceConfigured}
 	side := &fakeSide{entries: []peerEntry{line}}
 	l := quietLoop(side)
 

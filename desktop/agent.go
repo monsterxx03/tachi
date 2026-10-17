@@ -177,6 +177,11 @@ type desktopApp struct {
 	// Guarded by peersMu, NOT by mu, for the same reason delegatorMu is.
 	peersMu sync.Mutex
 	peers   *node.PeerList
+	// peersRefreshStop stops the loop that keeps that reading fresh (keepPeersFresh), and is nil
+	// until it starts. Guarded by its own mutex, NOT by peersMu: the loop takes peersMu on every
+	// tick, and stopping it must not wait for a tick to finish.
+	peersRefreshMu   sync.Mutex
+	peersRefreshStop context.CancelFunc
 
 	// promptCache memoizes built system prompts, keyed by the exact build inputs
 	// (working directory + session ID) — see systemPromptFor. Guarded by

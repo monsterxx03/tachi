@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/monsterxx03/tachi/agent/agentref"
 )
 
 // The two windows are the operator's (config node.discovery.ttl / contact_ttl), and what they decide
@@ -233,4 +235,76 @@ func TestAContactThisMachineMadeIsRecorded(t *testing.T) {
 	store.touch(discoveredID, "")
 	store.touch("not-a-node-id", lanAddr)
 	require.Empty(t, store.recent(store.contactWindow()))
+}
+
+// HOW this machine came to know a machine is every way at once, not the last way: the two suppliers
+// fill different gaps (one crosses no router, the other cannot see a machine it was never pointed at),
+// and a machine that arrived by one of them did not stop having arrived by the other. It is what the
+// panel states and what the queue reads, so both halves are pinned here.
+func TestEveryWayOneMachineWasHeardAboutIsKept(t *testing.T) {
+	store := newSightingsStore(nil)
+	now := time.Now()
+	store.now = func() time.Time { return now }
+
+	// Announced on the local network, then named by a peer — and merged while still awaiting
+	// verification, which is the one place two claims about one machine meet.
+	store.feed(candidate{Identity: discoveredID, Addrs: []string{lanAddr}, Source: agentref.SourceMDNS})
+	store.feed(candidate{Identity: discoveredID, Addrs: []string{lanAddr2}, Source: agentref.SourceGossip})
+	store.mu.Lock()
+	got := store.pending[discoveredID]
+	store.mu.Unlock()
+	require.Equal(t, agentref.SourceMDNS|agentref.SourceGossip, got.Source,
+		"the machine is one this one both saw and was told about")
+
+	// And the row it leaves behind keeps both, through a second proof from the other way round: a
+	// later sighting does not erase how this machine first heard about it.
+	store.confirm(candidate{Identity: discoveredID, Addrs: []string{lanAddr}, Source: agentref.SourceMDNS}, lanAddr)
+	store.confirm(candidate{Identity: discoveredID, Addrs: []string{lanAddr2}, Source: agentref.SourceGossip}, lanAddr2)
+	sightings := store.sightings()
+	require.Len(t, sightings, 1)
+	require.Equal(t, agentref.SourceMDNS|agentref.SourceGossip, sightings[0].Source)
+	require.Equal(t, "mDNS · gossip", agentref.SourceWord(sightings[0].Source),
+		"which is what a reader is told, in words")
+}
+
+// Two candidates due at the same moment are not equal work: a machine still announcing itself on the
+// local network is fresher evidence than somebody's memory of a machine it reached a while ago, so it
+// gets the tick's one connection first (design §六, 先手压流言). Without this the order would be
+// whatever a map happened to hand over — Go's map order is random, and a gossip answer can make a
+// whole batch due at once, because feed stamps every clockless claim with the same instant.
+func TestAMachineThisStoreHeardItselfIsVerifiedBeforeOneItWasToldAbout(t *testing.T) {
+	// Fed in the order that would otherwise decide it: the relayed one first, so a map walk could
+	// plausibly answer with it.
+	store := newSightingsStore(nil)
+	// A fixed clock, because "due at the same moment" is the case in hand: a gossip answer carries
+	// claims with no time of their own, and feed stamps every one of them with this store's clock.
+	now := time.Now()
+	store.now = func() time.Time { return now }
+	store.setVerifier(func(_ context.Context, addrs []string) (string, string, error) {
+		// Each address answers with the identity the claim about it named, so neither candidate takes
+		// the "named one identity and proved another" path — that is a different test's subject.
+		if addrs[0] == lanAddr {
+			return gossipID, lanAddr, nil
+		}
+		return discoveredID, addrs[0], nil
+	})
+	store.feed(candidate{Identity: gossipID, Addrs: []string{lanAddr}, Source: agentref.SourceGossip})
+	store.feed(candidate{Identity: discoveredID, Addrs: []string{lanAddr2}, Source: agentref.SourceMDNS})
+
+	store.mu.Lock()
+	relayed, saw := store.pending[gossipID], store.pending[discoveredID]
+	store.mu.Unlock()
+	require.True(t, relayed.Next.Equal(saw.Next), "both are due at the same moment, which is the case in hand")
+
+	require.True(t, store.verifyDue(context.Background()))
+	require.Empty(t, store.pending[discoveredID], "the machine this one heard itself was verified first")
+	_, relayedStillWaiting := store.pending[gossipID]
+	require.True(t, relayedStillWaiting, "and the one it was told about is still waiting its turn")
+
+	// The relayed one is not refused, only queued behind: it gets the next tick.
+	require.True(t, store.verifyDue(context.Background()))
+	store.mu.Lock()
+	_, stillQueued := store.pending[gossipID]
+	store.mu.Unlock()
+	require.False(t, stillQueued, "and it is verified on the tick after")
 }
