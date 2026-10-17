@@ -72,6 +72,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		}
 		m.providerItems = cfg.Providers
 		m.providerSelIdx = 0
+		m.providerFilter = ""
+		m.providerScrollOff = 0
+		m.refreshProviderShown()
 		m.setState(stateSelectingModel)
 		m.layout()
 		return nil

@@ -28,6 +28,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -43,11 +44,6 @@ import (
 func configYAML(o *options, baseURL string) (string, error) {
 	var buf bytes.Buffer
 	if err := configTmpl.Execute(&buf, configData{
-		Protocol:         o.protocol.String(),
-		BaseURL:          baseURL,
-		Timeout:          o.timeout,
-		HasTimeout:       o.timeout > 0,
-		SecondModel:      o.secondModel,
 		BashAllow:        o.bashAllow,
 		BashAsk:          o.bashAsk,
 		Permissions:      o.bashAllow || o.bashAsk,
@@ -68,13 +64,10 @@ func configYAML(o *options, baseURL string) (string, error) {
 	return buf.String(), nil
 }
 
-// configData feeds the config fixture template.
+// configData feeds the config fixture template. The provider's own facts (Protocol / BaseURL /
+// Timeout / SecondModel) are NOT here: they go into the provider FILES beside config.yaml, rendered
+// by providerFiles — a `providers:` block in this template would be dropped on load.
 type configData struct {
-	Protocol    string
-	BaseURL     string
-	Timeout     time.Duration
-	HasTimeout  bool
-	SecondModel string // "" = no second provider
 	BashAllow   bool
 	BashAsk     bool
 	Permissions bool // BashAllow || BashAsk — render the permissions block
@@ -134,29 +127,6 @@ type peerFixture struct {
 // configTmpl renders the config.yaml fixture. The {{- ... }} trims keep the
 // YAML free of blank lines when optional sections are absent.
 var configTmpl = template.Must(template.New("config").Parse(`provider: mock
-providers:
-  - name: mock
-    type: {{.Protocol}}
-    model: mock-model
-    base_url: {{.BaseURL}}
-    api_key: test-key
-    spec:
-      context_window: 128000
-{{- if .HasTimeout}}
-      timeout: {{.Timeout}}
-{{- end}}
-{{- if .SecondModel}}
-  - name: mock2
-    type: {{.Protocol}}
-    model: {{.SecondModel}}
-    base_url: {{.BaseURL}}
-    api_key: test-key
-    spec:
-      context_window: 128000
-{{- if .HasTimeout}}
-      timeout: {{.Timeout}}
-{{- end}}
-{{- end}}
 title_generation: false
 language: zh
 herdr:
@@ -237,8 +207,13 @@ type options struct {
 	bashAsk     bool          // permissions.bash.ask: ["*"] → 强制 Bash 走权限流
 	timeout     time.Duration // spec.timeout injected into the provider fixture
 	secondModel string        // 第二个 provider 的 model（/model 切换场景）
-	nodeEnabled bool          // node.enabled: true — 节点服务开关（默认关闭）
-	nodeListen  string        // node.listen — 远程 A2A 面的地址（loopback 之外就 serve TLS）
+	// extraProviders are MORE entries beside mock/mock2, each name a row of the /model picker worth
+	// its own: the picker has to both SCROLL (a terminal shows ~19 rows) and FILTER, and neither can
+	// be shown by a list of two. The model of each is "<name>-model", so a spec can filter on either
+	// half.
+	extraProviders []string
+	nodeEnabled    bool   // node.enabled: true — 节点服务开关（默认关闭）
+	nodeListen     string // node.listen — 远程 A2A 面的地址（loopback 之外就 serve TLS）
 	// nodePublicURL is where callers reach this node. A node bound to a WILDCARD address (which is how
 	// a test leaves loopback) has to be told, or it refuses to start: it cannot derive an address from
 	// 0.0.0.0, and a Card that named one would send callers nowhere (node/a2a.go).
@@ -297,6 +272,13 @@ func WithSpecTimeout(d time.Duration) Option {
 // ACP SetSessionConfigOption scenarios.
 func WithSecondProvider(model string) Option {
 	return func(o *options) { o.secondModel = model }
+}
+
+// WithExtraProviders adds more provider entries beside the mock (and mock2, if any): name → a row
+// with model "<name>-model", same protocol and base_url. For the /model picker, whose scrolling and
+// filtering a two-entry list cannot demonstrate.
+func WithExtraProviders(names ...string) Option {
+	return func(o *options) { o.extraProviders = append(o.extraProviders, names...) }
 }
 
 // WithNodeEnabled switches the node service on in the fixture (node.enabled:
@@ -410,8 +392,60 @@ func NewHome(t TB, mock *mockllm.Server, opts ...Option) string {
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("harness: write config fixture: %v", err)
 	}
+	// The provider definitions live beside it, in a provider.*.json of their own — config.LoadFrom
+	// reads them from there and drops any `providers:` block it finds in the yaml (provider_json.go).
+	providers, err := providerFiles(o, mock.BaseURL())
+	if err != nil {
+		t.Fatalf("harness: render provider fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "provider.mock.json"), providers, 0o600); err != nil {
+		t.Fatalf("harness: write provider fixture: %v", err)
+	}
 	return home
 }
+
+// providerFiles renders the fixture's provider entries — the mock, and mock2 when a spec asked for
+// a second one — as the contents of provider.mock.json.
+//
+// It goes through config.ProviderConfig and fileutil.MarshalJSON, the same types the app loads, for
+// the reason the rest of this file hand-renders nothing: a fixture that spells an entry out by hand
+// can drift from what the loader accepts, and the drift shows up as a spec that fails for a reason
+// that has nothing to do with what it was written to test.
+func providerFiles(o *options, baseURL string) ([]byte, error) {
+	mock := config.ProviderConfig{
+		Name:    "mock",
+		Type:    o.protocol.String(),
+		Model:   "mock-model",
+		BaseURL: baseURL,
+		APIKey:  "test-key",
+		Spec:    config.ModelSpec{ContextWindow: ptrInt64(defaultFixtureContextWindow)},
+	}
+	if o.timeout > 0 {
+		mock.Spec.Timeout = config.Duration(o.timeout)
+	}
+	list := []config.ProviderConfig{mock}
+	if o.secondModel != "" {
+		second := mock
+		second.Name = "mock2"
+		second.Model = o.secondModel
+		list = append(list, second)
+	}
+	for _, name := range o.extraProviders {
+		extra := mock
+		extra.Name = name
+		extra.Model = name + "-model"
+		list = append(list, extra)
+	}
+	return fileutil.MarshalJSON(struct {
+		Providers []config.ProviderConfig `json:"providers"`
+	}{Providers: list})
+}
+
+// defaultFixtureContextWindow is the window every fixture provider declares (the template used to
+// carry it inline).
+const defaultFixtureContextWindow = 128000
+
+func ptrInt64(v int64) *int64 { return &v }
 
 // SeedWorkDir creates a fresh working directory (no .tachi.md, no .tachi/)
 // and seeds the given files so tool outputs are assertable (e.g. a README.md

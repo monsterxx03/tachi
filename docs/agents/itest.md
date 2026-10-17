@@ -14,6 +14,7 @@
 - **用例的等待锚在 AGENT 的单轮状态上，绝不只看屏幕**：driver 的 `WaitIdle`/`Stop` 等的是 `AIAgent.TurnInFlight()`（每次会话写入背后那条 run goroutine）清零。渲染出的 idle 帧滞后于状态机，而 mock 的请求计数在它自己的 goroutine 上增长，所以「请求已计数 + 屏幕看着仍 idle」在一轮中途是可达到的状态——照这两样等就会提前返回，接着打字（被排进 pending 而不是开新一轮）、退出程序、或列举会话的用例，就只在负载高的 runner 上随机失败。
 - **`config.SetBaseDir` / `tools.SetWorkingDir` 是进程级全局**——之所以安全，只是因为 ginkgo 的并行节点是独立进程、且用例串行；每个用例钉一个新的工作目录（目录被删掉会让 Bash 的 fork/exec 失败）。
 - **密闭**：harness 的配置禁用了 `herdr`；绝不碰真实的 `~/.tachi`。
+- **fixture 的 provider 是写成一个 `provider.mock.json` 的，不是 config.yaml 里的 `providers:`**（`NewHome` → `providerFiles`）：装载器把那份 yaml 里的 `providers:` 块直接丢掉（见仓库根的 `.tachi.md`「配置在哪」），所以一条还在模板里写它的 fixture 会让**每一个**用例在 BeforeEach 里就红，报的是 `NewAIAgentWithConfig: provider not found` —— 看起来像产品 bug，而不是 fixture 落后。给两个前端加 provider 时同理：`WithSecondProvider` / `WithExtraProviders` 是往那个 JSON 里加条目，不是往 yaml 模板里加。
 
 ## harness
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -25,30 +26,130 @@ func (m *Model) handleKeySelectingModel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.providerSelIdx > 0 {
 			m.providerSelIdx--
 		}
+		m.clampProviderScroll()
 	case "down", "ctrl+j", "ctrl+n":
-		if m.providerSelIdx < len(m.providerItems)-1 {
+		if m.providerSelIdx < len(m.providerShown)-1 {
 			m.providerSelIdx++
 		}
+		m.clampProviderScroll()
 	case "enter":
-		return m, m.switchToProvider(m.providerSelIdx)
+		if m.providerSelIdx >= 0 && m.providerSelIdx < len(m.providerShown) {
+			return m, m.switchToProvider(m.providerSelIdx)
+		}
 	case "esc":
 		m.exitModelSelect("")
+	case "backspace":
+		// A rune, not a byte: the filter is typed by a reader, and a Chinese IME commits whole
+		// characters — cutting one in half would leave a filter that matches nothing and cannot be
+		// seen to be wrong.
+		if m.providerFilter != "" {
+			r := []rune(m.providerFilter)
+			m.setProviderFilter(string(r[:len(r)-1]))
+		}
+	default:
+		// Everything else that is a PRINTABLE key goes into the filter. Key().Text is the field that
+		// says so (bubbletea fills it only for character keys, and it carries the whole run for a
+		// paste or an IME commit), while the modifier guard keeps a Ctrl chord out of the box — the
+		// arrows' own Ctrl+P/N are matched above, so they never reach here.
+		key := msg.Key()
+		if key.Text != "" && key.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
+			m.setProviderFilter(m.providerFilter + key.Text)
+		}
 	}
 	return m, nil
 }
 
+// providerVisibleRows is how many provider rows fit in the picker: what layout() gives the picker
+// (min(len+1, height/2)) minus its title line. It is the same number the window is clamped
+// against, and the two have to agree or the highlight scrolls past the bottom of the box.
+func (m *Model) providerVisibleRows() int {
+	return min(max(m.height/2-1, 1), len(m.providerShown))
+}
+
+// clampProviderScroll keeps the window over the list AND over the highlight: a highlight below the
+// last visible row (or above the first) scrolls the window with it. Same rule the session picker
+// uses, for the same reason — an index the reader cannot see is an index they cannot trust.
+func (m *Model) clampProviderScroll() {
+	visibleRows := m.providerVisibleRows()
+	maxScroll := max(len(m.providerShown)-visibleRows, 0)
+	if m.providerScrollOff > maxScroll {
+		m.providerScrollOff = maxScroll
+	}
+	if m.providerScrollOff < 0 {
+		m.providerScrollOff = 0
+	}
+	if m.providerSelIdx < m.providerScrollOff {
+		m.providerScrollOff = m.providerSelIdx
+	}
+	if m.providerSelIdx >= m.providerScrollOff+visibleRows {
+		m.providerScrollOff = m.providerSelIdx - visibleRows + 1
+	}
+}
+
+// setProviderFilter re-filters the list and puts the highlight back at the head of it: once the
+// query changes, the row the reader was on belongs to a list they are no longer looking at. (The
+// desktop picker and the ⌘K/⌘P palettes do the same.)
+func (m *Model) setProviderFilter(filter string) {
+	m.providerFilter = filter
+	m.providerSelIdx = 0
+	m.providerScrollOff = 0
+	m.refreshProviderShown()
+}
+
+// refreshProviderShown recomputes providerShown from providerItems and the current filter.
+func (m *Model) refreshProviderShown() {
+	q := strings.ToLower(strings.TrimSpace(m.providerFilter))
+	if q == "" {
+		m.providerShown = m.providerItems
+	} else {
+		shown := make([]config.ProviderConfig, 0, len(m.providerItems))
+		for _, p := range m.providerItems {
+			if providerMatches(p, q) {
+				shown = append(shown, p)
+			}
+		}
+		m.providerShown = shown
+	}
+	if m.providerSelIdx >= len(m.providerShown) {
+		m.providerSelIdx = max(len(m.providerShown)-1, 0)
+	}
+	m.clampProviderScroll()
+}
+
+// providerMatches reports whether a provider answers the filter `q` (already lowercased and
+// trimmed). BOTH the name and the model string count, because the two answer different questions:
+// the name is the config entry (`goat-claude-sonnet-5-5`) while the model is what goes to the API
+// (`anthropic/claude-sonnet-5-5`) — so a search by vendor only ever matches the second one.
+func providerMatches(p config.ProviderConfig, q string) bool {
+	return strings.Contains(strings.ToLower(p.Name), q) ||
+		strings.Contains(strings.ToLower(p.Model), q)
+}
+
 func (m *Model) renderProviderSelection() string {
 	var b strings.Builder
-	b.WriteString(dimStyle.Render("Select provider (↑↓ Enter Esc)") + "\n")
+	b.WriteString(dimStyle.Render(m.providerSelectionTitle()) + "\n")
+
+	if len(m.providerShown) == 0 {
+		b.WriteString(completionNormalStyle.Width(m.width).Render(" 没有匹配的模型（Backspace 删掉过滤词）"))
+		b.WriteString("\n")
+		return b.String()
+	}
 
 	currentInfo := m.statusbar.ProviderInfo()
+	// The name column is sized from the WHOLE list, not the visible slice: a width that moved with
+	// every keystroke would shuffle every row's alignment while the reader is typing.
 	maxNameLen := 0
 	for _, p := range m.providerItems {
-		if len(p.Name) > maxNameLen {
-			maxNameLen = len(p.Name)
-		}
+		maxNameLen = max(maxNameLen, len(p.Name))
 	}
-	for idx, p := range m.providerItems {
+
+	// Only the window is drawn (see providerVisibleRows / clampProviderScroll). Drawing the whole
+	// list was the bug: the picker is given at most half the screen, so everything past that was
+	// produced and never seen — including the highlight, which the reader could then arrow off the
+	// bottom edge of the box with no way to tell where it went.
+	end := min(m.providerScrollOff+m.providerVisibleRows(), len(m.providerShown))
+	for idx := m.providerScrollOff; idx < end; idx++ {
+		p := m.providerShown[idx]
 		info := fmt.Sprintf("%s (%s)", p.Type, p.Model)
 		active := " "
 		if info == currentInfo {
@@ -65,18 +166,34 @@ func (m *Model) renderProviderSelection() string {
 	return b.String()
 }
 
+// providerSelectionTitle is the picker's title line: the key help, and — once a filter is typed —
+// what it is and how much of the list it left. The count is worth the space because an empty result
+// and a short one look the same in a box that only draws a few rows.
+func (m *Model) providerSelectionTitle() string {
+	if m.providerFilter == "" {
+		return fmt.Sprintf("Select provider (↑↓ Enter Esc) — %d 个，输入以过滤", len(m.providerItems))
+	}
+	return fmt.Sprintf("Select provider /%s (↑↓ Enter Esc Backspace) — %d/%d 个",
+		m.providerFilter, len(m.providerShown), len(m.providerItems))
+}
+
 func (m *Model) exitModelSelect(msg string) {
 	if msg != "" {
 		m.chatview.AddMessage(chatMessage{Role: "assistant", Content: msg})
 	}
 	m.providerItems = nil
+	m.providerShown = nil
+	m.providerFilter = ""
 	m.providerSelIdx = 0
+	m.providerScrollOff = 0
 	m.setState(stateIdle)
 	m.layout()
 }
 
 func (m *Model) switchToProvider(idx int) tea.Cmd {
-	pCfg := &m.providerItems[idx]
+	// From providerShown, because that is the list the highlighted row belongs to (the index the
+	// reader sees), and a filtered list has different indices from the whole one.
+	pCfg := &m.providerShown[idx]
 	resolved, err := llm.BuildProvider(m.cfg, pCfg.Name)
 	if err != nil {
 		m.exitModelSelect("Error: " + err.Error())
@@ -98,7 +215,10 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 
 		// Exit model selection overlay and show status messages.
 		m.providerItems = nil
+		m.providerShown = nil
+		m.providerFilter = ""
 		m.providerSelIdx = 0
+		m.providerScrollOff = 0
 		m.setState(stateIdle)
 		m.layout()
 

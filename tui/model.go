@@ -171,9 +171,22 @@ type Model struct {
 	// turn are both that ask — and stays nil while this machine has nothing to delegate to (no
 	// peers configured and discovery off, so there is no sending side to build).
 	// Only the Update goroutine touches it (see delegator()).
-	delegators     *node.DelegatorCache
-	providerItems  []config.ProviderConfig
-	providerSelIdx int
+	delegators *node.DelegatorCache
+
+	// The /model picker's state. providerItems is the whole configured list (what /model read from
+	// the config), while providerShown is what the reader is looking at — the same list narrowed by
+	// providerFilter. Everything the picker does by index (the highlight, Enter, the visible window)
+	// is in terms of providerShown, because that is the list on screen; providerItems is only ever
+	// re-filtered.
+	//
+	// Why the split exists: this machine's config holds seventy providers and a terminal shows about
+	// twenty lines, so the list has both too much to scroll through and too much to fit. The filter
+	// answers the first, the window (providerScrollOff) the second.
+	providerItems     []config.ProviderConfig
+	providerShown     []config.ProviderConfig
+	providerFilter    string
+	providerSelIdx    int
+	providerScrollOff int // first visible row of providerShown
 
 	mcpManager      *mcp.Manager
 	mcpServers      []config.MCPServerConfig
@@ -1003,7 +1016,9 @@ func (m *Model) layout() {
 		m.mcpView.SetSize(m.width, m.height)
 		return
 	case stateSelectingModel:
-		inputHeight = min(len(m.providerItems)+1, m.height/2)
+		// +1 for the picker's title line; the cap is the picker's window (see providerVisibleRows,
+		// which has to agree with this or the highlight scrolls off the edge of the box).
+		inputHeight = min(len(m.providerShown)+1, m.height/2)
 	case stateSelectingSession:
 		inputHeight = min(len(m.sessionList)+2, m.height/2)
 	case stateAwaitingConfirmation:

@@ -7,6 +7,7 @@ package tui_test
 // pendingQueue / steer / 状态机切换 / 表单等跨层交互 —— 单测覆盖不到的部分。
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/monsterxx03/tachi/itest/harness"
@@ -165,6 +166,61 @@ var _ = ginkgo.Describe("TUI 交互", func() {
 		s.Expect("切换后回答", specTimeout)
 		s.WaitIdle(1, specTimeout)
 		gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
+	})
+
+	// M2.7 是 /model 选择器的两个"列表比屏幕长"的事实：**过滤**（打字缩窄）和**滚动**（高亮
+	// 走到底时窗口跟着走）。这台机器的配置里有几十个模型，而终端只放得下十来行 —— 选择器原来把
+	// 整个列表一次画出来，超出的部分连同高亮一起看不见，读者向下按到某一条就再也找不到它在哪。
+	//
+	// 断言全部落在**屏幕上**，因为那正是这个 bug 的形状：整条链（按键 → 索引 → 视口）只在
+	// "有没有画出来"这一件事上出错，而 model/index 的单元测试看不见它。
+	ginkgo.It("M2.7 /model 列表：能过滤，也能滚到最后一行", func(_ ginkgo.SpecContext) {
+		names := make([]string, 0, 24)
+		for i := 1; i <= 24; i++ {
+			names = append(names, fmt.Sprintf("mock-%02d", i))
+		}
+		// mock + 24 = 25 行，而 120×40 的终端给选择器 40/2 = 20 行（含标题），所以最后一行
+		// 一开始必须在屏幕之外 —— 否则下面那条"滚过去才看得见"的断言证明不了任何事。
+		mock, home := startMock(mockllm.ProtocolOpenAI, nil, harness.WithExtraProviders(names...))
+		s := launch(home, mock)
+
+		s.Command("/model")
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("25 个"))
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("mock-01"))
+		gomega.Consistently(s.Screen, 200*time.Millisecond).ShouldNot(gomega.ContainSubstring("mock-24"),
+			"列表一共 25 行、屏幕只放得下标题+19 行，最后一行一开始不该在屏幕上")
+
+		// 按到底：窗口跟着高亮走，最后一行现在看得见。
+		for i := 0; i < 24; i++ {
+			s.Key("down")
+		}
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("mock-24"),
+			"高亮走到底之后窗口没有跟着滚：最后一行永远看不见")
+
+		// 过滤：打完整的名字，列表只剩它，标题报出 1/25。
+		s.Type("mock-07")
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("1/25"))
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("mock-07"))
+		gomega.Consistently(s.Screen, 200*time.Millisecond).ShouldNot(gomega.ContainSubstring("mock-08"),
+			"过滤之后别的行还在屏幕上")
+
+		// 过滤命中 model 而不是名字：model 是 "<name>-model"，所以一个只出现在 model 里的串
+		// （"-model"）会命中全部 25 行 —— 这证明第二半也在被搜。
+		for i := 0; i < len("mock-07"); i++ {
+			s.Key("backspace")
+		}
+		s.Type("-model")
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("25/25"))
+
+		// 清掉过滤并选中过滤出来的那条：Enter 用的是**看得见的那一行**，不是全列表里的下标。
+		for i := 0; i < len("-model"); i++ {
+			s.Key("backspace")
+		}
+		s.Type("mock-07")
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("1/25"))
+		s.Enter()
+		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("openai (mock-07-model)"),
+			"选中之后状态栏没有变成被过滤出来的那个模型")
 	})
 
 	ginkgo.It("M2.5 /sessions 列表并退出", func(_ ginkgo.SpecContext) {
