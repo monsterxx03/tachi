@@ -64,8 +64,13 @@ func StartOrAttachNode(ctx context.Context, cfg *config.Config) (*Handle, error)
 		// to find others without publishing itself, or the reverse.
 		Advertise:           cfg.Node.Discovery.Mdns.Advertise,
 		AdvertiseInterfaces: append([]string(nil), cfg.Node.Discovery.Mdns.Interfaces...),
-		Name:                cfg.Node.Name,
-		Description:         cfg.Node.Description,
+		// Discovery by hearsay, and how old a claim it will act on. Both are the operator's: the
+		// switch decides whether this node answers at all, the window decides when a peer's word about
+		// a machine is stale enough to be worth one connection instead of a schedule.
+		Gossip:      cfg.Node.Discovery.Gossip.Enabled,
+		ContactTTL:  cfg.Node.Discovery.ContactTTL,
+		Name:        cfg.Node.Name,
+		Description: cfg.Node.Description,
 		// What this machine's agent can do, published beside the node's own capability of running
 		// a remote turn. Read here, once, because a Card is a description published at startup.
 		Skills:   MachineSkills(),

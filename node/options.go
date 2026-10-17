@@ -152,6 +152,20 @@ type Options struct {
 	// not an interface here is an error rather than a fallback.
 	AdvertiseInterfaces []string
 
+	// Gossip is whether the remote surface answers a peer asking who else this machine can vouch for
+	// (config `node.discovery.gossip.enabled`, design §五). The sending side is what actually holds
+	// that answer, so this flag decides whether the ROUTE exists at all; whether there is anything to
+	// say is a question about the sending side (node/gossip.go registeredMesh).
+	Gossip bool
+
+	// ContactTTL is how long a machine this node has proved stays worth talking about (config
+	// `node.discovery.contact_ttl`). The gossip route uses it to decide when a peer's claim about a
+	// machine is old enough to be worth ONE connection rather than a retry schedule
+	// (node/gossip.go gossipCandidates). Zero means the built-in default.
+	//
+	// It is read at startup, like everything else this surface answers with.
+	ContactTTL time.Duration
+
 	// Executor is the receiving side's agent: it turns an accepted task into events.
 	// Nil means the built-in placeholder that echoes the task text — the seam a test
 	// injects through. The real one is the task runner (node/runner.go), wired by

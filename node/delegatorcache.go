@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -69,17 +70,37 @@ func DiscoveryOf(cfg *config.Config) Discovery {
 		return Discovery{}
 	}
 	m := cfg.Node.Discovery.Mdns
-	return Discovery{Enabled: m.Enabled, Interfaces: append([]string(nil), m.Interfaces...)}
+	return Discovery{
+		Enabled:    m.Enabled,
+		Interfaces: append([]string(nil), m.Interfaces...),
+		Gossip:     cfg.Node.Discovery.Gossip.Enabled,
+		TTL:        cfg.Node.Discovery.TTL,
+		ContactTTL: cfg.Node.Discovery.ContactTTL,
+	}
 }
 
-// Discovery is how this machine looks for nodes on its own (config `node.discovery.mdns`).
+// Discovery is how this machine looks for nodes on its own (config `node.discovery`): multicast on its
+// own network, and — separately — asking peers it already knows who else they can vouch for.
 //
 // It is a plain value rather than the config struct so that a cache does not have to be handed a
-// Config, and so that "off" is the zero value: every existing caller gets the behaviour it had.
+// Config, and so that "off" is the zero value: every existing caller gets the behaviour it had. The
+// two sources are separate switches and one store: either may feed it, and what it has proved is one
+// answer either way (node/sightings.go).
 type Discovery struct {
 	Enabled    bool
 	Interfaces []string
+	// Gossip is the hearsay half (config `node.discovery.gossip.enabled`).
+	Gossip bool
+	// TTL and ContactTTL are the store's two windows (config `node.discovery.ttl` / `contact_ttl`).
+	// Zero means "whatever the store shipped with", which is what an unconfigured process and a
+	// hand-built Config both get.
+	TTL        time.Duration
+	ContactTTL time.Duration
 }
+
+// any reports whether either source is on, which is what decides whether the discovery side exists at
+// all.
+func (d Discovery) any() bool { return d.Enabled || d.Gossip }
 
 // NewDelegatorCache returns a cache that builds senders with OpenSender, and — when discovery is on
 // — browses for nodes as those senders come and go.
@@ -88,7 +109,13 @@ type Discovery struct {
 // verifies a machine the directory did not have: a row that has appeared, and the one moment a reader
 // who is already looking needs to be told (see mdnsBrowser.onSighting).
 func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger, onSighting func()) *DelegatorCache {
-	return &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, onSighting: onSighting, openFunc: OpenSender}
+	c := &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, onSighting: onSighting, openFunc: OpenSender}
+	// Registered here rather than where discovery starts: the gossip route is answered by the NODE
+	// SERVICE, which is built from config and has no way to reach this object — and an answer from a
+	// process whose sending side has not come up yet is legitimately "I know nobody" rather than an
+	// error (node/gossip.go currentMesh).
+	registerMesh(c)
+	return c
 }
 
 // Close stops discovery, and it is TERMINAL: nothing asked of this cache afterwards starts a browser
@@ -116,6 +143,68 @@ func (c *DelegatorCache) Close() {
 	if store != nil {
 		store.Close()
 	}
+	// Last, and it says which mesh it is unregistering: a process that closed one cache and opened
+	// another must not lose the second one's registration here.
+	clearMesh(c)
+}
+
+// vouches is what this process may say about other machines: the ones it has proved ITSELF, recently
+// enough to stand behind, each with the address that answered (node/gossip.go mesh).
+//
+// "Recently enough" is contactTTL, and it is shorter than the hour a row lives in the directory, for
+// the same reason the two numbers are different: what this machine will DIAL is its own business,
+// while what it will say about another machine to a third one is a statement it should be able to
+// stand behind.
+//
+// A sighting with no address recorded is skipped rather than guessed at — there is nothing to tell
+// anyone — which also means a machine this process has heard about and never reached is never repeated.
+func (c *DelegatorCache) vouches() []gossipEntry {
+	if c == nil {
+		return nil
+	}
+	// Read under the lock, then let it go: the store has a lock of its own, and this codebase's rule
+	// is one at a time.
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	recent := store.recent(store.contactWindow())
+	now := store.clock()
+	out := make([]gossipEntry, 0, len(recent))
+	for _, seen := range recent {
+		if seen.Served == "" {
+			continue
+		}
+		out = append(out, gossipEntry{
+			ID:   seen.Identity,
+			Addr: seen.Served,
+			Age:  int(now.Sub(seen.Seen).Seconds()),
+		})
+	}
+	return out
+}
+
+// receive takes what a peer said and hands it to the same queue an announcement goes into: candidates,
+// each of which costs one connection before it can become a sighting (node/sightings.go).
+//
+// It drops everything when this process has no store — a machine that asked this node who it knows
+// cannot be answered, so there is nothing here to learn from either. That is the "no discovery side"
+// case, not an error: a node service can be hosted by a process that never opened a sending side.
+func (c *DelegatorCache) receive(cands []candidate) {
+	if c == nil || len(cands) == 0 {
+		return
+	}
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	if store == nil {
+		return
+	}
+	for _, cand := range cands {
+		store.feed(cand)
+	}
 }
 
 // startDiscovery brings the discovery side up the first time it is needed — the store every source
@@ -127,7 +216,7 @@ func (c *DelegatorCache) Close() {
 // answer to it is the state before discovery existed — this machine has to be told about peers. It
 // is said once in the log, and discovery stays off for this process.
 func (c *DelegatorCache) startDiscovery(ctx context.Context) {
-	if c.store != nil || !c.discovery.Enabled {
+	if c.store != nil || !c.discovery.any() {
 		return
 	}
 	// This machine's own identity, read HERE rather than by the caller: it is a disk read (and a key
@@ -140,28 +229,38 @@ func (c *DelegatorCache) startDiscovery(ctx context.Context) {
 		return
 	}
 	store := newSightingsStore(c.log)
-	browser, err := newMDNSBrowser(self, config.MdnsDiscoveryConfig{
-		Enabled:    c.discovery.Enabled,
-		Interfaces: c.discovery.Interfaces,
-	}, c.log, store)
-	if err != nil {
-		if c.log != nil {
-			c.log.Warn(ctx, "node: discovery is on but cannot start; you will have to configure peers",
-				"cause", err)
-		}
-		c.discovery.Enabled = false
-		return
-	}
+	store.setWindows(c.discovery.TTL, c.discovery.ContactTTL)
 	// The hook is handed over BEFORE anything starts: a sighting is what it is about, and a loop that
 	// was already running could verify one with nowhere to say so.
 	store.onSighting = c.onSighting
-	// Started together, and only once both could be built: a store with nothing feeding it and a
-	// browser with nowhere to put what it finds are each half of one thing. A second source is what
-	// will change this guard (it has to be able to start the store on its own); what it must not
-	// change is there being ONE store.
-	store.Start(context.WithoutCancel(ctx))
-	browser.Start(context.WithoutCancel(ctx))
-	c.store, c.browser = store, browser
+
+	// The multicast half, when it is on. A machine that cannot browse is not a machine that cannot
+	// discover — what fails here is about interfaces and ports, and the hearsay half needs neither —
+	// so this failure turns off THIS source and says so once, and leaves the rest of discovery alone.
+	if c.discovery.Enabled {
+		browser, err := newMDNSBrowser(self, config.MdnsDiscoveryConfig{
+			Enabled:    c.discovery.Enabled,
+			Interfaces: c.discovery.Interfaces,
+		}, c.log, store)
+		if err != nil {
+			if c.log != nil {
+				c.log.Warn(ctx, "node: mDNS discovery is on but cannot start; this machine has to be "+
+					"told about peers on its network, or find them by gossip", "cause", err)
+			}
+			c.discovery.Enabled = false
+		} else {
+			browser.Start(context.WithoutCancel(ctx))
+			c.browser = browser
+		}
+	}
+
+	if c.browser != nil || c.discovery.Gossip {
+		// The store comes up when it has a source: the browser that just started, or gossip — which
+		// feeds it from the other direction, since a peer's answer arrives at the node service rather
+		// than here (node/gossip.go, DelegatorCache.receive).
+		store.Start(context.WithoutCancel(ctx))
+		c.store = store
+	}
 }
 
 // For returns the sending side for this peer list, as the TOOL layer sees it, rebuilding it when the
@@ -206,10 +305,10 @@ func (c *DelegatorCache) ForSender(ctx context.Context, peers []config.PeerConfi
 	// With no configured peers there is still work to do when discovery is on: the whole point of it
 	// is a node that has no config line.
 	//
-	// Read under the lock, like every other read of discovery: startBrowser and selfID WRITE
-	// discovery.Enabled when the browser cannot come up, and the entry points ask this from several
-	// goroutines (a turn, the picker, a background probe).
-	if len(peers) == 0 && !c.discovery.Enabled {
+	// Read under the lock, like every other read of discovery: startDiscovery and selfID WRITE
+	// discovery when a source cannot come up, and the entry points ask this from several goroutines (a
+	// turn, the picker, a background probe).
+	if len(peers) == 0 && !c.discovery.any() {
 		return nil
 	}
 	key := peerSignature(peers) + "\x02" + discoverySignature(c.discovery)
@@ -295,13 +394,20 @@ func (c *DelegatorCache) selfID() string {
 	return identity.NodeID
 }
 
-// discoverySignature is the part of a rebuild key that belongs to discovery: the switch, and which
-// interfaces it browses on.
+// discoverySignature is the part of a rebuild key that belongs to discovery: both switches, and which
+// interfaces the multicast half browses on. Gossip belongs in it because the mesh the route answers
+// from IS this object (node/gossip.go): a sender built while gossip was off is a different sending
+// side from one built while it was on.
 func discoverySignature(d Discovery) string {
-	if !d.Enabled {
-		return "off"
+	mdns := "off"
+	if d.Enabled {
+		mdns = "on:" + strings.Join(d.Interfaces, ",")
 	}
-	return "on:" + strings.Join(d.Interfaces, ",")
+	gossip := "off"
+	if d.Gossip {
+		gossip = "on"
+	}
+	return mdns + "\x03" + gossip
 }
 
 // peerSignature is what a rebuild is keyed by.

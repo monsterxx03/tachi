@@ -466,7 +466,51 @@ type PeerConfig struct {
 // trustworthy: a discovered node still has to prove an identity over TLS before this machine will
 // name it, because anything on a local network can send a multicast packet (design §5).
 type DiscoveryConfig struct {
-	Mdns MdnsDiscoveryConfig `yaml:"mdns"`
+	Mdns   MdnsDiscoveryConfig   `yaml:"mdns"`
+	Gossip GossipDiscoveryConfig `yaml:"gossip"`
+
+	// TTL is how long a machine discovery found stays in the directory after the last time it was
+	// seen (node/sightings.go discoveryTTL). It is this machine's own choice rather than the
+	// announcement's: the announcement says how long its own records may be cached, not how long a
+	// person should keep seeing a row for a machine that went quiet.
+	//
+	// Zero means the built-in default (an hour), and that default lives in the code that spends it
+	// rather than here — one number, one place. It is read when the discovery side comes up, so
+	// changing it takes a restart: a running store keeps the window it was built with.
+	TTL time.Duration `yaml:"ttl,omitempty"`
+
+	// ContactTTL is how long a machine this process has PROVED stays worth talking about
+	// (node/sightings.go contactTTL): it bounds what this machine will vouch for when a peer asks, and
+	// how old a peer's claim about a machine may be before it is worth one connection instead of a
+	// retry schedule. Zero means the built-in default (ten minutes).
+	//
+	// It defaults shorter than TTL on purpose, and the two answer different questions: "may I still
+	// say I know this machine" versus "is the row still in the directory". Where being wrong means
+	// having told somebody else something false, the window is the tighter one.
+	ContactTTL time.Duration `yaml:"contact_ttl,omitempty"`
+}
+
+// GossipDiscoveryConfig is discovery by hearsay: asking a node this machine already knows who ELSE
+// it can vouch for (`/node/v1/gossip` on its A2A surface, over the same mutual TLS every delegation
+// already uses). It is what carries discovery past one network segment — multicast does not cross a
+// router, and a machine that was never configured anywhere is otherwise unreachable unless somebody
+// is on its LAN.
+//
+// It is off by default, and it is a leaf for the same reason mDNS is: a deployment that never turns
+// it on behaves exactly as it did before. What it can never do is decide that something is
+// trustworthy: a machine a peer named is a machine this one still has to reach and prove an identity
+// at before it becomes anything (design §三, docs/2026-10-15-a2a-gossip-design.md).
+type GossipDiscoveryConfig struct {
+	// Enabled is the whole of it: this machine asks its peers who they can vouch for, and answers
+	// when one asks it.
+	//
+	// One switch rather than two, and the reason is what the answer IS: a machine can only name
+	// machines it has itself reached, and every machine it reached it reached because it was allowed
+	// to — so asking to learn and agreeing to answer are the same decision about the same network.
+	// The cost of saying yes belongs in the same sentence: whoever can reach this node's A2A port can
+	// ask it who it knows (the node's stance on who MAY reach that port is unchanged: the network
+	// decides, and every caller is identified by its certificate).
+	Enabled bool `yaml:"enabled"`
 }
 
 // MdnsDiscoveryConfig is DNS-SD discovery over multicast DNS (`_tachi._tcp.local`).

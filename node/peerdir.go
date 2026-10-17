@@ -162,6 +162,12 @@ type discoveredPeer struct {
 	Identity string
 	// Addrs are the addresses the announcement resolved to (SRV + A/AAAA).
 	Addrs []string
+	// Served is the address that ANSWERED when this machine proved the identity — not necessarily the
+	// first one tried, and not necessarily any of the addresses above a moment later. It is kept for
+	// the one thing only evidence can support: saying where this machine actually reached the machine
+	// it is vouching for (node/gossip.go quotes it), and saying it in the log line that records the
+	// proof.
+	Served string
 	// Seen is when this was last observed.
 	Seen time.Time
 }

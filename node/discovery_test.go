@@ -109,14 +109,18 @@ func TestASightingNeedsTheProvenIdentityToMatchTheClaim(t *testing.T) {
 	require.Empty(t, b.store.sightings(), "an announcement is not a sighting")
 
 	// The machine at that address proves a DIFFERENT identity than the one announced.
-	b.store.setVerifier(func(context.Context, []string) (string, error) { return claimedID, nil })
+	b.store.setVerifier(func(context.Context, []string) (string, string, error) {
+		return claimedID, "https://192.168.1.9:7080", nil
+	})
 	require.True(t, b.store.verifyDue(context.Background()))
 	require.Empty(t, b.store.sightings(), "a claim that the handshake refutes is not a machine this one may list")
 	require.False(t, b.store.verifyDue(context.Background()), "and it is dropped rather than retried forever")
 
 	// The honest announcement, on the other hand, becomes one.
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7081"))
-	b.store.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	b.store.setVerifier(func(context.Context, []string) (string, string, error) {
+		return discoveredID, "https://192.168.1.9:7080", nil
+	})
 	require.True(t, b.store.verifyDue(context.Background()))
 	sightings := b.store.sightings()
 	require.Len(t, sightings, 1)
@@ -130,9 +134,9 @@ func TestACandidateThatDoesNotAnswerYetIsRetried(t *testing.T) {
 	b := testBrowser(t)
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
 	attempts := 0
-	b.store.setVerifier(func(context.Context, []string) (string, error) {
+	b.store.setVerifier(func(context.Context, []string) (string, string, error) {
 		attempts++
-		return "", errors.New("connection refused")
+		return "", "", errors.New("connection refused")
 	})
 
 	require.True(t, b.store.verifyDue(context.Background()))
@@ -151,7 +155,7 @@ func TestACandidateThatDoesNotAnswerYetIsRetried(t *testing.T) {
 func TestACandidateWithNoIdentityToProveIsDropped(t *testing.T) {
 	b := testBrowser(t)
 	b.observe(txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080"))
-	b.store.setVerifier(func(context.Context, []string) (string, error) { return "", nil })
+	b.store.setVerifier(func(context.Context, []string) (string, string, error) { return "", "", nil })
 
 	require.True(t, b.store.verifyDue(context.Background()))
 	require.False(t, b.store.verifyDue(context.Background()))
@@ -168,7 +172,9 @@ func TestASightingExpiresAnHourAfterItWasLastSeen(t *testing.T) {
 	a := txtAnnouncement("nas-dddd4444", discoveredID, "https://192.168.1.9:7080")
 	a.Seen = at
 	b.observe(a)
-	b.store.setVerifier(func(context.Context, []string) (string, error) { return discoveredID, nil })
+	b.store.setVerifier(func(context.Context, []string) (string, string, error) {
+		return discoveredID, "https://192.168.1.9:7080", nil
+	})
 	require.True(t, b.store.verifyDue(context.Background()))
 	require.Len(t, b.store.sightings(), 1)
 
@@ -189,9 +195,11 @@ func TestAConfirmedMachineKeepsEveryAddressItAnnounced(t *testing.T) {
 		"https://192.168.1.9:7080", "https://100.64.0.3:7080"))
 
 	var asked []string
-	b.store.setVerifier(func(_ context.Context, addrs []string) (string, error) {
+	b.store.setVerifier(func(_ context.Context, addrs []string) (string, string, error) {
 		asked = append([]string(nil), addrs...)
-		return discoveredID, nil
+		// The SECOND address is the one that answered, which is the case the return value exists
+		// for: a peer with several addresses proves itself at one of them.
+		return discoveredID, addrs[len(addrs)-1], nil
 	})
 
 	require.True(t, b.store.verifyDue(context.Background()))
@@ -543,25 +551,29 @@ func TestAMachineIsReportedOnlyWhenItEntersTheDirectory(t *testing.T) {
 	s.onSighting = func() { entered <- "sighting" }
 
 	cand := candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.168:9990"}}
-	s.confirm(cand)
+	s.confirm(cand, "https://192.168.71.168:9990")
 	assertSighting(t, entered, "the first sighting of a machine")
+	require.Equal(t, "https://192.168.71.168:9990", s.recent(time.Hour)[0].Served,
+		"and the address that answered is kept: it is what a vouching answer quotes (node/gossip.go)")
 
 	// The same machine, announcing the same address: already listed, nothing to say.
-	s.confirm(cand)
+	s.confirm(cand, "https://192.168.71.168:9990")
 	assertNoSighting(t, entered)
 
 	// The same machine at an address it had not named before: a new place to dial, so it is news.
-	s.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990"}})
+	s.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990"}},
+		"https://192.168.71.169:9990")
 	assertSighting(t, entered, "a machine that moved to an address this process had not learned")
 
 	// And an announcement that brings back the FIRST address alongside the new one reports nothing
 	// new either: the address is one it already knows, whatever order it arrives in.
 	s.confirm(candidate{Identity: discoveredID, Addrs: []string{"https://192.168.71.169:9990",
-		"https://192.168.71.168:9990"}})
+		"https://192.168.71.168:9990"}}, "https://192.168.71.169:9990")
 	assertNoSighting(t, entered)
 
 	// A different machine is a different entry, whatever it announces.
-	s.confirm(candidate{Identity: claimedID, Addrs: []string{"https://192.168.71.168:9990"}})
+	s.confirm(candidate{Identity: claimedID, Addrs: []string{"https://192.168.71.168:9990"}},
+		"https://192.168.71.168:9990")
 	assertSighting(t, entered, "a second machine")
 }
 

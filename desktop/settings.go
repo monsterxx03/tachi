@@ -606,6 +606,12 @@ var settingsTable = []settingApply{
 		Note: "把本机公告到网络上：只有承载节点服务的进程会做；开了别人就能发现它，不用在你这边写配置行"},
 	{Key: "node.discovery.mdns.interfaces", Category: catAdvanced, Mode: applyRestart,
 		Note: "在哪些网卡上浏览/公告，如 en0、eth0；留空＝自动挑能用的那几个（排除 loopback、VPN 隧道、虚拟机网桥、只有 link-local 地址的网卡）"},
+	{Key: "node.discovery.gossip.enabled", Category: catAdvanced, Mode: applyRestart,
+		Note: "本机去找别人（不限于本网段的）与别人来找本机，都由这一个开关决定：问邻居它替谁背书；路由挂在远端 A2A 面上，节点服务起来时才决定它答不答"},
+	{Key: "node.discovery.ttl", Category: catAdvanced, Mode: applyRestart,
+		Note: "发现到的机器在目录里留多久（默认 1 小时，0／留空＝用内置默认）；这个窗口是建账本时读的，而一个进程只建一次账本"},
+	{Key: "node.discovery.contact_ttl", Category: catAdvanced, Mode: applyRestart,
+		Note: "本机肯替一台机器背书、以及把邻居的一条转述当成新鲜的有效期（默认 10 分钟，0／留空＝用内置默认）；同样是建账本时读的"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},

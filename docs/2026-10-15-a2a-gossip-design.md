@@ -1,6 +1,6 @@
 # Tachi 多节点协作：gossip 发现（转述）
 
-状态：**设计；阶段 0（`node/sightings.go`：把候选队列 + 已证实集合抽出来共享）已落地（2026-10-17），阶段 1–3 尚未实现。** 本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
+状态：**阶段 0、1 已落地（2026-10-17：`node/sightings.go` 的共享账本，以及 `node/gossip.go` 的服务端路由），阶段 2–3 尚未实现。** 本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
 
 > 这是日期方案，不是行为手册；配置形状与接口是设计示意。落地后把稳定下来的部分回写 `docs/agents/node.md`。
 
@@ -107,10 +107,12 @@ sequenceDiagram
 
 两种窗口，回答两个不同的问题。这**不是**被禁的那种「同一个问题两个答案」——那条禁令针对的是两套规则在决定同一件事（比如「这东西什么时候被删」）；这里是两件不同的事：
 
-| 窗口 | 多长 | 回答什么 | 谁刷新它 |
+| 窗口 | 默认 | 回答什么 | 谁刷新它 |
 | --- | --- | --- | --- |
 | `contactTTL` | 10 分钟 | 我愿不愿意替它背书（转述集合） | 读通一次卡片，或者完成一次交换 |
 | `discoveryTTL` | 1 小时（既有） | 那一行还在不在目录里 | 一次握手验证、**一次成功的交换**，或者它是一条配置行（人写的意图，不需要证据） |
+
+两者都可在配置里改（`node.discovery.ttl` / `contact_ttl`，零值是上面这两个），**默认值只写在花掉它的代码里**（`node/sightings.go` 的常量），配置那边只说「零值即默认」——两处写同一个数就是漂移的开始。改窗口要重启：store 只建一次。
 
 同一份证据（「我最近真的碰到过它」），两个松紧不同的用途：**对外说话要更紧**——说错话比少说一句糟。
 
@@ -211,18 +213,25 @@ sequenceDiagram
 
 ### 转述集合从哪来
 
-「我最近接触过谁」这件事只有**发送侧**知道（卡片缓存 + pin + 交换本身），而发送侧住在入口点的 `DelegatorCache` 里；节点服务是从配置造出来的（`StartOrAttachNode(ctx, cfg)`），两者之间今天没有接线。所以这里要一个**显式的注册点**：
+「我最近接触过谁」这件事只有**发送侧**知道（卡片缓存 + pin + 交换本身），而发送侧住在入口点的 `DelegatorCache` 里；节点服务是从配置造出来的（`StartOrAttachNode(ctx, cfg)`），两者之间今天没有接线。所以这里要一个**显式的注册点**，而且它是**双向**的——出去的问、进来的答，读的是同一份东西：
 
 ```go
-// node/gossip.go
-// 本进程的本地发送侧，若它有：由持有 DelegatorCache 的入口点在构造时登记、Close 时撤销。
-// 读它的只有 gossip 的应答侧——「我最近接触过谁」是发送侧才知道的事。
-func SetReachableSource(fn func() []gossipEntry)
+// node/gossip.go（已落地）
+// mesh 是本进程的发现侧在 gossip 路由眼里的样子：它可以说别人什么，以及别人说的话往哪儿去。
+// 一个进程一份，由拥有 store 的那个对象实现（DelegatorCache），NewDelegatorCache 登记、Close 撤销。
+type mesh interface {
+	vouches() []gossipEntry    // 出去：我亲手证明过、且还在 contactTTL 内的机器，各带「应答的那个地址」
+	receive(cands []candidate) // 进来：一条声称，进同一个候选队列（一次握手之后才算数）
+}
 ```
+
+（实现时补上的一处：`vouches` 要说的「我拨通的那个地址」原先谁都不知道——验证的契约只回一个身份。所以 store 的 `verify` 现在回三样：证明的身份、**应答的地址**、错误，而那个地址被记进 `discoveredPeer.Served`。它也是这条链上唯一有证据的地址，配置里的、声称的都不算。）
 
 没登记（或这台机器根本没有发送侧）→ 应答为空。这是诚实的答案：**我此刻没有任何东西可以为它背书**。注入式函数在这个代码库里是现成的形状（`browser.setVerifier`、`PeerList` 的探测函数都是从外面注入的），所以这不是新的模式。
 
-它是**进程级**的一个函数指针，**后登记者为准**，`Close` 时撤销：一个进程里只会有一个 `DelegatorCache`（TUI 的 `m.delegators`、桌面的 `d.delegator`、channel 的一个字段），而节点服务是从配置造出来的、拿不到调用者的对象——这就是为什么这里必须有一个全局，而它只被读、只存一个函数值。这个包对「进程全局」的警惕（`DelegatorCache` 的注释专门嫌弃过）针对的是**状态**，不是**一个注入的读取口**。
+它是**进程级的一个注册口**（`registerMesh` / `clearMesh`），**后登记者为准**，`Close` 时撤销：一个进程里只会有一个 `DelegatorCache`（TUI 的 `m.delegators`、桌面的 `d.delegator`、channel 的一个字段），而节点服务是从配置造出来的、拿不到调用者的对象——这就是为什么这里必须有一个全局。
+
+**它不是「一个注入的读取口」，这一点值得说清**：落地的 `mesh` 是接口，两半一个读、一个写——`vouches` 从本机账本里读，`receive` 把邻居说的话**写进本机的候选队列**。这个包对「进程全局」的警惕（`DelegatorCache` 的注释专门嫌弃过）针对的是**状态**；这里放的是一个**对象**（拥有 store 的那个 cache），不是第二份状态——状态仍然只有那一个 store，注册口决定的只是「哪一个实例在应答」。限定它的是三条：只在构造时登记一次、`Close` 撤销**且认人**（关掉旧的不会把新的那份撤掉）、没登记就是空答且收到的条目直接丢掉。
 
 被否掉的替代：**只转述 pin 记录里的身份**。它不需要接线（pin 就在节点自己的数据目录里），但 pin 没有 `last_seen` 字段——只有 `first_seen`——所以它会把几个月前见过、后来搬走了的地址一直转述出去。而 §三 那个 `contactTTL` 恰恰就是它缺的新鲜度（只是活在内存里，不落盘：这是可重建的信息，不值得多一个要维护的文件）。多一次白拨是一回事，把「我见过」当成「我保证」是另一回事。
 
@@ -232,7 +241,9 @@ func SetReachableSource(fn func() []gossipEntry)
 | --- | --- |
 | 只拨私网 / 链路本地 | 复用 `isLocalAddr`。它已经认 CGNAT `100.64/10`，所以网格地址天生合法，公网地址天生被丢 |
 | 验证速率 | **和 mDNS 共用同一个候选队列、同一个 `verifyLoop`**：一个 tick 一条连接，无论网上有多少包。两套循环各拨各的 = 拨号速率翻倍，所以这里必须是同一个 |
-| 队列不被挤爆 | 候选队列与请求体各自设上限，**复用现成的 `maxDiscoveredPeers`（64）**，不新增魔法数 |
+| 队列不被挤爆 | 候选队列与请求体各自设上限，**复用现成的 `maxDiscoveredPeers`（64）**，不新增魔法数。**已落地**：请求体那半是 `maxGossipEntries`，队列那半是 `store.feed` 里的 `maxPendingCandidates`（满了拒新身份）。 |
+| 失败有尽头 | 一个候选最多被拨 `maxCandidateAttempts`（5）次就丢，**已落地**（`store.reschedule`）：它还在就再公告一次，以全新候选、满额预算回来，所以是「有界」而不是「被拉黑」。没有这一条，任何一次失败的候选都是一条永不结束的重试。 |
+| 一条条目带几个地址 | `self.addrs` 是 64 KiB 里的自由文本，**已落地**：一条条目最多 `maxGossipAddrs`（8）个地址，多的丢掉——否则一条条目就能递来一张上千个地址、每个一次带本机证书的连接的拨号表。 |
 | 先手压流言 | 同一 tick 有多个到期时，**本地看到的那条优先于转述来的**。排序规则是同一个道理的两次应用 |
 | 应答不做工作 | 纯内存读，见 §五 |
 | 转述的新鲜度 | 只转述 `contactTTL` 窗口内接触过的机器（§三）。**对外说的话要比自己的表更保守**：表里的行能活 1 小时，但替它背书只在这个更紧的窗口内 |
@@ -255,12 +266,12 @@ func SetReachableSource(fn func() []gossipEntry)
 
 | 位置 | 改什么 |
 | --- | --- |
-| `node/gossip.go`（新） | 客户端循环（选邻居、交换、退避、开关、`Close`）、服务端 handler 与它的 400、负载编解码、`SetReachableSource`，以及常量 `gossipPeriod` / `gossipFanout` / `gossipNudge` / `gossipTimeout` / `contactTTL` / `gossipMute` |
+| `node/gossip.go`（新） | **已落地**：服务端 handler 与它的 400/403/405/413、负载编解码、`gossipPath` / `maxGossipEntries` / `maxGossipBodyBytes` / `maxGossipAddrs`、以及注册口 `mesh`（`registerMesh` / `clearMesh` / `currentMesh`）。**还没做**：客户端循环（选邻居、交换、退避、开关、`Close`）与那批常量 `gossipPeriod` / `gossipFanout` / `gossipNudge` / `gossipTimeout` / `gossipMute` |
 | `node/remoteclient.go` | 加一个 `Exchange(ctx, e, payload)`：复用 `request` 与 `clientFor`（TLS pin、地址顺序、首字节超时），用自己的 `gossipTimeout` |
 | `node/a2a.go` | 远端 mux 上加一条 `/node/v1/gossip`（`a2asrv.WellKnownAgentCardPath` 的兄弟）；loopback 面拒绝；`enabled` 关时拒绝这条路由 |
 | `node/sightings.go`（新，从 `node/discovery.go` 抽出） | 「已证实集合 + 候选队列」收敛成一处：browser 与 gossip 都往里写。候选加来源，同 tick 的优先序靠它。**`peerDirectory.discover` 一行不用改** |
-| `node/delegatorcache.go` | `startBrowser` → `startDiscovery`（起两条腿）；`Close` 一起停；登记 / 撤销 `SetReachableSource`；维护挑选需要的三个小表：「最近接触过谁」（`contactTTL`，一次成功的交换或读通一次卡片都刷新它）、「上次问过谁」（轮转）、「谁刚失败过」（跳过）；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射）；缓存记住「最后一次被问到的 peers」给循环用（发送侧会随对端列表重建，循环需要一个稳定的访问点） |
-| `config/config.go` | `GossipDiscoveryConfig{ enabled }` 挂在 `node.discovery` 下，默认关；**同时删掉 `MdnsDiscoveryConfig.Advertise`**（§一.8：两处都只留 `enabled`），所以 mDNS 那一段的注释（讲「想找不想被找到」的那段）要一并重写。删字段只会踩到一处：`itest/run/discovery_test.go` 里那句 `Mdns.Advertise = true` |
+| `node/delegatorcache.go` | `startBrowser` → `startDiscovery`（起两条腿）；`Close` 一起停；登记 / 撤销 `mesh`；维护挑选需要的三个小表：「最近接触过谁」（`contactTTL`，一次成功的交换或读通一次卡片都刷新它）、「上次问过谁」（轮转）、「谁刚失败过」（跳过）；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射）；缓存记住「最后一次被问到的 peers」给循环用（发送侧会随对端列表重建，循环需要一个稳定的访问点） |
+| `config/config.go` | **已落地**：`GossipDiscoveryConfig{ enabled }` 与两个窗口（`ttl` / `contact_ttl`，零值即 `node/sightings.go` 里的默认）挂在 `node.discovery` 下，gossip 默认关。**还没做**：删掉 `MdnsDiscoveryConfig.Advertise`（§一.8：两处都只留 `enabled`）并把 mDNS 那一段的注释（讲「想找不想被找到」的那段）重写——删字段只会踩到一处：`itest/run/discovery_test.go` 里那句 `Mdns.Advertise = true` |
 | `node/peerdir.go` | `prependAddrs` 一家加一档（§三）；面板要显示来源，所以来源要能区分三个词（`local` 配置写的 / `mDNS` 本机看到的 / `gossip` 从邻居听来的，一台机器可以同时是前两个），并跟着 `discoveredPeer` 一起传上去 |
 | `node/peerboard.go` + Wails bindings | 面板那一列显示来源词：`local` / `mDNS` / `gossip`，可以是组合（`local · mDNS`）；**不显示具体是从哪台机器听来的**——那是日志的事（日志里写清 node id）。提醒那行**不加**——每轮都在付这笔 token |
 | `docs/agents/node.md` | 落地时同轮改：「发现（mDNS）」一节改成两条腿；写清转述只说自己证明过的、以及单向性为什么没被打破 |

@@ -58,26 +58,10 @@ const (
 	mdnsTXTScheme   = "scheme" // always https; a peer that could serve plaintext is not one
 	mdnsScheme      = "https"  // this program's only scheme for a peer (node/peers.go checkPeerURL)
 
-	// discoveryTTL is how long a machine that discovery alone found stays in the directory after the
-	// last time it was seen. An hour is this machine's own choice rather than the announcement's TTL:
-	// the announcement says how long its own records may be cached, not how long a person should keep
-	// seeing a row for a node that went quiet (design §一.8).
-	discoveryTTL = time.Hour
-
-	// discoveryRetry is how long a candidate that could not be verified waits before it is tried
-	// again. A node that is still starting up announces itself before it can answer, so a failure is
-	// the ordinary first result rather than a reason to forget it.
-	discoveryRetry = 30 * time.Second
-
-	// discoveryTick paces the verification loop. Verification is a connection per candidate, and a
-	// candidate is re-verified on a retry schedule rather than on every packet: a busy network would
-	// otherwise turn announcements into connections at whatever rate they arrive.
-	discoveryTick = 2 * time.Second
 )
 
-// The sightings store is where the three numbers above are spent: it owns the candidate queue, the
-// confirmed set and the verification loop, and mDNS is only one of the things that feed it
-// (node/sightings.go).
+// The numbers that pace and expire discovery (discoveryTTL, discoveryRetry, discoveryTick,
+// contactTTL) live with the store that spends them: node/sightings.go.
 
 // announcement is one DNS-SD announcement as it ARRIVED. Every field is untrusted text from whoever
 // sent the packet, and the shape of this type says so: nothing here is used without another check.

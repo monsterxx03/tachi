@@ -960,24 +960,28 @@ func deriveTitle(prompt string) string {
 }
 
 // verifierOf answers the one question discovery has about a candidate: which identity does the
-// machine at this address prove?
+// machine at this address prove — and, because the answer is only true AT an address, which address
+// answered.
 //
 // It is a card read, because that is the cheapest authenticated request there is, and the answer does
 // not come from the card: it comes from the TLS handshake underneath it, out of the pin record the
 // handshake writes (node/tls.go). A candidate that presents no certificate, or whose card cannot be
 // read, is a candidate that proves nothing — which is an ordinary outcome for a machine still
 // starting up, and the browser retries rather than believing the packet.
-func (c *remoteClient) verifierOf() func(ctx context.Context, addrs []string) (string, error) {
-	return func(ctx context.Context, addrs []string) (string, error) {
+//
+// The address comes back with the identity because the two are what a sighting IS (node/sightings.go
+// confirm): one machine may have several addresses and only one of them has been reached.
+func (c *remoteClient) verifierOf() func(ctx context.Context, addrs []string) (proved, served string, err error) {
+	return func(ctx context.Context, addrs []string) (string, string, error) {
 		e := peerEntry{Addrs: append([]string(nil), addrs...)}
 		_, served, err := c.fetchCard(ctx, e)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		// The pin is filed under the address that ANSWERED, which is not necessarily the first one
 		// tried — so the identity is read back from there rather than assumed.
 		id, _ := c.known.pinnedIdentityAt(served)
-		return id, nil
+		return id, served, nil
 	}
 }
 

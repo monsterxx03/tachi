@@ -159,6 +159,10 @@ func startA2ASurface(o Options, store *taskStore, identity *Identity) (*a2aSurfa
 	}
 	mux.Handle("/", protocol)
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
+	// The private route for discovery by hearsay, beside the Card rather than behind the A2A handler:
+	// it is not a spec route, so its refusals are this node's own words, and it needs no task store
+	// (node/gossip.go explain what an answer means, which is "one candidate each").
+	mux.Handle(gossipPath, gossipHandler(o.Gossip, identity.NodeID, o.ContactTTL, o.Logger))
 
 	srv := &http.Server{
 		Handler:           limitBody(mux, maxRequestBodyBytes),
