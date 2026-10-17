@@ -477,6 +477,47 @@ func (s *sightingsStore) confirm(cand candidate, served string) {
 	}
 }
 
+// touch records one CONTACT this machine made itself — a round it asked and got an answer to, or a
+// card it read — as opposed to a claim about a machine that somebody else made.
+//
+// It exists because there are two ways to be in contact with a machine and only one of them goes
+// through the queue: a claim arrives as a candidate and confirm writes the sighting, while a
+// connection this machine STARTS has no claim behind it — and the design counts both ("一次成功的交换
+// 必须算作一次接触", and the two windows' table: 读通一次卡片，或者完成一次交换). Without this, a machine
+// this process talks to every few minutes would never be one it may vouch for, simply because nobody
+// ever named it in a candidate — and a mesh whose reach depends on real reachability (design §一.4)
+// would be narrower than the evidence this machine actually holds.
+//
+// What it is NOT is a way in for a stranger: it is only called after a handshake that proved an
+// identity (node/remoteclient.go contact reads that identity back out of the pin the handshake just
+// filed), and the row it writes is keyed by that identity — the same key the directory merges on, so
+// a machine that is both configured and reached stays ONE row. It therefore mints no sighting this
+// machine has no evidence for; it only keeps what it has proved fresh enough to stand behind.
+//
+// Nothing calls onSighting: a machine that just answered a request from here is one the directory
+// already has a row for (its config line, or the sighting it entered by), so no reader is looking at
+// something that appeared.
+func (s *sightingsStore) touch(identity, served string) {
+	if s == nil || !IsNodeID(identity) || served == "" {
+		return
+	}
+	s.mu.Lock()
+	prev, had := s.seen[identity]
+	next := prev
+	next.Identity = identity
+	next.Served = served
+	next.Seen = s.clock()
+	if had {
+		// The address that just answered goes first, and one learned earlier is not dropped: the same
+		// rule confirm applies, for the same reason (it is where this machine really got through).
+		next.Addrs = prependAddrs(prev.Addrs, []string{served})
+	} else {
+		next.Addrs = []string{served}
+	}
+	s.seen[identity] = next
+	s.mu.Unlock()
+}
+
 // sightings is the store's answer for the directory: the machines it has VERIFIED and seen recently,
 // in a stable order.
 //

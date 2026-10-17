@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,9 @@ type DelegatorCache struct {
 	// browser is that browser, started the first time anyone asks for a sender. Nil while discovery
 	// is off, which is the default.
 	browser *mdnsBrowser
+	// gossip is the hearsay half's loop (node/gossip.go), started beside the store and stopped with
+	// it. Nil while gossip is off, which is the default.
+	gossip *gossipLoop
 	// closed is set by Close and read under mu, and it is what makes Close terminal: a sender asked
 	// for after it must come back nil rather than start a second browser (the cache is not rebuilt by
 	// then — an entry point is on its way out, and a goroutine still winding down may still ask).
@@ -70,13 +74,44 @@ func DiscoveryOf(cfg *config.Config) Discovery {
 		return Discovery{}
 	}
 	m := cfg.Node.Discovery.Mdns
-	return Discovery{
+	d := Discovery{
 		Enabled:    m.Enabled,
 		Interfaces: append([]string(nil), m.Interfaces...),
 		Gossip:     cfg.Node.Discovery.Gossip.Enabled,
 		TTL:        cfg.Node.Discovery.TTL,
 		ContactTTL: cfg.Node.Discovery.ContactTTL,
 	}
+	// Where this machine says it can be reached, when the operator said. This is the ONE mapping of
+	// that key into the sending side (the node service reads the same key for its own Card,
+	// node/config.go), and it stays empty rather than guessed: the TCP source address a peer sees is an
+	// exit or a temporary port, never an A2A listening address (node/gossip.go). Only an address a peer
+	// could actually dial reaches the loop (gossipSelfAddrs), and `listen` is deliberately not a second
+	// source: a derived address can be the loopback one, which would name the machine that is being
+	// told about it.
+	if url := strings.TrimSpace(cfg.Node.PublicURL); url != "" {
+		d.SelfAddrs = []string{url}
+	}
+	return d
+}
+
+// gossipSelfAddrs keeps the addresses worth putting in `self.addrs`: the ones a peer could even try
+// to dial (node/gossip.go isGossipAddr — https, and an address on a private, link-local or CGNAT
+// network).
+//
+// The check is the RECEIVING side's own, applied before the claim goes out, because the alternative is
+// sending something the far end silently drops: `public_url` in the shape config.go's own example
+// shows it (`https://nas.tail-scale.ts.net:7080`, a name rather than an address) would be a switch
+// that looks on and introduces this machine to nobody. What is dropped is said out loud where the loop
+// is built (startDiscovery) rather than here, because this is a pure function and the operator needs
+// to hear about it once.
+func gossipSelfAddrs(addrs []string) []string {
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if isGossipAddr(addr) {
+			out = append(out, addr)
+		}
+	}
+	return out
 }
 
 // Discovery is how this machine looks for nodes on its own (config `node.discovery`): multicast on its
@@ -91,6 +126,14 @@ type Discovery struct {
 	Interfaces []string
 	// Gossip is the hearsay half (config `node.discovery.gossip.enabled`).
 	Gossip bool
+	// SelfAddrs is where this machine says it can be reached, sent as `self.addrs` with every gossip
+	// exchange (config `node.public_url`, and DiscoveryOf is the only place that mapping happens).
+	//
+	// One ADDRESS in a list rather than one string, because that is the shape addresses have everywhere
+	// else here (a peer entry, a card, an announcement), and a receiver merges what it is given into an
+	// address set either way. Empty is normal: a process that hosts no node service has no address to
+	// name, and the field is optional on the wire (node/gossip.go selfPayload).
+	SelfAddrs []string
 	// TTL and ContactTTL are the store's two windows (config `node.discovery.ttl` / `contact_ttl`).
 	// Zero means "whatever the store shipped with", which is what an unconfigured process and a
 	// hand-built Config both get.
@@ -131,12 +174,16 @@ func (c *DelegatorCache) Close() {
 	// The switch goes off with it, so that the two ways of asking "may discovery run" agree: the flag
 	// is what stops a sender being built, this is what makes the value itself true.
 	c.discovery.Enabled = false
-	browser, store := c.browser, c.store
-	c.browser, c.store = nil, nil
+	browser, store, gossip := c.browser, c.store, c.gossip
+	c.browser, c.store, c.gossip = nil, nil, nil
 	c.current = nil
 	c.mu.Unlock()
-	// The producer first, then what it fed. Neither wait is on anything another package owns, so this
-	// is bounded by one in-flight connection at worst.
+	// The asker first, then the producer, then what it fed. Neither wait is on anything another
+	// package owns, so this is bounded by one in-flight connection at worst — and the loop must stop
+	// before the store it feeds and the sender it reads.
+	if gossip != nil {
+		gossip.Close()
+	}
 	if browser != nil {
 		browser.Close()
 	}
@@ -207,6 +254,44 @@ func (c *DelegatorCache) receive(cands []candidate) {
 	}
 }
 
+// neighbours is the directory as the gossip loop pools from it: one entry per machine this machine may
+// ask, read from the sending side the last peer list produced (node/gossip.go gossipSide).
+//
+// It is the DIRECTORY rather than a list of its own, and that is the whole of the neighbour rule (§四):
+// a configured line is in it (asking it is its first contact), a machine this machine has proved is in
+// it, and a machine that arrived by hearsay is not — until its own handshake has happened, at which
+// point it is a sighting like any other. Nil when no sending side has been built yet, which is a round
+// with nobody to ask rather than an error.
+func (c *DelegatorCache) neighbours() []peerEntry {
+	s := c.senderNow()
+	if s == nil {
+		return nil
+	}
+	return s.peers.Entries()
+}
+
+// exchange runs one round trip through the sending side's own client, so that the gossip route inherits
+// the TLS pin, the address order and the per-attempt deadlines every other call has (the only thing of
+// its own is the budget, node/remoteclient.go Exchange).
+func (c *DelegatorCache) exchange(ctx context.Context, e peerEntry, payload []byte) ([]byte, error) {
+	s := c.senderNow()
+	if s == nil {
+		return nil, errors.New("node: no sending side to gossip from")
+	}
+	return s.client.Exchange(ctx, e, payload, gossipTimeout)
+}
+
+// senderNow is the sending side this cache last built, under the lock: what the loop and the two
+// methods above read, and the reason a sender that was never asked for is nil rather than a rebuild.
+func (c *DelegatorCache) senderNow() *Sender {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.current
+}
+
 // startDiscovery brings the discovery side up the first time it is needed — the store every source
 // feeds (node/sightings.go), and with mDNS on, the browser that is its first source. Called with
 // c.mu held, and safe to call when it is already up.
@@ -260,6 +345,27 @@ func (c *DelegatorCache) startDiscovery(ctx context.Context) {
 		// than here (node/gossip.go, DelegatorCache.receive).
 		store.Start(context.WithoutCancel(ctx))
 		c.store = store
+	}
+
+	if c.discovery.Gossip {
+		// The loop is the OTHER direction of the same switch: it asks, and what it learns comes back
+		// through this object into the store above. It reads the store's own contact window, because
+		// the question a received claim is judged by ("how old is too old to be worth a retry
+		// schedule") is asked of this machine's clock and this machine's config.
+		//
+		// The addresses it introduces itself by are filtered to the ones a peer could dial, and an
+		// operator whose `public_url` is none of them hears about it once, here: the far end drops such
+		// a claim without a word, so silence on this side is how a switch ends up looking on while it
+		// does nothing (gossipSelfAddrs).
+		selfAddrs := gossipSelfAddrs(c.discovery.SelfAddrs)
+		if len(c.discovery.SelfAddrs) > 0 && len(selfAddrs) == 0 && c.log != nil {
+			c.log.Warn(ctx, "node: node.public_url is not an address a peer could dial — it has to be "+
+				"an https address on a private, link-local or CGNAT network — so gossip will not "+
+				"introduce this machine", "public_url", c.discovery.SelfAddrs[0])
+		}
+		loop := newGossipLoop(c, self, selfAddrs, store.contactWindow(), c.log)
+		loop.Start(context.WithoutCancel(ctx))
+		c.gossip = loop
 	}
 }
 

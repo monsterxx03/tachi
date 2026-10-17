@@ -1,6 +1,6 @@
 # Tachi 多节点协作：gossip 发现（转述）
 
-状态：**阶段 0、1 已落地（2026-10-17：`node/sightings.go` 的共享账本，以及 `node/gossip.go` 的服务端路由），阶段 2–3 尚未实现。** 本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
+状态：**阶段 0、1、2 已落地（2026-10-17：`node/sightings.go` 的共享账本，以及 `node/gossip.go` 的服务端路由与客户端循环），阶段 3 尚未实现。** 本文接在 `2026-10-14-a2a-discovery-design.md` 之后——那份定的是「候选面 + 连上即认」这条管道，本文给它加第三个供给者。已落地的前提不重复论证：身份从证书推出（`NodeIDFor`）、双向 TLS、pin 以 `node_id` 为键、一条公告必须先过一次握手才能变成目录里的一行。
 
 > 这是日期方案，不是行为手册；配置形状与接口是设计示意。落地后把稳定下来的部分回写 `docs/agents/node.md`。
 
@@ -182,7 +182,7 @@ sequenceDiagram
 
 1. **「变化」的判据是目录的 CONTENT 变了**（多了一个身份，或者某个身份多了一条地址），**不是**「这一轮有人答话」。若把后者算成变化，每一轮都会把下一轮提前，快节拍就永远停不下来。这里有一个很具体的陷阱：**`age` 每轮都在变**，所以「我发出去的负载和上次不一样」这个判据是错的，它每一轮都会成立；判据必须是身份 + 地址的**集合**，不能带上任何时间戳。同一件事在 mDNS 那边已经解决过一次：`sameAddrs` 按集合比（它的注释写的就是「顺序是『谁最后说话』、每次都变，不算变化」），`PeerList.SetOnChange` 也是这条——「只看谁被答复、答复说了什么，不看取答案的时刻」。
 2. **一轮什么都没变 → 不提前 → 回到节拍。** 所以稳态的定义就是「一轮改变不了任何东西」，而这件事由系统自己判出来，不需要谁宣布收敛。
-3. **提前量有一个下限间隔**（防抖，约一个节拍）。变化是**一串**而不是一个：一轮可能带回来 5 台机器，而验证是「一 tick 一个连接」，于是「变化」会挨个到来；没有这道防抖，那一串会把节拍锁在快档上。
+3. **提前量有一个下限间隔**（防抖，`gossipDebounce` = 两个 `gossipNudge`）。变化是**一串**而不是一个：一轮可能带回来 5 台机器，而验证是「一 tick 一个连接」，于是「变化」会挨个到来；没有这道防抖，那一串会把节拍锁在快档上。**这个窗口的尺度由 `gossipNudge` 定，不是由 tick 定**：它必须盖住「第一次提前 + 那一轮（在 nudge 之后）跑掉」，否则那一轮之后才被验证的机器会各自再拉早一轮，节拍照样停在快档上。
 
 | 轮次 | 何时 | 这一轮 | 下一轮 |
 | --- | --- | --- | --- |
@@ -266,11 +266,11 @@ type mesh interface {
 
 | 位置 | 改什么 |
 | --- | --- |
-| `node/gossip.go`（新） | **已落地**：服务端 handler 与它的 400/403/405/413、负载编解码、`gossipPath` / `maxGossipEntries` / `maxGossipBodyBytes` / `maxGossipAddrs`、以及注册口 `mesh`（`registerMesh` / `clearMesh` / `currentMesh`）。**还没做**：客户端循环（选邻居、交换、退避、开关、`Close`）与那批常量 `gossipPeriod` / `gossipFanout` / `gossipNudge` / `gossipTimeout` / `gossipMute` |
-| `node/remoteclient.go` | 加一个 `Exchange(ctx, e, payload)`：复用 `request` 与 `clientFor`（TLS pin、地址顺序、首字节超时），用自己的 `gossipTimeout` |
+| `node/gossip.go`（新） | **已落地**：服务端 handler 与它的 400/403/405/413、负载编解码、`gossipPath` / `maxGossipEntries` / `maxGossipBodyBytes` / `maxGossipAddrs`、注册口 `mesh`，以及客户端循环 `gossipLoop`（挑邻居、一轮交换、退避、`Close`）与那批常量 `gossipPeriod` / `gossipFanout` / `gossipNudge` / `gossipTimeout` / `gossipMute` / `gossipDebounce` |
+| `node/remoteclient.go` | **已落地**：`Exchange(ctx, e, payload, budget)` 复用 `requestAt` 与 `clientFor`（TLS pin、地址顺序、首字节超时）；预算由调用方给（缓存给的是 `gossipTimeout`），而它在多个地址之间怎么分是 `attemptBudget` 的事——一个短预算不能全花在前面几个死地址上，最后那个（配置入口）要留下一次尝试的量。**成功即一次「接触」**（`contact` → `sightingsStore.touch`：身份从那一次握手刚写下的 pin 读回，地址是应答的那个），读通一次卡片同样算（`fetchCard`），「一次成功的交换必须算作一次接触」（§三）由此落地 |
 | `node/a2a.go` | 远端 mux 上加一条 `/node/v1/gossip`（`a2asrv.WellKnownAgentCardPath` 的兄弟）；loopback 面拒绝；`enabled` 关时拒绝这条路由 |
 | `node/sightings.go`（新，从 `node/discovery.go` 抽出） | 「已证实集合 + 候选队列」收敛成一处：browser 与 gossip 都往里写。候选加来源，同 tick 的优先序靠它。**`peerDirectory.discover` 一行不用改** |
-| `node/delegatorcache.go` | `startBrowser` → `startDiscovery`（起两条腿）；`Close` 一起停；登记 / 撤销 `mesh`；维护挑选需要的三个小表：「最近接触过谁」（`contactTTL`，一次成功的交换或读通一次卡片都刷新它）、「上次问过谁」（轮转）、「谁刚失败过」（跳过）；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射）；缓存记住「最后一次被问到的 peers」给循环用（发送侧会随对端列表重建，循环需要一个稳定的访问点） |
+| `node/delegatorcache.go` | **已落地**：`startBrowser` → `startDiscovery`（起两条腿）；`Close` 先停循环、再停浏览器与 store；登记 / 撤销 `mesh`；`Discovery` 加 `SelfAddrs`（从 `cfg.Node.PublicURL` 来，`DiscoveryOf` 是唯一那份映射），出口先过一遍接收侧那道形状检查（`gossipSelfAddrs` → `isGossipAddr`），拨不通的形状（域名、公网地址）在启动时 warn 一行而不是静默失效。**与设计不同的一处**：挑选用的三个小表（最近问过谁、谁贡献过、谁刚失败过）不在缓存里，而在 `gossipLoop` 自己身上；循环的邻居池与客户端也不另存一份，而是直接读缓存最后一次建出来的那个 sender（`senderNow` → `peers.Entries()` / `client.Exchange`），所以「循环需要一个稳定的访问点」这条要求由「缓存里那一个 `current`」满足，没有第三份状态。**补的一处**：`Discovery` 是纯值、拿不到 logger，所以「拒绝了一个地址要说一声」落在 `startDiscovery`，`peerDirectory` 那几行不变 |
 | `config/config.go` | **已落地**：`GossipDiscoveryConfig{ enabled }` 与两个窗口（`ttl` / `contact_ttl`，零值即 `node/sightings.go` 里的默认）挂在 `node.discovery` 下，gossip 默认关；**`MdnsDiscoveryConfig.Advertise` 也已删**（§一.8），两处都只留 `enabled`——mDNS 那一段讲「想找不想被找到」的注释随之重写，唯一按字段取值的地方（`itest/run/discovery_test.go`）改成了 `Mdns.Enabled`，桌面设置页里 `mdns.advertise` 那一行一并删掉 |
 | `node/peerdir.go` | `prependAddrs` 一家加一档（§三）；面板要显示来源，所以来源要能区分三个词（`local` 配置写的 / `mDNS` 本机看到的 / `gossip` 从邻居听来的，一台机器可以同时是前两个），并跟着 `discoveredPeer` 一起传上去 |
 | `node/peerboard.go` + Wails bindings | 面板那一列显示来源词：`local` / `mDNS` / `gossip`，可以是组合（`local · mDNS`）；**不显示具体是从哪台机器听来的**——那是日志的事（日志里写清 node id）。提醒那行**不加**——每轮都在付这笔 token |
@@ -282,7 +282,7 @@ type mesh interface {
 | --- | --- | --- |
 | 0 | 抽出共享的已证实集合 + 候选队列（= 把 `mdnsBrowser` 的 `pending` / `seen` 两个 map、`verifyLoop` 的验证与退避、`Sightings()`、`onSighting`、注入的钟搬进一个不认识 mDNS 的结构；zeroconf 那一半与 `observe` / `decide` 的形状检查留下）。**mDNS 行为的判据是断言不变**——名字搬了家，测试跟着搬家，但每条断言说的还是同一件事 | 能（现有 `discovery_test.go` 就是回归网） |
 | 1 | 服务端：路由、编解码、注册点、开关与拒绝 | 能（假调用方） |
-| 2 | 客户端循环：选邻居、交换、退避、`Close` | 能（假 sender） |
+| 2 | 客户端循环：选邻居、交换、退避、`Close` —— **已落地**（`node/gossip.go` 的 `gossipLoop` + `remoteclient.Exchange`） | 能（假 sender：`gossip_test.go` 的 `fakeSide`；外加一条真的 mTLS 往返，钉住「循环 → 真 handler」这一段） |
 | 3 | 三进程组成：A 只配了 B，B 配了 C，A 不认识 C —— A 必须经由 B 发现 C 并委派成功 | 冒烟 |
 
 阶段 0 单独成阶段是有原因的：它是**唯一一处有回归风险的重构**，而它的正确性判据是「现有测试一条不改还是绿的」。先做它，后面全是加法。

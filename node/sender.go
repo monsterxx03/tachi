@@ -76,6 +76,9 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, s
 		requestTimeout: defaultRequestTimeout,
 		waitBudget:     defaultWaitBudget,
 		pollInterval:   defaultPollInterval,
+		// Where a successful call is recorded as a CONTACT with that peer, when this process has a
+		// discovery side: what this machine has reached recently is what it may vouch for (node/
+		// sightings.go touch). Assigned below, beside the store the directory reads.
 	}
 	// The Agent Card is read through the SAME client, and that is not a detail: the certificate a
 	// Tachi node serves is self-signed, so no system verifier accepts it, and on an mTLS surface
@@ -91,6 +94,7 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, s
 	if store != nil {
 		directory.discover = store.sightings
 		store.setVerifier(client.verifierOf())
+		client.store = store
 	}
 	return &Sender{peers: directory, records: records, client: client, known: known}, nil
 }

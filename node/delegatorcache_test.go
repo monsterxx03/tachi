@@ -180,3 +180,66 @@ func TestAClosedCacheHandsOutNothing(t *testing.T) {
 		"nor does discovery rescue it: the switch goes off with the browser")
 	require.Equal(t, 1, opens, "and nothing more is opened")
 }
+
+// The switch decides whether the hearsay half exists at all, and the loop's life is the cache's: it
+// comes up with the sending side, and it goes down BEFORE the store it writes into.
+func TestGossipComesUpAndGoesDownWithTheCache(t *testing.T) {
+	previous := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(previous) })
+
+	// Off: nothing of it exists — no store, no loop, so no packet can be sent.
+	quiet := NewDelegatorCache("", Discovery{Enabled: true, SelfAddrs: []string{lanAddr}}, nil, nil)
+	require.NotNil(t, quiet.For(t.Context(), nil))
+	require.Nil(t, quiet.gossip, "gossip off means no loop runs")
+	quiet.Close()
+
+	// On: the loop comes up with the store, carries this machine's own account of where it is, and does
+	// not outlive a Close. It has nothing to ask here (no peers, no sightings), which is a round with
+	// nobody in it rather than an error.
+	cache := NewDelegatorCache("", Discovery{Gossip: true, SelfAddrs: []string{lanAddr}}, nil, nil)
+	require.NotNil(t, cache.For(t.Context(), nil), "gossip alone is still a sending side")
+	require.NotNil(t, cache.gossip, "and the loop runs when it is on")
+	require.Equal(t, []string{lanAddr}, cache.gossip.selfAddrs)
+	require.NotNil(t, cache.store, "the store it feeds came up with it")
+
+	closed := make(chan struct{})
+	go func() {
+		cache.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return: the loop does not leave on its cancel")
+	}
+	require.Nil(t, cache.gossip, "and the cache holds neither half afterwards")
+	require.Nil(t, cache.store)
+}
+
+// Where this machine introduces itself by gossip is a claim like every other one, and the receiving end
+// keeps only what it could dial (node/gossip.go isGossipAddr: https, and an address on a private,
+// link-local or CGNAT network). The mapping keeps what the operator wrote — it is the same key the Card
+// is published under — and the loop is built over the part of it that survives that check, so an
+// operator whose `public_url` is a name hears about it once (startDiscovery) instead of being left with
+// a switch that looks on and introduces this machine to nobody.
+func TestOnlyAnAddressAPeerCouldDialIsUsedToIntroduceOurself(t *testing.T) {
+	cfg := &config.Config{}
+	// The shape config.go's own example has: a name, not an address. A peer can read this machine's
+	// Card at it and can never be handed it as somewhere to dial.
+	cfg.Node.PublicURL = "https://nas.tail-scale.ts.net:7080"
+	require.Equal(t, []string{cfg.Node.PublicURL}, DiscoveryOf(cfg).SelfAddrs,
+		"the mapping keeps what the operator wrote")
+	require.Empty(t, gossipSelfAddrs(DiscoveryOf(cfg).SelfAddrs), "and the loop is not built over it")
+
+	// A private address, as written (with the spaces an operator leaves behind): exactly what the far
+	// end accepts.
+	cfg.Node.PublicURL = "  " + lanAddr + "  "
+	require.Equal(t, []string{lanAddr}, DiscoveryOf(cfg).SelfAddrs)
+	require.Equal(t, []string{lanAddr}, gossipSelfAddrs(DiscoveryOf(cfg).SelfAddrs))
+
+	// A public address is dropped too — this route is for machines that can reach each other, and asking
+	// to be dialled from wherever is the thing that check exists for (§六) — and so is plaintext.
+	require.Empty(t, gossipSelfAddrs([]string{"https://8.8.8.8:7080"}))
+	require.Empty(t, gossipSelfAddrs([]string{"http://192.168.1.9:7080"}), "https is the other half")
+}

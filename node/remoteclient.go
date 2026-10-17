@@ -61,6 +61,13 @@ type remoteClient struct {
 	spillDir string
 	http     *http.Client
 
+	// store is the discovery side's ledger, when this process has one: a connection this client
+	// completes SUCCESSFULLY is a contact with that machine, and the store is where "who has this
+	// machine reached recently" lives (node/sightings.go touch). Nil on a sending side built without
+	// discovery, which is the default — and then nothing here is recorded anywhere, which is correct:
+	// a process with no discovery side has no vouching set to keep fresh.
+	store *sightingsStore
+
 	// clients caches one HTTP client per peer: a TLS configuration belongs to ONE peer (its pin,
 	// its address), and a client is the object that carries one. Built lazily so a peer this
 	// machine never calls costs nothing.
@@ -639,7 +646,9 @@ func (c *remoteClient) peerOf(d *Delegation) (peerEntry, error) {
 // last (node/peerdir.go prependAddrs), which is right for a machine that moved and costly for one that did
 // not: a laptop away from home tries its peer's LAN address and waits for a connection that cannot
 // work. This is how much of that wait is spent — and it is a small number on purpose, because the
-// fallback is one attempt away.
+// fallback is one attempt away. How much of it an address actually gets is attemptBudget's answer:
+// inside a caller's deadline it is also capped by that deadline, so the addresses in front cannot spend
+// the whole of a short budget and leave the last one — the configured entry — nothing.
 const firstAttemptTimeout = 2 * time.Second
 
 // do performs one request and classifies what came back.
@@ -655,36 +664,133 @@ func (c *remoteClient) do(ctx context.Context, d *Delegation, method, path strin
 }
 
 // request sends one request to a peer, trying each address it is known by until one answers.
+func (c *remoteClient) request(ctx context.Context, e peerEntry, method, path string, body []byte) ([]byte, error) {
+	payload, _, err := c.requestAt(ctx, e, method, path, body)
+	return payload, err
+}
+
+// requestAt is request with the address that ANSWERED kept beside the answer: which one it was is a
+// fact about this machine's own evidence (the same fact fetchCard answers with), and it is what a
+// contact is recorded against — the identity alone would leave this machine unable to say where it
+// had actually been (node/remoteclient.go contact).
 //
 // Falling through to the next address happens ONLY when nothing was reached: a refusal means the
 // request arrived at a machine and that machine said no, so the remaining addresses are not
 // candidates for the same request — they would be other machines.
-func (c *remoteClient) request(ctx context.Context, e peerEntry, method, path string, body []byte) ([]byte, error) {
+func (c *remoteClient) requestAt(ctx context.Context, e peerEntry, method, path string, body []byte) ([]byte, string, error) {
 	addrs := e.dialAddrs()
 	if len(addrs) == 0 {
-		return nil, &PeerRefusal{Transport: true, Peer: e.Display(),
+		return nil, "", &PeerRefusal{Transport: true, Peer: e.Display(),
 			Message: "this machine holds no address for it that can prove an identity (a peer must be https)"}
 	}
+	deadline, hasDeadline := ctx.Deadline()
 	var last error
 	for i, addr := range addrs {
-		budget := c.requestTimeout
-		if i < len(addrs)-1 {
-			budget = firstAttemptTimeout
+		left := time.Duration(0)
+		if hasDeadline {
+			left = time.Until(deadline)
 		}
-		payload, err := c.attempt(ctx, e, addr, method, path, body, budget)
+		payload, err := c.attempt(ctx, e, addr, method, path, body,
+			c.attemptBudget(left, hasDeadline, i, len(addrs)))
 		if err == nil {
-			return payload, nil
+			return payload, addr, nil
 		}
 		last = err
 		var refusal *PeerRefusal
 		if errors.As(err, &refusal) && !refusal.Transport {
-			return nil, err
+			return nil, "", err
 		}
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, last
+	return nil, "", last
+}
+
+// attemptBudget is how long ONE address gets: the full budget for the last one (there is nothing
+// behind it to fall back on), a short probe for the ones that have somewhere else to go.
+//
+// The third rule is what a SHORT outer budget needs, and it is why this is a function rather than two
+// lines in the loop: an address may never spend more than what is left after leaving one short
+// attempt's worth for every address still to come. A caller with a five-second budget and a peer with
+// three addresses would otherwise spend it proving the first two are dead and leave the last (the
+// configured address, and the one most likely to answer) nothing at all — and a round that fails on
+// that is a neighbour muted for gossipMute. When the addresses cannot even be covered that way it
+// splits what is left evenly rather than starving whoever is last. No deadline means no sharing: the
+// two numbers above, which is what every non-gossip caller has always got.
+func (c *remoteClient) attemptBudget(left time.Duration, hasDeadline bool, index, total int) time.Duration {
+	budget := c.requestTimeout
+	if index < total-1 {
+		budget = firstAttemptTimeout
+	}
+	if !hasDeadline {
+		return budget
+	}
+	remaining := total - index
+	reserve := time.Duration(remaining-1) * firstAttemptTimeout
+	allowed := left - reserve
+	if allowed < 0 {
+		allowed = left / time.Duration(remaining)
+	}
+	if allowed < budget {
+		budget = allowed
+	}
+	if budget < 0 {
+		return 0
+	}
+	return budget
+}
+
+// Exchange runs one gossip round trip with a peer: the payload out, the peer's own list back.
+//
+// It is `request` with its own budget, and that is the whole of it: the gossip route is on the same
+// surface as everything else here, so the TLS pin, the address order and the per-attempt deadlines are
+// the ones this client already applies (node/gossip.go says what the exchange is for; attemptBudget is
+// how a budget this short is shared out among a peer's addresses). What is different is the SIZE of
+// the budget — a round is a heartbeat that happens every few minutes for as long as this process runs,
+// so it must not borrow the delegation request timeout: one neighbour that is switched off would then
+// hold the round.
+//
+// A round that came back is a CONTACT with that machine, and it is recorded as one (contact): the
+// design's "一次成功的交换必须算作一次接触" (§三). It is what keeps a machine known only through gossip —
+// with no mDNS on its network to re-announce it — fresh enough to be vouched for, and in anybody's
+// directory at all.
+//
+// A failure is returned as-is rather than retried elsewhere: the caller decides what a failed round
+// means (a mute, in practice), and it is the one place that knows. Nothing about it is stored here.
+func (c *remoteClient) Exchange(ctx context.Context, e peerEntry, payload []byte, budget time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	raw, served, err := c.requestAt(ctx, e, http.MethodPost, gossipPath, payload)
+	if err != nil {
+		return nil, err
+	}
+	c.contact(e, served)
+	return raw, nil
+}
+
+// contact records that this machine reached a peer, for the one consumer of that fact: vouching
+// (node/sightings.go touch). A card this machine read counts as much as a round it asked — both are
+// this machine's own evidence, and both are what the design's two windows are refreshed by.
+//
+// The identity comes out of the PIN the handshake has just filed rather than out of the entry: a
+// configured line has no identity until this moment, and what the peer PROVED is the only thing worth
+// recording. The pin is looked up the way it was filed — under the configured address when the entry
+// has one (pinAddr), under the address that answered otherwise — and the entry's own identity is the
+// fallback for a record that cannot be read back, which a successful request makes impossible: the
+// certificate was checked against that very pin.
+//
+// Nothing happens without a store: a sending side built with discovery off has no vouching set to keep
+// fresh (node/sender.go OpenSender).
+func (c *remoteClient) contact(e peerEntry, served string) {
+	if c == nil || c.store == nil || served == "" {
+		return
+	}
+	identity := e.Identity
+	if pinned, ok := c.known.pinnedIdentityAt(pinAddr(e, served)); ok {
+		identity = pinned
+	}
+	c.store.touch(identity, served)
 }
 
 // attempt is one request to one address.
@@ -995,19 +1101,25 @@ func (c *remoteClient) verifierOf() func(ctx context.Context, addrs []string) (p
 // The address is answered rather than assumed because the card is CACHED under it: a peer that
 // answered from an address it did not have to be told about must be remembered that way, or the
 // next turn asks the address that just failed.
+//
+// Reading a card successfully is also a CONTACT, and it is recorded as one (contact): the design
+// counts it exactly like a completed exchange, and it is the half that keeps a configured peer — one
+// nobody has to announce, because a person wrote it down — in the set this machine may vouch for.
 func (c *remoteClient) fetchCard(ctx context.Context, e peerEntry) (*a2a.AgentCard, string, error) {
 	addrs := e.dialAddrs()
 	if len(addrs) == 0 {
 		return nil, "", fmt.Errorf("node: %s has no address this machine can ask over TLS", e.Display())
 	}
+	deadline, hasDeadline := ctx.Deadline()
 	var last error
 	for i, addr := range addrs {
-		budget := c.requestTimeout
-		if i < len(addrs)-1 {
-			budget = firstAttemptTimeout
+		left := time.Duration(0)
+		if hasDeadline {
+			left = time.Until(deadline)
 		}
-		card, err := c.cardAt(ctx, e, addr, budget)
+		card, err := c.cardAt(ctx, e, addr, c.attemptBudget(left, hasDeadline, i, len(addrs)))
 		if err == nil {
+			c.contact(e, addr)
 			return card, addr, nil
 		}
 		last = err

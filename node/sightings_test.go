@@ -194,3 +194,43 @@ func TestTwoSourcesDisagreeingAboutOneMachineTakeTheFresherReading(t *testing.T)
 	store.mu.Unlock()
 	require.True(t, got.Stale, "one connection is all a claim nobody is fresh about is worth")
 }
+
+// A contact this machine made ITSELF — a round it asked and got an answer to, or a card it read — is
+// what keeps a machine it reached in the set it may vouch for, with nothing announcing it and no
+// candidate ever naming it. It is the same evidence confirm writes, from a dial this machine started
+// rather than one a claim asked for (§三: 一次成功的交换必须算作一次接触).
+func TestAContactThisMachineMadeIsRecorded(t *testing.T) {
+	store := newSightingsStore(nil)
+	now := time.Now()
+	store.now = func() time.Time { return now }
+
+	store.touch(discoveredID, lanAddr)
+	recent := store.recent(store.contactWindow())
+	require.Len(t, recent, 1)
+	require.Equal(t, discoveredID, recent[0].Identity)
+	require.Equal(t, lanAddr, recent[0].Served, "the address that answered, which is the only one proved")
+	require.Equal(t, []string{lanAddr}, recent[0].Addrs)
+
+	// A second contact from another address refreshes the time and puts that address first, without
+	// dropping the one learned before it — the same rule confirm follows.
+	now = now.Add(time.Minute)
+	store.touch(discoveredID, lanAddr2)
+	recent = store.recent(store.contactWindow())
+	require.Len(t, recent, 1, "one machine, one row")
+	require.Equal(t, lanAddr2, recent[0].Served)
+	require.Equal(t, []string{lanAddr2, lanAddr}, recent[0].Addrs)
+	require.True(t, recent[0].Seen.Equal(now))
+
+	// Keeping it fresh is the whole point: it stays vouchable up to the window, and not past it.
+	now = now.Add(contactTTL - time.Second)
+	require.Len(t, store.recent(store.contactWindow()), 1)
+	now = now.Add(2 * time.Second)
+	require.Empty(t, store.recent(store.contactWindow()), "past the window it is not vouched for any more")
+
+	// What it will not do is mint a row out of nothing: a contact names an identity and an address that
+	// answered, and neither is optional.
+	store.touch("", lanAddr)
+	store.touch(discoveredID, "")
+	store.touch("not-a-node-id", lanAddr)
+	require.Empty(t, store.recent(store.contactWindow()))
+}
