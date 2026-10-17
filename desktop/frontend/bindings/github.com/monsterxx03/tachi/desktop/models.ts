@@ -1510,6 +1510,41 @@ export interface SettingListVO {
 }
 
 /**
+ * SettingsFilePreviewVO is one non-config.yaml file a save would write, and what would change in
+ * it.
+ */
+export interface SettingsFilePreviewVO {
+    /**
+     * Name is the file's base name (`provider.deepseek.json`). The page has no use for a full path
+     * — these all live in one directory — and a base name is what the reader would go and open.
+     */
+    "name": string;
+
+    /**
+     * New says the file does not exist yet: an entry the page just added, whose name picked a file
+     * of its own. It has no left side to diff, so Hunks holds the whole file as additions.
+     */
+    "new": boolean;
+
+    /**
+     * Deleted says the file would go away: every provider it defined was removed. `name` is then
+     * the only thing there is to show.
+     */
+    "deleted": boolean;
+
+    /**
+     * Hunks are the changed lines (linediff — the renderer every other diff uses).
+     */
+    "hunks"?: linediff$0.Hunk[] | null;
+
+    /**
+     * Added / Removed count them.
+     */
+    "added": number;
+    "removed": number;
+}
+
+/**
  * SettingsPreviewVO is what the reader sees when they ask what 保存 is about to do: the lines the
  * save would add and drop in config.yaml, and the one thing a diff of it cannot show.
  */
@@ -1550,6 +1585,17 @@ export interface SettingsPreviewVO {
      * how to warn (it also has the diff right there to point at).
      */
     "rewrites": boolean;
+
+    /**
+     * Files are the changes that land in the OTHER files of a save — the provider.*.json ones
+     * (`providers` lives there, see config/provider_json.go). Empty when this batch touches none,
+     * which is most saves.
+     * 
+     * A separate list rather than one merged diff, because the reader's question ("what is about to
+     * change") has one answer PER FILE and these are files they can open by that name. Hunks stays
+     * config.yaml's own diff.
+     */
+    "files"?: SettingsFilePreviewVO[] | null;
 }
 
 /**
@@ -1597,6 +1643,20 @@ export interface SettingsSchemaVO {
      * when someone wants it.
      */
     "lists": SettingListVO[] | null;
+
+    /**
+     * FileSources maps a list item's own path (`providers.0`) to the FILE that item lives in
+     * (`provider.deepseek.json`), for the lists whose items each come from their own file.
+     * 
+     * It rides here rather than on SettingFieldVO because it is a fact about the ITEM, not about
+     * a leaf: every leaf of one provider is in the same file, and a page that showed the file
+     * eleven times inside one card would be saying one thing eleven ways. Only `providers` has it
+     * today — MCP servers have the same idea but their editor is a block of its own
+     * (MCPServersEditor), not a list of fields.
+     * 
+     * An item the page has just ADDED has no entry: it is not in any file yet.
+     */
+    "fileSources"?: { [_ in string]?: string } | null;
 
     /**
      * MCPServerEditor is the CATEGORY the page draws the MCP servers editor in.

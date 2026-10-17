@@ -46,7 +46,7 @@ providers:
     base_url: https://api.openai.com/v1
     api_key: sk-backup
 `
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+	writeConfigAndProviders(t, dir, yaml)
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
     model: gpt-4
     api_key: sk-test
 `
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+	writeConfigAndProviders(t, dir, yaml)
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -116,9 +116,15 @@ func TestSaveAndLoad(t *testing.T) {
 		},
 	}
 
+	// The two halves of a real install: the preferences in config.yaml, the endpoint definitions in
+	// provider.deepseek.json beside it. yaml.Marshal(original) would write both into one file, which
+	// the loader now refuses on purpose — so this writes what an install actually looks like.
+	providers := original.Providers
+	original.Providers = nil
 	data, err := yaml.Marshal(original)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, data, 0600))
+	providerPath := writeProviderFixture(t, dir, providers)
 
 	loaded, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -126,7 +132,11 @@ func TestSaveAndLoad(t *testing.T) {
 	assert.Equal(t, original.MaxTokens, loaded.MaxTokens)
 	assert.Equal(t, original.MaxIterations, loaded.MaxIterations)
 	assert.Len(t, loaded.Providers, 1)
-	assert.Equal(t, original.Providers[0], loaded.Providers[0])
+	assert.Equal(t, providers[0].Name, loaded.Providers[0].Name)
+	assert.Equal(t, providers[0].Model, loaded.Providers[0].Model)
+	assert.Equal(t, providers[0].APIKey, loaded.Providers[0].APIKey)
+	// The definition knows which file it came from: that is what a save writes back to.
+	assert.Equal(t, providerPath, loaded.Providers[0].SourceFile)
 }
 
 func TestInputHistoryPath(t *testing.T) {
@@ -559,7 +569,7 @@ mcp_servers:
     url: https://ignored.example.com
 active_mcp_profile: test
 `
-	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0600))
+	writeConfigAndProviders(t, dir, yamlContent)
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -706,7 +716,7 @@ func TestToBool(t *testing.T) {
 func TestReviewAdversarial_UnconfiguredNil(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("providers:\n  - name: p\n    type: openai\n    model: m\n    api_key: k\n"), 0600))
+	writeConfigAndProviders(t, dir, "providers:\n  - name: p\n    type: openai\n    model: m\n    api_key: k\n")
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -740,7 +750,7 @@ func TestReviewAdversarial_FullConfigLoad(t *testing.T) {
       - gpt-4o
     judge_model: claude-opus
 `
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+	writeConfigAndProviders(t, dir, yaml)
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
@@ -791,7 +801,7 @@ providers:
 	assert.Equal(t, "high", p.Spec.ThinkingLevel)
 	require.NotNil(t, p.Spec.MaxRetries)
 	assert.Equal(t, 3, *p.Spec.MaxRetries)
-	assert.Equal(t, 90*time.Second, p.Spec.Timeout)
+	assert.Equal(t, Duration(90*time.Second), p.Spec.Timeout)
 	assert.Equal(t, "socks5://127.0.0.1:1080", p.Spec.Proxy)
 	require.NotNil(t, p.Spec.CreditRate)
 	assert.Equal(t, 0.05, *p.Spec.CreditRate)
@@ -926,7 +936,7 @@ func TestLoadFrom_ProviderVisionFlag(t *testing.T) {
     model: claude-sonnet-4-6
     api_key: sk-test
 `
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+	writeConfigAndProviders(t, dir, yaml)
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)

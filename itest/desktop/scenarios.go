@@ -49,8 +49,8 @@ type scenario struct {
 	// pricing is the mock provider's own price table, for the scenarios that make an assertion
 	// about MONEY. The shared provider entry has no prices (an unpriced model bills nothing,
 	// which keeps every other scenario's ¥/积分 figures at zero), so a scenario that needs a
-	// real number supplies one here — and it cannot come in through `config`, because
-	// `providers:` is already a key in the sandbox's own YAML and a second one would not load.
+	// real number supplies one here — and it cannot come in through `config`, because a price
+	// table lives INSIDE the provider entry (provider.smoke.json), not in config.yaml.
 	pricing *config.PricingConfig
 	// extraRoots are ADDITIONAL workspace roots for the session, each entry a directory the
 	// runner creates under the sandbox holding that entry's files. They are seeded rather than
@@ -3764,21 +3764,37 @@ permissions:
 				// —— 两边都得对，否则界面上的「自动」与 Tachi 实际的行为就是两回事。
 				// 这一条落在**新加的那个 provider** 上：它是界面造出来的条目，界面上把它的
 				// spec.vision 选成「自动」再保存，那个键就该从文件里消失。
+				//
+				// 看的是那个条目**自己的文件**：provider 定义在 provider.*.json 里，界面新加的
+				// 一条会得到一个以它命名的文件（config/provider_json.go）。
+				addedFile := cfg.ProviderConfig(cfg.Providers[0].Name)
+				addedRaw := ""
+				if addedFile != nil && addedFile.SourceFile != "" {
+					if b, err := os.ReadFile(addedFile.SourceFile); err == nil {
+						addedRaw = string(b)
+					}
+				}
+				c.check("新加的 provider 落在它自己的文件里", addedRaw != "",
+					"source="+fmt.Sprint(addedFile))
 				c.check("「自动」把 vision 写成未设置（键不出现，回读为 nil）",
-					cfg.Providers[0].Spec.Vision == nil, string(raw))
-				c.check("文件里没有 vision 这个键",
-					!strings.Contains(string(raw), "vision"), string(raw))
+					addedFile != nil && addedFile.Spec.Vision == nil, addedRaw)
+				c.check("那个文件里没有 vision 这个键",
+					!strings.Contains(addedRaw, "vision"), addedRaw)
 
 				// 列表的增删：这一页**不是立刻写盘**的那一套 —— ＋ 与删除都只是页面自己的待办，
 				// 保存时和字段值一起写进同一份配置（见 config.ListEdits）。所以这里断言的是**保存之后**
 				// 的文件：新条目在（带着从界面填进去的值），删掉的那一项不在，而那个全新列表也一起出现了
 				// （沙箱配置里根本没有 web_search 这个键）。
+				// 同一件事的第二个证人：删掉的那个 provider 必须真的从文件里消失，而不是只从
+				// 这一页的列表里划掉。
 				names := make([]string, 0, len(cfg.Providers))
 				for _, p := range cfg.Providers {
 					names = append(names, p.Name)
 				}
+				// 按名字找，不按下标：重载的顺序由 provider 文件名决定，列表位置不是保存能承诺的东西。
+				added := cfg.ProviderConfig("added-by-smoke")
 				c.check("保存把界面上「＋」的条目写进了文件（带着填进去的值）",
-					len(cfg.Providers) == 1 && names[0] == "added-by-smoke" && cfg.Providers[0].Model == "added-model",
+					added != nil && added.Model == "added-model",
 					fmt.Sprintf("providers=%v", names))
 				c.check("保存把界面上删掉的那一项也写进了文件（原来那个 provider 不在了）",
 					!slices.Contains(names, "smoke"), fmt.Sprintf("providers=%v", names))

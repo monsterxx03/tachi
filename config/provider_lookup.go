@@ -6,7 +6,7 @@ package config
 // (in llm). An empty name resolves to the DEFAULT provider.
 func (c *Config) ProviderConfig(name string) *ProviderConfig {
 	// Empty name → default provider; aliases resolved for both.
-	target := c.resolveAlias(c.resolveName(name))
+	target := c.ResolveProviderName(name)
 	// Look up the (possibly resolved) name in providers.
 	for j := range c.Providers {
 		if c.Providers[j].Name == target {
@@ -23,6 +23,18 @@ func (c *Config) resolveName(name string) string {
 		return name
 	}
 	return c.DefaultProviderName()
+}
+
+// ResolveProviderName turns a caller's name (empty = the default provider,
+// aliases included) into the name this Config would look up in Providers.
+//
+// It exists for the failure case: when the lookup finds nothing, the useful
+// sentence is "there is no X; there is Y and Z" — and the X in it is the name
+// the lookup actually asked for, not the one the caller passed (an alias, or
+// an empty name meaning the default, would both be wrong to report verbatim).
+// Same single source as the lookup itself, so the two cannot disagree.
+func (c *Config) ResolveProviderName(name string) string {
+	return c.resolveAlias(c.resolveName(name))
 }
 
 // resolveAlias resolves an alias to the actual provider name.

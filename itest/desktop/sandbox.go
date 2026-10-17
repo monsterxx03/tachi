@@ -9,11 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // The sandbox: everything a run touches lives under one temp dir, so a scenario can
@@ -110,61 +109,60 @@ func (sb *sandbox) demoEnv() map[string]string {
 }
 
 // writeConfig points the app at the scenario's mock. Every scenario gets its own provider
-// entry, which is why the config is written here and not checked in: the mock's port is
+// entry, which is why the files are written here and not checked in: the mock's port is
 // random.
+//
+// Two files, because that is what an install has (config/provider_json.go): the preferences in
+// config.yaml, the endpoint definition in provider.smoke.json beside it.
 //
 // extra is the scenario's own YAML block (see scenario.config) — appended verbatim so a
 // scenario that needs settings the shared config does not carry (permissions.bash.ask, for
-// instance) does not have to widen this function's signature with one field per feature.
+// instance) does not have to widen this function's signature with one field per feature. It
+// cannot carry provider settings: providers are not keys of this file.
 //
-// pricing is the one thing that CANNOT arrive through `extra`: it lives INSIDE the provider
-// entry, and a second `providers:` key is a duplicate mapping key. nil — every scenario but
-// perm-mcp-budget — leaves the model unpriced, which is what keeps the other scenarios' ¥/积分
-// numbers at zero and out of their assertions.
+// pricing rides on the provider entry rather than on `extra` because that is where a price table
+// lives. nil — every scenario but perm-mcp-budget — leaves the model unpriced, which is what keeps
+// the other scenarios' ¥/积分 numbers at zero and out of their assertions.
 func (sb *sandbox) writeConfig(baseURL string, pricing *config.PricingConfig, extra string) error {
-	spec, err := providerSpec(pricing)
+	dir := filepath.Join(sb.home, ".tachi")
+	// The provider goes through the types the app's loader reads (config.ProviderConfig /
+	// config.ModelSpec + fileutil.MarshalJSON), so a scenario cannot hand-write an entry the
+	// loader would read differently.
+	contextWindow, vision := int64(128000), true
+	provider := config.ProviderConfig{
+		Name:    "smoke",
+		Type:    config.ProviderTypeOpenAI,
+		Model:   "smoke-model",
+		BaseURL: baseURL,
+		APIKey:  "smoke-key",
+		Spec: config.ModelSpec{
+			ContextWindow: &contextWindow,
+			// vision: the mock accepts anything, and a provider that cannot see images makes the
+			// agent describe them instead of attaching them (agent/vision_fallback.go) — which is
+			// correct behaviour but leaves the image routes untestable. Scenarios that never send
+			// an image are unaffected: the flag only decides whether image parts are passed on as
+			// parts.
+			Vision:  &vision,
+			Pricing: pricing,
+		},
+	}
+	body, err := fileutil.MarshalJSON(struct {
+		Providers []config.ProviderConfig `json:"providers"`
+	}{Providers: []config.ProviderConfig{provider}})
 	if err != nil {
+		return fmt.Errorf("marshal provider fixture: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "provider.smoke.json"), append(body, '\n'), 0o600); err != nil {
 		return err
 	}
+
 	cfg := fmt.Sprintf(`provider: smoke
-providers:
-  - name: smoke
-    type: openai
-    model: smoke-model
-    base_url: %s
-    api_key: smoke-key
-    spec:
-      context_window: 128000
-      # vision: the mock accepts anything, and a provider that cannot see images makes the agent
-      # describe them instead of attaching them (agent/vision_fallback.go) — which is correct
-      # behaviour but leaves the image routes untestable. Scenarios that never send an image are
-      # unaffected: the flag only decides whether image parts are passed on as parts.
-      vision: true
-%stitle_generation: false
+title_generation: false
 language: zh
 herdr:
   enabled: false
-%s`, baseURL, spec, extra)
-	return os.WriteFile(filepath.Join(sb.home, ".tachi", "config.yaml"), []byte(cfg), 0o600)
-}
-
-// providerSpec renders the mock provider's extra `spec:` YAML — today only `pricing:` —
-// indented to sit under the `spec:` key above. It goes through the SAME type the app loads
-// (config.PricingConfig), so a scenario cannot hand-write a price table that the loader would
-// then read differently.
-func providerSpec(p *config.PricingConfig) (string, error) {
-	if p == nil {
-		return "", nil
-	}
-	raw, err := yaml.Marshal(map[string]any{"pricing": p})
-	if err != nil {
-		return "", fmt.Errorf("marshal provider pricing: %w", err)
-	}
-	var b strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
-		b.WriteString("      " + line + "\n")
-	}
-	return b.String(), nil
+%s`, extra)
+	return os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o600)
 }
 
 // writeMCPConfig points the app at the scenario's OAuth-protected MCP server.

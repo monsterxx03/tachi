@@ -407,6 +407,18 @@ function sectionsOf(
   return [...bare, ...out.filter((sec) => sec.prefix !== '')]
 }
 
+/** previewTitle is the preview's heading: one sentence that covers whatever the batch would write.
+ *  A save can touch config.yaml and one or more provider files (providers live in their own
+ *  `provider.*.json` — see desktop/settings.go's SaveSettings), so the title names the FILES that
+ *  are actually in play rather than promising "config.yaml". */
+function previewTitle(res: SettingsPreviewVO): string {
+  const files = res.files || []
+  if (files.length === 0) return '保存会写进 config.yaml 的改动'
+  const names = files.map((f) => f.name).join('、')
+  const hasYAML = (res.hunks || []).length > 0
+  return hasYAML ? `保存会写进 config.yaml 与 ${names} 的改动` : `保存会写进 ${names} 的改动`
+}
+
 /** pendingText is the foot's count of what the save will carry. The three kinds are one
  *  transaction, so one line has to say all of them — a page holding an item that is not in the
  *  config and reporting "0 项未保存" would be telling the reader nothing is about to happen. */
@@ -788,6 +800,7 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
                     hasError={it.fields.some((f) => fieldErrors[f.key])}
                     forceOpen={adds.some((a) => a.path === it.path)}
                     forceFolded={!!listOf(it.path) && foldedHere.has(listOf(it.path)!)}
+                    sourceFile={schema?.fileSources?.[it.path]}
                     onRemove={sec.list ? () => void removeItem(it.path) : undefined}
                     renderRow={(f, label) => <FieldRow {...rowProps(f)} label={label} />} />
                 ),
@@ -845,7 +858,7 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
           <section className="set-preview" aria-label="保存前预览">
             <div className="set-preview-head">
               <span className="set-preview-title">
-                {preview.res.ok ? '保存会写进 config.yaml 的改动' : '这次改动保存不了'}
+                {preview.res.ok ? previewTitle(preview.res) : '这次改动保存不了'}
               </span>
               {preview.res.ok ? (
                 <span className="set-preview-counts">
@@ -876,12 +889,45 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
             ) : null}
             {!preview.res.ok ? (
               <div className="set-preview-refused">{preview.res.summary}</div>
-            ) : (preview.res.hunks || []).length === 0 ? (
-              <div className="set-preview-empty">这次改动不会写进文件（表单里的值和文件里的一致）</div>
             ) : (
-              <div className="set-preview-diff">
-                <DiffLines hunks={preview.res.hunks || []} lineNumbers />
-              </div>
+              <>
+                {(preview.res.hunks || []).length === 0 ? null : (
+                  <div className="set-preview-file">
+                    <div className="set-preview-file-head">
+                      <span className="set-preview-path">config.yaml</span>
+                      <span className="set-preview-counts">
+                        {preview.res.added > 0 ? <span className="diff-count is-add">+{preview.res.added}</span> : null}
+                        {preview.res.removed > 0 ? <span className="diff-count is-del">−{preview.res.removed}</span> : null}
+                      </span>
+                    </div>
+                    <div className="set-preview-diff">
+                      <DiffLines hunks={preview.res.hunks || []} lineNumbers />
+                    </div>
+                  </div>
+                )}
+                {/* Provider files are separate documents with the same save behind them: each one
+                    gets its own heading, because the reader's question ("where does this go?") has
+                    one answer per file, and the name is what they would go and open. */}
+                {(preview.res.files || []).map((f) => (
+                  <div className="set-preview-file" key={f.name}>
+                    <div className="set-preview-file-head">
+                      <span className="set-preview-path">{f.name}</span>
+                      {f.new ? <span className="set-preview-tag">新文件</span> : null}
+                      {f.deleted ? <span className="set-preview-tag">整个文件删除</span> : null}
+                      <span className="set-preview-counts">
+                        {f.added > 0 ? <span className="diff-count is-add">+{f.added}</span> : null}
+                        {f.removed > 0 ? <span className="diff-count is-del">−{f.removed}</span> : null}
+                      </span>
+                    </div>
+                    <div className="set-preview-diff">
+                      <DiffLines hunks={f.hunks || []} lineNumbers />
+                    </div>
+                  </div>
+                ))}
+                {(preview.res.hunks || []).length === 0 && (preview.res.files || []).length === 0 ? (
+                  <div className="set-preview-empty">这次改动不会写进文件（表单里的值和文件里的一致）</div>
+                ) : null}
+              </>
             )}
           </section>
         ) : null}
@@ -896,7 +942,7 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
           ) : null}
           <button className="btn ghost" onClick={() => void openPreview()}
             disabled={saving || checking || previewing || (dirty.length === 0 && adds.length === 0 && removes.length === 0)}
-            title="先看一眼这次保存会写进 config.yaml 的改动（不会写文件）">
+            title="先看一眼这次保存会写进哪些文件（不会写文件）">
             {previewing ? '预览中…' : '预览'}
           </button>
           {/* The save button carries its own class: 预览 sits beside it, and "the first .btn in the
@@ -964,7 +1010,7 @@ function FieldRow({ f, label, draft, original, error, dirty, onChange, onReset }
  *  settingFoldedLists in desktop/settings.go). Small items in an ordinary list stay open, where a
  *  fold would cost a click and save nothing. An item holding a value the form REFUSED is forced
  *  open: an error behind a fold is an error the reader cannot act on. */
-function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRemove, renderRow }: {
+function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, sourceFile, onRemove, renderRow }: {
   item: Extract<Item, { kind: 'elem' }>
   dirtyCount: number
   hasError: boolean
@@ -974,6 +1020,10 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRem
   forceOpen?: boolean
   /** The item's list is declared folded (SettingListVO.folded): shut whatever its size. */
   forceFolded?: boolean
+  /** The FILE this item lives in (`provider.deepseek.json`), for items that each come from their
+   *  own file (SettingsSchemaVO.fileSources). Empty for an item the page is holding that is not in
+   *  any file yet, and for every list whose items share config.yaml. */
+  sourceFile?: string
   /** Removing is offered for an item of a declared list (see Section.list), and it is ONE gesture:
    *  the card leaves the list and a line at the foot of the block offers 「撤销」. That works
    *  because the removal is not written — the save is what performs it — so the confirmation a
@@ -995,6 +1045,10 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, onRem
         <span className="set-elem-caret" aria-hidden="true"><Caret open={!folded} /></span>
         <span className="set-elem-name">{item.label}</span>
         {item.label === item.locator ? null : <span className="set-elem-path">{item.locator}</span>}
+        {/* Where this item is stored. A provider lives in its own file, so a save writes a file the
+            reader can name — and the fold hides the card's body, which is the only other place that
+            could say it. It is the backend's answer (fileSources), not a guess from the path. */}
+        {sourceFile ? <span className="set-elem-source" title={`这一项存在 ${sourceFile} 里`}>{sourceFile}</span> : null}
         <span className="set-elem-flags">
           {hasError
             ? <span className="set-elem-bad">有填错</span>

@@ -21,19 +21,21 @@ import (
 func writeConfigFixture(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	return path
+	return writeConfigAndProviders(t, dir, body)
 }
 
-// Every leaf survives the round trip: the config the file yields is the config that was written.
+// Every leaf of config.yaml survives the round trip: the config the file yields is the config that
+// was written.
 //
 // "Written" is the whole object, so this is the property that makes the whole design safe — the
 // settings page mutates the object and the file follows, which is only sound if loading the file
 // back gives the same values (including the two duration types, which are a string in the file and
 // an int64 in memory).
+//
+// `providers` is NOT in that statement, and that is the point of the two provider assertions below:
+// they live in their own file, so saving config.yaml must not write them and must not lose them
+// either. What carries them to disk is config.SyncProviderFiles, which the settings save calls
+// alongside this one.
 func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 	path := writeConfigFixture(t, "# 我的配置\nlanguage: zh\nproviders:\n  - name: main\n    type: openai\n")
 	cfg, err := LoadFrom(path)
@@ -43,7 +45,7 @@ func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 	want := map[string]any{
 		"language":                        "en",
 		"max_tokens":                      4096,
-		"mcp_tool_search.jev_budget":       "45s",
+		"mcp_tool_search.jev_budget":      "45s",
 		"mcp_tool_refresh.interval":       "90s",
 		"checkpoints.retain":              7,
 		"web_search.proxy":                "http://127.0.0.1:7890",
@@ -84,12 +86,27 @@ func TestSaveRoundTripsTheWholeConfig(t *testing.T) {
 	if strings.Join(got.Permissions.Bash.Allow, ",") != "ls,git *" {
 		t.Errorf("permissions.bash.allow = %v", got.Permissions.Bash.Allow)
 	}
+	// The provider half is the settings save's SECOND call (SyncProviderFiles) — SaveTo does not and
+	// must not write it, so what `got` holds here is still what the fixture wrote.
+	if _, err := SyncProviderFiles(filepath.Dir(path), cfg.Providers); err != nil {
+		t.Fatalf("SyncProviderFiles: %v", err)
+	}
+	got, err = LoadFrom(path)
+	if err != nil {
+		t.Fatalf("the files this wrote do not load: %v", err)
+	}
 	if len(got.Providers) != 1 {
 		t.Fatalf("providers = %+v, want one", got.Providers)
 	}
 	spec := got.Providers[0].Spec
 	if spec.Proxy != "http://127.0.0.1:7890" || spec.ContextWindow == nil || *spec.ContextWindow != 200000 {
 		t.Errorf("provider spec = %+v", spec)
+	}
+	// config.yaml itself holds no providers: they are in provider.*.json, and this write must not
+	// put a second copy back (the loader refuses a file that has one). The check is the TOP-LEVEL
+	// key — `web_search.providers` is a different thing and is supposed to be there.
+	if raw, err := os.ReadFile(path); err == nil && strings.Contains(string(raw), "\nproviders:") {
+		t.Errorf("config.yaml must not carry a top-level providers: block\n%s", raw)
 	}
 
 	// A duration is a STRING in the file, not the nanoseconds underneath: gopkg.in/yaml.v3 (which

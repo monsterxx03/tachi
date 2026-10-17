@@ -53,6 +53,58 @@ func TestBuildProvider_NoDefault(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProviderNotFound)
 }
 
+// TestProviderNotFoundMessage: the not-found error answers both questions the
+// reader actually has — which name was looked up and what IS defined (with the
+// file that defines it). A bare "provider not found" leaves a startup failure
+// with no next step, which is what config.yaml's `provider:` naming an entry
+// that no provider file defines produces.
+//
+// The name reported is the one the lookup COMPARED, not the argument: an alias
+// and the empty-"default" form would both be misleading verbatim.
+func TestProviderNotFoundMessage(t *testing.T) {
+	cfg := testConfig(t) // one provider named "deepseek"
+	cfg.Provider = "goat-deepseek-v4.1-flash"
+	cfg.Providers = []config.ProviderConfig{
+		{Name: "deepseek-flash", SourceFile: "/home/u/.tachi/provider.deepseek.json"},
+		{Name: "fresh-from-the-page"}, // added in the settings page: no file yet
+	}
+	cfg.ProviderAliases = map[string]string{"fast": "goat-deepseek-v4.1-flash"}
+
+	_, err := BuildProvider(cfg, "")
+	require.ErrorIs(t, err, ErrProviderNotFound)
+	msg := err.Error()
+	assert.Contains(t, msg, `"goat-deepseek-v4.1-flash"`, "报错要说它找的是哪个名字")
+	assert.Contains(t, msg, "deepseek-flash (provider.deepseek.json)", "要列出现有的名字和它们所在的文件")
+	assert.Contains(t, msg, "fresh-from-the-page", "内存里新加的条目也要出现（它还没有文件）")
+
+	// An alias is reported under the name it resolved to.
+	_, err = BuildProvider(cfg, "fast")
+	require.ErrorIs(t, err, ErrProviderNotFound)
+	assert.Contains(t, err.Error(), `"goat-deepseek-v4.1-flash"`)
+
+	// Nothing defined at all: the fix is a file, so say where.
+	_, err = BuildProvider(&config.Config{}, "whatever")
+	require.ErrorIs(t, err, ErrProviderNotFound)
+	assert.Contains(t, err.Error(), "provider.<name>.json")
+}
+
+// TestDefaultProvider_NoDefaultMessage: "nothing is defined" and "several are
+// defined and none is chosen" are different problems with different fixes, and
+// the error has to say which one the user is in.
+func TestDefaultProvider_NoDefaultMessage(t *testing.T) {
+	_, err := DefaultProvider(&config.Config{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "provider.<name>.json")
+
+	cfg := testConfig(t)
+	cfg.Provider = ""
+	cfg.Providers = append(cfg.Providers, config.ProviderConfig{Name: "second"})
+	_, err = DefaultProvider(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "`provider`", "要告诉用户去 config.yaml 挑一个")
+	assert.Contains(t, err.Error(), "deepseek", "要把候选列出来")
+}
+
 // TestBuildProvider_OK verifies a configured name resolves into a provider
 // with the resolved fields attached (ContextWindow etc. available to callers
 // without re-resolving).
@@ -117,7 +169,7 @@ func TestBuildProvider_SpecOptions(t *testing.T) {
 				BaseURL: "https://api.example.com/v1",
 				Spec: config.ModelSpec{
 					MaxRetries: c.specMax,
-					Timeout:    90 * time.Second,
+					Timeout:    config.Duration(90 * time.Second),
 				},
 			}
 			resolved, err := BuildProvider(cfg, "p")

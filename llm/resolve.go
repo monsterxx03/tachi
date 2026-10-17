@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/httpx"
@@ -19,7 +20,9 @@ const defaultContextWindow int64 = 128_000
 
 // ErrProviderNotFound is returned by BuildProvider when the requested name is
 // empty or not present in the providers list. Callers decide between silent
-// fallback (dedicated providers) and fail-fast (/model switch).
+// fallback (dedicated providers) and fail-fast (/model switch) — and because
+// they branch on THIS (errors.Is), the error BuildProvider hands back is this
+// one wrapped with what was looked up and what exists, not this alone.
 var ErrProviderNotFound = errors.New("provider not found")
 
 // NewProviderFromConfig constructs a Provider from a config.ProviderConfig
@@ -53,7 +56,7 @@ func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 		opts = append(opts, config.WithMaxRetries(*spec.MaxRetries))
 	}
 	if spec.Timeout > 0 {
-		opts = append(opts, config.WithTimeout(spec.Timeout))
+		opts = append(opts, config.WithTimeout(time.Duration(spec.Timeout)))
 	}
 	if spec.Proxy != "" {
 		opts = append(opts, config.WithProxy(spec.Proxy))
@@ -67,7 +70,9 @@ func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 // main). An empty name resolves to the DEFAULT provider (same as
 // DefaultProvider). Returns ErrProviderNotFound when neither the name nor
 // the default resolves; resolution/construction errors are wrapped with
-// context.
+// context — and so is the not-found one, which carries WHAT it looked for
+// and WHAT exists (see providerNotFoundMessage): a bare "provider not found"
+// at startup names neither the missing name nor the file to fix.
 //
 // The returned ResolvedProvider embeds the provider instance (Provider) plus
 // its resolved config — callers that need ContextWindow / Model don't
@@ -75,7 +80,7 @@ func providerOptionsFromSpec(spec *config.ModelSpec) []config.ProviderOption {
 func BuildProvider(cfg *config.Config, name string) (*ResolvedProvider, error) {
 	pCfg := cfg.ProviderConfig(name)
 	if pCfg == nil {
-		return nil, ErrProviderNotFound
+		return nil, fmt.Errorf("%w: %s", ErrProviderNotFound, providerNotFoundMessage(cfg, name))
 	}
 	resolved, err := NewProviderFromConfig(pCfg)
 	if err != nil {
@@ -88,14 +93,61 @@ func BuildProvider(cfg *config.Config, name string) (*ResolvedProvider, error) {
 	return resolved, nil
 }
 
+// providerNotFoundMessage says which name was looked up and which names ARE
+// defined, each with the provider file that defines it.
+//
+// The name is what the lookup asked for rather than what the caller passed
+// (config.ResolveProviderName): "the default provider" and an alias are both
+// real lookups whose failure has to be reported under the name that was
+// actually compared against the list.
+//
+// The files are worth naming because providers live in provider.*.json beside
+// config.yaml, not in it (config/provider_json.go) — so "which file do I open
+// to fix this" is a real question, and the answer is one the loader already
+// knows (SourceFile). A provider the settings page just added exists only in
+// memory and has no file yet; it is listed by name alone.
+func providerNotFoundMessage(cfg *config.Config, name string) string {
+	target := cfg.ResolveProviderName(name)
+	if len(cfg.Providers) == 0 {
+		return fmt.Sprintf("no provider named %q, and none is defined; add one to %s",
+			target, filepath.Join(config.ProviderConfigDir(), "provider.<name>.json"))
+	}
+	return fmt.Sprintf("no provider named %q; defined: %s", target, definedProviders(cfg))
+}
+
+// definedProviders lists the names that DO exist, each with the file defining it —
+// the answer to "so what can I write instead?". Providers come from provider.*.json
+// beside config.yaml, so the file is a real part of the answer; an entry the settings
+// page just added lives only in memory and is listed by name alone.
+func definedProviders(cfg *config.Config) string {
+	names := make([]string, 0, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		if p.SourceFile == "" {
+			names = append(names, p.Name)
+			continue
+		}
+		names = append(names, fmt.Sprintf("%s (%s)", p.Name, filepath.Base(p.SourceFile)))
+	}
+	return strings.Join(names, ", ")
+}
+
 // DefaultProvider resolves and constructs the DEFAULT provider in one step —
 // the standard entry point for frontends (TUI, ACP, channel) that need both
 // the provider instance and its resolved config (ContextWindow / Thinking /
 // MaxTokens). The constructed provider carries its config name
 // (NewNamedProvider) for ledger grouping. Equivalent to BuildProvider(cfg, "").
+//
+// "No default" has two causes and they need different fixes — nothing defined
+// (write a provider file) versus several defined and none chosen (name one) —
+// so the error says which one it is, and the second one lists the candidates.
 func DefaultProvider(cfg *config.Config) (*ResolvedProvider, error) {
 	if cfg.DefaultProviderName() == "" {
-		return nil, fmt.Errorf("no provider configured; create %s", filepath.Join(config.BaseDir(), "config.yaml"))
+		if len(cfg.Providers) == 0 {
+			return nil, fmt.Errorf("no provider configured; add one in %s",
+				filepath.Join(config.ProviderConfigDir(), "provider.<name>.json"))
+		}
+		return nil, fmt.Errorf("no default provider chosen; set `provider` in %s to one of: %s",
+			filepath.Join(config.ProviderConfigDir(), "config.yaml"), definedProviders(cfg))
 	}
 	return BuildProvider(cfg, "")
 }

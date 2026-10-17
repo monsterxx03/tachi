@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -845,6 +846,17 @@ type SettingsSchemaVO struct {
 	// no fields: without this the page could not offer the first item of a list, which is exactly
 	// when someone wants it.
 	Lists []SettingListVO `json:"lists"`
+	// FileSources maps a list item's own path (`providers.0`) to the FILE that item lives in
+	// (`provider.deepseek.json`), for the lists whose items each come from their own file.
+	//
+	// It rides here rather than on SettingFieldVO because it is a fact about the ITEM, not about
+	// a leaf: every leaf of one provider is in the same file, and a page that showed the file
+	// eleven times inside one card would be saying one thing eleven ways. Only `providers` has it
+	// today — MCP servers have the same idea but their editor is a block of its own
+	// (MCPServersEditor), not a list of fields.
+	//
+	// An item the page has just ADDED has no entry: it is not in any file yet.
+	FileSources map[string]string `json:"fileSources,omitempty"`
 	// MCPServerEditor is the CATEGORY the page draws the MCP servers editor in.
 	//
 	// That editor is not a row: MCP servers live in mcp.json, not config.yaml (`MCPServers` is
@@ -985,8 +997,32 @@ func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 		Categories:      append([]string(nil), settingsCategoryOrder...),
 		Fields:          fields,
 		Lists:           settingLists(cfg),
+		FileSources:     itemFileSources(cfg),
 		MCPServerEditor: catMCP,
 	}
+}
+
+// itemFileSources names the file each list item came from, for the items that HAVE one.
+//
+// Today that is `providers`, and the reason is the same one that moved them out of config.yaml:
+// these entries live in files the reader can open, and "which file is this one in" is the first
+// question a save raises ("where did my edit go?"). The path is the item's own path
+// (`providers.0`), which is what a card is drawn from.
+func itemFileSources(cfg *config.Config) map[string]string {
+	if len(cfg.Providers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(cfg.Providers))
+	for i, p := range cfg.Providers {
+		if p.SourceFile == "" {
+			continue
+		}
+		out[fmt.Sprintf("providers.%d", i)] = filepath.Base(p.SourceFile)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // settingField is one schema row: the table's answer for the key, plus everything that comes from
@@ -1439,17 +1475,33 @@ func (s *AgentService) SaveSettings(updates map[string]any, appends, removes []s
 	// the field naming the profile that is actually loaded. The FILE still has to hold what the user
 	// asked for, so those leaves are laid over the object for this one marshal and lifted again
 	// before the push writes them for real (see overlayOwnedLeaves).
+	// provider 定义不在 config.yaml 里（它们在自己的 provider.*.json 文件里，见
+	// config/provider_json.go），所以那半边要单独写：这次保存改过的 provider 叶子此刻已经在
+	// 内存里，把这些条目按各自的来源整份写回文件就是它。写失败时这里把内存也一并撤回，跟下面
+	// config.yaml 写失败是同一种处理。
+	providerDir := ""
+	if cfgPath, err := config.ConfigPath(); err == nil {
+		providerDir = filepath.Dir(cfgPath)
+	}
 	var saveErr error
 	d.withConfig(func(c *config.Config) {
 		lift := overlayOwnedLeaves(c, ownedLeaves(rows, updates))
 		defer lift()
-		saveErr = config.Save(c)
+		undo, provErr := config.SyncProviderFiles(providerDir, c.Providers)
+		if provErr != nil {
+			saveErr = provErr
+			return
+		}
+		if saveErr = config.Save(c); saveErr != nil {
+			// 两份文件是同一次保存的两半：yaml 没写成，provider 文件也不该留着新内容。
+			undo()
+		}
 	})
 	if saveErr != nil {
 		if !memoryEdits.IsEmpty() {
 			d.withConfig(func(c *config.Config) { config.RestoreListEdits(c, snap) })
 		}
-		return &SaveSettingsResultVO{OK: false, Summary: "没能写入 config.yaml：" + saveErr.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
+		return &SaveSettingsResultVO{OK: false, Summary: "没能写入配置文件：" + saveErr.Error() + "（这次改动已撤销，内存与文件都没变，运行中的进程也未被通知）"}
 	}
 	// 5. The runtime half: everything already built that keeps its own copy of these values.
 	// Failures are per-session and the value IS saved, so they are reported, not rolled back.
@@ -1539,6 +1591,33 @@ type SettingsPreviewVO struct {
 	// It is a PREDICATE rather than a sentence because it is a fact about the file; the page decides
 	// how to warn (it also has the diff right there to point at).
 	Rewrites bool `json:"rewrites"`
+	// Files are the changes that land in the OTHER files of a save — the provider.*.json ones
+	// (`providers` lives there, see config/provider_json.go). Empty when this batch touches none,
+	// which is most saves.
+	//
+	// A separate list rather than one merged diff, because the reader's question ("what is about to
+	// change") has one answer PER FILE and these are files they can open by that name. Hunks stays
+	// config.yaml's own diff.
+	Files []SettingsFilePreviewVO `json:"files,omitempty"`
+}
+
+// SettingsFilePreviewVO is one non-config.yaml file a save would write, and what would change in
+// it.
+type SettingsFilePreviewVO struct {
+	// Name is the file's base name (`provider.deepseek.json`). The page has no use for a full path
+	// — these all live in one directory — and a base name is what the reader would go and open.
+	Name string `json:"name"`
+	// New says the file does not exist yet: an entry the page just added, whose name picked a file
+	// of its own. It has no left side to diff, so Hunks holds the whole file as additions.
+	New bool `json:"new"`
+	// Deleted says the file would go away: every provider it defined was removed. `name` is then
+	// the only thing there is to show.
+	Deleted bool `json:"deleted"`
+	// Hunks are the changed lines (linediff — the renderer every other diff uses).
+	Hunks []linediff.Hunk `json:"hunks,omitempty"`
+	// Added / Removed count them.
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
 }
 
 // diffPreviewContext is how much of the generated file the preview keeps around each change. Three
@@ -1558,6 +1637,10 @@ const diffPreviewContext = 3
 // "change" keys nobody touched). What that rewrite DOES cost the reader is Rewrites, said in words
 // and only when it is true.
 //
+// The provider files are the exception in the other direction: they have no generated projection to
+// diff against (they ARE the store), so their left side is what is on disk — see
+// previewProviderFiles.
+//
 // The batch is applied to the LIVE config and rolled back, rather than to a copy: a copy would have
 // to be built by marshalling and re-reading, and both of those go through the same code the answer
 // is about — a copy that marshals differently from the object would make the preview lie in the one
@@ -1574,6 +1657,10 @@ func (s *AgentService) PreviewSettings(updates map[string]any, appends, removes 
 	cfg := d.config()
 	if cfg == nil {
 		return &SettingsPreviewVO{Summary: "配置尚未加载，改不了"}
+	}
+	providerDir := ""
+	if cfgPath, err := config.ConfigPath(); err == nil {
+		providerDir = filepath.Dir(cfgPath)
 	}
 	edits := config.ListEdits{Updates: updates, Appends: appends, Removes: removes}
 	if edits.IsEmpty() {
@@ -1604,6 +1691,7 @@ func (s *AgentService) PreviewSettings(updates map[string]any, appends, removes 
 	applied := config.ListEdits{Updates: batched, Appends: appends, Removes: removes}
 
 	var before, after []byte
+	var providerFiles []SettingsFilePreviewVO
 	var previewErr error
 	d.withConfig(func(c *config.Config) {
 		// The file as this process would write it RIGHT NOW is the diff's left side…
@@ -1626,6 +1714,12 @@ func (s *AgentService) PreviewSettings(updates map[string]any, appends, removes 
 		}
 		lift := overlayOwnedLeaves(c, ownedLeaves(rows, updates))
 		after, previewErr = config.Marshal(c)
+		// The provider files are the other half of the same save. Their left side is what is ON
+		// DISK (unlike config.yaml, there is no in-memory projection of them): the files ARE the
+		// store, and the plan below is exactly what the save would write.
+		if previewErr == nil {
+			providerFiles, previewErr = previewProviderFiles(providerDir, c.Providers)
+		}
 		lift()
 		config.RestoreListEdits(c, snap)
 	})
@@ -1646,7 +1740,44 @@ func (s *AgentService) PreviewSettings(updates map[string]any, appends, removes 
 	// two leaves changed in different places (it trims only the common prefix and suffix).
 	hunks := linediff.DiffContext(string(before), string(after), diffPreviewContext)
 	added, removed := linediff.Counts(hunks)
-	return &SettingsPreviewVO{OK: true, Hunks: hunks, Added: added, Removed: removed, Rewrites: rewrites}
+	return &SettingsPreviewVO{OK: true, Hunks: hunks, Added: added, Removed: removed, Rewrites: rewrites, Files: providerFiles}
+}
+
+// previewProviderFiles is the provider half of a preview: for every file the save would write,
+// diff what is on disk against what the plan would put there; for every file it would delete, say
+// so. Only files that actually differ are reported — a save that changed `language` and nothing
+// else produces no provider entries, which is what keeps the preview about the reader's change.
+//
+// It reads the DISK rather than an in-memory copy, because for these files there is no copy: the
+// directory is the store (config.LoadProviders reads it at every load). That also means this must
+// stay read-only — it computes a plan and lets it go.
+func previewProviderFiles(dir string, providers []config.ProviderConfig) ([]SettingsFilePreviewVO, error) {
+	plan, err := config.PlanProviderFiles(dir, providers)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Empty() {
+		return nil, nil
+	}
+	out := make([]SettingsFilePreviewVO, 0, len(plan.Files)+len(plan.Deletes))
+	for _, path := range plan.Paths() {
+		vo := SettingsFilePreviewVO{Name: filepath.Base(path)}
+		current, readErr := os.ReadFile(path)
+		vo.New = readErr != nil && errors.Is(readErr, os.ErrNotExist)
+		if next, ok := plan.Files[path]; ok {
+			if !vo.New && string(current) == string(next) {
+				continue // 内容没变，不该出现在预览里
+			}
+			vo.Hunks = linediff.DiffContext(string(current), string(next), diffPreviewContext)
+			vo.Added, vo.Removed = linediff.Counts(vo.Hunks)
+		} else {
+			vo.Deleted = true
+			vo.Hunks = linediff.DiffContext(string(current), "", diffPreviewContext)
+			_, vo.Removed = linediff.Counts(vo.Hunks)
+		}
+		out = append(out, vo)
+	}
+	return out, nil
 }
 
 // deferredSessionLabels names the sessions whose push waited for a turn to end, in the summary's

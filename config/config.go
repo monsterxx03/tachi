@@ -168,9 +168,13 @@ func ProjectRootsFrom(primary string, additional []string) []string {
 
 // ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。
 // 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
+//
+// 每个字段都带着 json tag：这个结构现在住在 provider.*.json 里（见 provider_json.go），
+// json 那半是文件的写法，yaml 那半是设置页的路径 API 读它用的（config.value_path 按 yaml
+// tag 找字段）。两者写的是同一个名字，所以一个字段只有一个词。
 type ModelSpec struct {
 	// ContextWindow 手动覆盖模型上下文窗口（tokens）。
-	ContextWindow *int64 `yaml:"context_window,omitempty"`
+	ContextWindow *int64 `yaml:"context_window,omitempty" json:"context_window,omitzero"`
 
 	// ThinkingLevel 控制思考模式强度。不同模型支持不同级别：
 	//   - "none"             关闭思考模式
@@ -178,7 +182,7 @@ type ModelSpec struct {
 	// 空 = 使用模型内置默认（DeepSeek: 思考开启、effort high；Anthropic: adaptive）。
 	// 请求的级别会原样透传给 API，由服务端映射到模型实际的推理强度
 	// （如 DeepSeek thinking_mode 文档的 effort 映射表）。
-	ThinkingLevel string `yaml:"thinking_level,omitempty"`
+	ThinkingLevel string `yaml:"thinking_level,omitempty" json:"thinking_level,omitzero"`
 
 	// ThinkingEfforts 覆盖该 provider 端点接受的思考档位
 	// （取值同 ThinkingLevel 的具体档位，顺序无关）。空 = 用模型内置的档位表
@@ -190,7 +194,7 @@ type ModelSpec struct {
 	// 手动改回来。同一模型在不同线路上的档位可以不同（实测某网关的
 	// chat-completions 拒绝 max、Responses 接受），内置表描述模型本身，线路差异
 	// 落在这一层。与 spec.vision / llm.ModelSupportsVision 是同一种关系。
-	ThinkingEfforts []string `yaml:"thinking_efforts,omitempty"`
+	ThinkingEfforts []string `yaml:"thinking_efforts,omitempty" json:"thinking_efforts,omitzero"`
 
 	// Vision 标记模型是否支持图片（多模态）输入。
 	//   - nil（默认）：按模型名内置能力表自动判断（llm.ModelSupportsVision）
@@ -198,18 +202,22 @@ type ModelSpec struct {
 	//   - false：显式声明不支持图片（即使模型名命中了能力表）
 	// 当当前模型不支持图片但输入包含图片时，Tachi 会调用配置中第一个
 	// 支持图片的 provider 描述图片，再把描述文本喂给当前模型。
-	Vision *bool `yaml:"vision,omitempty"`
+	Vision *bool `yaml:"vision,omitempty" json:"vision,omitzero"`
 
 	// MaxRetries 失败后的额外重试次数。nil = 使用默认（各 provider 路径均为
 	// 2 次）；0 = 禁用重试；n = 重试 n 次。
 	// 落地方式：openai（go-openai，无内置重试）走外层 RetryProvider；
 	// anthropic / openai-res 走 SDK 内置重试（option.WithMaxRetries）。
-	MaxRetries *int `yaml:"max_retries,omitempty"`
+	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitzero"`
 
 	// Timeout 单次 LLM API 请求超时。0 = 使用默认（各路径不设超时）。
 	// 落地方式：openai（go-openai）设置 HTTP client 超时；
 	// anthropic / openai-res 走 SDK 的 option.WithRequestTimeout。
-	Timeout time.Duration `yaml:"timeout,omitempty"`
+	//
+	// 类型是 config.Duration 而不是 time.Duration：文件里写 `"timeout": "60s"`。裸的
+	// time.Duration 在 JSON 里是一个纳秒整数（60000000000），那种文件没人想手写，而这一份
+	// 正是手写的。
+	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitzero"`
 
 	// Proxy 该 provider 的 API 请求走哪个代理：
 	//
@@ -221,28 +229,38 @@ type ModelSpec struct {
 	// HTTPS_PROXY / NO_PROXY）——需要全局代理时用环境变量即可，本字段是
 	// "只有部分 provider 要走代理" 时的答案（境内直连、境外走代理）。
 	// URL 无法解析或 scheme 不支持时 provider 解析直接失败（不静默直连）。
-	Proxy string `yaml:"proxy,omitempty"`
+	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitzero"`
 
 	// Pricing 定价覆盖（可选，覆盖内置价格表）。类型定义在本包
 	// （PricingConfig）——定价 schema 单一来源，config 只负责装载，
 	// 定价语义（内置表/分时带）由 llm 解析。
-	Pricing *PricingConfig `yaml:"pricing,omitempty"`
+	Pricing *PricingConfig `yaml:"pricing,omitempty" json:"pricing,omitzero"`
 
 	// CreditRate 配置 credit 计算的速率（每 unitDivisor 个 token 的 credit
 	// 单价，见 llm.ComputeCredit）。nil/未配置 = 0（不产生 credit）。
 	// 计算时优先用账本行内记录的调用时刻快照；升级前的历史行没有快照，
 	// 聚合展示时用此处配置的当前 rate 实时回算。
-	CreditRate *float64 `yaml:"credit_rate,omitempty"`
+	CreditRate *float64 `yaml:"credit_rate,omitempty" json:"credit_rate,omitzero"`
 }
 
+// ProviderConfig is one model endpoint. It lives in a provider.*.json file (provider_json.go),
+// never in config.yaml: the yaml tags are what the settings page's path API addresses it by
+// (`providers.0.model`), and the json tags are what the file is written with.
 type ProviderConfig struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type"`
-	Model   string `yaml:"model"`
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
+	Name    string `yaml:"name" json:"name"`
+	Type    string `yaml:"type" json:"type,omitzero"`
+	Model   string `yaml:"model" json:"model,omitzero"`
+	BaseURL string `yaml:"base_url" json:"base_url,omitzero"`
+	APIKey  string `yaml:"api_key" json:"api_key,omitzero"`
 
-	Spec ModelSpec `yaml:"spec"`
+	Spec ModelSpec `yaml:"spec" json:"spec,omitzero"`
+
+	// SourceFile is the provider.*.json this entry was READ from — and therefore the file a save
+	// writes it back to. Empty on an entry the settings page just created, which is what makes
+	// "new" distinguishable from "came from a file" without a second field.
+	//
+	// It is not part of the file (`json:"-"`): a file cannot declare where it is.
+	SourceFile string `yaml:"-" json:"-"`
 }
 
 // Web search provider types. Referenced by WebSearchProviderConfig.Type.
@@ -1315,48 +1333,51 @@ func (c PprofConfig) Addr() string {
 }
 
 type Config struct {
-	Provider               string               `yaml:"provider"`
-	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
-	MaxIterations          *int                 `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
-	SessionCleanupMaxCount int                  `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
-	Providers              []ProviderConfig     `yaml:"providers"`
-	WebSearch              WebSearchConfig      `yaml:"web_search"`
-	WebFetch               WebFetchConfig       `yaml:"web_fetch"`
-	MCPServers             []MCPServerConfig    `yaml:"-"`                  // Loaded from JSON files via LoadMCPServers(); not in YAML
-	ActiveMCPProfile       string               `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
-	MCPToolSearch          MCPToolSearchConfig  `yaml:"mcp_tool_search"`
-	MCPToolRefresh         MCPToolRefreshConfig `yaml:"mcp_tool_refresh"`
-	TUI                    TUIConfig            `yaml:"tui"`
-	SystemReminder         SystemReminderConfig `yaml:"system_reminder"`
-	Language               string               `yaml:"language" default:"English"`      // Reply language for LLM
-	ExtraSystemPrompt      string               `yaml:"extra_system_prompt,omitempty"`   // Optional user-supplied system prompt content; when set, appended to the end of the system prompt
-	TitleGeneration        *bool                `yaml:"title_generation" default:"true"` // set false to use truncation
-	TitleProvider          string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
-	CommitProvider         string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
-	RunProvider            string               `yaml:"run_provider"`                    // optional: provider name for tachi -p run mode (defaults to main provider)
-	ProviderAliases        map[string]string    `yaml:"provider_aliases"`                // alias name → actual provider name
-	Memory                 MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
-	Channel                ChannelConfig        `yaml:"channel"`                         // IM channel backends
-	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
-	Review                 ReviewConfig         `yaml:"review"`                          // /review code review configuration
-	Compact                CompactConfig        `yaml:"compact"`                         // /compact command configuration
-	Checkpoints            CheckpointConfig     `yaml:"checkpoints"`                     // per-turn file snapshots for /rewind
-	ToolResult             ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
-	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
-	Dream                  DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)
-	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
-	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
-	Jev                    JevConfig            `yaml:"jev"`                             // TypeSafe Jev semantic judgments (optional)
-	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
-	Permissions            PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
-	Oneoff                 OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)
-	Hooks                  HooksConfig          `yaml:"hooks"`                           // Event hook system (user-defined commands)
-	Herdr                  HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
-	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
-	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
-	Badge                  BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
-	Node                   NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
-	Peers                  []PeerConfig         `yaml:"peers"`                           // Other Tachi nodes THIS machine may delegate work to
+	Provider               string `yaml:"provider"`
+	MaxTokens              int    `yaml:"max_tokens" default:"128000"`
+	MaxIterations          *int   `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
+	SessionCleanupMaxCount int    `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
+	// MCPServers is loaded from mcp.json (LoadMCPServers), not from config.yaml. Providers stay
+	// addressable as yaml paths — the settings page edits them leaf by leaf — but their FILE is
+	// provider.*.json: Marshal writes them nowhere, and LoadFrom fills them from that directory.
+	Providers         []ProviderConfig     `yaml:"providers,omitempty"`
+	WebSearch         WebSearchConfig      `yaml:"web_search"`
+	WebFetch          WebFetchConfig       `yaml:"web_fetch"`
+	MCPServers        []MCPServerConfig    `yaml:"-"`                  // Loaded from JSON files via LoadMCPServers(); not in YAML
+	ActiveMCPProfile  string               `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
+	MCPToolSearch     MCPToolSearchConfig  `yaml:"mcp_tool_search"`
+	MCPToolRefresh    MCPToolRefreshConfig `yaml:"mcp_tool_refresh"`
+	TUI               TUIConfig            `yaml:"tui"`
+	SystemReminder    SystemReminderConfig `yaml:"system_reminder"`
+	Language          string               `yaml:"language" default:"English"`      // Reply language for LLM
+	ExtraSystemPrompt string               `yaml:"extra_system_prompt,omitempty"`   // Optional user-supplied system prompt content; when set, appended to the end of the system prompt
+	TitleGeneration   *bool                `yaml:"title_generation" default:"true"` // set false to use truncation
+	TitleProvider     string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
+	CommitProvider    string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
+	RunProvider       string               `yaml:"run_provider"`                    // optional: provider name for tachi -p run mode (defaults to main provider)
+	ProviderAliases   map[string]string    `yaml:"provider_aliases"`                // alias name → actual provider name
+	Memory            MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
+	Channel           ChannelConfig        `yaml:"channel"`                         // IM channel backends
+	Subagent          SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
+	Review            ReviewConfig         `yaml:"review"`                          // /review code review configuration
+	Compact           CompactConfig        `yaml:"compact"`                         // /compact command configuration
+	Checkpoints       CheckpointConfig     `yaml:"checkpoints"`                     // per-turn file snapshots for /rewind
+	ToolResult        ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
+	Cron              CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
+	Dream             DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)
+	ACP               ACPConfig            `yaml:"acp"`                             // ACP agent configuration
+	DeepResearch      DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
+	Jev               JevConfig            `yaml:"jev"`                             // TypeSafe Jev semantic judgments (optional)
+	Logs              LogsConfig           `yaml:"logs"`                            // Logger configuration
+	Permissions       PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
+	Oneoff            OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)
+	Hooks             HooksConfig          `yaml:"hooks"`                           // Event hook system (user-defined commands)
+	Herdr             HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
+	Debug             DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
+	Web               WebConfig            `yaml:"web"`                             // Web console (tachi web)
+	Badge             BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
+	Node              NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
+	Peers             []PeerConfig         `yaml:"peers"`                           // Other Tachi nodes THIS machine may delegate work to
 
 	// USDToCNY is the rate the built-in price table uses for the vendors that
 	// publish in USD (OpenAI's gpt-6 family, TypeSafe/Jev): their records quote
@@ -1830,10 +1851,24 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// providers 已经搬进 provider.*.json（见 provider_json.go）。yaml 里还留着的那一段是旧版本
+	// 写下的：直接丢掉，下面那一行会把它换成目录里的文件读到的内容——不去比较、不提示，旧配置
+	// 对装载没有发言权。
+	cfg.Providers = nil
+
 	// Apply defaults to any fields not set in the YAML.
 	if err := defaults.Set(cfg); err != nil {
 		return nil, fmt.Errorf("config defaults: %w", err)
 	}
+
+	// 端点定义在 yaml 旁边的那组 JSON 文件里，按文件名排序合并。目录就是这份 config 所在的
+	// 目录（不是 BaseDir）：装载哪份 config.yaml 就该装配它旁边那套 provider，测试与 --home
+	// 的每一种用法都靠这一条成立。
+	providers, err := LoadProviders(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Providers = providers
 
 	// Expand provider_aliases into every provider-reference field, so that
 	// after loading all fields hold REAL provider names and no call site
@@ -1873,7 +1908,16 @@ func Save(cfg *Config) error {
 // page's preview of what a save would produce marshals the same object on both sides of the batch,
 // and its answer is only worth anything while it is the same function that writes the file. A
 // second `yaml.Marshal` at that call site would be that answer, one encoder swap away from lying.
+//
+// `providers` is dropped for the duration of the marshal: the field stays on Config because the
+// settings page addresses provider leaves BY PATH (`providers.0.model`), and the path API walks
+// the struct — but the definitions live in provider.*.json, and a config.yaml that still carried
+// them would be a second copy that the loader then refuses. Dropping it here (rather than in a
+// second struct) is what keeps "the file is the object, marshalled" true for everything else.
 func Marshal(cfg *Config) ([]byte, error) {
+	providers := cfg.Providers
+	cfg.Providers = nil
+	defer func() { cfg.Providers = providers }()
 	return yaml.Marshal(cfg)
 }
 
@@ -1928,6 +1972,9 @@ func atomicWriteConfig(path string, out []byte) error {
 	return fileutil.AtomicWriteFile(path, out, 0o700, mode)
 }
 
+// Init writes the starter files: config.yaml (preferences) and one provider.*.json. They are
+// two files from the first run because that is where they stay — see provider_json.go for why
+// the endpoint definitions are not part of config.yaml.
 func Init() (string, error) {
 	path, err := ConfigPath()
 	if err != nil {
@@ -1935,7 +1982,7 @@ func Init() (string, error) {
 	}
 
 	dir := configDir()
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 
@@ -1945,8 +1992,8 @@ func Init() (string, error) {
 	}
 
 	// Init-specific overrides (not defaults — user-facing template values).
-	cfg.Provider = "deepseek"
-	cfg.Providers = []ProviderConfig{
+	cfg.Provider = "deepseek-v4-flash"
+	providers := []ProviderConfig{
 		{
 			Name:    "deepseek-v4-flash",
 			Type:    ProviderTypeAnthropic,
@@ -1984,7 +2031,25 @@ func Init() (string, error) {
 	if _, err := f.Write(data); err != nil {
 		return "", err
 	}
+	// The provider file is a separate file and does NOT refuse an existing one: `tachi init` on a
+	// home that already has providers is the user asking for the preferences template, and the
+	// endpoint definitions they already wrote are not this command's to overwrite.
+	if _, err := SyncProviderFiles(dir, starters(providers)); err != nil {
+		return "", err
+	}
 	return path, nil
+}
+
+// starters stamps the fresh-install providers into the file this command writes for them:
+// one `provider.deepseek.json`, the name the template is about.
+func starters(providers []ProviderConfig) []ProviderConfig {
+	path := filepath.Join(ProviderConfigDir(), providerFilePrefix+"deepseek"+providerFileSuffix)
+	out := make([]ProviderConfig, len(providers))
+	for i, p := range providers {
+		p.SourceFile = path
+		out[i] = p
+	}
+	return out
 }
 
 // MCPEnabled returns true if at least one MCP server is configured.

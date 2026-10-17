@@ -12,6 +12,7 @@ package main
 // API. A hand-written list here is exactly the thing that rots when a field is added.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/linediff"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"gopkg.in/yaml.v3"
 )
 
 func configLeaves(t *testing.T) []string {
@@ -274,8 +276,8 @@ func settingsFixture(t *testing.T, yamlText string) (*desktopApp, *AgentService,
 	t.Helper()
 	dir := t.TempDir()
 	config.SetBaseDir(dir)
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(yamlText), 0o600); err != nil {
+	path, err := splitProvidersFixture(t, dir, yamlText)
+	if err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := config.Load()
@@ -285,6 +287,61 @@ func settingsFixture(t *testing.T, yamlText string) (*desktopApp, *AgentService,
 	d := newTestApp()
 	d.cfg = cfg
 	return d, &AgentService{desk: d}, path
+}
+
+// splitProvidersFixture writes yamlText as the fixture's config.yaml, moving any top-level
+// `providers:` block into provider.test.json beside it — the shape a real install has, and the only
+// shape the loader accepts (config.LoadProviders / LoadFrom's migration refusal). Returns the
+// config.yaml path.
+//
+// It is written out here rather than shared with config's identical test helper because the two
+// live in different modules and the helper is three dozen lines of yaml parsing: a duplicated test
+// fixture that a compiler checks against the real loader is cheaper than an exported test-only API
+// in `config`. A fixture that stops loading fails here, loudly.
+func splitProvidersFixture(t *testing.T, dir, yamlText string) (string, error) {
+	t.Helper()
+	doc := &yaml.Node{}
+	if err := yaml.Unmarshal([]byte(yamlText), doc); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
+		root := doc.Content[0]
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value != "providers" {
+				continue
+			}
+			var providers []config.ProviderConfig
+			if err := root.Content[i+1].Decode(&providers); err != nil {
+				return "", err
+			}
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			raw, err := json.MarshalIndent(map[string]any{"providers": providers}, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(filepath.Join(dir, "provider.test.json"), raw, 0o600); err != nil {
+				return "", err
+			}
+			break
+		}
+		out, err := yaml.Marshal(doc)
+		if err != nil {
+			return "", err
+		}
+		yamlText = string(out)
+	}
+	if err := os.WriteFile(path, []byte(yamlText), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// providerFileIn returns the provider file that lives beside the given config.yaml. Fixtures are
+// built by splitProvidersFixture, which puts every fixture provider into provider.test.json.
+func providerFileIn(t *testing.T, configPath string) string {
+	t.Helper()
+	return filepath.Join(filepath.Dir(configPath), "provider.test.json")
 }
 
 func readFileT(t *testing.T, path string) string {
@@ -513,7 +570,7 @@ func TestSaveSettingsRollsBackWhenTheFileRefusesAKey(t *testing.T) {
 	if res.OK {
 		t.Error("a batch whose write failed reported OK = true")
 	}
-	if !strings.Contains(res.Summary, "没能写入 config.yaml") || !strings.Contains(res.Summary, "已撤销") {
+	if !strings.Contains(res.Summary, "没能写入配置文件") || !strings.Contains(res.Summary, "已撤销") {
 		t.Fatalf("summary = %q, want a write failure that says the change was undone", res.Summary)
 	}
 	if d.cfg.Review.Thinking != nil {
@@ -543,7 +600,7 @@ func TestSaveSettingsPushesNothingWhenTheFileRefusesTheKey(t *testing.T) {
 	if res.OK {
 		t.Error("a batch whose write failed reported OK = true")
 	}
-	if !strings.Contains(res.Summary, "没能写入 config.yaml") || !strings.Contains(res.Summary, "已撤销") {
+	if !strings.Contains(res.Summary, "没能写入配置文件") || !strings.Contains(res.Summary, "已撤销") {
 		t.Fatalf("summary = %q, want a write failure that says the change was undone", res.Summary)
 	}
 	if got := logger.CurrentLevel(); got != "info" {
@@ -815,8 +872,6 @@ providers:
     model: claude-x
   - name: fast
     model: haiku
-  - name: main
-    model: duplicate-name
 `)
 	byKey := map[string]SettingFieldVO{}
 	for _, f := range svc.GetSettingsSchema().Fields {
@@ -1197,12 +1252,26 @@ title_provider: main
 	if len(final.Providers) != 2 {
 		t.Fatalf("providers after reload = %+v, want the added one in place of the dropped one", final.Providers)
 	}
-	if final.Providers[0].Name != "main" || final.Providers[0].Model != "m-edited" {
-		t.Errorf("providers[0] = %+v, want the edit to a surviving item", final.Providers[0])
+	// By NAME, not by index: the reload order is the provider FILES' (each entry is its own
+	// document, merged in file-name order), so a save no longer decides where an entry sits in
+	// the list. What it must do is keep the edit and the append.
+	byName := make(map[string]config.ProviderConfig, len(final.Providers))
+	for _, p := range final.Providers {
+		byName[p.Name] = p
 	}
-	if final.Providers[1].Name != "added" || final.Providers[1].Model != "m-added" {
-		t.Errorf("providers[1] = %+v, want the item this batch appended, with the values it sent",
-			final.Providers[1])
+	if got := byName["main"]; got.Model != "m-edited" {
+		t.Errorf("main = %+v, want the edit to a surviving item", got)
+	}
+	if got := byName["added"]; got.Model != "m-added" {
+		t.Errorf("added = %+v, want the item this batch appended, with the values it sent", got)
+	}
+	// The appended item got a file of its own, named after it — and the surviving one stayed in the
+	// file it came from.
+	if filepath.Base(byName["added"].SourceFile) != "provider.added.json" {
+		t.Errorf("the appended provider is in %q, want a file named after it", byName["added"].SourceFile)
+	}
+	if filepath.Base(byName["main"].SourceFile) != "provider.test.json" {
+		t.Errorf("main is in %q, want the file it was read from", byName["main"].SourceFile)
 	}
 	// The item nobody typed into is the SCAFFOLD, not a field of zeroes: `web_search.providers`
 	// declares `type: exa`, so the block this batch built starts at a working entry.
@@ -1324,11 +1393,25 @@ func TestPreviewSettingsShowsStructuralEdits(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("the preview refused the batch: %q", res.Summary)
 	}
-	if !showsLine(res.Hunks, linediff.KindAdd, "name: added") {
-		t.Errorf("the appended item is not in the diff: %+v", res.Hunks)
+	// A provider is a FILE, not a config.yaml leaf (config/provider_json.go): the edit lands in the
+	// provider files, so that is where the preview has to show it. config.yaml itself has nothing to
+	// say about this batch — which is the other half of what this asserts.
+	if len(res.Hunks) != 0 {
+		t.Errorf("config.yaml has lines to say about a provider-only batch: %+v", res.Hunks)
 	}
-	if !showsLine(res.Hunks, linediff.KindDel, "name: second") {
-		t.Errorf("the dropped item is not in the diff: %+v", res.Hunks)
+	shown := func(kind linediff.Kind, sub string) bool {
+		for _, f := range res.Files {
+			if showsLine(f.Hunks, kind, sub) {
+				return true
+			}
+		}
+		return false
+	}
+	if !shown(linediff.KindAdd, `"name": "added"`) {
+		t.Errorf("the appended item is not in any provider-file diff: %+v", res.Files)
+	}
+	if !shown(linediff.KindDel, `"name": "second"`) {
+		t.Errorf("the dropped item is not in any provider-file diff: %+v", res.Files)
 	}
 	if len(d.cfg.Providers) != 2 || d.cfg.Providers[1].Name != "second" {
 		t.Errorf("the preview left the list changed: %+v", d.cfg.Providers)
@@ -1378,8 +1461,8 @@ providers:
 	if len(d.cfg.Providers) != 3 {
 		t.Errorf("providers = %+v, want nothing removed", d.cfg.Providers)
 	}
-	if body := readFileT(t, path); !strings.Contains(body, "name: three") {
-		t.Errorf("config.yaml lost an item to the refused batch:\n%s", body)
+	if body := readFileT(t, providerFileIn(t, path)); !strings.Contains(body, `"name": "three"`) {
+		t.Errorf("the provider file lost an item to the refused batch:\n%s", body)
 	}
 }
 

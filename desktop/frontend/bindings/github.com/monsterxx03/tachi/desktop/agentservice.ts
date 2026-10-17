@@ -611,6 +611,10 @@ export function PreviewRewind(id: string, turn: number): $CancellablePromise<$mo
  * "change" keys nobody touched). What that rewrite DOES cost the reader is Rewrites, said in words
  * and only when it is true.
  * 
+ * The provider files are the exception in the other direction: they have no generated projection to
+ * diff against (they ARE the store), so their left side is what is on disk — see
+ * previewProviderFiles.
+ * 
  * The batch is applied to the LIVE config and rolled back, rather than to a copy: a copy would have
  * to be built by marshalling and re-reading, and both of those go through the same code the answer
  * is about — a copy that marshals differently from the object would make the preview lie in the one

@@ -322,6 +322,19 @@
   font-size: 12.5px;
   color: var(--text-faint);
 }
+/* The FILE an item is stored in — a provider lives in its own `provider.*.json`, so a card has to
+   say which one (每张卡在折叠状态也必须说得清楚：正文里不会再出现这个信息). Dimmer than the item
+   path beside it: it is a location, not a name. */
+.set-elem-source {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  opacity: 0.85;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: nowrap;
+}
 /* The item's own state, pushed to the end of the header: an item whose edits are hidden inside a
    fold still has to say that it holds some (and a refused value has to say that too — a card
    with an error is forced open, so this is the case where the fold was already overridden). */
@@ -414,6 +427,20 @@
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11.5px;
   color: var(--text);
+}
+/* One file of a save that writes more than one: a heading (which file, and its counts), then that
+   file's own diff. config.yaml and each provider.*.json get one apiece — the reader's question
+   「这次改动去了哪儿」 has one answer per file, and a name is what they would go and open. */
+.set-preview-file { padding: 6px 0 2px; }
+.set-preview-file + .set-preview-file { border-top: 1px solid var(--border); }
+.set-preview-file-head { display: flex; align-items: center; gap: 8px; padding: 0 0 2px; }
+.set-preview-file-head .set-preview-counts { margin-left: auto; }
+.set-preview-tag {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 .set-preview-refused { padding: 4px 0; font-size: 13px; color: var(--red); }
 .set-preview-empty { padding: 4px 0; font-size: 12.5px; color: var(--text-faint); }

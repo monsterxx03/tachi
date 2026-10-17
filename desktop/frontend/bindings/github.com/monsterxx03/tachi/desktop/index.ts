@@ -62,6 +62,7 @@ export type {
     SettingElementFieldVO,
     SettingFieldVO,
     SettingListVO,
+    SettingsFilePreviewVO,
     SettingsPreviewVO,
     SettingsRemovalVO,
     SettingsSchemaVO,

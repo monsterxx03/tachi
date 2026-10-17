@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -32,11 +33,7 @@ providers:
 func writeEditsFixture(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return writeConfigAndProviders(t, dir, body)
 }
 
 // loadEditsFixture is the object a form is looking at: the file, loaded.
@@ -91,20 +88,33 @@ func TestApplyListEditsAppendsThenUpdatesThenRemoves(t *testing.T) {
 		t.Errorf("providers[2] = %+v, want the values the batch sent for the new element", cfg.Providers[2])
 	}
 
-	// …and the same edit through the file: what the settings page does. The object is written
-	// whole, so the only question is whether it round-trips.
+	// …and the same edit through the FILES: what the settings page does. config.yaml is written
+	// whole and the provider definitions are written to their own provider.*.json (that is the two
+	// calls below — desktop's SaveSettings makes exactly this pair), so the question is whether the
+	// pair round-trips.
 	if err := SaveTo(path, cfg); err != nil {
 		t.Fatalf("SaveTo: %v", err)
 	}
-	got, err := LoadFrom(path)
+	if _, err := SyncProviderFiles(filepath.Dir(path), cfg.Providers); err != nil {
+		t.Fatalf("SyncProviderFiles: %v", err)
+	}
+	reloaded, err := LoadFrom(path)
 	if err != nil {
-		t.Fatalf("the file this wrote does not load: %v", err)
+		t.Fatalf("the files this wrote do not load: %v", err)
 	}
-	if want := "main,spare,added"; strings.Join(providerNamesOf(got), ",") != want {
-		t.Errorf("providers after a reload = %v, want %v", providerNamesOf(got), want)
+	// The ORDER after a reload is the files' own (merged in file-name order — provider.added.json
+	// sorts before provider.test.json), not the in-memory order above: a provider file is a
+	// document per endpoint, and nothing in it says "I am number two". So this half asserts the
+	// SET, and the values that came from the batch.
+	if got := providerNamesOf(reloaded); strings.Join(sortedCopy(got), ",") != "added,main,spare" {
+		t.Errorf("providers after a reload = %v, want added,main,spare in any order", got)
 	}
-	if got.Providers[0].Model != "m0-edited" || got.Providers[2].Model != "m3" {
-		t.Errorf("the leaf updates did not survive the round trip: %+v", got.Providers)
+	byName := make(map[string]string, len(reloaded.Providers))
+	for _, p := range reloaded.Providers {
+		byName[p.Name] = p.Model
+	}
+	if byName["main"] != "m0-edited" || byName["added"] != "m3" {
+		t.Errorf("the leaf updates did not survive the round trip: %+v", byName)
 	}
 }
 
@@ -245,24 +255,21 @@ func TestApplyListEditsAppendsAnElementWithAnUnsetLeaf(t *testing.T) {
 // and reading the file back gives nil again, which is the state the form draws as 自动.
 func TestSaveLeavesAnUnsetLeafOutOfTheFile(t *testing.T) {
 	cfg, path := loadEditsFixture(t, editsFixture)
+	providerPath := filepath.Join(filepath.Dir(path), providerFilePrefix+"test"+providerFileSuffix)
 	if err := SetPath(cfg, "providers.0.spec.vision", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveTo(path, cfg); err != nil {
-		t.Fatalf("SaveTo: %v", err)
-	}
-	body, _ := os.ReadFile(path)
-	if !strings.Contains(string(body), "vision: true") {
+	saveBoth(t, path, cfg)
+	body, _ := os.ReadFile(providerPath)
+	if !strings.Contains(string(body), `"vision": true`) {
 		t.Errorf("a SET optional leaf must be in the file:\n%s", body)
 	}
 
 	if err := SetPath(cfg, "providers.0.spec.vision", Unset{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveTo(path, cfg); err != nil {
-		t.Fatalf("SaveTo: %v", err)
-	}
-	body, _ = os.ReadFile(path)
+	saveBoth(t, path, cfg)
+	body, _ = os.ReadFile(providerPath)
 	if strings.Contains(string(body), "vision") {
 		t.Errorf("an unset optional leaf must not be spelled out:\n%s", body)
 	}
@@ -316,4 +323,23 @@ func TestSnapshotAndRestoreListEdits(t *testing.T) {
 		t.Errorf("providers.2.api_key = %q, want the pre-edit value (the element the removal shifted)",
 			cfg.Providers[2].APIKey)
 	}
+}
+
+// saveBoth is the settings page's write pair: config.yaml whole, plus the provider files. A test
+// that wants "it survives a save" has to make both calls, or it is only testing half of one.
+func saveBoth(t *testing.T, path string, cfg *Config) {
+	t.Helper()
+	if err := SaveTo(path, cfg); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	if _, err := SyncProviderFiles(filepath.Dir(path), cfg.Providers); err != nil {
+		t.Fatalf("SyncProviderFiles: %v", err)
+	}
+}
+
+// sortedCopy sorts a small []string without mutating the caller's slice.
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }

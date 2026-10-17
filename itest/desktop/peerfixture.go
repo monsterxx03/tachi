@@ -172,7 +172,7 @@ func startPeerFixtures(seeds []peerSeed) (string, []*peerFixture, error) {
 
 // yamlMarshalPeers renders the list as the top-level `peers:` block of config.yaml. It goes through
 // config.PeerConfig — the type the app loads — rather than a format string, so a scenario cannot hand
-// the app an entry its loader would read differently (the same reason sandbox.providerSpec marshals
+// the app an entry its loader would read differently (the same reason sandbox.writeConfig marshals
 // config.PricingConfig).
 func yamlMarshalPeers(peers []config.PeerConfig) (string, error) {
 	raw, err := yaml.Marshal(map[string]any{"peers": peers})
