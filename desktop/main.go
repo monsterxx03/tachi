@@ -280,9 +280,6 @@ func main() {
 		// The device link is stopped explicitly: its reconnect loop owns a goroutine that
 		// would otherwise keep waking up while the process is going away.
 		desk.stopBadge()
-		// The same for the loop that keeps the node reading fresh: it wakes up to probe, and a probe
-		// is a network round trip — nothing about quitting should wait for one.
-		desk.stopPeersFresh()
 		// And the bar's copy of the readout is withdrawn: a consumer that keeps drawing it
 		// would be reporting a process that no longer exists (see barstatus.go).
 		removeDesktopStatus()
@@ -367,9 +364,6 @@ func main() {
 	// delegation reminder both need an identity, and an identity only comes out of a handshake
 	// (desk.warmPeers).
 	desk.warmPeers()
-	// And keep asking, because the count on the Agents trigger is drawn from that reading and is on
-	// screen whether or not anybody is looking at the board (desk.keepPeersFresh).
-	desk.keepPeersFresh(peerReadingRefresh)
 
 	// The device link (badge.go): a screen the agent's questions can reach when nobody is
 	// looking at the window. It is off unless config or TACHI_BADGE names a transport.
