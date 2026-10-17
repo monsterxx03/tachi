@@ -485,10 +485,23 @@
   // 工具条上那个「模型」选择器。第二个只在启动时读过一次，所以保存之后读者回到对话，选择器里看不到刚
   // 加的模型 —— 只有重启应用才会出现。选择器在设置页盖着的时候也挂在页面上（这一页是盖住它，不是卸
   // 载它），所以「保存」与「对面跟着变」是同一次运行里的两半，读的就是工具条上那个下拉自己。
-  const picker = smoke.q('.provider-picker .provider-select')
-  const pickerOpts = picker ? Array.prototype.map.call(picker.options, (o) => smoke.text(o)) : []
+  // 选择器是**一个带过滤框的菜单**（App.tsx 的 ProviderPicker），不是一个 <select>：这台机器
+  // 的配置里有几十个模型，而系统菜单没法打字过滤 —— 所以「有没有这一项」现在要打开来读。
+  smoke.click('.provider-picker .provider-select')
+  const menuOpen = await smoke.waitFor(() => (smoke.q('.provider-menu-input') ? true : null), '打开模型菜单')
+  smoke.check('点模型选择器打开一个带过滤框的菜单', !!menuOpen, '')
+  const pickerOpts = smoke.allText('.provider-menu-name')
   smoke.check('保存后对话的模型选择器里就有刚加的 provider（不用重启）',
     pickerOpts.indexOf('added-by-smoke') >= 0, pickerOpts.join(' / ') || '(没有选项)')
+  // 收掉它：后面还有步骤要点到这一页上，一个开着不走的菜单会把它们挡住。
+  //
+  // **用点外部，不用 Esc**：这一页自己的 Esc 是 capture 阶段的（它拿 Esc 返回对话），于是它先
+  // 收到、又 stopPropagation，菜单根本轮不到。那个组合在真实使用里也不存在——工具条被这一页盖
+  // 着，读者点不到那个按钮，是 driver 的程序化点击才够得着。菜单自己那两条关闭路径（Esc / 点外
+  // 部）由 model-picker 场景在对话页上测，那才是它们该被测的地方。
+  document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  const menuClosed = await smoke.waitFor(() => (smoke.q('.provider-menu') ? null : true), '点外部关掉模型菜单')
+  smoke.check('关掉模型菜单（点外面）', !!menuClosed, '')
 
   // 再把它改回「自动」并保存：界面上唯一能表达"没有值"的状态，落到文件里是那个键不出现。
   // 这一条必须落在**还活着的**元素上（上一步把 fixture 里那个删掉了），所以问的是刚加的那个。

@@ -123,7 +123,7 @@ func (sb *sandbox) demoEnv() map[string]string {
 // pricing rides on the provider entry rather than on `extra` because that is where a price table
 // lives. nil — every scenario but perm-mcp-budget — leaves the model unpriced, which is what keeps
 // the other scenarios' ¥/积分 numbers at zero and out of their assertions.
-func (sb *sandbox) writeConfig(baseURL string, pricing *config.PricingConfig, extra string) error {
+func (sb *sandbox) writeConfig(baseURL string, pricing *config.PricingConfig, extraProviders []string, extra string) error {
 	dir := filepath.Join(sb.home, ".tachi")
 	// The provider goes through the types the app's loader reads (config.ProviderConfig /
 	// config.ModelSpec + fileutil.MarshalJSON), so a scenario cannot hand-write an entry the
@@ -154,6 +154,23 @@ func (sb *sandbox) writeConfig(baseURL string, pricing *config.PricingConfig, ex
 	}
 	if err := os.WriteFile(filepath.Join(dir, "provider.smoke.json"), append(body, '\n'), 0o600); err != nil {
 		return err
+	}
+	// The extra entries a scenario asked for, each in a file of its own. Every one points at the
+	// same mock — the picker needs a list to filter, not other endpoints to talk to — and the model
+	// string carries the name so a filter that matches the MODEL rather than the name is driven too.
+	for _, name := range extraProviders {
+		entry := provider
+		entry.Name = name
+		entry.Model = "fixture/" + name
+		one, err := fileutil.MarshalJSON(struct {
+			Providers []config.ProviderConfig `json:"providers"`
+		}{Providers: []config.ProviderConfig{entry}})
+		if err != nil {
+			return fmt.Errorf("marshal provider fixture %q: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "provider."+name+".json"), append(one, '\n'), 0o600); err != nil {
+			return err
+		}
 	}
 
 	cfg := fmt.Sprintf(`provider: smoke

@@ -580,6 +580,69 @@
   background-color: var(--accent-softer);
   color: var(--text);
 }
+/* The model menu (see ProviderPicker). The popover shell — position, border, shadow, the upward
+   animation — is .popover-panel's; these are the parts only this menu has: a filter box on top, a
+   bounded list below, and a hint at the foot.
+
+   Wider than the trigger on purpose. The trigger is a name clipped to 220px, while the menu holds
+   an input and the model strings behind it, so it takes the width it needs and stays put — a menu
+   that resized as the reader typed would move the rows out from under the pointer. */
+.provider-menu {
+  width: 320px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.provider-menu-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+.provider-menu-input:focus { border-color: var(--accent-2); }
+.provider-menu-input::placeholder { color: var(--text-faint); }
+/* ~10 rows before the list scrolls itself. The list is what scrolls, never the panel: an input
+   that scrolled away with the rows would leave the reader filtering blind. */
+.provider-menu-list { max-height: 260px; overflow-y: auto; }
+.provider-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.provider-menu-row.is-selected { background: var(--accent-soft); color: var(--accent-2); }
+.provider-menu-name {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The row the session is ALREADY on. Separate from .is-selected on purpose: the highlight is where
+   the keyboard is, and opening the menu puts it here — but moving the highlight away must not make
+   it stop saying which model is in effect. */
+.provider-menu-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.provider-menu-row.is-selected .provider-menu-tag { color: var(--accent-2); }
+.provider-menu-empty { padding: 10px 8px; color: var(--text-faint); text-align: center; font-size: 12.5px; }
+.provider-menu-foot {
+  padding: 2px 8px 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11px;
+}
 .usage-meta {
   display: inline-flex;
   align-items: center;

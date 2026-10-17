@@ -13,6 +13,7 @@ import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, a
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
+  ProviderPicker,
   SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
 import { TurnPart } from './parts'
@@ -2915,21 +2916,19 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
                 : null}
               <div className="provider-picker">
-                <select className="provider-select" value={providerName}
-                  title={currentProviderModel ? `模型：${currentProviderModel}` : undefined}
-                  onChange={async (e) => {
-                    const name = e.target.value
+                {/* The picker is a menu with a filter box, not a <select>: this config holds dozens of
+                    models and a native dropdown cannot be typed into (see ProviderPicker). Names only
+                    in the rows — the model string is long and often the same word twice; the tooltip,
+                    and the filter box, are what keep it reachable. */}
+                <ProviderPicker providers={providers} value={providerName} model={currentProviderModel}
+                  onPick={async (name) => {
                     await (AgentService as any).SwitchProvider?.(name)
                     refreshProvider()
                     // A different provider is a different context window, so the ring has to
                     // re-read (it is no longer a side effect of refreshProvider — see
                     // useSessionUsage).
                     refreshUsage(currentId)
-                  }}>
-                  {/* Names only — the model string is long and often identical
-                      to the provider name; the tooltip above keeps it reachable. */}
-                  {providers.map((p) => <option key={p.name ?? p.Name} value={p.name ?? p.Name}>{(p.name ?? p.Name)}</option>)}
-                </select>
+                  }} />
                 <select className="provider-select" value={thinkingLevel} onChange={async (e) => {
                   const lv = e.target.value
                   // A level the backend refuses (an endpoint that rejects it) is
@@ -2956,9 +2955,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     <span className="agents-ico"><AgentsIcon /></span>
                     {/* The count is the number of nodes that ANSWERED the last probe, not the number
                         configured: a machine that cannot delegate to anybody should read as an empty
-                        badge, not as "2". The reading is kept fresh by the BACKEND (desktop
-                        keepPeersFresh), not by this component: nobody opens the board on the badge's
-                        behalf, and a number that ages in place cannot be told from a current one. */}
+                        badge, not as "2". It moves when the BACKEND says the reading moved — and one of
+                        those moments is a machine entering the directory, which probes for it right
+                        then (desktop/peerboard.go peerDiscovered), so a node discovered while this
+                        badge is on screen counts as soon as it has answered. */}
                     <span className="agents-count">{(agentsBoard?.peers || []).filter((p) => p.reachable).length || ''}</span>
                   </button>
                   {agentsOpen && (

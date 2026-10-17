@@ -182,7 +182,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	for _, f := range peerFixtures {
 		defer f.Close()
 	}
-	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.config+peersYAML); err != nil {
+	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.extraProviders, sc.config+peersYAML); err != nil {
 		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 

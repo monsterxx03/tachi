@@ -1,49 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, LOOSE_LABEL, LOOSE_LABEL_HINT, LOOSE_GROUP_KEY } from './lib'
+import { fmtTime, imeActive, latestSessionOf, listNav, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, useFilterInput, LOOSE_LABEL, LOOSE_LABEL_HINT, LOOSE_GROUP_KEY } from './lib'
 import { MOD_KEY } from './platform'
 import type { SessionItem } from './types'
-
-// usePaletteInput owns a palette's filter box: what it HOLDS and what the LIST filters by are two
-// values while a Chinese IME is composing, and keeping them apart is the whole point.
-//
-// React updates a controlled input on every keystroke — including the pinyin a composition is
-// still spelling — so a list filtered by `e.target.value` re-filters (and re-highlights) on 你/ni/
-// nihao while the reader is still typing, moving the row under the cursor on every candidate key.
-// The two keys that end a composition are IME-owned too: Enter commits the candidate and Escape
-// cancels it, so either one would open a conversation or close the box on its way past. So: the box
-// holds the raw value (never rewritten mid-composition — writing into a composing field tears the
-// candidate window), the list filters by the COMMITTED query only, and the keydown handlers return
-// early while the composition is live (`composingRef.current || imeActive(e)`).
-//
-// The ref is cleared on the next macrotask for the reason the composer's own box gives: some WebKit
-// builds fire compositionend BEFORE the keydown that commits the candidate, and that Enter belongs
-// to the IME — while a later, genuine Enter must still be seen.
-function usePaletteInput() {
-  const [value, setValue] = useState('')
-  const [committed, setCommitted] = useState('')
-  const composingRef = useRef(false)
-  return {
-    value,
-    committed,
-    composingRef,
-    inputProps: {
-      value,
-      spellCheck: false,
-      onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-        setValue(e.target.value)
-        // Raw keystrokes filter as they are typed; a composition's do not until it lands.
-        if (!composingRef.current) setCommitted(e.target.value)
-      },
-      onCompositionStart: () => { composingRef.current = true },
-      onCompositionEnd: (e: React.CompositionEvent<HTMLInputElement>) => {
-        // The composition has landed: this is the first moment the list may react to it.
-        setCommitted(e.currentTarget.value)
-        window.setTimeout(() => { composingRef.current = false }, 0)
-      },
-    },
-  }
-}
 
 // ProjectChoice is one ⌘P row: a project, or the project-less bucket (无项目). The bucket is a row
 // because it is a GROUP on the other side of the same gesture — the sidebar keeps it at the foot of
@@ -78,7 +37,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   const [notice, setNotice] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const { committed: query, composingRef, inputProps } = usePaletteInput()
+  const { committed: query, composingRef, inputProps } = useFilterInput()
 
   // The bucket's members, by the SIDEBAR's own membership rule (looseMembers): the row shows how
   // many there are and which one Enter opens, so the two surfaces cannot disagree about which
@@ -100,7 +59,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   useEffect(() => { inputRef.current?.focus() }, [])
 
   // The highlight follows the query rather than the list: a re-filter that left the index
-  // past the end would make Enter a no-op. It follows the COMMITTED query (see usePaletteInput),
+  // past the end would make Enter a no-op. It follows the COMMITTED query (see useFilterInput),
   // so an IME composition does not walk it either.
   useEffect(() => { setIdx(0); setNotice('') }, [query])
 
@@ -208,7 +167,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
 
 // SessionPalette is ⌘K: type to filter the desktop's conversations by title, Enter to open the one
 // chosen. The sibling of the ⌘P palette above and deliberately the same box — the same input
-// behaviour (usePaletteInput), the same ↑↓ / Ctrl+N·P navigation (`listNav`), the same Escape —
+// behaviour (useFilterInput), the same ↑↓ / Ctrl+N·P navigation (`listNav`), the same Escape —
 // because the two are one gesture apart, and a reader who has used one has learned the other.
 //
 // Three things it decides for itself:
@@ -245,7 +204,7 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
   const [idx, setIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const { committed: query, composingRef, inputProps } = usePaletteInput()
+  const { committed: query, composingRef, inputProps } = useFilterInput()
 
   const rows = useMemo(
     () => sessionChoices(sessions, (id) => running.has(id) || !!waitingOf(id)).filter((s) => sessionMatches(s, query)),
@@ -257,7 +216,7 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
   useEffect(() => { inputRef.current?.focus() }, [])
 
   // The highlight follows the query rather than the list: a re-filter that left the index past the
-  // end would make Enter a no-op. It follows the COMMITTED query (see usePaletteInput), so an IME
+  // end would make Enter a no-op. It follows the COMMITTED query (see useFilterInput), so an IME
   // composition does not walk it either.
   useEffect(() => { setIdx(0) }, [query])
 
@@ -280,7 +239,7 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
 
   // ↑↓ and Ctrl+N/Ctrl+P walk the list; navigation wraps, as it does in ⌘P. Enter opens the
   // highlighted conversation and Escape closes — and a composing IME owns all four (see
-  // usePaletteInput).
+  // useFilterInput).
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (composingRef.current || imeActive(e)) return
     const delta = listNav(e)

@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
-import { HASH_REF_MARK, actOnKey, copyText, fmtDur, fmtShare, hashNamespace, humanize, imeActive } from './lib'
+import { HASH_REF_MARK, actOnKey, copyText, fmtDur, fmtShare, hashNamespace, humanize, imeActive, listNav, useFilterInput } from './lib'
 import { isMod, MOD_KEY } from './platform'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processStepLabel, processSummaryLine, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, PeerBoardVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { ProviderConfig } from '../bindings/github.com/monsterxx03/tachi/config'
 
 // MoreRows is the tail of a group's row WINDOW in the sidebar (App.tsx owns the window itself): the
 // line that says how many of that group's conversations are not rendered yet, and the thing that
@@ -183,6 +184,177 @@ function ContextPanel({ info, loading }: { info: ContextInfoVO | null; loading: 
           Total first: it is the line above the parts. */}
       <div className="ctx-foot">总量以最近一次 API 用量为准，分项为本地 chars/4 估算</div>
     </>
+  )
+}
+
+// ProviderPicker is the conversation toolbar's 模型 picker: a menu with a filter box.
+//
+// Why not a <select> any more: the providers are a config LIST and this machine already holds
+// seventy of them, while a native dropdown has no filter box and no way to add one — the popup is
+// the platform's, and a page cannot put anything inside it. Scrolling a system menu to find one
+// model is the whole problem. So it is built here, with the interaction every other candidate list
+// in the app already has (⌘K, ⌘P, the @-file picker): type to filter, ↑↓/Ctrl+N·P to move, Enter to
+// take the highlighted row, Esc to leave without choosing.
+//
+// The filter matches the NAME and the MODEL, because the two answer different questions: the name
+// is what the toolbar shows (`goat-claude-sonnet-5-5`) while the model is what goes to the API
+// (`anthropic/claude-sonnet-5-5`) — so "anthropic" or "stealth/" is only findable through the
+// second one.
+function ProviderPicker({ providers, value, model, onPick }: {
+  providers: ProviderConfig[] | undefined
+  /** The active provider's config name — the row that is marked 当前. */
+  value: string
+  /** Its model string, for the button's tooltip (the old <select>'s title). */
+  model?: string
+  onPick: (name: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLSpanElement>(null)
+
+  // Same dismissal contract as the context meter and the MCP panel: click outside, or Esc. It is
+  // attached only while the menu is open, so a closed picker holds no document listeners.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || boxRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const list = providers ?? []
+  return (
+    <span className="popover-anchor" ref={boxRef}>
+      {open ? (
+        <ProviderMenu list={list} value={value} onPick={(name) => { setOpen(false); onPick(name) }}
+          onClose={() => setOpen(false)} />
+      ) : null}
+      <button type="button" className="provider-select" aria-haspopup="listbox" aria-expanded={open}
+        title={model ? `模型：${model}` : undefined}
+        onClick={() => setOpen((v) => !v)}>
+        {value || '模型'}
+      </button>
+    </span>
+  )
+}
+
+// ProviderMenu is the picker's popover body, and it MOUNTS on open rather than being hidden and
+// shown — which is what resets it: a filter box that kept last time's query would open onto a list
+// that is already filtered by something the reader cannot see, and the highlight would be wherever
+// they left it. Mounting gets every piece of that state fresh for free.
+function ProviderMenu({ list, value, onPick, onClose }: {
+  list: ProviderConfig[]
+  value: string
+  onPick: (name: string) => void
+  onClose: () => void
+}) {
+  const filter = useFilterInput()
+  const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const shown = useMemo(() => {
+    const q = filter.committed.trim().toLowerCase()
+    if (!q) return list
+    return list.filter((p) => (p.name || '').toLowerCase().includes(q) || (p.model || '').toLowerCase().includes(q))
+  }, [list, filter.committed])
+
+  // The highlight: which row is lit, as a PURE FUNCTION of the query and one remembered index.
+  //
+  // Two rules, and they pull in opposite directions on purpose:
+  //   - on open, the highlight sits on the ACTIVE provider, so the menu shows where you are rather
+  //     than jumping to the head of a list of seventy;
+  //   - once a query is typed, it goes back to the head of the list (the palettes' rule): the row it
+  //     was on is a row of the list the reader is no longer looking at.
+  //
+  // The remembered index carries the query it was remembered FOR, which is what makes the second
+  // rule work without an effect: "the query changed" is a comparison made while rendering, not a
+  // correction applied one commit later. That distinction is the bug this shape exists to avoid —
+  // an effect that resets the index is a commit BEHIND, and the frame in between is one where the
+  // highlight is not where the code believes it is.
+  //
+  // (`idx` is also the value arrow keys move from and Enter reads, so "the lit row" and "the row
+  // Enter takes" cannot disagree: there is one index, computed once.)
+  const [remembered, setRemembered] = useState(() => ({
+    query: filter.committed,
+    idx: Math.max(0, shown.findIndex((p) => p.name === value)),
+  }))
+  // Clamped even when the query is unchanged: a provider deleted while this menu was open shrinks
+  // the list under a remembered index, and `shown[idx]` would then be undefined — an Enter that
+  // does nothing, silently.
+  const idx = remembered.query === filter.committed
+    ? Math.min(remembered.idx, Math.max(0, shown.length - 1))
+    : 0
+
+  // Keep the highlighted row in view while arrowing through a long list (the @-file picker's rule).
+  useEffect(() => {
+    const el = listRef.current?.children[idx] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [idx, shown])
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    // A composition owns the keyboard while it is live: its Enter commits a candidate and its
+    // Escape cancels one, and acting on either would pick or dismiss on the IME's behalf.
+    if (filter.composing() || imeActive(e)) return
+    const step = listNav(e)
+    if (step !== 0) {
+      e.preventDefault()
+      // From the CLAMPED index, so the first ↑ at the foot of a freshly filtered list wraps from the
+      // row that is actually lit rather than from a remembered one that is not on screen — and it is
+      // recorded as belonging to the CURRENT query, which is what keeps the next render from sending
+      // the highlight back to the head.
+      setRemembered({
+        query: filter.committed,
+        idx: shown.length === 0 ? 0 : (idx + step + shown.length) % shown.length,
+      })
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const pick = shown[idx]
+      if (pick) onPick(pick.name)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      // Claimed, and stopped, for the listeners above this menu on the document (the conversation's
+      // own Escape). Note what it does NOT reach: the settings page installs its Escape in the
+      // CAPTURE phase — it means "leave this page" there — so it answers first and stops the event
+      // before this handler is ever called. That combination is unreachable for a reader (the page
+      // covers the toolbar, so the picker cannot be opened from it), which is why it is not defended
+      // against here; see the settings smoke driver, which closes the menu the reader's way.
+      e.stopPropagation()
+      onClose()
+    }
+  }
+
+  return (
+    <div className="popover-panel provider-menu" role="listbox" aria-label="模型">
+      <input ref={inputRef} className="provider-menu-input" {...filter.inputProps}
+        placeholder="输入过滤（名字或 model）" aria-label="过滤模型" onKeyDown={onKeyDown} />
+      {shown.length === 0 ? (
+        <div className="provider-menu-empty">没有匹配的模型</div>
+      ) : (
+        <div className="provider-menu-list" ref={listRef}>
+          {shown.map((p, i) => (
+            <div key={p.name} role="option" aria-selected={i === idx}
+              className={`provider-menu-row${i === idx ? ' is-selected' : ''}${p.name === value ? ' is-current' : ''}`}
+              title={p.model || p.name}
+              onMouseEnter={() => setRemembered({ query: filter.committed, idx: i })}
+              // onMouseDown with preventDefault: the filter box must keep focus, or the click would
+              // blur it mid-gesture (the @-file picker's own reason, minus the caret).
+              onMouseDown={(e) => { e.preventDefault(); onPick(p.name) }}>
+              <span className="provider-menu-name">{p.name}</span>
+              {p.name === value ? <span className="provider-menu-tag">当前</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="provider-menu-foot">↑↓ 选择 · Enter 切换 · Esc 关闭</div>
+    </div>
   )
 }
 
@@ -1544,4 +1716,4 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }

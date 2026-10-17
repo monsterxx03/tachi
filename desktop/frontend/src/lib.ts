@@ -1,5 +1,6 @@
 import { Clipboard } from '@wailsio/runtime'
-import type { KeyboardEvent } from 'react'
+import type { ChangeEvent, CompositionEvent, KeyboardEvent } from 'react'
+import { useRef, useState } from 'react'
 import type { ProjectVO, SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AttachmentInfo, Message } from './types'
 
@@ -182,6 +183,55 @@ export function actOnKey(fn: () => void) {
       e.preventDefault()
       fn()
     }
+  }
+}
+
+// useFilterInput owns a filter box: what it HOLDS and what the LIST filters by are two values while
+// a Chinese IME is composing, and keeping them apart is the whole point.
+//
+// React updates a controlled input on every keystroke — including the pinyin a composition is still
+// spelling — so a list filtered by `e.target.value` re-filters (and re-highlights) on 你/ni/nihao
+// while the reader is still typing, moving the row under the cursor on every candidate key. The two
+// keys that end a composition are IME-owned too: Enter commits the candidate and Escape cancels it,
+// so either one would pick a row or close the box on its way past. So: the box holds the raw value
+// (never rewritten mid-composition — writing into a composing field tears the candidate window), the
+// list filters by the COMMITTED query only, and the keydown handlers return early while the
+// composition is live (`composingRef.current || imeActive(e)`).
+//
+// The ref is cleared on the next macrotask for the reason the composer's own box gives: some WebKit
+// builds fire compositionend BEFORE the keydown that commits the candidate, and that Enter belongs
+// to the IME — while a later, genuine Enter must still be seen.
+//
+// It lives here rather than beside any one caller because there are three filter boxes now (⌘P, ⌘K
+// and the model picker) and every one of them needs the same two-value handling: a copy per module
+// is how one of them ends up filtering on the raw value.
+export function useFilterInput() {
+  const [value, setValue] = useState('')
+  const [committed, setCommitted] = useState('')
+  const composingRef = useRef(false)
+  return {
+    /** What the box holds — the raw keystrokes, composition included. */
+    value,
+    /** What the LIST filters by: the value as of the last committed keystroke, not the composition. */
+    committed,
+    composingRef,
+    /** True while a composition owns the keyboard (see the comment above). */
+    composing: () => composingRef.current,
+    inputProps: {
+      value,
+      spellCheck: false,
+      onChange: (e: ChangeEvent<HTMLInputElement>) => {
+        setValue(e.target.value)
+        // Raw keystrokes filter as they are typed; a composition's do not until it lands.
+        if (!composingRef.current) setCommitted(e.target.value)
+      },
+      onCompositionStart: () => { composingRef.current = true },
+      onCompositionEnd: (e: CompositionEvent<HTMLInputElement>) => {
+        // The composition has landed: this is the first moment the list may react to it.
+        setCommitted(e.currentTarget.value)
+        window.setTimeout(() => { composingRef.current = false }, 0)
+      },
+    },
   }
 }
 

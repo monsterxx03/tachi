@@ -35,6 +35,15 @@ import (
 // the row's wording ("来自未知节点 <8 位>") is assertable.
 const smokeSourceNodeID = "cd726b446c34386ece70d88fdd5fbf2a"
 
+// pickerProviderNames are the extra providers the model-picker scenario seeds: enough entries that
+// filtering one out means something, with one name a query can isolate by itself ("fixture-pick").
+// The name is also what the row shows, while the MODEL string the sandbox writes is
+// "fixture/<name>" — which is what lets that driver prove the filter reads both.
+var pickerProviderNames = []string{
+	"fixture-alpha", "fixture-beta", "fixture-gamma", "fixture-delta",
+	"fixture-epsilon", "fixture-pick", "fixture-zeta", "fixture-eta",
+}
+
 type scenario struct {
 	name string
 	// What the model replies, request by request.
@@ -52,6 +61,13 @@ type scenario struct {
 	// real number supplies one here — and it cannot come in through `config`, because a price
 	// table lives INSIDE the provider entry (provider.smoke.json), not in config.yaml.
 	pricing *config.PricingConfig
+	// extraProviders are ADDITIONAL provider names the sandbox writes into provider files of their
+	// own, each pointing at the same mock. They exist for the model picker: it is a list WITH A
+	// FILTER, and the shared fixture holds exactly one entry (the mock), which cannot show that
+	// typing NARROWS the list rather than emptying it — or that the menu opens onto anything worth
+	// scrolling. Each name gets its own `provider.<name>.json`, which is also what an install with
+	// several files looks like on disk.
+	extraProviders []string
 	// extraRoots are ADDITIONAL workspace roots for the session, each entry a directory the
 	// runner creates under the sandbox holding that entry's files. They are seeded rather than
 	// added in the UI because the UI's only way in is a native directory picker, which a driver
@@ -3816,6 +3832,50 @@ permissions:
 				// 这里补的是"文件确实已经被重写过一次"这个前提：注释没了。
 				c.check("第一次保存之后，config.yaml 里已经没有手写注释（文件被整份重写过）",
 					!strings.Contains(string(raw), "# vision:"), string(raw)[:200])
+			},
+		},
+		//
+		//
+		// model-picker: 工具条上那个「模型」选择器 —— 一个**带过滤框的菜单**（App.tsx 的
+		// ProviderPicker），不是 <select>。
+		//
+		// 它存在的理由是数量：这份配置里有几十个模型，而原生下拉是系统菜单、塞不进一个输入框。
+		// 所以这一条要的不是「列表里有几项」（settings 场景已经在读那个列表，它关心的是保存之后
+		// 新 provider 有没有立刻出现），而是**打字真的会缩窄列表**、键盘真的能选、Esc 与点外部
+		// 真的能关。「菜单长得像有过滤框、输入不生效」「过滤把该留的也滤掉」「打开时还记着上次
+		// 的查询」都是只读一次列表看不出来的错。
+		//
+		// 沙箱默认只种一个 provider（mock），一条也证明不了过滤 —— 输入之后它要么全留要么全空。
+		// 所以这里种一批额外条目，每个一个 provider 文件（也是真实安装的样子）。
+		{
+			name: "model-picker",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe model-picker scenario's working directory\n",
+			},
+			extraProviders: pickerProviderNames,
+			after: func(c *checkCtx) {
+				c.check("选模型没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				// 切换是**会话级**的：它记在那份 meta.json 的 provider_name 里（SwitchProvider 改
+				// 的是 session.Meta.ProviderName，然后 UpdateMeta 落盘），不动全局配置。
+				// （别和 APIRecord 里的 `provider` 搞混：那是**每一次请求**记的快照，是另一回事。）
+				picked := ""
+				for _, m := range c.sessionMetas() {
+					if p, ok := m["provider_name"].(string); ok && p != "" {
+						picked = p
+					}
+				}
+				c.check("切到的模型记在这份会话自己的 meta.json 上（会话级）",
+					picked == "fixture-pick", "provider_name="+picked)
+
+				cfg, err := config.LoadFrom(filepath.Join(c.home, ".tachi", "config.yaml"))
+				c.check("config.yaml 可读", err == nil, errText(err))
+				if err == nil {
+					c.check("全局默认 provider 没有被这次切换改掉（它仍然只对新会话生效）",
+						cfg.Provider == "smoke", "provider="+cfg.Provider)
+					// 种下的条目都还在文件里：切换只是选了其中一个，没有重写配置。
+					c.check("种下的 8 个额外 provider 还在（切换不重写配置）",
+						len(cfg.Providers) == 9, fmt.Sprintf("providers=%d", len(cfg.Providers)))
+				}
 			},
 		},
 		//
