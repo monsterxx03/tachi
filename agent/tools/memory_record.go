@@ -13,10 +13,11 @@ const ToolNameRecordMemory = "RecordMemory"
 // explicit LLM-initiated memories to the backend. Decouples the tool
 // definition from the agent's memory and session management.
 type MemoryRecorder interface {
-	// RecordMemory stores a memory entry with the given content and tags.
-	// The implementation is responsible for associating it with the current
-	// session and passing it through the backend's filtering/upload pipeline.
-	RecordMemory(ctx context.Context, content string, tags []string) error
+	// RecordMemory stores a memory entry with the given content, tags and
+	// scope ("" = automatic; "global" / "project" force a domain).
+	// The implementation is responsible for validating the scope, associating
+	// the entry with the current session, and handing it to the backend.
+	RecordMemory(ctx context.Context, content string, tags []string, scope string) error
 }
 
 // RecordMemoryTool allows the LLM to explicitly record important information
@@ -53,8 +54,12 @@ func (t *RecordMemoryTool) Properties() map[string]PropertySchema {
 		},
 		"tags": {
 			Type:        "array",
-			Description: "Optional tags for categorization (e.g. [\"user-preference\", \"decision\", \"config\", \"project-convention\"]). Helps organize and filter memories.",
+			Description: "Optional keywords for this memory (e.g. [\"user-preference\", \"decision\", \"config\", \"project-convention\"]). They are stored in the entry and searched, so include words a future question about this fact would contain.",
 			Items:       map[string]string{"type": "string"},
+		},
+		"scope": {
+			Type:        "string",
+			Description: "Optional. \"global\" for knowledge that applies everywhere (who the user is, how they like to work, personal conventions); \"project\" for facts about this repository only. Omit to use the automatic choice: project when the session is inside a git repository, global otherwise.",
 		},
 	}
 }
@@ -69,6 +74,7 @@ type recordMemoryResult struct {
 	Success bool     `json:"success"`
 	Content string   `json:"content"`
 	Tags    []string `json:"tags,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
 	Message string   `json:"message,omitempty"`
 }
 
@@ -76,6 +82,7 @@ func (t *RecordMemoryTool) ExecuteContext(ctx context.Context, args string) (str
 	var params struct {
 		Content string   `json:"content"`
 		Tags    []string `json:"tags"`
+		Scope   string   `json:"scope"`
 	}
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -89,7 +96,7 @@ func (t *RecordMemoryTool) ExecuteContext(ctx context.Context, args string) (str
 		return "", fmt.Errorf("memory recorder not available")
 	}
 
-	if err := t.recorder.RecordMemory(ctx, params.Content, params.Tags); err != nil {
+	if err := t.recorder.RecordMemory(ctx, params.Content, params.Tags, params.Scope); err != nil {
 		return "", fmt.Errorf("failed to record memory: %w", err)
 	}
 
@@ -97,7 +104,8 @@ func (t *RecordMemoryTool) ExecuteContext(ctx context.Context, args string) (str
 		Success: true,
 		Content: params.Content,
 		Tags:    params.Tags,
-		Message: "Memory recorded successfully. It will be available for semantic recall in future conversations.",
+		Scope:   params.Scope,
+		Message: "Memory recorded successfully. It will be available for recall in future conversations.",
 	}
 
 	b, err := json.Marshal(result)

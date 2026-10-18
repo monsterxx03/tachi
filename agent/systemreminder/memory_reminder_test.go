@@ -13,13 +13,15 @@ import (
 // whole path (recall → reinforce → render) without any storage.
 type stubMemoryBackend struct{}
 
-func (stubMemoryBackend) Store(context.Context, string) error { return nil }
+func (stubMemoryBackend) Store(context.Context, string, []string, memory.StoreScope) error {
+	return nil
+}
 
 func (stubMemoryBackend) Recall(context.Context, string, int) ([]memory.Entry, error) {
 	return []memory.Entry{{ID: "fact-1", Content: "a remembered thing", Timestamp: time.Now().Unix()}}, nil
 }
 
-func (stubMemoryBackend) ReinforceFact(context.Context, string) error { return nil }
+func (stubMemoryBackend) ReinforceFacts(context.Context, []string) error { return nil }
 
 // TestMemoryRecallReminder_SwapBackendIsSafeUnderConcurrentGenerate is the race the reload
 // path creates: the settings goroutine swaps what the reminder points at (memory.* saved)

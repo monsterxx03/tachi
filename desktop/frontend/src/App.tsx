@@ -1775,6 +1775,34 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (res && res !== 'ok') setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, pinned: !pinned } : s)))
   }, [])
 
+  // actionNotice is a one-line, transient acknowledgement for actions whose only
+  // lasting evidence is a menu label the reader has already closed (memory
+  // consolidation, today). It NEVER takes a click — feedback is not a control —
+  // and it clears itself.
+  const [actionNotice, setActionNotice] = useState('')
+  const actionNoticeTimer = useRef(0)
+  const flashAction = useCallback((text: string) => {
+    setActionNotice(text)
+    window.clearTimeout(actionNoticeTimer.current)
+    actionNoticeTimer.current = window.setTimeout(() => setActionNotice(''), 2400)
+  }, [])
+
+  // toggleSkipDream turns background memory consolidation on or off for one
+  // conversation (the row's 跳过记忆整理 / 恢复记忆整理). The flag lives on the
+  // session record, so it covers every entry point — not just this window — and
+  // survives a restart. The local row is flipped first for an immediate menu,
+  // and a refusal (a session a subsystem owns) puts it back.
+  const toggleSkipDream = useCallback(async (sid: string, skip: boolean) => {
+    setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, skipDream: skip } : s)))
+    const res = await (AgentService as any).SetSessionSkipDream?.(sid, skip).catch((e: unknown) => String(e))
+    if (res && res !== 'ok') {
+      setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, skipDream: !skip } : s)))
+      flashAction(res)
+      return
+    }
+    flashAction(skip ? '已跳过这个会话的记忆整理' : '已恢复这个会话的记忆整理')
+  }, [flashAction])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     const list = (await AgentService.ListSessions().catch(() => null)) || []
@@ -3379,6 +3407,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               one here that is about WHERE the row sits rather than what happens to it. */}
           <button className="ctx-item" role="menuitem"
             onClick={() => { void togglePin(menu.sid, !menuSession?.pinned); setMenu(null) }}>{menuSession?.pinned ? '取消置顶' : '置顶'}</button>
+          {/* Memory consolidation is a property of the conversation, not of this window:
+              the flag sits in meta.json and every entry point reads it. A session a
+              subsystem owns (a remote execution) is fixed at skipped — the item says why
+              instead of pretending the choice exists. */}
+          <button className="ctx-item" role="menuitem" disabled={!!menuSession?.kind}
+            title={menuSession?.kind ? '远端执行的会话固定不参与记忆整理' : '打开后，后台整理不会读取这个会话；随时可以在这里恢复'}
+            onClick={() => { void toggleSkipDream(menu.sid, !menuSession?.skipDream); setMenu(null) }}>
+            {menuSession?.skipDream ? '恢复记忆整理' : '跳过记忆整理'}
+          </button>
           <button className="ctx-item" role="menuitem" onClick={() => { void openChain(menu.sid, sessions.find((x) => x.id === menu.sid)?.title || '会话') }}>回退链…</button>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           {/* No 「已复制」 flash: the menu is gone by the time the promise settles, and the click
@@ -3393,6 +3430,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
         </div>
       )}
+      {actionNotice && <div className="app-toast" role="status" aria-live="polite">{actionNotice}</div>}
       {projectMenu && (
         <div className="ctx-menu" role="menu" style={{ left: projectMenu.x, top: projectMenu.y }} onMouseLeave={() => setProjectMenu(null)}>
           <button className="ctx-item" role="menuitem"

@@ -6,12 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
@@ -45,7 +48,7 @@ func TestTopicBackend_StoreDirectContent(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
 	ctx := t.Context()
 
-	err := backend.Store(ctx, "用户偏好：代码注释用英文")
+	err := backend.Store(ctx, "用户偏好：代码注释用英文", nil, ScopeAuto)
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -228,7 +231,7 @@ func TestTopicBackend_Recall_Inbox(t *testing.T) {
 	ctx := t.Context()
 
 	// Write directly to inbox.
-	err := backend.Store(ctx, "记住：部署用 make deploy")
+	err := backend.Store(ctx, "记住：部署用 make deploy", nil, ScopeAuto)
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -380,30 +383,74 @@ func TestExtractTitle(t *testing.T) {
 	}
 }
 
-func TestComputeScore(t *testing.T) {
-	// computeScore now measures only text relevance (keyword matches, recency).
-	// Memory lifecycle factors (decay, superseded, reinforcements) are applied
-	// in Recall() from authoritative FactState data.
+func TestScoreBlock(t *testing.T) {
+	// The score is coverage of the query's terms plus small bonuses; lifecycle
+	// factors (decay, superseded, reinforcements) are applied in Recall().
 
-	// Block with keyword in title should get title bonus (0.5 + 0.2 = 0.7).
+	// A hit in the title must outrank the same term in the body only.
+	terms := buildSearchTerms([]string{"database"})
 	withTitle := "## Database\n\n关键词: storage\n\nWe chose SQLite."
-	titleScore := computeScore(withTitle, "database")
-	if titleScore < 0.65 || titleScore > 0.75 {
-		t.Errorf("title match score should be ~0.7, got %f", titleScore)
-	}
-
-	// Block with keyword in 关键词 line should get keyword bonus (0.5 + 0.2 = 0.7).
-	withKeyword := "## Storage\n\n关键词: database\n\nWe chose SQLite."
-	keywordScore := computeScore(withKeyword, "database")
-	if keywordScore < 0.65 || keywordScore > 0.75 {
-		t.Errorf("keyword match score should be ~0.7, got %f", keywordScore)
-	}
-
-	// Block with keyword in body only gets base score (0.5).
 	bodyOnly := "## Storage\n\n关键词: sql\n\nWe used a database."
-	bodyScore := computeScore(bodyOnly, "database")
-	if bodyScore < 0.45 || bodyScore > 0.55 {
-		t.Errorf("body-only match score should be ~0.5, got %f", bodyScore)
+
+	okTitle, titleScore := scoreBlock(withTitle, terms)
+	okBody, bodyScore := scoreBlock(bodyOnly, terms)
+	if !okTitle || !okBody {
+		t.Fatal("both blocks contain the term and must match")
+	}
+	if titleScore <= bodyScore {
+		t.Errorf("title hit (%f) should outrank body-only (%f)", titleScore, bodyScore)
+	}
+
+	// The core fix: a block that answers the WHOLE query must outrank one that
+	// shares a single word with it. Under the old fixed base both scored 0.5.
+	multi := buildSearchTerms([]string{"sqlite 连接池"})
+	full := "## 数据库\n\n关键词: sqlite, 连接池\n\n我们用 SQLite 的连接池。"
+	partial := "## 数据库\n\n关键词: sqlite\n\n我们用 SQLite。"
+	okFull, fullScore := scoreBlock(full, multi)
+	okPartial, partialScore := scoreBlock(partial, multi)
+	if !okFull || !okPartial {
+		t.Fatal("both blocks contain at least one term")
+	}
+	if fullScore <= partialScore {
+		t.Errorf("full coverage (%f) should outrank partial (%f)", fullScore, partialScore)
+	}
+
+	// No term → no result.
+	if ok, _ := scoreBlock("## Unrelated\n\nNothing here.", terms); ok {
+		t.Error("a block with no matching term must not match")
+	}
+}
+
+func TestBuildSearchTerms(t *testing.T) {
+	// A CJK phrase has no word boundaries: the phrase alone would only match a
+	// file that spells it exactly, so its bigrams are what make recall work.
+	terms := buildSearchTerms([]string{"记忆系统"})
+	texts := termTexts(terms)
+	want := []string{"记忆系统", "记忆", "系统"}
+	for _, w := range want {
+		if !slices.Contains(texts, w) {
+			t.Errorf("terms %v missing %q", texts, w)
+		}
+	}
+
+	// A multi-word phrase keeps the phrase AND its words.
+	terms = buildSearchTerms([]string{"memory system"})
+	texts = termTexts(terms)
+	if !slices.Contains(texts, "memory system") || !slices.Contains(texts, "memory") || !slices.Contains(texts, "system") {
+		t.Errorf("phrase expansion: got %v", texts)
+	}
+
+	// Function words are dropped: they match everything and rank nothing.
+	terms = buildSearchTerms([]string{"what did we do"})
+	if len(terms) != 0 {
+		t.Errorf("stop words should produce no terms, got %v", termTexts(terms))
+	}
+
+	// Duplicates collapse (case-insensitively) and the phrase's heavy weight
+	// survives a later, lighter mention.
+	terms = buildSearchTerms([]string{"SQLite", "sqlite"})
+	if len(terms) != 1 {
+		t.Errorf("duplicate terms should collapse, got %v", termTexts(terms))
 	}
 }
 
@@ -735,5 +782,189 @@ We chose SQLite.
 	}
 	if len(results) != 0 {
 		t.Errorf("expected no results with extractor keywords, got %d", len(results))
+	}
+}
+
+// The failure this path was fixed for: the extractor returns 2-3 word phrases
+// that never appear verbatim, so searching ONLY the phrases found nothing and
+// recall fell back to unrelated sessions on 72% of turns.
+func TestTopicBackend_Recall_SplitsExtractedPhrases(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t)
+	ctx := t.Context()
+
+	topicsDir := filepath.Join(tmpDir, "memory", "topics")
+	os.MkdirAll(topicsDir, 0755)
+	os.WriteFile(filepath.Join(topicsDir, "db.md"), []byte(`# DB
+
+## 数据库选型
+
+状态: active
+关键词: sqlite, database
+
+这个项目用 SQLite 作为数据库。
+
+---
+`), 0644)
+
+	// Neither "database connection pool" nor "database technology" appears in
+	// the file; "database" does.
+	backend.SetKeywordExtractor(&countingExtractor{kws: []string{"database connection pool"}})
+
+	results, err := backend.Recall(ctx, "what database technology did we choose for this project", 5)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected the word 'database' from the extracted phrase to match the topic")
+	}
+	if !strings.Contains(results[0].Content, "SQLite") {
+		t.Errorf("wrong entry returned: %q", results[0].Content)
+	}
+}
+
+// The same fact can sit in inbox and a topic file at once (dream has not folded
+// it in yet); injecting it twice wastes context and inflates its apparent
+// confidence.
+func TestTopicBackend_Recall_DedupesIdenticalContent(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t)
+	ctx := t.Context()
+
+	block := "## Shared fact\n\n关键词: sqlite\n\nWe chose SQLite for the project.\n"
+	topicsDir := filepath.Join(tmpDir, "memory", "topics")
+	os.MkdirAll(topicsDir, 0755)
+	os.WriteFile(filepath.Join(topicsDir, "db.md"), []byte(block+"\n---\n"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "memory", "inbox.md"), []byte("\n"+block+"\n---\n"), 0644)
+
+	results, err := backend.Recall(ctx, "sqlite", 10)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected the duplicate to collapse to 1 result, got %d", len(results))
+	}
+}
+
+// Scope decides which inbox a direct write lands in. Before scope existed every
+// write in a git repo landed in that project's inbox, so a user preference was
+// invisible everywhere else.
+func TestTopicBackend_StoreScopeAndTags(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t)
+	ctx := t.Context()
+	backend.projectDir = filepath.Join(tmpDir, "project-memory")
+
+	globalInbox := filepath.Join(tmpDir, "memory", InboxFile)
+	projectInbox := filepath.Join(backend.projectDir, InboxFile)
+
+	if err := backend.Store(ctx, "用户偏好：回答尽量简短", []string{"preference", " style ", "preference"}, ScopeGlobal); err != nil {
+		t.Fatalf("Store(global): %v", err)
+	}
+	globalBody, err := os.ReadFile(globalInbox)
+	if err != nil {
+		t.Fatalf("read global inbox: %v", err)
+	}
+	if !strings.Contains(string(globalBody), "回答尽量简短") {
+		t.Fatal("global write did not land in the global inbox")
+	}
+	// tags become a searchable 关键词 line, deduped.
+	if !strings.Contains(string(globalBody), "关键词: preference, style") {
+		t.Fatalf("tags should be written as a 关键词 line, got: %s", globalBody)
+	}
+	if _, err := os.Stat(projectInbox); !os.IsNotExist(err) {
+		t.Fatal("a global write must not create the project inbox")
+	}
+
+	if err := backend.Store(ctx, "本项目部署用 make deploy", nil, ScopeProject); err != nil {
+		t.Fatalf("Store(project): %v", err)
+	}
+	if _, err := os.Stat(projectInbox); err != nil {
+		t.Fatal("project write did not land in the project inbox")
+	}
+
+	// Auto keeps the old rule: project when one exists.
+	if err := backend.Store(ctx, "自动选择", nil, ScopeAuto); err != nil {
+		t.Fatalf("Store(auto): %v", err)
+	}
+	projectBody, _ := os.ReadFile(projectInbox)
+	if !strings.Contains(string(projectBody), "自动选择") {
+		t.Fatal("auto write should go to the project inbox when a project exists")
+	}
+
+	if err := backend.Store(ctx, "x", nil, StoreScope("bogus")); err == nil {
+		t.Fatal("unknown scope must be rejected")
+	}
+}
+
+// Project scope outside a repository must not drop the memory: it has nowhere
+// else to go, so it goes global.
+func TestTopicBackend_StoreProjectScopeOutsideRepo(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t) // projectDir is "" here
+	if err := backend.Store(t.Context(), "项目事实", nil, ScopeProject); err != nil {
+		t.Fatalf("Store(project): %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(tmpDir, "memory", InboxFile))
+	if err != nil || !strings.Contains(string(body), "项目事实") {
+		t.Fatalf("project write outside a repo should fall back to global (err=%v)", err)
+	}
+}
+
+func TestExtractTimestampReadsOnlyMetadata(t *testing.T) {
+	date := func(s string) int64 {
+		ts, _ := time.Parse(strutil.TimeFormatDate, s)
+		return ts.Unix()
+	}
+
+	if got := extractTimestamp("## 2026-06-10: 选择了 SQLite\n\n正文"); got != date("2026-06-10") {
+		t.Errorf("heading date: got %d, want %d", got, date("2026-06-10"))
+	}
+	if got := extractTimestamp("## 2026-06-19T22:32:01+08:00\n\n正文"); got == 0 {
+		t.Error("RFC3339 heading date was not parsed")
+	}
+	if got := extractTimestamp("## T\n\n来源: 2026-06-08\n\n正文"); got != date("2026-06-08") {
+		t.Errorf("来源 date: got %d, want %d", got, date("2026-06-08"))
+	}
+	// A year in prose is not the fact's date — the old scan took it.
+	if got := extractTimestamp("## Fact\n\nWe released this in 2024 and it still works."); got != 0 {
+		t.Errorf("prose year must not become a timestamp, got %d", got)
+	}
+}
+
+// Project memory follows the TURN's working directory, not the process cwd: a
+// Finder-launched desktop app runs in "/", so resolving the repository from the
+// process made project memory silently nonexistent there.
+func TestTopicBackend_ProjectDomainFollowsTurnWorkingDir(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t) // built in a directory with no repo
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := wdctx.WithDir(t.Context(), repo)
+
+	if err := backend.Store(ctx, "本项目部署用 make deploy", nil, ScopeAuto); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".tachi", "memory", InboxFile)); err != nil {
+		t.Fatal("write did not land in the session's project memory")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "memory", InboxFile)); !os.IsNotExist(err) {
+		t.Fatal("a project write must not also land in the global inbox")
+	}
+
+	// Recall inside the repository sees it...
+	results, err := backend.Recall(ctx, "make deploy", 5)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("project memory was not searched for a turn inside the repo")
+	}
+
+	// ...and a turn outside any repository does not.
+	results, err = backend.Recall(t.Context(), "make deploy", 5)
+	if err != nil {
+		t.Fatalf("Recall outside: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("project memory leaked into a turn outside the repo: %d results", len(results))
 	}
 }

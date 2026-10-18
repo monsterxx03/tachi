@@ -40,6 +40,23 @@ func WithDir(ctx context.Context, dir string) context.Context {
 	return context.WithValue(ctx, contextKey{}, dir)
 }
 
+// MaybeDir returns the directory bound to ctx and whether one was bound at all.
+//
+// Unlike Dir it never consults the process-wide fallback, so a caller can tell
+// "this turn says it is in /repo/x" from "nobody said — use the process cwd".
+// Memory needs that distinction: a Finder-launched desktop process runs in "/"
+// while the session works in a repository.
+func MaybeDir(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	dir, ok := ctx.Value(contextKey{}).(string)
+	if !ok || dir == "" {
+		return "", false
+	}
+	return dir, true
+}
+
 // Dir retrieves the working directory from ctx. When no directory is set in
 // the context, it falls back to the registered fallback function. This ensures
 // backward compatibility for the main agent, which tracks the working directory

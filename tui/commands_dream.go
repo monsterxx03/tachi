@@ -86,6 +86,17 @@ func (m *Model) handleDreamStatusCommand() tea.Cmd {
 // (not via SystemScheduler). It lists all sessions, runs the dream
 // orchestrator, and streams progress/results back to the chat view asynchronously.
 func (m *Model) handleDreamCommand() tea.Cmd {
+	// The switch gates this explicit command too: memory consolidation must
+	// never rewrite the user's sessions in an entry point where they have not
+	// turned it on. `/dream status` stays available either way.
+	if m.cfg == nil || !m.cfg.Dream.Enabled {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "🧠 **记忆整理未开启**（`dream.enabled`）\n\n先在 `~/.tachi/config.yaml` 里打开它，重启后再试；`/dream status` 仍可查看。",
+		})
+		return nil
+	}
+
 	sm := m.agent.SessionManager()
 	if sm == nil {
 		m.chatview.AddMessage(chatMessage{
@@ -142,8 +153,9 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 
 	// Store orchestrator reference before goroutine starts so /dream status can query it.
 	m.dreamOrch = dream.NewOrchestrator(dream.Config{
-		Logger:        m.logger,
-		MaxConcurrent: m.cfg.Dream.MaxConcurrent,
+		Logger:            m.logger,
+		MaxConcurrent:     m.cfg.Dream.MaxConcurrent,
+		MaxSessionsPerRun: m.cfg.Dream.MaxSessionsPerRun,
 	})
 	o := m.dreamOrch // local reference for goroutine
 
@@ -189,7 +201,7 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 			}, loadMessages)
 		}
 
-		if err := o.Run(ctx, sessions, runFn); err != nil {
+		if _, err := o.Run(ctx, sessions, runFn); err != nil {
 			ch <- fmt.Sprintf("🧠 **Dream 失败**: %v", err)
 		} else {
 			ch <- "🧠 **Dream 完成** — 记忆已整合"

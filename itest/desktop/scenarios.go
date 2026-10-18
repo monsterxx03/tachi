@@ -3049,6 +3049,27 @@ permissions:
 			},
 		},
 		//
+		// 会话可以把自己排除在记忆整理之外（右键 → 跳过记忆整理）。标记是会话记录上的
+		// skip_dream：整理入口在分组之前就过滤它，所以对每个入口都成立，并且活过重启。
+		// driver 验菜单文案随状态翻转；这里验它真的落在 meta.json 上 —— 界面状态活不过
+		// 重启，磁盘上的字段才是下次整理读到的那个。
+		{
+			name: "skip-dream",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe skip-dream scenario's working directory\n",
+			},
+			after: func(c *checkCtx) {
+				c.check("跳过记忆整理没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				skipped := 0
+				for _, m := range c.sessionMetas() {
+					if v, _ := m["skip_dream"].(bool); v {
+						skipped++
+					}
+				}
+				c.check("跳过记忆整理写进了 meta.json（恰好一个会话）", skipped == 1, fmt.Sprintf("%d 个", skipped))
+			},
+		},
+		//
 		// 运行中的会话删不掉（desktop/agent_session.go 的 DeleteSession）。拒绝是后端定的，
 		// 因为跑着的回合有自己的 goroutine，它的会话写入和 run map 写入都只认这个 id——在它
 		// 底下删掉目录，转录会静默丢失，还可能留下一个只有 meta.json 的重建目录。

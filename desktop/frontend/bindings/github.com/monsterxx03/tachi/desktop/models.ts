@@ -1263,6 +1263,13 @@ export interface SessionInfo {
     "cronCount"?: number;
 
     /**
+     * SkipDream says background memory consolidation leaves this conversation alone
+     * (session.Session.SkipDream). The sidebar needs it to label the action correctly
+     * (跳过 / 恢复), so it travels with the row.
+     */
+    "skipDream"?: boolean;
+
+    /**
      * Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a
      * receiving node's A2A execution (session.KindA2AExecution). It travels so the sidebar can
      * LABEL such a row instead of presenting it as a conversation the reader had; the label is

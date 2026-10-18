@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -648,11 +649,35 @@ func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([
 	if err != nil {
 		return nil, err
 	}
-	if len(sessions) > limit {
-		sessions = sessions[:limit]
+
+	// "Recent" means recently USED, not recently created: a conversation
+	// started a month ago and continued this morning is the one the user
+	// remembers. List() sorts by CreatedAt, so re-sort here.
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+
+	// Never offer the conversation being served — including its compaction
+	// siblings, which are the SAME conversation under another session id.
+	// Without this, a turn with no topic match injected the current session's
+	// own last messages as "memories from past sessions".
+	currentID, currentConv := "", ""
+	if cur := p.manager.Current(); cur != nil {
+		currentID = cur.ID
+		currentConv = cur.LogicalConversationID()
 	}
-	result := make([]memory.RecentSession, len(sessions))
-	for i, s := range sessions {
+
+	result := make([]memory.RecentSession, 0, limit)
+	for _, s := range sessions {
+		if len(result) >= limit {
+			break
+		}
+		if s.ID == currentID {
+			continue
+		}
+		if currentConv != "" && s.LogicalConversationID() == currentConv {
+			continue
+		}
 		msgs, err := p.manager.LoadSessionMessages(s.ID)
 		recent := []string{}
 		if err == nil {
@@ -664,13 +689,13 @@ func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([
 				}
 			}
 		}
-		result[i] = memory.RecentSession{
+		result = append(result, memory.RecentSession{
 			ID:             s.ID,
 			Title:          s.Title,
 			RecentMessages: recent,
 			CreatedAt:      s.CreatedAt,
 			UpdatedAt:      s.UpdatedAt,
-		}
+		})
 	}
 	return result, nil
 }

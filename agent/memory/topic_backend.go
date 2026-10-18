@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -36,15 +38,22 @@ const (
 	// this many times get a small boost.
 	reinforcementThreshold = 3
 	reinforcementBonus     = 0.1
-	// lowConfidenceThreshold: topic results scoring below this are too weak
-	// to stand alone — supplement with recent session summaries.
-	lowConfidenceThreshold = 0.3
-	// sessionFallbackScore: confidence given to session-summary entries so
-	// they rank above weak topic matches but below strong content hits.
-	sessionFallbackScore = 0.7
+	// sessionFallbackScore: confidence given to session-summary entries. The
+	// fallback only fires when NO topic block matched at all, so this number
+	// never competes with a real hit — it is here so the entries sort sanely
+	// if a caller ever mixes them.
+	sessionFallbackScore = 0.3
+	// sessionFallbackLimit caps how many recent sessions the fallback injects.
+	// Five of them (the old limit) spent roughly a kilotoken per user message
+	// on turns where nothing relevant was found; three still answers "what did
+	// we talk about recently".
+	sessionFallbackLimit = 3
 	// recentWindow: entries younger than this get a recency bonus.
 	recentWindow = 7 * 24 * time.Hour
-	// keywordLineBonus / recencyBonus: scoring bumps in the content matcher.
+	// titleBonus / keywordLineBonus / recencyBonus: scoring bumps on top of
+	// term coverage. A block matching every query term already scores 1.0, so
+	// these only separate equally-covered blocks.
+	titleBonus       = 0.2
 	keywordLineBonus = 0.2
 	recencyBonus     = 0.1
 	// maxLiteralSearchWords / maxLiteralCJKRunes bound when a query is already
@@ -52,13 +61,61 @@ const (
 	// shouldSkipExtraction, which is the only reader.
 	maxLiteralSearchWords = 3
 	maxLiteralCJKRunes    = 10
+
+	// maxSearchTerms bounds how many literal strings one query sends to rg and
+	// scores against. An extracted keyword expands into a phrase, its words and
+	// (for CJK) its bigrams; five keywords could otherwise produce a hundred
+	// terms, most of them generic fragments.
+	maxSearchTerms = 24
+
+	// coverageWeight scales coverage below 1.0 so the bonuses can still
+	// separate two blocks that both contain every term.
+	coverageWeight = 0.7
+
+	// Term weights. A phrase is the most specific thing the extractor produced,
+	// a whole CJK term is next, a bigram is a fragment that can appear in any
+	// sentence, and a short ASCII word ("go", "db") has little discriminating
+	// power on its own.
+	weightPhrase    = 1.6
+	weightCJKTerm   = 1.2
+	weightBigram    = 0.6
+	weightWord      = 1.0
+	weightShortWord = 0.5
 )
 
+// recallStopWords are dropped before searching. They are the words a question
+// is made of rather than the words it asks about: leaving them in gives every
+// block a small match score for "what" and "怎么", which is exactly the noise
+// the coverage ranking exists to avoid.
+//
+// Kept short and conservative on purpose — an over-eager list silently loses
+// recall, which is the failure this whole path is being fixed for.
+var recallStopWords = map[string]struct{}{
+	// English function words.
+	"a": {}, "an": {}, "the": {}, "and": {}, "or": {}, "of": {}, "to": {},
+	"in": {}, "on": {}, "at": {}, "for": {}, "with": {}, "from": {}, "by": {},
+	"is": {}, "are": {}, "was": {}, "were": {}, "be": {}, "been": {},
+	"do": {}, "does": {}, "did": {}, "how": {}, "what": {}, "why": {},
+	"when": {}, "where": {}, "which": {}, "who": {}, "i": {}, "you": {},
+	"we": {}, "they": {}, "it": {}, "this": {}, "that": {}, "my": {},
+	"me": {}, "our": {}, "your": {}, "its": {},
+	// Chinese equivalents, including the bigrams they break into.
+	"怎么": {}, "什么": {}, "如何": {}, "为什": {}, "这个": {}, "那个": {},
+	"这些": {}, "那些": {}, "我们": {}, "你们": {}, "他们": {}, "可以": {},
+	"是不": {}, "不是": {}, "一下": {}, "现在": {}, "之前": {}, "以前": {},
+	"然后": {}, "还是": {}, "就是": {}, "已经": {}, "需要": {}, "应该": {},
+	"关于": {}, "以及": {}, "一个": {}, "的话": {}, "了吗": {}, "最近": {},
+}
+
 // SessionProvider provides access to recent session metadata for temporal
-// query fallback. When the keyword-based topic search returns no results
-// (or very low confidence), TopicBackend falls back to recent session
-// summaries — this handles queries like "what did we talk about recently"
-// that grep-based search can never match.
+// query fallback. When the keyword-based topic search returns NOTHING at all,
+// TopicBackend falls back to recent session summaries — this handles queries
+// like "what did we talk about recently" that grep-based search can never
+// match. The provider is responsible for skipping the conversation being
+// served (see agent.topicSessionProvider): injecting the current session as a
+// "past session" is how the memory block ended up quoting the user back at
+// themselves on every turn.
+
 type SessionProvider interface {
 	RecentSessions(ctx context.Context, limit int) ([]RecentSession, error)
 }
@@ -93,12 +150,12 @@ type TopicBackend struct {
 	halfLifeDays    int             // decay half-life in days (default 7)
 
 	// reinforceMu protects concurrent writes to last_dream.json from
-	// simultaneous ReinforceFact calls (e.g. parallel MemoryRecallReminder
+	// simultaneous ReinforceFacts calls (e.g. parallel MemoryRecallReminder
 	// and MemoryRecallTool hits).
 	reinforceMu sync.Mutex
 
 	// decayCache caches loaded fact_states to avoid re-reading last_dream.json
-	// on every Recall call. Invalidated on ReinforceFact or after decayCacheTTL.
+	// on every Recall call. Invalidated on ReinforceFacts or after decayCacheTTL.
 	decayCacheMu   sync.RWMutex
 	decayCache     map[string]*FactState
 	decayCacheTime time.Time
@@ -181,11 +238,11 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		limit = 10
 	}
 
-	// Extract keywords for better text-search recall.
-	// Falls back to raw query if extractor is not set or fails.
-	// Short queries skip the LLM extraction round-trip entirely — they are
-	// already keyword-like, and extraction adds latency to every user
-	// message without improving recall for them.
+	// Turn the query into literal search terms. The LLM extractor bridges a
+	// natural-language question to words a topic file would contain, but its
+	// phrases are 2-3 words long and rarely appear verbatim (that is what left
+	// most recalls empty), so every keyword is ALSO split into its words and —
+	// for CJK, which has no word boundaries — into bigrams.
 	keywords := []string{query}
 	if t.extractor != nil {
 		if shouldSkipExtraction(query) {
@@ -194,26 +251,43 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 			keywords = kws
 			t.logger.Info(ctx, "keywords extracted", "keywords", keywords, "query", query)
 		} else if err != nil {
-			t.logger.Error(ctx, "keyword extraction failed, falling back to raw query", err)
+			// The raw question still goes through the same expansion below:
+			// its words are a poor man's extraction, and searching the whole
+			// sentence verbatim (the old behaviour) could never match.
+			t.logger.Error(ctx, "keyword extraction failed, falling back to query terms", err)
 		}
 	}
+	terms := buildSearchTerms(keywords)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+
+	// The project domain follows THIS turn's working directory, not the
+	// process cwd (see ProjectMemoryDir).
+	projectRoot := t.projectRootFor(ctx)
 
 	// Load decay states from last_dream.json in both domains.
-	decayStates := t.loadDecayStates()
+	decayStates := t.loadDecayStates(projectRoot)
 
 	var allResults []Entry
 
 	// 1. Search global topics + inbox
-	results := t.searchDir(ctx, filepath.Join(t.globalDir, "topics"), keywords)
+	results := t.searchDir(ctx, filepath.Join(t.globalDir, "topics"), terms)
 	allResults = append(allResults, results...)
-	results = t.searchFile(ctx, filepath.Join(t.globalDir, "inbox.md"), keywords)
+	results = t.searchFile(ctx, filepath.Join(t.globalDir, InboxFile), terms)
+	allResults = append(allResults, results...)
+	// A running dream has moved its inbox snapshot aside (see dream/inbox.go);
+	// recall must still see what is pending consolidation.
+	results = t.searchFile(ctx, filepath.Join(t.globalDir, InboxProcessingFile), terms)
 	allResults = append(allResults, results...)
 
 	// 2. Search project topics + inbox (if available)
-	if t.projectDir != "" {
-		results = t.searchDir(ctx, filepath.Join(t.projectDir, "topics"), keywords)
+	if projectRoot != "" {
+		results = t.searchDir(ctx, filepath.Join(projectRoot, "topics"), terms)
 		allResults = append(allResults, results...)
-		results = t.searchFile(ctx, filepath.Join(t.projectDir, "inbox.md"), keywords)
+		results = t.searchFile(ctx, filepath.Join(projectRoot, InboxFile), terms)
+		allResults = append(allResults, results...)
+		results = t.searchFile(ctx, filepath.Join(projectRoot, InboxProcessingFile), terms)
 		allResults = append(allResults, results...)
 	}
 
@@ -236,6 +310,12 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		}
 	}
 
+	// The same fact can be found twice — inbox and a topic file (before the
+	// next dream folds one into the other), global and project — and both
+	// copies would otherwise be injected. Dedupe AFTER the lifecycle factors
+	// so the surviving copy is the one that actually ranks higher.
+	allResults = dedupeEntries(allResults)
+
 	// Sort by score descending, truncate to limit.
 	sort.Slice(allResults, func(i, j int) bool {
 		return allResults[i].Score > allResults[j].Score
@@ -244,28 +324,18 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		allResults = allResults[:limit]
 	}
 
-	// Session fallback: when topic search returns no results or very low
-	// confidence (top score below lowConfidenceThreshold), supplement with
-	// recent session summaries. This handles temporal/navigational queries
-	// like "什么我们最近聊过什么" that keyword-based grep cannot match,
-	// without hardcoding any trigger words.
-	//
-	// Session entries get a medium confidence score (sessionFallbackScore) so
-	// they rank above weak topic matches (decayed/superseded) but below
-	// strong content hits.
-	if (len(allResults) == 0 || allResults[0].Score < lowConfidenceThreshold) && t.sessionProvider != nil {
-		sessionEntries, err := t.fetchRecentSessions(ctx, limit)
+	// Session fallback: ONLY when no topic block matched anything. The fallback
+	// exists for temporal/navigational queries ("最近聊过什么") that grep can
+	// never match — but "no match" is also what an unrelated question looks
+	// like, so this is capped and the provider skips the current conversation.
+	if len(allResults) == 0 && t.sessionProvider != nil {
+		sessionEntries, err := t.fetchRecentSessions(ctx)
 		if err != nil {
 			t.logger.Error(ctx, "session fallback", err)
 		} else if len(sessionEntries) > 0 {
-			allResults = append(sessionEntries, allResults...)
-			sort.Slice(allResults, func(i, j int) bool {
-				return allResults[i].Score > allResults[j].Score
-			})
-			if len(allResults) > limit {
-				allResults = allResults[:limit]
-			}
-			t.logger.Info(ctx, "session fallback: sessions added to recall results", "sessions", len(sessionEntries), "topicResults", len(allResults)-len(sessionEntries))
+			allResults = sessionEntries
+			t.logger.Info(ctx, "session fallback: no topic match, injecting recent sessions",
+				"sessions", len(sessionEntries))
 		}
 	}
 
@@ -273,13 +343,16 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 }
 
 // fetchRecentSessions retrieves recent session summaries from the SessionProvider
-// and converts them to memory Entry format with a medium confidence score (0.7).
-// These entries serve as a fallback when keyword-based topic search fails,
-// enabling temporal/navigational queries like "what did we talk about recently".
-// Each entry includes the session title and the most recent user messages for
-// meaningful context about what was discussed.
-func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]Entry, error) {
-	sessions, err := t.sessionProvider.RecentSessions(ctx, limit)
+// and converts them to memory Entry format.
+// These entries serve as a fallback when keyword-based topic search finds
+// nothing, enabling temporal/navigational queries like "what did we talk about
+// recently". Each entry includes the session title and the most recent user
+// messages for meaningful context about what was discussed.
+//
+// The provider, not this function, decides WHICH sessions: it knows the
+// conversation being served and must leave it out.
+func (t *TopicBackend) fetchRecentSessions(ctx context.Context) ([]Entry, error) {
+	sessions, err := t.sessionProvider.RecentSessions(ctx, sessionFallbackLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -312,20 +385,34 @@ func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]En
 }
 
 // Store appends a direct memory write (from the MemoryRecord tool) to the
-// domain's inbox.md. Memory produced asynchronously by the Dream sub-agent
+// chosen domain's inbox. Memory produced asynchronously by the Dream sub-agent
 // does not pass through Store.
-func (t *TopicBackend) Store(ctx context.Context, content string) error {
-	// Determine target domain: project if available, else global.
-	targetDir := t.globalDir
-	if t.projectDir != "" {
-		targetDir = t.projectDir
-		// Ensure project memory dir exists on first write.
-		os.MkdirAll(targetDir, 0700)
+//
+// Tags become a 关键词 line in the entry. That is not decoration: recall scores
+// a hit on the 关键词 line as evidence that the fact was written FOR this kind
+// of query, and the old code accepted tags and threw them away.
+func (t *TopicBackend) Store(ctx context.Context, content string, tags []string, scope StoreScope) error {
+	targetDir, err := t.domainDir(ctx, scope)
+	if err != nil {
+		return err
+	}
+	if targetDir == "" {
+		return fmt.Errorf("topic: no memory domain for scope %q", scope)
+	}
+	// Ensure project memory dir exists on first write.
+	if err := os.MkdirAll(targetDir, 0700); err != nil {
+		return fmt.Errorf("topic: create memory dir: %w", err)
 	}
 
-	inboxPath := filepath.Join(targetDir, "inbox.md")
-	entry := fmt.Sprintf("\n## %s\n\n%s\n\n---\n",
-		time.Now().Format(time.RFC3339), content)
+	inboxPath := filepath.Join(targetDir, InboxFile)
+	var entry strings.Builder
+	fmt.Fprintf(&entry, "\n## %s\n\n", time.Now().Format(time.RFC3339))
+	if line := formatTagLine(tags); line != "" {
+		entry.WriteString(line)
+		entry.WriteString("\n\n")
+	}
+	entry.WriteString(content)
+	entry.WriteString("\n\n---\n")
 
 	f, err := os.OpenFile(inboxPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -333,12 +420,62 @@ func (t *TopicBackend) Store(ctx context.Context, content string) error {
 	}
 	defer f.Close()
 
-	if _, err := f.WriteString(entry); err != nil {
+	if _, err := f.WriteString(entry.String()); err != nil {
 		return fmt.Errorf("topic: write inbox: %w", err)
 	}
 
-	t.logger.Info(ctx, "wrote to inbox", "path", inboxPath, "bytes", len(entry))
+	t.logger.Info(ctx, "wrote to inbox", "path", inboxPath, "bytes", entry.Len(), "scope", string(scope))
 	return nil
+}
+
+// domainDir resolves a scope to a directory. Project knowledge asked for
+// outside a project is stored globally rather than dropped.
+func (t *TopicBackend) domainDir(ctx context.Context, scope StoreScope) (string, error) {
+	projectRoot := t.projectRootFor(ctx)
+	switch scope {
+	case ScopeAuto:
+		if projectRoot != "" {
+			return projectRoot, nil
+		}
+		return t.globalDir, nil
+	case ScopeGlobal:
+		return t.globalDir, nil
+	case ScopeProject:
+		if projectRoot != "" {
+			return projectRoot, nil
+		}
+		t.logger.Info(context.Background(), "project memory requested outside a git repository — storing globally")
+		return t.globalDir, nil
+	default:
+		return "", fmt.Errorf("topic: unknown memory scope %q", scope)
+	}
+}
+
+// formatTagLine renders tags as a 关键词 line, dropping blanks and duplicates.
+// Capped because the line is a search aid, not a place to dump the request.
+func formatTagLine(tags []string) string {
+	const maxTags = 8
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(strings.ReplaceAll(tag, "\n", " "))
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+		if len(out) == maxTags {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return "关键词: " + strings.Join(out, ", ")
 }
 
 // --- Search implementation ---
@@ -376,17 +513,143 @@ func shouldSkipExtraction(query string) bool {
 	return len([]rune(trimmed)) <= maxLiteralCJKRunes
 }
 
+// searchTerm is one literal string ripgrep can look for, plus the weight it
+// carries in the ranking. Weight is what makes "数据库连接池" (a phrase the fact
+// itself is likely to contain) count for more than the bigram "连接" (which
+// half the files contain).
+type searchTerm struct {
+	text   string
+	weight float64
+}
+
+// buildSearchTerms expands the strings a query produced into the literals to
+// search for.
+//
+// One extracted keyword yields up to three kinds of term:
+//   - the phrase itself (heaviest: the most specific thing we were given),
+//   - each of its words,
+//   - for CJK runs, every two-character slice — Chinese has no word boundaries,
+//     so "记忆系统" would otherwise only match a file that spells it exactly.
+//
+// Duplicates collapse to their heaviest weight, and the list is capped at
+// maxSearchTerms. Terms are returned in a stable order (phrases first, then by
+// insertion), which keeps the rg command line and the logs readable.
+func buildSearchTerms(keywords []string) []searchTerm {
+	var terms []searchTerm
+	seen := make(map[string]int, len(keywords)*4)
+
+	add := func(text string, weight float64) {
+		text = strings.TrimSpace(text)
+		key := strings.ToLower(text)
+		if text == "" || isRecallStopWord(key) {
+			return
+		}
+		if i, ok := seen[key]; ok {
+			if weight > terms[i].weight {
+				terms[i].weight = weight
+			}
+			return
+		}
+		seen[key] = len(terms)
+		terms = append(terms, searchTerm{text: text, weight: weight})
+	}
+
+	for _, kw := range keywords {
+		kw = strings.TrimSpace(kw)
+		if kw == "" {
+			continue
+		}
+		if isAllStopWords(kw) {
+			continue
+		}
+		add(kw, weightPhrase)
+		for _, piece := range strings.Fields(kw) {
+			piece = strings.Trim(piece, termTrimCutset)
+			if piece == "" {
+				continue
+			}
+			if !strutil.ContainsCJK(piece) {
+				add(piece, asciiTermWeight(piece))
+				continue
+			}
+			runes := []rune(piece)
+			if len(runes) == 1 {
+				add(piece, weightShortWord)
+				continue
+			}
+			add(piece, weightCJKTerm)
+			for i := 0; i+1 < len(runes); i++ {
+				add(string(runes[i:i+2]), weightBigram)
+			}
+		}
+	}
+
+	if len(terms) > maxSearchTerms {
+		// Keep the heaviest; stable sort means equal weights keep insertion
+		// order, so phrases survive a tie with the words they contain.
+		sort.SliceStable(terms, func(i, j int) bool { return terms[i].weight > terms[j].weight })
+		terms = terms[:maxSearchTerms]
+	}
+	return terms
+}
+
+// termTrimCutset is punctuation stripped from both ends of a whitespace word:
+// the extractor writes phrases like "database, sqlite", and a literal search
+// for "database," would miss the plain word.
+const termTrimCutset = " \t" + ".,;:!?()[]{}\"'`，。；：！？（）【】《》、“”‘’"
+
+// asciiTermWeight gives long words more weight than two-letter ones; a query
+// containing "go" should not outrank one containing "sqlite" on that term.
+func asciiTermWeight(word string) float64 {
+	if len([]rune(word)) >= 4 {
+		return weightWord
+	}
+	return weightShortWord
+}
+
+func isRecallStopWord(word string) bool {
+	_, ok := recallStopWords[word]
+	return ok
+}
+
+// isAllStopWords reports whether a phrase is made only of function words
+// ("what did we do") — adding it as a phrase would match every file that
+// happens to contain those words, with the phrase's heavy weight.
+func isAllStopWords(phrase string) bool {
+	sawWord := false
+	for _, field := range strings.Fields(phrase) {
+		field = strings.Trim(field, termTrimCutset)
+		if field == "" {
+			continue
+		}
+		sawWord = true
+		if !isRecallStopWord(strings.ToLower(field)) {
+			return false
+		}
+	}
+	return sawWord
+}
+
+// termTexts is what rg receives: the literals, in weight order.
+func termTexts(terms []searchTerm) []string {
+	out := make([]string, len(terms))
+	for i, t := range terms {
+		out[i] = t.text
+	}
+	return out
+}
+
 // searchDir searches all .md files in a directory for matching blocks.
-func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []string) []Entry {
+func (t *TopicBackend) searchDir(ctx context.Context, dir string, terms []searchTerm) []Entry {
 	if !fileutil.Exists(dir) {
 		return nil
 	}
 
-	// Use rg with -e flags for each keyword (OR logic).
+	// Use rg with -e flags for each term (OR logic).
 	// -F enables fixed-string matching to avoid regex metacharacter issues.
 	args := []string{"-F", "-l", "-i", "--glob", "*.md"}
-	for _, kw := range keywords {
-		args = append(args, "-e", kw)
+	for _, term := range termTexts(terms) {
+		args = append(args, "-e", term)
 	}
 	args = append(args, dir)
 	t.logger.Info(ctx, "rg", "args", strings.Join(args, " "))
@@ -403,21 +666,21 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 
 	var results []Entry
 	for _, f := range strutil.SplitBy(string(out), "\n") {
-		entries := t.extractMatchingBlocks(f, keywords)
+		entries := t.extractMatchingBlocks(f, terms)
 		results = append(results, entries...)
 	}
 	return results
 }
 
 // searchFile searches a single file for matching blocks.
-func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []string) []Entry {
+func (t *TopicBackend) searchFile(ctx context.Context, path string, terms []searchTerm) []Entry {
 	if !fileutil.Exists(path) {
 		return nil
 	}
-	// Check if file contains any keyword.
+	// Check if file contains any term.
 	args := []string{"-F", "-i", "-q"}
-	for _, kw := range keywords {
-		args = append(args, "-e", kw)
+	for _, term := range termTexts(terms) {
+		args = append(args, "-e", term)
 	}
 	args = append(args, path)
 	t.logger.Info(ctx, "rg", "args", strings.Join(args, " "))
@@ -425,7 +688,7 @@ func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []s
 	if err := cmd.Run(); err != nil {
 		return nil // no match
 	}
-	return t.extractMatchingBlocks(path, keywords)
+	return t.extractMatchingBlocks(path, terms)
 }
 
 // --- Decay state helpers ---
@@ -433,7 +696,7 @@ func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []s
 // loadDecayStates returns fact_states from last_dream.json (both domains),
 // using an in-memory cache with TTL to avoid repeated disk reads.
 // Decay values are recalculated from LastReinforced at read time for accuracy.
-func (t *TopicBackend) loadDecayStates() map[string]*FactState {
+func (t *TopicBackend) loadDecayStates(projectRoot string) map[string]*FactState {
 	// Fast path: check cache under read lock.
 	t.decayCacheMu.RLock()
 	if t.decayCache != nil && time.Since(t.decayCacheTime) < decayCacheTTL {
@@ -445,7 +708,7 @@ func (t *TopicBackend) loadDecayStates() map[string]*FactState {
 
 	// Slow path: reload from disk.
 	result := make(map[string]*FactState)
-	for _, dir := range []string{t.globalDir, t.projectDir} {
+	for _, dir := range []string{t.globalDir, projectRoot} {
 		if dir == "" {
 			continue
 		}
@@ -538,15 +801,23 @@ func writeFactStates(memoryDir string, updateFn func(map[string]*FactState)) err
 	return fileutil.AtomicWriteJSONShared(statePath, &state)
 }
 
-// ReinforceFact strengthens a fact's decay state when recalled.
-// It searches both global and project last_dream.json for the fact,
-// increments its reinforcement counter, resets decay to 1.0,
-// and updates the last_reinforced timestamp.
-func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error {
+// ReinforceFacts strengthens the decay state of the facts a recall returned.
+//
+// One write per domain: the state file is a whole JSON document, so the old
+// per-entry call rewrote it once for every recalled entry — up to five
+// read-modify-writes of a file that grows with the memory store, before the
+// user's message was even sent.
+func (t *TopicBackend) ReinforceFacts(ctx context.Context, entryIDs []string) error {
+	ids := filterFactIDs(entryIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+
 	t.reinforceMu.Lock()
 	defer t.reinforceMu.Unlock()
 
-	for _, dir := range []string{t.globalDir, t.projectDir} {
+	now := time.Now()
+	for _, dir := range []string{t.globalDir, t.projectRootFor(ctx)} {
 		if dir == "" {
 			continue
 		}
@@ -555,25 +826,68 @@ func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error 
 			continue
 		}
 
-		// Check if the fact exists before incurring write I/O.
+		// Check which ids this domain owns before incurring write I/O.
 		states := loadFactStatesFromFile(dir)
-		if _, ok := states[entryID]; !ok {
+		var touched []string
+		for _, id := range ids {
+			if _, ok := states[id]; ok {
+				touched = append(touched, id)
+			}
+		}
+		if len(touched) == 0 {
 			continue
 		}
 
 		err := writeFactStates(dir, func(states map[string]*FactState) {
-			fs := states[entryID]
-			fs.Reinforcements++
-			fs.LastReinforced = time.Now()
-			fs.Decay = 1.0
+			for _, id := range touched {
+				fs := states[id]
+				if fs == nil {
+					continue
+				}
+				fs.Reinforcements++
+				fs.LastReinforced = now
+				fs.Decay = 1.0
+			}
 		})
 		if err != nil {
-			t.logger.Error(ctx, "ReinforceFact: write", err, "path", statePath)
+			t.logger.Error(ctx, "ReinforceFacts: write", err, "path", statePath)
 		}
 	}
+
+	// The cache is what Recall ranks by. Without this invalidation a fact
+	// reinforced on this turn kept its old decay for up to decayCacheTTL.
+	t.decayCacheMu.Lock()
+	t.decayCache = nil
+	t.decayCacheMu.Unlock()
+
 	return nil
 }
-func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []Entry {
+
+// ReinforceFact is the single-id convenience wrapper.
+func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error {
+	return t.ReinforceFacts(ctx, []string{entryID})
+}
+
+// filterFactIDs drops ids that cannot be facts: empty ones and session-fallback
+// entries ("session:<id>"), which have no FactState and would only make the
+// per-domain scans do work.
+func filterFactIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" || strings.HasPrefix(id, "session:") {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func (t *TopicBackend) extractMatchingBlocks(path string, terms []searchTerm) []Entry {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -584,18 +898,13 @@ func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []E
 
 	filename := filepath.Base(path)
 
-	// Lowercase all keywords once for case-insensitive matching.
-	keywordLower := make([]string, len(keywords))
-	for i, kw := range keywords {
-		keywordLower[i] = strings.ToLower(kw)
-	}
-
 	for _, block := range blocks {
 		block = strings.TrimSpace(block)
 		if block == "" {
 			continue
 		}
-		if !matchesAnyKeyword(block, keywordLower) {
+		matched, score := scoreBlock(block, terms)
+		if !matched {
 			continue
 		}
 
@@ -603,7 +912,7 @@ func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []E
 			ID:      FactID(filename, block),
 			Summary: extractTitle(block),
 			Content: strutil.Truncate(block, 1000),
-			Score:   computeScoreMulti(block, keywordLower),
+			Score:   score,
 		}
 
 		// Try to extract timestamp from "来源:" or date in title.
@@ -617,67 +926,105 @@ func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []E
 	return entries
 }
 
-// matchesAnyKeyword returns true if block contains any of the given
-// (already lowercased) keywords.
-func matchesAnyKeyword(block string, keywords []string) bool {
-	blockLower := strings.ToLower(block)
-	for _, kw := range keywords {
-		if strings.Contains(blockLower, kw) {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Scoring ---
 
-// computeScoreMulti calculates a relevance score for a block against multiple keywords.
-// It measures text relevance only (keyword matches, title hit, recency).
+// scoreBlock reports whether a block matches any search term and, if so, how
+// well it answers the query.
+//
+// The score is COVERAGE: the share of the query's total term weight the block
+// contains, plus small bonuses for a hit in the title, in the 关键词 line, and
+// for recency. Coverage replaced the old fixed 0.5 base, which rated one
+// incidental match ("memory" in a file about something else) exactly as high as
+// a fact that answered the whole question — leaving ranking to the bonuses.
+//
 // Memory lifecycle factors (decay, superseded status, reinforcement count) are
-// applied separately in Recall() using authoritative FactState data.
-func computeScoreMulti(block string, keywords []string) float64 {
-	score := 0.5
+// applied separately in Recall() from authoritative FactState data.
+func scoreBlock(block string, terms []searchTerm) (bool, float64) {
+	blockLower := strings.ToLower(block)
+	titleLower := strings.ToLower(extractTitle(block))
 
-	// Title match bonus.
-	title := strings.ToLower(extractTitle(block))
-	for _, kw := range keywords {
-		if strings.Contains(title, kw) {
-			score += keywordLineBonus
-			break
+	var total, matched float64
+	titleHit := false
+	keywordLineHit := false
+	recencyHit := false
+	// strong says at least one WHOLE term matched (a phrase, a CJK term or a
+	// real word) rather than only a fragment of one. A block sharing just the
+	// bigram "实现" with a question is noise, and injecting it hides the fact
+	// that nothing was actually found.
+	strong := false
+	ts := extractTimestamp(block)
+	if ts > 0 {
+		recencyHit = time.Since(time.Unix(ts, 0)) < recentWindow
+	}
+
+	for _, term := range terms {
+		total += term.weight
+		termLower := strings.ToLower(term.text)
+		if !strings.Contains(blockLower, termLower) {
+			continue
+		}
+		matched += term.weight
+		if term.weight >= weightWord {
+			strong = true
+		}
+		if !titleHit && strings.Contains(titleLower, termLower) {
+			titleHit = true
+		}
+		if !keywordLineHit && matchesKeywordLine(blockLower, termLower) {
+			keywordLineHit = true
 		}
 	}
 
-	// Keyword line match bonus.
-	for _, kw := range keywords {
-		if matchesKeywordLine(block, kw) {
-			score += keywordLineBonus
-			break
-		}
+	if matched == 0 || !strong || total <= 0 {
+		return false, 0
 	}
 
+	score := coverageWeight * matched / total
+	if titleHit {
+		score += titleBonus
+	}
+	if keywordLineHit {
+		score += keywordLineBonus
+	}
 	// Recency bonus: if timestamp is recent (within recentWindow).
-	if ts := extractTimestamp(block); ts > 0 {
-		age := time.Since(time.Unix(ts, 0))
-		if age < recentWindow {
-			score += recencyBonus
-		}
+	if recencyHit {
+		score += recencyBonus
 	}
 
-	return score
+	return true, math.Min(score, 1.0)
 }
 
-// computeScore calculates a relevance score for a block against a single query.
-// Delegates to computeScoreMulti for consistency.
-func computeScore(block, queryLower string) float64 {
-	return computeScoreMulti(block, []string{queryLower})
+// dedupeEntries keeps one copy of each distinct fact, by CONTENT.
+//
+// The ID cannot be the key: it includes the file name, so the same fact sitting
+// in inbox.md and in a topic file (or in both memory domains) has two IDs. The
+// surviving copy is the higher-scoring one.
+func dedupeEntries(entries []Entry) []Entry {
+	if len(entries) < 2 {
+		return entries
+	}
+	seen := make(map[[sha256.Size]byte]int, len(entries))
+	out := entries[:0]
+	for _, e := range entries {
+		key := sha256.Sum256([]byte(strings.TrimSpace(e.Content)))
+		if i, ok := seen[key]; ok {
+			if e.Score > out[i].Score {
+				out[i] = e
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, e)
+	}
+	return out
 }
 
-// matchesKeywordLine checks if the query matches a "关键词:" or "Keywords:" line.
-func matchesKeywordLine(block, queryLower string) bool {
-	for line := range strings.SplitSeq(block, "\n") {
-		lineLower := strings.ToLower(line)
-		if (strings.HasPrefix(lineLower, "关键词:") || strings.HasPrefix(lineLower, "keywords:")) &&
-			strings.Contains(lineLower, queryLower) {
+// matchesKeywordLine reports whether the query term appears in a "关键词:" or
+// "Keywords:" line. Both arguments must already be lowercase.
+func matchesKeywordLine(blockLower, queryLower string) bool {
+	for line := range strings.SplitSeq(blockLower, "\n") {
+		if (strings.HasPrefix(line, "关键词:") || strings.HasPrefix(line, "keywords:")) &&
+			strings.Contains(line, queryLower) {
 			return true
 		}
 	}
@@ -724,9 +1071,10 @@ func SplitByHR(content string) []string {
 // name — both as the Summary the model is shown and as the title the keyword
 // bonus scores against, so a keyword in the entry's own title earned nothing.
 //
-// The merged block itself is deliberately left alone: FactID hashes it,
-// dream/decay.go splits files with the same SplitByHR, and re-cutting the
-// boundary would re-key every existing fact's decay state.
+// The merged block itself is deliberately left alone: FactID and the decay
+// scan (dream/decay.go splits files with the same SplitByHR) both key off these
+// boundaries, so re-cutting them would re-key every existing fact's decay
+// state.
 func extractTitle(block string) string {
 	for _, prefix := range []string{"## ", "# "} {
 		for line := range strings.SplitSeq(block, "\n") {
@@ -748,29 +1096,83 @@ func extractTitle(block string) string {
 	return ""
 }
 
-// extractTimestamp tries to find a date in the block (from "来源:" line or ## header).
+// extractTimestamp returns the date a fact block carries, or 0.
+//
+// It reads only where the memory format puts a date — the entry heading
+// ("## 2026-06-10: …") and metadata lines ("Date:", "日期:", "来源:") — instead
+// of scanning the whole block for "202". The old scan could take a year out of
+// ordinary prose ("released in 2024") and treat it as the fact's timestamp,
+// which feeds the recency bonus.
 func extractTimestamp(block string) int64 {
 	for line := range strings.SplitSeq(block, "\n") {
 		trimmed := strings.TrimSpace(line)
-		// Try to find an RFC3339 or date-like pattern.
-		if idx := strings.Index(trimmed, "202"); idx >= 0 {
-			// Extract potential date substring.
-			sub := trimmed[idx:]
-			if len(sub) >= 10 {
-				// Try parsing "2026-06-10" or full RFC3339.
-				if t, err := time.Parse(time.RFC3339, sub[:min(len(sub), 25)]); err == nil {
-					return t.Unix()
-				}
-				if t, err := time.Parse(strutil.TimeFormatDate, sub[:10]); err == nil {
-					return t.Unix()
-				}
+		if rest, ok := strings.CutPrefix(trimmed, "## "); ok {
+			if ts, ok := parseDatePrefix(rest); ok {
+				return ts
+			}
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		for _, prefix := range []string{"date:", "日期:", "来源:", "source:"} {
+			if !strings.HasPrefix(lower, prefix) {
+				continue
+			}
+			// Prefixes are ASCII, so the byte offset is the same in `trimmed`.
+			if ts, ok := parseDatePrefix(strings.TrimSpace(trimmed[len(prefix):])); ok {
+				return ts
 			}
 		}
 	}
 	return 0
 }
 
+// parseDatePrefix parses a date at the START of s, in the forms the memory
+// format writes: RFC3339 ("2026-06-19T22:32:01+08:00"), a local timestamp
+// ("2026-06-10T09:00:00"), or a plain date ("2026-06-10").
+func parseDatePrefix(s string) (int64, bool) {
+	if len(s) >= len(time.RFC3339) {
+		if t, err := time.Parse(time.RFC3339, s[:len(time.RFC3339)]); err == nil {
+			return t.Unix(), true
+		}
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05", s[:min(len(s), len("2006-01-02T15:04:05"))]); err == nil {
+		return t.Unix(), true
+	}
+	if len(s) >= len(strutil.TimeFormatDate) {
+		if t, err := time.Parse(strutil.TimeFormatDate, s[:len(strutil.TimeFormatDate)]); err == nil {
+			return t.Unix(), true
+		}
+	}
+	return 0, false
+}
+
 // --- Utility functions ---
+
+// ProjectMemoryDir returns the project memory directory for a working
+// directory: <git root>/.tachi/memory, or "" when the directory is not inside
+// a git repository.
+func ProjectMemoryDir(workDir string) string {
+	root := findGitRoot(workDir)
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, ".tachi", "memory")
+}
+
+// projectRootFor resolves the project memory directory for ONE call.
+//
+// The turn's own working directory wins when the context carries one (every
+// frontend binds it — desktop, ACP, subagents): resolving from the PROCESS cwd
+// made project memory silently vanish wherever the process did not run inside
+// the session's repository, which is every Finder-launched desktop app. The
+// directory the backend was built in is only the fallback for a call with no
+// bound directory (a CLI one-off, a test).
+func (t *TopicBackend) projectRootFor(ctx context.Context) string {
+	if dir, ok := wdctx.MaybeDir(ctx); ok {
+		return ProjectMemoryDir(dir)
+	}
+	return t.projectDir
+}
 
 // findGitRoot walks up from dir looking for .git directory.
 func findGitRoot(dir string) string {

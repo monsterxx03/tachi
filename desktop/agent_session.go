@@ -58,6 +58,10 @@ type SessionInfo struct {
 	// the badge disappear with no migration. The sidebar row and the composer's
 	// clock badge both read it.
 	CronCount int `json:"cronCount,omitempty"`
+	// SkipDream says background memory consolidation leaves this conversation alone
+	// (session.Session.SkipDream). The sidebar needs it to label the action correctly
+	// (跳过 / 恢复), so it travels with the row.
+	SkipDream bool `json:"skipDream,omitempty"`
 	// Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a
 	// receiving node's A2A execution (session.KindA2AExecution). It travels so the sidebar can
 	// LABEL such a row instead of presenting it as a conversation the reader had; the label is
@@ -306,6 +310,36 @@ func (s *AgentService) SetSessionPinned(id string, pinned bool) string {
 	}
 	if err := s.desk.updateSessionMeta(id, func(sess *session.Session) {
 		sess.Pinned = pinned
+	}); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
+// SetSessionSkipDream turns memory consolidation on or off for ONE session (the
+// sidebar's 跳过记忆整理 / 恢复记忆整理 action).
+//
+// The flag is read by the dream pipeline, which filters such sessions out
+// before grouping — so it holds for every entry point (channel, desktop, TUI),
+// not just this process. It is written through updateSessionMeta for the same
+// reason as the pin: a running turn's own snapshot is the copy that will be
+// written next, and a plain read-modify-write of the file would be clobbered by
+// it.
+//
+// A session a subsystem owns (a remote execution) is fixed at skipped: its
+// conversation is not the reader's, and letting local memory digest it is not a
+// choice to offer. The refusal is a sentence the frontend shows verbatim.
+func (s *AgentService) SetSessionSkipDream(id string, skip bool) string {
+	if s.desk.sm == nil {
+		return errNoSessionManager.Error()
+	}
+	if !skip {
+		if sess, err := s.desk.sm.Load(id); err == nil && sess.Kind == session.KindA2AExecution {
+			return "远端执行的会话固定不参与记忆整理"
+		}
+	}
+	if err := s.desk.updateSessionMeta(id, func(sess *session.Session) {
+		sess.SkipDream = skip
 	}); err != nil {
 		return err.Error()
 	}
@@ -611,6 +645,7 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		CompactedParentTitle: ss.CompactedParentTitle,
 		ProjectID:            ss.ProjectID,
 		Pinned:               ss.Pinned,
+		SkipDream:            ss.SkipDream,
 		Kind:                 ss.Kind,
 		SourceNodeID:         ss.SourceNodeID,
 	}

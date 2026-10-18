@@ -765,15 +765,20 @@ func (c *CronConfig) IsEnabled() bool {
 }
 
 // DreamConfig holds configuration for AutoDream — the background memory
-// consolidation system that runs via SystemScheduler in channel mode.
+// consolidation system. channel mode runs it from a SystemScheduler entry
+// (Schedule); the desktop checks opportunistically while it is open, bounded
+// by MinInterval.
 type DreamConfig struct {
-	Enabled         bool          `yaml:"enabled" default:"false"`
-	Schedule        string        `yaml:"schedule" default:"0 3 * * *"`     // cron expression (default: daily 3 AM)
-	Provider        string        `yaml:"provider"`                         // provider name (empty → use main provider)
-	MaxConcurrent   int           `yaml:"max_concurrent" default:"3"`       // max parallel dream sub-agents
-	SubagentTimeout time.Duration `yaml:"subagent_timeout" default:"10m"`   // timeout for each dream sub-agent
-	SubagentMaxIter int           `yaml:"subagent_max_iters" default:"30"`  // max iterations for dream sub-agent
-	MaxMessageChars int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
+	Enabled           bool          `yaml:"enabled" default:"false"`
+	Schedule          string        `yaml:"schedule" default:"0 3 * * *"`       // cron expression, channel mode only (default: daily 3 AM)
+	MinInterval       time.Duration `yaml:"min_interval" default:"6h"`          // desktop: least time between two dreams of one domain
+	Provider          string        `yaml:"provider"`                           // provider name (empty → use main provider)
+	MaxConcurrent     int           `yaml:"max_concurrent" default:"3"`         // max parallel dream sub-agents
+	SubagentTimeout   time.Duration `yaml:"subagent_timeout" default:"10m"`     // timeout for each dream sub-agent
+	SubagentMaxIter   int           `yaml:"subagent_max_iters" default:"30"`    // max iterations for dream sub-agent
+	MaxMessageChars   int           `yaml:"max_message_chars" default:"2000"`   // max chars per message in dream prompt
+	MaxSessionsPerRun int           `yaml:"max_sessions_per_run" default:"8"`   // sessions consolidated in one pass (the rest wait for the next)
+	MaxSummaryChars   int           `yaml:"max_summary_chars" default:"100000"` // total conversation characters in one prompt
 }
 
 // JevConfig configures the optional TypeSafe Jev integration: a System One

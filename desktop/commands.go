@@ -90,10 +90,11 @@ type commandRun struct {
 // Only names in this map are offered to the frontend (see ListCommands), so a
 // registry entry without an implementation is simply not advertised.
 var desktopCommandHandlers = map[string]func(*commandRun) error{
-	"compact":       runCompactCommand,
-	commandReview:   runReviewCommand,
-	commandCommit:   runCommitCommand,
-	"sh":            runShellCommand,
+	"compact":     runCompactCommand,
+	"dream":       runDreamCommand,
+	commandReview: runReviewCommand,
+	commandCommit: runCommitCommand,
+	"sh":          runShellCommand,
 }
 
 // The commands that run as one-off forks. Named because more than the tables below needs them:
@@ -109,10 +110,11 @@ const (
 // summary IS its output) and /sh echoes a command the user wanted to see here. Declared in
 // one place so the split cannot drift per call site.
 var commandLane = map[string]runLane{
-	"compact":      laneTranscript,
-	"sh":           laneTranscript,
-	commandReview:  laneOneOff,
-	commandCommit:  laneOneOff,
+	"compact":     laneTranscript,
+	"sh":          laneTranscript,
+	commandReview: laneOneOff,
+	commandCommit: laneOneOff,
+	"dream":       laneOneOff,
 }
 
 // laneFor answers the table above, defaulting to the transcript: a command whose lane
@@ -660,6 +662,60 @@ func runCommitCommand(c *commandRun) error {
 	for ev := range stream {
 		c.ech <- ev
 	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// /dream
+// ---------------------------------------------------------------------------
+
+// runDreamCommand consolidates memory NOW: the same pass the timer runs (see
+// dream.go), forced past dream.min_interval. With "status" it only reports.
+//
+// It reports into the side-channel lane because its subject is the whole memory
+// store rather than this conversation — and because it can take minutes, which
+// a transcript turn would show as one long "thinking".
+func runDreamCommand(c *commandRun) error {
+	if strings.EqualFold(strings.TrimSpace(c.args), "status") {
+		c.ech <- agent.AgentEvent{
+			Type:      agent.AgentEventTextDelta,
+			TextDelta: c.desk.dreamStatusText(),
+		}
+		return nil
+	}
+	if cfg := c.desk.config(); cfg == nil || !cfg.Dream.Enabled {
+		c.ech <- agent.AgentEvent{
+			Type: agent.AgentEventTextDelta,
+			TextDelta: "记忆整理未开启（dream.enabled）。桌面只在开关打开时整理，" +
+				"包括这个手动命令；设置里打开后重启应用再试。",
+		}
+		return nil
+	}
+	if c.desk.dreamPassRunning() {
+		c.ech <- agent.AgentEvent{
+			Type:      agent.AgentEventTextDelta,
+			TextDelta: "记忆整理正在进行中，等这一轮结束再试。",
+		}
+		return nil
+	}
+
+	c.ech <- agent.AgentEvent{
+		Type:      agent.AgentEventTextDelta,
+		TextDelta: "开始整理记忆：读取上次整理之后的新会话，合并进主题文件。完成后会通知你。",
+	}
+
+	started := time.Now()
+	domains, err := c.desk.runDreamPass(c.ctx, true)
+	if err != nil {
+		return err
+	}
+
+	msg := fmt.Sprintf("记忆整理完成：处理了 %d 个记忆域（用时 %s）。",
+		domains, time.Since(started).Round(time.Second))
+	if domains == 0 {
+		msg = "没有需要整理的新内容：上次整理之后没有新会话。"
+	}
+	c.ech <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: msg}
 	return nil
 }
 

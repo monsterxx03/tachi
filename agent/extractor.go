@@ -30,12 +30,20 @@ type LLMKeywordExtractor struct {
 	sessionID func() string
 }
 
+// maxKeywordExtractionTimeout bounds the extraction call. The extractor runs on
+// the critical path: recall happens BEFORE the user's message is sent, so a
+// slow provider here delays the reply itself. A value at or above this cap
+// (memory.timeout defaults to 10s) used to spend the whole recall budget before
+// a single grep ran — the log had whole recalls abandoned at the deadline.
+const maxKeywordExtractionTimeout = 3 * time.Second
+
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
-// timeout defaults to 15s if zero is passed — keyword extraction is best-effort
-// and should not significantly delay the conversation flow.
+// timeout is CLAMPED to maxKeywordExtractionTimeout (and defaults to it when
+// zero): extraction is best-effort, and the terms a slow call would have
+// produced are worth less than the seconds it costs.
 func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Duration, l *logger.Logger) *LLMKeywordExtractor {
-	if timeout <= 0 {
-		timeout = 15 * time.Second
+	if timeout <= 0 || timeout > maxKeywordExtractionTimeout {
+		timeout = maxKeywordExtractionTimeout
 	}
 	return &LLMKeywordExtractor{
 		provider: provider,

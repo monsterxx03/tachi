@@ -1100,6 +1100,25 @@ export function SetSessionPinned(id: string, pinned: boolean): $CancellablePromi
 }
 
 /**
+ * SetSessionSkipDream turns memory consolidation on or off for ONE session (the
+ * sidebar's 跳过记忆整理 / 恢复记忆整理 action).
+ * 
+ * The flag is read by the dream pipeline, which filters such sessions out
+ * before grouping — so it holds for every entry point (channel, desktop, TUI),
+ * not just this process. It is written through updateSessionMeta for the same
+ * reason as the pin: a running turn's own snapshot is the copy that will be
+ * written next, and a plain read-modify-write of the file would be clobbered by
+ * it.
+ * 
+ * A session a subsystem owns (a remote execution) is fixed at skipped: its
+ * conversation is not the reader's, and letting local memory digest it is not a
+ * choice to offer. The refusal is a sentence the frontend shows verbatim.
+ */
+export function SetSessionSkipDream(id: string, skip: boolean): $CancellablePromise<string> {
+    return $Call.ByID(1931789518, id, skip);
+}
+
+/**
  * SetSessionWorkingDir changes the session's working directory and persists it
  * to session meta. The NEXT turn runs tools under this directory (per-turn
  * wdctx injection, like channel agent_turn.go). Returns "ok" on success.

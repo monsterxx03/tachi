@@ -282,6 +282,16 @@ type desktopApp struct {
 	// not observable from a binding. Guarded by mu.
 	cronRunning map[string]bool
 
+	// dream is the background memory consolidation pass (desktop/dream.go). It is
+	// created after the config is loaded and stopped on shutdown; dreamBusy is the
+	// app-level gate shared by the timer and a typed /dream, so two passes can
+	// never rewrite the same memory directory at once. A pass runs for minutes, so
+	// dreamMu is NOT mu: nothing here may wait behind the app-wide lock.
+	dreamMu     sync.Mutex
+	dreamCancel context.CancelFunc
+	dreamDone   chan struct{}
+	dreamBusy   bool
+
 	// projects is the desktop project table (docs/2026-09-14-desktop-project-design.md):
 	// the named workspaces member sessions inherit their roots from. It guards its own
 	// data with its own lock and never calls back into the app, which is what makes

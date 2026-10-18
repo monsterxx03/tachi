@@ -3,8 +3,6 @@ package dream
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -12,7 +10,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -69,6 +66,16 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		provider = agent.WrapProviderForUsage(provider, cfg.Config)
 	}
 
+	// Take the inbox aside before anything is read: from here on, a memory
+	// recorded by a live conversation lands in a fresh inbox.md that this run
+	// never touches, so clearing the consumed snapshot cannot delete it.
+	inboxTaken, inboxErr := TakeInbox(plan.Group.MemoryRoot, l)
+	if inboxErr != nil {
+		// A failure here must not abort the whole dream: the sessions are still
+		// worth consolidating, and the inbox is left exactly as it was.
+		l.Error(ctx, "dream: inbox handoff failed; continuing without inbox", inboxErr)
+	}
+
 	// Capture the watermark BEFORE building summaries: messages arriving
 	// after this point are not included in the prompt, so they must remain
 	// eligible for the next dream. Using the completion time as LastDreamAt
@@ -76,8 +83,15 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// than the watermark).
 	snapshotAt := time.Now()
 
-	// Build session summaries (pre-filtered to user+assistant only).
-	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, plan.LastState.LastDreamAt, l)
+	// Build session summaries (pre-filtered to user+assistant only), bounded
+	// by the per-run prompt budget. `through` is how far this run may move each
+	// session's watermark.
+	summaryBudget := 0
+	if cfg.Config != nil {
+		summaryBudget = cfg.Config.Dream.MaxSummaryChars
+	}
+	summaries, through := buildSessionSummaries(
+		plan.ActiveSessions, loadMessages, plan.LastState, cfg.MaxMessageChars, summaryBudget, snapshotAt, l)
 
 	// Build prompt.
 	systemPrompt, userPrompt := BuildPrompt(plan, summaries, cfg.MaxMessageChars)
@@ -129,6 +143,11 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	}
 
 	if lastErr != nil {
+		// The agent saw the inbox but did not finish: put the raw material back
+		// so the next run can complete the job.
+		if inboxTaken {
+			FinishInbox(plan.Group.MemoryRoot, false, l)
+		}
 		return State{}, lastErr
 	}
 
@@ -138,18 +157,24 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// them into the fresh scan (plan.LastState.FactStates is stale by the
 	// duration of the dream).
 	latestState := LoadState(plan.Group.MemoryRoot)
-	factStates := ScanTopicFacts(plan.Group.MemoryRoot, latestState.FactStates, l)
+	halfLifeDays := 0
+	if cfg.Config != nil {
+		halfLifeDays = cfg.Config.Memory.DecayHalfLifeDays
+	}
+	factStates := ScanTopicFacts(plan.Group.MemoryRoot, latestState.FactStates, l, halfLifeDays)
 
-	// Ensure inbox.md was cleared. The dream agent is instructed to integrate
-	// inbox content into topic files and then clear the inbox. If the agent
-	// forgot, force-clear to prevent stale content from accumulating and being
-	// re-processed in the next dream.
-	ensureInboxCleared(plan.Group.MemoryRoot, l)
+	// Close the handoff: on success the consumed snapshot is gone, whatever the
+	// agent did with it. inbox.md itself is never touched — it belongs to the
+	// live writers.
+	if inboxTaken {
+		FinishInbox(plan.Group.MemoryRoot, true, l)
+	}
 
 	state := State{
-		LastDreamAt:     snapshotAt,
-		SessionsDreamed: len(plan.ActiveSessions),
-		FactStates:      factStates,
+		LastDreamAt:       snapshotAt,
+		SessionsDreamed:   len(summaries),
+		SessionWatermarks: mergeWatermarks(plan.LastState.SessionWatermarks, through),
+		FactStates:        factStates,
 	}
 
 	l.Info(ctx, "completed successfully", "domain", plan.Group.Domain, "root", plan.Group.Root)
@@ -177,79 +202,157 @@ func resolveProvider(cfg RunConfig) (llm.Provider, error) {
 	return cfg.FallbackProvider, nil
 }
 
-// buildSessionSummaries loads and filters messages for each active session.
-// For each session, it includes all conversation turns that started after
-// lastDreamAt, plus up to 2 preceding turns for context. If lastDreamAt is
-// zero (first dream), all pairs are included.
-func buildSessionSummaries(sessions []*session.Session, loadMessages func(string) ([]session.Message, error), lastDreamAt time.Time, logger *logger.Logger) []SessionSummary {
+// Context around the watermark, and the default prompt budget. The budget is
+// mirrored by config.dream.max_summary_chars; it exists because a run that
+// overflows the model's window fails completely, and a failed run advances no
+// watermark.
+const (
+	contextPairsBefore       = 2
+	defaultSummaryCharBudget = 100_000
+)
+
+// buildSessionSummaries loads the sessions in the caller's order (newest
+// activity first) and returns both the prompt material and the watermark each
+// session may advance to.
+//
+// Within one session the pairs are taken OLDEST first: the watermark is a
+// cursor, so a session too long for this run has to continue from where it
+// stopped next time, not skip its middle. A session that does not fit is left
+// out and its watermark is untouched.
+func buildSessionSummaries(
+	sessions []*session.Session,
+	loadMessages func(string) ([]session.Message, error),
+	lastState State,
+	maxMessageChars, budget int,
+	snapshotAt time.Time,
+	logger *logger.Logger,
+) ([]SessionSummary, map[string]time.Time) {
+	if maxMessageChars <= 0 {
+		maxMessageChars = 2000
+	}
+	if budget <= 0 {
+		budget = defaultSummaryCharBudget
+	}
+
 	var summaries []SessionSummary
+	through := make(map[string]time.Time, len(sessions))
+	remaining := budget
 
 	for _, sess := range sessions {
+		cutoff, ok := lastState.SessionWatermarks[sess.ID]
+		if !ok {
+			cutoff = lastState.LastDreamAt
+		}
+
 		msgs, err := loadMessages(sess.ID)
 		if err != nil {
-			logger.Error(context.Background(), "failed to load messages", err, "id", sess.ID)
+			if logger != nil {
+				logger.Error(context.Background(), "failed to load messages", err, "id", sess.ID)
+			}
 			continue
 		}
 
 		pairs := FilterSessionMessages(msgs)
 		if len(pairs) == 0 {
+			// Nothing extractable here. Mark it read so every run does not
+			// load the same file again for nothing.
+			through[sess.ID] = snapshotAt
 			continue
 		}
 
-		// Find the first pair whose user message occurred after lastDreamAt.
-		// If lastDreamAt is zero (first dream), include all pairs from the beginning.
+		// Find the first pair that starts after this session's watermark. If
+		// the watermark is zero (first dream), include all pairs.
 		firstNewIdx := 0
-		if !lastDreamAt.IsZero() {
+		if !cutoff.IsZero() {
 			firstNewIdx = -1
 			for i, p := range pairs {
-				if p.Timestamp.After(lastDreamAt) {
+				if p.Timestamp.After(cutoff) {
 					firstNewIdx = i
 					break
 				}
 			}
 			if firstNewIdx == -1 {
-				// No new pairs in this session (shouldn't normally happen since
-				// ActiveSessionsSince already filtered by UpdatedAt, but be safe).
+				// No new pairs (UpdatedAt moved but no conversation did — a
+				// title edit, say). Nothing left to do for this session.
+				through[sess.ID] = snapshotAt
 				continue
 			}
 		}
 
-		// Include 2 preceding turns for context, clamped to start of slice.
-		contextWindow := 2
-		startIdx := max(firstNewIdx-contextWindow, 0)
+		// NEW pairs are taken first. Progress must not depend on whether the
+		// context pairs happen to fit the budget: taking context first could
+		// spend everything on turns an earlier run already read, and the
+		// cursor would never move.
+		var included []MessagePair
+		lastIncluded := time.Time{}
+		stopped := false
+		for i := firstNewIdx; i < len(pairs); i++ {
+			cost := pairCost(pairs[i], maxMessageChars)
+			if cost > remaining {
+				stopped = true
+				break
+			}
+			remaining -= cost
+			included = append(included, pairs[i])
+			lastIncluded = pairs[i].Timestamp
+		}
+		if len(included) == 0 {
+			// Not even one new pair fits: stop, and leave this session (and
+			// every later one) for the next run.
+			break
+		}
 
-		pairs = pairs[startIdx:]
+		// Context pairs go in FRONT, chronologically, and only while the budget
+		// still holds them.
+		contextStart := firstNewIdx
+		for c := 0; c < contextPairsBefore && contextStart > 0; c++ {
+			cand := pairs[contextStart-1]
+			cost := pairCost(cand, maxMessageChars)
+			if cost > remaining {
+				break
+			}
+			remaining -= cost
+			contextStart--
+		}
 
-		summaries = append(summaries, SessionSummary{
-			ID:       sess.ID,
-			Title:    sess.Title,
-			Messages: pairs,
-		})
+		summary := SessionSummary{ID: sess.ID, Title: sess.Title}
+		summary.Messages = append(summary.Messages, pairs[contextStart:firstNewIdx]...)
+		summary.Messages = append(summary.Messages, included...)
+		summaries = append(summaries, summary)
+
+		if !stopped {
+			// Everything this session had was included.
+			through[sess.ID] = snapshotAt
+		} else {
+			// Advance only as far as the last NEW pair actually included.
+			through[sess.ID] = lastIncluded
+		}
+
+		if stopped {
+			break
+		}
 	}
 
-	return summaries
+	return summaries, through
 }
 
-// ensureInboxCleared verifies that inbox.md is empty after a dream run.
-// The dream agent is instructed to integrate inbox content into topic files
-// and then clear the inbox. If the agent forgot, we force-clear here to
-// prevent stale content from being re-processed in the next dream.
-func ensureInboxCleared(memoryRoot string, logger *logger.Logger) {
-	inboxPath := filepath.Join(memoryRoot, "inbox.md")
-	info, err := os.Stat(inboxPath)
-	if os.IsNotExist(err) {
-		return // already clean
-	}
-	if err != nil {
-		logger.Error(context.Background(), "ensureInboxCleared: stat failed", err, "path", inboxPath)
-		return
-	}
-	if info.Size() == 0 {
-		return // already empty
-	}
+// pairCost is what one exchange adds to the prompt, after the per-message
+// truncation BuildPrompt applies.
+func pairCost(p MessagePair, maxMessageChars int) int {
+	return min(len(p.User), maxMessageChars) + min(len(p.Assistant), maxMessageChars)
+}
 
-	logger.Info(context.Background(), "inbox.md has content after dream — force-clearing", "bytes", info.Size())
-	if err := fileutil.WriteFileShared(inboxPath, []byte{}); err != nil {
-		logger.Error(context.Background(), "ensureInboxCleared: failed to truncate", err, "path", inboxPath)
+// mergeWatermarks layers this run's progress over the previous map.
+func mergeWatermarks(previous, updates map[string]time.Time) map[string]time.Time {
+	if len(previous) == 0 && len(updates) == 0 {
+		return nil
 	}
+	out := make(map[string]time.Time, len(previous)+len(updates))
+	for id, at := range previous {
+		out[id] = at
+	}
+	for id, at := range updates {
+		out[id] = at
+	}
+	return out
 }

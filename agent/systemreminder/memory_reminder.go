@@ -121,13 +121,17 @@ func (r *MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []str
 
 	rctx.Info(ctx, "MemoryRecall: recall returned entries", "count", len(entries))
 
-	// Reinforce each recalled fact to strengthen its decay state.
+	// Reinforce the recalled facts in ONE call: the backend persists them into
+	// a shared state file, so per-entry calls meant several rewrites of it
+	// before the user's message was even sent.
+	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if e.ID != "" {
-			if err := backend.ReinforceFact(recallCtx, e.ID); err != nil {
-				rctx.Error(ctx, "MemoryRecall: reinforce failed", err, "memory_id", e.ID)
-			}
+			ids = append(ids, e.ID)
 		}
+	}
+	if err := backend.ReinforceFacts(recallCtx, ids); err != nil {
+		rctx.Error(ctx, "MemoryRecall: reinforce failed", err)
 	}
 
 	var lines []string

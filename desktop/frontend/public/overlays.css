@@ -1493,3 +1493,28 @@
   transition: background 0.12s var(--ease);
 }
 .sel-ask-add:hover { background: var(--accent-ring); }
+
+/* ── Transient action acknowledgement ────────────────────────────────────── */
+/* An action whose lasting evidence lives somewhere the reader just closed (a
+   context-menu label) reports itself here: one line, above the composer, gone on
+   its own. pointer-events: none is the contract — feedback must never eat the
+   click aimed at whatever is behind it. */
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 140px;
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: min(460px, 72vw);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-2);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  animation: panel-in 0.14s var(--ease) both;
+}

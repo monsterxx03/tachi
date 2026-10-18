@@ -48,7 +48,7 @@ var Registry = []Def{
 	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", InputHint: "[rounds]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
 	{Name: "skill", Description: "List or activate skills", InputHint: "list | reload | <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "transcript", Description: "Generate session transcript report", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
-	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
+	{Name: "dream", Description: "Run AutoDream memory consolidation now (status: show when it last ran)", InputHint: "status", Modes: []Mode{ModeTUI, ModeDesktop}},
 	{Name: "cron", Description: "List cron jobs", Modes: []Mode{ModeChannel}},
 	{Name: "cd", Description: "Change working directory for this thread", InputHint: "<directory>", Modes: []Mode{ModeChannel}},
 	{Name: "sh", Description: "Run a shell command in the session working directory and echo its output (no LLM)", InputHint: "<command>", Modes: []Mode{ModeTUI, ModeChannel, ModeDesktop}},

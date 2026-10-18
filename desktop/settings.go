@@ -631,7 +631,8 @@ var settingsTable = []settingApply{
 	{Key: "channel", Mode: applyUnused, Note: "channel 模式的 IM 后端；desktop 只读其中的 notify 开关（决定 NotifyUser 工具挂不挂），账号与收信仍归 channel 进程"},
 	{Key: "cron", Category: catAdvanced, Mode: applyRestart,
 		Note: "后台定时任务；channel 与 desktop 各自只调度发给自己的任务，改动后要重启对应进程。其中 notify_matcher 与 jev_threshold 只被 channel 的定时任务使用"},
-	{Key: "dream", Mode: applyUnused, Note: "channel 模式的后台记忆整理"},
+	{Key: "dream", Category: catSession, Mode: applyRestart,
+		Note: "后台记忆整理（AutoDream）：桌面每 30 分钟检查一次，有新会话且距上次整理超过 min_interval 才真正整理；enabled 保存后重启生效。schedule 只被 channel 进程使用，桌面按 min_interval 检查"},
 	{Key: "acp", Mode: applyUnused, Note: "ACP 入口的配置"},
 	{Key: "deep_research", Mode: applyUnused, Note: "desktop 没有 research 命令（TUI 与 tachi -p 才有）"},
 	{Key: "web", Mode: applyUnused, Note: "tachi web 是独立进程，重启那个进程即可"},
@@ -666,6 +667,7 @@ var settingChoices = map[string]func(*config.Config) []string{
 	"subagent.provider":       providerNames,
 	"review.provider":         providerNames,
 	"memory.keyword_provider": providerNames,
+	"dream.provider":          providerNames,
 	"providers.*.type":        providerTypes,
 	"badge.transport":         badgeTransports,
 }

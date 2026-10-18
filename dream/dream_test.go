@@ -2,12 +2,15 @@ package dream
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -271,7 +274,7 @@ func TestOrchestrator_Run_SkipsWhenNoActiveSessions(t *testing.T) {
 	o := NewOrchestrator(Config{})
 
 	var called bool
-	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		called = true
 		return State{LastDreamAt: time.Now()}, nil
 	})
@@ -302,7 +305,7 @@ func TestOrchestrator_Run_PassesGates(t *testing.T) {
 
 	var calledDomain string
 	var receivedActive int
-	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		calledDomain = p.Group.Domain
 		receivedActive = len(p.ActiveSessions)
 		return State{
@@ -354,7 +357,7 @@ func TestOrchestrator_Run_OnlyPicksActiveSessions(t *testing.T) {
 
 	var receivedActive int
 	var activeIDs []string
-	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		receivedActive = len(p.ActiveSessions)
 		for _, s := range p.ActiveSessions {
 			activeIDs = append(activeIDs, s.ID)
@@ -429,7 +432,7 @@ func TestBuildSessionSummaries_FirstDream(t *testing.T) {
 		return msgs, nil
 	}
 
-	summaries := buildSessionSummaries(sessions, loadFn, time.Time{}, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{}, nil)
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 summary, got %d", len(summaries))
 	}
@@ -471,7 +474,7 @@ func TestBuildSessionSummaries_WindowFiltering(t *testing.T) {
 
 	lastDreamAt := now.Add(-90 * time.Minute) // 1.5h ago
 
-	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{LastDreamAt: lastDreamAt}, nil)
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 summary, got %d", len(summaries))
 	}
@@ -520,7 +523,7 @@ func TestBuildSessionSummaries_FewContextPairs(t *testing.T) {
 
 	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
 
-	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{LastDreamAt: lastDreamAt}, nil)
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 summary, got %d", len(summaries))
 	}
@@ -559,7 +562,7 @@ func TestBuildSessionSummaries_NoContextPairs(t *testing.T) {
 
 	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
 
-	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{LastDreamAt: lastDreamAt}, nil)
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 summary, got %d", len(summaries))
 	}
@@ -593,7 +596,7 @@ func TestBuildSessionSummaries_AllBeforeLastDream(t *testing.T) {
 
 	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
 
-	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{LastDreamAt: lastDreamAt}, nil)
 	if len(summaries) != 0 {
 		t.Errorf("expected 0 summaries (all pairs before lastDreamAt), got %d", len(summaries))
 	}
@@ -620,7 +623,7 @@ func TestBuildSessionSummaries_SkipsThinkingAndTools(t *testing.T) {
 		return msgs, nil
 	}
 
-	summaries := buildSessionSummaries(sessions, loadFn, time.Time{}, nil)
+	summaries := buildTestSummaries(sessions, loadFn, State{}, nil)
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 summary, got %d", len(summaries))
 	}
@@ -629,5 +632,302 @@ func TestBuildSessionSummaries_SkipsThinkingAndTools(t *testing.T) {
 	}
 	if summaries[0].Messages[0].User != "hello" {
 		t.Errorf("user content: got %q, want hello", summaries[0].Messages[0].User)
+	}
+}
+
+func TestOrchestrator_Run_SkipsInsideMinInterval(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	os.MkdirAll(memRoot, 0755)
+	// Dreamed 30m ago; the session has activity since then, so Gate 1 alone
+	// would let a timer-driven caller run again on the very next tick.
+	SaveState(memRoot, State{LastDreamAt: time.Now().Add(-30 * time.Minute)})
+
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: time.Now().Add(-10 * time.Minute)},
+	}
+
+	o := NewOrchestrator(Config{MinInterval: 6 * time.Hour})
+
+	var called bool
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{}, nil
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called {
+		t.Fatal("dream ran inside the min interval")
+	}
+}
+
+func TestOrchestrator_Run_RunsAfterMinInterval(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	os.MkdirAll(memRoot, 0755)
+	SaveState(memRoot, State{LastDreamAt: time.Now().Add(-7 * time.Hour)})
+
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: time.Now().Add(-10 * time.Minute)},
+	}
+
+	o := NewOrchestrator(Config{MinInterval: 6 * time.Hour})
+
+	var called bool
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{LastDreamAt: time.Now()}, nil
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !called {
+		t.Fatal("dream did not run after the min interval elapsed")
+	}
+}
+
+func TestOrchestrator_Run_FirstDreamIgnoresMinInterval(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	// No last_dream.json at all: a cooldown must not suppress the FIRST dream.
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: time.Now().Add(-time.Minute)},
+	}
+
+	o := NewOrchestrator(Config{MinInterval: 6 * time.Hour})
+
+	var called bool
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{LastDreamAt: time.Now()}, nil
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !called {
+		t.Fatal("first dream was suppressed by the min interval")
+	}
+}
+
+// buildTestSummaries adapts the old test call shape to the budgeted builder:
+// a real Config's budget, the wall clock as the snapshot, no truncation limit
+// beyond the production default.
+func buildTestSummaries(sessions []*session.Session, loadFn func(string) ([]session.Message, error), state State, l *logger.Logger) []SessionSummary {
+	summaries, _ := buildSessionSummaries(sessions, loadFn, state, 2000, defaultSummaryCharBudget, time.Now(), l)
+	return summaries
+}
+
+// One run must not try to read an unbounded backlog: a prompt that large is
+// rejected by the provider, and a failed run advances nothing. What does not
+// fit waits for the next run, and the saved state says so.
+func TestOrchestrator_Run_CapsSessionsAndRecordsBacklog(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	now := time.Now()
+	var sessions []*session.Session
+	for i := range 10 {
+		sessions = append(sessions, &session.Session{
+			ID:         fmt.Sprintf("s%d", i),
+			WorkingDir: repoDir,
+			UpdatedAt:  now.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+
+	o := NewOrchestrator(Config{MaxSessionsPerRun: 3})
+
+	var got int
+	_, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		got = len(p.ActiveSessions)
+		return State{LastDreamAt: time.Now()}, nil
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("dreamed %d sessions, want the cap of 3", got)
+	}
+	state := LoadState(filepath.Join(repoDir, ".tachi", "memory"))
+	if !state.Backlog {
+		t.Fatal("a run that left active sessions behind must record the backlog")
+	}
+}
+
+// The cooldown exists to keep the timer from burning tokens; a backlog is the
+// one case where waiting is wrong — it would take days to drain.
+func TestOrchestrator_Run_BacklogSkipsCooldown(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	os.MkdirAll(memRoot, 0755)
+	SaveState(memRoot, State{
+		LastDreamAt: time.Now().Add(-time.Hour),
+		Backlog:     true,
+	})
+
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: time.Now().Add(-30 * time.Minute)},
+	}
+	o := NewOrchestrator(Config{MinInterval: 6 * time.Hour})
+
+	var called bool
+	if _, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{LastDreamAt: time.Now()}, nil
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !called {
+		t.Fatal("a backlog must be drained without waiting for min_interval")
+	}
+}
+
+// A per-session watermark keeps an unprocessed session eligible even after a
+// LATER run moved LastDreamAt past its last update — the case the old global
+// watermark got wrong (those sessions were skipped forever).
+func TestActiveSessions_PerSessionWatermark(t *testing.T) {
+	now := time.Now()
+	state := State{
+		LastDreamAt: now,
+		SessionWatermarks: map[string]time.Time{
+			"done":   now,
+			"queued": now.Add(-48 * time.Hour),
+		},
+	}
+	sessions := []*session.Session{
+		{ID: "done", UpdatedAt: now.Add(-time.Minute)},
+		{ID: "queued", UpdatedAt: now.Add(-24 * time.Hour)}, // older than LastDreamAt, still pending
+		{ID: "never", UpdatedAt: now.Add(-30 * time.Minute)},
+	}
+
+	active := ActiveSessions(state, sessions)
+	ids := make(map[string]bool, len(active))
+	for _, s := range active {
+		ids[s.ID] = true
+	}
+	if ids["done"] {
+		t.Error("a fully dreamt session must not be active")
+	}
+	if !ids["queued"] {
+		t.Error("a session with an older watermark must stay active despite LastDreamAt")
+	}
+	// "never" has no watermark; the fallback is LastDreamAt, so it is done.
+	if ids["never"] {
+		t.Error("a session with no watermark falls back to LastDreamAt")
+	}
+}
+
+// The cursor moves only as far as the pairs actually included, so a session too
+// long for one prompt continues exactly where it stopped.
+func TestBuildSessionSummaries_PerSessionCursorAdvances(t *testing.T) {
+	start := time.Now().Add(-3 * time.Hour)
+	var msgs []session.Message
+	for i := range 4 {
+		at := start.Add(time.Duration(i) * 30 * time.Minute)
+		msgs = append(msgs,
+			session.Message{Type: session.MessageTypeUser, Content: strings.Repeat("u", 100), Timestamp: at},
+			session.Message{Type: session.MessageTypeAssistant, Content: strings.Repeat("a", 100), Timestamp: at},
+		)
+	}
+	load := func(string) ([]session.Message, error) { return msgs, nil }
+	sessions := []*session.Session{{ID: "s1"}}
+
+	// Budget for exactly one pair (200 chars) → 4 runs to get through.
+	state := State{}
+	seen := 0
+	for run := 0; run < 4; run++ {
+		summaries, through := buildSessionSummaries(sessions, load, state, 2000, 200, time.Now(), nil)
+		if len(summaries) != 1 {
+			t.Fatalf("run %d: got %d summaries, want 1", run, len(summaries))
+		}
+		seen += len(summaries[0].Messages)
+		state = State{SessionWatermarks: mergeWatermarks(state.SessionWatermarks, through)}
+	}
+	if seen != 4 {
+		t.Fatalf("saw %d pairs across runs, want each of the 4 exactly once", seen)
+	}
+	// A fifth run has nothing left.
+	summaries, _ := buildSessionSummaries(sessions, load, state, 2000, 200, time.Now(), nil)
+	if len(summaries) != 0 {
+		t.Fatalf("cursor did not reach the end: %d summaries", len(summaries))
+	}
+}
+
+// A session that does not fit the remaining budget is left completely alone:
+// no summary, and no watermark pretending it was read.
+func TestBuildSessionSummaries_UnfitSessionKeepsWatermark(t *testing.T) {
+	at := time.Now().Add(-time.Hour)
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: strings.Repeat("u", 500), Timestamp: at},
+		{Type: session.MessageTypeAssistant, Content: strings.Repeat("a", 500), Timestamp: at},
+	}
+	load := func(string) ([]session.Message, error) { return msgs, nil }
+
+	summaries, through := buildSessionSummaries(
+		[]*session.Session{{ID: "s1"}}, load, State{}, 2000, 100, time.Now(), nil)
+	if len(summaries) != 0 {
+		t.Fatalf("expected no summary when the budget cannot hold a pair, got %d", len(summaries))
+	}
+	if _, ok := through["s1"]; ok {
+		t.Fatal("an unread session must not get a watermark")
+	}
+}
+
+// skip_dream is honoured by the SHARED orchestrator, before domains are
+// grouped — so the desktop's timer and its /dream command skip such a session
+// exactly like channel and the TUI do. It is a property of the session record,
+// not of the entry point that happens to be running.
+func TestOrchestrator_Run_SkipsSkipDreamSessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	sessions := []*session.Session{
+		{ID: "skipped", WorkingDir: repoDir, UpdatedAt: time.Now(), SkipDream: true},
+	}
+
+	o := NewOrchestrator(Config{})
+	var called bool
+	if _, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{}, nil
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called {
+		t.Fatal("a session marked skip_dream was handed to the dream agent")
+	}
+}
+
+// A skipped session also must not count as pending work: it cannot be drained
+// by a later run, so treating it as backlog would make the cooldown skip
+// forever.
+func TestOrchestrator_Run_SkippedSessionIsNotBacklog(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	sessions := []*session.Session{
+		{ID: "skipped", WorkingDir: repoDir, UpdatedAt: time.Now(), SkipDream: true},
+	}
+
+	o := NewOrchestrator(Config{MaxSessionsPerRun: 1})
+	if _, err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		t.Fatal("no domain should have passed the gates")
+		return State{}, nil
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }

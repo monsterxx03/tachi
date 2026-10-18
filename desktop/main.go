@@ -289,6 +289,10 @@ func main() {
 		// The scheduler must stop first: its handler owns the turn goroutines,
 		// and Stop cancels their context and waits for them.
 		desk.stopCron()
+		// The consolidation pass holds its own context (a run can take minutes);
+		// cancelling it here is what keeps a quit from leaving an LLM call writing
+		// topic files as the process goes away.
+		desk.stopDream()
 		// The device link is stopped explicitly: its reconnect loop owns a goroutine that
 		// would otherwise keep waking up while the process is going away.
 		desk.stopBadge()
@@ -356,6 +360,11 @@ func main() {
 	// so a job keeps running; quitting really does stop them (no catch-up).
 	// Started after initAgent because it reads the config that just booted.
 	desk.startCron(context.Background())
+
+	// Memory consolidation, in the same posture: it runs only while this process
+	// is alive, asks every half hour whether a domain is due, and a quit stops it
+	// (no catch-up — the next launch's first check is the catch-up).
+	desk.startDream(context.Background())
 
 	// The node service (multi-node collaboration) is optional and OFF by default,
 	// and a failure to start it must not cost the user their desktop: log and carry

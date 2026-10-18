@@ -69,7 +69,9 @@ Each topic file should use this format:
 - If a new fact contradicts an old one, mark the old one as ` + "`状态: superseded`" + `
 - Generate ` + "`关键词:`" + ` with synonyms and related terms to improve grep-based recall
 - Do NOT duplicate facts already present in topic files
-- Clear inbox.md after integrating its contents into topic files
+- Integrate inbox.processing.md (when present) into topic files
+- Never write to or delete inbox.md — live conversations append to it while you run
+- The runner deletes inbox.processing.md itself; do not delete it
 - Update index.md to reflect the current topic structure (keep ≤200 lines)
 - If a topic file exceeds 50 facts, summarize older ones
 
@@ -109,11 +111,11 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 	b.WriteString("## Instructions\n\n")
 	b.WriteString("1. First, read the existing memory state:\n")
 	fmt.Fprintf(&b, "   - `%s/index.md` (may not exist yet)\n", plan.Group.MemoryRoot)
-	fmt.Fprintf(&b, "   - `%s/inbox.md` (may not exist yet)\n", plan.Group.MemoryRoot)
+	fmt.Fprintf(&b, "   - `%s/%s` (may not exist yet — the inbox snapshot for THIS run)\n", plan.Group.MemoryRoot, inboxProcessing)
 	fmt.Fprintf(&b, "   - Files in `%s/topics/`\n\n", plan.Group.MemoryRoot)
 	b.WriteString("2. Then review the session summaries below and extract important facts.\n")
 	b.WriteString("3. Write consolidated facts into topic files.\n")
-	b.WriteString("4. Update index.md and clear inbox.md if you integrated its content.\n\n")
+	b.WriteString("4. Update index.md. Do NOT touch inbox.md (live writes) and do NOT delete inbox.processing.md (the runner does).\n\n")
 
 	b.WriteString("## Session Summaries\n\n")
 

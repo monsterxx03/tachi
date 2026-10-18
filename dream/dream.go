@@ -23,6 +23,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/syncx"
@@ -31,6 +32,11 @@ import (
 
 // MaxConcurrentDreams limits parallel dream sub-agents across all domains.
 const MaxConcurrentDreams = 3
+
+// DefaultMaxSessionsPerRun is the batch size when none is configured. Small on
+// purpose: each session contributes up to MaxSummaryChars of conversation, and
+// a prompt that overflows is a wasted run, not a partial one.
+const DefaultMaxSessionsPerRun = 8
 
 // State records the last successful dream execution for a memory domain.
 type State struct {
@@ -42,6 +48,22 @@ type State struct {
 	FactsPruned     int                          `json:"facts_pruned"`
 	Errors          []string                     `json:"errors,omitempty"`
 	FactStates      map[string]*memory.FactState `json:"fact_states,omitempty"`
+
+	// SessionWatermarks records, per session, how far a dream has read. It is
+	// what lets ONE run take a bounded batch without skipping the rest: the
+	// old single LastDreamAt could only move forward, so a run that could not
+	// fit every active session (a months-long backlog, or a long outage) would
+	// either overflow the prompt or mark the unprocessed sessions done forever.
+	//
+	// A missing entry falls back to LastDreamAt, which is exactly the old
+	// behaviour for state written before this field existed.
+	SessionWatermarks map[string]time.Time `json:"session_watermarks,omitempty"`
+
+	// Backlog is true when the last run hit the per-run session cap and left
+	// active sessions behind. The cooldown gate ignores it as long as it is
+	// set, so a backlog drains at the caller's tick rate instead of at
+	// min_interval.
+	Backlog bool `json:"backlog,omitempty"`
 }
 
 // Status provides a snapshot of the orchestrator's current dream execution state.
@@ -80,8 +102,12 @@ type SessionGroup struct {
 // Plan holds a validated group ready for dream execution.
 type Plan struct {
 	Group          SessionGroup       // domain metadata (Root, MemoryRoot, etc.)
-	ActiveSessions []*session.Session // sessions with activity since last dream
+	ActiveSessions []*session.Session // sessions with activity since last dream (capped)
 	LastState      State
+	// Backlog says this plan left active sessions behind because the per-run
+	// cap was hit. It is written into the saved State so the NEXT run skips the
+	// cooldown and continues draining.
+	Backlog bool
 }
 
 // RunFunc is the callback invoked for each domain that passes the gates.
@@ -98,6 +124,24 @@ type RunFunc func(ctx context.Context, plan Plan) (State, error)
 type Config struct {
 	Logger        *logger.Logger
 	MaxConcurrent int // max parallel dream sub-agents (0 → use default)
+
+	// MaxSessionsPerRun caps how many sessions one sub-agent is asked to read
+	// (0 → DefaultMaxSessionsPerRun). One prompt has to hold them all: an
+	// unbounded run over a backlog produces a request no model accepts, and a
+	// failed run advances nothing. What is left over keeps its watermark and
+	// goes into the next batch.
+	MaxSessionsPerRun int
+
+	// MinInterval is the least time that must have passed since a domain's last
+	// successful dream before it is dreamed again (0 → no cooldown).
+	//
+	// It exists for TIMER-DRIVEN entry points — the desktop checks every half hour
+	// while the app happens to be open. Gate 1 alone (new activity since last
+	// dream) would let every tick consolidate the handful of messages typed since
+	// the previous check, turning a background job into an LLM call per tick. An
+	// hourly-or-daily cron entry does not need it: its schedule already IS the
+	// interval.
+	MinInterval time.Duration
 }
 
 // Orchestrator coordinates dream execution across memory domains.
@@ -158,7 +202,12 @@ func (o *Orchestrator) domainKey(g SessionGroup) string {
 
 // Run is the main entry point. It lists sessions, groups by domain, checks
 // gates, and invokes runFn for each qualifying domain.
-func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, runFn RunFunc) error {
+//
+// It reports how many domains were actually dreamed (0 = every domain was
+// skipped by a gate). Callers that only care about the error ignore it; the
+// desktop's manual trigger shows it, because "nothing ran" and "ran, but there
+// was no new material" are different answers to a person who just asked.
+func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, runFn RunFunc) (int, error) {
 	// Filter sessions marked as skip_dream.
 	sessions = FilterSkippedSessions(sessions)
 
@@ -170,29 +219,53 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 	for _, g := range groups {
 		lastState := LoadState(g.MemoryRoot)
 
-		// Gate 1: at least one session with activity since last dream.
-		active := ActiveSessionsSince(lastState.LastDreamAt, g.Sessions)
+		// Gate 2: minimum interval since this domain's last dream (timer-driven
+		// entry points only). Checked before Gate 1's session scan because it is
+		// two fields — a tick that lands inside the cooldown must not do work.
+		if o.cfg.MinInterval > 0 && !lastState.Backlog && !lastState.LastDreamAt.IsZero() &&
+			time.Since(lastState.LastDreamAt) < o.cfg.MinInterval {
+			o.logger.Info(ctx, "skipped — dreamed more recently than min interval",
+				"domain", g.Domain, "root", g.Root,
+				"last_dream", lastState.LastDreamAt, "min_interval", o.cfg.MinInterval)
+			continue
+		}
+
+		// Gate 3: at least one session with activity since its own watermark.
+		active := ActiveSessions(lastState, g.Sessions)
 		if len(active) == 0 {
 			o.logger.Info(ctx, "skipped — no sessions with activity since last dream",
 				"domain", g.Domain, "root", g.Root)
 			continue
 		}
 
-		// Gate 2: acquire domain lock (no concurrent dream on same domain).
+		// Newest activity first: recent conversations are what recall needs
+		// most, and the batch cap must not spend itself on months-old ones.
+		sort.SliceStable(active, func(i, j int) bool {
+			return active[i].UpdatedAt.After(active[j].UpdatedAt)
+		})
+		backlog := false
+		if maxSessions := o.maxSessionsPerRun(); len(active) > maxSessions {
+			active = active[:maxSessions]
+			backlog = true
+			o.logger.Info(ctx, "session cap reached; remaining sessions wait for the next run",
+				"domain", g.Domain, "root", g.Root, "cap", maxSessions)
+		}
+
+		// Gate 4: acquire domain lock (no concurrent dream on same domain).
 		if !AcquireLock(g.MemoryRoot) {
 			o.logger.Info(ctx, "skipped — lock held by another process", "domain", g.Domain, "root", g.Root)
 			continue
 		}
 
-		plans = append(plans, Plan{Group: g, ActiveSessions: active, LastState: lastState})
+		plans = append(plans, Plan{Group: g, ActiveSessions: active, LastState: lastState, Backlog: backlog})
 	}
 
 	if len(plans) == 0 {
 		o.logger.Info(ctx, "no domains passed gates")
-		return nil
+		return 0, nil
 	}
 
-	return o.executePlans(ctx, plans, runFn)
+	return len(plans), o.executePlans(ctx, plans, runFn)
 }
 
 // executePlans runs dream sub-agents for each plan, limited by concurrency.
@@ -248,6 +321,8 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 				return
 			}
 
+			state.Backlog = p.Backlog
+			state.SessionWatermarks = pruneWatermarks(state.SessionWatermarks, p.Group.Sessions)
 			if err := SaveState(p.Group.MemoryRoot, state); err != nil {
 				o.logger.Error(ctx, "failed to save state", err, "domain", p.Group.Domain, "root", p.Group.Root)
 			} else {
@@ -261,6 +336,54 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 }
 
 // --- Session filtering ---
+
+// maxSessionsPerRun resolves the batch cap.
+func (o *Orchestrator) maxSessionsPerRun() int {
+	if o.cfg.MaxSessionsPerRun > 0 {
+		return o.cfg.MaxSessionsPerRun
+	}
+	return DefaultMaxSessionsPerRun
+}
+
+// ActiveSessions returns the sessions with activity past their own watermark.
+//
+// A session without an entry falls back to LastDreamAt — state written before
+// per-session watermarks existed behaves exactly as it did. LastDreamAt is
+// deliberately NOT used as a floor for a session that HAS a watermark: after a
+// run, LastDreamAt is later than an unprocessed session's last update, and
+// taking the max would put that session to sleep forever.
+func ActiveSessions(lastState State, sessions []*session.Session) []*session.Session {
+	var active []*session.Session
+	for _, s := range sessions {
+		cutoff, ok := lastState.SessionWatermarks[s.ID]
+		if !ok {
+			cutoff = lastState.LastDreamAt
+		}
+		if cutoff.IsZero() || s.UpdatedAt.After(cutoff) {
+			active = append(active, s)
+		}
+	}
+	return active
+}
+
+// pruneWatermarks drops entries for sessions that no longer exist, so the
+// state file does not grow with every session ever dreamed.
+func pruneWatermarks(marks map[string]time.Time, sessions []*session.Session) map[string]time.Time {
+	if len(marks) == 0 {
+		return nil
+	}
+	known := make(container.Set[string])
+	for _, s := range sessions {
+		known.Add(s.ID)
+	}
+	out := make(map[string]time.Time, len(marks))
+	for id, at := range marks {
+		if known.Has(id) {
+			out[id] = at
+		}
+	}
+	return out
+}
 
 // ActiveSessionsSince returns sessions that have been updated after the given
 // time. If since is zero (first dream), all sessions are considered active.

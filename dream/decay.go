@@ -13,8 +13,13 @@ import (
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
-// HalfLifeDays is the decay half-life in days. Facts decay to 0.5 after this
-// many days without reinforcement, to 0.25 after 2×, etc.
+// HalfLifeDays is the DEFAULT decay half-life in days. Facts decay to 0.5 after
+// this many days without reinforcement, to 0.25 after 2×, etc.
+//
+// It is only a default: memory.decay_half_life_days is what recall ranks by,
+// and this package recalculates the snapshot with the SAME value so the prune
+// advice the dream prompt shows cannot describe a different curve from the one
+// recall applies.
 const HalfLifeDays = 7
 
 // CalculateDecay computes the decay factor based on time elapsed since the
@@ -26,7 +31,7 @@ const HalfLifeDays = 7
 //	decay = exp(-ln(2) × elapsed / halfLife)
 //
 // Returns 1.0 if both timestamps are zero (brand new, not yet decayed).
-func CalculateDecay(lastReinforced, createdAt time.Time) float64 {
+func CalculateDecay(lastReinforced, createdAt time.Time, halfLifeDays ...int) float64 {
 	ref := lastReinforced
 	if ref.IsZero() {
 		ref = createdAt
@@ -38,7 +43,11 @@ func CalculateDecay(lastReinforced, createdAt time.Time) float64 {
 	if elapsed < 0 {
 		return 1.0 // clock skew — treat as brand new
 	}
-	halfLife := time.Duration(HalfLifeDays) * 24 * time.Hour
+	days := HalfLifeDays
+	if len(halfLifeDays) > 0 && halfLifeDays[0] > 0 {
+		days = halfLifeDays[0]
+	}
+	halfLife := time.Duration(days) * 24 * time.Hour
 	return math.Exp(-math.Ln2 * elapsed.Seconds() / halfLife.Seconds())
 }
 
@@ -50,7 +59,7 @@ func CalculateDecay(lastReinforced, createdAt time.Time) float64 {
 //     status updated from the block content and decay recalculated.
 //   - Facts in existingStates not found in topic files are excluded
 //     (they were removed/consolidated by the dream agent).
-func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactState, logger *logger.Logger) map[string]*memory.FactState {
+func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactState, logger *logger.Logger, halfLifeDays ...int) map[string]*memory.FactState {
 	result := make(map[string]*memory.FactState)
 	now := time.Now()
 
@@ -97,7 +106,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 				// Clone to avoid mutating the caller's map.
 				cloned := *existing
 				cloned.Superseded = superseded
-				cloned.Decay = CalculateDecay(cloned.LastReinforced, cloned.CreatedAt)
+				cloned.Decay = CalculateDecay(cloned.LastReinforced, cloned.CreatedAt, halfLifeDays...)
 				result[id] = &cloned
 			} else {
 				// New fact: initialize with full strength.

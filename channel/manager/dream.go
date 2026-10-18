@@ -17,11 +17,13 @@ func (m *Manager) executeDream(ctx context.Context) error {
 	}
 
 	o := dream.NewOrchestrator(dream.Config{
-		Logger:        m.logger,
-		MaxConcurrent: m.cfg.Dream.MaxConcurrent,
+		Logger:            m.logger,
+		MaxConcurrent:     m.cfg.Dream.MaxConcurrent,
+		MaxSessionsPerRun: m.cfg.Dream.MaxSessionsPerRun,
 	})
 
-	return o.Run(ctx, sessions, m.runDreamForPlan)
+	_, err = o.Run(ctx, sessions, m.runDreamForPlan)
+	return err
 }
 
 // runDreamForPlan executes the dream pipeline for a single domain.
