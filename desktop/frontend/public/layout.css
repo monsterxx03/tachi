@@ -405,27 +405,21 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    (a second signal for the same fact) is what made the list look heavier than its content. The
    rail stays for ONE case — a conversation whose turn finished while the reader was elsewhere —
    because that row is otherwise identical to an idle one. */
+/* Active session: ONE quiet wash, and nothing else — no rail, no card, no shadow. The row says
+   which conversation is on screen by being the only one wearing that wash; a decorative bar beside
+   it was a second signal for the same fact, and in a list this dense the second signal is what read
+   as noise. (The rail that remains, below, belongs to a DIFFERENT fact: work that finished while
+   the reader was elsewhere.) */
 .session.active { background: var(--accent-soft); }
-.session.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 62%;
-  border-radius: 0 3px 3px 0;
-  background: var(--accent-line);
-}
 .session.active .session-title { color: var(--text); font-weight: 560; }
 /* A turn in flight in a conversation that is NOT the one on screen — or one whose work finished
    while the reader was elsewhere and which they have not opened since. This is the one case where
    nothing else on screen reports that work: the transcript belongs to another conversation, the
-   spinner is a 14px detail in the meta line, and the menu bar only counts. It keeps the rail (the
-   sidebar's own "this row matters" language) plus a faint wash, so it cannot be read as the
-   conversation you are in (that one is a stronger wash behind a 3px rail, and it keeps both:
-   :not(.active) is the whole difference). Which of the two it is, the spinner says: the highlight
-   outlives the turn, the spinner does not. */
+   spinner is a 14px detail in the meta line, and the menu bar only counts. So this row gets what no
+   other row has: a faint wash AND a 2px rail on the leading edge. The rail is safe to use here
+   because the selected row no longer wears one — two different bars on two different rows would have
+   meant one thing worn twice (see `.session.active` above). Which of the two states it is, the
+   spinner says: the highlight outlives the turn, the spinner does not. */
 .session.is-unseen:not(.active) { background: var(--accent-softer); }
 .session.is-unseen:not(.active)::before {
   content: "";
