@@ -19,6 +19,29 @@
 
 ## 新机器上的环境
 
+**最短路径**（照这个顺序，细节在下面）：
+
+```sh
+# 1. 工具链：JDK 17、Node ≥26、Android SDK（组件清单见下）、一个 AVD
+# 2. 装依赖
+cd mobile && npm install
+
+# 3. 生成原生工程（生成物，不入库）
+npx expo prebuild --platform android --no-install
+bash scripts/prepare-android.sh        # 钉 Gradle 版本、镜像、AGP —— 每次 prebuild 后都要跑
+
+# 4. 构建并装进模拟器
+cd android && ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+cd ..
+
+# 5. 跑起来：一个终端起 Metro，一个终端起假服务端
+npx expo start                         # 另开：adb reverse tcp:8081 tcp:8081
+go run ./mockapi -token dev-token      # 它会把「局域网地址 + 令牌」打出来
+```
+
+打开 App，在配对页填/扫那个地址和令牌，就能看到会话列表。验证：`npm test`（纯逻辑）、`bash e2e/run.sh`（端到端）。
+
 工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。
 
 - **JDK 必须是 17。** 这台机器上可能还装着更老的（`java -version` 报 1.8 是常见的），所以一律显式指定 `JAVA_HOME=$(/usr/libexec/java_home -v 17)`。macOS 只认 `~/Library/Java/JavaVirtualMachines/<名>.jdk/Contents/Home` 这个布局，tar.gz 解压出来要按它摆。
@@ -33,7 +56,7 @@ SDK 里放什么，分两类：
 | adb | `platform-tools/` |
 | 模拟器与系统镜像 | `emulator/`、`system-images/android-36/google_apis/arm64-v8a/`（Apple Silicon 必须用 **arm64-v8a** 镜像） |
 
-**其余（platform、build-tools、NDK）交给 Gradle 自己补**：它按项目实际要求装，实测会拉 `platforms/android-37.0`、`build-tools/37.0.0`、`ndk/27.1.12297006`——手动装一份 36 反而白装。它走系统代理，速度可以接受。
+**其余（platform、build-tools、NDK）交给 Gradle 自己补**：它按项目实际要求装，实测会拉 `platforms/android-37.0`、`build-tools/37.0.0`、`ndk/27.1.12297006`——手动装一份 36 反而白装。耗时取决于那台机器的网络。
 
 两个手工步骤，都是"包装里没有、而工具要求"的东西：
 
@@ -61,8 +84,8 @@ SDK 里放什么，分两类：
 - **Gradle 用的镜像一定要验 sha256**。腾讯镜像是 `dl.google.com/android/repository` 的投影，目录层级一致（系统镜像在 `sys-img/google_apis/` 下），文件名要从 `repository2-3.xml` / `sys-img*/sys-img2-3.xml` 里取；**每个包在索引里有 Linux / macOS / Windows 好几份 zip，取第一个会拿到 Linux 的**（按 `host-os=macosx`、`host-arch=aarch64` 过滤）。下载完拿索引里的 sha1 核对一遍，包对不上会以完全无关的方式炸。
 - **压缩包内的目录名 ≠ 安装目录名**：platform 包里是 `android-36/`、build-tools 包里是 `android-16/`（Android 16 = API 36），要分别落成 `platforms/android-36/`、`build-tools/36.0.0/`。
 - Gradle 发行版的缓存目录名是 **distributionUrl 的 MD5 的 base36**。想跳过 wrapper 自己下载（速度差一个量级），算好这个名字把 zip 直接放进去即可。
+- **`mobile/.npmrc` 把 npm 指到了淘宝镜像**。那台机器如果直通海外、走镜像反而慢，删掉这个文件就用官方源——它只影响这个项目，不碰全局配置。
 - **这台机器上另有一份 `~/.gradle/init.gradle`**（仓库里的模板是 `mobile/scripts/gradle-init.gradle`）：它把官方仓库换成阿里云镜像。新机器上不是必需的，想要镜像就 `cp mobile/scripts/gradle-init.gradle ~/.gradle/init.gradle`。
-- 如果机器开着**系统代理**，Java 会自动采用它 —— 那时访问国内镜像也被绕一圈，时间反而更慢。要绕开就在 `~/.gradle/gradle.properties` 里给这些域名配 `systemProp.http.nonProxyHosts`（Java 只认这一个键，它同时管 HTTP 和 HTTPS）。
 
 ## 构建与运行
 
