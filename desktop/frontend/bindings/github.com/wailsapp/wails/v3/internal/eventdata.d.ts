@@ -14,7 +14,10 @@ declare module "@wailsio/runtime" {
         interface CustomEvents {
             "agent:ask": main$0.AskEvent;
             "agent:ask_answered": main$0.AskAnsweredEvent;
+            "agent:cron_changed": string;
+            "agent:cron_turn": main$0.CronTurnEvent;
             "agent:filedrop": main$0.FileDropEvent;
+            "agent:sessions_changed": string;
             "agent:state": main$0.AgentState;
             "ui:open_session": string;
             "ui:theme": string;

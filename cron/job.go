@@ -46,6 +46,71 @@ const (
 	JobTypeOneshot JobType = "oneshot"
 )
 
+// TargetType identifies which entry point owns a job.
+const (
+	// TargetTypeChannel is a channel thread (the only kind that existed before
+	// the desktop could schedule).
+	TargetTypeChannel = "channel"
+	// TargetTypeDesktop is a desktop conversation.
+	TargetTypeDesktop = "desktop"
+)
+
+// Desktop modes. A desktop job always ends up bound to ONE conversation; Mode
+// only says whether that conversation exists yet.
+const (
+	// DesktopModeSession is a job already bound to DesktopTarget.SessionID.
+	DesktopModeSession = "session"
+	// DesktopModeNew is a job whose dedicated conversation is created on its
+	// first run. After that run, the scheduler binds it (see
+	// Scheduler.BindDesktopSession) and the mode becomes DesktopModeSession.
+	DesktopModeNew = "new"
+)
+
+// DesktopTarget is a desktop job's destination. Exactly one conversation: the
+// difference between the two modes is only whether it has been created yet.
+type DesktopTarget struct {
+	// Mode is session or new.
+	Mode string `json:"mode"`
+	// SessionID is the LOGICAL conversation id (session.Session.LogicalConversationID)
+	// once bound. It survives compaction, so a job keeps writing into the same
+	// conversation across every successor session.
+	SessionID string `json:"session_id,omitempty"`
+
+	// The following are a TEMPLATE, used only while SessionID is empty and Mode
+	// is new: the first run creates the conversation with them. Cleared when the
+	// job is bound.
+	ProjectID      string   `json:"project_id,omitempty"`
+	WorkingDir     string   `json:"working_dir,omitempty"`
+	AdditionalDirs []string `json:"additional_dirs,omitempty"`
+	ProviderName   string   `json:"provider_name,omitempty"`
+	// SkipApproval seeds the dedicated conversation's approval mode. It is a
+	// template field for the same reason as the rest: after creation the
+	// SESSION's own record is what every run reads.
+	SkipApproval bool `json:"skip_approval,omitempty"`
+}
+
+// Clone returns a copy that shares no mutable slices with d.
+func (d *DesktopTarget) Clone() *DesktopTarget {
+	if d == nil {
+		return nil
+	}
+	cp := *d
+	cp.AdditionalDirs = append([]string(nil), d.AdditionalDirs...)
+	return &cp
+}
+
+// Clone returns a copy that shares no mutable slices with j.
+func (j *Job) Clone() *Job {
+	if j == nil {
+		return nil
+	}
+	cp := *j
+	if j.Desktop != nil {
+		cp.Desktop = j.Desktop.Clone()
+	}
+	return &cp
+}
+
 // Job represents a scheduled cron task.
 type Job struct {
 	// ID is a unique identifier (short prefix, e.g. "cr_a1b2c3").
@@ -64,11 +129,16 @@ type Job struct {
 	// Prompt is the message sent to the LLM when the cron fires.
 	Prompt string `json:"prompt"`
 
-	// TargetType identifies the consumer type. Currently only "channel".
+	// TargetType identifies the consumer type. "channel" (the default) or
+	// "desktop". Empty reads as channel, so every job written before the
+	// desktop could schedule keeps its meaning.
 	TargetType string `json:"target_type"`
 
-	// TargetThreadID is the channel thread to send the response to.
+	// TargetThreadID is the channel thread to send the response to. Channel-only.
 	TargetThreadID string `json:"target_thread_id"`
+
+	// Desktop is the desktop destination (nil on channel jobs). See DesktopTarget.
+	Desktop *DesktopTarget `json:"desktop,omitempty"`
 
 	// Status controls whether the job is actively scheduled.
 	Status JobStatus `json:"status"`

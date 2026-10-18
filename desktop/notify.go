@@ -359,6 +359,29 @@ func (n *notifier) notifyOneOffDone(sessionID, kind string, findings int, outcom
 	n.notify(sessionID, notifyAppTitle, oneOffDoneBody(kind, findings, outcome))
 }
 
+// notifyCronDone / notifyCronFailed report a scheduled run. A scheduled run
+// says WHAT finished — the job's name is the part the reader does not already
+// know — and a failure is worth a ping for the same reason a one-off's is: the
+// report they were waiting for did not arrive.
+func (n *notifier) notifyCronDone(sessionID, jobName string) {
+	n.notify(sessionID, notifyAppTitle, cronDoneBody(jobName, true))
+}
+
+func (n *notifier) notifyCronFailed(sessionID, jobName string) {
+	n.notify(sessionID, notifyAppTitle, cronDoneBody(jobName, false))
+}
+
+func cronDoneBody(jobName string, ok bool) string {
+	name := truncateRunes(strings.TrimSpace(jobName), notifySubtitleMaxRune)
+	if name == "" {
+		name = "定时任务"
+	}
+	if ok {
+		return "「" + name + "」已完成"
+	}
+	return "「" + name + "」没有跑成功"
+}
+
 // oneOffDoneBody is the one-line body for a finished run. `outcome` is the command lane's end
 // reason: "complete", "interrupted" (the reader stopped it), or anything else — a failure.
 func oneOffDoneBody(kind string, findings int, outcome string) string {

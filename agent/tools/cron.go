@@ -9,28 +9,68 @@ import (
 
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/pkg/strutil"
-	robfigcron "github.com/robfig/cron/v3"
 )
 
 // ToolNameCron is the name for the CronTool registered in the tool registry.
 const ToolNameCron = "Cron"
 
-// nextRunParser parses cron expressions to compute next run time.
-// Use the same parser as the Scheduler.
-var nextRunParser = robfigcron.NewParser(robfigcron.Minute | robfigcron.Hour | robfigcron.Dom | robfigcron.Month | robfigcron.Dow | robfigcron.Descriptor)
+// CronTarget binds the Cron tool to the conversation that is calling it.
+//
+// The tool used to know only about channel threads. Both entry points that
+// schedule work now need the same CRUD surface with a different destination,
+// so the destination is supplied here instead of being hard-coded:
+//
+//   - channel: Type=channel, ID = the current thread;
+//   - desktop: Type=desktop, ID = the current LOGICAL conversation id (it
+//     survives compaction), and Prepare also records the template a "new"
+//     dedicated conversation will be created from.
+type CronTarget struct {
+	// Type is written to Job.TargetType on create.
+	Type string
+
+	// ID identifies the current conversation: a channel thread id or a desktop
+	// logical conversation id. It is called at create time and as CreatedBy.
+	ID func() string
+
+	// Matches decides which jobs `list` shows. A desktop caller sees jobs that
+	// write into this conversation and jobs it created (a dedicated one).
+	Matches func(*cron.Job) bool
+
+	// Prepare fills the target-specific fields on a job about to be created.
+	// mode is "session" (the default) or "new". It may reject "new"; the
+	// caller checks SupportsNewSession first, so a returned error is a real
+	// failure rather than a "not here".
+	Prepare func(job *cron.Job, mode string) error
+
+	// SupportsNewSession says whether target="new" is meaningful here. Only a
+	// frontend that can create a conversation (the desktop) sets it.
+	SupportsNewSession bool
+}
 
 // CronTool allows the LLM to manage scheduled cron jobs.
 type CronTool struct {
-	scheduler    *cron.Scheduler
-	threadIDFunc func() string // provides current thread ID for auto-fill
+	scheduler *cron.Scheduler
+	target    CronTarget
+	// onChange is called after a mutation lands. The desktop uses it to tell
+	// the frontend to re-read the session list, because a job created or
+	// deleted from a conversation changes that conversation's badge count
+	// while the turn is still running. Optional: the channel tool has no UI.
+	onChange func()
 }
 
-// NewCronTool creates a CronTool backed by the given scheduler.
-// threadIDFunc is called during create to auto-fill the target thread.
-func NewCronTool(scheduler *cron.Scheduler, threadIDFunc func() string) *CronTool {
-	return &CronTool{
-		scheduler:    scheduler,
-		threadIDFunc: threadIDFunc,
+// NewCronTool creates a CronTool backed by the given scheduler, scoped to one
+// conversation through target.
+func NewCronTool(scheduler *cron.Scheduler, target CronTarget) *CronTool {
+	return &CronTool{scheduler: scheduler, target: target}
+}
+
+// SetOnChange installs the post-mutation callback. nil (the default) is a
+// no-op, which is what the channel wants.
+func (t *CronTool) SetOnChange(fn func()) { t.onChange = fn }
+
+func (t *CronTool) changed() {
+	if t.onChange != nil {
+		t.onChange()
 	}
 }
 
@@ -38,12 +78,12 @@ func (t *CronTool) Name() string   { return ToolNameCron }
 func (t *CronTool) Parallel() bool { return false } // mutations should be sequential
 
 func (t *CronTool) Description() string {
-	return `Manage scheduled cron jobs. Jobs automatically trigger at the specified schedule and send the prompt to the target thread.
+	return `Manage scheduled cron jobs. Jobs automatically trigger at the specified schedule and send the prompt to the target conversation.
 
 By default, jobs are oneshot — they fire ONCE then auto-delete. Only set type to "recurring" when the user explicitly asks for a repeating task (daily, weekly, every N hours, etc.).
 
 Actions:
-- list: List all cron jobs
+- list: List the cron jobs belonging to this conversation
 - create: Create a new cron job (requires: name, schedule, prompt)
 - get: Get details of a specific job (requires: id)
 - update: Update an existing job (requires: id, plus fields to change)
@@ -53,7 +93,7 @@ Actions:
 }
 
 func (t *CronTool) Properties() map[string]PropertySchema {
-	return map[string]PropertySchema{
+	props := map[string]PropertySchema{
 		"action": {
 			Type:        "string",
 			Description: "The action to perform.",
@@ -92,6 +132,15 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 			Description: "IANA timezone for schedule evaluation (default: system local). Example: Asia/Shanghai, UTC",
 		},
 	}
+	if t.target.SupportsNewSession {
+		props["target"] = PropertySchema{
+			Type:        "string",
+			Description: `Where the result is written. "session" (default) = this conversation, inheriting its context. "new" = a dedicated conversation created on the first run; later runs all continue in it. Use "new" for independent monitoring tasks that should not mix with this conversation.`,
+			Enum:        []string{"session", "new"},
+			Default:     "session",
+		}
+	}
+	return props
 }
 
 func (t *CronTool) Required() []string {
@@ -108,11 +157,12 @@ type cronArgs struct {
 	Type     string `json:"type"`
 	Notify   string `json:"notify"`
 	Timezone string `json:"timezone"`
+	Target   string `json:"target"`
 }
 
 func (t *CronTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	if t.scheduler == nil {
-		return "", fmt.Errorf("cron: scheduler not configured — this tool is only available in channel mode")
+		return "", fmt.Errorf("cron: scheduler not configured — scheduled tasks are disabled in this entry point")
 	}
 
 	var params cronArgs
@@ -146,21 +196,15 @@ func (t *CronTool) handleList() (string, error) {
 		return "", fmt.Errorf("cron: list: %w", err)
 	}
 
-	// Filter jobs by current thread ID.
-	threadID := ""
-	if t.threadIDFunc != nil {
-		threadID = t.threadIDFunc()
-	}
-
 	var jobs []*cron.Job
 	for _, job := range allJobs {
-		if threadID == "" || job.TargetThreadID == threadID {
+		if t.target.Matches == nil || t.target.Matches(job) {
 			jobs = append(jobs, job)
 		}
 	}
 
 	if len(jobs) == 0 {
-		return "No cron jobs configured for this thread.", nil
+		return "No cron jobs configured for this conversation.", nil
 	}
 
 	slices.SortFunc(jobs, func(a, b *cron.Job) int {
@@ -190,27 +234,37 @@ func (t *CronTool) handleCreate(params cronArgs) (string, error) {
 		return "", fmt.Errorf("cron: prompt is required for create")
 	}
 
-	// Get the current thread ID.
-	threadID := ""
-	if t.threadIDFunc != nil {
-		threadID = t.threadIDFunc()
+	mode := params.Target
+	if mode == "" {
+		mode = "session"
+	}
+	if mode != "session" && mode != "new" {
+		return "", fmt.Errorf(`cron: target must be "session" or "new"`)
+	}
+	if mode == "new" && !t.target.SupportsNewSession {
+		return "", fmt.Errorf("cron: target=new is only available where a new conversation can be created (the desktop app)")
 	}
 
 	job := &cron.Job{
-		Name:           params.Name,
-		Schedule:       params.Schedule,
-		Prompt:         params.Prompt,
-		Type:           cron.JobType(params.Type),
-		Notify:         cron.NotifyPolicy(params.Notify),
-		Timezone:       params.Timezone,
-		TargetType:     "channel",
-		TargetThreadID: threadID,
+		Name:       params.Name,
+		Schedule:   params.Schedule,
+		Prompt:     params.Prompt,
+		Type:       cron.JobType(params.Type),
+		Notify:     cron.NotifyPolicy(params.Notify),
+		Timezone:   params.Timezone,
+		TargetType: t.target.Type,
+	}
+	if t.target.Prepare != nil {
+		if err := t.target.Prepare(job, mode); err != nil {
+			return "", fmt.Errorf("cron: prepare target: %w", err)
+		}
 	}
 
 	created, err := t.scheduler.Create(job)
 	if err != nil {
 		return "", fmt.Errorf("cron: create: %w", err)
 	}
+	t.changed()
 
 	return formatJobCreated(created), nil
 }
@@ -224,16 +278,35 @@ func (t *CronTool) handleGet(params cronArgs) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cron: get: %w", err)
 	}
-	if job == nil {
+	if job == nil || !t.allowed(job) {
 		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
 	}
 
 	return formatJobDetail(job), nil
 }
 
+// allowed scopes every by-id action to the conversation this tool belongs to.
+// `list` filtering alone is not enough: a model that saw an id in a previous
+// conversation (or a channel run naming a desktop job) must not be able to
+// update or delete work it cannot see. A job outside the scope reads as "not
+// found", the same answer a genuinely missing id gets.
+func (t *CronTool) allowed(job *cron.Job) bool {
+	if job == nil {
+		return false
+	}
+	return t.target.Matches == nil || t.target.Matches(job)
+}
+
 func (t *CronTool) handleUpdate(params cronArgs) (string, error) {
 	if params.ID == "" {
 		return "", fmt.Errorf("cron: id is required for update")
+	}
+	job, err := t.scheduler.Get(params.ID)
+	if err != nil {
+		return "", fmt.Errorf("cron: get: %w", err)
+	}
+	if !t.allowed(job) {
+		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
 	}
 
 	opts := cron.UpdateOpts{}
@@ -262,6 +335,7 @@ func (t *CronTool) handleUpdate(params cronArgs) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cron: update: %w", err)
 	}
+	t.changed()
 
 	return "✅ Job updated.\n\n" + formatJobDetail(updated), nil
 }
@@ -270,10 +344,18 @@ func (t *CronTool) handleDelete(params cronArgs) (string, error) {
 	if params.ID == "" {
 		return "", fmt.Errorf("cron: id is required for delete")
 	}
+	job, err := t.scheduler.Get(params.ID)
+	if err != nil {
+		return "", fmt.Errorf("cron: get: %w", err)
+	}
+	if !t.allowed(job) {
+		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
+	}
 
 	if err := t.scheduler.Delete(params.ID); err != nil {
 		return "", fmt.Errorf("cron: delete: %w", err)
 	}
+	t.changed()
 
 	return fmt.Sprintf("✅ Job %q deleted.", params.ID), nil
 }
@@ -282,11 +364,19 @@ func (t *CronTool) handlePause(params cronArgs) (string, error) {
 	if params.ID == "" {
 		return "", fmt.Errorf("cron: id is required for pause")
 	}
+	existing, err := t.scheduler.Get(params.ID)
+	if err != nil {
+		return "", fmt.Errorf("cron: get: %w", err)
+	}
+	if !t.allowed(existing) {
+		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
+	}
 
 	job, err := t.scheduler.Pause(params.ID)
 	if err != nil {
 		return "", fmt.Errorf("cron: pause: %w", err)
 	}
+	t.changed()
 
 	return fmt.Sprintf("⏸️ Job %q (%s) paused.", job.ID, job.Name), nil
 }
@@ -295,22 +385,46 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 	if params.ID == "" {
 		return "", fmt.Errorf("cron: id is required for resume")
 	}
+	existing, err := t.scheduler.Get(params.ID)
+	if err != nil {
+		return "", fmt.Errorf("cron: get: %w", err)
+	}
+	if !t.allowed(existing) {
+		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
+	}
 
 	job, err := t.scheduler.Resume(params.ID)
 	if err != nil {
 		return "", fmt.Errorf("cron: resume: %w", err)
 	}
+	t.changed()
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "▶️ Job %q (%s) resumed.\n", job.ID, job.Name)
 	fmt.Fprintf(&sb, "Schedule: %s\n", job.Schedule)
-	if nextRun := computeNextRun(job.Schedule); nextRun != nil {
+	if nextRun := computeNextRun(job); nextRun != nil {
 		fmt.Fprintf(&sb, "Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 	return sb.String(), nil
 }
 
 // --- Formatting helpers ---
+
+// describeTarget is the tool-facing description of a job's destination. It is
+// deliberately not a session TITLE: the tool runs on the model side, where the
+// id is the stable fact.
+func describeTarget(job *cron.Job) string {
+	if job.TargetType == cron.TargetTypeDesktop {
+		if job.Desktop == nil {
+			return "desktop"
+		}
+		if job.Desktop.SessionID != "" {
+			return "desktop conversation " + job.Desktop.SessionID
+		}
+		return "a new desktop conversation (created on the first run)"
+	}
+	return "channel thread " + job.TargetThreadID
+}
 
 func formatJobSummary(job *cron.Job) string {
 	status := "🟢"
@@ -330,7 +444,7 @@ func formatJobSummary(job *cron.Job) string {
 	promptPreview := strutil.Truncate(job.Prompt, 80)
 	fmt.Fprintf(&sb, "  Prompt: %s\n", promptPreview)
 
-	nextRun := computeNextRun(job.Schedule)
+	nextRun := computeNextRun(job)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
 		fmt.Fprintf(&sb, "  Next: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
@@ -368,13 +482,13 @@ func formatJobDetail(job *cron.Job) string {
 	}
 	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
 
-	nextRun := computeNextRun(job.Schedule)
+	nextRun := computeNextRun(job)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
 		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: channel thread %s\n", job.TargetThreadID)
+	fmt.Fprintf(&sb, "- Target: %s\n", describeTarget(job))
 	if job.Notify == cron.NotifyWhenRelevant {
 		sb.WriteString("- Notify: when_relevant (suppresses if nothing new)\n")
 	}
@@ -404,13 +518,13 @@ func formatJobCreated(job *cron.Job) string {
 	fmt.Fprintf(&sb, "✅ Created %s: **%s** (ID: `%s`)\n\n", typeLabel, job.Name, job.ID)
 	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
 
-	nextRun := computeNextRun(job.Schedule)
+	nextRun := computeNextRun(job)
 	if nextRun != nil {
 		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: current thread (%s)\n", job.TargetThreadID)
+	fmt.Fprintf(&sb, "- Target: %s\n", describeTarget(job))
 
 	if job.Timezone != "" {
 		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
@@ -419,13 +533,13 @@ func formatJobCreated(job *cron.Job) string {
 	return sb.String()
 }
 
-// computeNextRun parses a cron expression and returns the next fire time.
-// Returns nil if the expression cannot be parsed.
-func computeNextRun(schedule string) *time.Time {
-	sched, err := nextRunParser.Parse(schedule)
+// computeNextRun parses a cron expression in the job's own timezone and
+// returns the next fire time. Returns nil when the expression or the timezone
+// cannot be resolved (the job will be reported as invalid by the UI).
+func computeNextRun(job *cron.Job) *time.Time {
+	next, err := cron.NextRun(job.Schedule, job.Timezone, time.Now())
 	if err != nil {
 		return nil
 	}
-	next := sched.Next(time.Now())
 	return &next
 }

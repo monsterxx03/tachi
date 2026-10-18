@@ -264,6 +264,36 @@ func TestFinalizeCompact_MovesThePin(t *testing.T) {
 	assert.False(t, loadedParent.Pinned, "the parent kept a pin it no longer means anything on")
 }
 
+// TestFinalizeCompact_MovesTheCronBinding: a scheduled task resolves the
+// conversation by LOGICAL id, and the child is the record a cleanup considers.
+// The protection flag therefore moves with the conversation — a copy left on the
+// parent would keep a folded-away ancestor alive forever while the child (the
+// actual target) could be swept.
+func TestFinalizeCompact_MovesTheCronBinding(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("alpha", "/my/project")
+	require.NoError(t, err)
+	oldSess.CronBound = true
+	require.NoError(t, sm.UpdateMeta(oldSess))
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	newSess := sm.Current()
+	require.NotEqual(t, oldSess.ID, newSess.ID)
+	assert.True(t, newSess.CronBound, "the compacted child should carry the cron binding")
+
+	loadedChild, err := store.LoadMeta(newSess.ID)
+	require.NoError(t, err)
+	assert.True(t, loadedChild.CronBound, "the child's cron binding was not persisted")
+	loadedParent, err := store.LoadMeta(oldSess.ID)
+	require.NoError(t, err)
+	assert.False(t, loadedParent.CronBound, "the parent kept a cron binding it no longer means anything on")
+}
+
 // TestFinalizeCompact_MigratesThreadID guards against repeated auto-compact
 // on channel threads: after a compaction the new session must own the thread
 // binding and the old session must release it, so FindByThreadID (channel

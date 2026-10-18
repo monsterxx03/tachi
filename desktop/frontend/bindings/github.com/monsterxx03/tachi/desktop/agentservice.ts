@@ -130,6 +130,10 @@ export function CurrentSession(): $CancellablePromise<$models.SessionInfo | null
     return $Call.ByID(1225632939);
 }
 
+export function DeleteCronJob(id: string): $CancellablePromise<string> {
+    return $Call.ByID(144453850, id);
+}
+
 /**
  * DeleteMCPServerEntry removes name from the file its Profile names and installs the result.
  * 
@@ -408,11 +412,37 @@ export function GetWorkingTreeChanges(sessionID: string): $CancellablePromise<$m
 }
 
 /**
+ * IsCronScheduled reports whether the desktop scheduler is running; the panel
+ * uses it to say "已在设置里关闭" instead of leaving a silent empty list.
+ */
+export function IsCronScheduled(): $CancellablePromise<boolean> {
+    return $Call.ByID(2554542827);
+}
+
+/**
  * ListCommands returns the slash commands the desktop supports, in registry
  * order (which is what the palette shows).
  */
 export function ListCommands(): $CancellablePromise<$models.CommandVO[] | null> {
     return $Call.ByID(3190975402);
+}
+
+/**
+ * ListCronJobs returns the desktop jobs, with their target's current title and
+ * the next/last run already resolved. Channel jobs are not listed: this panel
+ * cannot deliver them and must not edit them.
+ */
+export function ListCronJobs(): $CancellablePromise<$models.CronJobVO[] | null> {
+    return $Call.ByID(3142988720);
+}
+
+/**
+ * ListCronTargets returns the conversations a job can be bound to. Compaction
+ * chains collapse to their leaf; subsystem-owned sessions are left out (a
+ * scheduled task must not write into somebody else's conversation).
+ */
+export function ListCronTargets(): $CancellablePromise<$models.CronTargetVO[] | null> {
+    return $Call.ByID(2595474462);
 }
 
 /**
@@ -595,6 +625,15 @@ export function PollWorkspacePaths(sessionID: string, paths: string[] | null): $
 }
 
 /**
+ * PreviewCron validates a schedule/timezone pair and returns the next few
+ * occurrences. It is the editor's live feedback; an invalid pair is returned
+ * as Error, not as a failed binding.
+ */
+export function PreviewCron(schedule: string, timezone: string): $CancellablePromise<$models.CronPreviewVO> {
+    return $Call.ByID(4263346116, schedule, timezone);
+}
+
+/**
  * PreviewFile describes the attachment at path and, when withContent is set,
  * returns the content of its text and table kinds.
  * 
@@ -758,6 +797,14 @@ export function RunCommand(text: string): $CancellablePromise<string> {
 }
 
 /**
+ * RunCronJobNow triggers one job immediately. It does not change the schedule;
+ * the run itself is asynchronous.
+ */
+export function RunCronJobNow(id: string): $CancellablePromise<string> {
+    return $Call.ByID(699924716, id);
+}
+
+/**
  * RunningSessions returns the IDs of sessions with an in-flight turn.
  * 
  * The answer is the per-session STATE, not the busy flag (`sessionRun.running`, the guard that
@@ -784,6 +831,14 @@ export function RunCommand(text: string): $CancellablePromise<string> {
  */
 export function RunningSessions(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3792694786);
+}
+
+/**
+ * SaveCronJob creates (ID == "") or updates a desktop job. It answers "ok" or
+ * the reason it refused; the frontend re-reads the list on success.
+ */
+export function SaveCronJob($in: $models.CronJobInput): $CancellablePromise<string> {
+    return $Call.ByID(3925019572, $in);
 }
 
 /**
@@ -934,6 +989,10 @@ export function SearchSessions(exclude: string, query: string, limit: number): $
  */
 export function SendMessage(sessionID: string, text: string): $CancellablePromise<string> {
     return $Call.ByID(729126489, sessionID, text);
+}
+
+export function SetCronJobPaused(id: string, paused: boolean): $CancellablePromise<string> {
+    return $Call.ByID(881010093, id, paused);
 }
 
 /**

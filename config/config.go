@@ -732,9 +732,11 @@ func (nc NodeConfig) WorkspaceDir() (string, error) {
 	return filepath.Abs(fileutil.ExpandHome(dir))
 }
 
-// CronConfig holds cron scheduler configuration (only active in channel mode).
+// CronConfig holds cron scheduler configuration. Both channel and desktop can
+// schedule; each process only fires the jobs whose target belongs to it, and
+// they share one store (writes are cross-process locked).
 type CronConfig struct {
-	Enabled          *bool         `yaml:"enabled" default:"true"` // whether to enable cron (default: true in channel mode)
+	Enabled          *bool         `yaml:"enabled" default:"true"` // whether to enable cron (default: true in both entry points)
 	StorePath        string        `yaml:"store_path"`             // custom store path (default: ~/.tachi/crons.json)
 	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`
 	ExecutionTimeout time.Duration `yaml:"execution_timeout" default:"5m"`

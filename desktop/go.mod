@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/monsterxx03/tachi v0.0.0
+	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v3 v3.0.0-beta.16
 	go.bug.st/serial v1.8.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -21,6 +22,7 @@ require (
 	github.com/coder/acp-go-sdk v0.13.5 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/creasty/defaults v1.8.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -31,6 +33,7 @@ require (
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
 	github.com/openai/openai-go/v3 v3.49.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/saltosystems/winrt-go v0.0.0-20260317170058-9c2fec580d96 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect

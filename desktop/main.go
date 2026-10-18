@@ -70,6 +70,15 @@ func init() {
 	// openSession). Registered rather than emitted bare, like ui:theme: that is
 	// what gives the frontend a typed handler.
 	application.RegisterEvent[string](openSessionEventName)
+	// A scheduled turn just started: its user bubble (the backend never types
+	// into a conversation the way a person does) plus enough detail for the
+	// pending bar to say 「等定时任务结束后发送」.
+	application.RegisterEvent[CronTurnEvent](cronTurnEventName)
+	// A job was created/edited/deleted/finished, so an open panel re-reads.
+	application.RegisterEvent[string](cronChangedEventName)
+	// A dedicated conversation was created or bound. The sidebar must know before
+	// a notification about it can be clicked.
+	application.RegisterEvent[string](sessionsChangedEventName)
 }
 
 // localAssetRoute is the prefix the webview uses to reach files on disk (see
@@ -277,6 +286,9 @@ func main() {
 	})
 	app.OnShutdown(func() {
 		desk.quitting.Store(true)
+		// The scheduler must stop first: its handler owns the turn goroutines,
+		// and Stop cancels their context and waits for them.
+		desk.stopCron()
 		// The device link is stopped explicitly: its reconnect loop owns a goroutine that
 		// would otherwise keep waking up while the process is going away.
 		desk.stopBadge()
@@ -339,6 +351,11 @@ func main() {
 		log.Printf("agent unavailable, falling back to simulated turns: %v", err)
 		desk.setSessionState("", AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
 	}
+
+	// Scheduled tasks live in this process: closing the window only hides it,
+	// so a job keeps running; quitting really does stop them (no catch-up).
+	// Started after initAgent because it reads the config that just booted.
+	desk.startCron(context.Background())
 
 	// The node service (multi-node collaboration) is optional and OFF by default,
 	// and a failure to start it must not cost the user their desktop: log and carry

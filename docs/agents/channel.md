@@ -89,6 +89,8 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 ## cron 通知（`when_relevant`）
 
+**调度归属先说清楚：channel 的 `Scheduler` 只 `Owns` `TargetType == "channel"`（空也算老任务），desktop 的任务它既不建定时项也不触发。** 两个进程共享同一个 `crons.json`，所以 `cron.Store` 的写路径带一把跨进程文件锁（`pkg/flock`）；`CronTool` 也不再知道 channel，它通过一个 `tools.CronTarget` 绑定当前线程，list 的范围和 create 写下的目标在同一处声明。marker 政策的文字搬到了 `cron.MarkerNotificationPolicy`（desktop 也用它），channel 只决定「这一次用门禁那套还是 marker 那套」。
+
 **一个跑完的任务的结果，靠 `judgeNotify`（`notify_gate.go`）里的一个决策抵达 channel——而不是靠碰巧投递它的那个分支。** 每一次 cron 运行都经过它，`notify=always` 也在内，所以这条策略只有一个家。它决定的是：
 
 | 情形 | 结果 | 决定者 |
@@ -102,7 +104,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 关于它有四件事很容易被无意中弄反：
 
-- **追加的提示词跟着决定者走，两套措辞都由 `buildCronPrompt` 拥有。** 门禁在作答期间，agent 被告知要**报告**（`gateNotificationPolicy`）——一个已经把一个发现判为不值得提的 agent，交给门禁去判的东西就是零，而这种预过滤恰恰是「开市了就总结」这类任务活不下来的原因（用例集里的 `market-open-flat` 就是那个任务）。门禁缺席、或已停止作答（`degraded`，每次判定重新算）期间，agent 拿回它**原来**的指令（`markerNotificationPolicy`），因为兜底是一个标记，而一个标记必须被点名要求。不要把两段文字合并，也不要丢掉第二段：一个没有 `jev` 块的安装，必须表现得同门禁存在之前一模一样。
+- **追加的提示词跟着决定者走；用哪一段由 `buildCronPrompt` 决定。** 门禁在作答期间，agent 被告知要**报告**（`gateNotificationPolicy`）——一个已经把一个发现判为不值得提的 agent，交给门禁去判的东西就是零，而这种预过滤恰恰是「开市了就总结」这类任务活不下来的原因（用例集里的 `market-open-flat` 就是那个任务）。门禁缺席、或已停止作答（`degraded`，每次判定重新算）期间，agent 拿回它**原来**的指令（`cron.MarkerNotificationPolicy`，桌面也共用的那一段），因为兜底是一个标记，而一个标记必须被点名要求。不要把两段文字合并，也不要丢掉第二段：一个没有 `jev` 块的安装，必须表现得同门禁存在之前一模一样。
 - **快路径是刻意比兜底更紧的。** `isMarkerOnly` 问的是报告*是不是*那个标记；兜底仍用 `ShouldSuppressResult` 那套宽松的 `strings.Contains`。不要把两者「统一」：那套宽松读法正是门禁要替换掉的行为，兜底必须是旧的那套，否则一个降级的服务会悄悄改变「被抑制」的含义。
 - **「没有判定」意味着标记，绝不是「投递」。** 这与 MCP 工具搜索那道门禁相反——那里缺失答案意味着「不要提供」，因为代价是工具列表被塞满，而这里的代价是一条被吞掉的通知。
 - **失败的轮次和任何别的轮次一样被判定**，而且状态里带着这个失败，因为轮次出错正是用户想听到的事。兜底在它上面保持沉默（那是门禁之前的行为，而且失败的运行归调度器：它记下状态并重试）。所以门禁改变了失败运行的行为，这就是它被放在 `jev` 块后面、作为可选项的原因。

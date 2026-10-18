@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
@@ -270,6 +271,17 @@ type desktopApp struct {
 	// index per searched root).
 	fileIndex *fileindex.Index
 
+	// cron is the in-process scheduler for desktop jobs. It is created after the
+	// config is loaded and stopped on shutdown; nil means cron is disabled or its
+	// store could not be opened. Guarded by cronMu, NOT by mu: building it reads
+	// the config, and a run must never wait behind the app-wide lock for that.
+	cronMu sync.Mutex
+	cron   *cron.Scheduler
+	// cronRunning is the set of job IDs whose handler is in flight right now. It
+	// is what the task list shows as 「运行中」; the scheduler's own semaphore is
+	// not observable from a binding. Guarded by mu.
+	cronRunning map[string]bool
+
 	// projects is the desktop project table (docs/2026-09-14-desktop-project-design.md):
 	// the named workspaces member sessions inherit their roots from. It guards its own
 	// data with its own lock and never calls back into the app, which is what makes
@@ -297,10 +309,11 @@ type desktopApp struct {
 
 func newDesktopApp() *desktopApp {
 	return &desktopApp{
-		runs:      make(map[string]*sessionRun),
-		simCh:     nil,
-		fileIndex: newFileIndex(),
-		projects:  &projectTable{},
+		runs:        make(map[string]*sessionRun),
+		simCh:       nil,
+		fileIndex:   newFileIndex(),
+		projects:    &projectTable{},
+		cronRunning: make(map[string]bool),
 	}
 }
 

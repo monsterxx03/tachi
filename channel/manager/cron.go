@@ -28,12 +28,41 @@ func (m *Manager) initCron(ctx context.Context) error {
 		Logger:           m.logger,
 		MaxConcurrent:    m.cfg.Cron.MaxConcurrent,
 		ExecutionTimeout: m.cfg.Cron.ExecutionTimeout,
+		// A job belongs to exactly one entry point. The desktop can now schedule
+		// too and both processes share crons.json, so without this both would
+		// fire the same job. An empty target type is an old channel job.
+		Owns: func(j *cron.Job) bool {
+			return j.TargetType == "" || j.TargetType == cron.TargetTypeChannel
+		},
 	})
 
 	m.scheduler = scheduler
 	m.initNotifyGate(ctx)
 	m.logger.Info(ctx, "channel: cron initialized", "path", storePath, "max_concurrent", m.cfg.Cron.MaxConcurrent, "timeout", m.cfg.Cron.ExecutionTimeout)
 	return nil
+}
+
+// newThreadCronTool binds the Cron tool to one channel thread. ONE definition
+// for both call sites (a regular turn here, a cron-triggered run in cron.go):
+// the list scope and the target written on create must describe the same
+// thread, or a job created in one place would be invisible in the other.
+func (m *Manager) newThreadCronTool(threadID string) *tools.CronTool {
+	return tools.NewCronTool(m.scheduler, tools.CronTarget{
+		Type: cron.TargetTypeChannel,
+		ID: func() string {
+			return threadID
+		},
+		Matches: func(j *cron.Job) bool {
+			return (j.TargetType == "" || j.TargetType == cron.TargetTypeChannel) &&
+				j.TargetThreadID == threadID
+		},
+		Prepare: func(j *cron.Job, mode string) error {
+			j.TargetType = cron.TargetTypeChannel
+			j.TargetThreadID = threadID
+			j.CreatedBy = threadID
+			return nil
+		},
+	})
 }
 
 // OnCronTrigger is the TriggerHandler callback invoked by the cron scheduler
@@ -56,9 +85,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	// The CronTool is scoped to this run rather than registered on the cached
 	// agent, so it can't leak into the next regular message turn on this
 	// thread (its closure is bound to this job's target thread anyway).
-	cronTool := tools.NewCronTool(m.scheduler, func() string {
-		return job.TargetThreadID
-	})
+	cronTool := m.newThreadCronTool(job.TargetThreadID)
 
 	// Per-thread session.
 	sm, diskHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
@@ -160,15 +187,12 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 // them — invisibly, and with no way to recover them afterwards.
 const (
 	// markerNotificationPolicy asks the agent to make the call, because under the
-	// marker nothing else does. The wording is unchanged from before the gate
-	// existed, so an installation without a usable jev block behaves exactly as
-	// it did, and a gate that has stopped answering falls back to the behaviour
-	// its fallback can actually read.
-	markerNotificationPolicy = "[Notification policy: when_relevant]\n" +
-		"After completing the task, evaluate whether the result contains meaningful or actionable information for the user. " +
-		"If there is nothing new, no changes detected, or nothing worth reporting, respond with ONLY the text `[SILENT]` — " +
-		"do not include any other content. The notification will be suppressed and the user will not be disturbed. " +
-		"Only send actual content when there IS something noteworthy to report."
+	// marker nothing else does. It is shared with the desktop through the cron
+	// package: the wording is unchanged from before the gate existed, so an
+	// installation without a usable jev block behaves exactly as it did, and a
+	// gate that has stopped answering falls back to the behaviour its fallback
+	// can actually read.
+	markerNotificationPolicy = cron.MarkerNotificationPolicy
 
 	// gateNotificationPolicy asks the agent to REPORT and leaves the judgment to
 	// the gate. The difference is not stylistic: a job whose own words say

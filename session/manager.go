@@ -157,6 +157,7 @@ func (m *Manager) CleanupOldSessions() int {
 	removed := 0
 	skippedThread := 0
 	skippedPinned := 0
+	skippedCron := 0
 	skippedHeld := 0
 	skippedCurrent := 0
 	skipped := make([]string, 0)
@@ -167,6 +168,14 @@ func (m *Manager) CleanupOldSessions() int {
 		// them one candidate at a time would only re-read the same file.
 		if s.Pinned {
 			skippedPinned++
+			continue
+		}
+		// A scheduled task writes into this conversation. Deleting it would
+		// orphan the job, and the sweep cannot read crons.json to find out: the
+		// desktop maintains this flag on the record (and compaction moves it to
+		// the child), so every entry point's cleanup can honour it.
+		if s.CronBound {
+			skippedCron++
 			continue
 		}
 		// Skip sessions that are actively used by IM channels.
@@ -197,6 +206,9 @@ func (m *Manager) CleanupOldSessions() int {
 	}
 	if skippedPinned > 0 {
 		m.logger.Info(context.Background(), "session cleanup: kept pinned sessions past maxKeep", "skipped", skippedPinned)
+	}
+	if skippedCron > 0 {
+		m.logger.Info(context.Background(), "session cleanup: kept sessions a scheduled task writes into", "skipped", skippedCron)
 	}
 	if skippedHeld > 0 {
 		m.logger.Info(context.Background(), "session cleanup: kept sessions a task or context still needs", "skipped", skippedHeld, "ids", held)

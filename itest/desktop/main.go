@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/session"
@@ -168,6 +169,9 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	}
 	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID, sc.sessionKind, sc.sessionSourceNodeID, sc.sessionHeldByTask); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+	}
+	if err := sb.seedCronJobs(sc.cronJobs); err != nil {
+		return report(sc.name, nil, []Line{{Label: "cron fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
 	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAI))
@@ -514,6 +518,60 @@ func (sb *sandbox) seedSessions(n int, title func(i int) string) error {
 		// SetTitle persists on its own (UpdateMeta inside), which is the whole record these
 		// fixtures need: no project, no roots, no transcript.
 		mgr.SetTitle(title(i))
+	}
+	return nil
+}
+
+// seedCronJobs writes the scenario's scheduled tasks into the sandbox's crons.json. Every task
+// targets the scenario's own conversation (the seeded 冒烟会话) unless it asks for a dedicated
+// one; that is what makes a `@every 2s` oneshot fire while the app is being driven.
+func (sb *sandbox) seedCronJobs(jobs []cronSeed) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	sessionStore, err := session.NewFileStore(filepath.Join(sb.home, ".tachi", "session"))
+	if err != nil {
+		return err
+	}
+	sessions, err := sessionStore.ListSessions()
+	if err != nil {
+		return err
+	}
+	targetID := ""
+	for _, s := range sessions {
+		if s.Title == "冒烟会话" {
+			targetID = s.ID
+			break
+		}
+	}
+	if targetID == "" {
+		return fmt.Errorf("cron fixture: the scenario's session was not seeded")
+	}
+
+	store := cron.NewStore(filepath.Join(sb.home, ".tachi", "crons.json"))
+	for i, j := range jobs {
+		typ := cron.JobType(j.Type)
+		if typ == "" {
+			typ = cron.JobTypeOneshot
+		}
+		target := &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: targetID}
+		if j.Target == "new" {
+			target = &cron.DesktopTarget{Mode: cron.DesktopModeNew, WorkingDir: sb.work}
+		}
+		job := &cron.Job{
+			ID:         fmt.Sprintf("cr_smoke%d", i+1),
+			Name:       j.Name,
+			Schedule:   j.Schedule,
+			Prompt:     j.Prompt,
+			Type:       typ,
+			Notify:     cron.NotifyAlways,
+			TargetType: cron.TargetTypeDesktop,
+			Desktop:    target,
+			Status:     cron.JobStatusActive,
+		}
+		if err := store.Create(job); err != nil {
+			return err
+		}
 	}
 	return nil
 }

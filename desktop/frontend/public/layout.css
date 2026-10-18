@@ -488,6 +488,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
 .sidebar-search:hover { background: var(--hover); color: var(--accent-2); }
+/* The sidebar's own chrome: search and 定时任务 sit together at the end of the
+   top row. A wrapper keeps the brand's space-between from pulling them apart
+   as the second button appears. */
+.sidebar-actions { display: flex; align-items: center; gap: 2px; }
+.sidebar-search.is-on { background: var(--accent-soft); color: var(--accent-2); }
 
 /* 新会话: the sidebar's own create row, under the search. It is the most repeated action in the
    app, so it gets a full-width row with a word on it rather than a ＋ — the ＋ belongs to a group
@@ -860,6 +865,24 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-right: 6px;
   color: var(--accent-2);
   vertical-align: -1px;
+}
+
+/* 「这个会话有 N 个定时任务」. A small pill, not just a clock: the number is what
+   tells a reader whether one task or five will act on its own. Same slot as the
+   pin, quieter colour. */
+.session-cron {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 6px;
+  padding: 0 4px;
+  height: 14px;
+  border-radius: 99px;
+  background: var(--accent-softer);
+  color: var(--accent-2);
+  font-size: 9.5px;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 .sidebar-footer {

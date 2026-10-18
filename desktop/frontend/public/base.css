@@ -134,6 +134,9 @@
   --diff-add-wash: rgba(13, 111, 69, 0.09);
   --diff-del-wash: rgba(191, 40, 49, 0.08);
   --amber: #8a4b08;
+  /* A quiet fill for "this is a warning, not an error" surfaces (a closed scheduler, a
+     pending dedicated conversation). Kept beside the ink it washes. */
+  --amber-wash: rgba(138, 75, 8, 0.1);
 
   /* ⌘F hits. Amber, not the accent: a hit has to be findable inside a diff, where green and red
      already mean added and removed, and inside prose, where the accent means a link or inline
@@ -330,6 +333,7 @@
   --diff-add-wash: rgba(70, 201, 138, 0.11);
   --diff-del-wash: rgba(255, 122, 130, 0.11);
   --amber: #e2a355;
+  --amber-wash: rgba(226, 163, 85, 0.13);
 
   --find-hit: rgba(255, 200, 80, 0.30);
   --find-hit-current: #d8a13a;

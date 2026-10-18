@@ -1068,7 +1068,7 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // textarea, and the stop/send buttons. It owns no state — `api` is useComposer's return
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
-export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerApi; running: boolean; onStop: () => void; onPageTurn: (delta: number) => void }) {
+export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { api: ComposerApi; running: boolean; cronRunning?: boolean; onStop: () => void; onPageTurn: (delta: number) => void }) {
   const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError, voiceState, voiceAvailable, voiceNotice, toggleVoice } = api
 
   // ONE line above the box, because a paste failure and a recording's complaint can never both be
@@ -1082,7 +1082,9 @@ export function Composer({ api, running, onStop, onPageTurn }: { api: ComposerAp
         <div className="pending-bar">
           <div className="pending-head">
             <span className="pending-title">
-              {running ? '⏸ 待发送 · 会在本轮工具调用结束后自动插入' : '待发送消息'}
+              {running
+                ? (cronRunning ? '⏸ 待发送 · 等定时任务结束后发送' : '⏸ 待发送 · 会在本轮工具调用结束后自动插入')
+                : '待发送消息'}
             </span>
             <span className="pending-actions">
               <button className="pending-send" disabled={sendingNow} onClick={sendPendingNow}>

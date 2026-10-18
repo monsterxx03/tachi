@@ -242,6 +242,12 @@ func (d *desktopApp) startTurn(id, text string) string {
 			agent.WithExtraTools(tools.NewSendFileTool()),
 			agent.WithDisplayUserMessage(rawText),
 		}
+		// The Cron tool is available in a normal turn when this process actually
+		// schedules. It is run-scoped (the closure names this conversation), so a
+		// cached agent never carries it into another session.
+		if sched := d.cronScheduler(); sched != nil {
+			ropts = append(ropts, agent.WithExtraTools(d.newDesktopCronTool(id)))
+		}
 		// Delegation rides as its own option: it brings both the two tools and the reminders that
 		// describe nodes and outstanding work, and it is the run-scoped gate (§10.2.1) — a run
 		// that does not pass it can neither call the tools nor be told about them.
@@ -300,6 +306,14 @@ func (d *desktopApp) stopTurn() {
 //
 // Callers must NOT hold d.mu.
 func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, cancel context.CancelFunc, steerCh chan agent.SteerInput, turnDone chan struct{}, ok bool) {
+	return d.beginTurnWith(context.Background(), id, r)
+}
+
+// beginTurnWith is beginTurn with a parent context. A scheduled run passes the
+// scheduler's context so that the job's timeout (and app shutdown) cancels the
+// turn it started; an interactive turn keeps the background context it always
+// had. Callers must NOT hold d.mu.
+func (d *desktopApp) beginTurnWith(parent context.Context, id string, r *sessionRun) (ctx context.Context, cancel context.CancelFunc, steerCh chan agent.SteerInput, turnDone chan struct{}, ok bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if r == nil || r.running {
@@ -313,7 +327,7 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 	// The tool-call count is per TURN, so it starts here (see countToolCall).
 	r.toolCalls = 0
 
-	ctx, cancel = context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(parent)
 	// The session's tree-derived state is re-pointed here, BEFORE the turn goroutine
 	// exists: a folder change or a project edit only marks the run (treeStale), because
 	// doing it from the UI goroutine could rewrite the store under a running turn. This
@@ -395,6 +409,11 @@ func (d *desktopApp) endTurn(id, endReason string) {
 		r.running = false
 		r.steerCh = nil
 		r.turnDone = nil
+		// The scheduled-turn bookkeeping is per turn, like the tool-call count:
+		// a name left behind would label the NEXT turn's notification with the
+		// previous job's name.
+		r.cronJobName = ""
+		r.cronSilent = false
 		// The turn is over, so its tool-call count is too (see countToolCall): the device's
 		// line about it is about a turn IN FLIGHT, and a number left standing after the turn
 		// would read as progress on something that already finished.
@@ -468,7 +487,16 @@ const (
 	// laneOneOff: they are dropped from the conversation — the record file is the content —
 	// and only the one-off lane's lifecycle events (see emitOneOff) are sent.
 	laneOneOff
+	// laneCron: a scheduled run. Like laneTranscript it IS the conversation (the reader can
+	// watch the work), but its completion notification names the job instead of saying
+	// 「回合完成」, and when_relevant can suppress that notification.
+	laneCron
 )
+
+// intoTranscript says whether this lane's content is the conversation.
+func (l runLane) intoTranscript() bool {
+	return l == laneTranscript || l == laneCron
+}
 
 func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 	d.handleEventIn(id, ev, laneTranscript)
@@ -479,7 +507,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 	// toTranscript decides whether THIS event may become part of the conversation. The
 	// state updates below are never gated: a review still shows 执行/思考 in the status bar,
 	// still moves the token rate, still refreshes the usage numbers.
-	toTranscript := d.app != nil && lane == laneTranscript
+	toTranscript := d.app != nil && lane.intoTranscript()
 	switch ev.Type {
 	case agent.AgentEventThinkingDelta:
 		d.tpsAdd(id, ev.ThinkingDelta)
@@ -629,6 +657,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		r.turnCost = r.cost - r.turnStartCost
 		r.turnCredit = r.credit - r.turnStartCredit
 		turnCost, turnCredit := r.turnCost, r.turnCredit
+		cronName, cronSilent := r.cronJobName, r.cronSilent
 		d.mu.Unlock()
 		if toTranscript && ev.Result != nil && isCurrent {
 			d.app.Event.Emit("agent:result", ev.Result)
@@ -654,11 +683,23 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// A one-off run ends here too — the command lane forwards its last TurnComplete — but it
 		// has its own notification, raised where its outcome is known (see notifyOneOffDone):
 		// announcing 「回合完成」 for a run with no turn on screen says nothing useful.
-		if lane == laneTranscript && ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
-			d.notify.notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
-			// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
-			// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
-			d.alertIfUnwatched(id, link.AlertKindDone)
+		// A scheduled run also ends here, but names the job and can be silent
+		// (when_relevant → [SILENT]): the reply is already in the conversation.
+		interrupted := ev.Result != nil &&
+			(ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled)
+		switch lane {
+		case laneTranscript:
+			if ev.Result != nil && !interrupted {
+				d.notify.notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
+				// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
+				// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
+				d.alertIfUnwatched(id, link.AlertKindDone)
+			}
+		case laneCron:
+			if ev.Result != nil && !interrupted && cronName != "" && !cronSilent {
+				d.notify.notifyCronDone(id, cronName)
+				d.alertIfUnwatched(id, link.AlertKindDone)
+			}
 		}
 	case agent.AgentEventError:
 		d.tpsReset(id)
@@ -689,7 +730,17 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		if r := d.getRun(id); ev.Messages != nil {
 			r.history = ev.Messages
 		}
+		cronName := ""
+		if r := d.ownerOfLocked(id); r != nil {
+			cronName = r.cronJobName
+		}
 		d.mu.Unlock()
+		// A scheduled run has no failure bubble on screen while the user is
+		// elsewhere; the notification is the only signal that the report they
+		// were waiting for did not arrive.
+		if lane == laneCron && !interrupted && cronName != "" {
+			d.notify.notifyCronFailed(id, cronName)
+		}
 		// A conversation turn concludes its newest assistant bubble; an one-off run has no
 		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
 		// patching "the newest assistant" would hit the turn the review was FOR.
@@ -1137,6 +1188,13 @@ type sessionRun struct {
 	// conversation this one is still writing. followCompaction consumes it, and the ownership
 	// goes with it.
 	compaction *compactionRecord
+
+	// cronJobName / cronSilent describe the SCHEDULED turn this run is executing,
+	// for the completion notification only. They are set by the cron handler
+	// before the stream starts, cronSilent just before the terminal event (the
+	// reply is known by then), and cleared by endTurn. Guarded by d.mu.
+	cronJobName string
+	cronSilent  bool
 }
 
 // delegatorCache is this process's ONE sending-side cache, built on first use and kept in step with

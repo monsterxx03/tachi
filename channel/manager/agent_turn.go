@@ -652,7 +652,7 @@ func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact
 	// thread can't observe them and there is no unregister step to forget.
 	var extra []tools.Tool
 	if m.scheduler != nil {
-		extra = append(extra, tools.NewCronTool(m.scheduler, func() string { return threadID }))
+		extra = append(extra, m.newThreadCronTool(threadID))
 	}
 	sendFileTool, sink := newSendFileTool()
 	extra = append(extra, sendFileTool)

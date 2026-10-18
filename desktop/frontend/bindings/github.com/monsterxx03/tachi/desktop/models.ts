@@ -178,6 +178,117 @@ export interface ContextPartVO {
 }
 
 /**
+ * CronJobInput is the editor's save payload. It is deliberately not cron.Job:
+ * the frontend never writes ids, timestamps or last-run state.
+ */
+export interface CronJobInput {
+    /**
+     * "" = create
+     */
+    "id": string;
+    "name": string;
+    "schedule": string;
+    "prompt": string;
+    "type": string;
+    "notify": string;
+    "timezone": string;
+
+    /**
+     * Mode is "session" (bind to SessionID) or "new" (create a dedicated
+     * conversation on the first run, from the template fields below).
+     */
+    "mode": string;
+    "sessionId": string;
+    "projectId": string;
+    "workingDir": string;
+    "additionalDirs": string[] | null;
+    "providerName": string;
+    "skipApproval": boolean;
+}
+
+/**
+ * CronJobVO is one desktop job as the panel and the editor see it.
+ */
+export interface CronJobVO {
+    "id": string;
+    "name": string;
+    "schedule": string;
+    "scheduleText": string;
+    "type": string;
+    "prompt": string;
+    "status": string;
+    "notify": string;
+    "timezone": string;
+
+    /**
+     * TargetKind is "session" (bound), "pending" (a dedicated conversation is
+     * created on the first run) or "missing" (its conversation was deleted).
+     */
+    "targetKind": string;
+    "targetTitle"?: string;
+
+    /**
+     * logical id
+     */
+    "targetSessionId"?: string;
+    "targetIsCurrent"?: boolean;
+    "targetProjectId"?: string;
+    "targetWorkingDir"?: string;
+    "targetProvider"?: string;
+    "targetSkipApproval"?: boolean;
+    "nextRun"?: string;
+    "nextRunError"?: string;
+    "lastRunAt"?: string;
+    "lastRunStatus"?: string;
+    "lastRunError"?: string;
+    "running"?: boolean;
+    "createdAt": string;
+    "updatedAt": string;
+}
+
+/**
+ * CronPreviewVO is the editor's live schedule preview.
+ */
+export interface CronPreviewVO {
+    "next": string[] | null;
+    "error"?: string;
+    "localTimezone": string;
+}
+
+/**
+ * CronTargetVO is one conversation the editor can bind a job to. A compaction
+ * chain yields ONE entry (its leaf), so the user cannot pick a page that is no
+ * longer the conversation.
+ */
+export interface CronTargetVO {
+    /**
+     * logical conversation id
+     */
+    "sessionId": string;
+    "title": string;
+    "projectId"?: string;
+    "projectName"?: string;
+    "workingDir"?: string;
+    "providerName"?: string;
+    "skipApproval"?: boolean;
+    "isCurrent"?: boolean;
+    "updatedAt"?: string;
+}
+
+/**
+ * CronTurnEvent tells the frontend a scheduled turn just started, so it can put
+ * the task's user bubble into the conversation (the backend never types into a
+ * turn the way a person does).
+ */
+export interface CronTurnEvent {
+    "sessionId": string;
+    "jobId": string;
+    "jobName": string;
+    "schedule": string;
+    "display": string;
+}
+
+/**
  * DirListingVO is one directory's worth of rows.
  */
 export interface DirListingVO {
@@ -1141,6 +1252,15 @@ export interface SessionInfo {
      * reader of the list agrees on it.
      */
     "pinned"?: boolean;
+
+    /**
+     * CronCount is how many desktop scheduled tasks write into this
+     * conversation. It is derived (from crons.json + the session's logical id),
+     * never stored on the session: deleting the task or re-binding it must make
+     * the badge disappear with no migration. The sidebar row and the composer's
+     * clock badge both read it.
+     */
+    "cronCount"?: number;
 
     /**
      * Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a

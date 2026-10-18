@@ -44,6 +44,17 @@ var pickerProviderNames = []string{
 	"fixture-epsilon", "fixture-pick", "fixture-zeta", "fixture-eta",
 }
 
+// cronSeed is one scheduled task written into the sandbox's crons.json. Target "" means the
+// seeded conversation; "new" means the task's own dedicated conversation (created on its first
+// run). Type "" is oneshot, which is what a `@every 2s` fixture needs: one fire, then gone.
+type cronSeed struct {
+	Name     string
+	Schedule string
+	Prompt   string
+	Type     string // "recurring" | "" (oneshot)
+	Target   string // "" (the seeded conversation) | "new"
+}
+
 type scenario struct {
 	name string
 	// What the model replies, request by request.
@@ -123,6 +134,11 @@ type scenario struct {
 	// the load-on-first-visit path (the 加载会话… placeholder), which a session that is merely
 	// re-selected never takes: switching inside one process serves the in-memory copy.
 	seedSecond []session.Message
+	// cronJobs seeds scheduled tasks into the sandbox's crons.json before launch. The target is
+	// the seeded 冒烟会话 (the newest one), so a `@every 2s` oneshot actually fires while the
+	// scenario is running — the one end-to-end fact a driver cannot create on its own (the UI's
+	// fastest schedule is still a minute away).
+	cronJobs []cronSeed
 	// uiState seeds desktop_ui.json before the app launches (see sb.seedUIState). It exists for the one
 	// shape a driver cannot produce: a RESTART. A driver can toggle a column and expand a directory, but
 	// nothing it does makes the app read those preferences off disk — and "the tree came back the way I
@@ -1009,9 +1025,9 @@ func scenarios() []scenario {
 				"docs/agents/desktop.md": "# 桌面手册\n\n文件视图要渲染的标题。\n",
 				// 比阅读区高的一份文档：驱动靠它断言「这个盒子是滚动器」——一份短文件看不出
 				// body 忘了 overflow:auto（内容不够高时，坏掉的盒子和好的盒子长得一模一样）。
-				"long.md": longMarkdown(60),
-				"dist/app.js":            "console.log(1)\n",
-				"run.log":                "noise\n",
+				"long.md":     longMarkdown(60),
+				"dist/app.js": "console.log(1)\n",
+				"run.log":     "noise\n",
 			},
 			// Two roots whose BASE NAMES collide: the label a root is shown under then degrades to its
 			// full path (rootLabels), and the frontend cannot derive that itself — it has to be the
@@ -4267,6 +4283,125 @@ permissions:
 			},
 			after: func(c *checkCtx) {
 				c.check("只读会话没有产生任何模型请求", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		// cron-page: 定时任务的完整页。入口在侧栏搜索旁，表单默认把任务绑到当前会话；
+		// 保存后左边出现、状态栏弹层也看得到。Go 侧只读 crons.json —— 界面证明「填了、点了」，
+		// 文件证明「真的写下了什么形状」（尤其是 desktop.mode=session + 一个非空的逻辑 id）。
+		{
+			name: "cron-page",
+			files: map[string]string{
+				"README.md": "# smoke\n\ncron-page scenario's working directory\n",
+			},
+			after: func(c *checkCtx) {
+				c.check("建任务不该调用模型", len(c.requests) == 0, requestCount(c.requests))
+				raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "crons.json"))
+				c.check("crons.json 可读", err == nil, errText(err))
+				if err != nil {
+					return
+				}
+				var data struct {
+					Jobs []struct {
+						Name       string `json:"name"`
+						Schedule   string `json:"schedule"`
+						Prompt     string `json:"prompt"`
+						TargetType string `json:"target_type"`
+						Desktop    *struct {
+							Mode      string `json:"mode"`
+							SessionID string `json:"session_id"`
+						} `json:"desktop"`
+					} `json:"jobs"`
+				}
+				if err := json.Unmarshal(raw, &data); err != nil {
+					c.check("crons.json 能被解析", false, errText(err))
+					return
+				}
+				c.check("crons.json 能被解析", true, "")
+				found := false
+				for _, j := range data.Jobs {
+					if j.Name != "冒烟巡检" {
+						continue
+					}
+					found = true
+					c.check("计划是默认的每天 09:00", j.Schedule == "0 9 * * *", j.Schedule)
+					c.check("提示词写下来了", strings.Contains(j.Prompt, "CI 状态"), j.Prompt)
+					c.check("目标是 desktop", j.TargetType == "desktop", j.TargetType)
+					if j.Desktop == nil {
+						c.check("带桌面目标", false, "")
+						break
+					}
+					c.check("目标模式是已绑定会话", j.Desktop.Mode == "session", j.Desktop.Mode)
+					c.check("绑定了一个逻辑会话", j.Desktop.SessionID != "", j.Desktop.SessionID)
+				}
+				c.check("界面上建的任务写进了 crons.json", found, "")
+			},
+		},
+		// cron-run: 定时任务真的跑了。种子是一条 `@every 2s` 的一次性任务，目标就是冒烟会话；
+		// 应用启动后调度器自己触发它，消息区和会话文件都应该出现「⏰ 快速巡检」和回答。
+		// 这一半是单元测试看不到的：它跨了调度器、桌面 run、laneCron、会话记录和一次性清理。
+		{
+			name: "cron-run",
+			files: map[string]string{
+				"README.md": "# smoke\n\ncron-run scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("巡检完成。", 900)},
+			},
+			cronJobs: []cronSeed{{
+				Name:     "快速巡检",
+				Schedule: "@every 2s",
+				Prompt:   "看一眼工作区，回一句巡检完成。",
+			}},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("定时任务调用了一次模型", len(c.requests) == 1, requestCount(c.requests))
+
+				foundUser, foundReply := false, false
+				for _, path := range sessionFiles(c.home) {
+					raw, err := os.ReadFile(path)
+					if err != nil {
+						continue
+					}
+					for _, line := range bytes.Split(raw, []byte("\n")) {
+						if len(line) == 0 {
+							continue
+						}
+						var m session.Message
+						if json.Unmarshal(line, &m) != nil {
+							continue
+						}
+						switch {
+						case m.Type == session.MessageTypeUser && strings.Contains(m.Content, "看一眼工作区"):
+							foundUser = true
+							c.check("模型收到的提示词带无人值守说明",
+								strings.Contains(m.Content, "Do not ask the user questions"), m.Content)
+							c.check("对话里显示的是任务名",
+								strings.HasPrefix(m.DisplayContent, "⏰ 快速巡检"), m.DisplayContent)
+						case m.Type == session.MessageTypeAssistant && strings.Contains(m.Content, "巡检完成。"):
+							foundReply = true
+						}
+					}
+				}
+				c.check("定时任务写下了用户消息", foundUser, "")
+				c.check("定时任务的回答写进了会话", foundReply, "")
+
+				// A oneshot deletes itself after the run; the handler returns a moment after the
+				// reply is written, so poll rather than assume the delete has landed yet.
+				gone := false
+				for i := 0; i < 20; i++ {
+					raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "crons.json"))
+					if err == nil {
+						var data struct {
+							Jobs []json.RawMessage `json:"jobs"`
+						}
+						if json.Unmarshal(raw, &data) == nil && len(data.Jobs) == 0 {
+							gone = true
+							break
+						}
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				c.check("一次性任务跑完自己删掉", gone, "")
 			},
 		},
 	}

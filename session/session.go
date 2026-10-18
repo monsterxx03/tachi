@@ -41,6 +41,21 @@ type Session struct {
 	// identically.
 	Pinned    bool `json:"pinned,omitempty"`
 	SkipDream bool `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	// CronBound marks a conversation a desktop scheduled task writes into.
+	//
+	// It is a CLEANUP hint, not the badge's source of truth: the desktop derives
+	// the number from crons.json, because that is the only place a job exists.
+	// This flag is what makes count-based cleanup work in EVERY entry point — a
+	// TUI or ACP process sweeping the same data dir has no business reading the
+	// cron store, but it can see a session record. The desktop writes it
+	// (syncCronProtection) on job create/delete/rebind and at startup, and
+	// compaction moves it to the child the conversation continues in.
+	//
+	// A stale true only keeps a session longer; a stale false could let the
+	// target of a job be cleaned. Startup reconciliation is what closes the
+	// second window, and a job whose target is gone is paused rather than
+	// silently re-created.
+	CronBound bool `json:"cron_bound,omitempty"`
 	// SkipApproval is this session's answer to 「bash 与文件工具要不要先问你」: the desktop's
 	// composer dropdown writes it, and the desktop reads it back (desktop/permission.go) every
 	// time it builds an agent for the session. false — the asking mode — is what every session

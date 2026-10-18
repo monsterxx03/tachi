@@ -629,7 +629,8 @@ var settingsTable = []settingApply{
 	// be false. It stays applyUnused because that mode is about the FORM — channel names are
 	// user-defined map keys, so no form can enumerate them — not about whether anything reads it.
 	{Key: "channel", Mode: applyUnused, Note: "channel 模式的 IM 后端；desktop 只读其中的 notify 开关（决定 NotifyUser 工具挂不挂），账号与收信仍归 channel 进程"},
-	{Key: "cron", Mode: applyUnused, Note: "channel 模式的后台调度"},
+	{Key: "cron", Category: catAdvanced, Mode: applyRestart,
+		Note: "后台定时任务；channel 与 desktop 各自只调度发给自己的任务，改动后要重启对应进程。其中 notify_matcher 与 jev_threshold 只被 channel 的定时任务使用"},
 	{Key: "dream", Mode: applyUnused, Note: "channel 模式的后台记忆整理"},
 	{Key: "acp", Mode: applyUnused, Note: "ACP 入口的配置"},
 	{Key: "deep_research", Mode: applyUnused, Note: "desktop 没有 research 命令（TUI 与 tachi -p 才有）"},

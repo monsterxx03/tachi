@@ -122,6 +122,44 @@ export function useUnseenSessions(currentId: string): Record<string, true> {
   return out
 }
 
+// ── Scheduled runs ──────────────────────────────────────────────────────────
+// A cron run is a normal turn in the conversation, but the backend starts it —
+// so the user's bubble has to come from an event. It is also the signal that
+// this turn is not steerable: the pending bar says 「等定时任务结束后发送」
+// instead of promising an injection at the next tool boundary.
+export function useCronRunningSessions(): Record<string, true> {
+  const [byID, setByID] = useState<Record<string, true>>({})
+  useEffect(() => {
+    const set = (sid: string | undefined, on: boolean) => {
+      if (!sid) return
+      setByID((prev) => {
+        if (on) {
+          if (prev[sid]) return prev
+          return { ...prev, [sid]: true }
+        }
+        if (!prev[sid]) return prev
+        const next = { ...prev }
+        delete next[sid]
+        return next
+      })
+    }
+    const offTurn = Events.On('agent:cron_turn', (event) => {
+      const d = event.data as { sessionId?: string }
+      set(d?.sessionId, true)
+    })
+    const offIdle = Events.On('agent:idle', (event) => {
+      const d = event.data as { sessionId?: string }
+      set(d?.sessionId, false)
+    })
+    const offErr = Events.On('agent:error', (event) => {
+      const d = event.data as { sessionId?: string }
+      set(d?.sessionId, false)
+    })
+    return () => { offTurn?.(); offIdle?.(); offErr?.() }
+  }, [])
+  return byID
+}
+
 // ── The active session's numbers ────────────────────────────────────────────
 // Cumulative cost/credit ("积分") from the usage ledger, the cache-hit rate behind the ring,
 // the output rate, and the context-window estimate behind the context ring. Session-scoped as
@@ -238,6 +276,25 @@ export function useAgentStream(deps: AgentStreamDeps) {
     currentId, updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
     refreshProvider, answerSteer, clearAsk, onSessionTitle,
   } = deps
+
+  // A scheduled run has no composer to place its user bubble, so the backend's
+  // start event does it. The running placeholder is placed here too: the first
+  // text delta would open one anyway, but until then the reader would see a
+  // bubble with no "working" line under it.
+  useEffect(() => {
+    const off = Events.On('agent:cron_turn', (event) => {
+      const d = event.data as { sessionId?: string; display?: string }
+      if (!d?.sessionId || !d.display) return
+      const now = Date.now()
+      const ts = new Date(now).toISOString()
+      updateSession(d.sessionId, (list) => [
+        ...list,
+        { id: `u-${now}-cron`, role: 'user', text: d.display as string, ts },
+        { id: `a-${now}-cron`, role: 'assistant', running: true, parts: [], ts },
+      ])
+    })
+    return () => off?.()
+  }, [updateSession])
 
   useEffect(() => {
     const off = Events.On('agent:tool', (event) => {

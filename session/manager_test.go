@@ -310,6 +310,66 @@ func TestManagerCleanup_KeepsPinnedSessions(t *testing.T) {
 	}
 }
 
+// TestManagerCleanup_KeepsCronBoundSessions pins the other persisted exemption:
+// a conversation a scheduled task writes into. The sweep runs in every entry
+// point, and only the session record is common to all of them, so the desktop
+// stamps CronBound there (and compaction moves it to the child). Deleting the
+// target would orphan the job; the unpinned, unbounded neighbours are still
+// trimmed, so the protection does not turn cleanup off.
+func TestManagerCleanup_KeepsCronBoundSessions(t *testing.T) {
+	store := newTempStore(t)
+	mgr := NewManagerWithStore(store, nil)
+	// No cap while the sessions are made: New() runs the sweep itself.
+	mgr.SetMaxKeep(0)
+
+	sessionIDs := make([]string, 0, 5)
+	for range 5 {
+		sess, err := mgr.New("alpha", ".")
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+		sessionIDs = append(sessionIDs, sess.ID)
+	}
+	oldest := sessionIDs[0]
+	mgr.Load(oldest)
+	bound := mgr.Current()
+	bound.CronBound = true
+	if err := store.UpdateMeta(bound); err != nil {
+		t.Fatalf("UpdateMeta failed: %v", err)
+	}
+	// The current session is the newest, so the cron-bound old one is the only
+	// reason an excess session survives below.
+	mgr.Load(sessionIDs[4])
+
+	mgr.SetMaxKeep(2)
+	removed := mgr.CleanupOldSessions()
+	if removed == 0 {
+		t.Fatal("expected the unprotected old sessions to be removed")
+	}
+
+	sessions, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	ids := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		ids[s.ID] = true
+	}
+	if !ids[oldest] {
+		t.Errorf("the cron-bound session %s was deleted by cleanup (kept: %v)", oldest, ids)
+	}
+	if ids[sessionIDs[1]] {
+		t.Errorf("an unbounded old session %s survived cleanup", sessionIDs[1])
+	}
+	loaded, err := store.LoadMeta(oldest)
+	if err != nil {
+		t.Fatalf("LoadMeta failed: %v", err)
+	}
+	if !loaded.CronBound {
+		t.Error("the surviving session lost its cron-bound flag")
+	}
+}
+
 func newTempStore(t *testing.T) *FileStore {
 	t.Helper()
 	store, err := NewFileStore(t.TempDir())

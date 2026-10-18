@@ -18,6 +18,7 @@ import {
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
+import { CronPage, CronPanel } from './cron'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { FileTreePanel, FILE_TREE_DEFAULT_WIDTH } from './filetree'
 import { FileView } from './fileview'
@@ -26,7 +27,7 @@ import { useFileTree, type OpenFile } from './useFileTree'
 import { RewindChainOverlay } from './rewindchain'
 import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
 import type { OneOffRun } from './agentEvents'
-import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO, CronJobVO, CronTargetVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
 import { FindBar, useFind } from './find'
@@ -40,7 +41,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
 
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, usePeersChanged, useUnseenSessions } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, usePeersChanged, useUnseenSessions, useCronRunningSessions } from './agentEvents'
 import { useComposer, Composer } from './composer'
 // CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
 // prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
@@ -774,7 +775,7 @@ function App() {
   // local state than a route could rebuild (collapsed project groups, the composer's draft, the
   // transcript's scroll offset), and coming back must not cost any of it. The file view takes the
   // CONTENT COLUMN (the chat is inert under it); the settings page covers the whole window.
-  const [view, setView] = useState<'chat' | 'settings' | 'file'>('chat')
+  const [view, setView] = useState<'chat' | 'settings' | 'file' | 'cron'>('chat')
   // ⌘F over the conversation. It is the LOWEST host in find.tsx's stack (the chat mounts first), so
   // any overlay or panel on top keeps the key for itself — the rule that lets a preview, a review's
   // pane or the file view search its own text. While either other view is up the chat is not the
@@ -794,6 +795,18 @@ function App() {
   const [agentsOpen, setAgentsOpen] = useState(false)
   const [agentsBoard, setAgentsBoard] = useState<PeerBoardVO | null>(null)
   const [agentsBusy, setAgentsBusy] = useState(false)
+  // Scheduled tasks: the popover's data, the page's selection, and the two lists
+  // the editor needs (conversations + projects). Everything here is PULLED on
+  // open and re-pulled on agent:cron_changed; the backend owns the truth.
+  const [cronOpen, setCronOpen] = useState(false)
+  const [cronJobs, setCronJobs] = useState<CronJobVO[]>([])
+  const [cronLoading, setCronLoading] = useState(false)
+  const [cronScheduled, setCronScheduled] = useState(false)
+  const [cronTargets, setCronTargets] = useState<CronTargetVO[]>([])
+  const [cronSelected, setCronSelected] = useState<string | null>(null)
+  const [cronCreating, setCronCreating] = useState(false)
+  const [cronNotice, setCronNotice] = useState('')
+  const cronRunningSessions = useCronRunningSessions()
   // The side-channel panel (third column): /review and /commit run as one-off forks, and
   // their process belongs here rather than in the conversation — see
   // docs/2026-09-12-desktop-oneoff-panel-design.md. The panel is a reader over the same
@@ -1007,6 +1020,11 @@ function App() {
   const isCurrentRunning = runningSet.has(currentId) ||
     state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
 
+  // How many scheduled tasks write into the conversation on screen. The count
+  // comes from the session list (derived on the backend), so it is right at
+  // startup, after a switch, and after the Cron tool changes a task.
+  const currentCronCount = sessions.find((s) => s.id === currentId)?.cronCount || 0
+
   // A turn's fold toggle grows (or shrinks) that turn IN PLACE. A reader who is following the
   // bottom has to stay there — the design's 「展开/收起不该让滚动位置跳」 — and the pin goes through
   // pinBottom so the growth itself cannot end following (that is handleScroll's job to get right,
@@ -1151,6 +1169,108 @@ function App() {
       setProjects((await AgentService.ListProjects()) || [])
     } catch { /* keep what we have */ }
   }, [])
+
+  // ── Scheduled tasks ────────────────────────────────────────────────────────
+  // The panel and the page are readers: everything is pulled when they open and
+  // re-pulled on agent:cron_changed. A job's next/last run and its target's title
+  // are resolved in Go, so the frontend never parses a compaction chain.
+  const refreshCron = useCallback(async () => {
+    setCronLoading(true)
+    try {
+      const [jobs, scheduled] = await Promise.all([
+        AgentService.ListCronJobs().catch(() => null),
+        AgentService.IsCronScheduled().catch(() => false),
+      ])
+      setCronJobs(jobs || [])
+      setCronScheduled(!!scheduled)
+    } finally {
+      setCronLoading(false)
+    }
+  }, [])
+
+  const refreshCronTargets = useCallback(async () => {
+    try {
+      setCronTargets((await AgentService.ListCronTargets()) || [])
+    } catch { /* keep the previous list */ }
+  }, [])
+
+  // refreshSessionList re-pulls the sidebar rows. The scheduled-task counts are
+  // DERIVED on the backend (crons.json + each conversation's logical id), so a
+  // job created or deleted anywhere — the page, the scheduler, or the Cron tool
+  // inside a turn — only shows up in a row's badge after this read.
+  const refreshSessionList = useCallback(async () => {
+    const list = (await AgentService.ListSessions().catch(() => null)) || []
+    setSessions(list.map((s) => ({ ...s, active: s.id === currentId })))
+  }, [currentId])
+
+  // openCronPage is the ONE way into the management view: the sidebar button,
+  // the popover's 新建/打开, and a row's 编辑 all land here. `creating` picks the
+  // empty form; a null selection with creating=false shows the page's own
+  // "choose a task" state rather than an unexplained blank editor.
+  const openCronPage = useCallback((jobID: string | null, creating = false) => {
+    setCronOpen(false)
+    setCronSelected(jobID)
+    setCronCreating(creating)
+    setCronNotice('')
+    setCronLoading(true)
+    setView('cron')
+  }, [])
+
+  useEffect(() => {
+    if (cronOpen) void refreshCron()
+  }, [cronOpen, refreshCron])
+
+  useEffect(() => {
+    if (view !== 'cron') return
+    void refreshCron()
+    void refreshCronTargets()
+    void refreshProjects()
+  }, [view, refreshCron, refreshCronTargets, refreshProjects])
+
+  // A job write can happen in the other entry point too (a channel process that
+  // shares crons.json); the event is the only way this panel hears about it.
+  useEffect(() => {
+    const off = Events.On('agent:cron_changed', () => {
+      if (cronOpen || view === 'cron') void refreshCron()
+      // The badge counts are session-derived; the tool can change them in the
+      // middle of a turn, so this is the live half of "实时更新".
+      void refreshSessionList()
+    })
+    return () => off?.()
+  }, [cronOpen, view, refreshCron, refreshSessionList])
+
+  // A dedicated conversation is created by the backend on a task's first run.
+  // The sidebar has to know it exists before a click on its notification can
+  // land anywhere.
+  useEffect(() => {
+    const off = Events.On('agent:sessions_changed', () => {
+      void refreshSessionList()
+    })
+    return () => off?.()
+  }, [refreshSessionList])
+
+  const toggleCronJob = useCallback(async (job: CronJobVO) => {
+    const res = await AgentService.SetCronJobPaused(job.id, job.status === 'active').catch((e) => String(e))
+    if (res !== 'ok') { setCronNotice(res || '操作失败'); return }
+    setCronNotice('')
+    await refreshCron()
+  }, [refreshCron])
+
+  const runCronNow = useCallback(async (job: CronJobVO) => {
+    const res = await AgentService.RunCronJobNow(job.id).catch((e) => String(e))
+    if (res !== 'ok') { setCronNotice(res || '运行失败'); return }
+    setCronNotice('')
+    await refreshCron()
+  }, [refreshCron])
+
+  const deleteCronJob = useCallback(async (job: CronJobVO) => {
+    const res = await AgentService.DeleteCronJob(job.id).catch((e) => String(e))
+    if (res !== 'ok') { setCronNotice(res || '删除失败'); return }
+    setCronNotice('')
+    setCronSelected((prev) => (prev === job.id ? null : prev))
+    setCronCreating(false)
+    await refreshCron()
+  }, [refreshCron])
 
   // A project write moves the ground under sessions the frontend already rendered (design
   // §7.4). Everything it shows was PULLED, so the backend's own write is not visible until the
@@ -2051,7 +2171,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // keeps the transcript's scroll offset and the composer's draft alive across the round trip.
   const appBodyRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
-    appBodyRef.current?.toggleAttribute('inert', view === 'settings')
+    appBodyRef.current?.toggleAttribute('inert', view === 'settings' || view === 'cron')
   }, [view])
 
   // The chat surfaces are INERT while the file view is up, for exactly the same reason and by exactly
@@ -2079,7 +2199,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // focus is deliberate: the chat view is still MOUNTED (inert), so its windows-level
       // listeners are alive, and ⌘N on the settings page must not quietly start a session
       // behind it. Escape is gated with the rest — the page's own dismissals are its own.
-      if (view === 'settings') return
+      if (view === 'settings' || view === 'cron') return
       if (e.key === 'Escape') {
         // Claim the gesture only when something here was actually dismissed: the side panel
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
@@ -2455,6 +2575,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           ? <span className="wait-dot" role="img" aria-label={waitingOf(s.id)} title={waitingOf(s.id)} />
           : null}
         {runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
+        {/* A conversation a scheduled task writes into. Derived by the backend from
+            crons.json, so deleting or re-binding the task clears it with no migration;
+            the number updates while a turn's Cron tool changes it. */}
+        {(s.cronCount || 0) > 0 ? (
+          <span className="session-cron" title={`${s.cronCount} 个定时任务`} aria-label={`${s.cronCount} 个定时任务`}>
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+            {s.cronCount}
+          </span>
+        ) : null}
         {/* A pinned row says so on its own line: the list is sorted pinned-first, and a row that
             jumped to the top with no mark would read as an arbitrary order. The title states the
             RULE, so the reader learns where the pin applies (this group) without having to try it. */}
@@ -2564,10 +2693,20 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               rows had to know the key. The palette itself is unchanged — this only names it. */}
           <div className="sidebar-top">
             <span className="sidebar-brand">Tachi</span>
-            <button className="sidebar-search" aria-label="搜索会话" title="搜索会话（⌘K）"
-              onClick={() => { setPaletteOpen(false); setSessionPaletteOpen(true) }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="10.8" cy="10.8" r="6.6" /><path d="m16 16 4 4" /></svg>
-            </button>
+            <div className="sidebar-actions">
+              <button className="sidebar-search" aria-label="搜索会话" title="搜索会话（⌘K）"
+                onClick={() => { setPaletteOpen(false); setSessionPaletteOpen(true) }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="10.8" cy="10.8" r="6.6" /><path d="m16 16 4 4" /></svg>
+              </button>
+              {/* The full page's other door. The popover in the composer is the quick look;
+                  this one is where a reader goes to manage tasks — and it is beside search
+                  because both are "the app's own lists", not the conversation's. */}
+              <button className={`sidebar-search${view === 'cron' ? ' is-on' : ''}`}
+                aria-label="定时任务" title="定时任务（所有后台任务）"
+                onClick={() => openCronPage(null, false)}>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+              </button>
+            </div>
           </div>
           {/* 新会话 — the sidebar's own create button, and the only one that is not tied to a
               group. Until now a new conversation was reachable from a group header's ＋ (which is
@@ -2915,7 +3054,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 <span className="composer-readonly-note">{managedReadOnlyNote(managedSession.kind!, managedSession.sourceNodeId, managedSession.sourceNode)}</span>
               </div>
             ) : (
-              <Composer api={composer} running={isCurrentRunning} onStop={stopChat} onPageTurn={scrollByHalfPage} />
+              <Composer api={composer} running={isCurrentRunning}
+                cronRunning={!!cronRunningSessions[currentId]}
+                onStop={stopChat} onPageTurn={scrollByHalfPage} />
             )}
             <div className="composer-status">
               <div className="work-dir-wrap popover-anchor">
@@ -3060,6 +3201,30 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       onCompleteAuth={completeMCPAuth}
                     />
                   )}
+                </span>
+                <span className="popover-anchor">
+                  <button className="cron-btn"
+                    title={currentCronCount > 0 ? `定时任务（本会话 ${currentCronCount} 个）` : '定时任务'}
+                    aria-label="定时任务" onClick={() => setCronOpen((v) => !v)}>
+                    <span className="cron-ico">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+                    </span>
+                    {currentCronCount > 0 ? <span className="cron-btn-count">{currentCronCount}</span> : null}
+                  </button>
+                  {cronOpen ? (
+                    <CronPanel
+                      jobs={cronJobs}
+                      loading={cronLoading}
+                      scheduled={cronScheduled}
+                      notice={cronNotice || undefined}
+                      onClose={() => { setCronOpen(false); setCronNotice('') }}
+                      onNew={() => openCronPage(null, true)}
+                      onEdit={(job) => openCronPage(job.id, false)}
+                      onOpenPage={() => openCronPage(null, false)}
+                      onTogglePaused={(job) => void toggleCronJob(job)}
+                      onRunNow={(job) => void runCronNow(job)}
+                    />
+                  ) : null}
                 </span>
               </div>
             </div>
@@ -3411,6 +3576,32 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           of the schema on the way in is exactly what makes the values on screen the values in
           the file. */}
       {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} onSaved={onSettingsSaved} /> : null}
+      {view === 'cron' ? (
+        <CronPage
+          jobs={cronJobs}
+          targets={cronTargets}
+          projects={projects}
+          loading={cronLoading}
+          scheduled={cronScheduled}
+          selectedId={cronSelected}
+          creating={cronCreating}
+          notice={cronNotice}
+          onBack={() => setView('chat')}
+          onSelect={(id) => { setCronSelected(id); setCronCreating(false); setCronNotice('') }}
+          onNew={() => { setCronSelected(null); setCronCreating(true); setCronNotice('') }}
+          onSaved={async (id) => {
+            // Refresh FIRST, then select: the new job must be in the list when
+            // the selection moves, or the form would flash the empty state.
+            await refreshCron()
+            setCronSelected(id)
+            setCronCreating(false)
+            void refreshCronTargets()
+          }}
+          onTogglePaused={(job) => void toggleCronJob(job)}
+          onRunNow={(job) => void runCronNow(job)}
+          onDelete={(job) => void deleteCronJob(job)}
+        />
+      ) : null}
       {/* 待提问队列唯一的渲染者：三个宿主各有自己的选中菜单，但队列只有一份、面板只有一个
           （见 selask.tsx）—— 面板挂在应用上而不是某个宿主里，正是为了让这件事只有一种形态。 */}
       <AskQueuePanel />

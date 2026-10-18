@@ -52,6 +52,12 @@ type SessionInfo struct {
 	// record's own field (session.Session.Pinned), so the order survives a restart and every
 	// reader of the list agrees on it.
 	Pinned bool `json:"pinned,omitempty"`
+	// CronCount is how many desktop scheduled tasks write into this
+	// conversation. It is derived (from crons.json + the session's logical id),
+	// never stored on the session: deleting the task or re-binding it must make
+	// the badge disappear with no migration. The sidebar row and the composer's
+	// clock badge both read it.
+	CronCount int `json:"cronCount,omitempty"`
 	// Kind marks a session a SUBSYSTEM owns rather than the person at the keyboard — today a
 	// receiving node's A2A execution (session.KindA2AExecution). It travels so the sidebar can
 	// LABEL such a row instead of presenting it as a conversation the reader had; the label is
@@ -153,11 +159,13 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	// read per row. An id with no pinned record stays unresolved, and the frontend says "unknown"
 	// rather than inventing a name.
 	peers := node.PeerAliases()
+	cronCounts := s.desk.cronCountsByLogical()
 	infos := make([]SessionInfo, 0, len(list))
 	for _, ss := range list {
 		info := toSessionInfo(ss)
 		info.HeldByTask = busy[ss.ID]
 		info.SourceNode = peers[ss.SourceNodeID]
+		info.CronCount = cronCounts[ss.LogicalConversationID()]
 		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].UpdatedAt.After(infos[j].UpdatedAt) })

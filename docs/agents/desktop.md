@@ -15,6 +15,7 @@
 | **桌面语音输入** | 你碰输入框的麦克风按钮或 `voice:*` 事件（`desktop/voice.go`、`composer.tsx` 里语音那一半） |
 | **桌面后端（绑定与路径）** | 你碰 `AgentService`——一个方法、一条绑定、一条会话路径、一个打开/显示动作 |
 | **桌面 MCP** | 你碰 MCP 授权、MCP 面板、设置页的 MCP 服务器编辑器，或延迟加载的工具那条池/提醒链路 |
+| **桌面定时任务** | 你碰 desktop 的 cron（`desktop/cron.go`、调度器、任务面板、任务与会话的绑定），或改 `cron` 包的归属/时区行为 |
 | **桌面会话树** | 你碰 skill 发现、权限，或者其他任何解析「这个会话在哪个树里干活」的东西 |
 | **桌面单轮历史** | 你碰一轮的历史是怎么拼起来、合并、续下去的 |
 | **桌面压缩** | 你碰压缩链路（`agent/compact.go`、`desktop/compaction.go`、`AgentEventAutoCompactDone` 那个 case）、`RunningSessions`，或者其他任何解析**哪个 run 拥有一个会话**的东西 |
@@ -80,6 +81,8 @@ make desktop-smoke ARGS="-keep"                         # keep the sandbox after
 | 上下文计量环、用量数字、自动压缩（循环在单轮中途自己压缩） | `ctx-ring`、`compact`、`auto-compact`、`compact-race` |
 | 压缩 WINDOW（子会话在那一轮还在跑时就存在：哪一行显示「运行中」、往子会话里发一条会怎样） | `compact-window` |
 | MCP 面板、OAuth、延迟加载的工具的提醒 | `mcp-auth` |
+| 定时任务（侧栏入口、完整页、新建表单、保存后的列表与弹层） | `cron-page` |
+| 定时任务真的跑一轮（`@every` 种子、消息区、会话记录、一次性清理） | `cron-run` |
 | Agents 面板（状态栏按钮、每个节点的名字/身份/来源/可达性、展开后的 card、刷新是一次真往返） | `agents-panel` |
 | skill 发现 / 目录 | `skill-catalog`、`project-context` |
 | 工作区根目录（加/删、git 分支、@-文件） | `roots-branch`、`multi-root`、`at-file-reload` |
@@ -243,6 +246,23 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **面板的一次开关会被写回 server 来自的那个 mcp.json**（`MCPServerConfig.SourceFile`；规则是「它来自的那个文件」，绝不是「当前 profile」，否则这次改动会在下次 profile 切换时丢掉）。这次编辑是**外科手术式**的（一个值的字节；缩进、键序和未知字段都活下来），因为 mcp.json 是手写的。**profile 切换保持只在运行时生效**——没有任何东西把 `active_mcp_profile` 写进 config.yaml，所以一个下拉框不可能静默地把某个 profile 变成之后每次启动的默认。
 - **`AuthorizeMCPServer(name)` 启动那条流并返回 "ok"；进度以 `agent:mcp_auth` 到达。** 它不得不这样：那条流需要一个浏览器，而且往往还需要一个人。`CompleteMCPServerAuth(name, url)` 是粘贴回来的那条路，它会**先取消**一条在飞的流——两条出路花的是同一个一次性授权码。那条流本身的三件事实：浏览器是一个变量（`mcp.BrowserOpener`），所以一次脚本化运行会替换它（`TACHI_DEMO_BROWSER_FETCH=1`——一次冒烟运行绝不能把它跑在的那台机器上开出一个窗口，而一次 demo **录制**必须）；回调地址在任何东西被注册或交换**之前**就固定了，因为 DCR 会发 redirect_uri，而 token 交换会再发一次；以及 state + PKCE verifier 在浏览器那条路上也被持久化，所以趁回调还挂着的时候从地址栏把 URL 粘出来是可行的。一个 401 无论怎么到达都是一个事实（`mcp.isAuthRequired` 在 `Initialize` 和 `ListTools` 两步上**都**映射两个传输哨兵值——只映射后面那个会让这样的 server 报一个普通的连接错误）。
 - **fixture 是 `itest/mcpauth/`，这个功能的两半都跑在它上面**（401 + `WWW-Authenticate` → PRM → AS 元数据 → DCR → `/authorize` → `/token` → 一个只认 bearer 的 MCP 端点）。桌面的单元测试在进程内驱动它；`mcp-auth` 在 runner 里启动它、并把沙箱的 `mcp.json` 指向它。`desktop/` 通过它的 module `replace` 到达它：一个假货，不是两个。
+
+## 桌面定时任务（`desktop/cron.go`）
+
+- **调度器住在应用进程里，两个入口各管自己那类任务。** channel 与 desktop 共用 `~/.tachi/crons.json`，所以每个 `Scheduler` 构造时都带一个 `Owns` 过滤器：channel 只调度 `TargetType` 为空或 `channel` 的任务，desktop 只调度 `desktop`。少了这一层，同一个任务会被两个进程各跑一遍。`cron.Store` 的写路径（`Create/Update/Delete/UpdateFunc`）在进程内锁之外还拿一把 `pkg/flock` 的文件锁，因为两个进程都会改这个文件。
+- **一条任务绑定的是对话，不是某一页会话。** `DesktopTarget.SessionID` 存 `session.Session.LogicalConversationID()`；`resolveCronTarget` 扫会话列表，取 `logical id` 匹配且 `CompactedChildID == ""` 的叶子。压缩把对话搬到子会话之后，下一次触发自动写进子会话；**不要**去搬 `ThreadID` 或重建任务（那是 channel 的 `FindByThreadID` 需要的，desktop 没有这个索引）。
+- **两种回复方式最终都是一种。** 「在这个会话里继续」直接写 `SessionID`；「新建一个专属会话」的 `Mode` 是 `new`、`SessionID` 空，第一次运行时 `createCronSession` 建会话、发 `agent:sessions_changed`，再用 `BindDesktopSession` 把 `SessionID/Mode=session` **只改目标字段**地写回任务（`UpdateFunc`，不碰用户同时编辑的计划/提示词）。绑定写失败就删掉刚建的会话、本次不跑，绝不留下任务不知道的孤儿会话。创建后的专属会话就是普通会话，标题是任务名。
+- **⚠ 引擎的闭包捕获的是「加条目时」的任务副本，而首次绑定只改文件。** 所以 handler 的第一件事是 `freshCronJob` 从 store 重读；拿旧副本会看到 `Mode=new`、`SessionID` 空，于是**每次触发都新建一个专属会话**。`TestCronHandlerReloadsTheJobItWasGiven` 钉住它。同样的道理：按 id 更新 prompt 但不换计划的任务不会重排条目，旧副本里的 prompt 也是过期的。
+- **`Cron` 工具的 `list` 和所有按 id 的动作都过同一个 `Matches`**：桌面侧是「目标是这条对话」或 `CreatedBy` 是这条对话。只过滤 `list` 会让模型拿一个见过的 id 去改/删另一条对话的任务；越界的 id 一律读作「not found」。
+- **一次定时回合走 `laneCron`，和普通回合共享事件路径。** 正在看这条会话的人会实时看到思考、工具卡片和正文；不在看时侧栏行显示运行中，完成时通知，之后打开会话能看到完整记录。`laneCron` 与 `laneTranscript` 的唯一区别是完成通知的文案（说任务名）和 `when_relevant` 的静默判断。通知失败/完成都走 `notifyCronDone`/`notifyCronFailed`，仍受 `watching` 约束。
+- **定时回合不接受 steer。** 用户在那个会话里输入的消息进待发送队列，不会被注入任务；任务自然结束后自动发出，`立即发送 · 打断` 可以停掉任务接管。前端靠 `agent:cron_turn` 知道这一点，并把待发送条的文案从「工具调用结束后插入」换成「等定时任务结束后发送」。`runCronTurn` 因此显式把 `r.steerCh` 清空，且不把 channel 交给 agent。
+- **无人值守的审批跟会话走。** 目标会话是「需要审批」时，`cronTurnContext` 打上 `withoutAsk`——命中 `ask` 的命令被拒绝并说明原因；是「无需审批」时留着，agent 的会话级开关（构建时从记录应用、`SetSkipApproval` 时更新）让 ask 规则静默。专属会话第一次创建时用模板的 `SkipApproval` 初始化，之后以会话记录为准。不要改成 channel 那种「`PermissionModeSkip` 一律放行」。
+- **模型正文必须逐次相同。** `cronModelPrompt` 只拼任务提示词 + `when_relevant` 政策（`cron.MarkerNotificationPolicy`）+ 无人值守说明，**不拼时间戳**；否则每次都会打穿这条会话的提示缓存。显示文字走另一条路（`WithDisplayUserMessage`，`⏰ 任务名 + 提示词摘要`），它会落进 `display_content`，所以重新加载也能看到。
+- **`when_relevant` 在桌面只抑制通知。** 回复本来就写在会话里，能收的是系统通知和提示音；判断用 `cron.Job.ShouldSuppressResult`（最终回复为空或含 `[SILENT]`）。channel 的 Jev 门禁不参与——它决定的是「投不投递」，桌面没有投递这一半。
+- **两个入口：** 侧栏搜索图标旁的时钟打开完整页（左列表右编辑，`CronPage`），输入框状态栏的时钟打开弹层（`CronPanel`）。它们是同一组绑定的两个读法；新建从弹层跳到完整页；完整页里按 Esc 返回对话（删除确认框打开时先关确认框）。**状态栏时钟上的数字是当前会话的任务数，侧栏行的徽章也是同一个数**：`SessionInfo.CronCount` 由后端用 `cronCountsByLogical` 从任务文件推导，不写进会话记录；`Cron` 工具在一次回合里增删任务时，`SetOnChange` 发 `agent:cron_changed`，前端重新拉会话列表，所以数字是实时的。
+- **设置页的 `cron` 行是 `applyRestart`**（原来是 `applyUnused`）：desktop 现在真的读 `cron.enabled/store_path/max_concurrent/execution_timeout`，启动时构造调度器；`notify_matcher`/`jev_threshold` 仍只被 channel 读，块的 Note 必须同时说清这两件事。
+- **应用退出后任务不跑，也不补跑。** 关窗口只是隐藏，进程还在，调度器照常；⌘Q 之后 `OnShutdown` 里的 `stopCron` 会取消 `s.ctx` 并等在跑的回合结束。不要给它加「启动时补跑」而不重新想清楚：那会让一次快速重启多跑一次。
+- **会话清理的保护落在 `Session.CronBound` 上，不是 retention 的 hold。** `syncCronProtection` 从 `crons.json` 推导哪些逻辑会话有 desktop 任务，启动时、任务增删/改绑时、以及每次跑完（oneshot 会删掉自己）写回**叶子**会话；压缩把它搬到子会话、父会话清掉。`Manager.CleanupOldSessions` 跳过这个标记，而它在每个入口都读得到——清理没有理由去读 cron store。不要用 `session.Retention`：那里的 reason 只表示「此刻有执行在跑」，定时任务是长期绑定，不是执行。
 
 ## 桌面会话树（每一条按树取值的路径都必须来自会话）
 

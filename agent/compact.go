@@ -135,6 +135,12 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// ancestor out of session cleanup forever. Same shape as ThreadID below — one binding,
 	// released from the record it no longer means anything on.
 	newSess.Pinned = oldSess.Pinned
+	// The cron-protection flag is a property of the CONVERSATION, and the child is
+	// the row a cleanup would consider (the parent folds away). Move it, exactly
+	// like the pin: a copy left on the parent would keep a hidden ancestor alive
+	// forever, while the child — the target a job resolves to — would be the one
+	// that could be deleted.
+	newSess.CronBound = oldSess.CronBound
 	// Same trap, worse consequence: a field left out of this block is silently zeroed, and for
 	// these two that means a compacted remote execution comes back looking like an ordinary
 	// local conversation — drivable from a frontend, and folded into the user's long-term
@@ -186,6 +192,10 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// conversation is pinned. Left alone it would be invisible state on a folded-away row
 	// AND a permanent exemption from session cleanup for an ancestor nobody can see.
 	oldSess.Pinned = false
+	// The cron binding moved to the child above; clear it here so the cleanup
+	// does not keep an ancestor nobody can see. The job still resolves the
+	// conversation through the child's logical id.
+	oldSess.CronBound = false
 	if err := sm.UpdateMeta(oldSess); err != nil {
 		// Non-fatal: log but continue. The new session is already created.
 		// The old session's compacted_child_id is missing, but the new
