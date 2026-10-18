@@ -107,6 +107,8 @@ flowchart LR
 
 ## 4. 服务端
 
+> 这一层的**线上协议**以 [agents/mobile-protocol.md](./agents/mobile-protocol.md) 为准（端点、事件、字段、错误码都在那里）。本节是当时的设计说明，细节有出入看那份。
+
 ### 4.1 放在哪
 
 `desktop/mobile*.go`，package `main`，跟 `desktop/` 的其他后端代码在同一个 module 里。理由只有一条：它要够到 `desktopApp` 的内部（`d.asks`、`d.runs`、事件出口），而这些不该被导出成一套新的公共 API。

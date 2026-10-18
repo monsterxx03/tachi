@@ -1,47 +1,104 @@
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, StyleSheet, Text, View, useColorScheme } from 'react-native';
-import { themes } from './src/theme/tokens';
+import { useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { useMobile } from './src/state/mobile';
+import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
+import { Chat } from './src/ui/Chat';
+import { Pairing } from './src/ui/Pairing';
+import { SessionList } from './src/ui/SessionList';
+import { Settings } from './src/ui/Settings';
 
-/**
- * 骨架：现在只证明两件事 —— 主题 token 在真机上出得来、深浅色跟着系统走。
- * 真正的界面（会话列表 / 聊天 / 设置）在这一层之下展开。
- */
-export default function App() {
-  const scheme = useColorScheme();
-  const isDark = scheme !== 'light';
-  const t = themes[isDark ? 'dark' : 'light'];
+/** 一条常驻的提示（连不上、令牌失效、服务端的拒绝原因） */
+function NoticeBar({ text }: { text: string }) {
+  const { tokens: t } = useTheme();
+  return (
+    <View style={[styles.notice, { backgroundColor: t.redWash, borderBottomColor: t.border }]}>
+      <View style={[styles.noticeDot, { backgroundColor: t.red }]} />
+      <Text style={{ color: t.red, fontSize: 12, flex: 1 }}>{text}</Text>
+    </View>
+  );
+}
+
+function Shell() {
+  const { tokens: t, isDark } = useTheme();
+  const m = useMobile();
+  const [showSettings, setShowSettings] = useState(false);
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]}>
+    <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top', 'bottom']}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
-      <View style={[styles.header, { backgroundColor: t.bgTop, borderBottomColor: t.border }]}>
-        <Text style={[styles.title, { color: t.title }]}>会话</Text>
-        <View style={[styles.accentDot, { backgroundColor: t.accent }]} />
-      </View>
 
-      <View style={styles.body}>
-        <Text style={[styles.hint, { color: t.faint }]}>还没有配对电脑</Text>
-        <Text style={[styles.sub, { color: t.dim }]}>
-          {isDark ? '深色' : '浅色'} · 配色取自桌面那份 token
-        </Text>
-      </View>
+      {!m.ready ? null : !m.pairing ? (
+        <Pairing onPaired={m.pair} />
+      ) : showSettings ? (
+        <Settings
+          pairing={m.pairing}
+          conn={m.conn}
+          onBack={() => setShowSettings(false)}
+          onUnpair={() => {
+            setShowSettings(false);
+            void m.unpair();
+          }}
+        />
+      ) : m.openId && m.chat.snapshot ? (
+        <>
+          {m.error ? <NoticeBar text={m.error} /> : null}
+          <Chat
+            snapshot={m.chat.snapshot}
+            live={m.chat.live}
+            onBack={m.close}
+            onDecide={(toolId, allow) => void m.decide(toolId, allow ? 'allow_once' : 'deny')}
+            onAnswer={(_toolId, text) => {
+              // 答案的形状沿用桌面：键是问题原文
+              const q = m.chat.snapshot?.asks[0];
+              if (q && q.kind === 'question') {
+                void m.answer(text ? { [q.questions[0].question]: text } : {});
+              }
+            }}
+            onOpenInfo={() => {}}
+            onOpenModels={() => {}}
+            onOpenFile={() => {}}
+            onSend={m.send}
+            onStop={() => m.send('', 'interrupt')}
+          />
+        </>
+      ) : (
+        <>
+          {m.error ? <NoticeBar text={m.error} /> : null}
+          <SessionList
+            sessions={m.sessions}
+            currentId={m.openId}
+            conn={m.conn}
+            onOpen={(id) => void m.open(id)}
+            onSettings={() => setShowSettings(true)}
+            onRefresh={() => void m.refresh()}
+          />
+        </>
+      )}
     </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <Shell />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  header: {
+  notice: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    gap: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  title: { fontSize: 22, fontWeight: '600' },
-  accentDot: { width: 8, height: 8, borderRadius: 4 },
-  body: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
-  hint: { fontSize: 16 },
-  sub: { fontSize: 13 },
+  noticeDot: { width: 7, height: 7, borderRadius: 3.5 },
 });

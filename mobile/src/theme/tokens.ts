@@ -11,6 +11,8 @@
 export interface ThemeTokens {
   bg: string;
   bgTop: string;
+  /** 会话列表那一栏的底色（比主背景略深/略暖一档） */
+  sid: string;
   panel: string;
   panel2: string;
   raise: string;
@@ -56,6 +58,7 @@ export interface ThemeTokens {
 export const dark: ThemeTokens = {
   bg: '#252a35',
   bgTop: '#292e3a',
+  sid: '#212630',
   panel: '#303541',
   panel2: '#343944',
   raise: '#2b303b',
@@ -99,6 +102,7 @@ export const dark: ThemeTokens = {
 export const light: ThemeTokens = {
   bg: '#f7f4ee',
   bgTop: '#fdfbf7',
+  sid: '#f3efe7',
   panel: '#fffefa',
   panel2: '#f2ede5',
   raise: '#fdfbf7',

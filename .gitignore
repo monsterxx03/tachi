@@ -5,6 +5,8 @@
 /tachi
 /tachi-linux-amd64
 /tachi-linux-arm64
+# go build 不带 -o 时把二进制写到当前目录 —— 在仓库根跑就会留下这个
+/mockapi
 .DS_Store
 
 # ginkgo -p compiles test binaries into the package dir (itest/run/run.test);

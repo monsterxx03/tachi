@@ -1,0 +1,194 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// 这几个测试钉的是**协议**（docs/agents/mobile-protocol.md），不是这个假实现。
+// 桌面端实现那份接口时，这些断言同样该成立。
+
+func newTestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(New("test-token").Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func get(t *testing.T, ts *httptest.Server, path, token string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
+}
+
+func TestPingDoesNotNeedToken(t *testing.T) {
+	ts := newTestServer(t)
+	// 配对页就是拿这个端点验证地址与令牌的，所以它自己不能先要令牌
+	if got := get(t, ts, "/v1/ping", "").StatusCode; got != http.StatusOK {
+		t.Fatalf("ping 应当不要令牌，得到 %d", got)
+	}
+}
+
+func TestEverythingElseNeedsToken(t *testing.T) {
+	ts := newTestServer(t)
+	for _, path := range []string{"/v1/sessions", "/v1/providers", "/v1/sessions/s1/page"} {
+		if got := get(t, ts, path, "").StatusCode; got != http.StatusUnauthorized {
+			t.Errorf("%s 缺令牌应当是 401，得到 %d", path, got)
+		}
+		if got := get(t, ts, path, "wrong-token").StatusCode; got != http.StatusUnauthorized {
+			t.Errorf("%s 错令牌应当是 401，得到 %d", path, got)
+		}
+		if got := get(t, ts, path, "test-token").StatusCode; got != http.StatusOK {
+			t.Errorf("%s 带对令牌应当是 200，得到 %d", path, got)
+		}
+	}
+}
+
+func TestNoSessionForUnknownID(t *testing.T) {
+	ts := newTestServer(t)
+	// 会话不存在给 404 + no_session，手机据此说「这段对话已经不在了」
+	resp := get(t, ts, "/v1/sessions/nope/page", "test-token")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("未知会话应当 404，得到 %d", resp.StatusCode)
+	}
+	var body map[string]string
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body["error"] != "no_session" {
+		t.Fatalf("错误码应当是 no_session，得到 %q", body["error"])
+	}
+}
+
+func dialWS(t *testing.T, ts *httptest.Server, token string) *websocket.Conn {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/v1/ws?token=" + token
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func readEvent(t *testing.T, conn *websocket.Conn) Event {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev Event
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+func TestOpenSessionGetsSnapshot(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialWS(t, ts, "test-token")
+
+	if err := conn.WriteJSON(map[string]string{"type": "open", "sessionId": "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	ev := readEvent(t, conn)
+	if ev.Type != "snapshot" {
+		t.Fatalf("open 之后第一条应当是 snapshot，得到 %q", ev.Type)
+	}
+	if ev.Snapshot.Session.ID != "s1" {
+		t.Fatalf("快照应当是 s1，得到 %q", ev.Snapshot.Session.ID)
+	}
+	if len(ev.Snapshot.Messages) == 0 {
+		t.Fatal("快照要带历史")
+	}
+	if len(ev.Snapshot.Asks) == 0 {
+		t.Fatal("s1 有一张待答的权限卡，快照要带上")
+	}
+}
+
+func TestSendMessageStreamsAndEnds(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialWS(t, ts, "test-token")
+	if err := conn.WriteJSON(map[string]string{"type": "open", "sessionId": "s3"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := readEvent(t, conn); ev.Type != "snapshot" {
+		t.Fatalf("第一条应当是 snapshot，得到 %q", ev.Type)
+	}
+
+	body := strings.NewReader(`{"text":"帮我看一下这段代码","mode":"send"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/sessions/s3/messages", body)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("发消息应当受理，得到 %d", resp.StatusCode)
+	}
+
+	// 事件流：回声 → 若干 text → 最后 idle（手机据此重读快照）
+	var sawEcho, sawText, sawIdle bool
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) && !sawIdle {
+		ev := readEvent(t, conn)
+		switch ev.Type {
+		case "user_message":
+			if ev.Origin != "mobile" {
+				t.Errorf("手机自己发的消息 origin 应当是 mobile，得到 %q", ev.Origin)
+			}
+			sawEcho = true
+		case "text":
+			sawText = true
+		case "idle":
+			sawIdle = true
+		}
+	}
+	if !sawEcho {
+		t.Error("应当收到自己那条消息的回声")
+	}
+	if !sawText {
+		t.Error("应当收到增量文字")
+	}
+	if !sawIdle {
+		t.Error("一轮结束应当以 idle 收尾")
+	}
+}
+
+func TestPageCursorIsIndexNotTime(t *testing.T) {
+	ts := newTestServer(t)
+	// before 是「记录序号」，返回严格小于它的那些：同一时刻的多条也不会漏
+	resp := get(t, ts, "/v1/sessions/s1/page?before=3&limit=10", "test-token")
+	var body struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range body.Messages {
+		if m.Index >= 3 {
+			t.Fatalf("before=3 不该返回 index=%d", m.Index)
+		}
+	}
+	if len(body.Messages) == 0 {
+		t.Fatal("应当返回 0..2 这三条")
+	}
+}
