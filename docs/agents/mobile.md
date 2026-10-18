@@ -42,6 +42,10 @@ SDK 里放什么，分两类：
 
 启动模拟器：`"$ANDROID_HOME/emulator/emulator" -avd tachi-phone &`，冷启动要一两分钟，等 `adb devices` 里出现 `device`、`adb shell getprop sys.boot_completed` 回 `1`。
 
+**Maestro**（跑端到端流程用）不是包管理器装的：把官方的 `maestro.zip` 解到 `~/.local/maestro` 就有可执行的 `bin/maestro`（它只是几个 jar 加一个脚本；跑的时候 `JAVA_HOME` 要指向 17）。
+
+**Gradle 的镜像**（可选）：想要阿里云那套就 `cp mobile/scripts/gradle-init.gradle ~/.gradle/init.gradle`——它必须放在仓库外，因为 `android/` 是生成物。网络能直通海外的话不配也行。
+
 ## 国内镜像
 
 | 什么 | 走哪 | 配在哪 |
@@ -51,14 +55,14 @@ SDK 里放什么，分两类：
 | Gradle 发行版（wrapper 拉的 zip） | 腾讯 `mirrors.cloud.tencent.com/gradle/` | `mobile/scripts/prepare-android.sh`（同上，每次 prebuild 后重跑） |
 | Android SDK 各组件 | 腾讯 `mirrors.cloud.tencent.com/AndroidSDK/` | 手动下 + 解压 |
 | JDK / Node 的 tar.gz | 清华（Adoptium / nodejs-release） | 手动下 |
-| GitHub（Maestro 之类） | clash 代理 `http://127.0.0.1:7890` | 命令里带 `-x` |
 
-**速度是量级差别，不是一点点**：同一个文件，镜像 13 MB/s、代理 4 MB/s、直连 `dl.google.com` 0.4 MB/s。所以 SDK 组件宁可手动下——`sdkmanager` 走的还是 `dl.google.com`。
+**镜像不是必需品，是加速**：网络能直通海外就直连；国内镜像胜在稳和快（同一个文件，镜像 13 MB/s、直连 `dl.google.com` 0.4 MB/s），所以 SDK 组件宁可手动下——`sdkmanager` 走的还是 `dl.google.com`。
 
-- **系统代理会拖慢国内镜像。** 这台机器的 macOS 系统代理（clash）会被 Java 自动采用，连国内镜像也要绕一圈；`~/.gradle/gradle.properties` 里的 `systemProp.http.nonProxyHosts` 就是为此存在的（Java 只认 `http.nonProxyHosts` 这一个键，它同时管 HTTP 和 HTTPS）。
 - **Gradle 用的镜像一定要验 sha256**。腾讯镜像是 `dl.google.com/android/repository` 的投影，目录层级一致（系统镜像在 `sys-img/google_apis/` 下），文件名要从 `repository2-3.xml` / `sys-img*/sys-img2-3.xml` 里取；**每个包在索引里有 Linux / macOS / Windows 好几份 zip，取第一个会拿到 Linux 的**（按 `host-os=macosx`、`host-arch=aarch64` 过滤）。下载完拿索引里的 sha1 核对一遍，包对不上会以完全无关的方式炸。
 - **压缩包内的目录名 ≠ 安装目录名**：platform 包里是 `android-36/`、build-tools 包里是 `android-16/`（Android 16 = API 36），要分别落成 `platforms/android-36/`、`build-tools/36.0.0/`。
-- Gradle 发行版的缓存目录名是 **distributionUrl 的 MD5 的 base36**。想跳过 wrapper 自己下载（它在代理下只有 0.2 MB/s），算好这个名字把 zip 直接放进去即可，`/tmp` 下那条命令就是这么做的。
+- Gradle 发行版的缓存目录名是 **distributionUrl 的 MD5 的 base36**。想跳过 wrapper 自己下载（速度差一个量级），算好这个名字把 zip 直接放进去即可。
+- **这台机器上另有一份 `~/.gradle/init.gradle`**（仓库里的模板是 `mobile/scripts/gradle-init.gradle`）：它把官方仓库换成阿里云镜像。新机器上不是必需的，想要镜像就 `cp mobile/scripts/gradle-init.gradle ~/.gradle/init.gradle`。
+- 如果机器开着**系统代理**，Java 会自动采用它 —— 那时访问国内镜像也被绕一圈，时间反而更慢。要绕开就在 `~/.gradle/gradle.properties` 里给这些域名配 `systemProp.http.nonProxyHosts`（Java 只认这一个键，它同时管 HTTP 和 HTTPS）。
 
 ## 构建与运行
 

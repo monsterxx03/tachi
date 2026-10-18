@@ -1,0 +1,54 @@
+// Gradle 的依赖走国内镜像。**放到 ~/.gradle/init.gradle**（不是仓库里——android/ 是
+// prebuild 生成的，写在里面会被冲掉；放在这里的模板是为了新机器上能直接抄过去）。
+//
+// 官方仓库被换掉、而不是简单追加：Gradle 按声明顺序试仓库，官方那几个排前面就等于
+// 永远先走慢的那个。官方的留在最后兜底（阿里云缺包时还有得退）。
+def mirrorPublic = { repos ->
+    repos.maven { url 'https://maven.aliyun.com/repository/public'; allowInsecureProtocol = false }
+}
+def mirrorGoogle = { repos ->
+    repos.maven { url 'https://maven.aliyun.com/repository/google'; allowInsecureProtocol = false }
+}
+def mirrorGradlePlugin = { repos ->
+    repos.maven { url 'https://maven.aliyun.com/repository/gradle-plugin'; allowInsecureProtocol = false }
+}
+def dropOfficial = { repos ->
+    def dead = []
+    repos.each { r ->
+        if (r instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository) {
+            def u = r.url.toString()
+            if (u.startsWith('https://repo1.maven.org/maven2') ||
+                u.startsWith('https://repo.maven.apache.org/maven2') ||
+                u.startsWith('https://dl.google.com/dl/android/maven2') ||
+                u.startsWith('https://jcenter.bintray.com') ||
+                u.startsWith('https://plugins.gradle.org/m2')) {
+                dead << r
+            }
+        }
+    }
+    dead.each { repos.remove(it) }
+}
+
+settingsEvaluated { settings ->
+    settings.pluginManagement.repositories { repos ->
+        dropOfficial(repos)
+        mirrorGradlePlugin(repos)
+        mirrorPublic(repos)
+        mirrorGoogle(repos)
+        gradlePluginPortal()
+    }
+}
+
+allprojects { p ->
+    p.buildscript.repositories { repos ->
+        dropOfficial(repos)
+        mirrorPublic(repos)
+        mirrorGoogle(repos)
+    }
+    p.repositories { repos ->
+        dropOfficial(repos)
+        mirrorGoogle(repos)
+        mirrorPublic(repos)
+        mavenCentral()
+    }
+}

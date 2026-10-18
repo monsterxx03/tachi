@@ -1,12 +1,29 @@
 # Tachi 移动端设计（Android 优先，V1）
 
-> 版本: 0.2 | 日期: 2026-10-18 | 状态: **设计已定值（未实现）**
+> 版本: 0.3 | 日期: 2026-10-18 | 状态: **设计已定值；手机端界面与假服务端已就绪，桌面那半边尚未实现**
 > 关联: [desktop.md](./agents/desktop.md)（桌面后端、另一块前端、待答表）、
 >       [badge.md](./agents/badge.md)（设备链路：同一张待答表的第二个读者）、
 >       [channel.md](./agents/channel.md)（为什么**不**做成 channel）、
 >       `desktop/asks.go`、`desktop/permission.go`、`desktop/askuser.go`、
 >       `desktop/agent_turn.go`、`desktop/agent_session.go`、`session/session.go`
 > 原型: [2026-10-18-mobile-prototype.html](./2026-10-18-mobile-prototype.html)（单文件假数据；手机 / 平板 / 白天 / 黑夜都能切）
+
+---
+
+## 进度（收工时的状态）
+
+**已就绪**——`mobile/` 能单独跑起来，怎么装环境、怎么构建、怎么验都在 [agents/mobile.md](./agents/mobile.md)：
+
+- 配对（扫二维码 / 手输）、会话列表、聊天、设置；平板两栏、白天黑夜两套配色。
+- 权限卡、提问卡、工具卡、附件（文本阅读器 + 图片）、Mermaid（随包离线渲染）、会话信息（上下文分项 / 工作区 / 模型切换 / 跳过审批 / 用量）。
+- 事件流客户端：投影归并、自动重连、心跳、回到前台重读；手机端单测与 Maestro 端到端都通过。
+- **假服务端** `mobile/mockapi/`：说真协议、喂假数据。协议在 [agents/mobile-protocol.md](./agents/mobile-protocol.md)，手机端不依赖桌面进程就能把整条流程跑完。
+
+**没动**（下一步从这开始）：
+
+- `desktop/` 那半边：`mobile` 配置块与令牌文件、HTTP + WebSocket 服务、`loadSessionForRemote`、按会话寻址的 `SwitchProvider` / `GetSkipApproval` / `SetSkipApproval`、`agent:user_message`（给 `startTurn` / `Steer` 加 `origin`）。
+- 设置页那张配对卡片（二维码 + 令牌 + 重新生成）。
+- 桌面和手机还没有一起跑过一次 —— 现在验证的是"手机 + mock 服务"这条线。
 
 ---
 
