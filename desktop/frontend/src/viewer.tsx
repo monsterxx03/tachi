@@ -263,13 +263,45 @@ export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stage
     }
   }, [onClose])
 
+  // isBlankClick decides whether a click landed on the overlay's own FRAMING rather than on the
+  // document's content. Three surfaces count as framing:
+  //   • the overlay itself (the backdrop's padding ring) and the stage (the gutter beside a
+  //     centred document) — those two already closed before this existed;
+  //   • the document's own paper (`.viewer-doc` / `.viewer-zoom-paper`), which is what a reader
+  //     actually clicks when they "click the empty space" of a short file: the paper is shorter
+  //     than the stage, so the area below the last paragraph belongs to the paper element itself.
+  //
+  // A click on a paragraph, a table cell, a code line or a link is NOT blank — it is reading, and
+  // starting a selection there must not dismiss anything.
+  //
+  // Two exclusions, each for its own reason:
+  //   • the diff pane (`.viewer-doc.is-diff`) fills the window and is a working surface with its
+  //     own file list — one stray click in its empty column should not throw the pane away;
+  //   • while a selection exists inside the stage, the click that ends a drag-selection is a
+  //     selection, not a dismissal (the select-text menu is opening on that same gesture).
+  const isBlankClick = (e: React.MouseEvent): boolean => {
+    const el = e.target as HTMLElement
+    if (el === e.currentTarget) return true
+    const frame = el.closest?.('.viewer-doc, .viewer-zoom-paper')
+    if (!frame || !stage.current?.contains(frame)) return false
+    if (frame.classList.contains('is-diff')) return false
+    // Only the frame element ITSELF is blank; a child of it is content.
+    if (el !== frame) return false
+    const sel = window.getSelection()
+    if (sel && !sel.isCollapsed && sel.toString().trim() !== '') {
+      const node = sel.anchorNode
+      if (node && stage.current?.contains(node)) return false
+    }
+    return true
+  }
+
   return createPortal(
     <div className={`viewer-overlay${overlayClass ? ' ' + overlayClass : ''}`} onClick={onClose} role="dialog" aria-modal="true" aria-label={label}>
       <div ref={stage} className={`viewer-stage${stageClass ? ' ' + stageClass : ''}`}
         {...stageProps}
         onClick={(e) => {
           if (dragged.current) { e.stopPropagation(); return }
-          if (e.target === e.currentTarget) { onClose(); return }
+          if (isBlankClick(e)) { onClose(); return }
           e.stopPropagation()
         }}>
         {children}

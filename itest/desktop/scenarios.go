@@ -2245,6 +2245,28 @@ func scenarios() []scenario {
 				c.check("读者写的问题也在里面", strings.Contains(ask, previewAskQuestion), strutil.Truncate(ask, 200))
 			},
 		},
+		// Where a preview overlay closes on a click: the backdrop's own ring, the gutter beside a
+		// narrow document, and the paper inside it. The last one is the interesting one — it is the
+		// largest "empty" area a reader sees while reading a short file, and it is the one a
+		// stopPropagation-style guard tends to swallow.
+		//
+		// The driver reports the element under each point BEFORE asserting (elementFromPoint, then a
+		// real click at it): a synthetic el.click() has no hit testing, so it would prove nothing
+		// about where a reader can actually click.
+		{
+			name: "preview-dismiss",
+			files: map[string]string{
+				"PREVIEW.md": "# smoke\n\n" + previewAskLine + "\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: sendFileStream("PREVIEW.md", "call_dismiss")},
+				{Reply: textStream("已经发给你了。", 700)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两次调用（送文件 + 开场）", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
 		// Switching away from a RUNNING session and back: the restored view must land at the
 		// newest message and stay there while the stream keeps writing. The driver measures the
 		// gap to the bottom on every frame across the switch, so the reported "先向上飘再跳到底"
