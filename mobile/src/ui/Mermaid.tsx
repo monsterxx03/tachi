@@ -1,5 +1,7 @@
-import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Asset } from 'expo-asset';
+import { File } from 'expo-file-system';
+import { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -10,22 +12,47 @@ import { useTheme } from '../theme/ThemeContext';
  * 和桌面的 markdown / HTML 沙箱同一条规矩：模型写的 HTML/SVG 永远不当页面内容插进去。
  * 用 strict 模式，图里内联的脚本与交互都关掉。
  *
- * 待办：正式实现要把 mermaid 随 App 离线打包（现在是从 npm 镜像取，第一次要联网）。
+ * mermaid 本身随 App 打包（`assets/mermaid.min.txt`），不在线取：手机上是离线可用的，
+ * 第一次画图不该卡在网络上。
  */
-const MERMAID_URL = 'https://registry.npmmirror.com/mermaid/12.2.0/files/dist/mermaid.min.js';
+let cachedJS: string | null = null;
+
+async function loadMermaidJS(): Promise<string> {
+  if (cachedJS) return cachedJS;
+  const asset = Asset.fromModule(require('../../assets/mermaid.min.txt'));
+  if (!asset.localUri) await asset.downloadAsync();
+  cachedJS = await new File(asset.localUri ?? asset.uri).text();
+  return cachedJS;
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export function Mermaid({ source, height = 260 }: { source: string; height?: number }) {
-  const { tokens: t, isDark } = useTheme();
+  const { tokens: t } = useTheme();
+  const [js, setJs] = useState<string | null>(cachedJS);
+
+  useEffect(() => {
+    if (js) return;
+    let alive = true;
+    void loadMermaidJS()
+      .then((s) => {
+        if (alive) setJs(s);
+      })
+      .catch(() => {
+        // 读不出来就停在占位上，别把整条消息拖垮
+      });
+    return () => {
+      alive = false;
+    };
+  }, [js]);
 
   const html = useMemo(() => {
+    if (!js) return null;
     return `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<script src="${MERMAID_URL}"></script>
 <style>
   html,body{margin:0;padding:0;background:transparent}
   .wrap{display:flex;align-items:center;justify-content:center;min-height:${height - 16}px;padding:8px}
@@ -33,6 +60,7 @@ export function Mermaid({ source, height = 260 }: { source: string; height?: num
 </style></head>
 <body>
 <div class="wrap"><pre class="mermaid">${escapeHtml(source)}</pre></div>
+<script>${js}</script>
 <script>
   mermaid.initialize({
     startOnLoad: true,
@@ -53,20 +81,27 @@ export function Mermaid({ source, height = 260 }: { source: string; height?: num
   });
 </script>
 </body></html>`;
-  }, [source, height, t]);
+  }, [js, source, height, t]);
 
   return (
     <View style={[styles.box, { borderColor: t.border, backgroundColor: t.panel }]}>
-      <WebView
-        originWhitelist={['*']}
-        source={{ html }}
-        style={{ height, backgroundColor: 'transparent' }}
-        scrollEnabled={false}
-      />
+      {html ? (
+        <WebView
+          originWhitelist={['*']}
+          source={{ html }}
+          style={{ height, backgroundColor: 'transparent' }}
+          scrollEnabled={false}
+        />
+      ) : (
+        <View style={[styles.placeholder, { height }]}>
+          <Text style={{ color: t.faint, fontSize: 12 }}>正在准备图的渲染器…</Text>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   box: { borderWidth: 1, borderRadius: 12, marginVertical: 10, overflow: 'hidden' },
+  placeholder: { alignItems: 'center', justifyContent: 'center' },
 });

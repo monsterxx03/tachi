@@ -271,6 +271,23 @@ function FileCard({
   );
 }
 
+/** 思考：默认折叠（它很长，而且多半不是你要找的那句） */
+function Thinking({ text }: { text: string }) {
+  const { tokens: t } = useTheme();
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={[styles.think, { borderLeftColor: t.borderStrong }]}>
+      <Pressable onPress={() => setOpen((v) => !v)} style={styles.thinkHead}>
+        <Feather name={open ? 'chevron-down' : 'chevron-right'} size={12} color={t.faint} />
+        <Text style={{ color: t.faint, fontSize: 12 }}>思考</Text>
+      </Pressable>
+      {open ? (
+        <Text style={{ color: t.faint, fontSize: 12.5, lineHeight: 19, marginTop: 4 }}>{text}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 export function MessageView({
   msg,
   toolResult,
@@ -309,11 +326,7 @@ export function MessageView({
   if (msg.role === 'assistant') {
     return (
       <View>
-        {msg.thinking ? (
-          <View style={[styles.think, { borderLeftColor: t.borderStrong }]}>
-            <Text style={{ color: t.faint, fontSize: 12.5, lineHeight: 19 }}>{msg.thinking}</Text>
-          </View>
-        ) : null}
+        {msg.thinking ? <Thinking text={msg.thinking} /> : null}
         <AssistantText text={msg.content} />
       </View>
     );
@@ -351,6 +364,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   think: { borderLeftWidth: 2, paddingLeft: 10, marginVertical: 6, opacity: 0.9 },
+  thinkHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
 
   tool: { borderWidth: 1, borderRadius: 11, marginVertical: 7, overflow: 'hidden' },
   toolHead: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 10, paddingVertical: 9 },

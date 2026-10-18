@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AppState, BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { AttachmentRef } from './src/api/types';
 import { api } from './src/api/client';
@@ -118,6 +118,14 @@ function Shell() {
     });
     return () => sub.remove();
   }, [openFile, showInfo, showSettings, m]);
+
+  // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void m.reloadCurrent();
+    });
+    return () => sub.remove();
+  }, [m]);
 
   const list = (
     <SessionList
