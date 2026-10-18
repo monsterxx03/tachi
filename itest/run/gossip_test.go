@@ -139,7 +139,7 @@ var _ = ginkgo.Describe("gossip 转述", func() {
 		ginkgo.DeferCleanup(func() { _ = handle.Close() })
 		aID := nodeIdentity(ginkgo.GinkgoT(), aHome).NodeID
 
-		cache := node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("itest-gossip"), nil)
+		cache := node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("itest-gossip"), nil, "")
 		ginkgo.DeferCleanup(cache.Close)
 		sender := cache.ForSender(ctx, cfg.Peers)
 		gomega.Expect(sender).NotTo(gomega.BeNil(), "gossip 开着就是发送侧")

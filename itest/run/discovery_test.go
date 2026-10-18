@@ -113,8 +113,10 @@ var _ = ginkgo.Describe("discovery", func() {
 
 		// No onSighting hook: this spec reads DirectoryRows itself, so a sighting has nowhere it
 		// needs pushing — the three entry points without a live view pass nil for the same reason.
+		// No session root either: this caller has no conversations, so a file a peer sent back would
+		// go to the spill directory (the branch storeFile takes for a caller with no session).
 		cache := node.NewDelegatorCache("tachi@discovery-caller", node.Discovery{Enabled: true},
-			logger.New("itest-discovery"), nil)
+			logger.New("itest-discovery"), nil, "")
 		ginkgo.DeferCleanup(cache.Close)
 		sender := cache.ForSender(ctx, nil)
 		gomega.Expect(sender).NotTo(gomega.BeNil(),
