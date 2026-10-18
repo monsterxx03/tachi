@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,6 +32,33 @@ func TestTurnDoneBody(t *testing.T) {
 				t.Errorf("turnDoneBody(%d, %s) = %q, want %q", tt.iterations, tt.took, got, tt.want)
 			}
 		})
+	}
+}
+
+// 一轮以错误收场时的正文。它带原因（别的文案都不带），而原因取的是**最内层**那句：包装层只
+// 说「是哪一层发现的」，只有链条末端说「到底怎么坏的」。这条测试同时也钉住「正文只有一行」
+// ——错误文本来自另一台机器，可能带换行。
+func TestTurnFailedBody(t *testing.T) {
+	// 真实的到达形状：agent 循环的包装 + 流消费器的包装 + 传输层那句话。
+	wrapped := fmt.Errorf("API call failed: %w",
+		fmt.Errorf("stream error (iteration %d): %w", 163, errors.New("local error: tls: bad record MAC")))
+	if got, want := turnFailedBody(wrapped), "回合出错 · local error: tls: bad record MAC"; got != want {
+		t.Errorf("turnFailedBody(wrapped) = %q, want %q", got, want)
+	}
+
+	// 没有原因可说（事件里没带 error）时说事实本身，不印一个空的「·」。
+	if got, want := turnFailedBody(nil), notifyTurnFailed; got != want {
+		t.Errorf("turnFailedBody(nil) = %q, want %q", got, want)
+	}
+
+	// 没有包装层时它就是它自己，而换行与控制字符不进这一行。
+	if got, want := turnFailedBody(errors.New("boom\nsecond line")), "回合出错 · boomsecond line"; got != want {
+		t.Errorf("turnFailedBody(multiline) = %q, want %q", got, want)
+	}
+
+	long := turnFailedBody(errors.New(strings.Repeat("x", notifyFailureReasonMaxRune*2)))
+	if runes := len([]rune(long)); runes > len([]rune(notifyTurnFailed))+3+notifyFailureReasonMaxRune {
+		t.Errorf("turnFailedBody(long) = %d runes, want the reason bounded to %d", runes, notifyFailureReasonMaxRune)
 	}
 }
 

@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -33,6 +34,8 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Notification copy is fixed rather than configurable, and deliberately terse:
@@ -51,7 +54,11 @@ const (
 	notifyAskWaiting  = waitingQuestion
 	notifyPermTitle   = "Tachi 等待你的授权"
 	notifyPermWaiting = waitingPermission
-	notifyTurnDone    = "回合完成"
+	// A finished turn and a failed one are two different sentences: in the second case what
+	// the reader is being told is that the reply they were waiting for is NOT coming. (A stop
+	// they asked for is neither — see notifyTurnFailed.)
+	notifyTurnDone   = "回合完成"
+	notifyTurnFailed = "回合出错"
 	// A side-channel run is announced by WHAT it was, not as 回合完成: it never had a turn on
 	// screen, so the name is the part the reader does not already know.
 	notifyReviewName = "评审"
@@ -64,6 +71,11 @@ const (
 	// the head of the command is what identifies it, and an untruncated pipeline
 	// would push the rest of the notification out of view.
 	notifyPermBodyMaxRune = 80
+	// notifyFailureReasonMaxRune bounds the error text carried by a failed turn's body. The
+	// head of the chain is what names the failure ("local error: tls: bad record MAC"), and
+	// an untruncated one — a provider's JSON blob, a stack of wrappers — would push the rest
+	// of the notification out of view.
+	notifyFailureReasonMaxRune = 80
 )
 
 // watching reports whether the user is looking at this conversation right now: the window
@@ -323,6 +335,50 @@ func (n *notifier) subtitleFor(sessionID string) string {
 // took — no excerpt of the reply (see the copy comment above).
 func (n *notifier) notifyTurnDone(sessionID string, iterations int, took time.Duration) {
 	n.notify(sessionID, notifyAppTitle, turnDoneBody(iterations, took))
+}
+
+// notifyTurnFailed reports a turn that ended in an error: a stream that died mid-turn (a
+// timeout, a dropped connection), a request the provider rejected, an iteration budget that
+// ran out. The reader is looking elsewhere and the reply is NOT coming, so the ping is the
+// whole message — and unlike the other bodies this one carries the reason, because "what
+// went wrong" is the part they would otherwise have to come back for.
+//
+// A stop the user asked for is NOT a failure (the caller excludes it): that is the same
+// normal conclusion it is for every other frontend, and pinging about it is noise.
+func (n *notifier) notifyTurnFailed(sessionID string, err error) {
+	n.notify(sessionID, notifyAppTitle, turnFailedBody(err))
+}
+
+// turnFailedBody is the one-line body for a failed turn.
+func turnFailedBody(err error) string {
+	reason := failureReason(err)
+	if reason == "" {
+		return notifyTurnFailed
+	}
+	return notifyTurnFailed + " · " + reason
+}
+
+// failureReason is the INNERMOST error's message, made safe to put on one line.
+//
+// The innermost, because the wrapping layers only say which layer noticed while the end of
+// the chain is the only part that says what actually went wrong: the loop's error arrives as
+// 「API call failed: stream error (iteration 163): local error: tls: bad record MAC」, and of
+// those three sentences only the last tells the reader anything the notification does not.
+//
+// OneLine rather than Truncate, for the reason that helper exists: an error message coming
+// back from a provider is text from another machine, so it can hold newlines and escapes —
+// and this text is going on a single notification line.
+func failureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	for {
+		inner := errors.Unwrap(err)
+		if inner == nil {
+			return strutil.OneLine(err.Error(), notifyFailureReasonMaxRune)
+		}
+		err = inner
+	}
 }
 
 // notifyAsk reports a turn parked on a question. The question text stays in the

@@ -709,8 +709,10 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 	case agent.AgentEventError:
 		d.tpsReset(id)
 		detail := "见日志"
+		var turnErr error
 		if ev.Result != nil && ev.Result.Error != nil {
-			detail = ev.Result.Error.Error()
+			turnErr = ev.Result.Error
+			detail = turnErr.Error()
 		}
 		// User-initiated stop is a normal conclusion, NOT an error — same
 		// semantics as tui (Ctrl+C), acp (prompt cancel) and channel (/stop).
@@ -745,6 +747,16 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// were waiting for did not arrive.
 		if lane == laneCron && !interrupted && cronName != "" {
 			d.notify.notifyCronFailed(id, cronName)
+		}
+		// A conversation turn that ended in an error is the other moment worth interrupting
+		// for: the reply the reader is waiting for is NOT coming, and the ⚠ line saying so is
+		// on a screen they are not looking at. The reason rides along — see notifyTurnFailed.
+		//
+		// The other two lanes are excluded on purpose. A stop the user asked for is a normal
+		// conclusion (see `interrupted` above), and a side-channel run raises its own
+		// notification where its outcome is known (emitOneOff), which names the run.
+		if lane == laneTranscript && !interrupted {
+			d.notify.notifyTurnFailed(id, turnErr)
 		}
 		// A conversation turn concludes its newest assistant bubble; an one-off run has no
 		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
