@@ -3,7 +3,7 @@
 //   swift build/make-appicon.swift            # 默认读 build/appicon-source.jpg
 //
 // 输出两个文件（都必须提交）：
-//   build/appicon.png                     ← wails3 generate icons 的输入（→ icons.icns / icon.ico）
+//   build/appicon.png                     ← wails3 generate icons 的输入（→ darwin/icons.icns）
 //   build/appicon.icon/Assets/tachi_art.png ← Icon Composer 源（macOS 26 的 Liquid Glass 图标，
 //                                             需要 Xcode 的 icontool 才会编译进 Assets.car）
 //

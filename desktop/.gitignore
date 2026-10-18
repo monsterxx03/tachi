@@ -3,12 +3,6 @@ bin
 frontend/dist
 frontend/node_modules
 build/linux/appimage/build
-build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
-# Mobile generated (per-machine; overlays hold absolute paths)
-build/ios/xcode/overlay.json
-build/ios/xcode/gen/
-build/android/overlay.json
-build/android/gen/
 # Generated bindings (wails3 generate bindings) — e.g. Go stdlib `time`
 frontend/bindings/time
 # STT 垫片的编译产物（stt/build_shim.sh 生），和 bin/ 同类：改了 shim.swift 就重编。

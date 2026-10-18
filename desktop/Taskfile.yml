@@ -19,18 +19,21 @@ vars:
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
-  # Target OS for build/package/run. Defaults to the host OS, and is overridden
-  # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
-  # tasks below dispatch to the matching platform Taskfile via this variable.
+  # Target OS for build/package/run; it picks which platform Taskfile the tasks below dispatch to.
+  # Defaults to the host OS, and that is the only value that works: there are exactly two targets
+  # — darwin and linux — and each one is built NATIVELY (macOS needs the macOS SDK and codesign,
+  # Linux needs cgo + gtk/webkit headers), so there is no cross-compile fallback left to switch to.
   GOOS: '{{.GOOS | default OS}}'
 
+# Only the two platforms this project ships are included. The other scaffolds the wails template
+# generates (windows/, ios/, android/) used to be here, along with a docker cross-compilation path
+# (`setup:docker`, and each platform's `build:docker` branch) — all removed on purpose, see
+# docs/agents/desktop.md ("桌面构建与签名"). Note `wails3 update build-assets` would put every one
+# of them back.
 includes:
   common: ./build/Taskfile.yml
-  windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
-  ios: ./build/ios/Taskfile.yml
-  android: ./build/android/Taskfile.yml
 
 tasks:
   build:
@@ -53,10 +56,8 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
-  setup:docker:
-    summary: Builds Docker image for cross-compilation (~800MB download)
-    cmds:
-      - task: common:setup:docker
+  # NB: the `build:docker` / `run:docker` below are SERVER mode (build/docker/Dockerfile.server —
+  # an HTTP-only image) and have nothing to do with cross-compiling the desktop app.
 
   build:server:
     summary: Builds the application in server mode (no GUI, HTTP server only)
