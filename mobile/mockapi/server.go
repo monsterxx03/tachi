@@ -171,12 +171,18 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, ok := fileBodies[id]
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_such_file"})
+	if ok {
+		w.Header().Set("Content-Type", found.MimeType)
+		_, _ = w.Write([]byte(body))
 		return
 	}
-	w.Header().Set("Content-Type", found.MimeType)
-	_, _ = w.Write([]byte(body))
+	if strings.HasPrefix(found.MimeType, "image/") {
+		// 图片现画一张：手机端那条「缩略图铺在气泡里」的路需要真的像素
+		w.Header().Set("Content-Type", found.MimeType)
+		_, _ = w.Write(chartPNG())
+		return
+	}
+	fail(w, http.StatusNotFound, "no_such_file")
 }
 
 type messageReq struct {

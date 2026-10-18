@@ -1,7 +1,8 @@
 import { Feather } from '@expo/vector-icons';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import type { PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
+import type { FileSource } from '../api/client';
+import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
 import type { Live } from '../state/mobile';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
@@ -86,7 +87,7 @@ function Composer({
   return (
     <View style={[styles.composer, { borderTopColor: t.border, backgroundColor: t.composerBg }]}>
       {running ? (
-        <View style={styles.runHint}>
+        <View style={[styles.runHint, styles.column]}>
           <View style={[styles.runDot, { backgroundColor: t.amber }]} />
           <Text style={{ color: t.faint, fontSize: 11.5 }} numberOfLines={1}>
             {short ? `停在这里${short}` : '正在跑，可以插话'}
@@ -97,7 +98,7 @@ function Composer({
           </Pressable>
         </View>
       ) : null}
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, styles.column]}>
         <View style={[styles.inputWrap, { backgroundColor: t.inputBg, borderColor: t.border }]}>
           <TextInput
             value={text}
@@ -182,6 +183,7 @@ function buildItems(snapshot: Snapshot, live: Live): Item[] {
 export function Chat({
   snapshot,
   live,
+  fileSource,
   onBack,
   onDecide,
   onAnswer,
@@ -193,6 +195,7 @@ export function Chat({
 }: {
   snapshot: Snapshot;
   live: Live;
+  fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
   onDecide: (toolId: string, allow: boolean) => void;
   onAnswer: (toolId: string, text: string) => void;
@@ -229,7 +232,7 @@ export function Chat({
       <FlatList
         data={items}
         keyExtractor={(it) => it.key}
-        contentContainerStyle={styles.messages}
+        contentContainerStyle={[styles.messages, styles.column]}
         renderItem={({ item }) =>
           item.kind === 'live' ? (
             <LiveBubble live={live} />
@@ -239,6 +242,7 @@ export function Chat({
               ask={item.ask}
               toolResult={item.result}
               attachments={snapshot.attachments}
+              fileSource={fileSource}
               onDecide={(allow) => item.ask && onDecide(item.ask.toolId, allow)}
               onAnswer={(text) => item.ask && onAnswer(item.ask.toolId, text)}
               onOpenFile={onOpenFile}
@@ -320,6 +324,8 @@ const styles = StyleSheet.create({
   iconBtn: { width: 26, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
 
   messages: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 },
+  // 平板那种宽屏下，一行别横跨整屏 —— 读一句话要来回甩头
+  column: { width: '100%', maxWidth: 760, alignSelf: 'center' },
   live: { paddingVertical: 4 },
   liveText: { fontSize: 15, lineHeight: 25 },
   think: { borderLeftWidth: 2, paddingLeft: 10, marginVertical: 6, opacity: 0.9 },

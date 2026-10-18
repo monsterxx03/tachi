@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import type { FileSource } from '../api/client';
 import type { AgentQuestion, AttachmentRef, PendingAsk, SessionMessage } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
 import { Mermaid } from './Mermaid';
@@ -207,8 +208,16 @@ function QuestionCard({ questions, onAnswer }: { questions: AgentQuestion[]; onA
   );
 }
 
-/** SendFile 交付过来的东西：图片铺在气泡里，文档是一张卡片 */
-function FileCard({ file, onOpen }: { file: AttachmentRef; onOpen: (id: string) => void }) {
+/** SendFile 交付过来的东西：图片直接把缩略图铺在气泡里，文档是一张卡片 */
+function FileCard({
+  file,
+  source,
+  onOpen,
+}: {
+  file: AttachmentRef;
+  source?: FileSource | null;
+  onOpen: (id: string) => void;
+}) {
   const { tokens: t } = useTheme();
   const isImage = file.mimeType.startsWith('image/');
   const sizeText = file.size > 1024 * 1024 ? `${(file.size / 1048576).toFixed(1)} MB` : `${Math.round(file.size / 1024)} KB`;
@@ -219,10 +228,17 @@ function FileCard({ file, onOpen }: { file: AttachmentRef; onOpen: (id: string) 
         onPress={() => onOpen(file.id)}
         style={[styles.imageCard, { borderColor: t.borderStrong, backgroundColor: t.panel }]}
       >
-        <View style={[styles.imagePh, { backgroundColor: t.wash }]}>
-          <Feather name="image" size={26} color={t.faint} />
-          <Text style={{ color: t.faint, fontSize: 11, marginTop: 6 }}>图片预览</Text>
-        </View>
+        {source ? (
+          <Image
+            source={{ uri: source.url, headers: source.headers }}
+            style={[styles.thumb, { backgroundColor: t.wash }]}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={[styles.imagePh, { backgroundColor: t.wash }]}>
+            <Feather name="image" size={26} color={t.faint} />
+          </View>
+        )}
         <View style={styles.fileMeta}>
           <Text style={{ color: t.text, fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
             {file.name}
@@ -260,6 +276,7 @@ export function MessageView({
   toolResult,
   ask,
   attachments,
+  fileSource,
   onDecide,
   onAnswer,
   onOpenFile,
@@ -268,6 +285,7 @@ export function MessageView({
   toolResult?: SessionMessage;
   ask?: PendingAsk;
   attachments: AttachmentRef[];
+  fileSource?: (a: AttachmentRef) => FileSource | null;
   onDecide: (allow: boolean) => void;
   onAnswer: (text: string) => void;
   onOpenFile: (id: string) => void;
@@ -303,7 +321,7 @@ export function MessageView({
 
   if (msg.role === 'tool_call') {
     const file = attachments.find((a) => a.id === msg.toolCallId);
-    if (file) return <FileCard file={file} onOpen={onOpenFile} />;
+    if (file) return <FileCard file={file} source={fileSource?.(file)} onOpen={onOpenFile} />;
     return <ToolCard msg={msg} result={toolResult} />;
   }
 
@@ -376,5 +394,6 @@ const styles = StyleSheet.create({
   fileIcon: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   fileMeta: { flex: 1, minWidth: 0 },
   imageCard: { borderWidth: 1, borderRadius: 12, overflow: 'hidden', marginVertical: 8, maxWidth: 320 },
+  thumb: { width: '100%', height: 170 },
   imagePh: { height: 130, alignItems: 'center', justifyContent: 'center' },
 });

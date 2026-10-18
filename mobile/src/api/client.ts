@@ -104,12 +104,25 @@ export const api = {
       body: JSON.stringify({ skip }),
     }),
 
-  /** 附件：只认交付记录里的 id，不接受路径 */
-  fileUrl: (c: Pairing, sessionId: string, a: AttachmentRef) =>
-    `${c.baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(a.id)}?token=${encodeURIComponent(c.token)}`,
+  /**
+   * 附件的下载地址与请求头。
+   *
+   * 令牌走**请求头**、不进 URL —— URL 会进日志和 WebView 的历史。图片用 Image 的
+   * headers 也能带上（RN 支持），文本就正常 fetch。
+   */
+  file: (c: Pairing, sessionId: string, a: AttachmentRef) => ({
+    url: `${c.baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(a.id)}`,
+    headers: { Authorization: `Bearer ${c.token}` },
+  }),
 };
 
 export type { Snapshot };
+
+/** 附件取回时要用的地址与请求头（令牌走头，不进 URL） */
+export interface FileSource {
+  url: string;
+  headers: Record<string, string>;
+}
 
 /**
  * 数组字段兜底：协议要求空的时候是 `[]` 而不是 `null`，但别拿渲染去赌 ——

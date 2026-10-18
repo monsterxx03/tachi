@@ -8,6 +8,14 @@
 // 它**不是**产品的一部分，接上真的移动接口之后就该删掉。
 package main
 
+import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
+)
+
 type SessionSummary struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -237,6 +245,24 @@ func seed() (order []string, byID map[string]*session) {
 	s5.append(Message{Role: "assistant", Content: mermaidReply})
 	add(s5)
 
+	// 带图片附件的一段：手机端那条「缩略图铺在气泡里 → 点开进阅读器」的路要有真像素可走
+	s6 := &session{}
+	s6.Session = SessionSummary{ID: "s6", Title: "索引估值提醒", ProjectName: "投资", UpdatedAt: "昨天"}
+	s6.Model = "Delta V3"
+	s6.Workspace = WorkspaceInfo{Primary: "~/repos/lixinger"}
+	s6.Usage = UsageInfo{Cost: 0.02}
+	s6.Context = ContextInfo{Estimate: 44000, Window: 128000, Parts: []ContextPart{
+		{Label: "系统提示词", Tokens: 6500}, {Label: "工具定义", Tokens: 8500},
+		{Label: "对话", Tokens: 24000}, {Label: "工具结果", Tokens: 5000},
+	}}
+	s6.State = SessionState{Status: "idle", Label: "空闲"}
+	s6.append(Message{Role: "user", Content: "今天收盘后看一下沪深300的估值分位。"})
+	s6.append(Message{Role: "assistant", Content: "沪深300 当前 PE 分位 38%，处在中低区间；银行和红利板块的分位更低一些（21% / 26%）。要不要我把这条挂成每日收盘后的提醒？"})
+	s6.append(Message{Role: "tool_call", ToolName: "SendFile", ToolCallID: "a-3", Title: "hs300-valuation.png"})
+	s6.append(Message{Role: "tool_result", ToolName: "SendFile", ToolCallID: "a-3", ToolResult: "已交付 hs300-valuation.png"})
+	s6.Attachments = []AttachmentRef{{ID: "a-3", Name: "hs300-valuation.png", MimeType: "image/png", Size: 186000, Downloadable: true}}
+	add(s6)
+
 	return order, byID
 }
 
@@ -277,4 +303,62 @@ var fileBodies = map[string]string{
 | Beta | $18 / 月 | $30 / 人 / 月 |
 | Gamma | 免费 | $12 / 人 / 月 |
 `,
+}
+
+// chartPNG 现画一张图当图片附件 —— 手机端要有一条真的图片路径可走
+// （缩略图铺在气泡里、点开进阅读器、令牌走请求头）。
+func chartPNG() []byte {
+	const w, h = 640, 400
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	bg := color.RGBA{0xfd, 0xfb, 0xf7, 0xff}
+	grid := color.RGBA{0x3e, 0x36, 0x2c, 0x22}
+	accent := color.RGBA{0x4a, 0x6c, 0xf5, 0xff}
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
+
+	for y := 60; y < h-40; y += 60 {
+		for x := 40; x < w-40; x++ {
+			img.Set(x, y, grid)
+		}
+	}
+
+	// 一条往上走的折线
+	series := []int{320, 300, 312, 268, 250, 256, 218, 200, 212, 178, 150, 162, 128}
+	step := (w - 80) / (len(series) - 1)
+	for i := 0; i < len(series)-1; i++ {
+		line(img, 40+i*step, series[i], 40+(i+1)*step, series[i+1], accent)
+	}
+	for i, y := range series {
+		x := 40 + i*step
+		for dy := -3; dy <= 3; dy++ {
+			for dx := -3; dx <= 3; dx++ {
+				img.Set(x+dx, y+dy, accent)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+func line(img *image.RGBA, x0, y0, x1, y1 int, c color.Color) {
+	dx, dy := x1-x0, y1-y0
+	steps := max(abs(dx), abs(dy))
+	if steps == 0 {
+		steps = 1
+	}
+	for i := 0; i <= steps; i++ {
+		x := x0 + dx*i/steps
+		y := y0 + dy*i/steps
+		for t := -1; t <= 1; t++ {
+			img.Set(x, y+t, c)
+		}
+	}
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

@@ -131,6 +131,7 @@ export interface MobileApi {
   pairing: Pairing | null;
   conn: WsStatus | 'idle';
   sessions: SessionSummary[];
+  providers: string[];
   openId: string | null;
   chat: ChatState;
   error: string | null;
@@ -152,6 +153,7 @@ export function useMobile(): MobileApi {
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [conn, setConn] = useState<WsStatus | 'idle'>('idle');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [providers, setProviders] = useState<string[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +193,16 @@ export function useMobile(): MobileApi {
       })
       .catch((e) => {
         if (!cancelled) setError(messageOfError(e));
+      });
+
+    // 可切换的模型（全局的，不随会话变）
+    void api
+      .providers(pairing)
+      .then((r) => {
+        if (!cancelled) setProviders(r.providers.map((p) => p.name));
+      })
+      .catch(() => {
+        // 拉不到就只是列表空着，不值得打断这一屏
       });
 
     const sock = new MobileSocket(pairing, {
@@ -336,6 +348,7 @@ export function useMobile(): MobileApi {
     pairing,
     conn,
     sessions,
+    providers,
     openId,
     chat,
     error,
