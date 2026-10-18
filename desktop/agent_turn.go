@@ -651,7 +651,12 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		d.emitUsage(id, isCurrent, nil)
 		d.mu.Lock()
 		r := d.getRun(id)
-		if ev.Messages != nil {
+		// Only the conversation may hand its history over. A side-channel run's messages are the
+		// review's or commit's own prompt and answer; adopting them would replace what the next
+		// turn sends — the model would forget the conversation, and the context ring, rebuilt from
+		// that history, would collapse to the side-channel's size. (The loop hands a one-off run's
+		// partial history over like any other, so the guard has to be here, where the lane is known.)
+		if ev.Messages != nil && lane.intoTranscript() {
 			r.history = ev.Messages
 		}
 		r.turnCost = r.cost - r.turnStartCost
@@ -727,7 +732,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// The STATE above still says 出错: keeping the history is not the same as calling the turn
 		// a success, and the frontend draws the failure from its own event.
 		d.mu.Lock()
-		if r := d.getRun(id); ev.Messages != nil {
+		if r := d.getRun(id); ev.Messages != nil && lane.intoTranscript() {
 			r.history = ev.Messages
 		}
 		cronName := ""

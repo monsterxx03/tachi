@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // The dispatch contract: the frontend sends whatever the user typed after "/",
@@ -97,8 +99,53 @@ func TestRunShellCommandEmptyIsUsageNotError(t *testing.T) {
 	}
 }
 
-// A /sh run must mark its synthesized tool call as user-requested, or the card
-// would fold its output away — hiding the very thing the command was run for.
+// A side-channel run (/review, /commit) must never become the conversation. Its turn's messages
+// are the review's own prompt and answer, and adopting them replaces the history the NEXT turn
+// sends: the model wakes up having forgotten everything the reader did, and the context ring
+// collapses to the side-channel's size (the estimate is rebuilt from that history).
+//
+// The failure branch is covered too, and for the same reason: a review that dies half way has
+// partial messages of its own, not the conversation's.
+func TestASideChannelRunDoesNotBecomeTheConversation(t *testing.T) {
+	d := newTestApp()
+	d.mu.Lock()
+	r := d.getRun("s1")
+	r.history = []llm.Message{{Role: "user", Content: "主对话"}, {Role: "assistant", Content: "回答"}}
+	d.mu.Unlock()
+
+	side := []llm.Message{{Role: "user", Content: "评审提示词"}, {Role: "assistant", Content: "评审意见"}}
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventTurnComplete, Messages: side, Result: &agent.RunResult{ExitReason: agent.ExitReasonStop},
+	}, laneOneOff)
+	if got := d.runHistory("s1"); len(got) != 2 || got[0].Content != "主对话" {
+		t.Fatalf("the review's own messages replaced the conversation: %+v", got)
+	}
+
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventError, Messages: side,
+		Result: &agent.RunResult{ExitReason: agent.ExitReasonError, Error: errors.New("boom")},
+	}, laneOneOff)
+	if got := d.runHistory("s1"); len(got) != 2 || got[0].Content != "主对话" {
+		t.Fatalf("a failed review replaced the conversation: %+v", got)
+	}
+
+	// The conversation's own turn still adopts what the loop hands over — that is the
+	// partial-history rule (issue #38), and it must keep working for both endings.
+	own := []llm.Message{{Role: "user", Content: "主对话"}, {Role: "assistant", Content: "回答"}, {Role: "user", Content: "再问"}}
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventTurnComplete, Messages: own, Result: &agent.RunResult{ExitReason: agent.ExitReasonStop},
+	}, laneTranscript)
+	if got := d.runHistory("s1"); len(got) != len(own) {
+		t.Fatalf("a conversation turn did not take its own history: %+v", got)
+	}
+	d.handleEventIn("s1", agent.AgentEvent{
+		Type: agent.AgentEventError, Messages: own,
+		Result: &agent.RunResult{ExitReason: agent.ExitReasonInterrupted},
+	}, laneTranscript)
+	if got := d.runHistory("s1"); len(got) != len(own) {
+		t.Fatalf("an interrupted turn dropped its partial history: %+v", got)
+	}
+}
 func TestRunShellCommandMarksCardForExpansion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
