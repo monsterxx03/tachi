@@ -1,0 +1,35 @@
+# 手机端的主链路：列表 → 进一段对话 → 答一张权限卡 → 返回。
+#
+# 它验的是"界面 + 事件流"这一层 —— 服务端用 mobile/mockapi（真协议、假数据），
+# 所以不需要桌面进程在场。跑之前先把 mockapi 起来，并在模拟器上完成一次配对。
+#
+#   go run ./mobile/mockapi -token dev-token &
+#   maestro --device emulator-5554 test mobile/e2e/main.yaml
+appId: dev.tachi.mobile
+name: 主链路
+---
+- launchApp
+
+# 列表：连着、有内容
+- assertVisible: "会话"
+- assertVisible: "已连接 · 这台电脑"
+- assertVisible: "清理构建目录"
+
+# 进对话：历史、工具卡、权限卡都在
+- tapOn: "清理构建目录"
+- assertVisible: "等待你的授权 · Bash"
+- assertVisible: "允许一次"
+- assertVisible: "拒绝"
+
+# 答这张卡：卡撤掉、状态回到空闲
+- tapOn: "允许一次"
+- assertVisible: "空闲"
+
+# 这一轮接着跑完 —— 回复是流式吐出来的，所以要等；文本用正则，因为整句更长
+- extendedWaitUntil:
+    visible: ".*命令跑完了.*"
+    timeout: 15000
+
+# Android 的返回键要回到列表，而不是退出 App
+- back
+- assertVisible: "会话"

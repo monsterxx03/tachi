@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
 import { messageOfError } from '../state/mobile';
 import { useTheme } from '../theme/ThemeContext';
+import { ScanPairing } from './ScanPairing';
 
 /** 开发期的默认值，省得每次手输；换机器就改这两个 */
 const DEV_URL = 'http://192.168.71.173:8787';
@@ -14,14 +16,14 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
   const [token, setToken] = useState(DEV_TOKEN);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
-  async function test() {
+  async function test(p: PairingInfo = { baseUrl: baseUrl.trim().replace(/\/+$/, ''), token: token.trim() }) {
     setBusy(true);
     setErr(null);
-    const url = baseUrl.trim().replace(/\/+$/, '');
     try {
-      const r = await ping(url);
-      if (r.ok) onPaired({ baseUrl: url, token: token.trim() });
+      const r = await ping(p.baseUrl);
+      if (r.ok) onPaired(p);
       else setErr('这台机器拒绝了这个地址');
     } catch (e) {
       setErr(messageOfError(e));
@@ -29,6 +31,19 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
       setBusy(false);
     }
   }
+
+  if (scanning)
+    return (
+      <ScanPairing
+        onClose={() => setScanning(false)}
+        onScanned={(p) => {
+          setScanning(false);
+          setBaseUrl(p.baseUrl);
+          setToken(p.token);
+          void test(p);
+        }}
+      />
+    );
 
   const field = {
     backgroundColor: t.inputBg,
@@ -42,6 +57,23 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
       <Text style={[styles.sub, { color: t.faint }]}>
         在电脑上打开 Tachi 桌面端的设置页，用它给的地址和令牌。
       </Text>
+
+      <Pressable
+        onPress={() => setScanning(true)}
+        style={({ pressed }) => [
+          styles.scanBtn,
+          { borderColor: t.borderStrong, backgroundColor: pressed ? t.wash : 'transparent' },
+        ]}
+      >
+        <Feather name="camera" size={17} color={t.accent2} />
+        <Text style={{ color: t.accent2, fontSize: 13.5, fontWeight: '600' }}>扫电脑上的二维码</Text>
+      </Pressable>
+
+      <View style={styles.orRow}>
+        <View style={[styles.rule, { backgroundColor: t.border }]} />
+        <Text style={{ color: t.faint, fontSize: 11.5 }}>或者手输</Text>
+        <View style={[styles.rule, { backgroundColor: t.border }]} />
+      </View>
 
       <Text style={[styles.label, { color: t.faint }]}>地址</Text>
       <TextInput
@@ -74,7 +106,7 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
       ) : null}
 
       <Pressable
-        onPress={test}
+        onPress={() => void test()}
         disabled={busy}
         style={({ pressed }) => [
           styles.btn,
@@ -98,10 +130,22 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: 22, paddingTop: 28 },
   title: { fontSize: 26, fontWeight: '600', letterSpacing: -0.4 },
-  sub: { fontSize: 13, lineHeight: 20, marginTop: 8, marginBottom: 22 },
+  sub: { fontSize: 13, lineHeight: 20, marginTop: 8, marginBottom: 18 },
+  scanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingVertical: 13,
+  },
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 2 },
+  rule: { flex: 1, height: StyleSheet.hairlineWidth },
   label: { fontSize: 12, marginBottom: 6, marginTop: 14 },
   input: { borderWidth: 1, borderRadius: 11, paddingHorizontal: 13, paddingVertical: 12, fontSize: 14 },
   errBox: { borderWidth: 1, borderRadius: 10, padding: 11, marginTop: 16 },
   btn: { borderRadius: 11, paddingVertical: 14, alignItems: 'center', marginTop: 22 },
   note: { fontSize: 11.5, lineHeight: 18, marginTop: 26 },
 });
+
