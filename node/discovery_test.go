@@ -645,6 +645,28 @@ func TestAMachineIsReportedOnlyWhenItEntersTheDirectory(t *testing.T) {
 	assertSighting(t, entered, "a second machine")
 }
 
+// The handshake that proves a claim is itself a card read, so the client records it as a contact
+// (touch) a moment BEFORE the claim is confirmed. That must not make the machine look like one this
+// store already listed: the confirmation is the first thing a reader could ever draw, and it is the
+// moment to say the row appeared. Asking the map instead of the claim is how a discovered machine
+// stays invisible until somebody happens to open the panel.
+func TestTheHandshakeThatProvesAClaimDoesNotHideItsArrival(t *testing.T) {
+	s := newSightingsStore(nil)
+	entered := make(chan string, 8)
+	s.onSighting = func() { entered <- "sighting" }
+
+	cand := candidate{Identity: discoveredID, Addrs: []string{lanAddr}}
+	// Exactly what verification does: read the card from the address that answered, which records a
+	// contact — and, until now, a row.
+	s.touch(discoveredID, lanAddr)
+	s.confirm(cand, lanAddr)
+	assertSighting(t, entered, "the machine whose claim the handshake just proved")
+
+	// And from then on it is an ordinary listed machine: a repeat says nothing.
+	s.confirm(cand, lanAddr)
+	assertNoSighting(t, entered)
+}
+
 func assertSighting(t *testing.T, seen chan string, what string) {
 	t.Helper()
 	select {

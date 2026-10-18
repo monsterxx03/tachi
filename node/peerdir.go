@@ -175,6 +175,17 @@ type discoveredPeer struct {
 	// prefers what this machine SAW over what it was told (node/sightings.go verifyDue). It is a set:
 	// a machine first announced and later vouched for carries both.
 	Source agentref.PeerSource
+	// Claimed is true once a CLAIM about this machine has been confirmed — a candidate this machine
+	// then dialled and proved (confirm). It is false for an entry that only ever came from a contact
+	// this machine made itself (touch): that says the machine exists and answered, not that anyone
+	// told this process about it, and no source word could be written for it.
+	//
+	// The distinction is what keeps the ARRIVAL tellable: the handshake that proves a claim is itself
+	// a card read, so touch writes the machine into the store a moment BEFORE the claim about it is
+	// confirmed. Without this field that first write makes confirm see a machine it already had, and
+	// the one moment a reader could be told the row appeared is lost — discovered machines then only
+	// ever turn up on the next read somebody happens to make.
+	Claimed bool
 	// Seen is when this was last observed.
 	Seen time.Time
 }

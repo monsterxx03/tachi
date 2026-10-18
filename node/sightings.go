@@ -487,7 +487,10 @@ func (s *sightingsStore) confirm(cand candidate, served string) {
 		Addrs:    append([]string(nil), cand.Addrs...),
 		Served:   served,
 		Source:   cand.Source,
-		Seen:     s.clock(),
+		// The claim is confirmed now, whatever brought this machine into the store before it (see
+		// Claimed: the handshake that verified this candidate is itself a contact).
+		Claimed: true,
+		Seen:    s.clock(),
 	}
 	if had {
 		// An address once learned is not dropped, only reordered: what said "I am here" most recently
@@ -500,11 +503,16 @@ func (s *sightingsStore) confirm(cand candidate, served string) {
 	}
 	s.seen[cand.Identity] = next
 	delete(s.pending, cand.Identity)
-	// A machine this list did not have, or one that told it about an address it did not know: either
-	// way a reader has a row to draw or an address to try that it did not have a moment ago. The
-	// ORDER is deliberately not part of it — it is "who spoke last", which changes on every
+	// A machine this store had not CONFIRMED before, or one that told it about an address it did not
+	// know: either way a reader has a row to draw or an address to try that it did not have a moment
+	// ago. The ORDER is deliberately not part of it — it is "who spoke last", which changes on every
 	// announcement, while what a reader cares about is whether there is somewhere new to dial.
-	entered := !had || !sameAddrs(prev.Addrs, next.Addrs)
+	//
+	// "Had" is asked of Claimed, not of the map: verifying this very candidate was a card read, and
+	// touch records those, so by the time this runs the machine is usually already in the map. Asking
+	// the map would answer "already listed" for the first machine anyone ever told us about, and the
+	// one moment its row appeared would go unreported.
+	entered := !had || !prev.Claimed || !sameAddrs(prev.Addrs, next.Addrs)
 	s.mu.Unlock()
 
 	s.log.Info(context.Background(), "node: discovered a node and proved its identity",
