@@ -1268,17 +1268,22 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
   // recorded" would contradict the backend's own sentence with a second, wrong one.
   const hasScope = count > 0 || !!diff?.note
   return (
+    // findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
+    // Everything else (the head, the per-file fold, 预览/打开) is the panel's own rendering, which
+    // is what keeps the two diffs from drifting apart.
+    // expandAll: with no findings to fold AROUND, every file opens — the diff is the content here,
+    // not context for a review.
+    // hscroll: this surface is the whole window, so the long lines get ONE bar at its bottom
+    // instead of one per file (and none at all in 左右) — see the pane's hscroll block.
+    //
+    // selectionSource='': a diff is text worth asking about (「这段为什么这么改」), and it belongs
+    // to no single file — so the source line is left out of the message, exactly as it is for a
+    // paragraph selected in the transcript.
     <ViewerOverlay label={`本轮改动 — ${count} 个文件（${source}）`} onClose={onClose} stageClass="is-doc"
       overlayClass="is-flush"
       findable
+      selectionSource=""
       controls={<CloseButton onClose={onClose} />}>
-      {/* findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
-          Everything else (the head, the per-file fold, 预览/打开) is the panel's own rendering,
-          which is what keeps the two diffs from drifting apart.
-          expandAll: with no findings to fold AROUND, every file opens — the diff is the content
-          here, not context for a review.
-          hscroll: this surface is the whole window, so the long lines get ONE bar at its bottom
-          instead of one per file (and none at all in 左右) — see the pane's hscroll block. */}
       <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${turn}\n${files}`}
         hasPaths={hasScope} diffError={error} expandAll fileList hscroll />
     </ViewerOverlay>

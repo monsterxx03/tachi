@@ -1,7 +1,9 @@
 // 选中一段文字之后浮出来的小菜单：复制，或者就这段文字问当前会话。
 //
-// 三个宿主共用它 —— 文件视图（从文件树里打开的文件）、会话里附件卡片展开的预览、会话全文 ——
-// 因为这三处摊开的都是可以读的文字，而「选中了想问问」跟这段字是从哪儿来的无关。
+// 四个宿主共用它 —— 文件视图（从文件树里打开的文件）、会话里附件卡片展开的预览、会话全文、
+// 以及预览浮层（一张图片放大、一份文档全屏、一张表格、一份 diff）—— 因为这几处摊开的都是
+// 可以读的文字，而「选中了想问问」跟这段字是从哪儿来的无关。浮层那一个是挂得最晚的：它盖在
+// 上面，所以它在时那一段字归它（见「谁管这一段」）。
 //
 // 提问不是一条一条发出去的，而是先收进一个**待提问队列**：读一份文档时往往是「这段 + 那段 +
 // 那儿」一起问，分三条消息发出去，模型会当成三个不相干的问题分别回答。所以回车是把这一项收进
@@ -9,7 +11,7 @@
 //
 // 五条规矩住在这里，别处不复述：
 //
-//   - **队列只有一份**（模块级，`useAskQueue` 订阅它）：三个宿主各有自己的选中菜单，但读者心里
+//   - **队列只有一份**（模块级，`useAskQueue` 订阅它）：四个宿主各有自己的选中菜单，但读者心里
 //     只有一份「待提问」—— 卡片预览就住在会话全文里面，两处都能选字，而两个队列会变成两个面板
 //     叠在同一个角上。面板也因此只画一份（`AskQueuePanel`，挂在 App 上）。
 //   - **谁管这一段，看谁在最里面**：卡片预览住在会话全文里面，两个宿主实例都会看见同一次选中，
@@ -330,17 +332,25 @@ export function SelectionAsk({ hostRef, source }: {
 	// Esc 认领这枚键：文件视图自己的 Esc 监听也挂在 window 上（`keydown`，非 capture），
 	// 所以这里必须压住它，否则收菜单会顺带把人送回会话。defaultPrevented 那一半是给查找条的
 	// （find.tsx 也在 capture 阶段）：那一层在菜单上面，不该被这里再关一次。
+	//
+	// **监听在挂载时就注册，不是等到有选中**：预览浮层（viewer.tsx）的 Esc 也挂在 window 上、
+	// 也在 capture 阶段，而 capture 监听按注册顺序跑 —— 浮层先挂上，它是父组件，effect 后跑；
+	// 子组件（这个）先跑。等到「有选中」才注册，注册顺序就反过来了，于是菜单开着时按 Esc 会
+	// 先把整个浮层关掉，菜单跟着一起消失。注册early + 用 ref 读「现在有没有选中」，顺序才是稳的。
+	const spotRef = useRef<Spot | null>(null)
+	spotRef.current = spot
+	const dismissRef = useRef(dismiss)
+	dismissRef.current = dismiss
 	useEffect(() => {
-		if (!spot) return
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key !== 'Escape' || e.defaultPrevented) return
+			if (e.key !== 'Escape' || e.defaultPrevented || !spotRef.current) return
 			e.preventDefault()
 			e.stopPropagation()
-			dismiss()
+			dismissRef.current()
 		}
 		window.addEventListener('keydown', onKey, true)
 		return () => window.removeEventListener('keydown', onKey, true)
-	}, [spot, dismiss])
+	}, [])
 
 	// 展开输入框之后焦点在框里，可以直接打字。按钮态不抢焦点：它由鼠标点。
 	useEffect(() => {

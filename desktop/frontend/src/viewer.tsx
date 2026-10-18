@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { FindBar, FindButton, useFind } from './find'
+import { SelectionAsk } from './selask'
 
 // Zoom bounds (0.2x … 6x covers "放大看细节" and "整体扫一眼" without letting the
 // content become unusable).
@@ -200,7 +201,7 @@ export function useViewerZoomKeys({ fit, reset, zoomBy }: {
 // because a viewer whose content is not in this document — an image, or a PDF/HTML
 // iframe — has nothing to search, and the shell still owns ⌘F there so it cannot fall
 // through to a bar behind the backdrop.
-export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stageProps, controls, onClose, findable, children }: {
+export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stageProps, controls, onClose, findable, selectionSource, children }: {
   label: string
   // A surface that wants the SHELL laid out differently (padding, backdrop) says so — the diff pane
   // takes the whole window, a mermaid diagram keeps the roomy margin around it.
@@ -211,6 +212,14 @@ export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stage
   controls: ReactNode
   onClose: () => void
   findable?: boolean
+  // selectionSource opts this viewer into the select-text menu (复制 / 提问, selask.tsx): the value
+  // is the `source` that goes into the message the model reads — an absolute path for a file, and
+  // '' for content that has no file of its own.
+  //
+  // Opt-in, and it is the STAGE that hosts it: the shell's own chrome (the control pill, the find
+  // bar) is not text to ask about, and a viewer whose content cannot be selected at all (an image,
+  // a PDF/HTML iframe — a different document this one cannot reach into) has nothing to offer.
+  selectionSource?: string
   children: ReactNode
 }) {
   const dragged = useRef(false)
@@ -221,6 +230,13 @@ export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stage
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // Something inside this overlay already used the key — the select-text menu (selask.tsx)
+      // claims the first Escape to close itself, and it registers its listener after this one, so
+      // on this capture handler the claim arrives as `defaultPrevented`. Without this half, pressing
+      // Esc with the 复制/提问 menu open would close the WHOLE overlay and take the menu with it,
+      // which is the opposite of what the key means there. (The find bar is the same handshake; it
+      // claims ⌘F and its own Esc, see find.tsx.)
+      if (e.defaultPrevented) return
       e.preventDefault()
       e.stopPropagation()
       // A field inside the overlay owns the first Esc: blur it and let the next one
@@ -257,6 +273,11 @@ export function ViewerOverlay({ label, overlayClass, stageRef, stageClass, stage
           e.stopPropagation()
         }}>
         {children}
+        {/* The stage is the host: a selection that lands on the backdrop or on the pill is not a
+            paragraph the reader is asking about. Portal'd to body with fixed positioning (see
+            .sel-ask), so it floats above this overlay's own z-index rather than inside the stage's
+            scroll box. */}
+        {selectionSource === undefined ? null : <SelectionAsk hostRef={stage} source={selectionSource} />}
       </div>
       {findable && find.open ? <FindBar find={find} className="is-overlay" /> : null}
       <div className="viewer-controls" onClick={(e) => e.stopPropagation()}>

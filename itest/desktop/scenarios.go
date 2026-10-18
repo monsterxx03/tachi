@@ -500,6 +500,11 @@ const (
 	selectionAskChatLine2  = "旁边这句也能选。"
 	selectionAskChatAsk    = "这句是什么意思？"
 	selectionAskDefaultAsk = "解释一下？"
+
+	// preview-selection-ask：全屏预览浮层里被选中的那一段、以及读者写下的问题。和上面同一套
+	// 理由 —— driver 按这串字找那一段，Go 这一半按它断言发出去的正文。
+	previewAskLine     = "这是一份可以全屏打开、然后选中提问的文档。"
+	previewAskQuestion = "这份文档是做什么的？"
 )
 
 // smokeReportMarkdown is the report body the mock writes: the marker plus enough prose that the
@@ -2199,7 +2204,47 @@ func scenarios() []scenario {
 					!strings.Contains(chatBatch, "文件："), strutil.Truncate(chatBatch, 160))
 			},
 		},
+		// The preview overlay is the fourth host of the select-text menu: a document opened
+		// full-screen is just as readable as one in the card, so selecting a paragraph there must
+		// offer the same 复制 / 提问.
 		//
+		// Three things are asserted, each of which can be "done" and still broken: the menu must
+		// actually be PAINTED above the overlay (it portals to body, so it exists either way — but
+		// its old z-index of 62 sat under the viewer's 90); Esc must close the MENU and leave the
+		// overlay up (this is the one that fails without the defaultPrevented handshake — the
+		// overlay's capture listener registers first and would close everything); and the ask
+		// queue panel has to be above the overlay too, or "added to the queue" is invisible.
+		//
+		// The Go half reads the file's absolute path out of the prompt: the menu's source is what
+		// the model uses to read the whole document, and a preview-selected paragraph must carry
+		// it exactly as the card's preview does.
+		{
+			name: "preview-selection-ask",
+			files: map[string]string{
+				"PREVIEW.md": "# smoke\n\n" + previewAskLine + "\n\n另一段落在这里。\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: sendFileStream("PREVIEW.md", "call_preview")},
+				{Reply: textStream("已经发给你了。", 700)},
+				// The ask itself goes out through the composer, so the driver's 发送 button ends
+				// this turn.
+				{Reply: textStream("这份文档是 smoke 场景的样例。", 700)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				if len(c.requests) < 3 {
+					c.check("三次调用（送文件 + 开场 + 提问）", false, requestCount(c.requests))
+					return
+				}
+				c.check("三次调用（送文件 + 开场 + 提问）", len(c.requests) == 3, requestCount(c.requests))
+				ask := lastUserText(c.requests[2])
+				c.check("浮层里选的那一段进了发出去的消息",
+					strings.Contains(ask, "“"+previewAskLine+"”"), strutil.Truncate(ask, 200))
+				c.check("它带着文件的绝对路径（模型据此去读整份文件）",
+					strings.Contains(ask, "文件："+filepath.Join(c.work, "PREVIEW.md")), strutil.Truncate(ask, 200))
+				c.check("读者写的问题也在里面", strings.Contains(ask, previewAskQuestion), strutil.Truncate(ask, 200))
+			},
+		},
 		// Switching away from a RUNNING session and back: the restored view must land at the
 		// newest message and stay there while the stream keeps writing. The driver measures the
 		// gap to the bottom on every frame across the switch, so the reported "先向上飘再跳到底"

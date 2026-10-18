@@ -287,15 +287,22 @@ function FileFullscreen({ file, path, meta, onClose }: {
   }
   if (meta.kind === 'csv') {
     return (
-      <ViewerOverlay label={`${file.name} — 表格`} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
+      // A table is text this page owns, so it gets the select-text menu too — a row copied out of a
+      // spreadsheet is the other reason to open one here.
+      <ViewerOverlay label={`${file.name} — 表格`} onClose={onClose} stageClass="is-doc" findable
+        selectionSource={path} controls={<CloseButton onClose={onClose} />}>
         <FileBody meta={meta} path={path} name={file.name} variant="viewer" />
       </ViewerOverlay>
     )
   }
   // The text kinds are the last ones that are OURS to search: an HTML or PDF viewer draws
   // inside an iframe, a different document this one cannot reach into (see FileViewer above).
+  // Same reason it is the only attachment overlay that offers the select-text menu (复制 / 提问):
+  // a selection inside that iframe belongs to the iframe's document, and what this page can read
+  // back is nothing.
   return (
-    <ViewerOverlay label={file.name} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
+    <ViewerOverlay label={file.name} onClose={onClose} stageClass="is-doc" findable
+      selectionSource={path} controls={<CloseButton onClose={onClose} />}>
       <FileBody meta={meta} path={path} name={file.name} variant="viewer" />
     </ViewerOverlay>
   )
