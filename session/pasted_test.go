@@ -19,23 +19,19 @@ var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01, 0
 // webview, so anything that is not a single directory name must be refused before it is joined onto
 // the store path.
 func TestDirFor(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
-	root, err := config.SessionDir()
-	if err != nil {
-		t.Fatalf("session dir: %v", err)
-	}
+	root := t.TempDir()
 
 	const id = "2026-09-13-103926-92db8c33"
-	if got, err := DirFor(id); err != nil || got != filepath.Join(root, id) {
+	if got, err := DirFor(root, id); err != nil || got != filepath.Join(root, id) {
 		t.Errorf("DirFor(%q) = %q, %v; want %q", id, got, err, filepath.Join(root, id))
 	}
 
 	for _, bad := range []string{"", ".", "..", "../other-session", "a/b", `/abs`, `a\b`} {
-		if got, err := DirFor(bad); err == nil {
+		if got, err := DirFor(root, bad); err == nil {
 			t.Errorf("DirFor(%q) = %q, want an error", bad, got)
 		}
 	}
-	if _, err := DirFor(""); err != ErrNoSessionID {
+	if _, err := DirFor(root, ""); err != ErrNoSessionID {
 		t.Errorf("DirFor(\"\") err = %v, want ErrNoSessionID (a frontend says this in its own words)", err)
 	}
 }
@@ -43,14 +39,10 @@ func TestDirFor(t *testing.T) {
 // TestSavePastedImageLandsInTheSessionDirectory pins where a paste goes — the same place for both
 // frontends, and the reason this is in the store rather than in either one of them.
 func TestSavePastedImageLandsInTheSessionDirectory(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
-	root, err := config.SessionDir()
-	if err != nil {
-		t.Fatalf("session dir: %v", err)
-	}
+	root := t.TempDir()
 	const id = "2026-09-13-103926-92db8c33"
 
-	path, err := SavePastedImage(id, ".png", pngBytes)
+	path, err := SavePastedImage(root, id, ".png", pngBytes)
 	if err != nil {
 		t.Fatalf("SavePastedImage: %v", err)
 	}
@@ -84,13 +76,13 @@ func TestSavePastedImageLandsInTheSessionDirectory(t *testing.T) {
 // timestamp alone collides (it did — the desktop's own test caught a lost screenshot that way), so
 // the name carries a uuid too.
 func TestSavePastedImageNamesAreUnique(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
+	root := t.TempDir()
 
-	first, err := SavePastedImage("id", ".png", pngBytes)
+	first, err := SavePastedImage(root, "id", ".png", pngBytes)
 	if err != nil {
 		t.Fatalf("first paste: %v", err)
 	}
-	second, err := SavePastedImage("id", ".png", pngBytes)
+	second, err := SavePastedImage(root, "id", ".png", pngBytes)
 	if err != nil {
 		t.Fatalf("second paste: %v", err)
 	}
@@ -109,13 +101,9 @@ func TestSavePastedImageNamesAreUnique(t *testing.T) {
 // @-reference of that turn — the bytes themselves are recorded with the message — so it goes to the
 // temp directory rather than into the store, where no session can own it.
 func TestSavePastedImageWithoutASessionUsesTemp(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
-	root, err := config.SessionDir()
-	if err != nil {
-		t.Fatalf("session dir: %v", err)
-	}
+	root := t.TempDir()
 
-	path, err := SavePastedImage("", ".png", pngBytes)
+	path, err := SavePastedImage(root, "", ".png", pngBytes)
 	if err != nil {
 		t.Fatalf("SavePastedImage: %v", err)
 	}
@@ -132,9 +120,12 @@ func TestSavePastedImageWithoutASessionUsesTemp(t *testing.T) {
 // "../../etc" must not put a file outside the store.
 func TestSavePastedImageRefusesTraversal(t *testing.T) {
 	base := t.TempDir()
+	// The global base dir is moved onto `base` as well, so the assertion below catches a refusal
+	// that writes under EITHER root: the one it was given, or the process-global one it must not
+	// consult.
 	config.SetBaseDir(base)
 
-	if _, err := SavePastedImage("../../etc", ".png", pngBytes); err == nil {
+	if _, err := SavePastedImage(base, "../../etc", ".png", pngBytes); err == nil {
 		t.Fatal("SavePastedImage accepted a traversal id")
 	}
 	if entries, _ := os.ReadDir(base); len(entries) != 0 {
@@ -146,17 +137,16 @@ func TestSavePastedImageRefusesTraversal(t *testing.T) {
 // so while the screenshot is still on the clipboard): a file the model will never be shown would sit
 // in the session forever.
 func TestSavePastedImageRefusesAnOversizedImage(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
+	root := t.TempDir()
 	const id = "2026-09-13-103926-92db8c33"
 
-	_, err := SavePastedImage(id, ".png", make([]byte, llm.MaxImageSize+1))
+	_, err := SavePastedImage(root, id, ".png", make([]byte, llm.MaxImageSize+1))
 	if err == nil {
 		t.Fatal("SavePastedImage accepted an image over the model's limit")
 	}
 	if !strings.Contains(err.Error(), "limit") {
 		t.Errorf("err = %v, want it to name the limit", err)
 	}
-	root, _ := config.SessionDir()
 	if _, statErr := os.Stat(filepath.Join(root, id)); !os.IsNotExist(statErr) {
 		t.Errorf("a refused paste still created the session's directory")
 	}

@@ -19,11 +19,11 @@ import (
 // in oneoff.go), and a hand-rolled fixture would stop testing that the moment the recorder
 // or the message shape changed.
 
-// oneOffTestDir pins the process-global base dir at t.TempDir() (never the real ~/.tachi,
-// same rule as fileservice_test.go) and returns this session's record directory.
+// oneOffTestDir returns this session's record directory, under the base dir the test's app was
+// built on (testAgentService — never the real ~/.tachi, same rule as fileservice_test.go): the
+// reader asks the STORE where a session lives, so the fixture and the reader must share one.
 func oneOffTestDir(t *testing.T, sessionID string) string {
 	t.Helper()
-	config.SetBaseDir(t.TempDir())
 	dir, err := config.SessionDir()
 	if err != nil {
 		t.Fatalf("session dir: %v", err)
@@ -95,6 +95,7 @@ const oneOffTestSession = "2026-09-12-193137-a8acf6c3"
 // review grouped under one run, and everything that must NOT show up (another session's
 // record, a corrupt file, a non-record file).
 func TestListOneOffs(t *testing.T) {
+	svc := testAgentService(t)
 	dir := oneOffTestDir(t, oneOffTestSession)
 	started := time.Date(2026, 9, 12, 19, 35, 35, 0, time.Local)
 	// One review, two rounds: same orchestrator-owned report directory.
@@ -117,7 +118,7 @@ func TestListOneOffs(t *testing.T) {
 	writeOneOffFile(t, dir, "review-20260912-195500-ffff.jsonl", "not json at all")
 	writeOneOffFile(t, dir, "notes.txt", "irrelevant")
 
-	got := (&AgentService{}).ListOneOffs(oneOffTestSession)
+	got := svc.ListOneOffs(oneOffTestSession)
 	if got.Note != "" {
 		t.Fatalf("ListOneOffs note = %q, want empty", got.Note)
 	}
@@ -161,6 +162,7 @@ func TestListOneOffs(t *testing.T) {
 // covered. That pairing is the durable half of 「已评审 N 条」 — the frontend's own memory of
 // it dies with the window (P4).
 func TestListOneOffsReviewOrigin(t *testing.T) {
+	svc := testAgentService(t)
 	dir := oneOffTestDir(t, oneOffTestSession)
 	started := time.Date(2026, 9, 12, 21, 0, 0, 0, time.Local)
 	m := oneOffMetaLine{
@@ -193,7 +195,7 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 		},
 	}))
 
-	items := (&AgentService{}).ListOneOffs(oneOffTestSession).Items
+	items := svc.ListOneOffs(oneOffTestSession).Items
 	if len(items) != 4 {
 		t.Fatalf("items = %d, want 4", len(items))
 	}
@@ -236,12 +238,13 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 }
 
 func TestListOneOffsWithoutRecords(t *testing.T) {
+	svc := testAgentService(t)
 	oneOffTestDir(t, oneOffTestSession)
-	got := (&AgentService{}).ListOneOffs(oneOffTestSession)
+	got := svc.ListOneOffs(oneOffTestSession)
 	if len(got.Items) != 0 || got.Note == "" {
 		t.Fatalf("empty list must explain itself: %+v", got)
 	}
-	if got := (&AgentService{}).ListOneOffs(""); got.Note == "" {
+	if got := svc.ListOneOffs(""); got.Note == "" {
 		t.Error("an empty session id must be refused, not silently listed")
 	}
 }
@@ -250,6 +253,7 @@ func TestListOneOffsWithoutRecords(t *testing.T) {
 // SessionMessage shape a session's transcript uses, the findings counted, and the api_request
 // line — which the panel does not render — skipped rather than replayed as a message.
 func TestLoadOneOffReplaysRecord(t *testing.T) {
+	svc := testAgentService(t)
 	dir := oneOffTestDir(t, oneOffTestSession)
 	name := "review-20260912-193535-bc05.jsonl"
 	ts := time.Date(2026, 9, 12, 19, 35, 36, 0, time.Local)
@@ -277,7 +281,7 @@ func TestLoadOneOffReplaysRecord(t *testing.T) {
 		messageLine(t, session.Message{Type: session.MessageTypeAssistant, Content: "done", Seq: 1, Timestamp: ts}),
 	)
 
-	got := (&AgentService{}).LoadOneOff(oneOffTestSession, name)
+	got := svc.LoadOneOff(oneOffTestSession, name)
 	if got.Notice != "" {
 		t.Fatalf("LoadOneOff notice = %q, want empty", got.Notice)
 	}
@@ -321,6 +325,7 @@ func TestLoadOneOffReplaysRecord(t *testing.T) {
 // TestOneOffPathsAreUntrusted: both the session id and the record name arrive from the
 // webview, so neither may escape the session's directory.
 func TestOneOffPathsAreUntrusted(t *testing.T) {
+	svc := testAgentService(t)
 	dir := oneOffTestDir(t, oneOffTestSession)
 	// A record that exists, to prove the refusals are about the NAME, not about absence.
 	writeOneOffFile(t, dir, "review-20260912-193535-bc05.jsonl",
@@ -335,14 +340,14 @@ func TestOneOffPathsAreUntrusted(t *testing.T) {
 		{oneOffTestSession, "review-20260912-193535-bc05.txt"},
 		{oneOffTestSession, ""},
 	} {
-		if got := (&AgentService{}).LoadOneOff(tc.session, tc.name); got.Notice == "" {
+		if got := svc.LoadOneOff(tc.session, tc.name); got.Notice == "" {
 			t.Errorf("LoadOneOff(%q, %q) was accepted; want a refusal", tc.session, tc.name)
 		}
-		if got := (&AgentService{}).ListOneOffs(tc.session); tc.session != oneOffTestSession && got.Note == "" {
+		if got := svc.ListOneOffs(tc.session); tc.session != oneOffTestSession && got.Note == "" {
 			t.Errorf("ListOneOffs(%q) was accepted; want a refusal", tc.session)
 		}
 	}
-	if _, err := oneOffPath(oneOffTestSession, "../x.jsonl"); err == nil {
+	if _, err := svc.oneOffPath(oneOffTestSession, "../x.jsonl"); err == nil {
 		t.Error("oneOffPath accepted a traversal")
 	}
 }

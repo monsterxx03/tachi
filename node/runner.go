@@ -673,7 +673,7 @@ func (r *runner) receiveFiles(cr *contextRun, prompt string, files []filePart) (
 			lines = append(lines, fmt.Sprintf("- %s (%s, %s) — attached to this message as an image", f.Name, f.MediaType, size))
 			continue
 		}
-		path, err := session.SaveReceivedFile(sessionID, f.Name, f.Bytes)
+		path, err := session.SaveReceivedFile(r.sessionsDir, sessionID, f.Name, f.Bytes)
 		if err != nil {
 			r.logger.Error(context.Background(), "node: could not store a file the caller sent",
 				err, "session", sessionID, "file", f.Name)

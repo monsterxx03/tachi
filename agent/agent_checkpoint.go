@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/checkpoint"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -245,13 +244,28 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 	}
 	sess := sm.Current()
 	roots := a.checkpointRoots(sess)
-	// The key carries the Options as well as the identity: the manager BAKES them in (the two
-	// guards and the retention are read once, at construction), so a session whose
-	// checkpoints.{max_files,max_bytes,retain} changed must NOT be served the old manager —
-	// that is the "I changed it and nothing happened" bug, and it is why these three keys
-	// need no reload call at all: the next use rebuilds.
-	key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%d",
-		sess.ID, strings.Join(roots, "\x00"),
+	// The checkpoints live BESIDE the session — inside the directory the store that owns the
+	// record keeps it in — not under the process-global session dir. Resolving the global one
+	// instead scatters a session's snapshots into a tree no reader of that session ever looks
+	// at: a session written through an explicit store (a node's per-context manager, a test's
+	// temp store) would leave its checkpoints behind in the real directory.
+	baseDir := a.SessionBaseDir()
+	if baseDir == "" {
+		// The store cannot name a directory (an in-memory or custom one). Then there is
+		// nothing to record rather than somewhere wrong to record it: a snapshot this session
+		// cannot reach is worse than no snapshot, because a rewind would report a restore it
+		// cannot deliver.
+		a.Config.Logger.Warn(ctx, "Agent: checkpoint disabled, session store has no directory")
+		return nil
+	}
+	// The key carries WHERE the session lives as well as its identity: the manager BAKES the
+	// Options in (the two guards and the retention are read once, at construction), so a
+	// session whose checkpoints.{max_files,max_bytes,retain} changed must NOT be served the
+	// old manager — that is the "I changed it and nothing happened" bug, and it is why these
+	// keys need no reload call at all: the next use rebuilds. The directory is in the key for
+	// the same reason: the same session id under another store is another session.
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d",
+		baseDir, sess.ID, strings.Join(roots, "\x00"),
 		cfg.Checkpoints.MaxFiles, cfg.Checkpoints.MaxBytes, cfg.Checkpoints.Retain)
 
 	a.ckptMu.Lock()
@@ -259,12 +273,7 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 	if a.ckpt != nil && a.ckptKey == key {
 		return a.ckpt
 	}
-	sessionDirRoot, err := config.SessionDir()
-	if err != nil {
-		a.Config.Logger.Warn(ctx, "Agent: checkpoint disabled, session dir unavailable", "err", err)
-		return nil
-	}
-	a.ckpt = checkpoint.NewManager(filepath.Join(sessionDirRoot, sess.ID), roots, checkpoint.Options{
+	a.ckpt = checkpoint.NewManager(filepath.Join(baseDir, sess.ID), roots, checkpoint.Options{
 		MaxFiles: cfg.Checkpoints.MaxFiles,
 		MaxBytes: cfg.Checkpoints.MaxBytes,
 		Retain:   cfg.Checkpoints.Retain,
@@ -272,6 +281,19 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 	})
 	a.ckptKey = key
 	return a.ckpt
+}
+
+// sessionBaseDir asks the session manager where its store keeps a session's files, or "" when
+// the store has no directory to name.
+//
+// The directory is asked of the STORE rather than resolved from config.SessionDir(), so the
+// checkpoints always land beside the record they describe (see BaseDir on session.Manager). A
+// store without one — an in-memory store, a test double — gets no checkpoint store at all.
+func sessionBaseDir(sm SessionManager) string {
+	if withDir, ok := sm.(interface{ BaseDir() string }); ok {
+		return withDir.BaseDir()
+	}
+	return ""
 }
 
 // checkpointRoots is the root set a turn's snapshot covers: the SESSION's own

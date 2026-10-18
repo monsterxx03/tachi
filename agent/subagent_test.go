@@ -143,6 +143,7 @@ type mockAgent struct {
 
 func (m *mockAgent) SubagentProvider() llm.Provider      { return nil }
 func (m *mockAgent) ParentSessionID() string             { return "" }
+func (m *mockAgent) SessionBaseDir() string              { return "" }
 func (m *mockAgent) Logger() *logger.Logger              { return logger.Default() }
 func (m *mockAgent) ToolNames() []string                 { return m.toolNames }
 func (m *mockAgent) GetTool(name string) agenttools.Tool { return nil }

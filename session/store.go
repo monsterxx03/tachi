@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -497,15 +496,41 @@ func ExtractTitle(content string) string {
 	return strutil.TruncateFitted(content, 50)
 }
 
+// subagentDirName is where a session's sub-agent transcripts live: beside pasted/, images/,
+// oneoff/ and received/, inside the session's own directory.
+const subagentDirName = "subagent"
+
+// SubagentDir resolves AND creates the directory a session's sub-agent transcripts live in:
+// <root>/<id>/subagent.
+//
+// The writer (a running sub-agent's recorder) and the reader below both go through here, because
+// a layout that is stated twice drifts: a transcript written where the reader does not look is a
+// sub-agent the reader never sees.
+func SubagentDir(root, sessionID string) (string, error) {
+	dir, err := DirFor(root, sessionID)
+	if err != nil {
+		return "", err
+	}
+	sub := filepath.Join(dir, subagentDirName)
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		return "", fmt.Errorf("session: create subagent dir: %w", err)
+	}
+	return sub, nil
+}
+
 // LoadSubagentMessages loads all subagent messages for a session.
 // Returns a map of subagentID → messages.
-func LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
-	dir, err := config.SessionDir()
+//
+// root is where the session's files live — the directory of the store that HOLDS the record (see
+// DirFor). The transcripts sit inside that directory, so resolving the root from anywhere else
+// reads a different session than the one the caller means.
+func LoadSubagentMessages(root, sessionID string) (map[string][]Message, error) {
+	dir, err := DirFor(root, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("session dir: %w", err)
+		return nil, err
 	}
 
-	subDir := filepath.Join(dir, sessionID, "subagent")
+	subDir := filepath.Join(dir, subagentDirName)
 	entries, err := os.ReadDir(subDir)
 	if err != nil {
 		if os.IsNotExist(err) {

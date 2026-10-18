@@ -8,6 +8,7 @@
 
 ## 一轮的绑定是会话级的
 
+- **一个会话的检查点住在它自己那份 store 命名的目录里，不是进程全局的会话目录。** 谁持有记录就问谁（`session.Manager.BaseDir`），所以一个写在显式目录下的会话——node 的按 context manager、测试的临时 store——检查点跟着它走；store 说不出目录（内存替身、测试替身），就没有检查点，而不是记到别处。理由有两条，都不是洁癖：落不到这条会话上的快照，回退会报出一个交付不了的成功；而写进全局目录的那一份是一堆没有记录陪着的残骸——一个用临时 store 的测试每跑一次就多几个，没人会去读，也没有东西会清。`TestCheckpointLandsBesideTheSessionRecord` 与 `TestCheckpointWithoutASessionDirectory` 钉住两半。
 - **一轮的检查点绑定是会话级的，而自动压缩会在轮中途把会话换掉。** manifest 在会话自己的目录下，所以在父会话里开始的那一轮，对子会话等于不存在：这一轮剩下的时间里，每个能写的工具都被拒绝（「turn N was never begun」，设计使然——没被记下来的写，就是回退收不回来的写），直到这一轮结束。所以 `maybeAutoCompact` 在它刷新其他会话级取值（SDK session id）的地方顺手把这一轮重新绑定（`rebindCheckpointTurn`）；只换根目录不需要这一步，因为 manifest 本来就是每个会话共用的。`TestCheckpointRebindsAfterCompaction` 钉住它。
 
 

@@ -530,10 +530,16 @@ func (s *AgentService) SavePastedImage(sessionID, mediaType, data string) Pasted
 	// The id names one directory under the store and comes from the webview, so it is resolved —
 	// and refused when it is not a single path element — before anything is written; the message is
 	// this frontend's, which is why the resolution happens here rather than inside the store call.
-	if _, err := sessionDirPath(sessionID); err != nil {
+	if _, err := s.sessionDirPath(sessionID); err != nil {
 		return PastedImageVO{Error: err.Error()}
 	}
-	path, err := session.SavePastedImage(sessionID, ext, raw)
+	store := s.desk.sessionStore()
+	if store == nil {
+		return PastedImageVO{Error: "会话存储不可用"}
+	}
+	// The ROOT comes from the store this desktop reads and writes sessions through, so the file
+	// lands beside the conversation it was pasted in rather than under a global default.
+	path, err := session.SavePastedImage(store.BaseDir(), sessionID, ext, raw)
 	if err != nil {
 		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
 	}

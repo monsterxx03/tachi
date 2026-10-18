@@ -235,6 +235,16 @@ func (d *desktopApp) sessionStore() *session.FileStore {
 	return d.store
 }
 
+// sessionBaseDir is where this app keeps its conversations — the store's own directory — or "" when
+// the store is not up yet. It is what a peer's returned files are written under, and what the
+// checkpoint store resolves against, so a session's own files always land beside its records.
+func (d *desktopApp) sessionBaseDir() string {
+	if store := d.sessionStore(); store != nil {
+		return store.BaseDir()
+	}
+	return ""
+}
+
 // buildAgentForSession constructs an AIAgent wired to the given session manager,
 // using the shared desktop config/system prompt and the SHARED MCP manager (so
 // multiple sessions reuse one MCP connection layer; per-session tool loading is

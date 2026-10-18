@@ -747,6 +747,18 @@ func (a *AIAgent) SessionManager() SessionManager {
 	return a.Config.SessionManager
 }
 
+// SessionBaseDir reports the directory the current session's files live in — the store that holds
+// the record names it (session.Manager.BaseDir) — or "" when there is no session or its store
+// cannot name one.
+//
+// Everything a session keeps BESIDE its records resolves through this: checkpoints, pasted images,
+// sub-agent transcripts, files received from another machine. A frontend asks the agent instead of
+// resolving config.SessionDir() itself, so a conversation written through an explicit store (a
+// node's per-context manager, a test's temp store) keeps its own files with it.
+func (a *AIAgent) SessionBaseDir() string {
+	return sessionBaseDir(a.Config.SessionManager)
+}
+
 // AllowAllAsksForSession records 「本会话全部允许」: from here this session is not asked about
 // another command or file call — not by an ask rule, and not by either judgment gate.
 //
@@ -1321,7 +1333,7 @@ func (a *AIAgent) KillBackgroundProcesses() {
 // around each provider at construction time.
 
 // usageDirFn returns the ledger directory; injectable for tests (mirrors the
-// oneoffSessionDirFn pattern in oneoff_recorder.go).
+// oneoffHomeDirFn pattern in oneoff_recorder.go).
 var usageDirFn = config.UsageDir
 
 var (

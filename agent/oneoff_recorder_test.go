@@ -19,16 +19,17 @@ import (
 
 // ---- helpers ----
 
-// overrideOneoffDirs points both one-off dir resolvers at tmp dirs for the
-// duration of a test.
+// overrideOneoffDirs points the global one-off home at a tmp dir for the duration of a test, and
+// returns a temp SESSION root for the recorder: a record that belongs to a conversation is filed
+// under the root its caller hands over, so a test passes one instead of replacing a package
+// variable.
 func overrideOneoffDirs(t *testing.T) (sessionDir, homeDir string) {
 	t.Helper()
 	sessionDir = t.TempDir()
 	homeDir = t.TempDir()
-	origS, origH := oneoffSessionDirFn, oneoffHomeDirFn
-	oneoffSessionDirFn = func() (string, error) { return sessionDir, nil }
+	origH := oneoffHomeDirFn
 	oneoffHomeDirFn = func() string { return homeDir }
-	t.Cleanup(func() { oneoffSessionDirFn, oneoffHomeDirFn = origS, origH })
+	t.Cleanup(func() { oneoffHomeDirFn = origH })
 	return sessionDir, homeDir
 }
 
@@ -64,7 +65,7 @@ func TestOneoffRecorder_PerSessionDir(t *testing.T) {
 		Kind:         "review",
 		SystemPrompt: "you are a reviewer",
 		Extra:        map[string]string{"thread": "t-1"},
-	}, "sess-abc", nil, "/repo", 30)
+	}, sessionDir, "sess-abc", nil, "/repo", 30)
 	require.NoError(t, err)
 
 	rec.record(&session.Message{Type: session.MessageTypeUser, Content: "review this"})
@@ -93,7 +94,7 @@ func TestOneoffRecorder_PerSessionDir(t *testing.T) {
 func TestOneoffRecorder_GlobalDir(t *testing.T) {
 	_, homeDir := overrideOneoffDirs(t)
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "dream"}, "", nil, "", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "dream"}, "", "", nil, "", 30)
 	require.NoError(t, err)
 	path, _, _ := rec.close()
 
@@ -111,7 +112,7 @@ func TestOneoffRecorder_ProviderInMeta(t *testing.T) {
 	overrideOneoffDirs(t)
 	prov := &mockStreamProvider{name: "deepseek"}
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", prov, "", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", "", prov, "", 30)
 	require.NoError(t, err)
 	path, _, _ := rec.close()
 
@@ -154,7 +155,7 @@ func TestOneoffRecorder_GlobalCreationSweeps(t *testing.T) {
 	past := time.Now().Add(-60 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(stale, past, past))
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "ambient"}, "", nil, "", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "ambient"}, "", "", nil, "", 30)
 	require.NoError(t, err)
 	rec.close()
 
@@ -167,7 +168,7 @@ func TestRecordSession_RedirectsToSidecar(t *testing.T) {
 	sessionDir, _ := overrideOneoffDirs(t)
 	a := newTestAgent(t, &mockStreamProvider{name: "mock"})
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "sess-x", nil, "", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, sessionDir, "sess-x", nil, "", 30)
 	require.NoError(t, err)
 	rs := &RunState{SkipSessionWrites: true, OneoffRec: rec} // one-off mode
 
@@ -349,7 +350,7 @@ func mustReadDir(t *testing.T, dir string) []string {
 func TestOneoffRecorder_RecordAPIRequest(t *testing.T) {
 	_, homeDir := overrideOneoffDirs(t)
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", nil, "/repo", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", "", nil, "/repo", 30)
 	require.NoError(t, err)
 
 	rec.recordAPIRequest(&session.APIRequest{
@@ -390,7 +391,7 @@ func TestOneoffRecorder_RecordAPIRequest(t *testing.T) {
 func TestOneoffRecorder_RecordAPIRequestWithDuration(t *testing.T) {
 	_, _ = overrideOneoffDirs(t)
 
-	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", nil, "/repo", 30)
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", "", nil, "/repo", 30)
 	require.NoError(t, err)
 
 	// The run loop writes the api_request line once, AFTER the call completes,

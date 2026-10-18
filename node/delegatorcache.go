@@ -63,7 +63,18 @@ type DelegatorCache struct {
 	// point is what holds the views somebody is looking at. Nil is the common case — three of the four
 	// entry points have no such view.
 	onSighting func()
-	openFunc   func(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error)
+	// sessionsDir is where this entry point keeps the conversations a delegated call belongs to: a
+	// file a peer sends back is written beside the session's own records (node/remoteclient.go
+	// storeFile). It travels with the cache because the SENDER is built per entry point, and each
+	// one knows its own store root — a process with no conversations (`-p`) passes "".
+	sessionsDir string
+	openFunc    func(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error)
+}
+
+// openSender is the default openFunc: this cache's own sending side, carrying the session root this
+// entry point works in.
+func (c *DelegatorCache) openSender(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
+	return OpenSender(peers, ownName, log, store, c.sessionsDir)
 }
 
 // DiscoveryOf is the discovery settings a config asks for, in the sending side's own terms: the one
@@ -167,8 +178,11 @@ func (d Discovery) any() bool { return d.Enabled || d.Gossip }
 // onSighting, when it is not nil, is called (from the browser's own goroutine) every time discovery
 // verifies a machine the directory did not have: a row that has appeared, and the one moment a reader
 // who is already looking needs to be told (see mdnsBrowser.onSighting).
-func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger, onSighting func()) *DelegatorCache {
-	c := &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, onSighting: onSighting, openFunc: OpenSender}
+//
+// sessionsDir is where this entry point keeps its conversations — the root a peer's returned files
+// are written under (see the field).
+func NewDelegatorCache(ownName string, d Discovery, log *logger.Logger, onSighting func(), sessionsDir string) *DelegatorCache {
+	c := &DelegatorCache{ownName: strings.TrimSpace(ownName), discovery: d, log: log, onSighting: onSighting, sessionsDir: sessionsDir}
 	// Registered here rather than where discovery starts: the gossip route is answered by the NODE
 	// SERVICE, which is built from config and has no way to reach this object — and an answer from a
 	// process whose sending side has not come up yet is legitimately "I know nobody" rather than an
@@ -444,7 +458,7 @@ func (c *DelegatorCache) ForSender(ctx context.Context, peers []config.PeerConfi
 	c.startDiscovery(ctx)
 	open := c.openFunc
 	if open == nil {
-		open = OpenSender
+		open = c.openSender
 	}
 	sender, err := open(peers, c.ownName, c.log, c.store)
 	if err != nil {

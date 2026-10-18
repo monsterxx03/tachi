@@ -11,6 +11,7 @@
 
 - **`meta.json` 是原子写的（tmp + rename）。** 保持这样：就地重写会让并发的读者——`--resume` 新开的存储、桌面侧栏、另一个进程——读到截断的文件，而 `scanSessions` 只能跳过解析不了的东西，于是一轮活着的回合会把自己的会话从别人的列表里悄悄丢掉。`session/store_test.go` 的 `TestListSessionsNeverMissesASessionBeingRewritten` 钉住它（对着 `os.WriteFile`，几百轮之内就会失败）。
 - **桌面把每个 manager 都建在同一个 store 上**（`d.sessionStore()`）：一轮通过它自己那个按轮的 manager 写入，而只有共享同一个 store，那次写入才能丢掉侧栏下一次读取本会被喂的那份快照。自己 new 一个 manager 就是那个错——它内部会另建一个 `NewFileStore`，拿不到 `d.sessionStore()` 那份快照（`desktop/` 下正确的写法是 `session.NewManagerWithStore(d.sessionStore(), nil)`）；[desktop.md](desktop.md)（桌面后端）有理由。
+- **一个会话的目录由 store 自己给出，不是从全局默认解析的**：`FileStore.BaseDir` → `Manager.BaseDir`，而 `session.DirFor(root, id)` 是把它和一个 id 接起来的**唯一**解析器（它拒绝不是单个路径元素的 id）。住在会话**旁边**的东西——检查点、粘贴的图片、子代理记录、一次性记录、从另一台机器收下的文件——都走它，所以一个写在显式目录下的会话（node 的按 context manager、测试的临时 store）把它的文件带在自己身上，而一个说不出目录的 store（内存替身）会被**拒绝**而不是写到别处。理由与钉住它的两个用例见 [checkpoints.md](checkpoints.md)。
 - **图片字节在 `AppendMessage` 里离开记录，这也是它们安全的原因。** 多模态消息的 parts 落在记录上（`Message.Parts`），字节不在：`AppendMessage`——会话记录**唯一**的写入者——把每张图片搬进该会话的 `images/` 目录，作为内容寻址的 blob（解码后字节的 SHA-256，所以同一张图发两次只花一个文件），只留下引用。两条规则由此成立：别的东西不许写会话记录（subagent 和一次性记录器有自己的文件，它们调用 `DropUnstoredImageParts`——一条它们解析不了的引用，比没有这个 part 更糟），以及磁盘上的记录永不携带 base64——这正是让一个满是截图的会话，仍是 `LoadMessages` 扫描缓冲区里可读 JSONL 的原因。读的那一半是 `LoadImage`，经 manager 以 `agent.ImageResolver` 抵达；blob 没了只让那一个 part 降级，绝不让转换失败（[prompt-cache.md](prompt-cache.md) 讲了为什么重建必须逐字节一致）。
 
 ## 分支是一次「先建好整棵树、再由 meta.json 发布」的写

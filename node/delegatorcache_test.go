@@ -22,7 +22,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
-	cache := NewDelegatorCache("", Discovery{}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil, "")
 
 	first := cache.For(t.Context(), peers)
 	require.NotNil(t, first)
@@ -42,7 +42,7 @@ func TestTheDelegatorFollowsThePeerList(t *testing.T) {
 func TestNoPeersMeansNoDelegator(t *testing.T) {
 	// Empty is a state, not a broken one: with nothing to delegate to, the tools are absent
 	// rather than present and always failing.
-	cache := NewDelegatorCache("", Discovery{}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil, "")
 	require.Nil(t, cache.For(t.Context(), nil))
 	require.Nil(t, cache.For(t.Context(), []config.PeerConfig{}))
 }
@@ -54,7 +54,7 @@ func TestDiscoveryAloneStillYieldsASender(t *testing.T) {
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil, "")
 	require.NotNil(t, cache.For(t.Context(), nil), "a machine with discovery on can still delegate")
 	cache.Close()
 }
@@ -66,13 +66,13 @@ func TestAFailedOpenIsNotCached(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	attempts := 0
-	cache := NewDelegatorCache("", Discovery{}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil, "")
 	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 		attempts++
 		if attempts == 1 {
 			return nil, errors.New("the records directory is not writable")
 		}
-		return OpenSender(p, "", nil, store)
+		return OpenSender(p, "", nil, store, "")
 	}
 
 	// A failure must not be remembered: the next turn tries again, so a transient problem heals
@@ -104,7 +104,7 @@ func TestWarmUpAsksEveryPeerWithoutWaitingForIt(t *testing.T) {
 		return nil, "", errors.New("nothing answered at that address")
 	}
 
-	cache := NewDelegatorCache("", Discovery{}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil, "")
 	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *sightingsStore) (*Sender, error) {
 		return &Sender{peers: dir}, nil
 	}
@@ -138,7 +138,7 @@ func TestWarmUpOnAClosedCacheOpensNothing(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://nas.example:8443"}}
 	opens := 0
-	cache := NewDelegatorCache("", Discovery{}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{}, nil, nil, "")
 	opened := make(chan struct{}, 1)
 	cache.openFunc = func([]config.PeerConfig, string, *logger.Logger, *sightingsStore) (*Sender, error) {
 		opens++
@@ -165,10 +165,10 @@ func TestAClosedCacheHandsOutNothing(t *testing.T) {
 
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	opens := 0
-	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil, "")
 	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 		opens++
-		return OpenSender(p, "", nil, store)
+		return OpenSender(p, "", nil, store, "")
 	}
 	require.NotNil(t, cache.For(t.Context(), peers))
 	require.Equal(t, 1, opens)
@@ -189,7 +189,7 @@ func TestGossipComesUpAndGoesDownWithTheCache(t *testing.T) {
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	// Off: nothing of it exists — no store, no loop, so no packet can be sent.
-	quiet := NewDelegatorCache("", Discovery{Enabled: true, SelfAddrs: []string{lanAddr}}, nil, nil)
+	quiet := NewDelegatorCache("", Discovery{Enabled: true, SelfAddrs: []string{lanAddr}}, nil, nil, "")
 	require.NotNil(t, quiet.For(t.Context(), nil))
 	require.Nil(t, quiet.gossip, "gossip off means no loop runs")
 	quiet.Close()
@@ -197,7 +197,7 @@ func TestGossipComesUpAndGoesDownWithTheCache(t *testing.T) {
 	// On: the loop comes up with the store, carries this machine's own account of where it is, and does
 	// not outlive a Close. It has nothing to ask here (no peers, no sightings), which is a round with
 	// nobody in it rather than an error.
-	cache := NewDelegatorCache("", Discovery{Gossip: true, SelfAddrs: []string{lanAddr}}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{Gossip: true, SelfAddrs: []string{lanAddr}}, nil, nil, "")
 	require.NotNil(t, cache.For(t.Context(), nil), "gossip alone is still a sending side")
 	require.NotNil(t, cache.gossip, "and the loop runs when it is on")
 	require.Equal(t, []string{lanAddr}, cache.gossip.selfAddrs)

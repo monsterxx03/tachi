@@ -219,7 +219,7 @@ func TestGossipRefusesWhatItCannotAnswer(t *testing.T) {
 // A machine it has merely heard about is never repeated: that is what stops a rumour from spreading
 // through it, and it is why the payload carries the age at all.
 func TestOnlyWhatThisProcessHasProvedIsRepeated(t *testing.T) {
-	cache := NewDelegatorCache("", Discovery{Gossip: true}, nil, nil)
+	cache := NewDelegatorCache("", Discovery{Gossip: true}, nil, nil, "")
 	t.Cleanup(cache.Close)
 	store := newSightingsStore(nil)
 	cache.store = store

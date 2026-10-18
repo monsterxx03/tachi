@@ -22,6 +22,12 @@ type Agent interface {
 	ParentSessionID() string
 	Logger() *logger.Logger
 
+	// SessionBaseDir reports the directory the parent session's own files live in, or "" when it
+	// cannot say. A sub-agent's transcript is written inside it (session.SubagentDir) — asked of
+	// the agent that owns the conversation rather than resolved globally, so a session written
+	// elsewhere keeps its transcripts with it.
+	SessionBaseDir() string
+
 	// Tool registry — used to copy tools from parent to child agents
 	ToolNames() []string
 	GetTool(name string) tools.Tool

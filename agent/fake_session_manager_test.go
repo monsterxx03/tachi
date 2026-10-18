@@ -51,6 +51,20 @@ type fakeSessionManager struct {
 	// store — strips Data and fills this map. Leaving it nil is the other interesting case: a
 	// reference whose blob is gone.
 	images map[string][]byte
+
+	// baseDir is the directory this fake's sessions "live" in, or "" for none. It exists for
+	// the layers that live BESIDE a session rather than inside it — the checkpoint store
+	// records its manifest in the session's own directory, so a manager that can name no
+	// directory gets no checkpoints at all (see sessionBaseDir). A test that wants them gives
+	// one through withFakeSessionIn.
+	baseDir string
+}
+
+// BaseDir names where this fake's sessions live; "" when the test did not provide one.
+func (f *fakeSessionManager) BaseDir() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.baseDir
 }
 
 func (f *fakeSessionManager) HasCurrent() bool {

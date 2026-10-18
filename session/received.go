@@ -36,14 +36,17 @@ const receivedDirName = "received"
 // There is no size limit here: what may cross the boundary is the CALLER's policy (per direction,
 // with its own refusal to report), and this layer's job is the layout. An empty payload is refused
 // because a zero-byte file is a broken transfer, not a file.
-func SaveReceivedFile(sessionID, name string, raw []byte) (string, error) {
+//
+// root is where the session's files live — the directory of the store that holds the record (see
+// DirFor).
+func SaveReceivedFile(root, sessionID, name string, raw []byte) (string, error) {
 	if len(raw) == 0 {
 		return "", errors.New("session: no bytes to store")
 	}
 	if name == "" || !fileutil.IsSinglePathElement(name) {
 		return "", fmt.Errorf("session: %q is not a usable file name", name)
 	}
-	dir, err := DirFor(sessionID)
+	dir, err := DirFor(root, sessionID)
 	if err != nil {
 		return "", err
 	}

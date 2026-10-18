@@ -20,7 +20,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // One reading of a message's Parts, used by both ends of all three directions. The cases below are
@@ -486,16 +485,15 @@ func TestAFileFromAPeerIsStoredOnlyOnce(t *testing.T) {
 		_, err := sender.Get(ctx, view.ID)
 		require.NoError(t, err)
 	}
-	sessionDir, err := session.DirFor(sessionID)
-	require.NoError(t, err)
-	stored, err := filepath.Glob(filepath.Join(sessionDir, "received", "*"))
-	require.NoError(t, err)
-	require.Len(t, stored, 1, "a poll must not write the same file again: %v", stored)
-	require.Equal(t, "once\n", string(mustRead(t, stored[0])))
-
+	// Where it landed is taken from the ANSWER rather than resolved a second way: the assertion is
+	// about the file the model was actually pointed at.
 	_, rest, ok := strings.Cut(view.Result, "saved on this machine at: ")
 	require.True(t, ok, view.Result)
 	path := strings.TrimSpace(strings.SplitN(rest, "\n", 2)[0])
+	stored, err := filepath.Glob(filepath.Join(filepath.Dir(path), "*"))
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "a poll must not write the same file again: %v", stored)
+	require.Equal(t, "once\n", string(mustRead(t, stored[0])))
 	require.Equal(t, stored[0], path, "and the path the model was given is the one that exists")
 }
 

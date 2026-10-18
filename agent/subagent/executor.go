@@ -144,7 +144,7 @@ func (e *Executor) run(
 	var rec *recorder
 	if parentID := e.agent.ParentSessionID(); parentID != "" {
 		var recErr error
-		rec, recErr = newRecorder(parentID, shortID, childLogger)
+		rec, recErr = newRecorder(e.agent.SessionBaseDir(), parentID, shortID, childLogger)
 		if recErr != nil {
 			childLogger.Error(ctx, "failed to create recorder", recErr)
 		} else {

@@ -21,13 +21,12 @@ import (
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-// sessionOneOffDir returns <sessions>/<id>/oneoff.
+// sessionOneOffDir returns <the server's session root>/<id>/oneoff.
+//
+// The root is the store this console reads sessions through (Store.BaseDir), so the side-channel
+// records it lists are the ones beside the conversation it just loaded.
 func (s *Server) sessionOneOffDir(id string) string {
-	sessDir, err := config.SessionDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(sessDir, id, "oneoff")
+	return filepath.Join(s.Store.BaseDir(), id, "oneoff")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -313,7 +312,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiReqs, _ := s.Store.LoadAPIRequests(id)
-	subagents, _ := session.LoadSubagentMessages(id)
+	subagents, _ := session.LoadSubagentMessages(s.Store.BaseDir(), id)
 	oneoffs := s.scanOneOffDir(s.sessionOneOffDir(id))
 	// Array fields must never serialize as null: the frontend calls
 	// .map()/.length on them unconditionally. Nil slices become "[]".
@@ -592,7 +591,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("load messages: %v", err))
 		return
 	}
-	subagents, _ := session.LoadSubagentMessages(id)
+	subagents, _ := session.LoadSubagentMessages(s.Store.BaseDir(), id)
 	apiReqs, _ := s.Store.LoadAPIRequests(id)
 
 	data := render.BuildReportDataFromMessagesWithRequests(sess, msgs, subagents, apiReqs)

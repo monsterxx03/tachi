@@ -77,6 +77,22 @@ func NewManagerWithStore(store Store, l *logger.Logger) *Manager {
 	return m
 }
 
+// BaseDir reports the directory this manager's store keeps its sessions in, or "" when the
+// store has none (an in-memory or otherwise custom store).
+//
+// It answers a question about LAYOUT, and the layers that live BESIDE the sessions are the
+// ones that ask — a session's checkpoint store records its manifest and its snapshots inside
+// that session's own directory. Asking the manager that WRITES the session is what keeps the
+// two together: resolving the directory from a process-global default instead puts a session
+// created under an explicit directory (a node's per-context manager, a test's temp store)
+// somewhere else entirely, and leaves its leftovers behind in the real one.
+func (m *Manager) BaseDir() string {
+	if withDir, ok := m.store.(interface{ BaseDir() string }); ok {
+		return withDir.BaseDir()
+	}
+	return ""
+}
+
 // SetSessionSwitchHook installs the callback a conversation's move to another session fires.
 //
 // It exists for the state a host keeps keyed by session id — a receiving node's retention
@@ -502,8 +518,11 @@ func (m *Manager) LoadImage(ref string) ([]byte, error) {
 
 // LoadSubagentMessages loads all subagent messages for a session.
 // Returns a map of subagentID → messages. Returns empty map if no subagents exist.
+//
+// The root comes from the store this manager writes through (BaseDir), so the transcripts it
+// reads are the ones beside the records it holds.
 func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
-	return LoadSubagentMessages(sessionID)
+	return LoadSubagentMessages(m.BaseDir(), sessionID)
 }
 
 // AppendAPIRequest records one LLM API call's request payload (system prompt

@@ -34,7 +34,12 @@ type Sender struct {
 //
 // It is called once per entry point rather than once per turn: the records are files, and a
 // tool call must not pay a directory scan.
-func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
+//
+// sessionsDir is where THIS process keeps the conversations a call belongs to — the entry point's
+// own store root, not a global lookup — because a file a peer sends back is written into the
+// session's own directory (session.SaveReceivedFile). A process with no conversations (`-p`) passes
+// "" and the file goes to spillDir instead.
+func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore, sessionsDir string) (*Sender, error) {
 	records, err := openDelegationStore(config.DelegationsDir())
 	if err != nil {
 		return nil, err
@@ -72,6 +77,7 @@ func OpenSender(peers []config.PeerConfig, ownName string, log *logger.Logger, s
 		ourCert:        ourCert,
 		ourName:        strings.TrimSpace(ownName),
 		spillDir:       config.ToolResultsDir(),
+		sessionsDir:    sessionsDir,
 		http:           &http.Client{},
 		requestTimeout: defaultRequestTimeout,
 		waitBudget:     defaultWaitBudget,

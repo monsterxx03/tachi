@@ -14,8 +14,18 @@ type testAgentOpt func(*AIAgent)
 // every AppendMessage call returns that error — use this to test session
 // write failure paths.
 func withFakeSession(appendErr ...error) testAgentOpt {
+	return withFakeSessionIn("", appendErr...)
+}
+
+// withFakeSessionIn is withFakeSession with the directory the fake's sessions live in.
+//
+// It is how a test that exercises checkpoints gets them at all: the checkpoint store records
+// its manifest BESIDE a session, so an agent whose manager names no directory has nowhere to
+// put one and records nothing (see sessionBaseDir). The directory is a real one — the fake
+// keeps its records in memory either way, but the snapshots are files.
+func withFakeSessionIn(dir string, appendErr ...error) testAgentOpt {
 	return func(a *AIAgent) {
-		fake := &fakeSessionManager{}
+		fake := &fakeSessionManager{baseDir: dir}
 		if len(appendErr) > 0 && appendErr[0] != nil {
 			fake.appendErr = appendErr[0]
 		}

@@ -38,6 +38,11 @@ type checkpointManifest struct {
 
 // checkpointTestAgent returns an agent whose session lives in a temp dir, with
 // checkpointing on and the turn's working directory bound in the context.
+//
+// The session's directory comes from the fake manager (withFakeSessionIn), because that is
+// where its checkpoints go: the agent asks the manager that OWNS the record rather than
+// resolving the process-global session dir. That one is still moved aside — other paths do
+// resolve it, and a test must leave nothing in the real ~/.tachi either way.
 func checkpointTestAgent(t *testing.T) (*AIAgent, string, context.Context) {
 	t.Helper()
 	oldBase := config.BaseDir()
@@ -48,7 +53,7 @@ func checkpointTestAgent(t *testing.T) (*AIAgent, string, context.Context) {
 	enabled := true
 	// A provider is required: rebuilding a session's history converts the records
 	// with the provider's type (see LoadSessionHistory), which a rewind does.
-	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSession())
+	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSessionIn(t.TempDir()))
 	a.Config.FullConfig = &config.Config{
 		Checkpoints: config.CheckpointConfig{Enabled: &enabled},
 	}
@@ -58,12 +63,15 @@ func checkpointTestAgent(t *testing.T) (*AIAgent, string, context.Context) {
 }
 
 // manifestPath is where a session's checkpoint index lives: beside the messages
-// and the one-off sidecars, under the session's own directory.
+// and the one-off sidecars, under the session's OWN directory — the one the
+// manager holding the record names, whatever the global session dir says.
 func manifestPath(t *testing.T, a *AIAgent) string {
 	t.Helper()
-	root, err := config.SessionDir()
-	require.NoError(t, err)
-	return filepath.Join(root, a.Config.SessionManager.Current().ID, "checkpoints", "manifest.json")
+	sm := a.Config.SessionManager
+	withDir, ok := sm.(interface{ BaseDir() string })
+	require.True(t, ok, "the test's session manager must name a directory")
+	require.NotEmpty(t, withDir.BaseDir())
+	return filepath.Join(withDir.BaseDir(), sm.Current().ID, "checkpoints", "manifest.json")
 }
 
 func readCheckpointManifest(t *testing.T, a *AIAgent) checkpointManifest {
@@ -73,6 +81,70 @@ func readCheckpointManifest(t *testing.T, a *AIAgent) checkpointManifest {
 	var m checkpointManifest
 	require.NoError(t, json.Unmarshal(data, &m))
 	return m
+}
+
+// TestCheckpointLandsBesideTheSessionRecord pins WHERE a session's checkpoint store lives: in
+// the directory of the store that owns the record, never under the process-global session dir.
+//
+// The two are the same in every ordinary frontend, which is exactly why the difference is
+// worth pinning. A session written through an explicit store — a node's per-context manager, a
+// test's temp store — used to scatter its checkpoints into the real ~/.tachi: one leftover
+// directory per session id, holding a manifest and no record, one per session ever begun there.
+func TestCheckpointLandsBesideTheSessionRecord(t *testing.T) {
+	global := t.TempDir()
+	oldBase := config.BaseDir()
+	config.SetBaseDir(global)
+	t.Cleanup(func() { config.SetBaseDir(oldBase) })
+
+	work := t.TempDir()
+	sessDir := t.TempDir()
+	enabled := true
+	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSessionIn(sessDir))
+	a.Config.FullConfig = &config.Config{
+		Checkpoints: config.CheckpointConfig{Enabled: &enabled},
+	}
+	_, err := a.Config.SessionManager.New("test", work)
+	require.NoError(t, err)
+
+	ctx := wdctx.WithDir(context.Background(), work)
+	a.beginCheckpointTurn(ctx, &RunState{}, "把导出改成流式", boundary(0, 0))
+
+	_, err = os.Stat(manifestPath(t, a))
+	require.NoError(t, err, "the manifest belongs beside the session's own record")
+
+	// And the global session dir must stay untouched: a snapshot written there is one this
+	// session could never rewind from, and a leftover nothing ever reads back.
+	_, err = os.Stat(filepath.Join(global, "session"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// TestCheckpointWithoutASessionDirectory pins the other half of that rule: a manager that
+// cannot name a directory (an in-memory store, a test double) gets NO checkpoint store, rather
+// than one somewhere arbitrary.
+func TestCheckpointWithoutASessionDirectory(t *testing.T) {
+	global := t.TempDir()
+	oldBase := config.BaseDir()
+	config.SetBaseDir(global)
+	t.Cleanup(func() { config.SetBaseDir(oldBase) })
+
+	work := t.TempDir()
+	enabled := true
+	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSession()) // a manager that names no directory
+	a.Config.FullConfig = &config.Config{
+		Checkpoints: config.CheckpointConfig{Enabled: &enabled},
+	}
+	_, err := a.Config.SessionManager.New("test", work)
+	require.NoError(t, err)
+
+	ctx := wdctx.WithDir(context.Background(), work)
+	rs := &RunState{}
+	a.beginCheckpointTurn(ctx, rs, "把导出改成流式", boundary(0, 0))
+
+	assert.Zero(t, rs.CheckpointTurn(), "a store with no directory must record no turn")
+	// Nothing anywhere: not beside the session (there is no such place) and not under the
+	// global dir either.
+	_, err = os.Stat(filepath.Join(global, "session"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 // TestCheckpointWiringRecordsBoundaryThenSnapshot pins the two call sites'

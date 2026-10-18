@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -24,22 +23,33 @@ const pastedDirName = "pasted"
 // language, the rest of this package's errors are not.
 var ErrNoSessionID = errors.New("session: no session id")
 
-// DirFor resolves the directory a session's own files live in: <SessionDir>/<id>.
+// ErrNoSessionDir reports that the caller cannot say WHERE a session's files live — its store
+// holds it somewhere it cannot name (see Manager.BaseDir). Named because every caller that writes
+// a session's own files needs the same refusal: joining an empty root with an id gives a RELATIVE
+// path, and a pasted image landing next to the process's working directory is worse than one that
+// is refused.
+var ErrNoSessionDir = errors.New("session: no session directory")
+
+// DirFor resolves the directory a session's own files live in: root/<id>.
 //
-// It is the ONE statement of that layout, which is why callers ask it rather than join the store
-// root themselves — and why the id, which can arrive from a webview, must be a single path element:
+// It is the ONE statement of that layout, which is why callers ask it rather than join a root
+// themselves — and why the id, which can arrive from a webview, must be a single path element:
 // a name like "../../other-session" would otherwise point somewhere else entirely, and the caller
 // is one file write — or one `open` — away from touching it.
-func DirFor(id string) (string, error) {
+//
+// The root is a PARAMETER, not config.SessionDir(): it is the directory the store that HOLDS the
+// session keeps it in (session.Manager.BaseDir), so a session written through an explicit store —
+// a node's per-context manager, a test's temp store — keeps its own files beside it instead of
+// scattering them into the real ~/.tachi.
+func DirFor(root, id string) (string, error) {
+	if root == "" {
+		return "", ErrNoSessionDir
+	}
 	if id == "" {
 		return "", ErrNoSessionID
 	}
 	if !fileutil.IsSinglePathElement(id) {
 		return "", fmt.Errorf("session: %q is not a session id", id)
-	}
-	root, err := config.SessionDir()
-	if err != nil {
-		return "", err
 	}
 	return filepath.Join(root, id), nil
 }
@@ -61,7 +71,10 @@ func DirFor(id string) (string, error) {
 // The size budget is enforced here as well as by the callers, which check it first so they can say
 // so while the screenshot is still on the clipboard: an oversized file would sit in the session
 // forever and never be seen by anyone (expansion annotates it as too large and attaches nothing).
-func SavePastedImage(sessionID, ext string, raw []byte) (string, error) {
+//
+// root is where the session's files live — the directory the store that holds the conversation
+// keeps it in (session.Manager.BaseDir); see DirFor for why it is a parameter and not a lookup.
+func SavePastedImage(root, sessionID, ext string, raw []byte) (string, error) {
 	if len(raw) == 0 {
 		return "", errors.New("session: no image bytes to store")
 	}
@@ -69,7 +82,7 @@ func SavePastedImage(sessionID, ext string, raw []byte) (string, error) {
 		return "", fmt.Errorf("session: image is %s, over the %s limit",
 			strutil.HumanBytes(int64(len(raw))), strutil.HumanBytes(llm.MaxImageSize))
 	}
-	path, err := pastedPath(sessionID, ext)
+	path, err := pastedPath(root, sessionID, ext)
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +96,7 @@ func SavePastedImage(sessionID, ext string, raw []byte) (string, error) {
 //
 // With no session the path comes from CreateTemp: the temp directory's contents are not this
 // package's to name, and reserving the file is what keeps two pastes in the same second apart.
-func pastedPath(sessionID, ext string) (string, error) {
+func pastedPath(root, sessionID, ext string) (string, error) {
 	if sessionID == "" {
 		f, err := os.CreateTemp("", "tachi-paste-*"+ext)
 		if err != nil {
@@ -95,7 +108,7 @@ func pastedPath(sessionID, ext string) (string, error) {
 		}
 		return path, nil
 	}
-	dir, err := DirFor(sessionID)
+	dir, err := DirFor(root, sessionID)
 	if err != nil {
 		return "", err
 	}

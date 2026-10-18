@@ -164,11 +164,10 @@ type oneoffAPIRequestLine struct {
 	session.APIRequest
 }
 
-// Injectable for tests (mirrors subagent/recorder.go's sessionDirFn).
-var (
-	oneoffSessionDirFn = config.SessionDir
-	oneoffHomeDirFn    = config.OneoffDir
-)
+// oneoffHomeDirFn resolves the global one-off home: where a record that belongs to NO conversation
+// is written (config.OneoffDir). A record that DOES belong to one is filed beside it instead, under
+// the root its caller passes (see newOneoffRecorder). Injectable for tests.
+var oneoffHomeDirFn = config.OneoffDir
 
 // oneoffRecorder appends session.Message lines plus a meta header to a
 // single JSONL file. One instance per one-off run; not shared across
@@ -183,9 +182,14 @@ type oneoffRecorder struct {
 
 // newOneoffRecorder creates the recorder, writes the meta header line, and
 // (for global-dir records) sweeps files older than retentionDays.
+//
+// sessionDirRoot is where this session's files live — the directory of the store that holds the
+// record (session.Manager.BaseDir, through AIAgent.SessionBaseDir) — and it is what the per-session
+// record is filed under. Empty is only meaningful with an empty sessionID (the global dir branch).
 // sessionID empty → global dir; non-empty → per-session dir.
 func newOneoffRecorder(
 	meta OneOffMeta,
+	sessionDirRoot string,
 	sessionID string,
 	provider llm.Provider,
 	cwd string,
@@ -193,11 +197,11 @@ func newOneoffRecorder(
 ) (*oneoffRecorder, error) {
 	var dir string
 	if sessionID != "" {
-		sessionDir, err := oneoffSessionDirFn()
+		sessionDir, err := session.DirFor(sessionDirRoot, sessionID)
 		if err != nil {
 			return nil, err
 		}
-		dir = filepath.Join(sessionDir, sessionID, "oneoff")
+		dir = filepath.Join(sessionDir, "oneoff")
 	} else {
 		dir = filepath.Join(oneoffHomeDirFn(), string(meta.Kind))
 		// Lazy retention sweep — only the global dir is age-managed;
@@ -342,7 +346,7 @@ func (a *AIAgent) startOneoffRecorder(ctx context.Context, meta OneOffMeta, prov
 		return nil
 	}
 	sessionID := a.resolveOneoffSessionID(meta)
-	rec, err := newOneoffRecorder(meta, sessionID, provider, oneoffCWD(ctx), a.oneoffRetentionDays())
+	rec, err := newOneoffRecorder(meta, a.SessionBaseDir(), sessionID, provider, oneoffCWD(ctx), a.oneoffRetentionDays())
 	if err != nil {
 		a.logWarn(ctx, "oneoff: failed to create recorder", err, "kind", meta.Kind)
 		return nil

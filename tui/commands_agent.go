@@ -80,6 +80,19 @@ func (m *Model) currentSessionID() string {
 	return ""
 }
 
+// sessionBaseDir is where the current session's own files live — the same "no session, no crash"
+// contract as currentSessionID: "" until the first turn has created one, which is what a paste
+// before any conversation needs (session.SavePastedImage stores under the OS temp dir then).
+//
+// It comes from the agent rather than from config.SessionDir(): everything a session keeps beside
+// its records is written through the store that holds it.
+func (m *Model) sessionBaseDir() string {
+	if m.agent == nil {
+		return ""
+	}
+	return m.agent.SessionBaseDir()
+}
+
 // sendCommitCommand 使用干净的对话上下文（不继承历史）把任务说明发给 LLM，
 // 由模型用 Bash 工具自行执行 git 并提交（不在此处 exec 任何命令）。
 // 如果配置了 commit_provider，使用专用 provider；否则回退到主 provider。

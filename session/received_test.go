@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/monsterxx03/tachi/config"
 )
 
 // A file that arrived from another machine lands in the session's own directory, under received/ —
@@ -14,14 +13,10 @@ import (
 // machine's delegation read back), because both are bytes from outside that belong to this
 // conversation.
 func TestSaveReceivedFileLandsInTheSessionDirectory(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
-	root, err := config.SessionDir()
-	if err != nil {
-		t.Fatalf("session dir: %v", err)
-	}
+	root := t.TempDir()
 	const id = "2026-09-13-103926-92db8c33"
 
-	path, err := SaveReceivedFile(id, "report.pdf", []byte("hello from the far side"))
+	path, err := SaveReceivedFile(root, id, "report.pdf", []byte("hello from the far side"))
 	if err != nil {
 		t.Fatalf("SaveReceivedFile: %v", err)
 	}
@@ -37,16 +32,16 @@ func TestSaveReceivedFileLandsInTheSessionDirectory(t *testing.T) {
 // that resolves upwards) must be refused rather than sanitised into something that writes somewhere
 // else: this is the difference between a name inside the session and a path on this machine.
 func TestSaveReceivedFileRefusesANameThatIsNotASingleElement(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
+	root := t.TempDir()
 	const id = "2026-09-13-103926-92db8c33"
 
 	for _, bad := range []string{"", ".", "..", "../evil.txt", "a/b.txt", `/etc/passwd`, `a\b.txt`} {
-		path, err := SaveReceivedFile(id, bad, []byte("x"))
+		path, err := SaveReceivedFile(root, id, bad, []byte("x"))
 		if err == nil {
 			t.Errorf("SaveReceivedFile(%q) = %q, want an error", bad, path)
 		}
 	}
-	if _, err := SaveReceivedFile(id, "fine.txt", nil); err == nil {
+	if _, err := SaveReceivedFile(root, id, "fine.txt", nil); err == nil {
 		t.Error("a zero-byte payload is a broken transfer, not a file")
 	}
 }
@@ -54,14 +49,14 @@ func TestSaveReceivedFileRefusesANameThatIsNotASingleElement(t *testing.T) {
 // Two peers sending the same name are two files. Overwriting would be silent data loss — the reader
 // gets a valid path either way, so nobody would ever see it.
 func TestSaveReceivedFileDoesNotOverwriteAnExistingName(t *testing.T) {
-	config.SetBaseDir(t.TempDir())
+	root := t.TempDir()
 	const id = "2026-09-13-103926-92db8c33"
 
-	first, err := SaveReceivedFile(id, "report.pdf", []byte("first"))
+	first, err := SaveReceivedFile(root, id, "report.pdf", []byte("first"))
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := SaveReceivedFile(id, "report.pdf", []byte("second"))
+	second, err := SaveReceivedFile(root, id, "report.pdf", []byte("second"))
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}

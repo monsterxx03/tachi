@@ -225,7 +225,7 @@ func TestAPeerIsPinnedOnFirstContactAndCheckAfter(t *testing.T) {
 	realURL := tlsPeer(t, real)
 
 	// First contact: nothing is pinned yet, so the key is recorded and the request goes through.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil, "")
 	require.NoError(t, err)
 	view, err := delegateTo(t, sender, "hi")
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func TestAPeerIsPinnedOnFirstContactAndCheckAfter(t *testing.T) {
 	require.Equal(t, realURL, pinned[real.NodeID].URL, "and so is where it was made")
 
 	// The same machine again — a NEW sender, so this reads the record rather than a cache.
-	again, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil)
+	again, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: realURL}}, "", nil, nil, "")
 	require.NoError(t, err)
 	_, err = delegateTo(t, again, "hi again")
 	require.NoError(t, err)
@@ -314,7 +314,7 @@ func TestACallerIntroducesItselfOnEveryCall(t *testing.T) {
 	}))
 
 	withBaseDir(t)
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: srv.URL}}, "tachi@mac", nil, nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: srv.URL}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	_, err = delegateTo(t, sender, "hi")
 	require.NoError(t, err)
@@ -368,14 +368,14 @@ func TestARenamedPeerIsStillTheSameMachine(t *testing.T) {
 	require.NoError(t, err)
 	url, sends := cardAndTaskPeer(t, machine)
 
-	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
+	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	started, err := delegateToNamed(t, first, "nas", "第一轮")
 	require.NoError(t, err)
 
 	// Same machine, same address, NEW local name — and with the identity the record holds, the
 	// follow-up still belongs to it (design §4.1: 别名变化不能改变任务归属).
-	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil)
+	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	_, err = renamed.Delegate(context.Background(), tools.DelegationRequest{
 		Peer: pinAndName(t, renamed, "home-nas"), Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
@@ -406,14 +406,14 @@ func TestAFollowUpWithoutANodeFindsItsMachineAfterARename(t *testing.T) {
 	require.NoError(t, err)
 	url, sends := cardAndTaskPeer(t, machine)
 
-	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
+	first, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	started, err := delegateToNamed(t, first, "nas", "第一轮")
 	require.NoError(t, err)
 	require.Equal(t, machine.NodeID, mustPeerNodeID(t, first.records, started.ID),
 		"the record really does bind the identity — this whole path rests on it")
 
-	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil)
+	renamed, err := OpenSender([]config.PeerConfig{{Name: "home-nas", URL: url}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	continued, err := renamed.Delegate(context.Background(), tools.DelegationRequest{
 		Prompt: "接着来", LogicalID: "conv-1", ContinueFrom: started.ID,
@@ -451,7 +451,7 @@ func TestAContinuationIsRefusedBeforeAMessageReachesAnotherMachine(t *testing.T)
 	sender, err := OpenSender([]config.PeerConfig{
 		{Name: "nas", URL: homeURL},
 		{Name: "hk-vm", URL: otherURL},
-	}, "tachi@mac", nil, nil)
+	}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 
 	started, err := delegateToNamed(t, sender, "nas", "第一轮")
@@ -487,7 +487,7 @@ func TestTwoRealNodesTalkOverTLS(t *testing.T) {
 
 	// The caller is a machine of its own: the identity OpenSender makes under this base dir is what
 	// the server reads, and it must be a DIFFERENT key than the server's.
-	sender, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "nas", URL: url}}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 
 	view, err := delegateToNamed(t, sender, "nas", "echo this back")

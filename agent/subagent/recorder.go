@@ -6,17 +6,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
 // recorder handles writing sub-agent execution messages to a JSONL file
 // under <session-dir>/subagent/<shortID>.jsonl.
-//
-// sessionDirFn is a function that returns the session storage directory.
-// In production it defaults to config.SessionDir; tests can override it.
-var sessionDirFn = config.SessionDir
 
 type recorder struct {
 	file   *os.File
@@ -24,14 +19,15 @@ type recorder struct {
 }
 
 // newRecorder creates a new recorder for the given session and sub-agent.
-func newRecorder(sessionID, shortID string, l *logger.Logger) (*recorder, error) {
-	sessionDir, err := sessionDirFn()
+//
+// root is where the session's own files live — session.SubagentDir resolves and creates the
+// subagent/ directory inside it — and the caller takes it from the agent that owns the
+// conversation (Agent.SessionBaseDir). It is deliberately not a process-global default: a session
+// written through an explicit store would leave its transcripts behind in the real ~/.tachi, where
+// nothing that reads the session ever looks.
+func newRecorder(root, sessionID, shortID string, l *logger.Logger) (*recorder, error) {
+	dir, err := session.SubagentDir(root, sessionID)
 	if err != nil {
-		return nil, err
-	}
-
-	dir := filepath.Join(sessionDir, sessionID, "subagent")
-	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
 

@@ -88,7 +88,8 @@ func (m *Model) attachClipboardImage(snap clipboard.Snapshot) {
 	}
 	// A fresh TUI has no session yet (the first turn creates it), and SavePastedImage handles that
 	// by falling back to the temp directory — the bytes still reach the session with the message.
-	path, err := session.SavePastedImage(m.currentSessionID(), ext, snap.Image)
+	// The root is the current session's own store; with no session it is unused.
+	path, err := session.SavePastedImage(m.sessionBaseDir(), m.currentSessionID(), ext, snap.Image)
 	if err != nil {
 		m.logger.Error(context.Background(), "tui: failed to store a pasted image", err)
 		m.noticeText("保存粘贴的图片失败：" + err.Error())

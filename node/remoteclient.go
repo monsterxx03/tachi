@@ -59,6 +59,12 @@ type remoteClient struct {
 	// tool results (config.ToolResultsDir): the pointer in the shortened text has to be a path this
 	// machine can actually read (boundAnswer).
 	spillDir string
+	// sessionsDir is where THIS process keeps the conversations a call belongs to — the entry
+	// point's own store root, not a global lookup. A file a peer sends back belongs to a session,
+	// and a session's files live beside its records (storeFile), so resolving the root here would
+	// scatter them into a directory nothing reads. Empty means this process has no conversations
+	// at all, and then a returned file goes to spillDir.
+	sessionsDir string
 	http     *http.Client
 
 	// store is the discovery side's ledger, when this process has one: a connection this client
@@ -608,7 +614,7 @@ func (c *remoteClient) takeFiles(ctx context.Context, d *Delegation, task *a2a.T
 // same idempotence reached the other way round. Both are copies on THIS machine.
 func (c *remoteClient) storeFile(ctx context.Context, d *Delegation, f filePart) (string, error) {
 	if sessionID := tools.SessionIDFromCtx(ctx); sessionID != "" {
-		return session.SaveReceivedFile(sessionID, f.Name, f.Bytes)
+		return session.SaveReceivedFile(c.sessionsDir, sessionID, f.Name, f.Bytes)
 	}
 	if c.spillDir == "" {
 		return "", errors.New("no session and no directory configured for files a peer sends back")

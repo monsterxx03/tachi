@@ -354,14 +354,9 @@ func TestGetSessionOneOffsIsArray(t *testing.T) {
 	}
 	id := sessions[0].ID
 
-	// sessionOneOffDir resolves against the global config base dir — point it
-	// at a temp home so the test never touches the real ~/.tachi.
-	home := t.TempDir()
-	prev := config.BaseDir()
-	config.SetBaseDir(home)
-	defer config.SetBaseDir(prev)
-
-	oneoffDir := filepath.Join(home, "session", id, "oneoff")
+	// The fixture goes where the server looks for it: beside the session's record, under the store
+	// this server reads sessions through.
+	oneoffDir := filepath.Join(s.Store.BaseDir(), id, "oneoff")
 	if err := os.MkdirAll(oneoffDir, 0700); err != nil {
 		t.Fatal(err)
 	}

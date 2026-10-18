@@ -144,7 +144,7 @@ type oneOffMetaLine struct {
 // It reads each record's header line and its file metadata only. The full parse is
 // LoadOneOff's job, for the one run the reader is actually looking at.
 func (s *AgentService) ListOneOffs(sessionID string) OneOffListVO {
-	dir, err := oneOffDir(sessionID)
+	dir, err := s.oneOffDir(sessionID)
 	if err != nil {
 		return OneOffListVO{Note: err.Error()}
 	}
@@ -215,7 +215,7 @@ type oneOffEntry struct {
 // request bodies are over half of a record's bytes. They stay on disk (the recorder writes them)
 // and a reader who wants them opens the record, or the web console's inspector.
 func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
-	path, err := oneOffPath(sessionID, name)
+	path, err := s.oneOffPath(sessionID, name)
 	if err != nil {
 		return OneOffDetailVO{Notice: err.Error()}
 	}
@@ -378,9 +378,10 @@ func newOneOffScanner(f *os.File) *bufio.Scanner {
 // oneOffDir locates a session's record directory.
 //
 // The session-name rule (untrusted, one path element) belongs to sessionDirPath, which this
-// shares with every other "which directory is this session" question.
-func oneOffDir(sessionID string) (string, error) {
-	dir, err := sessionDirPath(sessionID)
+// shares with every other "which directory is this session" question — including the ROOT it
+// resolves against (the store this desktop writes through).
+func (s *AgentService) oneOffDir(sessionID string) (string, error) {
+	dir, err := s.sessionDirPath(sessionID)
 	if err != nil {
 		return "", err
 	}
@@ -389,8 +390,8 @@ func oneOffDir(sessionID string) (string, error) {
 
 // oneOffPath resolves a record file name inside the session's directory. Same rule as
 // oneOffDir, plus the extension: the name only ever comes from ListOneOffs.
-func oneOffPath(sessionID, name string) (string, error) {
-	dir, err := oneOffDir(sessionID)
+func (s *AgentService) oneOffPath(sessionID, name string) (string, error) {
+	dir, err := s.oneOffDir(sessionID)
 	if err != nil {
 		return "", err
 	}

@@ -248,9 +248,14 @@ func New(cfg *config.Config) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Where this manager's conversations live: what a peer's returned file is written under, and
+	// the one answer the agent wiring resolves per session anyway. Asked once, here, because the
+	// store a test injects (m.sessionStore) is set AFTER construction — tests never exercise a
+	// returned file, so the process's own session directory is both correct and all there is.
+	sessionsDir, _ := config.SessionDir()
 	return &Manager{
 		cfg:                     cfg,
-		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil),
+		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil, sessionsDir),
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
 		agents:                  newAgentPool(),

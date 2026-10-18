@@ -127,7 +127,11 @@ func openSenderFor(t *testing.T, peerURL string) *Sender {
 	config.SetBaseDir(senderHome)
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}}, "", nil, nil)
+	// The sender's own session root, under its own home: what a peer's returned file is filed under
+	// when the context names a session (node/remoteclient.go storeFile).
+	sessionDir, err := config.SessionDir()
+	require.NoError(t, err)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "peer", URL: peerURL}}, "", nil, nil, sessionDir)
 	require.NoError(t, err)
 	return sender
 }
@@ -228,7 +232,7 @@ func TestASubmissionInABusyConversationIsRefused(t *testing.T) {
 
 	sender, err := OpenSender([]config.PeerConfig{
 		{Name: "peer", URL: "https://" + dialableAddr(t, peer.RemoteAddr())},
-	}, "", nil, nil)
+	}, "", nil, nil, "")
 	require.NoError(t, err)
 
 	// First submission: the peer accepts it and keeps working. The short wait is deliberate —
@@ -278,7 +282,7 @@ func TestAnUnreachablePeerIsUnknownRatherThanRefused(t *testing.T) {
 	require.NoError(t, fileutil.AtomicWriteJSON(config.PeerIdentitiesPath(),
 		map[string]knownPeer{ghostID: {Alias: "ghost", URL: ghostURL}}, 0o700, 0o600))
 
-	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: ghostURL}}, "", nil, nil)
+	sender, err := OpenSender([]config.PeerConfig{{Name: "ghost", URL: ghostURL}}, "", nil, nil, "")
 	require.NoError(t, err)
 
 	view, err := sender.Delegate(context.Background(), tools.DelegationRequest{
@@ -410,7 +414,7 @@ func TestAFollowUpWhoseMachineIsGoneSaysSo(t *testing.T) {
 	// Another peer IS configured — the point is which alias is missing, not that the list is empty.
 	stripped, err := OpenSender([]config.PeerConfig{
 		{Name: "someone-else", URL: "https://127.0.0.1:1"},
-	}, "tachi@mac", nil, nil)
+	}, "tachi@mac", nil, nil, "")
 	require.NoError(t, err)
 	_, err = stripped.Delegate(context.Background(), tools.DelegationRequest{
 		Prompt: "接着那份", LogicalID: "conv-1", ContinueFrom: first.ID,
@@ -648,7 +652,7 @@ func TestAToolLayerFailureIsNotAFabricatedTask(t *testing.T) {
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
-	sender, err := OpenSender(nil, "", nil, nil)
+	sender, err := OpenSender(nil, "", nil, nil, "")
 	require.NoError(t, err)
 
 	_, err = sender.Delegate(context.Background(), tools.DelegationRequest{Peer: "nobody", Prompt: "hi"})

@@ -244,6 +244,7 @@ type fakeAgent struct {
 
 func (a *fakeAgent) SubagentProvider() llm.Provider { return a.provider }
 func (a *fakeAgent) ParentSessionID() string        { return "" }
+func (a *fakeAgent) SessionBaseDir() string         { return "" }
 func (a *fakeAgent) Logger() *logger.Logger         { return logger.Default() }
 func (a *fakeAgent) ToolNames() []string            { return a.toolNames }
 func (a *fakeAgent) GetTool(name string) tools.Tool { return nil }
