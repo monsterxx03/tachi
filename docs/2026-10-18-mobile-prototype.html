@@ -1,0 +1,1302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tachi · 移动端界面预览</title>
+<style>
+  :root{
+    /* 与桌面同一套 token：深色是 Ayu Mirage，浅色是暖纸。 */
+    --bg:#252a35; --bg-top:#292e3a; --panel:#303541; --panel-2:#343944;
+    --sid:#212630; --raise:#2b303b;
+    --border:rgba(255,255,255,.09); --border-2:rgba(255,255,255,.14);
+    --wash:rgba(255,255,255,.045); --wash-2:rgba(255,255,255,.07);
+    --text:#cecdc6; --dim:#a9b0bd; --faint:#9ca3b1; --title:#e4e3dc;
+    --accent:#7c96ff; --accent-2:#9db1ff; --accent-strong:#4c589c; --accent-strong-hover:#5664ad;
+    --accent-soft:rgba(124,150,255,.16); --accent-line:rgba(124,150,255,.48);
+    --green:#46c98a; --red:#ff7a82; --red-wash:rgba(255,122,130,.14); --red-line:rgba(255,122,130,.45);
+    --amber:#e2a355; --amber-wash:rgba(226,163,85,.13); --amber-line:rgba(226,163,85,.35);
+    --on-accent:#f2f4ff;
+    --user-grad-a:#2c3246; --user-grad-b:#262c3e; --user-ink:#dde3ff;
+    --code-bg:rgba(255,255,255,.08); --code-ink:#e6e4dc;
+    --cmd-bg:rgba(0,0,0,.24); --cmd-ink:#e8e6df;
+    --input-bg:rgba(0,0,0,.16);
+    --composer-bg:rgba(0,0,0,.12);
+    --strip-bg:rgba(0,0,0,.08);
+    --head-bg:rgba(37,42,53,.72);
+    --toast-bg:#3a4150;
+    --switch-off:#aab0ba;
+    --shadow:0 30px 80px rgba(0,0,0,.55), 0 4px 16px rgba(0,0,0,.35);
+    --page-bg:radial-gradient(1200px 700px at 50% -10%, #1e232d, #14171e 60%);
+    --devbar-bg:#1a1e26; --devseg:#333a48; --devhint:#6d7686; --devborder:rgba(255,255,255,.07);
+    --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  body[data-theme="light"]{
+    --bg:#f7f4ee; --bg-top:#fdfbf7; --panel:#fffefa; --panel-2:#f2ede5;
+    --sid:#f3efe7; --raise:#fdfbf7;
+    --border:rgba(62,54,44,.12); --border-2:rgba(62,54,44,.17);
+    --wash:rgba(62,54,44,.05); --wash-2:rgba(62,54,44,.075);
+    --text:#2b2621; --dim:#5b554d; --faint:#6b655c; --title:#2b2621;
+    --accent:#4a6cf5; --accent-2:#2f4bd6; --accent-strong:#3550d8; --accent-strong-hover:#2f4bd6;
+    --accent-soft:rgba(74,108,245,.14); --accent-line:rgba(74,108,245,.5);
+    --green:#0d6f45; --red:#bf2831; --red-wash:rgba(191,40,49,.11); --red-line:rgba(191,40,49,.45);
+    --amber:#8a4b08; --amber-wash:rgba(138,75,8,.1); --amber-line:rgba(138,75,8,.3);
+    --on-accent:#ffffff;
+    --user-grad-a:#f1eade; --user-grad-b:#eae1d0; --user-ink:#4a4235;
+    --code-bg:rgba(62,54,44,.07); --code-ink:#34429e;
+    --cmd-bg:rgba(62,54,44,.06); --cmd-ink:#2b2621;
+    --input-bg:rgba(62,54,44,.04);
+    --composer-bg:rgba(62,54,44,.035);
+    --strip-bg:rgba(62,54,44,.025);
+    --head-bg:rgba(247,244,238,.82);
+    --toast-bg:#fffefa;
+    --switch-off:#b7b0a4;
+    --shadow:0 24px 60px rgba(62,54,44,.18), 0 4px 14px rgba(62,54,44,.12);
+    --page-bg:radial-gradient(1100px 600px at 50% -12%, #fdfbf7, #e9e4da 62%);
+    --devbar-bg:#efe9df; --devseg:#fffefa; --devhint:#8a8175; --devborder:rgba(62,54,44,.12);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{margin:0;padding:0;height:100%}
+  body{
+    background:var(--page-bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px; -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+  input{font:inherit}
+
+  /* ── 预览工具条（在设备外面，不是 App 的一部分） ── */
+  .devbar{
+    height:46px; display:flex; align-items:center; gap:14px; padding:0 16px;
+    background:var(--devbar-bg); border-bottom:1px solid var(--devborder);
+    font-size:12px; color:var(--faint); position:relative; z-index:50;
+  }
+  .devbar b{color:var(--dim);font-weight:600;letter-spacing:.04em}
+  .seg{display:flex;background:var(--wash);border:1px solid var(--border);border-radius:8px;padding:2px}
+  .seg button{padding:4px 12px;border-radius:6px;color:var(--faint)}
+  .seg button.on{background:var(--devseg);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+  .devbar .sp{flex:1}
+  .devbtn{padding:5px 11px;border-radius:7px;border:1px solid var(--border);color:var(--dim)}
+  .devbtn:hover{background:var(--wash)}
+  .devhint{color:var(--devhint)}
+  @media (max-width:700px){ .devhint{display:none} .devbar b{display:none} .devbar{gap:8px;padding:0 10px} .seg button{padding:4px 7px} }
+
+  /* ── 舞台与设备 ── */
+  .stage{position:relative; height:calc(100% - 46px); display:flex; align-items:center; justify-content:center; padding:18px}
+  .device-wrap{position:relative; flex:none}
+  .device{
+    position:absolute; top:0; left:0; transform-origin:0 0;
+    background:#0b0e14; border:10px solid #10141b; border-radius:56px; overflow:hidden;
+    box-shadow:var(--shadow); will-change:transform;
+  }
+  .device.tablet{border-radius:32px;border-width:12px}
+  .device.adaptive{border:0;border-radius:0;box-shadow:none;background:transparent}
+  .island{display:none}
+  body[data-mode="phone"] .island{
+    display:block; position:absolute; top:9px; left:50%; transform:translateX(-50%);
+    width:104px; height:28px; background:#05070a; border-radius:18px; z-index:9;
+  }
+
+  /* ── App 外壳 ── */
+  .app{
+    container-type:inline-size;
+    position:relative; display:flex; flex-direction:column; height:100%; overflow:hidden;
+    background:
+      radial-gradient(900px 420px at 50% -12%, var(--accent-soft), transparent 62%),
+      linear-gradient(180deg, var(--bg-top), var(--bg) 48%);
+  }
+  .statusbar{height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:12px;font-weight:600;color:var(--text);letter-spacing:.02em}
+  .sbicons{display:flex;align-items:center;gap:6px;color:var(--text)}
+  .batt{width:20px;height:10px;border:1.2px solid currentColor;border-radius:3px;position:relative;opacity:.9}
+  .batt:before{content:"";position:absolute;inset:1.5px;right:5px;background:currentColor;border-radius:1px}
+  .batt:after{content:"";position:absolute;right:-3px;top:2.5px;width:2px;height:4px;background:currentColor;border-radius:0 1px 1px 0}
+
+  .connbar{flex:none;display:flex;align-items:center;gap:8px;padding:7px 16px;font-size:12px;background:var(--red-wash);color:var(--red);border-bottom:1px solid var(--border)}
+  .connbar i{width:7px;height:7px;border-radius:50%;background:var(--red);flex:none}
+
+  .appbody{flex:1;display:flex;min-height:0;position:relative}
+
+  /* ── 会话列表 ── */
+  .sidebar{display:flex;flex-direction:column;width:100%;min-width:0;background:var(--sid)}
+  .shead{flex:none;padding:14px 16px 8px;display:flex;align-items:flex-start;gap:10px}
+  .shead .ht{flex:1;min-width:0}
+  .brand{font-size:25px;font-weight:650;letter-spacing:-.02em;color:var(--title);line-height:1.15}
+  .sub{font-size:12px;color:var(--faint);margin-top:4px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub .dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex:none;box-shadow:0 0 0 3px rgba(70,201,138,.12)}
+  .gear{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--faint);border:1px solid var(--border);margin-top:2px}
+  .gear:hover{background:var(--wash);color:var(--text)}
+  .list{flex:1;overflow-y:auto;padding:4px 8px 16px;min-height:0}
+  .list::-webkit-scrollbar,.messages::-webkit-scrollbar,.sheetbody::-webkit-scrollbar{width:0}
+  .row{display:block;width:100%;text-align:left;padding:12px 12px 11px;border-radius:12px;margin:2px 0;border:1px solid transparent}
+  .row:hover{background:var(--wash)}
+  .row.sel{background:var(--accent-soft);border-color:var(--accent-line)}
+  .rowtop{display:flex;align-items:center;gap:8px}
+  .rtitle{flex:1;min-width:0;font-size:14.5px;font-weight:600;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rowsub{margin-top:4px;font-size:12px;color:var(--faint);display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill{flex:none;font-size:10.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--border);color:var(--faint);letter-spacing:.01em}
+  .pill.amber{color:var(--amber);border-color:var(--amber-line);background:var(--amber-wash)}
+  .pill.live{color:var(--accent-2);border-color:var(--accent-line);background:var(--accent-soft);display:inline-flex;align-items:center;gap:5px}
+  .pill.live i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 1.6s infinite}
+  .pill.mute{opacity:.8}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+  .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--faint);font-size:13px;text-align:center;padding:24px;gap:6px}
+  .empty b{color:var(--dim);font-size:14px;font-weight:600}
+
+  /* ── 聊天 ── */
+  .chatpane{display:none;flex-direction:column;width:100%;min-width:0;background:var(--bg);position:relative}
+  .chathead{flex:none;height:58px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--border);background:var(--head-bg);backdrop-filter:blur(12px)}
+  .back{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--dim);flex:none}
+  .back:hover{background:var(--wash);color:var(--text)}
+  .hinfo{flex:1;min-width:0}
+  .htitle{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--title)}
+  .hsub{font-size:11.5px;color:var(--faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .statepill{flex:none;font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--border);color:var(--faint)}
+  .statepill.amber{color:var(--amber);border-color:var(--amber-line);background:var(--amber-wash)}
+  .statepill.live{color:var(--accent-2);border-color:var(--accent-line);background:var(--accent-soft)}
+
+  .chatmeta{flex:none;display:flex;align-items:center;gap:7px;padding:6px 14px;border-bottom:1px solid var(--border);background:var(--strip-bg);font-size:11.5px;color:var(--faint);min-height:34px;overflow:hidden}
+  .chatmeta .money{color:var(--dim);font-variant-numeric:tabular-nums;font-weight:650;letter-spacing:.01em}
+  .chatmeta .dotsep{opacity:.45}
+  .chatmeta .tps{display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .chatmeta .tps i{width:5px;height:5px;border-radius:50%;background:var(--green);flex:none}
+  .chatmeta .tps.live{color:var(--dim)}
+  .chatmeta .tps.live i{animation:pulse 1.2s infinite}
+  .chatmeta .tps.idle{opacity:.62}
+  .chatmeta .ctx{display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--faint);flex:none}
+  .chatmeta .ctx svg{width:13px;height:13px;display:block}
+  .chatmeta .ctx .track{fill:none;stroke:var(--border-2);stroke-width:2.8}
+  .chatmeta .ctx .val{fill:none;stroke:var(--accent);stroke-width:2.8;stroke-linecap:round;transition:stroke-dashoffset .3s}
+  .chatmeta .ctx.warn .val{stroke:var(--amber)}
+  .chatmeta .ctx.hot .val{stroke:var(--red)}
+  .chatmeta .ctx.warn,.chatmeta .ctx.hot{color:var(--amber)}
+  .chatmeta .ctx.hot{color:var(--red)}
+  .chatmeta .sp{flex:1}
+  .chatmeta .ws{display:none;font-family:var(--mono);font-size:10.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
+  .chip{font-size:11.5px;padding:3px 9px;border-radius:20px;border:1px solid var(--border-2);color:var(--dim);white-space:nowrap;flex:none}
+  .chip:hover{background:var(--wash);color:var(--text)}
+  .chip.flat{border-color:transparent;background:none}
+  .iconbtn{width:26px;height:26px;border-radius:7px;color:var(--faint);display:flex;align-items:center;justify-content:center;font-size:17px;line-height:1;flex:none}
+  .iconbtn:hover{background:var(--wash);color:var(--text)}
+  .skipchip{flex:none;font-size:10.5px;padding:2px 7px;border-radius:20px;color:var(--amber);border:1px solid var(--amber-line);background:var(--amber-wash);white-space:nowrap}
+
+  .kv{display:flex;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--faint);width:76px;flex:none}
+  .kv .v{color:var(--text);word-break:break-all;font-size:12.5px;line-height:1.5}
+  .kv .v.mono{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  .switchrow{display:flex;align-items:flex-start;gap:12px;margin-top:8px}
+  .switchrow .txt{flex:1}
+  .switchrow b{font-size:13px;color:var(--text);font-weight:600}
+  .switchrow p{margin:3px 0 0;font-size:11.5px;line-height:1.55;color:var(--faint)}
+  .switch{width:44px;height:26px;border-radius:20px;background:var(--wash-2);border:1px solid var(--border-2);position:relative;flex:none;transition:.18s;margin-top:1px}
+  .switch i{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:var(--switch-off);transition:.18s}
+  .switch.on{background:var(--amber-wash);border-color:var(--amber-line)}
+  .switch.on i{left:20px;background:var(--amber)}
+  .switch:disabled{opacity:.4}
+  .modelrow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px;border:1px solid var(--border);border-radius:11px;margin-bottom:8px}
+  .modelrow:hover{background:var(--wash)}
+  .modelrow.sel{border-color:var(--accent-line);background:var(--accent-soft)}
+  .modelrow .mi{flex:1;min-width:0}
+  .modelrow b{display:block;font-size:13.5px;color:var(--text);font-weight:600}
+  .modelrow span{display:block;font-size:11px;color:var(--faint);font-family:var(--mono);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .modelrow .check{color:var(--accent-2);font-size:14px;flex:none}
+
+  .ctxbar{display:flex;height:8px;border-radius:5px;overflow:hidden;background:var(--wash);margin:11px 0 13px}
+  .ctxbar .ctxfill{display:flex;height:100%}
+  .ctxbar span{display:block;height:100%}
+  .ctxrows{display:flex;flex-direction:column;gap:7px}
+  .ctxrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--faint)}
+  .ctxrow i{width:7px;height:7px;border-radius:2px;flex:none}
+  .ctxrow .n{flex:1}
+  .ctxrow .t{font-variant-numeric:tabular-nums;color:var(--dim)}
+
+  /* 附件（SendFile） */
+  .filecard{display:flex;align-items:center;gap:11px;width:100%;max-width:420px;text-align:left;padding:10px 11px;border:1px solid var(--border-2);background:var(--panel);border-radius:12px;margin:8px 0}
+  .filecard:hover{background:var(--panel-2)}
+  .ficon{width:34px;height:34px;border-radius:8px;background:var(--wash);display:flex;align-items:center;justify-content:center;color:var(--accent-2);flex:none}
+  .fmeta{flex:1;min-width:0}
+  .fmeta b{display:block;font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .fmeta span{display:block;font-size:11px;color:var(--faint);margin-top:2px}
+  .fopen{color:var(--faint);flex:none}
+  .imgcard{display:block;width:100%;max-width:420px;text-align:left;border:1px solid var(--border-2);background:var(--panel);border-radius:12px;padding:7px;margin:8px 0}
+  .imgcard:hover{background:var(--panel-2)}
+  .imgcard svg{display:block;width:100%;border-radius:7px}
+  .imgmeta{display:flex;align-items:baseline;gap:7px;padding:7px 4px 2px;font-size:11px;color:var(--faint)}
+  .imgmeta b{font-size:12.5px;color:var(--text);font-weight:600}
+
+  .filebody{max-width:760px;margin:0 auto;width:100%}
+  .doc{font-size:14px;line-height:1.72;color:var(--text)}
+  .doc h2{font-size:18px;margin:2px 0 6px;color:var(--title)}
+  .doc h3{font-size:14.5px;margin:18px 0 6px;color:var(--title)}
+  .doc p{margin:8px 0;color:var(--text)}
+  .doc ul{margin:6px 0 6px 18px;padding:0;color:var(--text)}
+  .doc li{margin:3px 0}
+  .doc table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
+  .doc th,.doc td{border-bottom:1px solid var(--border);padding:7px 8px;text-align:left}
+  .doc th{color:var(--faint);font-weight:600}
+  .doc code{font-family:var(--mono);background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:4px}
+  .docmeta{font-size:11.5px;color:var(--faint)}
+  .imgview{display:flex;align-items:center;justify-content:center;padding:6px 0}
+  .imgview svg{width:100%;max-width:640px;border-radius:12px;border:1px solid var(--border)}
+  .textview{font-family:var(--mono);font-size:12px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--dim);background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px;margin:0}
+
+  /* Mermaid 图与代码块 */
+  .mermaid{margin:10px auto;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--panel);overflow-x:auto;max-width:460px}
+  .mermaid svg{display:block;width:100%;height:auto}
+  .codeblock{font-family:var(--mono);font-size:11.5px;line-height:1.6;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:8px 0;overflow-x:auto;white-space:pre;color:var(--dim)}
+
+  @container (min-width:720px){
+    .chatmeta{padding:7px 20px}
+    .chatmeta .ws{display:block}
+  }
+
+  .messages{flex:1;overflow-y:auto;padding:16px 0 8px;min-height:0;scroll-behavior:smooth;display:flex;flex-direction:column}
+  .inner{max-width:720px;margin:auto auto 0;padding:0 16px;display:flex;flex-direction:column;gap:2px;width:100%}
+  .amsg{font-size:15px;line-height:1.72;color:var(--text);white-space:pre-wrap;word-break:break-word;padding:5px 0}
+  .amsg code{font-family:var(--mono);font-size:.86em;background:var(--code-bg);padding:1px 5px;border-radius:4px;color:var(--code-ink)}
+  .caret{display:inline-block;width:2px;height:1.05em;background:var(--accent-2);vertical-align:-.18em;margin-left:2px;animation:blink 1s steps(1) infinite;border-radius:1px}
+  @keyframes blink{50%{opacity:0}}
+  .umsg{align-self:flex-end;max-width:82%;background:linear-gradient(165deg,var(--user-grad-a),var(--user-grad-b));color:var(--user-ink);font-size:15px;line-height:1.6;padding:9px 14px;border-radius:16px 16px 5px 16px;margin:8px 0 10px;white-space:pre-wrap;word-break:break-word}
+  .umsg .tag{display:block;font-size:10.5px;opacity:.7;margin-top:5px;letter-spacing:.02em}
+  .readonly-banner{display:flex;gap:9px;align-items:flex-start;background:var(--wash);border:1px solid var(--border);border-radius:12px;padding:11px 12px;margin:4px 0 12px;font-size:12.5px;line-height:1.55;color:var(--dim)}
+  .readonly-banner b{color:var(--text);font-weight:600}
+  .tool{border:1px solid var(--border);background:var(--wash);border-radius:11px;margin:7px 0;overflow:hidden}
+  .toolhead{display:flex;align-items:center;gap:9px;width:100%;padding:9px 11px;text-align:left}
+  .tname{font-family:var(--mono);font-size:11.5px;color:var(--accent-2);flex:none;letter-spacing:.01em}
+  .tsum{font-size:12px;color:var(--dim);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ticon{flex:none;color:var(--faint);font-size:11px;transform:rotate(90deg);transition:transform .18s}
+  .tool.open .ticon{transform:rotate(-90deg)}
+  .toolbody{border-top:1px solid var(--border);padding:9px 11px;font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--dim);white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
+  .think{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:5px 0;color:var(--faint);font-size:12px}
+  .think:hover{color:var(--dim)}
+  .think .ticon{transform:rotate(0)}
+  .think.open .ticon{transform:rotate(90deg)}
+  .thinkbody{font-size:12.5px;line-height:1.65;color:var(--faint);border-left:2px solid var(--border-2);padding:2px 0 2px 11px;margin:2px 0 8px}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--faint);font-size:11px;margin:10px 0 6px}
+  .divider:before,.divider:after{content:"";height:1px;background:var(--border);flex:1}
+
+  .card{border:1px solid var(--border-2);background:var(--panel);border-radius:14px;padding:13px 14px;margin:12px 0}
+  .card.perm{background:var(--panel)}
+  .card.ask{}
+  .cardhead{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .cardkind{font-size:11.5px;font-weight:600;letter-spacing:.02em;color:var(--amber)}
+  .card.ask .cardkind{color:var(--accent-2)}
+  .cmd{font-family:var(--mono);font-size:12px;line-height:1.6;background:var(--cmd-bg);border:1px solid var(--border);border-radius:9px;padding:9px 11px;color:var(--cmd-ink);white-space:pre-wrap;word-break:break-all}
+  .rule{font-size:11.5px;color:var(--faint);margin-top:8px;line-height:1.5}
+  .cardactions{display:flex;gap:9px;margin-top:13px}
+  .btn{padding:8px 14px;border-radius:9px;font-size:13px;font-weight:600;border:1px solid transparent}
+  .btn.primary{background:var(--accent-strong);color:var(--on-accent)}
+  .btn.primary:hover{background:var(--accent-strong-hover)}
+  .btn.ghost{border-color:var(--border-2);color:var(--dim)}
+  .btn.ghost:hover{background:var(--wash);color:var(--text)}
+  .btn.deny{color:var(--red);border-color:var(--red-line)}
+  .btn.deny:hover{background:var(--red-wash)}
+  .btn:disabled{opacity:.4;cursor:default}
+  .q{font-size:14.5px;line-height:1.55;color:var(--text);margin-bottom:11px}
+  .opts{display:flex;flex-direction:column;gap:7px}
+  .opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border-2);border-radius:10px;font-size:13px;color:var(--dim)}
+  .opt:hover{background:var(--wash);color:var(--text)}
+  .opt.sel{border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent-2)}
+  .opt .radio{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--faint);flex:none;position:relative}
+  .opt.sel .radio{border-color:var(--accent-2)}
+  .opt.sel .radio:after{content:"";position:absolute;inset:2.5px;background:var(--accent-2);border-radius:50%}
+  .free{margin-top:8px}
+  .free input{width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:9px;padding:9px 11px;color:var(--text);font-size:12.5px;outline:none}
+  .free input:focus{border-color:var(--accent-line)}
+  .settled{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--faint);padding:9px 2px;margin:6px 0}
+  .settled b{color:var(--dim);font-weight:600}
+  .settled.ok b{color:var(--green)}
+  .settled.no b{color:var(--red)}
+
+  /* ── 输入区 ── */
+  .composer{flex:none;border-top:1px solid var(--border);background:var(--composer-bg);padding:9px 12px 12px}
+  .composer .cinner{max-width:720px;margin:0 auto}
+  .runhint{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--faint);padding:1px 3px 8px}
+  .runhint .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 1.6s infinite;flex:none}
+  .runhint.amber .dot{background:var(--amber);animation:none}
+  .runhint .act{margin-left:auto;color:var(--dim);font-size:11.5px;border-bottom:1px dotted var(--border-2);padding-bottom:1px;flex:none}
+  .runhint .act:hover{color:var(--text)}
+  .inputrow{display:flex;align-items:flex-end;gap:9px}
+  .inputwrap{flex:1;display:flex;align-items:center;background:var(--panel);border:1px solid var(--border-2);border-radius:13px;padding:0 4px 0 13px;min-height:44px}
+  .inputwrap:focus-within{border-color:var(--accent-line)}
+  .inputwrap input{flex:1;background:none;border:none;outline:none;color:var(--text);font-size:14.5px;padding:11px 0}
+  .inputwrap input::placeholder{color:var(--faint)}
+  .send{width:38px;height:38px;border-radius:10px;background:var(--accent-strong);color:var(--on-accent);display:flex;align-items:center;justify-content:center;flex:none;margin:3px}
+  .send:hover{background:var(--accent-strong-hover)}
+  .send:disabled{opacity:.35}
+  .ronote{padding:3px 2px 0;font-size:11px;color:var(--faint);text-align:center}
+
+  /* ── 设置 / 配对 ── */
+  .sheet{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--bg-top),var(--bg) 42%)}
+  .sheetbar{flex:none;height:56px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border)}
+  .sheetbar .stt{font-size:15px;font-weight:650;color:var(--title)}
+  .sheetbody{flex:1;overflow-y:auto;padding:16px}
+  .sheetbody .col{max-width:560px;margin:0 auto}
+  .card h3{margin:0 0 4px;font-size:14px;font-weight:650;color:var(--title)}
+  .card p{margin:0;font-size:12.5px;line-height:1.6;color:var(--faint)}
+  .connstate{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+  .connstate .d{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px rgba(70,201,138,.12)}
+  .connstate.off .d{background:var(--red);box-shadow:0 0 0 4px rgba(255,122,130,.12)}
+  .connstate b{font-size:14px;font-weight:650;color:var(--title)}
+  .addr{font-family:var(--mono);font-size:12px;color:var(--dim);background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-top:10px;word-break:break-all}
+  .pairrow{display:flex;gap:14px;align-items:center;margin-top:4px}
+  .qrbox{width:104px;height:104px;background:#fff;border-radius:10px;padding:6px;flex:none}
+  .qrbox svg{width:100%;height:100%;display:block}
+  .pairrow .pt{flex:1;font-size:12.5px;line-height:1.65;color:var(--faint)}
+  .linkbtn{color:var(--accent-2);font-size:12.5px;margin-top:8px;display:inline-block;border-bottom:1px solid rgba(157,177,255,.3);padding-bottom:1px}
+  .fine{font-size:11.5px;line-height:1.65;color:var(--faint);padding:6px 2px 2px}
+  .dangerbtn{width:100%;text-align:center;color:var(--red);border:1px solid rgba(255,122,130,.28);border-radius:10px;padding:10px;font-size:13px;margin-top:10px}
+  .dangerbtn:hover{background:rgba(255,122,130,.09)}
+
+  .pairwrap{display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px;padding-top:14px}
+  .scan{position:relative;width:200px;height:200px;border-radius:20px;background:#fff;padding:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  .scan svg{width:100%;height:100%;display:block}
+  .scanline{position:absolute;left:10px;right:10px;height:2px;background:linear-gradient(90deg,transparent,var(--accent-2),transparent);box-shadow:0 0 12px rgba(124,150,255,.8);animation:scan 2.4s ease-in-out infinite}
+  @keyframes scan{0%,100%{top:16px}50%{top:184px}}
+  .pairwrap h2{margin:6px 0 0;font-size:19px;font-weight:650;color:var(--title)}
+  .pairwrap p{margin:0;font-size:12.5px;line-height:1.7;color:var(--faint);max-width:320px}
+  .manual{width:100%;max-width:340px;display:flex;flex-direction:column;gap:8px;margin-top:2px}
+  .manual input{width:100%;background:var(--panel);border:1px solid var(--border-2);border-radius:9px;padding:10px 12px;color:var(--text);font-size:13px;outline:none}
+  .manual input:focus{border-color:var(--accent-line)}
+  .pairwrap .btn{min-width:200px}
+  .themeinset{margin-top:10px;display:inline-flex}
+
+  .toast{position:absolute;left:50%;bottom:86px;transform:translate(-50%,10px);background:var(--toast-bg);border:1px solid var(--border-2);color:var(--text);font-size:12px;padding:8px 14px;border-radius:20px;opacity:0;transition:.22s;pointer-events:none;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:86%;text-align:center}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+
+  /* ── 平板：两栏 ── */
+  @container (min-width:720px){
+    .statusbar{display:none}
+    .sidebar{width:322px;flex:none;border-right:1px solid var(--border);background:var(--sid)}
+    .shead{padding:24px 18px 10px}
+    .brand{font-size:23px}
+    .list{padding:6px 10px 20px}
+    .row{padding:13px 13px 12px;margin:3px 0}
+    .rtitle{font-size:14.5px}
+    .chatpane{display:flex;flex:1}
+    .chathead{height:64px;padding:0 20px}
+    .messages{padding:20px 0 10px}
+    .inner{max-width:760px;padding:0 24px}
+    .composer{padding:10px 20px 16px}
+    .back{display:none}
+    .sheetbody{padding:24px}
+  }
+  @container (max-width:719px){
+    .app[data-view="list"] .chatpane{display:none}
+    .app[data-view="chat"] .sidebar{display:none}
+    .app[data-view="chat"] .chatpane{display:flex}
+  }
+  @container (min-width:720px){
+    .app[data-view="list"] .chatpane{display:flex;flex-direction:column}
+    .app[data-view="list"] .chatpane .chathead{border-bottom:1px solid var(--border)}
+  }
+</style>
+</head>
+<body data-mode="phone">
+  <div class="devbar">
+    <b>预览</b>
+    <div class="seg" id="modeSeg">
+      <button data-mode="phone" class="on">手机</button>
+      <button data-mode="tablet">平板</button>
+      <button data-mode="adaptive">自适应</button>
+    </div>
+    <div class="seg" id="themeSeg">
+      <button data-theme="light">白天</button>
+      <button data-theme="dark" class="on">黑夜</button>
+    </div>
+    <span class="sp"></span>
+    <button class="devbtn" id="connBtn">模拟断线</button>
+    <span class="devhint">小米 17 · 红米 K Pad</span>
+  </div>
+
+  <main class="stage" id="stage">
+    <div class="device-wrap" id="wrap">
+      <div class="device" id="device">
+        <div class="island"></div>
+        <div class="app" id="app" data-view="list">
+          <div class="statusbar">
+            <span>17:58</span>
+            <span class="sbicons"><span style="font-size:10.5px;letter-spacing:.02em">5G</span>
+              <svg width="15" height="11" viewBox="0 0 15 11" fill="none"><path d="M1 4.2a9 9 0 0 1 13 0M3.4 6.6a5.6 5.6 0 0 1 8.2 0M6 9a2.2 2.2 0 0 1 3 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+              <span class="batt"></span></span>
+          </div>
+          <div class="connbar" id="connbar" hidden><i></i><span>连不上电脑（没开机、或不在同一个网络）</span></div>
+          <div class="appbody">
+            <aside class="sidebar">
+              <div class="shead">
+                <div class="ht">
+                  <div class="brand">Tachi</div>
+                  <div class="sub"><span class="dot"></span><span>MacBook Pro · 192.168.1.23</span></div>
+                </div>
+                <button class="gear" id="gearBtn" title="设置" aria-label="设置">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.54a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/></svg>
+                </button>
+              </div>
+              <div class="list" id="list"></div>
+            </aside>
+            <section class="chatpane" id="chatpane">
+              <div class="chathead" id="chathead"></div>
+              <div class="chatmeta" id="chatmeta"></div>
+              <div class="messages" id="messages"><div class="inner" id="inner"></div></div>
+              <div class="composer">
+                <div class="cinner">
+                  <div class="runhint" id="runhint" hidden><span class="dot"></span><span id="runhintText"></span><button class="act" id="interruptBtn">立即发送 · 打断</button></div>
+                  <div class="inputrow" id="inputrow">
+                    <div class="inputwrap"><input id="input" placeholder="和它说点什么…" autocomplete="off"></div>
+                    <button class="send" id="sendBtn" aria-label="发送">
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                    </button>
+                  </div>
+                  <div class="ronote" id="ronote">这段对话由远端任务占用，只能查看</div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 设置 -->
+          <section class="sheet" id="settingsSheet" hidden>
+            <div class="sheetbar">
+              <button class="back" data-close-sheet aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span class="stt">设置</span>
+            </div>
+            <div class="sheetbody"><div class="col">
+              <div class="card">
+                <div class="connstate" id="connstate"><span class="d"></span><b>已连接</b></div>
+                <p>活都在电脑上跑。手机只负责收发和回答。</p>
+                <div class="addr">http://192.168.1.23:8787</div>
+                <div class="cardactions">
+                  <button class="btn primary" id="toggleConn">断开</button>
+                  <button class="btn ghost" id="pairNow">重新配对</button>
+                </div>
+              </div>
+              <div class="card">
+                <h3>外观</h3>
+                <p>默认跟随系统。这里只切换预览。</p>
+                <div class="seg themeinset" id="themeInSettings">
+                  <button data-theme="light">白天</button>
+                  <button data-theme="dark" class="on">黑夜</button>
+                </div>
+              </div>
+              <div class="card">
+                <h3>这台电脑</h3>
+                <p>MacBook Pro · yejia</p>
+                <div class="pairrow">
+                  <div class="qrbox" id="qrSmall"></div>
+                  <div class="pt">在电脑上打开「设置 → 移动端」可以看到同一个码。<br>令牌等于这台电脑的控制权，别发到群里。</div>
+                </div>
+                <div class="cardactions">
+                  <button class="btn ghost" id="regen">重新生成令牌</button>
+                </div>
+              </div>
+              <p class="fine">手机和电脑必须在同一个局域网。V1 走明文 HTTP，请不要在咖啡厅或公司网络里使用。</p>
+              <button class="dangerbtn" id="unpair">解除配对</button>
+            </div></div>
+          </section>
+
+          <!-- 配对 -->
+          <section class="sheet" id="pairSheet" hidden>
+            <div class="sheetbar">
+              <button class="back" data-close-sheet aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span class="stt">连接电脑</span>
+            </div>
+            <div class="sheetbody"><div class="col pairwrap">
+              <div class="scan" id="qrBig"><div class="scanline"></div></div>
+              <h2>扫描电脑上的二维码</h2>
+              <p>在电脑上打开 Tachi →「设置 → 移动端」，把那一页的码对准这里。</p>
+              <div class="manual">
+                <input value="http://192.168.1.23:8787" aria-label="地址">
+                <input value="tachi_7f3c…9a2e" aria-label="令牌">
+              </div>
+              <button class="btn primary" id="pairDone">模拟扫码成功</button>
+              <p style="font-size:11.5px">没有二维码？在电脑上那一页下面可以直接复制地址和令牌。</p>
+            </div></div>
+          </section>
+
+          <!-- 会话信息 -->
+          <section class="sheet" id="infoSheet" hidden>
+            <div class="sheetbar">
+              <button class="back" data-close-sheet aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span class="stt">这段对话</span>
+            </div>
+            <div class="sheetbody"><div class="col" id="infoBody"></div></div>
+          </section>
+
+          <!-- 切换模型 -->
+          <section class="sheet" id="modelSheet" hidden>
+            <div class="sheetbar">
+              <button class="back" data-close-sheet aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span class="stt">切换模型</span>
+            </div>
+            <div class="sheetbody"><div class="col" id="modelBody"></div></div>
+          </section>
+
+          <!-- 附件预览 -->
+          <section class="sheet" id="fileSheet" hidden>
+            <div class="sheetbar">
+              <button class="back" data-close-sheet aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span class="stt" id="fileName">文件</span>
+              <span style="flex:1"></span>
+              <span class="filehint" style="font-size:11px;color:var(--faint)" id="fileHint"></span>
+            </div>
+            <div class="sheetbody"><div class="filebody" id="fileBody"></div></div>
+          </section>
+
+          <div class="toast" id="toast"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  // ── 设备预览 ────────────────────────────────────────────────
+  const stage=document.getElementById('stage'), wrap=document.getElementById('wrap'),
+        device=document.getElementById('device'), app=document.getElementById('app');
+  let mode='phone';
+  function fit(){
+    if(mode==='adaptive'){
+      device.className='device adaptive';
+      device.style.width='100%'; device.style.height='100%'; device.style.transform='none';
+      wrap.style.width='100%'; wrap.style.height='100%';
+      return;
+    }
+    const W=mode==='phone'?412:1024, H=mode==='phone'?892:680;
+    device.className='device'+(mode==='tablet'?' tablet':'');
+    device.style.width=W+'px'; device.style.height=H+'px';
+    const r=stage.getBoundingClientRect();
+    const s=Math.min(1,(r.width-40)/W,(r.height-40)/H);
+    device.style.transform=`scale(${s})`;
+    wrap.style.width=Math.round(W*s)+'px'; wrap.style.height=Math.round(H*s)+'px';
+  }
+  document.getElementById('modeSeg').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-mode]'); if(!b)return;
+    mode=b.dataset.mode; document.body.dataset.mode=mode;
+    document.querySelectorAll('#modeSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    fit();
+  });
+  function setTheme(t){
+    document.body.dataset.theme=t;
+    document.querySelectorAll('#themeSeg button').forEach(x=>x.classList.toggle('on',x.dataset.theme===t));
+    document.querySelectorAll('#themeInSettings button').forEach(x=>x.classList.toggle('on',x.dataset.theme===t));
+  }
+  document.getElementById('themeSeg').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-theme]'); if(b)setTheme(b.dataset.theme);
+  });
+  document.getElementById('themeInSettings').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-theme]'); if(b)setTheme(b.dataset.theme);
+  });
+  addEventListener('resize',fit);
+
+  // ── 假数据 ─────────────────────────────────────────────────
+  let seq=0;
+  const M=(kind,o={})=>({id:++seq,kind,...o});
+  const CHART_SVG=`<svg viewBox="0 0 320 180" role="img" aria-label="沪深300 估值分位">
+    <rect width="320" height="180" fill="var(--panel)"/>
+    <g stroke="var(--border)" stroke-width="1">
+      <line x1="34" y1="34" x2="304" y2="34"/><line x1="34" y1="68" x2="304" y2="68"/>
+      <line x1="34" y1="102" x2="304" y2="102"/><line x1="34" y1="136" x2="304" y2="136"/>
+    </g>
+    <line x1="34" y1="102" x2="304" y2="102" stroke="var(--amber)" stroke-dasharray="4 4" stroke-width="1" opacity=".7"/>
+    <path d="M34 118 L58 104 L82 110 L106 92 L130 100 L154 82 L178 90 L202 74 L226 83 L250 66 L274 74 L298 62 L298 136 L34 136 Z" fill="var(--accent-soft)"/>
+    <path d="M34 118 L58 104 L82 110 L106 92 L130 100 L154 82 L178 90 L202 74 L226 83 L250 66 L274 74 L298 62" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="298" cy="62" r="3" fill="var(--accent)"/>
+    <text x="34" y="22" fill="var(--faint)" font-size="10">沪深300 · PE 分位</text>
+    <text x="298" y="52" fill="var(--accent-2)" font-size="11" text-anchor="end">38%</text>
+    <text x="34" y="160" fill="var(--faint)" font-size="9">近一年 · 每日</text>
+    <text x="298" y="160" fill="var(--faint)" font-size="9" text-anchor="end">2026-10-17</text>
+    <text x="26" y="40" fill="var(--faint)" font-size="8" text-anchor="end">高</text>
+    <text x="26" y="140" fill="var(--faint)" font-size="8" text-anchor="end">低</text>
+  </svg>`;
+  const WEEKLY_HTML=`<h2>周报 · 2026-10-18</h2>
+    <p class="docmeta">本周 23 个提交 · 3 个模块</p>
+    <h3>移动端</h3>
+    <ul>
+      <li>定下形态：手机是桌面的另一块屏，不跑 agent、不拥有会话。</li>
+      <li>原型：手机单栏 / 平板两栏；白天与黑夜两套配色。</li>
+      <li>会话信息层：模型、工作区、审批开关、用量与上下文。</li>
+    </ul>
+    <h3>记忆</h3>
+    <ul>
+      <li>整理调度加了「跳过 / 恢复」的即时提示。</li>
+      <li>召回仍然按词展开，不按句。</li>
+    </ul>
+    <h3>下周</h3>
+    <p>搭移动端的服务端骨架：开关、令牌、会话列表，先用 <code>curl</code> 跑通。</p>`;
+  const PRICING_HTML=`<h2>竞品定价</h2>
+    <p class="docmeta">抓取时间 2026-10-17 22:10 · 4 个页面</p>
+    <table><thead><tr><th>产品</th><th>个人版</th><th>团队版</th><th>企业版</th></tr></thead>
+    <tbody>
+      <tr><td>Alpha</td><td>$20 / 月</td><td>$35 / 人 / 月</td><td>未公开</td></tr>
+      <tr><td>Beta</td><td>$18 / 月</td><td>$30 / 人 / 月</td><td>未公开</td></tr>
+      <tr><td>Gamma</td><td>免费</td><td>$12 / 人 / 月</td><td>$40 / 人 / 月</td></tr>
+      <tr><td>Delta</td><td>$25 / 月</td><td>$45 / 人 / 月</td><td>联系销售</td></tr>
+    </tbody></table>
+    <p>两家的企业版价格需要登录后才看得到，标了「未公开」。</p>`;
+  const MODELS=[
+    {id:'sonnet', name:'Claude Sonnet 4.5', short:'Sonnet 4.5', model:'claude-sonnet-4-5'},
+    {id:'gpt', name:'GPT-5.2', short:'GPT-5.2', model:'gpt-5.2'},
+    {id:'deepseek', name:'DeepSeek V3.2', short:'DeepSeek', model:'deepseek-chat'},
+    {id:'kimi', name:'Kimi K2', short:'Kimi K2', model:'kimi-k2'}
+  ];
+  const sessions=[
+    { id:'s1', title:'清理构建目录', project:'tachi', time:'刚刚', running:true, waiting:'随时等你授权',
+      model:'sonnet', ws:'~/repos/tachi', roots:['~/repos/tachi'], skip:false, cost:0.12, turnCost:0.018, tps:52,
+      ctx:{used:52400, window:200000, parts:[8200,12100,21400,10700]},
+      messages:[
+        M('user',{text:'把 build 目录里的旧产物清掉，只保留最近两次构建。'}),
+        M('assistant',{text:'我先看一下目录大小和最近一次构建时间。'}),
+        M('tool',{name:'Bash',sum:'du -sh build && ls -lt build | head -24',result:'328M\tbuild\n… 6 个 7 天前的产物\n… 2 个今天的产物'}),
+        M('assistant',{text:'`build/` 一共 328M，其中 6 个是 7 天前的产物。清理命令命中了 `permissions.bash.ask` 规则，需要你确认。'}),
+        M('perm',{cmd:'$ rm -rf build/electron-20261009-* build/web-20261010-*',rule:'匹配规则 permissions.bash.ask ·「rm -rf*」',state:'pending'})
+      ]},
+    { id:'s2', title:'登录流程重构', project:'tachi', time:'3 分钟前', running:true, waiting:'问',
+      model:'gpt', ws:'~/repos/tachi', roots:['~/repos/tachi'], skip:false, cost:0.31, turnCost:0.041, tps:47,
+      ctx:{used:118000, window:400000, parts:[9000,14000,76000,19000]},
+      messages:[
+        M('user',{text:'把登录失败的处理统一一下，别每个页面各写一套。'}),
+        M('assistant',{text:'好，我先看现有的三个登录入口。'}),
+        M('tool',{name:'Grep',sum:'"login|signin" src/ --type tsx',result:'src/auth/login.tsx\nsrc/auth/signup.tsx\nsrc/auth/oauth-callback.tsx\n… 5 个文件'}),
+        M('think',{text:'三个入口里有两套处理：LoginPage 用全局 toast，SignupPage 在表单里写红字，OAuthCallback 什么都不显示。收敛到一个 hook 最省事。',secs:'8 秒'}),
+        M('assistant',{text:'三个入口里其实有两套处理：`LoginPage` 用全局 toast，`SignupPage` 在表单里写红字，`OAuthCallback` 什么都不显示。我建议把它们收敛到一个地方，但先确认一下你想要的形态。'}),
+        M('ask',{question:'失败提示放在哪一层？',options:['页面各自展示','统一的 toast 组件','全局错误边界'],state:'pending'})
+      ]},
+    { id:'s3', title:'周报整理', project:'个人', time:'2 小时前', running:false, waiting:null,
+      model:'sonnet', ws:'~/notes', roots:['~/notes'], skip:true, cost:0.04, turnCost:0.007, tps:51,
+      ctx:{used:38000, window:200000, parts:[8000,12000,15000,3000]},
+      reply:'我看了本周剩下的提交：还有两个在 `desktop/cron.go`，之前没归进周报。我把它们补进「定时任务」那一节，标题也顺手改清楚一点。',
+      messages:[
+        M('user',{text:'把本周的提交整理成周报，按模块分组。'}),
+        M('assistant',{text:'本周有 23 个提交，集中在移动端设计、记忆调度和 MCP 面板三块。周报写在 `~/notes/weekly/2026-10-18.md` 了。'}),
+        M('file',{name:'2026-10-18.md',type:'md',size:'1.8 KB',html:WEEKLY_HTML})
+      ]},
+    { id:'s4', title:'竞品页面抓取', project:'节点任务', time:'昨天', running:false, waiting:null, readOnly:true, source:'来自 hostkvm',
+      model:'deepseek', ws:'~/workspace/a2a/ab12f0', roots:['~/workspace/a2a/ab12f0'], skip:false, cost:0.18, turnCost:0.012, tps:39,
+      ctx:{used:96000, window:128000, parts:[7000,9000,60000,20000]},
+      messages:[
+        M('user',{text:'抓取这四个产品的定价页，整理成一张表。'}),
+        M('assistant',{text:'4 个页面都抓到了。价格表在附件的 `pricing.md` 里，两家的企业版价格需要登录后才看得到，我在表里标了「未公开」。'}),
+        M('file',{name:'pricing.md',type:'md',size:'4.2 KB',html:PRICING_HTML})
+      ]},
+    { id:'s5', title:'索引估值提醒', project:'投资', time:'昨天', running:false, waiting:null,
+      model:'deepseek', ws:'~/repos/lixinger', roots:['~/repos/lixinger'], skip:false, cost:0.02, turnCost:0.004, tps:44,
+      ctx:{used:44000, window:128000, parts:[6500,8500,24000,5000]},
+      reply:'挂好了：每天收盘后跑一次，只在沪深300 的 PE 分位跌破 30% 或涨过 70% 的时候提醒你，平时不出声。',
+      messages:[
+        M('user',{text:'今天收盘后看一下沪深300的估值分位。'}),
+        M('assistant',{text:'沪深300 当前 PE 分位 38%，处在中低区间；银行和红利板块的分位更低一些（21% / 26%）。要不要我把这条挂成每日收盘后的提醒？'}),
+        M('file',{name:'hs300-valuation.png',type:'image',size:'182 KB',svg:CHART_SVG})
+      ]},
+    { id:'s6', title:'移动端接入方案', project:'tachi', time:'昨天', running:false, waiting:null,
+      model:'sonnet', ws:'~/repos/tachi', roots:['~/repos/tachi'], skip:false, cost:0.07, turnCost:0.011, tps:49,
+      ctx:{used:61000, window:200000, parts:[8000,12000,32000,9000]},
+      messages:[
+        M('user',{text:'移动端怎么接进来？画一下消息从手机到会话的路径。'}),
+        M('assistant',{text:'不像 channel 那样各聊各的：手机连的是开着的那台电脑，会话还是桌面上的那段。\n\n```mermaid\nflowchart TD\n  P["手机 App"] -->|"局域网"| D["桌面进程"]\n  D --> S["会话"]\n  D --> Q["待答表"]\n  Q --> A["审批 / 提问"]\n```\n\n所以手机不会多出一份记忆：它只是同一段对话的另一块屏。'})
+      ]}
+  ];
+  // waiting 的展示用文案：'随时等你授权' 是演示用的中间态，统一成两句
+  sessions[0].waiting='授权';
+  sessions[1].waiting='回答';
+
+  const state={view:'list',current:'s1',connected:true};
+
+  // ── 工具函数 ───────────────────────────────────────────────
+  const $=(id)=>document.getElementById(id);
+  const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const md=(s)=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\n/g,'<br>');
+  function renderRich(text){
+    let out='', last=0, m;
+    const re=/```([\w-]*)\n([\s\S]*?)```/g;
+    while((m=re.exec(text))){
+      out+=md(text.slice(last,m.index));
+      out+=m[1]==='mermaid'?`<div class="mermaid">${mermaidSVG(m[2])}</div>`:`<pre class="codeblock">${esc(m[2])}</pre>`;
+      last=re.lastIndex;
+    }
+    return out+md(text.slice(last));
+  }
+  function mermaidSVG(src){
+    try{return flowSVG(src)}catch(e){return `<pre class="codeblock">${esc(src)}</pre>`}
+  }
+  // 原型只懂 flowchart 的一个子集；正式实现用完整的 mermaid 渲染器。
+  function flowSVG(src){
+    const lines=src.trim().split('\n').map(s=>s.trim()).filter(Boolean);
+    const head=/^(?:flowchart|graph)\s+(TD|TB|LR|RL)/i.exec(lines[0]||'');
+    if(!head)throw new Error('unsupported');
+    const vertical=/TD|TB/i.test(head[1]);
+    const nodes=new Map(), order=[], edges=[];
+    const clean=(s)=>String(s).replace(/^"|"$/g,'').replace(/^'|'$/g,'');
+    const declRe=/([A-Za-z0-9_]+)\s*(\[([^\]]*)\]|\(([^)]*)\)|\{([^}]*)\})/g;
+    let dm;
+    while((dm=declRe.exec(src))){
+      const label=clean(dm[3]??dm[4]??dm[5]??dm[1]);
+      const shape=dm[2][0]==='['?'rect':dm[2][0]==='('?'round':'diamond';
+      if(!nodes.has(dm[1]))order.push(dm[1]);
+      nodes.set(dm[1],{label,shape});
+    }
+    const parseNode=(s)=>{
+      const m=/^([A-Za-z0-9_]+)\s*(?:\[([^\]]*)\]|\(([^)]*)\)|\{([^}]*)\})?/.exec(s.trim());
+      if(!m)throw new Error('bad node');
+      return {id:m[1],label:clean(m[2]??m[3]??m[4]??m[1])};
+    };
+    for(const line of lines.slice(1)){
+      const em=/^(.+?)\s*(-->|-\.->|---)\s*(?:\|([^|]*)\|)?\s*(.+)$/.exec(line);
+      if(!em)continue;
+      const from=parseNode(em[1]), to=parseNode(em[4]);
+      for(const n of [from,to]){
+        if(!nodes.has(n.id)){nodes.set(n.id,{label:n.label,shape:'rect'});order.push(n.id)}
+      }
+      edges.push({from:from.id,to:to.id,label:clean(em[3]||''),dash:em[2]==='-.->'});
+    }
+    if(!order.length)throw new Error('empty');
+    const rank=new Map(order.map(id=>[id,0]));
+    for(let k=0;k<order.length+1;k++){
+      let changed=false;
+      for(const e of edges){
+        if(rank.get(e.to)<rank.get(e.from)+1){rank.set(e.to,rank.get(e.from)+1);changed=true}
+      }
+      if(!changed)break;
+    }
+    const NH=34, PAD=12, GAPV=30, GAP=42;
+    for(const id of order){
+      const t=nodes.get(id).label;
+      const cjk=(t.match(/[\u4e00-\u9fff]/g)||[]).length;
+      const w=Math.min(210,Math.max(76,cjk*13+(t.length-cjk)*7+26));
+      nodes.get(id).w=w; nodes.get(id).h=NH;
+    }
+    const ranks=[];
+    for(const id of order){const r=rank.get(id);(ranks[r]=ranks[r]||[]).push(id)}
+    const maxRank=ranks.length-1;
+    let W,Hc;
+    if(vertical){
+      W=Math.max(...ranks.map(row=>row.reduce((s,id)=>s+nodes.get(id).w,0)+(row.length-1)*GAP))+PAD*2;
+      Hc=PAD*2+(maxRank+1)*NH+maxRank*GAPV;
+    }else{
+      const maxW=Math.max(...order.map(id=>nodes.get(id).w));
+      Hc=Math.max(...ranks.map(row=>row.length*NH+(row.length-1)*24))+PAD*2;
+      W=PAD*2+(maxRank+1)*maxW+maxRank*GAP;
+    }
+    const pos=new Map();
+    ranks.forEach((row,r)=>{
+      if(vertical){
+        const total=row.reduce((s,id)=>s+nodes.get(id).w,0)+(row.length-1)*GAP;
+        let x=(W-total)/2, y=PAD+r*(NH+GAPV);
+        row.forEach(id=>{pos.set(id,{x,y,w:nodes.get(id).w,h:NH});x+=nodes.get(id).w+GAP});
+      }else{
+        const maxW=Math.max(...order.map(id=>nodes.get(id).w));
+        const total=row.length*NH+(row.length-1)*24;
+        let y=(Hc-total)/2, x=PAD+r*(maxW+GAP);
+        row.forEach(id=>{pos.set(id,{x,y,w:nodes.get(id).w,h:NH});y+=NH+24});
+      }
+    });
+    const escv=(s)=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    let out=`<svg viewBox="0 0 ${Math.round(W)} ${Math.round(Hc)}" style="font-family:inherit;width:min(100%,${Math.round(W*1.5)}px);height:auto;display:block;margin:0 auto" role="img">`;
+    for(const e of edges){
+      const a=pos.get(e.from), b=pos.get(e.to); if(!a||!b)continue;
+      let x1,y1,x2,y2;
+      if(vertical){x1=a.x+a.w/2;y1=a.y+a.h;x2=b.x+b.w/2;y2=b.y}
+      else{x1=a.x+a.w;y1=a.y+a.h/2;x2=b.x;y2=b.y+b.h/2}
+      out+=`<path d="M${x1} ${y1} L${x2} ${y2}" stroke="var(--faint)" stroke-width="1.4" fill="none" ${e.dash?'stroke-dasharray="4 4"':''}/>`;
+      const ang=Math.atan2(y2-y1,x2-x1), ah=6;
+      out+=`<polygon points="${x2},${y2} ${x2-ah*Math.cos(ang-0.45)},${y2-ah*Math.sin(ang-0.45)} ${x2-ah*Math.cos(ang+0.45)},${y2-ah*Math.sin(ang+0.45)}" fill="var(--faint)"/>`;
+      if(e.label){
+        const mx=(x1+x2)/2, my=(y1+y2)/2;
+        const cjk=(e.label.match(/[\u4e00-\u9fff]/g)||[]).length;
+        const lw=cjk*10+(e.label.length-cjk)*6+10;
+        out+=`<rect x="${mx-lw/2}" y="${my-13}" width="${lw}" height="14" rx="3" fill="var(--panel)"/>`;
+        out+=`<text x="${mx}" y="${my-2}" text-anchor="middle" font-size="10" fill="var(--faint)">${escv(e.label)}</text>`;
+      }
+    }
+    for(const id of order){
+      const n=nodes.get(id), p=pos.get(id);
+      if(n.shape==='diamond'){
+        const cx=p.x+p.w/2, cy=p.y+p.h/2;
+        out+=`<polygon points="${cx},${p.y} ${p.x+p.w},${cy} ${cx},${p.y+p.h} ${p.x},${cy}" fill="var(--panel-2)" stroke="var(--border-2)" stroke-width="1.4"/>`;
+      }else{
+        out+=`<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="${n.shape==='round'?p.h/2:9}" fill="var(--panel-2)" stroke="var(--border-2)" stroke-width="1.4"/>`;
+      }
+      out+=`<text x="${p.x+p.w/2}" y="${p.y+p.h/2}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="var(--text)">${escv(n.label)}</text>`;
+    }
+    return out+'</svg>';
+  }
+  const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+  function scrollBottom(){const m=$('messages');m.scrollTop=m.scrollHeight}
+  let toastTimer;
+  function toast(t){
+    const el=$('toast'); el.textContent=t; el.classList.add('show');
+    clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2400);
+  }
+  const cur=()=>sessions.find(s=>s.id===state.current);
+
+  // ── 列表 ───────────────────────────────────────────────────
+  function badge(s){
+    if(s.readOnly) return '<span class="pill mute">只读</span>';
+    if(s.waiting==='授权') return '<span class="pill amber">等你授权</span>';
+    if(s.waiting==='回答') return '<span class="pill amber">等你回答</span>';
+    if(s.running) return '<span class="pill live"><i></i>在跑</span>';
+    return '';
+  }
+  function renderList(){
+    const order=[...sessions].sort((a,b)=> (b.running?1:0)-(a.running?1:0));
+    $('list').innerHTML=order.map(s=>`
+      <button class="row ${s.id===state.current?'sel':''}" data-id="${s.id}">
+        <div class="rowtop"><span class="rtitle">${esc(s.title)}</span>${badge(s)}</div>
+        <div class="rowsub"><span>${esc(s.project)}</span><span>·</span><span>${esc(s.time)}</span>${s.source?`<span>·</span><span>${esc(s.source)}</span>`:''}</div>
+      </button>`).join('');
+  }
+  $('list').addEventListener('click',e=>{
+    const r=e.target.closest('.row'); if(!r)return;
+    openSession(r.dataset.id);
+  });
+
+  // ── 聊天头部 / 气泡 ────────────────────────────────────────
+  function stateWord(s){
+    if(s.readOnly) return '只读';
+    if(s.waiting==='授权') return '等你授权';
+    if(s.waiting==='回答') return '等你回答';
+    if(s.running) return '正在运行';
+    return '空闲';
+  }
+  function renderHead(){
+    const s=cur(); if(!s){$('chathead').innerHTML='';return}
+    const cls=s.waiting?'amber':(s.running?'live':'');
+    $('chathead').innerHTML=`
+      <button class="back" id="backBtn" aria-label="返回"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <div class="hinfo">
+        <div class="htitle">${esc(s.title)}</div>
+        <div class="hsub">${esc(s.project)} · 运行在 MacBook Pro</div>
+      </div>
+      <span class="statepill ${cls}">${stateWord(s)}</span>`;
+    const b=$('backBtn'); if(b) b.onclick=()=>{state.view='list';app.dataset.view='list';renderList();renderChat()};
+  }
+
+  function modelOf(s){return MODELS.find(m=>m.id===s.model)||MODELS[0]}
+  function pctOf(s){return Math.min(100,Math.round(s.ctx.used/s.ctx.window*100))}
+  function fmtTok(n){return n>=100000?Math.round(n/1000)+'K':n>=1000?(n/1000).toFixed(1)+'K':String(n)}
+  const CTX_LABELS=['系统提示词','工具定义','对话','工具结果'];
+  const CTX_COLORS=['#7c96ff','#46c98a','#e2a355','#b58cff'];
+  function ctxCard(s){
+    const pct=pctOf(s);
+    return `<div class="card" style="margin-top:0">
+      <h3>上下文</h3>
+      <p>这一轮发给模型的估算用量 · ${fmtTok(s.ctx.used)} / ${fmtTok(s.ctx.window)} · ${pct}%</p>
+      <div class="ctxbar"><div class="ctxfill" style="width:${pct}%">${s.ctx.parts.map((v,i)=>`<span style="width:${(v/s.ctx.used*100).toFixed(2)}%;background:${CTX_COLORS[i]}"></span>`).join('')}</div></div>
+      <div class="ctxrows">${s.ctx.parts.map((v,i)=>`<div class="ctxrow"><i style="background:${CTX_COLORS[i]}"></i><span class="n">${CTX_LABELS[i]}</span><span class="t">${fmtTok(v)}</span></div>`).join('')}</div>
+    </div>`;
+  }
+  function renderMeta(){
+    const s=cur(); const el=$('chatmeta'); if(!s){el.innerHTML='';return}
+    const m=modelOf(s), pct=pctOf(s), C=2*Math.PI*6.4;
+    const cls=pct>=90?'hot':pct>=75?'warn':'';
+    el.innerHTML=`
+      <span class="money">$${s.cost.toFixed(2)}</span>
+      <span class="dotsep">·</span>
+      <span class="tps ${s.tpsLive?'live':'idle'}"><i></i>${s.tps} tok/s</span>
+      <span class="dotsep">·</span>
+      <button class="ctx ${cls}" id="ctxBtn" title="上下文用量">
+        <svg viewBox="0 0 16 16"><circle class="track" cx="8" cy="8" r="6.4"/><circle class="val" cx="8" cy="8" r="6.4" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C*(1-pct/100)).toFixed(2)}" transform="rotate(-90 8 8)"/></svg>
+        <span>${pct}%</span>
+      </button>
+      ${s.skip?'<span class="skipchip">跳过审批</span>':''}
+      <span class="sp"></span>
+      <span class="ws">${esc(s.ws)}</span>
+      ${s.readOnly?`<span class="chip">${esc(m.short)}</span>`:`<button class="chip" id="modelChip">${esc(m.short)}</button>`}
+      <button class="iconbtn" id="infoBtn" aria-label="会话信息">⋯</button>`;
+    const mc=$('modelChip'); if(mc) mc.onclick=()=>openSheet('models');
+    $('infoBtn').onclick=()=>openSheet('info');
+    $('ctxBtn').onclick=()=>openSheet('info');
+  }
+
+  function renderMsg(m,s){
+    if(m.kind==='user'){
+      return `<div class="umsg">${esc(m.text)}${m.steer?'<span class="tag">插入 · 下一个工具调用后看到</span>':''}</div>`;
+    }
+    if(m.kind==='assistant'){
+      return `<div class="amsg" data-mid="${m.id}">${renderRich(m.text)}</div>`;
+    }
+    if(m.kind==='tool'){
+      return `<div class="tool" data-tid="${m.id}">
+        <button class="toolhead"><span class="tname">${esc(m.name)}</span><span class="tsum">${esc(m.sum)}</span><span class="ticon">›</span></button>
+        <div class="toolbody" hidden>${esc(m.result||'')}</div>
+      </div>`;
+    }
+    if(m.kind==='think'){
+      return `<button class="think" data-th="${m.id}"><span class="ticon">›</span><span>思考 · ${esc(m.secs||'几秒')}</span></button>
+        <div class="thinkbody" data-thb="${m.id}" hidden>${esc(m.text)}</div>`;
+    }
+    if(m.kind==='perm'){
+      if(m.state!=='pending'){
+        const ok=m.state==='allow';
+        return `<div class="settled ${ok?'ok':'no'}"><b>${ok?'已允许一次':'已拒绝'}</b><span>· 刚才那条命令</span></div>`;
+      }
+      return `<div class="card perm">
+        <div class="cardhead"><span class="cardkind">等待你的授权 · Bash</span></div>
+        <div class="cmd">${esc(m.cmd)}</div>
+        <div class="rule">${esc(m.rule)}</div>
+        <div class="cardactions">
+          <button class="btn primary" data-perm="allow">允许一次</button>
+          <button class="btn ghost deny" data-perm="deny">拒绝</button>
+        </div>
+      </div>`;
+    }
+    if(m.kind==='ask'){
+      if(m.state!=='pending'){
+        return `<div class="settled ${m.state==='answered'?'ok':'no'}"><b>${m.state==='answered'?'已回答':'已跳过'}</b><span>· ${esc(m.answer||'这个问题没有答案')}</span></div>`;
+      }
+      return `<div class="card ask">
+        <div class="cardhead"><span class="cardkind">它想确认一件事</span></div>
+        <div class="q">${esc(m.question)}</div>
+        <div class="opts">${m.options.map((o,i)=>`<button class="opt" data-opt="${i}"><span class="radio"></span><span>${esc(o)}</span></button>`).join('')}</div>
+        <div class="free"><input placeholder="或者自己写一句…" data-free="${m.id}"></div>
+        <div class="cardactions">
+          <button class="btn primary" data-submit="${m.id}" disabled>提交</button>
+          <button class="btn ghost" data-skip="${m.id}">跳过</button>
+        </div>
+      </div>`;
+    }
+    if(m.kind==='file'){
+      if(m.type==='image'){
+        return `<button class="imgcard" data-file="${m.id}">${m.svg}<span class="imgmeta"><b>${esc(m.name)}</b><span>图片 · ${esc(m.size)}</span></span></button>`;
+      }
+      const kind=m.type==='md'?'Markdown':(m.type==='text'?'文本':'文件');
+      return `<button class="filecard" data-file="${m.id}">
+        <span class="ficon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+        <span class="fmeta"><b>${esc(m.name)}</b><span>${kind} · ${esc(m.size)}</span></span>
+        <span class="fopen">›</span>
+      </button>`;
+    }
+    if(m.kind==='divider') return `<div class="divider">${esc(m.text)}</div>`;
+    return '';
+  }
+
+  function renderChat(){
+    const s=cur(); if(!s){$('inner').innerHTML='<div class="empty"><b>选一段对话</b><span>左边是这台电脑上的会话</span></div>';renderMeta();return}
+    renderHead();
+    renderMeta();
+    let html='';
+    if(s.readOnly) html+=`<div class="readonly-banner"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="flex:none;margin-top:2px"><rect x="4.5" y="10" width="15" height="10.5" rx="2.2"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/></svg><div><b>这段对话由远端任务占用，只能查看。</b><br>${esc(s.source||'一台远端机器')}派来的任务正在用它，等它跑完才能接着说话。</div></div>`;
+    html+=s.messages.map(m=>renderMsg(m,s)).join('');
+    $('inner').innerHTML=html;
+    // 卡片内部状态
+    $('inner').querySelectorAll('[data-opt]').forEach(btn=>{
+      btn.onclick=()=>{
+        const card=btn.closest('.card');
+        card.querySelectorAll('[data-opt]').forEach(b=>b.classList.toggle('sel',b===btn));
+        const sb=card.querySelector('[data-submit]'); if(sb) sb.disabled=false;
+      };
+    });
+    $('inner').querySelectorAll('[data-submit]').forEach(btn=>{
+      btn.onclick=()=>{
+        const card=btn.closest('.card');
+        const sel=card.querySelector('.opt.sel');
+        const free=card.querySelector('[data-free]');
+        const ans=(free&&free.value.trim())||(sel?sel.textContent.trim():'');
+        if(!ans)return;
+        answerAsk(s,ans);
+      };
+    });
+    $('inner').querySelectorAll('[data-skip]').forEach(btn=>btn.onclick=()=>answerAsk(s,null));
+    $('inner').querySelectorAll('[data-perm]').forEach(btn=>btn.onclick=()=>answerPerm(s,btn.dataset.perm==='allow'));
+    $('inner').querySelectorAll('[data-file]').forEach(btn=>btn.onclick=()=>{
+      const msg=s.messages.find(x=>x.id===Number(btn.dataset.file));
+      if(msg) openFile(msg);
+    });
+    $('inner').querySelectorAll('.toolhead').forEach(h=>h.onclick=()=>{
+      const t=h.parentElement; t.classList.toggle('open');
+      t.querySelector('.toolbody').hidden=!t.classList.contains('open');
+    });
+    $('inner').querySelectorAll('.think').forEach(h=>h.onclick=()=>{
+      const b=$('inner').querySelector(`[data-thb="${h.dataset.th}"]`);
+      h.classList.toggle('open'); b.hidden=!h.classList.contains('open');
+    });
+    renderComposer();
+    requestAnimationFrame(scrollBottom);
+  }
+
+  function renderComposer(){
+    const s=cur(); if(!s)return;
+    const ro=!!s.readOnly;
+    $('inputrow').hidden=ro; $('ronote').hidden=!ro;
+    $('runhint').hidden=ro||!s.running;
+    if(s.running){
+      const amber=!!s.waiting;
+      $('runhint').className='runhint'+(amber?' amber':'');
+      $('runhintText').textContent=amber
+        ? (s.waiting==='授权'?'停在这里等你授权':'停在这里等你回答')
+        : '正在跑 · 补一句会在下一个工具调用后插入';
+    }
+    $('input').disabled=ro||!state.connected;
+    $('sendBtn').disabled=ro||!state.connected;
+    $('input').placeholder=ro?'只能查看':(s.running?'补一句…':'和它说点什么…');
+  }
+
+  // ── 打开 / 发送 ────────────────────────────────────────────
+  function openSession(id){
+    stopTPS();
+    state.current=id; state.view='chat'; app.dataset.view='chat';
+    renderList(); renderChat();
+  }
+  function addMsg(s,m){ m.id=++seq; s.messages.push(m); renderChat(); return m; }
+
+  let tpsTimer=null, tpsSession=null;
+  function startTPS(s){
+    stopTPS();
+    tpsSession=s; s.tpsLive=true;
+    s.tps=42+Math.floor(Math.random()*18);
+    renderMeta();
+    tpsTimer=setInterval(()=>{
+      if(cur()!==s)return;
+      s.tps=42+Math.floor(Math.random()*20);
+      renderMeta();
+    },700);
+  }
+  function stopTPS(){
+    if(tpsTimer){clearInterval(tpsTimer);tpsTimer=null}
+    if(tpsSession){
+      const was=tpsSession; tpsSession=null; was.tpsLive=false;
+      if(cur()===was) renderMeta();
+    }
+  }
+  function endTurnDemo(s){
+    s.running=false; stopTPS();
+    s.turnCost=+(0.005+Math.random()*0.02).toFixed(3);
+    s.cost=+(s.cost+s.turnCost).toFixed(3);
+    const grow=900+Math.floor(Math.random()*1300);
+    s.ctx.used=Math.min(s.ctx.window,s.ctx.used+grow);
+    s.ctx.parts[2]+=grow;
+    renderChat(); renderList();
+  }
+
+  async function streamSay(s,text,speed=20){
+    const m=addMsg(s,{kind:'assistant',text:''});
+    const el=$('inner').querySelector(`[data-mid="${m.id}"]`);
+    let i=0;
+    startTPS(s);
+    return new Promise(res=>{
+      const tick=()=>{
+        i=Math.min(text.length,i+2);
+        m.text=text.slice(0,i);
+        el.innerHTML=md(m.text)+(i<text.length?'<span class="caret"></span>':'');
+        scrollBottom();
+        if(i<text.length) setTimeout(tick,speed); else {stopTPS();res()}
+      };
+      tick();
+    });
+  }
+
+  async function answerPerm(s,allow){
+    if(!state.connected){toast('连不上电脑，回答没有发出去');return}
+    const card=s.messages.find(m=>m.kind==='perm'&&m.state==='pending');
+    if(!card)return;
+    card.state=allow?'allow':'deny'; s.waiting=null; renderChat(); renderList();
+    await wait(420);
+    if(allow){
+      s.messages.push({id:++seq,kind:'tool',name:'Bash',sum:'rm -rf build/electron-20261009-* …',result:'已删除 6 项，释放 281M'});
+      renderChat();
+      await wait(420);
+      await streamSay(s,'清完了：释放 281M，最近两次构建保留着。');
+    }else{
+      await streamSay(s,'好，那我只删 14 天前的产物，今天和昨天的先留着。');
+    }
+    endTurnDemo(s);
+  }
+
+  async function answerAsk(s,answer){
+    if(!state.connected){toast('连不上电脑，回答没有发出去');return}
+    const card=s.messages.find(m=>m.kind==='ask'&&m.state==='pending');
+    if(!card)return;
+    card.state=answer?'answered':'skipped'; card.answer=answer||'这个问题没有答案';
+    s.waiting=null; renderChat(); renderList();
+    await wait(420);
+    if(answer){
+      await streamSay(s,`那就用「${answer}」。我把三处入口都换成一个 hook，登录失败只会弹一次，不再各写各的。`);
+    }else{
+      await streamSay(s,'好，那我先不动，你想清楚再说。');
+    }
+    endTurnDemo(s);
+  }
+
+  async function genericTurn(s,text){
+    s.running=true; renderComposer(); renderList();
+    await wait(500);
+    s.messages.push({id:++seq,kind:'think',text:'先看看这段对话里已经有什么，别重复造一个。',secs:'6 秒'});
+    renderChat();
+    await wait(900);
+    s.messages.push({id:++seq,kind:'tool',name:'Grep',sum:'"'+text.slice(0,14)+'" …',result:'4 个文件里找到 7 处'});
+    renderChat();
+    await wait(600);
+    await streamSay(s,s.reply||'看到了。这里我先不动，等我把相关的地方列出来给你确认。');
+    endTurnDemo(s);
+  }
+
+  function send(){
+    const s=cur(); if(!s||s.readOnly||!state.connected)return;
+    const input=$('input'); const text=input.value.trim(); if(!text)return;
+    input.value='';
+    if(s.running){
+      s.messages.push({id:++seq,kind:'user',text,steer:true});
+      renderChat();
+      toast('已经插进去了，它会在下一个工具调用结束后看到');
+      return;
+    }
+    s.messages.push({id:++seq,kind:'user',text});
+    renderChat();
+    genericTurn(s,text);
+  }
+  $('sendBtn').onclick=send;
+  $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+
+  $('interruptBtn').onclick=()=>{
+    const s=cur(); if(!s)return;
+    if(!state.connected){toast('连不上电脑');return}
+    const text=$('input').value.trim();
+    s.running=false; s.waiting=null;
+    if(text){
+      $('input').value='';
+      s.messages.push({id:++seq,kind:'user',text});
+      renderChat();
+      genericTurn(s,text);
+    }else{
+      s.messages.push({id:++seq,kind:'divider',text:'已停止这一轮'});
+      renderChat(); renderList();
+      toast('已停止');
+    }
+  };
+
+  // ── 设置 / 配对 ────────────────────────────────────────────
+  function fakeQR(size=21){
+    const cells=[]; const finder=(x,y)=>{
+      for(let i=0;i<7;i++)for(let j=0;j<7;j++){
+        const edge=i===0||i===6||j===0||j===6, core=i>=2&&i<=4&&j>=2&&j<=4;
+        if(edge||core)cells.push([x+j,y+i]);
+      }
+    };
+    finder(0,0);finder(size-7,0);finder(0,size-7);
+    let seed=11; const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
+    for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+      const f=(x<8&&y<8)||(x>=size-8&&y<8)||(x<8&&y>=size-8);
+      if(!f&&rnd()>.52)cells.push([x,y]);
+    }
+    const rects=cells.map(([x,y])=>`<rect x="${x}" y="${y}" width="1" height="1"/>`).join('');
+    return `<svg viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><g fill="#12151b">${rects}</g></svg>`;
+  }
+  const SHEETS={settings:'settingsSheet',pair:'pairSheet',info:'infoSheet',models:'modelSheet',file:'fileSheet'};
+  function openSheet(which){
+    Object.entries(SHEETS).forEach(([k,id])=>{$(id).hidden=(k!==which)});
+    if(which==='settings')syncSettings();
+    if(which==='info')renderInfo();
+    if(which==='models')renderModels();
+  }
+  function closeSheet(){Object.values(SHEETS).forEach(id=>{$(id).hidden=true})}
+
+  function openFile(m){
+    $('fileName').textContent=m.name;
+    $('fileHint').textContent=m.type==='image'?'图片':(m.type==='md'?'Markdown':'文件');
+    $('fileBody').innerHTML = m.type==='image'
+      ? `<div class="imgview">${m.svg}</div>`
+      : m.type==='md'
+        ? `<div class="doc">${m.html}</div>`
+        : `<pre class="textview">${esc(m.text||'')}</pre>`;
+    openSheet('file');
+  }
+
+  function renderInfo(){
+    const s=cur(); if(!s)return;
+    const m=modelOf(s), ro=!!s.readOnly;
+    $('infoBody').innerHTML=`
+      ${ctxCard(s)}
+      <div class="card">
+        <h3>工作区</h3>
+        <p>工具在这里读写。手机上只能看。</p>
+        <div style="margin-top:8px">
+          <div class="kv"><span class="k">主目录</span><span class="v mono">${esc(s.roots[0]||s.ws)}</span></div>
+          ${s.roots.slice(1).map(r=>`<div class="kv"><span class="k">附加</span><span class="v mono">${esc(r)}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <h3>模型</h3>
+        <button class="modelrow" id="infoModel" style="margin:10px 0 0;${ro?'opacity:.55':''}">
+          <div class="mi"><b>${esc(m.name)}</b><span>${esc(m.model)}</span></div>
+          <span class="check" style="color:var(--faint)">›</span>
+        </button>
+      </div>
+      <div class="card">
+        <h3>审批</h3>
+        <div class="switchrow">
+          <div class="txt"><b>跳过审批</b><p>命中 ask 规则的命令会直接执行，不再停下来问。只影响这段对话。</p></div>
+          <button class="switch ${s.skip?'on':''}" id="skipSwitch" ${ro?'disabled':''} aria-label="跳过审批"><i></i></button>
+        </div>
+        ${ro?'<p style="margin-top:10px;color:var(--amber);font-size:11.5px">这段对话由远端任务占用，不能改设置。</p>':''}
+      </div>
+      <div class="card">
+        <h3>用量</h3>
+        <div style="margin-top:6px">
+          <div class="kv"><span class="k">这段对话</span><span class="v">$${s.cost.toFixed(3)}</span></div>
+          <div class="kv"><span class="k">上一轮</span><span class="v">$${s.turnCost.toFixed(3)}</span></div>
+          <div class="kv"><span class="k">速度</span><span class="v">${s.tps} tok/s</span></div>
+        </div>
+      </div>`;
+    const im=$('infoModel'); if(im&&!ro) im.onclick=()=>openSheet('models');
+    const sw=$('skipSwitch');
+    if(sw) sw.onclick=()=>{
+      if(ro)return;
+      s.skip=!s.skip; renderInfo(); renderMeta();
+      toast(s.skip?'这段对话不再弹审批':'这段对话恢复审批');
+    };
+  }
+
+  function renderModels(){
+    const s=cur(); if(!s)return;
+    $('modelBody').innerHTML=`<div class="card" style="margin-top:0">
+      ${MODELS.map(m=>`<button class="modelrow ${s.model===m.id?'sel':''}" data-model="${m.id}">
+        <div class="mi"><b>${esc(m.name)}</b><span>${esc(m.model)}</span></div>
+        ${s.model===m.id?'<span class="check">✓</span>':''}
+      </button>`).join('')}
+      <p class="fine">切换只影响这段对话，不改全局默认。正在跑的这一轮会在下一次模型调用时用上。</p>
+    </div>`;
+    $('modelBody').querySelectorAll('[data-model]').forEach(b=>{
+      b.onclick=()=>{
+        if(s.readOnly){toast('这段对话由远端任务占用，不能改模型');return}
+        s.model=b.dataset.model; renderModels(); renderMeta(); closeSheet();
+        toast('已切到 '+modelOf(s).name);
+      };
+    });
+  }
+  function syncSettings(){
+    const cs=$('connstate');
+    cs.className='connstate'+(state.connected?'':' off');
+    cs.querySelector('b').textContent=state.connected?'已连接':'已断开';
+    $('toggleConn').textContent=state.connected?'断开':'连接';
+  }
+  $('gearBtn').onclick=()=>openSheet('settings');
+  document.querySelectorAll('[data-close-sheet]').forEach(b=>b.onclick=closeSheet);
+  $('pairNow').onclick=()=>openSheet('pair');
+  $('unpair').onclick=()=>openSheet('pair');
+  $('pairDone').onclick=()=>{state.connected=true;syncConn();closeSheet();state.view='list';app.dataset.view='list';renderList();renderChat();toast('已连接到 MacBook Pro')};
+  $('toggleConn').onclick=()=>{state.connected=!state.connected;syncConn();syncSettings()};
+  $('regen').onclick=()=>toast('已重新生成；旧令牌的连接已断开');
+  $('qrSmall').innerHTML=fakeQR();
+  $('qrBig').insertAdjacentHTML('afterbegin',fakeQR(25));
+
+  function syncConn(){
+    $('connbar').hidden=state.connected;
+    $('input').disabled=!state.connected||(cur()&&cur().readOnly);
+    $('sendBtn').disabled=!state.connected||(cur()&&cur().readOnly);
+  }
+  $('connBtn').onclick=()=>{
+    state.connected=!state.connected; syncConn(); syncSettings();
+    $('connBtn').textContent=state.connected?'模拟断线':'恢复连接';
+  };
+
+  // ── 启动 ───────────────────────────────────────────────────
+  renderList();
+  openSession('s1');
+  syncConn();
+  fit();
+})();
+</script>
+</body>
+</html>
