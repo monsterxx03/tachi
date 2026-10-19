@@ -52,6 +52,6 @@
 - **询问按 agent 串行化（`PermissionState.askMu`）。** bash 从不需要这个（它的工具非并行，询问本来就一次一个）；MCPSearchTools 是并行的，所以同一组里的两次搜索可以同时停在那里——而 TUI 通过唯一那个 channel 回答每一张卡（`Channels.ConfirmResp`，容量 1），否则第二张卡会吃掉第一张的答案。
 - **每次调用都留下一行日志，有卡没卡都留**：`Agent: MCP search cost gate`，带 `decision`（proceed/ask/refuse）+ `reason` + `tokens` + `cost` + `budget` + `undiscovered` + `priced`；一次询问再留第二行（`... gate answered`），带着用户的选择。所以它需要的事实都在提前返回之前先收集好。这正是这道门禁可审计的原因：「它没问」和「没东西可加载」和「这个模型没有价表」从外面看本来是同一件没发生的事，而那个估算——整个特性所讲的那个数字——别处都不存在。
 - **「没人可问」有两种，第二种不在 `PermissionMode` 里。** 其一是 `PermissionModeSkip`（channel / `-p` / 子代理 / dream），其二是 `AgentConfig.NoCostAsks`：ask 会到达一个一律拒绝的 handler 的 run——今天只有 a2a 远端一轮（`node/runner.go`），它的 `denyRemoteAsk` 拒的本来是**安全**类询问，用它顺手决定「操作者设了预算就谁都不许加载工具」是一道谁也没被问过的问题（`cache_budget` 的默认值不是 0，所以这不是一个理论上的角落）。两者都放行，estimate 照样进那条 trace 行，所以「这台机器的钱花在哪」事后仍然答得出来。撤掉它，远端一轮就变成「有预算 = 加载不了 MCP」。
-- **卡片的 chrome 按种类分，正文从不分。** `desktop.PermissionEvent.Kind`（`bash` / `mcp_search`，由工具名推得）决定标题和按钮提示；preview 仍然是 agent 自己的渲染，原样展示——与让 `askPreview` 成为它那个格式唯一写入者的同一条规则。TUI 按工具名分叉出同样的两个字符串。整张卡（文案、上面的数字、一次跨第二次调用的拒绝）由 desktop 冒烟场景 `perm-mcp-budget` 端到端钉住。
+- **卡片的 chrome 按种类分，正文从不分。** `desktop.PermissionEvent.Kind`（`bash` / `mcp_search` / `files`，由工具名推得）决定那行副标题（标题三张卡统一是「权限确认」；按钮行没有单独的提示文案）；preview 仍然是 agent 自己的渲染，原样展示——与让 `askPreview` 成为它那个格式唯一写入者的同一条规则。TUI 按工具名分叉出它自己的问句。整张卡（文案、上面的数字、一次跨第二次调用的拒绝）由 desktop 冒烟场景 `perm-mcp-budget` 端到端钉住。
 
 Related: [`.tachi.md`](../../.tachi.md), [desktop.md](desktop.md)（MCP client、OAuth、面板）、[jev.md](jev.md)（那道门禁及其阈值纪律）、[prompt-cache.md](prompt-cache.md)（提醒块的接缝）。

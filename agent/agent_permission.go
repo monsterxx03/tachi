@@ -397,16 +397,15 @@ func askReasonLine(cause askCause) string {
 
 	case cause.judged:
 		// No rule matched, and the judgment is why they are being interrupted.
-		// Saying so is the point: otherwise the reader goes looking in the config
-		// for a rule that does not exist.
-		line := fmt.Sprintf("没有任何 ask 规则命中，是判定（jev）认为这条需要你先看一眼（%.2f ≥ %.2f）", cause.score, cause.threshold)
+		// The score and the thresholds are the whole reason: the reader is not
+		// looking for a rule in their config, they are deciding about one number.
+		line := fmt.Sprintf("jev score %.2f > %.2f", cause.score, cause.threshold)
 		if cause.rule == permission.AskNoRule {
-			line += "；另外这条命令本身也没能解析出来"
+			line += "；不过这条命令本身没能解析出来"
 		}
 		return line
 
 	default:
-		return "这条命令没能解析出来（引号/括号没闭合、末尾挂着 && 之类），没有命中任何规则 —— " +
-			"保守起见先问你一次；把语法写对就不会再问"
+		return "命令没能解析出来（引号/括号没闭合、末尾挂着 && 之类），写对语法就不会再问"
 	}
 }

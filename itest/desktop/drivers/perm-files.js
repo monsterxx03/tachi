@@ -2,7 +2,8 @@
 //
 // 这一侧断言 UI：卡片出现，且显示 agent 渲染的预览（工具 + 路径 + 命中规则）；三个选项都在；
 // 点击后表单消失（后端收下了答复）。而 kind=files 的文案是这套东西里最容易悄悄退回 bash 文案的
-// 地方（卡片会写「需要你确认这条命令」，而卡片里既没有命令也没有 bash 规则），所以这里连标题一起断言。
+// 地方（卡片里既没有命令也没有 bash 规则，而拒绝的语义是「只拒这一次调用」而不是中止这一轮），
+// 所以这里连副标题一起断言。
 //
 // 「文件真的读了」「回合没有中止」属于 Go 那一半（scenarios.go 的 after）。
 ;(async () => {
@@ -18,9 +19,10 @@
   smoke.check('确认卡显示要读的目标', preview.indexOf('perm-fixture.txt') >= 0, preview)
   smoke.check('确认卡显示命中的 ask 规则', preview.indexOf('perm-fixture*') >= 0, preview)
 
-  // kind=files 的文案：既不是 bash 的「需要你确认这条命令」，也不是 mcp_search 的花费文案。
-  const title = smoke.text('.perm-title')
-  smoke.check('标题是文件操作的文案', title.indexOf('文件操作') >= 0, title)
+  // kind=files 的文案：标题与其他卡一样是「权限确认」，差别在副标题——这里拒绝只拒
+  // 这一次调用，本轮继续（bash 的拒绝会中止这一轮），所以那句话不能退回 bash 的写法。
+  const sub = smoke.text('.perm-sub')
+  smoke.check('副标题说的是拒绝这次调用', sub.indexOf('这一次调用') >= 0, sub)
 
   const labels = smoke.qa('.perm-form .btn').map((b) => b.textContent.trim())
   smoke.check('三个选项：拒绝 / 本会话全部允许 / 允许一次',

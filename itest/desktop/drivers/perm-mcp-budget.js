@@ -6,7 +6,7 @@
 //   1. 拒绝**不中止回合** —— 模型被告知原因之后继续干活（bash 那边拒绝是 errCancelled）；
 //   2. 拒绝**记在本会话**上 —— 模型再调一次不再弹卡，而是直接收到同一个拒绝（第二次如果弹了卡，
 //      回合会 park 在那张卡上，脚本里那句回复永远到不了）；
-//   3. 卡片自己的话术：这里没有"命令"可看，只有一笔花费。
+//   3. 卡片自己的话术：这里没有"命令"可看，只有一笔花费（副标题说的是钱，标题和其他卡一样）。
 //
 // 池子必须是**非空且未加载**的：沙箱的 mcp.json 指向 runner 起的 OAuth fixture，连接之后它的
 // 一个工具停在 deferred 池里（scenario 把 min_tools_for_search 设成 -1）。池里没有未发现的工具
@@ -57,16 +57,17 @@
   smoke.click('.send-btn')
   if (!(await smoke.waitFor('.perm-form', 'MCP 工具加载确认卡出现', 30000))) return smoke.finish()
 
-  // 卡片的话术按 kind 分：这张不是「确认这条命令」，正文里也没有命令可读 —— 它要说的是一笔花费。
+  // 卡片的话术按 kind 分：标题三张卡都是「权限确认」，差别在副标题——这一张要说的是一笔花费，
+  // 而不是一条命令。
   const title = smoke.text('.perm-title')
-  smoke.check('标题说的是花费，不是命令', title.indexOf('加载 MCP 工具会花掉一笔钱') >= 0, title)
+  smoke.check('标题是统一的「权限确认」', title.indexOf('权限确认') >= 0, title)
+  const sub = smoke.text('.perm-sub')
+  smoke.check('副标题说的是这趟加载要花钱', sub.indexOf('花掉一笔钱') >= 0, sub)
   const preview = smoke.text('.perm-preview')
   smoke.check('预览报出整段重读的规模', preview.indexOf('当前上下文') >= 0 && preview.indexOf('30.0k tokens') >= 0, preview)
   smoke.check('预览报出这次多花多少', preview.indexOf('本次多花') >= 0 && preview.indexOf('¥2.700') >= 0, preview)
   smoke.check('预览报出预算阈值', preview.indexOf('预算阈值') >= 0 && preview.indexOf('¥1.000') >= 0, preview)
   smoke.check('预览说明池子里还有未加载的工具', preview.indexOf('未加载的 MCP 工具') >= 0, preview)
-  const hint = smoke.text('.perm-hint')
-  smoke.check('按钮提示说的是这次搜索，不是一条命令', hint.indexOf('这一次') >= 0 && hint.indexOf('MCP') >= 0, hint)
 
   const labels = smoke.qa('.perm-form .btn').map((b) => b.textContent.trim())
   smoke.check('三个选项：拒绝 / 本会话全部允许 / 允许一次',

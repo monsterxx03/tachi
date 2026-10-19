@@ -466,10 +466,10 @@ func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
 	assert.Contains(t, matched, "git push*")
 
 	// A rule the user wrote wins over a judgment that agreed: their own words are
-	// what they recognise, and "no rule matched" would be a lie here.
+	// what they recognise, and a score here would hide the rule they wrote.
 	both := askPreview("$ "+"git push origin main", askCause{rule: "git push*", judged: true, score: 0.9, threshold: 0.7})
 	assert.Contains(t, both, `命中 ask 规则: "git push*"`)
-	assert.NotContains(t, both, "没有任何 ask 规则命中")
+	assert.NotContains(t, both, "jev score")
 
 	malformed := askPreview("$ "+`cd /tmp && grep -rn "x" . | head && `, askCause{rule: permission.AskNoRule})
 	assert.Contains(t, malformed, "$ cd /tmp && grep -rn \"x\" . | head && ")
@@ -481,11 +481,10 @@ func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
 		"the sentinel is machine-facing: it must not leak into what a human reads")
 
 	// The judgment's own third wording: nothing matched, and the reason is the
-	// verdict. Without it the reader goes hunting in the config for a rule they
-	// never wrote — the same failure issue #40 was.
+	// verdict — the score and the threshold, not a rule to go hunting for in the
+	// config (the same failure issue #40 was).
 	judged := askPreview("$ "+"grep -rn password /", askCause{judged: true, score: 0.91, threshold: 0.7})
-	assert.Contains(t, judged, "没有任何 ask 规则命中")
-	assert.Contains(t, judged, "判定")
+	assert.Contains(t, judged, "jev score 0.91 > 0.70")
 	assert.NotContains(t, judged, "命中 ask 规则:",
 		"the judgment-raised ask must not claim a rule matched")
 
@@ -493,7 +492,7 @@ func TestBashAskPreviewNamesTheRealCause(t *testing.T) {
 	// (fix the syntax) is still the syntax.
 	unparsedJudged := askPreview("$ "+"rm -rf ~/x && ", askCause{rule: permission.AskNoRule, judged: true, score: 0.88, threshold: 0.7})
 	assert.Contains(t, unparsedJudged, "没能解析出来")
-	assert.Contains(t, unparsedJudged, "判定")
+	assert.Contains(t, unparsedJudged, "jev score 0.88 > 0.70")
 }
 
 // TestCheckBashUnparseableIsItsOwnValue: the sentinel is what every surface tells "no rule was

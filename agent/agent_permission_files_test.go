@@ -576,8 +576,7 @@ func TestFileAskPreviewNamesTheRealCause(t *testing.T) {
 	assert.Contains(t, matched, `命中 ask 规则: "/etc/*"`)
 
 	judged := askPreview("WriteFile /etc/hosts", askCause{judged: true, score: 0.91, threshold: 0.7})
-	assert.Contains(t, judged, "没有任何 ask 规则命中")
-	assert.Contains(t, judged, "0.91")
+	assert.Contains(t, judged, "jev score 0.91 > 0.70")
 	assert.NotContains(t, judged, "命中 ask 规则:")
 
 	assert.Contains(t, fileAskDenied(askCause{rule: "/etc/*"}, call).Error(), `matched ask rule "/etc/*"`)

@@ -1480,32 +1480,31 @@ function AskForm({ questions, onSubmit, onCancel }: {
 // No Esc and no default-on-Enter: Esc already means "dismiss the picker / close a
 // viewer" everywhere else in this UI, and the decision here can be a destructive
 // command — it should not be one habitual keypress away.
-// The chrome per kind of ask. Everything that differs between the two cards is
-// here, and everything that does NOT differ (the preview, the three buttons,
-// their wire values) is shared — the preview is the agent's own text and stays
-// verbatim in both.
+// The chrome per kind of ask. The title is the same on every card — it is one
+// thing, a permission decision — and only the line beside it says what kind of
+// thing is being confirmed; the preview below carries the case itself. The three
+// buttons, their wire values and the preview stay shared: the preview is the
+// agent's own text and is shown verbatim on every kind.
 //
-// The bash copy exists to avoid claiming a rule that may not exist (see the note
-// below); the search copy exists because the reader is being asked to accept a
-// SPEND, and 「确认这条命令」 on a card with no command in it sends them looking
-// for one.
-const permCopy: Record<PermissionKind, { title: string; sub: string; hint: string }> = {
+// The sub for each kind names what makes that card different rather than
+// repeating the title: bash's 「本会话全部允许」 covers this session's rules and
+// judgments, MCP search is a SPEND (and saying 「确认这条命令」 on a card with no
+// command in it sends the reader looking for one), and a file ask's deny refuses
+// that ONE call while the turn carries on.
+const permCopy: Record<PermissionKind, { title: string; sub: string }> = {
   bash: {
-    title: '需要你确认这条命令',
+    title: '权限确认',
     sub: '允许后本轮继续；deny 规则不受影响',
-    hint: '仅这一条；或本会话不再询问 bash（deny 规则仍然生效）',
   },
   mcp_search: {
-    title: '加载 MCP 工具会花掉一笔钱',
-    sub: '新工具会让整段 prompt 缓存失效，重读一次；拒绝后本会话不再加载',
-    hint: '仅这一次；或本会话不再询问 MCP 工具加载花费',
+    title: '权限确认',
+    sub: '加载会花掉一笔钱：新工具让整段 prompt 缓存失效，重读一次；拒绝后本会话不再加载',
   },
   files: {
-    // The preview below names the tool and the path, so this copy must not read
+    // The preview below names the tool and the path, so this sub must not read
     // like a bash card: 「拒绝」 here refuses THIS call only — the turn carries on.
-    title: '需要你确认这次文件操作',
-    sub: '允许后本轮继续；deny 规则不受影响',
-    hint: '仅这一次；或本会话不再询问文件规则（判定仍然会跑）',
+    title: '权限确认',
+    sub: '拒绝只拒这一次调用，本轮继续；deny 规则不受影响',
   },
 }
 
@@ -1528,7 +1527,6 @@ function PermissionForm({ perm, onAnswer }: {
       <pre className="perm-preview">{perm.req.preview}</pre>
       {perm.err ? <div className="perm-err">{perm.err}</div> : null}
       <div className="perm-actions">
-        <span className="perm-hint">{copy.hint}</span>
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('deny')}>拒绝</button>
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_session')}>本会话全部允许</button>
         <button className="btn" disabled={busy} onClick={() => onAnswer('allow_once')}>{busy ? '已发送…' : '允许一次'}</button>

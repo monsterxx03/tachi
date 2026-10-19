@@ -738,12 +738,12 @@
   display: flex;
   flex-wrap: wrap; /* seven controls' worth of precedent: never widen the pane */
   align-items: center;
+  justify-content: flex-end; /* no hint line on the left any more: the buttons own the row */
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
   background: var(--wash);
 }
-.perm-hint { margin-right: auto; font-size: 11px; color: var(--text-faint); }
 
 /* ── Workspace roots popover (the composer's ⌂ chip) ──────────────────────── */
 /* The session's root set: the primary directory, the additional roots, and the
