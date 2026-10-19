@@ -103,6 +103,7 @@ make desktop-smoke ARGS="-keep"                         # keep the sandbox after
 | 设置页的 MCP 服务器编辑器（唯一往 mcp.json 而不是 config.yaml 写的那个 block） | `mcp-edit` |
 | 收发文件或图片 | `paste-image`、`image-reload` |
 | 删除会话、运行中会话的护栏 | `delete-running` |
+| 手机接口（HTTP 发送、WebSocket 快照与投影、权限卡从手机回答、`origin=mobile` 的回声、消息落进记录） | `mobile-api` |
 | 其他任何东西——会话全文本身、会话行 | `transcript`、`sessions` |
 
 套件不需要把窗口放在前面，也不会去抢焦点：demo 模式在别的窗口盖住它时照样让页面保持清醒，而一次运行启动时不激活自己——所以你可以在它跑的时候接着干活。

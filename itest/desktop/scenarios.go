@@ -175,6 +175,15 @@ type scenario struct {
 	// the escape hatch. Seeded the same way and for the same reason as sessionKind: it is a
 	// persisted record, and what the window does with it has to be visible on the first render.
 	sessionHeldByTask bool
+	// mobile turns the phone interface on for this scenario, on a loopback port the runner
+	// picks. The config block is written by the runner (the port is not known when the
+	// scenarios are declared), and `live` is the half that talks to it: the subject of that
+	// scenario is not the webview at all, so its assertions happen while the app is running.
+	mobile bool
+	// live runs AFTER the driver's verdict and BEFORE the app is killed — the only window in
+	// which a scenario can talk to the running process over its own sockets (HTTP / WebSocket).
+	// `after` cannot: it runs once the app is gone, with only the disk left.
+	live func(c *liveCtx)
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -203,6 +212,23 @@ type projectSeed struct {
 	// older CreatedAt so it sorts after the member's project, which keeps the assertions that
 	// read the FIRST header pointing at the same project.
 	emptyName string
+}
+
+// liveCtx is what a scenario's `live` half gets: the sandbox, the running app's phone address,
+// and the mock model — so it can assert both the wire and what the model was asked, while the
+// process is still up.
+type liveCtx struct {
+	scenario string
+	home     string
+	work     string
+	// mobileAddr is the loopback host:port the phone interface was told to listen on.
+	mobileAddr string
+	mock       *mockllm.Server
+	lines      *[]Line
+}
+
+func (c *liveCtx) check(label string, ok bool, detail string) {
+	*c.lines = append(*c.lines, Line{Label: "go: " + label, OK: ok, Detail: detail})
 }
 
 // A probe is one Go-side assertion, appended to the same report the driver fills.
@@ -4490,6 +4516,39 @@ permissions:
 					time.Sleep(100 * time.Millisecond)
 				}
 				c.check("一次性任务跑完自己删掉", gone, "")
+			},
+		},
+		//
+		// mobile-api: 手机接口，打的是**运行中的进程**而不是窗口。
+		//
+		// 端口由 runner 挑（config 块也是它写的，见 scenario.mobile），所以这一场没有窗口里
+		// 可点的东西：驱动只把会话打开到就绪，剩下全部在 `live` 里做——HTTP 发消息、WebSocket
+		// 收投影、从 HTTP 回答一张权限卡。它证明的正是单测（handlers 对 fixture）和手机端单测
+		// （客户端对 mockapi）都够不到的那一段：两边围着**真实的一轮**转起来。
+		{
+			name:   "mobile-api",
+			mobile: true,
+			config: `
+permissions:
+  bash:
+    ask:
+      - "echo mobile-*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("echo mobile-e2e", "call_mob1")},
+				{Reply: textStream("手机发来的命令跑完了。", 1200)},
+			},
+			live: mobileAPIRoundTrip,
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// 记录是权威的：手机发的那句话落在会话文件里，重启之后还在。
+				found := ""
+				for _, f := range sessionFiles(c.home) {
+					if b, err := os.ReadFile(f); err == nil && strings.Contains(string(b), "手机联调：跑一下 echo") {
+						found = f
+					}
+				}
+				c.check("手机发出的消息写进了会话记录", found != "", fileList(sessionFiles(c.home)))
 			},
 		},
 	}

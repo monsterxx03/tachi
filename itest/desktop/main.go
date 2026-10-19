@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -186,7 +187,24 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	for _, f := range peerFixtures {
 		defer f.Close()
 	}
-	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.extraProviders, sc.config+peersYAML); err != nil {
+	// The phone interface, when the scenario is about it: the port is picked HERE because the
+	// config file needs a literal one and only the runner knows it. Bound-then-closed is the
+	// usual small race; it is tolerable for this suite (one run at a time) and its failure is
+	// loud — the server never answers and the live half says so by name.
+	mobileAddr := ""
+	if sc.mobile {
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			return report(sc.name, nil, []Line{{Label: "mobile port", OK: false, Detail: lerr.Error()}}, time.Since(start), verbose)
+		}
+		mobileAddr = ln.Addr().String()
+		_ = ln.Close()
+	}
+	extraConfig := sc.config + peersYAML
+	if sc.mobile {
+		extraConfig += fmt.Sprintf("mobile:\n  enabled: true\n  listen: %q\n", mobileAddr)
+	}
+	if err := sb.writeConfig(mock.BaseURL(), sc.pricing, sc.extraProviders, extraConfig); err != nil {
 		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -284,7 +302,6 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	if dom := snk.domSnapshot(); len(dom) > 0 {
 		_ = os.WriteFile(filepath.Join(dir, "dom.html"), dom, 0o644)
 	}
-	killAll()
 
 	lines := res.Lines
 	if !reported {
@@ -308,6 +325,18 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		lines = append(lines, Line{Label: "driver 跑到了结尾", OK: false,
 			Detail: "结果是在收尾之前发出来的，后面的断言没有跑"})
 	}
+	// The live half, while the process still owns its sockets. A scenario whose subject is a
+	// SERVER (the phone interface) has nothing left to assert once the app is gone — its whole
+	// exchange happens here. The result lines above describe the driver; these describe the
+	// process, and they belong in the same report.
+	if sc.live != nil {
+		lc := &liveCtx{
+			scenario: sc.name, home: sb.home, work: sb.work,
+			mobileAddr: mobileAddr, mock: mock, lines: &lines,
+		}
+		sc.live(lc)
+	}
+	killAll()
 
 	// The Go side of the evidence: what the model was asked and what landed on disk.
 	reqDump := filepath.Join(dir, "mock-requests.txt")
