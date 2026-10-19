@@ -81,6 +81,12 @@
       const values = smoke.qa('.mobile-pair-value')
       const tokenText = values[1] ? smoke.text(values[1]) : ''
       smoke.check('令牌默认是掩码（共享屏幕时看不到值）', tokenText.indexOf('•') >= 0, tokenText || '(没有令牌行)')
+      // 多网卡才有选择器：一块网卡的机器上它不该出现。出现时至少要有一个「自动」+ 一个候选，
+      // 否则那个下拉框点了什么都不会变。
+      const netSel = smoke.q('.mobile-pair-block select.set-select')
+      smoke.check('网络地址选择器只在有多个候选时出现',
+        !netSel || netSel.options.length >= 2,
+        netSel ? netSel.options.length + ' 个选项' : '(只有一个地址，没有选择器)')
     }
     const backToModel = catByName('模型')
     if (!backToModel) return smoke.fail('切回「模型」分组', '')

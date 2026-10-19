@@ -77,6 +77,37 @@ export function MobilePairingCard() {
 
       {pair ? (
         <div className="mobile-pair">
+          {pair.candidates && pair.candidates.length > 1 ? (
+            <div className="mobile-pair-row">
+              <span className="mobile-pair-label">网络</span>
+              <select
+                className="set-input set-select"
+                value={pair.interface || ''}
+                disabled={busy}
+                aria-label="配对使用的网络地址"
+                onChange={async (e) => {
+                  setBusy(true)
+                  setNotice('')
+                  try {
+                    const ret = await AgentService.SetMobilePairingHost(e.target.value)
+                    if (ret && ret !== 'ok') setNotice(ret)
+                  } catch (err) {
+                    setNotice(String(err))
+                  } finally {
+                    setBusy(false)
+                    await load()
+                  }
+                }}
+              >
+                <option value="">自动（{pair.candidates[0].interface} · {pair.candidates[0].address}）</option>
+                {pair.candidates.map((c) => (
+                  <option key={c.interface} value={c.interface}>{c.interface} · {c.address}</option>
+                ))}
+              </select>
+              <span className="mobile-pair-actions" />
+            </div>
+          ) : null}
+
           <div className="mobile-pair-row">
             <span className="mobile-pair-label">地址</span>
             <span className="mobile-pair-value" title={pair.url || pair.listen}>

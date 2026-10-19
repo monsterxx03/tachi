@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"path/filepath"
 	"time"
 
@@ -28,6 +29,10 @@ const mobileTokenFileName = "mobile.json"
 type mobileToken struct {
 	Token     string    `json:"token"`
 	CreatedAt time.Time `json:"created_at"`
+	// Interface is the network interface the pairing URL advertises ("" = automatic: the first
+	// physical one with an IPv4). It is stored by NAME rather than by address so a DHCP lease
+	// change does not silently point the QR at an address nobody holds any more.
+	Interface string `json:"interface,omitempty"`
 }
 
 // mobileTokenPath is the file's location — beside config.yaml, in whatever base dir this
@@ -82,37 +87,52 @@ func writeNewMobileToken() (string, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("mobile token: %w", err)
 	}
-	t := mobileToken{Token: base64.RawURLEncoding.EncodeToString(raw), CreatedAt: time.Now()}
+	// Regenerating the token must NOT forget which interface the reader picked: the two are
+	// different decisions, and the card would silently jump back to "automatic".
+	prev, ok, _ := readMobileTokenFile()
+	if !ok {
+		prev = mobileToken{}
+	}
+	t := mobileToken{
+		Token:     base64.RawURLEncoding.EncodeToString(raw),
+		CreatedAt: time.Now(),
+		Interface: prev.Interface,
+	}
+	if err := writeMobileTokenFile(t); err != nil {
+		return "", err
+	}
+	return t.Token, nil
+}
+
+// writeMobileTokenFile is the module's only writer: atomic, 0600, and it never drops a field it
+// was not asked to change (the token and the interface are two separate decisions).
+func writeMobileTokenFile(t mobileToken) error {
 	b, err := json.MarshalIndent(t, "", "  ")
 	if err != nil {
-		return "", err
+		return err
 	}
 	dir := config.BaseDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return err
 	}
-	path := mobileTokenPath()
 	tmp, err := os.CreateTemp(dir, ".mobile-*.json")
 	if err != nil {
-		return "", err
+		return err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op once the rename succeeded
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return "", err
-	}
-	return t.Token, nil
+	return os.Rename(tmpName, mobileTokenPath())
 }
 
 // mobileTokenEqual compares a presented token with the live one in constant time. Length is
@@ -133,11 +153,28 @@ type MobilePairingVO struct {
 	// so rather than printing 127.0.0.1, which no phone could use).
 	URL   string `json:"url"`
 	Token string `json:"token"`
+	// Host is the IPv4 address the URL was built from ("" when there is nothing usable).
+	Host string `json:"host"`
+	// Interface is the one the reader picked, or "" for automatic.
+	Interface string `json:"interface"`
+	// Candidates are the addresses this machine can offer. More than one is the normal case on
+	// a machine with Wi-Fi + Ethernet + a VPN, and only a person knows which network the phone
+	// is on — so the card lists them instead of betting on the kernel's ordering.
+	Candidates []MobilePairingCandidate `json:"candidates"`
 	// Payload is {"v":1,"url":…,"token":…} — the QR's content, verbatim.
 	Payload string `json:"payload"`
 	// Error is non-empty when the listener could not start (port taken, bad address), so the
 	// card can say why instead of showing a URL that answers nothing.
 	Error string `json:"error,omitempty"`
+}
+
+// MobilePairingCandidate is one address the pairing URL could use.
+type MobilePairingCandidate struct {
+	Interface string `json:"interface"`
+	Address   string `json:"address"`
+	// URL is what the phone would dial if this candidate were chosen — built here, once, so the
+	// card never assembles a URL of its own.
+	URL string `json:"url"`
 }
 
 // GetMobilePairing returns everything the settings card renders. It creates the token on
@@ -156,7 +193,20 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 		return out
 	}
 	out.Token = token
-	out.URL = mobilePairingURL(out.Listen)
+	_, port, err := net.SplitHostPort(out.Listen)
+	if err != nil || port == "" {
+		port = "8787"
+	}
+	out.Candidates = mobileLANCandidates(port)
+	want := ""
+	if st, ok, _ := readMobileTokenFile(); ok {
+		want = st.Interface
+	}
+	if c, ok := chooseMobileCandidate(out.Candidates, want); ok {
+		out.Interface = c.Interface
+		out.Host = c.Address
+		out.URL = c.URL
+	}
 	payload, _ := json.Marshal(map[string]any{"v": 1, "url": out.URL, "token": token})
 	out.Payload = string(payload)
 	if m := d.mobileServer(); m != nil {
@@ -186,36 +236,182 @@ func (s *AgentService) RegenerateMobileToken() string {
 	return "ok"
 }
 
-// mobilePairingURL turns a listen address into one a phone can dial: the port survives, the
-// host becomes this machine's LAN address (0.0.0.0 and 127.0.0.1 are not reachable from
-// another device), and the scheme is http because V1 is plain HTTP on the LAN.
-func mobilePairingURL(listen string) string {
-	_, port, err := net.SplitHostPort(listen)
-	if err != nil || port == "" {
-		port = "8787"
-	}
-	host := firstLANIPv4()
-	if host == "" {
+// mobilePairingURL is what a phone dials: the scheme is http because V1 is plain HTTP on the
+// LAN, and the host is one of this machine's own addresses (0.0.0.0 and 127.0.0.1 are not
+// reachable from another device).
+func mobilePairingURL(host, port string) string {
+	if host == "" || port == "" {
 		return ""
 	}
 	return "http://" + net.JoinHostPort(host, port)
 }
 
-// firstLANIPv4 returns the first non-loopback IPv4 address of an up interface. "" means this
-// machine is on no network we can name a phone with.
-func firstLANIPv4() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() {
+// mobileLANCandidates lists the addresses the card can offer, PHYSICAL interfaces first (see
+// pickLANIPv4 for why the order matters).
+func mobileLANCandidates(port string) []MobilePairingCandidate {
+	out := make([]MobilePairingCandidate, 0, 4)
+	for _, c := range lanCandidates() {
+		if !lanUsable(c) {
 			continue
 		}
-		if v4 := ipnet.IP.To4(); v4 != nil {
-			return v4.String()
+		out = append(out, MobilePairingCandidate{
+			Interface: c.name,
+			Address:   c.ip.String(),
+			URL:       mobilePairingURL(c.ip.String(), port),
+		})
+	}
+	// Stable partition: physical interfaces first, then everything else.
+	physical := make([]MobilePairingCandidate, 0, len(out))
+	other := make([]MobilePairingCandidate, 0, len(out))
+	for _, c := range out {
+		if physicalName(c.Interface) {
+			physical = append(physical, c)
+		} else {
+			other = append(other, c)
+		}
+	}
+	return append(physical, other...)
+}
+
+// chooseMobileCandidate answers which address the URL uses: the one the reader picked, when that
+// interface still has a usable address; otherwise the automatic one (the first, i.e. a physical
+// interface). "" means the machine has no usable address at all.
+func chooseMobileCandidate(cands []MobilePairingCandidate, wantInterface string) (MobilePairingCandidate, bool) {
+	if wantInterface != "" {
+		for _, c := range cands {
+			if c.Interface == wantInterface {
+				return c, true
+			}
+		}
+	}
+	if len(cands) > 0 {
+		return cands[0], true
+	}
+	return MobilePairingCandidate{}, false
+}
+
+// SetMobilePairingHost records which interface the pairing URL should use. "" means automatic.
+//
+// It writes the interface's own file (mobile.json) rather than config.yaml: this is a property
+// of the phone interface, not of the agent's preferences, and the card that shows it is not part
+// of the settings form's save batch.
+func (s *AgentService) SetMobilePairingHost(iface string) string {
+	cands := mobileLANCandidates("1") // the ports do not matter for the check
+	if iface != "" {
+		found := false
+		for _, c := range cands {
+			if c.Interface == iface {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "这台机器上没有这个网络接口（或它当前没有可用的 IPv4 地址）"
+		}
+	}
+	if err := setMobileInterface(iface); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
+// setMobileInterface rewrites the interface choice, keeping the token.
+func setMobileInterface(iface string) error {
+	t, ok, err := readMobileTokenFile()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// No token yet: create one, then record the choice on top of it.
+		if _, err := writeNewMobileToken(); err != nil {
+			return err
+		}
+		t, ok, err = readMobileTokenFile()
+		if err != nil || !ok {
+			return err
+		}
+	}
+	t.Interface = iface
+	return writeMobileTokenFile(t)
+}
+
+// lanCandidate is one interface address as the pairing URL weighs it. Point-to-point links
+// (utun/tun/tap) carry VPN addresses that only exist through that tunnel; bridges and vm
+// interfaces (bridge100, vmenet0, docker0) carry container/emulator networks. A phone on the
+// same Wi-Fi can reach NONE of them.
+type lanCandidate struct {
+	name         string
+	ip           net.IP
+	up           bool
+	pointToPoint bool
+}
+
+// lanCandidates is every IPv4 address this machine holds, with what decides whether a phone can
+// reach it. The ORDER is the kernel's; the preference between them is pickLANIPv4's business.
+func lanCandidates() []lanCandidate {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	cands := make([]lanCandidate, 0, len(ifaces))
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			v4 := ipnet.IP.To4()
+			if v4 == nil {
+				continue
+			}
+			cands = append(cands, lanCandidate{
+				name:         iface.Name,
+				ip:           v4,
+				up:           iface.Flags&net.FlagUp != 0,
+				pointToPoint: iface.Flags&net.FlagPointToPoint != 0,
+			})
+		}
+	}
+	return cands
+}
+
+// lanUsable is the ONE rule for "a phone on the same network could dial this".
+func lanUsable(c lanCandidate) bool {
+	return c.up && !c.pointToPoint && c.ip.To4() != nil &&
+		!c.ip.IsLoopback() && !c.ip.IsLinkLocalUnicast()
+}
+
+// firstLANIPv4 returns the automatic choice (the address a phone on the same network should
+// dial when nobody has picked one). "" means this machine has no address we can name one with.
+func firstLANIPv4() string { return pickLANIPv4(lanCandidates()) }
+
+// pickLANIPv4 prefers a PHYSICAL-looking interface (en0, eth0, wlan0…) and only falls back to
+// any other up, non-tunnel address when there is none — the order interfaces come back in is
+// not a promise, and the address on a VPN is the one that never works from the phone.
+func pickLANIPv4(cands []lanCandidate) string {
+	for _, wantPhysical := range []bool{true, false} {
+		for _, c := range cands {
+			if !lanUsable(c) || physicalName(c.name) != wantPhysical {
+				continue
+			}
+			return c.ip.String()
 		}
 	}
 	return ""
+}
+
+// physicalName names the interface kinds a LAN peer actually shares: macOS en0/en1, Linux
+// eth0/enp0s3/wlan0/wlp2s0. Everything else (bridge*, vmenet*, utun*, docker*, virbr*) is a
+// virtual network that exists only inside this machine.
+func physicalName(name string) bool {
+	for _, prefix := range []string{"en", "eth", "wl"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -1071,6 +1071,17 @@ export function SetMCPToolEnabled(name: string, enabled: boolean): $CancellableP
 }
 
 /**
+ * SetMobilePairingHost records which interface the pairing URL should use. "" means automatic.
+ * 
+ * It writes the interface's own file (mobile.json) rather than config.yaml: this is a property
+ * of the phone interface, not of the agent's preferences, and the card that shows it is not part
+ * of the settings form's save batch.
+ */
+export function SetMobilePairingHost(iface: string): $CancellablePromise<string> {
+    return $Call.ByID(1640675020, iface);
+}
+
+/**
  * SetOneOffPanelOpen records whether the side-channel panel is open. Written on every toggle
  * and best effort, like the rest of uiState: a failure costs the next launch the panel's
  * position and nothing else.

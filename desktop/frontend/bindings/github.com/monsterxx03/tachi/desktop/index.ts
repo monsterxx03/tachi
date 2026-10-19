@@ -39,6 +39,7 @@ export type {
     MCPToolParamVO,
     MCPToolSchemaVO,
     MCPToolVO,
+    MobilePairingCandidate,
     MobilePairingVO,
     OneOffDetailVO,
     OneOffListVO,

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -542,5 +543,128 @@ func TestMobileStartStop(t *testing.T) {
 	d.stopMobile()
 	if d.mobileServer() != nil {
 		t.Fatal("stopMobile left the server registered")
+	}
+}
+
+// TestPairingPicksALANAddress: the QR's URL has to be an address a phone can dial. On a machine
+// with a VPN and a container network, "first non-loopback IPv4" is whichever interface the kernel
+// happened to list first — which is exactly how the card came to show 10.251.1.1 (a utun link)
+// or 192.168.139.3 (a vm bridge) on a machine whose Wi-Fi was en0.
+func TestPairingPicksALANAddress(t *testing.T) {
+	cand := func(name, ip string, up bool, p2p bool) lanCandidate {
+		return lanCandidate{name: name, ip: net.ParseIP(ip), up: up, pointToPoint: p2p}
+	}
+	tests := []struct {
+		name  string
+		cands []lanCandidate
+		want  string
+	}{
+		{
+			name: "虚拟网桥排在前面也不选它",
+			cands: []lanCandidate{
+				cand("bridge100", "192.168.139.3", true, false),
+				cand("vmenet0", "192.168.64.2", true, false),
+				cand("en0", "10.5.178.101", true, false),
+			},
+			want: "10.5.178.101",
+		},
+		{
+			name: "VPN 的点对点地址不选",
+			cands: []lanCandidate{
+				cand("utun4", "10.251.1.1", true, true),
+				cand("en0", "192.168.1.20", true, false),
+			},
+			want: "192.168.1.20",
+		},
+		{
+			name:  "只有虚拟网卡时退而求其次（总比空着强）",
+			cands: []lanCandidate{cand("bridge100", "192.168.139.3", true, false)},
+			want:  "192.168.139.3",
+		},
+		{
+			name: "只有 loopback 与链路本地地址时给空（卡片会说没有可用地址）",
+			cands: []lanCandidate{
+				cand("lo0", "127.0.0.1", true, false),
+				cand("en8", "169.254.32.161", true, false),
+			},
+			want: "",
+		},
+		{
+			name:  "Linux 的 eth0 也算物理网卡",
+			cands: []lanCandidate{cand("docker0", "172.17.0.1", true, false), cand("eth0", "192.168.1.9", true, false)},
+			want:  "192.168.1.9",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pickLANIPv4(tt.cands); got != tt.want {
+				t.Fatalf("pickLANIPv4 = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMobilePairingHostIsChosenAndKept: the card's address selector is a real choice, it survives
+// a token regeneration, and an interface that is not on this machine is refused rather than
+// written (a URL pointing at nothing is worse than the automatic one).
+func TestMobilePairingHostIsChosenAndKept(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	d := newTestApp()
+
+	cands := mobileLANCandidates("8787")
+	if len(cands) == 0 {
+		t.Skip("这台机器没有可用的 LAN 地址")
+	}
+	want := cands[0]
+	if got := d.SetMobilePairingHostForTest(want.Interface); got != "ok" {
+		t.Fatalf("选了 %s = %q", want.Interface, got)
+	}
+	pair := d.pairing()
+	if pair.Interface != want.Interface || pair.URL != want.URL || pair.Host != want.Address {
+		t.Fatalf("配对地址 = %+v, want %s / %s", pair, want.Interface, want.URL)
+	}
+
+	// A bogus interface is refused and nothing moves.
+	if got := d.SetMobilePairingHostForTest("not-an-interface"); got == "ok" {
+		t.Fatal("不存在的接口被接受了")
+	}
+	if again := d.pairing(); again.Interface != want.Interface {
+		t.Fatalf("被拒绝的修改把选择改掉了：%q", again.Interface)
+	}
+
+	// Regenerating the token keeps the choice; the token itself changes.
+	before := pair.Token
+	if tok, err := writeNewMobileToken(); err != nil || tok == before {
+		t.Fatalf("regenerate token: %v (same=%v)", err, tok == before)
+	}
+	if kept := d.pairing(); kept.Interface != want.Interface {
+		t.Fatalf("换令牌之后接口选择丢了：%q", kept.Interface)
+	}
+}
+
+// SetMobilePairingHostForTest is the binding's core without the Wails receiver, for tests in
+// this package (the binding itself takes *AgentService).
+func (d *desktopApp) SetMobilePairingHostForTest(iface string) string {
+	return (&AgentService{desk: d}).SetMobilePairingHost(iface)
+}
+
+// pairing is GetMobilePairing's core, on the app rather than the service.
+func (d *desktopApp) pairing() MobilePairingVO {
+	return (&AgentService{desk: d}).GetMobilePairing()
+}
+
+// TestChooseMobileCandidate pins the fallback rule: a stale choice (the interface lost its
+// address, or the machine was renamed) must degrade to the automatic one, never to an empty URL.
+func TestChooseMobileCandidate(t *testing.T) {
+	a := MobilePairingCandidate{Interface: "en0", Address: "10.0.0.5", URL: "http://10.0.0.5:8787"}
+	b := MobilePairingCandidate{Interface: "bridge100", Address: "192.168.64.1", URL: "http://192.168.64.1:8787"}
+	if got, ok := chooseMobileCandidate([]MobilePairingCandidate{a, b}, "bridge100"); !ok || got.Interface != "bridge100" {
+		t.Fatalf("选 bridge100 = %+v", got)
+	}
+	if got, ok := chooseMobileCandidate([]MobilePairingCandidate{a, b}, "gone0"); !ok || got.Interface != "en0" {
+		t.Fatalf("过期选择应退回自动（列表第一个）：%+v", got)
+	}
+	if _, ok := chooseMobileCandidate(nil, ""); ok {
+		t.Fatal("没有候选时不应给出地址")
 	}
 }

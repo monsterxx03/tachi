@@ -692,6 +692,20 @@ export interface MCPToolVO {
 }
 
 /**
+ * MobilePairingCandidate is one address the pairing URL could use.
+ */
+export interface MobilePairingCandidate {
+    "interface": string;
+    "address": string;
+
+    /**
+     * URL is what the phone would dial if this candidate were chosen — built here, once, so the
+     * card never assembles a URL of its own.
+     */
+    "url": string;
+}
+
+/**
  * MobilePairingVO is what the settings card needs to pair a phone: where to point it, the
  * token to present, and the exact payload the QR code encodes (mobile/src/api/qr.ts parses
  * this shape, so the card must not build a second one).
@@ -707,6 +721,23 @@ export interface MobilePairingVO {
      */
     "url": string;
     "token": string;
+
+    /**
+     * Host is the IPv4 address the URL was built from ("" when there is nothing usable).
+     */
+    "host": string;
+
+    /**
+     * Interface is the one the reader picked, or "" for automatic.
+     */
+    "interface": string;
+
+    /**
+     * Candidates are the addresses this machine can offer. More than one is the normal case on
+     * a machine with Wi-Fi + Ethernet + a VPN, and only a person knows which network the phone
+     * is on — so the card lists them instead of betting on the kernel's ordering.
+     */
+    "candidates": MobilePairingCandidate[] | null;
 
     /**
      * Payload is {"v":1,"url":…,"token":…} — the QR's content, verbatim.
