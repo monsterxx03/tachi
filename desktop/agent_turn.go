@@ -140,8 +140,12 @@ func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) str
 	select {
 	case ch <- agent.SteerInput{Text: expanded.Text, Display: text, Images: expanded.Images}:
 		// The other screens draw a steered message with its own style, so the echo says which
-		// it was.
-		d.echoUserMessage(sessionID, text, true, origin)
+		// it was. An EMPTY steer is not a message: it is the "nothing is queued" reply that
+		// unblocks the loop (see answerSteer), and echoing it put an empty user bubble on every
+		// other screen at each steer point.
+		if text != "" {
+			d.echoUserMessage(sessionID, text, true, origin)
+		}
 		return "ok"
 	default:
 		return "dropped"
