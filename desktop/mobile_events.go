@@ -161,6 +161,36 @@ func (d *desktopApp) notifyMobileUserMessage(sessionID, text string, steer bool,
 	})
 }
 
+// notifySessionPrefs tells the OTHER screens that a session's two switches moved (the model it
+// runs on, and whether ask rules still raise a card).
+//
+// Both travel together because they are the two per-session facts a phone can change, and a
+// screen that re-read one without the other could show a pair that never existed. It is emitted
+// by the WRITERS (switchProviderFor / setSkipApprovalFor), not by the endpoints, so the window's
+// own controls produce it too — there is one fact, and everyone who changed it says so.
+func (d *desktopApp) notifySessionPrefs(sessionID, provider string, skipApproval bool) {
+	if d.app != nil {
+		d.app.Event.Emit("agent:session_prefs", map[string]any{
+			"sessionId":    sessionID,
+			"provider":     provider,
+			"skipApproval": skipApproval,
+		})
+	}
+	d.mobileNotify(sessionID, map[string]any{
+		"type":         mobileEvSessionPrefs,
+		"provider":     provider,
+		"skipApproval": skipApproval,
+	})
+}
+
+// sessionPrefs reads the record's two switches — the durable half every screen shows.
+func (d *desktopApp) sessionPrefs(id string) (provider string, skipApproval bool) {
+	if ss := d.sessionRecord(id); ss != nil {
+		return ss.ProviderName, ss.SkipApproval
+	}
+	return "", false
+}
+
 // echoUserMessage is the same echo on the desktop event bus. It is emitted for every origin: the
 // window ignores its own (origin == desktop) because it already drew that bubble, and appends
 // everyone else's.

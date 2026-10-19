@@ -106,10 +106,12 @@
 | `ask` | `ask` | 新增一条等待（权限或提问） |
 | `ask_answered` | `toolId` | 一条等待已被回答 |
 | `user_message` | `text`, `displayText`, `steer`, `origin` | **另一块屏**发来的用户消息 |
+| `session_prefs` | `provider`, `skipApproval` | 这段对话的模型 / 审批开关被**某一块屏**改了（桌面或手机）；两种开关一起发 |
 | `lagged` | — | 你跟不上了，重读快照 |
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
 - `origin` 是 `desktop` / `mobile` / `badge` / `cron`：一块屏改了共享状态要告诉另一块，收到时**自己发的那条**不重复画。
+- `session_prefs` 没有 origin：两个开关是**幂等**的共享状态，谁改的都要落到每一块屏上，收到就照它更新即可（开关写的是会话记录，事件只是让它立刻可见）。
 
 ## 线上类型
 

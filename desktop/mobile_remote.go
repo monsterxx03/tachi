@@ -258,6 +258,7 @@ func (d *desktopApp) switchProviderFor(id, name string) error {
 	d.mu.Lock()
 	r.agentProvider = name
 	d.mu.Unlock()
+	d.notifySessionPrefs(id, name, d.skipApprovalFor(id))
 	return nil
 }
 
@@ -311,6 +312,8 @@ func (d *desktopApp) setSkipApprovalFor(id string, skip bool) error {
 			if r.agent != nil {
 				r.agent.SetAllowAllAsksForSession(skip)
 			}
+			provider, _ := d.sessionPrefs(id)
+			d.notifySessionPrefs(id, provider, skip)
 			return nil
 		}
 	}
@@ -330,6 +333,7 @@ func (d *desktopApp) setSkipApprovalFor(id string, skip bool) error {
 		ss.SkipApproval = prev
 		return fmt.Errorf("保存会话失败：%v", err)
 	}
+	d.notifySessionPrefs(id, ss.ProviderName, skip)
 	return nil
 }
 

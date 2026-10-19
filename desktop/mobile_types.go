@@ -141,6 +141,7 @@ const (
 	mobileEvAsk          = "ask"
 	mobileEvAskAnswered  = "ask_answered"
 	mobileEvUserMessage  = "user_message"
+	mobileEvSessionPrefs = "session_prefs"
 	mobileEvLagged       = "lagged"
 )
 

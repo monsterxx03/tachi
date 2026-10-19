@@ -31,20 +31,12 @@ func mobileAPIRoundTrip(c *liveCtx) {
 	// ── the credential ─────────────────────────────────────────────────────
 	// The token is a file, not a config leaf (desktop/mobile_token.go): the scenario reads it the
 	// way the settings card hands it to a phone.
-	raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "mobile.json"))
-	if err != nil {
-		c.check("读到 mobile.json", false, err.Error())
-		return
-	}
-	var tok struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(raw, &tok); err != nil || tok.Token == "" {
-		c.check("mobile.json 里有一枚令牌", false, string(raw))
+	token, ok := mobileSmokeToken(c)
+	if !ok {
 		return
 	}
 	auth := func(req *http.Request) *http.Request {
-		req.Header.Set("Authorization", "Bearer "+tok.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		return req
 	}
@@ -100,7 +92,7 @@ func mobileAPIRoundTrip(c *liveCtx) {
 	c.check("列表里有沙箱那个会话", true, sessionID)
 
 	// ── the socket: subscribe, snapshot ────────────────────────────────────
-	wsURL := "ws://" + c.mobileAddr + "/v1/ws?token=" + url.QueryEscape(tok.Token)
+	wsURL := "ws://" + c.mobileAddr + "/v1/ws?token=" + url.QueryEscape(token)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		c.check("WebSocket 连得上", false, err.Error())
@@ -243,7 +235,10 @@ type mobileEvent struct {
 	IsError bool   `json:"isError"`
 	End     string `json:"end"`
 	Origin  string `json:"origin"`
-	Ask     *struct {
+	// session_prefs: the two switches another screen changed.
+	Provider     string `json:"provider"`
+	SkipApproval bool   `json:"skipApproval"`
+	Ask          *struct {
 		Kind           string `json:"kind"`
 		ToolID         string `json:"toolId"`
 		ToolName       string `json:"toolName"`
@@ -251,7 +246,9 @@ type mobileEvent struct {
 		Preview        string `json:"preview"`
 	} `json:"ask"`
 	Snapshot *struct {
-		State struct {
+		Model        string `json:"model"`
+		SkipApproval bool   `json:"skipApproval"`
+		State        struct {
 			Status string `json:"status"`
 		} `json:"state"`
 	} `json:"snapshot"`
@@ -284,4 +281,197 @@ func titles(rows []mobileSessionRow) string {
 		out = append(out, r.Title)
 	}
 	return strings.Join(out, " | ")
+}
+
+// mobileSmokeToken reads the credential the sandbox's app wrote. The token is a file, not a
+// config leaf (desktop/mobile_token.go), so this is how the settings card would hand it over.
+func mobileSmokeToken(c *liveCtx) (string, bool) {
+	raw, err := os.ReadFile(filepath.Join(c.home, ".tachi", "mobile.json"))
+	if err != nil {
+		c.check("读到 mobile.json", false, err.Error())
+		return "", false
+	}
+	var tok struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(raw, &tok); err != nil || tok.Token == "" {
+		c.check("mobile.json 里有一枚令牌", false, string(raw))
+		return "", false
+	}
+	return tok.Token, true
+}
+
+// mobilePrefsRoundTrip checks that the two per-session switches travel between screens: the phone
+// changes them over HTTP, and BOTH the phone (over its socket) and the window (its own controls,
+// asserted by the driver that is running at the same time) must show the new pair.
+//
+// The window's half is why `live` runs concurrently with the driver rather than after it: the
+// driver is sitting in a waitFor for exactly this change.
+func mobilePrefsRoundTrip(c *liveCtx) {
+	const altProvider = "smoke-alt"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	base := "http://" + c.mobileAddr
+	token, ok := mobileSmokeToken(c)
+	if !ok {
+		return
+	}
+	auth := func(req *http.Request) *http.Request {
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		return req
+	}
+
+	up := false
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		res, err := client.Get(base + "/v1/ping")
+		if err == nil {
+			res.Body.Close()
+			up = res.StatusCode == http.StatusOK
+			if up {
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !up {
+		c.check("移动接口在进程里起来了", false, c.mobileAddr+" 没有应答 /v1/ping")
+		return
+	}
+	c.check("移动接口在进程里起来了", true, c.mobileAddr)
+
+	// The phone's model list is the providers this process knows; the switch below picks one of
+	// them by name, exactly as the sheet would.
+	req, _ := http.NewRequest("GET", base+"/v1/providers", nil)
+	res, err := client.Do(auth(req))
+	if err != nil {
+		c.check("读到模型列表", false, err.Error())
+		return
+	}
+	var providers struct {
+		Providers []struct {
+			Name string `json:"name"`
+		} `json:"providers"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&providers)
+	res.Body.Close()
+	hasAlt := false
+	for _, p := range providers.Providers {
+		if p.Name == altProvider {
+			hasAlt = true
+		}
+	}
+	c.check("手机的模型列表里有第二个 provider", hasAlt, fmt.Sprintf("%d 个", len(providers.Providers)))
+
+	// The session to switch: the fixture's only one.
+	req, _ = http.NewRequest("GET", base+"/v1/sessions", nil)
+	res, err = client.Do(auth(req))
+	if err != nil {
+		c.check("列出会话", false, err.Error())
+		return
+	}
+	var list struct {
+		Sessions []mobileSessionRow `json:"sessions"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&list)
+	res.Body.Close()
+	sessionID := ""
+	for _, s := range list.Sessions {
+		if s.Title == "冒烟会话" {
+			sessionID = s.ID
+		}
+	}
+	if sessionID == "" {
+		c.check("列表里有沙箱那个会话", false, titles(list.Sessions))
+		return
+	}
+
+	// A socket, so the phone's own view of the change is what is asserted (not just the record).
+	wsURL := "ws://" + c.mobileAddr + "/v1/ws?token=" + url.QueryEscape(token)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		c.check("WebSocket 连得上", false, err.Error())
+		return
+	}
+	defer conn.Close()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"open","sessionId":"`+sessionID+`"}`)); err != nil {
+		c.check("发 open", false, err.Error())
+		return
+	}
+	snap := readEvent(conn, 10*time.Second)
+	if snap == nil || snap.Snapshot == nil {
+		c.check("open 先得到一份快照", false, eventType(snap))
+		return
+	}
+	c.check("初始状态：默认 provider、需要审批",
+		snap.Snapshot.Model == "smoke" && !snap.Snapshot.SkipApproval,
+		fmt.Sprintf("model=%q skip=%v", snap.Snapshot.Model, snap.Snapshot.SkipApproval))
+
+	// The two writes, the same two calls the sheets make.
+	for _, w := range []struct {
+		path string
+		body string
+		name string
+	}{
+		{"/provider", `{"name":"` + altProvider + `"}`, "切模型"},
+		{"/skip-approval", `{"skip":true}`, "打开跳过审批"},
+	} {
+		req, _ := http.NewRequest("POST", base+"/v1/sessions/"+url.PathEscape(sessionID)+w.path, strings.NewReader(w.body))
+		r, err := client.Do(auth(req))
+		if err != nil {
+			c.check(w.name+"被接受", false, err.Error())
+			continue
+		}
+		var body struct {
+			Accepted bool   `json:"accepted"`
+			Error    string `json:"error"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		r.Body.Close()
+		c.check(w.name+"被接受", r.StatusCode == http.StatusOK && body.Accepted,
+			fmt.Sprintf("%d %s", r.StatusCode, body.Error))
+	}
+
+	// Both switches arrive on the phone's socket. They travel in one event, but the two calls are
+	// two writes: the second event carries the final pair, and that is what must land there.
+	sawProvider, sawSkip := false, false
+	finalProvider, finalSkip := "", true
+	readDeadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(readDeadline) && (!sawProvider || !sawSkip) {
+		ev := readEvent(conn, 5*time.Second)
+		if ev == nil {
+			break
+		}
+		if ev.Type != "session_prefs" {
+			continue
+		}
+		if ev.Provider == altProvider {
+			sawProvider = true
+		}
+		if ev.SkipApproval {
+			sawSkip = true
+		}
+		finalProvider, finalSkip = ev.Provider, ev.SkipApproval
+	}
+	c.check("手机收到「模型被改了」", sawProvider, "")
+	c.check("手机收到「审批开关被改了」", sawSkip, "")
+	c.check("事件里带着两个开关的最终值", finalProvider == altProvider && finalSkip,
+		fmt.Sprintf("provider=%q skip=%v", finalProvider, finalSkip))
+
+	// The OTHER direction: the window flips the approval switch back, and this socket must hear
+	// it. Same event, same writer — proving it once per direction is the whole point of a sync.
+	back := false
+	backDeadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(backDeadline) {
+		ev := readEvent(conn, 5*time.Second)
+		if ev == nil {
+			break
+		}
+		if ev.Type == "session_prefs" && !ev.SkipApproval {
+			back = true
+			break
+		}
+	}
+	c.check("窗口改了审批开关，手机也收到", back, "")
 }

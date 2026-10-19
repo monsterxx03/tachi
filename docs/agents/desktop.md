@@ -104,13 +104,14 @@ make desktop-smoke ARGS="-keep"                         # keep the sandbox after
 | 收发文件或图片 | `paste-image`、`image-reload` |
 | 删除会话、运行中会话的护栏 | `delete-running` |
 | 手机接口（HTTP 发送、WebSocket 快照与投影、权限卡从手机回答、`origin=mobile` 的回声、消息落进记录） | `mobile-api` |
+| 会话的两个开关（模型 / 跳过审批）在两块屏之间同步——手机改窗口跟着变，窗口改手机收到 | `mobile-prefs` |
 | 其他任何东西——会话全文本身、会话行 | `transcript`、`sessions` |
 
 套件不需要把窗口放在前面，也不会去抢焦点：demo 模式在别的窗口盖住它时照样让页面保持清醒，而一次运行启动时不激活自己——所以你可以在它跑的时候接着干活。
 
 ### 套件的形状
 
-它就是 `itest/desktop/`：`main.go`（runner：沙箱、启动、判定、报告）、`scenarios.go`（每个场景一段对话——mock 的步骤加上 Go 那一侧的 `after` 断言）、`sandbox.go`（bundle 准备、隔离的 HOME、启动/杀掉）、`sink.go`（driver 上报的那个 loopback 端点）、`drivers/`（harness.js + 每个场景一个脚本）。每次运行它都会搭一个一次性沙箱，里面装着应用的一份私有拷贝（可执行文件改名成 `TachiSmoke`，这样没有 `pkill` 能碰到用户自己的 Tachi）、一个隔离的 HOME，其中 `config.yaml` 指向那台脚本化的模型、工作目录、`driver.js`、`dom.html`（判定看到它时的那个页面）和 `mock-requests.txt`（模型实际上被问的是什么）。**`desktop/bin/tachi-desktop.app` 必须存在**（`make -C desktop build`）；runner 每次运行都会用 `bin/tachi-desktop` 刷新里面的那个可执行文件。
+它就是 `itest/desktop/`：`main.go`（runner：沙箱、启动、判定、报告）、`scenarios.go`（每个场景一段对话——mock 的步骤加上 Go 那一侧的 `after` 断言；还有一个 `live` 半场，**与驱动并发**跑在进程活着的时候，给那些主角不是窗口的场景——手机接口就是从这里打的，它的 `mobile-prefs` 还靠这个并发去断言「另一块屏改了、窗口跟着变」）、`sandbox.go`（bundle 准备、隔离的 HOME、启动/杀掉）、`sink.go`（driver 上报的那个 loopback 端点）、`drivers/`（harness.js + 每个场景一个脚本）。每次运行它都会搭一个一次性沙箱，里面装着应用的一份私有拷贝（可执行文件改名成 `TachiSmoke`，这样没有 `pkill` 能碰到用户自己的 Tachi）、一个隔离的 HOME，其中 `config.yaml` 指向那台脚本化的模型、工作目录、`driver.js`、`dom.html`（判定看到它时的那个页面）和 `mock-requests.txt`（模型实际上被问的是什么）。**`desktop/bin/tachi-desktop.app` 必须存在**（`make -C desktop build`）；runner 每次运行都会用 `bin/tachi-desktop` 刷新里面的那个可执行文件。
 
 driver 断言 UI **显示**了什么（会话全文的形状、小片、按钮）；场景的 Go 那一半断言实际**发生了**什么（模型收到的提示词、写下的文件）——一个回归通常正好在二者之一里露出来，所以两边都要写。新场景是对着 harness 写一个 `drivers/<name>.js`（`smoke.waitFor`——绝不用固定 sleep——`smoke.check(label, ok, detail)`、`smoke.finish()`，外加 `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`，以及给一轮页脚的 ⋯ 菜单用的 `turnMenu`/`menuItem`/`turnMenuLabel`），再加上它在 `scenarios.go` 里的条目（mock 的 `steps`、工作目录的 `files`、一个 `after` 函数），并加进上面那张路由表。两边都保持小：每个场景一个行为，断言用户会注意到的东西。
 

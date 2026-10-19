@@ -2395,10 +2395,22 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // (agent:event / agent:tool / agent:turn / agent:error — see agentEvents.ts). The steer
   // reply and the question cleanup come from the composer: both are about the queue/form
   // that lives there.
+  // A phone (or another window) changed the model or the approval switch: this window shows the
+  // same pair immediately, because both live in the session record and the event is just that
+  // record becoming visible here. Only the session on screen has a control for them.
+  const applySessionPrefs = useCallback((sid: string, provider: string, skip: boolean) => {
+    if (sid !== currentId) return
+    setProviderName(provider)
+    setSkipApproval(skip)
+    // The provider decides which thinking levels exist, so re-derive them the way a local
+    // switch does; the values above are already right for the moment the event lands.
+    void refreshProvider()
+  }, [currentId, refreshProvider])
+
   useAgentStream({
     currentId,
     updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
-    injectSteerVisual,
+    injectSteerVisual, onSessionPrefs: applySessionPrefs,
     refreshProvider, answerSteer: composer.answerSteer, clearAsk: composer.clearAsk,
     onSessionTitle: setSessionTitle,
   })

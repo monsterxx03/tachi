@@ -35,6 +35,11 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// liveBudget bounds the scenario's live half (see scenario.live). It is generous — the phone's
+// round trip includes a real model reply — but finite, because a socket nobody closes must not
+// turn into a wedged suite.
+const liveBudget = 60 * time.Second
+
 // driverContactWindow is how long the runner waits for the driver to show ANY sign of life before
 // calling the run dead (see sink.contact). Longer than the app's own injection window (10s,
 // desktop/demo.go) so a page that takes its time still counts as alive, and far shorter than the
@@ -292,6 +297,21 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 				"app 到底起没起，看 home/.tachi 与 debug.log", driverContactWindow)}},
 			time.Since(start), verbose)
 	}
+	// The live half starts HERE — while the driver is still running — because some scenarios need
+	// both directions at once: the window has to show a change another screen makes, which means
+	// the driver must be waiting for a fact this half is about to cause. It gets its own lines
+	// (merged below) and its own budget.
+	lc := &liveCtx{scenario: sc.name, home: sb.home, work: sb.work, mobileAddr: mobileAddr, mock: mock}
+	liveDone := make(chan struct{})
+	if sc.live != nil {
+		go func() {
+			defer close(liveDone)
+			sc.live(lc)
+		}()
+	} else {
+		close(liveDone)
+	}
+
 	rest := timeout - driverContactWindow
 	if rest < time.Second {
 		rest = time.Second
@@ -325,17 +345,14 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		lines = append(lines, Line{Label: "driver 跑到了结尾", OK: false,
 			Detail: "结果是在收尾之前发出来的，后面的断言没有跑"})
 	}
-	// The live half, while the process still owns its sockets. A scenario whose subject is a
-	// SERVER (the phone interface) has nothing left to assert once the app is gone — its whole
-	// exchange happens here. The result lines above describe the driver; these describe the
-	// process, and they belong in the same report.
-	if sc.live != nil {
-		lc := &liveCtx{
-			scenario: sc.name, home: sb.home, work: sb.work,
-			mobileAddr: mobileAddr, mock: mock, lines: &lines,
-		}
-		sc.live(lc)
+	// Wait for the live half (bounded: it talks to a live process, and a hung socket must not
+	// hold the whole suite). Its lines describe the PROCESS; the ones above describe the driver.
+	select {
+	case <-liveDone:
+	case <-time.After(liveBudget):
+		lc.check("live 半场在预算内结束", false, liveBudget.String()+" 内没有完成")
 	}
+	lines = append(lines, lc.lines...)
 	killAll()
 
 	// The Go side of the evidence: what the model was asked and what landed on disk.

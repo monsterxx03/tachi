@@ -153,6 +153,8 @@ export type ServerEvent =
   | { type: 'ask'; ask: PendingAsk }
   | { type: 'ask_answered'; toolId: string }
   | { type: 'user_message'; text: string; displayText?: string; steer: boolean; origin: MessageOrigin }
+  /** 这段对话的模型 / 审批开关被某一块屏改了；两种开关一起发 */
+  | { type: 'session_prefs'; provider: string; skipApproval: boolean }
   | { type: 'lagged' };
 
 /** 这条消息是从哪块屏来的；用来决定自己要不要再画一次 */

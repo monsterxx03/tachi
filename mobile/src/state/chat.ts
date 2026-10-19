@@ -83,6 +83,19 @@ export function applyEvent(
       });
     }
 
+    case 'session_prefs': {
+      // 两个开关是共享状态：谁改的都落到这里，这块屏立刻显示同一对值。
+      if (!st.snapshot) return same(st);
+      return same({
+        ...st,
+        snapshot: {
+          ...st.snapshot,
+          model: ev.provider,
+          skipApproval: ev.skipApproval,
+        },
+      });
+    }
+
     case 'user_message': {
       // 另一块屏发来的才画；自己发的那条本地已经加过了
       if (!st.snapshot || ev.origin === selfOrigin) return same(st);

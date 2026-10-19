@@ -224,11 +224,14 @@ type liveCtx struct {
 	// mobileAddr is the loopback host:port the phone interface was told to listen on.
 	mobileAddr string
 	mock       *mockllm.Server
-	lines      *[]Line
+	// lines are this half's own assertions. It runs CONCURRENTLY with the driver (see
+	// runScenario), so it cannot append to the driver's slice — the runner merges these in
+	// after both have finished.
+	lines []Line
 }
 
 func (c *liveCtx) check(label string, ok bool, detail string) {
-	*c.lines = append(*c.lines, Line{Label: "go: " + label, OK: ok, Detail: detail})
+	c.lines = append(c.lines, Line{Label: "go: " + label, OK: ok, Detail: detail})
 }
 
 // A probe is one Go-side assertion, appended to the same report the driver fills.
@@ -4525,6 +4528,37 @@ permissions:
 		// 可点的东西：驱动只把会话打开到就绪，剩下全部在 `live` 里做——HTTP 发消息、WebSocket
 		// 收投影、从 HTTP 回答一张权限卡。它证明的正是单测（handlers 对 fixture）和手机端单测
 		// （客户端对 mockapi）都够不到的那一段：两边围着**真实的一轮**转起来。
+		// mobile-prefs: 会话的两个开关（模型 / 跳过审批）在两块屏之间同步。
+		//
+		// 这一场是唯一需要 live 与驱动**并发**的用例：手机那一半改的是记录，窗口那一半必须
+		// 在驱动还等着的时候把变化画出来（见 runScenario 里 live 的启动位置）。驱动只读窗口，
+		// 不看接口；live 只打接口，不看窗口——两条路各自证明一半，合起来才是「同步」。
+		{
+			name:           "mobile-prefs",
+			mobile:         true,
+			extraProviders: []string{"smoke-alt"},
+			// 不会被调用：这一场不对话，mock 只是让配置成立。
+			steps: []mockllm.Step{
+				{Reply: textStream("这一场没有对话。", 0)},
+			},
+			live: mobilePrefsRoundTrip,
+			after: func(c *checkCtx) {
+				// 记录是权威的：两次写都落进 meta.json，重启之后还是这个值。
+				provider, skip, found := "", false, false
+				for _, m := range c.sessionMetas() {
+					if m["title"] == "冒烟会话" {
+						provider, _ = m["provider_name"].(string)
+						skip, _ = m["skip_approval"].(bool)
+						found = true
+					}
+				}
+				// The LAST write wins: the phone opened the switch, then the window closed it
+				// again. Both writes are real — each one's event is what the other side asserted
+				// — so what the record must hold at the end is the second value.
+				c.check("会话记录里写下了手机换的 provider", found && provider == "smoke-alt", provider)
+				c.check("记录跟着最后一次写（窗口改回「需要审批」）", found && !skip, fmt.Sprintf("%v", skip))
+			},
+		},
 		{
 			name:   "mobile-api",
 			mobile: true,

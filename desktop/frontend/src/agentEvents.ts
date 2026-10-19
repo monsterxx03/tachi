@@ -264,6 +264,9 @@ export type AgentStreamDeps = {
   // The transcript's steer splitter: another screen's interjection lands where the window's own
   // queued steer would (after the tool work already shown, before the reply that continues).
   injectSteerVisual: (sid: string, text: string, ts: string) => void
+  // Another screen changed this conversation's two switches (model / approval). Both arrive
+  // together; the caller decides whether it is the session on screen.
+  onSessionPrefs: (sid: string, provider: string, skipApproval: boolean) => void
   refreshRunning: () => void
   // App-owned actions. All must be stable (useCallback) — they are effect dependencies.
   refreshProvider: () => void
@@ -277,7 +280,7 @@ export type AgentStreamDeps = {
 export function useAgentStream(deps: AgentStreamDeps) {
   const {
     currentId, updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
-    refreshProvider, answerSteer, clearAsk, onSessionTitle, injectSteerVisual,
+    refreshProvider, answerSteer, clearAsk, onSessionTitle, injectSteerVisual, onSessionPrefs,
   } = deps
 
   // A scheduled run has no composer to place its user bubble, so the backend's
@@ -298,6 +301,19 @@ export function useAgentStream(deps: AgentStreamDeps) {
     })
     return () => off?.()
   }, [updateSession])
+
+  // The two per-session switches, changed from another screen (the phone's model list or
+  // approval toggle; or this window, whose own controls emit the same event). It exists because
+  // the state lives in the session RECORD: without it the window would keep showing the old
+  // model until the reader switched sessions, while the phone was already running the new one.
+  useEffect(() => {
+    const off = Events.On('agent:session_prefs', (event) => {
+      const d = event.data as { sessionId?: string; provider?: string; skipApproval?: boolean }
+      if (!d?.sessionId) return
+      onSessionPrefs(d.sessionId, d.provider || '', d.skipApproval === true)
+    })
+    return () => off?.()
+  }, [onSessionPrefs])
 
   // A message another SCREEN sent (the phone; the device's voice path speaks through the
   // composer, so it arrives as a normal send). The window's own bubbles are drawn at submit

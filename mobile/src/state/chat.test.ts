@@ -90,6 +90,16 @@ describe('applyEvent —— 增量怎么落到界面上', () => {
     expect(other.snapshot?.messages[0].content).toBe('桌面说的');
   });
 
+  it('两个会话开关被另一块屏改了，这边立刻跟着变（不用等重读）', () => {
+    const st = applyEvent(
+      withSnapshot(),
+      { type: 'session_prefs', provider: 'smoke-alt', skipApproval: true },
+      'mobile',
+    ).state;
+    expect(st.snapshot?.model).toBe('smoke-alt');
+    expect(st.snapshot?.skipApproval).toBe(true);
+  });
+
   it('工具结果补在它自己的那条调用上，不会新起一条', () => {
     let st = withSnapshot();
     st = applyEvent(st, { type: 'tool_start', toolId: 't1', toolName: 'Bash', title: 'du -sh build' }, 'mobile').state;
