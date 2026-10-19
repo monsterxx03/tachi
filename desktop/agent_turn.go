@@ -51,10 +51,15 @@ func (s *AgentService) Stop() string {
 // Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
 // queue on any refusal, so an empty answer is not possible.
 func (s *AgentService) StopAndSend(sessionID, text string) string {
+	return s.desk.stopAndSendFrom(sessionID, text, originDesktop)
+}
+
+// stopAndSendFrom is StopAndSend with the screen that asked. origin only decides who skips the
+// echo of this message (see echoUserMessage).
+func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigin) string {
 	if text == "" {
 		return "empty"
 	}
-	d := s.desk
 	if sessionID == "" {
 		return refuseNoSession
 	}
@@ -92,7 +97,7 @@ func (s *AgentService) StopAndSend(sessionID, text string) string {
 			}
 		}
 	}
-	return d.startTurn(id, text)
+	return d.startTurnFrom(id, text, origin)
 }
 
 // Steer answers the agent's steer_check for a session: it delivers the text
@@ -110,7 +115,10 @@ func (s *AgentService) StopAndSend(sessionID, text string) string {
 // child's id alone it would find no steer channel and answer "not running" — the frontend shows
 // the text in the transcript, the agent's steer_check times out, and the message is gone.
 func (s *AgentService) Steer(sessionID, text string) string {
-	d := s.desk
+	return s.desk.steerFrom(sessionID, text, originDesktop)
+}
+
+func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) string {
 	d.mu.Lock()
 	r := d.getRun(sessionID)
 	ch := r.steerCh
@@ -131,6 +139,9 @@ func (s *AgentService) Steer(sessionID, text string) string {
 	}
 	select {
 	case ch <- agent.SteerInput{Text: expanded.Text, Display: text, Images: expanded.Images}:
+		// The other screens draw a steered message with its own style, so the echo says which
+		// it was.
+		d.echoUserMessage(sessionID, text, true, origin)
 		return "ok"
 	default:
 		return "dropped"
@@ -143,7 +154,13 @@ func (s *AgentService) Steer(sessionID, text string) string {
 // It returns "ok" when a turn is running, or the reason none started — never nothing. Both
 // refusals used to be bare `return`s, which is what made a lost message invisible: the caller
 // answered "ok", the frontend had already drawn the bubble, and no event ever came to clear it.
-func (d *desktopApp) startTurn(id, text string) string {
+func (d *desktopApp) startTurn(id string, text string) string {
+	return d.startTurnFrom(id, text, originDesktop)
+}
+
+// startTurnFrom is startTurn with the screen that sent the message. origin is used ONLY for the
+// echo below (agent:user_message / the phone's user_message); it changes no behaviour.
+func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string {
 	if id == "" {
 		return refuseNoSession
 	}
@@ -276,6 +293,10 @@ func (d *desktopApp) startTurn(id, text string) string {
 			d.handleEvent(id, ev)
 		}
 	}()
+	// Accepted AFTER beginTurn took the turn: this is the point where a message that never
+	// went out is distinguishable from one that did. The window already drew its own bubble
+	// (origin == desktop); every other screen appends it from here.
+	d.echoUserMessage(id, rawText, false, origin)
 	return "ok"
 }
 
@@ -466,6 +487,17 @@ func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
 		"cacheHitRate": rate, "hasCacheHit": hasCacheHit,
 		"contextEstimate": est, "contextWindow": win,
 	})
+	// The phone's top strip reads the same numbers. `usage` and `cost` carry the same values
+	// today (the protocol has both names because they came from two desktop events); sending
+	// both keeps the client's type switch honest whichever one it listens to.
+	u := mobileUsage{Cost: cost, Credit: credit}
+	if hasCacheHit {
+		u.CacheHitRate = rate
+	}
+	d.mobileNotify(id, map[string]any{"type": mobileEvUsage, "usage": u})
+	d.mobileNotify(id, map[string]any{
+		"type": mobileEvCost, "cost": cost, "credit": credit, "cacheHitRate": rate,
+	})
 }
 
 // handleEvent maps AgentEvent types to the running state, and forwards the raw
@@ -563,6 +595,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			kind:      askKindAskUser,
 			sessionID: id,
 			toolID:    ev.ToolID,
+			toolName:  tools.ToolNameAskUser,
 			questions: ev.Questions,
 		})
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
@@ -772,6 +805,9 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 	if toTranscript {
 		d.app.Event.Emit("agent:event", map[string]any{"sessionId": id, "event": ev})
 	}
+	// The phone gets a PROJECTION, never the raw event (it carries Messages and full tool
+	// output). Same lane gate: a side-channel run is not part of this conversation.
+	d.mobileProjectEvent(id, ev, lane)
 }
 
 // ── Simulated fallback (used only when the real agent failed to bootstrap) ──
@@ -794,6 +830,8 @@ func (d *desktopApp) emitIdle(id, reason string) {
 			"current":   d.currentID() == id,
 		})
 	}
+	// The phone's queue ("排在这轮之后") flushes on this, exactly like the window's.
+	d.mobileNotify(id, map[string]any{"type": mobileEvIdle, "end": reason})
 }
 
 // setSessionState records one session's own state and reports it.
@@ -863,6 +901,8 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 	// state change travels — a turn's progress that the device missed would leave it
 	// reporting a session as idle while it is working.
 	d.notifyLink()
+	// The phone is the third reader of that same road.
+	d.mobileNotify(id, map[string]any{"type": mobileEvState, "state": d.mobileState(id)})
 }
 
 // emitState pushes one session's state to the frontend (see setSessionState).

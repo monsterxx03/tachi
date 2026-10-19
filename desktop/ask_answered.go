@@ -16,12 +16,16 @@ type AskAnsweredEvent struct {
 }
 
 func (d *desktopApp) notifyAskAnswered(sessionID, toolID string, kind pendingAskKind) {
-	if d.app == nil {
-		return
+	if d.app != nil {
+		d.app.Event.Emit("agent:ask_answered", AskAnsweredEvent{
+			SessionID: sessionID,
+			ToolID:    toolID,
+			Kind:      string(kind),
+		})
 	}
-	d.app.Event.Emit("agent:ask_answered", AskAnsweredEvent{
-		SessionID: sessionID,
-		ToolID:    toolID,
-		Kind:      string(kind),
-	})
+	// The phone keeps the same contract: whoever answered, every other screen drops the card.
+	// This is the protocol's ONE broadcast exception — an answer may belong to any conversation,
+	// and the payload is one id — so it reaches connections that are not subscribed to this
+	// session too.
+	d.mobileBroadcast(map[string]any{"type": mobileEvAskAnswered, "toolId": toolID})
 }

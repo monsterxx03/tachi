@@ -47,10 +47,11 @@ func (d *desktopApp) answerAskUser(sessionID string, answers, annotations map[st
 	if a == nil {
 		return fmt.Errorf("no agent")
 	}
+	// The row's toolID has to be read BEFORE it is dropped: the phone's card is keyed by it,
+	// and an empty one would leave a card that can never be matched to its answer.
+	toolID := d.pendingAskToolID(sessionID, askKindAskUser)
 	a.RespondToAskUser(answers, annotations)
 	d.dropAsks(sessionID, askKindAskUser)
-	// toolID 这里没有：AskUser 的回答按会话走（见 answerAskUser 的注释），
-	// 所以 toolID 留空，前端按会话清。
-	d.notifyAskAnswered(sessionID, "", askKindAskUser)
+	d.notifyAskAnswered(sessionID, toolID, askKindAskUser)
 	return nil
 }

@@ -202,6 +202,12 @@ type desktopApp struct {
 	// milliseconds, neither of which may ever wait behind the app-wide lock (see voice.go).
 	voice voiceInput
 
+	// mobile is the LAN interface the phone app connects to (mobile.go): the same
+	// conversations, a third screen. nil = the interface is off. It is replaced by
+	// startMobile/stopMobile and read by every event path that asks "is anyone listening?".
+	// Guarded by mu.
+	mobile *mobileServer
+
 	mu   sync.Mutex
 	runs map[string]*sessionRun // key: session ID
 	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every

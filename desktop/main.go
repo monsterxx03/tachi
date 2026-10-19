@@ -396,6 +396,13 @@ func main() {
 	// After initAgent, because the config it reads belongs to the app that just booted.
 	desk.startBadge(desk.config())
 
+	// The phone interface (mobile.go): the same conversations, seen and driven from a phone on
+	// the LAN. Off unless config says otherwise; a listener that cannot bind is reported on the
+	// settings page and does not cost the user their desktop. Stopped with the process, so a
+	// quit really does stop answering.
+	desk.startMobile(desk.config())
+	app.OnShutdown(func() { desk.stopMobile() })
+
 	// Optional self-test driver (TACHI_DEMO): inject JS to type & send from
 	// within the webview, so we can exercise input + state transitions without
 	// relying on system-level mouse/keyboard coordinates.

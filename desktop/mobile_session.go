@@ -1,0 +1,435 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"mime"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/session"
+)
+
+// 手机读的那一半：列表、一页历史、一份快照、一份附件清单。
+//
+// 这里没有一条路径会改变桌面正在显示的会话（design 不变量 1）：它们只读记录与本进程的
+// run 表，不碰 activeID，也不发状态事件。
+
+// mobileNoSession 是协议里的 no_session（手机显示「这段对话已经不在了」）。
+var errMobileNoSession = fmt.Errorf("no_session")
+
+// mobilePageLimit is the default page size for the phone. It matches the mobile client's own
+// default (/v1/sessions/{id}/page?limit=50) so a client that omits the parameter still gets what
+// it asked for.
+const mobilePageLimit = 50
+
+// mobileSnapshotLimit is how much history one snapshot carries. Older messages are paged in
+// over HTTP; the snapshot only needs enough to paint the screen.
+const mobileSnapshotLimit = 100
+
+// mobileSessions returns the list the phone shows: one row per CONVERSATION, which means a
+// compaction chain folds to its leaf. Folding happens here, once — the phone never rebuilds a
+// chain (a second definition of "which row is this conversation" is exactly what drifts).
+func (d *desktopApp) mobileSessions() ([]mobileSessionSummary, error) {
+	if d.sm == nil {
+		return nil, fmt.Errorf("no session manager")
+	}
+	list, err := d.sm.List()
+	if err != nil {
+		return nil, err
+	}
+	// A session named as another's compacted parent is the OLD half of a conversation: the
+	// child is the same conversation continued, and both would render as two identical rows.
+	parents := make(map[string]bool, len(list))
+	for _, ss := range list {
+		if ss.CompactedParentID != "" {
+			parents[ss.CompactedParentID] = true
+		}
+	}
+	busy := d.busySessions()
+	out := make([]mobileSessionSummary, 0, len(list))
+	for _, ss := range list {
+		if parents[ss.ID] {
+			continue
+		}
+		out = append(out, d.mobileSummary(ss, busy))
+	}
+	// Pinned first, then newest — the same order the desktop sidebar gives a group, and the
+	// order the protocol asks for.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
+		return out[i].UpdatedAt > out[j].UpdatedAt
+	})
+	return out, nil
+}
+
+// mobileSummary renders one row. running / waiting / heldByTask all come from the SAME sources
+// the sidebar reads (sessionRunning, waitingSentence, the retention record): a phone that
+// disagreed with the window about "who is waiting" would be worse than no phone at all.
+func (d *desktopApp) mobileSummary(ss *session.Session, busy map[string]bool) mobileSessionSummary {
+	running, _ := d.sessionRunning(ss.ID)
+	waiting := ""
+	if running {
+		waiting = d.waitingSentence(ss.ID, d.stateFor(ss.ID))
+	}
+	project := ""
+	if p, ok := d.projects.get(ss.ProjectID); ok {
+		project = p.Name
+	}
+	return mobileSessionSummary{
+		ID:          ss.ID,
+		Title:       ss.Title,
+		ProjectName: project,
+		UpdatedAt:   ss.UpdatedAt.Format(time.RFC3339),
+		Running:     running,
+		Waiting:     waiting,
+		ReadOnly:    ss.Kind != "",
+		HeldByTask:  busy[ss.ID],
+		Pinned:      ss.Pinned,
+	}
+}
+
+// mobilePage returns up to `limit` records whose index is strictly LESS than `before`
+// (newest-first window from the tail, delivered oldest→newest).
+//
+// The cursor is the record index, not a timestamp — two records written in the same instant
+// would otherwise be skipped wholesale when they straddle a page boundary.
+func (d *desktopApp) mobilePage(id string, before int, limit int) ([]mobileMessage, bool, *session.Session, error) {
+	if d.sm == nil {
+		return nil, false, nil, fmt.Errorf("no session manager")
+	}
+	ss := d.sessionRecord(id)
+	if ss == nil {
+		return nil, false, nil, errMobileNoSession
+	}
+	if limit <= 0 {
+		limit = mobilePageLimit
+	}
+	raw, err := d.sm.LoadSessionMessages(id)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	kept := make([]int, 0, len(raw))
+	for i := range raw {
+		if before > 0 && i >= before {
+			continue
+		}
+		kept = append(kept, i)
+	}
+	hasMore := len(kept) > limit
+	if hasMore {
+		kept = kept[len(kept)-limit:]
+	}
+	return mobileMessages(raw, kept), hasMore, ss, nil
+}
+
+// mobileSnapshot is what `open` answers with: the record's tail plus everything the phone needs
+// to paint the screen around it. It is a READ — no agent is built, no state is emitted, and the
+// desktop's displayed session is untouched.
+func (d *desktopApp) mobileSnapshot(id string) (*mobileSnapshot, error) {
+	if d.sm == nil {
+		return nil, fmt.Errorf("no session manager")
+	}
+	ss := d.sessionRecord(id)
+	if ss == nil {
+		return nil, errMobileNoSession
+	}
+	raw, err := d.sm.LoadSessionMessages(id)
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]int, 0, len(raw))
+	for i := range raw {
+		kept = append(kept, i)
+	}
+	hasMore := len(kept) > mobileSnapshotLimit
+	if hasMore {
+		kept = kept[len(kept)-mobileSnapshotLimit:]
+	}
+	primary, additional := d.sessionRootsFrom(ss)
+	if additional == nil {
+		additional = []string{}
+	}
+	parts := mobileContextParts(d.contextPartsFor(id))
+	// The session records the provider it runs on; "" means "the default", and the phone shows
+	// a name, so the default is spelled out here rather than left as an empty chip.
+	model := ss.ProviderName
+	if model == "" {
+		if cfg := d.config(); cfg != nil {
+			model = cfg.Provider
+		}
+	}
+	return &mobileSnapshot{
+		Session:      d.mobileSummary(ss, d.busySessions()),
+		Messages:     mobileMessages(raw, kept),
+		HasMore:      hasMore,
+		State:        d.mobileState(id),
+		Asks:         d.mobileAsks(id),
+		Model:        model,
+		SkipApproval: ss.SkipApproval,
+		Workspace:    mobileWorkspace{Primary: primary, Additional: additional},
+		Usage:        d.mobileUsage(id),
+		Context:      mobileContext{Estimate: d.mobileContextEstimate(id), Window: d.mobileContextWindow(id), Parts: parts},
+		Attachments:  d.mobileAttachments(ss, raw),
+	}, nil
+}
+
+// mobileMessages converts the selected raw records into the wire shape, preserving the true
+// in-turn ordering (assistant text / tool call / tool result interleaved) and folding a run of
+// thinking records into the assistant message that follows them.
+func mobileMessages(raw []session.Message, kept []int) []mobileMessage {
+	out := make([]mobileMessage, 0, len(kept))
+	var pendingThinking []string
+	for _, i := range kept {
+		rm := raw[i]
+		index := i
+		switch rm.Type {
+		case session.MessageTypeUser:
+			out = append(out, mobileMessage{
+				Index: index, Role: "user", Content: rm.Content, DisplayContent: rm.DisplayContent,
+				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			})
+		case session.MessageTypeReminder:
+			out = append(out, mobileMessage{
+				Index: index, Role: "reminder", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			})
+		case session.MessageTypeThinking:
+			pendingThinking = append(pendingThinking, rm.Content)
+		case session.MessageTypeAssistant:
+			m := mobileMessage{
+				Index: index, Role: "assistant", Content: rm.Content,
+				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			}
+			if len(pendingThinking) > 0 {
+				m.Thinking = strings.Join(pendingThinking, "\n")
+				pendingThinking = nil
+			}
+			out = append(out, m)
+		case session.MessageTypeToolCall:
+			argsJSON := marshalArgs(rm.Args)
+			out = append(out, mobileMessage{
+				Index: index, Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
+				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
+				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			})
+		case session.MessageTypeToolResult:
+			out = append(out, mobileMessage{
+				Index: index, Role: "tool_result", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
+				ToolResult: rm.Result, IsError: rm.IsError,
+				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			})
+		}
+	}
+	return out
+}
+
+// mobileState is one session's state, in the wire's shape. The waiting sentence comes from the
+// same place the desktop's marker does (waitingSentence), never from a caller.
+func (d *desktopApp) mobileState(id string) mobileState {
+	st := d.stateFor(id)
+	return mobileState{
+		Status:  string(st.Status),
+		Label:   st.Label,
+		Detail:  st.Detail,
+		Waiting: d.waitingSentence(id, st),
+	}
+}
+
+// mobileAsks lists this session's pending waits. The card's content is the agent's own
+// (preview / questions) — the phone renders it, it does not re-describe it.
+func (d *desktopApp) mobileAsks(sessionID string) []mobileAsk {
+	out := make([]mobileAsk, 0, 2)
+	for _, a := range d.snapshotAsks() {
+		if a.sessionID != sessionID {
+			continue
+		}
+		out = append(out, mobileAskOf(a))
+	}
+	return out
+}
+
+// mobileUsage reads this session's ledger numbers off its run, WITHOUT creating one: a session
+// the desktop has not opened in this process simply has nothing measured yet, and an empty run
+// entry is what the guards around getRun exist to avoid.
+func (d *desktopApp) mobileUsage(id string) mobileUsage {
+	r := d.runOf(id)
+	if r == nil {
+		return mobileUsage{}
+	}
+	d.mu.Lock()
+	cost, credit, rate, hasRate := r.cost, r.credit, r.cacheHitRate, r.hasCacheHit
+	d.mu.Unlock()
+	u := mobileUsage{Cost: cost, Credit: credit}
+	if hasRate {
+		u.CacheHitRate = rate
+	}
+	return u
+}
+
+// mobileContextParts maps the desktop's breakdown onto the wire's {label, tokens}.
+func mobileContextParts(parts []ContextPartVO) []mobileContextPart {
+	out := make([]mobileContextPart, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, mobileContextPart{Label: p.Label, Tokens: p.Tokens})
+	}
+	return out
+}
+
+// contextPartsFor is the desktop's own breakdown for a session, without the VO: the same
+// contextUsage snapshot GetContextInfo reads.
+func (d *desktopApp) contextPartsFor(id string) []ContextPartVO {
+	_, tb, _ := d.contextUsage(id)
+	return contextParts(tb)
+}
+
+func (d *desktopApp) mobileContextEstimate(id string) int64 {
+	est, _, _ := d.contextUsage(id)
+	return est
+}
+
+func (d *desktopApp) mobileContextWindow(id string) int64 {
+	_, _, window := d.contextUsage(id)
+	return window
+}
+
+// mobileAttachments lists the files THIS conversation handed over with SendFile. Nothing else
+// is reachable from the phone: the download endpoint resolves an id against these same records,
+// so "the token can read any file" is not a capability this interface ever had.
+//
+// The id IS the tool call's id: one call carries one path, and that id is already in the record,
+// so the link survives a reload and a restart.
+func (d *desktopApp) mobileAttachments(ss *session.Session, raw []session.Message) []mobileAttachment {
+	max := d.mobileAttachmentLimit()
+	out := make([]mobileAttachment, 0, 4)
+	seen := make(map[string]bool, 4)
+	for _, rm := range raw {
+		if rm.Type != session.MessageTypeToolCall || rm.Name != tools.ToolNameSendFile || rm.ToolCallID == "" {
+			continue
+		}
+		if seen[rm.ToolCallID] {
+			continue
+		}
+		seen[rm.ToolCallID] = true
+		path := sendFilePath(rm.Args)
+		if path == "" {
+			continue
+		}
+		abs := d.resolveAttachmentPath(ss, path)
+		size := int64(0)
+		downloadable := false
+		if abs != "" {
+			if st, err := os.Stat(abs); err == nil && st.Mode().IsRegular() {
+				size = st.Size()
+				downloadable = size <= max
+			}
+		}
+		name := filepath.Base(path)
+		out = append(out, mobileAttachment{
+			ID:           rm.ToolCallID,
+			Name:         name,
+			MimeType:     mobileMimeType(name),
+			Size:         size,
+			Downloadable: downloadable,
+		})
+	}
+	return out
+}
+
+// sendFilePath pulls the single argument SendFile takes out of the recorded call.
+func sendFilePath(args any) string {
+	switch v := args.(type) {
+	case nil:
+		return ""
+	case string:
+		var p struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(v), &p) != nil {
+			return ""
+		}
+		return p.Path
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(b, &p) != nil {
+		return ""
+	}
+	return p.Path
+}
+
+// resolveAttachmentPath turns a recorded path into an absolute one, using the SAME roots this
+// conversation runs its tools under (primary first, then the additional ones). "" means the file
+// is not reachable through them.
+func (d *desktopApp) resolveAttachmentPath(ss *session.Session, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	primary, additional := d.sessionRootsFrom(ss)
+	roots := append([]string{primary}, additional...)
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		candidate := filepath.Join(root, path)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if primary != "" {
+		return filepath.Join(primary, path)
+	}
+	return ""
+}
+
+// mobileAttachmentLimit is the configured download bound, read live so a change applies to the
+// next download rather than needing a restart.
+func (d *desktopApp) mobileAttachmentLimit() int64 {
+	cfg := d.config()
+	if cfg == nil {
+		return config.MobileConfig{}.MaxAttachmentBytes()
+	}
+	return cfg.Mobile.MaxAttachmentBytes()
+}
+
+// mobileMimeType names a file's type for the phone's renderer. It decides only how the phone
+// SHOWS the file (inline image, markdown reader, plain text, "open it on the computer"), so a
+// wrong guess is cosmetic — but a missing one would send every unknown file down the same path.
+func mobileMimeType(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".txt", ".log":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".html", ".htm":
+		return "text/html"
+	case ".pdf":
+		return "application/pdf"
+	}
+	if t := mime.TypeByExtension(ext); t != "" {
+		return t
+	}
+	return "application/octet-stream"
+}

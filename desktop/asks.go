@@ -40,6 +40,10 @@ type pendingAsk struct {
 	kind      pendingAskKind
 	sessionID string
 	toolID    string
+	// toolName is the tool whose gate raised this wait. The phone needs it to pick the same
+	// card chrome the window does (permEventKind), and it is recorded HERE, where the wait is
+	// created — a second source would be free to disagree with the gate about what is asked.
+	toolName string
 
 	// preview 是权限等待的展示内容：agent 自己渲染的「$ 命令 + 命中的规则」
 	// （askPreview）。原样透传给设备，不在这里二次解析——那份格式的第二个
@@ -100,6 +104,9 @@ func (d *desktopApp) registerAsk(a *pendingAsk) {
 	// 不出声。之后你切走了也不补响——那会把一条已经看过的等待再说一遍。
 	d.alertIfUnwatched(a.sessionID, link.AlertKindAsk)
 	d.notifyLink()
+	// The phone is the third reader of this table (design §4.6): a card appears there exactly
+	// when a row is registered here.
+	d.notifyMobileAsk(a)
 }
 
 // alertIfUnwatched 在「你不在看」时攒下一次提示音请求。
@@ -134,6 +141,18 @@ func (d *desktopApp) windowFocused() bool {
 		return false
 	}
 	return d.notify.window.IsFocused()
+}
+
+// pendingAskToolID reports the tool call id of a session's wait of this kind, or "" when there
+// is none. It exists for the answer paths that address a wait by SESSION (AskUserQuestion): the
+// broadcast that follows still has to name the card the other screens should drop.
+func (d *desktopApp) pendingAskToolID(sessionID string, kind pendingAskKind) string {
+	for _, a := range d.snapshotAsks() {
+		if a.sessionID == sessionID && a.kind == kind {
+			return a.toolID
+		}
+	}
+	return ""
 }
 
 // dropAsk 注销一条等待。调用方不必先确认真有一条：这条路径的重入是正常的

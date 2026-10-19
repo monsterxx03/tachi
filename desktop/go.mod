@@ -3,6 +3,7 @@ module github.com/monsterxx03/tachi/desktop
 go 1.26.5
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/monsterxx03/tachi v0.0.0
 	github.com/stretchr/testify v1.11.1
@@ -20,7 +21,6 @@ require (
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.37.0 // indirect
 	github.com/coder/acp-go-sdk v0.13.5 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/creasty/defaults v1.8.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

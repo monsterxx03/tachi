@@ -137,6 +137,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 		kind:      askKindPermission,
 		sessionID: sessionID,
 		toolID:    toolID,
+		toolName:  toolName,
 		preview:   preview,
 		answer:    answer,
 	})
@@ -269,21 +270,16 @@ func bashCommandOf(args string) string {
 // dies with the process. This control says what the session's MODE is, and the mode is what the
 // record holds, so what it shows is what a restart will do.
 func (s *AgentService) GetSkipApproval() bool {
-	r := s.desk.activeRun()
-	if r == nil || r.sm == nil {
-		return false
-	}
-	if cur := r.sm.Current(); cur != nil {
-		return cur.SkipApproval
-	}
-	return false
+	return s.desk.skipApprovalFor(s.desk.currentID())
 }
 
 // SetSkipApproval writes that mode onto the displayed session's record and applies it to the live
 // agent. It answers "ok" or the reason it could not, and the frontend re-reads on a refusal rather
 // than leaving a control claiming a mode that is not in force.
 //
-// The record is written FIRST and applied second: a write that fails puts the record's copy back
+// The write itself lives in setSkipApprovalFor, addressed by session, because the phone switches
+// this mode on the conversation it is looking at rather than on the one the window displays. There
+// the record is written FIRST and applied second: a write that fails puts the record's copy back
 // and touches no agent, so the two halves cannot end up describing different modes.
 func (s *AgentService) SetSkipApproval(skip bool) string {
 	d := s.desk
@@ -294,30 +290,8 @@ func (s *AgentService) SetSkipApproval(skip bool) string {
 	if id == "" {
 		return refuseNoSession
 	}
-	r, err := d.prepareSession(context.Background(), id)
-	if err != nil {
+	if err := d.setSkipApprovalFor(id, skip); err != nil {
 		return err.Error()
-	}
-	if r.sm == nil {
-		return refuseNoSession
-	}
-	cur := r.sm.Current()
-	if cur == nil {
-		return refuseNoSession
-	}
-	if cur.SkipApproval == skip {
-		return "ok"
-	}
-	prev := cur.SkipApproval
-	cur.SkipApproval = skip
-	if err := r.sm.UpdateMeta(cur); err != nil {
-		cur.SkipApproval = prev
-		return fmt.Sprintf("保存会话失败：%v", err)
-	}
-	// The live half. An agent-less run (bootstrap failed) is not an error: the record is what the
-	// next agent is built from, and there is nothing driving a turn here anyway.
-	if r.agent != nil {
-		r.agent.SetAllowAllAsksForSession(skip)
 	}
 	return "ok"
 }

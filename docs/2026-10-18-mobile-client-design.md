@@ -1,6 +1,6 @@
 # Tachi 移动端设计（Android 优先，V1）
 
-> 版本: 0.3 | 日期: 2026-10-18 | 状态: **设计已定值；手机端界面与假服务端已就绪，桌面那半边尚未实现**
+> 版本: 0.4 | 日期: 2026-10-19 | 状态: **设计已定值；手机端界面、假服务端与桌面服务端（§4 的阶段 1–3）已就绪；桌面前端的回声与配对卡片尚未接入**
 > 关联: [desktop.md](./agents/desktop.md)（桌面后端、另一块前端、待答表）、
 >       [badge.md](./agents/badge.md)（设备链路：同一张待答表的第二个读者）、
 >       [channel.md](./agents/channel.md)（为什么**不**做成 channel）、
@@ -19,11 +19,15 @@
 - 事件流客户端：投影归并、自动重连、心跳、回到前台重读；手机端单测与 Maestro 端到端都通过。
 - **假服务端** `mobile/mockapi/`：说真协议、喂假数据。协议在 [agents/mobile-protocol.md](./agents/mobile-protocol.md)，手机端不依赖桌面进程就能把整条流程跑完。
 
+**已就绪（桌面服务端）**——`desktop/mobile*.go`，细节在 [agents/mobile.md](./agents/mobile.md) 的「服务端」一节：
+
+- `mobile` 配置块与 `~/.tachi/mobile.json` 令牌文件、HTTP + WebSocket 服务、`loadSessionForRemote`、按会话寻址的 `SwitchProvider` / `GetSkipApproval` / `SetSkipApproval`、`agent:user_message`（`startTurn` / `Steer` 带 `origin`）。
+- 端点是协议那份文档里的全部；Go 侧 `httptest` 钉住「不切走桌面 / 翻页游标 / 拒绝码 / 投影 / 背压 / 附件只认交付记录」。
+
 **没动**（下一步从这开始）：
 
-- `desktop/` 那半边：`mobile` 配置块与令牌文件、HTTP + WebSocket 服务、`loadSessionForRemote`、按会话寻址的 `SwitchProvider` / `GetSkipApproval` / `SetSkipApproval`、`agent:user_message`（给 `startTurn` / `Steer` 加 `origin`）。
-- 设置页那张配对卡片（二维码 + 令牌 + 重新生成）。
-- 桌面和手机还没有一起跑过一次 —— 现在验证的是"手机 + mock 服务"这条线。
+- 桌面前端那一半：`agent:user_message` 的监听（把手机发的消息画进窗口的会话全文），以及设置页那张配对卡片（二维码 + 令牌 + 重新生成）。
+- 手机和**真实桌面**还没有一起跑过 —— 现在验证的是「手机 + mock 服务」和 Go 侧的 `httptest`；把两者接起来是第一次联调。
 
 ---
 

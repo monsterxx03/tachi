@@ -289,6 +289,28 @@ var settingsTable = []settingApply{
 		Apply:    applyBadgeLink,
 	},
 
+	// --- the phone interface (the same conversations, a third screen) ---
+	// enabled/listen are consumed once, when the listener is built: opening a socket is a
+	// process-level act, and a restart is the honest way to apply it.
+	{
+		Key:      "mobile.enabled",
+		Category: catExtend,
+		Mode:     applyRestart,
+		Note:     "局域网里的明文 HTTP：拿到令牌的人就能让这台电脑执行命令 —— 只在自己家的网络里打开。",
+	},
+	{
+		Key:      "mobile.listen",
+		Category: catExtend,
+		Mode:     applyRestart,
+		Note:     "手机要能从局域网连进来，所以默认监听 0.0.0.0:8787；监听失败只影响这一项，不影响桌面启动。",
+	},
+	{
+		Key:      "mobile.max_attachment_mb",
+		Category: catExtend,
+		Mode:     applyLazy,
+		Note:     "手机能下载的单个附件上限（只算 agent 用 SendFile 交付过的文件）；下一次下载读新值。",
+	},
+
 	// --- model and providers ---
 	// Prices and credit rates are read lazily by the usage ledger, but resolving a
 	// provider is a per-session fact (SetResolvedProvider), so the row is a push.

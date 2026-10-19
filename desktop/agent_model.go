@@ -18,6 +18,9 @@ func (s *AgentService) ListProviders() []config.ProviderConfig {
 
 // SwitchProvider switches the active session's agent to the given config
 // provider, persisting it to that session's metadata (like TUI does).
+// SwitchProvider switches the DISPLAYED session's model. The logic itself is addressed by
+// session (switchProviderFor): the phone switches the conversation it is looking at, and using
+// one implementation is what keeps the two from disagreeing about which record was written.
 func (s *AgentService) SwitchProvider(name string) string {
 	d := s.desk
 	if d.config() == nil {
@@ -27,30 +30,9 @@ func (s *AgentService) SwitchProvider(name string) string {
 	if id == "" {
 		return refuseNoSession
 	}
-	r, err := d.prepareSession(context.Background(), id)
-	if err != nil {
+	if err := d.switchProviderFor(id, name); err != nil {
 		return err.Error()
 	}
-	if r.agent == nil {
-		return refuseNoSession
-	}
-	if _, err := r.agent.SetResolvedProvider(name); err != nil {
-		return err.Error()
-	}
-	// Re-apply this session's thinking override (or its default) against the new
-	// provider, so switching models doesn't inherit a stale thinking setting.
-	if r.sm != nil {
-		if curr := r.sm.Current(); curr != nil {
-			applyThinking(r.agent, curr.ThinkingLevel)
-			if curr.ProviderName != name {
-				curr.ProviderName = name
-				_ = r.sm.UpdateMeta(curr) // best-effort
-			}
-		}
-	}
-	d.mu.Lock()
-	r.agentProvider = name
-	d.mu.Unlock()
 	return "ok"
 }
 

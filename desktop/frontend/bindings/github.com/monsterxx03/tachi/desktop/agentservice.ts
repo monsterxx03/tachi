@@ -263,6 +263,14 @@ export function GetMCPToolSchema(name: string): $CancellablePromise<$models.MCPT
 }
 
 /**
+ * GetMobilePairing returns everything the settings card renders. It creates the token on
+ * first call: a card that says "no token yet" would leave the user nothing to pair with.
+ */
+export function GetMobilePairing(): $CancellablePromise<$models.MobilePairingVO> {
+    return $Call.ByID(1844101022);
+}
+
+/**
  * GetPlan returns one of this session's plans — the newest when path is empty, otherwise
  * the plan at path (which must be one of this session's own plan files).
  * 
@@ -691,6 +699,17 @@ export function PreviewSettings(updates: { [_ in string]?: any } | null, appends
  */
 export function RefreshPeerBoard(): $CancellablePromise<$models.PeerBoardVO> {
     return $Call.ByID(1074826517);
+}
+
+/**
+ * RegenerateMobileToken replaces the token and DROPS every live connection.
+ * 
+ * Dropping them is the other half of "invalidate": a paired phone holds its socket open, and
+ * a token replaced underneath it would otherwise keep working for as long as that socket
+ * lived — which is exactly the phone the user is trying to lock out.
+ */
+export function RegenerateMobileToken(): $CancellablePromise<string> {
+    return $Call.ByID(238092313);
 }
 
 /**
@@ -1143,7 +1162,9 @@ export function SetSidebarWidth(px: number): $CancellablePromise<void> {
  * agent. It answers "ok" or the reason it could not, and the frontend re-reads on a refusal rather
  * than leaving a control claiming a mode that is not in force.
  * 
- * The record is written FIRST and applied second: a write that fails puts the record's copy back
+ * The write itself lives in setSkipApprovalFor, addressed by session, because the phone switches
+ * this mode on the conversation it is looking at rather than on the one the window displays. There
+ * the record is written FIRST and applied second: a write that fails puts the record's copy back
  * and touches no agent, so the two halves cannot end up describing different modes.
  */
 export function SetSkipApproval(skip: boolean): $CancellablePromise<string> {
@@ -1221,6 +1242,9 @@ export function StopAndSend(sessionID: string, text: string): $CancellablePromis
 /**
  * SwitchProvider switches the active session's agent to the given config
  * provider, persisting it to that session's metadata (like TUI does).
+ * SwitchProvider switches the DISPLAYED session's model. The logic itself is addressed by
+ * session (switchProviderFor): the phone switches the conversation it is looking at, and using
+ * one implementation is what keeps the two from disagreeing about which record was written.
  */
 export function SwitchProvider(name: string): $CancellablePromise<string> {
     return $Call.ByID(1503034677, name);

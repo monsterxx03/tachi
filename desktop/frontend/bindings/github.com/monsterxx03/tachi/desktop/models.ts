@@ -692,6 +692,35 @@ export interface MCPToolVO {
 }
 
 /**
+ * MobilePairingVO is what the settings card needs to pair a phone: where to point it, the
+ * token to present, and the exact payload the QR code encodes (mobile/src/api/qr.ts parses
+ * this shape, so the card must not build a second one).
+ */
+export interface MobilePairingVO {
+    "enabled": boolean;
+    "listen": string;
+
+    /**
+     * URL is the address a phone on the same network can reach, or "" when this machine has
+     * no non-loopback IPv4 address to offer (then the card shows the listen address and says
+     * so rather than printing 127.0.0.1, which no phone could use).
+     */
+    "url": string;
+    "token": string;
+
+    /**
+     * Payload is {"v":1,"url":…,"token":…} — the QR's content, verbatim.
+     */
+    "payload": string;
+
+    /**
+     * Error is non-empty when the listener could not start (port taken, bad address), so the
+     * card can say why instead of showing a URL that answers nothing.
+     */
+    "error"?: string;
+}
+
+/**
  * OneOffDetailVO is one run's replayable content.
  */
 export interface OneOffDetailVO {

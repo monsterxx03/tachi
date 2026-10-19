@@ -1383,6 +1383,7 @@ type Config struct {
 	Debug             DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
 	Web               WebConfig            `yaml:"web"`                             // Web console (tachi web)
 	Badge             BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
+	Mobile            MobileConfig         `yaml:"mobile"`                          // LAN interface the phone app connects to (same conversations, third screen)
 	Node              NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
 	Peers             []PeerConfig         `yaml:"peers"`                           // Other Tachi nodes THIS machine may delegate work to
 
@@ -1443,6 +1444,41 @@ type BadgeConfig struct {
 // An unset value reads as the default (on) — the same nil-means-default rule the rest of
 // the config uses.
 func (b BadgeConfig) AlertsEnabled() bool { return b.Alert == nil || *b.Alert }
+
+// MobileConfig is the LAN interface the phone app connects to: the same conversations the
+// desktop is having, seen and driven from a phone (see docs/agents/mobile-protocol.md).
+//
+// It is OFF by default, and when it is on it listens on 0.0.0.0 because a phone on the same
+// Wi-Fi has to be able to reach it. That is the whole trade: plain HTTP on the LAN, and a
+// bearer token that lets whoever holds it run commands on this machine.
+type MobileConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Listen is the address the HTTP server binds. Port 8787 is the protocol's default; the
+	// host part is 0.0.0.0 because a loopback-only listener cannot be reached from a phone.
+	Listen string `yaml:"listen" default:"0.0.0.0:8787"`
+	// MaxAttachmentMB bounds ONE file the phone may download (a SendFile hand-over). It is
+	// read at download time, so a change applies to the next download rather than needing a
+	// restart. Zero or negative falls back to the default.
+	MaxAttachmentMB int `yaml:"max_attachment_mb" default:"50"`
+}
+
+// MobileAddress returns the listen address, with the protocol default filled in.
+func (m MobileConfig) MobileAddress() string {
+	if m.Listen == "" {
+		return "0.0.0.0:8787"
+	}
+	return m.Listen
+}
+
+// MaxAttachmentBytes is the download bound, with the default filled in.
+func (m MobileConfig) MaxAttachmentBytes() int64 {
+	mb := m.MaxAttachmentMB
+	if mb <= 0 {
+		mb = 50
+	}
+	return int64(mb) << 20
+}
+
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files
 // capturing the full execution of side-channel LLM runs (/commit, /review,

@@ -1553,6 +1553,7 @@ func TestEveryOfferedLeafIsConsumed(t *testing.T) {
 		"tool_result.file_dir":          "ResultFileDir()",
 		"provider_aliases":              "ExpandProviderAliases() (runs once, at the end of LoadFrom)",
 		"jev.max_questions_per_request": "JevConfig.QuestionsPerRequest() (resolved from base_url when unset)",
+		"mobile.max_attachment_mb":      "MobileConfig.MaxAttachmentBytes() (the 50 MB default lives there, not at the call site)",
 	}
 	src := goSourceOutsideConfig(t)
 	cfg := config.DefaultConfig()

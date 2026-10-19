@@ -44,7 +44,7 @@ go run ./mockapi -token dev-token      # 它会把「局域网地址 + 令牌」
 
 工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。
 
-- **JDK 必须是 17。** 这台机器上可能还装着更老的（`java -version` 报 1.8 是常见的），所以一律显式指定 `JAVA_HOME=$(/usr/libexec/java_home -v 17)`。macOS 只认 `~/Library/Java/JavaVirtualMachines/<名>.jdk/Contents/Home` 这个布局，tar.gz 解压出来要按它摆。
+- **JDK 必须是 17。** 这台机器上可能还装着更老的（`java -version` 报 1.8 是常见的），所以一律显式指定 `JAVA_HOME=$(/usr/libexec/java_home -v 17)`。macOS 只认 `~/Library/Java/JavaVirtualMachines/<名>.jdk/Contents/Home` 这个布局，tar.gz 解压出来要按它摆——而且**摆的是整棵 `Contents/`**（`Info.plist` 在内）：只拷 `Home/` 的话 `java -version` 照样能跑，但 `/usr/libexec/java_home -v 17` 看不见它，只会回落到 1.8。
 - **Node 不能是 20。** React Native 0.88 的 engines 是 `^22.13 || ^24.3 || >=26`；用 20 会在装依赖时以 `EBADENGINE` 起步，出问题的位置和 Node 毫无关系。本机 homebrew 的 26 就够用。
 - **`ANDROID_HOME=~/Library/Android/sdk`。**
 
@@ -56,14 +56,17 @@ SDK 里放什么，分两类：
 | adb | `platform-tools/` |
 | 模拟器与系统镜像 | `emulator/`、`system-images/android-36/google_apis/arm64-v8a/`（Apple Silicon 必须用 **arm64-v8a** 镜像） |
 
-**其余（platform、build-tools、NDK）交给 Gradle 自己补**：它按项目实际要求装，实测会拉 `platforms/android-37.0`、`build-tools/37.0.0`、`ndk/27.1.12297006`——手动装一份 36 反而白装。耗时取决于那台机器的网络。
+**其余（platform、build-tools、NDK）交给 Gradle 自己补**：它按项目实际要求装，实测会拉 `platforms/android-37.0`、`build-tools/37.0.0`、`ndk/27.1.12297006`——手动装一份 36 反而白装。耗时取决于那台机器的网络。若 `sdkmanager` 和 Gradle 的自补撞在一起，SDK 下会多出个 `platform-tools-2/`，`avdmanager` 每次都警告「inconsistent location」——那是重复的一份，删掉即可，`platform-tools/` 才是在用的。
 
 两个手工步骤，都是"包装里没有、而工具要求"的东西：
 
-- **`emulator/` 要补一个 `package.xml`**，否则 `avdmanager create avd` 直接报 `"emulator" package must be installed!`（它靠这个文件认已安装的包，Google 的 zip 里不带）。照着系统镜像目录里那份 `package.xml` 仿写即可。
+- **`emulator/` 要补一个 `package.xml`**，否则 `avdmanager create avd` 直接报 `"emulator" package must be installed!`（它靠这个文件认已安装的包，Google 的 zip 里不带）。照着系统镜像目录里那份 `package.xml` 仿写即可。**用 `sdkmanager --install emulator` 装的不用这一条**——它自己写这个文件，只有手动解压 zip 才要补。
 - **模型/镜像放好后，`avdmanager` 才认得**：`avdmanager create avd -n tachi-phone -k "system-images;android-36;google_apis;arm64-v8a" -d pixel_8`（平板用 `-d pixel_tablet`）。
 
-启动模拟器：`"$ANDROID_HOME/emulator/emulator" -avd tachi-phone &`，冷启动要一两分钟，等 `adb devices` 里出现 `device`、`adb shell getprop sys.boot_completed` 回 `1`。
+启动模拟器：`"$ANDROID_HOME/emulator/emulator" -avd tachi-phone -gpu host &`，冷启动要一两分钟，等 `adb devices` 里出现 `device`、`adb shell getprop sys.boot_completed` 回 `1`。
+
+- **新建的 AVD 默认配置会把 SystemUI 拖到反复 ANR。** 默认是 `hw.gpu.enabled=no` + `hw.ramSize=2G`，宿主一有负载，模拟器就隔一会儿弹一次「System UI isn't responding」——它挡住界面，看着像 App 崩了，其实 App 在底下正常渲染。把 `~/.android/avd/<名>.avd/config.ini` 里 `hw.gpu.mode` 改成 `host`、`hw.ramSize` 提到 `4G`，启动时带 `-gpu host`，就没有了。真遇到又不想改配置，点 Wait 也能继续用。
+- **配对走 `adb reverse`，别用宿主的局域网 IP**：`adb reverse tcp:8787 tcp:8787`，配对页地址写 `http://127.0.0.1:8787`、令牌就是 `go run ./mockapi -token` 那个。模拟器绕去宿主 IP 是否通取决于 NAT，回环这条一定通。Metro 的 `8081` 同理。
 
 **Maestro**（跑端到端流程用）不是包管理器装的：把官方的 `maestro.zip` 解到 `~/.local/maestro` 就有可执行的 `bin/maestro`（它只是几个 jar 加一个脚本；跑的时候 `JAVA_HOME` 要指向 17）。
 
@@ -129,4 +132,13 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 
 ## 服务端
 
-（待实现：移动接口的端点、那几条按会话寻址的桌面方法、`agent:user_message` 的 origin 参数。实现后写在这里，指针指向 `desktop/mobile*.go`。）
+`desktop/mobile*.go`，package `main`，随桌面进程起落（`main.go` 的 `startMobile`）；配置块 `mobile.{enabled,listen,max_attachment_mb}`，监听地址默认 `0.0.0.0:8787`。**端点、事件、字段的出处是 [mobile-protocol.md](mobile-protocol.md)**，这一节只说那些不做就会静默坏掉的地方。
+
+- **令牌是凭据，不是配置**：`~/.tachi/mobile.json`（`0600`，首次配对时生成），不进 `config.yaml`；比较用 `crypto/subtle`。`RegenerateMobileToken` 换值**并且断开每一条活连接**——留着旧 socket，等于没作废。
+- **手机发消息前必须走 `loadSessionForRemote`**（`prepareSession` + `LoadSessionHistory`，**不写 `activeID`、不发状态事件**）。`startTurn` 读的是 `r.history`，而 `prepareSession` 不恢复它：一段桌面没打开过的会话，手机发的第一句会让模型忘掉之前的一切，而界面看起来完全正常。
+- **按会话寻址的三件事各有一份实现**（`switchProviderFor` / `skipApprovalFor` / `setSkipApprovalFor`）：桌面原有的那三个只认 `currentID`，手机直接调会改到窗口正看着的那一段。`setSkipApprovalFor` 先写记录再翻 live agent，且**没有 live run 时只写记录**——一个开关不值得建一个 agent。
+- **三种发送的拒绝各是自己的码**：`turn_running` / `not_running` / `steer_unsupported`。定时任务轮没有 steer 通道，它不是「没在跑」。
+- **线上只走投影**（`mobile_events.go`）：`Messages` 与完整工具输出不上线，工具结果截到 2 KiB，旁路运行（`/review`、`/commit`）与对话一样被 lane 挡住。
+- **背压是丢连接，不是等**：每条连接 256 条事件的队列，满了发 `lagged` 再关；最多 16 条连接。`ask_answered` 是唯一的广播（它可能属于任何会话），其余只发给订阅了那个会话的连接。
+- **附件只认 `SendFile` 的记录**：`attachmentId` 就是那次工具调用的 id，下载端点从不接受路径；相对路径按**那次调用所属会话**的根目录解析。
+- **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。
