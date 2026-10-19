@@ -175,8 +175,8 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, elapsedMs, o
   // matters because the two can differ — a turn whose changes came from a SHELL command has no
   // fragment diffs to unfold, and its numbers are exactly the ones no fragment ever counted.
   const chipTitle = (chip.source === 'checkpoint'
-    ? '本轮改动，来自检查点：与这一轮开始时的快照对比（真实 numstat，包含 shell 命令的改动）'
-    : `本轮改动来自工具调用：只是片段内的行数，不是 git numstat${chip.note ? `；检查点没有给出这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在这里' : ''}`)
+    ? '与这一轮开始时对比（含 shell 改动）'
+    : `来自工具调用的片段行数，不是 git numstat${chip.note ? `；检查点没有这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；不含 shell 改动' : ''}`)
     + (diffParts.length === 0 ? '；点击打开完整 diff' : '；点击展开本轮所有片段 diff')
 
   // Whether this footer carries the 「评审所有改动」 entry. onReviewAll is passed only for the LATEST
@@ -207,11 +207,9 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, elapsedMs, o
     menuItems.push({
       key: 'diff', label: '完整 diff',
       // The baseline is not this entry's promise: a turn with a checkpoint pair is read from its own
-      // two trees (frozen — a shell command's writes are in it, and a commit since does not empty
-      // it), and only a turn without one falls back to the working tree against HEAD. So the tooltip
-      // names both and points at the overlay's own head line, the one place that knows which answer
-      // came back — a promise made here would be a second, guessing surface.
-      title: '本轮的完整改动，带真实文件行号（浮层顶部会说明这一次与什么对照：有检查点的是这一轮自己的两个快照，没有的是 git HEAD）',
+      // two trees, and only a turn without one falls back to the working tree against HEAD. The
+      // overlay's own head line says which — a promise made here would be a second, guessing surface.
+      title: '本轮的完整改动（带文件行号）',
       onClick: () => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths),
     })
     menuItems.push({
@@ -224,7 +222,7 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, elapsedMs, o
       disabled: !reviewPending && !reviewDone && !!sessionBusy,
       title: reviewPending ? '评审进行中（过程在右侧面板）'
         : reviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
-          : sessionBusy ? '等这一轮跑完' : '让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）',
+          : sessionBusy ? '等这一轮跑完' : '评审本轮改动的文件',
       onClick: () => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id)),
     })
   }
@@ -235,7 +233,7 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, elapsedMs, o
       disabled: !allReviewPending && !allReviewDone && !!sessionBusy,
       title: allReviewPending ? '评审进行中（过程在右侧面板）'
         : allReviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
-          : sessionBusy ? '等这一轮跑完' : '让 agent 评审工作树里所有未提交的改动（与 git HEAD 对照，只读；过程与意见在右侧面板）',
+          : sessionBusy ? '等这一轮跑完' : '评审未提交的改动（对照 git HEAD）',
       onClick: () => (allReviewPending || allReviewDone ? onOpenOneOff?.() : onReviewAll?.(m.id)),
     })
   }
@@ -2526,7 +2524,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         : p.noFiles
           ? `未还原任何文件：${p.noFiles}`
           : p.filesUnchanged
-            ? '这一轮之后没有文件改动，工作区无需还原'
+            ? '这一轮之后没有文件改动，无需还原'
             : added + changed + deleted === 0 ? '文件无变化'
               : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`)
         + (p.rootMismatch ? `（${p.rootMismatch}）` : '')
@@ -2668,7 +2666,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           a conversation that had never been compacted. */}
       {row.compactedMissing === null ? null : (
         <div className="session-chain-gone"
-          title="这一段对话在压缩时被摘要取代；压缩前的那一节已经不在会话列表里（被删除或按 max_keep 清理掉了），无法回看">
+          title="压缩前的对话已被清理，无法回看">
           {row.compactedFrom.length > 0 ? '更早的压缩前会话已不在列表' : '压缩前的会话已不在列表'}
           {row.compactedMissing ? `：${row.compactedMissing}` : ''}
         </div>
@@ -2759,7 +2757,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               reader who wants the current conversation's project already has ⌘N (「再来一个这类的」)
               and that project's own ＋. */}
           <button className="new-chat" onClick={() => { void newChat('') }}
-            title="新建会话（不绑定项目；⌘N 是「再来一个当前这类」，⌘⇧N 同这个按钮）">
+            title="新建会话（⌘⇧N）">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h8" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z" /></svg>
             <span>新会话</span>
           </button>
@@ -2892,7 +2890,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     )
                     : null}
                   {group.project && !group.project.rootsUsable ? (
-                    <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>
+                    <span className="proj-bad" title="主目录不可用：暂用会话自己的快照">目录不可用</span>
                   ) : null}
                   <button type="button" className="proj-add"
                     title={group.project ? '在该项目里新建会话' : '新建一个不属于任何项目的会话'}
@@ -2959,9 +2957,25 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             </button>
             <div className="titlebar-title" title={sessionTitle || undefined}>{sessionTitle}</div>
             <div className="titlebar-right no-drag">
+              {/* The run's numbers live with the conversation's name, not in the composer's status
+                  row: that row answers "what will the next message use" (model, thinking, approval),
+                  while these five are facts about the conversation on screen. The ring keeps its
+                  popover — which drops DOWN here, see .titlebar .popover-panel in layout.css. */}
+              <div className="titlebar-metrics">
+                {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
+                  : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
+                  : null}
+                <ContextMeter sessionId={currentId} estimate={ctxEstimate} window={ctxWindow} />
+                <span className="usage-meta">
+                  {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
+                  {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
+                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
+                </span>
+              </div>
+              <span className="titlebar-sep" aria-hidden="true" />
               <button className={`sidebar-toggle filetree-toggle no-drag ${fileTreeOpen ? '' : 'is-collapsed'}`}
                 onClick={() => setFileTreeVisible(!fileTreeOpen)}
-                title={fileTreeOpen ? '收起文件树' : `展开文件树（${MOD_KEY}E）：工作区目录，点文件在会话这一列打开`}>
+                title={fileTreeOpen ? '收起文件树' : `展开文件树（${MOD_KEY}E）`}>
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 2.5h6l3 3v8h-9z"/><path d="M6 7h4M6 9.5h4M6 12h2.5"/></svg>
               </button>
               <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
@@ -3142,9 +3156,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   <PlanChip plan={plan} open={planOpen} onToggle={() => setPlanOpen((v) => !v)} />
                 </div>
               ) : null}
-              {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
-                : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
-                : null}
               <div className="provider-picker">
                 {/* The picker is a menu with a filter box, not a <select>: this config holds dozens of
                     models and a native dropdown cannot be typed into (see ProviderPicker). Names only
@@ -3183,7 +3194,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 <select className="provider-select approval-select" value={skipApproval ? 'skip' : 'ask'}
                   disabled={!currentId}
                   aria-label="权限审批"
-                  title="权限审批：bash 与文件工具命中 ask 规则时是否先让你确认"
+                  title="命中 ask 规则时是否先问你"
                   onChange={async (e) => {
                     const skip = e.target.value === 'skip'
                     const res = await (AgentService as any).SetSkipApproval?.(skip)
@@ -3193,12 +3204,6 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   <option value="ask">需要审批</option>
                   <option value="skip">无需审批</option>
                 </select>
-                <ContextMeter sessionId={currentId} estimate={ctxEstimate} window={ctxWindow} />
-                <span className="usage-meta">
-                  {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
-                  {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
-                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
-                </span>
                 <span className="popover-anchor">
                   <button className="agents-btn" title="Agents（可委派的节点）" onClick={() => setAgentsOpen((v) => !v)}>
                     <span className="agents-ico"><AgentsIcon /></span>
@@ -3318,7 +3323,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               onClick={() => { if (rt.kind === 'ok' && rt.turn != null) void openRewindCard(rewindMenu.sid, rt.turn) }}>回退到这里</button>
             {/* 从这里分支：把这条消息**之前**的对话拷成一个新会话（工作区、检查点、原会话一律不动）。 */}
             <button className="ctx-item" role="menuitem" disabled={rt.kind !== 'ok'}
-              title={why || '把这一轮之前的对话复制成一个新会话（工作区和这次对话都不动）'}
+              title={why || '复制成新会话（两边都不动）'}
               onClick={() => {
                 if (rt.kind !== 'ok' || rt.turn == null) return
                 const sid = rewindMenu.sid
@@ -3337,11 +3342,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 ? `不能回退：${rewindCard.preview.blocked}`
                 : rewindCard.preview.userText
                   ? rewindCard.conversationOnly
-                    ? `只把对话退到这一轮之前（工作区文件不动），并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
-                    : `会撤销这一轮之后的全部工作，并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
+                    ? `只退对话，文件不动；把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
+                    : `撤销这一轮之后的改动，把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
                   : rewindCard.conversationOnly
-                    ? '只把对话退到这一轮之前（工作区文件不动），并把该轮的提示词放回输入框。'
-                    : '会撤销这一轮之后的全部工作，并把该轮的提示词放回输入框。'}
+                    ? '只退对话，文件不动；把该轮的提示词放回输入框。'
+                    : '撤销这一轮之后的改动，把该轮的提示词放回输入框。'}
             </div>
             {/* The one thing a reader may want to change about a rewind: whether the
                 workspace goes back with it. Off by default (a rewind moves both), and the
@@ -3366,7 +3371,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <div className="rewind-note">文件保留不改动：不会还原，也不会删除任何文件。</div>
             ) : null}
             {!rewindCard.preview.blocked && !rewindCard.conversationOnly && rewindCard.preview.filesUnchanged ? (
-              <div className="rewind-note">这一轮及之后没有文件改动，工作区无需还原。</div>
+              <div className="rewind-note">这一轮及之后没有文件改动，无需还原。</div>
             ) : null}
             {!rewindCard.preview.blocked && !rewindCard.conversationOnly && rewindCard.preview.noFiles ? (
               <div className="confirm-error">
@@ -3425,7 +3430,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               subsystem owns (a remote execution) is fixed at skipped — the item says why
               instead of pretending the choice exists. */}
           <button className="ctx-item" role="menuitem" disabled={!!menuSession?.kind}
-            title={menuSession?.kind ? '远端执行的会话固定不参与记忆整理' : '打开后，后台整理不会读取这个会话；随时可以在这里恢复'}
+            title={menuSession?.kind ? '远端执行的会话固定不参与记忆整理' : '后台整理不读这个会话；随时恢复'}
             onClick={() => { void toggleSkipDream(menu.sid, !menuSession?.skipDream); setMenu(null) }}>
             {menuSession?.skipDream ? '恢复记忆整理' : '跳过记忆整理'}
           </button>

@@ -770,7 +770,7 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
           <div className="settings-sub">
             {loadError
               ? '读不到配置'
-              : `${shownFields.length} 个可配置项 · 值的形态决定了输入框：开关、文本框、或每行一项的列表`}
+              : `${shownFields.length} 个可配置项`}
           </div>
         </div>
 

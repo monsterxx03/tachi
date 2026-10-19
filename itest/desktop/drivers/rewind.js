@@ -269,7 +269,7 @@
   if (!(await smoke.waitFor('.confirm-box', '回退确认卡出现（写文件的那一轮）', 5000))) return smoke.finish()
   const scopeCard = smoke.text('.confirm-box')
   smoke.check('默认仍是两半一起退（会说撤销工作）',
-    scopeCard.indexOf('会撤销这一轮之后的全部工作') >= 0, scopeCard.slice(0, 200))
+    scopeCard.indexOf('撤销这一轮之后的改动') >= 0, scopeCard.slice(0, 200))
   smoke.check('这张卡的破坏性那半就是会删掉刚写的文件', scopeCard.indexOf('删除 1') >= 0, scopeCard.slice(0, 200))
   const scope = smoke.q('.confirm-box .rewind-scope input')
   if (!scope) return smoke.fail('找到「只回退对话」开关', '没有 .rewind-scope input')
@@ -280,7 +280,7 @@
   smoke.check('勾上后卡片明说文件保留、不改动', scopedCard.indexOf('文件保留不改动') >= 0, scopedCard.slice(0, 260))
   smoke.check('勾上后文件清单降级成「本次不动」的提示',
     scopedCard.indexOf('如果一并回退文件') >= 0, scopedCard.slice(0, 260))
-  smoke.check('勾上后不再说会撤销工作', scopedCard.indexOf('会撤销这一轮之后的全部工作') < 0, scopedCard.slice(0, 260))
+  smoke.check('勾上后不再说会撤销工作', scopedCard.indexOf('撤销这一轮之后的改动') < 0, scopedCard.slice(0, 260))
   const scopeGo = smoke.qa('.confirm-box .btn.danger')[0]
   smoke.check('按钮跟着改成「只回退对话」',
     !!scopeGo && smoke.text(scopeGo).indexOf('只回退对话') >= 0, scopeGo ? smoke.text(scopeGo) : '(找不到按钮)')

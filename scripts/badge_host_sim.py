@@ -141,7 +141,7 @@ class Host:
         if "decision" in message:
             meaning = {
                 "allow_once": "允许这一次",
-                "allow_session": "本会话全部允许",
+                "allow_session": "本会话都允许",
                 "deny": "拒绝",
             }.get(message["decision"], "?")
             print(f"  含义: {BOLD}{meaning}{RESET}")

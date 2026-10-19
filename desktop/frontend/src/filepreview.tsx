@@ -206,7 +206,7 @@ export const FileCard = memo(function FileCard({ file, workDir }: { file: Attach
   const note = !meta ? '' : meta.kind === 'missing'
     ? '文件已不存在（可能已被移动或删除）'
     : meta.error ? `无法读取：${meta.error}`
-      : !meta.previewable ? '该类型不支持预览，可用「打开」交给系统应用'
+      : !meta.previewable ? '不支持预览，用「打开」'
         : ''
 
   return (
@@ -376,7 +376,7 @@ function ExpandButton({ onFull }: { onFull: () => void }) {
 // backend's (desktop/preview.go) and is not repeated here — a hard-coded number
 // would drift the moment the cap moves.
 function TruncatedNotice({ meta }: { meta: FilePreviewVO }) {
-  return <div className="file-preview-note">文件较大，此处只显示开头部分（共 {fmtBytes(meta.size)}）</div>
+  return <div className="file-preview-note">只显示开头（共 {fmtBytes(meta.size)}）</div>
 }
 
 // FilePreviewOverlay opens the attachment preview for an arbitrary local path — the
@@ -402,7 +402,7 @@ export function FilePreviewOverlay({ path, name, onClose }: { path: string; name
     return (
       <ViewerOverlay label={base} onClose={onClose} stageClass="is-doc" controls={<CloseButton onClose={onClose} />}>
         <div className="viewer-doc diff-panel-empty">
-          {meta === null ? '读取中…' : meta.error ? `无法读取：${meta.error}` : '这个文件没有可预览的内容，用「打开」交给系统应用'}
+          {meta === null ? '读取中…' : meta.error ? `无法读取：${meta.error}` : '没有可预览的内容，用「打开」'}
         </div>
       </ViewerOverlay>
     )

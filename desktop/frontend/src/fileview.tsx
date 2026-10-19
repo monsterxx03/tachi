@@ -111,7 +111,7 @@ export function FileView({ api, sessionId, onBack }: {
 	const note = !meta ? ''
 		: meta.kind === 'missing' ? '文件已不存在（可能已被移动或删除）'
 			: meta.kind === 'dir' ? '目录本身不是一个可预览的文件'
-				: !meta.previewable ? '该类型不支持预览，可用「打开」交给系统应用' : ''
+				: !meta.previewable ? '不支持预览，用「打开」' : ''
 	const target = path || ''
 
 	return (

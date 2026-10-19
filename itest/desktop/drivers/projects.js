@@ -294,6 +294,11 @@
   // ── 3. 工作区面板只读,并指向项目 ────────────────────────────────────────
   smoke.click('.work-dir')
   if (!(await smoke.waitFor('.roots-panel', '工作区面板打开', 8000))) return smoke.finish()
+  // 这个 chip 在状态行的**左**端：面板必须向右长。共用的外壳是向左长的（右端那两个触发器
+  // 要的正是那个方向），套在这里会让左半边跑到窗口外——曾经标题和路径就是被裁掉的。
+  const pr = smoke.q('.roots-panel').getBoundingClientRect()
+  smoke.check('面板完整落在窗口里（从 chip 向右长）', pr.left >= 0 && pr.right <= document.documentElement.clientWidth + 1,
+    JSON.stringify({ left: Math.round(pr.left), right: Math.round(pr.right), vw: document.documentElement.clientWidth }))
   const paneText = smoke.text('.roots-panel')
   smoke.check('面板说明由项目管理', paneText.indexOf('由项目') >= 0, paneText.slice(0, 160))
   smoke.check('只读：没有「更换主目录」', smoke.qa('.roots-panel .roots-btn').every((b) => b.textContent.indexOf('更换') < 0),

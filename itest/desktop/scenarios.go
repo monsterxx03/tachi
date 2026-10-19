@@ -1238,7 +1238,7 @@ func scenarios() []scenario {
 		//
 		// at-agent: `#a:` 选一个节点。沙箱没配任何 peer，所以这里钉的是**路由与措辞**（drivers/
 		// at-agent.js）：一个 '#' 给出两个命名空间候选、Tab 把它展开成 `#a:` 并把弹窗留在那个命名
-		// 空间、空的节点列表说的是「没有可点名的节点」而不是退回去搜文件、不是引用的 '#' 不开弹窗。
+		// 空间、空的节点列表说的是「还没连上过任何节点」而不是退回去搜文件、不是引用的 '#' 不开弹窗。
 		// 「行里显示什么」（本机怎么称呼它、pin 住的身份、上次探测的结果）由 Go 侧断，三个前端同一句话。
 		//
 		{
@@ -2829,8 +2829,8 @@ mcp_tool_search:
 			},
 		},
 		//
-		// 本会话全部允许: two DIFFERENT commands match the same ask rule. The first one asks,
-		// the driver answers 「本会话全部允许」, and the second must run with no card at all —
+		// 本会话都允许: two DIFFERENT commands match the same ask rule. The first one asks,
+		// the driver answers 「本会话都允许」, and the second must run with no card at all —
 		// which is the whole point of the choice: an agent's shell commands do not repeat
 		// verbatim, so a per-command memory would ask again here. The second command
 		// deliberately matches the SAME rule, so a build where the switch did nothing would
@@ -2864,7 +2864,7 @@ permissions:
 			},
 		},
 		// 无需审批（会话级的审批**模式**）: 输入框上方那行状态栏里的下拉框写进会话记录的模式。它与
-		// perm-session 的「本会话全部允许」翻的是同一个开关（agent 侧的会话级放行 + 策略那一半），
+		// perm-session 的「本会话都允许」翻的是同一个开关（agent 侧的会话级放行 + 策略那一半），
 		// 区别是这个选择**持久**在 meta.json 里 —— 换个会话、重启应用都跟着它，所以这条同时钉住
 		// "不用问"和"写到盘上"。
 		//

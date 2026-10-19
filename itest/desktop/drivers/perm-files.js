@@ -25,8 +25,8 @@
   smoke.check('副标题说的是拒绝这次调用', sub.indexOf('这一次调用') >= 0, sub)
 
   const labels = smoke.qa('.perm-form .btn').map((b) => b.textContent.trim())
-  smoke.check('三个选项：拒绝 / 本会话全部允许 / 允许一次',
-    labels.length === 3 && labels[0].indexOf('拒绝') >= 0 && labels[1].indexOf('本会话全部允许') >= 0 && labels[2].indexOf('允许一次') >= 0,
+  smoke.check('三个选项：拒绝 / 本会话都允许 / 允许一次',
+    labels.length === 3 && labels[0].indexOf('拒绝') >= 0 && labels[1].indexOf('本会话都允许') >= 0 && labels[2].indexOf('允许一次') >= 0,
     labels.join(' | '))
 
   const allow = smoke.qa('.perm-form .btn').find((b) => b.textContent.trim() === '允许一次')

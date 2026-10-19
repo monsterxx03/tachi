@@ -994,6 +994,30 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-left: auto;
 }
 
+/* The run's numbers (throughput, context, cache, cost, credit). They belong to the
+   conversation the title names, not to the composer's row — that row says what the
+   NEXT message will use. The cluster never shrinks: the title yields its room with
+   an ellipsis instead, which is the same bargain the title already made. */
+.titlebar-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.titlebar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+/* The shared popover shell opens UPWARD because its triggers sit on the composer's
+   bottom row. A ring in the titlebar has nothing above it, so its panel drops down. */
+.titlebar .popover-panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
 /* ── Theme switch (light / dark) ─────────────────────────────────────────── */
 /* A two-slot pill with a sliding thumb: which side is "on" reads at a glance,
    and the thumb is the affordance that says "click to move it". The active

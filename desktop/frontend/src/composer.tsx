@@ -1219,7 +1219,7 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
                 send()
               }}
               onPaste={onPaste}
-              placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，#a: 选节点，#s: 选会话）'} />
+              placeholder={running ? '正在运行…Enter 加入待发送' : '发送消息给 Tachi…（@ 文件，# 会话/节点）'} />
           </div>
           <div className="composer-actions">
             {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，

@@ -1,4 +1,4 @@
-// perm-session — 「本会话全部允许」之后的第二条命令不再弹卡。
+// perm-session — 「本会话都允许」之后的第二条命令不再弹卡。
 //
 // 两次调用的命令**不同**、但命中同一条 ask 规则：这才是这个选项要解决的场景（agent 造出来的命令
 // 不会逐字重复）。Go 那一半证"两条命令都真的跑了、三步都走到了"；这一侧证"只见到一张卡"。
@@ -12,9 +12,9 @@
   if (!(await smoke.waitFor('.perm-form', '第一条命令的确认卡出现', 30000))) return smoke.finish()
   const labels = smoke.qa('.perm-form .btn').map((b) => b.textContent.trim())
   smoke.check('确认卡有三个选项，中间那个是整个会话的',
-    labels.length === 3 && labels[1] === '本会话全部允许', labels.join(' | '))
+    labels.length === 3 && labels[1] === '本会话都允许', labels.join(' | '))
 
-  const allowAll = smoke.qa('.perm-form .btn').find((b) => b.textContent.trim() === '本会话全部允许')
+  const allowAll = smoke.qa('.perm-form .btn').find((b) => b.textContent.trim() === '本会话都允许')
   smoke.click(allowAll)
   if (!(await smoke.waitFor(() => !smoke.q('.perm-form'), '答复后确认卡消失'))) return smoke.finish()
 

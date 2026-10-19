@@ -26,7 +26,7 @@
   smoke.check('预览里不出现机器面向的哨兵值', preview.indexOf('no-rule:unparseable') < 0,
     JSON.stringify(preview))
   smoke.check('卡片那句副标题也不再断言"命中了 ask 规则"',
-    head.indexOf('命中') < 0 && head.indexOf('deny 规则不受影响') >= 0, JSON.stringify(head))
+    head.indexOf('命中') < 0 && head.indexOf('拒绝') >= 0, JSON.stringify(head))
   smoke.check('与命令无关的那条 ask 规则没有被念出来（它真的没参与）',
     preview.indexOf('perm-fixture') < 0, JSON.stringify(preview))
 

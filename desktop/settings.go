@@ -296,19 +296,19 @@ var settingsTable = []settingApply{
 		Key:      "mobile.enabled",
 		Category: catExtend,
 		Mode:     applyRestart,
-		Note:     "局域网里的明文 HTTP：拿到令牌的人就能让这台电脑执行命令 —— 只在自己家的网络里打开。",
+		Note:     "局域网明文 HTTP：拿到令牌就能在这台电脑上执行命令——只在家里的网络里开。",
 	},
 	{
 		Key:      "mobile.listen",
 		Category: catExtend,
 		Mode:     applyRestart,
-		Note:     "手机要能从局域网连进来，所以默认监听 0.0.0.0:8787；监听失败只影响这一项，不影响桌面启动。",
+		Note:     "默认 0.0.0.0:8787；监听失败不影响桌面启动。",
 	},
 	{
 		Key:      "mobile.max_attachment_mb",
 		Category: catExtend,
 		Mode:     applyLazy,
-		Note:     "手机能下载的单个附件上限（只算 agent 用 SendFile 交付过的文件）；下一次下载读新值。",
+		Note:     "手机可下载的单个附件上限（只算 SendFile 交付的）。",
 	},
 
 	// --- model and providers ---
@@ -317,7 +317,7 @@ var settingsTable = []settingApply{
 	// The two are NOT the same kind of fact. `provider` is the DEFAULT for sessions that do not
 	// exist yet: every running session has its own provider recorded (the /model switch), so a
 	// new default reaches them only by being used — which is lazy, not a rebuild.
-	{Key: "provider", Category: catModel, Mode: applyLazy, Note: "这是新会话的默认值；已开的会话各自记录着自己的 provider，要用 /model 切换"},
+	{Key: "provider", Category: catModel, Mode: applyLazy, Note: "新会话的默认值；已开的会话用 /model 切换"},
 	// `providers` is the provider DEFINITIONS (model, base_url, api_key, thinking_level): an
 	// edit has to reach the agents that were resolved before it.
 	{
@@ -342,7 +342,7 @@ var settingsTable = []settingApply{
 			}))
 		},
 	},
-	{Key: "provider_aliases", Category: catModel, Mode: applyRestart, Note: "ExpandProviderAliases 只在 LoadFrom 末尾跑一次，别名早已展开成真名"},
+	{Key: "provider_aliases", Category: catModel, Mode: applyRestart, Note: "别名在启动时展开，改完要重启"},
 	{Key: "max_tokens", Category: catModel, Mode: applyLazy},
 	{Key: "max_iterations", Mode: applyUnused, Note: "desktop 不传 MaxIterations（0 = 无限），只有 tachi -p 读它"},
 	// Jev is a judgment endpoint rather than a provider, but it is still "which model answers
@@ -368,8 +368,8 @@ var settingsTable = []settingApply{
 	},
 
 	// --- sessions ---
-	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已在运行的会话 manager 保留旧上限"},
-	{Key: "usd_to_cny", Category: catModel, Mode: applyLazy, Note: "每个读取方都在用时现取（llm.USDToCNYRate(cfg) 由 usage 记账 / jev 调用传入），下次算价即生效"},
+	{Key: "session_cleanup_max_count", Category: catGeneral, Mode: applyLazy, Note: "建新会话时读；已运行的保留旧上限"},
+	{Key: "usd_to_cny", Category: catModel, Mode: applyLazy, Note: "下次算价即生效"},
 
 	// --- tools ---
 	{
@@ -473,9 +473,9 @@ var settingsTable = []settingApply{
 				d.withConfig(func(c *config.Config) { c.ActiveMCPProfile = profile })
 				return nil
 			}
-			// One call, not one per session: the manager and its connections are shared, and the
-			// profile file is resolved against the displayed session's tree (mcp.<name>.json can
-			// live in a project).
+			// One call, not one per session: the manager and its connections are shared, and a
+			// profile lives in one global file (~/.tachi/mcp.<name>.json) — there is no project
+			// scope (config.LoadMCPConfig says why).
 			return d.switchMCPProfileTo(profile)
 		},
 	},
@@ -567,24 +567,24 @@ var settingsTable = []settingApply{
 	{Key: "checkpoints.enabled", Category: catSession, Mode: applyLazy},
 	// The three limits need no reload call: the manager bakes them in at construction, and the
 	// per-session key now CONTAINS them, so the next use rebuilds it with the new values.
-	{Key: "checkpoints.max_files", Category: catSession, Mode: applyLazy, Note: "Options 已并进检查点 manager 的 key：下次用到时按新值重建"},
-	{Key: "checkpoints.max_bytes", Category: catSession, Mode: applyLazy, Note: "同 checkpoints.max_files"},
-	{Key: "checkpoints.retain", Category: catSession, Mode: applyLazy, Note: "同 checkpoints.max_files"},
+	{Key: "checkpoints.max_files", Category: catSession, Mode: applyLazy, Note: "下次用到时按新值重建"},
+	{Key: "checkpoints.max_bytes", Category: catSession, Mode: applyLazy, Note: "同上"},
+	{Key: "checkpoints.retain", Category: catSession, Mode: applyLazy, Note: "同上"},
 	{Key: "oneoff", Category: catSession, Mode: applyLazy},
 	{Key: "compact", Category: catSession, Mode: applyLazy},
-	{Key: "review", Category: catSession, Mode: applyLazy, Note: "ResolveReviewOptions(cfg) 每次命令现读",
+	{Key: "review", Category: catSession, Mode: applyLazy, Note: "每次命令现读",
 		// Its one list is TOOL NAMES (config.AllowedTools), so it gets its own example rather
 		// than the plain hint: a list box is where a reader meets the value's shape.
 		ListExample: "ReadFile\nGrep"},
 	// Registered unconditionally, reading the config on every generation (see GitReminder):
 	// nothing has to be pushed, and nothing has to be rebuilt — which is the point, since the
 	// collector cannot remove a reminder without taking every other reminder's state with it.
-	{Key: "system_reminder", Category: catSession, Mode: applyLazy, Note: "git reminder 每次生成时现读配置"},
+	{Key: "system_reminder", Category: catSession, Mode: applyLazy, Note: "每次生成时现读"},
 
 	// peers: 这台机器可以向哪些节点委派（发送方目录，与 node.enabled 无关）。工具与 reminder
 	// 都在用时现读，所以是热改：改完下一轮就生效，不用重启。
 	{Key: "peers", Category: catAdvanced, Mode: applyLazy,
-		Note: "发送方目录：name / url / note；工具与 reminder 每轮现读，改完下一轮生效"},
+		Note: "发送方目录：name / url / note；下一轮生效"},
 
 	// --- consumed once at startup ---
 	{
@@ -598,9 +598,9 @@ var settingsTable = []settingApply{
 			return nil
 		},
 	},
-	{Key: "logs", Category: catAdvanced, Mode: applyRestart, Note: "max_size / max_files 冻结在 rotatingWriter 上（含已打开的 fd）；logs.level 有更具体的一行，已是热改"},
-	{Key: "debug.pprof", Category: catAdvanced, Mode: applyRestart, Note: "启动即绑端口"},
-	{Key: "herdr", Category: catAdvanced, Mode: applyRestart, Note: "hook 初始化时读，且 DetectHerdr 还看 HERDR_ENV"},
+	{Key: "logs", Category: catAdvanced, Mode: applyRestart, Note: "max_size / max_files 要重启；level 已经能热改"},
+	{Key: "debug.pprof", Category: catAdvanced, Mode: applyRestart, Note: "启动时绑端口"},
+	{Key: "herdr", Category: catAdvanced, Mode: applyRestart, Note: "hook 初始化时读；还看 HERDR_ENV"},
 	// node: 入口启动时起/停本机节点服务（StartOrAttachNode），运行中切换需要能起停服务本身，
 	// 首版不做 —— 所以这一整块是 ⟳ 而不是热改。
 	//
@@ -608,41 +608,41 @@ var settingsTable = []settingApply{
 	// 在 `listen` 底下读到的是 `workspace` 的事。块里字段各说各话时，就得到叶子
 	// （settings_test.go 的 TestANoteIsSharedOnlyWithinOneBlock 钉着这条）。
 	{Key: "node.enabled", Category: catAdvanced, Mode: applyRestart,
-		Note: "承载节点服务：别的机器可以把远程任务发给本机（默认关，关着连数据目录、锁、监听都不碰）。运行中起停需要能控制服务本身，首版没做"},
+		Note: "承载节点服务：别的机器可以发远程任务给本机（默认关）。运行中起停还没做"},
 	{Key: "node.listen", Category: catAdvanced, Mode: applyRestart,
-		Note: "远端 A2A 面绑的地址，启动时绑定；离开 loopback 就自动变成 mTLS、要求调用方出示证书。绑通配地址必须同时填 public_url，否则拒绝启动"},
+		Note: "A2A 面绑的地址；离开 loopback 会自动变成 mTLS。绑通配地址时必须填 public_url，否则起不来"},
 	{Key: "node.public_url", Category: catAdvanced, Mode: applyRestart,
-		Note: "调用方能拨到的地址，进 Card 也进发现公告；留空从 listen 推 —— 绑通配地址时推不出来，那时必须填"},
+		Note: "调用方能拨到的地址；留空从 listen 推（绑通配地址时必须填）"},
 	{Key: "node.name", Category: catAdvanced, Mode: applyRestart,
-		Note: "本机自称的名字：进 Card、随每次调用带给对端（对端只当「自报」记）。不可冒充的是密钥推出来的 node_id"},
+		Note: "本机自称的名字；真正的身份是密钥推出的 node_id"},
 	{Key: "node.description", Category: catAdvanced, Mode: applyRestart,
-		Note: "一句话说明这台机器是干什么的，进 Card、对端的面板里读得到；留空用内置那句。Card 是启动时发布的自述，所以要重启"},
+		Note: "一句话说明这台机器；留空用内置那句"},
 	{Key: "node.workspace", Category: catAdvanced, Mode: applyRestart,
-		Note: "远程任务的工作目录（默认 ~/workspace，~ 会展开、首次用到时才建）；留空这个节点起不来"},
+		Note: "远程任务的工作目录（默认 ~/workspace）；留空节点起不来"},
 	{Key: "node.question_timeout", Category: catAdvanced, Mode: applyRestart,
-		Note: "一个远程提问等多久才判失败：到点这一轮判 FAILED、问题留在状态里；0 表示不限时。时限在建 runner 时定下"},
+		Note: "远程提问等多久判失败；0 = 不限时"},
 	{Key: "node.max_parked", Category: catAdvanced, Mode: applyRestart,
-		Note: "同时挂住几个提问（每个都占一条会话和一轮 turn）；到上限是「这次问不出去」，不是拒绝新活儿"},
+		Note: "同时挂住几个提问；到上限是这次问不出去，不是拒绝新活儿"},
 	{Key: "node.discovery.mdns.enabled", Category: catAdvanced, Mode: applyRestart,
-		Note: "本机在局域网上找别人（浏览），以及在承载节点服务的进程里被别人找到（公告）——一个开关管这两半；第一次要用发送侧时才起浏览器"},
+		Note: "局域网里找别人、也被别人找到；一个开关管两半"},
 	{Key: "node.discovery.mdns.interfaces", Category: catAdvanced, Mode: applyRestart,
-		Note: "在哪些网卡上浏览/公告，如 en0、eth0；留空＝自动挑能用的那几个（排除 loopback、VPN 隧道、虚拟机网桥、只有 link-local 地址的网卡）"},
+		Note: "浏览/公告走哪些网卡（如 en0）；留空自动挑"},
 	{Key: "node.discovery.gossip.enabled", Category: catAdvanced, Mode: applyRestart,
-		Note: "本机去找别人（不限于本网段的）与别人来找本机，都由这一个开关决定：问邻居它替谁背书；路由挂在远端 A2A 面上，节点服务起来时才决定它答不答"},
+		Note: "去找别人、也让别人找到本机；一个开关管两半"},
 	{Key: "node.discovery.gossip.period", Category: catAdvanced, Mode: applyRestart,
-		Note: "问邻居的节拍：每这么久挑一轮换（默认 3 分钟，0／留空＝内置默认）；它得满足「节拍 × 邻居数 ÷ 扇出 < contact_ttl」，否则总有邻居轮不到刷新"},
+		Note: "问邻居的节拍（默认 3 分钟）；要满足 节拍 × 邻居数 ÷ 扇出 < contact_ttl"},
 	{Key: "node.discovery.gossip.fanout", Category: catAdvanced, Mode: applyRestart,
-		Note: "一轮问几个邻居（默认 2，0／留空＝内置默认）；每个都是一次请求，这是收窄上面那条「轮不到」的旋钮"},
+		Note: "一轮问几个邻居（默认 2）"},
 	{Key: "node.discovery.gossip.nudge", Category: catAdvanced, Mode: applyRestart,
-		Note: "目录内容一变（多了一台机器／多了一个地址），下一轮提前到这么久之后（默认 10 秒，0／留空＝内置默认）；两次提前之间的下限固定是它的两倍，不单列"},
+		Note: "目录一变，下一轮提前到这么久之后（默认 10 秒）"},
 	{Key: "node.discovery.gossip.timeout", Category: catAdvanced, Mode: applyRestart,
-		Note: "一次交换的预算，地址与 body 全算在内（默认 5 秒，0／留空＝内置默认）；比一次握手还短就会把每一轮都变成失败（也就是静音）"},
+		Note: "一次交换的超时（默认 5 秒）；太短会让每一轮都失败"},
 	{Key: "node.discovery.gossip.mute", Category: catAdvanced, Mode: applyRestart,
-		Note: "一轮失败的邻居被跳过多久（默认 5 分钟，0／留空＝内置默认）；它是「配置里写了、但机器关着」这件事的代价上限"},
+		Note: "失败的邻居跳过多久（默认 5 分钟）"},
 	{Key: "node.discovery.ttl", Category: catAdvanced, Mode: applyRestart,
-		Note: "发现到的机器在目录里留多久（默认 1 小时，0／留空＝用内置默认）；这个窗口是建账本时读的，而一个进程只建一次账本"},
+		Note: "发现到的机器留多久（默认 1 小时）"},
 	{Key: "node.discovery.contact_ttl", Category: catAdvanced, Mode: applyRestart,
-		Note: "本机肯替一台机器背书、以及把邻居的一条转述当成新鲜的有效期（默认 10 分钟，0／留空＝用内置默认）；同样是建账本时读的"},
+		Note: "背书与转述的新鲜期（默认 10 分钟）"},
 
 	// --- another entry mode's keys ---
 	{Key: "tui", Mode: applyUnused, Note: "TUI 专属"},
@@ -651,10 +651,44 @@ var settingsTable = []settingApply{
 	// be false. It stays applyUnused because that mode is about the FORM — channel names are
 	// user-defined map keys, so no form can enumerate them — not about whether anything reads it.
 	{Key: "channel", Mode: applyUnused, Note: "channel 模式的 IM 后端；desktop 只读其中的 notify 开关（决定 NotifyUser 工具挂不挂），账号与收信仍归 channel 进程"},
-	{Key: "cron", Category: catAdvanced, Mode: applyRestart,
-		Note: "后台定时任务；channel 与 desktop 各自只调度发给自己的任务，改动后要重启对应进程。其中 notify_matcher 与 jev_threshold 只被 channel 的定时任务使用"},
-	{Key: "dream", Category: catSession, Mode: applyRestart,
-		Note: "后台记忆整理（AutoDream）：桌面每 30 分钟检查一次，有新会话且距上次整理超过 min_interval 才真正整理；enabled 保存后重启生效。schedule 只被 channel 进程使用，桌面按 min_interval 检查"},
+	// One row per leaf, because the six do not all mean the same thing: four are read by BOTH
+	// entry points when they build a scheduler, while the two notify keys are channel-only.
+	// (A block-wide note printed the same paragraph under every field — including "only channel
+	// uses notify_matcher" under `max_concurrent`.)
+	{Key: "cron.enabled", Category: catAdvanced, Mode: applyRestart,
+		Note: "后台定时任务总开关；关掉后桌面不再调度，任务本身还在"},
+	{Key: "cron.execution_timeout", Category: catAdvanced, Mode: applyRestart,
+		Note: "单个任务最长跑多久，超时判失败"},
+	{Key: "cron.max_concurrent", Category: catAdvanced, Mode: applyRestart,
+		Note: "同时跑几个任务"},
+	{Key: "cron.store_path", Category: catAdvanced, Mode: applyRestart,
+		Note: "任务文件路径（默认 ~/.tachi/crons.json）"},
+	{Key: "cron.notify_matcher", Category: catAdvanced, Mode: applyRestart,
+		Note: "channel 的 when_relevant 怎么判：marker / jev / auto；desktop 不读"},
+	{Key: "cron.jev_threshold", Category: catAdvanced, Mode: applyRestart,
+		Note: "channel 的 when_relevant 交付阈值；desktop 不读"},
+	// One row per leaf here too: only `enabled` needs a restart (the periodic goroutine is
+	// started at boot), every other value is read on each pass, and `schedule` is channel's.
+	{Key: "dream.enabled", Category: catSession, Mode: applyRestart,
+		Note: "后台记忆整理总开关；关掉后下一轮不再整理，开启要重启"},
+	{Key: "dream.schedule", Category: catSession, Mode: applyRestart,
+		Note: "channel 的整理时间表；desktop 不读（按 min_interval 检查）"},
+	{Key: "dream.min_interval", Category: catSession, Mode: applyLazy,
+		Note: "同一域两次整理的最小间隔"},
+	{Key: "dream.provider", Category: catSession, Mode: applyLazy,
+		Note: "整理用哪个 provider；留空用主 provider"},
+	{Key: "dream.max_concurrent", Category: catSession, Mode: applyLazy,
+		Note: "同时跑几个整理子代理"},
+	{Key: "dream.subagent_timeout", Category: catSession, Mode: applyLazy,
+		Note: "每个整理子代理的超时"},
+	{Key: "dream.subagent_max_iters", Category: catSession, Mode: applyLazy,
+		Note: "每个整理子代理的最大步数"},
+	{Key: "dream.max_message_chars", Category: catSession, Mode: applyLazy,
+		Note: "整理提示词里每条消息的字符上限"},
+	{Key: "dream.max_sessions_per_run", Category: catSession, Mode: applyLazy,
+		Note: "一次整理几段会话，其余等下一轮"},
+	{Key: "dream.max_summary_chars", Category: catSession, Mode: applyLazy,
+		Note: "一次整理的全部对话字符上限"},
 	{Key: "acp", Mode: applyUnused, Note: "ACP 入口的配置"},
 	{Key: "deep_research", Mode: applyUnused, Note: "desktop 没有 research 命令（TUI 与 tachi -p 才有）"},
 	{Key: "web", Mode: applyUnused, Note: "tachi web 是独立进程，重启那个进程即可"},

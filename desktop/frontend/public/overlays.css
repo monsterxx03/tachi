@@ -751,8 +751,14 @@
    panels; wider, because paths are long and truncating the one piece of
    information that distinguishes two roots would be self-defeating. */
 .roots-panel {
-  width: 440px;
   padding: 12px 14px 12px;
+  /* The shared shell hangs LEFT from its trigger, which is right for the ring and
+     the MCP panel sitting at the row's right end. This trigger sits at the row's
+     LEFT end, so growing left walks the panel out of the window (the first half of
+     its title clipped). It grows right instead, and never wider than the window. */
+  left: -6px;
+  right: auto;
+  width: min(440px, calc(100vw - 24px));
 }
 .roots-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
 .roots-title { font-size: 12.5px; font-weight: 600; color: var(--text); }

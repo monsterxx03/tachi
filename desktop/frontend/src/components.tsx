@@ -1253,7 +1253,7 @@ function AtFilePicker({ mark, query, items, selected, loading, refCount, onPick,
     // configured: a peer that has never been reached outbound has no identity to insert, so an empty
     // list here is not "nothing is configured" — that would be the one thing a list of nodes may not
     // imply (agentref.Search). One sentence that is true of both.
-    ? ns === 'agents' ? '没有可点名的节点（身份出自一次握手，本机还没连上过任何一台）' : '无匹配会话'
+    ? ns === 'agents' ? '还没连上过任何节点' : '无匹配会话'
     : '无匹配文件'
   // Keep the highlighted row in view while arrowing through a long list.
   useEffect(() => {
@@ -1486,25 +1486,28 @@ function AskForm({ questions, onSubmit, onCancel }: {
 // buttons, their wire values and the preview stay shared: the preview is the
 // agent's own text and is shown verbatim on every kind.
 //
-// The sub for each kind names what makes that card different rather than
-// repeating the title: bash's 「本会话全部允许」 covers this session's rules and
-// judgments, MCP search is a SPEND (and saying 「确认这条命令」 on a card with no
-// command in it sends the reader looking for one), and a file ask's deny refuses
-// that ONE call while the turn carries on.
-const permCopy: Record<PermissionKind, { title: string; sub: string }> = {
+// `sub` carries the one consequence the buttons cannot show: for bash a deny ends
+// the turn, a file ask's deny refuses only that call, and MCP search is a SPEND.
+// `sessionHint` is the hover on 「本会话都允许」 — the session-wide answer never
+// widens into a deny rule, which matters to whoever wrote those rules but not
+// enough to sit in the card's head line.
+const permCopy: Record<PermissionKind, { title: string; sub: string; sessionHint: string }> = {
   bash: {
     title: '权限确认',
-    sub: '允许后本轮继续；deny 规则不受影响',
+    sub: '拒绝会结束这一轮',
+    sessionHint: '本会话不再问 ask；deny 规则仍然生效',
   },
   mcp_search: {
     title: '权限确认',
-    sub: '加载会花掉一笔钱：新工具让整段 prompt 缓存失效，重读一次；拒绝后本会话不再加载',
+    sub: '会花掉一笔钱，并重读一次 prompt',
+    sessionHint: '本会话不再问加载花费',
   },
   files: {
-    // The preview below names the tool and the path, so this sub must not read
-    // like a bash card: 「拒绝」 here refuses THIS call only — the turn carries on.
+    // The preview names the tool and the path, so this sub carries the difference:
+    // 「拒绝」 here refuses THIS call only — the turn carries on.
     title: '权限确认',
-    sub: '拒绝只拒这一次调用，本轮继续；deny 规则不受影响',
+    sub: '拒绝只拒这一次调用',
+    sessionHint: '本会话不再问文件 ask；deny 规则仍然生效',
   },
 }
 
@@ -1528,7 +1531,7 @@ function PermissionForm({ perm, onAnswer }: {
       {perm.err ? <div className="perm-err">{perm.err}</div> : null}
       <div className="perm-actions">
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('deny')}>拒绝</button>
-        <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_session')}>本会话全部允许</button>
+        <button className="btn ghost" disabled={busy} title={copy.sessionHint} onClick={() => onAnswer('allow_session')}>本会话都允许</button>
         <button className="btn" disabled={busy} onClick={() => onAnswer('allow_once')}>{busy ? '已发送…' : '允许一次'}</button>
       </div>
     </div>
@@ -1638,7 +1641,7 @@ function AgentsPanel({ board, busy, onClose, onRefresh }: {
                     the tooltip is what they mean to a person. Not rendered at all when there is
                     nothing to state, rather than an empty chip. */}
                 {p.source ? (
-                  <span className="agents-src" title="这台机器是怎么被知道的：配置里写的 / 局域网里自己听到的 / 邻居告诉的">
+                  <span className="agents-src" title="来源：配置 / 局域网 / 邻居">
                     {p.source}
                   </span>
                 ) : null}
