@@ -907,6 +907,13 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 	d.notifyLink()
 	// The phone is the third reader of that same road.
 	d.mobileNotify(id, map[string]any{"type": mobileEvState, "state": d.mobileState(id)})
+	// 列表那一行是第四处：它按会话广播，因为停在列表页的手机没有订阅任何会话。
+	d.mobileBroadcast(map[string]any{
+		"type":      mobileEvSessionState,
+		"sessionId": id,
+		"running":   st.Status.busy(),
+		"waiting":   st.Waiting,
+	})
 }
 
 // emitState pushes one session's state to the frontend (see setSessionState).

@@ -6,6 +6,8 @@ export interface ToolRun {
   id: string;
   name: string;
   title: string;
+  /** 工具参数（JSON 字符串），tool_args 事件补上 */
+  args?: string;
   result?: string;
   isError?: boolean;
 }
@@ -15,6 +17,8 @@ export interface Live {
   text: string;
   thinking: string;
   tools: ToolRun[];
+  /** 这一轮的实时速度（协议里的 tps 事件）；还没收到过就是 undefined */
+  tps?: number;
 }
 
 export const emptyLive: Live = { active: false, text: '', thinking: '', tools: [] };
@@ -56,6 +60,18 @@ export function applyEvent(
           ...st.live,
           active: true,
           tools: [...st.live.tools, { id: ev.toolId, name: ev.toolName, title: ev.title }],
+        },
+      });
+
+    case 'tps':
+      return same({ ...st, live: { ...st.live, tps: ev.tps } });
+
+    case 'tool_args':
+      return same({
+        ...st,
+        live: {
+          ...st.live,
+          tools: st.live.tools.map((t) => (t.id === ev.toolId ? { ...t, args: ev.args } : t)),
         },
       });
 

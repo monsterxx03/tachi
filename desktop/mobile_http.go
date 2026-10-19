@@ -93,6 +93,16 @@ func (m *mobileServer) handleStop(w http.ResponseWriter, r *http.Request) {
 	mobileWriteJSON(w, map[string]any{"accepted": true})
 }
 
+// handleDeleteSession removes a conversation. The phone and the desktop share one delete path,
+// and the list event it broadcasts brings every other screen back in step.
+func (m *mobileServer) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if status, code := m.desk.mobileDeleteSession(r.PathValue("id")); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
 type mobileProviderReq struct {
 	Name string `json:"name"`
 }

@@ -29,9 +29,12 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function Mermaid({ source, height = 260 }: { source: string; height?: number }) {
+export function Mermaid({ source, height = 220 }: { source: string; height?: number }) {
   const { tokens: t } = useTheme();
   const [js, setJs] = useState<string | null>(cachedJS);
+  // 图有多高只有画完才知道。写死一个高度就会把下半张裁掉，而 WebView 里又滚不动
+  // （scrollEnabled=false），所以让页面量完把高度报回来。
+  const [boxHeight, setBoxHeight] = useState(height);
 
   useEffect(() => {
     if (js) return;
@@ -55,7 +58,7 @@ export function Mermaid({ source, height = 260 }: { source: string; height?: num
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <style>
   html,body{margin:0;padding:0;background:transparent}
-  .wrap{display:flex;align-items:center;justify-content:center;min-height:${height - 16}px;padding:8px}
+  .wrap{display:flex;align-items:center;justify-content:center;padding:8px}
   svg{max-width:100%;height:auto}
 </style></head>
 <body>
@@ -79,6 +82,21 @@ export function Mermaid({ source, height = 260 }: { source: string; height?: num
     },
     flowchart: { curve: 'basis', useMaxWidth: true }
   });
+
+  // 画完把真实高度报回 RN（mermaid 是异步渲染的，所以轮询等它出现）
+  (function () {
+    var tries = 0;
+    function report() {
+      var svg = document.querySelector('.wrap svg');
+      if (svg) {
+        var h = Math.ceil(svg.getBoundingClientRect().height) + 24;
+        if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(String(h));
+        return;
+      }
+      if (tries++ < 60) setTimeout(report, 100);
+    }
+    report();
+  })();
 </script>
 </body></html>`;
   }, [js, source, height, t]);
@@ -89,11 +107,16 @@ export function Mermaid({ source, height = 260 }: { source: string; height?: num
         <WebView
           originWhitelist={['*']}
           source={{ html }}
-          style={{ height, backgroundColor: 'transparent' }}
+          style={{ height: boxHeight, backgroundColor: 'transparent' }}
           scrollEnabled={false}
+          onMessage={(e) => {
+            const h = Number(e.nativeEvent.data);
+            // 只接受合理的高度：太小是量到了没画完的盒子，太大是异常
+            if (Number.isFinite(h) && h > 60) setBoxHeight(Math.min(Math.ceil(h), 1600));
+          }}
         />
       ) : (
-        <View style={[styles.placeholder, { height }]}>
+        <View style={[styles.placeholder, { height: boxHeight }]}>
           <Text style={{ color: t.faint, fontSize: 12 }}>正在准备图的渲染器…</Text>
         </View>
       )}

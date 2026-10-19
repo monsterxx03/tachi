@@ -44,6 +44,7 @@
 | GET | `/v1/sessions/{id}/page` | `?before=<index>&limit=<n>` | `{messages: [Message], hasMore, session}` |
 | POST | `/v1/sessions/{id}/messages` | `{text, mode}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/stop` | — | `{accepted: true}` |
+| DELETE | `/v1/sessions/{id}` | — | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/provider` | `{name}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/skip-approval` | `{skip}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/permissions/{toolId}` | `{decision}` | `{accepted: true}` |
@@ -67,6 +68,8 @@
 | 待答项已被处理 | 409 `no_such_pending_request` | 已经在别处回答过了 |
 | 只读会话（子系统所有） | 409 `read_only` | 这段对话由别的任务占用 |
 | 节点任务正在执行 | 409 `held_by_task` | 有一项远端任务正在使用它 |
+| 删除一段正在跑的对话 | 409 `turn_running` | 它正在跑；插话或打断？ |
+| 删除失败（写盘出错等） | 500 `delete_failed` | 删不掉这段对话 |
 | 这台电脑建不出 agent（还没配 provider） | 409 `agent_unavailable` | 这台电脑还没配好模型，先在电脑上配置 |
 
 ## WebSocket
@@ -107,6 +110,7 @@
 | `ask_answered` | `toolId` | 一条等待已被回答 |
 | `user_message` | `text`, `displayText`, `steer`, `origin` | **另一块屏**发来的用户消息 |
 | `session_prefs` | `provider`, `skipApproval` | 这段对话的模型 / 审批开关被**某一块屏**改了（桌面或手机）；两种开关一起发 |
+| `sessions_changed` | — | 会话列表变了：任何一块屏新建或删除了一段对话。**广播给每一条连接**（列表不属于某一段会话的流） |
 | `lagged` | — | 你跟不上了，重读快照 |
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
@@ -150,4 +154,5 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 3. **线上只走投影**，没有 `Messages`，没有完整工具输出。
 4. **手机改的每一件事都按会话寻址**，落在那段被点名的对话上，不碰桌面正在看的那一段。
 5. **一块屏改了共享状态，要告诉另一块**（消息用 `user_message`、回答用 `ask_answered`）。
-6. **手机不改变桌面正在显示的会话。**
+6. **列表的增删是广播，不属于某一段会话的流。** 任何一块屏新建或删除对话都发 `sessions_changed`，收到的人重读 `/v1/sessions`。删除走桌面同一条 `DeleteSession`：正在跑的那一轮**被拒绝**，不是被停下来。
+7. **手机不改变桌面正在显示的会话。**

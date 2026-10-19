@@ -4,78 +4,50 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { FileSource } from '../api/client';
 import type { AgentQuestion, AttachmentRef, PendingAsk, SessionMessage } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
-import { Mermaid } from './Mermaid';
+import { Markdown } from './Markdown';
+import { stripReminders } from './reminder';
 
-/** 把回复切成「文本 / 代码块 / 图」三种块 —— 只认围栏，不做完整 markdown */
-type Block =
-  | { kind: 'text'; text: string }
-  | { kind: 'code'; lang: string; text: string }
-  | { kind: 'mermaid'; text: string };
-
-function parseBlocks(raw: string): Block[] {
-  const out: Block[] = [];
-  const re = /```([\w-]*)\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw))) {
-    if (m.index > last) out.push({ kind: 'text', text: raw.slice(last, m.index) });
-    const lang = m[1] ?? '';
-    out.push(lang === 'mermaid' ? { kind: 'mermaid', text: m[2] } : { kind: 'code', lang, text: m[2] });
-    last = re.lastIndex;
-  }
-  if (last < raw.length) out.push({ kind: 'text', text: raw.slice(last) });
-  return out;
-}
-
-/** 行内 `code` 与换行 */
-function TextBlock({ text, style }: { text: string; style: object }) {
-  const { tokens: t } = useTheme();
-  const lines = text.replace(/\n+$/, '').split('\n');
-  return (
-    <Text style={style}>
-      {lines.map((line, li) => (
-        <Text key={li}>
-          {line.split(/(`[^`]+`)/g).map((part, pi) =>
-            part.startsWith('`') && part.endsWith('`') && part.length > 2 ? (
-              <Text key={pi} style={{ color: t.codeInk, backgroundColor: t.codeBg }}>
-                {part.slice(1, -1)}
-              </Text>
-            ) : (
-              <Text key={pi}>{part}</Text>
-            ),
-          )}
-          {li < lines.length - 1 ? '\n' : ''}
-        </Text>
-      ))}
-    </Text>
-  );
-}
-
-/** 助手的一段回复 */
+/** 助手的一段回复：整段交给 Markdown（围栏里的 mermaid 也在它的 fence 规则里接管） */
 function AssistantText({ text }: { text: string }) {
-  const { tokens: t } = useTheme();
-  const blocks = parseBlocks(text);
-  return (
-    <View style={styles.body}>
-      {blocks.map((b, i) => {
-        if (b.kind === 'mermaid') return <Mermaid key={i} source={b.text} />;
-        if (b.kind === 'code')
-          return (
-            <View key={i} style={[styles.codeBlock, { backgroundColor: t.codeBg }]}>
-              <Text style={{ color: t.codeInk, fontFamily: 'monospace', fontSize: 12.5 }}>{b.text.replace(/\n$/, '')}</Text>
-            </View>
-          );
-        return <TextBlock key={i} text={b.text} style={[styles.assistantText, { color: t.text }]} />;
-      })}
-    </View>
-  );
+  const clean = stripReminders(text);
+  if (!clean) return null;
+  return <Markdown text={clean} />;
 }
 
-/** 工具调用：一行，点开看结果 */
-function ToolCard({ msg, result }: { msg: SessionMessage; result?: SessionMessage }) {
+/** 工具参数从 JSON 字符串摊开，读起来像一段代码而不是一行 */
+function prettyArgs(args?: string): string {
+  if (!args) return '';
+  try {
+    return JSON.stringify(JSON.parse(args), null, 2);
+  } catch {
+    return args;
+  }
+}
+
+/**
+ * 工具调用：一行，点开看参数和结果。
+ *
+ * 实时那一轮和历史记录用同一个组件 —— 两边各画一套的结果是「正在跑的时候点不开、
+ * 停下来才恢复正常」，那种差异没有理由存在。
+ */
+export function ToolCard({
+  name,
+  title,
+  args,
+  result,
+  isError,
+  running,
+}: {
+  name: string;
+  title?: string;
+  args?: string;
+  result?: string;
+  isError?: boolean;
+  running?: boolean;
+}) {
   const { tokens: t } = useTheme();
   const [open, setOpen] = useState(false);
-  const failed = result?.isError;
+  const summary = title || prettyArgs(args).split('\n')[0] || '';
 
   return (
     <View style={[styles.tool, { borderColor: t.border, backgroundColor: t.wash }]}>
@@ -86,18 +58,34 @@ function ToolCard({ msg, result }: { msg: SessionMessage; result?: SessionMessag
           color={t.faint}
           style={{ marginTop: 1 }}
         />
-        <Text style={[styles.toolName, { color: failed ? t.red : t.dim }]} numberOfLines={1}>
-          {msg.toolName}
+        {running ? <Feather name="loader" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
+        <Text style={[styles.toolName, { color: isError ? t.red : t.dim }]} numberOfLines={1}>
+          {name}
         </Text>
         <Text style={[styles.toolSum, { color: t.faint }]} numberOfLines={1}>
-          {msg.title || msg.args || ''}
+          {summary}
         </Text>
       </Pressable>
-      {open && result?.toolResult ? (
+      {open ? (
         <View style={[styles.toolBody, { borderTopColor: t.border }]}>
-          <Text style={{ color: failed ? t.red : t.dim, fontFamily: 'monospace', fontSize: 12 }}>
-            {result.toolResult.trimEnd()}
-          </Text>
+          {args ? (
+            <Text style={{ color: t.dim, fontFamily: 'monospace', fontSize: 12 }}>{prettyArgs(args)}</Text>
+          ) : null}
+          {result ? (
+            <Text
+              style={{
+                color: isError ? t.red : t.dim,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                marginTop: args ? 8 : 0,
+              }}
+            >
+              {result.trimEnd()}
+            </Text>
+          ) : null}
+          {!args && !result ? (
+            <Text style={{ color: t.faint, fontSize: 12 }}>{running ? '还在跑…' : '没有留下参数'}</Text>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -272,7 +260,7 @@ function FileCard({
 }
 
 /** 思考：默认折叠（它很长，而且多半不是你要找的那句） */
-function Thinking({ text }: { text: string }) {
+export function Thinking({ text }: { text: string }) {
   const { tokens: t } = useTheme();
   const [open, setOpen] = useState(false);
   return (
@@ -319,7 +307,7 @@ export function MessageView({
   if (msg.role === 'user')
     return (
       <View style={[styles.userBubble, { backgroundColor: t.userBg }]}>
-        <TextBlock text={msg.displayContent ?? msg.content} style={{ color: t.userInk, fontSize: 15, lineHeight: 22 }} />
+        <Markdown text={stripReminders(msg.displayContent ?? msg.content)} ink={t.userInk} />
       </View>
     );
 
@@ -335,16 +323,22 @@ export function MessageView({
   if (msg.role === 'tool_call') {
     const file = attachments.find((a) => a.id === msg.toolCallId);
     if (file) return <FileCard file={file} source={fileSource?.(file)} onOpen={onOpenFile} />;
-    return <ToolCard msg={msg} result={toolResult} />;
+    return (
+      <ToolCard
+        name={msg.toolName ?? ''}
+        title={msg.title}
+        args={msg.args}
+        result={toolResult?.toolResult}
+        isError={toolResult?.isError}
+      />
+    );
   }
 
   // tool_result 由它上面那条 tool_call 一起画
   if (msg.role === 'tool_result') return null;
 
-  if (msg.role === 'reminder')
-    return (
-      <Text style={{ color: t.faint, fontSize: 12.5, marginVertical: 6 }}>{msg.content}</Text>
-    );
+  // 系统提醒不在手机上展示：它跟着某一轮被注入，原样显示只会把真正的回复挤走
+  if (msg.role === 'reminder') return null;
 
   return null;
 }

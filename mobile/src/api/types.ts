@@ -153,8 +153,12 @@ export type ServerEvent =
   | { type: 'ask'; ask: PendingAsk }
   | { type: 'ask_answered'; toolId: string }
   | { type: 'user_message'; text: string; displayText?: string; steer: boolean; origin: MessageOrigin }
-  /** 这段对话的模型 / 审批开关被某一块屏改了；两种开关一起发 */
+  /** 这一段对话的模型 / 审批开关被某一块屏改了；两种开关一起发 */
   | { type: 'session_prefs'; provider: string; skipApproval: boolean }
+  /** 会话列表变了（桌面或手机新建 / 删除）；广播给每一条连接 */
+  | { type: 'sessions_changed' }
+  /** 某段会话的「在跑 / 在等」变了；广播给每一条连接（列表那一行要跟着亮） */
+  | { type: 'session_state'; sessionId: string; running: boolean; waiting: WaitingText }
   | { type: 'lagged' };
 
 /** 这条消息是从哪块屏来的；用来决定自己要不要再画一次 */

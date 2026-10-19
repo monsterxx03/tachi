@@ -152,6 +152,22 @@ func (d *desktopApp) mobileStop(id string) (int, string) {
 	return 0, ""
 }
 
+// mobileDeleteSession deletes a conversation from the phone. It goes through DeleteSession, so
+// the same rule holds here: a session with a turn in flight is refused, not stopped underneath.
+func (d *desktopApp) mobileDeleteSession(id string) (int, string) {
+	if d.sessionRecord(id) == nil {
+		return http.StatusNotFound, "no_session"
+	}
+	switch res := (&AgentService{desk: d}).DeleteSession(id); res {
+	case "ok":
+		return 0, ""
+	case refuseDeleteRunning:
+		return http.StatusConflict, "turn_running"
+	default:
+		return http.StatusInternalServerError, "delete_failed"
+	}
+}
+
 // mobileRunState reads a session's turn state WITHOUT creating a run entry: a lookup that
 // only asks "is something running here?" must not leave an empty sessionRun behind.
 func (d *desktopApp) mobileRunState(id string) (running, hasSteer bool) {

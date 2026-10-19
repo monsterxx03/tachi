@@ -210,6 +210,8 @@ func (s *AgentService) DeleteSession(id string) string {
 		d.activeID = ""
 	}
 	d.mu.Unlock()
+	// Outside the lock: mobileBroadcast reads the server pointer under d.mu.
+	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
 	return "ok"
 }
 
@@ -446,6 +448,7 @@ func (s *AgentService) NewSession(projectID string) SessionInfo {
 	d.activeID = sess.ID
 	d.mu.Unlock()
 	d.setSessionState(sess.ID, AgentState{Status: StatusIdle, Label: "空闲", Detail: "新会话"})
+	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
 	return toSessionInfo(sess)
 }
 

@@ -142,7 +142,13 @@ const (
 	mobileEvAskAnswered  = "ask_answered"
 	mobileEvUserMessage  = "user_message"
 	mobileEvSessionPrefs = "session_prefs"
-	mobileEvLagged       = "lagged"
+	// mobileEvSessionState 一条会话的「在跑 / 在等」变了。和 state 不同，它是**广播**：
+	// 停在列表页的手机没订阅任何会话，却正是需要更新那一行的人。
+	mobileEvSessionState = "session_state"
+	// mobileEvSessionsChanged 会话列表变了（新建 / 删除），广播给每一条连接 —— 列表不是
+	// 某个会话的流，凡是连着这台电脑的手机都该重读一次。
+	mobileEvSessionsChanged = "sessions_changed"
+	mobileEvLagged          = "lagged"
 )
 
 // 手机 → 服务端：订阅一个会话，以及心跳。

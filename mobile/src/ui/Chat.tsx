@@ -6,15 +6,18 @@ import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } fr
 import type { Live } from '../state/mobile';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
-import { MessageView } from './Message';
+import { MessageView, Thinking, ToolCard } from './Message';
+import { Markdown } from './Markdown';
 
 /** 细条：这一段对话花了多少、跑多快、上下文占了多少、用的哪个模型 */
 function MetaStrip({
   snapshot,
+  live,
   onOpenInfo,
   onOpenModels,
 }: {
   snapshot: Snapshot;
+  live: Live;
   onOpenInfo: () => void;
   onOpenModels: () => void;
 }) {
@@ -26,11 +29,13 @@ function MetaStrip({
 
   return (
     <View style={[styles.strip, { borderBottomColor: t.border, backgroundColor: t.stripBg }]}>
-      <Text style={[styles.money, { color: t.dim }]}>${usage.cost.toFixed(2)}</Text>
+      <Text style={[styles.money, { color: t.dim }]}>¥{usage.cost.toFixed(3)}</Text>
       <Text style={[styles.sep, { color: t.faint }]}>·</Text>
       <View style={[styles.tps, { opacity: streaming ? 1 : 0.62 }]}>
         <View style={[styles.tpsDot, { backgroundColor: streaming ? t.green : t.faint }]} />
-        <Text style={{ color: streaming ? t.dim : t.faint, fontSize: 11.5 }}>52 tok/s</Text>
+        <Text style={{ color: streaming ? t.dim : t.faint, fontSize: 11.5 }}>
+          {live.tps ? `${Math.round(live.tps)} tok/s` : '—'}
+        </Text>
       </View>
       <Text style={[styles.sep, { color: t.faint }]}>·</Text>
       <Pressable onPress={onOpenInfo} style={styles.ctx}>
@@ -130,36 +135,22 @@ function Composer({
 
 /** 活气泡：这一轮正在流的东西。轮次一结束就被记录替换掉。 */
 function LiveBubble({ live }: { live: Live }) {
-  const { tokens: t } = useTheme();
   if (!live.active && !live.text && live.tools.length === 0) return null;
   return (
     <View style={styles.live}>
-      {live.thinking ? (
-        <View style={[styles.think, { borderLeftColor: t.borderStrong }]}>
-          <Text style={{ color: t.faint, fontSize: 12.5, lineHeight: 19 }}>{live.thinking}</Text>
-        </View>
-      ) : null}
+      {live.thinking ? <Thinking text={live.thinking} /> : null}
       {live.tools.map((tool) => (
-        <View key={tool.id} style={[styles.tool, { borderColor: t.border, backgroundColor: t.wash }]}>
-          <View style={styles.toolHead}>
-            <Feather name={tool.result ? 'check' : 'loader'} size={13} color={tool.isError ? t.red : t.faint} />
-            <Text style={[styles.toolName, { color: tool.isError ? t.red : t.dim }]} numberOfLines={1}>
-              {tool.name}
-            </Text>
-            <Text style={[styles.toolSum, { color: t.faint }]} numberOfLines={1}>
-              {tool.title}
-            </Text>
-          </View>
-          {tool.result ? (
-            <View style={[styles.toolBody, { borderTopColor: t.border }]}>
-              <Text style={{ color: t.dim, fontFamily: 'monospace', fontSize: 12 }}>
-                {tool.result.trimEnd().slice(0, 800)}
-              </Text>
-            </View>
-          ) : null}
-        </View>
+        <ToolCard
+          key={tool.id}
+          name={tool.name}
+          title={tool.title}
+          args={tool.args}
+          result={tool.result}
+          isError={tool.isError}
+          running={!tool.result}
+        />
       ))}
-      {live.text ? <Text style={[styles.liveText, { color: t.text }]}>{live.text}</Text> : null}
+      {live.text ? <Markdown text={live.text} /> : null}
     </View>
   );
 }
@@ -188,6 +179,7 @@ export function Chat({
   live,
   fileSource,
   onBack,
+  onToggleList,
   onDecide,
   onAnswer,
   onOpenInfo,
@@ -200,6 +192,8 @@ export function Chat({
   live: Live;
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
+  /** 宽屏：收起 / 展开左边那栏。没有它（窄屏）时 header 显示返回键。 */
+  onToggleList?: () => void;
   onDecide: (toolId: string, allow: boolean) => void;
   onAnswer: (toolId: string, text: string) => void;
   onOpenInfo: () => void;
@@ -215,8 +209,11 @@ export function Chat({
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
-        <Pressable onPress={onBack} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
-          <Feather name="chevron-left" size={22} color={t.dim} />
+        <Pressable
+          onPress={onToggleList ?? onBack}
+          style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}
+        >
+          <Feather name={onToggleList ? 'menu' : 'chevron-left'} size={onToggleList ? 19 : 22} color={t.dim} />
         </Pressable>
         <View style={styles.headInfo}>
           <Text style={[styles.headTitle, { color: t.title }]} numberOfLines={1}>
@@ -230,7 +227,7 @@ export function Chat({
         <StatePill session={s} t={t} />
       </View>
 
-      <MetaStrip snapshot={snapshot} onOpenInfo={onOpenInfo} onOpenModels={onOpenModels} />
+      <MetaStrip snapshot={snapshot} live={live} onOpenInfo={onOpenInfo} onOpenModels={onOpenModels} />
 
       <FlatList
         data={items}

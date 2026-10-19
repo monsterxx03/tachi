@@ -185,7 +185,7 @@ func (s *Server) broadcast(sessionID string, ev Event) {
 	s.mu.Lock()
 	targets := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
-		if ev.Type == "ask_answered" || c.sessionID == sessionID {
+		if ev.Type == "ask_answered" || ev.Type == "sessions_changed" || c.sessionID == sessionID {
 			targets = append(targets, c)
 		}
 	}

@@ -172,6 +172,7 @@ func (m *mobileServer) handler() http.Handler {
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", m.guard(m.handleFile))
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", m.guard(m.handleMessage))
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", m.guard(m.handleStop))
+	mux.HandleFunc("DELETE /v1/sessions/{id}", m.guard(m.handleDeleteSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", m.guard(m.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", m.guard(m.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", m.guard(m.handlePermission))

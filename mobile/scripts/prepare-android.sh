@@ -76,3 +76,28 @@ allprojects { p ->
 EOF
   echo "AGP 版本统一 -> 9.2.1"
 fi
+
+# 4) ML Kit 的 registrar 类。
+#
+#    ML Kit 通过 AndroidManifest 里那个 provider 的 metadata 列出自己的组件
+#    （CommonComponentRegistrar / BarcodeRegistrar …），运行时用反射 new 出来。
+#    R8 看不到这次反射，release 包会把这些类的**无参构造函数**裁掉，于是：
+#
+#      W ComponentDiscovery: Could not instantiate com.google.mlkit.vision.barcode.internal.BarcodeRegistrar
+#      Caused by: java.lang.NoSuchMethodException: ...BarcodeRegistrar.<init>
+#
+#    表现是相机能开、预览正常，但扫码永远不回调 —— debug 包不做裁剪，所以只有 release 坏。
+proguard="$here/android/app/proguard-rules.pro"
+if [[ -f "$proguard" ]] && ! grep -q 'com.google.mlkit' "$proguard"; then
+  cat >> "$proguard" <<'EOF'
+
+# ML Kit 的组件是被反射实例化的（见 scripts/prepare-android.sh），R8 必须整包保留。
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode.** { *; }
+-keep class com.google.android.gms.internal.mlkit_common.** { *; }
+-dontwarn com.google.mlkit.**
+EOF
+  echo "ML Kit 的 keep 规则 -> proguard-rules.pro"
+else
+  echo "ML Kit 的 keep 规则已存在"
+fi

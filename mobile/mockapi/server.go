@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", s.guard(s.handleFile))
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", s.guard(s.handleMessage))
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.guard(s.handleStop))
+	mux.HandleFunc("DELETE /v1/sessions/{id}", s.guard(s.handleDeleteSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", s.guard(s.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", s.guard(s.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", s.guard(s.handlePermission))
@@ -246,6 +247,34 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 type providerReq struct {
 	Name string `json:"name"`
+}
+
+// handleDeleteSession 删一段会话。正在跑的那一轮拒绝（协议里 turn_running 那条），
+// 删掉之后广播 sessions_changed —— 列表不属于任何一条会话流。
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	sess, ok := s.byID[id]
+	if !ok {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	if sess.Session.Running {
+		s.mu.Unlock()
+		fail(w, http.StatusConflict, "turn_running")
+		return
+	}
+	delete(s.byID, id)
+	for i, x := range s.order {
+		if x == id {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			break
+		}
+	}
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "sessions_changed"})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
 }
 
 func (s *Server) handleProvider(w http.ResponseWriter, r *http.Request) {

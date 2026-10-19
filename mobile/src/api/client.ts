@@ -72,6 +72,10 @@ export const api = {
   stop: (c: Pairing, id: string) =>
     req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
 
+  /** 删一段对话。正在跑的那一轮会被拒绝（先停下再删），和桌面同一条规矩。 */
+  deleteSession: (c: Pairing, id: string) =>
+    req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   decide: (c: Pairing, id: string, toolId: string, decision: PermissionDecision) =>
     req<{ accepted: boolean }>(
       c,

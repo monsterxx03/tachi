@@ -19,7 +19,7 @@ import (
 
 func main() {
 	token := flag.String("token", "dev-token", "配对令牌（手机端填这个）")
-	listen := flag.String("listen", "0.0.0.0:8787", "监听地址")
+	listen := flag.String("listen", "0.0.0.0:9797", "监听地址")
 	flag.Parse()
 
 	srv := New(*token)

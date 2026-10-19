@@ -32,6 +32,8 @@ export interface MobileApi {
   decline: () => Promise<void>;
   setProvider: (name: string) => Promise<void>;
   setSkipApproval: (skip: boolean) => Promise<void>;
+  /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
+  deleteSession: (id: string) => Promise<void>;
 }
 
 export function useMobile(): MobileApi {
@@ -93,6 +95,23 @@ export function useMobile(): MobileApi {
 
     const sock = new MobileSocket(pairing, {
       onEvent: (ev) => {
+        if (ev.type === 'session_state') {
+          // 列表那一行的「在跑 / 在等」：没订阅那段会话的也要看到
+          setSessions((list) =>
+            list.map((s) =>
+              s.id === ev.sessionId ? { ...s, running: ev.running, waiting: ev.waiting } : s,
+            ),
+          );
+          return;
+        }
+        if (ev.type === 'sessions_changed') {
+          // 会话列表是广播的：桌面新建 / 删除、或另一台手机删了，这里重读一次
+          void api
+            .listSessions(pairing)
+            .then((r) => setSessions(r.sessions))
+            .catch(() => undefined);
+          return;
+        }
         if (ev.type === 'lagged') {
           void reload(openIdRef.current);
           return;
@@ -146,6 +165,8 @@ export function useMobile(): MobileApi {
 
   /** 回到前台时用：挂后台期间可能什么都没收到，回来先重读一遍 */
   const reloadCurrent = useCallback(async () => {
+    // 从后台回来先重建连接：锁屏期间那条多半已经死了，而它可能还报着 OPEN
+    socketRef.current?.forceReconnect();
     await reload(openIdRef.current);
     if (!pairing) return;
     try {
@@ -248,6 +269,20 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  /** 删一段对话。删除成功后服务端会广播 sessions_changed，列表靠那条事件回到一致。 */
+  const deleteSession = useCallback(
+    (id: string) =>
+      withError(async () => {
+        if (!pairing) return;
+        await api.deleteSession(pairing, id);
+        if (openIdRef.current === id) {
+          setOpenId(null);
+          setChat(emptyChat);
+        }
+      }),
+    [pairing, withError],
+  );
+
   return {
     ready,
     pairing,
@@ -269,6 +304,7 @@ export function useMobile(): MobileApi {
     decline,
     setProvider,
     setSkipApproval,
+    deleteSession,
   };
 }
 

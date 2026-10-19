@@ -43,6 +43,35 @@ export class MobileSocket {
     this.connect();
   }
 
+  /**
+   * 从后台回来时用：**重建**连接，而不是相信现有那条。
+   *
+   * 锁屏期间系统会挂起定时器，TCP 也可能是半开的 —— 这时 readyState 还报 OPEN，
+   * `ensureConnected` 见有对象就直接返回，于是界面永远停在「连不上」，只有杀掉重进才恢复。
+   * 重连一次很便宜，判断「这条还活着吗」不可靠。
+   */
+  forceReconnect(): void {
+    if (this.closed) return;
+    this.clearHeartbeat();
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      // 旧连接的回调会晚一步到达：onclose 里靠 ws 身份把它的重连逻辑挡掉
+      try {
+        old.close();
+      } catch {
+        // 已经关了
+      }
+    }
+    this.retry = 0;
+    this.reconnects += 1;
+    this.connect();
+  }
+
   /** 订阅一个会话；已经连着的话就换订阅 */
   subscribe(sessionId: string): void {
     this.sessionId = sessionId;
@@ -60,6 +89,7 @@ export class MobileSocket {
     this.ws = ws;
 
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       this.retry = 0;
       this.opts.onStatus?.('open');
       if (this.sessionId) this.send({ type: 'open', sessionId: this.sessionId });
@@ -68,6 +98,7 @@ export class MobileSocket {
     };
 
     ws.onmessage = (e: WebSocketMessageEvent) => {
+      if (this.ws !== ws) return;
       try {
         const ev = JSON.parse(String(e.data)) as ServerEvent;
         if ((ev as { type: string }).type === 'pong') return;
@@ -82,6 +113,8 @@ export class MobileSocket {
     };
 
     ws.onclose = () => {
+      // 被 forceReconnect 换掉的旧连接：它的 onclose 不算「连接断了」
+      if (this.ws !== ws) return;
       this.clearHeartbeat();
       this.ws = null;
       this.opts.onStatus?.('closed');

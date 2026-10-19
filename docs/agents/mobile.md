@@ -66,7 +66,7 @@ SDK 里放什么，分两类：
 启动模拟器：`"$ANDROID_HOME/emulator/emulator" -avd tachi-phone -gpu host &`，冷启动要一两分钟，等 `adb devices` 里出现 `device`、`adb shell getprop sys.boot_completed` 回 `1`。
 
 - **新建的 AVD 默认配置会把 SystemUI 拖到反复 ANR。** 默认是 `hw.gpu.enabled=no` + `hw.ramSize=2G`，宿主一有负载，模拟器就隔一会儿弹一次「System UI isn't responding」——它挡住界面，看着像 App 崩了，其实 App 在底下正常渲染。把 `~/.android/avd/<名>.avd/config.ini` 里 `hw.gpu.mode` 改成 `host`、`hw.ramSize` 提到 `4G`，启动时带 `-gpu host`，就没有了。真遇到又不想改配置，点 Wait 也能继续用。
-- **配对走 `adb reverse`，别用宿主的局域网 IP**：`adb reverse tcp:8787 tcp:8787`，配对页地址写 `http://127.0.0.1:8787`、令牌就是 `go run ./mockapi -token` 那个。模拟器绕去宿主 IP 是否通取决于 NAT，回环这条一定通。Metro 的 `8081` 同理。
+- **配对走 `adb reverse`，别用宿主的局域网 IP**：`adb reverse tcp:9797 tcp:9797`，配对页地址写 `http://127.0.0.1:9797`、令牌就是 `go run ./mockapi -token` 那个。模拟器绕去宿主 IP 是否通取决于 NAT，回环这条一定通。Metro 的 `8081` 同理。**mock 服务占 `9797`，真桌面占 `8787`**——两者可以同时开着，不必为了联调停掉另一个。
 
 **Maestro**（跑端到端流程用）不是包管理器装的：把官方的 `maestro.zip` 解到 `~/.local/maestro` 就有可执行的 `bin/maestro`（它只是几个 jar 加一个脚本；跑的时候 `JAVA_HOME` 要指向 17）。
 
@@ -107,10 +107,28 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
   `:react-native-webview:compileDebugJavaWithJavac > ClassNotFoundException: org.gradle.internal.compiler.java.IncrementalCompileTask`。
   这不是库坏了——9.4.1 的 `JdkTools` 去加载一个它自己已经删掉的包，而 Expo 自己的模块是 Kotlin、不走这条路径，所以只有第三方 Java 库会炸。9.5.1 修好了它；9.8.1 又会让 Expo 的 gradle 插件 Kotlin 编译失败。**换库、统一 AGP、关 fork 都试过，全无效**——那一串实验值多少钱就看这一条。
 - 两个配置**不要**回退成 app.json 里的裸字段（它们在 SDK 58 不生效）：允许明文 HTTP 要用 `expo-build-properties`，深浅色跟随系统要装 `expo-system-ui`。验证方式：生成出来的 `android/app/src/main/AndroidManifest.xml` 里应有 `android:usesCleartextTraffic="true"`。
+- **改了 `assets/icon.png` 之后必须重跑 `npx expo prebuild --platform android --no-install`**：图标是 prebuild 从 `app.json` 的 `icon` / `android.adaptiveIcon` 生成到 `android/app/src/main/res/mipmap-*` 的，换源文件不重新生成，装进去的还是旧图标（`android/` 是生成物，见上）。重跑后记得再跑 `scripts/prepare-android.sh`。
+- **release 包的 R8 会剪掉 ML Kit 的组件构造函数，表现是扫码永远不回调。** ML Kit 靠 `ComponentDiscovery` 反射 `new` 自己的 registrar，R8 看不到这次反射：
+  `W ComponentDiscovery: Could not instantiate com.google.mlkit.vision.barcode.internal.BarcodeRegistrar` /
+  `Caused by: java.lang.NoSuchMethodException: …BarcodeRegistrar.<init>`。
+  debug 包不裁剪，所以只有 release 坏，相机预览完全正常，很容易误判成「二维码没对准」。keep 规则由 `scripts/prepare-android.sh` 写进生成的 `proguard-rules.pro`（和 Gradle 版本同一处理方式）。排查同一类问题：`adb logcat | grep ComponentDiscovery`。
 - 构建产物：`android/app/build/outputs/apk/debug/app-debug.apk`。
-- **停 mock 服务别用 `lsof -ti:8787`**：那个命令列出的是**所有碰过这个端口**的进程，包括**连着它的模拟器** —— 它会把模拟器一起杀掉（表现是模拟器莫名其妙退出，系统崩溃报告里是 `qemu-system-aarch64` 的 SIGABRT）。用 `lsof -ti:8787 -sTCP:LISTEN` 只挑监听的那一个，或者干脆按名字 `pkill -f mockapi`。
+- **只给一台真机装的时候，别打四合一包**：默认 `assembleDebug` 会把 arm64-v8a / armeabi-v7a / x86 / x86_64 四份原生库都塞进去（约 152 MB，APK 178 MB，其中三分之二是这台机器用不上的）。真机是 arm64，用 `./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a`，包降到 70 MB 上下；模拟器要 x86_64，分开构建。**别改 `android/gradle.properties` 钉这个**——它属于生成目录，下一次 prebuild 就没了。
+- **真机优先走无线调试，USB 不一定通**（常见于线只供电、或平板插在集线器上）：设置 → 开发者选项 → 无线调试 → 「使用配对码配对设备」，然后 `adb pair <ip>:<配对端口>` 填码。**配对端口不是连接端口**——配对成功后用 `adb mdns services` 找到 `_adb-tls-connect._tcp` 那条的端口再 `adb connect <ip>:<端口>`；直接试 5555 会 Connection refused。之后照旧 `adb reverse tcp:8081 tcp:8081`（无线 adb 上也有效），`adb -s <ip:端口>` 指定设备。
+- **dev 包启动后白屏、随即退回桌面不是崩了**：debug APK 里没有 JS bundle，全靠 Metro。先确认 8081 上已经有 Metro（可能用户自己开着，别重复起），`adb reverse tcp:8081 tcp:8081`，然后 `am force-stop` + `am start -n dev.tachi.mobile/.MainActivity`。
+- **停 mock 服务别用 `lsof -ti:9797`**：那个命令列出的是**所有碰过这个端口**的进程，包括**连着它的模拟器** —— 它会把模拟器一起杀掉（表现是模拟器莫名其妙退出，系统崩溃报告里是 `qemu-system-aarch64` 的 SIGABRT）。用 `lsof -ti:9797 -sTCP:LISTEN` 只挑监听的那一个，或者干脆按名字 `pkill -f mockapi`。
 - **写界面要用 `react-native-safe-area-context` 的 `SafeAreaView`**，RN 自带的那个已弃用（运行时会弹警告条）。
 - **mermaid 随包发**（`assets/mermaid.min.txt`，5 MB 全量构建）。它停在 `assets/` 而不是模块里：`metro.config.js` 把 `txt` 加进 `assetExts`，否则 Metro 会把它当 JS 模块去执行。运行时用 `expo-asset` + `expo-file-system` 读成字符串注进 WebView——这样第一次画图也不依赖网络。
+
+## 界面
+
+- **正文的 markdown 是自己渲染的**：`src/ui/md.ts` 只解析模型真会写的那部分（标题、列表、引用、分隔线、表格、粗体/斜体/行内码/链接），`Markdown.tsx` 画成 RN 组件；围栏代码块与 mermaid 由 `Message.tsx` 先切走，不归它管。别引 `react-markdown`——那是渲染 DOM 的，手机上用不了。
+- **`<system-reminder>` 不进消息流**：桌面把它折成正文旁边一个小标记，手机上没人会点开，所以 `stripReminders` 直接抽掉，`role: 'reminder'` 整条不画。
+- **实时那一轮和历史记录必须用同一套组件**（`Message.tsx` 的 `ToolCard` / `Thinking`）。两边各画一套的后果是「正在跑的时候工具卡点不开、也没有参数，停下来切个会话又正常了」。
+- **键盘高度自己补**：SDK 58 是 edge-to-edge，manifest 里的 `adjustResize` 不再把窗口缩下来。`App.tsx` 监听 `keyboardDidShow` 给容器垫 `paddingBottom`，否则输入框整条躺在键盘底下。
+- 宽屏（≥768）侧栏可以收起，入口是对话 header 左上角那个菜单键。
+- **会话的增删是广播，不是某一段会话的流**：桌面新建 / 删除、手机删除都发 `sessions_changed`，客户端重读 `/v1/sessions`。手机上是「列表左滑露出删除按钮 → 原生确认框 → `DELETE /v1/sessions/{id}`」，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
+- **切后台回来要重建 WebSocket**（`MobileSocket.forceReconnect`）：锁屏期间定时器被挂起、连接可能半开，而 `readyState` 仍报 OPEN——只调 `ensureConnected` 的表现为「回来一直显示连不上，杀掉重进才好」。
 
 ## 验证
 

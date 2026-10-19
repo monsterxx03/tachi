@@ -1,7 +1,15 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { AppState, BackHandler, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import {
+  AppState,
+  BackHandler,
+  Keyboard,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AttachmentRef } from './src/api/types';
 import { api } from './src/api/client';
 import type { MobileApi } from './src/state/mobile';
@@ -32,12 +40,14 @@ function ChatPane({
   setShowInfo,
   openFile,
   setOpenFile,
+  onToggleList,
 }: {
   m: MobileApi;
   showInfo: boolean;
   setShowInfo: (v: boolean) => void;
   openFile: AttachmentRef | null;
   setOpenFile: (f: AttachmentRef | null) => void;
+  onToggleList?: () => void;
 }) {
   const { tokens: t } = useTheme();
   const inChat = Boolean(m.openId && m.chat.snapshot);
@@ -63,6 +73,7 @@ function ChatPane({
         live={m.chat.live}
         fileSource={(a) => (m.pairing && m.openId ? api.file(m.pairing, m.openId, a) : null)}
         onBack={m.close}
+        onToggleList={onToggleList}
         onDecide={(toolId, allow) => void m.decide(toolId, allow ? 'allow_once' : 'deny')}
         onAnswer={(_toolId, text) => {
           const q = m.chat.snapshot?.asks[0];
@@ -90,10 +101,24 @@ function Shell() {
   const { tokens: t, isDark } = useTheme();
   const m = useMobile();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const wide = width >= 768; // 平板：列表和对话并排
   const [showSettings, setShowSettings] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [openFile, setOpenFile] = useState<AttachmentRef | null>(null);
+  const [sideCollapsed, setSideCollapsed] = useState(false);
+  // 键盘高度自己算：SDK 58 是 edge-to-edge，adjustResize 不再把窗口缩下来，
+  // 不补这一段输入框就整条躺在键盘底下。
+  const [keyboard, setKeyboard] = useState(0);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   // Android 的返回键：先关掉打开的层，再退出一段对话，最后才让系统去退出 App
   useEffect(() => {
@@ -135,52 +160,58 @@ function Shell() {
       onOpen={(id) => void m.open(id)}
       onSettings={() => setShowSettings(true)}
       onRefresh={() => void m.refresh()}
+      onDelete={(id) => void m.deleteSession(id)}
     />
   );
 
   if (!m.ready) return <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top', 'bottom']} />;
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top', 'bottom']}>
-      <StatusBar style={isDark ? 'light' : 'dark'} />
-      {m.pairing && m.error ? <NoticeBar text={m.error} /> : null}
+    <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top']}>
+      <View style={[styles.root, { paddingBottom: keyboard > 0 ? keyboard : insets.bottom }]}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        {m.pairing && m.error ? <NoticeBar text={m.error} /> : null}
 
-      {!m.pairing ? (
-        <Pairing onPaired={m.pair} />
-      ) : showSettings ? (
-        <Settings
-          pairing={m.pairing}
-          conn={m.conn}
-          onBack={() => setShowSettings(false)}
-          onUnpair={() => {
-            setShowSettings(false);
-            void m.unpair();
-          }}
-        />
-      ) : wide ? (
-        <View style={styles.wide}>
-          <View style={[styles.wideSide, { borderRightColor: t.border, backgroundColor: t.sid }]}>{list}</View>
-          <View style={styles.wideMain}>
-            <ChatPane
-              m={m}
-              showInfo={showInfo}
-              setShowInfo={setShowInfo}
-              openFile={openFile}
-              setOpenFile={setOpenFile}
-            />
+        {!m.pairing ? (
+          <Pairing onPaired={m.pair} />
+        ) : showSettings ? (
+          <Settings
+            pairing={m.pairing}
+            conn={m.conn}
+            onBack={() => setShowSettings(false)}
+            onUnpair={() => {
+              setShowSettings(false);
+              void m.unpair();
+            }}
+          />
+        ) : wide ? (
+          <View style={styles.wide}>
+            {sideCollapsed ? null : (
+              <View style={[styles.wideSide, { borderRightColor: t.border, backgroundColor: t.sid }]}>{list}</View>
+            )}
+            <View style={styles.wideMain}>
+              <ChatPane
+                m={m}
+                showInfo={showInfo}
+                setShowInfo={setShowInfo}
+                openFile={openFile}
+                setOpenFile={setOpenFile}
+                onToggleList={() => setSideCollapsed((v) => !v)}
+              />
+            </View>
           </View>
-        </View>
-      ) : m.openId && m.chat.snapshot ? (
-        <ChatPane
-          m={m}
-          showInfo={showInfo}
-          setShowInfo={setShowInfo}
-          openFile={openFile}
-          setOpenFile={setOpenFile}
-        />
-      ) : (
-        list
-      )}
+        ) : m.openId && m.chat.snapshot ? (
+          <ChatPane
+            m={m}
+            showInfo={showInfo}
+            setShowInfo={setShowInfo}
+            openFile={openFile}
+            setOpenFile={setOpenFile}
+          />
+        ) : (
+          list
+        )}
+      </View>
     </SafeAreaView>
   );
 }

@@ -1,6 +1,16 @@
 import { Feather } from '@expo/vector-icons';
-import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  Alert,
+  Animated,
+  FlatList,
+  PanResponder,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import type { SessionSummary } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
@@ -29,6 +39,61 @@ function Badge({ text, tone, t }: { text: string; tone: 'mute' | 'amber' | 'live
   );
 }
 
+/** 左滑露出来的那一截：刚好放得下一个删除按钮 */
+const DELETE_WIDTH = 84;
+
+/**
+ * 一行可以左滑露出删除。
+ *
+ * 只在横向移动超过 8px 时接管手势 —— 轻点仍然落到里面的 Pressable 上，
+ * 否则点开一段对话这件事会被滑动手势吃掉。
+ */
+function SwipeRow({ children, onDelete }: { children: React.ReactNode; onDelete: () => void }) {
+  const { tokens: t } = useTheme();
+  const tx = useRef(new Animated.Value(0)).current;
+  const opened = useRef(false);
+
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderMove: (_e, g) => {
+        const base = opened.current ? -DELETE_WIDTH : 0;
+        tx.setValue(Math.max(-DELETE_WIDTH, Math.min(0, base + g.dx)));
+      },
+      onPanResponderRelease: (_e, g) => {
+        const open = (opened.current ? -DELETE_WIDTH : 0) + g.dx < -DELETE_WIDTH / 2;
+        opened.current = open;
+        Animated.spring(tx, {
+          toValue: open ? -DELETE_WIDTH : 0,
+          useNativeDriver: false,
+          bounciness: 0,
+        }).start();
+      },
+    }),
+  ).current;
+
+  return (
+    <View style={styles.swipeWrap}>
+      <View style={[styles.deleteLayer, { backgroundColor: t.redWash }]}>
+        <Pressable
+          onPress={() => {
+            Animated.spring(tx, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
+            opened.current = false;
+            onDelete();
+          }}
+          style={styles.deleteBtn}
+        >
+          <Feather name="trash-2" size={16} color={t.red} />
+          <Text style={{ color: t.red, fontSize: 11, marginTop: 3 }}>删除</Text>
+        </Pressable>
+      </View>
+      <Animated.View style={{ transform: [{ translateX: tx }], backgroundColor: t.sid }} {...pan.panHandlers}>
+        {children}
+      </Animated.View>
+    </View>
+  );
+}
+
 export function SessionList({
   sessions,
   currentId,
@@ -36,6 +101,7 @@ export function SessionList({
   onOpen,
   onSettings,
   onRefresh,
+  onDelete,
 }: {
   sessions: SessionSummary[];
   currentId: string | null;
@@ -43,6 +109,7 @@ export function SessionList({
   onOpen: (id: string) => void;
   onSettings: () => void;
   onRefresh: () => void;
+  onDelete: (id: string) => void;
 }) {
   const { tokens: t } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
@@ -91,25 +158,35 @@ export function SessionList({
           const selected = s.id === currentId;
           const badge = badgeOf(s);
           return (
-            <Pressable
-              onPress={() => onOpen(s.id)}
-              style={({ pressed }) => [
-                styles.row,
-                selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
-                !selected && pressed && { backgroundColor: t.wash },
-              ]}
+            <SwipeRow
+              onDelete={() =>
+                Alert.alert('删除这段对话？', s.title, [
+                  { text: '取消', style: 'cancel' },
+                  { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
+                ])
+              }
             >
-              <View style={styles.rowTop}>
-                <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
-                  {s.title}
+              <Pressable
+                onPress={() => onOpen(s.id)}
+                style={({ pressed }) => [
+                  styles.row,
+                  selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
+                  !selected && pressed && { backgroundColor: t.wash },
+                ]}
+              >
+                <View style={styles.rowTop}>
+                  {s.pinned ? <Feather name="bookmark" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
+                  <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
+                    {s.title}
+                  </Text>
+                  {badge ? <Badge {...badge} t={t} /> : null}
+                </View>
+                <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
+                  {s.projectName ? `${s.projectName} · ` : ''}
+                  {s.updatedAt}
                 </Text>
-                {badge ? <Badge {...badge} t={t} /> : null}
-              </View>
-              <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
-                {s.projectName ? `${s.projectName} · ` : ''}
-                {s.updatedAt}
-              </Text>
-            </Pressable>
+              </Pressable>
+            </SwipeRow>
           );
         }}
       />
@@ -128,7 +205,10 @@ const styles = StyleSheet.create({
   gear: { width: 34, height: 34, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
 
   listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
-  row: { borderRadius: 12, borderWidth: 1, borderColor: 'transparent', paddingTop: 12, paddingHorizontal: 12, paddingBottom: 11, marginVertical: 2 },
+  swipeWrap: { borderRadius: 12, overflow: 'hidden', marginVertical: 2 },
+  deleteLayer: { position: 'absolute', right: 0, top: 0, bottom: 0, width: DELETE_WIDTH },
+  deleteBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  row: { borderRadius: 12, borderWidth: 1, borderColor: 'transparent', paddingTop: 12, paddingHorizontal: 12, paddingBottom: 11 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: '600' },
   rowSub: { marginTop: 4, fontSize: 12 },
