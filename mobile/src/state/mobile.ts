@@ -23,7 +23,8 @@ export interface MobileApi {
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
   close: () => void;
-  send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<void>;
+  /** true = 服务端收下了；false 时输入框把文字还给读者 */
+  send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<boolean>;
   /** 回到前台时用：重读当前会话的快照与列表（App 挂后台期间可能什么都不知道） */
   reloadCurrent: () => Promise<void>;
   decide: (toolId: string, decision: 'allow_once' | 'deny') => Promise<void>;
@@ -175,12 +176,17 @@ export function useMobile(): MobileApi {
     }
   }, []);
 
+  // send answers whether the message actually went out. The composer needs that answer to
+  // keep the reader's words on a refusal: the server's reason is on screen (the banner), and a
+  // box that emptied itself leaves them retyping what it just explained.
   const send = useCallback(
-    (text: string, mode: 'send' | 'steer' | 'interrupt') =>
-      withError(async () => {
+    async (text: string, mode: 'send' | 'steer' | 'interrupt'): Promise<boolean> => {
+      let ok = false
+      await withError(async () => {
         const id = openIdRef.current;
-        if (!pairing || !id) return;
+        if (!pairing || !id) return
         await api.send(pairing, id, text, mode);
+        ok = true
         // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）
         setChat((st) =>
           st.snapshot
@@ -196,7 +202,9 @@ export function useMobile(): MobileApi {
               }
             : st,
         );
-      }),
+      })
+      return ok
+    },
     [pairing, withError],
   );
 

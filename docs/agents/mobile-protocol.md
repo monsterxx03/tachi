@@ -67,6 +67,7 @@
 | 待答项已被处理 | 409 `no_such_pending_request` | 已经在别处回答过了 |
 | 只读会话（子系统所有） | 409 `read_only` | 这段对话由别的任务占用 |
 | 节点任务正在执行 | 409 `held_by_task` | 有一项远端任务正在使用它 |
+| 这台电脑建不出 agent（还没配 provider） | 409 `agent_unavailable` | 这台电脑还没配好模型，先在电脑上配置 |
 
 ## WebSocket
 

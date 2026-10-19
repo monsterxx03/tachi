@@ -75,7 +75,7 @@ function ChatPane({
           if (f) setOpenFile(f);
         }}
         onSend={m.send}
-        onStop={() => m.send('', 'interrupt')}
+        onStop={() => void m.send('', 'interrupt')}
       />
     );
 

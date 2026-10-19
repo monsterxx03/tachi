@@ -77,7 +77,7 @@ function Composer({
 }: {
   running: boolean;
   waiting: string;
-  onSend: (text: string, mode: SendMode) => void;
+  onSend: (text: string, mode: SendMode) => Promise<boolean>;
   onStop: () => void;
 }) {
   const { tokens: t } = useTheme();
@@ -113,8 +113,11 @@ function Composer({
           onPress={() => {
             const v = text.trim();
             if (!v) return;
-            onSend(v, running ? 'steer' : 'send');
-            setText('');
+            // Only clear once the server took it: a refusal is explained by the banner, and
+            // taking the reader's words with it makes them retype what they were just told.
+            void onSend(v, running ? 'steer' : 'send').then((ok) => {
+              if (ok) setText('');
+            });
           }}
           style={({ pressed }) => [styles.sendBtn, { backgroundColor: pressed || !text.trim() ? t.accentStrong : t.accent }]}
         >
@@ -202,7 +205,7 @@ export function Chat({
   onOpenInfo: () => void;
   onOpenModels: () => void;
   onOpenFile: (id: string) => void;
-  onSend: (text: string, mode: SendMode) => void;
+  onSend: (text: string, mode: SendMode) => Promise<boolean>;
   onStop: () => void;
 }) {
   const { tokens: t } = useTheme();

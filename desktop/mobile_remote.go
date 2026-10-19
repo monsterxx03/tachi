@@ -86,7 +86,7 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 			if errors.Is(err, errMobileNoSession) {
 				return http.StatusNotFound, "no_session"
 			}
-			return http.StatusConflict, "load_failed"
+			return http.StatusConflict, "agent_unavailable"
 		}
 		switch d.startTurnFrom(id, text, originMobile) {
 		case "ok":
@@ -125,7 +125,7 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 				if errors.Is(err, errMobileNoSession) {
 					return http.StatusNotFound, "no_session"
 				}
-				return http.StatusConflict, "load_failed"
+				return http.StatusConflict, "agent_unavailable"
 			}
 		}
 		switch d.stopAndSendFrom(id, text, originMobile) {

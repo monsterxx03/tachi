@@ -130,6 +130,8 @@ export function messageOfError(e: unknown): string {
         return '这段对话由别的任务占用';
       case 'held_by_task':
         return '有一项远端任务正在使用它';
+      case 'agent_unavailable':
+        return '这台电脑还没配好模型，先在电脑上配置';
     }
     return `出错了（${e.code}）`;
   }

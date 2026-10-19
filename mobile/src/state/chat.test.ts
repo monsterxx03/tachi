@@ -131,6 +131,7 @@ describe('messageOfError —— 服务端拒绝的原因要原样变成人话', 
     expect(messageOfError(new ApiError(404, 'no_session'))).toBe('这段对话已经不在了');
     expect(messageOfError(new ApiError(409, 'turn_running'))).toBe('它正在跑；插话或打断？');
     expect(messageOfError(new ApiError(409, 'no_such_pending_request'))).toBe('已经在别处回答过了');
+    expect(messageOfError(new ApiError(409, 'agent_unavailable'))).toBe('这台电脑还没配好模型，先在电脑上配置');
     expect(messageOfError(new ApiError(409, 'read_only'))).toBe('这段对话由别的任务占用');
   });
 
