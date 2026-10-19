@@ -212,10 +212,10 @@ func (s *Server) snapshot(sessionID string) *Snapshot {
 	}
 	cp := sess.Snapshot
 	// 空就是空数组，不是 null —— Go 的 nil 切片会序列化成 null，客户端会当数组用
-	cp.Messages = append([]Message{}, sess.Snapshot.Messages...)
-	cp.Asks = append([]any{}, sess.Snapshot.Asks...)
-	cp.Attachments = append([]AttachmentRef{}, sess.Snapshot.Attachments...)
-	cp.Context.Parts = append([]ContextPart{}, sess.Snapshot.Context.Parts...)
-	cp.Workspace.Additional = append([]string{}, sess.Snapshot.Workspace.Additional...)
+	cp.Messages = append([]Message{}, sess.Messages...)
+	cp.Asks = append([]any{}, sess.Asks...)
+	cp.Attachments = append([]AttachmentRef{}, sess.Attachments...)
+	cp.Context.Parts = append([]ContextPart{}, sess.Context.Parts...)
+	cp.Workspace.Additional = append([]string{}, sess.Workspace.Additional...)
 	return &cp
 }

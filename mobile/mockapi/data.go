@@ -130,11 +130,9 @@ type session struct {
 func (s *session) append(m Message) Message {
 	m.Index = s.nextIndex
 	s.nextIndex++
-	s.Snapshot.Messages = append(s.Snapshot.Messages, m)
+	s.Messages = append(s.Messages, m)
 	return m
 }
-
-func newSession(m *session) *session { return m }
 
 // seed 造出几个能覆盖各种状态的会话：在跑、等你授权、等你回答、只读、空闲。
 func seed() (order []string, byID map[string]*session) {

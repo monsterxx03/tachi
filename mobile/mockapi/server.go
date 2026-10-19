@@ -290,10 +290,6 @@ func (s *Server) handleSkipApproval(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
 }
 
-type permReq struct {
-	Decision string `json:"decision"`
-}
-
 func (s *Server) handlePermission(w http.ResponseWriter, r *http.Request) {
 	sess := s.get(r.PathValue("id"))
 	if sess == nil {
