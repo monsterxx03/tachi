@@ -261,6 +261,9 @@ export type AgentStreamDeps = {
   applyToSession: (sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message, openIfMissing?: boolean) => void
   enqueueDelta: (sid: string, type: 'thinking' | 'text', delta: string) => void
   flushDeltas: () => void
+  // The transcript's steer splitter: another screen's interjection lands where the window's own
+  // queued steer would (after the tool work already shown, before the reply that continues).
+  injectSteerVisual: (sid: string, text: string, ts: string) => void
   refreshRunning: () => void
   // App-owned actions. All must be stable (useCallback) — they are effect dependencies.
   refreshProvider: () => void
@@ -274,7 +277,7 @@ export type AgentStreamDeps = {
 export function useAgentStream(deps: AgentStreamDeps) {
   const {
     currentId, updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
-    refreshProvider, answerSteer, clearAsk, onSessionTitle,
+    refreshProvider, answerSteer, clearAsk, onSessionTitle, injectSteerVisual,
   } = deps
 
   // A scheduled run has no composer to place its user bubble, so the backend's
@@ -295,6 +298,33 @@ export function useAgentStream(deps: AgentStreamDeps) {
     })
     return () => off?.()
   }, [updateSession])
+
+  // A message another SCREEN sent (the phone; the device's voice path speaks through the
+  // composer, so it arrives as a normal send). The window's own bubbles are drawn at submit
+  // time, never from an event — so origin === 'desktop' is skipped, and without this the window
+  // showed only the assistant's reply to a question it never displayed.
+  useEffect(() => {
+    const off = Events.On('agent:user_message', (event) => {
+      const d = event.data as {
+        sessionId?: string; text?: string; displayText?: string; steer?: boolean; origin?: string
+      }
+      if (!d?.sessionId || d.origin === 'desktop') return
+      const text = d.displayText || d.text || ''
+      if (!text) return
+      const now = Date.now()
+      const ts = new Date(now).toISOString()
+      if (d.steer) {
+        // An interjection splits the live segment exactly like the window's own queued steer.
+        injectSteerVisual(d.sessionId, text, ts)
+        return
+      }
+      updateSession(d.sessionId, (list) => [
+        ...list,
+        { id: `u-${now}-echo`, role: 'user', text, ts },
+      ])
+    })
+    return () => off?.()
+  }, [injectSteerVisual, updateSession])
 
   useEffect(() => {
     const off = Events.On('agent:tool', (event) => {

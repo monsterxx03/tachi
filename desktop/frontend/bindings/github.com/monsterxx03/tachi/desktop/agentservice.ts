@@ -707,6 +707,9 @@ export function RefreshPeerBoard(): $CancellablePromise<$models.PeerBoardVO> {
  * Dropping them is the other half of "invalidate": a paired phone holds its socket open, and
  * a token replaced underneath it would otherwise keep working for as long as that socket
  * lived — which is exactly the phone the user is trying to lock out.
+ * It answers "ok" or the reason it could not, like the other bindings: the value itself is
+ * the CARD's to re-read (GetMobilePairing), and a caller that had to tell a token apart from a
+ * refusal message would be guessing.
  */
 export function RegenerateMobileToken(): $CancellablePromise<string> {
     return $Call.ByID(238092313);

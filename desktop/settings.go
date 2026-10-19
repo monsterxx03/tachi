@@ -890,6 +890,13 @@ type SettingsSchemaVO struct {
 	// about the group, and the groups are declared here (settingsCategoryOrder), so the page is
 	// told rather than left to match on a name.
 	MCPServerEditor string `json:"mcpServerEditor"`
+	// MobilePairing is the CATEGORY the page draws the phone pairing card in.
+	//
+	// Same reasoning as MCPServerEditor: the card is not a config leaf (its payload is a
+	// credential that lives in ~/.tachi/mobile.json, and its data comes from a binding rather
+	// than from the form), but WHICH GROUP it belongs to is a claim about the groups, and those
+	// are declared here. Empty would mean "this build has no such card".
+	MobilePairing string `json:"mobilePairing"`
 }
 
 // ListEdits is config's own vocabulary for the structural half of a save, aliased here so this file
@@ -1024,6 +1031,7 @@ func (s *AgentService) GetSettingsSchema() *SettingsSchemaVO {
 		Lists:           settingLists(cfg),
 		FileSources:     itemFileSources(cfg),
 		MCPServerEditor: catMCP,
+		MobilePairing:   catExtend,
 	}
 }
 

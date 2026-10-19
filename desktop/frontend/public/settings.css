@@ -549,3 +549,21 @@
 .mcp-check { flex-direction: row; align-items: center; gap: 7px; font-size: 13px; color: var(--text-dim); }
 .mcp-form-actions { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
 .mcp-form-actions .btn { padding: 4px 14px; font-size: 13px; }
+
+/* ── 手机配对 ─────────────────────────────────────────────────────────────── */
+/* 不是一行配置：地址与令牌来自 mobile.json（一份凭据文件），二维码是那条 payload 的渲染。
+   所以它跟 MCP 编辑器一样是一块自己拿数据的卡片，而不是 SaveSettings 的一个叶子。 */
+.mobile-pair { display: grid; gap: 10px; margin-top: 8px; }
+.mobile-pair-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.mobile-pair-label { font-size: 13px; color: var(--text-faint); }
+.mobile-pair-value {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 13px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mobile-pair-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mobile-pair-qr { display: flex; gap: 16px; align-items: flex-start; margin-top: 2px; }
+.mobile-pair-qr img { width: 168px; height: 168px; border-radius: 8px; background: #fff; padding: 6px; }
+.mobile-pair-qr-hint { font-size: 12.5px; line-height: 1.6; color: var(--text-faint); max-width: 320px; }
+.mobile-pair-warn { font-size: 12.5px; line-height: 1.6; color: var(--amber); }
+.mobile-pair-ok { font-size: 12.5px; color: var(--accent-2); }

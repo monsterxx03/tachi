@@ -2398,6 +2398,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   useAgentStream({
     currentId,
     updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
+    injectSteerVisual,
     refreshProvider, answerSteer: composer.answerSteer, clearAsk: composer.clearAsk,
     onSessionTitle: setSessionTitle,
   })

@@ -62,6 +62,34 @@
   const wantCats = ['通用', '模型', '工具与权限', 'MCP', '会话与上下文', '扩展能力', '高级']
   smoke.check('左栏列出全部分组，顺序与后端一致', cats.join('|') === wantCats.join('|'), cats.join(' | '))
 
+  // ── 手机配对卡：另一块"不是配置叶子"的内容 ────────────────────────────────
+  // 它归哪个分组由后端说（schema.mobilePairing），令牌来自自己的文件、不是 config.yaml。
+  // 沙箱里 mobile.enabled 是 false，所以卡在、但它说的是"接口关着"，而令牌已经按需生成。
+  const extendCat = catByName('扩展能力')
+  if (extendCat) {
+    smoke.click(extendCat)
+    const pairCard = await smoke.waitFor('.mobile-pair-block', '「扩展能力」里出现手机配对卡')
+    smoke.check('手机配对卡画在后端点名的分组里', !!pairCard, '')
+    if (pairCard) {
+      const warn = smoke.text('.mobile-pair-warn')
+      smoke.check('卡片写明这是局域网明文、拿到令牌就能执行命令',
+        warn.indexOf('明文') >= 0 && warn.indexOf('令牌') >= 0, warn.slice(0, 80))
+      smoke.check('沙箱里接口是关的，卡片说出来',
+        smoke.text('.mobile-pair-block').indexOf('移动接口现在是关闭的') >= 0,
+        smoke.text('.mobile-pair-block').slice(0, 80))
+      // 第二个 .mobile-pair-value 才是令牌（第一个是地址）。
+      const values = smoke.qa('.mobile-pair-value')
+      const tokenText = values[1] ? smoke.text(values[1]) : ''
+      smoke.check('令牌默认是掩码（共享屏幕时看不到值）', tokenText.indexOf('•') >= 0, tokenText || '(没有令牌行)')
+    }
+    const backToModel = catByName('模型')
+    if (!backToModel) return smoke.fail('切回「模型」分组', '')
+    smoke.click(backToModel)
+    if (!(await smoke.waitFor('.set-elem', '回到模型组'))) return smoke.finish()
+  } else {
+    smoke.check('左栏有「扩展能力」分组', false, cats.join(' | '))
+  }
+
   // ── 配置列表：一个 list item 是一张卡片 ──────────────────────────────────
   const modelCat = catByName('模型')
   if (!modelCat) return smoke.fail('左栏有「模型」', cats.join(' | '))

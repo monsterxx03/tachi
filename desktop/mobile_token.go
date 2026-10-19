@@ -172,6 +172,9 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 // Dropping them is the other half of "invalidate": a paired phone holds its socket open, and
 // a token replaced underneath it would otherwise keep working for as long as that socket
 // lived — which is exactly the phone the user is trying to lock out.
+// It answers "ok" or the reason it could not, like the other bindings: the value itself is
+// the CARD's to re-read (GetMobilePairing), and a caller that had to tell a token apart from a
+// refusal message would be guessing.
 func (s *AgentService) RegenerateMobileToken() string {
 	token, err := writeNewMobileToken()
 	if err != nil {
@@ -180,7 +183,7 @@ func (s *AgentService) RegenerateMobileToken() string {
 	if m := s.desk.mobileServer(); m != nil {
 		m.setToken(token)
 	}
-	return token
+	return "ok"
 }
 
 // mobilePairingURL turns a listen address into one a phone can dial: the port survives, the

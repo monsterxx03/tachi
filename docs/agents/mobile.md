@@ -141,4 +141,5 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - **线上只走投影**（`mobile_events.go`）：`Messages` 与完整工具输出不上线，工具结果截到 2 KiB，旁路运行（`/review`、`/commit`）与对话一样被 lane 挡住。
 - **背压是丢连接，不是等**：每条连接 256 条事件的队列，满了发 `lagged` 再关；最多 16 条连接。`ask_answered` 是唯一的广播（它可能属于任何会话），其余只发给订阅了那个会话的连接。
 - **附件只认 `SendFile` 的记录**：`attachmentId` 就是那次工具调用的 id，下载端点从不接受路径；相对路径按**那次调用所属会话**的根目录解析。
-- **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。
+- **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。桌面那一半的监听在 `agentEvents.ts`（`useAgentStream`）：非 `desktop` 的 origin 追加气泡，`steer` 的走 `injectSteerVisual`（切开正在流的那一段）。**这个回声没有冒烟场景**——驱动没法扮演另一块屏；改它只能靠单测与手验。
+- **配对卡不是配置叶子**：`SettingsSchemaVO.MobilePairing` 只回答「画在哪个分组」（`catExtend`），卡片自己的数据来自 `GetMobilePairing` 这个绑定，二维码渲染的是后端给的 `payload`（手机端 `qr.ts` 解析同一个形状，两边不得各拼一份）。令牌默认掩码，`RegenerateMobileToken` 返回 `ok` 或原因，卡片换新后重新读一次。

@@ -4,6 +4,7 @@ import type { SettingFieldVO, SettingListVO, SettingsPreviewVO, SettingsSchemaVO
 import { Caret, EyeIcon } from './components'
 import { DiffLines } from './diff'
 import { MCPServersEditor } from './mcpeditor'
+import { MobilePairingCard } from './mobilepairing'
 import { IS_MAC } from './platform'
 
 // The settings page: every editable leaf of the config, grouped, one input each.
@@ -848,6 +849,10 @@ export function SettingsPage({ onBack, onSaved }: { onBack: () => void; onSaved?
               knows no keys (see the file's opening comment). It writes mcp.json, not config.yaml,
               so it stays out of the batch below. */}
           {!loadError && schema && shown === schema.mcpServerEditor ? <MCPServersEditor /> : null}
+
+          {/* The phone pairing card: also not a config leaf (its token is a credential in its
+              own file), drawn in the group the BACKEND names — see schema.mobilePairing. */}
+          {!loadError && schema && shown === schema.mobilePairing ? <MobilePairingCard /> : null}
         </div>
 
         {/* The preview: what 保存 would write, as a diff of the generated config.yaml. It sits

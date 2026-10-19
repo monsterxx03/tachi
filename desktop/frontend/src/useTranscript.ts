@@ -140,9 +140,15 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
       for (let i = list.length - 1; i >= 0; i--) {
         if (list[i].role === 'assistant' && list[i].running) { ai = i; break }
       }
-      if (ai < 0) return list
-      const seg = list[ai]
       const now = Date.now()
+      if (ai < 0) {
+        // Nothing is streaming to split — the turn is over, or the frontend has not placed a
+        // placeholder for it (a steer accepted on a session this window never opened). The
+        // message still belongs at the end: dropping it would make the phone's interjection
+        // invisible here while the reply to it arrives.
+        return [...list, { id: `u-${now}-steer`, role: 'user', text, ts, steer: true }]
+      }
+      const seg = list[ai]
       // steer: the bubble is an interjection, not a turn's prompt — the rewind menu
       // reads this to refuse it by name instead of quietly undoing the whole turn.
       const u: Message = { id: `u-${now}-steer`, role: 'user', text, ts, steer: true }

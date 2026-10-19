@@ -1824,6 +1824,16 @@ export interface SettingsSchemaVO {
      * told rather than left to match on a name.
      */
     "mcpServerEditor": string;
+
+    /**
+     * MobilePairing is the CATEGORY the page draws the phone pairing card in.
+     * 
+     * Same reasoning as MCPServerEditor: the card is not a config leaf (its payload is a
+     * credential that lives in ~/.tachi/mobile.json, and its data comes from a binding rather
+     * than from the form), but WHICH GROUP it belongs to is a claim about the groups, and those
+     * are declared here. Empty would mean "this build has no such card".
+     */
+    "mobilePairing": string;
 }
 
 /**
