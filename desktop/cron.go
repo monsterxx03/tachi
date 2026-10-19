@@ -762,6 +762,11 @@ func (d *desktopApp) cronToolTarget(sessionID string) tools.CronTarget {
 	return tools.CronTarget{
 		Type: cron.TargetTypeDesktop,
 		ID:   func() string { return logical },
+		// The same logical id is what a job's target carries, so the tool can
+		// tell the model a job writes here instead of leaving it to compare the
+		// target id with the (post-compaction, different) session id.
+		SelfID: func() string { return logical },
+
 		Matches: func(j *cron.Job) bool {
 			if j.TargetType != cron.TargetTypeDesktop || j.Desktop == nil {
 				return false

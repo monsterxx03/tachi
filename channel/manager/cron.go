@@ -52,6 +52,9 @@ func (m *Manager) newThreadCronTool(threadID string) *tools.CronTool {
 		ID: func() string {
 			return threadID
 		},
+		SelfID: func() string {
+			return threadID
+		},
 		Matches: func(j *cron.Job) bool {
 			return (j.TargetType == "" || j.TargetType == cron.TargetTypeChannel) &&
 				j.TargetThreadID == threadID

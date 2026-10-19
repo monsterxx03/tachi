@@ -32,6 +32,14 @@ type CronTarget struct {
 	// logical conversation id. It is called at create time and as CreatedBy.
 	ID func() string
 
+	// SelfID, when set, is the id this conversation has as a job TARGET (the
+	// value ID is written as). describeTarget labels a job whose destination
+	// equals it "this conversation", so the model does not have to reconcile
+	// the target id with the session id in its own prompt: on the desktop the
+	// target is the LOGICAL conversation id, which survives compaction and
+	// therefore need not equal the session the turn is running in.
+	SelfID func() string
+
 	// Matches decides which jobs `list` shows. A desktop caller sees jobs that
 	// write into this conversation and jobs it created (a dedicated one).
 	Matches func(*cron.Job) bool
@@ -266,7 +274,7 @@ func (t *CronTool) handleCreate(params cronArgs) (string, error) {
 	}
 	t.changed()
 
-	return formatJobCreated(created), nil
+	return t.formatJobCreated(created), nil
 }
 
 func (t *CronTool) handleGet(params cronArgs) (string, error) {
@@ -282,7 +290,7 @@ func (t *CronTool) handleGet(params cronArgs) (string, error) {
 		return fmt.Sprintf("❌ Job %q not found.", params.ID), nil
 	}
 
-	return formatJobDetail(job), nil
+	return t.formatJobDetail(job), nil
 }
 
 // allowed scopes every by-id action to the conversation this tool belongs to.
@@ -337,7 +345,7 @@ func (t *CronTool) handleUpdate(params cronArgs) (string, error) {
 	}
 	t.changed()
 
-	return "✅ Job updated.\n\n" + formatJobDetail(updated), nil
+	return "✅ Job updated.\n\n" + t.formatJobDetail(updated), nil
 }
 
 func (t *CronTool) handleDelete(params cronArgs) (string, error) {
@@ -412,18 +420,27 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 
 // describeTarget is the tool-facing description of a job's destination. It is
 // deliberately not a session TITLE: the tool runs on the model side, where the
-// id is the stable fact.
-func describeTarget(job *cron.Job) string {
+// id is the stable fact. A destination that equals SelfID is marked as this
+// very conversation — see the field's comment for why the id can differ from
+// the session id the model was told about.
+func (t *CronTool) describeTarget(job *cron.Job) string {
 	if job.TargetType == cron.TargetTypeDesktop {
 		if job.Desktop == nil {
 			return "desktop"
 		}
 		if job.Desktop.SessionID != "" {
-			return "desktop conversation " + job.Desktop.SessionID
+			return "desktop conversation " + job.Desktop.SessionID + t.selfSuffix(job.Desktop.SessionID)
 		}
 		return "a new desktop conversation (created on the first run)"
 	}
-	return "channel thread " + job.TargetThreadID
+	return "channel thread " + job.TargetThreadID + t.selfSuffix(job.TargetThreadID)
+}
+
+func (t *CronTool) selfSuffix(targetID string) string {
+	if targetID == "" || t.target.SelfID == nil || t.target.SelfID() != targetID {
+		return ""
+	}
+	return " (this conversation)"
 }
 
 func formatJobSummary(job *cron.Job) string {
@@ -467,7 +484,7 @@ func formatJobSummary(job *cron.Job) string {
 	return sb.String()
 }
 
-func formatJobDetail(job *cron.Job) string {
+func (t *CronTool) formatJobDetail(job *cron.Job) string {
 	var sb strings.Builder
 
 	status := "Active"
@@ -488,7 +505,7 @@ func formatJobDetail(job *cron.Job) string {
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: %s\n", describeTarget(job))
+	fmt.Fprintf(&sb, "- Target: %s\n", t.describeTarget(job))
 	if job.Notify == cron.NotifyWhenRelevant {
 		sb.WriteString("- Notify: when_relevant (suppresses if nothing new)\n")
 	}
@@ -509,7 +526,7 @@ func formatJobDetail(job *cron.Job) string {
 	return sb.String()
 }
 
-func formatJobCreated(job *cron.Job) string {
+func (t *CronTool) formatJobCreated(job *cron.Job) string {
 	var sb strings.Builder
 	typeLabel := "recurring cron job"
 	if job.Type == cron.JobTypeOneshot {
@@ -524,7 +541,7 @@ func formatJobCreated(job *cron.Job) string {
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: %s\n", describeTarget(job))
+	fmt.Fprintf(&sb, "- Target: %s\n", t.describeTarget(job))
 
 	if job.Timezone != "" {
 		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)

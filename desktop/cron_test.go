@@ -174,6 +174,29 @@ func TestCronToolTargetBindsTheCurrentConversation(t *testing.T) {
 	}))
 }
 
+// A job belongs to the CONVERSATION, whose id survives compaction; the tool
+// must also recognize that id as the conversation it is in, or the model reads
+// the target id, compares it with its (newer) session id and concludes the job
+// went somewhere else.
+func TestCronToolTargetKeepsTheConversationIDAcrossCompaction(t *testing.T) {
+	d, store := cronTestApp(t)
+	parent := addSession(t, store, &session.Session{ID: "p1", Title: "对话"})
+	addSession(t, store, &session.Session{
+		ID: "c1", Title: "对话", LogicalID: "p1", CompactedParentID: "p1",
+	})
+	parent.CompactedChildID = "c1"
+	require.NoError(t, store.UpdateMeta(parent))
+
+	target := d.cronToolTarget("c1")
+	assert.Equal(t, "p1", target.ID(), "a job belongs to the conversation, not one page of it")
+	require.NotNil(t, target.SelfID)
+	assert.Equal(t, "p1", target.SelfID(), "the running page must still name the conversation as its own")
+
+	job := &cron.Job{TargetType: cron.TargetTypeDesktop}
+	require.NoError(t, target.Prepare(job, "session"))
+	assert.Equal(t, "p1", job.Desktop.SessionID)
+}
+
 func TestCronHandlerReloadsTheJobItWasGiven(t *testing.T) {
 	d, _ := cronTestApp(t)
 	sched := cron.NewScheduler(cron.SchedulerConfig{

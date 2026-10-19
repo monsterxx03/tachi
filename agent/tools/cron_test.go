@@ -64,3 +64,37 @@ func TestCronToolScopesByIDActionsToItsConversation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "updated", updated.Prompt)
 }
+
+// A job that writes into the calling conversation must SAY so. On the desktop
+// its target id is the logical conversation id, which stops equalling the
+// session id the moment that conversation is compacted — without the label the
+// model reads a foreign id and may conclude the job went elsewhere.
+func TestDescribeTargetMarksTheCurrentConversation(t *testing.T) {
+	tool := NewCronTool(nil, CronTarget{
+		Type:   cron.TargetTypeDesktop,
+		ID:     func() string { return "logical-1" },
+		SelfID: func() string { return "logical-1" },
+	})
+
+	self := &cron.Job{TargetType: cron.TargetTypeDesktop,
+		Desktop: &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: "logical-1"}}
+	assert.Equal(t, "desktop conversation logical-1 (this conversation)", tool.describeTarget(self))
+
+	other := &cron.Job{TargetType: cron.TargetTypeDesktop,
+		Desktop: &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: "logical-2"}}
+	assert.Equal(t, "desktop conversation logical-2", tool.describeTarget(other))
+
+	pending := &cron.Job{TargetType: cron.TargetTypeDesktop,
+		Desktop: &cron.DesktopTarget{Mode: cron.DesktopModeNew}}
+	assert.Equal(t, "a new desktop conversation (created on the first run)", tool.describeTarget(pending))
+
+	thread := &cron.Job{TargetType: cron.TargetTypeChannel, TargetThreadID: "t1"}
+	assert.Equal(t, "channel thread t1", tool.describeTarget(thread), "a desktop tool must not claim a thread")
+
+	ch := NewCronTool(nil, CronTarget{
+		Type:   cron.TargetTypeChannel,
+		ID:     func() string { return "t1" },
+		SelfID: func() string { return "t1" },
+	})
+	assert.Equal(t, "channel thread t1 (this conversation)", ch.describeTarget(thread))
+}

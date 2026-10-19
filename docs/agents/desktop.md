@@ -255,6 +255,7 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 
 - **调度器住在应用进程里，两个入口各管自己那类任务。** channel 与 desktop 共用 `~/.tachi/crons.json`，所以每个 `Scheduler` 构造时都带一个 `Owns` 过滤器：channel 只调度 `TargetType` 为空或 `channel` 的任务，desktop 只调度 `desktop`。少了这一层，同一个任务会被两个进程各跑一遍。`cron.Store` 的写路径（`Create/Update/Delete/UpdateFunc`）在进程内锁之外还拿一把 `pkg/flock` 的文件锁，因为两个进程都会改这个文件。
 - **一条任务绑定的是对话，不是某一页会话。** `DesktopTarget.SessionID` 存 `session.Session.LogicalConversationID()`；`resolveCronTarget` 扫会话列表，取 `logical id` 匹配且 `CompactedChildID == ""` 的叶子。压缩把对话搬到子会话之后，下一次触发自动写进子会话；**不要**去搬 `ThreadID` 或重建任务（那是 channel 的 `FindByThreadID` 需要的，desktop 没有这个索引）。
+- **工具回话时必须把「目标就是你所在的对话」说出来。** `CronTarget.SelfID` 与 `ID` 同为这条对话的逻辑 id；`describeTarget` 在任务的 `Desktop.SessionID` 等于它时渲染 `(this conversation)` 后缀。压缩之后 session id 与逻辑 id 不同，而模型手里只有自己 prompt 里的 session id，一个比对不上的裸 id 会被读成「投到了别的会话」——这足以让它删掉刚建对的任务，所以是行为，不是文案。
 - **两种回复方式最终都是一种。** 「在这个会话里继续」直接写 `SessionID`；「新建一个专属会话」的 `Mode` 是 `new`、`SessionID` 空，第一次运行时 `createCronSession` 建会话、发 `agent:sessions_changed`，再用 `BindDesktopSession` 把 `SessionID/Mode=session` **只改目标字段**地写回任务（`UpdateFunc`，不碰用户同时编辑的计划/提示词）。绑定写失败就删掉刚建的会话、本次不跑，绝不留下任务不知道的孤儿会话。创建后的专属会话就是普通会话，标题是任务名。
 - **⚠ 引擎的闭包捕获的是「加条目时」的任务副本，而首次绑定只改文件。** 所以 handler 的第一件事是 `freshCronJob` 从 store 重读；拿旧副本会看到 `Mode=new`、`SessionID` 空，于是**每次触发都新建一个专属会话**。`TestCronHandlerReloadsTheJobItWasGiven` 钉住它。同样的道理：按 id 更新 prompt 但不换计划的任务不会重排条目，旧副本里的 prompt 也是过期的。
 - **`Cron` 工具的 `list` 和所有按 id 的动作都过同一个 `Matches`**：桌面侧是「目标是这条对话」或 `CreatedBy` 是这条对话。只过滤 `list` 会让模型拿一个见过的 id 去改/删另一条对话的任务；越界的 id 一律读作「not found」。
