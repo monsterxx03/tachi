@@ -1,5 +1,6 @@
 import type {
   AttachmentRef,
+  Panels,
   PermissionDecision,
   ProjectRef,
   SendMode,
@@ -96,6 +97,10 @@ export const api = {
 
   /** 新建会话时可选的项目 */
   projects: (c: Pairing) => req<{ projects: ProjectRef[] }>(c, '/v1/projects'),
+
+  /** 这段对话的三个只读面板（MCP / agent / 定时任务） */
+  panels: (c: Pairing, id: string) =>
+    req<{ panels: Panels }>(c, `/v1/sessions/${encodeURIComponent(id)}/panels`),
 
   decide: (c: Pairing, id: string, toolId: string, decision: PermissionDecision) =>
     req<{ accepted: boolean }>(

@@ -65,6 +65,7 @@ function ChatPane({
         onClose={() => setShowInfo(false)}
         onPickModel={(name) => void m.setProvider(name)}
         onToggleSkip={(skip) => void m.setSkipApproval(skip)}
+        loadPanels={m.loadPanels}
       />
     );
 
@@ -109,6 +110,7 @@ function Shell() {
   const wide = width >= 768; // 平板：列表和对话并排
   const [showSettings, setShowSettings] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [addingDevice, setAddingDevice] = useState(false);
   const [creating, setCreating] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [openFile, setOpenFile] = useState<AttachmentRef | null>(null);
@@ -137,6 +139,10 @@ function Shell() {
         setShowInfo(false);
         return true;
       }
+      if (addingDevice) {
+        setAddingDevice(false);
+        return true;
+      }
       if (showNew) {
         setShowNew(false);
         return true;
@@ -152,7 +158,7 @@ function Shell() {
       return false;
     });
     return () => sub.remove();
-  }, [openFile, showInfo, showNew, showSettings, m]);
+  }, [openFile, showInfo, showNew, showSettings, addingDevice, m]);
 
   // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态
   useEffect(() => {
@@ -196,10 +202,18 @@ function Shell() {
     <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top']}>
       <View style={[styles.root, { paddingBottom: keyboard > 0 ? keyboard : insets.bottom }]}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
-        {m.pairing && m.error ? <NoticeBar text={m.error} /> : null}
+        {/* 配对那一屏自己有错误位；把上一台的连接错误压在它上面只会吓人一跳 */}
+        {m.pairing && m.error && !addingDevice && !showNew ? <NoticeBar text={m.error} /> : null}
 
-        {!m.pairing ? (
-          <Pairing onPaired={m.pair} />
+        {!m.pairing || addingDevice ? (
+          <Pairing
+            onPaired={(p, label) => {
+              // 加完一台就回设置页：留在配对上会让人以为没成功
+              setAddingDevice(false);
+              void m.pair(p, label);
+            }}
+            onClose={m.pairing ? () => setAddingDevice(false) : undefined}
+          />
         ) : showNew ? (
           <NewSession
             projects={m.projects}
@@ -210,7 +224,15 @@ function Shell() {
         ) : showSettings ? (
           <Settings
             pairing={m.pairing}
+            devices={m.devices}
+            activeDevice={m.activeDevice}
             conn={m.conn}
+            onSwitchDevice={(i) => {
+              setShowSettings(false);
+              void m.switchDevice(i);
+            }}
+            onRemoveDevice={(i) => void m.removeDevice(i)}
+            onAddDevice={() => setAddingDevice(true)}
             onBack={() => setShowSettings(false)}
             onUnpair={() => {
               setShowSettings(false);

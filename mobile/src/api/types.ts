@@ -112,6 +112,57 @@ export interface ContextInfo {
   parts: { label: string; tokens: number }[];
 }
 
+/** 三个只读面板：这段对话能用的 MCP、可以委派过去的 agent、定时任务。 */
+export interface Panels {
+  mcp: MCPPanelRow[];
+  agents: AgentPanel;
+  cron: CronPanelRow[];
+}
+
+export interface MCPPanelRow {
+  name: string;
+  type: string;
+  connected: boolean;
+  /** 这台电脑上这个 server 要先去授权 */
+  needsAuth: boolean;
+  /** 这段对话已经载入的工具数（工具搜索下可能一个都没载入） */
+  loaded: number;
+  /** 这个 server 一共提供多少工具 */
+  tools: number;
+}
+
+export interface AgentPanel {
+  peers: AgentPanelRow[];
+  checkedAt: string;
+  /** false = 还没问过任何节点，界面要说出来，而不是画一个空的「没有节点」 */
+  anyChecked: boolean;
+}
+
+export interface AgentPanelRow {
+  name: string;
+  label: string;
+  url: string;
+  note: string;
+  /** 最近一次探测的结论（同一批文案给桌面那份面板用） */
+  reach: string;
+  skills: string[];
+  err: string;
+}
+
+export interface CronPanelRow {
+  id: string;
+  name: string;
+  scheduleText: string;
+  status: string;
+  /** session / pending / missing */
+  targetKind: string;
+  targetTitle: string;
+  nextRun: string;
+  lastRunStatus: string;
+  lastRunError: string;
+  running: boolean;
+}
+
 /** 打开一段对话时先给的那一份完整快照；之后才接增量。 */
 export interface Snapshot {
   session: SessionSummary;

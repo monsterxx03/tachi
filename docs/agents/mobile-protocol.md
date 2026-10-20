@@ -53,6 +53,7 @@
 | POST | `/v1/sessions/{id}/permissions/{toolId}` | `{decision}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/questions` | `{answers}` 或 `{decline: true}` | `{accepted: true}` |
 | GET | `/v1/sessions/{id}/files/{attachmentId}` | — | 文件本身 |
+| GET | `/v1/sessions/{id}/panels` | — | `{panels: Panels}`，MCP / agent / 定时任务三个只读面板 |
 
 `mode` 是 `send` / `steer` / `interrupt`；`decision` 是 `allow_once` / `deny`。
 
@@ -137,6 +138,13 @@ Message         { index, role, content, displayContent?, timestamp?, iteration?,
                   toolName?, toolCallId?, args?, title?, toolResult?, isError?, thinking? }
                 role ∈ user / assistant / tool_call / tool_result / reminder
                 index 是它在会话记录文件里的绝对位置 —— 翻页游标就是它
+Panels          { mcp:[{name, type, connected, needsAuth, loaded, tools}],
+                  agents:{peers:[{name, label, url, note, reach, skills[], err}], checkedAt, anyChecked},
+                  cron:[{id, name, scheduleText, status, targetKind, targetTitle,
+                         nextRun, lastRunStatus, lastRunError, running}] }
+                mcp.loaded / mcp.tools 是「这段对话载入几个 / 这个 server 一共几个」
+                agents.anyChecked=false 表示还没问过任何节点（不是「没有节点」）
+                cron.targetKind ∈ session / pending / missing
 ProjectRef      { id, name, primary, runnable }
                 primary 是这个项目会带给会话的工作目录；runnable=false 表示目录已经不在了
 PendingAsk      = PermissionAsk | QuestionAsk

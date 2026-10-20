@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
-import { loadPairing, savePairing } from '../api/storage';
-import type { ProjectRef, SessionSummary } from '../api/types';
+import { deviceLabel, loadDevices, saveDevices, type Device } from '../api/storage';
+import type { Panels, ProjectRef, SessionSummary } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
 
@@ -12,6 +12,10 @@ export type { ChatState, Live, ToolRun } from './chat';
 export interface MobileApi {
   ready: boolean;
   pairing: Pairing | null;
+  /** 这台手机记住的电脑（家里 / 公司各一台），同一时刻只连其中一台 */
+  devices: Device[];
+  /** devices 里当前那一台的下标 */
+  activeDevice: number;
   conn: WsStatus | 'idle';
   sessions: SessionSummary[];
   providers: string[];
@@ -20,7 +24,12 @@ export interface MobileApi {
   openId: string | null;
   chat: ChatState;
   error: string | null;
-  pair: (p: Pairing) => Promise<void>;
+  /** label 是配对页从 /v1/ping 拿到的名字（+ 主机） */
+  pair: (p: Pairing, label?: string) => Promise<void>;
+  /** 换一台电脑：断开这一条、清掉画面，再连过去 */
+  switchDevice: (index: number) => Promise<void>;
+  /** 从列表里删掉一台；删的是当前那台时会顺位切到剩下的 */
+  removeDevice: (index: number) => Promise<void>;
   unpair: () => Promise<void>;
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
@@ -44,11 +53,15 @@ export interface MobileApi {
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
   createSession: (opts: { projectId?: string; workingDir?: string }) => Promise<SessionSummary | null>;
+  /** 当前对话的三个只读面板（MCP / agent / 定时任务）；失败返回 null，原因在 error 上 */
+  loadPanels: () => Promise<Panels | null>;
 }
 
 export function useMobile(): MobileApi {
   const [ready, setReady] = useState(false);
   const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [activeDevice, setActiveDevice] = useState(0);
   const [conn, setConn] = useState<WsStatus | 'idle'>('idle');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
@@ -78,13 +91,18 @@ export function useMobile(): MobileApi {
     [pairing],
   );
 
-  // 启动时读一次配对
+  // 启动时读一次「记住的电脑」：列表 + 当前那一台
   useEffect(() => {
-    void loadPairing().then((p) => {
-      setPairing(p);
+    void loadDevices().then((book) => {
+      setDevices(book.devices);
+      setActiveDevice(book.active);
+      setPairing(book.devices[book.active] ?? null);
       setReady(true);
     });
   }, []);
+  // 列表与当前项都是 ref 的读者要用的最新值
+  const devicesRef = useRef<Device[]>([]);
+  devicesRef.current = devices;
 
   // 有配对就拉列表并挂上连接
   useEffect(() => {
@@ -196,19 +214,81 @@ export function useMobile(): MobileApi {
     };
   }, [pairing, reload]);
 
-  const pair = useCallback(async (p: Pairing) => {
-    await savePairing(p);
-    setError(null);
-    setPairing(p);
-  }, []);
-
-  const unpair = useCallback(async () => {
-    await savePairing(null);
+  /** 断开当前这一屏：换电脑 / 删设备之后都不该留着上一台的会话 */
+  const resetView = useCallback(() => {
     setOpenId(null);
     setChat(emptyChat);
     setSessions([]);
-    setPairing(null);
+    setProviders([]);
+    setProjects([]);
+    setError(null);
   }, []);
+
+  const activate = useCallback(
+    async (list: Device[], index: number) => {
+      setDevices(list);
+      setActiveDevice(index);
+      if (list.length === 0) {
+        await saveDevices([], 0);
+        resetView();
+        setPairing(null);
+        return;
+      }
+      const next = list[index] ?? list[0];
+      await saveDevices(list, list.indexOf(next));
+      setActiveDevice(list.indexOf(next));
+      if (next.baseUrl === pairing?.baseUrl && next.token === pairing?.token) {
+        // 已经是这一台：不重建连接（重连一次要重读快照，没必要）
+        setPairing(next);
+        return;
+      }
+      resetView();
+      setPairing(next);
+    },
+    [pairing, resetView],
+  );
+
+  // 同一台电脑再配一次（换了令牌）按地址去重：列表里不该出现两条同一个地址
+  const pair = useCallback(
+    async (p: Pairing, label?: string) => {
+      const dev: Device = { ...p, label: label || deviceLabel('', p.baseUrl) };
+      const list = devicesRef.current.slice();
+      const at = list.findIndex((d) => d.baseUrl === p.baseUrl);
+      if (at >= 0) list[at] = dev;
+      else list.push(dev);
+      await activate(list, at >= 0 ? at : list.length - 1);
+    },
+    [activate],
+  );
+
+  const switchDevice = useCallback(
+    async (index: number) => {
+      const list = devicesRef.current;
+      if (index < 0 || index >= list.length) return;
+      await activate(list.slice(), index);
+    },
+    [activate],
+  );
+
+  const removeDevice = useCallback(
+    async (index: number) => {
+      const list = devicesRef.current.slice();
+      if (index < 0 || index >= list.length) return;
+      list.splice(index, 1);
+      if (list.length === 0) {
+        await activate([], 0);
+        return;
+      }
+      // 删的是前面某一台时，当前那台的下标要往前挪一格
+      const next = index < activeDevice ? activeDevice - 1 : Math.min(activeDevice, list.length - 1);
+      await activate(list, next);
+    },
+    [activate, activeDevice],
+  );
+
+  const unpair = useCallback(async () => {
+    await removeDevice(activeDevice);
+  }, [removeDevice, activeDevice]);
 
   const refresh = useCallback(async () => {
     if (!pairing) return;
@@ -386,6 +466,19 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  const loadPanels = useCallback(async (): Promise<Panels | null> => {
+    const id = openIdRef.current;
+    if (!pairing || !id) return null;
+    try {
+      const r = await api.panels(pairing, id);
+      setError(null);
+      return r.panels;
+    } catch (e) {
+      setError(messageOfError(e));
+      return null;
+    }
+  }, [pairing]);
+
   // 新建会话：服务端建的是真正的那一段（记录在电脑上），这里只把它插进列表并打开。
   // 两件事都由 sessions_changed 再确认一次 —— 但它可能比这个响应先到，所以本地也插一行，
   // 插的时候按 id 去重。
@@ -408,6 +501,8 @@ export function useMobile(): MobileApi {
   return {
     ready,
     pairing,
+    devices,
+    activeDevice,
     conn,
     sessions,
     providers,
@@ -416,6 +511,8 @@ export function useMobile(): MobileApi {
     chat,
     error,
     pair,
+    switchDevice,
+    removeDevice,
     unpair,
     refresh,
     reloadCurrent,
@@ -432,6 +529,7 @@ export function useMobile(): MobileApi {
     deleteSession,
     setPinned,
     createSession,
+    loadPanels,
   };
 }
 

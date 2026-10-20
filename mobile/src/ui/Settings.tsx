@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Pairing as PairingInfo } from '../api/client';
+import type { Device } from '../api/storage';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeMode } from '../theme/tokens';
 
@@ -12,12 +13,22 @@ const MODES: { value: ThemeMode; label: string }[] = [
 
 export function Settings({
   pairing,
+  devices,
+  activeDevice,
   conn,
+  onSwitchDevice,
+  onRemoveDevice,
+  onAddDevice,
   onUnpair,
   onBack,
 }: {
   pairing: PairingInfo | null;
+  devices: Device[];
+  activeDevice: number;
   conn: string;
+  onSwitchDevice: (index: number) => void;
+  onRemoveDevice: (index: number) => void;
+  onAddDevice: () => void;
   onUnpair: () => void;
   onBack: () => void;
 }) {
@@ -32,19 +43,59 @@ export function Settings({
         <Text style={[styles.title, { color: t.title }]}>设置</Text>
       </View>
 
-      <View style={styles.body}>
-        <Text style={[styles.section, { color: t.faint }]}>连接</Text>
+      <ScrollView contentContainerStyle={styles.body}>
+        <Text style={[styles.section, { color: t.faint }]}>电脑</Text>
         <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
-          <View style={styles.kv}>
-            <Text style={[styles.k, { color: t.faint }]}>状态</Text>
-            <Text style={[styles.v, { color: conn === 'open' ? t.green : t.amber }]}>
-              {conn === 'open' ? '已连接' : conn === 'connecting' ? '正在连接…' : '连不上'}
-            </Text>
-          </View>
-          <View style={styles.kv}>
-            <Text style={[styles.k, { color: t.faint }]}>地址</Text>
-            <Text style={[styles.v, styles.mono, { color: t.dim }]}>{pairing?.baseUrl ?? '未配对'}</Text>
-          </View>
+          {devices.length === 0 ? (
+            <Text style={{ color: t.faint, fontSize: 12.5 }}>还没配对过电脑</Text>
+          ) : null}
+          {devices.map((d, i) => {
+            const on = i === activeDevice;
+            return (
+              <Pressable
+                key={`${d.baseUrl}-${i}`}
+                onPress={() => (on ? undefined : onSwitchDevice(i))}
+                style={[styles.device, { borderColor: on ? t.accentLine : t.border, backgroundColor: on ? t.accentSoft : 'transparent' }]}
+              >
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
+                    {d.label || d.baseUrl}
+                  </Text>
+                  <Text style={{ color: t.faint, fontSize: 11, marginTop: 2, fontFamily: 'monospace' }} numberOfLines={1}>
+                    {on
+                      ? `${d.baseUrl} · ${conn === 'open' ? '已连接' : conn === 'connecting' ? '正在连接…' : '连不上'}`
+                      : d.baseUrl}
+                  </Text>
+                </View>
+                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
+                <Pressable
+                  hitSlop={8}
+                  onPress={() =>
+                    Alert.alert('删掉这台电脑？', d.label || d.baseUrl, [
+                      { text: '取消', style: 'cancel' },
+                      { text: '删掉', style: 'destructive', onPress: () => onRemoveDevice(i) },
+                    ])
+                  }
+                  style={styles.trash}
+                >
+                  <Feather name="x" size={15} color={t.faint} />
+                </Pressable>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            onPress={onAddDevice}
+            style={({ pressed }) => [
+              styles.addDevice,
+              { borderColor: t.borderStrong, backgroundColor: pressed ? t.wash : 'transparent' },
+            ]}
+          >
+            <Feather name="plus" size={15} color={t.accent2} />
+            <Text style={{ color: t.accent2, fontSize: 13 }}>添加电脑</Text>
+          </Pressable>
+          <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 10, lineHeight: 17 }}>
+            同时只连一台：会话在电脑上，切过去看到的是那台电脑的会话。地址 {pairing?.baseUrl ?? '—'}
+          </Text>
         </View>
 
         <Text style={[styles.section, { color: t.faint }]}>外观</Text>
@@ -79,9 +130,9 @@ export function Settings({
             { borderColor: t.redLine, backgroundColor: pressed ? t.redWash : 'transparent' },
           ]}
         >
-          <Text style={{ color: t.red, fontSize: 13.5, fontWeight: '600' }}>解除配对</Text>
+          <Text style={{ color: t.red, fontSize: 13.5, fontWeight: '600' }}>解除当前这一台的配对</Text>
         </Pressable>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -108,4 +159,24 @@ const styles = StyleSheet.create({
   seg: { flexDirection: 'row', gap: 8 },
   segItem: { borderWidth: 1, borderRadius: 9, paddingHorizontal: 12, paddingVertical: 8 },
   danger: { borderWidth: 1, borderRadius: 11, paddingVertical: 13, alignItems: 'center', marginTop: 26 },
+  device: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+  },
+  trash: { padding: 4 },
+  addDevice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 11,
+  },
 });

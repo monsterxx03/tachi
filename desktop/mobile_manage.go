@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/session"
 )
@@ -128,4 +129,121 @@ func (d *desktopApp) mobileSessionByID(id string) (*session.Session, int, string
 		return nil, http.StatusNotFound, "no_session"
 	}
 	return ss, 0, ""
+}
+
+// ---------------------------------------------------------------------------
+// 会话面板：MCP / 可委派的 agent / 定时任务
+// ---------------------------------------------------------------------------
+
+// mobileMCPPanel is one MCP server as the phone lists it: the counts, not the tool contracts.
+// A phone screen cannot use a JSON schema; what it can answer is "是否连上、载入了几个工具".
+type mobileMCPPanel struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Connected bool   `json:"connected"`
+	NeedsAuth bool   `json:"needsAuth"`
+	Loaded    int    `json:"loaded"`
+	Tools     int    `json:"tools"`
+}
+
+// mobileAgentPanel is the peer board, minus the parts only the window can act on (authorizing an
+// MCP server, opening a card, inserting a reference).
+type mobileAgentPanel struct {
+	Peers      []mobileAgentRow `json:"peers"`
+	CheckedAt  string           `json:"checkedAt"`
+	AnyChecked bool             `json:"anyChecked"`
+}
+
+type mobileAgentRow struct {
+	Name   string   `json:"name"`
+	Label  string   `json:"label"`
+	URL    string   `json:"url"`
+	Note   string   `json:"note"`
+	Reach  string   `json:"reach"`
+	Skills []string `json:"skills"`
+	Err    string   `json:"err"`
+}
+
+// mobileCronRow is one scheduled job as the phone lists it.
+type mobileCronRow struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ScheduleText  string `json:"scheduleText"`
+	Status        string `json:"status"`
+	TargetKind    string `json:"targetKind"`
+	TargetTitle   string `json:"targetTitle"`
+	NextRun       string `json:"nextRun"`
+	LastRunStatus string `json:"lastRunStatus"`
+	LastRunError  string `json:"lastRunError"`
+	Running       bool   `json:"running"`
+}
+
+// mobilePanels is the whole panel screen in one answer: three lists that are all read-only.
+type mobilePanels struct {
+	MCP    []mobileMCPPanel `json:"mcp"`
+	Agents mobileAgentPanel `json:"agents"`
+	Cron   []mobileCronRow  `json:"cron"`
+}
+
+// mobileSessionPanels answers the three panels for ONE conversation. It is a read: no agent is
+// built, no probe is forced beyond what the board already caches, and the desk's view is
+// untouched. The MCP half is the session's own loaded set (listMCPServersFor), because "this
+// session can call these tools" is the question the panel exists to answer.
+func (d *desktopApp) mobileSessionPanels(sessionID string) (*mobilePanels, int, string) {
+	if _, status, code := d.mobileSessionByID(sessionID); code != "" {
+		return nil, status, code
+	}
+	svc := &AgentService{desk: d}
+	out := &mobilePanels{
+		MCP:    make([]mobileMCPPanel, 0, 4),
+		Cron:   make([]mobileCronRow, 0, 4),
+		Agents: mobileAgentPanel{Peers: make([]mobileAgentRow, 0, 4)},
+	}
+
+	for _, s := range svc.listMCPServersFor(sessionID) {
+		loaded := 0
+		for _, t := range s.Tools {
+			if t.Loaded {
+				loaded++
+			}
+		}
+		out.MCP = append(out.MCP, mobileMCPPanel{
+			Name: s.Name, Type: s.Type, Connected: s.Connected, NeedsAuth: s.NeedsAuth,
+			Loaded: loaded, Tools: len(s.Tools),
+		})
+	}
+
+	board := svc.PeerBoard()
+	out.Agents.CheckedAt = board.CheckedAt
+	out.Agents.AnyChecked = board.AnyChecked
+	for _, p := range board.Peers {
+		row := mobileAgentRow{
+			Name: p.Name, Label: p.Label, URL: p.URL, Note: p.Note, Reach: p.Reach, Err: p.Err,
+			Skills: make([]string, 0, 4),
+		}
+		if p.Card != nil {
+			for _, sk := range p.Card.Skills {
+				row.Skills = append(row.Skills, sk.Name)
+			}
+		}
+		out.Agents.Peers = append(out.Agents.Peers, row)
+	}
+
+	for _, j := range svc.ListCronJobs() {
+		out.Cron = append(out.Cron, mobileCronRow{
+			ID: j.ID, Name: j.Name, ScheduleText: j.ScheduleText, Status: j.Status,
+			TargetKind: j.TargetKind, TargetTitle: j.TargetTitle,
+			NextRun:       mobileStamp(j.NextRun),
+			LastRunStatus: j.LastRunState, LastRunError: j.LastRunError, Running: j.Running,
+		})
+	}
+	return out, 0, ""
+}
+
+// mobileStamp renders a time for the wire, or "" when the job has never run / has no next run.
+func mobileStamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }

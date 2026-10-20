@@ -827,3 +827,40 @@ func TestMobileRenameBroadcastsTheList(t *testing.T) {
 		t.Fatalf("stored title = %v", rec)
 	}
 }
+
+// TestMobilePanelsAreAddressedBySession: the three panels answer for the conversation the phone
+// named, and every array is `[]` rather than null — the client uses them as arrays, and a null
+// there crashes a render instead of failing a type check (protocol: 数组空的时候是 []).
+func TestMobilePanelsAreAddressedBySession(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	_, ts := mobileTestServer(t, d)
+
+	code, body := mobileCall(t, ts, "GET", "/v1/sessions/"+s.ID+"/panels", "secret", nil)
+	if code != http.StatusOK {
+		t.Fatalf("panels = %d, want 200", code)
+	}
+	panels, _ := body["panels"].(map[string]any)
+	if panels == nil {
+		t.Fatalf("body = %v, want a panels object", body)
+	}
+	for _, key := range []string{"mcp", "cron"} {
+		if _, ok := panels[key].([]any); !ok {
+			t.Fatalf("%s = %v, want an array (never null)", key, panels[key])
+		}
+	}
+	agents, _ := panels["agents"].(map[string]any)
+	if agents == nil {
+		t.Fatalf("agents = %v, want an object", panels["agents"])
+	}
+	if _, ok := agents["peers"].([]any); !ok {
+		t.Fatalf("agents.peers = %v, want an array", agents["peers"])
+	}
+
+	if code, _ := mobileCall(t, ts, "GET", "/v1/sessions/nope/panels", "secret", nil); code != http.StatusNotFound {
+		t.Fatalf("panels for an unknown session = %d, want 404", code)
+	}
+}

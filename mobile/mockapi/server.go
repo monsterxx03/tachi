@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/providers", s.guard(s.handleProviders))
 	mux.HandleFunc("GET /v1/sessions/{id}/page", s.guard(s.handlePage))
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", s.guard(s.handleFile))
+	mux.HandleFunc("GET /v1/sessions/{id}/panels", s.guard(s.handlePanels))
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", s.guard(s.handleMessage))
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.guard(s.handleStop))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.guard(s.handleDeleteSession))
@@ -131,6 +132,38 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		{"id": "p-tachi", "name": "tachi", "primary": "~/repos/tachi", "runnable": true},
 		{"id": "p-notes", "name": "笔记", "primary": "~/notes", "runnable": true},
 		{"id": "p-gone", "name": "已删除的项目", "primary": "~/gone", "runnable": false},
+	}})
+}
+
+// handlePanels 回这段会话的三个只读面板。假数据，形状与真服务端一致。
+func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
+	if s.get(r.PathValue("id")) == nil {
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"panels": map[string]any{
+		"mcp": []map[string]any{
+			{"name": "日志检索", "type": "stdio", "connected": true, "needsAuth": false, "loaded": 3, "tools": 12},
+			{"name": "任务板", "type": "http", "connected": false, "needsAuth": true, "loaded": 0, "tools": 0},
+		},
+		"agents": map[string]any{
+			"anyChecked": true,
+			"checkedAt":  "刚刚",
+			"peers": []map[string]any{
+				{"name": "构建机", "label": "ci-vm", "url": "http://10.0.0.8:8790", "note": "能跑发布与回归",
+					"reach": "可达", "skills": []string{"build", "deploy"}, "err": ""},
+				{"name": "笔记本", "label": "", "url": "http://10.0.0.9:8790", "note": "",
+					"reach": "连不上", "skills": []string{}, "err": "timeout"},
+			},
+		},
+		"cron": []map[string]any{
+			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "status": "enabled",
+				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
+				"lastRunStatus": "complete", "lastRunError": "", "running": false},
+			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "status": "paused",
+				"targetKind": "missing", "targetTitle": "", "nextRun": "",
+				"lastRunStatus": "error", "lastRunError": "会话已经不在了", "running": false},
+		},
 	}})
 }
 

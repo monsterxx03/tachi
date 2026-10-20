@@ -46,13 +46,20 @@ type MCPServerVO struct {
 // (see the sort below), because the panel renders the order it is given.
 func (s *AgentService) ListMCPServers() []MCPServerVO {
 	d := s.desk
-	if d.config() == nil || d.mcp == nil {
-		return nil
-	}
 	d.mu.Lock()
 	sid := d.activeID
 	d.mu.Unlock()
-	set := d.mcp.SetFor(sid) // nil when sid is empty (no session context)
+	return s.listMCPServersFor(sid)
+}
+
+// listMCPServersFor is the same reading addressed by SESSION: the phone's MCP panel is about the
+// conversation it is looking at, not about whichever one the window has open.
+func (s *AgentService) listMCPServersFor(sessionID string) []MCPServerVO {
+	d := s.desk
+	if d.config() == nil || d.mcp == nil {
+		return nil
+	}
+	set := d.mcp.SetFor(sessionID) // nil when the id is empty (no session context)
 
 	byServer := make(map[string][]*mcp.DeferredTool)
 	for _, t := range d.mcp.Pool().All() {

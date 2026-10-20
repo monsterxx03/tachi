@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
+import { deviceLabel } from '../api/storage';
 import { messageOfError } from '../state/mobile';
 import { useTheme } from '../theme/ThemeContext';
 import { ScanPairing } from './ScanPairing';
@@ -10,7 +11,14 @@ import { ScanPairing } from './ScanPairing';
 const DEV_URL = 'http://192.168.71.173:8787';
 const DEV_TOKEN = 'dev-token';
 
-export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
+export function Pairing({
+  onPaired,
+  onClose,
+}: {
+  onPaired: (p: PairingInfo, label?: string) => void;
+  /** 从设置页「添加电脑」进来时给一个返回；第一台配对时没有 */
+  onClose?: () => void;
+}) {
   const { tokens: t } = useTheme();
   const [baseUrl, setBaseUrl] = useState(DEV_URL);
   const [token, setToken] = useState(DEV_TOKEN);
@@ -23,7 +31,8 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
     setErr(null);
     try {
       const r = await ping(p.baseUrl);
-      if (r.ok) onPaired(p);
+      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台
+      if (r.ok) onPaired(p, deviceLabel(r.name, p.baseUrl));
       else setErr('这台机器拒绝了这个地址');
     } catch (e) {
       setErr(messageOfError(e));
@@ -53,6 +62,14 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
 
   return (
     <View style={styles.root}>
+      {onClose ? (
+        <Pressable
+          onPress={onClose}
+          style={({ pressed }) => [styles.back, { backgroundColor: pressed ? t.wash : 'transparent' }]}
+        >
+          <Feather name="chevron-left" size={22} color={t.dim} />
+        </Pressable>
+      ) : null}
       <Text style={[styles.title, { color: t.title }]}>配对电脑</Text>
       <Text style={[styles.sub, { color: t.faint }]}>
         在电脑上打开 Tachi 桌面端的设置页，用它给的地址和令牌。
@@ -129,6 +146,7 @@ export function Pairing({ onPaired }: { onPaired: (p: PairingInfo) => void }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: 22, paddingTop: 28 },
+  back: { width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   title: { fontSize: 26, fontWeight: '600', letterSpacing: -0.4 },
   sub: { fontSize: 13, lineHeight: 20, marginTop: 8, marginBottom: 18 },
   scanBtn: {

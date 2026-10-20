@@ -240,6 +240,16 @@ func (m *mobileServer) handleCreateSession(w http.ResponseWriter, r *http.Reques
 	mobileWriteJSON(w, map[string]any{"session": row})
 }
 
+// handlePanels answers the session's MCP / agent / scheduled-job panels. All three are reads.
+func (m *mobileServer) handlePanels(w http.ResponseWriter, r *http.Request) {
+	panels, status, code := m.desk.mobileSessionPanels(r.PathValue("id"))
+	if code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"panels": panels})
+}
+
 // handleProjects lists what the phone's project picker offers.
 func (m *mobileServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	mobileWriteJSON(w, map[string]any{"projects": m.desk.mobileProjects()})
