@@ -2,6 +2,8 @@ import { Feather } from '@expo/vector-icons';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ProjectRef } from '../api/types';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { useEdgeBack } from './edgeBack';
 
@@ -21,7 +23,7 @@ export function NewSession({
   onCreate: (opts: { projectId?: string; workingDir?: string }) => void;
 }) {
   const { tokens: t } = useTheme();
-  const edgePan = useEdgeBack(onClose);
+  const back = useEdgeBack(onClose);
   // '' = 无项目（普通会话），否则就是项目 id
   const [projectId, setProjectId] = useState('');
   const [workingDir, setWorkingDir] = useState('~/workspace');
@@ -29,7 +31,8 @@ export function NewSession({
   const pick = (id: string) => setProjectId(id);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
+    <GestureDetector gesture={back.gesture}>
+      <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
           <Feather name="chevron-left" size={22} color={t.dim} />
@@ -102,7 +105,8 @@ export function NewSession({
           会话建在电脑上，电脑也能看到它。
         </Text>
       </ScrollView>
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

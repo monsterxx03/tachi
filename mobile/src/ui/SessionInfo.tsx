@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
 import type { Live } from '../state/chat';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { useEdgeBack } from './edgeBack';
 
@@ -118,7 +120,7 @@ export function SessionInfo({
 }) {
   const { tokens: t } = useTheme();
   // 左缘右划 = 返回对话（和这个页面上那个 chevron 同一个动作）
-  const edgePan = useEdgeBack(onClose);
+  const back = useEdgeBack(onClose);
   const s = snapshot.session;
   const ratio = snapshot.context.window > 0 ? snapshot.context.estimate / snapshot.context.window : 0;
   const readOnly = s.readOnly;
@@ -180,7 +182,8 @@ export function SessionInfo({
   }, [sessionId]);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
+    <GestureDetector gesture={back.gesture}>
+      <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
           <Feather name="chevron-left" size={22} color={t.dim} />
@@ -362,7 +365,8 @@ export function SessionInfo({
         </View>
       </ScrollView>
       )}
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

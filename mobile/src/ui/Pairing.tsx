@@ -5,6 +5,8 @@ import { ping, type Pairing as PairingInfo } from '../api/client';
 import { deviceLabel } from '../api/storage';
 import { useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { ScanPairing } from './ScanPairing';
 
@@ -27,7 +29,7 @@ export function Pairing({
   const [err, setErr] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   // 从设置页「添加电脑」进来时才有返回；首次配对没有上一屏，手势自然无效
-  const edgePan = useEdgeBack(onClose);
+  const back = useEdgeBack(onClose);
 
   async function test(p: PairingInfo = { baseUrl: baseUrl.trim().replace(/\/+$/, ''), token: token.trim() }) {
     setBusy(true);
@@ -64,7 +66,8 @@ export function Pairing({
   };
 
   return (
-    <View style={styles.root} {...edgePan}>
+    <GestureDetector gesture={back.gesture}>
+      <Animated.View style={[styles.root, back.style]}>
       {onClose ? (
         <Pressable
           onPress={onClose}
@@ -146,7 +149,8 @@ export function Pairing({
       <Text style={[styles.note, { color: t.faint }]}>
         这条链路是局域网的明文 HTTP：拿到令牌的人就能让那台电脑执行命令。只在家里用自己的网络。
       </Text>
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

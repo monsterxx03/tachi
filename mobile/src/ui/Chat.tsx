@@ -14,6 +14,8 @@ import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } fr
 import type { Live } from '../state/mobile';
 import { buildItems, type Item, type ProcessStep } from '../state/items';
 import { useEdgeBack } from './edgeBack';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { MessageView, Thinking, ToolCard } from './Message';
@@ -341,12 +343,13 @@ export function Chat({
     onLoadOlder();
   };
 
-  const edgePan = useEdgeBack(onEdgeBack);
+  const back = useEdgeBack(onEdgeBack);
   // inverted 列表本来就贴着最新那条；这个 ref 只留给出错时手动定位，不参与常规滚动
   const listRef = useRef<FlatList<Item>>(null);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
+    <GestureDetector gesture={back.gesture}>
+      <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable
           onPress={onToggleList ?? onBack}
@@ -430,7 +433,8 @@ export function Chat({
           onStop={onStop}
         />
       )}
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 

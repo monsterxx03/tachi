@@ -2,6 +2,8 @@ import { Feather } from '@expo/vector-icons';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Pairing as PairingInfo } from '../api/client';
 import type { Device } from '../api/storage';
+import { GestureDetector } from 'react-native-gesture-handler';
+import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { useEdgeBack } from './edgeBack';
 import type { ThemeMode } from '../theme/tokens';
@@ -34,10 +36,11 @@ export function Settings({
   onBack: () => void;
 }) {
   const { tokens: t, mode, setMode } = useTheme();
-  const edgePan = useEdgeBack(onBack);
+  const back = useEdgeBack(onBack);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
+    <GestureDetector gesture={back.gesture}>
+      <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onBack} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
           <Feather name="chevron-left" size={22} color={t.dim} />
@@ -135,7 +138,8 @@ export function Settings({
           <Text style={{ color: t.red, fontSize: 13.5, fontWeight: '600' }}>解除当前这一台的配对</Text>
         </Pressable>
       </ScrollView>
-    </View>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
