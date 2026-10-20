@@ -228,10 +228,15 @@ func (d *desktopApp) markCronRunning(id string, running bool) {
 	d.emitCronChanged(id)
 }
 
+// emitCronChanged tells every screen the job table moved — the window
+// (agent:cron_changed) and every phone (cron_changed). A job created, edited, paused, deleted or
+// finished is one fact with one exit: the phone's panel rereads the table from it, so a change
+// made on either screen is visible on the other without a reconnect (issue: 双端同步).
 func (d *desktopApp) emitCronChanged(id string) {
 	if d.app != nil {
 		d.app.Event.Emit(cronChangedEventName, id)
 	}
+	d.mobileBroadcast(map[string]any{"type": mobileEvCronChanged, "id": id})
 }
 
 // emitSessionsChanged tells EVERY screen the conversation list moved — the window

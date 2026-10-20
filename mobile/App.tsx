@@ -66,6 +66,8 @@ function ChatPane({
         onPickModel={(name) => void m.setProvider(name)}
         onToggleSkip={(skip) => void m.setSkipApproval(skip)}
         loadPanels={m.loadPanels}
+        cronVersion={m.cronVersion}
+        onCronAction={m.cronAction}
       />
     );
 

@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
 import type { Live } from '../state/chat';
 import { useTheme } from '../theme/ThemeContext';
@@ -99,6 +99,8 @@ export function SessionInfo({
   onPickModel,
   onToggleSkip,
   loadPanels,
+  cronVersion,
+  onCronAction,
 }: {
   snapshot: Snapshot;
   live: Live;
@@ -108,6 +110,10 @@ export function SessionInfo({
   onToggleSkip: (skip: boolean) => void;
   /** 三个只读面板的数据源（打开面板才拉） */
   loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
+  /** 定时任务表的版本号：另一块屏改了任务就 +1 */
+  cronVersion: number;
+  /** 定时任务的动作（跑一次 / 暂停 / 恢复 / 删除）；成功返回 null */
+  onCronAction: (id: string, action: 'run' | 'pause' | 'resume' | 'delete') => Promise<string | null>;
 }) {
   const { tokens: t } = useTheme();
   const s = snapshot.session;
@@ -122,6 +128,9 @@ export function SessionInfo({
   // 这一屏问过一次就不再自动问：失败也停下。之前是「没拿到就再试」，读不到的时候
   // 变成一圈没有出口的重试 —— 屏幕上就是疯狂闪烁，电脑那边被轮番请求。
   const [asked, setAsked] = useState(false);
+  // 定时任务的动作：进行中的那一条 + 上一次的结果（成功也留一句，否则按了没反应）
+  const [busyJob, setBusyJob] = useState<string | null>(null);
+  const [cronNotice, setCronNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -140,6 +149,24 @@ export function SessionInfo({
     setAsked(true);
     void refresh();
   }, [tab, asked, loading, refresh]);
+
+  // 另一块屏改了定时任务（窗口、另一台手机、或者任务刚跑完）：面板已经打开就重读一次。
+  // 版本号只在真的收到事件时变，所以这里不会变成轮询。
+  const seenCron = useRef(cronVersion);
+  useEffect(() => {
+    if (cronVersion === seenCron.current) return;
+    seenCron.current = cronVersion;
+    if (tab === 'cron' || panels) void refresh();
+  }, [cronVersion, tab, panels, refresh]);
+
+  const cronAct = async (id: string, action: 'run' | 'pause' | 'resume' | 'delete') => {
+    setBusyJob(id);
+    setCronNotice(null);
+    const err = await onCronAction(id, action);
+    setBusyJob(null);
+    setCronNotice(err ?? (action === 'run' ? '已开始运行' : action === 'delete' ? '已删除' : action === 'pause' ? '已暂停' : '已恢复'));
+    if (!err) await refresh();
+  };
 
   // 换了一段对话（同一个组件被复用）时把上一段的面板清掉
   const sessionId = snapshot.session.id;
@@ -193,7 +220,22 @@ export function SessionInfo({
             <>
               {tab === 'mcp' ? <MCPList rows={panels.mcp} t={t} /> : null}
               {tab === 'agents' ? <AgentList panel={panels.agents} t={t} /> : null}
-              {tab === 'cron' ? <CronList rows={panels.cron} t={t} /> : null}
+              {tab === 'cron' ? (
+                <CronList
+                  rows={panels.cron}
+                  t={t}
+                  busyId={busyJob}
+                  notice={cronNotice}
+                  onRun={(id) => void cronAct(id, 'run')}
+                  onPause={(id, paused) => void cronAct(id, paused ? 'pause' : 'resume')}
+                  onDelete={(row) =>
+                    Alert.alert('删除这个定时任务？', row.name, [
+                      { text: '取消', style: 'cancel' },
+                      { text: '删除', style: 'destructive', onPress: () => void cronAct(row.id, 'delete') },
+                    ])
+                  }
+                />
+              ) : null}
             </>
           ) : null}
           {asked ? (
@@ -210,7 +252,9 @@ export function SessionInfo({
             </Pressable>
           ) : null}
           <Text style={[styles.hint, { color: t.faint, textAlign: 'center' }]}>
-            面板只读：连 server、授权、改定时任务都在电脑上做。
+            {tab === 'cron'
+              ? '这里可以跑一次、暂停、删除；新建任务和改计划在电脑上做。'
+              : '面板只读：连 server 和授权都在电脑上做。'}
           </Text>
         </ScrollView>
       ) : (
@@ -388,36 +432,101 @@ function AgentList({ panel, t }: { panel?: AgentPanel; t: ReturnType<typeof useT
   );
 }
 
-function CronList({ rows, t }: { rows: CronPanelRow[]; t: ReturnType<typeof useTheme>['tokens'] }) {
-  if (rows.length === 0) return <Text style={[styles.empty, { color: t.faint }]}>没有定时任务。</Text>;
+function CronList({
+  rows,
+  t,
+  busyId,
+  notice,
+  onRun,
+  onPause,
+  onDelete,
+}: {
+  rows: CronPanelRow[];
+  t: ReturnType<typeof useTheme>['tokens'];
+  busyId: string | null;
+  notice: string | null;
+  onRun: (id: string) => void;
+  onPause: (id: string, paused: boolean) => void;
+  onDelete: (row: CronPanelRow) => void;
+}) {
+  if (rows.length === 0)
+    return (
+      <>
+        <Text style={[styles.empty, { color: t.faint }]}>没有定时任务。</Text>
+        {notice ? <Text style={[styles.empty, { color: t.faint }]}>{notice}</Text> : null}
+      </>
+    );
   return (
     <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
       <Text style={[styles.cardTitle, { color: t.text }]}>定时任务</Text>
+      {notice ? (
+        <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 8 }}>{notice}</Text>
+      ) : null}
       {rows.map((j) => (
-        <View key={j.id} style={styles.panelRow}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
-              {j.name}
-            </Text>
-            <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
-              {[j.scheduleText, j.targetTitle || '（会话不在了）'].filter(Boolean).join(' · ')}
-            </Text>
-            <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
-              {j.running ? '正在跑' : j.nextRun ? `下次 ${shortTime(j.nextRun)}` : '不会自动跑'}
-              {j.lastRunStatus ? ` · 上次 ${j.lastRunStatus}` : ''}
-            </Text>
-            {j.lastRunError ? (
-              <Text style={{ color: t.red, fontSize: 11.5, marginTop: 3 }} numberOfLines={2}>
-                {j.lastRunError}
+        <View key={j.id} style={styles.cronItem}>
+          <View style={styles.panelRow}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
+                {j.name}
               </Text>
-            ) : null}
+              <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
+                {[j.scheduleText, j.targetTitle || '（会话不在了）'].filter(Boolean).join(' · ')}
+              </Text>
+              <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
+                {j.running ? '正在跑' : j.nextRun ? `下次 ${shortTime(j.nextRun)}` : '不会自动跑'}
+                {j.lastRunStatus ? ` · 上次 ${j.lastRunStatus}` : ''}
+              </Text>
+              {j.lastRunError ? (
+                <Text style={{ color: t.red, fontSize: 11.5, marginTop: 3 }} numberOfLines={2}>
+                  {j.lastRunError}
+                </Text>
+              ) : null}
+            </View>
+            <Text style={{ color: j.status === 'paused' ? t.faint : t.accent2, fontSize: 11.5 }}>
+              {j.status === 'paused' ? '已暂停' : '启用'}
+            </Text>
           </View>
-          <Text style={{ color: j.status === 'paused' ? t.faint : t.accent2, fontSize: 11.5 }}>
-            {j.status === 'paused' ? '已暂停' : '启用'}
-          </Text>
+          <View style={styles.cronActions}>
+            <CronBtn label={j.running ? '运行中…' : '运行一次'} disabled={j.running || busyId === j.id} onPress={() => onRun(j.id)} t={t} />
+            <CronBtn
+              label={j.status === 'paused' ? '恢复' : '暂停'}
+              disabled={busyId === j.id}
+              onPress={() => onPause(j.id, j.status !== 'paused')}
+              t={t}
+            />
+            <CronBtn label="删除" tone="red" disabled={busyId === j.id} onPress={() => onDelete(j)} t={t} />
+          </View>
         </View>
       ))}
     </View>
+  );
+}
+
+function CronBtn({
+  label,
+  onPress,
+  disabled,
+  tone,
+  t,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  tone?: 'red';
+  t: ReturnType<typeof useTheme>['tokens'];
+}) {
+  const color = tone === 'red' ? t.red : t.dim;
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.cronBtn,
+        { borderColor: tone === 'red' ? t.redLine : t.border, backgroundColor: pressed ? t.wash : 'transparent', opacity: disabled ? 0.5 : 1 },
+      ]}
+    >
+      <Text style={{ color, fontSize: 11.5 }}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -455,6 +564,9 @@ const styles = StyleSheet.create({
   panelLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   empty: { fontSize: 12.5, lineHeight: 19, paddingVertical: 10 },
   errBox: { borderWidth: 1, borderRadius: 10, padding: 11 },
+  cronItem: { paddingTop: 11 },
+  cronActions: { flexDirection: 'row', gap: 8, paddingTop: 9 },
+  cronBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   refreshBtn: {
     flexDirection: 'row',
     alignItems: 'center',

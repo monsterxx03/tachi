@@ -180,6 +180,9 @@ func (m *mobileServer) handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", m.guard(m.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", m.guard(m.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", m.guard(m.handlePermission))
+	mux.HandleFunc("POST /v1/cron/{id}/run", m.guard(m.handleCronRun))
+	mux.HandleFunc("POST /v1/cron/{id}/pause", m.guard(m.handleCronPause))
+	mux.HandleFunc("DELETE /v1/cron/{id}", m.guard(m.handleCronDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/questions", m.guard(m.handleQuestions))
 	return mux
 }

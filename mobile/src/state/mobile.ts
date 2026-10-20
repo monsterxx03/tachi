@@ -42,6 +42,10 @@ export interface MobileApi {
   loadOlder: () => Promise<void>;
   /** 一页更早的历史正在读（顶部那条提示靠它，也靠它挡住重复请求） */
   olderLoading: boolean;
+  /** 定时任务表的版本号：另一块屏改了任务就 +1，面板据此重读 */
+  cronVersion: number;
+  /** 跑一次 / 暂停 / 恢复 / 删除；成功返回 null，失败返回那句原因 */
+  cronAction: (id: string, action: 'run' | 'pause' | 'resume' | 'delete') => Promise<string | null>;
   decide: (toolId: string, decision: 'allow_once' | 'deny') => Promise<void>;
   answer: (answers: Record<string, string>) => Promise<void>;
   decline: () => Promise<void>;
@@ -72,6 +76,7 @@ export function useMobile(): MobileApi {
   const [openId, setOpenId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [olderLoading, setOlderLoading] = useState(false);
+  const [cronVersion, setCronVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
@@ -189,6 +194,11 @@ export function useMobile(): MobileApi {
               );
             })
             .catch(() => undefined);
+          return;
+        }
+        if (ev.type === 'cron_changed') {
+          // 定时任务表是广播的：窗口、另一台手机或调度器自己改了，就让面板重读一次
+          setCronVersion((v) => v + 1);
           return;
         }
         if (ev.type === 'lagged') {
@@ -469,6 +479,22 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  // 三个动作走同一层：错误就地还给面板，不挂全局横幅（面板自己有位置说）
+  const cronAction = useCallback(
+    async (id: string, action: 'run' | 'pause' | 'resume' | 'delete'): Promise<string | null> => {
+      if (!pairing) return '还没有配对电脑';
+      try {
+        if (action === 'run') await api.cronRun(pairing, id);
+        else if (action === 'delete') await api.cronDelete(pairing, id);
+        else await api.cronPause(pairing, id, action === 'pause');
+        return null;
+      } catch (e) {
+        return messageOfError(e);
+      }
+    },
+    [pairing],
+  );
+
   const loadPanels = useCallback(async (): Promise<{ panels: Panels | null; error: string | null }> => {
     const id = openIdRef.current;
     if (!pairing || !id) return { panels: null, error: '没有打开着的会话' };
@@ -524,6 +550,8 @@ export function useMobile(): MobileApi {
     reloadCurrent,
     loadOlder,
     olderLoading,
+    cronVersion,
+    cronAction,
     open,
     close,
     send,

@@ -76,7 +76,7 @@ function isActive(job: CronJobVO): boolean {
 // ── panel (status bar) ─────────────────────────────────────────────────────
 
 export function CronPanel({
-  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow,
+  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow, onDelete,
 }: {
   jobs: CronJobVO[]
   loading: boolean
@@ -88,7 +88,15 @@ export function CronPanel({
   onOpenPage: () => void
   onTogglePaused: (job: CronJobVO) => void
   onRunNow: (job: CronJobVO) => void
+  onDelete: (job: CronJobVO) => void
 }) {
+  // Deleting here is a two-step confirm INSIDE the row: the page has a dialog, but a popover
+  // that opened a modal on top of itself would be a second surface for one question. The step
+  // is per row, and it drops by itself when the job list moves (a delete from either screen).
+  const [confirming, setConfirming] = useState<string | null>(null)
+  useEffect(() => {
+    if (confirming && !jobs.some((j) => j.id === confirming)) setConfirming(null)
+  }, [jobs, confirming])
   const active = jobs.filter(isActive).length
   const next = jobs
     .filter((j) => isActive(j) && j.nextRun)
@@ -154,19 +162,31 @@ export function CronPanel({
                   <span className={last.bad ? 'cron-bad' : ''}>{last.text}</span>
                   {job.lastRunError ? <span className="cron-bad"> · {job.lastRunError}</span> : null}
                 </div>
-                <div className="cron-job-actions">
-                  {scheduled ? (
-                    <button className="btn ghost sm" onClick={() => onRunNow(job)} disabled={job.running}>
-                      {job.running ? '运行中…' : '运行一次'}
-                    </button>
-                  ) : null}
-                  <button className="btn ghost sm" onClick={() => onEdit(job)}>编辑</button>
-                  {scheduled ? (
-                    <button className="btn ghost sm" onClick={() => onTogglePaused(job)}>
-                      {isActive(job) ? '暂停' : '恢复'}
-                    </button>
-                  ) : null}
-                </div>
+                {confirming === job.id ? (
+                  <div className="cron-job-actions cron-confirm-row">
+                    <span className="cron-hint">删除「{job.name}」？</span>
+                    <span className="cron-grow" />
+                    <button className="btn ghost sm" onClick={() => setConfirming(null)}>取消</button>
+                    <button className="btn sm danger" onClick={() => { setConfirming(null); onDelete(job) }}>删除</button>
+                  </div>
+                ) : (
+                  <div className="cron-job-actions">
+                    {scheduled ? (
+                      <button className="btn ghost sm" onClick={() => onRunNow(job)} disabled={job.running}>
+                        {job.running ? '运行中…' : '运行一次'}
+                      </button>
+                    ) : null}
+                    <button className="btn ghost sm" onClick={() => onEdit(job)}>编辑</button>
+                    {scheduled ? (
+                      <button className="btn ghost sm" onClick={() => onTogglePaused(job)}>
+                        {isActive(job) ? '暂停' : '恢复'}
+                      </button>
+                    ) : null}
+                    {scheduled ? (
+                      <button className="btn ghost sm cron-danger" onClick={() => setConfirming(job.id)}>删除</button>
+                    ) : null}
+                  </div>
+                )}
               </div>
             )
           })
@@ -185,17 +205,27 @@ export function CronPanel({
 
 type ScheduleMode = 'daily' | 'weekly' | 'hourly' | 'custom'
 
+// 两个互不重叠的问题：
+//   kind = 这件事要做几次（反复 / 只做一次）
+//   mode = 反复的时候，按什么节奏（每天 / 每周 / 每 N 小时 / 自定义 cron）
+// 之前「自定义」和「高级」各有一个 cron 输入框，而「每 N 小时」旁边又有一个「只跑一次」的
+// 勾选框 —— 同一个问题被问了两次、答案又互相打架。现在只跑一次有自己的时间（日期 + 时刻），
+// 不再借用「每天 09:00」这种说法。
+type ScheduleKind = 'repeat' | 'once'
+
 type Draft = {
   id: string
   name: string
+  kind: ScheduleKind
   mode: ScheduleMode
   time: string
   weekdays: number[] // 1..7, 7 = Sunday
   hourEvery: number
   custom: string
+  /** 只跑一次时的时刻，datetime-local 的形状：YYYY-MM-DDTHH:mm（本地时区） */
+  fireAt: string
   timezone: string
   prompt: string
-  oneshot: boolean
   notify: 'always' | 'when_relevant'
   reply: 'session' | 'new'
   sessionID: string
@@ -228,20 +258,37 @@ function parseSchedule(schedule: string): Pick<Draft, 'mode' | 'time' | 'weekday
   return { mode: 'custom', time: '09:00', weekdays: [], hourEvery: 2, custom: text }
 }
 
+/** Date → datetime-local 的本地形状（不能 toISOString：那是 UTC，会整体挪几个小时） */
+function localInput(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/** 一次性的默认时刻：沿用 09:00，今天已经过了就明天 */
+function defaultFireAt(time = '09:00'): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
+  const h = m ? Number(m[1]) : 9
+  const min = m ? Number(m[2]) : 0
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, min, 0, 0)
+  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1)
+  return localInput(at)
+}
+
 function defaultDraft(targets: CronTargetVO[], projects: ProjectVO[], job?: CronJobVO | null): Draft {
   const current = targets.find((t) => t.isCurrent) || targets[0]
   if (!job) {
     return {
       id: '',
       name: '',
+      kind: 'repeat',
       mode: 'daily',
       time: '09:00',
       weekdays: [1, 2, 3, 4, 5],
       hourEvery: 2,
       custom: '0 9 * * *',
+      fireAt: defaultFireAt('09:00'),
       timezone: '',
       prompt: '',
-      oneshot: false,
       notify: 'always',
       reply: 'session',
       sessionID: current?.sessionId || '',
@@ -257,13 +304,19 @@ function defaultDraft(targets: CronTargetVO[], projects: ProjectVO[], job?: Cron
   // from the TARGET's workspace/provider/mode, not from whatever conversation
   // happens to be on screen.
   const base = (job.targetSessionId && targets.find((t) => t.sessionId === job.targetSessionId)) || current
+  // 一次性任务的「什么时候」是那个具体时刻：旧数据里它的 cron 可能只是「每天 09:00」，
+  // 真正要跑的却是 nextRun 那一刻，所以以 nextRun 为准；还没有 nextRun 就顺延到明早。
+  const onceAt = job.type === 'oneshot'
+    ? (job.nextRun ? localInput(new Date(job.nextRun)) : defaultFireAt(sched.time))
+    : ''
   return {
     id: job.id,
     name: job.name,
     ...sched,
+    kind: job.type === 'oneshot' ? 'once' : 'repeat',
+    fireAt: onceAt || defaultFireAt(sched.time),
     timezone: job.timezone || '',
     prompt: job.prompt,
-    oneshot: job.type === 'oneshot',
     notify: job.notify === 'when_relevant' ? 'when_relevant' : 'always',
     reply: bound ? 'session' : 'new',
     // A deleted target cannot be selected; fall back to the conversation on
@@ -288,6 +341,13 @@ function clockOf(draft: Draft): { h: number; m: number } | null {
 }
 
 function buildSchedule(draft: Draft): string {
+  // 只跑一次：把那个时刻翻成「这一天的这一分钟」的 cron（日 + 月 + * 的星期）。
+  if (draft.kind === 'once') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(draft.fireAt)
+    if (!m) return ''
+    const [, , mon, dom, h, mi] = m
+    return `${Number(mi)} ${Number(h)} ${Number(dom)} ${Number(mon)} *`
+  }
   if (draft.mode === 'custom') return draft.custom.trim()
   const c = clockOf(draft)
   if (!c) return ''
@@ -441,7 +501,7 @@ export function CronPage({
         name: draft.name.trim(),
         schedule,
         prompt: draft.prompt,
-        type: draft.oneshot ? 'oneshot' : 'recurring',
+        type: draft.kind === 'once' ? 'oneshot' : 'recurring',
         notify: draft.notify,
         timezone: draft.timezone.trim(),
         mode: draft.reply,
@@ -562,22 +622,42 @@ export function CronPage({
             </div>
 
             <div className="cron-field">
-              <label className="cron-label">什么时候运行</label>
-              <div className="cron-seg" role="group" aria-label="运行频率">
+              <label className="cron-label">{draft.kind === 'once' ? '什么时候跑这一次' : '什么时候运行'}</label>
+              <div className="cron-seg" role="group" aria-label="运行方式">
                 {([
-                  ['daily', '每天'], ['weekly', '每周'], ['hourly', '每 N 小时'], ['custom', '自定义'],
-                ] as [ScheduleMode, string][]).map(([mode, label]) => (
-                  <button key={mode} className={draft.mode === mode ? 'is-on' : ''}
-                    onClick={() => patch({ mode })}>
+                  ['repeat', '反复运行'], ['once', '只运行一次'],
+                ] as [ScheduleKind, string][]).map(([kind, label]) => (
+                  <button key={kind} className={draft.kind === kind ? 'is-on' : ''}
+                    onClick={() => patch({ kind })}>
                     {label}
                   </button>
                 ))}
               </div>
 
-              {draft.mode === 'custom' ? (
+              {draft.kind === 'repeat' ? (
+                <div className="cron-seg" role="group" aria-label="运行频率">
+                  {([
+                    ['daily', '每天'], ['weekly', '每周'], ['hourly', '每 N 小时'], ['custom', '自定义'],
+                  ] as [ScheduleMode, string][]).map(([mode, label]) => (
+                    <button key={mode} className={draft.mode === mode ? 'is-on' : ''}
+                      onClick={() => patch({ mode })}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="cron-sched-row">
+                  <input className="cron-input cron-date" type="date" value={draft.fireAt.slice(0, 10)}
+                    onChange={(e) => patch({ fireAt: `${e.target.value}T${draft.fireAt.slice(11, 16) || '09:00'}` })} />
+                  <input className="cron-input cron-time" type="time" value={draft.fireAt.slice(11, 16)}
+                    onChange={(e) => patch({ fireAt: `${draft.fireAt.slice(0, 10)}T${e.target.value}` })} />
+                </div>
+              )}
+
+              {draft.kind === 'repeat' && draft.mode === 'custom' ? (
                 <input className="cron-input cron-cron-expr" value={draft.custom}
                   placeholder="0 9 * * 1-5" onChange={(e) => patch({ custom: e.target.value })} />
-              ) : draft.mode === 'hourly' ? (
+              ) : draft.kind === 'repeat' && draft.mode === 'hourly' ? (
                 <div className="cron-sched-row">
                   <span className="cron-hint">每</span>
                   <input className="cron-input cron-num" type="number" min={1} max={23}
@@ -585,15 +665,15 @@ export function CronPage({
                     onChange={(e) => patch({ hourEvery: Number(e.target.value) })} />
                   <span className="cron-hint">小时</span>
                 </div>
-              ) : (
+              ) : draft.kind === 'repeat' ? (
                 <div className="cron-sched-row">
                   <span className="cron-hint">时间</span>
                   <input className="cron-input cron-time" type="time" value={draft.time}
                     onChange={(e) => patch({ time: e.target.value })} />
                 </div>
-              )}
+              ) : null}
 
-              {draft.mode === 'weekly' ? (
+              {draft.kind === 'repeat' && draft.mode === 'weekly' ? (
                 <div className="cron-weekdays" role="group" aria-label="星期">
                   {[1, 2, 3, 4, 5, 6, 7].map((d) => (
                     <button key={d} className={draft.weekdays.includes(d) ? 'is-on' : ''}
@@ -622,14 +702,8 @@ export function CronPage({
               </div>
 
               <details className="cron-adv">
-                <summary>高级：cron 表达式与时间设置</summary>
+                <summary>高级：时区</summary>
                 <div className="cron-adv-body">
-                  <div className="cron-adv-row">
-                    <span className="cron-hint">cron</span>
-                    <input className="cron-input cron-cron-expr" value={draft.mode === 'custom' ? draft.custom : schedule}
-                      placeholder="0 9 * * *"
-                      onChange={(e) => patch({ mode: 'custom', custom: e.target.value })} />
-                  </div>
                   <div className="cron-adv-row">
                     <span className="cron-hint">时区</span>
                     <input className="cron-input cron-tz" value={draft.timezone}
@@ -650,15 +724,13 @@ export function CronPage({
                 </div>
               </details>
 
-              {/* Type is a separate fact from the schedule shape. A oneshot can
-                  be "每天 09:00" (it runs at the next 09:00, then deletes); the
-                  old "只跑一次" preset hid that and made an existing oneshot
-                  read as recurring in the editor. */}
-              <label className="cron-check">
-                <input type="checkbox" checked={draft.oneshot}
-                  onChange={(e) => patch({ oneshot: e.target.checked })} />
-                <span>只跑一次（跑完自动删除）</span>
-              </label>
+              {/* 「做几次」是上面那个分段，不再是一个和频率并排的勾选框：
+                  否则「每 N 小时」旁边出现「只跑一次」，两个答案在读的人脑子里打架。 */}
+              {draft.kind === 'once' ? (
+                <div className="cron-form-hint">
+                  到了这个时刻跑一次，跑完任务自动删除；已经产生的会话和记录不受影响。
+                </div>
+              ) : null}
             </div>
 
             <div className="cron-field">

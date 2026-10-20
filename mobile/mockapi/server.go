@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -18,6 +19,8 @@ type Server struct {
 	byID    map[string]*session
 	clients map[*client]struct{}
 	log     *logger.Logger
+	// cron 是假服务端的定时任务表：手机上那三个动作要改得动它，面板才看得出同步
+	cron []map[string]any
 }
 
 func New(token string) *Server {
@@ -28,6 +31,14 @@ func New(token string) *Server {
 		byID:    byID,
 		clients: map[*client]struct{}{},
 		log:     logger.New("mockapi"),
+		cron: []map[string]any{
+			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "status": "active",
+				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
+				"lastRunStatus": "complete", "lastRunError": "", "running": false},
+			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "status": "paused",
+				"targetKind": "missing", "targetTitle": "", "nextRun": "",
+				"lastRunStatus": "error", "lastRunError": "会话已经不在了", "running": false},
+		},
 	}
 }
 
@@ -67,6 +78,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.guard(s.handleStop))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.guard(s.handleDeleteSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/pin", s.guard(s.handlePin))
+	mux.HandleFunc("POST /v1/cron/{id}/run", s.guard(s.handleCronRun))
+	mux.HandleFunc("POST /v1/cron/{id}/pause", s.guard(s.handleCronPause))
+	mux.HandleFunc("DELETE /v1/cron/{id}", s.guard(s.handleCronDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", s.guard(s.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", s.guard(s.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", s.guard(s.handlePermission))
@@ -141,6 +155,16 @@ func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no_session")
 		return
 	}
+	s.mu.Lock()
+	cron := make([]map[string]any, 0, len(s.cron))
+	for _, j := range s.cron {
+		cp := make(map[string]any, len(j))
+		for k, v := range j {
+			cp[k] = v
+		}
+		cron = append(cron, cp)
+	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"panels": map[string]any{
 		"mcp": []map[string]any{
 			{"name": "日志检索", "type": "stdio", "connected": true, "needsAuth": false, "loaded": 3, "tools": 12},
@@ -156,15 +180,94 @@ func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
 					"reach": "连不上", "skills": []string{}, "err": "timeout"},
 			},
 		},
-		"cron": []map[string]any{
-			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "status": "enabled",
-				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
-				"lastRunStatus": "complete", "lastRunError": "", "running": false},
-			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "status": "paused",
-				"targetKind": "missing", "targetTitle": "", "nextRun": "",
-				"lastRunStatus": "error", "lastRunError": "会话已经不在了", "running": false},
-		},
+		"cron": cron,
 	}})
+}
+
+type cronPauseReq struct {
+	Paused bool `json:"paused"`
+}
+
+// cronIndex 找到一条任务在表里的位置；调用方持锁
+func (s *Server) cronIndex(id string) int {
+	for i, j := range s.cron {
+		if j["id"] == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *Server) handleCronRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	i := s.cronIndex(id)
+	if i < 0 {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_job")
+		return
+	}
+	if s.cron[i]["running"] == true {
+		s.mu.Unlock()
+		fail(w, http.StatusConflict, "cron_failed")
+		return
+	}
+	s.cron[i]["running"] = true
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "cron_changed", ID: id})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+
+	// 跑一轮：两秒后结束，让面板看得见「运行中 → 上次成功」
+	go func() {
+		time.Sleep(2 * time.Second)
+		s.mu.Lock()
+		if j := s.cronIndex(id); j >= 0 {
+			s.cron[j]["running"] = false
+			s.cron[j]["lastRunStatus"] = "complete"
+			s.cron[j]["lastRunError"] = ""
+		}
+		s.mu.Unlock()
+		s.broadcast("", Event{Type: "cron_changed", ID: id})
+	}()
+}
+
+func (s *Server) handleCronPause(w http.ResponseWriter, r *http.Request) {
+	var req cronPauseReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	id := r.PathValue("id")
+	s.mu.Lock()
+	i := s.cronIndex(id)
+	if i < 0 {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_job")
+		return
+	}
+	if req.Paused {
+		s.cron[i]["status"] = "paused"
+	} else {
+		s.cron[i]["status"] = "active"
+	}
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "cron_changed", ID: id})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+func (s *Server) handleCronDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	i := s.cronIndex(id)
+	if i < 0 {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_job")
+		return
+	}
+	s.cron = append(s.cron[:i], s.cron[i+1:]...)
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "cron_changed", ID: id})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
 }
 
 type pinReq struct {

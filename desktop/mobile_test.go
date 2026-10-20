@@ -864,3 +864,52 @@ func TestMobilePanelsAreAddressedBySession(t *testing.T) {
 		t.Fatalf("panels for an unknown session = %d, want 404", code)
 	}
 }
+
+// TestMobileCronChangedReachesThePhone: a job written on EITHER screen has to reach the other one
+// (双端同步). The window has its own event; the phone's only channel is this broadcast, and it is
+// emitted from the one place every cron write funnels through (emitCronChanged).
+func TestMobileCronChangedReachesThePhone(t *testing.T) {
+	d, _ := newMobileApp(t)
+	m, _ := mobileTestServer(t, d)
+	c := newMobileConn(m, nil)
+	c.out = make(chan []byte, 4)
+	m.mu.Lock()
+	m.conns[c] = struct{}{}
+	m.mu.Unlock()
+
+	d.emitCronChanged("job-1")
+	select {
+	case b := <-c.out:
+		var ev map[string]any
+		if err := json.Unmarshal(b, &ev); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if ev["type"] != mobileEvCronChanged || ev["id"] != "job-1" {
+			t.Fatalf("event = %v, want cron_changed for job-1", ev)
+		}
+	default:
+		t.Fatal("emitCronChanged broadcast nothing; the phone's panel would stay stale")
+	}
+}
+
+// TestMobileCronRefusalsKeepTheirCode: the three cron actions answer the protocol's table, not a
+// generic failure — the phone shows a different sentence for each.
+func TestMobileCronRefusalsKeepTheirCode(t *testing.T) {
+	cases := []struct {
+		res    string
+		status int
+		code   string
+	}{
+		{"ok", 0, ""},
+		{"任务不存在", http.StatusNotFound, "no_job"},
+		{"定时任务已在设置里关闭", http.StatusConflict, "cron_disabled"},
+		{"这个任务不属于 desktop", http.StatusConflict, "not_desktop"},
+		{"写盘失败了", http.StatusInternalServerError, "cron_failed"},
+	}
+	for _, c := range cases {
+		status, code := mobileCronResult(c.res)
+		if status != c.status || code != c.code {
+			t.Fatalf("%q → (%d, %q), want (%d, %q)", c.res, status, code, c.status, c.code)
+		}
+	}
+}

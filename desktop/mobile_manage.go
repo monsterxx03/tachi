@@ -247,3 +247,41 @@ func mobileStamp(t time.Time) string {
 	}
 	return t.Format(time.RFC3339)
 }
+
+// ---------------------------------------------------------------------------
+// 定时任务：运行一次 / 暂停 / 删除
+// ---------------------------------------------------------------------------
+
+// mobileCronResult maps a cron write's answer to the phone's (status, code). The three writers in
+// cron.go answer with a Chinese sentence (it is what the window shows verbatim), so the mapping
+// belongs here rather than in a second implementation: one refusal, one behaviour.
+func mobileCronResult(res string) (int, string) {
+	switch res {
+	case "ok":
+		return 0, ""
+	case "任务不存在":
+		return http.StatusNotFound, "no_job"
+	case "定时任务已在设置里关闭":
+		return http.StatusConflict, "cron_disabled"
+	case "这个任务不属于 desktop":
+		return http.StatusConflict, "not_desktop"
+	}
+	return http.StatusInternalServerError, "cron_failed"
+}
+
+// mobileCronRun runs one job now. The run itself is asynchronous: the phone gets "accepted", and
+// the job's 运行中 state arrives through the cron_changed broadcast this path already emits.
+func (d *desktopApp) mobileCronRun(id string) (int, string) {
+	return mobileCronResult((&AgentService{desk: d}).RunCronJobNow(id))
+}
+
+// mobileCronPause pauses or resumes a job.
+func (d *desktopApp) mobileCronPause(id string, paused bool) (int, string) {
+	return mobileCronResult((&AgentService{desk: d}).SetCronJobPaused(id, paused))
+}
+
+// mobileCronDelete removes a job. Same writer as the window's 删除: the conversation it wrote into
+// and its records stay where they are.
+func (d *desktopApp) mobileCronDelete(id string) (int, string) {
+	return mobileCronResult((&AgentService{desk: d}).DeleteCronJob(id))
+}

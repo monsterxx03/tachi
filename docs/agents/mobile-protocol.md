@@ -54,6 +54,9 @@
 | POST | `/v1/sessions/{id}/questions` | `{answers}` 或 `{decline: true}` | `{accepted: true}` |
 | GET | `/v1/sessions/{id}/files/{attachmentId}` | — | 文件本身 |
 | GET | `/v1/sessions/{id}/panels` | — | `{panels: Panels}`，MCP / agent / 定时任务三个只读面板 |
+| POST | `/v1/cron/{id}/run` | — | `{accepted: true}`，立刻跑一次（异步） |
+| POST | `/v1/cron/{id}/pause` | `{paused}` | `{accepted: true}` |
+| DELETE | `/v1/cron/{id}` | — | `{accepted: true}` |
 
 `mode` 是 `send` / `steer` / `interrupt`；`decision` 是 `allow_once` / `deny`。
 
@@ -81,6 +84,10 @@
 | 工作目录不能用 | 400 `bad_working_dir` | 这个目录用不了，换一个路径试试 |
 | 建会话失败（写盘出错等） | 500 `create_failed` | 没能建出这段对话，在电脑上看看日志 |
 | 置顶没写进去 | 500 `pin_failed` | 置顶没保存成功，再试一次 |
+| 定时任务不存在 | 404 `no_job` | 这个定时任务已经不在了 |
+| 定时任务在设置里被关掉 | 409 `cron_disabled` | 定时任务在电脑的设置里被关掉了 |
+| 任务不属于这台电脑 | 409 `not_desktop` | 这个任务不归这台电脑管 |
+| 定时任务的写入失败 | 500 `cron_failed` | 操作没成功，在电脑上看看日志 |
 
 ## WebSocket
 
@@ -121,6 +128,7 @@
 | `user_message` | `text`, `displayText`, `steer`, `origin` | **另一块屏**发来的用户消息 |
 | `session_prefs` | `provider`, `skipApproval` | 这段对话的模型 / 审批开关被**某一块屏**改了（桌面或手机）；两种开关一起发 |
 | `sessions_changed` | — | 会话列表变了：任何一块屏新建 / 删除 / **重命名 / 置顶**了一段对话。**广播给每一条连接**（列表不属于某一段会话的流）；手机收到后要重读列表，并把**打开着的那段**的标题、项目、置顶一并修掉 |
+| `cron_changed` | `id` | 定时任务表变了：任意一块屏新建 / 改 / 暂停 / 恢复 / 删除，或者调度器跑完一次。**广播给每一条连接**；手机上重读面板（没打开就等下次打开，别去轮询） |
 | `lagged` | — | 你跟不上了，重读快照 |
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
@@ -175,3 +183,4 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 5. **一块屏改了共享状态，要告诉另一块**（消息用 `user_message`、回答用 `ask_answered`）。
 6. **列表的增删改都是广播，不属于某一段会话的流。** 任何一块屏新建、删除、重命名、置顶对话都发 `sessions_changed`，收到的人重读 `/v1/sessions`（并把打开着的那段的标题等一并修掉）。删除走桌面同一条 `DeleteSession`：正在跑的那一轮**被拒绝**，不是被停下来；置顶走同一条 `SetSessionPinned`。
 7. **手机不改变桌面正在显示的会话。**
+8. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。

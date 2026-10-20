@@ -14,6 +14,8 @@ import (
 // 的事件表一一对应；用 omitempty，一个结构体覆盖所有类型。
 type Event struct {
 	Type string `json:"type"`
+	// ID 是 cron_changed 变的那一条（定时任务不属于任何会话，所以走广播）
+	ID string `json:"id,omitempty"`
 
 	Text        string        `json:"text,omitempty"`
 	DisplayText string        `json:"displayText,omitempty"`
@@ -185,7 +187,8 @@ func (s *Server) broadcast(sessionID string, ev Event) {
 	s.mu.Lock()
 	targets := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
-		if ev.Type == "ask_answered" || ev.Type == "sessions_changed" || c.sessionID == sessionID {
+		// ask_answered / sessions_changed / cron_changed 是广播：它们不属于某一段会话的流
+		if ev.Type == "ask_answered" || ev.Type == "sessions_changed" || ev.Type == "cron_changed" || c.sessionID == sessionID {
 			targets = append(targets, c)
 		}
 	}

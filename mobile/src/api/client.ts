@@ -102,6 +102,19 @@ export const api = {
   panels: (c: Pairing, id: string) =>
     req<{ panels: Panels }>(c, `/v1/sessions/${encodeURIComponent(id)}/panels`),
 
+  /** 定时任务：立刻跑一次 / 暂停或恢复 / 删除。三条都走桌面同一条写入路径。 */
+  cronRun: (c: Pairing, id: string) =>
+    req<{ accepted: boolean }>(c, `/v1/cron/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+
+  cronPause: (c: Pairing, id: string, paused: boolean) =>
+    req<{ accepted: boolean }>(c, `/v1/cron/${encodeURIComponent(id)}/pause`, {
+      method: 'POST',
+      body: JSON.stringify({ paused }),
+    }),
+
+  cronDelete: (c: Pairing, id: string) =>
+    req<{ accepted: boolean }>(c, `/v1/cron/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   decide: (c: Pairing, id: string, toolId: string, decision: PermissionDecision) =>
     req<{ accepted: boolean }>(
       c,

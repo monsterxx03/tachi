@@ -193,6 +193,14 @@ export function messageOfError(e: unknown): string {
         return '没能建出这段对话，在电脑上看看日志';
       case 'pin_failed':
         return '置顶没保存成功，再试一次';
+      case 'no_job':
+        return '这个定时任务已经不在了';
+      case 'cron_disabled':
+        return '定时任务在电脑的设置里被关掉了';
+      case 'not_desktop':
+        return '这个任务不归这台电脑管';
+      case 'cron_failed':
+        return '操作没成功，在电脑上看看日志';
     }
     return `出错了（${e.code}）`;
   }

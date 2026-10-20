@@ -24,6 +24,32 @@
   smoke.check('默认「在这个会话里继续」', chosen.indexOf('在这个会话里继续') >= 0, chosen)
   smoke.check('默认给出下次运行时间', smoke.text('.cron-preview').length > 0, smoke.text('.cron-preview'))
 
+  // ── 时间那一栏问两个互不重叠的问题 ────────────────────────────────────
+  // 「做几次」是一个分段（反复 / 只一次），「什么频率」是第二个分段，只在反复运行时出现。
+  // 早先它们和一个「只跑一次」的勾选框混在一起，于是「每 N 小时」旁边挂着「只跑一次」，
+  // 而「自定义」和「高级」各有一个 cron 输入框。这三条断言就是那次改版的形状。
+  const kindSeg = smoke.text('.cron-seg[aria-label="运行方式"]')
+  smoke.check('「做几次」是一个分段', !!smoke.q('.cron-seg[aria-label="运行方式"]'), '')
+  smoke.check('分段里有反复运行', kindSeg.indexOf('反复运行') >= 0, kindSeg)
+  smoke.check('分段里有只运行一次', kindSeg.indexOf('只运行一次') >= 0, kindSeg)
+  smoke.check('不再有「只跑一次」勾选框', smoke.qa('.cron-check').length === 0, '')
+  smoke.check('高级里不再有第二个 cron 输入框',
+    smoke.qa('.cron-adv .cron-cron-expr').length === 0, smoke.text('.cron-adv'))
+
+  // 切到「只运行一次」：频率分段收起来，换成日期 + 时刻，预览仍然给得出下次运行
+  const onceBtn = smoke.qa('.cron-seg button').find((b) => smoke.text(b) === '只运行一次')
+  if (!onceBtn) return smoke.fail('有「只运行一次」按钮', smoke.text('.cron-field'))
+  smoke.click(onceBtn)
+  await smoke.sleep(60)
+  smoke.check('只跑一次时没有频率分段', !smoke.q('.cron-seg[aria-label="运行频率"]'), '')
+  smoke.check('只跑一次给出日期输入', !!smoke.q('.cron-date'), '')
+  smoke.check('只跑一次仍然有下次运行', smoke.text('.cron-preview').indexOf('下次运行') >= 0, smoke.text('.cron-preview'))
+  const backBtn = smoke.qa('.cron-seg button').find((b) => smoke.text(b) === '反复运行')
+  if (!backBtn) return smoke.fail('能切回反复运行', smoke.text('.cron-field'))
+  smoke.click(backBtn)
+  await smoke.sleep(60)
+  smoke.check('切回反复运行后频率分段回来了', !!smoke.q('.cron-seg[aria-label="运行频率"]'), '')
+
   // ── 填名字与内容，保存 ──────────────────────────────────────────────────
   if (!smoke.type('[data-field="name"]', '冒烟巡检')) return smoke.fail('有名称输入框', '')
   if (!smoke.type('[data-field="prompt"]', '看一眼 CI 状态，没有变化就说没有变化。')) {
@@ -62,6 +88,21 @@
   smoke.check('弹层里能看到刚建的任务', panelNames.indexOf('冒烟巡检') >= 0, panelNames.join(' | '))
   const hint = smoke.text('.cron-foot-hint')
   smoke.check('弹层写了退出后不补跑', hint.indexOf('不会补跑') >= 0, hint)
+
+  // 弹层里也能删：先问一次（就在这一行里），取消之后那排动作回来。这里不真的删 ——
+  // Go 那一半还要读 crons.json。
+  const del = smoke.qa('.cron-job .cron-danger')[0]
+  smoke.check('弹层里有删除键', !!del, '')
+  if (del) {
+    smoke.click(del)
+    await smoke.sleep(60)
+    smoke.check('删除先问一次', smoke.text('.cron-confirm-row').indexOf('删除「') >= 0, smoke.text('.cron-confirm-row'))
+    const cancel = smoke.qa('.cron-confirm-row .btn').find((b) => smoke.text(b) === '取消')
+    if (!cancel) return smoke.fail('确认条里有取消', smoke.text('.cron-confirm-row'))
+    smoke.click(cancel)
+    await smoke.sleep(60)
+    smoke.check('取消之后回到那排动作', !!smoke.q('.cron-job .cron-danger'), '')
+  }
 
   smoke.finish()
 })()

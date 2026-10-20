@@ -250,6 +250,42 @@ func (m *mobileServer) handlePanels(w http.ResponseWriter, r *http.Request) {
 	mobileWriteJSON(w, map[string]any{"panels": panels})
 }
 
+type mobilePauseReq struct {
+	Paused bool `json:"paused"`
+}
+
+// handleCronRun / handleCronPause / handleCronDelete are the phone's three actions on one
+// scheduled job. They go through the SAME writers the window uses, and each one emits
+// cron_changed — which is how the other screen hears about it.
+func (m *mobileServer) handleCronRun(w http.ResponseWriter, r *http.Request) {
+	if status, code := m.desk.mobileCronRun(r.PathValue("id")); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
+func (m *mobileServer) handleCronPause(w http.ResponseWriter, r *http.Request) {
+	var req mobilePauseReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	if status, code := m.desk.mobileCronPause(r.PathValue("id"), req.Paused); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
+func (m *mobileServer) handleCronDelete(w http.ResponseWriter, r *http.Request) {
+	if status, code := m.desk.mobileCronDelete(r.PathValue("id")); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
 // handleProjects lists what the phone's project picker offers.
 func (m *mobileServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	mobileWriteJSON(w, map[string]any{"projects": m.desk.mobileProjects()})

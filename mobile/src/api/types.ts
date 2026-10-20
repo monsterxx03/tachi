@@ -216,6 +216,8 @@ export type ServerEvent =
   | { type: 'session_prefs'; provider: string; skipApproval: boolean }
   /** 会话列表变了（桌面或手机新建 / 删除）；广播给每一条连接 */
   | { type: 'sessions_changed' }
+  /** 定时任务表变了（新建 / 改 / 暂停 / 删除 / 跑完），`id` 是变的那一条；广播给每一条连接 */
+  | { type: 'cron_changed'; id: string }
   /** 某段会话的「在跑 / 在等」变了；广播给每一条连接（列表那一行要跟着亮） */
   | { type: 'session_state'; sessionId: string; running: boolean; waiting: WaitingText }
   | { type: 'lagged' };

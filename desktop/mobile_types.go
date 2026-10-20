@@ -148,7 +148,10 @@ const (
 	// mobileEvSessionsChanged 会话列表变了（新建 / 删除），广播给每一条连接 —— 列表不是
 	// 某个会话的流，凡是连着这台电脑的手机都该重读一次。
 	mobileEvSessionsChanged = "sessions_changed"
-	mobileEvLagged          = "lagged"
+	// mobileEvCronChanged 定时任务表变了（新建 / 改 / 暂停 / 删除 / 跑完一次）。和会话列表
+	// 一样是**广播**：这张表不属于任何一段对话，谁改的都要让另一块屏重读。
+	mobileEvCronChanged = "cron_changed"
+	mobileEvLagged      = "lagged"
 )
 
 // 手机 → 服务端：订阅一个会话，以及心跳。

@@ -3269,6 +3269,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       onOpenPage={() => openCronPage(null, false)}
                       onTogglePaused={(job) => void toggleCronJob(job)}
                       onRunNow={(job) => void runCronNow(job)}
+                      onDelete={(job) => void deleteCronJob(job)}
                     />
                   ) : null}
                 </span>

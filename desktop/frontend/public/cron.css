@@ -112,6 +112,9 @@
 @keyframes cron-spin { to { transform: rotate(360deg); } }
 
 .cron-job-actions { display: flex; gap: 2px; margin: 5px 0 0 -5px; }
+/* the inline delete confirm keeps the row's height (the two-step never jumps the panel) */
+.cron-confirm-row { align-items: center; gap: 6px; }
+.cron-confirm-row .cron-hint { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cron-job-actions .btn:disabled { opacity: 0.45; cursor: default; }
 
 .cron-foot {
