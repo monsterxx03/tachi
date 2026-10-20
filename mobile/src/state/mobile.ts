@@ -53,8 +53,11 @@ export interface MobileApi {
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
   createSession: (opts: { projectId?: string; workingDir?: string }) => Promise<SessionSummary | null>;
-  /** 当前对话的三个只读面板（MCP / agent / 定时任务）；失败返回 null，原因在 error 上 */
-  loadPanels: () => Promise<Panels | null>;
+  /**
+   * 当前对话的三个只读面板（MCP / agent / 定时任务）。失败时返回原因而不是塞进全局
+   * error —— 面板读不到是这一屏的事，不该在顶上挂一条红色横幅，更不该触发重试风暴。
+   */
+  loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
 }
 
 export function useMobile(): MobileApi {
@@ -466,16 +469,19 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
-  const loadPanels = useCallback(async (): Promise<Panels | null> => {
+  const loadPanels = useCallback(async (): Promise<{ panels: Panels | null; error: string | null }> => {
     const id = openIdRef.current;
-    if (!pairing || !id) return null;
+    if (!pairing || !id) return { panels: null, error: '没有打开着的会话' };
     try {
       const r = await api.panels(pairing, id);
-      setError(null);
-      return r.panels;
+      return { panels: r.panels, error: null };
     } catch (e) {
-      setError(messageOfError(e));
-      return null;
+      // 路由不存在的 404 ≠ 会话不存在（那个会回 no_session）：是那台电脑上的桌面端旧了
+      const error =
+        e instanceof ApiError && e.code === 'http_404'
+          ? '这台电脑上还没有面板，桌面端可能是旧版本'
+          : messageOfError(e);
+      return { panels: null, error };
     }
   }, [pairing]);
 

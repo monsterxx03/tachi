@@ -107,7 +107,7 @@ export function SessionInfo({
   onPickModel: (name: string) => void;
   onToggleSkip: (skip: boolean) => void;
   /** 三个只读面板的数据源（打开面板才拉） */
-  loadPanels: () => Promise<Panels | null>;
+  loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
 }) {
   const { tokens: t } = useTheme();
   const s = snapshot.session;
@@ -117,22 +117,37 @@ export function SessionInfo({
   const usage = snapshot.usage;
   const [tab, setTab] = useState<Tab>('overview');
   const [panels, setPanels] = useState<Panels | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // 这一屏问过一次就不再自动问：失败也停下。之前是「没拿到就再试」，读不到的时候
+  // 变成一圈没有出口的重试 —— 屏幕上就是疯狂闪烁，电脑那边被轮番请求。
+  const [asked, setAsked] = useState(false);
 
-  // 面板是这一屏才有用的东西：切过去才拉，拉过就留着（切回来不闪一下空）
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const p = await loadPanels();
-      if (p) setPanels(p);
+      const r = await loadPanels();
+      // 失败时不清掉已经拿到的：看到旧数据 + 一句原因，比一瞬间变空好
+      if (r.panels) setPanels(r.panels);
+      setPanelError(r.error);
     } finally {
       setLoading(false);
     }
   }, [loadPanels]);
 
   useEffect(() => {
-    if (tab !== 'overview' && !panels && !loading) void refresh();
-  }, [tab, panels, loading, refresh]);
+    if (tab === 'overview' || asked || loading) return;
+    setAsked(true);
+    void refresh();
+  }, [tab, asked, loading, refresh]);
+
+  // 换了一段对话（同一个组件被复用）时把上一段的面板清掉
+  const sessionId = snapshot.session.id;
+  useEffect(() => {
+    setPanels(null);
+    setPanelError(null);
+    setAsked(false);
+  }, [sessionId]);
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -169,19 +184,29 @@ export function SessionInfo({
               <Text style={{ color: t.faint, fontSize: 12 }}>正在读面板…</Text>
             </View>
           ) : null}
-          {tab === 'mcp' ? <MCPList rows={panels?.mcp ?? []} t={t} /> : null}
-          {tab === 'agents' ? <AgentList panel={panels?.agents} t={t} /> : null}
-          {tab === 'cron' ? <CronList rows={panels?.cron ?? []} t={t} /> : null}
+          {panelError ? (
+            <View style={[styles.errBox, { borderColor: t.redLine, backgroundColor: t.redWash }]}>
+              <Text style={{ color: t.red, fontSize: 12.5, lineHeight: 18 }}>{panelError}</Text>
+            </View>
+          ) : null}
           {panels ? (
+            <>
+              {tab === 'mcp' ? <MCPList rows={panels.mcp} t={t} /> : null}
+              {tab === 'agents' ? <AgentList panel={panels.agents} t={t} /> : null}
+              {tab === 'cron' ? <CronList rows={panels.cron} t={t} /> : null}
+            </>
+          ) : null}
+          {asked ? (
             <Pressable
               onPress={() => void refresh()}
+              disabled={loading}
               style={({ pressed }) => [
                 styles.refreshBtn,
-                { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
+                { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent', opacity: loading ? 0.6 : 1 },
               ]}
             >
               <Feather name="refresh-cw" size={13} color={t.faint} />
-              <Text style={{ color: t.faint, fontSize: 12 }}>刷新</Text>
+              <Text style={{ color: t.faint, fontSize: 12 }}>{loading ? '读取中…' : '刷新'}</Text>
             </Pressable>
           ) : null}
           <Text style={[styles.hint, { color: t.faint, textAlign: 'center' }]}>
@@ -429,6 +454,7 @@ const styles = StyleSheet.create({
   panelRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 11 },
   panelLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   empty: { fontSize: 12.5, lineHeight: 19, paddingVertical: 10 },
+  errBox: { borderWidth: 1, borderRadius: 10, padding: 11 },
   refreshBtn: {
     flexDirection: 'row',
     alignItems: 'center',
