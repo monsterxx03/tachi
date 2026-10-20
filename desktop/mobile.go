@@ -446,8 +446,16 @@ func (c *mobileConn) readLoop(parent context.Context) {
 // conversation must not build an agent, must not touch the desktop's displayed session, and
 // must not emit a state event (see loadSessionForRemote for the write path, which does restore
 // the history before a message).
+//
+// An EMPTY id is the phone saying "I am back on the list": drop the subscription and send
+// nothing. Without it the socket keeps streaming the conversation the reader just left — a
+// running turn is a few dozen small events a second, all of them re-rendering a screen nobody
+// is looking at, which is exactly what makes a swipe in the list stutter.
 func (c *mobileConn) open(sessionID string) {
 	c.subscribe(sessionID)
+	if sessionID == "" {
+		return
+	}
 	snap, err := c.srv.desk.mobileSnapshot(sessionID)
 	if err != nil {
 		c.send(mobileMarshal(map[string]any{

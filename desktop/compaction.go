@@ -113,5 +113,6 @@ func (d *desktopApp) followCompaction(id string) string {
 			"sessionId":  next,
 		})
 	}
+	// 两块屏的通知不在这里发：它们要带上这一轮结束的原因（见 endTurn）。
 	return next
 }

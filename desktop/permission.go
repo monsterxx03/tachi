@@ -22,6 +22,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // PermissionEvent is emitted to the frontend when a turn is parked on a user
@@ -111,9 +112,21 @@ func permKey(sessionID, toolID string) string { return sessionID + "\x00" + tool
 // `a` is captured for the session-wide approval: 「本会话全部允许」 flips the switch on
 // that session's own policy (per agent, see agent_configure.go), which is also what
 // makes the NEXT ask inside this session skip the handler entirely.
-func (d *desktopApp) permissionHandler(sessionID string, a *agent.AIAgent) agent.PermissionHandler {
+//
+// The id is read from the MANAGER at ask time, never captured: an agent outlives the
+// record it was built for. Compaction moves the conversation into a child session and
+// the same agent keeps running this turn — a captured parent id would park the ask
+// (and address its card) at a conversation nobody is looking at, which is a turn that
+// waits forever with no card on any screen.
+func (d *desktopApp) permissionHandler(sm *session.Manager, a *agent.AIAgent) agent.PermissionHandler {
 	return func(ctx context.Context, toolName, toolID, preview, args string) (bool, error) {
-		return d.askPermission(ctx, sessionID, a, toolName, toolID, preview, args)
+		id := ""
+		if sm != nil {
+			if cur := sm.Current(); cur != nil {
+				id = cur.ID
+			}
+		}
+		return d.askPermission(ctx, id, a, toolName, toolID, preview, args)
 	}
 }
 

@@ -385,10 +385,6 @@ func lanUsable(c lanCandidate) bool {
 		!c.ip.IsLoopback() && !c.ip.IsLinkLocalUnicast()
 }
 
-// firstLANIPv4 returns the automatic choice (the address a phone on the same network should
-// dial when nobody has picked one). "" means this machine has no address we can name one with.
-func firstLANIPv4() string { return pickLANIPv4(lanCandidates()) }
-
 // pickLANIPv4 prefers a PHYSICAL-looking interface (en0, eth0, wlan0…) and only falls back to
 // any other up, non-tunnel address when there is none — the order interfaces come back in is
 // not a promise, and the address on a VPN is the one that never works from the phone.

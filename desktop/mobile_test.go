@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -911,5 +912,89 @@ func TestMobileCronRefusalsKeepTheirCode(t *testing.T) {
 		if status != c.status || code != c.code {
 			t.Fatalf("%q → (%d, %q), want (%d, %q)", c.res, status, code, c.status, c.code)
 		}
+	}
+}
+
+// TestMobileUnsubscribeOnEmptyOpen: sessionId 为空串 = 退订（「我回列表了」）。
+//
+// 不回快照、也不再收到那段会话的事件。缺了它，离开的对话在跑的时候仍然每秒推几十条
+// 增量过来 —— 手机为一个没人看的画面重画，列表上划一下就卡。
+func TestMobileUnsubscribeOnEmptyOpen(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	_, ts := mobileTestServer(t, d)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/v1/ws?token=secret", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"open","sessionId":"`+s.ID+`"}`)); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+
+	// 退订：既不该回快照，也不该再把这段会话的事件推过来
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"open","sessionId":""}`)); err != nil {
+		t.Fatalf("unsubscribe: %v", err)
+	}
+	// 一条 ping 当栅栏：两条命令在同一条连接上是按序处理的，pong 回来就说明退订已经生效
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if _, data, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read pong: %v", err)
+	} else if !strings.Contains(string(data), "pong") {
+		t.Fatalf("栅栏应答不是 pong：%s", data)
+	}
+	d.mobileNotify(s.ID, map[string]any{"type": mobileEvText, "text": "should not arrive"})
+	short, cancelShort := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancelShort()
+	if _, data, err := conn.Read(short); err == nil {
+		t.Fatalf("退订之后还收到了东西: %s", data)
+	}
+
+	// 退订只影响那一段会话的流，广播照样到。换一条连接验：读超时之后 coder/websocket
+	// 认为这条连接已经不可用了，在同一条上继续读会是「network connection closed」。
+	conn2, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/v1/ws?token=secret", nil)
+	if err != nil {
+		t.Fatalf("dial 2: %v", err)
+	}
+	defer conn2.CloseNow()
+	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
+	if _, data, err := conn2.Read(ctx); err != nil {
+		t.Fatalf("read broadcast: %v", err)
+	} else if !strings.Contains(string(data), mobileEvSessionsChanged) {
+		t.Fatalf("广播没到：%s", data)
+	}
+}
+
+// TestMobileAskWireKinds: 待答项在线上只有两种词 —— `permission` 与 `question`。
+//
+// 内部那张表把它们叫 `permission` / `ask_user`，中间那一个词漏到线上过一次：手机认的是
+// `question`，于是真实桌面发来的提问永远落不到卡片那条分支上（mock 的种子数据写的是
+// `question`，所以只有它在的时候能看到卡片）。这类不一致不会报错，只会让一条分支永远不成立。
+func TestMobileAskWireKinds(t *testing.T) {
+	perm := mobileAskOf(&pendingAsk{kind: askKindPermission, toolID: "t1", toolName: "Bash"})
+	if perm.Kind != "permission" {
+		t.Errorf("权限那张卡的 kind = %q，线上应当是 permission", perm.Kind)
+	}
+	q := mobileAskOf(&pendingAsk{
+		kind: askKindAskUser, toolID: "t2",
+		questions: []tools.Question{{Question: "放哪一层？", Options: []tools.QuestionOption{{Label: "甲"}}}},
+	})
+	if q.Kind != "question" {
+		t.Errorf("提问那张卡的 kind = %q，线上应当是 question", q.Kind)
+	}
+	if len(q.Questions) != 1 || q.Questions[0].Question != "放哪一层？" || len(q.Questions[0].Options) != 1 {
+		t.Errorf("提问的内容没传到线上：%+v", q.Questions)
 	}
 }

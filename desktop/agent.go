@@ -647,7 +647,7 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	// simulated turns.
 	var a *agent.AIAgent
 	if d.config() != nil {
-		a, err = d.buildAgentForSession(ctx, id, sm)
+		a, err = d.buildAgentForSession(ctx, sm)
 		if err != nil {
 			return nil, err
 		}

@@ -82,6 +82,8 @@ func (d *desktopApp) mobileProjectEvent(id string, ev agent.AgentEvent, lane run
 		if ev.Result != nil && ev.Result.Error != nil {
 			evt["error"] = ev.Result.Error.Error()
 		}
+		// 成功时这里只说「压完了」。搬到子会话的事走 session_moved —— 那一步发生在
+		// 这一轮结束之后（followCompaction），和桌面拿到的 agent:session_switched 是同一刻。
 		d.mobileNotify(id, evt)
 	}
 }
@@ -121,12 +123,12 @@ func mobileAskOf(a *pendingAsk) mobileAsk {
 	ma := mobileAsk{ToolID: a.toolID}
 	switch a.kind {
 	case askKindPermission:
-		ma.Kind = string(askKindPermission)
+		ma.Kind = mobileAskKindPermission
 		ma.ToolName = a.toolName
 		ma.PermissionKind = permEventKind(a.toolName)
 		ma.Preview = a.preview
 	case askKindAskUser:
-		ma.Kind = string(askKindAskUser)
+		ma.Kind = mobileAskKindQuestion
 		ma.Questions = make([]mobileQuestion, 0, len(a.questions))
 		for _, q := range a.questions {
 			labels := make([]string, 0, len(q.Options))

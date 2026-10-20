@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/monsterxx03/tachi/agent"
 )
 
@@ -299,5 +304,51 @@ func TestFollowCompactionDropsTheApprovalMode(t *testing.T) {
 	}
 	if a.PermState.AllowAllAsks {
 		t.Error("搬到子会话后 agent 还在放行：新会话说「需要审批」，行为却是不问")
+	}
+}
+
+// TestFollowCompactionTellsThePhone: 压缩把对话搬进子会话时，手机必须收到换轨通知。
+// 它订的是**旧 id**；不说一声，画面就停在压缩点、状态永远「在跑」，而 idle 早发往子会话了。
+// 通知里带着结束原因：队列要靠它决定发不发（换轨后那条 idle 手机很可能收不到）。
+func TestFollowCompactionTellsThePhone(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	_, ts := mobileTestServer(t, d)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http")+"/v1/ws?token=secret", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"open","sessionId":"`+s.ID+`"}`)); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// 订阅的回执是快照
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+
+	run := &sessionRun{state: AgentState{Status: StatusIdle, Label: "空闲"}}
+	d.runs[s.ID] = run
+	run.compaction = &compactionRecord{SessionID: "child-id"}
+
+	// 换轨的通知在 endTurn 里发：它要带上这一轮为什么结束（手机靠它决定队列发不发）
+	d.endTurn(s.ID, "complete")
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read moved: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if ev["type"] != mobileEvSessionMoved || ev["from"] != s.ID || ev["to"] != "child-id" || ev["end"] != "complete" {
+		t.Fatalf("event = %v, want session_moved from the old id to the child, with the turn's end", ev)
 	}
 }

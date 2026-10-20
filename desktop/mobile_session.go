@@ -319,13 +319,6 @@ func mobileContextParts(parts []ContextPartVO) []mobileContextPart {
 	return out
 }
 
-// contextPartsFor is the desktop's own breakdown for a session, without the VO: the same
-// contextUsage snapshot GetContextInfo reads.
-func (d *desktopApp) contextPartsFor(id string) []ContextPartVO {
-	_, tb, _ := d.contextUsage(id)
-	return contextParts(tb)
-}
-
 // estimateContextFromRecords is estimateFromMessages WITHOUT a live run: the most recent call's
 // recorded prompt size, falling back to the chars/4 estimate on records too old to carry counts.
 // A session restored from disk has had nothing appended since that call, so it IS the context

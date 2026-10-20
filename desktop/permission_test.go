@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // askCmd + askArgs are one Bash call the way the agent sees it: the tool args as
@@ -532,4 +533,54 @@ func TestSetSkipApprovalWithoutASession(t *testing.T) {
 	if svc.GetSkipApproval() {
 		t.Error("no session means the asking mode")
 	}
+}
+
+// TestPermissionAskFollowsCompaction: 压缩把对话搬进子会话之后，这个 agent 还活着并且接着跑
+// 这一轮 —— 权限卡片必须落到**当前那个会话**上。
+//
+// 曾经的形状是把 id 在 permissionHandler 里捕获下来：压缩之后卡片的 subject 还是父会话，
+// 窗口和手机都看着子会话，于是谁都收不到那张卡 —— 这一轮就那么挂着，直到有人手动停掉。
+func TestPermissionAskFollowsCompaction(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	sm, err := session.NewManager(nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	parent, err := sm.New("", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	d := newDesktopApp()
+	h := d.permissionHandler(sm, newPermissionTestAgent(t))
+
+	// parkAndRelease 发起一次 ask、等它登记在 wantID 上，再取消上下文收掉它。
+	parkAndRelease := func(toolID, wantID string) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan askOutcome, 1)
+		go func() {
+			ok, err := h(ctx, "Bash", toolID, askPrev, askArgs)
+			out <- askOutcome{approved: ok, err: err}
+		}()
+		waitAskRegistered(t, d, wantID, toolID, true)
+		cancel()
+		if got := <-out; got.err == nil {
+			t.Fatalf("%s: 取消之后这次询问应当以错误结束，得到 %+v", toolID, got)
+		}
+	}
+
+	// 1) 压缩之前：问在父会话上
+	parkAndRelease("call_1", parent.ID)
+
+	// 2) 压缩：同一个 manager 里，当前会话变成子会话
+	if _, err := agent.FinalizeCompact(sm, "sys", "摘要"); err != nil {
+		t.Fatalf("FinalizeCompact: %v", err)
+	}
+	child := sm.Current()
+	if child == nil || child.ID == parent.ID {
+		t.Fatal("压缩没有把对话搬进子会话")
+	}
+
+	// 3) 压缩之后：同一个 handler，问必须落在子会话上（登记在父会话上会一直挂到超时）
+	parkAndRelease("call_2", child.ID)
 }

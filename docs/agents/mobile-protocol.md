@@ -101,7 +101,7 @@
 服务端 → {"type":"pong"}
 ```
 
-- **一次只订阅一个会话**；第二次 `open` 替换订阅。
+- **一次只订阅一个会话**；第二次 `open` 替换订阅。`sessionId` 为**空串**表示「退订，我回列表了」：电脑停掉这条流、不回快照。少了这一步，读者离开的那段对话还在源源不断推过来（一轮在跑就是每秒几十条小事件），全落在一个没人看的画面上 —— 列表页划起来卡，源头往往在这儿。
 - `snapshot` 就是下面那个 `Snapshot`。
 - **只有订阅了某个会话的连接才收它的事件**；例外是 `ask_answered`（很小，且可能属于任何会话）。
 - 两分钟没有心跳就关连接（客户端切前台时重连）。
@@ -119,7 +119,8 @@
 | `turn` | `durationMs`, `iterations`, `end` | 一轮结束，`end` 是 `complete`/`interrupted`/`error` |
 | `error` | `message`, `interrupted` | 出错 |
 | `idle` | `end` | 真的一轮结束了（手机据此补发排队中的消息） |
-| `compact_start` / `compact_done` | `error?` | 压缩开始 / 结束 |
+| `compact_start` / `compact_done` | `error?` | 压缩开始 / 结束。**成功之后还有一步换轨，见 `session_moved`** |
+| `session_moved` | `from`, `to`, `end` | 这段对话搬到另一个会话 id 了（压缩成功把它写进子会话）。订阅是跟着 id 走的：手机要把 `openId`、WS 订阅、还没发出去的队列一起搬过去。`end` 是这一轮为什么结束 —— 换轨之后的 `idle` 发往新 id，手机多半收不到，队列要靠它决定发不发（`complete` 就发，被打断/出错就留着） |
 | `state` | `state` | 会话状态变了 |
 | `tps` | `tps`, `lastTps` | 实时速度（工具边界之后变暗） |
 | `usage` / `cost` | 见 `UsageInfo` | 会话金额、缓存命中 |
@@ -183,4 +184,5 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 5. **一块屏改了共享状态，要告诉另一块**（消息用 `user_message`、回答用 `ask_answered`）。
 6. **列表的增删改都是广播，不属于某一段会话的流。** 任何一块屏新建、删除、重命名、置顶对话都发 `sessions_changed`，收到的人重读 `/v1/sessions`（并把打开着的那段的标题等一并修掉）。删除走桌面同一条 `DeleteSession`：正在跑的那一轮**被拒绝**，不是被停下来；置顶走同一条 `SetSessionPinned`。
 7. **手机不改变桌面正在显示的会话。**
-8. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
+8. **一段对话可以换 id，订阅要跟着走。** 通知里带着这一轮的结束原因：换轨与 `idle` 之间没有别的延迟，换订阅一定晚一步，`idle` 靠不住。 压缩成功时 agent 把历史搬进**子会话**，这一轮剩下的部分接着在子会话里跑。桌面在这一刻换轨（`agent:session_switched`），手机收到 `session_moved` 后把画面、订阅、排队中的消息一起搬到新 id。不搬的手机停在旧那一半：画面不动、状态永远「在跑」、队列发不出去（`idle` 已经发往子会话了）。换轨发生在**一轮结束之后**，不是压缩那一刻 —— 中途搬会把正在写的消息从画面底下抽走。
+9. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。

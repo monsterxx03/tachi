@@ -251,10 +251,11 @@ func (d *desktopApp) sessionBaseDir() string {
 // isolated by the manager's discovered sets). It returns the agent; the caller
 // applies provider/thinking overrides.
 //
-// sessionID is needed for the permission handler: a bash `ask` rule parks the
-// agent goroutine on the user, and the answer must reach THAT conversation (see
-// permission.go).
-func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string, sm *session.Manager) (*agent.AIAgent, error) {
+// The session manager is what the permission handler resolves the conversation
+// through: a bash `ask` rule parks the agent goroutine on the user, and the answer has
+// to reach the conversation the session is IN NOW (see permission.go — compaction can
+// move it to a child while this agent is still running).
+func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manager) (*agent.AIAgent, error) {
 	// One snapshot for the agent's whole configuration. The pointer is NOT swapped
 	// afterwards (see withConfig), so the agent keeps seeing settings the user
 	// changes later — that is the contract, not a race.
@@ -330,7 +331,7 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 	// The ask decision belongs to this session's user. Installed after construction
 	// because the handler reaches back into the agent for 「本会话全部允许」 (which
 	// flips the session-wide switch on this agent's own policy).
-	a.SetPermissionHandler(d.permissionHandler(sessionID, a))
+	a.SetPermissionHandler(d.permissionHandler(sm, a))
 	// This session's own approval mode, out of its record: 「无需审批」 puts the agent in the
 	// state the card's 「本会话全部允许」 leaves behind (SetAllowAllAsksForSession — one setter,
 	// both readers), so no ask reaches the handler for a bash command or a file call. A denied

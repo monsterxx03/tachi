@@ -455,6 +455,19 @@ func (d *desktopApp) endTurn(id, endReason string) {
 	// the point where no turn of it can be in flight (see deferred_push.go). Before agent:idle, so
 	// the change is in place before the messages the user queued during the turn go out.
 	now := d.followCompaction(id)
+	// 压缩成功时这一轮把对话搬进了**子会话**：手机订的是旧那一半，不说一声就停在压缩点
+	// （idle 发往子会话，它听不到）。搬得走哪一步由 followCompaction 决定，这里只负责
+	// 通知 —— 而且必须带上这一轮为什么结束：手机要靠它决定队列里的话发不发。
+	if now != id {
+		d.mobileNotify(id, map[string]any{
+			"type": mobileEvSessionMoved,
+			"from": id,
+			"to":   now,
+			"end":  endReason,
+		})
+		// 列表里那一行的身份变了（压缩链折到叶子）：每一块屏都该重读一次
+		d.emitSessionsChanged(now)
+	}
 	d.flushDeferredPushes(id, now)
 	d.emitIdle(now, endReason)
 }

@@ -142,6 +142,9 @@ const (
 	mobileEvAskAnswered  = "ask_answered"
 	mobileEvUserMessage  = "user_message"
 	mobileEvSessionPrefs = "session_prefs"
+	// mobileEvSessionMoved 这段对话搬到了另一个会话 id（压缩成功把它写进子会话）。
+	// 订阅是跟着 id 走的：不换轨的手机就停在旧那一半上，看着一个再也不会动的画面。
+	mobileEvSessionMoved = "session_moved"
 	// mobileEvSessionState 一条会话的「在跑 / 在等」变了。和 state 不同，它是**广播**：
 	// 停在列表页的手机没订阅任何会话，却正是需要更新那一行的人。
 	mobileEvSessionState = "session_state"
@@ -152,6 +155,14 @@ const (
 	// 一样是**广播**：这张表不属于任何一段对话，谁改的都要让另一块屏重读。
 	mobileEvCronChanged = "cron_changed"
 	mobileEvLagged      = "lagged"
+)
+
+// 待答项的 kind：**线上的词**，不是内部那张表的 kind。两者只差一个（`ask_user` 在线上叫
+// `question`），而差的那一个正好让手机的卡片永远不认 —— 内部的名字一旦漏到线上，客户端的
+// 类型是对的、代码是对的，只是那条分支永远不成立。
+const (
+	mobileAskKindPermission = "permission"
+	mobileAskKindQuestion   = "question"
 )
 
 // 手机 → 服务端：订阅一个会话，以及心跳。
