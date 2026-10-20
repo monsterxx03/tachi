@@ -183,7 +183,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		primary = expandHome(wd)
 	case "p-tachi":
-		projectName, primary, x
+		projectName, primary, additional = "tachi", "~/repos/tachi", []string{"~/repos/shared"}
 	case "p-notes":
 		projectName, primary = "笔记", "~/notes"
 	default:
