@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -157,7 +159,17 @@ func (d *desktopApp) mobileSnapshot(id string) (*mobileSnapshot, error) {
 	if additional == nil {
 		additional = []string{}
 	}
-	parts := mobileContextParts(d.contextPartsFor(id))
+	// Everything the context card shows, from ONE read: a live agent's own measurement when one
+	// exists, the records on disk when it does not (a conversation the desktop never opened in
+	// this process — issue #53's "context and cost are empty").
+	est, tb, window := d.contextUsage(id)
+	if est <= 0 {
+		est = estimateContextFromRecords(raw, d.providerTypeFor(ss))
+	}
+	if window <= 0 {
+		window = d.contextWindowFor(ss)
+	}
+	parts := mobileContextParts(contextParts(tb))
 	// The session records the provider it runs on; "" means "the default", and the phone shows
 	// a name, so the default is spelled out here rather than left as an empty chip.
 	model := ss.ProviderName
@@ -176,7 +188,7 @@ func (d *desktopApp) mobileSnapshot(id string) (*mobileSnapshot, error) {
 		SkipApproval: ss.SkipApproval,
 		Workspace:    mobileWorkspace{Primary: primary, Additional: additional},
 		Usage:        d.mobileUsage(id),
-		Context:      mobileContext{Estimate: d.mobileContextEstimate(id), Window: d.mobileContextWindow(id), Parts: parts},
+		Context:      mobileContext{Estimate: est, Window: window, Parts: parts},
 		Attachments:  d.mobileAttachments(ss, raw),
 	}, nil
 }
@@ -255,20 +267,45 @@ func (d *desktopApp) mobileAsks(sessionID string) []mobileAsk {
 	return out
 }
 
-// mobileUsage reads this session's ledger numbers off its run, WITHOUT creating one: a session
-// the desktop has not opened in this process simply has nothing measured yet, and an empty run
-// entry is what the guards around getRun exist to avoid.
+// mobileUsage reads this session's cost from the usage LEDGER, which is what the desktop's
+// status bar aggregates too (rebuildCostCredit). It deliberately does not need a live run: a
+// conversation the desktop has not opened in this process still spent its money, and reporting
+// 0 for it made the phone's usage card look broken (issue #53).
+//
+// Cost and credit are CNY / 积分, the units the ledger rows carry — the phone renders ¥.
 func (d *desktopApp) mobileUsage(id string) mobileUsage {
-	r := d.runOf(id)
-	if r == nil {
+	ss := d.sessionRecord(id)
+	if ss == nil || d.sm == nil {
 		return mobileUsage{}
 	}
-	d.mu.Lock()
-	cost, credit, rate, hasRate := r.cost, r.credit, r.cacheHitRate, r.hasCacheHit
-	d.mu.Unlock()
+	rec := agent.GlobalUsageRecorder()
+	if rec == nil {
+		return mobileUsage{}
+	}
+	rows, err := rec.Rows(id, ss.CreatedAt)
+	if err != nil {
+		return mobileUsage{}
+	}
+	return mobileUsageFromRows(rows, d.config())
+}
+
+// mobileUsageFromRows is the aggregation itself, without a recorder: the same sums the desktop's
+// status bar takes (rebuildCostCredit), testable without touching a ledger directory.
+func mobileUsageFromRows(rows []llm.UsageRow, cfg *config.Config) mobileUsage {
+	var cost, credit float64
+	var lastIn, lastCr int64
+	have := false
+	for _, row := range rows {
+		cost += row.Cost()
+		credit += row.CreditValue(llm.ResolveCreditRate(cfg, row.Provider, row.Model))
+		lastIn, lastCr = row.InputTokens, row.CacheReadInputTokens
+		have = true
+	}
 	u := mobileUsage{Cost: cost, Credit: credit}
-	if hasRate {
-		u.CacheHitRate = rate
+	// Same "recent rate" as the desktop: the LAST call's cache reads over cache-miss + cache-read.
+	// Writing new cache entries is excluded on purpose.
+	if have && lastIn+lastCr > 0 {
+		u.CacheHitRate = float64(lastCr) / float64(lastIn+lastCr)
 	}
 	return u
 }
@@ -289,14 +326,68 @@ func (d *desktopApp) contextPartsFor(id string) []ContextPartVO {
 	return contextParts(tb)
 }
 
-func (d *desktopApp) mobileContextEstimate(id string) int64 {
-	est, _, _ := d.contextUsage(id)
+// estimateContextFromRecords is estimateFromMessages WITHOUT a live run: the most recent call's
+// recorded prompt size, falling back to the chars/4 estimate on records too old to carry counts.
+// A session restored from disk has had nothing appended since that call, so it IS the context
+// size right now.
+func estimateContextFromRecords(msgs []session.Message, providerType string) int64 {
+	var est, real int64
+	for _, m := range msgs {
+		u := m.Usage
+		if u == nil || u.EstimatedInputTokens <= 0 {
+			continue
+		}
+		est = u.EstimatedInputTokens
+		real = llm.PromptTokens(&llm.Usage{
+			InputTokens:              u.InputTokens,
+			CacheReadInputTokens:     u.CacheReadInputTokens,
+			CacheCreationInputTokens: u.CacheCreationInputTokens,
+		}, providerType)
+	}
+	if real > 0 {
+		return real
+	}
 	return est
 }
 
-func (d *desktopApp) mobileContextWindow(id string) int64 {
-	_, _, window := d.contextUsage(id)
-	return window
+// providerTypeFor names the provider TYPE (anthropic / openai / …) a session runs on. It decides
+// how llm.PromptTokens reads a recorded call's counts, so "" (unknown) must be distinguishable
+// from a real type — it changes the answer for OpenAI-family providers.
+func (d *desktopApp) providerTypeFor(ss *session.Session) string {
+	cfg := d.config()
+	if cfg == nil {
+		return ""
+	}
+	name := ""
+	if ss != nil {
+		name = ss.ProviderName
+	}
+	if p := cfg.ProviderConfig(name); p != nil {
+		return string(p.Type)
+	}
+	return ""
+}
+
+// contextWindowFor resolves the model's window from CONFIG, for a session no live agent has
+// been built for. Same rule as llm.Resolve: the provider's explicit override wins, then the
+// built-in model table.
+func (d *desktopApp) contextWindowFor(ss *session.Session) int64 {
+	cfg := d.config()
+	if cfg == nil {
+		return 0
+	}
+	name := ""
+	if ss != nil {
+		name = ss.ProviderName
+	}
+	p := cfg.ProviderConfig(name)
+	if p == nil {
+		return 0
+	}
+	if p.Spec.ContextWindow != nil && *p.Spec.ContextWindow > 0 {
+		return *p.Spec.ContextWindow
+	}
+	return llm.ModelContextWindow(p.Model)
 }
 
 // mobileAttachments lists the files THIS conversation handed over with SendFile. Nothing else

@@ -1,6 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Snapshot } from '../api/types';
+import type { Live } from '../state/chat';
 import { useTheme } from '../theme/ThemeContext';
 
 /** 分项条的四档：同一个色系由深到浅，别用语义色（绿/琥珀说的是「好/警告」，这里说的是「占比」） */
@@ -8,13 +9,24 @@ function partColors(t: ReturnType<typeof useTheme>['tokens']): string[] {
   return [t.accent, t.accent2, t.accentLine, t.accentSoft];
 }
 
-function CtxBar({ parts, total, t }: { parts: { label: string; tokens: number }[]; total: number; t: ReturnType<typeof useTheme>['tokens'] }) {
+function CtxBar({
+  parts,
+  total,
+  t,
+}: {
+  parts: { label: string; tokens: number }[];
+  total: number;
+  t: ReturnType<typeof useTheme>['tokens'];
+}) {
   const colors = partColors(t);
+  // 没有分项（这段对话在本进程里还没跑过一轮）时只画总量：编几个 0 的桶只会让人以为
+  // 「工具结果占 0」是测出来的。
+  const rows = parts.length > 0 ? parts : [{ label: '上下文', tokens: total }];
   return (
     <>
       <View style={[styles.ctxBar, { backgroundColor: t.wash }]}>
         <View style={styles.ctxFill}>
-          {parts.map((p, i) => (
+          {rows.map((p, i) => (
             <View
               key={p.label}
               style={{ height: 8, width: `${total > 0 ? (p.tokens / total) * 100 : 0}%`, backgroundColor: colors[i % colors.length] }}
@@ -22,15 +34,21 @@ function CtxBar({ parts, total, t }: { parts: { label: string; tokens: number }[
           ))}
         </View>
       </View>
-      <View style={styles.ctxRows}>
-        {parts.map((p, i) => (
-          <View key={p.label} style={styles.ctxRow}>
-            <View style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: colors[i % colors.length] }} />
-            <Text style={[styles.ctxLabel, { color: t.faint }]}>{p.label}</Text>
-            <Text style={[styles.ctxNum, { color: t.dim }]}>{p.tokens.toLocaleString()}</Text>
-          </View>
-        ))}
-      </View>
+      {parts.length > 0 ? (
+        <View style={styles.ctxRows}>
+          {parts.map((p, i) => (
+            <View key={p.label} style={styles.ctxRow}>
+              <View style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: colors[i % colors.length] }} />
+              <Text style={[styles.ctxLabel, { color: t.faint }]}>{p.label}</Text>
+              <Text style={[styles.ctxNum, { color: t.dim }]}>{p.tokens.toLocaleString()}</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={[styles.hint, { color: t.faint }]}>
+          只有总量：分项要在电脑上跑过一轮才有。
+        </Text>
+      )}
     </>
   );
 }
@@ -56,12 +74,14 @@ function Switch({ on, disabled, onPress, t }: { on: boolean; disabled?: boolean;
 
 export function SessionInfo({
   snapshot,
+  live,
   providers,
   onClose,
   onPickModel,
   onToggleSkip,
 }: {
   snapshot: Snapshot;
+  live: Live;
   providers: string[];
   onClose: () => void;
   onPickModel: (name: string) => void;
@@ -71,6 +91,8 @@ export function SessionInfo({
   const s = snapshot.session;
   const ratio = snapshot.context.window > 0 ? snapshot.context.estimate / snapshot.context.window : 0;
   const readOnly = s.readOnly;
+  const tps = live.tps || live.lastTps;
+  const usage = snapshot.usage;
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -158,12 +180,27 @@ export function SessionInfo({
           <Text style={[styles.cardTitle, { color: t.text }]}>用量</Text>
           <View style={styles.kv}>
             <Text style={[styles.k, { color: t.faint }]}>这段对话</Text>
-            <Text style={[styles.v, { color: t.dim }]}>${snapshot.usage.cost.toFixed(3)}</Text>
+            <Text style={[styles.v, { color: t.dim }]}>¥{usage.cost.toFixed(3)}</Text>
           </View>
+          {usage.credit ? (
+            <View style={styles.kv}>
+              <Text style={[styles.k, { color: t.faint }]}>积分</Text>
+              <Text style={[styles.v, { color: t.dim }]}>{usage.credit.toFixed(2)}</Text>
+            </View>
+          ) : null}
+          {usage.cacheHitRate != null ? (
+            <View style={styles.kv}>
+              <Text style={[styles.k, { color: t.faint }]}>缓存命中</Text>
+              <Text style={[styles.v, { color: t.dim }]}>{Math.round(usage.cacheHitRate * 100)}%</Text>
+            </View>
+          ) : null}
           <View style={styles.kv}>
             <Text style={[styles.k, { color: t.faint }]}>速度</Text>
-            <Text style={[styles.v, { color: t.dim }]}>52 tok/s</Text>
+            <Text style={[styles.v, { color: t.dim }]}>{tps ? `${Math.round(tps)} tok/s` : '—'}</Text>
           </View>
+          <Text style={[styles.hint, { color: t.faint }]}>
+            金额与积分来自电脑上的用量账本（人民币）；速度是这一轮实测的输出速度。
+          </Text>
         </View>
       </ScrollView>
     </View>

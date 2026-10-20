@@ -122,12 +122,16 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 
 ## 界面
 
-- **正文的 markdown 是自己渲染的**：`src/ui/md.ts` 只解析模型真会写的那部分（标题、列表、引用、分隔线、表格、粗体/斜体/行内码/链接），`Markdown.tsx` 画成 RN 组件；围栏代码块与 mermaid 由 `Message.tsx` 先切走，不归它管。别引 `react-markdown`——那是渲染 DOM 的，手机上用不了。
+- **正文的 markdown 交给 `@ronradtke/react-native-markdown-display`**（RN 原生的 markdown-it 渲染，表格 / 列表 / 代码块都是它自己的规则）；我们只补两件事：围栏里的 `mermaid` 换成 WebView 那张图，以及所有文字可长按选中。别引 `react-markdown`——那是渲染 DOM 的，手机上用不了。
 - **`<system-reminder>` 不进消息流**：桌面把它折成正文旁边一个小标记，手机上没人会点开，所以 `stripReminders` 直接抽掉，`role: 'reminder'` 整条不画。
 - **实时那一轮和历史记录必须用同一套组件**（`Message.tsx` 的 `ToolCard` / `Thinking`）。两边各画一套的后果是「正在跑的时候工具卡点不开、也没有参数，停下来切个会话又正常了」。
 - **键盘高度自己补**：SDK 58 是 edge-to-edge，manifest 里的 `adjustResize` 不再把窗口缩下来。`App.tsx` 监听 `keyboardDidShow` 给容器垫 `paddingBottom`，否则输入框整条躺在键盘底下。
 - 宽屏（≥768）侧栏可以收起，入口是对话 header 左上角那个菜单键。
-- **会话的增删是广播，不是某一段会话的流**：桌面新建 / 删除、手机删除都发 `sessions_changed`，客户端重读 `/v1/sessions`。手机上是「列表左滑露出删除按钮 → 原生确认框 → `DELETE /v1/sessions/{id}`」，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
+- **消息列表是 inverted 的**（数据倒过来喂）：打开会话就停在最新一条，往上翻出来的更早一页接在数组末尾（视觉顶部），画面不用补偿滚动位置。往上翻到头会走 `page` 端点续读，`hasMore` 跟着最旧的那条走；快照重读时 `mergeSnapshot` 把已经翻出来的更早消息留在原处（一轮结束、重连、lagged 都会触发重读）。进对话先翻到底部这一条也要它：非 inverted 的列表默认停在顶部，等于让人从一百条前的一页往下翻。
+- **工具调用按「连着的一串」折成一行（`ToolFold`，`N 步`）**，点开才逐步展开；失败的那一步不折，自己留一行 —— 出错要看得见。实时那一轮仍旧逐步显示（正在跑的时候，过程就是信息）。
+- **左滑露出两个动作：置顶 / 删除**（`SwipeRow` 的 actions）。收起的动作层从可达性树里摘掉，否则读屏和自动化会点到一个看不见的按钮。
+- **会话的增删改是广播，不是某一段会话的流**：桌面新建 / 删除 / **重命名 / 置顶**、手机建 / 删 / 置顶都发 `sessions_changed`，客户端重读 `/v1/sessions`，并把**打开着的那段**的标题等一并修掉（不修的话，桌面上改了名的对话在这里一直显示旧名）。手机上是「列表左滑 → 置顶 / 删除」，删除走原生确认框与 `DELETE /v1/sessions/{id}`，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
+- **新建会话在列表 header 的 `+`**：项目可选，无项目时手输工作目录（空 = `~/workspace`，`~` 由电脑展开）。桌面那份 `NewSession` 会把窗口切到新会话上，手机不走它 —— 协议不变量 7 要求手机不改变桌面正在显示的那一段。
 - **切后台回来要重建 WebSocket**（`MobileSocket.forceReconnect`）：锁屏期间定时器被挂起、连接可能半开，而 `readyState` 仍报 OPEN——只调 `ensureConnected` 的表现为「回来一直显示连不上，杀掉重进才好」。
 
 ## 验证
@@ -152,6 +156,10 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 ## 服务端
 
 `desktop/mobile*.go`，package `main`，随桌面进程起落（`main.go` 的 `startMobile`）；配置块 `mobile.{enabled,listen,max_attachment_mb}`，监听地址默认 `0.0.0.0:8787`。**端点、事件、字段的出处是 [mobile-protocol.md](mobile-protocol.md)**，这一节只说那些不做就会静默坏掉的地方。
+
+- **用量与上下文不能挂在一个 live run 上**（`mobile_session.go` 的 `mobileUsage` / `estimateContextFromRecords`）：手机点开一段电脑上没打开过的对话时没有 run，报告「0 元、0 token」看着就是坏了。金额与积分从**用量账本**（`agent.GlobalUsageRecorder().Rows(id, createdAt)`）算，上下文估算从记录里最近一次调用的 `usage` 算，上下文窗口从配置里那个 provider 的 `spec.context_window`（没有就用模型表）算。分项（`ContextInfo.Parts`）只有活着的 agent 才有，所以空着的时候界面说「只有总量」。
+- **手机建会话、置顶都走桌面同一条路**：置顶复用 `SetSessionPinned`；建会话只写记录（不建 agent、不碰 `activeID`），第一条消息才由 `loadSessionForRemote` 建起来。
+- **`emitSessionsChanged` 同时发给窗口和手机**：一个事实一个出口 —— 重命名、置顶、新建、删除都从它出去，谁少发一次，另一块屏就停在旧列表上。
 
 - **令牌是凭据，不是配置**：`~/.tachi/mobile.json`（`0600`，首次配对时生成），不进 `config.yaml`；比较用 `crypto/subtle`。`RegenerateMobileToken` 换值**并且断开每一条活连接**——留着旧 socket，等于没作废。
 - **手机发消息前必须走 `loadSessionForRemote`**（`prepareSession` + `LoadSessionHistory`，**不写 `activeID`、不发状态事件**）。`startTurn` 读的是 `r.history`，而 `prepareSession` 不恢复它：一段桌面没打开过的会话，手机发的第一句会让模型忘掉之前的一切，而界面看起来完全正常。

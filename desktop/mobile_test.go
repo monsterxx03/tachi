@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -666,5 +667,163 @@ func TestChooseMobileCandidate(t *testing.T) {
 	}
 	if _, ok := chooseMobileCandidate(nil, ""); ok {
 		t.Fatal("没有候选时不应给出地址")
+	}
+}
+
+// TestMobileUsageFromRows is issue #51/#53's arithmetic: cost and credit are summed off the
+// ledger (not off a live run), and the cached share is the LAST call's reads over miss+read.
+func TestMobileUsageFromRows(t *testing.T) {
+	now := time.Now()
+	rows := []llm.UsageRow{
+		{TS: now, SessionID: "s", InputPrice: 2, OutputPrice: 8, CacheReadPrice: 0.2,
+			InputTokens: 100, OutputTokens: 10, CacheReadInputTokens: 900},
+		{TS: now, SessionID: "s", InputPrice: 2, OutputPrice: 8, CacheReadPrice: 0.2,
+			InputTokens: 200, OutputTokens: 20, CacheReadInputTokens: 200},
+	}
+	u := mobileUsageFromRows(rows, &config.Config{})
+	want := rows[0].Cost() + rows[1].Cost()
+	if u.Cost < want-1e-9 || u.Cost > want+1e-9 {
+		t.Fatalf("cost = %v, want %v (the sum of the ledger rows)", u.Cost, want)
+	}
+	// 200 reads out of 400 prompt tokens on the last call.
+	if u.CacheHitRate < 0.5-1e-9 || u.CacheHitRate > 0.5+1e-9 {
+		t.Fatalf("cache hit rate = %v, want 0.5 (the last call only)", u.CacheHitRate)
+	}
+	if empty := mobileUsageFromRows(nil, &config.Config{}); empty.Cost != 0 || empty.CacheHitRate != 0 {
+		t.Fatalf("no rows = %+v, want zeros", empty)
+	}
+}
+
+// TestMobileContextFallsBackToRecords: a session nothing has opened in this process still reports
+// its context size (the last recorded call) and its model's window (from config) — issue #53.
+func TestMobileContextFallsBackToRecords(t *testing.T) {
+	d, sm := newMobileApp(t)
+	d.cfg.Providers = []config.ProviderConfig{{
+		Name: "p", Model: "claude-sonnet-4-5", Type: config.ProviderTypeAnthropic,
+	}}
+	d.cfg.Provider = "p"
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	writeRecords(t, s.ID,
+		`{"type":"user","content":"hi","timestamp":"2026-10-19T10:00:00Z"}`,
+		`{"type":"assistant","content":"hello","timestamp":"2026-10-19T10:00:01Z",`+
+			`"usage":{"input_tokens":1200,"cache_read_input_tokens":300,"estimated_input_tokens":400}}`,
+	)
+
+	snap, err := d.mobileSnapshot(s.ID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if snap.Context.Estimate != 1500 {
+		t.Fatalf("context estimate = %d, want the recorded prompt size 1500", snap.Context.Estimate)
+	}
+	if snap.Context.Window <= 0 {
+		t.Fatal("context window = 0; a session with no live agent still knows its model's window")
+	}
+}
+
+// TestMobileCreateDoesNotMoveTheDeskView: creating a conversation from the phone is invariant 7 —
+// the window keeps showing what it was showing, and the new row exists for both screens.
+func TestMobileCreateDoesNotMoveTheDeskView(t *testing.T) {
+	d, sm := newMobileApp(t)
+	shown, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	d.mu.Lock()
+	d.activeID = shown.ID
+	d.mu.Unlock()
+
+	dir := t.TempDir()
+	row, status, code := d.mobileCreateSession("", dir)
+	if code != "" {
+		t.Fatalf("create = %d %s", status, code)
+	}
+	if row.ID == shown.ID || row.ID == "" {
+		t.Fatalf("created row = %+v", row)
+	}
+	d.mu.Lock()
+	got := d.activeID
+	d.mu.Unlock()
+	if got != shown.ID {
+		t.Fatalf("activeID = %q, want the displayed session %q untouched", got, shown.ID)
+	}
+	if rec := d.sessionRecord(row.ID); rec == nil || rec.WorkingDir != dir {
+		t.Fatalf("created session's working dir = %v, want %q", rec, dir)
+	}
+}
+
+// TestMobileCreateExpandsHomePath is the "~ is the COMPUTER's home directory" rule, without
+// touching a real home: a path under a temp dir round-trips unchanged, and "~" expands through
+// the same helper the desktop's own new-session path uses.
+func TestMobileCreateExpandsHomePath(t *testing.T) {
+	expanded, err := expandRootPath("~/workspace")
+	if err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	home, _ := os.UserHomeDir()
+	if !filepath.IsAbs(expanded) || !strings.HasPrefix(expanded, home) {
+		t.Fatalf("~/workspace = %q, want an absolute path under %q", expanded, home)
+	}
+	if strings.HasPrefix(expanded, "~") {
+		t.Fatalf("~/workspace kept the tilde: %q", expanded)
+	}
+}
+
+// TestMobilePinPersists: the pin is a record field, re-read by both lists, so the phone's swipe
+// and the sidebar's 置顶 are the same write.
+func TestMobilePinPersists(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if status, code := d.mobileSetPinned(s.ID, true); code != "" {
+		t.Fatalf("pin = %d %s", status, code)
+	}
+	rows, err := d.mobileSessions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 || !rows[0].Pinned {
+		t.Fatalf("rows = %+v, want the single row pinned", rows)
+	}
+	if status, code := d.mobileSetPinned("nope", true); code != "no_session" {
+		t.Fatalf("pin on an unknown session = %d %s", status, code)
+	}
+}
+
+// TestMobileRenameBroadcastsTheList: a title changed on the machine reaches the phone as a list
+// event (issue #57). Without it the row kept the old name until the conversation was reopened.
+func TestMobileRenameBroadcastsTheList(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	m, _ := mobileTestServer(t, d)
+	c := newMobileConn(m, nil)
+	c.out = make(chan []byte, 4)
+	m.mu.Lock()
+	m.conns[c] = struct{}{}
+	m.mu.Unlock()
+
+	if res := (&AgentService{desk: d}).RenameSession(s.ID, "新名字"); res != "ok" {
+		t.Fatalf("rename = %q", res)
+	}
+	select {
+	case b := <-c.out:
+		var ev map[string]any
+		_ = json.Unmarshal(b, &ev)
+		if ev["type"] != mobileEvSessionsChanged {
+			t.Fatalf("event = %v, want sessions_changed", ev)
+		}
+	default:
+		t.Fatal("rename broadcast nothing; the phone would keep the old title")
+	}
+	if rec := d.sessionRecord(s.ID); rec == nil || rec.Title != "新名字" {
+		t.Fatalf("stored title = %v", rec)
 	}
 }

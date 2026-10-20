@@ -20,6 +20,7 @@ import { FileViewer } from './src/ui/FileViewer';
 import { Pairing } from './src/ui/Pairing';
 import { SessionInfo } from './src/ui/SessionInfo';
 import { SessionList } from './src/ui/SessionList';
+import { NewSession } from './src/ui/NewSession';
 import { Settings } from './src/ui/Settings';
 
 /** 一条常驻的提示（连不上、令牌失效、服务端的拒绝原因） */
@@ -59,6 +60,7 @@ function ChatPane({
     return (
       <SessionInfo
         snapshot={m.chat.snapshot}
+        live={m.chat.live}
         providers={m.providers}
         onClose={() => setShowInfo(false)}
         onPickModel={(name) => void m.setProvider(name)}
@@ -87,6 +89,8 @@ function ChatPane({
         }}
         onSend={m.send}
         onStop={() => void m.send('', 'interrupt')}
+        onLoadOlder={() => void m.loadOlder()}
+        olderLoading={m.olderLoading}
       />
     );
 
@@ -104,6 +108,8 @@ function Shell() {
   const insets = useSafeAreaInsets();
   const wide = width >= 768; // 平板：列表和对话并排
   const [showSettings, setShowSettings] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [openFile, setOpenFile] = useState<AttachmentRef | null>(null);
   const [sideCollapsed, setSideCollapsed] = useState(false);
@@ -131,6 +137,10 @@ function Shell() {
         setShowInfo(false);
         return true;
       }
+      if (showNew) {
+        setShowNew(false);
+        return true;
+      }
       if (showSettings) {
         setShowSettings(false);
         return true;
@@ -142,7 +152,7 @@ function Shell() {
       return false;
     });
     return () => sub.remove();
-  }, [openFile, showInfo, showSettings, m]);
+  }, [openFile, showInfo, showNew, showSettings, m]);
 
   // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态
   useEffect(() => {
@@ -159,10 +169,26 @@ function Shell() {
       conn={m.conn}
       onOpen={(id) => void m.open(id)}
       onSettings={() => setShowSettings(true)}
+      onNew={() => setShowNew(true)}
       onRefresh={() => void m.refresh()}
       onDelete={(id) => void m.deleteSession(id)}
+      onPin={(id, pinned) => void m.setPinned(id, pinned)}
     />
   );
+
+  // 新建会话：建好就进去。失败原因由顶部那条提示说（m.error）。
+  const create = async (opts: { projectId?: string; workingDir?: string }) => {
+    setCreating(true);
+    try {
+      const s = await m.createSession(opts);
+      if (s) {
+        setShowNew(false);
+        void m.open(s.id);
+      }
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (!m.ready) return <SafeAreaView style={[styles.root, { backgroundColor: t.bg }]} edges={['top', 'bottom']} />;
 
@@ -174,6 +200,13 @@ function Shell() {
 
         {!m.pairing ? (
           <Pairing onPaired={m.pair} />
+        ) : showNew ? (
+          <NewSession
+            projects={m.projects}
+            busy={creating}
+            onClose={() => setShowNew(false)}
+            onCreate={(opts) => void create(opts)}
+          />
         ) : showSettings ? (
           <Settings
             pairing={m.pairing}

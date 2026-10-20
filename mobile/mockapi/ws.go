@@ -211,8 +211,15 @@ func (s *Server) snapshot(sessionID string) *Snapshot {
 		return nil
 	}
 	cp := sess.Snapshot
+	// 快照只带最近 snapshotLimit 条（和真服务端同一个上限），更早的由 page 端点翻 ——
+	// 手机「往上滑加载更早」的路才有东西可翻。
+	msgs := sess.Messages
+	if len(msgs) > snapshotLimit {
+		msgs = msgs[len(msgs)-snapshotLimit:]
+		cp.HasMore = true
+	}
 	// 空就是空数组，不是 null —— Go 的 nil 切片会序列化成 null，客户端会当数组用
-	cp.Messages = append([]Message{}, sess.Messages...)
+	cp.Messages = append([]Message{}, msgs...)
 	cp.Asks = append([]any{}, sess.Asks...)
 	cp.Attachments = append([]AttachmentRef{}, sess.Attachments...)
 	cp.Context.Parts = append([]ContextPart{}, sess.Context.Parts...)

@@ -39,32 +39,44 @@ function Badge({ text, tone, t }: { text: string; tone: 'mute' | 'amber' | 'live
   );
 }
 
-/** 左滑露出来的那一截：刚好放得下一个删除按钮 */
-const DELETE_WIDTH = 84;
+/** 左滑露出来的那一截：每个动作一个按钮的宽度 */
+const ACTION_WIDTH = 84;
+
+export interface SwipeAction {
+  label: string;
+  icon: 'bookmark' | 'trash-2';
+  tone: 'accent' | 'red';
+  onPress: () => void;
+}
 
 /**
- * 一行可以左滑露出删除。
+ * 一行可以左滑露出动作（置顶 / 删除）。
  *
  * 只在横向移动超过 8px 时接管手势 —— 轻点仍然落到里面的 Pressable 上，
  * 否则点开一段对话这件事会被滑动手势吃掉。
  */
-function SwipeRow({ children, onDelete }: { children: React.ReactNode; onDelete: () => void }) {
+function SwipeRow({ children, actions }: { children: React.ReactNode; actions: SwipeAction[] }) {
   const { tokens: t } = useTheme();
   const tx = useRef(new Animated.Value(0)).current;
   const opened = useRef(false);
+  // 收起时那层动作仍在树里（它就在内容底下），对读屏和自动化来说等于一排看不见的按钮 ——
+  // 所以收起时把整层从可达性树里摘掉。
+  const [revealed, setRevealed] = useState(false);
+  const reveal = actions.length * ACTION_WIDTH;
 
   const pan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderMove: (_e, g) => {
-        const base = opened.current ? -DELETE_WIDTH : 0;
-        tx.setValue(Math.max(-DELETE_WIDTH, Math.min(0, base + g.dx)));
+        const base = opened.current ? -reveal : 0;
+        tx.setValue(Math.max(-reveal, Math.min(0, base + g.dx)));
       },
       onPanResponderRelease: (_e, g) => {
-        const open = (opened.current ? -DELETE_WIDTH : 0) + g.dx < -DELETE_WIDTH / 2;
+        const open = (opened.current ? -reveal : 0) + g.dx < -reveal / 2;
         opened.current = open;
+        setRevealed(open);
         Animated.spring(tx, {
-          toValue: open ? -DELETE_WIDTH : 0,
+          toValue: open ? -reveal : 0,
           useNativeDriver: false,
           bounciness: 0,
         }).start();
@@ -72,20 +84,35 @@ function SwipeRow({ children, onDelete }: { children: React.ReactNode; onDelete:
     }),
   ).current;
 
+  const close = () => {
+    Animated.spring(tx, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
+    opened.current = false;
+    setRevealed(false);
+  };
+
   return (
     <View style={styles.swipeWrap}>
-      <View style={[styles.deleteLayer, { backgroundColor: t.redWash }]}>
-        <Pressable
-          onPress={() => {
-            Animated.spring(tx, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
-            opened.current = false;
-            onDelete();
-          }}
-          style={styles.deleteBtn}
-        >
-          <Feather name="trash-2" size={16} color={t.red} />
-          <Text style={{ color: t.red, fontSize: 11, marginTop: 3 }}>删除</Text>
-        </Pressable>
+      <View
+        style={[styles.actionLayer, { width: reveal, backgroundColor: t.wash }]}
+        importantForAccessibility={revealed ? 'auto' : 'no-hide-descendants'}
+        accessibilityElementsHidden={!revealed}
+      >
+        {actions.map((a) => {
+          const color = a.tone === 'red' ? t.red : t.accent2;
+          return (
+            <Pressable
+              key={a.label}
+              onPress={() => {
+                close();
+                a.onPress();
+              }}
+              style={[styles.actionBtn, { backgroundColor: a.tone === 'red' ? t.redWash : t.accentSoft }]}
+            >
+              <Feather name={a.icon} size={16} color={color} />
+              <Text style={{ color, fontSize: 11, marginTop: 3 }}>{a.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
       <Animated.View style={{ transform: [{ translateX: tx }], backgroundColor: t.sid }} {...pan.panHandlers}>
         {children}
@@ -100,16 +127,20 @@ export function SessionList({
   conn,
   onOpen,
   onSettings,
+  onNew,
   onRefresh,
   onDelete,
+  onPin,
 }: {
   sessions: SessionSummary[];
   currentId: string | null;
   conn: string;
   onOpen: (id: string) => void;
   onSettings: () => void;
+  onNew: () => void;
   onRefresh: () => void;
   onDelete: (id: string) => void;
+  onPin: (id: string, pinned: boolean) => void;
 }) {
   const { tokens: t } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
@@ -127,6 +158,15 @@ export function SessionList({
             </Text>
           </View>
         </View>
+        <Pressable
+          onPress={onNew}
+          style={({ pressed }) => [
+            styles.gear,
+            { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
+          ]}
+        >
+          <Feather name="plus" size={18} color={t.faint} />
+        </Pressable>
         <Pressable
           onPress={onSettings}
           style={({ pressed }) => [
@@ -159,12 +199,24 @@ export function SessionList({
           const badge = badgeOf(s);
           return (
             <SwipeRow
-              onDelete={() =>
-                Alert.alert('删除这段对话？', s.title, [
-                  { text: '取消', style: 'cancel' },
-                  { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
-                ])
-              }
+              actions={[
+                {
+                  label: s.pinned ? '取消置顶' : '置顶',
+                  icon: 'bookmark',
+                  tone: 'accent',
+                  onPress: () => onPin(s.id, !s.pinned),
+                },
+                {
+                  label: '删除',
+                  icon: 'trash-2',
+                  tone: 'red',
+                  onPress: () =>
+                    Alert.alert('删除这段对话？', s.title, [
+                      { text: '取消', style: 'cancel' },
+                      { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
+                    ]),
+                },
+              ]}
             >
               <Pressable
                 onPress={() => onOpen(s.id)}
@@ -206,8 +258,8 @@ const styles = StyleSheet.create({
 
   listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
   swipeWrap: { borderRadius: 12, overflow: 'hidden', marginVertical: 2 },
-  deleteLayer: { position: 'absolute', right: 0, top: 0, bottom: 0, width: DELETE_WIDTH },
-  deleteBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  actionLayer: { position: 'absolute', right: 0, top: 0, bottom: 0, flexDirection: 'row' },
+  actionBtn: { width: ACTION_WIDTH, alignItems: 'center', justifyContent: 'center' },
   row: { borderRadius: 12, borderWidth: 1, borderColor: 'transparent', paddingTop: 12, paddingHorizontal: 12, paddingBottom: 11 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: '600' },

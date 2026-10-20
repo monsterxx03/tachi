@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
 import { loadPairing, savePairing } from '../api/storage';
-import type { SessionSummary } from '../api/types';
+import type { ProjectRef, SessionSummary } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
 
@@ -15,6 +15,8 @@ export interface MobileApi {
   conn: WsStatus | 'idle';
   sessions: SessionSummary[];
   providers: string[];
+  /** 新建会话时可挑的项目（桌面上的那份，只读） */
+  projects: ProjectRef[];
   openId: string | null;
   chat: ChatState;
   error: string | null;
@@ -27,6 +29,10 @@ export interface MobileApi {
   send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<boolean>;
   /** 回到前台时用：重读当前会话的快照与列表（App 挂后台期间可能什么都不知道） */
   reloadCurrent: () => Promise<void>;
+  /** 往上翻一页更早的历史；还有没有更早的看 snapshot.hasMore */
+  loadOlder: () => Promise<void>;
+  /** 一页更早的历史正在读（顶部那条提示靠它，也靠它挡住重复请求） */
+  olderLoading: boolean;
   decide: (toolId: string, decision: 'allow_once' | 'deny') => Promise<void>;
   answer: (answers: Record<string, string>) => Promise<void>;
   decline: () => Promise<void>;
@@ -34,6 +40,10 @@ export interface MobileApi {
   setSkipApproval: (skip: boolean) => Promise<void>;
   /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
   deleteSession: (id: string) => Promise<void>;
+  /** 置顶 / 取消置顶。位置由服务端广播的 sessions_changed 落到每一块屏上。 */
+  setPinned: (id: string, pinned: boolean) => Promise<void>;
+  /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
+  createSession: (opts: { projectId?: string; workingDir?: string }) => Promise<SessionSummary | null>;
 }
 
 export function useMobile(): MobileApi {
@@ -42,14 +52,21 @@ export function useMobile(): MobileApi {
   const [conn, setConn] = useState<WsStatus | 'idle'>('idle');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectRef[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatState>(emptyChat);
+  const [olderLoading, setOlderLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
   // 事件回调里要读到最新的会话 id，用 ref 避开闭包
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
+  // 翻页要读「画面上最旧的那条」，那只有渲染后的 chat 里有
+  const chatRef = useRef<ChatState>(chat);
+  chatRef.current = chat;
+  // 一页正在飞的时候不要再来一页：滚动事件一秒能来几十次
+  const pagingRef = useRef(false);
 
   const reload = useCallback(
     async (id: string | null) => {
@@ -93,6 +110,16 @@ export function useMobile(): MobileApi {
         // 拉不到就只是列表空着，不值得打断这一屏
       });
 
+    // 新建会话时能挑的项目
+    void api
+      .projects(pairing)
+      .then((r) => {
+        if (!cancelled) setProjects(r.projects);
+      })
+      .catch(() => {
+        // 同上：没有项目可选时「无项目」那条路照样能用
+      });
+
     const sock = new MobileSocket(pairing, {
       onEvent: (ev) => {
         if (ev.type === 'session_state') {
@@ -105,10 +132,41 @@ export function useMobile(): MobileApi {
           return;
         }
         if (ev.type === 'sessions_changed') {
-          // 会话列表是广播的：桌面新建 / 删除、或另一台手机删了，这里重读一次
+          // 会话列表是广播的：桌面新建 / 删除 / 重命名 / 置顶，或另一台手机做了这些，这里重读一次。
+          // 打开着的那段也要跟着改：标题是那一行的全部身份，重读列表却不修快照的话，
+          // 桌面上改了名字的对话在这里一直显示旧名（issue #57）。
           void api
             .listSessions(pairing)
-            .then((r) => setSessions(r.sessions))
+            .then((r) => {
+              setSessions(r.sessions);
+              const id = openIdRef.current;
+              if (!id) return;
+              const row = r.sessions.find((s) => s.id === id);
+              if (!row) {
+                // 在别处被删了：停在一条不存在的对话上没有意义
+                setOpenId(null);
+                setChat(emptyChat);
+                return;
+              }
+              setChat((st) =>
+                st.snapshot
+                  ? {
+                      ...st,
+                      snapshot: {
+                        ...st.snapshot,
+                        session: {
+                          ...st.snapshot.session,
+                          title: row.title,
+                          projectName: row.projectName,
+                          pinned: row.pinned,
+                          readOnly: row.readOnly,
+                          heldByTask: row.heldByTask,
+                        },
+                      },
+                    }
+                  : st,
+              );
+            })
             .catch(() => undefined);
           return;
         }
@@ -176,6 +234,42 @@ export function useMobile(): MobileApi {
       // 下一次刷新再说
     }
   }, [reload, pairing]);
+
+  /**
+   * 上滑翻页：游标是画面上最旧一条的记录序号（协议里那条：不是时间戳 —— 时间戳会撞）。
+   * 合并之后 hasMore 用这一页自己的答案，否则到了最早一页还会一直请求。
+   */
+  const loadOlder = useCallback(async () => {
+    const id = openIdRef.current;
+    const snap = chatRef.current.snapshot;
+    if (!pairing || !id || !snap || !snap.hasMore || pagingRef.current) return;
+    const first = snap.messages.find((m) => m.index >= 0);
+    if (!first) return;
+    pagingRef.current = true;
+    setOlderLoading(true);
+    try {
+      const r = await api.page(pairing, id, first.index);
+      setChat((st) => {
+        if (!st.snapshot) return st;
+        const seen = new Set(st.snapshot.messages.map((m) => m.index));
+        const older = r.messages.filter((m) => !seen.has(m.index));
+        return {
+          ...st,
+          snapshot: {
+            ...st.snapshot,
+            messages: [...older, ...st.snapshot.messages],
+            hasMore: r.hasMore,
+          },
+        };
+      });
+      setError(null);
+    } catch (e) {
+      setError(messageOfError(e));
+    } finally {
+      pagingRef.current = false;
+      setOlderLoading(false);
+    }
+  }, [pairing]);
 
   const open = useCallback(async (id: string) => {
     setOpenId(id);
@@ -283,12 +377,41 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  /** 置顶 / 取消置顶。列表的次序由服务端广播的 sessions_changed 重新读出来。 */
+  const setPinned = useCallback(
+    (id: string, pinned: boolean) =>
+      withError(async () => {
+        if (pairing) await api.setPinned(pairing, id, pinned);
+      }),
+    [pairing, withError],
+  );
+
+  // 新建会话：服务端建的是真正的那一段（记录在电脑上），这里只把它插进列表并打开。
+  // 两件事都由 sessions_changed 再确认一次 —— 但它可能比这个响应先到，所以本地也插一行，
+  // 插的时候按 id 去重。
+  const createSession = useCallback(
+    async (opts: { projectId?: string; workingDir?: string }): Promise<SessionSummary | null> => {
+      if (!pairing) return null;
+      try {
+        const r = await api.createSession(pairing, opts);
+        setError(null);
+        setSessions((list) => [r.session, ...list.filter((s) => s.id !== r.session.id)]);
+        return r.session;
+      } catch (e) {
+        setError(messageOfError(e));
+        return null;
+      }
+    },
+    [pairing],
+  );
+
   return {
     ready,
     pairing,
     conn,
     sessions,
     providers,
+    projects,
     openId,
     chat,
     error,
@@ -296,6 +419,8 @@ export function useMobile(): MobileApi {
     unpair,
     refresh,
     reloadCurrent,
+    loadOlder,
+    olderLoading,
     open,
     close,
     send,
@@ -305,6 +430,8 @@ export function useMobile(): MobileApi {
     setProvider,
     setSkipApproval,
     deleteSession,
+    setPinned,
+    createSession,
   };
 }
 

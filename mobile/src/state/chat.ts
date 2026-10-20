@@ -19,6 +19,8 @@ export interface Live {
   tools: ToolRun[];
   /** 这一轮的实时速度（协议里的 tps 事件）；还没收到过就是 undefined */
   tps?: number;
+  /** 工具边界 / 轮次结束后冻结下来的上一次速度 —— 停下来时显示它 */
+  lastTps?: number;
 }
 
 export const emptyLive: Live = { active: false, text: '', thinking: '', tools: [] };
@@ -45,7 +47,9 @@ export function applyEvent(
 
   switch (ev.type) {
     case 'snapshot':
-      return same({ snapshot: ev.snapshot, live: emptyLive });
+      // 快照是整个会话的权威状态，实时那一轮要清掉 —— 但最后一次实测速度留着：
+      // 它就是这段对话最近的速度，清掉的话每轮结束都退回「—」。
+      return same({ snapshot: mergeSnapshot(st.snapshot, ev.snapshot), live: { ...emptyLive, lastTps: st.live.lastTps } });
 
     case 'text':
       return same({ ...st, live: { ...st.live, active: true, text: st.live.text + ev.text } });
@@ -64,7 +68,7 @@ export function applyEvent(
       });
 
     case 'tps':
-      return same({ ...st, live: { ...st.live, tps: ev.tps } });
+      return same({ ...st, live: { ...st.live, tps: ev.tps, lastTps: ev.lastTps || st.live.lastTps } });
 
     case 'tool_args':
       return same({
@@ -139,6 +143,26 @@ export function applyEvent(
   }
 }
 
+/**
+ * 新快照落到已有画面上：**已经翻出来的更早消息留着**。
+ *
+ * 快照只带最近一百条（协议里那条：记录是权威的，但快照只够画一屏）。用户上滑翻过更早的
+ * 历史之后，一次轮次结束、一次重连都会重读快照 —— 直接替换等于把翻出来的东西又收回去，
+ * 滚动位置也会跳。所以这里把比新快照更早的那些合并回去，按记录序号去重。
+ *
+ * hasMore 跟着**合并后**最旧的那条走：新快照的 hasMore 说的是「比我这一屏更早的还有」，
+ * 而我们手里可能已经有更早的了，那时该用旧的答案。
+ */
+export function mergeSnapshot(prev: Snapshot | null, snap: Snapshot): Snapshot {
+  if (!prev || prev.session.id !== snap.session.id) return snap;
+  const oldest = snap.messages.length > 0 ? snap.messages[0].index : Number.MAX_SAFE_INTEGER;
+  const older = prev.messages.filter((m) => m.index >= 0 && m.index < oldest);
+  if (older.length === 0) return snap;
+  const seen = new Set(older.map((m) => m.index));
+  const merged = [...older, ...snap.messages.filter((m) => !seen.has(m.index))];
+  return { ...snap, messages: merged, hasMore: prev.hasMore };
+}
+
 /** 服务端那些拒绝原因翻成一句人话（协议里那张表） */
 export function messageOfError(e: unknown): string {
   if (e instanceof ApiError) {
@@ -161,6 +185,14 @@ export function messageOfError(e: unknown): string {
         return '有一项远端任务正在使用它';
       case 'agent_unavailable':
         return '这台电脑还没配好模型，先在电脑上配置';
+      case 'no_project':
+        return '这个项目已经不在了（或它的目录不可用）';
+      case 'bad_working_dir':
+        return '这个目录用不了，换一个路径试试';
+      case 'create_failed':
+        return '没能建出这段对话，在电脑上看看日志';
+      case 'pin_failed':
+        return '置顶没保存成功，再试一次';
     }
     return `出错了（${e.code}）`;
   }

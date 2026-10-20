@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -26,6 +27,7 @@ type SessionSummary struct {
 	Waiting    string `json:"waiting"`
 	ReadOnly   bool   `json:"readOnly"`
 	HeldByTask bool   `json:"heldByTask"`
+	Pinned     bool   `json:"pinned,omitempty"`
 }
 
 type Message struct {
@@ -230,7 +232,7 @@ func seed() (order []string, byID map[string]*session) {
 	add(s4)
 
 	s5 := &session{}
-	s5.Session = SessionSummary{ID: "s5", Title: "移动端接入方案", ProjectName: "tachi", UpdatedAt: "昨天"}
+	s5.Session = SessionSummary{ID: "s5", Title: "移动端接入方案", ProjectName: "tachi", UpdatedAt: "昨天", Pinned: true}
 	s5.Model = "Alpha 4.5"
 	s5.Workspace = WorkspaceInfo{Primary: "~/repos/tachi"}
 	s5.Usage = UsageInfo{Cost: 0.07}
@@ -261,8 +263,56 @@ func seed() (order []string, byID map[string]*session) {
 	s6.Attachments = []AttachmentRef{{ID: "a-3", Name: "hs300-valuation.png", MimeType: "image/png", Size: 186000, Downloadable: true}}
 	add(s6)
 
+	// 一段很长的历史：快照只带最近 100 条（和真服务端同一个上限），更早的靠 page 翻。
+	// 手机上那条「往上滑加载更早」的路要有真东西可翻。
+	s7 := &session{}
+	s7.Session = SessionSummary{ID: "s7", Title: "长对话：接口梳理", ProjectName: "tachi", UpdatedAt: "前天"}
+	s7.Model = "Beta 5.2"
+	s7.Workspace = WorkspaceInfo{Primary: "~/repos/tachi"}
+	s7.Usage = UsageInfo{Cost: 1.42, Credit: 1200, CacheHitRate: 0.72}
+	s7.Context = ContextInfo{Estimate: 168000, Window: 400000, Parts: []ContextPart{
+		{Label: "系统提示词", Tokens: 9000}, {Label: "工具定义", Tokens: 14000},
+		{Label: "对话", Tokens: 120000}, {Label: "工具结果", Tokens: 25000},
+	}}
+	s7.State = SessionState{Status: "idle", Label: "空闲"}
+	for i := 0; i < 130; i++ {
+		if i%4 == 0 {
+			s7.append(Message{Role: "user", Content: fmt.Sprintf("第 %d 轮：把这个模块的接口列一下。", i/4+1)})
+		} else {
+			s7.append(Message{Role: "assistant", Content: fmt.Sprintf("已记录第 %d 条：接口与调用方都在这儿。", i)})
+		}
+	}
+	add(s7)
+
+	// 一轮里连着调用好几个工具：手机上那行「N 步」要有东西可折；其中一个失败的留在外面。
+	s8 := &session{}
+	s8.Session = SessionSummary{ID: "s8", Title: "接口巡检", ProjectName: "tachi", UpdatedAt: "3 天前"}
+	s8.Model = "Gamma K2"
+	s8.Workspace = WorkspaceInfo{Primary: "~/repos/tachi"}
+	s8.Usage = UsageInfo{Cost: 0.09}
+	s8.Context = ContextInfo{Estimate: 41000, Window: 200000, Parts: []ContextPart{
+		{Label: "系统提示词", Tokens: 8000}, {Label: "工具定义", Tokens: 12000},
+		{Label: "对话", Tokens: 18000}, {Label: "工具结果", Tokens: 3000},
+	}}
+	s8.State = SessionState{Status: "idle", Label: "空闲"}
+	s8.append(Message{Role: "user", Content: "看一下 mobile 那边的接口有没有漏掉鉴权。"})
+	s8.append(Message{Role: "assistant", Content: "我先翻一遍服务端的路由表和手机端的调用。"})
+	s8.append(Message{Role: "tool_call", ToolName: "ReadFile", ToolCallID: "tc-8a", Title: "desktop/mobile.go"})
+	s8.append(Message{Role: "tool_result", ToolName: "ReadFile", ToolCallID: "tc-8a", ToolResult: "… 13 条 mux.HandleFunc …"})
+	s8.append(Message{Role: "tool_call", ToolName: "Bash", ToolCallID: "tc-8b", Title: "go vet ./desktop"})
+	s8.append(Message{Role: "tool_result", ToolName: "Bash", ToolCallID: "tc-8b", ToolResult: "exit status 1: build constraints exclude all Go files", IsError: true})
+	s8.append(Message{Role: "tool_call", ToolName: "Grep", ToolCallID: "tc-8c", Title: "guard(...)"})
+	s8.append(Message{Role: "tool_result", ToolName: "Grep", ToolCallID: "tc-8c", ToolResult: "13 处都在 m.guard(...) 里"})
+	s8.append(Message{Role: "tool_call", ToolName: "ReadFile", ToolCallID: "tc-8d", Title: "mobile/src/api/client.ts"})
+	s8.append(Message{Role: "tool_result", ToolName: "ReadFile", ToolCallID: "tc-8d", ToolResult: "… Authorization: Bearer …"})
+	s8.append(Message{Role: "assistant", Content: "13 个端点都过了 guard，除了 ping（它本来就不该要令牌）。有个 vet 失败是目录不对，不是代码问题。"})
+	add(s8)
+
 	return order, byID
 }
+
+// snapshotLimit 与真服务端的 mobileSnapshotLimit 对齐：快照只够画一屏，更早的要翻页。
+const snapshotLimit = 100
 
 const mermaidReply = `不像 channel 那样各聊各的：手机连的是开着的那台电脑，会话还是桌面上的那段。
 

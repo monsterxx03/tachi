@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { FileSource } from '../api/client';
 import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
 import type { Live } from '../state/mobile';
@@ -26,6 +26,9 @@ function MetaStrip({
   const ratio = context.window > 0 ? context.estimate / context.window : 0;
   const ctxColor = ratio >= 0.9 ? t.red : ratio >= 0.75 ? t.amber : t.faint;
   const streaming = session.running;
+  // 停下来的那一轮保留最后一次速度（桌面同一条规矩：工具边界之后变暗），
+  // 否则每轮结束后这里都退回「—」，看着像从没测到过。
+  const tps = live.tps || live.lastTps;
 
   return (
     <View style={[styles.strip, { borderBottomColor: t.border, backgroundColor: t.stripBg }]}>
@@ -34,7 +37,7 @@ function MetaStrip({
       <View style={[styles.tps, { opacity: streaming ? 1 : 0.62 }]}>
         <View style={[styles.tpsDot, { backgroundColor: streaming ? t.green : t.faint }]} />
         <Text style={{ color: streaming ? t.dim : t.faint, fontSize: 11.5 }}>
-          {live.tps ? `${Math.round(live.tps)} tok/s` : '—'}
+          {tps ? `${Math.round(tps)} tok/s` : '—'}
         </Text>
       </View>
       <Text style={[styles.sep, { color: t.faint }]}>·</Text>
@@ -133,6 +136,42 @@ function Composer({
   );
 }
 
+/** 一串工具调用：一行概括，点开看每一步（桌面的「N 步」那一行的手机版）。 */
+function ToolFold({ tools }: { tools: ToolPair[] }) {
+  const { tokens: t } = useTheme();
+  const [open, setOpen] = useState(false);
+  const names = tools.map((x) => x.msg.toolName ?? '').filter(Boolean);
+  const unique = [...new Set(names)];
+  const summary = unique.length > 2 ? `${unique.slice(0, 2).join('、')} 等` : unique.join('、');
+
+  return (
+    <View style={[styles.tool, { borderColor: t.border, backgroundColor: t.wash }]}>
+      <Pressable onPress={() => setOpen((v) => !v)} style={styles.toolHead}>
+        <Feather name={open ? 'chevron-up' : 'chevron-down'} size={13} color={t.faint} style={{ marginTop: 1 }} />
+        <Text style={[styles.toolName, { color: t.dim }]}>{tools.length} 步</Text>
+        <Text style={[styles.toolSum, { color: t.faint }]} numberOfLines={1}>
+          {summary}
+        </Text>
+      </Pressable>
+      {open ? (
+        <View style={{ paddingBottom: 4, paddingTop: 2 }}>
+          {tools.map((x) => (
+            <View key={x.key} style={{ paddingHorizontal: 4 }}>
+              <ToolCard
+                name={x.msg.toolName ?? ''}
+                title={x.msg.title}
+                args={x.msg.args}
+                result={x.result?.toolResult}
+                isError={x.result?.isError}
+              />
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 /** 活气泡：这一轮正在流的东西。轮次一结束就被记录替换掉。 */
 function LiveBubble({ live }: { live: Live }) {
   if (!live.active && !live.text && live.tools.length === 0) return null;
@@ -155,8 +194,11 @@ function LiveBubble({ live }: { live: Live }) {
   );
 }
 
+type ToolPair = { key: string; msg: SessionMessage; result?: SessionMessage };
+
 type Item =
   | { kind: 'msg'; key: string; msg: SessionMessage; ask?: PendingAsk; result?: SessionMessage }
+  | { kind: 'tools'; key: string; tools: ToolPair[] }
   | { kind: 'live'; key: string };
 
 function buildItems(snapshot: Snapshot, live: Live): Item[] {
@@ -165,10 +207,34 @@ function buildItems(snapshot: Snapshot, live: Live): Item[] {
     if (m.role === 'tool_result' && m.toolCallId) results.set(m.toolCallId, m);
   }
   const items: Item[] = [];
+  // 连着的一串工具调用折成一行（像桌面的「N 步」）：一轮里模型常常连着调五六个工具，
+  // 每个都占一行的话，真正的回复会被挤到屏幕外。失败的那些不折 —— 出错要看得见。
+  const flushTools = (tools: ToolPair[]) => {
+    if (tools.length === 0) return;
+    if (tools.length === 1) {
+      const t = tools[0];
+      items.push({ kind: 'msg', key: t.key, msg: t.msg, result: t.result });
+      return;
+    }
+    items.push({ kind: 'tools', key: `tools${tools[0].msg.index}`, tools: [...tools] });
+  };
+  let pendingTools: ToolPair[] = [];
   snapshot.messages.forEach((m, i) => {
     if (m.role === 'tool_result') return; // 跟着它的 tool_call 一起画
-    items.push({ kind: 'msg', key: `m${i}`, msg: m, result: m.toolCallId ? results.get(m.toolCallId) : undefined });
+    // key 用**记录序号**，不是数组位置：往上翻页时前面插进一整页，按位置生成的话每一条
+    // 的 key 都会变，列表就认不出「读者正看着哪条」了（滚动位置会跳）。
+    // 本地先画上的那条（index < 0）还没有记录位置，用它在数组里的位置兜底。
+    const key = m.index >= 0 ? `m${m.index}` : `local${i}`;
+    const result = m.toolCallId ? results.get(m.toolCallId) : undefined;
+    if (m.role === 'tool_call' && !result?.isError) {
+      pendingTools.push({ key, msg: m, result });
+      return;
+    }
+    flushTools(pendingTools);
+    pendingTools = [];
+    items.push({ kind: 'msg', key, msg: m, result });
   });
+  flushTools(pendingTools);
   snapshot.asks.forEach((ask, i) => items.push({ kind: 'msg', key: `ask${i}`, msg: snapshot.messages[0], ask }));
   if (live.active || live.text || live.tools.length > 0) items.push({ kind: 'live', key: 'live' });
   return items;
@@ -187,6 +253,8 @@ export function Chat({
   onOpenFile,
   onSend,
   onStop,
+  onLoadOlder,
+  olderLoading,
 }: {
   snapshot: Snapshot;
   live: Live;
@@ -201,10 +269,24 @@ export function Chat({
   onOpenFile: (id: string) => void;
   onSend: (text: string, mode: SendMode) => Promise<boolean>;
   onStop: () => void;
+  /** 上滑到头时翻一页更早的历史 */
+  onLoadOlder: () => void;
+  /** 一页更早的历史正在读 */
+  olderLoading: boolean;
 }) {
   const { tokens: t } = useTheme();
   const s = snapshot.session;
   const items = useMemo(() => buildItems(snapshot, live), [snapshot, live]);
+  // FlatList 是 inverted 的：数据倒过来喂，视觉上第一条在底部
+  const reversed = useMemo(() => items.slice().reverse(), [items]);
+  // 一页在飞的时候不要再要一页：滚动事件一秒能来几十次，而服务端那一页是真的要读盘的
+  const wantOlder = () => {
+    if (!snapshot.hasMore || olderLoading) return;
+    onLoadOlder();
+  };
+
+  // inverted 列表本来就贴着最新那条；这条 ref 只留给出错时手动定位，不参与常规滚动。
+  const listRef = useRef<FlatList<Item>>(null);
 
   return (
     <View style={[styles.root, { backgroundColor: t.bg }]}>
@@ -230,12 +312,33 @@ export function Chat({
       <MetaStrip snapshot={snapshot} live={live} onOpenInfo={onOpenInfo} onOpenModels={onOpenModels} />
 
       <FlatList
-        data={items}
+        ref={listRef}
+        data={reversed}
         keyExtractor={(it) => it.key}
         contentContainerStyle={[styles.messages, styles.column]}
+        // inverted：最新的一条在底部，偏移 0 就是「贴底」。这样打开会话自然停在最新处，
+        // 往上翻出来的一页接在数组末尾（视觉上是顶部），画面一动不动 —— 不用去补偿滚动位置。
+        inverted
+        onEndReached={wantOlder}
+        onEndReachedThreshold={0.2}
+        ListFooterComponent={
+          olderLoading ? (
+            <View style={styles.olderHead}>
+              <ActivityIndicator size="small" color={t.faint} />
+              <Text style={{ color: t.faint, fontSize: 11.5 }}>正在读更早的消息…</Text>
+            </View>
+          ) : snapshot.hasMore ? (
+            <Pressable onPress={wantOlder} style={styles.olderHead}>
+              <Feather name="chevron-up" size={13} color={t.faint} />
+              <Text style={{ color: t.faint, fontSize: 11.5 }}>上滑（或点这里）看更早的消息</Text>
+            </Pressable>
+          ) : undefined
+        }
         renderItem={({ item }) =>
           item.kind === 'live' ? (
             <LiveBubble live={live} />
+          ) : item.kind === 'tools' ? (
+            <ToolFold tools={item.tools} />
           ) : (
             <MessageView
               msg={item.msg}
@@ -324,6 +427,7 @@ const styles = StyleSheet.create({
   iconBtn: { width: 26, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
 
   messages: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 },
+  olderHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 10 },
   // 平板那种宽屏下，一行别横跨整屏 —— 读一句话要来回甩头
   column: { width: '100%', maxWidth: 760, alignSelf: 'center' },
   live: { paddingVertical: 4 },

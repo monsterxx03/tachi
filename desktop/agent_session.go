@@ -211,7 +211,7 @@ func (s *AgentService) DeleteSession(id string) string {
 	}
 	d.mu.Unlock()
 	// Outside the lock: mobileBroadcast reads the server pointer under d.mu.
-	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
+	d.emitSessionsChanged(id)
 	return "ok"
 }
 
@@ -294,6 +294,10 @@ func (s *AgentService) RenameSession(id, title string) string {
 	if err := d.sm.UpdateMeta(sess); err != nil {
 		return err.Error()
 	}
+	// The title is the row's whole identity, and the phone has no other way to learn it: a
+	// conversation renamed on the machine kept its old name there until it was reopened
+	// (issue #57).
+	d.emitSessionsChanged(id)
 	return "ok"
 }
 
@@ -315,6 +319,8 @@ func (s *AgentService) SetSessionPinned(id string, pinned bool) string {
 	}); err != nil {
 		return err.Error()
 	}
+	// A pin moves the ROW (the list is pinned-first), so every screen has to re-read it.
+	s.desk.emitSessionsChanged(id)
 	return "ok"
 }
 
@@ -448,7 +454,7 @@ func (s *AgentService) NewSession(projectID string) SessionInfo {
 	d.activeID = sess.ID
 	d.mu.Unlock()
 	d.setSessionState(sess.ID, AgentState{Status: StatusIdle, Label: "空闲", Detail: "新会话"})
-	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
+	d.emitSessionsChanged(sess.ID)
 	return toSessionInfo(sess)
 }
 

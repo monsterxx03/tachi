@@ -234,10 +234,17 @@ func (d *desktopApp) emitCronChanged(id string) {
 	}
 }
 
+// emitSessionsChanged tells EVERY screen the conversation list moved — the window
+// (agent:sessions_changed, so the sidebar re-reads it) and every phone (sessions_changed).
+// id is the conversation the change is about, for a window that wants to look at just that one.
+//
+// One function for one fact: a rename, a pin, a create and a delete all move the list, and the
+// phone has no other way to hear about a change made on the machine (issue #57).
 func (d *desktopApp) emitSessionsChanged(id string) {
 	if d.app != nil {
 		d.app.Event.Emit(sessionsChangedEventName, id)
 	}
+	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
 }
 
 // ---------------------------------------------------------------------------

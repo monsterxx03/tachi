@@ -196,3 +196,51 @@ func (m *mobileServer) handleQuestions(w http.ResponseWriter, r *http.Request) {
 func (m *mobileServer) handleFile(w http.ResponseWriter, r *http.Request) {
 	m.desk.serveMobileAttachment(w, r, r.PathValue("id"), r.PathValue("attachmentId"))
 }
+
+type mobilePinReq struct {
+	Pinned bool `json:"pinned"`
+}
+
+// handlePin is the phone's 置顶 / 取消置顶. The row's position is a list fact, so the success
+// answer is the usual accepted + the sessions_changed broadcast every screen re-reads.
+func (m *mobileServer) handlePin(w http.ResponseWriter, r *http.Request) {
+	var req mobilePinReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	if status, code := m.desk.mobileSetPinned(r.PathValue("id"), req.Pinned); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
+type mobileNewSessionReq struct {
+	ProjectID  string `json:"projectId"`
+	WorkingDir string `json:"workingDir"`
+}
+
+// handleCreateSession creates a conversation from the phone and answers with the row the list
+// would show, so the caller does not have to wait for its own sessions_changed to see it.
+func (m *mobileServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req mobileNewSessionReq
+	// An empty body is legal: it means "无项目、默认工作目录".
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			mobileFail(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+	}
+	row, status, code := m.desk.mobileCreateSession(req.ProjectID, req.WorkingDir)
+	if code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"session": row})
+}
+
+// handleProjects lists what the phone's project picker offers.
+func (m *mobileServer) handleProjects(w http.ResponseWriter, r *http.Request) {
+	mobileWriteJSON(w, map[string]any{"projects": m.desk.mobileProjects()})
+}

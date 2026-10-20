@@ -1,6 +1,7 @@
 import type {
   AttachmentRef,
   PermissionDecision,
+  ProjectRef,
   SendMode,
   SessionMessage,
   SessionSummary,
@@ -75,6 +76,26 @@ export const api = {
   /** 删一段对话。正在跑的那一轮会被拒绝（先停下再删），和桌面同一条规矩。 */
   deleteSession: (c: Pairing, id: string) =>
     req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 置顶 / 取消置顶。位置是列表的事实，成功之后服务端会广播 sessions_changed。 */
+  setPinned: (c: Pairing, id: string, pinned: boolean) =>
+    req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}/pin`, {
+      method: 'POST',
+      body: JSON.stringify({ pinned }),
+    }),
+
+  /**
+   * 新建一段对话。项目是可选的；没有项目时就按 workingDir 起一段（空 = ~/workspace，
+   * "~" 由服务端展开 —— 那是那台电脑的主目录，不是手机的）。
+   */
+  createSession: (c: Pairing, opts: { projectId?: string; workingDir?: string }) =>
+    req<{ session: SessionSummary }>(c, '/v1/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: opts.projectId ?? '', workingDir: opts.workingDir ?? '' }),
+    }),
+
+  /** 新建会话时可选的项目 */
+  projects: (c: Pairing) => req<{ projects: ProjectRef[] }>(c, '/v1/projects'),
 
   decide: (c: Pairing, id: string, toolId: string, decision: PermissionDecision) =>
     req<{ accepted: boolean }>(

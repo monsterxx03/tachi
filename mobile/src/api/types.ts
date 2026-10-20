@@ -25,6 +25,14 @@ export interface SessionSummary {
   pinned?: boolean;
 }
 
+/** 新建会话时可挑的项目。primary 是它会带来的工作目录，runnable=false 表示目录已经不在了。 */
+export interface ProjectRef {
+  id: string;
+  name: string;
+  primary: string;
+  runnable: boolean;
+}
+
 export type MessageRole = 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'reminder';
 
 /** 历史里的一条记录。index 是它在会话记录文件里的绝对位置，翻页游标就是它。 */

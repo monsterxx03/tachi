@@ -57,12 +57,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ping", s.handlePing)
 	mux.HandleFunc("GET /v1/ws", s.handleWS)
 	mux.HandleFunc("GET /v1/sessions", s.guard(s.handleSessions))
+	mux.HandleFunc("POST /v1/sessions", s.guard(s.handleCreateSession))
+	mux.HandleFunc("GET /v1/projects", s.guard(s.handleProjects))
 	mux.HandleFunc("GET /v1/providers", s.guard(s.handleProviders))
 	mux.HandleFunc("GET /v1/sessions/{id}/page", s.guard(s.handlePage))
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", s.guard(s.handleFile))
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", s.guard(s.handleMessage))
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.guard(s.handleStop))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.guard(s.handleDeleteSession))
+	mux.HandleFunc("POST /v1/sessions/{id}/pin", s.guard(s.handlePin))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", s.guard(s.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", s.guard(s.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", s.guard(s.handlePermission))
@@ -103,11 +106,122 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]SessionSummary, 0, len(s.order))
+	// 置顶在前，其余保持原来的次序 —— 与真服务端同一条规矩（协议：pinned first, then newest）
+	ids := make([]string, 0, len(s.order))
 	for _, id := range s.order {
+		if s.byID[id].Session.Pinned {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range s.order {
+		if !s.byID[id].Session.Pinned {
+			ids = append(ids, id)
+		}
+	}
+	out := make([]SessionSummary, 0, len(ids))
+	for _, id := range ids {
 		out = append(out, s.byID[id].Session)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+// handleProjects 是新建会话时那个项目下拉框的数据源
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"projects": []map[string]any{
+		{"id": "p-tachi", "name": "tachi", "primary": "~/repos/tachi", "runnable": true},
+		{"id": "p-notes", "name": "笔记", "primary": "~/notes", "runnable": true},
+		{"id": "p-gone", "name": "已删除的项目", "primary": "~/gone", "runnable": false},
+	}})
+}
+
+type pinReq struct {
+	Pinned bool `json:"pinned"`
+}
+
+func (s *Server) handlePin(w http.ResponseWriter, r *http.Request) {
+	var req pinReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	s.mu.Lock()
+	sess, ok := s.byID[r.PathValue("id")]
+	if !ok {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	sess.Session.Pinned = req.Pinned
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "sessions_changed"})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+type newSessionReq struct {
+	ProjectID  string `json:"projectId"`
+	WorkingDir string `json:"workingDir"`
+}
+
+// handleCreateSession 建一段新会话。真的服务端不碰桌面正在看的那段，也不再建 agent；
+// 假服务端照这个形状回一行，然后广播 sessions_changed。
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req newSessionReq
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			fail(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+	}
+	projectName := ""
+	primary := ""
+	additional := []string{}
+	switch req.ProjectID {
+	case "":
+		wd := strings.TrimSpace(req.WorkingDir)
+		if wd == "" {
+			wd = "~/workspace"
+		}
+		primary = expandHome(wd)
+	case "p-tachi":
+		projectName, primary, x
+	case "p-notes":
+		projectName, primary = "笔记", "~/notes"
+	default:
+		fail(w, http.StatusConflict, "no_project")
+		return
+	}
+
+	s.mu.Lock()
+	id := "s" + strconv.Itoa(len(s.order)+1)
+	for s.byID[id] != nil {
+		id += "x"
+	}
+	ns := &session{}
+	ns.Session = SessionSummary{
+		ID: id, Title: "新会话", ProjectName: projectName, UpdatedAt: "刚刚",
+	}
+	ns.Model = "Alpha 4.5"
+	ns.Workspace = WorkspaceInfo{Primary: primary, Additional: additional}
+	ns.Context = ContextInfo{Estimate: 0, Window: 200000, Parts: []ContextPart{}}
+	ns.State = SessionState{Status: "idle", Label: "空闲", Detail: "新会话"}
+	s.byID[id] = ns
+	s.order = append([]string{id}, s.order...)
+	row := ns.Session
+	s.mu.Unlock()
+
+	s.broadcast("", Event{Type: "sessions_changed"})
+	writeJSON(w, http.StatusOK, map[string]any{"session": row})
+}
+
+// expandHome 只是让假服务端的日志看起来像真的：真服务端展开的是它那台机器的主目录。
+func expandHome(p string) string {
+	if p == "~" {
+		return "/home/mock"
+	}
+	if strings.HasPrefix(p, "~/") {
+		return "/home/mock/" + strings.TrimPrefix(p, "~/")
+	}
+	return p
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
