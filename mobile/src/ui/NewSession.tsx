@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ProjectRef } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
+import { useEdgeBack } from './edgeBack';
 
 /**
  * 新建一段对话。项目是可选的；选择「无项目」时可以改工作目录 —— 手机上没有文件选择器，
@@ -20,6 +21,7 @@ export function NewSession({
   onCreate: (opts: { projectId?: string; workingDir?: string }) => void;
 }) {
   const { tokens: t } = useTheme();
+  const edgePan = useEdgeBack(onClose);
   // '' = 无项目（普通会话），否则就是项目 id
   const [projectId, setProjectId] = useState('');
   const [workingDir, setWorkingDir] = useState('~/workspace');
@@ -27,7 +29,7 @@ export function NewSession({
   const pick = (id: string) => setProjectId(id);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]}>
+    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
           <Feather name="chevron-left" size={22} color={t.dim} />

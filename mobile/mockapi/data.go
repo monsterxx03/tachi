@@ -299,8 +299,12 @@ func seed() (order []string, byID map[string]*session) {
 	s8.append(Message{Role: "assistant", Content: "我先翻一遍服务端的路由表和手机端的调用。"})
 	s8.append(Message{Role: "tool_call", ToolName: "ReadFile", ToolCallID: "tc-8a", Title: "desktop/mobile.go"})
 	s8.append(Message{Role: "tool_result", ToolName: "ReadFile", ToolCallID: "tc-8a", ToolResult: "… 13 条 mux.HandleFunc …"})
+	// 真实记录里，两个 tool call 之间一定夹着 thinking 和**内容为空的 assistant**（模型每调一次
+	// 就写一条）。种子照这个形状写，手机上「折叠」那条路才验得到真的东西。
+	s8.append(Message{Role: "assistant", Content: "", Thinking: "先看看 Bash 的版本，再跑 vet。"})
 	s8.append(Message{Role: "tool_call", ToolName: "Bash", ToolCallID: "tc-8b", Title: "go vet ./desktop"})
 	s8.append(Message{Role: "tool_result", ToolName: "Bash", ToolCallID: "tc-8b", ToolResult: "exit status 1: build constraints exclude all Go files", IsError: true})
+	s8.append(Message{Role: "assistant", Content: "", Thinking: "vet 挂了，换成搜 guard 的调用。"})
 	s8.append(Message{Role: "tool_call", ToolName: "Grep", ToolCallID: "tc-8c", Title: "guard(...)"})
 	s8.append(Message{Role: "tool_result", ToolName: "Grep", ToolCallID: "tc-8c", ToolResult: "13 处都在 m.guard(...) 里"})
 	s8.append(Message{Role: "tool_call", ToolName: "ReadFile", ToolCallID: "tc-8d", Title: "mobile/src/api/client.ts"})

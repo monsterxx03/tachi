@@ -1,9 +1,19 @@
 import { Feather } from '@expo/vector-icons';
 import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import type { FileSource } from '../api/client';
 import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
 import type { Live } from '../state/mobile';
+import { buildItems, type Item, type ProcessStep } from '../state/items';
+import { useEdgeBack } from './edgeBack';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { MessageView, Thinking, ToolCard } from './Message';
@@ -76,33 +86,95 @@ function MetaStrip({
   );
 }
 
-/** 底部：正在跑的时候多一行提示（插话 / 打断），只读会话换成一条说明 */
+/**
+ * 底部：正在跑的时候多一行状态，发出去的话先进「待发送队列」（桌面的 pending 的手机版）。
+ *
+ * 运行中直接把这句发出去是错的：它会被当成插话立刻塞进正在流的这一轮，读者看到的是
+ * 「已经发出去了」，而桌面那边是排队、在本轮工具调用结束后再插入。所以这里只有两件事：
+ * 运行中发送 = 排队；「立即发送 · 打断」= 先停这一轮，等它真的结束了再把队列发出去。
+ */
 function Composer({
   running,
   waiting,
+  pending,
   onSend,
+  onQueue,
+  onDropPending,
+  onClearPending,
+  onSendPendingNow,
   onStop,
 }: {
   running: boolean;
   waiting: string;
+  pending: string[];
   onSend: (text: string, mode: SendMode) => Promise<boolean>;
+  onQueue: (text: string) => void;
+  onDropPending: (index: number) => void;
+  onClearPending: () => void;
+  onSendPendingNow: () => void;
   onStop: () => void;
 }) {
   const { tokens: t } = useTheme();
   const [text, setText] = useState('');
   const short = waiting === '等待你的授权' ? '等你授权' : waiting === '等待你的回答' ? '等你回答' : '';
 
+  const submit = () => {
+    const v = text.trim();
+    if (!v) {
+      // 空着按发送 = 停掉这一轮（正在跑的时候才有意义）
+      if (running) onStop();
+      return;
+    }
+    if (running) {
+      onQueue(v);
+      setText('');
+      return;
+    }
+    // 不在跑：服务端没收下就把字还给读者（拒绝的原因在顶部横幅里）
+    void onSend(v, 'send').then((ok) => {
+      if (ok) setText('');
+    });
+  };
+
   return (
     <View style={[styles.composer, { borderTopColor: t.border, backgroundColor: t.composerBg }]}>
+      {pending.length > 0 ? (
+        <View style={[styles.pendingBar, styles.column, { borderBottomColor: t.border }]}>
+          <View style={styles.pendingHead}>
+            <Text style={{ color: t.faint, fontSize: 11.5, flex: 1 }} numberOfLines={1}>
+              {running ? '待发送 · 本轮工具调用结束后自动插入' : '待发送消息'}
+            </Text>
+            <Pressable onPress={onSendPendingNow}>
+              <Text style={{ color: t.accent2, fontSize: 11.5 }}>
+                {running ? '立即发送 · 打断' : '发送'}
+              </Text>
+            </Pressable>
+            <Pressable onPress={onClearPending}>
+              <Text style={{ color: t.faint, fontSize: 11.5 }}>清空</Text>
+            </Pressable>
+          </View>
+          {pending.map((p, i) => (
+            <View key={`${i}-${p.slice(0, 8)}`} style={styles.pendingItem}>
+              <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={2}>
+                {p}
+              </Text>
+              <Pressable onPress={() => onDropPending(i)} hitSlop={8}>
+                <Feather name="x" size={13} color={t.faint} />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
       {running ? (
         <View style={[styles.runHint, styles.column]}>
           <View style={[styles.runDot, { backgroundColor: t.amber }]} />
           <Text style={{ color: t.faint, fontSize: 11.5 }} numberOfLines={1}>
-            {short ? `停在这里${short}` : '正在跑，可以插话'}
+            {short ? `停在这里${short}` : '正在跑 · 发送会排队'}
           </Text>
           <View style={styles.spacer} />
           <Pressable onPress={onStop}>
-            <Text style={{ color: t.accent2, fontSize: 11.5 }}>立即发送 · 打断</Text>
+            <Text style={{ color: t.accent2, fontSize: 11.5 }}>打断</Text>
           </Pressable>
         </View>
       ) : null}
@@ -118,126 +190,89 @@ function Composer({
           />
         </View>
         <Pressable
-          onPress={() => {
-            const v = text.trim();
-            if (!v) return;
-            // Only clear once the server took it: a refusal is explained by the banner, and
-            // taking the reader's words with it makes them retype what they were just told.
-            void onSend(v, running ? 'steer' : 'send').then((ok) => {
-              if (ok) setText('');
-            });
-          }}
+          onPress={submit}
+          // 只有图标：读屏和自动化都要靠这个名字认它
+          accessibilityRole="button"
+          accessibilityLabel={running && !text.trim() ? '停止' : '发送'}
           style={({ pressed }) => [styles.sendBtn, { backgroundColor: pressed || !text.trim() ? t.accentStrong : t.accent }]}
         >
-          <Feather name="arrow-up" size={17} color={t.onAccent} />
+          <Feather name={running && !text.trim() ? 'square' : 'arrow-up'} size={17} color={t.onAccent} />
         </Pressable>
       </View>
     </View>
   );
 }
 
-/** 一串工具调用：一行概括，点开看每一步（桌面的「N 步」那一行的手机版）。 */
-function ToolFold({ tools }: { tools: ToolPair[] }) {
+/**
+ * 一轮的过程：一行概括，点开按记录里的先后展开（桌面的「N 步」那一行的手机版）。
+ *
+ * 折进去的是思考与成功的工具调用；正文和失败的那一步留在外面。展开时思考在前、工具
+ * 紧跟其后，顺序就是它们真正发生的顺序 —— 所以这里不要按种类分组。
+ */
+function ProcessFold({ steps, running }: { steps: ProcessStep[]; running?: boolean }) {
   const { tokens: t } = useTheme();
   const [open, setOpen] = useState(false);
-  const names = tools.map((x) => x.msg.toolName ?? '').filter(Boolean);
+  const tools = steps.filter((s): s is Extract<ProcessStep, { kind: 'tool' }> => s.kind === 'tool');
+  const thinkings = steps.filter((s): s is Extract<ProcessStep, { kind: 'thinking' }> => s.kind === 'thinking');
+  const names = tools.map((x) => x.pair.msg.toolName ?? '').filter(Boolean);
   const unique = [...new Set(names)];
-  const summary = unique.length > 2 ? `${unique.slice(0, 2).join('、')} 等` : unique.join('、');
+  const label = tools.length > 0 ? `${tools.length} 步` : `思考 ${thinkings.length} 段`;
+  const summary =
+    unique.length === 0
+      ? ''
+      : unique.length > 2
+        ? `${unique.slice(0, 2).join('、')} 等`
+        : unique.join('、');
 
   return (
     <View style={[styles.tool, { borderColor: t.border, backgroundColor: t.wash }]}>
       <Pressable onPress={() => setOpen((v) => !v)} style={styles.toolHead}>
         <Feather name={open ? 'chevron-up' : 'chevron-down'} size={13} color={t.faint} style={{ marginTop: 1 }} />
-        <Text style={[styles.toolName, { color: t.dim }]}>{tools.length} 步</Text>
-        <Text style={[styles.toolSum, { color: t.faint }]} numberOfLines={1}>
-          {summary}
-        </Text>
+        <Text style={[styles.toolName, { color: t.dim }]}>{label}</Text>
+        {running ? <Text style={{ color: t.accent2, fontSize: 11.5 }}>· 在跑</Text> : null}
+        {summary ? (
+          <Text style={[styles.toolSum, { color: t.faint }]} numberOfLines={1}>
+            {summary}
+          </Text>
+        ) : null}
       </Pressable>
       {open ? (
         <View style={{ paddingBottom: 4, paddingTop: 2 }}>
-          {tools.map((x) => (
-            <View key={x.key} style={{ paddingHorizontal: 4 }}>
-              <ToolCard
-                name={x.msg.toolName ?? ''}
-                title={x.msg.title}
-                args={x.msg.args}
-                result={x.result?.toolResult}
-                isError={x.result?.isError}
-              />
-            </View>
-          ))}
+          {steps.map((step) =>
+            step.kind === 'thinking' ? (
+              <View key={step.key} style={{ paddingHorizontal: 8 }}>
+                <Thinking text={step.text} />
+              </View>
+            ) : (
+              <View key={step.key} style={{ paddingHorizontal: 4 }}>
+                <ToolCard
+                  name={step.pair.msg.toolName ?? ''}
+                  title={step.pair.msg.title}
+                  args={step.pair.msg.args}
+                  result={step.pair.result?.toolResult}
+                  isError={step.pair.result?.isError}
+                  running={running === true && step.pair.result === undefined}
+                />
+              </View>
+            ),
+          )}
         </View>
       ) : null}
     </View>
   );
 }
 
-/** 活气泡：这一轮正在流的东西。轮次一结束就被记录替换掉。 */
+/**
+ * 活气泡：这一轮**正在写的字**。思考和工具已经由 items.ts 折成过程那一行了 —— 两边各画
+ * 一套的话，跑着的时候工具一个个露在外面、停下来才折，画面会在轮次结束时整段跳一下。
+ */
 function LiveBubble({ live }: { live: Live }) {
-  if (!live.active && !live.text && live.tools.length === 0) return null;
+  if (!live.text) return null;
   return (
     <View style={styles.live}>
-      {live.thinking ? <Thinking text={live.thinking} /> : null}
-      {live.tools.map((tool) => (
-        <ToolCard
-          key={tool.id}
-          name={tool.name}
-          title={tool.title}
-          args={tool.args}
-          result={tool.result}
-          isError={tool.isError}
-          running={!tool.result}
-        />
-      ))}
-      {live.text ? <Markdown text={live.text} /> : null}
+      <Markdown text={live.text} />
     </View>
   );
-}
-
-type ToolPair = { key: string; msg: SessionMessage; result?: SessionMessage };
-
-type Item =
-  | { kind: 'msg'; key: string; msg: SessionMessage; ask?: PendingAsk; result?: SessionMessage }
-  | { kind: 'tools'; key: string; tools: ToolPair[] }
-  | { kind: 'live'; key: string };
-
-function buildItems(snapshot: Snapshot, live: Live): Item[] {
-  const results = new Map<string, SessionMessage>();
-  for (const m of snapshot.messages) {
-    if (m.role === 'tool_result' && m.toolCallId) results.set(m.toolCallId, m);
-  }
-  const items: Item[] = [];
-  // 连着的一串工具调用折成一行（像桌面的「N 步」）：一轮里模型常常连着调五六个工具，
-  // 每个都占一行的话，真正的回复会被挤到屏幕外。失败的那些不折 —— 出错要看得见。
-  const flushTools = (tools: ToolPair[]) => {
-    if (tools.length === 0) return;
-    if (tools.length === 1) {
-      const t = tools[0];
-      items.push({ kind: 'msg', key: t.key, msg: t.msg, result: t.result });
-      return;
-    }
-    items.push({ kind: 'tools', key: `tools${tools[0].msg.index}`, tools: [...tools] });
-  };
-  let pendingTools: ToolPair[] = [];
-  snapshot.messages.forEach((m, i) => {
-    if (m.role === 'tool_result') return; // 跟着它的 tool_call 一起画
-    // key 用**记录序号**，不是数组位置：往上翻页时前面插进一整页，按位置生成的话每一条
-    // 的 key 都会变，列表就认不出「读者正看着哪条」了（滚动位置会跳）。
-    // 本地先画上的那条（index < 0）还没有记录位置，用它在数组里的位置兜底。
-    const key = m.index >= 0 ? `m${m.index}` : `local${i}`;
-    const result = m.toolCallId ? results.get(m.toolCallId) : undefined;
-    if (m.role === 'tool_call' && !result?.isError) {
-      pendingTools.push({ key, msg: m, result });
-      return;
-    }
-    flushTools(pendingTools);
-    pendingTools = [];
-    items.push({ kind: 'msg', key, msg: m, result });
-  });
-  flushTools(pendingTools);
-  snapshot.asks.forEach((ask, i) => items.push({ kind: 'msg', key: `ask${i}`, msg: snapshot.messages[0], ask }));
-  if (live.active || live.text || live.tools.length > 0) items.push({ kind: 'live', key: 'live' });
-  return items;
 }
 
 export function Chat({
@@ -248,6 +283,7 @@ export function Chat({
   onToggleList,
   onDecide,
   onAnswer,
+  onDecline,
   onOpenInfo,
   onOpenModels,
   onOpenFile,
@@ -255,6 +291,12 @@ export function Chat({
   onStop,
   onLoadOlder,
   olderLoading,
+  onEdgeBack,
+  pending,
+  onQueue,
+  onDropPending,
+  onClearPending,
+  onSendPendingNow,
 }: {
   snapshot: Snapshot;
   live: Live;
@@ -263,7 +305,10 @@ export function Chat({
   /** 宽屏：收起 / 展开左边那栏。没有它（窄屏）时 header 显示返回键。 */
   onToggleList?: () => void;
   onDecide: (toolId: string, allow: boolean) => void;
-  onAnswer: (toolId: string, text: string) => void;
+  /** 键是问题原文、值用 ", " 连接（协议里的答案形状） */
+  onAnswer: (answers: Record<string, string>) => void;
+  /** 「跳过」= decline，不是「交一份空答案」 */
+  onDecline: () => void;
   onOpenInfo: () => void;
   onOpenModels: () => void;
   onOpenFile: (id: string) => void;
@@ -273,6 +318,17 @@ export function Chat({
   onLoadOlder: () => void;
   /** 一页更早的历史正在读 */
   olderLoading: boolean;
+  /**
+   * 从屏幕左缘往右划：窄屏=回列表，宽屏侧栏收起=把列表拉回来。
+   * 只认「起点在左缘 24pt 内」的手势，否则会跟消息里的横向操作打架。
+   */
+  onEdgeBack?: () => void;
+  /** 待发送队列（运行中发的消息）；渲染在输入框上方 */
+  pending: string[];
+  onQueue: (text: string) => void;
+  onDropPending: (index: number) => void;
+  onClearPending: () => void;
+  onSendPendingNow: () => void;
 }) {
   const { tokens: t } = useTheme();
   const s = snapshot.session;
@@ -285,11 +341,12 @@ export function Chat({
     onLoadOlder();
   };
 
-  // inverted 列表本来就贴着最新那条；这条 ref 只留给出错时手动定位，不参与常规滚动。
+  const edgePan = useEdgeBack(onEdgeBack);
+  // inverted 列表本来就贴着最新那条；这个 ref 只留给出错时手动定位，不参与常规滚动
   const listRef = useRef<FlatList<Item>>(null);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]}>
+    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable
           onPress={onToggleList ?? onBack}
@@ -337,17 +394,19 @@ export function Chat({
         renderItem={({ item }) =>
           item.kind === 'live' ? (
             <LiveBubble live={live} />
-          ) : item.kind === 'tools' ? (
-            <ToolFold tools={item.tools} />
+          ) : item.kind === 'process' ? (
+            <ProcessFold steps={item.steps} running={item.running} />
           ) : (
             <MessageView
               msg={item.msg}
               ask={item.ask}
               toolResult={item.result}
+              running={item.running}
               attachments={snapshot.attachments}
               fileSource={fileSource}
               onDecide={(allow) => item.ask && onDecide(item.ask.toolId, allow)}
-              onAnswer={(text) => item.ask && onAnswer(item.ask.toolId, text)}
+              onAnswer={(answers) => onAnswer(answers)}
+              onDecline={() => onDecline()}
               onOpenFile={onOpenFile}
             />
           )
@@ -359,7 +418,17 @@ export function Chat({
           <Text style={{ color: t.faint, fontSize: 12.5 }}>这段对话由别的任务占用，只能查看</Text>
         </View>
       ) : (
-        <Composer running={s.running} waiting={s.waiting} onSend={onSend} onStop={onStop} />
+        <Composer
+          running={s.running}
+          waiting={s.waiting}
+          pending={pending}
+          onSend={onSend}
+          onQueue={onQueue}
+          onDropPending={onDropPending}
+          onClearPending={onClearPending}
+          onSendPendingNow={onSendPendingNow}
+          onStop={onStop}
+        />
       )}
     </View>
   );
@@ -440,6 +509,9 @@ const styles = StyleSheet.create({
   toolBody: { borderTopWidth: StyleSheet.hairlineWidth, padding: 10 },
 
   composer: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 6, paddingBottom: 8 },
+  pendingBar: { paddingHorizontal: 12, paddingBottom: 6 },
+  pendingHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingBottom: 5, paddingTop: 2 },
+  pendingItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 },
   runHint: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 16, paddingBottom: 6 },
   runDot: { width: 5, height: 5, borderRadius: 2.5 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12 },

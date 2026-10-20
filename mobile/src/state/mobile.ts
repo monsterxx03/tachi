@@ -34,8 +34,21 @@ export interface MobileApi {
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
   close: () => void;
-  /** true = 服务端收下了；false 时输入框把文字还给读者 */
+  /** true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。 */
   send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<boolean>;
+  /**
+   * 这一段对话的待发送队列（桌面那份「待发送」的手机版）。运行中发的消息进这里，
+   * 不直接进对话 —— 否则会插进正在流的这一轮里，而且和桌面看到的不是一回事。
+   */
+  pending: string[];
+  /** 运行中才该用它；不在跑时调用会立刻发出去 */
+  queueMessage: (text: string) => void;
+  dropPending: (index: number) => void;
+  clearPending: () => void;
+  /** 「立即发送 · 打断」：停掉这一轮，等它真的结束了再把队列发出去 */
+  sendPendingNow: () => void;
+  /** 只打断，不发队列 */
+  stop: () => Promise<void>;
   /** 回到前台时用：重读当前会话的快照与列表（App 挂后台期间可能什么都不知道） */
   reloadCurrent: () => Promise<void>;
   /** 往上翻一页更早的历史；还有没有更早的看 snapshot.hasMore */
@@ -77,6 +90,11 @@ export function useMobile(): MobileApi {
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [olderLoading, setOlderLoading] = useState(false);
   const [cronVersion, setCronVersion] = useState(0);
+  // 待发送队列按会话存：切走再回来，没发出去的那句还在（桌面也是这么做的）
+  const [pending, setPending] = useState<Record<string, string[]>>({});
+  const pendingRef = useRef<Record<string, string[]>>({});
+  // 「立即发送·打断」之后即使这一轮以 interrupted 结束，也要把队列发出去
+  const forceFlush = useRef<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
@@ -120,7 +138,10 @@ export function useMobile(): MobileApi {
     void api
       .listSessions(pairing)
       .then((r) => {
-        if (!cancelled) setSessions(r.sessions);
+        if (cancelled) return;
+        setSessions(r.sessions);
+        // 连上了就把上一次的「连不上」撤掉 —— 那条横幅不能一直挂着
+        setError(null);
       })
       .catch((e) => {
         if (!cancelled) setError(messageOfError(e));
@@ -201,17 +222,78 @@ export function useMobile(): MobileApi {
           setCronVersion((v) => v + 1);
           return;
         }
+        if (ev.type === 'session_moved') {
+          // 压缩成功把这轮对话写进了子会话，桌面在同一刻换的轨（agent:session_switched）。
+          // 订阅是按 id 走的：不跟着搬，画面就停在压缩点、状态永远「在跑」，而 idle 早已
+          // 发往子会话了。还没发出去的队列也跟着搬 —— 那是同一段对话里读者排的话。
+          const carried = pendingRef.current[ev.from] ?? [];
+          if (carried.length > 0) {
+            const moved = {
+              ...pendingRef.current,
+              [ev.to]: [...(pendingRef.current[ev.to] ?? []), ...carried],
+            };
+            delete moved[ev.from];
+            pendingRef.current = moved;
+            setPending(moved);
+          }
+          if (forceFlush.current[ev.from]) {
+            delete forceFlush.current[ev.from];
+            forceFlush.current[ev.to] = true;
+          }
+          if (openIdRef.current === ev.from) {
+            openIdRef.current = ev.to;
+            setOpenId(ev.to);
+            // 不清画面：子会话的快照马上就到（mergeSnapshot 见到 id 变了会整段换掉），
+            // 先清空的话这一瞬 snapshot 是 undefined，Composer 会以为「没在跑」——读者
+            // 正好在这几十毫秒里按发送，就会直发撞上 turn_running。
+            socketRef.current?.subscribe(ev.to);
+            // 这一轮的 idle 发往新 id，而换订阅晚一步 —— 队列得在这里补发，规则和 idle
+            // 那条一样：自然结束就发，被打断/出错就留着让读者决定（「立即发送·打断」
+            // 按过的话，打断也算数）。
+            const queued = (pendingRef.current[ev.to] ?? []).length > 0;
+            const forced = forceFlush.current[ev.to] === true;
+            if (queued && (ev.end === 'complete' || forced)) {
+              forceFlush.current[ev.to] = false;
+              void flushPending('send');
+            }
+          }
+          return;
+        }
+        // 工具边界：桌面在这一刻把队列「插」进正在跑的轮次（steer）。
+        if (ev.type === 'tool_result') {
+          const id = openIdRef.current;
+          if (id && (pendingRef.current[id] ?? []).length > 0) void flushPending('steer');
+        }
+        // 一轮真的结束了：自然结束就把队列当成新一轮发出去；被打断/出错则留着让读者决定
+        // （桌面的规则一样）。「立即发送·打断」按过的话，打断也算数。
+        if (ev.type === 'idle') {
+          const id = openIdRef.current;
+          if (id) {
+            const forced = forceFlush.current[id] === true;
+            const queued = (pendingRef.current[id] ?? []).length > 0;
+            if (queued && (ev.end === 'complete' || forced)) {
+              forceFlush.current[id] = false;
+              void flushPending('send');
+            }
+          }
+        }
         if (ev.type === 'lagged') {
           void reload(openIdRef.current);
           return;
         }
+        // 没有打开的会话：这些都是上一段的尾巴，别为一个没人看的画面重画
+        if (!openIdRef.current) return;
         setChat((st) => {
           const { state, needsReload } = applyEvent(st, ev, 'mobile');
           if (needsReload) void reload(openIdRef.current);
           return state;
         });
       },
-      onStatus: setConn,
+      onStatus: (st) => {
+        setConn(st);
+        // 连接一恢复，之前那条「连不上电脑」就不该再挂着
+        if (st === 'open') setError(null);
+      },
       onReconnected: () => {
         void reload(openIdRef.current);
         void api.listSessions(pairing).then((r) => setSessions(r.sessions));
@@ -373,6 +455,9 @@ export function useMobile(): MobileApi {
   const close = useCallback(() => {
     setOpenId(null);
     setChat(emptyChat);
+    // 名单页不订阅任何会话：在跑的那段每秒几十条增量，落在一个没人看的画面上就是
+    // 纯负担 —— 左滑列表的每一帧都在跟它抢 JS 线程。
+    socketRef.current?.subscribe(null);
   }, []);
 
   const withError = useCallback(async (fn: () => Promise<unknown>) => {
@@ -387,6 +472,24 @@ export function useMobile(): MobileApi {
   // send answers whether the message actually went out. The composer needs that answer to
   // keep the reader's words on a refusal: the server's reason is on screen (the banner), and a
   // box that emptied itself leaves them retyping what it just explained.
+  // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）
+  const echoLocal = useCallback((text: string) => {
+    setChat((st) =>
+      st.snapshot
+        ? {
+            ...st,
+            snapshot: {
+              ...st.snapshot,
+              messages: [
+                ...st.snapshot.messages,
+                { index: -1, role: 'user', content: text, displayContent: text },
+              ],
+            },
+          }
+        : st,
+    );
+  }, []);
+
   const send = useCallback(
     async (text: string, mode: 'send' | 'steer' | 'interrupt'): Promise<boolean> => {
       let ok = false
@@ -395,26 +498,77 @@ export function useMobile(): MobileApi {
         if (!pairing || !id) return
         await api.send(pairing, id, text, mode);
         ok = true
-        // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）
-        setChat((st) =>
-          st.snapshot
-            ? {
-                ...st,
-                snapshot: {
-                  ...st.snapshot,
-                  messages: [
-                    ...st.snapshot.messages,
-                    { index: -1, role: 'user', content: text, displayContent: text },
-                  ],
-                },
-              }
-            : st,
-        );
+        echoLocal(text);
       })
       return ok
     },
-    [pairing, withError],
+    [pairing, withError, echoLocal],
   );
+
+  // 队列的三个原子操作。pendingRef 是事件回调能看到的「最新值」——render 闭包里的
+  // state 在回调里是旧的。
+  const writePending = useCallback((id: string, list: string[]) => {
+    const next = { ...pendingRef.current, [id]: list };
+    pendingRef.current = next;
+    setPending(next);
+  }, []);
+  const takePending = useCallback((id: string): string => {
+    const text = (pendingRef.current[id] ?? []).join('\n\n');
+    if (text) writePending(id, []);
+    return text;
+  }, [writePending]);
+
+  const queueMessage = useCallback((text: string) => {
+    const id = openIdRef.current;
+    if (!id) return;
+    const list = pendingRef.current[id] ?? [];
+    writePending(id, [...list, text]);
+  }, [writePending]);
+
+  const dropPending = useCallback((index: number) => {
+    const id = openIdRef.current;
+    if (!id) return;
+    const list = (pendingRef.current[id] ?? []).filter((_, i) => i !== index);
+    writePending(id, list);
+  }, [writePending]);
+
+  const clearPending = useCallback(() => {
+    const id = openIdRef.current;
+    if (!id) return;
+    writePending(id, []);
+  }, [writePending]);
+
+  // 队列出去的时候按「新一轮」发；插话只在工具边界由下面的事件路径走。
+  const flushPending = useCallback(async (mode: 'send' | 'steer'): Promise<void> => {
+    const id = openIdRef.current;
+    if (!pairing || !id) return;
+    const text = takePending(id);
+    if (!text) return;
+    await withError(async () => {
+      await api.send(pairing, id, text, mode);
+      echoLocal(text);
+    });
+  }, [pairing, takePending, withError, echoLocal]);
+
+  const stop = useCallback(async () => {
+    const id = openIdRef.current;
+    if (!pairing || !id) return;
+    await withError(() => api.stop(pairing, id));
+  }, [pairing, withError]);
+
+  // 「立即发送 · 打断」：先停这一轮，等 idle 到了再把队列发出去（桌面同一条路）。
+  // 直接在这里发会撞上 turn_running —— 那一轮还没真的结束。
+  const sendPendingNow = useCallback(() => {
+    const id = openIdRef.current;
+    if (!id) return;
+    // 没在跑（比如上一轮被打断后队列还留着）：直接当成新一轮发出去
+    if (!chatRef.current.snapshot?.session.running) {
+      void flushPending('send');
+      return;
+    }
+    forceFlush.current[id] = true;
+    void stop();
+  }, [stop, flushPending]);
 
   const decide = useCallback(
     (toolId: string, decision: 'allow_once' | 'deny') =>
@@ -555,6 +709,12 @@ export function useMobile(): MobileApi {
     open,
     close,
     send,
+    pending: openId ? pending[openId] ?? [] : [],
+    queueMessage,
+    dropPending,
+    clearPending,
+    sendPendingNow,
+    stop,
     decide,
     answer,
     decline,

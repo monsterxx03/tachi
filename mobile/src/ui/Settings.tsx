@@ -3,6 +3,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import type { Pairing as PairingInfo } from '../api/client';
 import type { Device } from '../api/storage';
 import { useTheme } from '../theme/ThemeContext';
+import { useEdgeBack } from './edgeBack';
 import type { ThemeMode } from '../theme/tokens';
 
 const MODES: { value: ThemeMode; label: string }[] = [
@@ -33,9 +34,10 @@ export function Settings({
   onBack: () => void;
 }) {
   const { tokens: t, mode, setMode } = useTheme();
+  const edgePan = useEdgeBack(onBack);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.bg }]}>
+    <View style={[styles.root, { backgroundColor: t.bg }]} {...edgePan}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onBack} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
           <Feather name="chevron-left" size={22} color={t.dim} />

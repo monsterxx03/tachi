@@ -205,6 +205,11 @@ export type ServerEvent =
   | { type: 'idle'; end: TurnEnd }
   | { type: 'compact_start' }
   | { type: 'compact_done'; error?: string }
+  /**
+   * 对话搬到了另一个会话 id（压缩成功写进子会话）。订阅必须跟着走。
+   * end 是这一轮为什么结束：换轨之后 idle 发往新 id，手机多半收不到，队列要靠它决定。
+   */
+  | { type: 'session_moved'; from: string; to: string; end: TurnEnd }
   | { type: 'state'; state: SessionState }
   | { type: 'tps'; tps: number; lastTps: number }
   | { type: 'usage'; usage: UsageInfo }

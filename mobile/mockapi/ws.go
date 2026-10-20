@@ -36,10 +36,13 @@ type Event struct {
 	Iterations  int           `json:"iterations,omitempty"`
 	Message     string        `json:"message,omitempty"`
 	Interrupted bool          `json:"interrupted,omitempty"`
-	Tps         float64       `json:"tps,omitempty"`
-	LastTps     float64       `json:"lastTps,omitempty"`
-	Usage       *UsageInfo    `json:"usage,omitempty"`
-	Cost        float64       `json:"cost,omitempty"`
+	// From / To 是 session_moved 的两个 id：这段对话从哪搬到哪（压缩写进子会话）
+	From    string     `json:"from,omitempty"`
+	To      string     `json:"to,omitempty"`
+	Tps     float64    `json:"tps,omitempty"`
+	LastTps float64    `json:"lastTps,omitempty"`
+	Usage   *UsageInfo `json:"usage,omitempty"`
+	Cost    float64    `json:"cost,omitempty"`
 }
 
 // 协议里的不变量：每条连接 256 条事件的缓冲，满了发 lagged 并断开

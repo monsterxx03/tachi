@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
 import { deviceLabel } from '../api/storage';
+import { useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
 import { useTheme } from '../theme/ThemeContext';
 import { ScanPairing } from './ScanPairing';
@@ -25,6 +26,8 @@ export function Pairing({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  // 从设置页「添加电脑」进来时才有返回；首次配对没有上一屏，手势自然无效
+  const edgePan = useEdgeBack(onClose);
 
   async function test(p: PairingInfo = { baseUrl: baseUrl.trim().replace(/\/+$/, ''), token: token.trim() }) {
     setBusy(true);
@@ -61,7 +64,7 @@ export function Pairing({
   };
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} {...edgePan}>
       {onClose ? (
         <Pressable
           onPress={onClose}
@@ -103,6 +106,9 @@ export function Pairing({
         placeholderTextColor={t.faint}
         style={[styles.input, field]}
       />
+      <Text style={[styles.note, { color: t.faint, marginTop: 6 }]}>
+        模拟器可以填 127.0.0.1（配 adb reverse）；真机要填电脑的局域网地址。
+      </Text>
 
       <Text style={[styles.label, { color: t.faint }]}>令牌</Text>
       <TextInput

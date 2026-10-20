@@ -7,7 +7,15 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.tachi.mobile",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "连接同一局域网里开着 Tachi 的电脑：会话、审批和消息都在那台机器上。",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "android": {
       "package": "dev.tachi.mobile",
@@ -24,7 +32,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "扫描电脑上的配对二维码需要相机权限。"
+          "cameraPermission": "扫描电脑上的配对二维码需要相机权限。",
+          "microphonePermission": false
         }
       ],
       "expo-secure-store",

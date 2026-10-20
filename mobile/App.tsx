@@ -9,6 +9,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AttachmentRef } from './src/api/types';
 import { api } from './src/api/client';
@@ -80,10 +81,8 @@ function ChatPane({
         onBack={m.close}
         onToggleList={onToggleList}
         onDecide={(toolId, allow) => void m.decide(toolId, allow ? 'allow_once' : 'deny')}
-        onAnswer={(_toolId, text) => {
-          const q = m.chat.snapshot?.asks[0];
-          if (q && q.kind === 'question') void m.answer(text ? { [q.questions[0].question]: text } : {});
-        }}
+        onAnswer={(answers) => void m.answer(answers)}
+        onDecline={() => void m.decline()}
         onOpenInfo={() => setShowInfo(true)}
         onOpenModels={() => setShowInfo(true)}
         onOpenFile={(id) => {
@@ -91,9 +90,16 @@ function ChatPane({
           if (f) setOpenFile(f);
         }}
         onSend={m.send}
-        onStop={() => void m.send('', 'interrupt')}
+        onStop={() => void m.stop()}
+        pending={m.pending}
+        onQueue={m.queueMessage}
+        onDropPending={m.dropPending}
+        onClearPending={m.clearPending}
+        onSendPendingNow={m.sendPendingNow}
         onLoadOlder={() => void m.loadOlder()}
         olderLoading={m.olderLoading}
+        // 窄屏就是「返回列表」；宽屏侧栏收起时把它拉回来
+        onEdgeBack={onToggleList ?? m.close}
       />
     );
 
@@ -154,13 +160,19 @@ function Shell() {
         return true;
       }
       if (m.openId) {
+        // 宽屏侧栏收起时，「返回」= 把列表拉回来；否则才是退回列表页。
+        // （Android 上从左边划那一下就是系统的返回手势，所以这条路必须和手势走同一个判断。）
+        if (wide && sideCollapsed) {
+          setSideCollapsed(false);
+          return true;
+        }
         m.close();
         return true;
       }
       return false;
     });
     return () => sub.remove();
-  }, [openFile, showInfo, showNew, showSettings, addingDevice, m]);
+  }, [openFile, showInfo, showNew, showSettings, addingDevice, m, wide, sideCollapsed]);
 
   // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态
   useEffect(() => {
@@ -175,12 +187,13 @@ function Shell() {
       sessions={m.sessions}
       currentId={m.openId}
       conn={m.conn}
-      onOpen={(id) => void m.open(id)}
+      // 这些必须是稳定引用：行组件 memo 过，回调每帧新建的话 memo 等于没有
+      onOpen={m.open}
       onSettings={() => setShowSettings(true)}
       onNew={() => setShowNew(true)}
-      onRefresh={() => void m.refresh()}
-      onDelete={(id) => void m.deleteSession(id)}
-      onPin={(id, pinned) => void m.setPinned(id, pinned)}
+      onRefresh={m.refresh}
+      onDelete={m.deleteSession}
+      onPin={m.setPinned}
     />
   );
 
@@ -274,12 +287,15 @@ function Shell() {
 }
 
 export default function App() {
+  // 手势在 UI 线程解析：左滑那类「跟手」的动作不能交给 JS 线程（它随时在被事件流占着）。
   return (
-    <SafeAreaProvider>
-      <ThemeProvider>
-        <Shell />
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <Shell />
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 

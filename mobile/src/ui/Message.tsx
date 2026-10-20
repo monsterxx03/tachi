@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { FileSource } from '../api/client';
 import type { AgentQuestion, AttachmentRef, PendingAsk, SessionMessage } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
@@ -138,57 +138,110 @@ function PermissionCard({
 }
 
 /** 提问卡：agent 想确认一件事 */
-function QuestionCard({ questions, onAnswer }: { questions: AgentQuestion[]; onAnswer: (text: string) => void }) {
+function QuestionCard({
+  questions,
+  onAnswer,
+  onDecline,
+}: {
+  questions: AgentQuestion[];
+  onAnswer: (answers: Record<string, string>) => void;
+  onDecline: () => void;
+}) {
   const { tokens: t } = useTheme();
-  const [picked, setPicked] = useState<Record<string, string>>({});
-  const [free, setFree] = useState('');
-  const first = questions[0];
+  // 每一问一格：多选是**数组**，单选也走同一条路（数组里最多一个）
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [free, setFree] = useState<Record<string, string>>({});
+
+  const toggle = (q: AgentQuestion, opt: string) =>
+    setPicked((p) => {
+      const cur = p[q.question] ?? [];
+      if (!q.multiSelect) return { ...p, [q.question]: cur[0] === opt ? [] : [opt] };
+      return {
+        ...p,
+        [q.question]: cur.includes(opt) ? cur.filter((x) => x !== opt) : [...cur, opt],
+      };
+    });
+
+  // 每一问都答了才让提交：少答一题，模型拿到的就是一段缺了半句的话
+  const complete = questions.every(
+    (q) => (picked[q.question] ?? []).length > 0 || (free[q.question] ?? '').trim() !== '',
+  );
+
+  const submit = () => {
+    const answers: Record<string, string> = {};
+    for (const q of questions) {
+      // 形状沿用桌面：键是问题原文，值用 ", " 连接（选了选项又自己补一句 = 两段）
+      const parts = [...(picked[q.question] ?? [])];
+      const extra = (free[q.question] ?? '').trim();
+      if (extra) parts.push(extra);
+      if (parts.length > 0) answers[q.question] = parts.join(', ');
+    }
+    onAnswer(answers);
+  };
 
   return (
     <View style={[styles.card, { borderColor: t.borderStrong, backgroundColor: t.panel }]}>
-      <Text style={[styles.cardHead, { color: t.accent2 }]}>它想确认一件事</Text>
-      <Text style={[styles.question, { color: t.text }]}>{first.question}</Text>
-      {first.options?.map((opt) => {
-        const on = picked[first.question] === opt;
-        return (
-          <Pressable
-            key={opt}
-            onPress={() => setPicked((p) => ({ ...p, [first.question]: opt }))}
-            style={[
-              styles.option,
-              { borderColor: on ? t.accentLine : t.border, backgroundColor: on ? t.accentSoft : 'transparent' },
-            ]}
-          >
-            <View style={[styles.radio, { borderColor: on ? t.accent : t.borderStrong }]}>
-              {on ? <View style={[styles.radioDot, { backgroundColor: t.accent }]} /> : null}
-            </View>
-            <Text style={{ color: t.text, fontSize: 13.5 }}>{opt}</Text>
-          </Pressable>
-        );
-      })}
-      <View style={[styles.freeInput, { backgroundColor: t.inputBg, borderColor: t.border }]}>
-        <Text
-          style={{ color: free ? t.text : t.faint, fontSize: 13 }}
-          onPress={() => setFree(free ? '' : '只改登录页，别的先不动')}
-        >
-          {free || '或者自己写一句…'}
-        </Text>
-      </View>
+      <Text style={[styles.cardHead, { color: t.accent2 }]}>
+        它想确认{questions.length > 1 ? `${questions.length} 件事` : '一件事'}
+      </Text>
+      {questions.map((q) => (
+        <View key={q.question} style={{ marginTop: 10 }}>
+          <Text style={[styles.question, { color: t.text, marginTop: 0 }]}>{q.question}</Text>
+          {q.options?.map((opt) => {
+            const on = (picked[q.question] ?? []).includes(opt);
+            return (
+              <Pressable
+                key={opt}
+                onPress={() => toggle(q, opt)}
+                style={[
+                  styles.option,
+                  {
+                    borderColor: on ? t.accentLine : t.border,
+                    backgroundColor: on ? t.accentSoft : 'transparent',
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.radio,
+                    // 多选画方框，单选画圆点：让人一眼看出能不能选好几个
+                    q.multiSelect ? { borderRadius: 4 } : null,
+                    { borderColor: on ? t.accent : t.borderStrong },
+                  ]}
+                >
+                  {on ? <View style={[styles.radioDot, { backgroundColor: t.accent }]} /> : null}
+                </View>
+                <Text style={{ color: t.text, fontSize: 13.5, flex: 1 }}>{opt}</Text>
+              </Pressable>
+            );
+          })}
+          <View style={[styles.freeInput, { backgroundColor: t.inputBg, borderColor: t.border }]}>
+            <TextInput
+              value={free[q.question] ?? ''}
+              onChangeText={(text) => setFree((f) => ({ ...f, [q.question]: text }))}
+              placeholder="或者自己写一句…"
+              placeholderTextColor={t.faint}
+              style={{ color: t.text, fontSize: 13, padding: 0 }}
+              multiline
+            />
+          </View>
+        </View>
+      ))}
       <View style={styles.cardActions}>
         <Pressable
-          disabled={!picked[first.question] && !free}
-          onPress={() => onAnswer(picked[first.question] ?? free)}
+          disabled={!complete}
+          onPress={submit}
           style={({ pressed }) => [
             styles.btnPrimary,
             {
               backgroundColor: pressed ? t.accentStrong : t.accent,
-              opacity: picked[first.question] || free ? 1 : 0.45,
+              opacity: complete ? 1 : 0.45,
             },
           ]}
         >
           <Text style={{ color: t.onAccent, fontSize: 13, fontWeight: '600' }}>回答</Text>
         </Pressable>
-        <Pressable onPress={() => onAnswer('')} style={styles.btnFlat}>
+        <Pressable onPress={onDecline} style={styles.btnFlat}>
           <Text style={{ color: t.faint, fontSize: 13 }}>跳过</Text>
         </Pressable>
       </View>
@@ -279,20 +332,25 @@ export function Thinking({ text }: { text: string }) {
 export function MessageView({
   msg,
   toolResult,
+  running,
   ask,
   attachments,
   fileSource,
   onDecide,
   onAnswer,
+  onDecline,
   onOpenFile,
 }: {
   msg: SessionMessage;
   toolResult?: SessionMessage;
+  /** 工具还在跑（只有实时那一轮会给） */
+  running?: boolean;
   ask?: PendingAsk;
   attachments: AttachmentRef[];
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onDecide: (allow: boolean) => void;
-  onAnswer: (text: string) => void;
+  onAnswer: (answers: Record<string, string>) => void;
+  onDecline: () => void;
   onOpenFile: (id: string) => void;
 }) {
   const { tokens: t } = useTheme();
@@ -302,7 +360,7 @@ export function MessageView({
       <PermissionCard preview={ask.preview} toolName={ask.toolName} onDecide={onDecide} />
     );
   if (ask?.kind === 'question')
-    return <QuestionCard questions={ask.questions} onAnswer={onAnswer} />;
+    return <QuestionCard questions={ask.questions} onAnswer={onAnswer} onDecline={onDecline} />;
 
   if (msg.role === 'user')
     return (
@@ -330,6 +388,7 @@ export function MessageView({
         args={msg.args}
         result={toolResult?.toolResult}
         isError={toolResult?.isError}
+        running={running}
       />
     );
   }

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { ApiError, normalizeSnapshot } from '../api/client';
 import type { Snapshot } from '../api/types';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
@@ -150,9 +151,11 @@ describe('messageOfError —— 服务端拒绝的原因要原样变成人话', 
   });
 
   it('连不上和上面那些不是一回事', () => {
-    expect(messageOfError(new TypeError('Network request failed'))).toBe(
-      '连不上电脑（没开机、或不在同一个网络）',
-    );
+    const text = messageOfError(new TypeError('Network request failed'));
+    expect(text.startsWith('连不上电脑')).toBe(true);
+    // iOS 多一种「看起来一样」的原因：本地网络权限被拒。那句话必须把它说出来，
+    // 否则读者只会去检查 Wi-Fi 和那台电脑。
+    if (Platform.OS === 'ios') expect(text).toContain('本地网络权限');
   });
 });
 

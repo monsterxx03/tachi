@@ -72,13 +72,17 @@ export class MobileSocket {
     this.connect();
   }
 
-  /** 订阅一个会话；已经连着的话就换订阅 */
-  subscribe(sessionId: string): void {
+  /**
+   * 订阅一个会话；已经连着的话就换订阅。传 null = 退出这段对话（回列表）：告诉电脑
+   * 别再把它的流推过来 —— 一段在跑的对话每秒几十条事件，全落在一个没人看的画面上。
+   */
+  subscribe(sessionId: string | null): void {
     this.sessionId = sessionId;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.send({ type: 'open', sessionId });
+      this.send({ type: 'open', sessionId: sessionId ?? '' });
       return;
     }
+    if (!sessionId) return;
     this.connect();
   }
 

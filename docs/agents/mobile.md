@@ -14,6 +14,7 @@
 | **新机器上的环境** | 在一台没有 Android 工具链的机器上第一次碰 `mobile/`——**照这一节做，不要照网上的教程** |
 | **国内镜像** | 某个下载慢到以为卡住时；或者新机器上要重新配一遍 |
 | **构建与运行** | 你要构建、安装、跑这个 App；或者 prebuild 之后构建失败 |
+| **iOS（真机）** | 你要在 iPhone 上自己装一份（不分发）：工具链、`app.json` 的 iOS 三项、以及本地网络权限这类只在真机上出现的坑 |
 | **验证** | 你想知道一个改动该拿什么证明它是对的、agent 自己验得到哪一层 |
 | **服务端** | 你碰桌面那半边（`desktop/mobile*.go`）或手机要用的那几个桌面方法 |
 
@@ -120,6 +121,52 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - **写界面要用 `react-native-safe-area-context` 的 `SafeAreaView`**，RN 自带的那个已弃用（运行时会弹警告条）。
 - **mermaid 随包发**（`assets/mermaid.min.txt`，5 MB 全量构建）。它停在 `assets/` 而不是模块里：`metro.config.js` 把 `txt` 加进 `assetExts`，否则 Metro 会把它当 JS 模块去执行。运行时用 `expo-asset` + `expo-file-system` 读成字符串注进 WebView——这样第一次画图也不依赖网络。
 
+## iOS（真机自己装，不分发）
+
+`ios/` 与 `android/` 一样是 **CNG 生成物**，不入库：`npx expo prebuild -p ios` 生成，跟着 `app.json` 走，不手改。
+
+**工具链比 Android 那套更挑：**
+
+- **必须是完整 Xcode，不是 Command Line Tools**：只有 CLT 时 `xcodebuild` 直接报 "requires Xcode"。装完 `sudo xcode-select -s /Applications/Xcode.app` 并跑一次 `sudo xcodebuild -license accept`。
+- **CocoaPods 用 Homebrew 装**（`brew install cocoapods`）。系统自带的 Ruby 2.6 太老，`gem install` 会在解析阶段就失败。
+- **一个 Apple ID 就够自装**：Xcode 里登进 Personal Team，免费签名 7 天过期，重装即可；iOS 16+ 要在手机上打开「开发者模式」。
+- 跑起来：`npx expo run:ios --device`（它会自己 prebuild + pod install）。**`scripts/prepare-android.sh` 是 Android 专用**（Gradle/AGP/R8），别对 iOS 跑；iOS 没有需要钉的等价物。
+
+**`app.json` 里 iOS 那三项各有各的理由：**
+
+- `bundleIdentifier` —— 没有它 `prebuild` 卡在交互式提问，非交互直接失败。
+- `NSLocalNetworkUsageDescription` —— iOS 14+ 连局域网要单独授权，缺这条那句询问没有说明。
+- `NSAppTransportSecurity` —— 明文 http / ws 到**局域网 IP**。ATS 的例外按域名写，而家里那台机器是个 IP，列不进去，所以是 `NSAllowsArbitraryLoads`；Expo 模板默认就是它，这里**显式钉住**，免得哪天模板变了、配对静默失败。图标是全不透明的 1024 PNG（只是带 alpha 通道），不用换。
+
+**模拟器路线（已验证）：** `xcodebuild -workspace ios/Tachi.xcworkspace -scheme Tachi -sdk iphonesimulator -destination 'platform=iOS Simulator,id=<UDID>' build`，然后 `xcrun simctl install/launch`。模拟器直接能连宿主的 `127.0.0.1`（不需要任何转发），所以配对填 `http://127.0.0.1:9797` 就能跟 mockapi 联调。两个坑：
+
+- **别用 `CODE_SIGNING_ALLOWED=NO` 编。** 那样出来的包能在模拟器里启动、界面也正常，但**没有 Keychain 权限**：配对那一步 SecureStore 会抛 `A required entitlement isn't present`，配对存不下来，App 永远停在配对页。用 Xcode 自己的（模拟器 ad-hoc）签名就好。
+- **第一次 `xcodebuild` 可能卡死在 `CompileStoryboard`（`ibtool` 0% CPU 挂几分钟）。** 不是工程的问题：先单独跑一次 `xcrun ibtool ... SplashScreen.storyboard` 把 IB 服务唤醒，或直接重跑 build，第二次就过。
+
+**真机路线（已验证）：** 签名只要一次团队：
+
+```sh
+# 先让 Xcode 认一次设备（Window → Devices and Simulators），手机才会出现「开发者模式」
+cd mobile/ios
+xcodebuild -workspace Tachi.xcworkspace -scheme Tachi -configuration Debug -sdk iphoneos \
+  -destination 'platform=iOS,id=<UDID>' DEVELOPMENT_TEAM=<TEAM> CODE_SIGN_STYLE=Automatic \
+  -allowProvisioningUpdates build
+xcrun devicectl device install app --device <devicectl-id> build/Build/Products/Debug-iphoneos/Tachi.app
+xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
+```
+
+- **「开发者模式」不是一直存在的菜单项**：它要等 Xcode 真的认过这台手机（Devices 窗口里准备完 DDI）之后，才会出现在 设置 → 隐私与安全性；打开后手机重启、解锁时再确认一次。没开之前 `xcodebuild` 会直接报 `Developer Mode disabled`。
+- **免费个人团队装完第一次启动会被拦**：`FBSOpenApplicationErrorDomain error 3 / profile has not been explicitly trusted`。去 设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任那个 Apple ID，之后 `devicectl ... launch` 才通。免费签名 7 天过期，重装即可。
+- **Debug 包依赖 Metro**：JS 是从电脑的 8081 拉的，手机和电脑要在同一个 Wi-Fi（这时本地网络权限的弹窗就来了），Metro 一停 App 就是红屏。想要「装上去就能用」，打 `-configuration Release`（JS 打进包里）。
+
+**三个只在真机上才会撞的坑：**
+
+1. **本地网络权限**。第一次连局域网就弹（往往早于配对 —— 连 Metro 的 8081 也算）。点了「不允许」之后连接会被**静默**拦掉，和「电脑没开机」一模一样，很容易误判成服务端坏了。改回来在 设置 → 隐私与安全性 → 本地网络。`messageOfError` 在 iOS 上把那句话多带一条「或没给本地网络权限」，就是这个原因。
+2. **没有 `adb reverse`**。模拟器那一整套在真机上不存在：配对地址必须是**电脑的局域网地址**（桌面配对卡片的网卡候选就是为此），手机和电脑同一个 Wi-Fi，访客网络 / AP 隔离会直接断掉。
+3. **Metro 可达性**。调试包从电脑的 8081 拉 JS：macOS 防火墙要允许 node 接受入站连接，点错了就是白屏（不是崩溃）。
+
+**一条更快的路：Expo Go。** 现在用的原生模块 Expo Go 都内置，`npx expo start` 扫码即可先看界面；代价是它用不了我们自己的 Info.plist（本地网络与明文由 Expo Go 自己决定），所以它验不了配对那条路。
+
 ## 界面
 
 - **正文的 markdown 交给 `@ronradtke/react-native-markdown-display`**（RN 原生的 markdown-it 渲染，表格 / 列表 / 代码块都是它自己的规则）；我们只补两件事：围栏里的 `mermaid` 换成 WebView 那张图，以及所有文字可长按选中。别引 `react-markdown`——那是渲染 DOM 的，手机上用不了。
@@ -128,13 +175,16 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - **键盘高度自己补**：SDK 58 是 edge-to-edge，manifest 里的 `adjustResize` 不再把窗口缩下来。`App.tsx` 监听 `keyboardDidShow` 给容器垫 `paddingBottom`，否则输入框整条躺在键盘底下。
 - 宽屏（≥768）侧栏可以收起，入口是对话 header 左上角那个菜单键。
 - **消息列表是 inverted 的**（数据倒过来喂）：打开会话就停在最新一条，往上翻出来的更早一页接在数组末尾（视觉顶部），画面不用补偿滚动位置。往上翻到头会走 `page` 端点续读，`hasMore` 跟着最旧的那条走；快照重读时 `mergeSnapshot` 把已经翻出来的更早消息留在原处（一轮结束、重连、lagged 都会触发重读）。进对话先翻到底部这一条也要它：非 inverted 的列表默认停在顶部，等于让人从一百条前的一页往下翻。
-- **工具调用按「连着的一串」折成一行（`ToolFold`，`N 步`）**，点开才逐步展开；失败的那一步不折，自己留一行 —— 出错要看得见。实时那一轮仍旧逐步显示（正在跑的时候，过程就是信息）。
+- **一轮的过程折成一行（`ProcessFold`）**：思考和成功的工具调用都收进去，**按记录里的先后**排（点开照这个顺序展开，不按种类分组）；只有工具时标 `N 步`，只有思考时标 `思考 N 段`。正文留在外面，失败的那一步也留在外面。判据是两条用户消息之间，不是「相邻」。真实记录里两个 `tool_call` 之间一定夹着 `tool_result`，还常常夹着 `thinking` 和**内容为空的 assistant**（模型每调一次就写一条）——按相邻判断的话每段只剩一个工具，永远折不起来，手机上看到的就是「每个 tool call 都露在外面」。失败的那一步留在原地，出错要看得见。分组的纯函数在 `src/state/items.ts`（`buildItems`），`items.test.ts` 用真实记录的形状钉住；实时那一轮仍旧逐步显示（正在跑的时候，过程就是信息）。
+- **从左边往右划 = 返回上一屏**：凡是「推上去的一页」都挂 `src/ui/edgeBack.ts` 的 `useEdgeBack` —— 对话（窄屏回列表 / 宽屏侧栏收起时把列表拉回来）、会话信息、设置、新建会话、添加电脑（配对页只在有上一屏时才有返回）。**文件阅读器故意不挂**：那里的图片是可以双指缩放、拖着看的，横向手势归它。iOS 没有系统返回手势，由这个 hook 的 PanResponder 认（起点在左缘 24pt 内、横向划够 64pt，正文里的横向操作不被吃）。**Android 上这条手势归系统**（手势导航的左缘返回），App 收不到 —— 所以同一件事必须由 `BackHandler` 完成：它先判断「宽屏且侧栏收起」，再决定是展开侧栏还是关闭会话；只做 PanResponder 的话，Android 上这一划会直接退到桌面。
 - **左滑露出两个动作：置顶 / 删除**（`SwipeRow` 的 actions）。收起的动作层从可达性树里摘掉，否则读屏和自动化会点到一个看不见的按钮。
+- **这一行的手势在 UI 线程上（`react-native-gesture-handler` 的 `Gesture.Pan` + `reanimated` 的共享值）**，不是 `PanResponder`。`PanResponder` 每一帧都要过一次 JS 线程，而这块屏的 JS 线程随时被会话事件占着 —— 表现就是「跟不上手指、一划就弹回去」，调动画参数救不回来。判据也交给 GH：`activeOffsetX([-8, 8])` 让横向归这一行、`failOffsetY([-14, 14])` 让纵向归列表，两者不再互相抢；松手用 `withTiming` 按「还剩多远」定快慢。**这条路线要求根节点是 `GestureHandlerRootView`**（`App.tsx` 最外层），缺了它手势静默不触发。**`edgeBack` 仍是 `PanResponder`**（它要的是「左缘 24pt 内的横向划动」，还没搬）；要搬的话判据不一样，别照抄这里。还有一条不在手势里、但读者一定感觉得到：**离开对话要退订**（`open` 的 `sessionId` 传空串）—— 否则那段在跑的对话每秒几十条增量还在往手机上灌。
 - **会话的增删改是广播，不是某一段会话的流**：桌面新建 / 删除 / **重命名 / 置顶**、手机建 / 删 / 置顶都发 `sessions_changed`，客户端重读 `/v1/sessions`，并把**打开着的那段**的标题等一并修掉（不修的话，桌面上改了名的对话在这里一直显示旧名）。手机上是「列表左滑 → 置顶 / 删除」，删除走原生确认框与 `DELETE /v1/sessions/{id}`，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
 - **新建会话在列表 header 的 `+`**：项目可选，无项目时手输工作目录（空 = `~/workspace`，`~` 由电脑展开）。桌面那份 `NewSession` 会把窗口切到新会话上，手机不走它 —— 协议不变量 7 要求手机不改变桌面正在显示的那一段。
 - **记住多台电脑，同时只连一台**：`src/api/storage.ts` 存的是「列表 + 当前下标」（`tachi.devices`），单台时代的 `tachi.pairing` 在第一次读取时迁进来并删掉。切换 = 断开那条 socket、清掉画面、重连；会话在电脑上，所以切过去看到的是另一台电脑的会话。设置页里能加、切、删；**加完自动回设置页**（留在配对页会让人以为没成功）。
 - **会话信息页有四个页签**：概览（上下文 / 工作区 / 模型 / 审批 / 用量）、MCP、Agent、定时任务。后三个面板里 MCP 与 Agent 是只读的，定时任务有三个动作（运行一次 / 暂停·恢复 / 删除）；**每个会话只自动问一次**（`asked`），带一个刷新键；能连 server、能授权、能建任务、能改计划的只有桌面。定时任务的三个动作与电脑同一个写入路径，改动由 `cron_changed` 广播到每一块屏（窗口收到 `agent:cron_changed` 重读，手机收到就重读面板）——**双端谁改的都立刻在另一边可见**，没有第二条同步路径。**别把「panels 为空」当成再拉一次的条件** —— 请求失败时那就是一个没有出口的重试循环：屏幕上 loading 翻个不停、电脑被轮番请求。失败的原因显示在面板里（`panelError`），重试只由刷新键发起。MCP 面板说「这段对话载入 x/y 个工具」—— 工具搜索下 y 可以是全部而 x 是零。
 - **切后台回来要重建 WebSocket**（`MobileSocket.forceReconnect`）：锁屏期间定时器被挂起、连接可能半开，而 `readyState` 仍报 OPEN——只调 `ensureConnected` 的表现为「回来一直显示连不上，杀掉重进才好」。
+- **运行中压缩会换会话 id，画面要跟着搬**：压缩成功时 agent 把历史写进**子会话**，这一轮剩下的部分接着在子会话里跑，而 `idle` 也发往子会话。桌面在同一刻换轨（`agent:session_switched`），手机收到 `session_moved`（`from` / `to` / `end`）后把打开的那个 id、WS 订阅、还没发出去的队列一起搬过去，并重读子会话的快照。不搬的表现是：画面停在压缩点、状态永远「在跑」、排队的话发不出去，只能退回列表再点进来。换轨发生在**一轮结束之后**——压缩那一刻就搬，会把正在写的消息从画面底下抽走。**队列靠通知里的 `end` 补发**：换订阅一定比 `idle` 晚一步，等那条事件是等不到的；规则与 `idle` 那条相同（自然结束就发，被打断/出错就留）。
 
 ## 验证
 
@@ -151,7 +201,7 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 
 - **写界面时保持它能跑在 web 上**——那是 agent 能自己看见界面的另一条路。代价是原生模块要有一层平台适配（安全存储在 web 上退化成 localStorage），这层本来也该有。
 - **「手机 + 真桌面」的联调不碰你自己的应用**：造一个隔离的 HOME——`config.yaml` 里 `mobile.enabled: true`，一个 `mobile.json` 写着想要的 token（`0600`），再在 `~/.tachi/session/<id>/` 手写一份 `meta.json` + `messages.jsonl`——然后 `open -n --env HOME=<sandbox> desktop/bin/tachi-desktop.app` 起第二个实例。手机端照旧 `adb reverse tcp:8787 tcp:8787` 连 `127.0.0.1:8787`。收工只杀那一个：从 `ps eww` 按 `HOME=` 认 pid，**别对整个 bundle `pkill`**（会命中用户自己那份）。没有配 provider 时发送会被 409 `agent_unavailable` 挡下，那正是错误透传那条路的现成用例（手机应显示「这台电脑还没配好模型，先在电脑上配置」，输入框里的字要留着）。
-- **端到端用 `mobile/e2e/`**：`bash mobile/e2e/run.sh`（它先把 mockapi 重启成种子状态，再让 Maestro 跑 `main.yaml`）。两个踩过的点：**Maestro 的文本匹配是精确相等、不是包含**（要包含就写成 `".*命令跑完了.*"`）；flow 会消耗种子数据（点掉那张待答卡），所以每次跑之前都得重置 mock 服务 —— 脚本做这件事。
+- **端到端用 `mobile/e2e/`**：`bash mobile/e2e/run.sh`（每条 flow 之前都把 mockapi 重启成种子状态：`main.yaml` 是主链路，`compact.yaml` 是运行中压缩换轨 + 队列补发）。三个踩过的点：**Maestro 的文本匹配默认是整串相等**（要包含就写成 `".*命令跑完了.*"`）；**iOS 上一行在无障碍树里是合并后的一整串**（`移动端接入方案, tachi · 昨天`），所以点会话要用 `.*标题.*`，Android 上是分开的元素；flow 会消耗种子数据（点掉那张待答卡、造出子会话），所以每条之前都得重置 mock 服务 —— 脚本做这件事。
 - **模拟器扫不了码**：它的相机没有真实画面，所以扫码这条路只能验到"界面能打开、权限流程正常"，二维码的解析由 `src/api/qr.test.ts` 钉住（码里装的是 `{"v":1,"url":"…","token":"…"}`）。
 - 桌面的会话记录是权威，实时流只延长尾巴；验界面时以"重读快照后画面正确"为准，不要只信流。
 

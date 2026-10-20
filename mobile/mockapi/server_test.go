@@ -192,3 +192,65 @@ func TestPageCursorIsIndexNotTime(t *testing.T) {
 		t.Fatal("应当返回 0..2 这三条")
 	}
 }
+
+// TestCompactionMovesThePhone: 压缩成功会把这轮对话搬进子会话，尾巴与 idle 都发往新 id。
+// 手机必须收到 session_moved 并换订阅 —— 停在旧 id 上就永远等不到那一轮的结束。
+func TestCompactionMovesThePhone(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialWS(t, ts, "test-token")
+	if err := conn.WriteJSON(map[string]string{"type": "open", "sessionId": "s3"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := readEvent(t, conn); ev.Type != "snapshot" {
+		t.Fatalf("第一条应当是 snapshot，得到 %q", ev.Type)
+	}
+
+	body := strings.NewReader(`{"text":"这段太长了，压缩一下","mode":"send"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/sessions/s3/messages", body)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("发消息应当受理，得到 %d", resp.StatusCode)
+	}
+
+	var moved *Event
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && moved == nil {
+		ev := readEvent(t, conn)
+		if ev.Type == "session_moved" {
+			moved = &ev
+		}
+	}
+	if moved == nil {
+		t.Fatal("压缩之后没有收到 session_moved：手机永远停在被压缩掉的那一半上")
+	}
+	if moved.From != "s3" || moved.To == "" || moved.To == moved.From {
+		t.Fatalf("session_moved = %+v，应当从一个 id 指向一个新 id", *moved)
+	}
+	if moved.End != "complete" {
+		t.Fatalf("session_moved.end = %q，压缩是这一轮正常结束之后的事", moved.End)
+	}
+
+	// 换订阅：新会话的快照先到（压缩摘要在那里面），然后尾巴与 idle
+	if err := conn.WriteJSON(map[string]string{"type": "open", "sessionId": moved.To}); err != nil {
+		t.Fatal(err)
+	}
+	// 广播（sessions_changed）可能插在前面，跳过它
+	var snap Event
+	for snap.Type != "snapshot" {
+		snap = readEvent(t, conn)
+	}
+	if snap.Snapshot == nil || snap.Snapshot.Session.ID != moved.To {
+		t.Fatalf("换订阅后应当收到子会话的快照，得到 %+v", snap)
+	}
+	// 换过来的会话必须已经是空闲的：换轨发生在一轮结束之后，手机要靠这一点补发队列
+	// （idle 在换订阅落地之前就发走了，等不到 —— 这正是 session_moved 要带 end 的原因）
+	if snap.Snapshot.Session.Running {
+		t.Fatal("换轨时的子会话还在跑：手机补发队列会被 turn_running 挡下")
+	}
+}

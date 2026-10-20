@@ -1,0 +1,38 @@
+# 运行中压缩：对话搬进子会话之后，手机要跟着换轨。
+#
+# 压缩成功时 agent 把历史写进一个新的会话，这一轮的收尾与 idle 都发往新 id；手机订的是
+# 旧 id，不跟着搬就停在压缩点、状态永远「在跑」、排队的话发不出去。
+#
+# 这条流程验三件事：换轨后看到的是子会话（摘要），排队的那句在换轨后自己发出去，
+# 状态落回空闲。mockapi 的剧本按关键词挑，英文用 "compact"（中文也认「压缩」）。
+appId: dev.tachi.mobile
+name: 压缩换轨
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "会话"
+    timeout: 30000
+- tapOn: ".*长对话：接口梳理.*"
+- extendedWaitUntil:
+    visible: "补一句…"
+    timeout: 15000
+
+# 这一轮会压缩：跑起来之后再说一句，它先进队列
+- tapOn: "补一句…"
+- inputText: "compact"
+- tapOn: "发送"
+- extendedWaitUntil:
+    visible: ".*正在跑.*"
+    timeout: 15000
+- tapOn: "补一句…"
+- inputText: "queued hello"
+- tapOn: "发送"
+
+# 换轨：画面里是子会话的快照（摘要来自它，不是旧那一半）
+- extendedWaitUntil:
+    visible: ".*压缩摘要.*"
+    timeout: 60000
+# 队列补发：这一轮的 idle 发往新 id，手机收不到，靠 session_moved 带的 end 补
+- extendedWaitUntil:
+    visible: ".*queued hello.*"
+    timeout: 60000

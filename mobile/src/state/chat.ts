@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { ApiError } from '../api/client';
 import type { ServerEvent, SessionMessage, Snapshot } from '../api/types';
 
@@ -204,5 +205,9 @@ export function messageOfError(e: unknown): string {
     }
     return `出错了（${e.code}）`;
   }
-  return '连不上电脑（没开机、或不在同一个网络）';
+  // iOS 上还有第三种原因，而且它看起来和另外两种一模一样：本地网络权限被拒了。
+  // 那一句话要能把人送到正确的位置（设置 → 隐私与安全性 → 本地网络）。
+  return Platform.OS === 'ios'
+    ? '连不上电脑（没开机、不在同一网络，或没给本地网络权限）'
+    : '连不上电脑（没开机、或不在同一个网络）';
 }

@@ -1,16 +1,14 @@
 import { Feather } from '@expo/vector-icons';
-import { useRef, useState } from 'react';
-import {
-  Alert,
-  Animated,
-  FlatList,
-  PanResponder,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { memo, useState } from 'react';
+import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  Easing,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import type { SessionSummary } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
@@ -52,41 +50,52 @@ export interface SwipeAction {
 /**
  * 一行可以左滑露出动作（置顶 / 删除）。
  *
- * 只在横向移动超过 8px 时接管手势 —— 轻点仍然落到里面的 Pressable 上，
- * 否则点开一段对话这件事会被滑动手势吃掉。
+ * **手势在 UI 线程解析**（gesture-handler + reanimated），不是 PanResponder：后者每一帧都要
+ * 过一次 JS 线程，而这块屏的 JS 线程随时在被会话事件占着 —— 表现就是「跟不上手指、一划就
+ * 弹回去」。`activeOffsetX` 让横向的意图归这一行、纵向归列表，两者不再互相抢。
  */
 function SwipeRow({ children, actions }: { children: React.ReactNode; actions: SwipeAction[] }) {
   const { tokens: t } = useTheme();
-  const tx = useRef(new Animated.Value(0)).current;
-  const opened = useRef(false);
-  // 收起时那层动作仍在树里（它就在内容底下），对读屏和自动化来说等于一排看不见的按钮 ——
-  // 所以收起时把整层从可达性树里摘掉。
-  const [revealed, setRevealed] = useState(false);
   const reveal = actions.length * ACTION_WIDTH;
+  // 0 = 关着，-reveal = 全开。手势与动画都只碰这两个共享值，不经过 React。
+  const tx = useSharedValue(0);
+  const opened = useSharedValue(false);
+  // 收起时那层动作仍在树里（它就在内容底下），对读屏和自动化来说等于一排看不见的按钮 ——
+  // 所以收起时把整层从可达性树里摘掉（这条要 React 知道，所以只有它过 JS）。
+  const [revealed, setRevealed] = useState(false);
 
-  const pan = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
-      onPanResponderMove: (_e, g) => {
-        const base = opened.current ? -reveal : 0;
-        tx.setValue(Math.max(-reveal, Math.min(0, base + g.dx)));
-      },
-      onPanResponderRelease: (_e, g) => {
-        const open = (opened.current ? -reveal : 0) + g.dx < -reveal / 2;
-        opened.current = open;
-        setRevealed(open);
-        Animated.spring(tx, {
-          toValue: open ? -reveal : 0,
-          useNativeDriver: false,
-          bounciness: 0,
-        }).start();
-      },
-    }),
-  ).current;
+  const pan = Gesture.Pan()
+    // 横向划够 8px 才认领这一行；纵向先划够 14px 就交还给列表去滚
+    .activeOffsetX([-8, 8])
+    .failOffsetY([-14, 14])
+    .onUpdate((e) => {
+      const base = opened.value ? -reveal : 0;
+      tx.value = Math.max(-reveal, Math.min(0, base + e.translationX));
+    })
+    .onEnd(() => {
+      const open = tx.value < -reveal / 2;
+      opened.value = open;
+      // 松手吸附：按「还剩多远」定快慢，短距离一下就到位，整段划开才用满时长
+      const remaining = Math.min(1, Math.abs((open ? -reveal : 0) - tx.value) / reveal);
+      tx.value = withTiming(open ? -reveal : 0, {
+        duration: 90 + Math.round(110 * remaining),
+        easing: Easing.out(Easing.cubic),
+      });
+      runOnJS(setRevealed)(open);
+    })
+    // 手势被别处接管（比如列表滚动赢了）：收回去，不要停在半路
+    .onFinalize((_e, success) => {
+      if (success) return;
+      opened.value = false;
+      tx.value = withTiming(0, { duration: 120, easing: Easing.out(Easing.cubic) });
+      runOnJS(setRevealed)(false);
+    });
+
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: tx.value }] }));
 
   const close = () => {
-    Animated.spring(tx, { toValue: 0, useNativeDriver: false, bounciness: 0 }).start();
-    opened.current = false;
+    opened.value = false;
+    tx.value = withTiming(0, { duration: 120, easing: Easing.out(Easing.cubic) });
     setRevealed(false);
   };
 
@@ -114,9 +123,9 @@ function SwipeRow({ children, actions }: { children: React.ReactNode; actions: S
           );
         })}
       </View>
-      <Animated.View style={{ transform: [{ translateX: tx }], backgroundColor: t.sid }} {...pan.panHandlers}>
-        {children}
-      </Animated.View>
+      <GestureDetector gesture={pan}>
+        <Animated.View style={[{ backgroundColor: t.sid }, style]}>{children}</Animated.View>
+      </GestureDetector>
     </View>
   );
 }
@@ -193,58 +202,86 @@ export function SessionList({
             tintColor={t.faint}
           />
         }
-        renderItem={({ item }) => {
-          const s = item;
-          const selected = s.id === currentId;
-          const badge = badgeOf(s);
-          return (
-            <SwipeRow
-              actions={[
-                {
-                  label: s.pinned ? '取消置顶' : '置顶',
-                  icon: 'bookmark',
-                  tone: 'accent',
-                  onPress: () => onPin(s.id, !s.pinned),
-                },
-                {
-                  label: '删除',
-                  icon: 'trash-2',
-                  tone: 'red',
-                  onPress: () =>
-                    Alert.alert('删除这段对话？', s.title, [
-                      { text: '取消', style: 'cancel' },
-                      { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
-                    ]),
-                },
-              ]}
-            >
-              <Pressable
-                onPress={() => onOpen(s.id)}
-                style={({ pressed }) => [
-                  styles.row,
-                  selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
-                  !selected && pressed && { backgroundColor: t.wash },
-                ]}
-              >
-                <View style={styles.rowTop}>
-                  {s.pinned ? <Feather name="bookmark" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
-                  <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
-                    {s.title}
-                  </Text>
-                  {badge ? <Badge {...badge} t={t} /> : null}
-                </View>
-                <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
-                  {s.projectName ? `${s.projectName} · ` : ''}
-                  {s.updatedAt}
-                </Text>
-              </Pressable>
-            </SwipeRow>
-          );
-        }}
+        renderItem={({ item }) => (
+          <SessionRow
+            s={item}
+            selected={item.id === currentId}
+            onOpen={onOpen}
+            onDelete={onDelete}
+            onPin={onPin}
+          />
+        )}
       />
     </View>
   );
 }
+
+/**
+ * 一行。**memo 过**：外层的聊天状态每秒会变好几次（流式文字、tps、排队），Shell 一重渲染
+ * 这个列表就跟着重渲染；不 memo 的话，正在左滑的那一行每一帧都在被别人的事件挤占 JS 线程
+ * —— 看上去就是「一点都不丝滑」。传进来的都是稳定引用或原始值，所以只有这一行自己的
+ * 状态变了才会重画。
+ */
+const SessionRow = memo(function SessionRow({
+  s,
+  selected,
+  onOpen,
+  onDelete,
+  onPin,
+}: {
+  s: SessionSummary;
+  selected: boolean;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onPin: (id: string, pinned: boolean) => void;
+}) {
+  const { tokens: t } = useTheme();
+  const badge = badgeOf(s);
+
+  const actions: SwipeAction[] = [
+    {
+      label: s.pinned ? '取消置顶' : '置顶',
+      icon: 'bookmark',
+      tone: 'accent',
+      onPress: () => onPin(s.id, !s.pinned),
+    },
+    {
+      label: '删除',
+      icon: 'trash-2',
+      tone: 'red',
+      onPress: () =>
+        Alert.alert('删除这段对话？', s.title, [
+          { text: '取消', style: 'cancel' },
+          { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
+        ]),
+    },
+  ];
+
+  return (
+    <SwipeRow actions={actions}>
+      <Pressable
+        onPress={() => onOpen(s.id)}
+        style={({ pressed }) => [
+          styles.row,
+          selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
+          !selected && pressed && { backgroundColor: t.wash },
+        ]}
+      >
+        <View style={styles.rowTop}>
+          {s.pinned ? <Feather name="bookmark" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
+          <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
+            {s.title}
+          </Text>
+          {badge ? <Badge {...badge} t={t} /> : null}
+        </View>
+        <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
+          {s.projectName ? `${s.projectName} · ` : ''}
+          {s.updatedAt}
+        </Text>
+      </Pressable>
+    </SwipeRow>
+  );
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

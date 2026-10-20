@@ -17,10 +17,49 @@ type scriptStep struct {
 	toolArgs string
 	toolOut  string
 	ask      any
+	// slow 把这一轮拉长到十来秒：手机端那条「运行中发送 → 排队 → 工具边界插入」的路
+	// 需要一段真的还在跑的回合才验得到。
+	slow bool
+	// compact 让这一轮在中途搬进子会话：手机端「压缩后换轨」那条路（session_moved）
+	// 需要一个真的换 id 的回合才验得到。
+	compact bool
+	// repeat 把同一个工具连出几次：手机端「跑的时候就把过程折成一行、步数实时往上走」
+	// 需要一轮里有好几个工具才看得出来。
+	repeat int
 }
 
 func pickScript(text string) scriptStep {
 	switch {
+	case strings.Contains(text, "slow"):
+		return scriptStep{
+			slow: true,
+			reply: "这一轮故意跑得久一点，好让你在它还没结束的时候发消息。手机端应该把那句话放进待发送队列，" +
+				"而不是立刻塞进正在流的回复里；等到这次工具调用结束，它才会作为插话出现在对话里。" +
+				"如果中途按了「立即发送 · 打断」，这一轮会先停掉，队列里的那句再作为新的一轮发出来。" +
+				"再多说几句，确保这段时间足够你操作。",
+			toolName: "Bash",
+			toolArgs: "sleep 3 && echo slow",
+			toolOut:  "slow",
+		}
+	case strings.Contains(text, "压缩") || strings.Contains(strings.ToLower(text), "compact"):
+		return scriptStep{
+			slow:    true,
+			compact: true,
+			reply: "这段对话太长了，我先把它压缩一次再往下说。压缩会把历史写进一个新的子会话，" +
+				"这一轮的尾巴也跟着过去 —— 手机上应该自己换到那段新会话，而不是停在压缩点等一个不会再来的一轮结束。",
+			toolName: "Read",
+			toolArgs: "internal/history.go",
+			toolOut:  "… 共 640 行",
+		}
+	case strings.Contains(text, "多步") || strings.Contains(text, "multi"):
+		return scriptStep{
+			slow:     true,
+			repeat:   3,
+			reply:    "我分三步看：先读入口，再找引用，最后核对接口。这三步都跑完之后再看结论。",
+			toolName: "Read",
+			toolArgs: "src/auth/login.tsx",
+			toolOut:  "… 共 128 行",
+		}
 	case strings.Contains(text, "删") || strings.Contains(text, "rm "):
 		return scriptStep{
 			reply:    "先看一下要删的东西有多大，然后清理命令会命中 `permissions.bash.ask` 规则，需要你确认。",
@@ -117,27 +156,46 @@ func (s *Server) runTurn(sess *session, text, mode string) {
 
 	step := pickScript(text)
 
-	// 吐字：中间插一次工具调用
+	delay := 45 * time.Millisecond
+	if step.slow {
+		delay = 300 * time.Millisecond
+	}
+
+	// 吐字：中间插工具调用（默认一次，repeat 则均匀插几次）
 	chunks := chunksOf(step.reply)
-	half := len(chunks) / 2
+	repeat := step.repeat
+	if repeat == 0 {
+		repeat = 1
+	}
+	toolAfter := func(i int) int {
+		for k := 1; k <= repeat; k++ {
+			if i == len(chunks)*k/(repeat+1) {
+				return k
+			}
+		}
+		return 0
+	}
 	var spoken strings.Builder
 	for i, ch := range chunks {
 		if s.stopped(sess) {
 			s.endTurn(sess, "interrupted", start)
 			return
 		}
-		time.Sleep(45 * time.Millisecond)
+		time.Sleep(delay)
 		spoken.WriteString(ch)
 		s.broadcast(id, Event{Type: "text", Text: ch})
 
-		if i == half {
-			s.broadcast(id, Event{Type: "tool_start", ToolID: "call-1", ToolName: step.toolName, Title: step.toolArgs})
-			s.broadcast(id, Event{Type: "tool_args", ToolID: "call-1", Args: step.toolArgs})
-			time.Sleep(120 * time.Millisecond)
-			s.broadcast(id, Event{Type: "tool_result", ToolID: "call-1", Result: step.toolOut})
+		if k := toolAfter(i); k > 0 {
+			toolID := "call-" + itoa(k)
+			title := step.toolArgs + " #" + itoa(k)
+			s.broadcast(id, Event{Type: "tool_start", ToolID: toolID, ToolName: step.toolName, Title: title})
+			s.broadcast(id, Event{Type: "tool_args", ToolID: toolID, Args: step.toolArgs})
+			// 跑得久一点：手机端要能在「还在跑」的时候看到折叠行上的步数
+			time.Sleep(700 * time.Millisecond)
+			s.broadcast(id, Event{Type: "tool_result", ToolID: toolID, Result: step.toolOut})
 			s.mu.Lock()
-			sess.append(Message{Role: "tool_call", ToolName: step.toolName, ToolCallID: "call-1", Title: step.toolArgs})
-			sess.append(Message{Role: "tool_result", ToolName: step.toolName, ToolCallID: "call-1", ToolResult: step.toolOut})
+			sess.append(Message{Role: "tool_call", ToolName: step.toolName, ToolCallID: toolID, Title: title})
+			sess.append(Message{Role: "tool_result", ToolName: step.toolName, ToolCallID: toolID, ToolResult: step.toolOut})
 			s.mu.Unlock()
 		}
 	}
@@ -145,6 +203,23 @@ func (s *Server) runTurn(sess *session, text, mode string) {
 	s.mu.Lock()
 	sess.append(Message{Role: "assistant", Content: spoken.String()})
 	s.mu.Unlock()
+
+	if step.compact {
+		// 压缩：把这一轮搬进子会话。**换轨发生在一轮结束之后**（真实现就在 endTurn 里：
+		// r.running 先落回 false，再 followCompaction），所以子会话此刻已经是空闲的 ——
+		// 手机在这之后补发队列里的消息才不会被 turn_running 挡下。
+		s.broadcast(id, Event{Type: "compact_start"})
+		time.Sleep(600 * time.Millisecond)
+		child := s.compactInto(sess)
+		s.broadcast(id, Event{Type: "compact_done"})
+		s.mu.Lock()
+		child.Session.Running = false
+		s.mu.Unlock()
+		s.broadcast(id, Event{Type: "session_moved", From: id, To: child.Session.ID, End: "complete"})
+		s.broadcast("", Event{Type: "sessions_changed"})
+		sess = child
+		id = child.Session.ID
+	}
 
 	if step.ask != nil {
 		// 停下来等一句：把待答项挂上，广播出去，这一轮就不再往下走了
@@ -212,4 +287,32 @@ func (s *Server) endTurn(sess *session, end string, start time.Time) {
 	s.broadcast(id, Event{Type: "turn", End: end, DurationMs: time.Since(start).Milliseconds(), Iterations: 1})
 	s.broadcast(id, Event{Type: "state", State: &st})
 	s.broadcast(id, Event{Type: "idle", End: end})
+}
+
+// compactInto 造出压缩后的子会话。真实现把摘要与最近几条记录写进新会话说，这里只留一条
+// 摘要：手机要验的是「换轨之后画面里的东西来自子会话」，不是摘要的内容。
+func (s *Server) compactInto(old *session) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := old.Session.ID + "-c"
+	for s.byID[id] != nil {
+		id += "c"
+	}
+	ns := &session{}
+	ns.Snapshot = old.Snapshot
+	ns.Session.ID = id
+	ns.Session.UpdatedAt = "刚刚"
+	ns.Messages = nil
+	ns.nextIndex = 0
+	ns.Asks = nil
+	ns.Attachments = nil
+	ns.Context = ContextInfo{Estimate: 2400, Window: old.Context.Window, Parts: []ContextPart{}}
+	ns.append(Message{
+		Role: "assistant",
+		Content: "（压缩摘要）前面 " + itoa(old.nextIndex) + " 条消息的摘要。手机端在压缩结束后应该已经换到这段子会话上：" +
+			"先看到这条摘要，再看到这一轮的尾巴。",
+	})
+	s.byID[id] = ns
+	s.order = append([]string{id}, s.order...)
+	return ns
 }
