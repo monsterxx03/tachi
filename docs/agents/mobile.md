@@ -43,7 +43,9 @@ go run ./mockapi -token dev-token      # 它会把「局域网地址 + 令牌」
 
 打开 App，在配对页填/扫那个地址和令牌，就能看到会话列表。验证：`npm test`（纯逻辑）、`bash e2e/run.sh`（端到端）。
 
-工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。
+工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。构建 `android/` 那一步还要 `ANDROID_HOME`，少了它 Gradle 以「SDK location not found」失败。
+
+- **`babel.config.js` 必须在**（`presets: ['babel-preset-expo']`）。reanimated 4 的 worklet 全靠 babel 插件编译：`babel-preset-expo` 见到 `react-native-worklets` 会自动加上那个插件，而**没有这份配置就没人跑 babel**——App 起得来，却在加载阶段崩在 `Cannot read property 'bytecode' of undefined`（`installUnpackers` 读的就是 worklet 函数的 `__initData`）。`babel-preset-expo` 本身也必须在顶层 `node_modules`，光是嵌在 `expo/node_modules` 里不够（`presets: ['babel-preset-expo']` 从项目根解析）。同理，`react-native-gesture-handler` / `react-native-reanimated` 从 `node_modules` 里消失时 `tsc` 会先报一串 `Cannot find module`，而**原生模块是编在 APK 里的**——补装完 JS 包之后必须重新编译一次 APK，否则 Metro 能加载 JS，运行时仍报 `RNGestureHandlerModule could not be found`。
 
 - **JDK 必须是 17。** 这台机器上可能还装着更老的（`java -version` 报 1.8 是常见的），所以一律显式指定 `JAVA_HOME=$(/usr/libexec/java_home -v 17)`。macOS 只认 `~/Library/Java/JavaVirtualMachines/<名>.jdk/Contents/Home` 这个布局，tar.gz 解压出来要按它摆——而且**摆的是整棵 `Contents/`**（`Info.plist` 在内）：只拷 `Home/` 的话 `java -version` 照样能跑，但 `/usr/libexec/java_home -v 17` 看不见它，只会回落到 1.8。
 - **Node 不能是 20。** React Native 0.88 的 engines 是 `^22.13 || ^24.3 || >=26`；用 20 会在装依赖时以 `EBADENGINE` 起步，出问题的位置和 Node 毫无关系。本机 homebrew 的 26 就够用。
@@ -175,7 +177,8 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **键盘高度自己补**：SDK 58 是 edge-to-edge，manifest 里的 `adjustResize` 不再把窗口缩下来。`App.tsx` 监听 `keyboardDidShow` 给容器垫 `paddingBottom`，否则输入框整条躺在键盘底下。
 - 宽屏（≥768）侧栏可以收起，入口是对话 header 左上角那个菜单键。
 - **消息列表是 inverted 的**（数据倒过来喂）：打开会话就停在最新一条，往上翻出来的更早一页接在数组末尾（视觉顶部），画面不用补偿滚动位置。往上翻到头会走 `page` 端点续读，`hasMore` 跟着最旧的那条走；快照重读时 `mergeSnapshot` 把已经翻出来的更早消息留在原处（一轮结束、重连、lagged 都会触发重读）。进对话先翻到底部这一条也要它：非 inverted 的列表默认停在顶部，等于让人从一百条前的一页往下翻。
-- **一轮的过程折成一行（`ProcessFold`）**：思考和成功的工具调用都收进去，**按记录里的先后**排（点开照这个顺序展开，不按种类分组）；只有工具时标 `N 步`，只有思考时标 `思考 N 段`。正文留在外面，失败的那一步也留在外面。判据是两条用户消息之间，不是「相邻」。真实记录里两个 `tool_call` 之间一定夹着 `tool_result`，还常常夹着 `thinking` 和**内容为空的 assistant**（模型每调一次就写一条）——按相邻判断的话每段只剩一个工具，永远折不起来，手机上看到的就是「每个 tool call 都露在外面」。失败的那一步留在原地，出错要看得见。分组的纯函数在 `src/state/items.ts`（`buildItems`），`items.test.ts` 用真实记录的形状钉住；实时那一轮仍旧逐步显示（正在跑的时候，过程就是信息）。
+- **列表数据里只放历史**（`buildItems` 只依赖快照）：实时那一轮（`buildLiveTail`）和待答项（`buildAskItems`）挂在 `ListHeaderComponent` 上——inverted 列表的头部就是视觉最底部，待答项因此仍在最靠底的位置（实时那一轮在它上面）。理由：RN 的列表单元是 `PureComponent`，`renderItem` 和 `item` 的引用一变，所有已挂载的单元全部重画；流式文字每个字都在变，混进同一个数组就等于每来一段文字都把可见消息的 markdown 重新解析一遍。同样地，`Chat` 的 `renderItem` 走 `useCallback` 加一个 `env` ref（回调、主题、附件都从那里取），它的引用必须保持稳定。状态层还有一道：`mobile.ts` 把 `text`/`thinking` 事件攒到下一帧再提交（`flushStream`），任何别的事件到来前先把它吐出去，否则快照会看见一段「还没发生」的历史。
+- **一轮的过程折成一行（`ProcessFold`）**：思考和成功的工具调用都收进去，**按记录里的先后**排（点开照这个顺序展开，不按种类分组）；只有工具时标 `N 步`，只有思考时标 `思考 N 段`。正文留在外面，失败的那一步也留在外面。判据是两条用户消息之间，不是「相邻」。真实记录里两个 `tool_call` 之间一定夹着 `tool_result`，还常常夹着 `thinking` 和**内容为空的 assistant**（模型每调一次就写一条）——按相邻判断的话每段只剩一个工具，永远折不起来，手机上看到的就是「每个 tool call 都露在外面」。失败的那一步留在原地，出错要看得见。分组的纯函数在 `src/state/items.ts`，拆成三份：`buildItems`（历史）、`buildLiveTail`（实时那一轮）、`buildAskItems`（待答项）；`items.test.ts` 用真实记录的形状钉住。实时那一轮仍在跑的时候逐步显示（过程就是信息）。
 - **从左边往右划 = 返回上一屏**：凡是「推上去的一页」都挂 `src/ui/edgeBack.ts` 的 `useEdgeBack` —— 对话（窄屏回列表 / 宽屏侧栏收起时把列表拉回来）、会话信息、设置、新建会话、添加电脑（配对页只在有上一屏时才有返回）。**文件阅读器故意不挂**：那里的图片是可以双指缩放、拖着看的，横向手势归它。iOS 没有系统返回手势，由这个 hook 的 PanResponder 认（起点在左缘 24pt 内、横向划够 64pt，正文里的横向操作不被吃）。**Android 上这条手势归系统**（手势导航的左缘返回），App 收不到 —— 所以同一件事必须由 `BackHandler` 完成：它先判断「宽屏且侧栏收起」，再决定是展开侧栏还是关闭会话；只做 PanResponder 的话，Android 上这一划会直接退到桌面。
 - **左滑露出两个动作：置顶 / 删除**（`SwipeRow` 的 actions）。收起的动作层从可达性树里摘掉，否则读屏和自动化会点到一个看不见的按钮。
 - **这一行的手势在 UI 线程上（`react-native-gesture-handler` 的 `Gesture.Pan` + `reanimated` 的共享值）**，不是 `PanResponder`。`PanResponder` 每一帧都要过一次 JS 线程，而这块屏的 JS 线程随时被会话事件占着 —— 表现就是「跟不上手指、一划就弹回去」，调动画参数救不回来。判据也交给 GH：`activeOffsetX([-8, 8])` 让横向归这一行、`failOffsetY([-14, 14])` 让纵向归列表，两者不再互相抢；松手用 `withTiming` 按「还剩多远」定快慢。**这条路线要求根节点是 `GestureHandlerRootView`**（`App.tsx` 最外层），缺了它手势静默不触发。

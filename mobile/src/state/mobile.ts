@@ -167,8 +167,60 @@ export function useMobile(): MobileApi {
         // 同上：没有项目可选时「无项目」那条路照样能用
       });
 
+    // 流式文字按帧合并。一条 delta 一次 setState 的话，服务端发多快就渲染多快（一秒
+    // 几十次很常见），而一帧的可见结果只取决于这一帧攒下的全部文字 —— 攒到下一帧一次性
+    // 吐出去，渲染次数就从「跟服务端同速」变成「跟屏幕同速」。
+    const streamBuf = { text: '', thinking: '' };
+    let streamFrame: number | null = null;
+    // 攒着的字属于哪一段对话。换了会话（或从列表进另一段）之后，上一段没吐完的字
+    // 绝不能落到新画面上——那会凭空长出一段没发生过的正文。
+    let streamOwner: string | null = null;
+    const dropStream = () => {
+      if (streamFrame !== null) {
+        cancelAnimationFrame(streamFrame);
+        streamFrame = null;
+      }
+      streamBuf.text = '';
+      streamBuf.thinking = '';
+    };
+    const flushStream = () => {
+      if (streamFrame !== null) {
+        cancelAnimationFrame(streamFrame);
+        streamFrame = null;
+      }
+      const { text, thinking } = streamBuf;
+      if (!text && !thinking) return;
+      streamBuf.text = '';
+      streamBuf.thinking = '';
+      setChat((st) => {
+        let next = st;
+        if (thinking) next = applyEvent(next, { type: 'thinking', text: thinking }, 'mobile').state;
+        if (text) next = applyEvent(next, { type: 'text', text }, 'mobile').state;
+        return next;
+      });
+    };
+    const queueStream = (kind: 'text' | 'thinking', text: string) => {
+      if (streamOwner !== openIdRef.current) {
+        dropStream();
+        streamOwner = openIdRef.current;
+      }
+      streamBuf[kind] += text;
+      if (streamFrame !== null) return;
+      streamFrame = requestAnimationFrame(() => {
+        streamFrame = null;
+        flushStream();
+      });
+    };
+
     const sock = new MobileSocket(pairing, {
       onEvent: (ev) => {
+        // 文字先攒着。攒批只在「这一帧里全是文字」时是安全的：快照、工具边界、回合
+        // 结束这些事件必须看见它们之前的全部文字，所以下面先 flush 再处理。
+        if (ev.type === 'text' || ev.type === 'thinking') {
+          if (!openIdRef.current) return;
+          queueStream(ev.type, ev.text);
+          return;
+        }
         if (ev.type === 'session_state') {
           // 列表那一行的「在跑 / 在等」：没订阅那段会话的也要看到
           setSessions((list) =>
@@ -278,11 +330,16 @@ export function useMobile(): MobileApi {
           }
         }
         if (ev.type === 'lagged') {
+          // 丢掉的那段文字已经不可信了：重读会给出权威版本，攒着的旧字混进去只会造出
+          // 一段没发生过的正文
+          dropStream();
           void reload(openIdRef.current);
           return;
         }
         // 没有打开的会话：这些都是上一段的尾巴，别为一个没人看的画面重画
         if (!openIdRef.current) return;
+        // 这个事件要看见它之前的全部文字（快照、工具边界、回合结束都在此列）
+        flushStream();
         setChat((st) => {
           const { state, needsReload } = applyEvent(st, ev, 'mobile');
           if (needsReload) void reload(openIdRef.current);
@@ -304,6 +361,8 @@ export function useMobile(): MobileApi {
 
     return () => {
       cancelled = true;
+      // 卸载后那一帧的 flush 没有意义（还会对着已经离开的画面 setState）
+      dropStream();
       sock.close();
       socketRef.current = null;
     };

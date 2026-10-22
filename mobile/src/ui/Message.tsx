@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { FileSource } from '../api/client';
 import type { AgentQuestion, AttachmentRef, PendingAsk, SessionMessage } from '../api/types';
@@ -329,7 +329,7 @@ export function Thinking({ text }: { text: string }) {
   );
 }
 
-export function MessageView({
+export const MessageView = memo(function MessageView({
   msg,
   toolResult,
   running,
@@ -348,7 +348,8 @@ export function MessageView({
   ask?: PendingAsk;
   attachments: AttachmentRef[];
   fileSource?: (a: AttachmentRef) => FileSource | null;
-  onDecide: (allow: boolean) => void;
+  /** 带 toolId：卡片自己绑不上它，见下面的 PermissionCard 调用 */
+  onDecide: (toolId: string, allow: boolean) => void;
   onAnswer: (answers: Record<string, string>) => void;
   onDecline: () => void;
   onOpenFile: (id: string) => void;
@@ -357,7 +358,11 @@ export function MessageView({
 
   if (ask?.kind === 'permission')
     return (
-      <PermissionCard preview={ask.preview} toolName={ask.toolName} onDecide={onDecide} />
+      <PermissionCard
+        preview={ask.preview}
+        toolName={ask.toolName}
+        onDecide={(allow) => onDecide(ask.toolId, allow)}
+      />
     );
   if (ask?.kind === 'question')
     return <QuestionCard questions={ask.questions} onAnswer={onAnswer} onDecline={onDecline} />;
@@ -400,7 +405,7 @@ export function MessageView({
   if (msg.role === 'reminder') return null;
 
   return null;
-}
+});
 
 const styles = StyleSheet.create({
   body: { paddingVertical: 4 },

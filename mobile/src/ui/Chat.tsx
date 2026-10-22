@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -12,7 +12,7 @@ import {
 import type { FileSource } from '../api/client';
 import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
 import type { Live } from '../state/mobile';
-import { buildItems, type Item, type ProcessStep } from '../state/items';
+import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep } from '../state/items';
 import { useEdgeBack } from './edgeBack';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
@@ -334,9 +334,60 @@ export function Chat({
 }) {
   const { tokens: t } = useTheme();
   const s = snapshot.session;
-  const items = useMemo(() => buildItems(snapshot, live), [snapshot, live]);
+  // 三块分开算，只有历史进列表数据。
+  //
+  // 实时那一轮每个字都在变；它跟着进数组的话，整份数组每个字都重建一次，而列表单元是按
+  // 引用判断要不要重画的（RN 的单元是 PureComponent，renderItem 就在它的 props 里）——
+  // 一次重建就是整列重画，长会话里每来一段文字都要把可见消息的 markdown 重新解析一遍。
+  // 所以历史只依赖 snapshot，实时那一轮和待答项挂在列表头部（见 ListHeaderComponent）。
+  const history = useMemo(() => buildItems(snapshot), [snapshot]);
   // FlatList 是 inverted 的：数据倒过来喂，视觉上第一条在底部
-  const reversed = useMemo(() => items.slice().reverse(), [items]);
+  const reversed = useMemo(() => history.slice().reverse(), [history]);
+  const liveTail = useMemo(() => buildLiveTail(live), [live]);
+  const asks = useMemo(() => buildAskItems(snapshot), [snapshot]);
+
+  // 会变的东西走 ref：renderItem 的引用必须永久稳定，否则上层每帧新建的箭头函数
+  // 会把它变成一个每帧都换引用的新函数，memo 和 PureComponent 就全都失效了。
+  const env = useRef({
+    t,
+    fileSource,
+    onDecide,
+    onAnswer,
+    onDecline,
+    onOpenFile,
+    attachments: snapshot.attachments,
+  });
+  env.current = {
+    t,
+    fileSource,
+    onDecide,
+    onAnswer,
+    onDecline,
+    onOpenFile,
+    attachments: snapshot.attachments,
+  };
+
+  const renderBody = useCallback((item: Item) => {
+    const e = env.current;
+    if (item.kind === 'process') return <ProcessFold steps={item.steps} running={item.running} />;
+    // 实时那一条只在列表头部渲染：它要每帧的 live，进了这里就等于把 live 塞进依赖
+    if (item.kind === 'live') return null;
+    return (
+      <MessageView
+        msg={item.msg}
+        ask={item.ask}
+        toolResult={item.result}
+        running={item.running}
+        attachments={e.attachments}
+        fileSource={e.fileSource}
+        onDecide={e.onDecide}
+        onAnswer={e.onAnswer}
+        onDecline={e.onDecline}
+        onOpenFile={e.onOpenFile}
+      />
+    );
+  }, []);
+  const renderRow = useCallback(({ item }: { item: Item }) => renderBody(item), [renderBody]);
   // 一页在飞的时候不要再要一页：滚动事件一秒能来几十次，而服务端那一页是真的要读盘的
   const wantOlder = () => {
     if (!snapshot.hasMore || olderLoading) return;
@@ -394,26 +445,24 @@ export function Chat({
             </Pressable>
           ) : undefined
         }
-        renderItem={({ item }) =>
-          item.kind === 'live' ? (
-            <LiveBubble live={live} />
-          ) : item.kind === 'process' ? (
-            <ProcessFold steps={item.steps} running={item.running} />
-          ) : (
-            <MessageView
-              msg={item.msg}
-              ask={item.ask}
-              toolResult={item.result}
-              running={item.running}
-              attachments={snapshot.attachments}
-              fileSource={fileSource}
-              onDecide={(allow) => item.ask && onDecide(item.ask.toolId, allow)}
-              onAnswer={(answers) => onAnswer(answers)}
-              onDecline={() => onDecline()}
-              onOpenFile={onOpenFile}
-            />
-          )
+        ListHeaderComponent={
+          // 列表头部在 inverted 列表里就是**视觉最底部**：先是实时那一轮（过程一行在正文
+          // 上面），再往下是待答项 —— 待答项永远最靠底，正在跑的内容不能把它挤上去。
+          liveTail.length || asks.length ? (
+            <View>
+              {liveTail.map((it) => {
+                if (it.kind === 'live') return <LiveBubble key={it.key} live={live} />;
+                if (it.kind === 'process')
+                  return <ProcessFold key={it.key} steps={it.steps} running={it.running} />;
+                return null;
+              })}
+              {asks.map((it) => (
+                <View key={it.key}>{renderBody(it)}</View>
+              ))}
+            </View>
+          ) : undefined
         }
+        renderItem={renderRow}
       />
 
       {s.readOnly ? (

@@ -108,7 +108,7 @@ function liveProcess(live: Live): ProcessStep[] {
   return steps;
 }
 
-export function buildItems(snapshot: Snapshot, live: Live): Item[] {
+export function buildItems(snapshot: Snapshot): Item[] {
   const results = new Map<string, SessionMessage>();
   for (const m of snapshot.messages) {
     if (m.role === 'tool_result' && m.toolCallId) results.set(m.toolCallId, m);
@@ -157,14 +157,31 @@ export function buildItems(snapshot: Snapshot, live: Live): Item[] {
   });
   flushTurn();
 
-  // 实时那一轮：过程（思考 + 工具）也折成一行，**跑着的时候就开始折**，那一行上的步数
-  // 随着工具一个个结束往上走。正文单独留在外面 —— 正在写的字才是读者要看的。
-  const inFlight = liveProcess(live);
-  const foldedLive = foldItem(inFlight, 'live-process', live.active);
-  if (foldedLive) items.push(foldedLive);
-  if (live.text || live.active) items.push({ kind: 'live', key: 'live' });
-
-  // 待答项永远排最后：它是读者现在唯一该做的事，不能被正在跑的内容挤到看不见的地方
-  snapshot.asks.forEach((ask, i) => items.push({ kind: 'msg', key: `ask${i}`, msg: snapshot.messages[0], ask }));
+  // 实时那一轮**不在这里**：它每个字都在变，混进来就会让整份列表每次流式都重建，
+  // 而列表单元是按引用判断「要不要重画」的，重建一次就等于整列重画一遍。它由
+  // buildLiveTail 单独给，待答项由 buildAskItems 单独给，两者都挂在列表头部
+  // （见 Chat.tsx）—— 历史这一半因此只在回合结束、翻页时变。
   return items;
+}
+
+/**
+ * 正在跑的那一轮要画的东西：过程（思考 + 工具）折成一行，正文单独一条。
+ *
+ * **跑着的时候就开始折**，那一行上的步数随着工具一个个结束往上走。正文留在外面 ——
+ * 正在写的字才是读者要看的。与 buildItems 分开是因为它跟着每个字变，而历史不跟着变。
+ */
+export function buildLiveTail(live: Live): Item[] {
+  const items: Item[] = [];
+  const folded = foldItem(liveProcess(live), 'live-process', live.active);
+  if (folded) items.push(folded);
+  if (live.text || live.active) items.push({ kind: 'live', key: 'live' });
+  return items;
+}
+
+/**
+ * 待答项：读者现在唯一该做的事，画在**视觉最底部**——实时那一轮在它上面，
+ * 正在跑的内容永远不能把卡片挤到看不见的地方。
+ */
+export function buildAskItems(snapshot: Snapshot): Item[] {
+  return snapshot.asks.map((ask, i) => ({ kind: 'msg', key: `ask${i}`, msg: snapshot.messages[0], ask }));
 }

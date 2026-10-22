@@ -1,6 +1,6 @@
 import type { SessionMessage, Snapshot } from '../api/types';
 import { emptyLive, type Live } from './chat';
-import { buildItems } from './items';
+import { buildAskItems, buildItems, buildLiveTail, type Item } from './items';
 
 /** 一段最小快照；消息按参数给 */
 function snap(messages: SessionMessage[]): Snapshot {
@@ -45,6 +45,16 @@ beforeEach(() => {
   next = 0;
 });
 
+/**
+ * 一屏的全部项，按时间顺序（旧 → 新）：历史、实时那一轮、待答项。
+ *
+ * 三块在渲染时是分开算的（历史、实时、待答各一个纯函数，见 items.ts）—— 历史不跟着
+ * 每个字重建，是这次拆开的全部原因。这里拼回一条线，让断言的语义和拆分前一致。
+ */
+function screen(s: Snapshot, live: Live): Item[] {
+  return [...buildItems(s), ...buildLiveTail(live), ...buildAskItems(s)];
+}
+
 describe('buildItems —— 一轮的过程折成一行', () => {
   it('一轮里成功的工具收成一行，失败的那一步留在原地', () => {
     const items = buildItems(
@@ -60,8 +70,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
         call('c'),
         resultOf('c'),
         assistant('13 个端点都过了 guard'),
-      ]),
-      emptyLive,
+      ])
     );
 
     const kinds = items.map((i) => (i.kind === 'msg' ? i.msg.role : i.kind));
@@ -90,8 +99,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
         call('c'),
         resultOf('c'),
         assistant('改完了'),
-      ]),
-      emptyLive,
+      ])
     );
 
     const folds = items.filter((i) => i.kind === 'process');
@@ -122,8 +130,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
         call('d'),
         resultOf('d'),
         assistant('第二轮完了'),
-      ]),
-      emptyLive,
+      ])
     );
 
     const folds = items.filter((i) => i.kind === 'process');
@@ -141,8 +148,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
         assistant('', '第一段思考'),
         assistant('', '第二段思考'),
         assistant('结论是这样'),
-      ]),
-      emptyLive,
+      ])
     );
     // 思考折成一条 + 正文
     expect(items.map((i) => i.kind)).toEqual(['msg', 'process', 'msg']);
@@ -155,7 +161,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
   });
 
   it('只有一个工具时照旧画成一张卡（折一行没有意义）', () => {
-    const items = buildItems(snap([user('跑一下'), call('a'), resultOf('a')]), emptyLive);
+    const items = buildItems(snap([user('跑一下'), call('a'), resultOf('a')]));
     expect(items.map((i) => i.kind)).toEqual(['msg', 'msg']);
     expect(items[1].kind === 'msg' && items[1].msg.role).toBe('tool_call');
   });
@@ -171,7 +177,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
         { id: 'b', name: 'Grep', title: 'x' },
       ],
     };
-    const items = buildItems(snap([user('扫一遍')]), live);
+    const items = screen(snap([user('扫一遍')]), live);
 
     // 过程一行 + 正在写的正文
     expect(items.map((i) => i.kind)).toEqual(['msg', 'process', 'live']);
@@ -194,7 +200,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
       active: true,
       tools: [{ id: 'a', name: 'Bash', title: 'ls' }],
     };
-    const items = buildItems(snap([user('跑一下')]), live);
+    const items = screen(snap([user('跑一下')]), live);
     const card = items[1];
     expect(card.kind).toBe('msg');
     if (card.kind !== 'msg') throw new Error('类型不对');
@@ -206,7 +212,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     const s = snap([user('问一下'), call('a'), resultOf('a')]);
     s.asks = [{ kind: 'question', toolId: 'a', questions: [{ question: '放哪一层？', options: ['甲', '乙'] }] }];
     const live: Live = { ...emptyLive, active: true, text: '正在写' };
-    const items = buildItems(s, live);
+    const items = screen(s, live);
     const last = items[items.length - 1];
     expect(last.kind === 'msg' ? last.ask?.toolId : '').toBe('a');
   });
@@ -214,7 +220,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
   it('待答项排在消息之后', () => {
     const s = snap([user('删掉它'), call('a'), resultOf('a')]);
     s.asks = [{ kind: 'permission', toolId: 'a', toolName: 'Bash', permissionKind: 'bash', preview: 'rm -rf x' }];
-    const items = buildItems(s, emptyLive);
+    const items = screen(s, emptyLive);
     const last = items[items.length - 1];
     expect(last.kind).toBe('msg');
     expect(last.kind === 'msg' ? last.ask?.toolId : '').toBe('a');

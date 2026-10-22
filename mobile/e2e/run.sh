@@ -13,7 +13,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 
 export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17)}"
-export PATH="$HOME/Library/Android/sdk/platform-tools:$PATH"
+# maestro 是 Java 程序，它按 PATH 里的 java 认版本；只设 JAVA_HOME 它会报「Java 17 or higher is required」
+export PATH="$JAVA_HOME/bin:$HOME/Library/Android/sdk/platform-tools:$PATH"
 
 reset_mock() {
   echo "== 重置 mock 服务 =="
