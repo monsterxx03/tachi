@@ -198,6 +198,7 @@
 
   /* Radius scale. Anything rounder than the "pill" preset (status badge,
      jump button, avatars) uses 999px / 50% directly. */
+  --radius-2xs: 4px;
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 10px;
@@ -566,5 +567,16 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
      element's own roll-up, and widgets.css is loaded AFTER this file — a same-specificity rule
      here would lose on source order alone. */
   .roll.rolling .roll-line:first-child { display: none; }
-  .roll.rolling .roll-inner { animation: roll-in 0.14s var(--ease) both !important; }
+  .roll.rolling .roll-inner { animation: roll-in 0.15s var(--ease) both !important; }
+}
+
+/* Switching the theme repaints every colour at once (they all hang off data-theme). With each
+   element's hover transition still armed, the whole window cross-fades and the switch reads as a
+   smear instead of a switch. theme.ts adds this class, flips the attribute, forces the style
+   recalculation, and removes it on the next frame — so the only frame that loses its transitions
+   is the one that changed colour. `!important` because it has to beat every element's own
+   declaration, and it is on for exactly one frame. */
+html.theme-switching,
+html.theme-switching * {
+  transition: none !important;
 }

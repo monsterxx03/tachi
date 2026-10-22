@@ -327,7 +327,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
   padding: 5px;
-  animation: panel-in 0.14s var(--ease) both;
+  animation: panel-in 0.15s var(--ease) both;
 }
 /* Menu entries are real <button>s: the menu has no free-floating click rows to
    reason about, so keyboard support comes for free. */
@@ -428,7 +428,7 @@
   padding: 6px 14px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .btn:hover { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-line); box-shadow: var(--shadow-1); }
 .btn.danger { border-color: var(--red-line); color: var(--red); }
@@ -1302,7 +1302,7 @@
 }
 .rewind-chain-foot kbd {
   border: 1px solid var(--border-2);
-  border-radius: 5px;
+  border-radius: var(--radius-2xs);
   padding: 1px 5px;
   font-size: 10.5px;
   background: var(--hover);
@@ -1330,7 +1330,7 @@
   border: 1px solid var(--border-2);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
-  animation: panel-in 0.16s var(--ease) both;
+  animation: panel-in 0.15s var(--ease) both;
 }
 .sel-ask-btn {
   border: none;
@@ -1513,7 +1513,7 @@
   z-index: 70;
   max-width: min(460px, 72vw);
   padding: 7px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   box-shadow: var(--shadow-2);
@@ -1522,5 +1522,5 @@
   line-height: 1.5;
   text-align: center;
   pointer-events: none;
-  animation: panel-in 0.14s var(--ease) both;
+  animation: panel-in 0.15s var(--ease) both;
 }

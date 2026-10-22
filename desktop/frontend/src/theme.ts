@@ -67,7 +67,21 @@ export function useThemeSnapshot(): Theme {
 // turn "follow the system" into "pin to whatever the system happened to be",
 // since the only way back would be a toggle the user never asked for.
 function paintTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
+  const root = document.documentElement
+  // Every colour on screen hangs off data-theme, and most elements carry a transition for
+  // hover. Flipping the attribute with those armed makes the whole window cross-fade at once,
+  // which reads as a smear rather than a switch. So: close every transition for the frame the
+  // attribute changes (the class, see base.css), force the style recalculation so the switch
+  // and the closed transitions land in the same frame, then release on the next one.
+  root.classList.add('theme-switching')
+  root.dataset.theme = theme
+  void root.offsetHeight
+  const release = () => root.classList.remove('theme-switching')
+  requestAnimationFrame(release)
+  // rAF is frozen while the window is occluded (see docs/agents/desktop.md), and a class left
+  // behind would quietly disable every transition until the next frame. Releasing twice is
+  // harmless; never releasing is not.
+  setTimeout(release, 120)
   listeners.forEach((cb) => cb())
 }
 

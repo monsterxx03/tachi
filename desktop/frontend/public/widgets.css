@@ -83,7 +83,7 @@
 .assistant-text pre code { background: none; padding: 0; color: var(--text); font-size: 0.806em; line-height: 1.6; }
 .assistant-text blockquote {
   border-left: 3px solid var(--accent);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--accent-softer);
   margin: 0.8em 0;
   padding: 0.5em 1em;
@@ -148,7 +148,7 @@
   color: var(--text-faint);
   font-size: 11px;
   letter-spacing: 0.02em;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
 .thinking-head:hover { color: var(--accent-2); background: var(--accent-softer); }
 .thinking-ico {
@@ -188,7 +188,7 @@
   background: var(--wash);
   color: var(--text-dim);
   font-size: 11.5px;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .notice-head:not(.static) { cursor: pointer; }
 .notice-head:not(.static):hover { background: var(--wash-2); color: var(--text); }
@@ -235,7 +235,7 @@
      resolves against this value too. */
   line-height: 16px;
   cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .process-head:hover { background: var(--wash-2); color: var(--text); }
 /* Running: the row reports the CURRENT state instead of the finished counts — one turn, one
@@ -319,7 +319,7 @@
   border-radius: var(--radius-xs);
   cursor: pointer;
   user-select: none;
-  transition: color 0.12s ease;
+  transition: color 0.12s var(--ease);
 }
 .reminder-head:hover { color: var(--accent); }
 .reminder-ico { font-size: 11px; font-weight: 700; }
@@ -510,7 +510,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
   font-size: 12px;
-  animation: panel-in 0.14s var(--ease) both;
+  animation: panel-in 0.15s var(--ease) both;
 }
 /* The entry's own state (评审中… / 已评审), after its scope and dimmer than it: the row keeps
    saying WHICH review it is. */

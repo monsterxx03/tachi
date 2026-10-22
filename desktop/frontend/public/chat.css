@@ -81,7 +81,7 @@
   font-weight: 550;
   cursor: pointer;
   box-shadow: var(--shadow-2);
-  transition: color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .jump-latest:hover { color: var(--accent-2); border-color: var(--accent-line); box-shadow: var(--shadow-3); }
 .jump-ico { font-size: 12px; line-height: 1; }
@@ -289,7 +289,7 @@
   padding: 2px 0;
   border-radius: var(--radius-xs);
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background 0.12s var(--ease);
 }
 .tool-head:hover { background: var(--accent-softer); }
 .tool-ico {
@@ -303,7 +303,7 @@
   font-weight: 560;
   letter-spacing: 0.01em;
   color: var(--text-dim);
-  transition: color 0.12s ease;
+  transition: color 0.12s var(--ease);
 }
 .tool-head:hover .tool-name { color: var(--accent-2); }
 .tool-status { margin-left: auto; font-size: 11.5px; font-weight: 700; }
@@ -469,7 +469,7 @@
   border-radius: var(--radius-xs);
   flex-shrink: 0;
   line-height: 1.4;
-  transition: color 0.12s ease, background 0.12s ease;
+  transition: color 0.12s var(--ease), background 0.12s var(--ease);
 }
 .pending-del:hover { color: var(--red); background: var(--red-wash); }
 
@@ -596,7 +596,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
    6.2:1. Same rule the two tokens are named for. */
 .stop-btn:hover { background: var(--red-strong); color: var(--on-accent); }
 .stop-btn:hover::before { border-top-color: var(--on-accent); border-right-color: var(--sheen); }
-.stop-btn:active { transform: scale(0.95); }
+.stop-btn:active { transform: scale(0.96); }
 @keyframes stop-spin { to { transform: rotate(360deg); } }
 .composer-actions {
   display: flex;
@@ -621,7 +621,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   transition: filter 0.15s var(--ease), transform 0.08s var(--ease);
 }
 .send-btn:hover { filter: brightness(1.05); }
-.send-btn:active { transform: translateY(1px) scale(0.985); }
+.send-btn:active { transform: translateY(1px) scale(0.96); }
 .send-btn:disabled {
   opacity: 0.42;
   cursor: not-allowed;
@@ -649,7 +649,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   transition: color 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 .mic-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.mic-btn:active { transform: scale(0.95); }
+.mic-btn:active { transform: scale(0.96); }
 /* Preparing and transcribing are WAITS, not actions: the click is ignored (the app is either
    asking for a system permission or running the recognizer), so the button reads as inert. */
 .mic-btn:disabled { opacity: 0.5; cursor: default; }

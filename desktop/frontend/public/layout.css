@@ -397,7 +397,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-sm);
   cursor: pointer;
   margin-bottom: 2px;
-  transition: background 0.14s var(--ease);
+  transition: background 0.15s var(--ease);
 }
 .session:hover { background: var(--hover); }
 /* Active session. A single quiet fill rather than the old filled card plus accent rail: the row
@@ -485,7 +485,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .sidebar-search:hover { background: var(--hover); color: var(--accent-2); }
 /* The sidebar's own chrome: search and 定时任务 sit together at the end of the
@@ -513,7 +513,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .new-chat:hover { background: var(--hover); color: var(--text); }
 .new-chat svg { flex: none; color: var(--text-faint); }
@@ -538,7 +538,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.16s var(--ease), color 0.16s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .new-project:hover { background: var(--hover); color: var(--accent-2); }
 
@@ -624,7 +624,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   line-height: 1.35;
   color: var(--amber);
   border: 1px solid var(--amber);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 5px;
 }
 /* "N conversations in this (collapsed) group finished while you were elsewhere": the same chip in
@@ -638,7 +638,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   line-height: 1.35;
   color: var(--accent-2);
   border: 1px solid var(--accent-2);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0 5px;
 }
 /* A project whose PRIMARY directory is gone drives nothing, so its members are editable
@@ -825,7 +825,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   background: var(--chrome-1);
   color: var(--text-dim);
   font: inherit;
@@ -877,7 +877,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-right: 6px;
   padding: 0 4px;
   height: 14px;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: var(--accent-softer);
   color: var(--accent-2);
   font-size: 9.5px;
@@ -907,7 +907,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-dim);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .footer-item:hover { background: var(--hover); color: var(--text); }
 .footer-item:disabled { color: var(--text-faint); cursor: default; }
@@ -1041,7 +1041,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-faint);
   cursor: pointer;
   flex-shrink: 0;
-  transition: border-color 0.16s var(--ease);
+  transition: border-color 0.15s var(--ease);
 }
 .theme-toggle:hover { border-color: var(--accent-line); }
 .theme-ico {

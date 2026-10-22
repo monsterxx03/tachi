@@ -45,7 +45,7 @@
 .cron-title { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; gap: 7px; }
 .cron-count {
   font-size: 10.5px; font-weight: 600; color: var(--text-faint);
-  background: var(--wash); border-radius: 99px; padding: 1px 7px;
+  background: var(--wash); border-radius: var(--radius-pill); padding: 1px 7px;
 }
 .cron-sub { font-size: 11.5px; color: var(--text-faint); }
 .cron-head-actions { display: flex; align-items: center; gap: 4px; }
@@ -84,7 +84,7 @@
 .cron-job-name { font-size: 13px; font-weight: 600; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cron-target {
   flex: 0 1 auto; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 10.5px; border-radius: 99px; padding: 1px 7px;
+  font-size: 10.5px; border-radius: var(--radius-pill); padding: 1px 7px;
   color: var(--text-faint); background: var(--wash); border: 1px solid var(--border);
 }
 .cron-target.is-current { color: var(--accent-2); background: var(--accent-softer); border-color: rgba(74,108,245,0.2); }
@@ -94,7 +94,7 @@
 .cron-sched { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
 .cron-once {
   font-size: 10px; color: var(--amber); background: var(--amber-wash);
-  border: 1px solid var(--border); border-radius: 99px; padding: 1px 6px; white-space: nowrap;
+  border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 1px 6px; white-space: nowrap;
 }
 
 .cron-job-line { margin-top: 4px; font-size: 11.5px; color: var(--text-dim); line-height: 1.55; }
@@ -204,7 +204,7 @@
 .cron-sep { margin: 0 6px; opacity: 0.5; }
 .cron-switch-label { font-size: 11.5px; color: var(--text-faint); }
 .cron-switch {
-  width: 30px; height: 17px; border-radius: 99px; border: none;
+  width: 30px; height: 17px; border-radius: var(--radius-pill); border: none;
   background: var(--border-2); position: relative; display: inline-block;
   flex: 0 0 30px; cursor: pointer; padding: 0;
 }
@@ -248,7 +248,7 @@
 .cron-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--wash); border: 1px solid var(--border); border-radius: var(--radius-sm); flex-wrap: wrap; }
 .cron-seg button {
   border: none; background: transparent; color: var(--text-dim);
-  padding: 4px 11px; border-radius: 5px; font-size: 12px; cursor: pointer;
+  padding: 4px 11px; border-radius: var(--radius-xs); font-size: 12px; cursor: pointer;
 }
 .cron-seg button:hover { color: var(--text); }
 .cron-seg button.is-on {
