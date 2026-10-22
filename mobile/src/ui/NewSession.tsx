@@ -161,10 +161,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  back: { width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  back: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: 15, fontWeight: '600' },
   body: { padding: 16, gap: 12 },
-  card: { borderWidth: 1, borderRadius: 12, padding: 13 },
+  card: { borderWidth: 1, borderRadius: 10, padding: 13 },
   cardTitle: { fontSize: 13.5, fontWeight: '600' },
   row: {
     flexDirection: 'row',
@@ -178,5 +178,5 @@ const styles = StyleSheet.create({
   },
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, marginTop: 10 },
   hint: { fontSize: 11.5, lineHeight: 17, marginTop: 8 },
-  btn: { borderRadius: 11, paddingVertical: 14, alignItems: 'center' },
+  btn: { borderRadius: 10, paddingVertical: 14, alignItems: 'center' },
 });

@@ -16,18 +16,16 @@
 }
 
 :root {
-  /* The window's own background: a soft accent halo bleeding down from behind the titlebar (so
-     the top of the transcript reads as lit rather than as a blank sheet), a corner tint
-     bottom-right, and a vertical falloff from --bg-top to --bg that gives the content plane
-     depth. Together they are what makes the background read as "Tachi blue" instead of neutral
-     grey — and agent text sits on a lived-in surface, not a stark white page.
+  /* The window's own background: one flat colour, deliberately. It used to be an accent halo,
+     a corner tint and a vertical falloff stacked together, and that read as texture behind
+     every conversation — a second thing to look at that no message ever needed. The depth
+     this app actually leans on comes from the surface ladder below (panel-solid > chrome-2 >
+     bg > chrome) and from whitespace; the background only has to stay quiet.
 
-     Named here because two opaque surfaces paint it: .app (the chat view) and .settings-view,
-     which covers it while the settings page is up. They must not drift apart. */
-  --app-bg:
-    radial-gradient(1100px 540px at 50% -14%, var(--app-tint-a), transparent 62%),
-    radial-gradient(880px 620px at 104% 112%, var(--app-tint-b), transparent 58%),
-    linear-gradient(180deg, var(--bg-top), var(--bg) 46%);
+     Still a token, and still named here: two opaque surfaces paint it — .app (the chat view)
+     and .settings-view, which covers it while the settings page is up — and they must not
+     drift apart. */
+  --app-bg: var(--bg);
 
   /* The window's top strip — one height for every column's first row: the content column's
      toolbar (.titlebar), the sidebar's own strip, and the settings rail's one (both are
@@ -60,7 +58,6 @@
      designed around, and it keeps the identity constant across themes (a warm
      accent would change the app's colour when the switch flips). */
   --bg: #f7f4ee;         /* app background — agent messages sit directly on it */
-  --bg-top: #fdfbf7;     /* …and its lighter top edge (see .app's gradient) */
   --chrome: #f3efe7;     /* sidebar — a hair deeper than the page, not a panel */
   --chrome-2: #fdfbf7;   /* titlebar / composer */
   --panel-solid: #fffefa; /* cards/popovers: warm white, still brighter than bg */
@@ -89,10 +86,6 @@
 
   --scrollbar: rgba(62, 54, 44, 0.2);
   --scrollbar-hover: rgba(62, 54, 44, 0.32);
-
-  /* Dot grid on the content plane (see .chat-wrap::before): just enough ink to
-     give a large empty transcript a texture instead of blank paper. */
-  --grid-dot: rgba(62, 54, 44, 0.05);
 
   --text: #2b2621;
   --text-dim: #5b554d;
@@ -164,12 +157,6 @@
   --user-code-bg: rgba(62, 54, 44, 0.12);
   --user-code-ink: #3f382c;
 
-  /* The two ambient tints that make the flat background read as sunlight on
-     paper rather than neutral grey, plus the vertical light falloff .app
-     paints. Kept faint: a strong halo turns a warm page into a tinted one. */
-  --app-tint-a: rgba(255, 224, 178, 0.13);
-  --app-tint-b: rgba(172, 146, 110, 0.07);
-
   /* Context-breakdown palette (the ring's popover, see ContextMeter): one hue
      per bucket, in the order /usage lists them. The three "infrastructure"
      buckets share a blue ramp — they are all scaffolding rather than things the
@@ -183,26 +170,28 @@
   --ctx-tool-results: #0b6a75;
   --ctx-other: #6d6459;
 
-  /* Elevation. Warm ink rather than neutral black, and light: on paper a raised
-     edge is a hint, not a drop shadow. The paired 1px ambient ring is what keeps
-     those edges crisp without weight. */
+  /* Two depths, not four. A surface that only has to look slightly raised (a card, the
+     composer bar) takes --shadow-1; anything that floats OVER the page and must read as
+     "above" (popovers, drawers, the palette) takes --shadow-2. The two middle steps drew
+     distinctions nobody could see, and a fourth level of shadow is decoration rather than
+     structure. Warm ink rather than neutral black: on paper a raised edge is a hint, not a
+     drop shadow — the paired 1px ambient ring is what keeps those edges crisp without weight. */
   --shadow-1: 0 1px 2px rgba(62, 54, 44, 0.06), 0 1px 1px rgba(62, 54, 44, 0.04);
-  --shadow-2: 0 2px 6px rgba(62, 54, 44, 0.06), 0 5px 18px rgba(62, 54, 44, 0.05);
-  --shadow-3: 0 8px 20px rgba(62, 54, 44, 0.08), 0 20px 44px rgba(62, 54, 44, 0.09);
-  --shadow-4: 0 14px 32px rgba(62, 54, 44, 0.12), 0 32px 72px rgba(62, 54, 44, 0.14);
+  --shadow-2: 0 8px 20px rgba(62, 54, 44, 0.08), 0 20px 44px rgba(62, 54, 44, 0.09);
   /* The one upward shadow (the 意见 pane's sticky send bar, chat.css) — a
      token so it follows the same ink as the others in both themes. */
   --shadow-up: 0 -8px 16px -12px rgba(62, 54, 44, 0.35);
   /* Decorative accent glows (brand mark, welcome glyph). */
   --glow-accent: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 
-  /* Radius scale. Anything rounder than the "pill" preset (status badge,
-     jump button, avatars) uses 999px / 50% directly. */
+  /* Radius scale: two steps and two exceptions. Controls (rows, buttons, inputs, chips)
+     take --radius-sm; panels that hold other surfaces (popovers, drawers, overlays) take
+     --radius-lg. --radius-2xs is not a step down the same ladder — it belongs to micro
+     pieces (badges, keycaps, the checkbox mark) where an 8px radius would eat the shape.
+     Anything rounder than "pill" (avatars, status dots) uses 50% directly. */
   --radius-2xs: 4px;
-  --radius-xs: 6px;
   --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
   /* The disclosure caret is one size everywhere, and it is an ICON rather than the ▸/▾ glyphs:
@@ -283,7 +272,6 @@
      at ~#9ca3b1 and the top of the ladder at ~#303541. Lower the planes any
      further and THAT is what breaks first; --text has room to spare. */
   --bg: #252a35;
-  --bg-top: #292e3a;
   --chrome: #1e222b;
   --chrome-2: #2b303b;
   --panel-solid: #303541;
@@ -304,7 +292,6 @@
   --scrollbar: rgba(255, 255, 255, 0.16);
   --scrollbar-hover: rgba(255, 255, 255, 0.3);
 
-  --grid-dot: rgba(255, 255, 255, 0.045);
 
   --text: #cecdc6;
   --text-dim: #a9b0bd;
@@ -355,9 +342,6 @@
   --user-code-bg: rgba(124, 150, 255, 0.18);
   --user-code-ink: #dfe5ff;
 
-  --app-tint-a: rgba(122, 149, 255, 0.05);
-  --app-tint-b: rgba(91, 124, 255, 0.045);
-
   /* Same buckets, lifted for a dark surface (see the light block). */
   --ctx-system: #8ea7ff;
   --ctx-internal-tools: #b3c1ff;
@@ -372,9 +356,7 @@
      low-contrast palette loses its calm the moment popovers wear hard black
      edges. Ayu Mirage shadows its panels with black at 0.2–0.3. */
   --shadow-1: 0 1px 2px rgba(8, 10, 14, 0.34), 0 1px 1px rgba(8, 10, 14, 0.24);
-  --shadow-2: 0 2px 6px rgba(8, 10, 14, 0.38), 0 4px 16px rgba(8, 10, 14, 0.28);
-  --shadow-3: 0 6px 16px rgba(8, 10, 14, 0.42), 0 16px 40px rgba(8, 10, 14, 0.36);
-  --shadow-4: 0 12px 28px rgba(8, 10, 14, 0.46), 0 28px 64px rgba(8, 10, 14, 0.4);
+  --shadow-2: 0 6px 16px rgba(8, 10, 14, 0.42), 0 16px 40px rgba(8, 10, 14, 0.36);
   --shadow-up: 0 -8px 16px -12px rgba(8, 10, 14, 0.4);
   --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.35));
   --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%239ca3b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -448,7 +430,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 
 /* ── ⌘F: find inside a surface ───────────────────────────────────────────────
@@ -473,7 +455,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-2);
   z-index: 5;
 }
 /* The body's own padding would let content show through above a sticky bar pinned at 0. */
@@ -487,7 +469,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   width: 168px;
   padding: 3px 7px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--text);
   font: inherit;
@@ -514,7 +496,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   font-size: 12px;
   line-height: 1;
   padding: 3px 5px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .find-btn:hover:not(:disabled),
 .find-open:hover { background: var(--accent-soft); color: var(--accent-2); }

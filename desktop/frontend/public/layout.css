@@ -143,7 +143,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   height: 26px;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
   font-size: 13px;
@@ -191,7 +191,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .filetree-ignored,
 .filetree-size { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
 .filetree-branch { flex-shrink: 0; font-size: 11.5px; color: var(--accent-2); }
-.filetree-ignored { border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 0 4px; }
+.filetree-ignored { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; }
 .filetree-size { font-variant-numeric: tabular-nums; }
 .filetree-link { font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
 /* 变化标记：短促的一点（见 useFileTree 的 DIRTY_MARK_MS），点它重新读这一层。 */
@@ -249,7 +249,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   padding: 3px 9px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--text-dim);
   font-family: inherit;
@@ -294,7 +294,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .fileview-reload {
   padding: 2px 8px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--accent-2);
   font-family: inherit;
@@ -338,7 +338,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   min-width: 0;
   padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--text);
   font-family: inherit;
@@ -352,7 +352,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   height: 26px;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
   font-size: 13px;
@@ -368,7 +368,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   height: 26px;
   margin-right: 4px;
   border: none;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -648,7 +648,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   font-size: 12px;
   color: var(--amber);
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 .proj-add {
@@ -658,7 +658,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-faint);
   font-size: 14px;
   padding: 0 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
 }
@@ -672,7 +672,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--text);
   background: var(--panel-solid);
   border: 1px solid var(--accent-line);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 2px 6px;
   outline: none;
 }
@@ -722,7 +722,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin: 0 0 2px 10px;
   padding: 4px 8px;
   border-left: 2px solid var(--border-2);
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-faint);
   font-family: inherit;
   font-size: 12px;
@@ -749,7 +749,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   padding: 4px 8px;
   border: none;
   border-left: 2px solid var(--border-2);
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: transparent;
   color: var(--text-faint);
   font-family: inherit;
@@ -773,7 +773,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-right: 6px;
   padding: 0 5px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-faint);
   white-space: nowrap;
@@ -825,7 +825,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--chrome-1);
   color: var(--text-dim);
   font: inherit;
@@ -852,7 +852,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   margin-right: 8px;
   padding: 0 6px;
   border: 1px solid var(--accent-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--accent-2);
   font-weight: 600;
 }

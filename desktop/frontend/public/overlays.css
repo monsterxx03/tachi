@@ -14,7 +14,7 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
+  box-shadow: var(--shadow-2);
   animation: panel-in 0.22s var(--ease) both;
 }
 @keyframes panel-in {
@@ -35,7 +35,7 @@
   color: var(--text-dim);
   font-size: 11px;
   padding: 3px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -51,7 +51,7 @@
   color: var(--text-dim);
   font-size: 11px;
   padding: 3px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -91,7 +91,7 @@
   color: var(--text-dim);
   font-size: 11.5px;
   padding: 2px 16px 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .mcp-profile-select:disabled { opacity: 0.6; cursor: wait; }
@@ -111,7 +111,7 @@
   color: var(--text-dim);
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -135,7 +135,7 @@
   font-size: 10px;
   color: var(--text-faint);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   padding: 0 5px;
   white-space: nowrap;
 }
@@ -185,7 +185,7 @@
   color: var(--text-dim);
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .mcp-toggle.on { border-color: var(--accent); color: var(--accent); }
@@ -246,7 +246,7 @@
   font-size: 11px;
   padding: 3px 6px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--bg-2);
   color: var(--text-dim);
 }
@@ -324,8 +324,8 @@
   min-width: 128px;
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-3);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
   padding: 5px;
   animation: panel-in 0.15s var(--ease) both;
 }
@@ -341,7 +341,7 @@
   font-size: 12.5px;
   text-align: left;
   color: var(--text);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.1s var(--ease), color 0.1s var(--ease);
 }
@@ -357,7 +357,7 @@
 .session-rename {
   width: 100%;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--text);
   font-size: 12.5px;
@@ -382,7 +382,7 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
+  box-shadow: var(--shadow-2);
   padding: 20px;
   animation: panel-in 0.2s var(--ease) both;
 }
@@ -466,7 +466,7 @@
   text-align: center;
   padding: 3px 8px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: linear-gradient(180deg, var(--panel-solid), var(--panel-2));
   /* Bottom inset line = the classic keycap bevel. */
   box-shadow: inset 0 -1.5px 0 var(--border-2), var(--shadow-1);
@@ -494,7 +494,7 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
+  box-shadow: var(--shadow-2);
   overflow: hidden;
   animation: panel-in 0.2s var(--ease) both;
 }
@@ -518,7 +518,7 @@
   align-items: center;
   gap: 14px;
   padding: 8px 10px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 /* The selected row is a solid, rounded BLOCK: the fill itself is the mark, and the row's own title
@@ -570,7 +570,7 @@
   max-width: 100%;
   padding: 0 6px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--wash-2);
   color: var(--text-dim);
   font-size: 10.5px;
@@ -652,7 +652,7 @@
   gap: 8px;
   padding: 6px 9px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
 }
@@ -680,7 +680,7 @@
   box-sizing: border-box;
   padding: 6px 9px;
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--text);
   font-size: 13px;
@@ -822,7 +822,7 @@
   gap: 4px;
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--veil);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
@@ -832,7 +832,7 @@
 .roots-error {
   margin-top: 8px;
   padding: 6px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--red-wash);
   color: var(--red);
   font-size: 11px;
@@ -844,7 +844,7 @@
   color: var(--text-dim);
   font-size: 11px;
   padding: 2px 7px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
@@ -988,7 +988,7 @@
   border-radius: var(--radius-sm);
   background: var(--wash);
 }
-.plan-item { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-xs); }
+.plan-item { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-sm); }
 .plan-item:hover { background: var(--accent-softer); }
 .plan-item.is-current { background: var(--accent-soft); }
 .plan-item-main {
@@ -1029,7 +1029,7 @@
   font-family: inherit;
   font-size: 11px;
   padding: 3px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .plan-item-del:hover { background: var(--red-wash); color: var(--red); }
@@ -1108,7 +1108,7 @@
   font-family: inherit;
   font-size: 11px;
   padding: 2px 7px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .plan-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
@@ -1135,7 +1135,7 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
+  box-shadow: var(--shadow-2);
   overflow: hidden;
   outline: none;
   animation: panel-in 0.2s var(--ease) both;
@@ -1152,7 +1152,7 @@
   font-size: 15px;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .rewind-chain-close:hover { background: var(--hover); color: var(--text); }
 /* The rule of this surface, said once, before any row: a rewind takes the files AND
@@ -1328,8 +1328,8 @@
   padding: 4px;
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-3);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
   animation: panel-in 0.15s var(--ease) both;
 }
 .sel-ask-btn {
@@ -1339,7 +1339,7 @@
   font-family: inherit;
   font-size: 11.5px;
   padding: 5px 10px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
@@ -1376,7 +1376,7 @@
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
+  box-shadow: var(--shadow-2);
   animation: panel-in 0.18s var(--ease) both;
 }
 .ask-q-head {
@@ -1409,7 +1409,7 @@
   gap: 6px;
   align-items: center;
   padding: 3px 4px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
 }
 .ask-q-line:hover { background: var(--hover); }
 .ask-q-text {
@@ -1424,7 +1424,7 @@
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--text);
   font-family: inherit;
@@ -1442,7 +1442,7 @@
   font-size: 11px;
   font-family: inherit;
   padding: 3px 6px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
@@ -1463,7 +1463,7 @@
   font-family: inherit;
   font-size: 11.5px;
   padding: 5px 8px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
@@ -1493,7 +1493,7 @@
   font-size: 11.5px;
   padding: 5px 9px;
   margin-left: 2px;
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   cursor: pointer;
   transition: background 0.12s var(--ease);

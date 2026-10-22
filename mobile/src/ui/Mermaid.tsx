@@ -125,6 +125,6 @@ export function Mermaid({ source, height = 220 }: { source: string; height?: num
 }
 
 const styles = StyleSheet.create({
-  box: { borderWidth: 1, borderRadius: 12, marginVertical: 10, overflow: 'hidden' },
+  box: { borderWidth: 1, borderRadius: 10, marginVertical: 10, overflow: 'hidden' },
   placeholder: { alignItems: 'center', justifyContent: 'center' },
 });

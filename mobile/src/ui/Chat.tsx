@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type ComponentRef } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -118,15 +118,31 @@ function Composer({
 }) {
   const { tokens: t } = useTheme();
   const [text, setText] = useState('');
+  const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
+  // 已经为「字还没提交」重试过一次；防止真的空着也反复失焦
+  const retried = useRef(false);
+  const submitRef = useRef<() => void>(() => {});
   const short = waiting === '等待你的授权' ? '等你授权' : waiting === '等待你的回答' ? '等你回答' : '';
 
   const submit = () => {
     const v = text.trim();
     if (!v) {
       // 空着按发送 = 停掉这一轮（正在跑的时候才有意义）
-      if (running) onStop();
+      if (running) {
+        onStop();
+        return;
+      }
+      // 字在屏幕上、`text` 却是空的：中文输入法还在组合里（拼音没选字），点击先让它
+      // 提交，state 要下一帧才跟上。不补这一下的话，第一次点击只是把拼音提交掉，
+      // 消息发不出去 —— 表现就是「发送要点两次」。
+      if (inputRef.current?.isFocused() && !retried.current) {
+        retried.current = true;
+        inputRef.current.blur();
+        requestAnimationFrame(() => submitRef.current());
+      }
       return;
     }
+    retried.current = false;
     if (running) {
       onQueue(v);
       setText('');
@@ -137,6 +153,7 @@ function Composer({
       if (ok) setText('');
     });
   };
+  submitRef.current = submit;
 
   return (
     <View style={[styles.composer, { borderTopColor: t.border, backgroundColor: t.composerBg }]}>
@@ -183,6 +200,7 @@ function Composer({
       <View style={[styles.inputRow, styles.column]}>
         <View style={[styles.inputWrap, { backgroundColor: t.inputBg, borderColor: t.border }]}>
           <TextInput
+            ref={inputRef}
             value={text}
             onChangeText={setText}
             placeholder="补一句…"
@@ -520,7 +538,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  back: { width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  back: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   headInfo: { flex: 1, minWidth: 0, paddingHorizontal: 4 },
   headTitle: { fontSize: 14.5, fontWeight: '600' },
   headSub: { fontSize: 11.5, marginTop: 2 },
@@ -555,7 +573,7 @@ const styles = StyleSheet.create({
   live: { paddingVertical: 4 },
   liveText: { fontSize: 15, lineHeight: 25 },
   think: { borderLeftWidth: 2, paddingLeft: 10, marginVertical: 6, opacity: 0.9 },
-  tool: { borderWidth: 1, borderRadius: 11, marginVertical: 7, overflow: 'hidden' },
+  tool: { borderWidth: 1, borderRadius: 10, marginVertical: 7, overflow: 'hidden' },
   toolHead: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 10, paddingVertical: 9 },
   toolName: { fontSize: 12.5, fontWeight: '600' },
   toolSum: { flex: 1, fontSize: 12, fontFamily: 'monospace' },
@@ -570,6 +588,6 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12 },
   inputWrap: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 15, paddingVertical: 11 },
   input: { fontSize: 14, padding: 0, maxHeight: 90 },
-  sendBtn: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  sendBtn: { width: 38, height: 38, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   readOnlyNote: { borderTopWidth: StyleSheet.hairlineWidth, padding: 14, alignItems: 'center' },
 });

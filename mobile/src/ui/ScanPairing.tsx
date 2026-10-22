@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#000' },
   center: { alignItems: 'center', justifyContent: 'center', padding: 30, backgroundColor: '#000' },
   permissionText: { fontSize: 13, lineHeight: 20, textAlign: 'center', marginTop: 12, marginBottom: 18 },
-  permissionBtn: { borderRadius: 11, paddingHorizontal: 20, paddingVertical: 12 },
+  permissionBtn: { borderRadius: 10, paddingHorizontal: 20, paddingVertical: 12 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   frame: {
     width: 230,

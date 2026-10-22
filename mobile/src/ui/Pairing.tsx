@@ -156,7 +156,7 @@ export function Pairing({
 
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: 22, paddingTop: 28 },
-  back: { width: 34, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  back: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   title: { fontSize: 26, fontWeight: '600', letterSpacing: -0.4 },
   sub: { fontSize: 13, lineHeight: 20, marginTop: 8, marginBottom: 18 },
   scanBtn: {
@@ -165,15 +165,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     borderWidth: 1,
-    borderRadius: 11,
+    borderRadius: 10,
     paddingVertical: 13,
   },
   orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 2 },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
   label: { fontSize: 12, marginBottom: 6, marginTop: 14 },
-  input: { borderWidth: 1, borderRadius: 11, paddingHorizontal: 13, paddingVertical: 12, fontSize: 14 },
+  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 12, fontSize: 14 },
   errBox: { borderWidth: 1, borderRadius: 10, padding: 11, marginTop: 16 },
-  btn: { borderRadius: 11, paddingVertical: 14, alignItems: 'center', marginTop: 22 },
+  btn: { borderRadius: 10, paddingVertical: 14, alignItems: 'center', marginTop: 22 },
   note: { fontSize: 11.5, lineHeight: 18, marginTop: 26 },
 });
 
