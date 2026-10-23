@@ -119,14 +119,19 @@ export function buildItems(snapshot: Snapshot): Item[] {
   let turn: Item[] = [];
   let foldAt = -1;
   let steps: ProcessStep[] = [];
+  // 这一轮的**交付物**（SendFile 递过来的文件），按发出的先后，钉在本轮结尾。
+  // 它们不是过程：折进「N 步」里等于把「把 X 发给我」的答案藏在一个要展开的行后面
+  // （桌面的 turnView 也是这么分的，见它的 attachments 那一栏）。
+  let files: Item[] = [];
 
   const flushTurn = () => {
     const folded = foldItem(steps, `proc${foldAt}-${steps[0]?.key ?? ''}`);
     if (folded) turn.splice(foldAt, 0, folded);
-    items.push(...turn);
+    items.push(...turn, ...files);
     turn = [];
     foldAt = -1;
     steps = [];
+    files = [];
   };
 
   snapshot.messages.forEach((m, i) => {
@@ -144,6 +149,11 @@ export function buildItems(snapshot: Snapshot): Item[] {
     if (m.role === 'assistant' && m.thinking) {
       if (foldAt < 0) foldAt = turn.length;
       steps.push({ kind: 'thinking', key: `t${key}`, text: m.thinking });
+    }
+    // 交付物不是过程：一个成功的 SendFile 就是这个文件本身，露在外面（见 files 的注释）
+    if (m.role === 'tool_call' && m.toolName === 'SendFile' && !result?.isError) {
+      files.push({ kind: 'msg', key, msg: m, result });
+      return;
     }
     if (m.role === 'tool_call' && !result?.isError) {
       if (foldAt < 0) foldAt = turn.length;

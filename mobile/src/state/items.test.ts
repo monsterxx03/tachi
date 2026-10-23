@@ -160,6 +160,19 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     ]);
   });
 
+  it('SendFile 不折进过程：它是交付物，露在本轮结尾', () => {
+    const items = buildItems(
+      snap([user('把周报发我'), call('a', 'SendFile'), resultOf('a'), assistant('发你了')]),
+    );
+    // 过程那一行不该出现：折起来等于把「文件在哪」的答案藏在要展开的行后面
+    expect(items.some((i) => i.kind === 'process')).toBe(false);
+    // 文件卡片排在本轮最后，即使模型在它之后又说了一句
+    const last = items[items.length - 1];
+    expect(last.kind).toBe('msg');
+    expect(last.kind === 'msg' ? last.msg.toolName : '').toBe('SendFile');
+    expect(items.length).toBe(3);
+  });
+
   it('只有一个工具时照旧画成一张卡（折一行没有意义）', () => {
     const items = buildItems(snap([user('跑一下'), call('a'), resultOf('a')]));
     expect(items.map((i) => i.kind)).toEqual(['msg', 'msg']);

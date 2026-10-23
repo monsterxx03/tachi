@@ -329,6 +329,41 @@ export function Thinking({ text }: { text: string }) {
   );
 }
 
+/** SendFile 调用参数里的那一个 path —— 记录里它永远是 {"path": "..."} */
+function fileFromSendFileArgs(msg: SessionMessage): AttachmentRef | null {
+  if (!msg.args) return null;
+  let path = '';
+  try {
+    const v = JSON.parse(msg.args) as { path?: unknown };
+    if (typeof v?.path === 'string') path = v.path;
+  } catch {
+    return null;
+  }
+  if (!path) return null;
+  const name = path.split(/[\\/]/).pop() || path;
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  const mime: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    md: 'text/markdown',
+    txt: 'text/plain',
+    json: 'application/json',
+  };
+  return {
+    id: msg.toolCallId ?? '',
+    name,
+    mimeType: mime[ext] ?? 'application/octet-stream',
+    // 参数里没有大小：卡片照常显示名字和图标，下载留给有记录的那一条
+    size: 0,
+    downloadable: false,
+  };
+}
+
 export const MessageView = memo(function MessageView({
   msg,
   toolResult,
@@ -384,7 +419,12 @@ export const MessageView = memo(function MessageView({
   }
 
   if (msg.role === 'tool_call') {
-    const file = attachments.find((a) => a.id === msg.toolCallId);
+    // 后端的附件列表是权威（它有大小、可下载标志）；没有那一条时从调用参数里兜一个出来 ——
+    // 否则一个刚跑完、快照还没带上附件的 SendFile 会退回成一张普通工具卡，读者看不出
+    // 模型到底递了个什么文件过来。
+    const file =
+      attachments.find((a) => a.id === msg.toolCallId) ??
+      (msg.toolName === 'SendFile' ? fileFromSendFileArgs(msg) : null);
     if (file) return <FileCard file={file} source={fileSource?.(file)} onOpen={onOpenFile} />;
     return (
       <ToolCard
