@@ -3,9 +3,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
 import { deviceLabel } from '../api/storage';
-import { useEdgeBack } from './edgeBack';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { ScanPairing } from './ScanPairing';
@@ -66,7 +65,6 @@ export function Pairing({
   };
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, back.style]}>
       {onClose ? (
         <Pressable
@@ -149,8 +147,8 @@ export function Pairing({
       <Text style={[styles.note, { color: t.faint }]}>
         这条链路是局域网的明文 HTTP：拿到令牌的人就能让那台电脑执行命令。只在家里用自己的网络。
       </Text>
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

@@ -13,8 +13,7 @@ import type { FileSource } from '../api/client';
 import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
 import type { Live } from '../state/mobile';
 import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep } from '../state/items';
-import { useEdgeBack } from './edgeBack';
-import { GestureDetector } from 'react-native-gesture-handler';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
@@ -417,7 +416,6 @@ export function Chat({
   const listRef = useRef<FlatList<Item>>(null);
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable
@@ -500,8 +498,8 @@ export function Chat({
           onStop={onStop}
         />
       )}
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

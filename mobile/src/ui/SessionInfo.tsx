@@ -3,10 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
 import type { Live } from '../state/chat';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
-import { useEdgeBack } from './edgeBack';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 
 type Tab = 'overview' | 'mcp' | 'agents' | 'cron';
 
@@ -182,7 +181,6 @@ export function SessionInfo({
   }, [sessionId]);
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
@@ -365,8 +363,8 @@ export function SessionInfo({
         </View>
       </ScrollView>
       )}
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

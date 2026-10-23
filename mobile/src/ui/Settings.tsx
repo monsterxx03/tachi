@@ -2,10 +2,9 @@ import { Feather } from '@expo/vector-icons';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Pairing as PairingInfo } from '../api/client';
 import type { Device } from '../api/storage';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
-import { useEdgeBack } from './edgeBack';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import type { ThemeMode } from '../theme/tokens';
 
 const MODES: { value: ThemeMode; label: string }[] = [
@@ -39,7 +38,6 @@ export function Settings({
   const back = useEdgeBack(onBack);
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onBack} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
@@ -138,8 +136,8 @@ export function Settings({
           <Text style={{ color: t.red, fontSize: 13.5, fontWeight: '600' }}>解除当前这一台的配对</Text>
         </Pressable>
       </ScrollView>
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { Dimensions } from 'react-native';
-import { Gesture } from 'react-native-gesture-handler';
+import { Dimensions, StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 /**
@@ -17,20 +17,22 @@ const SCREEN = Dimensions.get('window').width;
  * 从屏幕左缘往右划 = 返回上一屏。**手势与动画都在 UI 线程**（gesture-handler + reanimated），
  * 和列表里那一行左滑是同一条路。
  *
- * 三条判据，缺一条都会出问题：
+ * **手势层只盖住左缘那一条**（`EdgeBackZone`），不铺满整屏 —— 这一条是硬要求：
+ * 铺满整屏时手势层是列表的**父级**，手指一落下就先被它接住，`failOffsetY` 那句「竖着划
+ * 就让给列表」不成立（真机上实测：点击有效、整个列表滑不动）。让手势层根本不覆盖正文，
+ * 滚动就不再取决于手势库怎么判优先级。
  *
- * - **起点必须在左缘**（`onBegin` 里看 `absoluteX`）。正文里的代码块、表格、mermaid 各有
- *   自己的横向操作，从正文中间起手的横划不该被这个手势吃掉。
- * - **右划 10px 才激活、竖着动 16px 就放弃**（`activeOffsetX` / `failOffsetY`）：竖划归列表
- *   滚动。`PanResponder` 那版是「先抢到再说」，所以正文里的横向滚动会被它夺走 —— 表现就是
- *   在代码块上划一下就退回列表。
- * - **内层的横向滚动优先**：GH 里原生滚动手势（ScrollView）的优先级高于 JS 手势，所以手指
- *   落在代码块上时，这一划归代码块。这也是为什么这个 hook 不再用 `PanResponder`。
+ * 窄条里仍然要判方向：
  *
- * 跟手：整屏按位移右移，松手时超过三成屏宽（或者甩得够快）就补完这段动画再返回，否则弹回。
+ * - **起点必须在左缘**（`onBegin` 里看 `absoluteX`）—— 现在窄条本身已经保证了。
+ * - **右划 10px 才激活、竖着动 16px 就放弃**（`activeOffsetX` / `failOffsetY`）：窄条上的
+ *   竖划不该把页面拖走。
  *
- * **Android 上这条手势归系统**（手势导航的左缘返回），App 收不到 —— 那边由 App 的
- * BackHandler 做（见 App.tsx）。这里覆盖 iOS，以及用三键导航的 Android。
+ * 跟手：整屏按位移右移（`style` 照旧挂在页面根节点上），松手时超过三成屏宽（或者甩得够快）
+ * 就补完这段动画再返回，否则弹回。手势一旦激活，手指移出窄条也继续跟。
+ *
+ * **Android 上系统手势导航会先截走左缘这一划**，所以那里多数时候走的是 App 的 BackHandler
+ * （见 App.tsx）；这条手势覆盖 iOS 与用三键导航的 Android。
  */
 export function useEdgeBack(onBack?: () => void) {
   const tx = useSharedValue(0);
@@ -41,7 +43,7 @@ export function useEdgeBack(onBack?: () => void) {
     () =>
       Gesture.Pan()
         .enabled(!!onBack)
-        // 往右 10px 才认；竖着动 16px 就让给列表
+        // 往右 10px 才认；竖着动 16px 就放弃
         .activeOffsetX([10, SCREEN])
         .failOffsetY([-16, 16])
         .onBegin((e) => {
@@ -75,3 +77,26 @@ export function useEdgeBack(onBack?: () => void) {
   const style = useAnimatedStyle(() => ({ transform: [{ translateX: tx.value }] }));
   return { gesture, style };
 }
+
+/**
+ * 挂手势的那一条。**放在页面根节点里、内容之后**（绝对定位盖在上面），宽度就是
+ * `EDGE_BACK_ZONE`。它只有这么窄，正文上的滑动与它无关 —— 这是列表能滚的前提。
+ */
+export function EdgeBackZone({ gesture }: { gesture: ReturnType<typeof Gesture.Pan> }) {
+  return (
+    <GestureDetector gesture={gesture}>
+      <View style={styles.zone} />
+    </GestureDetector>
+  );
+}
+
+const styles = StyleSheet.create({
+  zone: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_BACK_ZONE,
+    zIndex: 10,
+  },
+});
