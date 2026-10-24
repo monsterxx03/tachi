@@ -12,10 +12,10 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "连接同一局域网里开着 Tachi 的电脑：会话、审批和消息都在那台机器上。",
         "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
-          "NSAllowsLocalNetworking": true
+          "NSAllowsArbitraryLoads": true
         }
-      }
+      },
+      "appleTeamId": "36ANL9C8HK"
     },
     "android": {
       "package": "dev.tachi.mobile",

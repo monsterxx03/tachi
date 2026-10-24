@@ -23,17 +23,86 @@ export class ApiError extends Error {
 export interface Pairing {
   baseUrl: string;
   token: string;
+  /**
+   * 同一台电脑的其它地址（备用）。配对码里带着它，服务端在 `/v1/ping` 里也会再报一次 ——
+   * 手机用它来判断「还有没有别的路能进这台电脑」，不需要用户知道自己在哪个网络里。
+   */
+  urls?: string[];
+  /**
+   * 地址是读者手动选的：自动切换不再动它（见 `mobile/src/state/mobile.ts` 的 heal / rotate）。
+   * 只有「记住的电脑」（`Device`）会用到，临时拼出来的 Pairing 不带。
+   */
+  pinned?: boolean;
+}
+
+/**
+ * 一次请求最多等多久。
+ *
+ * 没有上限的话，慢链路（Wi-Fi 差 + 蜂窝）会让一个请求永远挂着：界面停在空列表、不报错、
+ * 也不重试，看起来就像「连上了但什么也没有」——比明确失败更难查。
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * 最近几次请求的去向与结果，给设置页上的那一行诊断用。
+ *
+ * 为什么值得存在：这条链路上「已连接但什么都没加载」有三种完全不同的原因 —— 请求没发出去、
+ * 发出去了没人应答、答回来被丢掉。它们在屏幕上长得一模一样，而手机上没有控制台可看。留下
+ * 这几条记录，就能让它变成一句能读的话。
+ */
+export interface ReqRecord {
+  at: number;
+  method: string;
+  path: string;
+  base: string;
+  ms: number;
+  outcome: string;
+}
+
+const recentReqs: ReqRecord[] = [];
+
+export function recentRequests(): ReqRecord[] {
+  return recentReqs.slice(-4);
+}
+
+function noteReq(rec: ReqRecord): void {
+  recentReqs.push(rec);
+  if (recentReqs.length > 12) recentReqs.shift();
 }
 
 async function req<T>(conn: Pairing, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${conn.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${conn.token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
+  const started = Date.now();
+  // 调用方自己的 signal 也要能生效（附件下载这类），所以两者合并
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  const forwardAbort = () => ctrl.abort();
+  init?.signal?.addEventListener('abort', forwardAbort);
+  let res: Response;
+  try {
+    res = await fetch(`${conn.baseUrl}${path}`, {
+      ...init,
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${conn.token}`,
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    const aborted = ctrl.signal.aborted && !init?.signal?.aborted;
+    noteReq({
+      at: started,
+      method: init?.method ?? 'GET',
+      path,
+      base: conn.baseUrl,
+      ms: Date.now() - started,
+      outcome: aborted ? '超时' : `发不出去：${(e as Error)?.message ?? e}`,
+    });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    init?.signal?.removeEventListener('abort', forwardAbort);
+  }
   if (!res.ok) {
     let code = `http_${res.status}`;
     try {
@@ -42,9 +111,12 @@ async function req<T>(conn: Pairing, path: string, init?: RequestInit): Promise<
     } catch {
       // 不是 JSON 就用手上的状态码
     }
+    noteReq({ at: started, method: init?.method ?? 'GET', path, base: conn.baseUrl, ms: Date.now() - started, outcome: `HTTP ${res.status}` });
     throw new ApiError(res.status, code);
   }
-  return (await res.json()) as T;
+  const out = (await res.json()) as T;
+  noteReq({ at: started, method: init?.method ?? 'GET', path, base: conn.baseUrl, ms: Date.now() - started, outcome: 'ok' });
+  return out;
 }
 
 /** /v1/ping 的答案。`hostname` 是那台机器自己的名字（老服务端没有这一项）。 */
@@ -55,11 +127,16 @@ export interface PingResult {
   /** 机器名（hostname），手机列表里默认显示它 */
   hostname?: string;
   version?: string;
+  /**
+   * 这台电脑当前的全部地址，主的那条在前。老服务端没有这一项 —— 那就只有手上这一条。
+   * 它让「配对一次」就够了：之后那台电脑换了网络、开了 Tailscale，手机连上就能知道。
+   */
+  urls?: string[];
 }
 
-/** 配对页用它验证地址与令牌；这个端点不要令牌 */
-export async function ping(baseUrl: string): Promise<PingResult> {
-  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/ping`);
+/** 配对页用它验证地址与令牌；这个端点不要令牌。signal 由并发探测用来放弃输掉的那几条。 */
+export async function ping(baseUrl: string, signal?: AbortSignal): Promise<PingResult> {
+  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/ping`, { signal });
   if (!res.ok) throw new ApiError(res.status, `http_${res.status}`);
   return (await res.json()) as PingResult;
 }

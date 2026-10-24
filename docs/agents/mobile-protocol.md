@@ -30,7 +30,7 @@
 - 除 `/v1/ping` 外都要 `Authorization: Bearer <token>`；WebSocket 的令牌放在查询串里（`?token=`），因为 React Native 的 WebSocket 设不了握手头。
 - 令牌是凭据，不是配置：单独的文件、`0600`、可一键作废，作废时断开所有活连接。
 - V1 是**局域网明文**。拿到令牌就能让那台电脑执行命令 —— 这是被接受的代价，代价写在使用它的那个界面上。
-- 地址：`0.0.0.0:8787`（默认）。只在自己家的网络里用。
+- 地址：`0.0.0.0:8787`（默认）。**一台电脑对外的地址可能不止一条**，局域网的和 Tailscale 的 100.x 常常同时在 —— 见不变量 11。
 
 ## HTTP 端点
 
@@ -38,7 +38,7 @@
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/v1/ping` | — | `{ok, name, hostname, version}`，配对页用它验证地址与令牌 |
+| GET | `/v1/ping` | — | `{ok, name, hostname, version, urls}`，配对页用它验证地址与令牌 |
 | GET | `/v1/sessions` | — | `{sessions: [SessionSummary]}` |
 | POST | `/v1/sessions` | `{projectId?, workingDir?}` | `{session: SessionSummary}` |
 | GET | `/v1/projects` | — | `{projects: [ProjectRef]}`，新建会话时的项目下拉框 |
@@ -197,3 +197,4 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 8. **一段对话可以换 id，订阅要跟着走。** 通知里带着这一轮的结束原因：换轨与 `idle` 之间没有别的延迟，换订阅一定晚一步，`idle` 靠不住。 压缩成功时 agent 把历史搬进**子会话**，这一轮剩下的部分接着在子会话里跑。桌面在这一刻换轨（`agent:session_switched`），手机收到 `session_moved` 后把画面、订阅、排队中的消息一起搬到新 id。不搬的手机停在旧那一半：画面不动、状态永远「在跑」、队列发不出去（`idle` 已经发往子会话了）。换轨发生在**一轮结束之后**，不是压缩那一刻 —— 中途搬会把正在写的消息从画面底下抽走。
 9. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
 10. **「保持唤醒」是一台机器的一个值，所以它也是广播的。** 它不属于任何一段会话，手机发的 `POST /v1/awake` 与桌面托盘的勾选走同一个写入方（桌面的 `setAwake`），改完立刻广播 `awake_changed`、带完整的 `AwakeState` —— 两块屏照它画，没有第二条同步路径。**开着的时候关不关得掉由那台电脑说了算**：系统的断言被拒时，答案是「关着」加一句原因（500 `awake_failed`），而**不是**把开关画成开着的。`durationMin` 是偏好、落在那台电脑上，所以它熬得过重启；`on` 不是 —— 进程没了，断言就没了，重启后的状态永远是关。
+11. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。

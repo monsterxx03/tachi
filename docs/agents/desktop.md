@@ -465,8 +465,8 @@ go build .                       # 仍然是 GUI
 - **桌面能力用空实现顶住调用点**：`refreshTray`（托盘读数）、`notifyLink` / `enqueueAlert` / `startBadge` / `stopBadge` / `applyBadgeLink`（BLE 与提示音）、`OpenPath` / `OpenURL`（系统 launcher）。运行时文件里的调用一行都不用改 —— 加一个新的桌面能力时照这个形状做，不要在每个调用点写 `if`。
 - **通知走接口**（`notifyHost`，`notify_host.go`）：窗口版是 `*notifier`，无头版是 `noNotifier{}`。**调用点一律写 `d.notifyHost()`，不要写 `d.notify.`** —— 字段是接口，一个用字面量构造出来的 `desktopApp`（测试会这么干）拿到的是 nil 接口，直接调用会 panic，而 `notifyHost()` 兜住了这一点。
 - **`alertKind` 有一份本地副本**（`alert_kind.go`）：值是设备链路协议的一部分，必须与 `link.AlertKind*` 一致；分开是因为无头构建不能编译那套 cgo 蓝牙栈。
-- **配对信息在启动时打出来，并且带二维码**（`main_headless.go` 的 `logMobilePairing` + `pairing_qr.go`）：无头进程没有设置页，所以它用**同一个** `GetMobilePairing`（桌面卡片渲染的就是它）打出一张终端二维码、候选地址和令牌。二维码的内容就是那个 payload —— 和手机扫码解析的是同一个 JSON，所以扫一下等于填了地址加 43 个字符的令牌。
-  - **二维码只在 stdout 是终端时打印**（`os.ModeCharDevice`）：systemd 的 journal、重定向的日志、itest 的捕获里，那些方块是没人能扫的噪音。那种场景下文字两行就是全部答案（`journalctl -u tachi | grep -A1 pairing`）。
+- **配对信息在启动时打出来，并且带二维码**（`main_headless.go` 的 `logMobilePairing` + `pairing_qr.go`）：无头进程没有设置页，所以它用**同一个** `GetMobilePairing`（桌面卡片渲染的就是它）打出一张终端二维码、每条可达地址（带「局域网 / Tailscale」这种给人看的标签）和令牌。二维码的内容就是那个 payload —— 和手机扫码解析的是同一个 JSON，所以扫一下等于填了**全部地址**加 43 个字符的令牌；手机连的时候并发试这些地址，谁先应答用谁（见 [mobile.md](mobile.md)）。
+  - **二维码只在 stdout 是终端时打印**（`os.ModeCharDevice`）：systemd 的 journal、重定向的日志、itest 的捕获里，那些方块是没人能扫的噪音。那种场景下文字就是全部答案（`journalctl -u tachi | grep -A3 pairing` —— 地址可能有好几条，别只 -A1）。
   - **黑白方向跟着终端背景走**（`COLORFGBG`，判断不出按深色）：方向反了多数手机仍能扫，但一块配对屏不该赌「通常能扫」。
   - **宽度超过 78 列就不打**：折行的二维码看着像能扫，其实扫不出来 —— 宁可只留文字。
   - `mobile.listen` 只绑回环时会警告一句：那种配置下地址、令牌都对，手机却永远连不上。

@@ -133,11 +133,17 @@ func logMobilePairing(d *desktopApp) {
 			"set it to 0.0.0.0:8787 for the phone to connect", vo.Listen)
 	}
 	for i, c := range vo.Candidates {
+		// The label, not the interface name: "utun10 · 100.98.239.75" tells a reader nothing about
+		// which of these they can actually dial from where.
 		if i == 0 {
-			log.Printf("tachi: phone pairing — fill this address in the app, or scan the code below: %s", c.URL)
+			log.Printf("tachi: phone pairing — fill this address in the app, or scan the code below: %s (%s)",
+				c.URL, c.Label)
 			continue
 		}
-		log.Printf("tachi:                 another interface: %s (%s)", c.URL, c.Interface)
+		log.Printf("tachi:                 fallback address: %s (%s)", c.URL, c.Label)
+	}
+	if len(vo.URLs) > 1 {
+		log.Print("tachi: the code carries every address above; the phone tries them and uses whichever answers")
 	}
 	printPairingQRCode(vo.Payload)
 	log.Printf("tachi: token: %s", vo.Token)

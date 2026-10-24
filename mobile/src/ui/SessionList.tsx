@@ -139,6 +139,7 @@ export function SessionList({
   onSettings,
   onNew,
   onRefresh,
+  error,
   onDelete,
   onPin,
 }: {
@@ -151,6 +152,8 @@ export function SessionList({
   onSettings: () => void;
   onNew: () => void;
   onRefresh: () => void;
+  /** 连上了但读不到东西时的那句话（null = 一切正常） */
+  error?: string | null;
   onDelete: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
 }) {
@@ -173,6 +176,21 @@ export function SessionList({
                 : '连不上电脑'}
             </Text>
           </View>
+          {/* 「已连接」和「读得到东西」是两件事：WebSocket 通了不代表 HTTP 请求回来了。
+              这里只有真的有问题时才出现，平时不占地方。 */}
+          {error ? (
+            <Pressable
+              onPress={onRefresh}
+              style={({ pressed }) => [
+                styles.errLine,
+                { backgroundColor: pressed ? t.redWash : 'transparent' },
+              ]}
+            >
+              <Text style={{ color: t.red, fontSize: 11.5 }} numberOfLines={2}>
+                {error} · 点这里重试
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
         <Pressable
           onPress={onNew}
@@ -298,6 +316,7 @@ const styles = StyleSheet.create({
   subRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   sub: { fontSize: 12, flexShrink: 1 },
+  errLine: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, marginTop: 6 },
   gear: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
 
   listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },

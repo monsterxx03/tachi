@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -152,6 +156,21 @@ func (m *mobileServer) listenError() string {
 	return m.listenErr
 }
 
+// pairingPort is the port a phone has to dial: the one the listener actually bound, so a configured
+// port of 0 (the OS picks one) still produces a URL that works. The configured address is the
+// fallback for a server that is not listening at all — the pairing card still has to show something.
+func (m *mobileServer) pairingPort() string {
+	if _, port, err := net.SplitHostPort(m.listenAddr()); err == nil && port != "" {
+		return port
+	}
+	if cfg := m.desk.config(); cfg != nil {
+		if _, port, err := net.SplitHostPort(cfg.Mobile.MobileAddress()); err == nil && port != "" {
+			return port
+		}
+	}
+	return "8787"
+}
+
 func (m *mobileServer) serve() {
 	server := &http.Server{Handler: m.handler(), ReadHeaderTimeout: 10 * time.Second}
 	m.srv = server
@@ -207,8 +226,115 @@ func (m *mobileServer) handler() http.Handler {
 	mux.HandleFunc("POST /v1/cron/{id}/pause", m.guard(m.handleCronPause))
 	mux.HandleFunc("DELETE /v1/cron/{id}", m.guard(m.handleCronDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/questions", m.guard(m.handleQuestions))
-	return mux
+	return mobileAccessLog(mobileGzip(mux))
 }
+
+// mobileAccessLog writes one line per request: whether it arrived, what we answered, how much we
+// wrote, and how long the client was kept waiting.
+//
+// It exists because a phone can say "connected" while nothing loads, and from the desktop there is
+// no way to tell three cases apart: the request never arrived (the app or the network), it arrived
+// and we answered something the phone did not like (a status), or we answered and the bytes never
+// finished crossing (a slow or broken path). One line per request answers all three.
+func mobileAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &mobileRecorder{ResponseWriter: w, status: http.StatusOK}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		// deferred, and with a panic caught: a handler that dies mid-response would otherwise leave
+		// NO line here, which reads exactly like "the request never arrived" — the opposite conclusion.
+		panicked := ""
+		defer func() {
+			if p := recover(); p != nil {
+				panicked = fmt.Sprint(p)
+				if rec.bytes == 0 {
+					mobileFail(rec, http.StatusInternalServerError, "panic")
+				}
+			}
+			logger.New("mobile").Info(context.Background(), "request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"from", host,
+				"status", rec.status,
+				"bytes", rec.bytes,
+				"ms", time.Since(start).Milliseconds(),
+				"panic", panicked,
+			)
+		}()
+		next.ServeHTTP(rec, r)
+	})
+}
+
+// mobileRecorder remembers the status and the body size — and forwards Hijack, because the
+// WebSocket upgrade needs the raw connection and would fail against a bare wrapper.
+type mobileRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *mobileRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *mobileRecorder) Write(b []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += n
+	return n, err
+}
+
+func (r *mobileRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+func (r *mobileRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// mobileGzip compresses JSON responses when the phone asks for it.
+//
+// Why it is worth the trouble: the session list is ~22 KB of highly repetitive JSON, and the phone's
+// link is not always a good one (cellular, a tailnet tunnel, a laptop's wireless). On a lossy path a
+// response that size turns into many seconds of retransmits — the WebSocket handshake lands, the list
+// never arrives, and the screen says "connected" with nothing in it. The same payload is ~3 KB
+// compressed, which is a different problem to transport.
+//
+// Two paths are left alone: the WebSocket upgrade (it needs the raw connection) and file downloads
+// (already compressed media, and they may be range requests).
+func mobileGzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+			r.URL.Path == "/v1/ws" || strings.Contains(r.URL.Path, "/files/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		gz := gzip.NewWriter(w)
+		defer func() {
+			_ = gz.Close()
+		}()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, out: gz}, r)
+	})
+}
+
+// gzipResponseWriter keeps the status line and headers going to the real writer while the body goes
+// through the compressor.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	out io.Writer
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) { return g.out.Write(b) }
 
 // guard is the bearer check for HTTP. The comparison is constant time: the token IS the
 // credential, and a byte-by-byte early exit would leak it one request at a time.

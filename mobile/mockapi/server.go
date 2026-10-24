@@ -156,11 +156,15 @@ func constTimeEqual(a, b string) bool {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	// ping 不要令牌：配对页就是拿它来验证地址与令牌的，先要能连上
+	//
+	// urls 是这台机器对外的全部地址（协议里那一项）。假服务端只有一条 —— 就是请求自己用的那条，
+	// 因为它本来就在这个地址上应答；手机端照样能走到「服务端告诉我地址表」这条路。
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"name":     "tachi-mockapi",
 		"hostname": "mock-machine",
 		"version":  "0.1",
+		"urls":     []string{"http://" + r.Host},
 	})
 }
 

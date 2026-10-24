@@ -11,8 +11,10 @@ import (
 // pairingQRCode renders the pairing payload as a terminal QR code.
 //
 // The payload is the same JSON the desktop card hands its frontend and the phone's scanner expects
-// ({"v":1,"url":…,"token":…}, see mobile_token.go) — one shape, three presentations: a QR image in
-// the window, these block characters here, and the scanner on the phone.
+// ({"v":1,"url":…,"urls":[…],"token":…}, see mobile_token.go) — one shape, three presentations: a
+// QR image in the window, these block characters here, and the scanner on the phone. "urls" is the
+// whole set of addresses, so one scan teaches the phone every way to reach this machine: on the
+// home network it takes the 4ms LAN one, from elsewhere it takes the tailnet one.
 //
 // The one thing that has to be right is CONTRAST, and which direction that is depends on the
 // terminal's background. ToSmallString's inverse flag swaps black and white; printing the dark

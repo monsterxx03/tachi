@@ -203,6 +203,8 @@ function Shell() {
       currentId={m.openId}
       conn={m.conn}
       deviceName={m.devices[m.activeDevice]?.label}
+      // 「连上了但列表没读回来」单独说 —— 这条横幅平时不出现
+      error={m.conn === 'open' && m.sessions.length === 0 ? m.error : null}
       // 这些必须是稳定引用：行组件 memo 过，回调每帧新建的话 memo 等于没有
       onOpen={m.open}
       onSettings={() => setShowSettings(true)}
@@ -264,6 +266,7 @@ function Shell() {
             }}
             onRemoveDevice={(i) => void m.removeDevice(i)}
             onRenameDevice={(i, label) => void m.renameDevice(i, label)}
+            onSelectAddress={(i, url) => void m.selectAddress(i, url)}
             onAddDevice={() => setAddingDevice(true)}
             onBack={() => setShowSettings(false)}
             awake={m.awake}

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +114,13 @@ func TestMobileAuth(t *testing.T) {
 	}
 	if name, _ := ping["name"].(string); name == "" {
 		t.Fatalf("ping carries no name: %v", ping)
+	}
+	// urls is the phone's way to learn the addresses it was never paired with (a laptop that
+	// changed network, a tailnet that came up). It has to be on every ping, and it has to be an
+	// array even when this machine has nothing to offer — a missing key makes the phone think the
+	// server is old, which is a different thing from "this machine has no address".
+	if _, ok := ping["urls"].([]any); !ok {
+		t.Fatalf("ping carries no urls array: %v", ping["urls"])
 	}
 	if code, _ := mobileCall(t, ts, "GET", "/v1/sessions", "", nil); code != http.StatusUnauthorized {
 		t.Fatalf("sessions without token = %d, want 401", code)
@@ -557,61 +566,184 @@ func TestMobileStartStop(t *testing.T) {
 	}
 }
 
-// TestPairingPicksALANAddress: the QR's URL has to be an address a phone can dial. On a machine
-// with a VPN and a container network, "first non-loopback IPv4" is whichever interface the kernel
-// happened to list first — which is exactly how the card came to show 10.251.1.1 (a utun link)
-// or 192.168.139.3 (a vm bridge) on a machine whose Wi-Fi was en0.
-func TestPairingPicksALANAddress(t *testing.T) {
+// TestPairingCandidatesAreDialable: the card, the QR and the phone all get exactly the addresses a
+// phone could plausibly reach. The two ways that promise breaks are both real: the kernel hands back
+// interfaces in an arbitrary order (a utun link, a VM bridge), and a container bridge (docker0) has a
+// perfectly ordinary IPv4 that no phone can dial. An address that cannot answer is worse than none —
+// the phone spends a probe on it and the reader has one more line to ignore.
+func TestPairingCandidatesAreDialable(t *testing.T) {
 	cand := func(name, ip string, up bool, p2p bool) lanCandidate {
 		return lanCandidate{name: name, ip: net.ParseIP(ip), up: up, pointToPoint: p2p}
 	}
 	tests := []struct {
 		name  string
 		cands []lanCandidate
-		want  string
+		want  []string
 	}{
 		{
-			name: "虚拟网桥排在前面也不选它",
+			name: "物理网卡收，虚拟网桥不收",
 			cands: []lanCandidate{
 				cand("bridge100", "192.168.139.3", true, false),
 				cand("vmenet0", "192.168.64.2", true, false),
 				cand("en0", "10.5.178.101", true, false),
 			},
-			want: "10.5.178.101",
+			want: []string{"en0"},
 		},
 		{
-			name: "VPN 的点对点地址不选",
+			name: "容器网桥（docker0）不收 —— 它是这台机器内部的网络",
+			cands: []lanCandidate{
+				cand("docker0", "172.17.0.1", true, false),
+				cand("eth0", "192.168.1.9", true, false),
+			},
+			want: []string{"eth0"},
+		},
+		{
+			name:  "只有容器网桥时宁可为空（卡片会说没有可用地址）",
+			cands: []lanCandidate{cand("br-2f1a", "172.18.0.1", true, false)},
+			want:  nil,
+		},
+		{
+			name: "VPN 的点对点地址不收",
 			cands: []lanCandidate{
 				cand("utun4", "10.251.1.1", true, true),
 				cand("en0", "192.168.1.20", true, false),
 			},
-			want: "192.168.1.20",
+			want: []string{"en0"},
 		},
 		{
-			name:  "只有虚拟网卡时退而求其次（总比空着强）",
-			cands: []lanCandidate{cand("bridge100", "192.168.139.3", true, false)},
-			want:  "192.168.139.3",
-		},
-		{
-			name: "只有 loopback 与链路本地地址时给空（卡片会说没有可用地址）",
+			name: "loopback 与链路本地地址不收",
 			cands: []lanCandidate{
 				cand("lo0", "127.0.0.1", true, false),
 				cand("en8", "169.254.32.161", true, false),
 			},
-			want: "",
+			want: nil,
 		},
 		{
-			name:  "Linux 的 eth0 也算物理网卡",
-			cands: []lanCandidate{cand("docker0", "172.17.0.1", true, false), cand("eth0", "192.168.1.9", true, false)},
-			want:  "192.168.1.9",
+			name:  "没起来了的接口不收",
+			cands: []lanCandidate{cand("en0", "192.168.1.20", false, false)},
+			want:  nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := pickLANIPv4(tt.cands); got != tt.want {
-				t.Fatalf("pickLANIPv4 = %q, want %q", got, tt.want)
+			got := make([]string, 0, len(tt.cands))
+			for _, c := range tt.cands {
+				if lanUsable(c) {
+					got = append(got, c.name)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("可用的接口 = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPairingOffersTheTailnet: an address from Tailscale's range is a candidate even though it
+// arrives on a point-to-point utun — a phone on the same tailnet can reach it from anywhere, which
+// is the whole reason this exists. Every OTHER tunnel still stays out: a company VPN's 10.x address
+// is one no phone can dial, no matter how many of them the machine has.
+func TestPairingOffersTheTailnet(t *testing.T) {
+	cand := func(name, ip string, up bool, p2p bool) lanCandidate {
+		return lanCandidate{name: name, ip: net.ParseIP(ip), up: up, pointToPoint: p2p}
+	}
+	tests := []struct {
+		name string
+		cand lanCandidate
+		want bool
+	}{
+		{"tailnet 收（哪怕挂在点对点网卡上）", cand("utun10", "100.98.239.75", true, true), true},
+		{"公司 VPN 的点对点地址不收", cand("utun4", "10.251.1.1", true, true), false},
+		{"物理网卡照旧收", cand("en0", "192.168.71.183", true, false), true},
+		{"tailnet 段之外的点对点地址不因为落在这个段附近就收", cand("utun6", "100.128.0.1", true, true), false},
+		{"连着尾灯的 tailnet 地址照收", cand("tailscale0", "100.79.47.90", true, true), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lanUsable(tt.cand); got != tt.want {
+				t.Fatalf("lanUsable(%s %s, p2p=%v) = %v, want %v",
+					tt.cand.name, tt.cand.ip, tt.cand.pointToPoint, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPairingOrderPutsTheLanFirst: the card and the QR show one address first, and that one has to be
+// the LAN. In the same house it answers in single-digit milliseconds and works with nothing else
+// running; the tailnet is the fallback for everywhere else, and a container bridge is worth listing
+// only after both — no phone can ever reach docker0.
+func TestPairingOrderPutsTheLanFirst(t *testing.T) {
+	mk := func(iface, kind string) MobilePairingCandidate {
+		return MobilePairingCandidate{Interface: iface, Kind: kind, Address: iface, URL: "http://" + iface}
+	}
+	got := orderMobileCandidates([]MobilePairingCandidate{
+		mk("utun10", pairingKindTailscale), // 内核可能先给隧道
+		mk("docker0", pairingKindLAN),      // 虚拟网桥：手机永远连不到，排最后
+		mk("en0", pairingKindLAN),
+	})
+	want := []string{"en0", "utun10", "docker0"}
+	if len(got) != len(want) {
+		t.Fatalf("排序后 %d 条, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Interface != want[i] {
+			t.Fatalf("第 %d 条 = %s, want %s（顺序：%v）", i, got[i].Interface, want[i], got)
+		}
+	}
+}
+
+// TestPairingURLsCoverEveryAddress: the QR carries the whole set, the chosen one first and no
+// duplicates — this is what teaches a phone that there is more than one way in, so losing an
+// address out of it means the phone silently loses its fallback.
+func TestPairingURLsCoverEveryAddress(t *testing.T) {
+	cands := []MobilePairingCandidate{
+		{Interface: "en0", Address: "192.168.1.20", Kind: pairingKindLAN, URL: "http://192.168.1.20:8787"},
+		{Interface: "utun10", Address: "100.98.239.75", Kind: pairingKindTailscale, URL: "http://100.98.239.75:8787"},
+		{Interface: "en7", Address: "10.0.0.5", Kind: pairingKindLAN, URL: "http://192.168.1.20:8787"}, // 同一个地址两个网卡
+	}
+	got := mobilePairingURLs(cands, "http://100.98.239.75:8787")
+	want := []string{"http://100.98.239.75:8787", "http://192.168.1.20:8787"}
+	if len(got) != len(want) {
+		t.Fatalf("urls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("urls = %v, want %v", got, want)
+		}
+	}
+	// 没有选择的时候就是候选自己的顺序（内网在前）。
+	if auto := mobilePairingURLs(cands, ""); len(auto) == 0 || auto[0] != "http://192.168.1.20:8787" {
+		t.Fatalf("自动顺序的 urls = %v, want 内网地址在前", auto)
+	}
+}
+
+// TestPairingPayloadCarriesEveryURL: one scan has to be enough. The payload keeps "v":1 and "url"
+// (an older phone build reads those and stops), and adds "urls" — the set the current build races.
+func TestPairingPayloadCarriesEveryURL(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	vo := (&AgentService{desk: newTestApp()}).GetMobilePairing()
+	if len(vo.Candidates) == 0 {
+		t.Skip("这台机器没有可用的地址")
+	}
+	var payload struct {
+		V     int      `json:"v"`
+		URL   string   `json:"url"`
+		URLs  []string `json:"urls"`
+		Token string   `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(vo.Payload), &payload); err != nil {
+		t.Fatalf("payload 不是 JSON: %v", err)
+	}
+	if payload.V != 1 || payload.URL != vo.URL || payload.Token == "" {
+		t.Fatalf("payload = %+v, want v=1 / url=%s / token 非空", payload, vo.URL)
+	}
+	if len(payload.URLs) != len(vo.URLs) || len(payload.URLs) == 0 {
+		t.Fatalf("payload.urls = %v, want %v", payload.URLs, vo.URLs)
+	}
+	for i := range vo.URLs {
+		if payload.URLs[i] != vo.URLs[i] {
+			t.Fatalf("payload.urls = %v, want %v", payload.URLs, vo.URLs)
+		}
 	}
 }
 
@@ -1030,5 +1162,55 @@ func TestMobileUsageIsMemoized(t *testing.T) {
 	d.usageCache.mu.Unlock()
 	if got := d.mobileUsage(s.ID); got.Cost != 0 {
 		t.Fatalf("cost = %v after the entry expired, want a fresh read (0 here)", got.Cost)
+	}
+}
+
+// TestMobileGzip: the phone's link is not always good, and the session list is the one response big
+// enough for that to matter. Compression has to apply to JSON, and has to stay away from the
+// WebSocket upgrade (which needs the raw connection) and from file downloads (already compressed,
+// and they may be range requests).
+func TestMobileGzip(t *testing.T) {
+	body := strings.Repeat(`{"t":"一个不短的中文标题"}`, 200)
+	h := mobileGzip(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+
+	read := func(path string, gzipOK bool) (*httptest.ResponseRecorder, string) {
+		req := httptest.NewRequest("GET", path, nil)
+		if gzipOK {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec, rec.Header().Get("Content-Encoding")
+	}
+
+	rec, enc := read("/v1/sessions", true)
+	if enc != "gzip" {
+		t.Fatalf("JSON 没被压缩: Content-Encoding = %q", enc)
+	}
+	if rec.Body.Len() >= len(body) {
+		t.Fatalf("压缩后 %d 字节，原样 %d —— 一点没小", rec.Body.Len(), len(body))
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("不是合法的 gzip: %v", err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil || string(got) != body {
+		t.Fatalf("解开之后和原文不一样: err=%v 长度=%d/%d", err, len(got), len(body))
+	}
+
+	// 客户端没说要压缩：原样发，别让对方解不开
+	if _, enc := read("/v1/sessions", false); enc == "gzip" {
+		t.Fatal("客户端没接受 gzip，却压缩了")
+	}
+	// WebSocket 升级要裸连接；文件下载是已经压过的媒体，还可能有 Range
+	if _, enc := read("/v1/ws", true); enc == "gzip" {
+		t.Fatal("WebSocket 端点被压缩了，握手会坏")
+	}
+	if _, enc := read("/v1/sessions/x/files/y", true); enc == "gzip" {
+		t.Fatal("文件下载被压缩了")
 	}
 }

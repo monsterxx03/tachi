@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Pairing as PairingInfo } from '../api/client';
 import type { Device } from '../api/storage';
+import { recentRequests, type ReqRecord } from '../api/client';
 import type { AwakeState } from '../api/types';
 import { defaultLabel } from '../api/label';
 import Animated from 'react-native-reanimated';
@@ -13,6 +14,17 @@ import type { ThemeMode } from '../theme/tokens';
 
 /** 菜单/卡片上的时长选项。0 = 不自动关 —— 与桌面托盘里那组一致。 */
 const AWAKE_DURATIONS = [30, 60, 180, 360, 480, 0];
+
+/**
+ * 一台电脑的每一条地址，当前在用的那条排第一。
+ *
+ * 旧数据（或者只连过一条地址的电脑）没有 urls，退回 baseUrl —— 所以这里永远至少有一样东西，
+ * 而「等 N 条地址」那种缩写不再出现：读者要能看到完整的 URL 才能自己抄去手输。
+ */
+function addressLines(d: Device): string[] {
+  const all = d.urls && d.urls.length > 0 ? d.urls : [d.baseUrl];
+  return [d.baseUrl, ...all.filter((u) => u !== d.baseUrl)];
+}
 
 /** 分钟的读法：和桌面菜单里那行「唤醒时长」用同一套说法（两边看的是同一个值）。 */
 function awakeDurationText(minutes: number): string {
@@ -43,6 +55,7 @@ export function Settings({
   onSwitchDevice,
   onRemoveDevice,
   onRenameDevice,
+  onSelectAddress,
   onAddDevice,
   onUnpair,
   onBack,
@@ -56,6 +69,8 @@ export function Settings({
   conn: string;
   onSwitchDevice: (index: number) => void;
   onRemoveDevice: (index: number) => void;
+  /** 手动指定这台电脑走哪条地址；null = 交回自动 */
+  onSelectAddress: (index: number, url: string | null) => void;
   /** 改这一台在手机上的显示名；只写本地，不通知那台机器 */
   onRenameDevice: (index: number, label: string) => void;
   onAddDevice: () => void;
@@ -71,6 +86,14 @@ export function Settings({
   const back = useEdgeBack(onBack);
   // 改名是行内编辑，不弹一个新页面：这一屏本来就短，改的是一个字段。
   const [editing, setEditing] = useState<number | null>(null);
+  // 哪一台展开了「用哪条地址」的选择（null = 都收着）
+  const [picking, setPicking] = useState<number | null>(null);
+  // 诊断：最近几次请求的去向与结果。手机上没有控制台，这一行是唯一能读到的证据。
+  const [reqs, setReqs] = useState<ReqRecord[]>([]);
+  useEffect(() => {
+    const t = setInterval(() => setReqs(recentRequests()), 1000);
+    return () => clearInterval(t);
+  }, []);
   const [draft, setDraft] = useState('');
   // 「保持唤醒」：自定义时长是一个输入框，输入到一半不是合法数字，所以单独存草稿。
   const [awakeCustom, setAwakeCustom] = useState('');
@@ -155,11 +178,72 @@ export function Settings({
                       {d.label || d.baseUrl}
                     </Text>
                   )}
-                  <Text style={{ color: t.faint, fontSize: 11, marginTop: 2, fontFamily: 'monospace' }} numberOfLines={1}>
-                    {on
-                      ? `${d.baseUrl} · ${conn === 'open' ? '已连接' : conn === 'connecting' ? '正在连接…' : '连不上'}`
-                      : d.baseUrl}
-                  </Text>
+                  {/* 每一条地址都列出来，完整的。上面那行是「这台电脑叫什么」，这里是「它在哪」——
+                      缩成一条加个「等 N 条」，读者就没法自己判断该抄哪条去手输。 */}
+                  {addressLines(d).map((line, k) => (
+                    <Text
+                      key={line}
+                      style={{
+                        color: k === 0 && on ? t.accent2 : t.faint,
+                        fontSize: 11,
+                        marginTop: k === 0 ? 2 : 1,
+                        fontFamily: 'monospace',
+                      }}
+                      numberOfLines={1}
+                    >
+                      {line}
+                    </Text>
+                  ))}
+                  {on ? (
+                    <Text style={{ color: t.faint, fontSize: 11, marginTop: 1 }}>
+                      {conn === 'open' ? '已连接' : conn === 'connecting' ? '正在连接…' : '连不上'}
+                      {d.pinned ? ' · 手动选的地址' : ''}
+                    </Text>
+                  ) : null}
+
+                  {/* 「点那一行地址」太隐蔽了（试过的人找不到），所以给它一个明说的入口。 */}
+                  {!renaming && addressLines(d).length > 1 ? (
+                    <Pressable
+                      hitSlop={6}
+                      onPress={() => setPicking(picking === i ? null : i)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }}
+                    >
+                      <Feather
+                        name={picking === i ? 'chevron-up' : 'chevron-down'}
+                        size={12}
+                        color={t.accent2}
+                      />
+                      <Text style={{ color: t.accent2, fontSize: 11 }}>
+                        {picking === i ? '收起' : d.pinned ? '换个地址' : '用哪条地址'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {picking === i ? (
+                    <View style={{ marginTop: 6, gap: 2 }}>
+                      {[null, ...addressLines(d)].map((opt) => {
+                        const checked = opt ? d.baseUrl === opt : !d.pinned;
+                        return (
+                          <Pressable
+                            key={opt ?? 'auto'}
+                            onPress={() => {
+                              setPicking(null);
+                              onSelectAddress(i, opt);
+                            }}
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 5 }}
+                          >
+                            <Feather
+                              name={checked ? 'check-circle' : 'circle'}
+                              size={13}
+                              color={checked ? t.accent2 : t.borderStrong}
+                            />
+                            <Text style={{ color: checked ? t.text : t.faint, fontSize: 12 }}>
+                              {opt ?? '自动（跟着网络走）'}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
                 </View>
                 {renaming ? (
                   <>
@@ -211,8 +295,22 @@ export function Settings({
             <Text style={{ color: t.accent2, fontSize: 13 }}>添加电脑</Text>
           </Pressable>
           <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 10, lineHeight: 17 }}>
-            同时只连一台：会话在电脑上，切过去看到的是那台电脑的会话。名字只存在这台手机上，改它不会动那台机器。地址 {pairing?.baseUrl ?? '—'}
+            同时只连一台。名字只存在这台手机上，改它不会动那台机器。
           </Text>
+          {reqs.length > 0 ? (
+            <View style={{ marginTop: 8, gap: 1 }}>
+              <Text style={{ color: t.faint, fontSize: 10.5 }}>最近的请求</Text>
+              {reqs.map((q) => (
+                <Text
+                  key={`${q.at}-${q.path}`}
+                  style={{ color: q.outcome === 'ok' ? t.faint : t.red, fontSize: 10, fontFamily: 'monospace' }}
+                  numberOfLines={1}
+                >
+                  {q.path.replace('/v1', '')} · {q.base.replace(/^https?:\/\//, '')} · {q.outcome} · {q.ms}ms
+                </Text>
+              ))}
+            </View>
+          ) : null}
         </View>
 
         <Text style={[styles.section, { color: t.faint }]}>这台电脑</Text>

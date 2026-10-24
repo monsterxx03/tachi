@@ -43,7 +43,7 @@ go run ./mockapi -token dev-token      # 它会把「局域网地址 + 令牌」
 
 打开 App，在配对页填/扫那个地址和令牌，就能看到会话列表。验证：`npm test`（纯逻辑）、`bash e2e/run.sh`（端到端）。
 
-**连一台无头宿主时，扫它启动时打出的那张终端二维码**（下面还跟着地址和令牌两行文字），见 [desktop.md](desktop.md) 的「无头宿主」：那台机器上没有设置页可以点。二维码只在它的 stdout 是终端时出现（systemd 下只有文字），内容与手机扫码解析的是同一个 payload。令牌存在那台机器的 `~/.tachi/mobile.json`（`0600`，首次启动生成）；把日志贴出去之前先删掉那行。配置里的 `mobile.listen` 必须是 `0.0.0.0:8787` 一类可被局域网访问的地址 —— 绑在 `127.0.0.1` 上时日志会警告，因为那种情况下手机永远连不上。
+**连一台无头宿主时，扫它启动时打出的那张终端二维码**（下面跟着这台机器的每条地址和一行令牌），见 [desktop.md](desktop.md) 的「无头宿主」：那台机器上没有设置页可以点。二维码只在它的 stdout 是终端时出现（systemd 下只有文字），内容与手机扫码解析的是同一个 payload。令牌存在那台机器的 `~/.tachi/mobile.json`（`0600`，首次启动生成）；把日志贴出去之前先删掉那行。配置里的 `mobile.listen` 必须是 `0.0.0.0:8787` 一类可被局域网访问的地址 —— 绑在 `127.0.0.1` 上时日志会警告，因为那种情况下手机永远连不上。
 
 工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。构建 `android/` 那一步还要 `ANDROID_HOME`，少了它 Gradle 以「SDK location not found」失败。
 
@@ -135,12 +135,14 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - **CocoaPods 用 Homebrew 装**（`brew install cocoapods`）。系统自带的 Ruby 2.6 太老，`gem install` 会在解析阶段就失败。
 - **一个 Apple ID 就够自装**：Xcode 里登进 Personal Team，免费签名 7 天过期，重装即可；iOS 16+ 要在手机上打开「开发者模式」。
 - 跑起来：`npx expo run:ios --device`（它会自己 prebuild + pod install）。**`scripts/prepare-android.sh` 是 Android 专用**（Gradle/AGP/R8），别对 iOS 跑；iOS 没有需要钉的等价物。
+- **签名 team 写在 `app.json` 的 `ios.appleTeamId`**，不在 Xcode 里手选：`ios/` 是生成物，任何一次 `expo prebuild` 都会把手选的 team 冲掉（重编直接报 `Signing for "Tachi" requires a development team`）。环境里唯一那份签名身份是 `Apple Development: monsterxx03@icloud.com (2YPXTHDWK4)` —— 那是**证书**名里的后缀，**不是 team id**，别拿它当 `DEVELOPMENT_TEAM` 传。
 
 **`app.json` 里 iOS 那三项各有各的理由：**
 
 - `bundleIdentifier` —— 没有它 `prebuild` 卡在交互式提问，非交互直接失败。
 - `NSLocalNetworkUsageDescription` —— iOS 14+ 连局域网要单独授权，缺这条那句询问没有说明。
-- `NSAppTransportSecurity` —— 明文 http / ws 到**局域网 IP**。ATS 的例外按域名写，而家里那台机器是个 IP，列不进去，所以是 `NSAllowsArbitraryLoads`；Expo 模板默认就是它，这里**显式钉住**，免得哪天模板变了、配对静默失败。图标是全不透明的 1024 PNG（只是带 alpha 通道），不用换。
+- `NSAppTransportSecurity` —— 明文 http 到**任意 IP**。ATS 的例外按域名写，而那台机器是个 IP，列不进去，所以只留 `NSAllowsArbitraryLoads`；Expo 模板默认就是它，这里**显式钉住**，免得哪天模板变了、配对静默失败。图标是全不透明的 1024 PNG（只是带 alpha 通道），不用换。
+  - **绝不能再加 `NSAllowsLocalNetworking`**（曾经有过，已删）：Apple 的规则是**它一旦存在，`NSAllowsArbitraryLoads` 就被忽略**，于是这个 App 只被允许连「本地」地址。而 iOS 认定的「本地」是私有网段（`192.168.*` 等），**不包括 Tailscale 用的 `100.64.0.0/10`**。症状极具误导性：局域网地址一切正常，换到 tailnet 地址后**只有 `fetch` 全灭**（报 `The resource could not be loaded because the App Transport Security policy requires the use of a secure connection`），而 WebSocket 照连不误 —— RN 的 WebSocket 走裸 socket、不过 ATS；Safari 和别的 App 也不受这份 plist 约束。**排查的钥匙是客户端那一行诊断**（设置页底部的「最近的请求」）：服务端日志里看不到请求，而客户端写着 `发不出去: fetch failed: … requires the use of a secure connection`。
 
 **模拟器路线（已验证）：** `xcodebuild -workspace ios/Tachi.xcworkspace -scheme Tachi -sdk iphonesimulator -destination 'platform=iOS Simulator,id=<UDID>' build`，然后 `xcrun simctl install/launch`。模拟器直接能连宿主的 `127.0.0.1`（不需要任何转发），所以配对填 `http://127.0.0.1:9797` 就能跟 mockapi 联调。两个坑：
 
@@ -166,7 +168,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 **三个只在真机上才会撞的坑：**
 
 1. **本地网络权限**。第一次连局域网就弹（往往早于配对 —— 连 Metro 的 8081 也算）。点了「不允许」之后连接会被**静默**拦掉，和「电脑没开机」一模一样，很容易误判成服务端坏了。改回来在 设置 → 隐私与安全性 → 本地网络。`messageOfError` 在 iOS 上把那句话多带一条「或没给本地网络权限」，就是这个原因。
-2. **没有 `adb reverse`**。模拟器那一整套在真机上不存在：配对地址必须是**电脑的局域网地址**（桌面配对卡片的网卡候选就是为此），手机和电脑同一个 Wi-Fi，访客网络 / AP 隔离会直接断掉。
+2. **没有 `adb reverse`**。模拟器那一整套在真机上不存在：配对地址必须是**电脑的局域网地址**，或者手机也加入同一个 tailnet 后用那个 100.x —— 桌面配对卡片列出的候选就是这些，扫码会把它们全部带过去；手机和电脑同一个 Wi-Fi，访客网络 / AP 隔离会直接断掉。
 3. **Metro 可达性**。调试包从电脑的 8081 拉 JS：macOS 防火墙要允许 node 接受入站连接，点错了就是白屏（不是崩溃）。
 
 **一条更快的路：Expo Go。** 现在用的原生模块 Expo Go 都内置，`npx expo start` 扫码即可先看界面；代价是它用不了我们自己的 Info.plist（本地网络与明文由 Expo Go 自己决定），所以它验不了配对那条路。
@@ -188,7 +190,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **页面返回（`edgeBack`）同在 UI 线程**，判据与本行不同：起手点必须在**左缘 16pt** 以内（正文的左右内边距正好是 16，所以代码块、表格这些从 16 开始 —— 手势区与它们不重叠，在代码块上横划只滚代码块），往右 10px 才认领、竖着动 16px 就放弃；整屏跟手右移，松手过三成屏宽（或甩得够快）才补完动画返回。**手势层只盖住左缘那一条（`EdgeBackZone`），绝不铺满整屏**：铺满时它是列表的父级，手指一落下就先被它接住，`failOffsetY` 那句「竖着划就让给列表」不成立 —— 真机上的表现是**点按有效、整个列表滑不动**（连侧栏一起）。横向滚动抢不过它是同一件事的另一面。还有一条不在手势里、但读者一定感觉得到：**离开对话要退订**（`open` 的 `sessionId` 传空串）—— 否则那段在跑的对话每秒几十条增量还在往手机上灌。
 - **会话的增删改是广播，不是某一段会话的流**：桌面新建 / 删除 / **重命名 / 置顶**、手机建 / 删 / 置顶都发 `sessions_changed`，客户端重读 `/v1/sessions`，并把**打开着的那段**的标题等一并修掉（不修的话，桌面上改了名的对话在这里一直显示旧名）。手机上是「列表左滑 → 置顶 / 删除」，删除走原生确认框与 `DELETE /v1/sessions/{id}`，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
 - **新建会话在列表 header 的 `+`**：项目可选，无项目时手输工作目录（空 = `~/workspace`，`~` 由电脑展开）。桌面那份 `NewSession` 会把窗口切到新会话上，手机不走它 —— 协议不变量 7 要求手机不改变桌面正在显示的那一段。
-- **记住多台电脑，同时只连一台**：`src/api/storage.ts` 存的是「列表 + 当前下标」（`tachi.devices`），单台时代的 `tachi.pairing` 在第一次读取时迁进来并删掉。切换 = 断开那条 socket、清掉画面、重连；会话在电脑上，所以切过去看到的是另一台电脑的会话。设置页里能加、切、删、改名；**加完自动回设置页**（留在配对页会让人以为没成功）。列表里的名字默认取 `/v1/ping` 的 `hostname`（去掉 macOS 的 `.local`，规则在 `src/api/label.ts`），会话列表顶部那行「已连接 · X」显示的就是它；设置页里点铅笔就能改（行内编辑，不跳页）—— **只写这台手机的存储，不回传**：那台机器不知道自己被叫什么，清空输入恢复默认名（`hostname` 留在设备条目里，就是为这一步）。
+- **记住多台电脑，同时只连一台**：`src/api/storage.ts` 存的是「列表 + 当前下标」（`tachi.devices`），单台时代的 `tachi.pairing` 在第一次读取时迁进来并删掉。切换 = 断开那条 socket、清掉画面、重连；会话在电脑上，所以切过去看到的是另一台电脑的会话。**每台电脑存的是一串地址（`baseUrl` + `urls`）而不是一条**：连的时候并发 ping 全部地址、谁先应答用谁（`src/api/addresses.ts`），赢的那条写回 `baseUrl`。启动、切设备、回前台各校正一次 —— 换了网络（离家 / 回家）之后该走哪条只有比一次才知道，而这个校正**先按记住的地址连上再加一次赛**，不挡着界面出来。设置页里能加、切、删、改名；**加完自动回设置页**（留在配对页会让人以为没成功）。列表里的名字默认取 `/v1/ping` 的 `hostname`（去掉 macOS 的 `.local`，规则在 `src/api/label.ts`），会话列表顶部那行「已连接 · X」显示的就是它；设置页里点铅笔就能改（行内编辑，不跳页）—— **只写这台手机的存储，不回传**：那台机器不知道自己被叫什么，清空输入恢复默认名（`hostname` 留在设备条目里，就是为这一步）。
 - **会话信息页有四个页签**：概览（上下文 / 工作区 / 审批 / 用量 / **模型**）、MCP、Agent、定时任务。模型列表放最末：provider 可以很多，它一长就会把底下别的卡推得看不见；后三个面板里 MCP 与 Agent 是只读的，定时任务有三个动作（运行一次 / 暂停·恢复 / 删除）；**每个会话只自动问一次**（`asked`），带一个刷新键；能连 server、能授权、能建任务、能改计划的只有桌面。定时任务的三个动作与电脑同一个写入路径，改动由 `cron_changed` 广播到每一块屏（窗口收到 `agent:cron_changed` 重读，手机收到就重读面板）——**双端谁改的都立刻在另一边可见**，没有第二条同步路径。**别把「panels 为空」当成再拉一次的条件** —— 请求失败时那就是一个没有出口的重试循环：屏幕上 loading 翻个不停、电脑被轮番请求。失败的原因显示在面板里（`panelError`），重试只由刷新键发起。MCP 面板说「这段对话载入 x/y 个工具」—— 工具搜索下 y 可以是全部而 x 是零。
 - **切后台回来要重建 WebSocket**（`MobileSocket.forceReconnect`）：锁屏期间定时器被挂起、连接可能半开，而 `readyState` 仍报 OPEN——只调 `ensureConnected` 的表现为「回来一直显示连不上，杀掉重进才好」。
 - **运行中压缩会换会话 id，画面要跟着搬**：压缩成功时 agent 把历史写进**子会话**，这一轮剩下的部分接着在子会话里跑，而 `idle` 也发往子会话。桌面在同一刻换轨（`agent:session_switched`），手机收到 `session_moved`（`from` / `to` / `end`）后把打开的那个 id、WS 订阅、还没发出去的队列一起搬过去，并重读子会话的快照。不搬的表现是：画面停在压缩点、状态永远「在跑」、排队的话发不出去，只能退回列表再点进来。换轨发生在**一轮结束之后**——压缩那一刻就搬，会把正在写的消息从画面底下抽走。**队列靠通知里的 `end` 补发**：换订阅一定比 `idle` 晚一步，等那条事件是等不到的；规则与 `idle` 那条相同（自然结束就发，被打断/出错就留）。
@@ -205,7 +207,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 | --- | --- | --- |
 | 协议与桌面那半边 | Go 测试（`httptest` 打接口）+ 冒烟场景 `mobile-api`（真进程上打 HTTP/WebSocket，`make desktop-smoke ARGS="-run mobile-api -v"`） | 全自动 |
 | 无头宿主（没有窗口的那条路） | `make itest-headless`：编 `-tags headless` 的真二进制、起进程、HTTP 建会话、WS 收一轮、重订阅核对记录，外加锁与鉴权 | 全自动（不需要 GUI，CI 能跑） |
-| 手机端纯逻辑 | `npx tsc --noEmit` + `npm test`（jest-expo；`src/state/chat.test.ts` 钉的是事件归并和错误文案那层纯函数） | 全自动 |
+| 手机端纯逻辑 | `npx tsc --noEmit` + `npm test`（jest-expo；`src/state/chat.test.ts` 钉的是事件归并和错误文案那层纯函数，`src/api/addresses.test.ts` 钉的是「并发试地址、谁先应答用谁」） | 全自动 |
 | 手机端界面 | **web 目标**：`npm run web`，浏览器里自己点、截图、看 console 与网络 | 全自动（agent 用浏览器工具） |
 | 模拟器上的真界面 | `adb exec-out screencap -p > x.png` 看一眼；改代码后 Metro 会热重载，不用重装 | 全自动 |
 | 触摸交互、扫码、手感、锁屏重连 | Maestro 驱动点击（`~/.local/maestro/bin/maestro`，装在仓库外） | 半自动 |
@@ -242,4 +244,4 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。桌面那一半的监听在 `agentEvents.ts`（`useAgentStream`）：非 `desktop` 的 origin 追加气泡，`steer` 的走 `injectSteerVisual`（切开正在流的那一段）。**这个回声没有冒烟场景**——驱动没法扮演另一块屏；改它只能靠单测与手验。
 - **「保持唤醒」的写入方只有一个**（`desktopApp.setAwake`，`desktop/awake.go`）：手机这条 `POST /v1/awake` 和桌面托盘的勾选、以及到点自动关，走的是同一个函数，改完都广播 `awake_changed`。所以它没有「按会话寻址」的那份孪生实现 —— 它不是会话的事。资源的那一半跟着进程：断言在进程里，进程没了断言就没了，所以状态不落盘、重启后永远是关（时长偏好落在那台电脑的 `desktop_ui.json` 里）。**无头宿主同样有它**：`awake` 在 `newDesktopApp` 里建，托盘只是它在有窗口时的另一半界面。
 - **配对卡不是配置叶子**：`SettingsSchemaVO.MobilePairing` 只回答「画在哪个分组」（`catExtend`），卡片自己的数据来自 `GetMobilePairing` 这个绑定，二维码渲染的是后端给的 `payload`（手机端 `qr.ts` 解析同一个形状，两边不得各拼一份）。令牌默认掩码，`RegenerateMobileToken` 返回 `ok` 或原因，卡片换新后重新读一次。
-- **配对地址是「候选 + 一个选择」**：`mobileLANCandidates` 列出这台机器上手机够得着的 IPv4（物理网卡优先；`utun*` 的 VPN 地址、`bridge*`/`vmenet*`/`docker*` 的虚拟网络、链路本地地址都不算），有多于一个时候卡片给一个下拉框。选择存进 `mobile.json` 的 `interface`——按**接口名**而不是地址存，DHCP 换了地址也不会指到一个没人持有的 IP；空 = 自动（候选里的第一个）。选中的接口没了就退回自动。`SetMobilePairingHost` 只接受当前候选里的接口名。
+- **配对地址是「一串地址 + 一个优先项」**：`mobileLANCandidates` 列出这台机器上手机够得着的 IPv4——物理网卡（`en*`/`eth*`/`wl*`）优先，再加**点对点网卡上 `100.64.0.0/10` 的地址**（那是 Tailscale 的号段：手机只要在同一个 tailnet 里，家里 NAS 和路上都能连；macOS 独立版 App 的这个地址就挂在一个普通 `utun10` 上，靠接口名分辨不出来，所以认号段）。`utun*` 上别的地址（公司 VPN 的 10.x）、`bridge*`/`vmenet*`/`docker*` 的虚拟网络、链路本地地址都不算。**一个接口只决定「谁排第一」**：选择存进 `mobile.json` 的 `interface`（按接口名而不是地址存，DHCP 换了地址也不会指到一个没人持有的 IP；空 = 自动），其余地址一起进 `urls`，跟着二维码和 `/v1/ping` 下发。`SetMobilePairingHost` 只接受当前候选里的接口名。手机端并发试全部地址、谁先应答用谁，见 [mobile-protocol.md](mobile-protocol.md) 不变量 11。

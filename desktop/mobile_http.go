@@ -14,17 +14,38 @@ import (
 // there is no compatibility negotiation in V1.
 const mobileVersion = "0.1"
 
+// pairingURLs is every address a phone can dial to reach this listener, primary first.
+//
+// It exists so the phone can SELF-HEAL: an address appears or disappears when a laptop joins a
+// different network or starts Tailscale, and a phone that paired yesterday would otherwise never
+// learn the new one. Ping is the one call every connection makes, so the list rides on it.
+func (m *mobileServer) pairingURLs() []string {
+	cands := mobileLANCandidates(m.pairingPort())
+	want := ""
+	if st, ok, _ := readMobileTokenFile(); ok {
+		want = st.Interface
+	}
+	chosen := ""
+	if c, ok := chooseMobileCandidate(cands, want); ok {
+		chosen = c.URL
+	}
+	return mobilePairingURLs(cands, chosen)
+}
+
 func (m *mobileServer) handlePing(w http.ResponseWriter, r *http.Request) {
 	// No token: the pairing page is verifying the address AND the token, so it has to be able
 	// to reach something first. It reveals nothing a LAN scan would not.
 	// hostname is what a phone with several saved computers labels this one with. It is the
 	// MACHINE's name, not the product's: "name" answers "what is this app", which is the same string
 	// on every install.
+	// urls is the same set the QR code carried (see pairingURLs): a phone that has one address uses
+	// this to learn the rest, so pairing once is enough even as networks come and go.
 	mobileWriteJSON(w, map[string]any{
 		"ok":       true,
 		"name":     "tachi-desktop",
 		"hostname": m.hostname,
 		"version":  mobileVersion,
+		"urls":     m.pairingURLs(),
 	})
 }
 

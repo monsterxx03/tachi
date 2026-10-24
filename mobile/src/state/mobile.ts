@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
+import { fastestPairing, nextAddress, normalizeAddresses } from '../api/addresses';
 import { loadDevices, saveDevices, type Device } from '../api/storage';
 import { deviceLabel } from '../api/label';
 import type { AwakeState, Panels, ProjectRef, SessionSummary } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
+
+/**
+ * 掉线触发的「重新比地址」节流。一次掉线会连着重试好几次（1s/2s/4s…），而一次探测最长要
+ * 2.5 秒 —— 不节流的话重连期间的探测会自己叠起来。
+ */
+const DROP_HEAL_GAP_MS = 5_000;
+/** 探测全失败时换地址的节流。它比探测间隔长：换过去之后要留出重连的时间，否则会来回跳。 */
+const ROTATE_GAP_MS = 12_000;
 
 // 这一层只管副作用（连接、存储、请求）；事件的归并是纯函数，在 ./chat 里，单独测
 export { applyEvent, emptyChat, emptyLive, messageOfError } from './chat';
@@ -25,12 +34,17 @@ export interface MobileApi {
   openId: string | null;
   chat: ChatState;
   error: string | null;
-  /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）与原始 hostname */
-  pair: (p: Pairing, meta?: { label?: string; hostname?: string }) => Promise<void>;
+  /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）、原始 hostname，以及那台电脑的全部地址 */
+  pair: (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => Promise<void>;
   /** 换一台电脑：断开这一条、清掉画面，再连过去 */
   switchDevice: (index: number) => Promise<void>;
   /** 给某一台改个名字：只写这台手机上的存储，不通知那台机器（协议里没有这个端点） */
   renameDevice: (index: number, label: string) => Promise<void>;
+  /**
+   * 手动指定这台电脑走哪条地址；传 null = 交回自动（会重新比一次）。
+   * 手动选中的那条不会被自动切换改掉，直到读者选回自动。
+   */
+  selectAddress: (index: number, url: string | null) => Promise<void>;
   /** 从列表里删掉一台；删的是当前那台时会顺位切到剩下的 */
   removeDevice: (index: number) => Promise<void>;
   unpair: () => Promise<void>;
@@ -130,18 +144,117 @@ export function useMobile(): MobileApi {
     [pairing],
   );
 
+  // 列表与当前项都是 ref 的读者要用的最新值
+  const devicesRef = useRef<Device[]>([]);
+  devicesRef.current = devices;
+  const activeDeviceRef = useRef(0);
+  activeDeviceRef.current = activeDevice;
+
+  // 每次「这一台电脑」被重新确定（启动 / 切设备 / 回前台 / 掉线）就 +1。地址探测要几百毫秒，
+  // 回来时读者可能已经切到另一台了 —— 那次结果只属于上一台，不能写回去。
+  const connectSeq = useRef(0);
+  // 上一次「掉线后重新比地址」/「没探测结果就换地址」的时刻（各自节流）
+  const dropHealAt = useRef(0);
+  const rotateAt = useRef(0);
+
+  /**
+   * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
+   *
+   * 一台电脑的地址是会变的：笔记本换到另一个网络、Tailscale 起来了/停了、DHCP 换了 IP。
+   * 手机不该要求用户知道这些 —— 它自己比一次就知道现在该走哪条。
+   *
+   * 它**不阻塞**界面：调用方先用记住的地址连，这条在后台把结果换上去（真的不用换时什么也不做）。
+   */
+  /** 把「这台电脑现在走哪条地址」写进存储（下次启动从这里开始试，但仍然会并发复核）。 */
+  const rememberAddress = useCallback(async (dev: Pairing, baseUrl: string, urls: string[]) => {
+    const list = devicesRef.current.slice();
+    const at = list.findIndex((d) => d.token === dev.token && d.baseUrl === dev.baseUrl);
+    if (at < 0) return;
+    list[at] = { ...list[at], baseUrl, urls };
+    setDevices(list);
+    await saveDevices(list, activeDeviceRef.current);
+  }, []);
+
+  /**
+   * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
+   *
+   * `onNothing` 是「一条都应答不了」时的出口：网络烂的时候两条路可能都来不及应答，而那时
+   * 留在原地是最坏的选择（人可能已经离开家了）。调用方用它换下一条地址去试。
+   *
+   * 手动选定过地址的电脑（`pinned`）不做任何自动切换 —— 那是读者明确说过的意思。
+   */
+  const heal = useCallback(
+    async (dev: Pairing, onNothing?: () => void) => {
+      if (dev.pinned) return;
+      const seq = ++connectSeq.current;
+      const picked = await fastestPairing(dev);
+      if (seq !== connectSeq.current) return;
+      if (!picked) {
+        onNothing?.();
+        return;
+      }
+      const { pairing: next, urls } = picked;
+      await rememberAddress(dev, next.baseUrl, urls);
+      // 换了一条才重建连接：同一条地址（只是地址表变新了）不该断开正在用的那条 socket
+      if (next.baseUrl !== dev.baseUrl) setPairing(next);
+    },
+    [rememberAddress],
+  );
+
+  /**
+   * 换到下一条地址。这是「一条都应答不了」时的兜底：明知这次探不出来，也要真的去试另一条 ——
+   * 只在家里存在的那条地址，人离开家之后是永远不会应答的。
+   */
+  const rotate = useCallback(
+    async (dev: Pairing) => {
+      if (dev.pinned) return;
+      const urls = normalizeAddresses(dev);
+      const next = nextAddress(urls, dev.baseUrl);
+      if (!next) return;
+      await rememberAddress(dev, next, urls);
+      setPairing({ ...dev, baseUrl: next, urls });
+    },
+    [rememberAddress],
+  );
+
+  /**
+   * 掉线之后重新比一次地址。
+   *
+   * 这条是「在 App 里换网络」的唯一出路：从家里的 Wi-Fi 走到 5G、或者反过来，能连的那条地址
+   * 变了，而 socket 只会拿着旧的那条一直重试。启动/回前台那两处比不到这件事 —— 人一直看着屏幕
+   * 的时候，App 根本没离开过前台。
+   */
+  const healOnDrop = useCallback(
+    (dev: Pairing) => {
+      if (dev.pinned) return;
+      const now = Date.now();
+      if (now - dropHealAt.current < DROP_HEAL_GAP_MS) return;
+      dropHealAt.current = now;
+      void heal(dev, () => {
+        // 一条都没应答：别守着旧地址了，按顺序换下一条真的去试
+        if (now - rotateAt.current < ROTATE_GAP_MS) return;
+        rotateAt.current = now;
+        void rotate(dev);
+      });
+    },
+    [heal, rotate],
+  );
+
   // 启动时读一次「记住的电脑」：列表 + 当前那一台
   useEffect(() => {
     void loadDevices().then((book) => {
       setDevices(book.devices);
       setActiveDevice(book.active);
-      setPairing(book.devices[book.active] ?? null);
+      // 同步给 ref：heal 可能在这一帧的渲染之前就跑完，它要用这个下标写回存储
+      activeDeviceRef.current = book.active;
+      const first = book.devices[book.active] ?? null;
+      setPairing(first);
       setReady(true);
+      // 记住的地址是「上一次赢的那条」。换了网络之后它可能已经不是最快的，甚至根本不通，
+      // 所以在后台再比一次 —— 不挡着界面出来，赢了就换过去。
+      if (first) void heal(first);
     });
-  }, []);
-  // 列表与当前项都是 ref 的读者要用的最新值
-  const devicesRef = useRef<Device[]>([]);
-  devicesRef.current = devices;
+  }, [heal]);
 
   // 有配对就拉列表并挂上连接
   useEffect(() => {
@@ -386,6 +499,8 @@ export function useMobile(): MobileApi {
         void reload(openIdRef.current);
         void api.listSessions(pairing).then((r) => setSessions(r.sessions));
       },
+      // 掉线（含心跳判死）：先别急着重连到旧地址，比一遍 —— 赢的那条会通过 setPairing 换上去
+      onDisconnected: () => healOnDrop(pairing),
     });
     socketRef.current = sock;
     sock.ensureConnected();
@@ -397,7 +512,7 @@ export function useMobile(): MobileApi {
       sock.close();
       socketRef.current = null;
     };
-  }, [pairing, reload]);
+  }, [pairing, reload, healOnDrop]);
 
   /** 断开当前这一屏：换电脑 / 删设备之后都不该留着上一台的会话 */
   const resetView = useCallback(() => {
@@ -420,8 +535,13 @@ export function useMobile(): MobileApi {
         return;
       }
       const next = list[index] ?? list[0];
-      await saveDevices(list, list.indexOf(next));
-      setActiveDevice(list.indexOf(next));
+      const at = list.indexOf(next);
+      await saveDevices(list, at);
+      setActiveDevice(at);
+      // 同上：heal 写回存储时读的是这个 ref，不能等一次渲染
+      activeDeviceRef.current = at;
+      // 每一台都可能不止一条地址：连之前（重新）比一次，赢的那条会被写回存储。
+      void heal(next);
       if (next.baseUrl === pairing?.baseUrl && next.token === pairing?.token) {
         // 已经是这一台：不重建连接（重连一次要重读快照，没必要）
         setPairing(next);
@@ -430,19 +550,22 @@ export function useMobile(): MobileApi {
       resetView();
       setPairing(next);
     },
-    [pairing, resetView],
+    [pairing, resetView, heal],
   );
 
-  // 同一台电脑再配一次（换了令牌）按地址去重：列表里不该出现两条同一个地址
+  // 同一台电脑再配一次（换了令牌或换了地址）按令牌去重：列表里不该出现两条同一个地址
   const pair = useCallback(
-    async (p: Pairing, meta?: { label?: string; hostname?: string }) => {
+    async (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => {
+      const urls = normalizeAddresses({ baseUrl: p.baseUrl, urls: meta?.urls });
       const dev: Device = {
         ...p,
+        baseUrl: urls[0] ?? p.baseUrl,
+        urls: urls.length > 1 ? urls : undefined,
         label: meta?.label || deviceLabel({}, p.baseUrl),
         hostname: meta?.hostname,
       };
       const list = devicesRef.current.slice();
-      const at = list.findIndex((d) => d.baseUrl === p.baseUrl);
+      const at = list.findIndex((d) => d.token === p.token || d.baseUrl === p.baseUrl);
       if (at >= 0) list[at] = dev;
       else list.push(dev);
       await activate(list, at >= 0 ? at : list.length - 1);
@@ -473,6 +596,26 @@ export function useMobile(): MobileApi {
       await saveDevices(list, activeDevice);
     },
     [activeDevice],
+  );
+
+  const selectAddress = useCallback(
+    async (index: number, url: string | null) => {
+      const list = devicesRef.current.slice();
+      const dev = list[index];
+      if (!dev) return;
+      const urls = normalizeAddresses(dev);
+      list[index] = {
+        ...dev,
+        baseUrl: url ?? dev.baseUrl,
+        urls: urls.length > 1 ? urls : undefined,
+        // null = 交回自动；heal 会立刻比一次，把能动的那条找回来
+        pinned: url ? true : undefined,
+      };
+      rotateAt.current = 0;
+      dropHealAt.current = 0;
+      await activate(list, index);
+    },
+    [activate],
   );
 
   const removeDevice = useCallback(
@@ -512,13 +655,16 @@ export function useMobile(): MobileApi {
     socketRef.current?.forceReconnect();
     await reload(openIdRef.current);
     if (!pairing) return;
+    // 回前台最常见的变化是「网络换了」（离开家 / 回到家）：比一次才知道该走哪条地址。
+    // 它不挡着下面的读取 —— 真要换地址，那次 setPairing 会自己把连接重建一遍。
+    void heal(pairing);
     try {
       const r = await api.listSessions(pairing);
       setSessions(r.sessions);
     } catch {
       // 下一次刷新再说
     }
-  }, [reload, pairing]);
+  }, [reload, pairing, heal]);
 
   /**
    * 上滑翻页：游标是画面上最旧一条的记录序号（协议里那条：不是时间戳 —— 时间戳会撞）。
@@ -836,6 +982,7 @@ export function useMobile(): MobileApi {
     pair,
     switchDevice,
     renameDevice,
+    selectAddress,
     removeDevice,
     unpair,
     refresh,
