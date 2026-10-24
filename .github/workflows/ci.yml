@@ -67,11 +67,13 @@ jobs:
         run: CGO_ENABLED=0 go build -tags headless -trimpath -o /tmp/tachi-headless .
 
   # Integration tests (docs/2026-07-31-tui-integration-test.md): `make itest`
-  # runs the four suites in parallel (-j4) — mockllm contract tests, itest/run
+  # runs the five suites in parallel (-j5) — mockllm contract tests, itest/run
   # (-p pipe, real binary), itest/tui (in-process bubbletea: real Model +
-  # real AIAgent), itest/acp (real binary + ACP SDK) — each with ginkgo -p
-  # spec parallelism (ITEST_PROCS=4). Specs own isolated homes/mocks, so the
-  # whole thing is hermetic; run/acp build the real binary once per suite.
+  # real AIAgent), itest/acp (real binary + ACP SDK), itest/headless (the
+  # desktop module's no-window host: real binary, real HTTP/WS, no GUI and no
+  # cgo) — the first four with ginkgo -p spec parallelism (ITEST_PROCS=4).
+  # Specs own isolated homes/mocks, so the whole thing is hermetic;
+  # run/acp build the real binary once per suite.
   integration:
     runs-on: ubuntu-latest
     steps:

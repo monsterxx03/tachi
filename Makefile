@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux build-linux-arm64 test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp desktop-smoke headless headless-linux headless-linux-arm64
+.PHONY: build build-debug build-linux build-linux-arm64 test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp itest-headless desktop-smoke headless headless-linux headless-linux-arm64
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -136,7 +136,7 @@ GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 ITEST_PROCS ?= 4
 
 itest: web-check
-	$(MAKE) -j4 itest-mockllm itest-run itest-tui itest-acp
+	$(MAKE) -j5 itest-mockllm itest-run itest-tui itest-acp itest-headless
 
 # Contract + unit tests for the mock LLM server (no integration build tag
 # needed — the contract tests run under plain `go test` too).
@@ -151,6 +151,13 @@ itest-tui: itest-mockllm
 
 itest-acp: itest-mockllm
 	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/acp
+
+# itest-headless 驱动无头宿主的**真二进制**（`-tags headless`，CGO_ENABLED=0，不需要 GUI）：
+# 起一个进程、HTTP 建会话、WS 收一轮、再重订阅核对记录。go test 而不是 ginkgo ——
+# 三个用例不需要 spec 并行，而编译一次二进制比调度并发更贵。
+# -count=1：这条路最怕的是缓存把「这次没跑」说成绿的。
+itest-headless: itest-mockllm
+	go test -tags integration -count=1 ./itest/headless
 
 # desktop-smoke drives the REAL desktop app (see docs/agents/desktop.md): a throwaway
 # bundle, scripted model, and a driver that asserts what the UI shows. Not part of

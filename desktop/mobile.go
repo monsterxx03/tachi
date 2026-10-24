@@ -125,6 +125,15 @@ func (m *mobileServer) setToken(token string) {
 	}
 }
 
+// listenAddr is the address the listener actually bound. It differs from the configured string when
+// the port is 0 (the OS picks one), which is what a test or a container wants to ask for.
+func (m *mobileServer) listenAddr() string {
+	if m == nil || m.ln == nil {
+		return ""
+	}
+	return m.ln.Addr().String()
+}
+
 func (m *mobileServer) listenError() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

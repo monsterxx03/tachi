@@ -83,7 +83,7 @@ func main() {
 		log.Fatalf("tachi: cannot listen on %s: %s", cfg.Mobile.MobileAddress(), reason)
 	}
 
-	log.Printf("tachi: headless host up, phone interface on %s", cfg.Mobile.MobileAddress())
+	log.Printf("tachi: headless host up, phone interface on %s", srv.listenAddr())
 	// The one-host lock (host_lock.go) is already held: another entry point that tries this data
 	// directory while this process runs is refused, so nothing else can write these conversations.
 	log.Print("tachi: this process owns ~/.tachi while it runs; a second host (the desktop app or " +
