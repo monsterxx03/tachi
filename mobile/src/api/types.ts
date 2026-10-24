@@ -250,4 +250,23 @@ export type MessageOrigin = 'desktop' | 'mobile' | 'badge' | 'cron';
 /** 手机发出去的命令 */
 export type SendMode = 'send' | 'steer' | 'interrupt';
 
+/**
+ * 手机传上去、宿主存进这段会话目录里的一个文件（`POST /v1/sessions/{id}/files` 的答案）。
+ *
+ * `name` 是宿主**存下来的**名字（重名会加 -1、-2），发送时手机递的就是它 —— 协议里从不出现
+ * 路径：令牌不能等于「读那台机器上的任意文件」。`kind` 是 @ 展开会把它当成什么
+ * （image / text / binary），手机只拿它挑个图标。
+ */
+export interface UploadedFile {
+  name: string;
+  size: number;
+  kind: string;
+}
+
+/** 待发送队列里的一条：一段话 + 可选的文件（排队时它们是一起发生的事）。 */
+export interface PendingMessage {
+  text: string;
+  files: UploadedFile[];
+}
+
 export type PermissionDecision = 'allow_once' | 'deny';

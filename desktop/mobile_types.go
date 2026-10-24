@@ -76,6 +76,16 @@ type mobileAttachment struct {
 	Downloadable bool   `json:"downloadable"`
 }
 
+// mobileUploadVO is what one upload answers: the name the server STORED the file under (which is
+// what the send request then cites — never a path), its size, and what @-expansion will make of
+// it. kind is the same vocabulary the composer's dropped-file rows use (image / text / binary), so
+// a phone can pick an icon without deciding anything for itself.
+type mobileUploadVO struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Kind string `json:"kind"`
+}
+
 type mobileWorkspace struct {
 	Primary    string   `json:"primary"`
 	Additional []string `json:"additional"`

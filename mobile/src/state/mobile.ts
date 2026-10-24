@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
+import { api, ApiError, normalizeSnapshot, uploadCapMb, type Pairing } from '../api/client';
 import { fastestPairing, nextAddress, normalizeAddresses } from '../api/addresses';
 import { loadDevices, saveDevices, type Device } from '../api/storage';
 import { deviceLabel } from '../api/label';
-import type { AwakeState, Panels, ProjectRef, SessionSummary } from '../api/types';
+import type { PickedFile } from '../api/pick';
+import type { AwakeState, Panels, PendingMessage, ProjectRef, SessionSummary, UploadedFile } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
+import { displayOf } from './attach';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
 
 /**
@@ -51,15 +53,24 @@ export interface MobileApi {
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
   close: () => void;
-  /** true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。 */
-  send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<boolean>;
+  /**
+   * true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。
+   * `files` 是已经传上去的资料（uploadFile 换回来的名字），随这条消息一起交给那台电脑。
+   */
+  send: (text: string, mode: 'send' | 'steer' | 'interrupt', files?: UploadedFile[]) => Promise<boolean>;
+  /**
+   * 把一个本地文件传给那台电脑，换回它存下来的名字。成功后由调用方把它挂在待发消息上。
+   * 失败回原因（屏幕小，那句原因就是读者唯一能行动的东西），不弹顶部横幅 —— 附件是输入框
+   * 自己的事，传不上去不该把整段对话的状态盖住。
+   */
+  uploadFile: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
   /**
    * 这一段对话的待发送队列（桌面那份「待发送」的手机版）。运行中发的消息进这里，
    * 不直接进对话 —— 否则会插进正在流的这一轮里，而且和桌面看到的不是一回事。
    */
-  pending: string[];
+  pending: PendingMessage[];
   /** 运行中才该用它；不在跑时调用会立刻发出去 */
-  queueMessage: (text: string) => void;
+  queueMessage: (text: string, files?: UploadedFile[]) => void;
   dropPending: (index: number) => void;
   clearPending: () => void;
   /** 「立即发送 · 打断」：停掉这一轮，等它真的结束了再把队列发出去 */
@@ -83,6 +94,8 @@ export interface MobileApi {
   setSkipApproval: (skip: boolean) => Promise<void>;
   /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
   deleteSession: (id: string) => Promise<void>;
+  /** 改标题。走桌面同一条写入路径，成功后 sessions_changed 落到每一块屏上（含桌面上那一行）。 */
+  renameSession: (id: string, title: string) => Promise<void>;
   /** 置顶 / 取消置顶。位置由服务端广播的 sessions_changed 落到每一块屏上。 */
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
@@ -118,8 +131,8 @@ export function useMobile(): MobileApi {
   const [cronVersion, setCronVersion] = useState(0);
   const [awake, setAwakeState] = useState<AwakeState | null>(null);
   // 待发送队列按会话存：切走再回来，没发出去的那句还在（桌面也是这么做的）
-  const [pending, setPending] = useState<Record<string, string[]>>({});
-  const pendingRef = useRef<Record<string, string[]>>({});
+  const [pending, setPending] = useState<Record<string, PendingMessage[]>>({});
+  const pendingRef = useRef<Record<string, PendingMessage[]>>({});
   // 「立即发送·打断」之后即使这一轮以 interrupted 结束，也要把队列发出去
   const forceFlush = useRef<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
@@ -728,8 +741,10 @@ export function useMobile(): MobileApi {
   // send answers whether the message actually went out. The composer needs that answer to
   // keep the reader's words on a refusal: the server's reason is on screen (the banner), and a
   // box that emptied itself leaves them retyping what it just explained.
-  // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）
-  const echoLocal = useCallback((text: string) => {
+  // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）。
+  // 气泡里是「自己的话 + 文件名」，和服务端写进记录的那一句一致（见 ./attach）。
+  const echoLocal = useCallback((text: string, files: UploadedFile[] = []) => {
+    const shown = displayOf(text, files.map((f) => f.name));
     setChat((st) =>
       st.snapshot
         ? {
@@ -738,7 +753,7 @@ export function useMobile(): MobileApi {
               ...st.snapshot,
               messages: [
                 ...st.snapshot.messages,
-                { index: -1, role: 'user', content: text, displayContent: text },
+                { index: -1, role: 'user', content: shown, displayContent: shown },
               ],
             },
           }
@@ -747,38 +762,60 @@ export function useMobile(): MobileApi {
   }, []);
 
   const send = useCallback(
-    async (text: string, mode: 'send' | 'steer' | 'interrupt'): Promise<boolean> => {
+    async (text: string, mode: 'send' | 'steer' | 'interrupt', files: UploadedFile[] = []): Promise<boolean> => {
       let ok = false
       await withError(async () => {
         const id = openIdRef.current;
         if (!pairing || !id) return
-        await api.send(pairing, id, text, mode);
+        await api.send(pairing, id, text, mode, files.map((f) => f.name));
         ok = true
-        echoLocal(text);
+        echoLocal(text, files);
       })
       return ok
     },
     [pairing, withError, echoLocal],
   );
 
+  const uploadFile = useCallback(
+    async (f: PickedFile): Promise<{ file?: UploadedFile; error?: string }> => {
+      const id = openIdRef.current;
+      if (!pairing || !id) return { error: '没有打开的对话' };
+      // 明显太大的不必传完再被拒：上限是那台电脑报回来的那个数（见 uploadCapMb）
+      const cap = uploadCapMb();
+      if (cap > 0 && f.size && f.size > cap * 1024 * 1024) {
+        return { error: `文件太大（上限 ${cap} MB）` };
+      }
+      try {
+        const { file } = await api.uploadFile(pairing, id, f);
+        return { file };
+      } catch (e) {
+        return { error: messageOfError(e) };
+      }
+    },
+    [pairing],
+  );
+
   // 队列的三个原子操作。pendingRef 是事件回调能看到的「最新值」——render 闭包里的
   // state 在回调里是旧的。
-  const writePending = useCallback((id: string, list: string[]) => {
+  const writePending = useCallback((id: string, list: PendingMessage[]) => {
     const next = { ...pendingRef.current, [id]: list };
     pendingRef.current = next;
     setPending(next);
   }, []);
-  const takePending = useCallback((id: string): string => {
-    const text = (pendingRef.current[id] ?? []).join('\n\n');
-    if (text) writePending(id, []);
-    return text;
+  // 队列出去的时候合成一条：几段话之间空一行，文件按排队顺序连起来（附件跟着那条消息走）
+  const takePending = useCallback((id: string): PendingMessage => {
+    const list = pendingRef.current[id] ?? [];
+    const text = list.map((p) => p.text).filter(Boolean).join('\n\n');
+    const files = list.flatMap((p) => p.files);
+    if (text || files.length) writePending(id, []);
+    return { text, files };
   }, [writePending]);
 
-  const queueMessage = useCallback((text: string) => {
+  const queueMessage = useCallback((text: string, files: UploadedFile[] = []) => {
     const id = openIdRef.current;
     if (!id) return;
     const list = pendingRef.current[id] ?? [];
-    writePending(id, [...list, text]);
+    writePending(id, [...list, { text, files }]);
   }, [writePending]);
 
   const dropPending = useCallback((index: number) => {
@@ -798,11 +835,11 @@ export function useMobile(): MobileApi {
   const flushPending = useCallback(async (mode: 'send' | 'steer'): Promise<void> => {
     const id = openIdRef.current;
     if (!pairing || !id) return;
-    const text = takePending(id);
-    if (!text) return;
+    const { text, files } = takePending(id);
+    if (!text && files.length === 0) return;
     await withError(async () => {
-      await api.send(pairing, id, text, mode);
-      echoLocal(text);
+      await api.send(pairing, id, text, mode, files.map((f) => f.name));
+      echoLocal(text, files);
     });
   }, [pairing, takePending, withError, echoLocal]);
 
@@ -885,6 +922,16 @@ export function useMobile(): MobileApi {
     (id: string, pinned: boolean) =>
       withError(async () => {
         if (pairing) await api.setPinned(pairing, id, pinned);
+      }),
+    [pairing, withError],
+  );
+
+  // 改标题和置顶是同一类事：它是列表里那一行的字段，写完之后由 sessions_changed 落到每一块屏。
+  // 这里不先改本地那一份 —— 广播马上就到，两份状态各改一次就该对不上了。
+  const renameSession = useCallback(
+    (id: string, title: string) =>
+      withError(async () => {
+        if (pairing) await api.renameSession(pairing, id, title);
       }),
     [pairing, withError],
   );
@@ -994,6 +1041,7 @@ export function useMobile(): MobileApi {
     open,
     close,
     send,
+    uploadFile,
     pending: openId ? pending[openId] ?? [] : [],
     queueMessage,
     dropPending,
@@ -1007,6 +1055,7 @@ export function useMobile(): MobileApi {
     setSkipApproval,
     deleteSession,
     setPinned,
+    renameSession,
     createSession,
     loadPanels,
     awake,

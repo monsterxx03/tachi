@@ -38,7 +38,7 @@
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/v1/ping` | — | `{ok, name, hostname, version, urls}`，配对页用它验证地址与令牌 |
+| GET | `/v1/ping` | — | `{ok, name, hostname, version, urls, maxUploadMb}`，配对页用它验证地址与令牌 |
 | GET | `/v1/sessions` | — | `{sessions: [SessionSummary]}` |
 | POST | `/v1/sessions` | `{projectId?, workingDir?}` | `{session: SessionSummary}` |
 | GET | `/v1/projects` | — | `{projects: [ProjectRef]}`，新建会话时的项目下拉框 |
@@ -46,10 +46,12 @@
 | GET | `/v1/awake` | — | `{awake: AwakeState}`，这台电脑的「保持唤醒」开关 |
 | POST | `/v1/awake` | `{on, durationMin?}` | `{awake: AwakeState}`，改完立刻广播 |
 | GET | `/v1/sessions/{id}/page` | `?before=<index>&limit=<n>` | `{messages: [Message], hasMore, session}` |
-| POST | `/v1/sessions/{id}/messages` | `{text, mode}` | `{accepted: true}` |
+| POST | `/v1/sessions/{id}/files` | multipart，一个 `file` 部件 | `{file: UploadedFile}`，把文件存进这段会话自己的目录 |
+| POST | `/v1/sessions/{id}/messages` | `{text, mode, attachments?}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/stop` | — | `{accepted: true}` |
 | DELETE | `/v1/sessions/{id}` | — | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/pin` | `{pinned}` | `{accepted: true}` |
+| POST | `/v1/sessions/{id}/title` | `{title}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/provider` | `{name}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/skip-approval` | `{skip}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/permissions/{toolId}` | `{decision}` | `{accepted: true}` |
@@ -60,13 +62,18 @@
 | POST | `/v1/cron/{id}/pause` | `{paused}` | `{accepted: true}` |
 | DELETE | `/v1/cron/{id}` | — | `{accepted: true}` |
 
-`mode` 是 `send` / `steer` / `interrupt`；`decision` 是 `allow_once` / `deny`。
+`mode` 是 `send` / `steer` / `interrupt`；`decision` 是 `allow_once` / `deny`。`attachments` 是上传时拿到的**名字**（不是路径），见下面「附件」那条。
 
 - **翻页游标是记录序号**：`before` 传上一次拿到的最旧一条的 `index`，服务端返回序号**严格小于**它的那 `limit` 条。不用时间戳 —— 消息没有自己的 id，而时间戳会撞，同一刻的两条落在页边界上会被整段跳过。
 - **新建会话不改变桌面正在看的那一段**（不变量 7）：`projectId` 走项目的目录快照；没有项目时按 `workingDir` 起一段，空 = `~/workspace`，`~` 与 `~/x` 由**那台电脑**展开（手机没有文件选择器），目录不存在会建出来。新建成功同样广播 `sessions_changed`。
+- **重命名与桌面同一条写入方**（`RenameSession`），成功即广播 `sessions_changed`：标题是行在列表里的身份，两块屏都靠重读它 —— 手机上改的名字，桌面上那一行立刻跟着变（反过来也一样）。空标题是 `400 bad_request`；标题是装饰性的，所以只读会话也改得。
 - **置顶是列表的事实**：`pinned` 写进会话记录，成功即广播 `sessions_changed` —— 两块屏的次序都由重新读列表得出，不各算一份。
 - **`hostname` 是那台机器自己的名字**（`os.Hostname()`，见 `mobile_http.go`），它和 `name` 不是一回事：`name` 是产品名，每台安装都一样。「记住多台电脑」的手机拿它当默认显示名（去掉 macOS 的 `.local`），用户可以在手机上改名 —— **改名只在手机上生效，协议里没有写回它的端点**。
 - **附件端点不接受路径**：`attachmentId` 就是那次 `SendFile` 调用的 id，只回记录里反查，查不到就是 404。记录里的 `path` 可能是相对的，按那次调用所属会话的工作目录解析。这样「令牌 = 任意文件读取」这个洞从一开始就不存在。
+- **手机发文件是两步，而且第二步只认名字。** 上传（`POST .../files`）把字节写进**这段会话自己的目录**（`uploads/`，与 `pasted/` 并排：删会话一起删，绝不落进用户的工作区），回的是它存下来的 `name`、大小和 `kind`。发送时 `attachments` 递的就是那个 `name` —— 服务端只在**这段会话的 `uploads/` 里**按名字解析，递一个 `../../x` 或一个不存在的名字都是拒绝（`bad_request` / `no_such_upload`），不是跳过。所以令牌仍然不等于「读那台机器上任意文件」。
+- **文件不经过另一条路进模型**：解析出来的名字变成一句 `@<绝对路径>`，和桌面上拖进来的文件是同一个引用，展开（文本内联 / 图片变多模态 / 其它让 agent 用工具读）走 `atfile.Expand`。附件只是「这句话里带着几个文件」，没有第二种传输。
+- **气泡显示文件名，不显示路径**：记录里的 `displayContent` 是「用户的话 + 每行一个 `📎 <名字>`」（服务端 `mobileMessageWithFiles` 那一句，手机本地回声镜像同一条规则）。两边读的是同一条记录，所以桌面上看这段对话也是这句话。
+- **图片有自己的上限（5 MB，`llm.MaxImageSize`），在上传时就被拒**：它要作为多模态内容交给模型，存下来而没人看得见不是一种结果。HEIC/HEIF 也拒（`unsupported_image`）—— iPhone 的相机默认拍这个，而模型只认 png/jpg/gif/webp；相册那条路用 `compatible` 转成 JPEG。`maxUploadMb`（ping 里那一项）是这台机器对**非图片**文件的上限，手机在挑完文件、开始上传之前就能拒绝一个太大的。
 
 **拒绝的原因要原样透传**，不要笼统成「操作失败」—— 手机屏幕小，用户唯一能行动的就是那句话。
 
@@ -87,11 +94,18 @@
 | 工作目录不能用 | 400 `bad_working_dir` | 这个目录用不了，换一个路径试试 |
 | 建会话失败（写盘出错等） | 500 `create_failed` | 没能建出这段对话，在电脑上看看日志 |
 | 置顶没写进去 | 500 `pin_failed` | 置顶没保存成功，再试一次 |
+| 标题是空的 | 400 `bad_request` | 名字不能是空的 |
+| 改名没写进去 | 500 `rename_failed` | 没改成功，在电脑上看看日志 |
 | 定时任务不存在 | 404 `no_job` | 这个定时任务已经不在了 |
 | 定时任务在设置里被关掉 | 409 `cron_disabled` | 定时任务在电脑的设置里被关掉了 |
 | 任务不属于这台电脑 | 409 `not_desktop` | 这个任务不归这台电脑管 |
 | 定时任务的写入失败 | 500 `cron_failed` | 操作没成功，在电脑上看看日志 |
 | 那台电脑的操作系统不肯「别睡」 | 500 `awake_failed` | 这台电脑没能保持唤醒 |
+| 上传的文件超过这台机器的上限 | 413 `文件太大（60 MB，上限 50 MB）` | 原样显示这句话 |
+| 上传的图片超过 5 MB | 413 `图片太大（6 MB，上限 5 MB）` | 原样显示这句话 |
+| 传的是 HEIC/HEIF 照片 | 415 `unsupported_image` | 这张是 HEIC，先转成 JPG/PNG |
+| 文件没存下来（磁盘出错等） | 500 `store_failed` | 文件没存下来，在电脑上看看日志 |
+| 发送时点了一个这个会话里不存在的文件 | 409 `no_such_upload` | 文件没传上去，删掉它重新选 |
 | 「保持唤醒」的时长越界 | 400 `bad_request` | 时长要在这台电脑接受的范围内 |
 
 ## WebSocket
@@ -173,6 +187,9 @@ PermissionAsk   { kind:"permission", toolId, toolName, permissionKind, preview }
 QuestionAsk     { kind:"question", toolId, questions:[{question, options?, multiSelect?}] }
 AttachmentRef   { id, name, mimeType, size, downloadable }
                 id 就是那次 SendFile 调用的 id
+UploadedFile    { name, size, kind }
+                name 是宿主存下来的名字（重名会加 -1、-2），发送时递的就是它
+                kind ∈ image / text / binary —— @-展开会把它当成什么（只用来挑图标）
 SessionState    { status, label, detail, waiting }
 WorkspaceInfo   { primary, additional[] }
 UsageInfo       { cost, credit?, cacheHitRate? }
@@ -197,4 +214,5 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 8. **一段对话可以换 id，订阅要跟着走。** 通知里带着这一轮的结束原因：换轨与 `idle` 之间没有别的延迟，换订阅一定晚一步，`idle` 靠不住。 压缩成功时 agent 把历史搬进**子会话**，这一轮剩下的部分接着在子会话里跑。桌面在这一刻换轨（`agent:session_switched`），手机收到 `session_moved` 后把画面、订阅、排队中的消息一起搬到新 id。不搬的手机停在旧那一半：画面不动、状态永远「在跑」、队列发不出去（`idle` 已经发往子会话了）。换轨发生在**一轮结束之后**，不是压缩那一刻 —— 中途搬会把正在写的消息从画面底下抽走。
 9. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
 10. **「保持唤醒」是一台机器的一个值，所以它也是广播的。** 它不属于任何一段会话，手机发的 `POST /v1/awake` 与桌面托盘的勾选走同一个写入方（桌面的 `setAwake`），改完立刻广播 `awake_changed`、带完整的 `AwakeState` —— 两块屏照它画，没有第二条同步路径。**开着的时候关不关得掉由那台电脑说了算**：系统的断言被拒时，答案是「关着」加一句原因（500 `awake_failed`），而**不是**把开关画成开着的。`durationMin` 是偏好、落在那台电脑上，所以它熬得过重启；`on` 不是 —— 进程没了，断言就没了，重启后的状态永远是关。
-11. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。
+11. **手机送进来的文件只认名字，不认路径**（见「HTTP 端点」里附件那条）：上传回的 `name` 是发送时唯一能递的东西，服务端在那段会话的 `uploads/` 里解析。少这一步，「有令牌」就等于「能读这台机器上任何文件」。
+12. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。

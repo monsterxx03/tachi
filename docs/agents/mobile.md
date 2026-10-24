@@ -117,6 +117,7 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
   `W ComponentDiscovery: Could not instantiate com.google.mlkit.vision.barcode.internal.BarcodeRegistrar` /
   `Caused by: java.lang.NoSuchMethodException: …BarcodeRegistrar.<init>`。
   debug 包不裁剪，所以只有 release 坏，相机预览完全正常，很容易误判成「二维码没对准」。keep 规则由 `scripts/prepare-android.sh` 写进生成的 `proguard-rules.pro`（和 Gradle 版本同一处理方式）。排查同一类问题：`adb logcat | grep ComponentDiscovery`。
+- **给设备装 release 包**（不依赖 Metro，装上去就能用）：`./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` → `adb install -r app/build/outputs/apk/release/app-release.apk`。release 用的是模板里的 **debug 签名**（`signingConfigs.debug`，见生成出来的 `build.gradle`），所以能直接覆盖 debug 包；**R8 会剪掉 ML Kit**，所以 `scripts/prepare-android.sh` 那步在 release 上是必须的（它的 keep 规则不写进去，release 装得上、扫码永远不回调）。
 - 构建产物：`android/app/build/outputs/apk/debug/app-debug.apk`。
 - **只给一台真机装的时候，别打四合一包**：默认 `assembleDebug` 会把 arm64-v8a / armeabi-v7a / x86 / x86_64 四份原生库都塞进去（约 152 MB，APK 178 MB，其中三分之二是这台机器用不上的）。真机是 arm64，用 `./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a`，包降到 70 MB 上下；模拟器要 x86_64，分开构建。**别改 `android/gradle.properties` 钉这个**——它属于生成目录，下一次 prebuild 就没了。
 - **真机优先走无线调试，USB 不一定通**（常见于线只供电、或平板插在集线器上）：设置 → 开发者选项 → 无线调试 → 「使用配对码配对设备」，然后 `adb pair <ip>:<配对端口>` 填码。**配对端口不是连接端口**——配对成功后用 `adb mdns services` 找到 `_adb-tls-connect._tcp` 那条的端口再 `adb connect <ip>:<端口>`；直接试 5555 会 Connection refused。之后照旧 `adb reverse tcp:8081 tcp:8081`（无线 adb 上也有效），`adb -s <ip:端口>` 指定设备。
@@ -143,6 +144,8 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - `NSLocalNetworkUsageDescription` —— iOS 14+ 连局域网要单独授权，缺这条那句询问没有说明。
 - `NSAppTransportSecurity` —— 明文 http 到**任意 IP**。ATS 的例外按域名写，而那台机器是个 IP，列不进去，所以只留 `NSAllowsArbitraryLoads`；Expo 模板默认就是它，这里**显式钉住**，免得哪天模板变了、配对静默失败。图标是全不透明的 1024 PNG（只是带 alpha 通道），不用换。
   - **绝不能再加 `NSAllowsLocalNetworking`**（曾经有过，已删）：Apple 的规则是**它一旦存在，`NSAllowsArbitraryLoads` 就被忽略**，于是这个 App 只被允许连「本地」地址。而 iOS 认定的「本地」是私有网段（`192.168.*` 等），**不包括 Tailscale 用的 `100.64.0.0/10`**。症状极具误导性：局域网地址一切正常，换到 tailnet 地址后**只有 `fetch` 全灭**（报 `The resource could not be loaded because the App Transport Security policy requires the use of a secure connection`），而 WebSocket 照连不误 —— RN 的 WebSocket 走裸 socket、不过 ATS；Safari 和别的 App 也不受这份 plist 约束。**排查的钥匙是客户端那一行诊断**（设置页底部的「最近的请求」）：服务端日志里看不到请求，而客户端写着 `发不出去: fetch failed: … requires the use of a secure connection`。
+
+- **重新 `expo prebuild` 会连 `Pods/` 和 `Tachi.xcworkspace` 一起冲掉**（它们在 `ios/` 里面，而 `ios/` 是生成物），于是 `xcodebuild` 直接报 `'Tachi.xcworkspace' does not exist`。这不是工程坏了：`cd ios && pod install` 会重新生成两者。**顺序**是 prebuild → pod install → xcodebuild；反过来做，白等一次编译。
 
 **模拟器路线（已验证）：** `xcodebuild -workspace ios/Tachi.xcworkspace -scheme Tachi -sdk iphonesimulator -destination 'platform=iOS Simulator,id=<UDID>' build`，然后 `xcrun simctl install/launch`。模拟器直接能连宿主的 `127.0.0.1`（不需要任何转发），所以配对填 `http://127.0.0.1:9797` 就能跟 mockapi 联调。两个坑：
 
@@ -182,10 +185,13 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - 宽屏（≥768）侧栏可以收起，入口是对话 header 左上角那个菜单键。
 - **消息列表是 inverted 的**（数据倒过来喂）：打开会话就停在最新一条，往上翻出来的更早一页接在数组末尾（视觉顶部），画面不用补偿滚动位置。往上翻到头会走 `page` 端点续读，`hasMore` 跟着最旧的那条走；快照重读时 `mergeSnapshot` 把已经翻出来的更早消息留在原处（一轮结束、重连、lagged 都会触发重读）。进对话先翻到底部这一条也要它：非 inverted 的列表默认停在顶部，等于让人从一百条前的一页往下翻。
 - **列表数据里只放历史**（`buildItems` 只依赖快照）：实时那一轮（`buildLiveTail`）和待答项（`buildAskItems`）挂在 `ListHeaderComponent` 上——inverted 列表的头部就是视觉最底部，待答项因此仍在最靠底的位置（实时那一轮在它上面）。理由：RN 的列表单元是 `PureComponent`，`renderItem` 和 `item` 的引用一变，所有已挂载的单元全部重画；流式文字每个字都在变，混进同一个数组就等于每来一段文字都把可见消息的 markdown 重新解析一遍。同样地，`Chat` 的 `renderItem` 走 `useCallback` 加一个 `env` ref（回调、主题、附件都从那里取），它的引用必须保持稳定。状态层还有一道：`mobile.ts` 把 `text`/`thinking` 事件攒到下一帧再提交（`flushStream`），任何别的事件到来前先把它吐出去，否则快照会看见一段「还没发生」的历史。
+- **发文件是「先传上去，再把名字挂到消息上」（输入框左边那个回形针）**：照片 / 拍照 / 文件三个入口（`src/api/pick.ts`），选完立刻出现一条 chip 并开始传（`POST /v1/sessions/{id}/files`，multipart —— 字节由系统从磁盘读，手机不在 JS 内存里造一份 base64），传完 chip 才能发；失败的那条留在原地说原因，删掉重选即可。协议与「为什么只认名字」见 [mobile-protocol.md](mobile-protocol.md) 附件那条。**还有文件在路上时按发送什么也不做**：那一刻发出去等于把它弄丢，而屏幕上那句话已经发出去了。手机自己只拦一种情况 —— 选择器报了大小、而那台电脑 ping 回来的上限更小（`uploadCapMb`）；其余判断都是服务端的，它的话原样显示在 chip 上。
+- **气泡里显示文件名，不显示路径**：`src/state/attach.ts` 的 `displayOf` 是服务端 `mobileMessageWithFiles` 那一句的镜像（`📎 名字` 一行一个），所以自己发的那条在发出的一瞬间就长得和重读记录之后一样。待发送队列（运行中发的消息）**连着文件一起排**（`PendingMessage`）：`flushPending` 把几段话合成一条、文件按顺序连起来，附件不会因为排队而掉。
 - **交付物不是过程**：一次成功的 `SendFile` 不折进「N 步」那一行，而是钉在本轮结尾（`buildItems` 里那个 `files`）—— 它是「把 X 发给我」的答案，折起来等于把答案藏在一个要展开的行后面（桌面 `turnView` 的 attachments 那一栏是同一个分法）。卡片优先用快照的 `attachments`（有大小、可下载），没有那一条时从调用参数里的 `path` 兜一个出来（`fileFromSendFileArgs`），否则一个快照还没带上附件的调用会退回成普通工具卡。
 - **一轮的过程折成一行（`ProcessFold`）**：思考、成功的工具调用、**以及模型中途写的话**都收进去，**按记录里的先后**排（点开照这个顺序展开，不按种类分组）；只有工具时标 `N 步`，只有思考时标 `思考 N 段`，只有中间正文时标 `N 段过程说明`。**只有这一轮最后写的那段话留在外面**（桌面的 conclusion）—— 留着每一段正文，一个跑了二十步的回合会在过程行下面堆出十几段话，而它们都是过程。失败的那一步也留在外面。判据是两条用户消息之间，不是「相邻」。真实记录里两个 `tool_call` 之间一定夹着 `tool_result`，还常常夹着 `thinking` 和**内容为空的 assistant**（模型每调一次就写一条）——按相邻判断的话每段只剩一个工具，永远折不起来，手机上看到的就是「每个 tool call 都露在外面」。失败的那一步留在原地，出错要看得见。分组的纯函数在 `src/state/items.ts`，拆成三份：`buildItems`（历史）、`buildLiveTail`（实时那一轮）、`buildAskItems`（待答项）；`items.test.ts` 用真实记录的形状钉住。**实时那一轮用同一套判据**（`buildLiveTail`）：跑着的时候中间写过的话也已经折进去了，露在最后一行的就只有正在写的那段；为此 `Live` 是一个有序的 `parts`（思考/正文/工具），不能退回成「一个字符串 + 一组工具」—— 那样一来先后就丢了，画面上又是所有文字挤在过程行下面。
 - **从左边往右划 = 返回上一屏**：凡是「推上去的一页」都挂 `src/ui/edgeBack.ts` 的 `useEdgeBack` —— 对话（窄屏回列表 / 宽屏侧栏收起时把列表拉回来）、会话信息、设置、新建会话、添加电脑（配对页只在有上一屏时才有返回）。**文件阅读器故意不挂**：那里的图片是可以双指缩放、拖着看的，横向手势归它。iOS 没有系统返回手势，由这条手势认（判据见下一条）。**Android 上这条手势归系统**（手势导航的左缘返回），App 收不到 —— 所以同一件事必须由 `BackHandler` 完成：它先判断「宽屏且侧栏收起」，再决定是展开侧栏还是关闭会话；只做手势的话，Android 上这一划会直接退到桌面。
 - **左滑露出两个动作：置顶 / 删除**（`SwipeRow` 的 actions）。收起的动作层从可达性树里摘掉，否则读屏和自动化会点到一个看不见的按钮。
+- **长按一行 = 重命名**：弹一个输入框（草稿在本地，没按「保存」之前那台电脑上的标题一个字都不动），回车即保存。写的是桌面同一条 `RenameSession`，所以桌面上那一行立刻改名；空的、没变的都不发请求。第三个动作没塞进左滑 —— 那一截加宽就要挤掉「删除」的可点区域。
 - **这一行的手势在 UI 线程上（`react-native-gesture-handler` 的 `Gesture.Pan` + `reanimated` 的共享值）**，不是 `PanResponder`。`PanResponder` 每一帧都要过一次 JS 线程，而这块屏的 JS 线程随时被会话事件占着 —— 表现就是「跟不上手指、一划就弹回去」，调动画参数救不回来。判据也交给 GH：`activeOffsetX([-8, 8])` 让横向归这一行、`failOffsetY([-14, 14])` 让纵向归列表，两者不再互相抢；松手用 `withTiming` 按「还剩多远」定快慢。**这条路线要求根节点是 `GestureHandlerRootView`**（`App.tsx` 最外层），缺了它手势静默不触发。
 - **页面返回（`edgeBack`）同在 UI 线程**，判据与本行不同：起手点必须在**左缘 16pt** 以内（正文的左右内边距正好是 16，所以代码块、表格这些从 16 开始 —— 手势区与它们不重叠，在代码块上横划只滚代码块），往右 10px 才认领、竖着动 16px 就放弃；整屏跟手右移，松手过三成屏宽（或甩得够快）才补完动画返回。**手势层只盖住左缘那一条（`EdgeBackZone`），绝不铺满整屏**：铺满时它是列表的父级，手指一落下就先被它接住，`failOffsetY` 那句「竖着划就让给列表」不成立 —— 真机上的表现是**点按有效、整个列表滑不动**（连侧栏一起）。横向滚动抢不过它是同一件事的另一面。还有一条不在手势里、但读者一定感觉得到：**离开对话要退订**（`open` 的 `sessionId` 传空串）—— 否则那段在跑的对话每秒几十条增量还在往手机上灌。
 - **会话的增删改是广播，不是某一段会话的流**：桌面新建 / 删除 / **重命名 / 置顶**、手机建 / 删 / 置顶都发 `sessions_changed`，客户端重读 `/v1/sessions`，并把**打开着的那段**的标题等一并修掉（不修的话，桌面上改了名的对话在这里一直显示旧名）。手机上是「列表左滑 → 置顶 / 删除」，删除走原生确认框与 `DELETE /v1/sessions/{id}`，正在跑的那一轮会被拒绝（和桌面同一条 `DeleteSession`）。
@@ -206,6 +212,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 | 层 | 怎么验 | 谁验 |
 | --- | --- | --- |
 | 协议与桌面那半边 | Go 测试（`httptest` 打接口）+ 冒烟场景 `mobile-api`（真进程上打 HTTP/WebSocket，`make desktop-smoke ARGS="-run mobile-api -v"`） | 全自动 |
+| 手机上传 / 发送带附件 | `desktop/mobile_upload_test.go`（端点是真 HTTP，multipart）、`mobile/src/state/attach.test.ts`（气泡那一行）；手验：`npm run web` + `go run ./mockapi -token dev-token` | 全自动 |
 | 无头宿主（没有窗口的那条路） | `make itest-headless`：编 `-tags headless` 的真二进制、起进程、HTTP 建会话、WS 收一轮、重订阅核对记录，外加锁与鉴权 | 全自动（不需要 GUI，CI 能跑） |
 | 手机端纯逻辑 | `npx tsc --noEmit` + `npm test`（jest-expo；`src/state/chat.test.ts` 钉的是事件归并和错误文案那层纯函数，`src/api/addresses.test.ts` 钉的是「并发试地址、谁先应答用谁」） | 全自动 |
 | 手机端界面 | **web 目标**：`npm run web`，浏览器里自己点、截图、看 console 与网络 | 全自动（agent 用浏览器工具） |
@@ -240,6 +247,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **线上只走投影**（`mobile_events.go`）：`Messages` 与完整工具输出不上线，工具结果截到 2 KiB，旁路运行（`/review`、`/commit`）与对话一样被 lane 挡住。
 - **背压是丢连接，不是等**：每条连接 256 条事件的队列，满了发 `lagged` 再关；最多 16 条连接。`ask_answered` 是唯一的广播（它可能属于任何会话），其余只发给订阅了那个会话的连接。
 - **附件只认 `SendFile` 的记录**：`attachmentId` 就是那次工具调用的 id，下载端点从不接受路径；相对路径按**那次调用所属会话**的根目录解析。
+- **手机传上来的文件住在会话自己的 `uploads/` 里**（`session.SaveUploadedFile`，与 `pasted/` 并排；删会话一起删，绝不落进工作区）。名字保留发送方给的那个（重名加 `-1`、`-2`），因为那是读者认得出的东西。发送时 `mobileUploadRefs` 只在这个目录里按名字解析成 `@<绝对路径>` —— 客户端永远递不了任意路径，随后展开、图片多模态、记录都走既有的那条路。**图片 5 MB 与 HEIC 在上传那一刻就拒**（存下来没人看得见不是一种结果），非图片走 `mobile.max_attachment_mb`。
 - **两个会话开关也是共享状态**（模型 `provider`、`skipApproval`）：写入方是 `switchProviderFor` / `setSkipApprovalFor`，它们在写完之后发一条 `agent:session_prefs` + 手机的 `session_prefs`，两个值一起走。所以桌面改的手机立刻看见、手机改的桌面立刻看见；事件没有 origin——它是幂等状态，谁改的都要落到每一块屏。窗口的控件与手机的模型表/审批开关都走这两个写入方，不存在第二条广播路径。冒烟：`mobile-prefs`。
 - **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。桌面那一半的监听在 `agentEvents.ts`（`useAgentStream`）：非 `desktop` 的 origin 追加气泡，`steer` 的走 `injectSteerVisual`（切开正在流的那一段）。**这个回声没有冒烟场景**——驱动没法扮演另一块屏；改它只能靠单测与手验。
 - **「保持唤醒」的写入方只有一个**（`desktopApp.setAwake`，`desktop/awake.go`）：手机这条 `POST /v1/awake` 和桌面托盘的勾选、以及到点自动关，走的是同一个函数，改完都广播 `awake_changed`。所以它没有「按会话寻址」的那份孪生实现 —— 它不是会话的事。资源的那一半跟着进程：断言在进程里，进程没了断言就没了，所以状态不落盘、重启后永远是关（时长偏好落在那台电脑的 `desktop_ui.json` 里）。**无头宿主同样有它**：`awake` 在 `newDesktopApp` 里建，托盘只是它在有窗口时的另一半界面。

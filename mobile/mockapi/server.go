@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,11 +96,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/awake", s.guard(s.handleSetAwake))
 	mux.HandleFunc("GET /v1/sessions/{id}/page", s.guard(s.handlePage))
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", s.guard(s.handleFile))
+	mux.HandleFunc("POST /v1/sessions/{id}/files", s.guard(s.handleUpload))
 	mux.HandleFunc("GET /v1/sessions/{id}/panels", s.guard(s.handlePanels))
 	mux.HandleFunc("POST /v1/sessions/{id}/messages", s.guard(s.handleMessage))
 	mux.HandleFunc("POST /v1/sessions/{id}/stop", s.guard(s.handleStop))
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.guard(s.handleDeleteSession))
 	mux.HandleFunc("POST /v1/sessions/{id}/pin", s.guard(s.handlePin))
+	mux.HandleFunc("POST /v1/sessions/{id}/title", s.guard(s.handleRename))
 	mux.HandleFunc("POST /v1/cron/{id}/run", s.guard(s.handleCronRun))
 	mux.HandleFunc("POST /v1/cron/{id}/pause", s.guard(s.handleCronPause))
 	mux.HandleFunc("DELETE /v1/cron/{id}", s.guard(s.handleCronDelete))
@@ -165,6 +169,8 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		"hostname": "mock-machine",
 		"version":  "0.1",
 		"urls":     []string{"http://" + r.Host},
+		// 上传上限跟着真服务端那份配置走；假服务端取默认的 50 MB
+		"maxUploadMb": 50,
 	})
 }
 
@@ -495,6 +501,46 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleUpload 收下手机发的一个文件。假服务端不真的存字节：它只要把「存下来的名字」还回去，
+// 因为手机关心的就是这个名字（发送时递它），而协议里从不出现路径。
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	sess := s.get(r.PathValue("id"))
+	if sess == nil {
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	if sess.Session.ReadOnly {
+		fail(w, http.StatusConflict, "read_only")
+		return
+	}
+	f, header, err := r.FormFile("file")
+	if err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	defer f.Close()
+	// 大小只用来回报给手机；字节本身没有用处
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	name := filepath.Base(header.Filename)
+	kind := "binary"
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		kind = "image"
+	case ".txt", ".md", ".log", ".json", ".go", ".ts", ".yaml", ".yml":
+		kind = "text"
+	}
+	s.mu.Lock()
+	sess.Uploads = append(sess.Uploads, name)
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"file": map[string]any{"name": name, "size": len(buf), "kind": kind},
+	})
+}
+
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	sess := s.get(r.PathValue("id"))
 	if sess == nil {
@@ -532,6 +578,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 type messageReq struct {
 	Text string `json:"text"`
 	Mode string `json:"mode"`
+	// 上传时拿到的名字（不是路径）。假服务端只把它们写进那条消息的气泡里。
+	Attachments []string `json:"attachments"`
 }
 
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
@@ -541,9 +589,18 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req messageReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Text) == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		(strings.TrimSpace(req.Text) == "" && len(req.Attachments) == 0) {
 		fail(w, http.StatusBadRequest, "bad_request")
 		return
+	}
+	// 气泡里是「自己的话 + 每个文件一行名字」，与真服务端写记录的那一条一致
+	shown := strings.TrimSpace(req.Text)
+	for _, n := range req.Attachments {
+		if shown != "" {
+			shown += "\n\n"
+		}
+		shown += "📎 " + n
 	}
 	if sess.Session.ReadOnly {
 		fail(w, http.StatusConflict, "read_only")
@@ -571,7 +628,32 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go s.runTurn(sess, req.Text, req.Mode)
+	go s.runTurn(sess, shown, req.Mode)
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+type titleReq struct {
+	Title string `json:"title"`
+}
+
+// handleRename 改一段对话的标题。标题是列表里那一行的字段，所以改完广播 sessions_changed ——
+// 与真服务端同一条规矩（那台电脑上开着的窗口也靠它改名字）。
+func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
+	var req titleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Title) == "" {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	s.mu.Lock()
+	sess, ok := s.byID[r.PathValue("id")]
+	if !ok {
+		s.mu.Unlock()
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	sess.Session.Title = strings.TrimSpace(req.Title)
+	s.mu.Unlock()
+	s.broadcast("", Event{Type: "sessions_changed"})
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
 }
 

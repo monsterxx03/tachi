@@ -285,3 +285,30 @@ func (d *desktopApp) mobileCronPause(id string, paused bool) (int, string) {
 func (d *desktopApp) mobileCronDelete(id string) (int, string) {
 	return mobileCronResult((&AgentService{desk: d}).DeleteCronJob(id))
 }
+
+// mobileRename sets a conversation's title from the phone and answers the protocol's (status, code).
+//
+// It goes through RenameSession — the window's own writer — so there is one place that decides what
+// a rename means, and the sessions_changed it emits is how the OTHER screens hear about it. That
+// broadcast is the whole point here: a row's title is its identity in the list, and a phone that
+// renamed a conversation must not leave the window showing the old name (nor the reverse).
+//
+// A title is cosmetic, so a conversation another task owns can still be renamed — the same rule the
+// sidebar follows. Only an EMPTY one is refused: a row with no name at all is worse than the old one.
+func (d *desktopApp) mobileRename(id, title string) (int, string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return http.StatusBadRequest, "bad_request"
+	}
+	if d.sessionRecord(id) == nil {
+		return http.StatusNotFound, "no_session"
+	}
+	switch res := (&AgentService{desk: d}).RenameSession(id, title); res {
+	case "ok":
+		return 0, ""
+	case "no session manager":
+		return http.StatusInternalServerError, "rename_failed"
+	default:
+		return http.StatusNotFound, "no_session"
+	}
+}

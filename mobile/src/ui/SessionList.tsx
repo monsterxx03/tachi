@@ -1,6 +1,16 @@
 import { Feather } from '@expo/vector-icons';
-import { memo, useState } from 'react';
-import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useState } from 'react';
+import {
+  Alert,
+  FlatList,
+  Modal,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -142,6 +152,7 @@ export function SessionList({
   error,
   onDelete,
   onPin,
+  onRename,
 }: {
   sessions: SessionSummary[];
   currentId: string | null;
@@ -156,10 +167,28 @@ export function SessionList({
   error?: string | null;
   onDelete: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
+  /** 改标题；写的是那台电脑上的记录，成功之后 sessions_changed 让每一块屏都跟着改 */
+  onRename: (id: string, title: string) => void;
 }) {
   const { tokens: t } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
+  // 长按打开的那个对话框。draft 是本地草稿：没按「保存」之前，那台电脑上的标题一个字都不动
+  const [renaming, setRenaming] = useState<SessionSummary | null>(null);
+  const [draft, setDraft] = useState('');
   const online = conn === 'open';
+
+  const askRename = useCallback((s: SessionSummary) => {
+    setRenaming(s);
+    setDraft(s.title);
+  }, []);
+  const closeRename = useCallback(() => setRenaming(null), []);
+  const commitRename = useCallback(() => {
+    const title = draft.trim();
+    const id = renaming?.id;
+    setRenaming(null);
+    if (!id || !title || title === renaming?.title) return;
+    onRename(id, title);
+  }, [draft, renaming, onRename]);
 
   return (
     <View style={[styles.root, { backgroundColor: t.sid }]}>
@@ -234,9 +263,40 @@ export function SessionList({
             onOpen={onOpen}
             onDelete={onDelete}
             onPin={onPin}
+            onRename={askRename}
           />
         )}
       />
+
+      {/* 长按一行改名字。标题是那台电脑上的记录，这里只递交一个词：保存之后由 sessions_changed
+          让每一块屏重读 —— 桌面上那一行不会停在旧名字上，这一段也不会各留一份。 */}
+      <Modal visible={!!renaming} transparent animationType="fade" onRequestClose={closeRename}>
+        <Pressable style={styles.backdrop} onPress={closeRename}>
+          <View style={[styles.dialog, { backgroundColor: t.panel, borderColor: t.border }]}>
+            <Text style={[styles.dialogTitle, { color: t.text }]}>重命名</Text>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              autoFocus
+              selectTextOnFocus
+              placeholder="这段对话叫什么"
+              placeholderTextColor={t.faint}
+              style={[styles.dialogInput, { color: t.text, borderColor: t.border, backgroundColor: t.inputBg }]}
+              // 键盘上的回车就是「保存」：这一屏没有第二件事要用它
+              submitBehavior="submit"
+              onSubmitEditing={commitRename}
+            />
+            <View style={styles.dialogRow}>
+              <Pressable onPress={closeRename} hitSlop={8} accessibilityRole="button">
+                <Text style={{ color: t.faint, fontSize: 14 }}>取消</Text>
+              </Pressable>
+              <Pressable onPress={commitRename} hitSlop={8} accessibilityRole="button">
+                <Text style={{ color: t.accent2, fontSize: 14, fontWeight: '600' }}>保存</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -253,12 +313,15 @@ const SessionRow = memo(function SessionRow({
   onOpen,
   onDelete,
   onPin,
+  onRename,
 }: {
   s: SessionSummary;
   selected: boolean;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
+  /** 长按一行：改名字。左滑只有两个动作，第三个放不下，也不该挤掉「删除」的宽度 */
+  onRename: (s: SessionSummary) => void;
 }) {
   const { tokens: t } = useTheme();
   const badge = badgeOf(s);
@@ -286,6 +349,9 @@ const SessionRow = memo(function SessionRow({
     <SwipeRow actions={actions}>
       <Pressable
         onPress={() => onOpen(s.id)}
+        onLongPress={() => onRename(s)}
+        // 长按要「按住一会儿」才算，不是一碰就弹：这一屏的主要动作是打开会话
+        delayLongPress={400}
         style={({ pressed }) => [
           styles.row,
           selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
@@ -317,6 +383,11 @@ const styles = StyleSheet.create({
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   sub: { fontSize: 12, flexShrink: 1 },
   errLine: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, marginTop: 6 },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  dialog: { width: '100%', maxWidth: 420, borderRadius: 14, borderWidth: 1, padding: 16, gap: 12 },
+  dialogTitle: { fontSize: 15, fontWeight: '600' },
+  dialogInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  dialogRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 20, paddingTop: 2 },
   gear: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
 
   listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },

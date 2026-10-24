@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -294,10 +295,10 @@ func TestMobileSendRefusals(t *testing.T) {
 		t.Fatalf("new session: %v", err)
 	}
 
-	if code, got := d.mobileSend("nope", "hi", "send"); code != http.StatusNotFound || got != "no_session" {
+	if code, got := d.mobileSend("nope", "hi", "send", nil); code != http.StatusNotFound || got != "no_session" {
 		t.Fatalf("unknown session = (%d,%s), want (404,no_session)", code, got)
 	}
-	if code, got := d.mobileSend(s.ID, "hi", "steer"); code != http.StatusConflict || got != "not_running" {
+	if code, got := d.mobileSend(s.ID, "hi", "steer", nil); code != http.StatusConflict || got != "not_running" {
 		t.Fatalf("steer while idle = (%d,%s), want (409,not_running)", code, got)
 	}
 
@@ -307,10 +308,10 @@ func TestMobileSendRefusals(t *testing.T) {
 	r := d.getRun(s.ID)
 	r.running = true
 	d.mu.Unlock()
-	if code, got := d.mobileSend(s.ID, "hi", "steer"); code != http.StatusConflict || got != "steer_unsupported" {
+	if code, got := d.mobileSend(s.ID, "hi", "steer", nil); code != http.StatusConflict || got != "steer_unsupported" {
 		t.Fatalf("steer on a scheduled turn = (%d,%s), want (409,steer_unsupported)", code, got)
 	}
-	if code, got := d.mobileSend(s.ID, "hi", "send"); code != http.StatusConflict || got != "turn_running" {
+	if code, got := d.mobileSend(s.ID, "hi", "send", nil); code != http.StatusConflict || got != "turn_running" {
 		t.Fatalf("send while running = (%d,%s), want (409,turn_running)", code, got)
 	}
 }
@@ -407,7 +408,7 @@ func TestMobileUserMessageEcho(t *testing.T) {
 	m.conns[c] = struct{}{}
 	m.mu.Unlock()
 
-	d.echoUserMessage(s.ID, "你好", false, originDesktop)
+	d.echoUserMessage(s.ID, "你好", "你好", false, originDesktop)
 	select {
 	case b := <-c.out:
 		var ev map[string]any
@@ -417,6 +418,36 @@ func TestMobileUserMessageEcho(t *testing.T) {
 		}
 	default:
 		t.Fatal("no user_message was broadcast")
+	}
+}
+
+// TestMobileSessionTitleBroadcasts: a generated title is a field of the list's row, so it leaves
+// through the list's exit. The window hears it on its own event stream; the phone has only
+// sessions_changed, and without this it kept calling the conversation 未命名会话 for good.
+func TestMobileSessionTitleBroadcasts(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	m, _ := mobileTestServer(t, d)
+	// A connection that never subscribed: the list is not part of any conversation's stream.
+	c := newMobileConn(m, nil)
+	c.out = make(chan []byte, 4)
+	m.mu.Lock()
+	m.conns[c] = struct{}{}
+	m.mu.Unlock()
+
+	d.handleEvent(s.ID, agent.AgentEvent{Type: agent.AgentEventSessionTitle, Title: "新标题"})
+	select {
+	case b := <-c.out:
+		var ev map[string]any
+		_ = json.Unmarshal(b, &ev)
+		if ev["type"] != mobileEvSessionsChanged {
+			t.Fatalf("event = %v, want sessions_changed", ev)
+		}
+	default:
+		t.Fatal("a generated title did not reach the phone")
 	}
 }
 

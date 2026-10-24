@@ -1,8 +1,10 @@
 import { Feather } from '@expo/vector-icons';
-import { useCallback, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -10,11 +12,26 @@ import {
   View,
 } from 'react-native';
 import type { FileSource } from '../api/client';
-import type { AttachmentRef, PendingAsk, SendMode, SessionMessage, Snapshot } from '../api/types';
+import { pickDocument, pickPhoto, type PickedFile } from '../api/pick';
+import type {
+  AttachmentRef,
+  PendingAsk,
+  PendingMessage,
+  SendMode,
+  SessionMessage,
+  Snapshot,
+  UploadedFile,
+} from '../api/types';
 import type { Live } from '../state/mobile';
 import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep } from '../state/items';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { MessageView, Thinking, ToolCard } from './Message';
@@ -88,6 +105,48 @@ function MetaStrip({
 }
 
 /**
+ * 停止按钮：和桌面那个一模一样 —— 一圈红色在转，中间一个小方块。
+ *
+ * 桌面把「正在生成、点这里停」做成了一个转动的圆环（`chat.css` 的 `.stop-btn`），因为一个静止的
+ * 方块读起来像「发一条」；手机这里跟着同一个形状，就不必再写一行「打断」的文字去解释它。
+ * 环转在 UI 线程上（reanimated 的共享值），JS 线程正被这一轮的事件占着也照样匀速。
+ */
+function StopRing({ t }: { t: ThemeTokens }) {
+  const spin = useSharedValue(0);
+  useEffect(() => {
+    spin.value = withRepeat(withTiming(360, { duration: 800, easing: Easing.linear }), -1, false);
+  }, [spin]);
+  const ring = useAnimatedStyle(() => ({ transform: [{ rotate: `${spin.value}deg` }] }));
+  return (
+    <View style={[styles.stopBtn, { borderColor: t.redLine, backgroundColor: t.panel }]}>
+      <Animated.View
+        style={[styles.stopRing, { borderTopColor: t.red, borderRightColor: t.redLine }, ring]}
+      />
+      <View style={[styles.stopSquare, { backgroundColor: t.red }]} />
+    </View>
+  );
+}
+
+/** 输入框里挂着的一个待发文件：传完的带 file，正在传的没有，失败的那条带 error。 */
+type Attach = { key: string; name: string; size?: number; file?: UploadedFile; error?: string };
+
+/** 回形针展开的三个入口之一。 */
+function AttachItem({ icon, label, onPress }: { icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) {
+  const { tokens: t } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [styles.attachItem, pressed && { backgroundColor: t.wash }]}
+    >
+      <Feather name={icon} size={15} color={t.dim} />
+      <Text style={{ color: t.dim, fontSize: 12.5 }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/**
  * 底部：正在跑的时候多一行状态，发出去的话先进「待发送队列」（桌面的 pending 的手机版）。
  *
  * 运行中直接把这句发出去是错的：它会被当成插话立刻塞进正在流的这一轮，读者看到的是
@@ -99,6 +158,7 @@ function Composer({
   waiting,
   pending,
   onSend,
+  onUpload,
   onQueue,
   onDropPending,
   onClearPending,
@@ -107,9 +167,10 @@ function Composer({
 }: {
   running: boolean;
   waiting: string;
-  pending: string[];
-  onSend: (text: string, mode: SendMode) => Promise<boolean>;
-  onQueue: (text: string) => void;
+  pending: PendingMessage[];
+  onSend: (text: string, mode: SendMode, files?: UploadedFile[]) => Promise<boolean>;
+  onUpload: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
+  onQueue: (text: string, files?: UploadedFile[]) => void;
   onDropPending: (index: number) => void;
   onClearPending: () => void;
   onSendPendingNow: () => void;
@@ -117,15 +178,55 @@ function Composer({
 }) {
   const { tokens: t } = useTheme();
   const [text, setText] = useState('');
+  // 待发的文件：传完的带 file，正在传的没有，失败的那条带 error（读者可以删掉它再来一次）
+  const [files, setFiles] = useState<Attach[]>([]);
+  const [menu, setMenu] = useState(false);
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
   // 已经为「字还没提交」重试过一次；防止真的空着也反复失焦
   const retried = useRef(false);
   const submitRef = useRef<() => void>(() => {});
   const short = waiting === '等待你的授权' ? '等你授权' : waiting === '等待你的回答' ? '等你回答' : '';
+  const uploading = files.some((f) => !f.file && !f.error);
+  const ready = files.filter((f): f is Attach & { file: UploadedFile } => !!f.file);
+  // 能发的东西：一句话，或者至少一个传完的文件（只发一张图、什么也不说是合法的）
+  const canSend = !!text.trim() || ready.length > 0;
+
+  // 挑到一个文件就先把它画成一条 chip，再传：上传要几秒，而这段时间里屏幕上是空的，
+  // 读起来就是「点了没反应」。传完 chip 才变成能发的；失败的那条留在原地说为什么。
+  const add = useCallback(
+    async (picked: PickedFile | null) => {
+      if (!picked) return;
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setFiles((list) => [...list, { key, name: picked.name, size: picked.size }]);
+      const { file, error } = await onUpload(picked);
+      setFiles((list) =>
+        list.map((f) =>
+          f.key === key
+            ? file
+              ? { ...f, file, name: file.name, size: file.size }
+              : { ...f, error: error || '没能传上去' }
+            : f,
+        ),
+      );
+    },
+    [onUpload],
+  );
+
+  const pick = async (source: 'library' | 'camera' | 'document') => {
+    setMenu(false);
+    // 取消（或没给权限）就是什么也不做：那是读者的选择，不是错误
+    const picked = await (source === 'document'
+      ? pickDocument().catch(() => null)
+      : pickPhoto(source).catch(() => null));
+    await add(picked);
+  };
 
   const submit = () => {
+    setMenu(false);
     const v = text.trim();
-    if (!v) {
+    // 还有文件在路上：现在发出去就是把它弄丢，而屏幕上那句话已经发出去了 —— 挡下来。
+    if (uploading) return;
+    if (!v && ready.length === 0) {
       // 空着按发送 = 停掉这一轮（正在跑的时候才有意义）
       if (running) {
         onStop();
@@ -142,14 +243,19 @@ function Composer({
       return;
     }
     retried.current = false;
+    const sent = ready.map((f) => f.file);
     if (running) {
-      onQueue(v);
+      onQueue(v, sent);
       setText('');
+      setFiles([]);
       return;
     }
-    // 不在跑：服务端没收下就把字还给读者（拒绝的原因在顶部横幅里）
-    void onSend(v, 'send').then((ok) => {
-      if (ok) setText('');
+    // 不在跑：服务端没收下就把字还给读者（拒绝的原因在顶部横幅里）—— 文件也留着，重发还是那几个
+    void onSend(v, 'send', sent).then((ok) => {
+      if (ok) {
+        setText('');
+        setFiles([]);
+      }
     });
   };
   submitRef.current = submit;
@@ -172,9 +278,9 @@ function Composer({
             </Pressable>
           </View>
           {pending.map((p, i) => (
-            <View key={`${i}-${p.slice(0, 8)}`} style={styles.pendingItem}>
+            <View key={`${i}-${p.text.slice(0, 8)}`} style={styles.pendingItem}>
               <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={2}>
-                {p}
+                {[p.text, ...p.files.map((f) => `📎 ${f.name}`)].filter(Boolean).join('\n')}
               </Text>
               <Pressable onPress={() => onDropPending(i)} hitSlop={8}>
                 <Feather name="x" size={13} color={t.faint} />
@@ -184,19 +290,63 @@ function Composer({
         </View>
       ) : null}
 
+      {files.length > 0 ? (
+        <View style={[styles.attachBar, styles.column]}>
+          {files.map((f) => (
+            <View
+              key={f.key}
+              style={[styles.fileChip, { backgroundColor: t.inputBg, borderColor: f.error ? t.red : t.border }]}
+            >
+              <Feather
+                name={f.error ? 'alert-circle' : f.file?.kind === 'image' ? 'image' : 'file'}
+                size={12}
+                color={f.error ? t.red : t.faint}
+              />
+              <Text style={{ color: f.error ? t.red : t.dim, fontSize: 12, flexShrink: 1 }} numberOfLines={1}>
+                {f.error ? `${f.name}：${f.error}` : f.name}
+              </Text>
+              {/* 正在传的那条没有 ×：它已经在路上了，删掉 chip 也停不下这次请求 */}
+              {f.file || f.error ? (
+                <Pressable onPress={() => setFiles((list) => list.filter((x) => x.key !== f.key))} hitSlop={8}>
+                  <Feather name="x" size={12} color={t.faint} />
+                </Pressable>
+              ) : (
+                <ActivityIndicator size="small" color={t.faint} />
+              )}
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {/* 三个入口是一层浮出的选择，不是常驻的一行：点空白处、按返回键、端走任意一项都会收起来。
+          之前它挂在输入框上面不走，读者挑完照片回到对话，那排字还留在那儿，看着像输入框多了一行。 */}
+      <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
+        <Pressable style={[styles.menuBackdrop, styles.column]} onPress={() => setMenu(false)}>
+          <View style={[styles.menuSheet, { backgroundColor: t.panel, borderColor: t.border }]}>
+            <AttachItem icon="image" label="照片" onPress={() => pick('library')} />
+            <AttachItem icon="camera" label="拍照" onPress={() => pick('camera')} />
+            <AttachItem icon="file-text" label="文件" onPress={() => pick('document')} />
+          </View>
+        </Pressable>
+      </Modal>
+
       {running ? (
         <View style={[styles.runHint, styles.column]}>
           <View style={[styles.runDot, { backgroundColor: t.amber }]} />
           <Text style={{ color: t.faint, fontSize: 11.5 }} numberOfLines={1}>
             {short ? `停在这里${short}` : '正在跑 · 发送会排队'}
           </Text>
-          <View style={styles.spacer} />
-          <Pressable onPress={onStop}>
-            <Text style={{ color: t.accent2, fontSize: 11.5 }}>打断</Text>
-          </Pressable>
         </View>
       ) : null}
       <View style={[styles.inputRow, styles.column]}>
+        <Pressable
+          onPress={() => setMenu((m) => !m)}
+          accessibilityRole="button"
+          accessibilityLabel="发送文件"
+          style={({ pressed }) => [styles.attachBtn, pressed && { backgroundColor: t.wash }]}
+        >
+          <Feather name="paperclip" size={17} color={menu ? t.accent2 : t.faint} />
+        </Pressable>
         <View style={[styles.inputWrap, { backgroundColor: t.inputBg, borderColor: t.border }]}>
           <TextInput
             ref={inputRef}
@@ -206,17 +356,32 @@ function Composer({
             placeholderTextColor={t.faint}
             style={[styles.input, { color: t.text }]}
             multiline
+            // 回车 = 发送，不换行。两套平台各认一个开关：原生认 submitBehavior（多行输入框的
+            // Return 从「插一个换行」变成「提交」，焦点不丢 —— 连发几句不用每次重新点输入框）；
+            // react-native-web 还只认老的 blurOnSubmit，而它在多行输入框上正是同一个意思。
+            // 想换行仍然有 Shift+Enter（web）。
+            submitBehavior="submit"
+            blurOnSubmit={Platform.OS === 'web' ? true : undefined}
+            onSubmitEditing={() => submitRef.current()}
           />
         </View>
-        <Pressable
-          onPress={submit}
-          // 只有图标：读屏和自动化都要靠这个名字认它
-          accessibilityRole="button"
-          accessibilityLabel={running && !text.trim() ? '停止' : '发送'}
-          style={({ pressed }) => [styles.sendBtn, { backgroundColor: pressed || !text.trim() ? t.accentStrong : t.accent }]}
-        >
-          <Feather name={running && !text.trim() ? 'square' : 'arrow-up'} size={17} color={t.onAccent} />
-        </Pressable>
+        {/* 运行中、又没有话要发：这颗按钮的意思就是「停」。它长成桌面那个转动的红环，
+            而不是一个方块 + 上面一行「打断」—— 那个字在手机上是纯解释，形状本身已经说明白了。 */}
+        {running && !canSend ? (
+          <Pressable onPress={onStop} accessibilityRole="button" accessibilityLabel="停止">
+            <StopRing t={t} />
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={submit}
+            // 只有图标：读屏和自动化都要靠这个名字认它
+            accessibilityRole="button"
+            accessibilityLabel="发送"
+            style={({ pressed }) => [styles.sendBtn, { backgroundColor: pressed || !canSend ? t.accentStrong : t.accent }]}
+          >
+            <Feather name="arrow-up" size={17} color={t.onAccent} />
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -315,6 +480,7 @@ export function Chat({
   onOpenModels,
   onOpenFile,
   onSend,
+  onUpload,
   onStop,
   onLoadOlder,
   olderLoading,
@@ -339,7 +505,7 @@ export function Chat({
   onOpenInfo: () => void;
   onOpenModels: () => void;
   onOpenFile: (id: string) => void;
-  onSend: (text: string, mode: SendMode) => Promise<boolean>;
+  onSend: (text: string, mode: SendMode, files?: UploadedFile[]) => Promise<boolean>;
   onStop: () => void;
   /** 上滑到头时翻一页更早的历史 */
   onLoadOlder: () => void;
@@ -350,9 +516,11 @@ export function Chat({
    * 只认「起点在左缘 24pt 内」的手势，否则会跟消息里的横向操作打架。
    */
   onEdgeBack?: () => void;
-  /** 待发送队列（运行中发的消息）；渲染在输入框上方 */
-  pending: string[];
-  onQueue: (text: string) => void;
+  /** 待发送队列（运行中发的消息，连着挂在上面的文件）；渲染在输入框上方 */
+  pending: PendingMessage[];
+  onQueue: (text: string, files?: UploadedFile[]) => void;
+  /** 把一个本地文件传给那台电脑；答案里是它存下来的名字，或者为什么没成 */
+  onUpload: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
   onDropPending: (index: number) => void;
   onClearPending: () => void;
   onSendPendingNow: () => void;
@@ -500,6 +668,7 @@ export function Chat({
           waiting={s.waiting}
           pending={pending}
           onSend={onSend}
+          onUpload={onUpload}
           onQueue={onQueue}
           onDropPending={onDropPending}
           onClearPending={onClearPending}
@@ -593,8 +762,38 @@ const styles = StyleSheet.create({
   runHint: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 16, paddingBottom: 6 },
   runDot: { width: 5, height: 5, borderRadius: 2.5 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12 },
+  attachBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  attachBar: { paddingHorizontal: 12, paddingBottom: 6, gap: 5 },
+  fileChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  menuBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.28)', paddingHorizontal: 12, paddingBottom: 20 },
+  menuSheet: {
+    flexDirection: 'row',
+    gap: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    padding: 8,
+    // 浮在输入框之下那一块之上的阴影：不与页面的其它层共用，只有它自己会浮起来
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  attachItem: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10 },
   inputWrap: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 15, paddingVertical: 11 },
   input: { fontSize: 14, padding: 0, maxHeight: 90 },
   sendBtn: { width: 38, height: 38, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  stopBtn: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  // 环比按钮小一圈：桌面是 inset -4（往外扩），手机上往外扩会压到上面那行提示
+  stopRing: { position: 'absolute', width: 33, height: 33, borderRadius: 17, borderWidth: 2, borderColor: 'transparent' },
+  stopSquare: { width: 9, height: 9, borderRadius: 2 },
   readOnlyNote: { borderTopWidth: StyleSheet.hairlineWidth, padding: 14, alignItems: 'center' },
 });

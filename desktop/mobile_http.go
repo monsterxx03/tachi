@@ -3,8 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // HTTP 端点：命令走这里（能独立重试、能用 curl 调），过程走 WebSocket。
@@ -46,6 +51,10 @@ func (m *mobileServer) handlePing(w http.ResponseWriter, r *http.Request) {
 		"hostname": m.hostname,
 		"version":  mobileVersion,
 		"urls":     m.pairingURLs(),
+		// maxUploadMb is this machine's ceiling for a file the phone sends. It rides on ping
+		// because a picker should be able to refuse a 90 MB video BEFORE spending the upload: the
+		// number is the machine's configuration, and the phone has no way to know it otherwise.
+		"maxUploadMb": m.desk.mobileAttachmentLimit() / (1024 * 1024),
 	})
 }
 
@@ -100,6 +109,10 @@ func (m *mobileServer) handlePage(w http.ResponseWriter, r *http.Request) {
 type mobileMessageReq struct {
 	Text string `json:"text"`
 	Mode string `json:"mode"`
+	// Attachments are the NAMES uploads answered with, in the order the reader attached them.
+	// Never paths: the server joins each onto this session's own uploads directory, so holding the
+	// token cannot name a file the phone never sent (docs/agents/mobile-protocol.md).
+	Attachments []string `json:"attachments"`
 }
 
 func (m *mobileServer) handleMessage(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +121,7 @@ func (m *mobileServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 		mobileFail(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	if status, code := m.desk.mobileSend(r.PathValue("id"), req.Text, req.Mode); code != "" {
+	if status, code := m.desk.mobileSend(r.PathValue("id"), req.Text, req.Mode, req.Attachments); code != "" {
 		mobileFail(w, status, code)
 		return
 	}
@@ -225,6 +238,81 @@ func (m *mobileServer) handleQuestions(w http.ResponseWriter, r *http.Request) {
 
 func (m *mobileServer) handleFile(w http.ResponseWriter, r *http.Request) {
 	m.desk.serveMobileAttachment(w, r, r.PathValue("id"), r.PathValue("attachmentId"))
+}
+
+// handleUpload stores a file the phone sends into the session's own directory and answers the name
+// to cite when the message goes out.
+//
+// multipart/form-data, not JSON+base64: a phone's picker hands over a FILE (a uri on disk), and
+// multipart lets the platform stream it from there. Base64 would make the phone build a third
+// larger copy in JavaScript memory before the first byte left — 67 MB for a 50 MB document, on the
+// device least able to spare it. The server side is bounded either way (see below).
+//
+// The body is bounded BEFORE anything is read or spilled to disk: this listener is reachable by
+// anything on the network that holds the token, and an unbounded body is free disk and memory to
+// take. mobileUpload applies the configured limit itself, once, so the two cannot drift apart.
+func (m *mobileServer) handleUpload(w http.ResponseWriter, r *http.Request) {
+	limit := m.desk.mobileAttachmentLimit()
+	// The extra megabyte is multipart framing (boundaries, headers), never file bytes.
+	r.Body = http.MaxBytesReader(w, r.Body, limit+1<<20)
+	overLimit := func(err error) bool {
+		var tooBig *http.MaxBytesError
+		return errors.As(err, &tooBig) || strings.Contains(err.Error(), "request body too large")
+	}
+	// 32 MiB stays in memory, the rest spills to a temp file — the parse itself must not be the
+	// thing that decides how much memory an upload costs.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		if overLimit(err) {
+			mobileFail(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("文件太大（上限 %s）", strutil.HumanBytes(limit)))
+			return
+		}
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	f, header, err := r.FormFile("file")
+	if err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		if overLimit(err) {
+			mobileFail(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("文件太大（上限 %s）", strutil.HumanBytes(limit)))
+			return
+		}
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	// The part's own filename and type: that is what the picker called the file, and what the
+	// phone shows back while the message is being written.
+	vo, status, code := m.desk.mobileUpload(r.PathValue("id"), header.Filename, header.Header.Get("Content-Type"), raw)
+	if code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"file": vo})
+}
+
+type mobileTitleReq struct {
+	Title string `json:"title"`
+}
+
+// handleRename is the phone's 重命名. The row's title is a list fact, so the success answer is the
+// usual accepted + the sessions_changed broadcast every screen re-reads.
+func (m *mobileServer) handleRename(w http.ResponseWriter, r *http.Request) {
+	var req mobileTitleReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	if status, code := m.desk.mobileRename(r.PathValue("id"), req.Title); code != "" {
+		mobileFail(w, status, code)
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
 }
 
 type mobilePinReq struct {

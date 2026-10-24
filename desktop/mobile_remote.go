@@ -22,9 +22,9 @@ import (
 
 // loadSessionForRemote is LoadSession's first two steps WITHOUT the third.
 //
-//	1. prepareSession — build this session's own agent and manager;
-//	2. restore its LLM history into r.history;
-//	3. (nothing: no activeID, no state event)
+//  1. prepareSession — build this session's own agent and manager;
+//  2. restore its LLM history into r.history;
+//  3. (nothing: no activeID, no state event)
 //
 // The missing third step is the point: the phone opening a conversation must not move the
 // window. The history restore is not optional either — startTurn ALWAYS reads r.history
@@ -62,8 +62,14 @@ func (d *desktopApp) loadSessionForRemote(id string) (*sessionRun, error) {
 // mobileSend handles one of the three send modes and answers the protocol's (status, code).
 // The refusal reason is passed through verbatim where it is specific enough to act on: the
 // phone screen is small, and the reason IS the only thing the reader can act on.
-func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
-	if text == "" {
+//
+// attachments are the names uploads answered with (POST /v1/sessions/{id}/files) — NOT paths. They
+// become @-references here, resolved inside this session's own uploads directory, and then travel
+// the existing route: @-expansion at turn start turns a text file into content, an image into a
+// multi-modal part, anything else into "read it with your tools". There is no second way for a file
+// to reach the model, which is why this layer only has to name one.
+func (d *desktopApp) mobileSend(id, text, mode string, attachments []string) (int, string) {
+	if text == "" && len(attachments) == 0 {
 		return http.StatusBadRequest, "bad_request"
 	}
 	ss := d.sessionRecord(id)
@@ -76,6 +82,13 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 	if d.busySessions()[id] {
 		return http.StatusConflict, "held_by_task"
 	}
+	refs, status, code := d.mobileUploadRefs(id, attachments)
+	if code != "" {
+		return status, code
+	}
+	// full goes to the model, shown to the transcript (see mobileMessageWithFiles).
+	full, shown := mobileMessageWithFiles(text, refs, attachments)
+	text = full
 	switch mode {
 	case "send":
 		if running, _ := d.mobileRunState(id); running {
@@ -88,7 +101,7 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 			}
 			return http.StatusConflict, "agent_unavailable"
 		}
-		switch d.startTurnFrom(id, text, originMobile) {
+		switch d.startTurnFrom(id, text, shown, originMobile) {
 		case "ok":
 			return 0, ""
 		case refuseTurnRunning:
@@ -109,7 +122,7 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 		if !hasSteer {
 			return http.StatusConflict, "steer_unsupported"
 		}
-		switch d.steerFrom(id, text, originMobile) {
+		switch d.steerFrom(id, text, shown, originMobile) {
 		case "ok":
 			return 0, ""
 		case "not running":
@@ -128,7 +141,7 @@ func (d *desktopApp) mobileSend(id, text, mode string) (int, string) {
 				return http.StatusConflict, "agent_unavailable"
 			}
 		}
-		switch d.stopAndSendFrom(id, text, originMobile) {
+		switch d.stopAndSendFrom(id, text, shown, originMobile) {
 		case "ok":
 			return 0, ""
 		case "empty":

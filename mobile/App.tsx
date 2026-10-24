@@ -91,6 +91,7 @@ function ChatPane({
           if (f) setOpenFile(f);
         }}
         onSend={m.send}
+        onUpload={m.uploadFile}
         onStop={() => void m.stop()}
         pending={m.pending}
         onQueue={m.queueMessage}
@@ -212,6 +213,7 @@ function Shell() {
       onRefresh={m.refresh}
       onDelete={m.deleteSession}
       onPin={m.setPinned}
+      onRename={m.renameSession}
     />
   );
 

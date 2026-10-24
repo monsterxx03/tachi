@@ -50,12 +50,16 @@ func (s *AgentService) Stop() string {
 // Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
 // queue on any refusal, so an empty answer is not possible.
 func (s *AgentService) StopAndSend(sessionID, text string) string {
-	return s.desk.stopAndSendFrom(sessionID, text, originDesktop)
+	return s.desk.stopAndSendFrom(sessionID, text, text, originDesktop)
 }
 
 // stopAndSendFrom is StopAndSend with the screen that asked. origin only decides who skips the
 // echo of this message (see echoUserMessage).
-func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigin) string {
+//
+// display is what the transcript SHOWS — the same string unless a screen attached files, in which
+// case text carries the @-references that reach the model and display names them in the bubble
+// (the phone's uploads; see desktop/mobile_upload.go).
+func (d *desktopApp) stopAndSendFrom(sessionID, text, display string, origin messageOrigin) string {
 	if text == "" {
 		return "empty"
 	}
@@ -96,7 +100,7 @@ func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigi
 			}
 		}
 	}
-	return d.startTurnFrom(id, text, origin)
+	return d.startTurnFrom(id, text, display, origin)
 }
 
 // Steer answers the agent's steer_check for a session: it delivers the text
@@ -114,10 +118,10 @@ func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigi
 // child's id alone it would find no steer channel and answer "not running" — the frontend shows
 // the text in the transcript, the agent's steer_check times out, and the message is gone.
 func (s *AgentService) Steer(sessionID, text string) string {
-	return s.desk.steerFrom(sessionID, text, originDesktop)
+	return s.desk.steerFrom(sessionID, text, text, originDesktop)
 }
 
-func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) string {
+func (d *desktopApp) steerFrom(sessionID, text, display string, origin messageOrigin) string {
 	d.mu.Lock()
 	r := d.getRun(sessionID)
 	ch := r.steerCh
@@ -137,13 +141,13 @@ func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) str
 	default:
 	}
 	select {
-	case ch <- agent.SteerInput{Text: expanded.Text, Display: text, Images: expanded.Images}:
+	case ch <- agent.SteerInput{Text: expanded.Text, Display: display, Images: expanded.Images}:
 		// The other screens draw a steered message with its own style, so the echo says which
 		// it was. An EMPTY steer is not a message: it is the "nothing is queued" reply that
 		// unblocks the loop (see answerSteer), and echoing it put an empty user bubble on every
 		// other screen at each steer point.
 		if text != "" {
-			d.echoUserMessage(sessionID, text, true, origin)
+			d.echoUserMessage(sessionID, text, display, true, origin)
 		}
 		return "ok"
 	default:
@@ -158,12 +162,17 @@ func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) str
 // refusals used to be bare `return`s, which is what made a lost message invisible: the caller
 // answered "ok", the frontend had already drawn the bubble, and no event ever came to clear it.
 func (d *desktopApp) startTurn(id string, text string) string {
-	return d.startTurnFrom(id, text, originDesktop)
+	return d.startTurnFrom(id, text, text, originDesktop)
 }
 
 // startTurnFrom is startTurn with the screen that sent the message. origin is used ONLY for the
 // echo below (agent:user_message / the phone's user_message); it changes no behaviour.
-func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string {
+//
+// display is the user's OWN words as the transcript should show them, which is text itself unless
+// the screen attached files: then text carries the @-references (what the model must see) and
+// display names the files (what a reader can read). Both go into the record; a reloaded transcript
+// shows display, exactly like this turn does.
+func (d *desktopApp) startTurnFrom(id, text, display string, origin messageOrigin) string {
 	if id == "" {
 		return refuseNoSession
 	}
@@ -214,11 +223,12 @@ func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string
 
 	history := d.runHistory(id)
 	// The user's OWN words, before any expansion: the transcript must show what was typed
-	// (`@path`), while the model gets the expanded text. Session records keep both.
+	// (`@path`), while the model gets the expanded text. Session records keep both. A screen that
+	// attached FILES hands in a display of its own (names, not paths) — see the doc comment.
 	// (A merged trailing message — an interrupted session — keeps only THIS turn's text as
 	// the display while Content holds both; that path is rare and its display side is
 	// cosmetic, which is not worth threading a second display string through the merge.)
-	rawText := text
+	rawText := display
 	// Expand @-file references before anything else: text files are inlined,
 	// images become multi-modal content parts. This must happen BEFORE the
 	// trailing-user merge below — history stores already-expanded user
@@ -299,7 +309,7 @@ func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string
 	// Accepted AFTER beginTurn took the turn: this is the point where a message that never
 	// went out is distinguishable from one that did. The window already drew its own bubble
 	// (origin == desktop); every other screen appends it from here.
-	d.echoUserMessage(id, rawText, false, origin)
+	d.echoUserMessage(id, rawText, rawText, false, origin)
 	return "ok"
 }
 
@@ -620,6 +630,12 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			default:
 			}
 		}
+	case agent.AgentEventSessionTitle:
+		// 这段对话的标题刚被生成（第一轮里，且只发生一次）—— 它是列表里那一行的一个字段，
+		// 所以走列表的出口广播一次：窗口本来就从 agent:event 那串流里拿到这个标题，手机不在
+		// 那条线上，它只有 sessions_changed 这一条路（和重命名完全同一个事实、同一个出口）。
+		// 少这一句的表现是：桌面上的标题变了，手机上那段对话一直叫「未命名会话」。
+		d.emitSessionsChanged(id)
 	case agent.AgentEventAskUser:
 		// The agent loop is parked, waiting for the user's answers. Push the
 		// questions to the frontend, which renders the form and answers via

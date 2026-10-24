@@ -1,9 +1,10 @@
 import { Feather } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { api, type Pairing } from '../api/client';
 import type { AttachmentRef } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
+import { ZoomableImage } from './Zoomable';
 
 /**
  * 附件阅读器：手机上能看的，只有 agent 在这段对话里用 SendFile 交出去的那几个。
@@ -74,13 +75,11 @@ export function FileViewer({
       </View>
 
       {isImage ? (
-        <ScrollView contentContainerStyle={styles.imageWrap} maximumZoomScale={3}>
-          <Image
-            source={{ uri: remote.url, headers: remote.headers }}
-            style={[styles.image, { borderColor: t.border, backgroundColor: t.panel }]}
-            resizeMode="contain"
-          />
-        </ScrollView>
+        // 捏合放大 / 拖动 / 双击（见 ./Zoomable）。原来那个 ScrollView 的 maximumZoomScale
+        // 只有 iOS 认，安卓上是一张不会动的图。
+        <View style={{ flex: 1, padding: 16 }}>
+          <ZoomableImage source={{ uri: remote.url, headers: remote.headers }} />
+        </View>
       ) : isText ? (
         <ScrollView contentContainerStyle={styles.textWrap}>
           {loading ? (
