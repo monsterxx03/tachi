@@ -26,6 +26,14 @@ import (
 )
 
 func main() {
+	// One host per base directory — see host_lock.go. Taken before the config is read, so a second
+	// launch leaves no listener, no scheduler and no stray state behind: it says why and exits.
+	hostLock, lockErr := acquireHostLock()
+	if lockErr != nil {
+		log.Fatal(lockErr)
+	}
+	defer hostLock.Release()
+
 	desk := newDesktopApp()
 
 	// Boot the tachi agent. There is no simulated-turn fallback here on purpose: a headless host
@@ -76,11 +84,10 @@ func main() {
 	}
 
 	log.Printf("tachi: headless host up, phone interface on %s", cfg.Mobile.MobileAddress())
-	// Not a warning about THIS process: it is a warning about running it beside the desktop app on
-	// the same machine. Both would hold their own agent for the same conversation and append to the
-	// same session file — there is no cross-process occupancy lock yet (see docs/agents/desktop.md).
-	log.Print("tachi: this process owns ~/.tachi while it runs; do not also run the desktop app on " +
-		"the same machine, or two agents will write the same conversations")
+	// The one-host lock (host_lock.go) is already held: another entry point that tries this data
+	// directory while this process runs is refused, so nothing else can write these conversations.
+	log.Print("tachi: this process owns ~/.tachi while it runs; a second host (the desktop app or " +
+		"another headless process) will be refused until it exits")
 
 	<-ctx.Done()
 

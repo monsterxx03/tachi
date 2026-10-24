@@ -129,6 +129,15 @@ func localAssetPath(r *http.Request) string {
 }
 
 func main() {
+	// One host per base directory — see host_lock.go. It is taken before anything else so a second
+	// launch costs nothing: no window, no config read, no listener.
+	hostLock, lockErr := acquireHostLock()
+	if lockErr != nil {
+		reportHostLocked(lockErr)
+		return
+	}
+	defer hostLock.Release()
+
 	desk := newDesktopApp()
 
 	// Scripted-run hooks, installed before anything can use them (both self-gate on

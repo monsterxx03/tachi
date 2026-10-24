@@ -215,7 +215,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 
 `desktop/mobile*.go`，package `main`，配置块 `mobile.{enabled,listen,max_attachment_mb}`，监听地址默认 `0.0.0.0:8787`。**端点、事件、字段的出处是 [mobile-protocol.md](mobile-protocol.md)**，这一节只说那些不做就会静默坏掉的地方。
 
-- **服务端有两个宿主，实现只有一套**：桌面进程（`main.go` 的 `startMobile`）与无头进程（`main_headless.go`，构建标签 `headless`）。同一个 `desktopApp`、同一个 `~/.tachi`、同一份协议；无头宿主只是没有窗口、托盘、通知、BLE 与麦克风。**两者不能同时跑在同一台机器上** —— 没有跨进程的会话占用锁，两个 agent 会往同一个会话文件里写。手机连哪台机器，看到的就是那台机器的会话。
+- **服务端有两个宿主，实现只有一套**：桌面进程（`main.go` 的 `startMobile`）与无头进程（`main_headless.go`，构建标签 `headless`）。同一个 `desktopApp`、同一个 `~/.tachi`、同一份协议；无头宿主只是没有窗口、托盘、通知、BLE 与麦克风。**同一份 `~/.tachi` 同时只有一个宿主**：两个入口都在启动时拿 `host.lock`，后起的那个退出（无头见 stderr，桌面是系统弹窗）—— 两个 agent 会往同一个会话文件里写。手机连哪台机器，看到的就是那台机器的会话。
 
 - **用量与上下文不能挂在一个 live run 上**（`mobile_session.go` 的 `mobileUsage` / `estimateContextFromRecords`）：手机点开一段电脑上没打开过的对话时没有 run，报告「0 元、0 token」看着就是坏了。金额与积分从**用量账本**（`agent.GlobalUsageRecorder().Rows(id, createdAt)`）算，上下文估算从记录里最近一次调用的 `usage` 算，上下文窗口从配置里那个 provider 的 `spec.context_window`（没有就用模型表）算。分项（`ContextInfo.Parts`）只有活着的 agent 才有，所以空着的时候界面说「只有总量」。
 - **手机建会话、置顶都走桌面同一条路**：置顶复用 `SetSessionPinned`；建会话只写记录（不建 agent、不碰 `activeID`），第一条消息才由 `loadSessionForRemote` 建起来。

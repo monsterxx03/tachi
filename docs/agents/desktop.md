@@ -452,5 +452,5 @@ go build .                       # 仍然是 GUI
 - **`alertKind` 有一份本地副本**（`alert_kind.go`）：值是设备链路协议的一部分，必须与 `link.AlertKind*` 一致；分开是因为无头构建不能编译那套 cgo 蓝牙栈。
 - **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → startMobile`，退出按相反顺序收。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
 - **手机是唯一前端，所以协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
-- **同一台机器上不要同时跑桌面和无头**：两边各自持有 agent，会往同一个会话文件里写。现在**没有**跨进程占用锁（`pkg/flock` 是现成的材料），所以无头启动时会打一行警告。要让两个宿主共享同一批会话，先解决这件事。
+- **一台机器一个宿主，由一把锁保证**（`host_lock.go`）：同一份 `~/.tachi` 同时只允许一个进程跑 agent —— 桌面和无头都在 `main` 的第一行拿 `host.lock`（`pkg/flock`，进程死了内核自动释放，不留需要人工清理的东西）。后启动的那个**直接退出**并说明是谁在用这份数据：桌面走系统弹窗（macOS `osascript` / Linux `zenity`，因为 Wails 自己的 dialog 要等 `App.Run`），无头走 stderr。这不是礼貌：两个 agent 各自持有一份 history，往同一个 `messages.jsonl` 里追加，没有哪种合并是安全的。`open -n` 这类「故意开第二个」的用法只对**隔离 HOME** 的沙箱成立（冒烟套件正是如此），对真实 `~/.tachi` 会被这把锁拒掉。
 - **验证**：`make headless`（交叉时 `GOOS=linux GOARCH=amd64 make headless`）必须常绿 —— 它就是「不依赖桌面能力」的定义，CI 里那个 `desktop-headless` job 跑的是同一条命令的裸形式。本机能起一个沙箱验协议（隔离 `HOME` + `mobile.enabled` + `mobile.json` 的令牌，`/v1/ping` → `/v1/sessions` → 发一条消息）。`go test ./...` 和 GUI 构建走的是默认标签，**headless 这条路没有测试覆盖**，改它的人要自己把上面两条跑一遍。
