@@ -598,6 +598,28 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		if toTranscript && isCurrent && ev.ToolName == tools.ToolNameSavePlan && !ev.ToolIsError {
 			d.emit("agent:plan", map[string]any{"sessionId": id})
 		}
+	case agent.AgentEventSteerCheck:
+		// The loop parks here between tool calls, waiting for the frontend to answer "is anything
+		// queued?". Silence is not an answer: with nobody writing to the channel the loop waits out
+		// defaultSteerTimeout (5s) at EVERY tool boundary, which is a desktop turn with one tool
+		// call being five seconds slower than the same turn in the TUI — and on the phone it looks
+		// like a stall between the tool result and the next token.
+		//
+		// steerFrom drains the channel before writing, so a real steer landing in this same instant
+		// wins the slot. A steer that arrives just after this reply waits for the NEXT boundary
+		// rather than being lost — the same trade the TUI makes (tui/model_events.go).
+		d.mu.Lock()
+		var steerCh chan agent.SteerInput
+		if r := d.ownerOfLocked(id); r != nil {
+			steerCh = r.steerCh
+		}
+		d.mu.Unlock()
+		if steerCh != nil {
+			select {
+			case steerCh <- agent.SteerInput{}:
+			default:
+			}
+		}
 	case agent.AgentEventAskUser:
 		// The agent loop is parked, waiting for the user's answers. Push the
 		// questions to the frontend, which renders the form and answers via
