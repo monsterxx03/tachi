@@ -43,6 +43,8 @@ go run ./mockapi -token dev-token      # 它会把「局域网地址 + 令牌」
 
 打开 App，在配对页填/扫那个地址和令牌，就能看到会话列表。验证：`npm test`（纯逻辑）、`bash e2e/run.sh`（端到端）。
 
+**连一台无头宿主时，地址和令牌从它的启动日志里读**（`phone pairing` 那两行，见 [desktop.md](desktop.md) 的「无头宿主」）：那台机器上没有设置页可以点。令牌存在那台机器的 `~/.tachi/mobile.json`（`0600`，首次启动生成）；把日志贴出去之前先删掉那行。配置里的 `mobile.listen` 必须是 `0.0.0.0:8787` 一类可被局域网访问的地址 —— 绑在 `127.0.0.1` 上时日志会警告，因为那种情况下手机永远连不上。
+
 工具链：**JDK 17**（Temurin）、**Node 26**、**Android SDK**（`~/Library/Android/sdk`）。构建 `android/` 那一步还要 `ANDROID_HOME`，少了它 Gradle 以「SDK location not found」失败。
 
 - **`babel.config.js` 必须在**（`presets: ['babel-preset-expo']`）。reanimated 4 的 worklet 全靠 babel 插件编译：`babel-preset-expo` 见到 `react-native-worklets` 会自动加上那个插件，而**没有这份配置就没人跑 babel**——App 起得来，却在加载阶段崩在 `Cannot read property 'bytecode' of undefined`（`installUnpackers` 读的就是 worklet 函数的 `__initData`）。`babel-preset-expo` 本身也必须在顶层 `node_modules`，光是嵌在 `expo/node_modules` 里不够（`presets: ['babel-preset-expo']` 从项目根解析）。同理，`react-native-gesture-handler` / `react-native-reanimated` 从 `node_modules` 里消失时 `tsc` 会先报一串 `Cannot find module`，而**原生模块是编在 APK 里的**——补装完 JS 包之后必须重新编译一次 APK，否则 Metro 能加载 JS，运行时仍报 `RNGestureHandlerModule could not be found`。

@@ -456,6 +456,7 @@ go build .                       # 仍然是 GUI
 - **桌面能力用空实现顶住调用点**：`refreshTray`（托盘读数）、`notifyLink` / `enqueueAlert` / `startBadge` / `stopBadge` / `applyBadgeLink`（BLE 与提示音）、`OpenPath` / `OpenURL`（系统 launcher）。运行时文件里的调用一行都不用改 —— 加一个新的桌面能力时照这个形状做，不要在每个调用点写 `if`。
 - **通知走接口**（`notifyHost`，`notify_host.go`）：窗口版是 `*notifier`，无头版是 `noNotifier{}`。**调用点一律写 `d.notifyHost()`，不要写 `d.notify.`** —— 字段是接口，一个用字面量构造出来的 `desktopApp`（测试会这么干）拿到的是 nil 接口，直接调用会 panic，而 `notifyHost()` 兜住了这一点。
 - **`alertKind` 有一份本地副本**（`alert_kind.go`）：值是设备链路协议的一部分，必须与 `link.AlertKind*` 一致；分开是因为无头构建不能编译那套 cgo 蓝牙栈。
+- **配对信息在启动日志里**（`logMobilePairing`）：无头进程没有设置页，所以它用**同一个** `GetMobilePairing`（桌面卡片渲染的就是它）把候选地址和令牌打出来，末尾一行说明那是凭据。它还会在 `mobile.listen` 只绑回环时警告一句 —— 那种配置下地址、令牌都对，手机却永远连不上。别把这个输出挪进「调试日志」：对一台放在 NAS 上的宿主，它是用户唯一能拿到配对信息的途径。
 - **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → startMobile`，退出按相反顺序收。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
 - **手机是唯一前端，所以协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
 - **一台机器一个宿主，由一把锁保证**（`host_lock.go`）：同一份 `~/.tachi` 同时只允许一个进程跑 agent —— 桌面和无头都在 `main` 的第一行拿 `host.lock`（`pkg/flock`，进程死了内核自动释放，不留需要人工清理的东西）。后启动的那个**直接退出**并说明是谁在用这份数据：桌面走系统弹窗（macOS `osascript` / Linux `zenity`，因为 Wails 自己的 dialog 要等 `App.Run`），无头走 stderr。这不是礼貌：两个 agent 各自持有一份 history，往同一个 `messages.jsonl` 里追加，没有哪种合并是安全的。`open -n` 这类「故意开第二个」的用法只对**隔离 HOME** 的沙箱成立（冒烟套件正是如此），对真实 `~/.tachi` 会被这把锁拒掉。

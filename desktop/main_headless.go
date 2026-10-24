@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -84,6 +85,7 @@ func main() {
 	}
 
 	log.Printf("tachi: headless host up, phone interface on %s", srv.listenAddr())
+	logMobilePairing(desk)
 	// The one-host lock (host_lock.go) is already held: another entry point that tries this data
 	// directory while this process runs is refused, so nothing else can write these conversations.
 	log.Print("tachi: this process owns ~/.tachi while it runs; a second host (the desktop app or " +
@@ -101,4 +103,53 @@ func main() {
 		cache.Close()
 	}
 	desk.teardownAgent()
+}
+
+// logMobilePairing prints what the phone needs, because there is no settings card here to show it.
+//
+// The windowed build has GetMobilePairing behind a card (QR + address + a masked token). A headless
+// host has no window at all, so without this the pairing information exists only as a file the user
+// has to know about (~/.tachi/mobile.json) plus an IP they have to look up — and the address the
+// listener logs is the BIND address (0.0.0.0:8787), which is not something a phone can dial.
+//
+// GetMobilePairing is the same source the card renders: candidates are this machine's LAN addresses,
+// ordered physical-first, and the token is created on first call. One source, two presentations.
+func logMobilePairing(d *desktopApp) {
+	vo := (&AgentService{desk: d}).GetMobilePairing()
+	if vo.Error != "" {
+		log.Printf("tachi: pairing information unavailable: %s", vo.Error)
+		return
+	}
+	if len(vo.Candidates) == 0 {
+		log.Print("tachi: this machine has no usable LAN address — a phone cannot reach it")
+		return
+	}
+	if host, _, err := net.SplitHostPort(vo.Listen); err == nil && loopbackHost(host) {
+		// The tokens and the card are right; the listener itself is the problem. Saying so here is
+		// the difference between "the phone keeps saying it cannot connect" and one line the reader
+		// can act on before they start pairing.
+		log.Printf("tachi: WARNING mobile.listen is %s — only this machine can reach that; "+
+			"set it to 0.0.0.0:8787 for the phone to connect", vo.Listen)
+	}
+	for i, c := range vo.Candidates {
+		if i == 0 {
+			log.Printf("tachi: phone pairing — fill this address in the app: %s", c.URL)
+			continue
+		}
+		log.Printf("tachi:                 another interface: %s (%s)", c.URL, c.Interface)
+	}
+	log.Printf("tachi: token: %s", vo.Token)
+	log.Print("tachi: that line is a credential — delete it before pasting this log anywhere")
+}
+
+// loopbackHost reports whether a listen host only accepts connections from this machine.
+func loopbackHost(host string) bool {
+	switch host {
+	case "", "0.0.0.0", "::":
+		return false
+	case "localhost":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
