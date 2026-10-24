@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,11 @@ type mobileServer struct {
 	desk *desktopApp
 	srv  *http.Server
 	ln   net.Listener
+	// hostname is this machine's name, reported by /v1/ping so a phone that remembers several
+	// computers can tell them apart in its own list. Read ONCE at construction: renaming the
+	// machine while Tachi runs is not a thing, and the pairing screen must not depend on a syscall
+	// per request. Empty when the OS cannot say — the phone falls back to the address.
+	hostname string
 
 	mu    sync.Mutex
 	token string
@@ -107,7 +113,13 @@ func (d *desktopApp) stopMobile() {
 }
 
 func newMobileServer(d *desktopApp, token string) *mobileServer {
-	return &mobileServer{desk: d, token: token, conns: make(map[*mobileConn]struct{})}
+	hostname, _ := os.Hostname()
+	return &mobileServer{
+		desk:     d,
+		token:    token,
+		hostname: hostname,
+		conns:    make(map[*mobileConn]struct{}),
+	}
 }
 
 // setToken replaces the credential and drops every live connection: a regenerated token that

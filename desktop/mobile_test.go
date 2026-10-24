@@ -101,8 +101,17 @@ func TestMobileAuth(t *testing.T) {
 	d, _ := newMobileApp(t)
 	_, ts := mobileTestServer(t, d)
 
-	if code, _ := mobileCall(t, ts, "GET", "/v1/ping", "", nil); code != http.StatusOK {
+	code, ping := mobileCall(t, ts, "GET", "/v1/ping", "", nil)
+	if code != http.StatusOK {
 		t.Fatalf("ping without token = %d, want 200", code)
+	}
+	// hostname is what a phone with several saved computers labels this one with, so an empty one
+	// silently leaves every row saying "tachi-desktop · <address>".
+	if h, _ := ping["hostname"].(string); h == "" {
+		t.Fatalf("ping carries no hostname: %v", ping)
+	}
+	if name, _ := ping["name"].(string); name == "" {
+		t.Fatalf("ping carries no name: %v", ping)
 	}
 	if code, _ := mobileCall(t, ts, "GET", "/v1/sessions", "", nil); code != http.StatusUnauthorized {
 		t.Fatalf("sessions without token = %d, want 401", code)

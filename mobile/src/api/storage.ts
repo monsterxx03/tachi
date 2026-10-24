@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import type { Pairing } from './client';
+import { hostOf } from './label';
 
 /**
  * 配对信息（地址 + 令牌）存在哪。
@@ -16,8 +17,15 @@ const KEY = 'tachi.devices';
 const LEGACY_KEY = 'tachi.pairing';
 
 export interface Device extends Pairing {
-  /** 给人看的名字：配对时从 /v1/ping 拿到的名字 + 主机名 */
+  /** 给人看的名字：配对时取那台机器自报的名字，之后可以在设置页改（只存在这台手机上） */
   label: string;
+  /**
+   * /v1/ping 报上来的机器名，原名留着。
+   *
+   * 改名之后仍然要它：清空输入时回到的默认值就是它，排查「这条是哪台机器」也靠它。老服务端
+   * 没有这个字段（协议后加的），所以是可选的。
+   */
+  hostname?: string;
 }
 
 export interface DeviceBook {
@@ -57,20 +65,6 @@ export async function saveDevices(devices: Device[], active: number): Promise<vo
     return;
   }
   await writeRaw(KEY, JSON.stringify({ devices, active }));
-}
-
-/** 配对时给那一台起个名字：ping 回来的名字 + 它的主机，认得出是哪一台就够了 */
-export function deviceLabel(name: string, baseUrl: string): string {
-  const host = hostOf(baseUrl);
-  return name && name !== host ? `${name} · ${host}` : host;
-}
-
-function hostOf(baseUrl: string): string {
-  try {
-    return baseUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  } catch {
-    return baseUrl;
-  }
 }
 
 async function readRaw(key: string): Promise<string | null> {

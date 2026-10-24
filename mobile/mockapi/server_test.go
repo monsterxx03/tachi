@@ -41,8 +41,19 @@ func get(t *testing.T, ts *httptest.Server, path, token string) *http.Response {
 func TestPingDoesNotNeedToken(t *testing.T) {
 	ts := newTestServer(t)
 	// 配对页就是拿这个端点验证地址与令牌的，所以它自己不能先要令牌
-	if got := get(t, ts, "/v1/ping", "").StatusCode; got != http.StatusOK {
-		t.Fatalf("ping 应当不要令牌，得到 %d", got)
+	resp := get(t, ts, "/v1/ping", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ping 应当不要令牌，得到 %d", resp.StatusCode)
+	}
+	defer resp.Body.Close()
+	// hostname 是手机端列表里的默认名字；假服务端也要给，否则那条 UI 在 mock 下永远走兜底
+	// 分支，测不到
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode ping: %v", err)
+	}
+	if h, _ := body["hostname"].(string); h == "" {
+		t.Fatalf("ping 没有 hostname：%v", body)
 	}
 }
 

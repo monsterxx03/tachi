@@ -1,7 +1,9 @@
 import { Feather } from '@expo/vector-icons';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Pairing as PairingInfo } from '../api/client';
 import type { Device } from '../api/storage';
+import { defaultLabel } from '../api/label';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
@@ -20,6 +22,7 @@ export function Settings({
   conn,
   onSwitchDevice,
   onRemoveDevice,
+  onRenameDevice,
   onAddDevice,
   onUnpair,
   onBack,
@@ -30,12 +33,25 @@ export function Settings({
   conn: string;
   onSwitchDevice: (index: number) => void;
   onRemoveDevice: (index: number) => void;
+  /** 改这一台在手机上的显示名；只写本地，不通知那台机器 */
+  onRenameDevice: (index: number, label: string) => void;
   onAddDevice: () => void;
   onUnpair: () => void;
   onBack: () => void;
 }) {
   const { tokens: t, mode, setMode } = useTheme();
   const back = useEdgeBack(onBack);
+  // 改名是行内编辑，不弹一个新页面：这一屏本来就短，改的是一个字段。
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState('');
+
+  // 清空输入 = 回到默认名（那台机器自报的名字，或者地址）。这条规则让「忘了原来叫什么」
+  // 有出路，也免得一个空名字在列表里留下一条看不见的条目。
+  function commit(index: number, d: Device) {
+    const wanted = draft.trim();
+    onRenameDevice(index, wanted || defaultLabel(d));
+    setEditing(null);
+  }
 
   return (
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
@@ -54,35 +70,74 @@ export function Settings({
           ) : null}
           {devices.map((d, i) => {
             const on = i === activeDevice;
+            const renaming = editing === i;
             return (
               <Pressable
                 key={`${d.baseUrl}-${i}`}
-                onPress={() => (on ? undefined : onSwitchDevice(i))}
+                onPress={() => (renaming || on ? undefined : onSwitchDevice(i))}
                 style={[styles.device, { borderColor: on ? t.accentLine : t.border, backgroundColor: on ? t.accentSoft : 'transparent' }]}
               >
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
-                    {d.label || d.baseUrl}
-                  </Text>
+                  {renaming ? (
+                    <TextInput
+                      value={draft}
+                      onChangeText={setDraft}
+                      autoFocus
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                      returnKeyType="done"
+                      onSubmitEditing={() => commit(i, d)}
+                      placeholder={defaultLabel(d)}
+                      placeholderTextColor={t.faint}
+                      style={[styles.nameInput, { color: t.text, borderColor: t.borderStrong, backgroundColor: t.bg }]}
+                    />
+                  ) : (
+                    <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
+                      {d.label || d.baseUrl}
+                    </Text>
+                  )}
                   <Text style={{ color: t.faint, fontSize: 11, marginTop: 2, fontFamily: 'monospace' }} numberOfLines={1}>
                     {on
                       ? `${d.baseUrl} · ${conn === 'open' ? '已连接' : conn === 'connecting' ? '正在连接…' : '连不上'}`
                       : d.baseUrl}
                   </Text>
                 </View>
-                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
-                <Pressable
-                  hitSlop={8}
-                  onPress={() =>
-                    Alert.alert('删掉这台电脑？', d.label || d.baseUrl, [
-                      { text: '取消', style: 'cancel' },
-                      { text: '删掉', style: 'destructive', onPress: () => onRemoveDevice(i) },
-                    ])
-                  }
-                  style={styles.trash}
-                >
-                  <Feather name="x" size={15} color={t.faint} />
-                </Pressable>
+                {renaming ? (
+                  <>
+                    <Pressable hitSlop={8} onPress={() => commit(i, d)} style={styles.trash}>
+                      <Feather name="check" size={15} color={t.accent2} />
+                    </Pressable>
+                    <Pressable hitSlop={8} onPress={() => setEditing(null)} style={styles.trash}>
+                      <Feather name="x" size={15} color={t.faint} />
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
+                    <Pressable
+                      hitSlop={8}
+                      onPress={() => {
+                        setDraft(d.label);
+                        setEditing(i);
+                      }}
+                      style={styles.trash}
+                    >
+                      <Feather name="edit-2" size={14} color={t.faint} />
+                    </Pressable>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={() =>
+                        Alert.alert('删掉这台电脑？', d.label || d.baseUrl, [
+                          { text: '取消', style: 'cancel' },
+                          { text: '删掉', style: 'destructive', onPress: () => onRemoveDevice(i) },
+                        ])
+                      }
+                      style={styles.trash}
+                    >
+                      <Feather name="x" size={15} color={t.faint} />
+                    </Pressable>
+                  </>
+                )}
               </Pressable>
             );
           })}
@@ -97,7 +152,7 @@ export function Settings({
             <Text style={{ color: t.accent2, fontSize: 13 }}>添加电脑</Text>
           </Pressable>
           <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 10, lineHeight: 17 }}>
-            同时只连一台：会话在电脑上，切过去看到的是那台电脑的会话。地址 {pairing?.baseUrl ?? '—'}
+            同时只连一台：会话在电脑上，切过去看到的是那台电脑的会话。名字只存在这台手机上，改它不会动那台机器。地址 {pairing?.baseUrl ?? '—'}
           </Text>
         </View>
 
@@ -174,6 +229,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   trash: { padding: 4 },
+  nameInput: {
+    borderWidth: 1,
+    borderRadius: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    fontSize: 13.5,
+  },
   addDevice: {
     flexDirection: 'row',
     alignItems: 'center',

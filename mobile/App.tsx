@@ -187,6 +187,7 @@ function Shell() {
       sessions={m.sessions}
       currentId={m.openId}
       conn={m.conn}
+      deviceName={m.devices[m.activeDevice]?.label}
       // 这些必须是稳定引用：行组件 memo 过，回调每帧新建的话 memo 等于没有
       onOpen={m.open}
       onSettings={() => setShowSettings(true)}
@@ -222,10 +223,10 @@ function Shell() {
 
         {!m.pairing || addingDevice ? (
           <Pairing
-            onPaired={(p, label) => {
+            onPaired={(p, meta) => {
               // 加完一台就回设置页：留在配对上会让人以为没成功
               setAddingDevice(false);
-              void m.pair(p, label);
+              void m.pair(p, meta);
             }}
             onClose={m.pairing ? () => setAddingDevice(false) : undefined}
           />
@@ -247,6 +248,7 @@ function Shell() {
               void m.switchDevice(i);
             }}
             onRemoveDevice={(i) => void m.removeDevice(i)}
+            onRenameDevice={(i, label) => void m.renameDevice(i, label)}
             onAddDevice={() => setAddingDevice(true)}
             onBack={() => setShowSettings(false)}
             onUnpair={() => {

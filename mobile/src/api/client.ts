@@ -46,11 +46,21 @@ async function req<T>(conn: Pairing, path: string, init?: RequestInit): Promise<
   return (await res.json()) as T;
 }
 
+/** /v1/ping 的答案。`hostname` 是那台机器自己的名字（老服务端没有这一项）。 */
+export interface PingResult {
+  ok: boolean;
+  /** 产品名，每台安装都一样；只用来判明「这是不是一个 Tachi」 */
+  name?: string;
+  /** 机器名（hostname），手机列表里默认显示它 */
+  hostname?: string;
+  version?: string;
+}
+
 /** 配对页用它验证地址与令牌；这个端点不要令牌 */
-export async function ping(baseUrl: string): Promise<{ ok: boolean; name: string; version: string }> {
+export async function ping(baseUrl: string): Promise<PingResult> {
   const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/ping`);
   if (!res.ok) throw new ApiError(res.status, `http_${res.status}`);
-  return (await res.json()) as { ok: boolean; name: string; version: string };
+  return (await res.json()) as PingResult;
 }
 
 export const api = {

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -133,11 +134,12 @@ func logMobilePairing(d *desktopApp) {
 	}
 	for i, c := range vo.Candidates {
 		if i == 0 {
-			log.Printf("tachi: phone pairing — fill this address in the app: %s", c.URL)
+			log.Printf("tachi: phone pairing — fill this address in the app, or scan the code below: %s", c.URL)
 			continue
 		}
 		log.Printf("tachi:                 another interface: %s (%s)", c.URL, c.Interface)
 	}
+	printPairingQRCode(vo.Payload)
 	log.Printf("tachi: token: %s", vo.Token)
 	log.Print("tachi: that line is a credential — delete it before pasting this log anywhere")
 }
@@ -152,4 +154,22 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// printPairingQRCode shows the payload as a scannable code, but ONLY on a terminal.
+//
+// A QR code is the difference between copying a 43-character token by hand and pointing the phone at
+// the screen. When stdout is not a terminal — systemd's journal, a redirected log, the itest
+// harness — the block characters are unreadable noise in a file nobody can scan, so the two text
+// lines above are the whole answer there.
+func printPairingQRCode(payload string) {
+	info, err := os.Stdout.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	code, err := pairingQRCode(payload)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(os.Stdout, code)
 }

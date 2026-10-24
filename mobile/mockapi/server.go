@@ -85,7 +85,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", s.guard(s.handleSkipApproval))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", s.guard(s.handlePermission))
 	mux.HandleFunc("POST /v1/sessions/{id}/questions", s.guard(s.handleQuestions))
-	return mux
+	return allowWebPreview(mux)
+}
+
+// allowWebPreview 给浏览器里的界面补上 CORS。
+//
+// 只属于这个假服务端：`npm run web` 的页面在 8082 上，浏览器会拦掉它发往 9797 的 fetch（手机
+// App 不跨域，所以真服务端不需要这些头——那边开 CORS 等于让任意网页读手机接口）。OPTIONS 必须
+// 在最外层答，因为 guard 会因为它没带令牌而拒掉预检。
+//
+// WebSocket 不受 CORS 约束，mockapi 的 upgrader 本来就放开 Origin（ws.go）。
+func allowWebPreview(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // guard 检查 Bearer 令牌；比较是常量时间的（协议里那条：令牌是凭据）
@@ -115,7 +135,12 @@ func constTimeEqual(a, b string) bool {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	// ping 不要令牌：配对页就是拿它来验证地址与令牌的，先要能连上
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": "tachi-mockapi", "version": "0.1"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"name":     "tachi-mockapi",
+		"hostname": "mock-machine",
+		"version":  "0.1",
+	})
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {

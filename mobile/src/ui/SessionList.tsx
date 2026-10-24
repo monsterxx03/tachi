@@ -134,6 +134,7 @@ export function SessionList({
   sessions,
   currentId,
   conn,
+  deviceName,
   onOpen,
   onSettings,
   onNew,
@@ -144,6 +145,8 @@ export function SessionList({
   sessions: SessionSummary[];
   currentId: string | null;
   conn: string;
+  /** 当前那台电脑在手机上的名字（用户可以改）；空 = 还没配对信息，退回「这台电脑」 */
+  deviceName?: string;
   onOpen: (id: string) => void;
   onSettings: () => void;
   onNew: () => void;
@@ -163,7 +166,11 @@ export function SessionList({
           <View style={styles.subRow}>
             <View style={[styles.onlineDot, { backgroundColor: online ? t.green : t.amber }]} />
             <Text style={[styles.sub, { color: t.faint }]} numberOfLines={1}>
-              {online ? '已连接 · 这台电脑' : conn === 'connecting' ? '正在连接电脑…' : '连不上电脑'}
+              {online
+                ? `已连接 · ${deviceName || '这台电脑'}`
+                : conn === 'connecting'
+                ? '正在连接电脑…'
+                : '连不上电脑'}
             </Text>
           </View>
         </View>

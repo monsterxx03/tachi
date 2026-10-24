@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
-import { deviceLabel } from '../api/storage';
+import { deviceLabel } from '../api/label';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
 import Animated from 'react-native-reanimated';
@@ -17,7 +17,7 @@ export function Pairing({
   onPaired,
   onClose,
 }: {
-  onPaired: (p: PairingInfo, label?: string) => void;
+  onPaired: (p: PairingInfo, meta?: { label: string; hostname?: string }) => void;
   /** 从设置页「添加电脑」进来时给一个返回；第一台配对时没有 */
   onClose?: () => void;
 }) {
@@ -35,8 +35,9 @@ export function Pairing({
     setErr(null);
     try {
       const r = await ping(p.baseUrl);
-      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台
-      if (r.ok) onPaired(p, deviceLabel(r.name, p.baseUrl));
+      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台。默认名取机器自报的
+      // hostname（老服务端没有这一项时退回「产品名 · 地址」）。
+      if (r.ok) onPaired(p, { label: deviceLabel(r, p.baseUrl), hostname: r.hostname });
       else setErr('这台机器拒绝了这个地址');
     } catch (e) {
       setErr(messageOfError(e));

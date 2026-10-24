@@ -38,7 +38,7 @@
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/v1/ping` | — | `{ok, name, version}`，配对页用它验证地址与令牌 |
+| GET | `/v1/ping` | — | `{ok, name, hostname, version}`，配对页用它验证地址与令牌 |
 | GET | `/v1/sessions` | — | `{sessions: [SessionSummary]}` |
 | POST | `/v1/sessions` | `{projectId?, workingDir?}` | `{session: SessionSummary}` |
 | GET | `/v1/projects` | — | `{projects: [ProjectRef]}`，新建会话时的项目下拉框 |
@@ -63,6 +63,7 @@
 - **翻页游标是记录序号**：`before` 传上一次拿到的最旧一条的 `index`，服务端返回序号**严格小于**它的那 `limit` 条。不用时间戳 —— 消息没有自己的 id，而时间戳会撞，同一刻的两条落在页边界上会被整段跳过。
 - **新建会话不改变桌面正在看的那一段**（不变量 7）：`projectId` 走项目的目录快照；没有项目时按 `workingDir` 起一段，空 = `~/workspace`，`~` 与 `~/x` 由**那台电脑**展开（手机没有文件选择器），目录不存在会建出来。新建成功同样广播 `sessions_changed`。
 - **置顶是列表的事实**：`pinned` 写进会话记录，成功即广播 `sessions_changed` —— 两块屏的次序都由重新读列表得出，不各算一份。
+- **`hostname` 是那台机器自己的名字**（`os.Hostname()`，见 `mobile_http.go`），它和 `name` 不是一回事：`name` 是产品名，每台安装都一样。「记住多台电脑」的手机拿它当默认显示名（去掉 macOS 的 `.local`），用户可以在手机上改名 —— **改名只在手机上生效，协议里没有写回它的端点**。
 - **附件端点不接受路径**：`attachmentId` 就是那次 `SendFile` 调用的 id，只回记录里反查，查不到就是 404。记录里的 `path` 可能是相对的，按那次调用所属会话的工作目录解析。这样「令牌 = 任意文件读取」这个洞从一开始就不存在。
 
 **拒绝的原因要原样透传**，不要笼统成「操作失败」—— 手机屏幕小，用户唯一能行动的就是那句话。

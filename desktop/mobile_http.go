@@ -16,7 +16,15 @@ const mobileVersion = "0.1"
 func (m *mobileServer) handlePing(w http.ResponseWriter, r *http.Request) {
 	// No token: the pairing page is verifying the address AND the token, so it has to be able
 	// to reach something first. It reveals nothing a LAN scan would not.
-	mobileWriteJSON(w, map[string]any{"ok": true, "name": "tachi-desktop", "version": mobileVersion})
+	// hostname is what a phone with several saved computers labels this one with. It is the
+	// MACHINE's name, not the product's: "name" answers "what is this app", which is the same string
+	// on every install.
+	mobileWriteJSON(w, map[string]any{
+		"ok":       true,
+		"name":     "tachi-desktop",
+		"hostname": m.hostname,
+		"version":  mobileVersion,
+	})
 }
 
 func (m *mobileServer) handleSessions(w http.ResponseWriter, r *http.Request) {

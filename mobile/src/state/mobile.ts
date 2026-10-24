@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
-import { deviceLabel, loadDevices, saveDevices, type Device } from '../api/storage';
+import { loadDevices, saveDevices, type Device } from '../api/storage';
+import { deviceLabel } from '../api/label';
 import type { Panels, ProjectRef, SessionSummary } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
@@ -24,10 +25,12 @@ export interface MobileApi {
   openId: string | null;
   chat: ChatState;
   error: string | null;
-  /** label 是配对页从 /v1/ping 拿到的名字（+ 主机） */
-  pair: (p: Pairing, label?: string) => Promise<void>;
+  /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）与原始 hostname */
+  pair: (p: Pairing, meta?: { label?: string; hostname?: string }) => Promise<void>;
   /** 换一台电脑：断开这一条、清掉画面，再连过去 */
   switchDevice: (index: number) => Promise<void>;
+  /** 给某一台改个名字：只写这台手机上的存储，不通知那台机器（协议里没有这个端点） */
+  renameDevice: (index: number, label: string) => Promise<void>;
   /** 从列表里删掉一台；删的是当前那台时会顺位切到剩下的 */
   removeDevice: (index: number) => Promise<void>;
   unpair: () => Promise<void>;
@@ -404,8 +407,12 @@ export function useMobile(): MobileApi {
 
   // 同一台电脑再配一次（换了令牌）按地址去重：列表里不该出现两条同一个地址
   const pair = useCallback(
-    async (p: Pairing, label?: string) => {
-      const dev: Device = { ...p, label: label || deviceLabel('', p.baseUrl) };
+    async (p: Pairing, meta?: { label?: string; hostname?: string }) => {
+      const dev: Device = {
+        ...p,
+        label: meta?.label || deviceLabel({}, p.baseUrl),
+        hostname: meta?.hostname,
+      };
       const list = devicesRef.current.slice();
       const at = list.findIndex((d) => d.baseUrl === p.baseUrl);
       if (at >= 0) list[at] = dev;
@@ -422,6 +429,22 @@ export function useMobile(): MobileApi {
       await activate(list.slice(), index);
     },
     [activate],
+  );
+
+  // 改名是本地的事：devices 是这台手机自己的簿子，那台机器并不知道（也不需要知道）。
+  // 它刻意不走 activate —— 改名不该断开并重连一条正在用的 WebSocket。
+  const renameDevice = useCallback(
+    async (index: number, label: string) => {
+      const list = devicesRef.current.slice();
+      const at = list[index];
+      if (!at) return;
+      const name = label.trim();
+      if (!name || name === at.label) return;
+      list[index] = { ...at, label: name };
+      setDevices(list);
+      await saveDevices(list, activeDevice);
+    },
+    [activeDevice],
   );
 
   const removeDevice = useCallback(
@@ -757,6 +780,7 @@ export function useMobile(): MobileApi {
     error,
     pair,
     switchDevice,
+    renameDevice,
     removeDevice,
     unpair,
     refresh,

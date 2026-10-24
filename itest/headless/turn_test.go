@@ -97,6 +97,22 @@ func TestHeadlessRefusesRequestsWithoutTheToken(t *testing.T) {
 	if !h.ping() {
 		t.Fatal("ping should answer without a token")
 	}
+	// …and it has to say what this machine is CALLED: that string is what a phone with several
+	// saved computers labels this one with (see mobile/src/api/label.ts). An empty one silently
+	// leaves every row reading "tachi-desktop · <address>", which is the bug the field exists for.
+	status, body := h.do(t, "GET", "/v1/ping", "")
+	if status != 200 {
+		t.Fatalf("ping: %d %s", status, body)
+	}
+	var ping struct {
+		Hostname string `json:"hostname"`
+	}
+	if err := json.Unmarshal([]byte(body), &ping); err != nil {
+		t.Fatalf("decode ping: %v (%s)", err, body)
+	}
+	if ping.Hostname == "" {
+		t.Fatalf("ping carries no hostname: %s", body)
+	}
 }
 
 // TestSecondHostOnTheSameHomeIsRefused pins the one-host rule (desktop/host_lock.go) from the
