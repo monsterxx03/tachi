@@ -21,7 +21,25 @@ type Server struct {
 	log     *logger.Logger
 	// cron 是假服务端的定时任务表：手机上那三个动作要改得动它，面板才看得出同步
 	cron []map[string]any
+	// awake 是这台「电脑」的保持唤醒开关。它不属于任何会话，所以和 cron 一样是一份独立状态，
+	// 由 POST /v1/awake 改、由 awake_changed 广播 —— 手机端的卡片在两个假服务端之间也能被验证。
+	awake AwakeState
 }
+
+// AwakeState 与 docs/agents/mobile-protocol.md 的线上类型一字不差。
+type AwakeState struct {
+	On bool `json:"on"`
+	// DurationMin 是偏好（0 = 不自动关），Until 是这次开着时到点自动关的时刻
+	DurationMin int    `json:"durationMin"`
+	Until       string `json:"until"`
+}
+
+// 时长的默认与边界，与桌面 awake.go 同一套（默认 3 小时，0 = 不自动关）
+const (
+	mockAwakeDefaultMinutes = 180
+	mockAwakeMinMinutes     = 5
+	mockAwakeMaxMinutes     = 24 * 60
+)
 
 func New(token string) *Server {
 	order, byID := seed()
@@ -31,6 +49,7 @@ func New(token string) *Server {
 		byID:    byID,
 		clients: map[*client]struct{}{},
 		log:     logger.New("mockapi"),
+		awake:   AwakeState{DurationMin: mockAwakeDefaultMinutes},
 		cron: []map[string]any{
 			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "status": "active",
 				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
@@ -71,6 +90,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions", s.guard(s.handleCreateSession))
 	mux.HandleFunc("GET /v1/projects", s.guard(s.handleProjects))
 	mux.HandleFunc("GET /v1/providers", s.guard(s.handleProviders))
+	mux.HandleFunc("GET /v1/awake", s.guard(s.handleAwake))
+	mux.HandleFunc("POST /v1/awake", s.guard(s.handleSetAwake))
 	mux.HandleFunc("GET /v1/sessions/{id}/page", s.guard(s.handlePage))
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", s.guard(s.handleFile))
 	mux.HandleFunc("GET /v1/sessions/{id}/panels", s.guard(s.handlePanels))
@@ -383,6 +404,49 @@ func expandHome(p string) string {
 		return "/home/mock/" + strings.TrimPrefix(p, "~/")
 	}
 	return p
+}
+
+// handleAwake 读的是那台「电脑」的开关：手机卡片画的就是它。
+func (s *Server) handleAwake(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	st := s.awake
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"awake": st})
+}
+
+// handleSetAwake 走和桌面同一条规矩：越界的时长是 400 bad_request，成功之后把完整状态广播给
+// 每一条连接（假服务端没有系统能拒，所以 awake_failed 在这里不会发生）。
+func (s *Server) handleSetAwake(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		On          bool `json:"on"`
+		DurationMin *int `json:"durationMin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+
+	s.mu.Lock()
+	st := s.awake
+	if req.DurationMin != nil {
+		m := *req.DurationMin
+		if m != 0 && (m < mockAwakeMinMinutes || m > mockAwakeMaxMinutes) {
+			s.mu.Unlock()
+			fail(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		st.DurationMin = m
+	}
+	st.On = req.On
+	st.Until = ""
+	if st.On && st.DurationMin > 0 {
+		st.Until = time.Now().Add(time.Duration(st.DurationMin) * time.Minute).UTC().Format(time.RFC3339)
+	}
+	s.awake = st
+	s.mu.Unlock()
+
+	s.broadcast("", Event{Type: "awake_changed", Awake: &st})
+	writeJSON(w, http.StatusOK, map[string]any{"awake": st})
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {

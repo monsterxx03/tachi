@@ -185,6 +185,17 @@ type desktopApp struct {
 	// Guarded by mu.
 	mobile *mobileServer
 
+	// usageCache memoizes one session's cost for the phone's snapshot (mobile_session.go): the
+	// ledger scan is the most expensive part of opening a conversation, and a reader tapping
+	// through three of them should pay for it once. Its own lock lives inside it.
+	usageCache mobileUsageCache
+
+	// awake is the machine-wide 「保持唤醒」 switch (awake.go): the tray menu and the phone
+	// drive the same object, and it is created here rather than in main.go because a HEADLESS
+	// host has it too — the phone is then its only surface. Its own lock lives inside it (a
+	// D-Bus call on Linux must never run under the app-wide lock).
+	awake *awakeController
+
 	mu   sync.Mutex
 	runs map[string]*sessionRun // key: session ID
 	// trayCost memoizes today's spend for the menu bar (see todayCost): refreshTray runs on every
@@ -279,15 +290,20 @@ type desktopApp struct {
 }
 
 func newDesktopApp() *desktopApp {
-	return &desktopApp{
-		windowHost:   newWindowHost(),
-		notify:       newNotifierHost(),
+	d := &desktopApp{
+		windowHost:  newWindowHost(),
+		notify:      newNotifierHost(),
 		runs:        make(map[string]*sessionRun),
 		simCh:       nil,
 		fileIndex:   newFileIndex(),
 		projects:    &projectTable{},
 		cronRunning: make(map[string]bool),
 	}
+	// The switch is built after the struct because its callback needs the app (the tray menu and
+	// the phones are repainted from it). Nothing is asserted at construction: every launch starts
+	// with the machine's own behaviour.
+	d.awake = newAwakeController(d.onAwakeChanged)
+	return d
 }
 
 // ---------------------------------------------------------------------------
@@ -636,4 +652,3 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	d.notifyMCPRootsChanged()
 	return r, nil
 }
-

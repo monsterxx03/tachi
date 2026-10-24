@@ -30,7 +30,14 @@ type windowHost struct {
 	// (SetLabel) nor a tooltip. What a bar OUTSIDE this process can draw comes from refreshTray's
 	// other copy, desktop_status.json (barstatus.go).
 	trayStatus *application.MenuItem
-	window     *application.WebviewWindow
+	// trayAwake / trayAwakeNote / trayAwakePresets are the tray's half of the machine-wide
+	// 「保持唤醒」 switch (awake.go): the checkbox, the "当前：3 小时" line inside its submenu, and
+	// one radio per quick pick. The controller itself lives in desktopApp, so a headless host has
+	// the same switch — it just has no menu to draw it in.
+	trayAwake        *application.MenuItem
+	trayAwakeNote    *application.MenuItem
+	trayAwakePresets map[int]*application.MenuItem
+	window           *application.WebviewWindow
 	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what
 	// lets the main window's close hook tell a USER-initiated close (which hides the window)
 	// from the one the shutdown path performs on its way out (which must go through). Without

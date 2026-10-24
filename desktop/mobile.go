@@ -191,6 +191,8 @@ func (m *mobileServer) handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions", m.guard(m.handleCreateSession))
 	mux.HandleFunc("GET /v1/projects", m.guard(m.handleProjects))
 	mux.HandleFunc("GET /v1/providers", m.guard(m.handleProviders))
+	mux.HandleFunc("GET /v1/awake", m.guard(m.handleAwake))
+	mux.HandleFunc("POST /v1/awake", m.guard(m.handleSetAwake))
 	mux.HandleFunc("GET /v1/sessions/{id}/page", m.guard(m.handlePage))
 	mux.HandleFunc("GET /v1/sessions/{id}/files/{attachmentId}", m.guard(m.handleFile))
 	mux.HandleFunc("GET /v1/sessions/{id}/panels", m.guard(m.handlePanels))

@@ -193,6 +193,10 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **切后台回来要重建 WebSocket**（`MobileSocket.forceReconnect`）：锁屏期间定时器被挂起、连接可能半开，而 `readyState` 仍报 OPEN——只调 `ensureConnected` 的表现为「回来一直显示连不上，杀掉重进才好」。
 - **运行中压缩会换会话 id，画面要跟着搬**：压缩成功时 agent 把历史写进**子会话**，这一轮剩下的部分接着在子会话里跑，而 `idle` 也发往子会话。桌面在同一刻换轨（`agent:session_switched`），手机收到 `session_moved`（`from` / `to` / `end`）后把打开的那个 id、WS 订阅、还没发出去的队列一起搬过去，并重读子会话的快照。不搬的表现是：画面停在压缩点、状态永远「在跑」、排队的话发不出去，只能退回列表再点进来。换轨发生在**一轮结束之后**——压缩那一刻就搬，会把正在写的消息从画面底下抽走。**队列靠通知里的 `end` 补发**：换订阅一定比 `idle` 晚一步，等那条事件是等不到的；规则与 `idle` 那条相同（自然结束就发，被打断/出错就留）。
 
+- **打开一段对话先画它自己的骨架（`src/ui/Opening.tsx`），而不是让列表停在原地。** 快照要走一个来回（服务端读记录 + 算用量 + 传一百多条消息），而这段时间里原来的画面**一点没变**——点下去没反应、然后整段对话突然出现，读起来就是「卡了一下」。所以骨架照着真内容的几块搭（header 58、用量条、几组气泡、输入框占位），尺寸对齐是为了接上来时不跳；呼吸用 `withRepeat`，并**淡入 160ms**：一次快速打开里它只存在一瞬，硬切反而闪。它还有两条出路——6 秒后说一句「那台电脑可能没在应答」并给「重新打开」，因为一个只会转圈的骨架，是把这个观感问题换成一个真的卡死。**判据是 `openId && !chat.snapshot`**（`ChatPane` 里），所以窄屏、宽屏右栏、以及切到另一段会话时走的都是同一条。
+
+- **「保持唤醒」在设置页，而且是那台电脑的开关**（`GET/POST /v1/awake`）：它不属于任何一段会话，所以不放在会话信息页。卡片读的是服务端给的那个值（没读到就画关着，并说明可能是旧版本，绝不在这里猜）；时长既能点那几个和托盘一致的快捷项（30 分 / 1 小时 / 3 小时 / 6 小时 / 8 小时 / 不自动关），也能填任意分钟 —— **框里空着就是「不自动关」**，不是错误。`awake_changed` 一到就照它重画，所以桌面上勾掉的开关、以及到点自己关掉的那一刻，这一页不用重进也跟着变。开关**不能**画成「我想开」的样子：系统拒绝时服务端回的是「关着」，卡片就停在关着。
+
 ## 验证
 
 按能不能自己跑完分层，**越往下越需要人**：
@@ -222,6 +226,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **服务端有两个宿主，实现只有一套**：桌面进程（`main.go` 的 `startMobile`）与无头进程（`main_headless.go`，构建标签 `headless`）。同一个 `desktopApp`、同一个 `~/.tachi`、同一份协议；无头宿主只是没有窗口、托盘、通知、BLE 与麦克风。**同一份 `~/.tachi` 同时只有一个宿主**：两个入口都在启动时拿 `host.lock`，后起的那个退出（无头见 stderr，桌面是系统弹窗）—— 两个 agent 会往同一个会话文件里写。手机连哪台机器，看到的就是那台机器的会话。
 
 - **用量与上下文不能挂在一个 live run 上**（`mobile_session.go` 的 `mobileUsage` / `estimateContextFromRecords`）：手机点开一段电脑上没打开过的对话时没有 run，报告「0 元、0 token」看着就是坏了。金额与积分从**用量账本**（`agent.GlobalUsageRecorder().Rows(id, createdAt)`）算，上下文估算从记录里最近一次调用的 `usage` 算，上下文窗口从配置里那个 provider 的 `spec.context_window`（没有就用模型表）算。分项（`ContextInfo.Parts`）只有活着的 agent 才有，所以空着的时候界面说「只有总量」。
+- **用量在手机上被记 TTL 5 秒**（`mobileUsage`，`desktop/mobile_session.go`）：它是从账本按天分文件、从会话建立那天开始 SUM 出来的，**一次打开里最贵的那步**（2500 条记录的会话实测 40–55ms，快照整体 53ms → 16ms）。手机连点三段对话时那个数字根本没变，而一轮的开销是经 `usage` 事件送达的、不走这条读，所以几秒的陈旧不会和正在跑的一轮对不上。**读失败不缓存**——否则接下来五秒都在报 0。
 - **手机建会话、置顶都走桌面同一条路**：置顶复用 `SetSessionPinned`；建会话只写记录（不建 agent、不碰 `activeID`），第一条消息才由 `loadSessionForRemote` 建起来。
 - **`emitSessionsChanged` 同时发给窗口和手机**：一个事实一个出口 —— 重命名、置顶、新建、删除都从它出去，谁少发一次，另一块屏就停在旧列表上。
 - **面板是只读的，而且按会话寻址**（`mobileSessionPanels`，`GET /v1/sessions/{id}/panels`）：MCP 那半用的是**那一段会话**的载入集合（`listMCPServersFor`，窗口用的是 `activeID` 那条路），否则手机看到的会是桌面正开着的那一段能调什么。agent 那半直接读 `PeerBoard()`（带缓存，不强制探测），定时任务那半读 `ListCronJobs()`。
@@ -235,5 +240,6 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **附件只认 `SendFile` 的记录**：`attachmentId` 就是那次工具调用的 id，下载端点从不接受路径；相对路径按**那次调用所属会话**的根目录解析。
 - **两个会话开关也是共享状态**（模型 `provider`、`skipApproval`）：写入方是 `switchProviderFor` / `setSkipApprovalFor`，它们在写完之后发一条 `agent:session_prefs` + 手机的 `session_prefs`，两个值一起走。所以桌面改的手机立刻看见、手机改的桌面立刻看见；事件没有 origin——它是幂等状态，谁改的都要落到每一块屏。窗口的控件与手机的模型表/审批开关都走这两个写入方，不存在第二条广播路径。冒烟：`mobile-prefs`。
 - **一块屏发的消息要回声**：`echoUserMessage` 同时发 `agent:user_message`（桌面）和 `user_message`（手机），带 `origin`；收到自己那条的不再画。窗口自己画的用户气泡不来自事件，少了这一条，手机发的消息会显示成「对一句话的回复，但那句话不在」。桌面那一半的监听在 `agentEvents.ts`（`useAgentStream`）：非 `desktop` 的 origin 追加气泡，`steer` 的走 `injectSteerVisual`（切开正在流的那一段）。**这个回声没有冒烟场景**——驱动没法扮演另一块屏；改它只能靠单测与手验。
+- **「保持唤醒」的写入方只有一个**（`desktopApp.setAwake`，`desktop/awake.go`）：手机这条 `POST /v1/awake` 和桌面托盘的勾选、以及到点自动关，走的是同一个函数，改完都广播 `awake_changed`。所以它没有「按会话寻址」的那份孪生实现 —— 它不是会话的事。资源的那一半跟着进程：断言在进程里，进程没了断言就没了，所以状态不落盘、重启后永远是关（时长偏好落在那台电脑的 `desktop_ui.json` 里）。**无头宿主同样有它**：`awake` 在 `newDesktopApp` 里建，托盘只是它在有窗口时的另一半界面。
 - **配对卡不是配置叶子**：`SettingsSchemaVO.MobilePairing` 只回答「画在哪个分组」（`catExtend`），卡片自己的数据来自 `GetMobilePairing` 这个绑定，二维码渲染的是后端给的 `payload`（手机端 `qr.ts` 解析同一个形状，两边不得各拼一份）。令牌默认掩码，`RegenerateMobileToken` 返回 `ok` 或原因，卡片换新后重新读一次。
 - **配对地址是「候选 + 一个选择」**：`mobileLANCandidates` 列出这台机器上手机够得着的 IPv4（物理网卡优先；`utun*` 的 VPN 地址、`bridge*`/`vmenet*`/`docker*` 的虚拟网络、链路本地地址都不算），有多于一个时候卡片给一个下拉框。选择存进 `mobile.json` 的 `interface`——按**接口名**而不是地址存，DHCP 换了地址也不会指到一个没人持有的 IP；空 = 自动（候选里的第一个）。选中的接口没了就退回自动。`SetMobilePairingHost` 只接受当前候选里的接口名。

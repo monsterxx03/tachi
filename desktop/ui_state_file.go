@@ -69,6 +69,10 @@ type uiState struct {
 	// the same expansion (filetree.go's fileTreeKey). It carries a write time so the table can drop
 	// the oldest workspaces; both bounds are clamped on write AND re-checked on read.
 	FileTreeMemo map[string]fileTreeMemo `json:"fileTreeMemo,omitempty"`
+	// AwakeMinutes is how long 「保持唤醒」 lasts before it turns itself off (awake.go), in minutes;
+	// 0 = 不自动关. It is a POINTER because "never set" (→ the 3-hour default) and "set to 不自动关"
+	// are different answers, and omitempty would collapse them into the same file.
+	AwakeMinutes *int `json:"awakeMinutes,omitempty"`
 }
 
 // The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it

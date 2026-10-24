@@ -23,6 +23,7 @@ import { SessionInfo } from './src/ui/SessionInfo';
 import { SessionList } from './src/ui/SessionList';
 import { NewSession } from './src/ui/NewSession';
 import { Settings } from './src/ui/Settings';
+import { Opening } from './src/ui/Opening';
 
 /** 一条常驻的提示（连不上、令牌失效、服务端的拒绝原因） */
 function NoticeBar({ text }: { text: string }) {
@@ -102,6 +103,20 @@ function ChatPane({
         onEdgeBack={onToggleList ?? m.close}
       />
     );
+
+  // 已经点名了一段对话，但快照还没到：画它自己的骨架，而不是停在列表上。
+  // 这一屏取代的正是「点了没反应」——快照要一个来回（读记录 + 算用量 + 传一百多条消息），
+  // 这段时间里没有任何反馈，读起来就是卡住。
+  if (m.openId) {
+    const row = m.sessions.find((s) => s.id === m.openId);
+    return (
+      <Opening
+        title={row?.title}
+        onBack={onToggleList ?? m.close}
+        onRetry={() => void m.open(m.openId!)}
+      />
+    );
+  }
 
   return (
     <View style={styles.emptyPane}>
@@ -251,6 +266,9 @@ function Shell() {
             onRenameDevice={(i, label) => void m.renameDevice(i, label)}
             onAddDevice={() => setAddingDevice(true)}
             onBack={() => setShowSettings(false)}
+            awake={m.awake}
+            onLoadAwake={m.loadAwake}
+            onSetAwake={m.setAwake}
             onUnpair={() => {
               setShowSettings(false);
               void m.unpair();
@@ -272,7 +290,7 @@ function Shell() {
               />
             </View>
           </View>
-        ) : m.openId && m.chat.snapshot ? (
+        ) : m.openId ? (
           <ChatPane
             m={m}
             showInfo={showInfo}

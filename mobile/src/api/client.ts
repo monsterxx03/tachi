@@ -1,5 +1,6 @@
 import type {
   AttachmentRef,
+  AwakeState,
   Panels,
   PermissionDecision,
   ProjectRef,
@@ -107,6 +108,18 @@ export const api = {
 
   /** 新建会话时可选的项目 */
   projects: (c: Pairing) => req<{ projects: ProjectRef[] }>(c, '/v1/projects'),
+
+  /**
+   * 这台电脑的「保持唤醒」开关（不属于任何一段会话）。没传 durationMin 就沿用存着的偏好 ——
+   * 传了的话它同时成为这次的时长。
+   */
+  awake: (c: Pairing) => req<{ awake: AwakeState }>(c, '/v1/awake'),
+
+  setAwake: (c: Pairing, on: boolean, durationMin?: number) =>
+    req<{ awake: AwakeState }>(c, '/v1/awake', {
+      method: 'POST',
+      body: JSON.stringify(durationMin == null ? { on } : { on, durationMin }),
+    }),
 
   /** 这段对话的三个只读面板（MCP / agent / 定时任务） */
   panels: (c: Pairing, id: string) =>

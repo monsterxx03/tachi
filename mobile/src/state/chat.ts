@@ -221,6 +221,9 @@ export function messageOfError(e: unknown): string {
         return '这个任务不归这台电脑管';
       case 'cron_failed':
         return '操作没成功，在电脑上看看日志';
+      case 'awake_failed':
+        // 电脑的系统（或它的桌面环境）不肯接这条「别睡」的禁令 —— 不是手机的错。
+        return '这台电脑没能保持唤醒';
     }
     return `出错了（${e.code}）`;
   }

@@ -16,6 +16,8 @@ type Event struct {
 	Type string `json:"type"`
 	// ID 是 cron_changed 变的那一条（定时任务不属于任何会话，所以走广播）
 	ID string `json:"id,omitempty"`
+	// Awake 是 awake_changed 带的完整状态（一台机器的开关，同样走广播）
+	Awake *AwakeState `json:"awake,omitempty"`
 
 	Text        string        `json:"text,omitempty"`
 	DisplayText string        `json:"displayText,omitempty"`

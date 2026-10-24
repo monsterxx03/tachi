@@ -59,7 +59,7 @@ func TestPingDoesNotNeedToken(t *testing.T) {
 
 func TestEverythingElseNeedsToken(t *testing.T) {
 	ts := newTestServer(t)
-	for _, path := range []string{"/v1/sessions", "/v1/providers", "/v1/sessions/s1/page"} {
+	for _, path := range []string{"/v1/sessions", "/v1/providers", "/v1/awake", "/v1/sessions/s1/page"} {
 		if got := get(t, ts, path, "").StatusCode; got != http.StatusUnauthorized {
 			t.Errorf("%s 缺令牌应当是 401，得到 %d", path, got)
 		}
@@ -70,6 +70,65 @@ func TestEverythingElseNeedsToken(t *testing.T) {
 			t.Errorf("%s 带对令牌应当是 200，得到 %d", path, got)
 		}
 	}
+}
+
+// TestAwakeIsOneSwitchForTheWholeMachine: 保持唤醒是一台机器的一个值，不属于任何会话 —— 读一次、
+// 改一次，改完广播给每一条连接。手机卡片和桌面托盘看的就是这一个值。
+func TestAwakeIsOneSwitchForTheWholeMachine(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialWS(t, ts, "test-token")
+
+	resp := get(t, ts, "/v1/awake", "test-token")
+	var read struct {
+		Awake AwakeState `json:"awake"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&read); err != nil {
+		t.Fatalf("decode awake: %v", err)
+	}
+	if read.Awake.On || read.Awake.DurationMin != mockAwakeDefaultMinutes {
+		t.Fatalf("默认应当是关着、偏好 %d 分钟，得到 %+v", mockAwakeDefaultMinutes, read.Awake)
+	}
+
+	// 越界的时长是调用方的错（400），不是「那台机器拒绝」，两者在手机上说的不是一句话
+	if code := postJSON(t, ts, "/v1/awake", map[string]any{"on": true, "durationMin": 1}); code != http.StatusBadRequest {
+		t.Fatalf("1 分钟的时长应当 400，得到 %d", code)
+	}
+
+	if code := postJSON(t, ts, "/v1/awake", map[string]any{"on": true, "durationMin": 45}); code != http.StatusOK {
+		t.Fatalf("开启应当 200，得到 %d", code)
+	}
+	ev := readEvent(t, conn)
+	if ev.Type != "awake_changed" || ev.Awake == nil {
+		t.Fatalf("开启之后应当广播 awake_changed，得到 %+v", ev)
+	}
+	if !ev.Awake.On || ev.Awake.DurationMin != 45 || ev.Awake.Until == "" {
+		t.Fatalf("广播的状态应当是开着、45 分钟、带到期时刻，得到 %+v", ev.Awake)
+	}
+
+	resp = get(t, ts, "/v1/awake", "test-token")
+	if err := json.NewDecoder(resp.Body).Decode(&read); err != nil {
+		t.Fatalf("decode awake: %v", err)
+	}
+	if !read.Awake.On || read.Awake.DurationMin != 45 {
+		t.Fatalf("重新读应当是改后的状态，得到 %+v", read.Awake)
+	}
+}
+
+func postJSON(t *testing.T, ts *httptest.Server, path string, body any) int {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp.StatusCode
 }
 
 func TestNoSessionForUnknownID(t *testing.T) {

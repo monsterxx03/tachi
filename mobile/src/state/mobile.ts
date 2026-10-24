@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
 import { loadDevices, saveDevices, type Device } from '../api/storage';
 import { deviceLabel } from '../api/label';
-import type { Panels, ProjectRef, SessionSummary } from '../api/types';
+import type { AwakeState, Panels, ProjectRef, SessionSummary } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
 
@@ -78,6 +78,15 @@ export interface MobileApi {
    * error —— 面板读不到是这一屏的事，不该在顶上挂一条红色横幅，更不该触发重试风暴。
    */
   loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
+  /**
+   * 这台电脑的「保持唤醒」开关。null = 还没读到（没配对、那台电脑是旧版本，或者还没请求）。
+   * 它是一台机器的值，和「打开着哪段对话」无关。
+   */
+  awake: AwakeState | null;
+  /** 读一次；设置页打开时调 */
+  loadAwake: () => Promise<void>;
+  /** 开关 / 改时长。成功返回 null，失败返回那句原因（此时会顺手重读一次真实状态）。 */
+  setAwake: (on: boolean, durationMin?: number) => Promise<string | null>;
 }
 
 export function useMobile(): MobileApi {
@@ -93,6 +102,7 @@ export function useMobile(): MobileApi {
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [olderLoading, setOlderLoading] = useState(false);
   const [cronVersion, setCronVersion] = useState(0);
+  const [awake, setAwakeState] = useState<AwakeState | null>(null);
   // 待发送队列按会话存：切走再回来，没发出去的那句还在（桌面也是这么做的）
   const [pending, setPending] = useState<Record<string, string[]>>({});
   const pendingRef = useRef<Record<string, string[]>>({});
@@ -135,6 +145,8 @@ export function useMobile(): MobileApi {
 
   // 有配对就拉列表并挂上连接
   useEffect(() => {
+    // 这台电脑的开关跟着配对走：换了电脑就先把上一台的值丢掉，别一秒钟里拿别人的状态去画。
+    setAwakeState(null);
     if (!pairing) return;
     let cancelled = false;
 
@@ -158,6 +170,16 @@ export function useMobile(): MobileApi {
       })
       .catch(() => {
         // 拉不到就只是列表空着，不值得打断这一屏
+      });
+
+    // 这台电脑的「保持唤醒」开关（一台机器一个值，所以跟着配对走，不跟着会话）
+    void api
+      .awake(pairing)
+      .then((r) => {
+        if (!cancelled) setAwakeState(r.awake);
+      })
+      .catch(() => {
+        // 读不到就只是卡片留空：那台电脑可能还是旧版本，不值得打断这一屏
       });
 
     // 新建会话时能挑的项目
@@ -270,6 +292,12 @@ export function useMobile(): MobileApi {
               );
             })
             .catch(() => undefined);
+          return;
+        }
+        if (ev.type === 'awake_changed') {
+          // 一台机器的开关，谁改的都落在这里：桌面的托盘、另一台手机、以及到点自己关的时候。
+          // 带着完整状态，照它画即可 —— 不重读，也就不会有两块屏各说一套的窗口。
+          setAwakeState(ev.awake);
           return;
         }
         if (ev.type === 'cron_changed') {
@@ -731,6 +759,33 @@ export function useMobile(): MobileApi {
     [pairing],
   );
 
+  const loadAwake = useCallback(async () => {
+    if (!pairing) return;
+    try {
+      const r = await api.awake(pairing);
+      setAwakeState(r.awake);
+    } catch {
+      // 同上：读不到只是一张空卡片，不挂全局横幅
+    }
+  }, [pairing]);
+
+  const setAwake = useCallback(
+    async (on: boolean, durationMin?: number): Promise<string | null> => {
+      if (!pairing) return '还没有配对电脑';
+      try {
+        const r = await api.setAwake(pairing, on, durationMin);
+        setAwakeState(r.awake);
+        return null;
+      } catch (e) {
+        // 服务端说没成功 = 那台机器现在是关的（系统的断言被拒、或者时长不合法）。
+        // 重读一次，让开关停在真实状态上，而不是读者刚点的那一下。
+        void loadAwake();
+        return messageOfError(e);
+      }
+    },
+    [pairing, loadAwake],
+  );
+
   const loadPanels = useCallback(async (): Promise<{ panels: Panels | null; error: string | null }> => {
     const id = openIdRef.current;
     if (!pairing || !id) return { panels: null, error: '没有打开着的会话' };
@@ -807,6 +862,9 @@ export function useMobile(): MobileApi {
     setPinned,
     createSession,
     loadPanels,
+    awake,
+    loadAwake,
+    setAwake,
   };
 }
 

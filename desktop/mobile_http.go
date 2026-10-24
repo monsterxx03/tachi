@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 )
@@ -297,4 +298,46 @@ func (m *mobileServer) handleCronDelete(w http.ResponseWriter, r *http.Request) 
 // handleProjects lists what the phone's project picker offers.
 func (m *mobileServer) handleProjects(w http.ResponseWriter, r *http.Request) {
 	mobileWriteJSON(w, map[string]any{"projects": m.desk.mobileProjects()})
+}
+
+// ── 保持唤醒 ─────────────────────────────────────────────────────────────────
+//
+// 这台电脑的一个开关，不属于任何一段会话（awake.go）。两个端点都没有 id：托盘的勾选和这里是
+// 同一个值的两块屏，谁改的都会经 awake_changed 落到另一块上。
+
+// handleAwake answers the switch's current state, which is what the phone's card draws.
+func (m *mobileServer) handleAwake(w http.ResponseWriter, r *http.Request) {
+	mobileWriteJSON(w, map[string]any{"awake": m.desk.awakeState()})
+}
+
+type mobileAwakeReq struct {
+	On bool `json:"on"`
+	// DurationMin is optional: omit it to keep the stored preference (and let a 开启 use it as it
+	// is). Send it to change the preference AND this 开启's length — that is what the phone's
+	// 时长 chips do.
+	DurationMin *int `json:"durationMin"`
+}
+
+// handleSetAwake is the phone's half of the switch. The write goes through the same
+// desktopApp.setAwake the tray menu calls, so neither screen can invent a state the other does
+// not have; the answer is the state the machine is ACTUALLY in, which is off when the operating
+// system refused the assertion.
+func (m *mobileServer) handleSetAwake(w http.ResponseWriter, r *http.Request) {
+	var req mobileAwakeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	st, err := m.desk.setAwake(req.On, req.DurationMin)
+	if err != nil {
+		if errors.Is(err, errAwakeDuration) {
+			mobileFail(w, http.StatusBadRequest, "bad_request")
+			return
+		}
+		// The machine (or its desktop environment) would not hold the assertion. The phone shows
+		// "这台电脑没能保持唤醒" and re-reads, so its switch falls back to off instead of lying.
+		mobileFail(w, http.StatusInternalServerError, "awake_failed")
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"awake": st})
 }

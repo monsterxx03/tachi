@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -273,10 +274,20 @@ func (d *desktopApp) mobileAsks(sessionID string) []mobileAsk {
 // 0 for it made the phone's usage card look broken (issue #53).
 //
 // Cost and credit are CNY / 积分, the units the ledger rows carry — the phone renders ¥.
+//
+// The answer is memoized for mobileUsageTTL. The scan is the most expensive part of opening a
+// conversation (40–55 ms measured on a 2 500-record conversation: the ledger is one file per day
+// and it is summed from the session's start), while everything else in the snapshot costs a few
+// milliseconds — so tapping three conversations in a row meant three full scans for a number that
+// had not moved. A turn's spend reaches the phone through its `usage` event, not through this, so
+// a few seconds of staleness here cannot make the card disagree with a running turn.
 func (d *desktopApp) mobileUsage(id string) mobileUsage {
 	ss := d.sessionRecord(id)
 	if ss == nil || d.sm == nil {
 		return mobileUsage{}
+	}
+	if u, ok := d.usageCache.get(id); ok {
+		return u
 	}
 	rec := agent.GlobalUsageRecorder()
 	if rec == nil {
@@ -286,7 +297,50 @@ func (d *desktopApp) mobileUsage(id string) mobileUsage {
 	if err != nil {
 		return mobileUsage{}
 	}
-	return mobileUsageFromRows(rows, d.config())
+	u := mobileUsageFromRows(rows, d.config())
+	d.usageCache.put(id, u)
+	return u
+}
+
+// mobileUsageTTL is how long one session's cost is trusted. Short on purpose: it only has to
+// cover "the reader is moving between conversations right now". A FAILED read is not cached —
+// the next open should try again rather than keep reporting zero for five seconds.
+const mobileUsageTTL = 5 * time.Second
+
+// mobileUsageCache remembers one number per session. Zero value is usable; the map is created on
+// the first write, so a desktopApp built in a test needs no constructor call for it.
+type mobileUsageCache struct {
+	mu  sync.Mutex
+	at  map[string]time.Time
+	val map[string]mobileUsage
+}
+
+func (c *mobileUsageCache) get(id string) (mobileUsage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at, ok := c.at[id]
+	if !ok || time.Since(at) > mobileUsageTTL {
+		return mobileUsage{}, false
+	}
+	return c.val[id], true
+}
+
+func (c *mobileUsageCache) put(id string, u mobileUsage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.at == nil {
+		c.at = make(map[string]time.Time)
+		c.val = make(map[string]mobileUsage)
+	}
+	// A bound, because a long-lived desktop walks through hundreds of conversations: dropping the
+	// table wholesale is cheaper than tracking which entries are still interesting.
+	const maxEntries = 512
+	if len(c.at) >= maxEntries {
+		c.at = make(map[string]time.Time, maxEntries)
+		c.val = make(map[string]mobileUsage, maxEntries)
+	}
+	c.at[id] = time.Now()
+	c.val[id] = u
 }
 
 // mobileUsageFromRows is the aggregation itself, without a recorder: the same sums the desktop's

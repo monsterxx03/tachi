@@ -1007,3 +1007,28 @@ func TestMobileAskWireKinds(t *testing.T) {
 		t.Errorf("提问的内容没传到线上：%+v", q.Questions)
 	}
 }
+
+// TestMobileUsageIsMemoized: 打开一段会话时，用量是这次读取里最贵的一步（账本按天分文件，从会话
+// 建立那天开始 SUM），而手机连点三段对话时那个数字根本没变。所以它被记 TTL 秒 —— 但**过期的缓存
+// 必须重算**，而且读失败**不缓存**（否则接下来五秒都在报 0）。
+func TestMobileUsageIsMemoized(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	// 记一个看得见的值：能读到它，就说明没有去扫账本（这个测试的 HOME 里没有账本）。
+	d.usageCache.put(s.ID, mobileUsage{Cost: 1.23})
+	if got := d.mobileUsage(s.ID); got.Cost != 1.23 {
+		t.Fatalf("cost = %v, want the cached 1.23", got.Cost)
+	}
+
+	// 过期的条目要重算：没有账本时答案回到 0，那就是「真的又去读了」的证据。
+	d.usageCache.mu.Lock()
+	d.usageCache.at[s.ID] = time.Now().Add(-2 * mobileUsageTTL)
+	d.usageCache.mu.Unlock()
+	if got := d.mobileUsage(s.ID); got.Cost != 0 {
+		t.Fatalf("cost = %v after the entry expired, want a fresh read (0 here)", got.Cost)
+	}
+}

@@ -43,6 +43,8 @@
 | POST | `/v1/sessions` | `{projectId?, workingDir?}` | `{session: SessionSummary}` |
 | GET | `/v1/projects` | — | `{projects: [ProjectRef]}`，新建会话时的项目下拉框 |
 | GET | `/v1/providers` | — | `{providers: [{name, model}]}`，可切换的模型 |
+| GET | `/v1/awake` | — | `{awake: AwakeState}`，这台电脑的「保持唤醒」开关 |
+| POST | `/v1/awake` | `{on, durationMin?}` | `{awake: AwakeState}`，改完立刻广播 |
 | GET | `/v1/sessions/{id}/page` | `?before=<index>&limit=<n>` | `{messages: [Message], hasMore, session}` |
 | POST | `/v1/sessions/{id}/messages` | `{text, mode}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/stop` | — | `{accepted: true}` |
@@ -89,6 +91,8 @@
 | 定时任务在设置里被关掉 | 409 `cron_disabled` | 定时任务在电脑的设置里被关掉了 |
 | 任务不属于这台电脑 | 409 `not_desktop` | 这个任务不归这台电脑管 |
 | 定时任务的写入失败 | 500 `cron_failed` | 操作没成功，在电脑上看看日志 |
+| 那台电脑的操作系统不肯「别睡」 | 500 `awake_failed` | 这台电脑没能保持唤醒 |
+| 「保持唤醒」的时长越界 | 400 `bad_request` | 时长要在这台电脑接受的范围内 |
 
 ## WebSocket
 
@@ -131,6 +135,7 @@
 | `session_prefs` | `provider`, `skipApproval` | 这段对话的模型 / 审批开关被**某一块屏**改了（桌面或手机）；两种开关一起发 |
 | `sessions_changed` | — | 会话列表变了：任何一块屏新建 / 删除 / **重命名 / 置顶**了一段对话。**广播给每一条连接**（列表不属于某一段会话的流）；手机收到后要重读列表，并把**打开着的那段**的标题、项目、置顶一并修掉 |
 | `cron_changed` | `id` | 定时任务表变了：任意一块屏新建 / 改 / 暂停 / 恢复 / 删除，或者调度器跑完一次。**广播给每一条连接**；手机上重读面板（没打开就等下次打开，别去轮询） |
+| `awake_changed` | `awake` | 这台电脑的「保持唤醒」变了：桌面托盘勾的、另一块屏改的、或者到点自己关的。**广播给每一条连接**，带着完整的 `AwakeState` —— 收到就照它画，不用再读什么 |
 | `lagged` | — | 你跟不上了，重读快照 |
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
@@ -155,6 +160,10 @@ Panels          { mcp:[{name, type, connected, needsAuth, loaded, tools}],
                 mcp.loaded / mcp.tools 是「这段对话载入几个 / 这个 server 一共几个」
                 agents.anyChecked=false 表示还没问过任何节点（不是「没有节点」）
                 cron.targetKind ∈ session / pending / missing
+AwakeState      { on, durationMin, until }
+                on 是开关；durationMin 是偏好（下次开启用多少分钟，0 = 不自动关）；
+                until 是这次开着时到点自动关的时刻（RFC3339），空串 = 关着或不自动关。
+                它属于**那台电脑**，不属于任何会话
 ProjectRef      { id, name, primary, runnable }
                 primary 是这个项目会带给会话的工作目录；runnable=false 表示目录已经不在了
 PendingAsk      = PermissionAsk | QuestionAsk
@@ -187,3 +196,4 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 7. **手机不改变桌面正在显示的会话。**
 8. **一段对话可以换 id，订阅要跟着走。** 通知里带着这一轮的结束原因：换轨与 `idle` 之间没有别的延迟，换订阅一定晚一步，`idle` 靠不住。 压缩成功时 agent 把历史搬进**子会话**，这一轮剩下的部分接着在子会话里跑。桌面在这一刻换轨（`agent:session_switched`），手机收到 `session_moved` 后把画面、订阅、排队中的消息一起搬到新 id。不搬的手机停在旧那一半：画面不动、状态永远「在跑」、队列发不出去（`idle` 已经发往子会话了）。换轨发生在**一轮结束之后**，不是压缩那一刻 —— 中途搬会把正在写的消息从画面底下抽走。
 9. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
+10. **「保持唤醒」是一台机器的一个值，所以它也是广播的。** 它不属于任何一段会话，手机发的 `POST /v1/awake` 与桌面托盘的勾选走同一个写入方（桌面的 `setAwake`），改完立刻广播 `awake_changed`、带完整的 `AwakeState` —— 两块屏照它画，没有第二条同步路径。**开着的时候关不关得掉由那台电脑说了算**：系统的断言被拒时，答案是「关着」加一句原因（500 `awake_failed`），而**不是**把开关画成开着的。`durationMin` 是偏好、落在那台电脑上，所以它熬得过重启；`on` 不是 —— 进程没了，断言就没了，重启后的状态永远是关。

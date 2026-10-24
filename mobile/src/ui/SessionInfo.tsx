@@ -5,6 +5,7 @@ import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '..
 import type { Live } from '../state/chat';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
+import { Switch } from './controls';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 
 type Tab = 'overview' | 'mcp' | 'agents' | 'cron';
@@ -71,25 +72,6 @@ function CtxBar({
         </Text>
       )}
     </>
-  );
-}
-
-function Switch({ on, disabled, onPress, t }: { on: boolean; disabled?: boolean; onPress: () => void; t: ReturnType<typeof useTheme>['tokens'] }) {
-  return (
-    <Pressable
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.switch,
-        {
-          backgroundColor: on ? t.amberWash : t.washStrong,
-          borderColor: on ? t.amberLine : t.borderStrong,
-          opacity: disabled ? 0.4 : 1,
-        },
-      ]}
-    >
-      <View style={[styles.knob, { left: on ? 20 : 2, backgroundColor: on ? t.amber : t.switchOff }]} />
-    </Pressable>
   );
 }
 
@@ -592,6 +574,4 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   switchRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  switch: { width: 44, height: 26, borderRadius: 20, borderWidth: 1, justifyContent: 'center' },
-  knob: { position: 'absolute', width: 20, height: 20, borderRadius: 10 },
 });
