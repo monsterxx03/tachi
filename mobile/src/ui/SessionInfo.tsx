@@ -291,33 +291,6 @@ export function SessionInfo({
           <Text style={[styles.hint, { color: t.faint }]}>改目录是电脑上的事，手机只读。</Text>
         </View>
 
-        {/* 模型 */}
-        <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
-          <Text style={[styles.cardTitle, { color: t.text }]}>模型</Text>
-          {providers.map((name) => {
-            const on = name === snapshot.model;
-            return (
-              <Pressable
-                key={name}
-                disabled={readOnly}
-                onPress={() => onPickModel(name)}
-                style={[
-                  styles.modelRow,
-                  {
-                    borderColor: on ? t.accentLine : t.border,
-                    backgroundColor: on ? t.accentSoft : 'transparent',
-                    opacity: readOnly ? 0.55 : 1,
-                  },
-                ]}
-              >
-                <Text style={{ color: t.text, fontSize: 13.5, flex: 1 }}>{name}</Text>
-                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
-              </Pressable>
-            );
-          })}
-          <Text style={[styles.hint, { color: t.faint }]}>只影响这段对话，不改电脑上的默认。</Text>
-        </View>
-
         {/* 审批 */}
         <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
           <View style={styles.switchRow}>
@@ -361,6 +334,33 @@ export function SessionInfo({
             金额与积分来自电脑上的用量账本（人民币）；速度是这一轮实测的输出速度。
           </Text>
         </View>
+        {/* 模型 */}
+        <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
+          <Text style={[styles.cardTitle, { color: t.text }]}>模型</Text>
+          {providers.map((name) => {
+            const on = name === snapshot.model;
+            return (
+              <Pressable
+                key={name}
+                disabled={readOnly}
+                onPress={() => onPickModel(name)}
+                style={[
+                  styles.modelRow,
+                  {
+                    borderColor: on ? t.accentLine : t.border,
+                    backgroundColor: on ? t.accentSoft : 'transparent',
+                    opacity: readOnly ? 0.55 : 1,
+                  },
+                ]}
+              >
+                <Text style={{ color: t.text, fontSize: 13.5, flex: 1 }}>{name}</Text>
+                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
+              </Pressable>
+            );
+          })}
+          <Text style={[styles.hint, { color: t.faint }]}>只影响这段对话，不改电脑上的默认。</Text>
+        </View>
+
       </ScrollView>
       )}
         <EdgeBackZone gesture={back.gesture} />

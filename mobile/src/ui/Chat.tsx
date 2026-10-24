@@ -225,17 +225,25 @@ function Composer({
 /**
  * 一轮的过程：一行概括，点开按记录里的先后展开（桌面的「N 步」那一行的手机版）。
  *
- * 折进去的是思考与成功的工具调用；正文和失败的那一步留在外面。展开时思考在前、工具
- * 紧跟其后，顺序就是它们真正发生的顺序 —— 所以这里不要按种类分组。
+ * 折进去的是思考、成功的工具调用、以及模型在中途写的话；只有这一轮最后写的那段留在
+ * 外面（它是答案），失败的那一步也留在外面。展开时顺序就是它们真正发生的顺序 —— 所以
+ * 这里不要按种类分组。
  */
 function ProcessFold({ steps, running }: { steps: ProcessStep[]; running?: boolean }) {
   const { tokens: t } = useTheme();
   const [open, setOpen] = useState(false);
   const tools = steps.filter((s): s is Extract<ProcessStep, { kind: 'tool' }> => s.kind === 'tool');
   const thinkings = steps.filter((s): s is Extract<ProcessStep, { kind: 'thinking' }> => s.kind === 'thinking');
+  const notes = steps.filter((s) => s.kind === 'note');
   const names = tools.map((x) => x.pair.msg.toolName ?? '').filter(Boolean);
   const unique = [...new Set(names)];
-  const label = tools.length > 0 ? `${tools.length} 步` : `思考 ${thinkings.length} 段`;
+  // 只有中间写的话、没有工具也没有思考：说的就是「这一段是过程，不是答案」
+  const label =
+    tools.length > 0
+      ? `${tools.length} 步`
+      : thinkings.length > 0
+        ? `思考 ${thinkings.length} 段`
+        : `${notes.length} 段过程说明`;
   const summary =
     unique.length === 0
       ? ''
@@ -258,11 +266,7 @@ function ProcessFold({ steps, running }: { steps: ProcessStep[]; running?: boole
       {open ? (
         <View style={{ paddingBottom: 4, paddingTop: 2 }}>
           {steps.map((step) =>
-            step.kind === 'thinking' ? (
-              <View key={step.key} style={{ paddingHorizontal: 8 }}>
-                <Thinking text={step.text} />
-              </View>
-            ) : (
+            step.kind === 'tool' ? (
               <View key={step.key} style={{ paddingHorizontal: 4 }}>
                 <ToolCard
                   name={step.pair.msg.toolName ?? ''}
@@ -273,6 +277,10 @@ function ProcessFold({ steps, running }: { steps: ProcessStep[]; running?: boole
                   running={running === true && step.pair.result === undefined}
                 />
               </View>
+            ) : (
+              <View key={step.key} style={{ paddingHorizontal: 8 }}>
+                {step.kind === 'thinking' ? <Thinking text={step.text} /> : <Markdown text={step.msg.content} />}
+              </View>
             ),
           )}
         </View>
@@ -282,14 +290,14 @@ function ProcessFold({ steps, running }: { steps: ProcessStep[]; running?: boole
 }
 
 /**
- * 活气泡：这一轮**正在写的字**。思考和工具已经由 items.ts 折成过程那一行了 —— 两边各画
- * 一套的话，跑着的时候工具一个个露在外面、停下来才折，画面会在轮次结束时整段跳一下。
+ * 活气泡：这一轮**正在写的那一段话**。之前写的已经由 items.ts 折成过程那一行了 ——
+ * 两边各画一套的话，跑着的时候正文一段段堆在外面、停下来才折，画面会在轮次结束时整段跳。
  */
-function LiveBubble({ live }: { live: Live }) {
-  if (!live.text) return null;
+function LiveBubble({ text }: { text: string }) {
+  if (!text) return null;
   return (
     <View style={styles.live}>
-      <Markdown text={live.text} />
+      <Markdown text={text} />
     </View>
   );
 }
@@ -467,10 +475,11 @@ export function Chat({
           liveTail.length || asks.length ? (
             <View>
               {liveTail.map((it) => {
-                if (it.kind === 'live') return <LiveBubble key={it.key} live={live} />;
+                if (it.kind === 'live') return <LiveBubble key={it.key} text={it.text} />;
                 if (it.kind === 'process')
                   return <ProcessFold key={it.key} steps={it.steps} running={it.running} />;
-                return null;
+                // 剩下的是这一轮交出来的文件卡：用和历史同一个渲染，附件信息在环境里
+                return <View key={it.key}>{renderBody(it)}</View>;
               })}
               {asks.map((it) => (
                 <View key={it.key}>{renderBody(it)}</View>
