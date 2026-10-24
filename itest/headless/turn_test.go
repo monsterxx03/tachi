@@ -27,26 +27,13 @@ func TestHeadlessTurnReachesThePhone(t *testing.T) {
 	sb := newSandbox(t, mock.URL())
 	h := startHost(t, sb)
 
-	status, body := h.do(t, "POST", "/v1/sessions", `{"workingDir":"`+sb.home+`"}`)
-	if status != 200 {
-		t.Fatalf("create session: %d %s", status, body)
-	}
-	var created struct {
-		Session struct {
-			ID string `json:"id"`
-		} `json:"session"`
-	}
-	if err := json.Unmarshal([]byte(body), &created); err != nil {
-		t.Fatalf("decode create: %v (%s)", err, body)
-	}
-	id := created.Session.ID
+	id := h.createSession(t, sb.home)
 
 	conn := h.dialWS(t)
-
 	writeJSON(t, conn, map[string]string{"type": "open", "sessionId": id})
 	waitSnapshot(t, conn)
 
-	status, body = h.do(t, "POST", "/v1/sessions/"+id+"/messages", `{"text":"你好","mode":"send"}`)
+	status, body := h.do(t, "POST", "/v1/sessions/"+id+"/messages", `{"text":"你好","mode":"send"}`)
 	if status != 200 {
 		t.Fatalf("send: %d %s", status, body)
 	}

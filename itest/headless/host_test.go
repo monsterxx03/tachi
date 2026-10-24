@@ -12,6 +12,7 @@ package headless_test
 // 每个用例有自己的 HOME，因此有自己的 ~/.tachi、自己的锁、自己的端口 —— 用例之间互不相干。
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,6 +81,14 @@ type sandbox struct {
 // test reads it back. A fixed port would collide when two cases run at once.
 func newSandbox(t *testing.T, providerURL string) *sandbox {
 	t.Helper()
+	return newSandboxWith(t, providerURL, "")
+}
+
+// newSandboxWith is newSandbox plus a verbatim YAML block appended to config.yaml — a scenario that
+// needs a setting the shared config does not carry (permission rules, for one) does not widen this
+// signature with one field per feature.
+func newSandboxWith(t *testing.T, providerURL, extra string) *sandbox {
+	t.Helper()
 	home := t.TempDir()
 	dir := filepath.Join(home, ".tachi")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -90,7 +99,7 @@ func newSandbox(t *testing.T, providerURL string) *sandbox {
 	writeFile(t, filepath.Join(dir, "provider.mock.json"), provider)
 	writeFile(t, filepath.Join(dir, "config.yaml"),
 		"provider: mock\ntitle_generation: false\nlanguage: zh\n"+
-			"mobile:\n  enabled: true\n  listen: \"127.0.0.1:0\"\n")
+			"mobile:\n  enabled: true\n  listen: \"127.0.0.1:0\"\n"+extra)
 	writeFile(t, filepath.Join(dir, "mobile.json"), `{"token":"`+testToken+`"}`)
 	return &sandbox{home: home}
 }
@@ -232,4 +241,25 @@ func (h *host) dialWS(t *testing.T) *websocket.Conn {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// createSession creates one conversation through the phone's own endpoint and returns its id.
+func (h *host) createSession(t *testing.T, workingDir string) string {
+	t.Helper()
+	status, body := h.do(t, "POST", "/v1/sessions", `{"workingDir":"`+workingDir+`"}`)
+	if status != 200 {
+		t.Fatalf("create session: %d %s", status, body)
+	}
+	var created struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatalf("decode create: %v (%s)", err, body)
+	}
+	if created.Session.ID == "" {
+		t.Fatalf("create session returned no id: %s", body)
+	}
+	return created.Session.ID
 }
