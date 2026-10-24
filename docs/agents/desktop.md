@@ -21,6 +21,7 @@
 | **桌面压缩** | 你碰压缩链路（`agent/compact.go`、`desktop/compaction.go`、`AgentEventAutoCompactDone` 那个 case）、`RunningSessions`，或者其他任何解析**哪个 run 拥有一个会话**的东西 |
 | **桌面 UI 状态** | 你改前端：哪个模块拥有什么，以及每条约定守住的那条规则 |
 | **桌面主题** | 你碰颜色 |
+| **无头宿主（`-tags headless`）** | 你要让手机在没有窗口的机器上连上来（NAS、服务器、容器），或者给运行时文件里加一句 `d.app` / `d.emit` / 一个新的桌面能力 |
 
 ## 桌面冒烟验证（demo + mockllm）
 
@@ -426,3 +427,30 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **限定整个调色板的是 `--text-faint` 的对比度下限，不是主墨的**（它落在最浅的平面上，所以它同时钉住了墨和梯子的顶端）：任何「调亮一点」的改动都是在跟它做交易，而验证它靠的是跨每个平面跑一遍 WCAG 比率检查，不是眼睛。绘制前的窗口颜色（`windowBgLight`/`windowBgDark`）是同一个决定在第二个地方 —— 改 `--bg` 时一起把它挪过去。
 - **每种模式一个定义，在 `frontend/public/base.css` 里**：那个深色块，由启动脚本 + `src/theme.ts` 解析。没有任何前端规则读 `prefers-color-scheme`，也没有任何别的文件带深色 —— 高亮器的 token 映射到那些语义 token 上，所以一次调色板改动免费覆盖代码块。
 - **要看一次调色板改动就渲染 token，而不是去截应用窗口** —— 一个 token 页面把两个变体并排放在一张图里（窗口截图在这里**可以**截：见冒烟套件规则与陷阱下的截图那条）：从 base.css 里把两个块抽出来（比对前用 `git show HEAD:desktop/frontend/public/base.css`），放进一个小 HTML 页面，它的色块读 `var(--token)`，每个变体一个作用域，然后给那个截图。
+
+## 无头宿主（`-tags headless`）
+
+手机的服务端和会话运行时**不需要窗口**：`-tags headless` 编出来的同一个程序只跑这两样，手机是它唯一的前端。它不是一个新的入口模式，也不是 channel —— 是同一个 `desktopApp`，换掉窗口那一层。
+
+```sh
+make headless                    # 本机：./tachi-headless-<goos>-<goarch>
+make headless-linux              # Linux amd64（NAS 最常见的那个）：./tachi-headless-linux-amd64
+make headless-linux-arm64        # Linux arm64
+cd desktop && make headless      # 只编桌面模块，产物在 desktop/bin/
+go build .                       # 仍然是 GUI
+```
+
+`make headless-linux` / `make headless-linux-arm64` 就是 `make headless GOOS=…` 的常用形态，命名和 `build-linux` / `build-linux-arm64` 对称：前缀说编什么，后缀说给哪个平台。**Linux 上没有桌面版可跑**（那个要 gtk，属于 `desktop/` 自己的 `make build`），所以「给 Linux 编一个」等于「编无头宿主」。产物落在仓库根、名字带平台，因为它下一步就是被 scp 到另一台机器上。
+
+构建标签与 `CGO_ENABLED=0` 只在 `desktop/Makefile` 定义一次；根目标只做转发与搬运。
+
+- **构建标签是窗口框架的开关，不是功能的开关**：碰 wails 或桌面能力的文件带 `!headless` —— `main.go`、`notify.go`、`remote.go`、`demo.go`、`tray*`、`menu*`、`uitheme.go`、`webview_awake*`、`singleinstance*`、`window_frame*`、`badge.go`、`voice.go`、`attach*`。`CGO_ENABLED=0` 下 wails 连编都编不过（它要 cgo 才有的类型），所以一个漏掉的 import 会立刻变成编译错误，而不是运行期惊喜。
+- **运行时文件里不许出现 `d.app` / `d.tray` / `d.window`**：窗口状态住在嵌入的 `windowHost` 里（`ui_state_ui.go` 有字段，`ui_state_headless.go` 是空结构），所以 headless 下写 `d.app` 就是编译失败 —— 这是故意的。要问「有没有人在看」用 `d.hasUI()`；要发事件用 `d.emit(name, data)`。
+- **所有推送走同一个出口**：每个 `d.app.Event.Emit` 都已经改成 `d.emit`，headless 版是空函数。加一条新事件时直接用 `d.emit`，不要碰 `d.app.Event`。
+- **桌面能力用空实现顶住调用点**：`refreshTray`（托盘读数）、`notifyLink` / `enqueueAlert` / `startBadge` / `stopBadge` / `applyBadgeLink`（BLE 与提示音）、`OpenPath` / `OpenURL`（系统 launcher）。运行时文件里的调用一行都不用改 —— 加一个新的桌面能力时照这个形状做，不要在每个调用点写 `if`。
+- **通知走接口**（`notifyHost`，`notify_host.go`）：窗口版是 `*notifier`，无头版是 `noNotifier{}`。**调用点一律写 `d.notifyHost()`，不要写 `d.notify.`** —— 字段是接口，一个用字面量构造出来的 `desktopApp`（测试会这么干）拿到的是 nil 接口，直接调用会 panic，而 `notifyHost()` 兜住了这一点。
+- **`alertKind` 有一份本地副本**（`alert_kind.go`）：值是设备链路协议的一部分，必须与 `link.AlertKind*` 一致；分开是因为无头构建不能编译那套 cgo 蓝牙栈。
+- **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → startMobile`，退出按相反顺序收。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
+- **手机是唯一前端，所以协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
+- **同一台机器上不要同时跑桌面和无头**：两边各自持有 agent，会往同一个会话文件里写。现在**没有**跨进程占用锁（`pkg/flock` 是现成的材料），所以无头启动时会打一行警告。要让两个宿主共享同一批会话，先解决这件事。
+- **验证**：`make headless`（交叉时 `GOOS=linux GOARCH=amd64 make headless`）必须常绿 —— 它就是「不依赖桌面能力」的定义，CI 里那个 `desktop-headless` job 跑的是同一条命令的裸形式。本机能起一个沙箱验协议（隔离 `HOME` + `mobile.enabled` + `mobile.json` 的令牌，`/v1/ping` → `/v1/sessions` → 发一条消息）。`go test ./...` 和 GUI 构建走的是默认标签，**headless 这条路没有测试覆盖**，改它的人要自己把上面两条跑一遍。

@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp desktop-smoke
+.PHONY: build build-debug build-linux build-linux-arm64 test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp desktop-smoke headless headless-linux headless-linux-arm64
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -50,6 +50,42 @@ build-linux: web-check
 
 build-linux-arm64: web-check
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath $(TAGS) -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
+
+# headless 构建**无窗口宿主**：会话运行时 + 手机服务端，没有窗口、托盘、通知、BLE、麦克风。
+# 给一台没有图形环境的机器用（NAS、服务器、容器）——手机连它，不需要桌面开着。
+#
+# 构建本身住在 desktop/Makefile（那边是独立 module，构建标签与 CGO_ENABLED=0 只定义一处）；
+# 这里只转发，并把产物搬到仓库根，和 tachi / tachi-linux-amd64 一样是「随手可拿」的位置：
+# 这东西的用途就是被 scp 到另一台机器上。
+#
+# 完整的一条：`make headless-linux`（amd64）或 `make headless-linux-arm64`，产物直接落在仓库根，
+# 名字带平台。与 `build-linux` / `build-linux-arm64` 同一套命名：前缀说的是「编什么」，
+# 后缀说的是「给哪个平台」。
+#
+# GOOS/GOARCH 必须显式转发给子 make —— 命令前的环境变量赋值只进得去父 make，不会随 MAKEFLAGS
+# 一起下去，子 make 于是按**宿主**平台构建，产物名字却是交叉平台的名字。所以 headless 目标把
+# 它们当作 make 变量读（$(or $(GOOS),…)：命令行变量优先，其次环境），再逐一转给子 make。
+#
+# HEADLESS_OUT 这个名字**不能**和 desktop/Makefile 里的变量同名：命令行变量会经 MAKEFLAGS
+# 传给子 make，于是子 make 的 `-o` 也指到根目录，cp 复制的还是上一次的旧文件 —— 名字对、
+# 平台错，正是最难发现的那种。那边叫 HEADLESS_BIN。
+HEADLESS_GOOS   ?= $(or $(GOOS),$(shell go env GOOS))
+HEADLESS_GOARCH ?= $(or $(GOARCH),$(shell go env GOARCH))
+HEADLESS_OUT    ?= tachi-headless-$(HEADLESS_GOOS)-$(HEADLESS_GOARCH)
+
+# headless-linux 是上面那条的常用形态：Linux 上没有桌面版可跑（那个要 gtk，属于 desktop/
+# 自己的构建），所以「给 Linux 编一个」就是「编无头宿主」。
+headless-linux:
+	$(MAKE) --no-print-directory headless GOOS=linux GOARCH=amd64
+
+headless-linux-arm64:
+	$(MAKE) --no-print-directory headless GOOS=linux GOARCH=arm64
+
+headless:
+	$(MAKE) -C desktop --no-print-directory headless \
+		$(if $(GOOS),GOOS=$(GOOS)) $(if $(GOARCH),GOARCH=$(GOARCH))
+	cp desktop/bin/tachi-headless $(HEADLESS_OUT)
+	@echo "→ $(HEADLESS_OUT)"
 
 test: web-check
 	go test ./...

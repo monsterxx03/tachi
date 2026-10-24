@@ -107,8 +107,8 @@ func (d *desktopApp) followCompaction(id string) string {
 		}
 	}
 
-	if d.app != nil {
-		d.app.Event.Emit("agent:session_switched", map[string]any{
+	if d.hasUI() {
+		d.emit("agent:session_switched", map[string]any{
 			"previousId": id,
 			"sessionId":  next,
 		})

@@ -171,8 +171,8 @@ func (d *desktopApp) notifyMobileUserMessage(sessionID, text string, steer bool,
 // by the WRITERS (switchProviderFor / setSkipApprovalFor), not by the endpoints, so the window's
 // own controls produce it too — there is one fact, and everyone who changed it says so.
 func (d *desktopApp) notifySessionPrefs(sessionID, provider string, skipApproval bool) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:session_prefs", map[string]any{
+	if d.hasUI() {
+		d.emit("agent:session_prefs", map[string]any{
 			"sessionId":    sessionID,
 			"provider":     provider,
 			"skipApproval": skipApproval,
@@ -197,8 +197,8 @@ func (d *desktopApp) sessionPrefs(id string) (provider string, skipApproval bool
 // window ignores its own (origin == desktop) because it already drew that bubble, and appends
 // everyone else's.
 func (d *desktopApp) echoUserMessage(sessionID, text string, steer bool, origin messageOrigin) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:user_message", map[string]any{
+	if d.hasUI() {
+		d.emit("agent:user_message", map[string]any{
 			"sessionId":   sessionID,
 			"text":        text,
 			"displayText": text,

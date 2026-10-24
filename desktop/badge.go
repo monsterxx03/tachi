@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 import (
@@ -518,7 +520,7 @@ func (d *desktopApp) transcribeVoice(ctx context.Context, u link.VoiceUpload) {
 		badgeLog().Info(ctx, "badge voice: 没有可投递的文本（按下了但没说话？）")
 		return
 	}
-	d.app.Event.Emit("badge:voice", map[string]any{"text": text})
+	d.emit("badge:voice", map[string]any{"text": text})
 
 	// 回执：设备屏幕上要显示「这句话是什么、到哪了」（设计文档 §5 的 voice_text）。
 	// state 由这里算——「会话在不在跑」是后端知道的事实，而「哪个会话是当前的」是前端的

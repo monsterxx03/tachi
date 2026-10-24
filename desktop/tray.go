@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 import (
@@ -114,8 +116,8 @@ func (d *desktopApp) newSessionFromMenuBar() {
 		return
 	}
 	d.revealWindow()
-	if d.app != nil {
-		d.app.Event.Emit(uiNewSessionEventName)
+	if d.hasUI() {
+		d.emit(uiNewSessionEventName, nil)
 	}
 }
 

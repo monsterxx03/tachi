@@ -47,6 +47,25 @@ jobs:
       - name: Build
         run: go build -trimpath -ldflags="-s -w" -o tachi .
 
+  # The no-window host (desktop/ with `-tags headless`). It is the one build that proves the phone
+  # interface does not need a desktop: no cgo, so no gtk/webkit headers, and a static binary comes
+  # out. Cheap enough to run on every push, and the only guard that build has (desktop's own tests
+  # run under the default tag).
+  desktop-headless:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build the headless host
+        working-directory: desktop
+        run: CGO_ENABLED=0 go build -tags headless -trimpath -o /tmp/tachi-headless .
+
   # Integration tests (docs/2026-07-31-tui-integration-test.md): `make itest`
   # runs the four suites in parallel (-j4) — mockllm contract tests, itest/run
   # (-p pipe, real binary), itest/tui (in-process bubbletea: real Model +

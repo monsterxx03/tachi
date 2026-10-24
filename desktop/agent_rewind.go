@@ -229,11 +229,11 @@ func (s *AgentService) ApplyRewind(id string, turn int, conversationOnly bool) s
 	// the next turn's first API call — the same ring-lags-behind asymmetry that a long turn
 	// showed (see the emitUsage doc comment).
 	d.emitUsage(id, d.currentID() == id, nil)
-	if d.app != nil {
+	if d.hasUI() {
 		// The whole preview travels with the event: the frontend composes the
 		// notice from the numbers (and shows what was NOT restored), without a
 		// second round trip that could straddle another turn.
-		d.app.Event.Emit("agent:rewound", map[string]any{
+		d.emit("agent:rewound", map[string]any{
 			"sessionId": id,
 			"preview":   toRewindPreviewVO(res.Preview),
 		})

@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 import (
@@ -313,9 +315,10 @@ func main() {
 	// which is why the notifier is handed the displayed session; a click on one
 	// goes to the conversation it named (openSession). Permission is asked once,
 	// in the background, so the prompt is not tied to the first notification.
-	desk.notify = newNotifier(notifyService, window, desk)
-	desk.notify.onNotificationClick()
-	go desk.notify.requestAuthorization()
+	notifier := newNotifier(notifyService, window, desk)
+	desk.notify = notifier
+	notifier.onNotificationClick()
+	go notifier.requestAuthorization()
 
 	// Forward native file drops to the frontend, which inserts @-references
 	// into the input area. The element id lets the frontend decide where the

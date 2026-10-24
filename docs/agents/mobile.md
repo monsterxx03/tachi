@@ -1,6 +1,6 @@
 # Tachi —— 移动端手册
 
-`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在桌面进程里跑，手机连的是那台开着的电脑。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
+`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。手机连的是那台机器。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
 
 `mobile/AGENTS.md` 是 Expo 模板带的、写给写代码的 agent 的通用建议（跟着 SDK 更新，值得读）。它与本文冲突时以本文为准——本文说的是这个项目怎么跑。
 
@@ -213,7 +213,9 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 
 ## 服务端
 
-`desktop/mobile*.go`，package `main`，随桌面进程起落（`main.go` 的 `startMobile`）；配置块 `mobile.{enabled,listen,max_attachment_mb}`，监听地址默认 `0.0.0.0:8787`。**端点、事件、字段的出处是 [mobile-protocol.md](mobile-protocol.md)**，这一节只说那些不做就会静默坏掉的地方。
+`desktop/mobile*.go`，package `main`，配置块 `mobile.{enabled,listen,max_attachment_mb}`，监听地址默认 `0.0.0.0:8787`。**端点、事件、字段的出处是 [mobile-protocol.md](mobile-protocol.md)**，这一节只说那些不做就会静默坏掉的地方。
+
+- **服务端有两个宿主，实现只有一套**：桌面进程（`main.go` 的 `startMobile`）与无头进程（`main_headless.go`，构建标签 `headless`）。同一个 `desktopApp`、同一个 `~/.tachi`、同一份协议；无头宿主只是没有窗口、托盘、通知、BLE 与麦克风。**两者不能同时跑在同一台机器上** —— 没有跨进程的会话占用锁，两个 agent 会往同一个会话文件里写。手机连哪台机器，看到的就是那台机器的会话。
 
 - **用量与上下文不能挂在一个 live run 上**（`mobile_session.go` 的 `mobileUsage` / `estimateContextFromRecords`）：手机点开一段电脑上没打开过的对话时没有 run，报告「0 元、0 token」看着就是坏了。金额与积分从**用量账本**（`agent.GlobalUsageRecorder().Rows(id, createdAt)`）算，上下文估算从记录里最近一次调用的 `usage` 算，上下文窗口从配置里那个 provider 的 `spec.context_window`（没有就用模型表）算。分项（`ContextInfo.Parts`）只有活着的 agent 才有，所以空着的时候界面说「只有总量」。
 - **手机建会话、置顶都走桌面同一条路**：置顶复用 `SetSessionPinned`；建会话只写记录（不建 agent、不碰 `activeID`），第一条消息才由 `loadSessionForRemote` 建起来。

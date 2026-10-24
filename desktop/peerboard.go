@@ -41,10 +41,10 @@ const peersChangedEvent = "agent:peers_changed"
 // probe that says what the last one said, is silence — otherwise every re-read would ask for another
 // probe and the pair would tick for ever.
 func (d *desktopApp) notifyPeersChanged() {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
-	d.app.Event.Emit(peersChangedEvent, map[string]any{})
+	d.emit(peersChangedEvent, map[string]any{})
 }
 
 // peerDiscovered is what the discovery browser says when a machine it had not listed enters the

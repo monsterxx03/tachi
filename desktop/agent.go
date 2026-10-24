@@ -5,17 +5,14 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
-	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/session"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // AgentStatus enumerates the runtime states the agent can be in. These are
@@ -121,24 +118,15 @@ func (s *AgentService) RunningSessions() []string {
 }
 
 type desktopApp struct {
-	app  *application.App
-	tray *application.SystemTray
-	// trayStatus is the tray menu's live readout item (state + today's spend + the
-	// displayed session's context %). refreshTray updates it. On Linux it is the ONLY
-	// place those numbers can be seen INSIDE Tachi's own chrome: a tray host there shows
-	// neither the bar label (SetLabel) nor a tooltip. What a bar OUTSIDE this process can
-	// draw comes from refreshTray's other copy, desktop_status.json (barstatus.go).
-	trayStatus *application.MenuItem
-	window     *application.WebviewWindow
-	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what
-	// lets the main window's close hook tell a USER-initiated close (which hides the window)
-	// from the one the shutdown path performs on its way out (which must go through). Without
-	// it the hook would be the app's own exit being cancelled.
-	quitting atomic.Bool
-	// notify posts native notifications about a conversation the user is not looking at —
-	// another application, or another conversation (see watching). Set once during startup,
-	// before any turn can run (see newNotifier).
-	notify *notifier
+	// notify posts native notifications about a conversation the user is not looking at. It is an
+	// interface so a process with no notification centre can answer every call with silence; see
+	// notify_host.go. Installed by main.go in the windowed build, noNotifier in the headless one.
+	notify notifierHost
+
+	// windowHost carries the window-facing fields (app, tray, window, quitting, plus the device
+	// link and the microphone). It is empty in a headless build, which is how the runtime below
+	// compiles without a window at all — see ui_state_ui.go / ui_state_headless.go.
+	windowHost
 
 	// sm is a stable session manager (no bound current) used to list on-disk
 	// sessions. It is created once in initAgent and is never repointed; the
@@ -191,17 +179,6 @@ type desktopApp struct {
 	// caller already holds mu.
 	activeID string
 
-	// badgeLink is the link server of the connection that is up right now (nil when the
-	// device is away). It exists for the one message that has to be written from
-	// OUTSIDE the link's own goroutine: the voice receipt, which is produced after
-	// transcription finishes. Guarded by mu.
-	badgeLink *link.Server
-
-	// voice is the desktop's own microphone state (the composer's voice button). It carries
-	// its OWN lock — a recording runs for tens of seconds and a transcription for hundreds of
-	// milliseconds, neither of which may ever wait behind the app-wide lock (see voice.go).
-	voice voiceInput
-
 	// mobile is the LAN interface the phone app connects to (mobile.go): the same
 	// conversations, a third screen. nil = the interface is off. It is replaced by
 	// startMobile/stopMobile and read by every event path that asks "is anyone listening?".
@@ -220,28 +197,6 @@ type desktopApp struct {
 	// both what the frontend answers through and what the device link reads (see
 	// asks.go for why it is ONE table). Guarded by mu.
 	asks map[string]*pendingAsk
-
-	// alerts holds the device's pending notification sounds, oldest first. They wait here
-	// until the link's Server takes them (see TakeAlerts) — a beep is an EVENT, not part of
-	// the snapshot, so it must not be swallowed by the snapshot's debounce. Guarded by mu.
-	alerts []link.Alert
-
-	// linkMu guards the device link's subscriber list AND its lifecycle — the running
-	// listener and the cancel that stops it (see badge.go). It is NOT mu: notifyLink is
-	// called from under mu in several places, and the callbacks must never wait behind
-	// the app-wide lock.
-	linkMu     sync.Mutex
-	linkSubs   map[int]func()
-	linkSubSeq int
-	linkStop   context.CancelFunc
-	linkLn     link.Listener
-	// linkGate serializes startBadge/stopBadge, so that "at most one link is live" holds
-	// by OUR bookkeeping rather than by the operating system refusing a second open. BLE
-	// will not refuse it — two centrals can connect to the same peripheral —
-	// and two live links mean two ref ledgers, where the same waiting item gets registered
-	// twice and neither copy can be answered. linkMu keeps guarding the fields; this one
-	// keeps two whole switches from interleaving.
-	linkGate sync.Mutex
 
 	// settingsMu serializes SaveSettings end to end (snapshot → memory → file → pushes).
 	// Two saves landing at once — a double-clicked button, two windows — would otherwise
@@ -325,6 +280,8 @@ type desktopApp struct {
 
 func newDesktopApp() *desktopApp {
 	return &desktopApp{
+		windowHost:   newWindowHost(),
+		notify:       newNotifierHost(),
 		runs:        make(map[string]*sessionRun),
 		simCh:       nil,
 		fileIndex:   newFileIndex(),
@@ -680,18 +637,3 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	return r, nil
 }
 
-// trayIcon returns the menu-bar (template) icon bytes for a given status.
-func trayIcon(status AgentStatus) []byte {
-	switch status {
-	case StatusThinking:
-		return iconThinking
-	case StatusToolRunning:
-		return iconTool
-	case StatusBusy:
-		return iconBusy
-	case StatusError:
-		return iconError
-	default:
-		return iconIdle
-	}
-}

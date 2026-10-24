@@ -575,10 +575,10 @@ func kindName(k atfile.Kind) string {
 
 // emitFileDrop forwards a native file drop to the frontend.
 func (d *desktopApp) emitFileDrop(paths []string, elementID string) {
-	if d.app == nil || len(paths) == 0 {
+	if !d.hasUI() || len(paths) == 0 {
 		return
 	}
-	d.app.Event.Emit("agent:filedrop", FileDropEvent{Paths: paths, ElementID: elementID})
+	d.emit("agent:filedrop", FileDropEvent{Paths: paths, ElementID: elementID})
 }
 
 // atFileRoot returns the directory a session's @-file references resolve

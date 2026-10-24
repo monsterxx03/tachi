@@ -764,10 +764,10 @@ func (d *desktopApp) reconnectMCPTokenSiblings(srv *config.MCPServerConfig) {
 // emitMCPAuth pushes one authorization step to the frontend. A nil app is the
 // simulated/test case (see emitWorkspaceChanged for the same guard).
 func (d *desktopApp) emitMCPAuth(ev MCPAuthEvent) {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
-	d.app.Event.Emit("agent:mcp_auth", ev)
+	d.emit("agent:mcp_auth", ev)
 }
 
 // markMCPNeedsAuth records whether a server has asked for authorization and not been

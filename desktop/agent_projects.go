@@ -246,14 +246,14 @@ func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, pri
 // so a frontend can also act on a session it is not showing. Both are informational: the
 // reader re-reads the session it IS showing plus the sidebar, whatever the payload says.
 func (d *desktopApp) emitWorkspaceChanged(projectID, sessionID string) {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
 	payload := map[string]any{"projectId": projectID}
 	if sessionID != "" {
 		payload["sessionId"] = sessionID
 	}
-	d.app.Event.Emit("agent:workspace_changed", payload)
+	d.emit("agent:workspace_changed", payload)
 }
 
 // invalidateMemberSkills marks every LIVE member session's agent as needing its skill store

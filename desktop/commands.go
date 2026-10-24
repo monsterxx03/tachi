@@ -373,11 +373,11 @@ func (s *AgentService) nothingToReview(sessionID string, scope reviewScope) stri
 // its own record file as it goes, and the panel reads that. One source of truth, and no
 // second streaming implementation to keep in step with the transcript's.
 func (d *desktopApp) emitOneOff(id string, payload map[string]any) {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
 	payload["sessionId"] = id
-	d.app.Event.Emit("agent:oneoff", payload)
+	d.emit("agent:oneoff", payload)
 }
 
 func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
@@ -506,7 +506,7 @@ func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewed
 			// watch, so while the reader is looking elsewhere (another app, or another
 			// conversation) this is the ONLY signal that it is over — and it names the run and
 			// its outcome, which is why it is not notifyTurnDone.
-			d.notify.notifyOneOffDone(id, name, findings, endReason)
+			d.notifyHost().notifyOneOffDone(id, name, findings, endReason)
 		}
 	}()
 	return ""
@@ -580,9 +580,7 @@ func runCompactCommand(c *commandRun) error {
 
 	// The notice deliberately carries no summary: the summary IS this command's
 	// streamed output, already in the transcript above it.
-	if c.desk.app != nil {
-		c.desk.app.Event.Emit("agent:compact_done", map[string]any{"sessionId": c.id, "oldCount": len(history)})
-	}
+	c.desk.emit("agent:compact_done", map[string]any{"sessionId": c.id, "oldCount": len(history)})
 	return nil
 }
 
