@@ -207,6 +207,18 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 		}
 
 		role := anthropic.MessageParamRole(msg.Role)
+		// A message that produced no block must not go on the wire: MessageParam.Content is
+		// tagged `json:"content,omitzero"`, so an empty block list marshals as
+		// {"role":"assistant"} — the field vanishes, and the upstream rejects the WHOLE
+		// request with 「messages[N]: missing field content」, costing every other turn in the
+		// conversation. Where histories are built an empty assistant is already refused
+		// (llm.Message.IsEmptyAssistant); this covers one that came from elsewhere — a
+		// session store written by an older build, or a frontend's own saved history.
+		// Dropping it loses nothing: the message said nothing to begin with.
+		if len(contentBlocks) == 0 {
+			i++
+			continue
+		}
 		anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
 			Role:    role,
 			Content: contentBlocks,

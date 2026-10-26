@@ -973,6 +973,7 @@ func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 	defer close(ch)
 
 	acc := &streamAccumulator{finishReason: "max_tokens"}
+	acc.text.WriteString("let me run")
 	acc.toolCalls = []llm.ToolCall{
 		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
 	}
@@ -985,6 +986,32 @@ func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 	assistantMsg := rs.Messages[0]
 	assert.Equal(t, "assistant", assistantMsg.Role)
 	assert.Nil(t, assistantMsg.ToolCalls)
+}
+
+// A truncated response whose only content was the calls has nothing left once they are
+// stripped, and a message with no block at all has no valid wire form — it stays out of the
+// history entirely (llm.Message.IsEmptyAssistant).
+func TestHandleLengthFinish_EmptyAfterStrippingCalls(t *testing.T) {
+	a := newTestAgent(t, nil)
+	rs := &RunState{
+		Messages: []llm.Message{},
+		Budget:   NewIterationBudget(0),
+	}
+	ch := make(chan AgentEvent, 8)
+	defer close(ch)
+
+	acc := &streamAccumulator{finishReason: "max_tokens"}
+	acc.toolCalls = []llm.ToolCall{
+		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
+	}
+
+	outcome := a.handleLengthFinish(t.Context(), acc, rs, ch)
+	assert.Equal(t, outcomeContinue, outcome)
+
+	for _, m := range rs.Messages {
+		assert.False(t, m.IsEmptyAssistant(), "empty assistant message reached the history")
+		assert.Nil(t, m.ToolCalls)
+	}
 }
 
 // TestHandleLengthFinish_Exhausted verifies the loop stops after
@@ -1631,4 +1658,44 @@ func TestAgentLoop_StreamStartPrecedesToolCall(t *testing.T) {
 	require.NotEmpty(t, events)
 	assert.Equal(t, []string{"stream_start", "tool_call", "stream_start"}, *got,
 		"stream_start fires during thinking (before tool_call), and again on the second API call")
+}
+
+// TestHandleStopFinish_EmptyResponseStaysOutOfHistory pins the reason a conversation can 422
+// forever: an upstream stop that carries nothing must not become an assistant message in the
+// history, because that message has no valid wire form (llm.Message.IsEmptyAssistant).
+func TestHandleStopFinish_EmptyResponseStaysOutOfHistory(t *testing.T) {
+	a := newTestAgent(t, nil)
+	rs := &RunState{
+		Messages: []llm.Message{{Role: "user", Content: "继续"}},
+		Budget:   NewIterationBudget(0),
+	}
+	ch := make(chan AgentEvent, 8)
+	defer close(ch)
+
+	acc := &streamAccumulator{finishReason: "stop"}
+	outcome := a.handleStopFinish(t.Context(), acc, rs, ch)
+
+	assert.Equal(t, outcomeStop, outcome)
+	require.Len(t, rs.Messages, 1, "empty assistant response must not be appended")
+	assert.Equal(t, "user", rs.Messages[0].Role)
+}
+
+// A response with text still lands in the history as before.
+func TestHandleStopFinish_TextIsAppended(t *testing.T) {
+	a := newTestAgent(t, nil)
+	rs := &RunState{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		Budget:   NewIterationBudget(0),
+	}
+	ch := make(chan AgentEvent, 8)
+	defer close(ch)
+
+	acc := &streamAccumulator{finishReason: "stop"}
+	acc.text.WriteString("hello")
+	outcome := a.handleStopFinish(t.Context(), acc, rs, ch)
+
+	assert.Equal(t, outcomeStop, outcome)
+	require.Len(t, rs.Messages, 2)
+	assert.Equal(t, "assistant", rs.Messages[1].Role)
+	assert.Equal(t, "hello", rs.Messages[1].Content)
 }

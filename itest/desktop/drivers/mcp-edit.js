@@ -71,5 +71,28 @@
   // 表单收起 = 这一条已经落盘（保存成功才关表单）；失败会留在原地并把原因写在下面。
   smoke.check('保存成功后表单收起', !smoke.q('.mcp-form'), '')
 
+  // ── 删除要先问一次 ────────────────────────────────────────────────────────
+  // 真删会改磁盘，而磁盘那一半由 Go 侧逐条断言（fixture 那条没动、新条目在）—— 这里只验
+  // 界面这一问：点「删除」不删，而是把这一行换成「删除「X」？ 取消 / 删除」；取消之后
+  // 行和删除键都回来。
+  const rowOf = (name) =>
+    smoke.qa('.mcp-entry').find((r) => smoke.text(r.querySelector('.mcp-entry-name')) === name)
+  const addedRow = rowOf('smoke-added')
+  if (!addedRow) return smoke.fail('列表里有 smoke-added 这一行', names().join(' | '))
+  const delBtn = smoke.qa('button', addedRow).find((b) => smoke.text(b) === '删除')
+  if (!delBtn) return smoke.fail('这一行有「删除」', smoke.allText('button').join(' / '))
+  smoke.click(delBtn)
+  if (!(await smoke.waitFor('.mcp-confirm-row', '点删除先出现确认'))) return smoke.finish()
+  const confirmText = smoke.text('.mcp-confirm-row')
+  smoke.check('确认行问的是这一条', confirmText.indexOf('删除「smoke-added」') >= 0, confirmText)
+  smoke.check('还没删：这一行还在', names().indexOf('smoke-added') >= 0, names().join(' | '))
+
+  const cancel = smoke.qa('.mcp-confirm-row .btn').find((b) => smoke.text(b) === '取消')
+  if (!cancel) return smoke.fail('确认行里有「取消」', smoke.allText('.mcp-confirm-row .btn').join(' / '))
+  smoke.click(cancel)
+  if (!(await smoke.waitFor(() => !smoke.q('.mcp-confirm-row'), '取消之后确认行收起'))) return smoke.finish()
+  const backDel = smoke.qa('button', rowOf('smoke-added')).find((b) => smoke.text(b) === '删除')
+  smoke.check('取消之后删除键回来了', !!backDel, smoke.allText('button').join(' / '))
+
   smoke.finish()
 })()

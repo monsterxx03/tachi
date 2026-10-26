@@ -1,3 +1,5 @@
+import { File, UploadTask, UploadType } from 'expo-file-system';
+import { Platform } from 'react-native';
 import type { PickedFile } from './pick';
 import type {
   AttachmentRef,
@@ -127,7 +129,62 @@ async function req<T>(conn: Pairing, path: string, init?: RequestInit): Promise<
  */
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+/**
+ * 原生这一半**不走 fetch + FormData**。
+ *
+ * RN 的 FormData 只认「字符串」和「{uri, name, type}」两种 part，而带 uri 的那种在新架构的
+ * iOS 上会以 `Network request failed` 结束 —— 请求根本没发出去（服务端的访问日志里什么都没有，
+ * 而同一台手机 POST /messages 是通的）。这是 RN 那条已知的 multipart 上传缺陷的形状
+ * （facebook/react-native#56404），换版本不在选项里，所以文件直接用系统的上传任务发：
+ * `expo-file-system` 的 `UploadTask` 在原生侧拼 multipart，字节不经过 JS。
+ */
+async function uploadNative(
+  c: Pairing,
+  path: string,
+  f: PickedFile,
+): Promise<{ file: UploadedFile }> {
+  const started = Date.now();
+  const task = new UploadTask(new File(f.uri), `${c.baseUrl}${path}`, {
+    uploadType: UploadType.MULTIPART,
+    fieldName: 'file',
+    mimeType: f.mimeType || 'application/octet-stream',
+    headers: { Authorization: `Bearer ${c.token}` },
+  });
+  let res: Awaited<ReturnType<typeof task.uploadAsync>>;
+  try {
+    res = await task.uploadAsync();
+  } catch (e) {
+    noteReq({
+      at: started,
+      method: 'POST',
+      path,
+      base: c.baseUrl,
+      ms: Date.now() - started,
+      outcome: `发不出去：${(e as Error)?.message ?? e}`,
+    });
+    throw e;
+  }
+  if (res.status < 200 || res.status >= 300) {
+    let code = `http_${res.status}`;
+    try {
+      const body = JSON.parse(res.body) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // 不是 JSON 就用手上的状态码
+    }
+    noteReq({ at: started, method: 'POST', path, base: c.baseUrl, ms: Date.now() - started, outcome: `HTTP ${res.status}` });
+    throw new ApiError(res.status, code);
+  }
+  noteReq({ at: started, method: 'POST', path, base: c.baseUrl, ms: Date.now() - started, outcome: 'ok' });
+  return JSON.parse(res.body) as { file: UploadedFile };
+}
+
 async function upload(c: Pairing, id: string, f: PickedFile): Promise<{ file: UploadedFile }> {
+  const path = `/v1/sessions/${encodeURIComponent(id)}/files`;
+  // web 上没有那套原生任务：选择器直接给 File，FormData 走浏览器自己那条路
+  if (Platform.OS !== 'web' && f.uri.startsWith('file://')) {
+    return uploadNative(c, path, f);
+  }
   const form = new FormData();
   if (f.file) {
     // web：选择器直接给了 File，塞进去即可
@@ -136,7 +193,6 @@ async function upload(c: Pairing, id: string, f: PickedFile): Promise<{ file: Up
     // 原生：{uri, name, type} 是 RN 认的形状，字节由系统从磁盘读，不经过 JS
     form.append('file', { uri: f.uri, name: f.name, type: f.mimeType } as unknown as Blob);
   }
-  const path = `/v1/sessions/${encodeURIComponent(id)}/files`;
   const started = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), UPLOAD_TIMEOUT_MS);

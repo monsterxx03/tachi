@@ -254,7 +254,7 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			}
 		}
 		m.ToolCalls = calls
-		if len(m.ToolCalls) == 0 && m.Content == "" && len(m.ThinkingBlocks) == 0 {
+		if m.IsEmptyAssistant() {
 			continue
 		}
 		kept = append(kept, m)

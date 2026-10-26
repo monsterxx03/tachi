@@ -789,7 +789,9 @@ export function useMobile(): MobileApi {
         const { file } = await api.uploadFile(pairing, id, f);
         return { file };
       } catch (e) {
-        return { error: messageOfError(e) };
+        // 「连不上电脑」对诊断毫无帮助：底层到底说了什么一并带上（网络层的报错只有那一句能看）
+        const why = e instanceof ApiError ? '' : `（${(e as Error)?.message ?? String(e)}）`;
+        return { error: messageOfError(e) + why };
       }
     },
     [pairing],

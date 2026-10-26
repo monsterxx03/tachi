@@ -1269,7 +1269,9 @@ func (a *AIAgent) handleLengthFinish(
 	a.recordAssistantTurn(rs, acc.text.String(), acc.usage, acc.thinkBlocks)
 
 	// Append the assistant message to history so it is preserved for
-	// session resume — whether we continue or stop exhausted.
+	// session resume — whether we continue or stop exhausted. A message that
+	// carries nothing (a truncated response with no output yet) stays out of it:
+	// it has no valid wire form (llm.Message.IsEmptyAssistant).
 	msg := acc.assistantMessage()
 	// API protocol requires every tool_use to be paired with a
 	// tool_result; truncated tool calls that were never executed cannot
@@ -1278,7 +1280,9 @@ func (a *AIAgent) handleLengthFinish(
 	if len(msg.ToolCalls) > 0 {
 		msg.ToolCalls = nil
 	}
-	rs.append(msg)
+	if !msg.IsEmptyAssistant() {
+		rs.append(msg)
+	}
 
 	if rs.LengthRetries >= maxLengthContinueRetries {
 		return a.lengthExhausted(ctx, acc, rs, ch)
@@ -1413,7 +1417,19 @@ func (a *AIAgent) handleStopFinish(
 	// assignment stays as a defensive drop so the recorded history never
 	// holds unpaired tool_use blocks.
 	msg.ToolCalls = nil
-	rs.append(msg)
+	// A stop can carry NOTHING — no text, no thinking, no tool call (an upstream that
+	// answers with an empty message). Appending that would put a message with no block at
+	// all into the turn's history, and the next request's wire form drops the field the API
+	// requires, so this conversation then fails every turn with 「missing field content」
+	// (see llm.Message.IsEmptyAssistant). The record side already leaves it out
+	// (recordAssistantTurn writes nothing without text and usage) — which is why reloading
+	// the session from disk cures it and only the in-memory history stays broken.
+	if msg.IsEmptyAssistant() {
+		a.Config.Logger.Warn(ctx, "Agent: empty assistant response, not added to history",
+			"iteration", rs.APICalls)
+	} else {
+		rs.append(msg)
+	}
 
 	a.recordAssistantTurn(rs, acc.text.String(), acc.usage, acc.thinkBlocks)
 

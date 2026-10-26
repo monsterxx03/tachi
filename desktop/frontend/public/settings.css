@@ -532,6 +532,19 @@
    server is a row that cannot connect until a browser round trip. */
 .mcp-entry-head .btn { margin-left: 0; padding: 2px 10px; font-size: 11.5px; }
 .mcp-entry-head .btn:first-of-type { margin-left: auto; }
+/* 删除要先确认一次：确认这一步就长在这一行里（和定时任务那一排同一个做法），不做弹窗 ——
+   弹窗会盖住「删的是哪一条、在哪个文件里」。`.mcp-entry-head .btn:first-of-type` 的
+   margin-left 在这里要让位给这个容器的右对齐。 */
+.mcp-confirm-row { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.mcp-confirm-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mcp-entry-head .mcp-confirm-row .btn:first-of-type { margin-left: 0; }
 .mcp-entry-auth { padding: 0 12px 8px; font-size: 12.5px; color: var(--text-dim); }
 
 .mcp-form { padding: 12px; border-top: 1px solid var(--border); }

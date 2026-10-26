@@ -212,13 +212,34 @@ function Composer({
     [onUpload],
   );
 
-  const pick = async (source: 'library' | 'camera' | 'document') => {
+  // 挑文件本身。取消（或没给权限）回 null，那是读者的选择，不是错误；但**真的出错**
+  // 必须留一行字：这里原先是 `.catch(() => null)`，于是「点了没反应」连个理由都没有。
+  const openPicker = useCallback(
+    async (source: 'library' | 'camera' | 'document') => {
+      try {
+        const picked = source === 'document' ? await pickDocument() : await pickPhoto(source);
+        await add(picked);
+      } catch {
+        const key = `${Date.now()}-pick`;
+        const name = source === 'document' ? '文件' : '照片';
+        setFiles((list) => [...list, { key, name, error: '打不开选择器' }]);
+      }
+    },
+    [add],
+  );
+
+  // 三个入口都在这层浮出的 Modal 里。**要等它收完再开系统选择器**：iOS 上一个
+  // controller 还在 dismiss 的时候去 present 另一个，会静默失败 —— 相机那条路因为
+  // 先 await 了一次权限，恰好躲过了这一帧，所以「拍照能开、照片和文件没反应」。
+  // onDismiss 只在 iOS 上有意义；Android 的选择器是另一个 Activity，直接开。
+  const pendingPick = useRef<'library' | 'camera' | 'document' | null>(null);
+  const pick = (source: 'library' | 'camera' | 'document') => {
     setMenu(false);
-    // 取消（或没给权限）就是什么也不做：那是读者的选择，不是错误
-    const picked = await (source === 'document'
-      ? pickDocument().catch(() => null)
-      : pickPhoto(source).catch(() => null));
-    await add(picked);
+    if (Platform.OS === 'ios') {
+      pendingPick.current = source;
+      return;
+    }
+    void openPicker(source);
   };
 
   const submit = () => {
@@ -320,7 +341,17 @@ function Composer({
 
       {/* 三个入口是一层浮出的选择，不是常驻的一行：点空白处、按返回键、端走任意一项都会收起来。
           之前它挂在输入框上面不走，读者挑完照片回到对话，那排字还留在那儿，看着像输入框多了一行。 */}
-      <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
+      <Modal
+        visible={menu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenu(false)}
+        onDismiss={() => {
+          const source = pendingPick.current;
+          pendingPick.current = null;
+          if (source) void openPicker(source);
+        }}
+      >
         <Pressable style={[styles.menuBackdrop, styles.column]} onPress={() => setMenu(false)}>
           <View style={[styles.menuSheet, { backgroundColor: t.panel, borderColor: t.border }]}>
             <AttachItem icon="image" label="照片" onPress={() => pick('library')} />

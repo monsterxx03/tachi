@@ -157,6 +157,24 @@ type Message struct {
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
+// IsEmptyAssistant reports whether this is an assistant message that says nothing at all: no
+// text, no thinking, no tool call, no content part. It exists because such a message has no
+// valid wire form. Anthropic's MessageParam.Content is tagged `json:"content,omitzero"`, so an
+// empty block list marshals as `{"role":"assistant"}` — the field disappears from the JSON and
+// the upstream rejects the WHOLE request with 「messages[N]: missing field content」, taking
+// every other turn of the conversation with it.
+//
+// An upstream can hand one back (a stop with no text, no thinking and no tool call), so every
+// place that puts an accumulated response into a history asks this first, and the places that
+// rebuild a history (session conversion) drop the ones already recorded elsewhere.
+func (m Message) IsEmptyAssistant() bool {
+	return m.Role == "assistant" &&
+		m.Content == "" &&
+		len(m.ContentParts) == 0 &&
+		len(m.ToolCalls) == 0 &&
+		len(m.ThinkingBlocks) == 0
+}
+
 // ToolCallFunction represents the function called by the LLM
 type ToolCallFunction struct {
 	Name      string `json:"name"`

@@ -135,6 +135,9 @@ export function MCPServersEditor() {
   const [open, setOpen] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [notice, setNotice] = useState<{ bad: boolean; text: string } | null>(null)
+  // 删除是一条要确认的动作：这一行自己换成「删除「X」？ 取消 / 删除」，不做弹窗 —— 弹窗
+  // 会盖住「我删的到底是哪一条、删的是哪个文件里的」。行没了/换了，这一步跟着收回。
+  const [confirming, setConfirming] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
 
@@ -244,10 +247,24 @@ export function MCPServersEditor() {
                     授权
                   </button>
                 ) : null}
-                <button className="btn ghost" disabled={busy}
-                  onClick={() => openEntry(key, draftOf(entry))}>编辑</button>
-                <button className="btn ghost" disabled={busy}
-                  onClick={() => void remove(entry)}>删除</button>
+                {confirming === key ? (
+                  <span className="mcp-confirm-row">
+                    <span className="mcp-confirm-hint" title={sourceLabel(entry)}>
+                      删除「{key}」？
+                    </span>
+                    <button className="btn ghost" disabled={busy}
+                      onClick={() => setConfirming(null)}>取消</button>
+                    <button className="btn danger" disabled={busy}
+                      onClick={() => { setConfirming(null); void remove(entry) }}>删除</button>
+                  </span>
+                ) : (
+                  <>
+                    <button className="btn ghost" disabled={busy}
+                      onClick={() => openEntry(key, draftOf(entry))}>编辑</button>
+                    <button className="btn ghost" disabled={busy}
+                      onClick={() => setConfirming(key)}>删除</button>
+                  </>
+                )}
               </div>
               {state?.message ? <div className="mcp-entry-auth">{state.message}</div> : null}
               {open === key && draft ? <EntryForm d={draft} set={setDraft} profiles={prof.available}

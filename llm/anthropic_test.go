@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -474,5 +475,42 @@ func TestBuildRequest_ToolMessagesAtStart_NoCrash(t *testing.T) {
 	}
 	if len(req.Messages[0].Content) != 2 {
 		t.Errorf("expected 2 content blocks (tool result + user text), got %d", len(req.Messages[0].Content))
+	}
+}
+
+// An assistant message that says nothing has no valid wire form: MessageParam.Content is
+// `json:"content,omitzero"`, so the field disappears and the upstream rejects the whole
+// request ("messages[N]: missing field content"). Dropping it from the body is what keeps the
+// rest of a long conversation usable.
+func TestBuildRequest_EmptyAssistant_NoMessageWithoutContent(t *testing.T) {
+	p := NewAnthropicProvider("key", "", "claude-sonnet-4-6")
+	msgs := []Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant"}, // an empty stop, straight from an upstream
+		{Role: "user", Content: "继续"},
+	}
+
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected the empty assistant to be dropped, got %d messages", len(req.Messages))
+	}
+
+	// The invariant that matters is on the JSON, not on the struct: a message whose content
+	// block list is empty marshals without the field.
+	raw, err := json.Marshal(req.Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	for i, m := range body {
+		if _, ok := m["content"]; !ok {
+			t.Fatalf("messages[%d] has no content field: %s", i, raw)
+		}
 	}
 }
