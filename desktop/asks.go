@@ -4,7 +4,6 @@ import (
 	"sort"
 
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/desktop/link"
 )
 
 // pendingAskKind 区分两类等待，它同时就是发给设备的 kind 字段。
@@ -102,7 +101,7 @@ func (d *desktopApp) registerAsk(a *pendingAsk) {
 	d.mu.Unlock()
 	// 提示音在**登记这一刻**判一次（见 watching）：你正看着这个会话、窗口也在前台就
 	// 不出声。之后你切走了也不补响——那会把一条已经看过的等待再说一遍。
-	d.alertIfUnwatched(a.sessionID, link.AlertKindAsk)
+	d.alertIfUnwatched(a.sessionID, alertKindAsk)
 	d.notifyLink()
 	// The phone is the third reader of this table (design §4.6): a card appears there exactly
 	// when a row is registered here.
@@ -118,7 +117,7 @@ func (d *desktopApp) alertIfUnwatched(sessionID, kind string) {
 	if !d.alertsEnabled() {
 		return
 	}
-	if watching(d.windowFocused(), d.activeSessionID(), sessionID) {
+	if watching(d.notifyHost().focused(), d.activeSessionID(), sessionID) {
 		return
 	}
 	d.enqueueAlert(kind)
@@ -129,18 +128,6 @@ func (d *desktopApp) alertIfUnwatched(sessionID, kind string) {
 func (d *desktopApp) alertsEnabled() bool {
 	cfg := d.config()
 	return cfg == nil || cfg.Badge.AlertsEnabled()
-}
-
-// windowFocused 说窗口现在有没有焦点——watching 的一半（另一半是「看的是哪个会话」），
-// 设备的提示音与 macOS 通知都读它。
-//
-// 拿不到窗口句柄时返回 false（当作「没在看」）：一块提示音的代价是被多响一声，而
-// 猜错的另一个方向是「人在别处、什么都没发生」——那正是这个功能要消灭的情况。
-func (d *desktopApp) windowFocused() bool {
-	if d.notify == nil || d.notify.window == nil {
-		return false
-	}
-	return d.notify.window.IsFocused()
 }
 
 // pendingAskToolID reports the tool call id of a session's wait of this kind, or "" when there

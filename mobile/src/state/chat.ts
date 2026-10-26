@@ -13,18 +13,42 @@ export interface ToolRun {
   isError?: boolean;
 }
 
+/**
+ * 实时那一轮的一段。**顺序就是发生的顺序**：思考和正文一段段接在尾部（同类合并），工具
+ * 调用当场插进去（见 appendDelta）。
+ *
+ * 为什么不是「一个字符串 + 一组工具」：模型在一轮里会写一段、调工具、再写一段，全部拼进
+ * 一个字符串就丢了这个先后，画面上只剩「所有文字挤在过程行下面」（桌面端的 parts 数组
+ * 是同一个模型，见 desktop 的 appendPartDelta）。
+ */
+export type LivePart =
+  | { type: 'thinking'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'tool'; tool: ToolRun };
+
 export interface Live {
   active: boolean;
-  text: string;
-  thinking: string;
-  tools: ToolRun[];
+  parts: LivePart[];
   /** 这一轮的实时速度（协议里的 tps 事件）；还没收到过就是 undefined */
   tps?: number;
   /** 工具边界 / 轮次结束后冻结下来的上一次速度 —— 停下来时显示它 */
   lastTps?: number;
 }
 
-export const emptyLive: Live = { active: false, text: '', thinking: '', tools: [] };
+export const emptyLive: Live = { active: false, parts: [] };
+
+/** 同一类的一段接着上一段的尾部，否则另起一段：中间夹了思考或工具就是新的一段 */
+function appendDelta(parts: LivePart[], type: 'thinking' | 'text', delta: string): LivePart[] {
+  if (!delta) return parts;
+  const last = parts[parts.length - 1];
+  if (last && last.type === type) return [...parts.slice(0, -1), { type, text: last.text + delta }];
+  return [...parts, { type, text: delta }];
+}
+
+/** 工具事件按 call id 找到它自己那一段；找不到就什么都不动（别为一个不认识的事件新起一段） */
+function patchTool(parts: LivePart[], id: string, patch: Partial<ToolRun>): LivePart[] {
+  return parts.map((p) => (p.type === 'tool' && p.tool.id === id ? { ...p, tool: { ...p.tool, ...patch } } : p));
+}
 
 export interface ChatState {
   snapshot: Snapshot | null;
@@ -53,10 +77,13 @@ export function applyEvent(
       return same({ snapshot: mergeSnapshot(st.snapshot, ev.snapshot), live: { ...emptyLive, lastTps: st.live.lastTps } });
 
     case 'text':
-      return same({ ...st, live: { ...st.live, active: true, text: st.live.text + ev.text } });
+      return same({ ...st, live: { ...st.live, active: true, parts: appendDelta(st.live.parts, 'text', ev.text) } });
 
     case 'thinking':
-      return same({ ...st, live: { ...st.live, active: true, thinking: st.live.thinking + ev.text } });
+      return same({
+        ...st,
+        live: { ...st.live, active: true, parts: appendDelta(st.live.parts, 'thinking', ev.text) },
+      });
 
     case 'tool_start':
       return same({
@@ -64,7 +91,7 @@ export function applyEvent(
         live: {
           ...st.live,
           active: true,
-          tools: [...st.live.tools, { id: ev.toolId, name: ev.toolName, title: ev.title }],
+          parts: [...st.live.parts, { type: 'tool', tool: { id: ev.toolId, name: ev.toolName, title: ev.title } }],
         },
       });
 
@@ -74,21 +101,13 @@ export function applyEvent(
     case 'tool_args':
       return same({
         ...st,
-        live: {
-          ...st.live,
-          tools: st.live.tools.map((t) => (t.id === ev.toolId ? { ...t, args: ev.args } : t)),
-        },
+        live: { ...st.live, parts: patchTool(st.live.parts, ev.toolId, { args: ev.args }) },
       });
 
     case 'tool_result':
       return same({
         ...st,
-        live: {
-          ...st.live,
-          tools: st.live.tools.map((t) =>
-            t.id === ev.toolId ? { ...t, result: ev.result, isError: ev.isError } : t,
-          ),
-        },
+        live: { ...st.live, parts: patchTool(st.live.parts, ev.toolId, { result: ev.result, isError: ev.isError }) },
       });
 
     case 'state': {
@@ -202,6 +221,9 @@ export function messageOfError(e: unknown): string {
         return '这个任务不归这台电脑管';
       case 'cron_failed':
         return '操作没成功，在电脑上看看日志';
+      case 'awake_failed':
+        // 电脑的系统（或它的桌面环境）不肯接这条「别睡」的禁令 —— 不是手机的错。
+        return '这台电脑没能保持唤醒';
     }
     return `出错了（${e.code}）`;
   }

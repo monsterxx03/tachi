@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, normalizeSnapshot, type Pairing } from '../api/client';
-import { deviceLabel, loadDevices, saveDevices, type Device } from '../api/storage';
-import type { Panels, ProjectRef, SessionSummary } from '../api/types';
+import { api, ApiError, normalizeSnapshot, uploadCapMb, type Pairing } from '../api/client';
+import { fastestPairing, nextAddress, normalizeAddresses } from '../api/addresses';
+import { loadDevices, saveDevices, type Device } from '../api/storage';
+import { deviceLabel } from '../api/label';
+import type { PickedFile } from '../api/pick';
+import type { AwakeState, Panels, PendingMessage, ProjectRef, SessionSummary, UploadedFile } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
+import { displayOf } from './attach';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
+
+/**
+ * 掉线触发的「重新比地址」节流。一次掉线会连着重试好几次（1s/2s/4s…），而一次探测最长要
+ * 2.5 秒 —— 不节流的话重连期间的探测会自己叠起来。
+ */
+const DROP_HEAL_GAP_MS = 5_000;
+/** 探测全失败时换地址的节流。它比探测间隔长：换过去之后要留出重连的时间，否则会来回跳。 */
+const ROTATE_GAP_MS = 12_000;
 
 // 这一层只管副作用（连接、存储、请求）；事件的归并是纯函数，在 ./chat 里，单独测
 export { applyEvent, emptyChat, emptyLive, messageOfError } from './chat';
@@ -24,25 +36,41 @@ export interface MobileApi {
   openId: string | null;
   chat: ChatState;
   error: string | null;
-  /** label 是配对页从 /v1/ping 拿到的名字（+ 主机） */
-  pair: (p: Pairing, label?: string) => Promise<void>;
+  /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）、原始 hostname，以及那台电脑的全部地址 */
+  pair: (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => Promise<void>;
   /** 换一台电脑：断开这一条、清掉画面，再连过去 */
   switchDevice: (index: number) => Promise<void>;
+  /** 给某一台改个名字：只写这台手机上的存储，不通知那台机器（协议里没有这个端点） */
+  renameDevice: (index: number, label: string) => Promise<void>;
+  /**
+   * 手动指定这台电脑走哪条地址；传 null = 交回自动（会重新比一次）。
+   * 手动选中的那条不会被自动切换改掉，直到读者选回自动。
+   */
+  selectAddress: (index: number, url: string | null) => Promise<void>;
   /** 从列表里删掉一台；删的是当前那台时会顺位切到剩下的 */
   removeDevice: (index: number) => Promise<void>;
   unpair: () => Promise<void>;
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
   close: () => void;
-  /** true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。 */
-  send: (text: string, mode: 'send' | 'steer' | 'interrupt') => Promise<boolean>;
+  /**
+   * true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。
+   * `files` 是已经传上去的资料（uploadFile 换回来的名字），随这条消息一起交给那台电脑。
+   */
+  send: (text: string, mode: 'send' | 'steer' | 'interrupt', files?: UploadedFile[]) => Promise<boolean>;
+  /**
+   * 把一个本地文件传给那台电脑，换回它存下来的名字。成功后由调用方把它挂在待发消息上。
+   * 失败回原因（屏幕小，那句原因就是读者唯一能行动的东西），不弹顶部横幅 —— 附件是输入框
+   * 自己的事，传不上去不该把整段对话的状态盖住。
+   */
+  uploadFile: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
   /**
    * 这一段对话的待发送队列（桌面那份「待发送」的手机版）。运行中发的消息进这里，
    * 不直接进对话 —— 否则会插进正在流的这一轮里，而且和桌面看到的不是一回事。
    */
-  pending: string[];
+  pending: PendingMessage[];
   /** 运行中才该用它；不在跑时调用会立刻发出去 */
-  queueMessage: (text: string) => void;
+  queueMessage: (text: string, files?: UploadedFile[]) => void;
   dropPending: (index: number) => void;
   clearPending: () => void;
   /** 「立即发送 · 打断」：停掉这一轮，等它真的结束了再把队列发出去 */
@@ -66,6 +94,8 @@ export interface MobileApi {
   setSkipApproval: (skip: boolean) => Promise<void>;
   /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
   deleteSession: (id: string) => Promise<void>;
+  /** 改标题。走桌面同一条写入路径，成功后 sessions_changed 落到每一块屏上（含桌面上那一行）。 */
+  renameSession: (id: string, title: string) => Promise<void>;
   /** 置顶 / 取消置顶。位置由服务端广播的 sessions_changed 落到每一块屏上。 */
   setPinned: (id: string, pinned: boolean) => Promise<void>;
   /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
@@ -75,6 +105,15 @@ export interface MobileApi {
    * error —— 面板读不到是这一屏的事，不该在顶上挂一条红色横幅，更不该触发重试风暴。
    */
   loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
+  /**
+   * 这台电脑的「保持唤醒」开关。null = 还没读到（没配对、那台电脑是旧版本，或者还没请求）。
+   * 它是一台机器的值，和「打开着哪段对话」无关。
+   */
+  awake: AwakeState | null;
+  /** 读一次；设置页打开时调 */
+  loadAwake: () => Promise<void>;
+  /** 开关 / 改时长。成功返回 null，失败返回那句原因（此时会顺手重读一次真实状态）。 */
+  setAwake: (on: boolean, durationMin?: number) => Promise<string | null>;
 }
 
 export function useMobile(): MobileApi {
@@ -90,9 +129,10 @@ export function useMobile(): MobileApi {
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [olderLoading, setOlderLoading] = useState(false);
   const [cronVersion, setCronVersion] = useState(0);
+  const [awake, setAwakeState] = useState<AwakeState | null>(null);
   // 待发送队列按会话存：切走再回来，没发出去的那句还在（桌面也是这么做的）
-  const [pending, setPending] = useState<Record<string, string[]>>({});
-  const pendingRef = useRef<Record<string, string[]>>({});
+  const [pending, setPending] = useState<Record<string, PendingMessage[]>>({});
+  const pendingRef = useRef<Record<string, PendingMessage[]>>({});
   // 「立即发送·打断」之后即使这一轮以 interrupted 结束，也要把队列发出去
   const forceFlush = useRef<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
@@ -117,21 +157,122 @@ export function useMobile(): MobileApi {
     [pairing],
   );
 
+  // 列表与当前项都是 ref 的读者要用的最新值
+  const devicesRef = useRef<Device[]>([]);
+  devicesRef.current = devices;
+  const activeDeviceRef = useRef(0);
+  activeDeviceRef.current = activeDevice;
+
+  // 每次「这一台电脑」被重新确定（启动 / 切设备 / 回前台 / 掉线）就 +1。地址探测要几百毫秒，
+  // 回来时读者可能已经切到另一台了 —— 那次结果只属于上一台，不能写回去。
+  const connectSeq = useRef(0);
+  // 上一次「掉线后重新比地址」/「没探测结果就换地址」的时刻（各自节流）
+  const dropHealAt = useRef(0);
+  const rotateAt = useRef(0);
+
+  /**
+   * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
+   *
+   * 一台电脑的地址是会变的：笔记本换到另一个网络、Tailscale 起来了/停了、DHCP 换了 IP。
+   * 手机不该要求用户知道这些 —— 它自己比一次就知道现在该走哪条。
+   *
+   * 它**不阻塞**界面：调用方先用记住的地址连，这条在后台把结果换上去（真的不用换时什么也不做）。
+   */
+  /** 把「这台电脑现在走哪条地址」写进存储（下次启动从这里开始试，但仍然会并发复核）。 */
+  const rememberAddress = useCallback(async (dev: Pairing, baseUrl: string, urls: string[]) => {
+    const list = devicesRef.current.slice();
+    const at = list.findIndex((d) => d.token === dev.token && d.baseUrl === dev.baseUrl);
+    if (at < 0) return;
+    list[at] = { ...list[at], baseUrl, urls };
+    setDevices(list);
+    await saveDevices(list, activeDeviceRef.current);
+  }, []);
+
+  /**
+   * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
+   *
+   * `onNothing` 是「一条都应答不了」时的出口：网络烂的时候两条路可能都来不及应答，而那时
+   * 留在原地是最坏的选择（人可能已经离开家了）。调用方用它换下一条地址去试。
+   *
+   * 手动选定过地址的电脑（`pinned`）不做任何自动切换 —— 那是读者明确说过的意思。
+   */
+  const heal = useCallback(
+    async (dev: Pairing, onNothing?: () => void) => {
+      if (dev.pinned) return;
+      const seq = ++connectSeq.current;
+      const picked = await fastestPairing(dev);
+      if (seq !== connectSeq.current) return;
+      if (!picked) {
+        onNothing?.();
+        return;
+      }
+      const { pairing: next, urls } = picked;
+      await rememberAddress(dev, next.baseUrl, urls);
+      // 换了一条才重建连接：同一条地址（只是地址表变新了）不该断开正在用的那条 socket
+      if (next.baseUrl !== dev.baseUrl) setPairing(next);
+    },
+    [rememberAddress],
+  );
+
+  /**
+   * 换到下一条地址。这是「一条都应答不了」时的兜底：明知这次探不出来，也要真的去试另一条 ——
+   * 只在家里存在的那条地址，人离开家之后是永远不会应答的。
+   */
+  const rotate = useCallback(
+    async (dev: Pairing) => {
+      if (dev.pinned) return;
+      const urls = normalizeAddresses(dev);
+      const next = nextAddress(urls, dev.baseUrl);
+      if (!next) return;
+      await rememberAddress(dev, next, urls);
+      setPairing({ ...dev, baseUrl: next, urls });
+    },
+    [rememberAddress],
+  );
+
+  /**
+   * 掉线之后重新比一次地址。
+   *
+   * 这条是「在 App 里换网络」的唯一出路：从家里的 Wi-Fi 走到 5G、或者反过来，能连的那条地址
+   * 变了，而 socket 只会拿着旧的那条一直重试。启动/回前台那两处比不到这件事 —— 人一直看着屏幕
+   * 的时候，App 根本没离开过前台。
+   */
+  const healOnDrop = useCallback(
+    (dev: Pairing) => {
+      if (dev.pinned) return;
+      const now = Date.now();
+      if (now - dropHealAt.current < DROP_HEAL_GAP_MS) return;
+      dropHealAt.current = now;
+      void heal(dev, () => {
+        // 一条都没应答：别守着旧地址了，按顺序换下一条真的去试
+        if (now - rotateAt.current < ROTATE_GAP_MS) return;
+        rotateAt.current = now;
+        void rotate(dev);
+      });
+    },
+    [heal, rotate],
+  );
+
   // 启动时读一次「记住的电脑」：列表 + 当前那一台
   useEffect(() => {
     void loadDevices().then((book) => {
       setDevices(book.devices);
       setActiveDevice(book.active);
-      setPairing(book.devices[book.active] ?? null);
+      // 同步给 ref：heal 可能在这一帧的渲染之前就跑完，它要用这个下标写回存储
+      activeDeviceRef.current = book.active;
+      const first = book.devices[book.active] ?? null;
+      setPairing(first);
       setReady(true);
+      // 记住的地址是「上一次赢的那条」。换了网络之后它可能已经不是最快的，甚至根本不通，
+      // 所以在后台再比一次 —— 不挡着界面出来，赢了就换过去。
+      if (first) void heal(first);
     });
-  }, []);
-  // 列表与当前项都是 ref 的读者要用的最新值
-  const devicesRef = useRef<Device[]>([]);
-  devicesRef.current = devices;
+  }, [heal]);
 
   // 有配对就拉列表并挂上连接
   useEffect(() => {
+    // 这台电脑的开关跟着配对走：换了电脑就先把上一台的值丢掉，别一秒钟里拿别人的状态去画。
+    setAwakeState(null);
     if (!pairing) return;
     let cancelled = false;
 
@@ -155,6 +296,16 @@ export function useMobile(): MobileApi {
       })
       .catch(() => {
         // 拉不到就只是列表空着，不值得打断这一屏
+      });
+
+    // 这台电脑的「保持唤醒」开关（一台机器一个值，所以跟着配对走，不跟着会话）
+    void api
+      .awake(pairing)
+      .then((r) => {
+        if (!cancelled) setAwakeState(r.awake);
+      })
+      .catch(() => {
+        // 读不到就只是卡片留空：那台电脑可能还是旧版本，不值得打断这一屏
       });
 
     // 新建会话时能挑的项目
@@ -269,6 +420,12 @@ export function useMobile(): MobileApi {
             .catch(() => undefined);
           return;
         }
+        if (ev.type === 'awake_changed') {
+          // 一台机器的开关，谁改的都落在这里：桌面的托盘、另一台手机、以及到点自己关的时候。
+          // 带着完整状态，照它画即可 —— 不重读，也就不会有两块屏各说一套的窗口。
+          setAwakeState(ev.awake);
+          return;
+        }
         if (ev.type === 'cron_changed') {
           // 定时任务表是广播的：窗口、另一台手机或调度器自己改了，就让面板重读一次
           setCronVersion((v) => v + 1);
@@ -355,6 +512,8 @@ export function useMobile(): MobileApi {
         void reload(openIdRef.current);
         void api.listSessions(pairing).then((r) => setSessions(r.sessions));
       },
+      // 掉线（含心跳判死）：先别急着重连到旧地址，比一遍 —— 赢的那条会通过 setPairing 换上去
+      onDisconnected: () => healOnDrop(pairing),
     });
     socketRef.current = sock;
     sock.ensureConnected();
@@ -366,7 +525,7 @@ export function useMobile(): MobileApi {
       sock.close();
       socketRef.current = null;
     };
-  }, [pairing, reload]);
+  }, [pairing, reload, healOnDrop]);
 
   /** 断开当前这一屏：换电脑 / 删设备之后都不该留着上一台的会话 */
   const resetView = useCallback(() => {
@@ -389,8 +548,13 @@ export function useMobile(): MobileApi {
         return;
       }
       const next = list[index] ?? list[0];
-      await saveDevices(list, list.indexOf(next));
-      setActiveDevice(list.indexOf(next));
+      const at = list.indexOf(next);
+      await saveDevices(list, at);
+      setActiveDevice(at);
+      // 同上：heal 写回存储时读的是这个 ref，不能等一次渲染
+      activeDeviceRef.current = at;
+      // 每一台都可能不止一条地址：连之前（重新）比一次，赢的那条会被写回存储。
+      void heal(next);
       if (next.baseUrl === pairing?.baseUrl && next.token === pairing?.token) {
         // 已经是这一台：不重建连接（重连一次要重读快照，没必要）
         setPairing(next);
@@ -399,15 +563,22 @@ export function useMobile(): MobileApi {
       resetView();
       setPairing(next);
     },
-    [pairing, resetView],
+    [pairing, resetView, heal],
   );
 
-  // 同一台电脑再配一次（换了令牌）按地址去重：列表里不该出现两条同一个地址
+  // 同一台电脑再配一次（换了令牌或换了地址）按令牌去重：列表里不该出现两条同一个地址
   const pair = useCallback(
-    async (p: Pairing, label?: string) => {
-      const dev: Device = { ...p, label: label || deviceLabel('', p.baseUrl) };
+    async (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => {
+      const urls = normalizeAddresses({ baseUrl: p.baseUrl, urls: meta?.urls });
+      const dev: Device = {
+        ...p,
+        baseUrl: urls[0] ?? p.baseUrl,
+        urls: urls.length > 1 ? urls : undefined,
+        label: meta?.label || deviceLabel({}, p.baseUrl),
+        hostname: meta?.hostname,
+      };
       const list = devicesRef.current.slice();
-      const at = list.findIndex((d) => d.baseUrl === p.baseUrl);
+      const at = list.findIndex((d) => d.token === p.token || d.baseUrl === p.baseUrl);
       if (at >= 0) list[at] = dev;
       else list.push(dev);
       await activate(list, at >= 0 ? at : list.length - 1);
@@ -420,6 +591,42 @@ export function useMobile(): MobileApi {
       const list = devicesRef.current;
       if (index < 0 || index >= list.length) return;
       await activate(list.slice(), index);
+    },
+    [activate],
+  );
+
+  // 改名是本地的事：devices 是这台手机自己的簿子，那台机器并不知道（也不需要知道）。
+  // 它刻意不走 activate —— 改名不该断开并重连一条正在用的 WebSocket。
+  const renameDevice = useCallback(
+    async (index: number, label: string) => {
+      const list = devicesRef.current.slice();
+      const at = list[index];
+      if (!at) return;
+      const name = label.trim();
+      if (!name || name === at.label) return;
+      list[index] = { ...at, label: name };
+      setDevices(list);
+      await saveDevices(list, activeDevice);
+    },
+    [activeDevice],
+  );
+
+  const selectAddress = useCallback(
+    async (index: number, url: string | null) => {
+      const list = devicesRef.current.slice();
+      const dev = list[index];
+      if (!dev) return;
+      const urls = normalizeAddresses(dev);
+      list[index] = {
+        ...dev,
+        baseUrl: url ?? dev.baseUrl,
+        urls: urls.length > 1 ? urls : undefined,
+        // null = 交回自动；heal 会立刻比一次，把能动的那条找回来
+        pinned: url ? true : undefined,
+      };
+      rotateAt.current = 0;
+      dropHealAt.current = 0;
+      await activate(list, index);
     },
     [activate],
   );
@@ -461,13 +668,16 @@ export function useMobile(): MobileApi {
     socketRef.current?.forceReconnect();
     await reload(openIdRef.current);
     if (!pairing) return;
+    // 回前台最常见的变化是「网络换了」（离开家 / 回到家）：比一次才知道该走哪条地址。
+    // 它不挡着下面的读取 —— 真要换地址，那次 setPairing 会自己把连接重建一遍。
+    void heal(pairing);
     try {
       const r = await api.listSessions(pairing);
       setSessions(r.sessions);
     } catch {
       // 下一次刷新再说
     }
-  }, [reload, pairing]);
+  }, [reload, pairing, heal]);
 
   /**
    * 上滑翻页：游标是画面上最旧一条的记录序号（协议里那条：不是时间戳 —— 时间戳会撞）。
@@ -531,8 +741,10 @@ export function useMobile(): MobileApi {
   // send answers whether the message actually went out. The composer needs that answer to
   // keep the reader's words on a refusal: the server's reason is on screen (the banner), and a
   // box that emptied itself leaves them retyping what it just explained.
-  // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）
-  const echoLocal = useCallback((text: string) => {
+  // 自己发的那条本地先画上（回声会带着 origin=mobile 被忽略）。
+  // 气泡里是「自己的话 + 文件名」，和服务端写进记录的那一句一致（见 ./attach）。
+  const echoLocal = useCallback((text: string, files: UploadedFile[] = []) => {
+    const shown = displayOf(text, files.map((f) => f.name));
     setChat((st) =>
       st.snapshot
         ? {
@@ -541,7 +753,7 @@ export function useMobile(): MobileApi {
               ...st.snapshot,
               messages: [
                 ...st.snapshot.messages,
-                { index: -1, role: 'user', content: text, displayContent: text },
+                { index: -1, role: 'user', content: shown, displayContent: shown },
               ],
             },
           }
@@ -550,38 +762,60 @@ export function useMobile(): MobileApi {
   }, []);
 
   const send = useCallback(
-    async (text: string, mode: 'send' | 'steer' | 'interrupt'): Promise<boolean> => {
+    async (text: string, mode: 'send' | 'steer' | 'interrupt', files: UploadedFile[] = []): Promise<boolean> => {
       let ok = false
       await withError(async () => {
         const id = openIdRef.current;
         if (!pairing || !id) return
-        await api.send(pairing, id, text, mode);
+        await api.send(pairing, id, text, mode, files.map((f) => f.name));
         ok = true
-        echoLocal(text);
+        echoLocal(text, files);
       })
       return ok
     },
     [pairing, withError, echoLocal],
   );
 
+  const uploadFile = useCallback(
+    async (f: PickedFile): Promise<{ file?: UploadedFile; error?: string }> => {
+      const id = openIdRef.current;
+      if (!pairing || !id) return { error: '没有打开的对话' };
+      // 明显太大的不必传完再被拒：上限是那台电脑报回来的那个数（见 uploadCapMb）
+      const cap = uploadCapMb();
+      if (cap > 0 && f.size && f.size > cap * 1024 * 1024) {
+        return { error: `文件太大（上限 ${cap} MB）` };
+      }
+      try {
+        const { file } = await api.uploadFile(pairing, id, f);
+        return { file };
+      } catch (e) {
+        return { error: messageOfError(e) };
+      }
+    },
+    [pairing],
+  );
+
   // 队列的三个原子操作。pendingRef 是事件回调能看到的「最新值」——render 闭包里的
   // state 在回调里是旧的。
-  const writePending = useCallback((id: string, list: string[]) => {
+  const writePending = useCallback((id: string, list: PendingMessage[]) => {
     const next = { ...pendingRef.current, [id]: list };
     pendingRef.current = next;
     setPending(next);
   }, []);
-  const takePending = useCallback((id: string): string => {
-    const text = (pendingRef.current[id] ?? []).join('\n\n');
-    if (text) writePending(id, []);
-    return text;
+  // 队列出去的时候合成一条：几段话之间空一行，文件按排队顺序连起来（附件跟着那条消息走）
+  const takePending = useCallback((id: string): PendingMessage => {
+    const list = pendingRef.current[id] ?? [];
+    const text = list.map((p) => p.text).filter(Boolean).join('\n\n');
+    const files = list.flatMap((p) => p.files);
+    if (text || files.length) writePending(id, []);
+    return { text, files };
   }, [writePending]);
 
-  const queueMessage = useCallback((text: string) => {
+  const queueMessage = useCallback((text: string, files: UploadedFile[] = []) => {
     const id = openIdRef.current;
     if (!id) return;
     const list = pendingRef.current[id] ?? [];
-    writePending(id, [...list, text]);
+    writePending(id, [...list, { text, files }]);
   }, [writePending]);
 
   const dropPending = useCallback((index: number) => {
@@ -601,11 +835,11 @@ export function useMobile(): MobileApi {
   const flushPending = useCallback(async (mode: 'send' | 'steer'): Promise<void> => {
     const id = openIdRef.current;
     if (!pairing || !id) return;
-    const text = takePending(id);
-    if (!text) return;
+    const { text, files } = takePending(id);
+    if (!text && files.length === 0) return;
     await withError(async () => {
-      await api.send(pairing, id, text, mode);
-      echoLocal(text);
+      await api.send(pairing, id, text, mode, files.map((f) => f.name));
+      echoLocal(text, files);
     });
   }, [pairing, takePending, withError, echoLocal]);
 
@@ -692,6 +926,16 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  // 改标题和置顶是同一类事：它是列表里那一行的字段，写完之后由 sessions_changed 落到每一块屏。
+  // 这里不先改本地那一份 —— 广播马上就到，两份状态各改一次就该对不上了。
+  const renameSession = useCallback(
+    (id: string, title: string) =>
+      withError(async () => {
+        if (pairing) await api.renameSession(pairing, id, title);
+      }),
+    [pairing, withError],
+  );
+
   // 三个动作走同一层：错误就地还给面板，不挂全局横幅（面板自己有位置说）
   const cronAction = useCallback(
     async (id: string, action: 'run' | 'pause' | 'resume' | 'delete'): Promise<string | null> => {
@@ -706,6 +950,33 @@ export function useMobile(): MobileApi {
       }
     },
     [pairing],
+  );
+
+  const loadAwake = useCallback(async () => {
+    if (!pairing) return;
+    try {
+      const r = await api.awake(pairing);
+      setAwakeState(r.awake);
+    } catch {
+      // 同上：读不到只是一张空卡片，不挂全局横幅
+    }
+  }, [pairing]);
+
+  const setAwake = useCallback(
+    async (on: boolean, durationMin?: number): Promise<string | null> => {
+      if (!pairing) return '还没有配对电脑';
+      try {
+        const r = await api.setAwake(pairing, on, durationMin);
+        setAwakeState(r.awake);
+        return null;
+      } catch (e) {
+        // 服务端说没成功 = 那台机器现在是关的（系统的断言被拒、或者时长不合法）。
+        // 重读一次，让开关停在真实状态上，而不是读者刚点的那一下。
+        void loadAwake();
+        return messageOfError(e);
+      }
+    },
+    [pairing, loadAwake],
   );
 
   const loadPanels = useCallback(async (): Promise<{ panels: Panels | null; error: string | null }> => {
@@ -757,6 +1028,8 @@ export function useMobile(): MobileApi {
     error,
     pair,
     switchDevice,
+    renameDevice,
+    selectAddress,
     removeDevice,
     unpair,
     refresh,
@@ -768,6 +1041,7 @@ export function useMobile(): MobileApi {
     open,
     close,
     send,
+    uploadFile,
     pending: openId ? pending[openId] ?? [] : [],
     queueMessage,
     dropPending,
@@ -781,8 +1055,12 @@ export function useMobile(): MobileApi {
     setSkipApproval,
     deleteSession,
     setPinned,
+    renameSession,
     createSession,
     loadPanels,
+    awake,
+    loadAwake,
+    setAwake,
   };
 }
 

@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 // Native notifications for the moments the app has news while the user is looking
@@ -77,21 +79,6 @@ const (
 	// of the notification out of view.
 	notifyFailureReasonMaxRune = 80
 )
-
-// watching reports whether the user is looking at this conversation right now: the window
-// has focus AND it is showing that session.
-//
-// It is ONE rule with two readers, and they must not drift apart — the OS notification
-// (notify, below) and the device's beep (asks.go's alertIfUnwatched) are the two ways this
-// app interrupts somebody, and both exist to reach a user who is looking elsewhere. Written
-// as a pure function so the combinations can be pinned on the host: trying them for real
-// costs a notification, a session switch, and a walk to the device.
-//
-// An empty active id means no conversation is open (a fresh window, before anything is
-// loaded). That is "elsewhere": there is no transcript on screen the news would repeat.
-func watching(focused bool, activeSessionID, eventSessionID string) bool {
-	return focused && eventSessionID == activeSessionID
-}
 
 // notificationService owns the one Wails notification backend and the two rules
 // this app adds to it: startup may not abort the process, and nothing is posted
@@ -315,6 +302,14 @@ func (n *notifier) notify(sessionID, title, body string) {
 	}()
 }
 
+// focused reports whether this app is the foreground application — the window half of watching
+// (watching.go). A notifier built without a window (a test) is never focused, which is the
+// "elsewhere" side of that rule and the safe half for a notification: a stray ping costs a beep,
+// while the other mistake leaves the reader believing nothing happened.
+func (n *notifier) focused() bool {
+	return n != nil && n.window != nil && n.window.IsFocused()
+}
+
 // active and subtitleFor reach the window's state through the target; a notifier built
 // without one (a test) has no session on screen, which is the "elsewhere" side of watching.
 func (n *notifier) active() string {
@@ -488,22 +483,6 @@ func askBody(questions int) string {
 	return notifyAskWaiting
 }
 
-// sessionTitle returns the session's display title ("" when unknown). It is the notifier's
-// subtitle callback (see notifyTarget): naming the conversation is what makes a notification
-// about one the reader is NOT looking at actionable rather than puzzling.
-func (d *desktopApp) sessionTitle(id string) string {
-	d.mu.Lock()
-	r := d.ownerOfLocked(id)
-	d.mu.Unlock()
-	if r == nil || r.sm == nil {
-		return ""
-	}
-	if cur := r.sm.Current(); cur != nil {
-		return cur.Title
-	}
-	return ""
-}
-
 // openSessionEventName is Go→frontend: 「打开那个会话」——一条被点开的通知说的就是这句话。
 //
 // 与托盘那条 ui:new_session（tray.go）同一个壳，理由也一样：一条从应用外面来的请求只能落在
@@ -516,7 +495,7 @@ func (d *desktopApp) openSession(sessionID string) {
 	if d.app == nil {
 		return
 	}
-	d.app.Event.Emit(openSessionEventName, sessionID)
+	d.emit(openSessionEventName, sessionID)
 }
 
 // truncateRunes cuts s to at most max runes, appending an ellipsis when

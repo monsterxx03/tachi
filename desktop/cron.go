@@ -233,8 +233,8 @@ func (d *desktopApp) markCronRunning(id string, running bool) {
 // finished is one fact with one exit: the phone's panel rereads the table from it, so a change
 // made on either screen is visible on the other without a reconnect (issue: 双端同步).
 func (d *desktopApp) emitCronChanged(id string) {
-	if d.app != nil {
-		d.app.Event.Emit(cronChangedEventName, id)
+	if d.hasUI() {
+		d.emit(cronChangedEventName, id)
 	}
 	d.mobileBroadcast(map[string]any{"type": mobileEvCronChanged, "id": id})
 }
@@ -246,8 +246,8 @@ func (d *desktopApp) emitCronChanged(id string) {
 // One function for one fact: a rename, a pin, a create and a delete all move the list, and the
 // phone has no other way to hear about a change made on the machine (issue #57).
 func (d *desktopApp) emitSessionsChanged(id string) {
-	if d.app != nil {
-		d.app.Event.Emit(sessionsChangedEventName, id)
+	if d.hasUI() {
+		d.emit(sessionsChangedEventName, id)
 	}
 	d.mobileBroadcast(map[string]any{"type": mobileEvSessionsChanged})
 }
@@ -634,8 +634,8 @@ func (d *desktopApp) runCronTurn(ctx context.Context, sessionID string, job *cro
 	history := d.runHistory(sessionID)
 	history, modelText = mergeTrailingUserMessage(history, expanded.Text)
 
-	if d.app != nil {
-		d.app.Event.Emit(cronTurnEventName, CronTurnEvent{
+	if d.hasUI() {
+		d.emit(cronTurnEventName, CronTurnEvent{
 			SessionID: sessionID,
 			JobID:     job.ID,
 			JobName:   job.Name,

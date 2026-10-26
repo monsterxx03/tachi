@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 import (
@@ -30,7 +32,7 @@ func (d *desktopApp) scrollWindow(direction int) {
 	if d.app == nil {
 		return
 	}
-	d.app.Event.Emit(chatScrollEventName, map[string]any{"delta": direction})
+	d.emit(chatScrollEventName, map[string]any{"delta": direction})
 }
 
 // toggleWindowFront 把主窗口在「前台」和「后台」之间翻一下。

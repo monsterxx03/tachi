@@ -20,7 +20,10 @@ import (
 // newTestApp builds a desktopApp with no runs: the @-file root then falls back
 // to the process working directory, which each test pins with t.Chdir.
 func newTestApp() *desktopApp {
-	return &desktopApp{runs: make(map[string]*sessionRun), fileIndex: newFileIndex(), projects: &projectTable{}}
+	// Through newDesktopApp, not a struct literal: the notifier host must be installed, or the
+	// first runtime call into d.notify is a nil-interface panic. The constructor is also where the
+	// per-session maps come from, so a literal would have to keep track of them by hand.
+	return newDesktopApp()
 }
 
 // newSessionManagerForTest returns a session manager rooted in a temp dir

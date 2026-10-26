@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -23,6 +23,10 @@ import (
 // Deleting the file is also a way out: the next pairing regenerates one, which is what a
 // user who has lost track of the old value wants.
 const mobileTokenFileName = "mobile.json"
+
+// defaultMobilePairingPort is the protocol's port, used only when nothing better can say: the
+// listener is not up AND the config does not parse. Nine times out of ten this is a unit test.
+const defaultMobilePairingPort = "8787"
 
 // mobileToken is what the file holds. created_at is for the settings card ("paired at …"),
 // not for any expiry: V1 has no rotation schedule.
@@ -161,7 +165,12 @@ type MobilePairingVO struct {
 	// a machine with Wi-Fi + Ethernet + a VPN, and only a person knows which network the phone
 	// is on — so the card lists them instead of betting on the kernel's ordering.
 	Candidates []MobilePairingCandidate `json:"candidates"`
-	// Payload is {"v":1,"url":…,"token":…} — the QR's content, verbatim.
+	// URLs is EVERY address a phone can dial, the chosen one first: inside the house the LAN
+	// address answers first, away from it the tailnet one does. The phone tries them all at once
+	// (see mobile/src/api/addresses.ts), so this is a set, not a preference list — the order only
+	// decides which line the card and the headless log print first.
+	URLs []string `json:"urls"`
+	// Payload is {"v":1,"url":…,"urls":[…],"token":…} — the QR's content, verbatim.
 	Payload string `json:"payload"`
 	// Error is non-empty when the listener could not start (port taken, bad address), so the
 	// card can say why instead of showing a URL that answers nothing.
@@ -172,9 +181,53 @@ type MobilePairingVO struct {
 type MobilePairingCandidate struct {
 	Interface string `json:"interface"`
 	Address   string `json:"address"`
+	// Kind is what KIND of network this is — pairingKindLAN or pairingKindTailscale — so the card
+	// can label the row with the words a person uses (Label, below) instead of an interface name
+	// only a kernel understands.
+	Kind string `json:"kind"`
+	// Label is that kind in words, decided HERE so the settings card and the headless log cannot
+	// call the same network two different things.
+	Label string `json:"label"`
 	// URL is what the phone would dial if this candidate were chosen — built here, once, so the
 	// card never assembles a URL of its own.
 	URL string `json:"url"`
+}
+
+// The two kinds of address a phone can reach. They are not symmetric: the LAN address is faster
+// and is the one that works with nothing else running, while the tailnet address works from
+// anywhere but only while Tailscale is up on both ends. The phone therefore tries both and takes
+// whichever answers — this label is for the human reading the card, not for the choice.
+const (
+	pairingKindLAN       = "lan"
+	pairingKindTailscale = "tailscale"
+)
+
+// tailscaleCGNAT is the range Tailscale hands out (100.64.0.0/10). A point-to-point interface
+// carrying an address from it is the tailnet, which a phone on the same tailnet CAN reach — the one
+// exception to "an address on a tunnel is useless to another device".
+var tailscaleCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+func isTailscaleAddress(ip net.IP) bool {
+	return ip != nil && tailscaleCGNAT.Contains(ip)
+}
+
+// lanCandidateKind answers which kind of network an address belongs to. Tailscale is recognised by
+// its address range rather than by an interface name: the kernel gives the macOS app's tunnel a
+// plain utunN (the same name every other VPN uses), so the name cannot tell them apart.
+func lanCandidateKind(c lanCandidate) string {
+	if isTailscaleAddress(c.ip) {
+		return pairingKindTailscale
+	}
+	return pairingKindLAN
+}
+
+// mobileKindLabel is a kind in the words a person reads. It lives next to the kinds rather than in
+// the two presenters (settings card, headless log) that print it.
+func mobileKindLabel(kind string) string {
+	if kind == pairingKindTailscale {
+		return "Tailscale"
+	}
+	return "局域网"
 }
 
 // GetMobilePairing returns everything the settings card renders. It creates the token on
@@ -193,9 +246,19 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 		return out
 	}
 	out.Token = token
-	_, port, err := net.SplitHostPort(out.Listen)
-	if err != nil || port == "" {
-		port = "8787"
+	// The port comes from the listener when there is one: a configured 0 means the OS picks, and a
+	// card (or a QR code) built from the config would then name a port nothing is listening on.
+	m := d.mobileServer()
+	port := ""
+	if m != nil {
+		port = m.pairingPort()
+	}
+	if port == "" {
+		if _, p, err := net.SplitHostPort(out.Listen); err == nil && p != "" {
+			port = p
+		} else {
+			port = defaultMobilePairingPort
+		}
 	}
 	out.Candidates = mobileLANCandidates(port)
 	want := ""
@@ -207,9 +270,12 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 		out.Host = c.Address
 		out.URL = c.URL
 	}
-	payload, _ := json.Marshal(map[string]any{"v": 1, "url": out.URL, "token": token})
+	out.URLs = mobilePairingURLs(out.Candidates, out.URL)
+	// "urls" rides along with "url" instead of replacing it: an older build of the phone reads the
+	// first one and stops there, so a code it scans still pairs (it just knows only one address).
+	payload, _ := json.Marshal(map[string]any{"v": 1, "url": out.URL, "urls": out.URLs, "token": token})
 	out.Payload = string(payload)
-	if m := d.mobileServer(); m != nil {
+	if m != nil {
 		if err := m.listenError(); err != "" {
 			out.Error = err
 		}
@@ -246,31 +312,73 @@ func mobilePairingURL(host, port string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
-// mobileLANCandidates lists the addresses the card can offer, PHYSICAL interfaces first (see
-// pickLANIPv4 for why the order matters).
+// mobileLANCandidates lists the addresses the card can offer, in the order a phone should try them:
+// the LAN first (fastest, needs nothing else running), then the tailnet, then anything else.
 func mobileLANCandidates(port string) []MobilePairingCandidate {
 	out := make([]MobilePairingCandidate, 0, 4)
 	for _, c := range lanCandidates() {
 		if !lanUsable(c) {
 			continue
 		}
+		kind := lanCandidateKind(c)
 		out = append(out, MobilePairingCandidate{
 			Interface: c.name,
 			Address:   c.ip.String(),
+			Kind:      kind,
+			Label:     mobileKindLabel(kind),
 			URL:       mobilePairingURL(c.ip.String(), port),
 		})
 	}
-	// Stable partition: physical interfaces first, then everything else.
-	physical := make([]MobilePairingCandidate, 0, len(out))
-	other := make([]MobilePairingCandidate, 0, len(out))
-	for _, c := range out {
-		if physicalName(c.Interface) {
-			physical = append(physical, c)
-		} else {
-			other = append(other, c)
+	// Stable partition by how good a bet the address is (see orderMobileCandidates).
+	return orderMobileCandidates(out)
+}
+
+// orderMobileCandidates is the order a phone should try these in: a physical interface first, then
+// the tailnet, and anything else last. The tailnet goes after the LAN not because it is worse — it
+// is the only one that works from a different city — but because a phone in the same house should be
+// reading the address that answers in 4ms, and the tailnet is the one that disappears when Tailscale
+// stops. Everything else (docker0, a vm bridge) comes last for a harder reason: no phone can ever
+// reach it, so it is only worth listing after the two that might.
+func orderMobileCandidates(in []MobilePairingCandidate) []MobilePairingCandidate {
+	rank := func(c MobilePairingCandidate) int {
+		switch {
+		case physicalName(c.Interface):
+			return 0
+		case c.Kind == pairingKindTailscale:
+			return 1
+		default:
+			return 2
 		}
 	}
-	return append(physical, other...)
+	out := make([]MobilePairingCandidate, 0, len(in))
+	for want := 0; want <= 2; want++ {
+		for _, c := range in {
+			if rank(c) == want {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// mobilePairingURLs is every address as a URL, the chosen one first. This is what the QR carries and
+// what /v1/ping repeats, so the phone treats it as the truth about where this machine lives; an
+// address that shows up twice (the same IP on two interfaces) is kept once.
+func mobilePairingURLs(cands []MobilePairingCandidate, chosenURL string) []string {
+	out := make([]string, 0, len(cands))
+	seen := make(map[string]bool, len(cands))
+	add := func(url string) {
+		if url == "" || seen[url] {
+			return
+		}
+		seen[url] = true
+		out = append(out, url)
+	}
+	add(chosenURL)
+	for _, c := range cands {
+		add(c.URL)
+	}
+	return out
 }
 
 // chooseMobileCandidate answers which address the URL uses: the one the reader picked, when that
@@ -338,7 +446,8 @@ func setMobileInterface(iface string) error {
 // lanCandidate is one interface address as the pairing URL weighs it. Point-to-point links
 // (utun/tun/tap) carry VPN addresses that only exist through that tunnel; bridges and vm
 // interfaces (bridge100, vmenet0, docker0) carry container/emulator networks. A phone on the
-// same Wi-Fi can reach NONE of them.
+// same Wi-Fi can reach NONE of them — the exception is the tailnet, which the phone can join
+// (see isTailscaleAddress): that one is decided by address range, not by interface kind.
 type lanCandidate struct {
 	name         string
 	ip           net.IP
@@ -347,7 +456,8 @@ type lanCandidate struct {
 }
 
 // lanCandidates is every IPv4 address this machine holds, with what decides whether a phone can
-// reach it. The ORDER is the kernel's; the preference between them is pickLANIPv4's business.
+// reach it. The ORDER is the kernel's; which of them a phone is offered, and in what order, is
+// mobileLANCandidates / orderMobileCandidates' business.
 func lanCandidates() []lanCandidate {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -380,29 +490,51 @@ func lanCandidates() []lanCandidate {
 }
 
 // lanUsable is the ONE rule for "a phone on the same network could dial this".
+//
+// A point-to-point interface is normally a verdict of "no": its address exists only inside the
+// tunnel, so a device on the same Wi-Fi can reach none of it. Tailscale is the exception that makes
+// the rule interesting — the tailnet IS a network the phone can be on, so an address from its range
+// is reachable even though it arrives on a utun.
 func lanUsable(c lanCandidate) bool {
-	return c.up && !c.pointToPoint && c.ip.To4() != nil &&
-		!c.ip.IsLoopback() && !c.ip.IsLinkLocalUnicast()
+	if !c.up || c.ip.To4() == nil || c.ip.IsLoopback() || c.ip.IsLinkLocalUnicast() {
+		return false
+	}
+	// A virtual interface carries a network that exists INSIDE this machine. No phone can dial one,
+	// so it is not a candidate — an address that cannot answer is worse than no address at all: the
+	// phone spends a probe on it, and the reader has one more line to ignore.
+	if virtualName(c.name) {
+		return false
+	}
+	if c.pointToPoint {
+		return isTailscaleAddress(c.ip)
+	}
+	return true
 }
 
-// pickLANIPv4 prefers a PHYSICAL-looking interface (en0, eth0, wlan0…) and only falls back to
-// any other up, non-tunnel address when there is none — the order interfaces come back in is
-// not a promise, and the address on a VPN is the one that never works from the phone.
-func pickLANIPv4(cands []lanCandidate) string {
-	for _, wantPhysical := range []bool{true, false} {
-		for _, c := range cands {
-			if !lanUsable(c) || physicalName(c.name) != wantPhysical {
-				continue
-			}
-			return c.ip.String()
+// virtualName names the interface kinds that only ever carry a network inside the host: container
+// bridges (docker0, br-*, cni*, flannel*, veth*), VM bridges (bridge*, vmenet*, vmnet*, virbr*), and
+// macOS's own plumbing (anpi*, ap1, awdl*, llw*). It is a DENY list rather than a list of the names
+// that are allowed, because the interesting unknown is on the other side: a bonded NIC (bond0), a
+// VLAN (vlan10) or a mesh interface (zt*, wg*) is a network a phone may well be on, and a whitelist
+// would silently drop it.
+func virtualName(name string) bool {
+	for _, prefix := range []string{
+		"docker", "br-", "cni", "flannel", "veth",
+		"bridge", "vmenet", "vmnet", "virbr",
+		"anpi", "ap1", "awdl", "llw",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
 		}
 	}
-	return ""
+	return false
 }
 
 // physicalName names the interface kinds a LAN peer actually shares: macOS en0/en1, Linux
 // eth0/enp0s3/wlan0/wlp2s0. Everything else (bridge*, vmenet*, utun*, docker*, virbr*) is a
-// virtual network that exists only inside this machine.
+// virtual network that exists only inside this machine — with one exception that is deliberately
+// NOT decided here: an address from the tailnet range is a network the phone can join, wherever it
+// is attached (isTailscaleAddress).
 func physicalName(name string) bool {
 	for _, prefix := range []string{"en", "eth", "wl"} {
 		if strings.HasPrefix(name, prefix) {

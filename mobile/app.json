@@ -12,10 +12,10 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "连接同一局域网里开着 Tachi 的电脑：会话、审批和消息都在那台机器上。",
         "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
-          "NSAllowsLocalNetworking": true
+          "NSAllowsArbitraryLoads": true
         }
-      }
+      },
+      "appleTeamId": "36ANL9C8HK"
     },
     "android": {
       "package": "dev.tachi.mobile",
@@ -32,7 +32,15 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "扫描电脑上的配对二维码需要相机权限。",
+          "cameraPermission": "扫描电脑上的二维码，或直接拍一张照片发给对话里的 agent，都需要相机权限。",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "从相册选一张照片发给对话里的 agent。",
+          "cameraPermission": "扫描电脑上的二维码，或直接拍一张照片发给对话里的 agent，都需要相机权限。",
           "microphonePermission": false
         }
       ],

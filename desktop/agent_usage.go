@@ -141,8 +141,8 @@ func (d *desktopApp) tpsAdd(id, text string) {
 	tps := tpsRate(r.tpsTokens, r.tpsStart)
 	last := r.tpsLast
 	d.mu.Unlock()
-	if d.app != nil && tps > 0 {
-		d.app.Event.Emit("agent:tps", map[string]any{"sessionId": id, "tps": tps})
+	if d.hasUI() && tps > 0 {
+		d.emit("agent:tps", map[string]any{"sessionId": id, "tps": tps})
 	}
 	if tps > 0 {
 		// The phone's strip dims to lastTps once the rate stops moving; it needs both numbers.
@@ -163,8 +163,8 @@ func (d *desktopApp) tpsReset(id string) {
 	r.tpsStart = time.Time{}
 	last := r.tpsLast
 	d.mu.Unlock()
-	if d.app != nil && last > 0 {
-		d.app.Event.Emit("agent:tps", map[string]any{"sessionId": id, "tps": 0, "lastTps": last})
+	if d.hasUI() && last > 0 {
+		d.emit("agent:tps", map[string]any{"sessionId": id, "tps": 0, "lastTps": last})
 	}
 	if last > 0 {
 		d.mobileNotify(id, map[string]any{"type": mobileEvTps, "tps": 0, "lastTps": last})

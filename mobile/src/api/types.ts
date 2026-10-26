@@ -25,6 +25,18 @@ export interface SessionSummary {
   pinned?: boolean;
 }
 
+/**
+ * 这台电脑的「保持唤醒」开关。它不属于任何一段会话 —— 一整台机器只有一个值。
+ *
+ * on 是开关本身；durationMin 是偏好（下次开启用多少分钟，0 = 不自动关）；until 是这次开着时
+ * 到点自动关的时刻（RFC3339），空串表示没开或不自动关。
+ */
+export interface AwakeState {
+  on: boolean;
+  durationMin: number;
+  until: string;
+}
+
 /** 新建会话时可挑的项目。primary 是它会带来的工作目录，runnable=false 表示目录已经不在了。 */
 export interface ProjectRef {
   id: string;
@@ -223,6 +235,11 @@ export type ServerEvent =
   | { type: 'sessions_changed' }
   /** 定时任务表变了（新建 / 改 / 暂停 / 删除 / 跑完），`id` 是变的那一条；广播给每一条连接 */
   | { type: 'cron_changed'; id: string }
+  /**
+   * 这台电脑的「保持唤醒」变了：托盘勾的、另一块屏改的、或者到点自己关的。
+   * 带着完整的新状态，广播给每一条连接 —— 收到就照它画，不用再读什么。
+   */
+  | { type: 'awake_changed'; awake: AwakeState }
   /** 某段会话的「在跑 / 在等」变了；广播给每一条连接（列表那一行要跟着亮） */
   | { type: 'session_state'; sessionId: string; running: boolean; waiting: WaitingText }
   | { type: 'lagged' };
@@ -232,5 +249,24 @@ export type MessageOrigin = 'desktop' | 'mobile' | 'badge' | 'cron';
 
 /** 手机发出去的命令 */
 export type SendMode = 'send' | 'steer' | 'interrupt';
+
+/**
+ * 手机传上去、宿主存进这段会话目录里的一个文件（`POST /v1/sessions/{id}/files` 的答案）。
+ *
+ * `name` 是宿主**存下来的**名字（重名会加 -1、-2），发送时手机递的就是它 —— 协议里从不出现
+ * 路径：令牌不能等于「读那台机器上的任意文件」。`kind` 是 @ 展开会把它当成什么
+ * （image / text / binary），手机只拿它挑个图标。
+ */
+export interface UploadedFile {
+  name: string;
+  size: number;
+  kind: string;
+}
+
+/** 待发送队列里的一条：一段话 + 可选的文件（排队时它们是一起发生的事）。 */
+export interface PendingMessage {
+  text: string;
+  files: UploadedFile[];
+}
 
 export type PermissionDecision = 'allow_once' | 'deny';

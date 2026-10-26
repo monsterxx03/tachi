@@ -3,10 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
 import type { Live } from '../state/chat';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
-import { useEdgeBack } from './edgeBack';
+import { Switch } from './controls';
+import { humanTokens } from './num';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 
 type Tab = 'overview' | 'mcp' | 'agents' | 'cron';
 
@@ -62,7 +63,7 @@ function CtxBar({
             <View key={p.label} style={styles.ctxRow}>
               <View style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: colors[i % colors.length] }} />
               <Text style={[styles.ctxLabel, { color: t.faint }]}>{p.label}</Text>
-              <Text style={[styles.ctxNum, { color: t.dim }]}>{p.tokens.toLocaleString()}</Text>
+              <Text style={[styles.ctxNum, { color: t.dim }]}>{humanTokens(p.tokens)}</Text>
             </View>
           ))}
         </View>
@@ -72,25 +73,6 @@ function CtxBar({
         </Text>
       )}
     </>
-  );
-}
-
-function Switch({ on, disabled, onPress, t }: { on: boolean; disabled?: boolean; onPress: () => void; t: ReturnType<typeof useTheme>['tokens'] }) {
-  return (
-    <Pressable
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.switch,
-        {
-          backgroundColor: on ? t.amberWash : t.washStrong,
-          borderColor: on ? t.amberLine : t.borderStrong,
-          opacity: disabled ? 0.4 : 1,
-        },
-      ]}
-    >
-      <View style={[styles.knob, { left: on ? 20 : 2, backgroundColor: on ? t.amber : t.switchOff }]} />
-    </Pressable>
   );
 }
 
@@ -182,7 +164,6 @@ export function SessionInfo({
   }, [sessionId]);
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
@@ -270,7 +251,7 @@ export function SessionInfo({
           <View style={styles.cardHead}>
             <Text style={[styles.cardTitle, { color: t.text }]}>上下文</Text>
             <Text style={[styles.cardNum, { color: t.dim }]}>
-              {snapshot.context.estimate.toLocaleString()} / {snapshot.context.window.toLocaleString()}
+              {humanTokens(snapshot.context.estimate)} / {humanTokens(snapshot.context.window)}
               <Text style={{ color: t.faint }}> · {Math.round(ratio * 100)}%</Text>
             </Text>
           </View>
@@ -290,34 +271,6 @@ export function SessionInfo({
               <Text style={[styles.v, styles.mono, { color: t.dim }]}>{d}</Text>
             </View>
           ))}
-          <Text style={[styles.hint, { color: t.faint }]}>改目录是电脑上的事，手机只读。</Text>
-        </View>
-
-        {/* 模型 */}
-        <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
-          <Text style={[styles.cardTitle, { color: t.text }]}>模型</Text>
-          {providers.map((name) => {
-            const on = name === snapshot.model;
-            return (
-              <Pressable
-                key={name}
-                disabled={readOnly}
-                onPress={() => onPickModel(name)}
-                style={[
-                  styles.modelRow,
-                  {
-                    borderColor: on ? t.accentLine : t.border,
-                    backgroundColor: on ? t.accentSoft : 'transparent',
-                    opacity: readOnly ? 0.55 : 1,
-                  },
-                ]}
-              >
-                <Text style={{ color: t.text, fontSize: 13.5, flex: 1 }}>{name}</Text>
-                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
-              </Pressable>
-            );
-          })}
-          <Text style={[styles.hint, { color: t.faint }]}>只影响这段对话，不改电脑上的默认。</Text>
         </View>
 
         {/* 审批 */}
@@ -325,9 +278,6 @@ export function SessionInfo({
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.cardTitle, { color: t.text }]}>跳过审批</Text>
-              <Text style={[styles.hint, { color: t.faint }]}>
-                命中 ask 规则的命令会直接执行，不再停下来问。只影响这段对话。
-              </Text>
             </View>
             <Switch on={snapshot.skipApproval} disabled={readOnly} onPress={() => onToggleSkip(!snapshot.skipApproval)} t={t} />
           </View>
@@ -359,14 +309,38 @@ export function SessionInfo({
             <Text style={[styles.k, { color: t.faint }]}>速度</Text>
             <Text style={[styles.v, { color: t.dim }]}>{tps ? `${Math.round(tps)} tok/s` : '—'}</Text>
           </View>
-          <Text style={[styles.hint, { color: t.faint }]}>
-            金额与积分来自电脑上的用量账本（人民币）；速度是这一轮实测的输出速度。
-          </Text>
         </View>
+        {/* 模型 */}
+        <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
+          <Text style={[styles.cardTitle, { color: t.text }]}>模型</Text>
+          {providers.map((name) => {
+            const on = name === snapshot.model;
+            return (
+              <Pressable
+                key={name}
+                disabled={readOnly}
+                onPress={() => onPickModel(name)}
+                style={[
+                  styles.modelRow,
+                  {
+                    borderColor: on ? t.accentLine : t.border,
+                    backgroundColor: on ? t.accentSoft : 'transparent',
+                    opacity: readOnly ? 0.55 : 1,
+                  },
+                ]}
+              >
+                <Text style={{ color: t.text, fontSize: 13.5, flex: 1 }}>{name}</Text>
+                {on ? <Feather name="check" size={14} color={t.accent2} /> : null}
+              </Pressable>
+            );
+          })}
+          <Text style={[styles.hint, { color: t.faint }]}>只影响这段对话，不改电脑上的默认。</Text>
+        </View>
+
       </ScrollView>
       )}
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 
@@ -594,6 +568,4 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   switchRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  switch: { width: 44, height: 26, borderRadius: 20, borderWidth: 1, justifyContent: 'center' },
-  knob: { position: 'absolute', width: 20, height: 20, borderRadius: 10 },
 });

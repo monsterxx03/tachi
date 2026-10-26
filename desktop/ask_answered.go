@@ -16,8 +16,8 @@ type AskAnsweredEvent struct {
 }
 
 func (d *desktopApp) notifyAskAnswered(sessionID, toolID string, kind pendingAskKind) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:ask_answered", AskAnsweredEvent{
+	if d.hasUI() {
+		d.emit("agent:ask_answered", AskAnsweredEvent{
 			SessionID: sessionID,
 			ToolID:    toolID,
 			Kind:      string(kind),

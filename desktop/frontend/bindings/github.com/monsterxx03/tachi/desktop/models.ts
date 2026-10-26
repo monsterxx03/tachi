@@ -699,6 +699,19 @@ export interface MobilePairingCandidate {
     "address": string;
 
     /**
+     * Kind is what KIND of network this is — pairingKindLAN or pairingKindTailscale — so the card
+     * can label the row with the words a person uses (Label, below) instead of an interface name
+     * only a kernel understands.
+     */
+    "kind": string;
+
+    /**
+     * Label is that kind in words, decided HERE so the settings card and the headless log cannot
+     * call the same network two different things.
+     */
+    "label": string;
+
+    /**
      * URL is what the phone would dial if this candidate were chosen — built here, once, so the
      * card never assembles a URL of its own.
      */
@@ -740,7 +753,15 @@ export interface MobilePairingVO {
     "candidates": MobilePairingCandidate[] | null;
 
     /**
-     * Payload is {"v":1,"url":…,"token":…} — the QR's content, verbatim.
+     * URLs is EVERY address a phone can dial, the chosen one first: inside the house the LAN
+     * address answers first, away from it the tailnet one does. The phone tries them all at once
+     * (see mobile/src/api/addresses.ts), so this is a set, not a preference list — the order only
+     * decides which line the card and the headless log print first.
+     */
+    "urls": string[] | null;
+
+    /**
+     * Payload is {"v":1,"url":…,"urls":[…],"token":…} — the QR's content, verbatim.
      */
     "payload": string;
 

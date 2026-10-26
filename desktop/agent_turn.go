@@ -12,7 +12,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/desktop/link"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -51,12 +50,16 @@ func (s *AgentService) Stop() string {
 // Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
 // queue on any refusal, so an empty answer is not possible.
 func (s *AgentService) StopAndSend(sessionID, text string) string {
-	return s.desk.stopAndSendFrom(sessionID, text, originDesktop)
+	return s.desk.stopAndSendFrom(sessionID, text, text, originDesktop)
 }
 
 // stopAndSendFrom is StopAndSend with the screen that asked. origin only decides who skips the
 // echo of this message (see echoUserMessage).
-func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigin) string {
+//
+// display is what the transcript SHOWS — the same string unless a screen attached files, in which
+// case text carries the @-references that reach the model and display names them in the bubble
+// (the phone's uploads; see desktop/mobile_upload.go).
+func (d *desktopApp) stopAndSendFrom(sessionID, text, display string, origin messageOrigin) string {
 	if text == "" {
 		return "empty"
 	}
@@ -97,7 +100,7 @@ func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigi
 			}
 		}
 	}
-	return d.startTurnFrom(id, text, origin)
+	return d.startTurnFrom(id, text, display, origin)
 }
 
 // Steer answers the agent's steer_check for a session: it delivers the text
@@ -115,10 +118,10 @@ func (d *desktopApp) stopAndSendFrom(sessionID, text string, origin messageOrigi
 // child's id alone it would find no steer channel and answer "not running" — the frontend shows
 // the text in the transcript, the agent's steer_check times out, and the message is gone.
 func (s *AgentService) Steer(sessionID, text string) string {
-	return s.desk.steerFrom(sessionID, text, originDesktop)
+	return s.desk.steerFrom(sessionID, text, text, originDesktop)
 }
 
-func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) string {
+func (d *desktopApp) steerFrom(sessionID, text, display string, origin messageOrigin) string {
 	d.mu.Lock()
 	r := d.getRun(sessionID)
 	ch := r.steerCh
@@ -138,13 +141,13 @@ func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) str
 	default:
 	}
 	select {
-	case ch <- agent.SteerInput{Text: expanded.Text, Display: text, Images: expanded.Images}:
+	case ch <- agent.SteerInput{Text: expanded.Text, Display: display, Images: expanded.Images}:
 		// The other screens draw a steered message with its own style, so the echo says which
 		// it was. An EMPTY steer is not a message: it is the "nothing is queued" reply that
 		// unblocks the loop (see answerSteer), and echoing it put an empty user bubble on every
 		// other screen at each steer point.
 		if text != "" {
-			d.echoUserMessage(sessionID, text, true, origin)
+			d.echoUserMessage(sessionID, text, display, true, origin)
 		}
 		return "ok"
 	default:
@@ -159,12 +162,17 @@ func (d *desktopApp) steerFrom(sessionID, text string, origin messageOrigin) str
 // refusals used to be bare `return`s, which is what made a lost message invisible: the caller
 // answered "ok", the frontend had already drawn the bubble, and no event ever came to clear it.
 func (d *desktopApp) startTurn(id string, text string) string {
-	return d.startTurnFrom(id, text, originDesktop)
+	return d.startTurnFrom(id, text, text, originDesktop)
 }
 
 // startTurnFrom is startTurn with the screen that sent the message. origin is used ONLY for the
 // echo below (agent:user_message / the phone's user_message); it changes no behaviour.
-func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string {
+//
+// display is the user's OWN words as the transcript should show them, which is text itself unless
+// the screen attached files: then text carries the @-references (what the model must see) and
+// display names the files (what a reader can read). Both go into the record; a reloaded transcript
+// shows display, exactly like this turn does.
+func (d *desktopApp) startTurnFrom(id, text, display string, origin messageOrigin) string {
 	if id == "" {
 		return refuseNoSession
 	}
@@ -215,11 +223,12 @@ func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string
 
 	history := d.runHistory(id)
 	// The user's OWN words, before any expansion: the transcript must show what was typed
-	// (`@path`), while the model gets the expanded text. Session records keep both.
+	// (`@path`), while the model gets the expanded text. Session records keep both. A screen that
+	// attached FILES hands in a display of its own (names, not paths) — see the doc comment.
 	// (A merged trailing message — an interrupted session — keeps only THIS turn's text as
 	// the display while Content holds both; that path is rare and its display side is
 	// cosmetic, which is not worth threading a second display string through the merge.)
-	rawText := text
+	rawText := display
 	// Expand @-file references before anything else: text files are inlined,
 	// images become multi-modal content parts. This must happen BEFORE the
 	// trailing-user merge below — history stores already-expanded user
@@ -300,7 +309,7 @@ func (d *desktopApp) startTurnFrom(id, text string, origin messageOrigin) string
 	// Accepted AFTER beginTurn took the turn: this is the point where a message that never
 	// went out is distinguishable from one that did. The window already drew its own bubble
 	// (origin == desktop); every other screen appends it from here.
-	d.echoUserMessage(id, rawText, false, origin)
+	d.echoUserMessage(id, rawText, rawText, false, origin)
 	return "ok"
 }
 
@@ -479,7 +488,7 @@ func (d *desktopApp) endTurn(id, endReason string) {
 // frontend as the raw per-call numbers ("agent:usage"); the cost payload always comes from
 // the ledger so both paths agree by construction.
 func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
 	r := d.getRun(id)
@@ -490,7 +499,7 @@ func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
 	hasCacheHit := r.hasCacheHit
 	d.mu.Unlock()
 	if isCurrent && usage != nil {
-		d.app.Event.Emit("agent:usage", usage)
+		d.emit("agent:usage", usage)
 	}
 	// The context ring rides the same event as the cost row: both are "this session's
 	// numbers", and both are only meaningful right after an API call. Without it the ring
@@ -499,7 +508,7 @@ func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
 	// when the turn started, while the popover, which fetches on open, already knew. See
 	// itest/desktop/drivers/ctx-ring.js.
 	est, win := d.contextUsageOf(r)
-	d.app.Event.Emit("agent:cost", map[string]any{
+	d.emit("agent:cost", map[string]any{
 		"sessionId": id, "cost": cost, "credit": credit,
 		"cacheHitRate": rate, "hasCacheHit": hasCacheHit,
 		"contextEstimate": est, "contextWindow": win,
@@ -556,7 +565,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 	// toTranscript decides whether THIS event may become part of the conversation. The
 	// state updates below are never gated: a review still shows 执行/思考 in the status bar,
 	// still moves the token rate, still refreshes the usage numbers.
-	toTranscript := d.app != nil && lane.intoTranscript()
+	toTranscript := d.hasUI() && lane.intoTranscript()
 	switch ev.Type {
 	case agent.AgentEventThinkingDelta:
 		d.tpsAdd(id, ev.ThinkingDelta)
@@ -577,7 +586,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// (reuses tools.ToolArgsSummary) so the frontend can render the title
 		// and full args.
 		if toTranscript && isCurrent {
-			d.app.Event.Emit("agent:tool", map[string]any{
+			d.emit("agent:tool", map[string]any{
 				"name":   ev.ToolName,
 				"title":  tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
 				"args":   ev.ToolArgs,
@@ -597,8 +606,36 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// record from drifting, and it is why the tool args are not carried here.
 		// Success only — a SavePlan that failed to write changed nothing.
 		if toTranscript && isCurrent && ev.ToolName == tools.ToolNameSavePlan && !ev.ToolIsError {
-			d.app.Event.Emit("agent:plan", map[string]any{"sessionId": id})
+			d.emit("agent:plan", map[string]any{"sessionId": id})
 		}
+	case agent.AgentEventSteerCheck:
+		// The loop parks here between tool calls, waiting for the frontend to answer "is anything
+		// queued?". Silence is not an answer: with nobody writing to the channel the loop waits out
+		// defaultSteerTimeout (5s) at EVERY tool boundary, which is a desktop turn with one tool
+		// call being five seconds slower than the same turn in the TUI — and on the phone it looks
+		// like a stall between the tool result and the next token.
+		//
+		// steerFrom drains the channel before writing, so a real steer landing in this same instant
+		// wins the slot. A steer that arrives just after this reply waits for the NEXT boundary
+		// rather than being lost — the same trade the TUI makes (tui/model_events.go).
+		d.mu.Lock()
+		var steerCh chan agent.SteerInput
+		if r := d.ownerOfLocked(id); r != nil {
+			steerCh = r.steerCh
+		}
+		d.mu.Unlock()
+		if steerCh != nil {
+			select {
+			case steerCh <- agent.SteerInput{}:
+			default:
+			}
+		}
+	case agent.AgentEventSessionTitle:
+		// 这段对话的标题刚被生成（第一轮里，且只发生一次）—— 它是列表里那一行的一个字段，
+		// 所以走列表的出口广播一次：窗口本来就从 agent:event 那串流里拿到这个标题，手机不在
+		// 那条线上，它只有 sessions_changed 这一条路（和重命名完全同一个事实、同一个出口）。
+		// 少这一句的表现是：桌面上的标题变了，手机上那段对话一直叫「未命名会话」。
+		d.emitSessionsChanged(id)
 	case agent.AgentEventAskUser:
 		// The agent loop is parked, waiting for the user's answers. Push the
 		// questions to the frontend, which renders the form and answers via
@@ -616,8 +653,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			questions: ev.Questions,
 		})
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
-		if d.app != nil {
-			d.app.Event.Emit("agent:ask", AskEvent{
+		if d.hasUI() {
+			d.emit("agent:ask", AskEvent{
 				SessionID: id,
 				ToolID:    ev.ToolID,
 				Questions: ev.Questions,
@@ -629,14 +666,14 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		for _, q := range ev.Questions {
 			questions = append(questions, q.Question)
 		}
-		d.notify.notifyAsk(id, questions)
+		d.notifyHost().notifyAsk(id, questions)
 	case agent.AgentEventAutoCompactStart:
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩上下文…"})
 		// Compaction is an LLM call of its own and takes a while, so the
 		// transcript says what the pause is. (The raw event is forwarded too,
 		// but the notice is Go's, like the TUI's and ACP's wording.)
-		if d.app != nil {
-			d.app.Event.Emit("agent:compact_start", map[string]any{"sessionId": id})
+		if d.hasUI() {
+			d.emit("agent:compact_start", map[string]any{"sessionId": id})
 		}
 	case agent.AgentEventAutoCompactDone:
 		// Failure keeps the original history — the loop retries on its next
@@ -656,8 +693,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			default:
 				d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩失败，继续"})
 			}
-			if d.app != nil {
-				d.app.Event.Emit("agent:compact_done", map[string]any{
+			if d.hasUI() {
+				d.emit("agent:compact_done", map[string]any{
 					"sessionId": id,
 					"reason":    reason,
 					"error":     ev.Result.Error.Error(),
@@ -682,8 +719,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			}
 		}
 		d.mu.Unlock()
-		if d.app != nil {
-			d.app.Event.Emit("agent:compact_done", map[string]any{
+		if d.hasUI() {
+			d.emit("agent:compact_done", map[string]any{
 				"sessionId": id,
 				"movedTo":   moved,
 				"oldCount":  ev.OldMsgCount,
@@ -715,8 +752,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		cronName, cronSilent := r.cronJobName, r.cronSilent
 		d.mu.Unlock()
 		if toTranscript && ev.Result != nil && isCurrent {
-			d.app.Event.Emit("agent:result", ev.Result)
-			d.app.Event.Emit("agent:turn", map[string]any{
+			d.emit("agent:result", ev.Result)
+			d.emit("agent:turn", map[string]any{
 				"sessionId":  id,
 				"durationMs": ev.Result.Duration.Milliseconds(),
 				"iterations": ev.Result.IterationsUsed,
@@ -745,15 +782,15 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		switch lane {
 		case laneTranscript:
 			if ev.Result != nil && !interrupted {
-				d.notify.notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
-				// 设备也响一声（另一种音频，见 link.AlertKindDone）：同一条「你不在看」的判据，
+				d.notifyHost().notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
+				// 设备也响一声（另一种音频，见 alertKindDone）：同一条「你不在看」的判据，
 				// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
-				d.alertIfUnwatched(id, link.AlertKindDone)
+				d.alertIfUnwatched(id, alertKindDone)
 			}
 		case laneCron:
 			if ev.Result != nil && !interrupted && cronName != "" && !cronSilent {
-				d.notify.notifyCronDone(id, cronName)
-				d.alertIfUnwatched(id, link.AlertKindDone)
+				d.notifyHost().notifyCronDone(id, cronName)
+				d.alertIfUnwatched(id, alertKindDone)
 			}
 		}
 	case agent.AgentEventError:
@@ -796,7 +833,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// elsewhere; the notification is the only signal that the report they
 		// were waiting for did not arrive.
 		if lane == laneCron && !interrupted && cronName != "" {
-			d.notify.notifyCronFailed(id, cronName)
+			d.notifyHost().notifyCronFailed(id, cronName)
 		}
 		// A conversation turn that ended in an error is the other moment worth interrupting
 		// for: the reply the reader is waiting for is NOT coming, and the ⚠ line saying so is
@@ -806,13 +843,13 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// conclusion (see `interrupted` above), and a side-channel run raises its own
 		// notification where its outcome is known (emitOneOff), which names the run.
 		if lane == laneTranscript && !interrupted {
-			d.notify.notifyTurnFailed(id, turnErr)
+			d.notifyHost().notifyTurnFailed(id, turnErr)
 		}
 		// A conversation turn concludes its newest assistant bubble; an one-off run has no
 		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
 		// patching "the newest assistant" would hit the turn the review was FOR.
 		if toTranscript {
-			d.app.Event.Emit("agent:error", map[string]any{"sessionId": id, "error": detail, "interrupted": interrupted})
+			d.emit("agent:error", map[string]any{"sessionId": id, "error": detail, "interrupted": interrupted})
 		}
 	}
 	// Forward the raw event for every session so the frontend can keep a
@@ -820,7 +857,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 	// of the two paths into the transcript (the typed events above are the first), so a
 	// side-channel run must be kept out of it as well.
 	if toTranscript {
-		d.app.Event.Emit("agent:event", map[string]any{"sessionId": id, "event": ev})
+		d.emit("agent:event", map[string]any{"sessionId": id, "event": ev})
 	}
 	// The phone gets a PROJECTION, never the raw event (it carries Messages and full tool
 	// output). Same lane gate: a side-channel run is not part of this conversation.
@@ -840,8 +877,8 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 // auto-sent: a compaction switch can move the session between the event being
 // emitted and the callback running, and the comparison has to survive that.
 func (d *desktopApp) emitIdle(id, reason string) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:idle", map[string]any{
+	if d.hasUI() {
+		d.emit("agent:idle", map[string]any{
 			"sessionId": id,
 			"reason":    reason,
 			"current":   d.currentID() == id,
@@ -931,69 +968,9 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 
 // emitState pushes one session's state to the frontend (see setSessionState).
 func (d *desktopApp) emitState(st AgentState) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:state", st)
+	if d.hasUI() {
+		d.emit("agent:state", st)
 	}
-}
-
-// trayLabel is the menu bar's text: today's spend and how full the displayed session's context is,
-// joined with " · ".
-//
-// Either half can be missing (nothing spent yet, nothing measured), and when BOTH are the label
-// falls back to the session's short state — the bar must keep saying something rather than flipping
-// to an empty box next to the icon.
-func trayLabel(st AgentState, cost, context string) string {
-	parts := make([]string, 0, 2)
-	if cost != "" {
-		parts = append(parts, cost)
-	}
-	if context != "" {
-		parts = append(parts, context)
-	}
-	if len(parts) == 0 {
-		return st.Label
-	}
-	return strings.Join(parts, " · ")
-}
-
-// refreshTray repaints the tray for the DISPLAYED session — the only surface where a state is
-// not per session. The icon carries the state; the two numbers are what the window cannot tell you
-// while it is hidden.
-//
-// The numbers go to THREE places, and each covers a surface the others cannot reach: SetLabel is
-// the macOS menu bar's text (a Linux tray host ignores it), the status MENU ITEM is where a Linux
-// user reads them (a macOS menu shows it too, which is a bonus), and desktop_status.json is what a
-// bar widget outside this process draws (barstatus.go). The three are set from the same strings
-// and numbers so they can never disagree.
-func (d *desktopApp) refreshTray() {
-	if d.tray == nil {
-		return
-	}
-	st := d.currentState()
-	estimate, _, window := d.contextUsage(st.SessionID)
-	spent := d.todayCost()
-	cost := formatCost(spent)
-	context := trayContext(estimate, window)
-	d.tray.SetLabel(trayLabel(st, cost, context))
-	if d.trayStatus != nil {
-		d.trayStatus.SetLabel(trayStatusItemText(st, cost, context))
-	}
-	applyTrayIcon(d.tray, st.Status)
-	writeDesktopStatus(st, spent, contextPercent(estimate, window))
-}
-
-// trayStatusItemText is the label of the tray menu's status item: the state word plus the same two
-// numbers the bar label carries.
-//
-// The state word is kept even when the numbers are present: on Linux this item is what a reader
-// looks at to know what the app is doing, and "¥0.386 · 42%" alone would not say whether it is
-// working or idle.
-func trayStatusItemText(st AgentState, cost, context string) string {
-	readout := trayLabel(st, cost, context) // the numbers, or st.Label when there are none
-	if readout == st.Label {
-		return "运行状态: " + st.Label
-	}
-	return "运行状态: " + st.Label + " · " + readout
 }
 
 // reflectActive re-reports a session's state at the moment it becomes the displayed one:

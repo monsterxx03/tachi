@@ -2,10 +2,9 @@ import { Feather } from '@expo/vector-icons';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { ProjectRef } from '../api/types';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
-import { useEdgeBack } from './edgeBack';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 
 /**
  * 新建一段对话。项目是可选的；选择「无项目」时可以改工作目录 —— 手机上没有文件选择器，
@@ -31,7 +30,6 @@ export function NewSession({
   const pick = (id: string) => setProjectId(id);
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
       <View style={[styles.header, { borderBottomColor: t.border, backgroundColor: t.bgTop }]}>
         <Pressable onPress={onClose} style={({ pressed }) => [styles.back, pressed && { backgroundColor: t.wash }]}>
@@ -105,8 +103,8 @@ export function NewSession({
           会话建在电脑上，电脑也能看到它。
         </Text>
       </ScrollView>
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

@@ -23,6 +23,7 @@ import { SessionInfo } from './src/ui/SessionInfo';
 import { SessionList } from './src/ui/SessionList';
 import { NewSession } from './src/ui/NewSession';
 import { Settings } from './src/ui/Settings';
+import { Opening } from './src/ui/Opening';
 
 /** 一条常驻的提示（连不上、令牌失效、服务端的拒绝原因） */
 function NoticeBar({ text }: { text: string }) {
@@ -90,6 +91,7 @@ function ChatPane({
           if (f) setOpenFile(f);
         }}
         onSend={m.send}
+        onUpload={m.uploadFile}
         onStop={() => void m.stop()}
         pending={m.pending}
         onQueue={m.queueMessage}
@@ -102,6 +104,20 @@ function ChatPane({
         onEdgeBack={onToggleList ?? m.close}
       />
     );
+
+  // 已经点名了一段对话，但快照还没到：画它自己的骨架，而不是停在列表上。
+  // 这一屏取代的正是「点了没反应」——快照要一个来回（读记录 + 算用量 + 传一百多条消息），
+  // 这段时间里没有任何反馈，读起来就是卡住。
+  if (m.openId) {
+    const row = m.sessions.find((s) => s.id === m.openId);
+    return (
+      <Opening
+        title={row?.title}
+        onBack={onToggleList ?? m.close}
+        onRetry={() => void m.open(m.openId!)}
+      />
+    );
+  }
 
   return (
     <View style={styles.emptyPane}>
@@ -187,6 +203,9 @@ function Shell() {
       sessions={m.sessions}
       currentId={m.openId}
       conn={m.conn}
+      deviceName={m.devices[m.activeDevice]?.label}
+      // 「连上了但列表没读回来」单独说 —— 这条横幅平时不出现
+      error={m.conn === 'open' && m.sessions.length === 0 ? m.error : null}
       // 这些必须是稳定引用：行组件 memo 过，回调每帧新建的话 memo 等于没有
       onOpen={m.open}
       onSettings={() => setShowSettings(true)}
@@ -194,6 +213,7 @@ function Shell() {
       onRefresh={m.refresh}
       onDelete={m.deleteSession}
       onPin={m.setPinned}
+      onRename={m.renameSession}
     />
   );
 
@@ -222,10 +242,10 @@ function Shell() {
 
         {!m.pairing || addingDevice ? (
           <Pairing
-            onPaired={(p, label) => {
+            onPaired={(p, meta) => {
               // 加完一台就回设置页：留在配对上会让人以为没成功
               setAddingDevice(false);
-              void m.pair(p, label);
+              void m.pair(p, meta);
             }}
             onClose={m.pairing ? () => setAddingDevice(false) : undefined}
           />
@@ -247,8 +267,13 @@ function Shell() {
               void m.switchDevice(i);
             }}
             onRemoveDevice={(i) => void m.removeDevice(i)}
+            onRenameDevice={(i, label) => void m.renameDevice(i, label)}
+            onSelectAddress={(i, url) => void m.selectAddress(i, url)}
             onAddDevice={() => setAddingDevice(true)}
             onBack={() => setShowSettings(false)}
+            awake={m.awake}
+            onLoadAwake={m.loadAwake}
+            onSetAwake={m.setAwake}
             onUnpair={() => {
               setShowSettings(false);
               void m.unpair();
@@ -270,7 +295,7 @@ function Shell() {
               />
             </View>
           </View>
-        ) : m.openId && m.chat.snapshot ? (
+        ) : m.openId ? (
           <ChatPane
             m={m}
             showInfo={showInfo}

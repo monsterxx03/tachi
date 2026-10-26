@@ -182,10 +182,10 @@ func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 // emitMCPReady reports that the shared pool will not grow by itself any more for this
 // startup. Informational: the frontend's only use is to re-read the server list.
 func (d *desktopApp) emitMCPReady() {
-	if d.app == nil {
+	if !d.hasUI() {
 		return
 	}
-	d.app.Event.Emit("agent:mcp_ready", map[string]any{})
+	d.emit("agent:mcp_ready", map[string]any{})
 }
 
 // newSessionManager creates a fresh session manager honoring the configured

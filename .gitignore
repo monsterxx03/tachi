@@ -5,6 +5,10 @@
 /tachi
 /tachi-linux-amd64
 /tachi-linux-arm64
+# The no-window host (make headless). Same reasoning: a build artifact at the root, and the
+# anchored names keep them from swallowing anything else. The suffix is GOOS-GOARCH.
+/tachi-headless
+/tachi-headless-*
 # go build 不带 -o 时把二进制写到当前目录 —— 在仓库根跑就会留下这个
 /mockapi
 .DS_Store

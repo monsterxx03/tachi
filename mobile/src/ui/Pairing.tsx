@@ -2,10 +2,9 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { ping, type Pairing as PairingInfo } from '../api/client';
-import { deviceLabel } from '../api/storage';
-import { useEdgeBack } from './edgeBack';
+import { deviceLabel } from '../api/label';
+import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { ScanPairing } from './ScanPairing';
@@ -18,7 +17,7 @@ export function Pairing({
   onPaired,
   onClose,
 }: {
-  onPaired: (p: PairingInfo, label?: string) => void;
+  onPaired: (p: PairingInfo, meta?: { label: string; hostname?: string; urls?: string[] }) => void;
   /** 从设置页「添加电脑」进来时给一个返回；第一台配对时没有 */
   onClose?: () => void;
 }) {
@@ -36,8 +35,11 @@ export function Pairing({
     setErr(null);
     try {
       const r = await ping(p.baseUrl);
-      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台
-      if (r.ok) onPaired(p, deviceLabel(r.name, p.baseUrl));
+      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台。默认名取机器自报的
+      // hostname（老服务端没有这一项时退回「产品名 · 地址」）。
+      // urls 也一起带上：那台电脑可能不止一条地址（局域网 + Tailscale），全部记下来，
+      // 之后手机自己挑能用的那条，不需要读者知道自己在哪个网络里。
+      if (r.ok) onPaired(p, { label: deviceLabel(r, p.baseUrl), hostname: r.hostname, urls: r.urls });
       else setErr('这台机器拒绝了这个地址');
     } catch (e) {
       setErr(messageOfError(e));
@@ -66,7 +68,6 @@ export function Pairing({
   };
 
   return (
-    <GestureDetector gesture={back.gesture}>
       <Animated.View style={[styles.root, back.style]}>
       {onClose ? (
         <Pressable
@@ -110,7 +111,8 @@ export function Pairing({
         style={[styles.input, field]}
       />
       <Text style={[styles.note, { color: t.faint, marginTop: 6 }]}>
-        模拟器可以填 127.0.0.1（配 adb reverse）；真机要填电脑的局域网地址。
+        模拟器可以填 127.0.0.1（配 adb reverse）；真机填电脑的任意一个地址——局域网的和 Tailscale 的都行，
+        扫码会把它们一起记住。
       </Text>
 
       <Text style={[styles.label, { color: t.faint }]}>令牌</Text>
@@ -147,10 +149,11 @@ export function Pairing({
       </Pressable>
 
       <Text style={[styles.note, { color: t.faint }]}>
-        这条链路是局域网的明文 HTTP：拿到令牌的人就能让那台电脑执行命令。只在家里用自己的网络。
+        链路是明文 HTTP：走局域网时同一个 Wi-Fi 下的人能看见，走 Tailscale 时那段包在 Tailscale 的加密隧道里。
+        两种情况下，拿到令牌的人都能让那台电脑执行命令。
       </Text>
+        <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
-    </GestureDetector>
   );
 }
 

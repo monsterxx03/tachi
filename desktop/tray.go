@@ -1,9 +1,12 @@
+//go:build !headless
+
 package main
 
 import (
 	"embed"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -57,6 +60,32 @@ func setupTray(d *desktopApp) *application.SystemTray {
 	// surface left for the numbers in Tachi's own chrome (a bar widget outside this
 	// process reads them instead from desktop_status.json, see barstatus.go).
 	d.trayStatus = menu.Add(trayStatusPlaceholder).SetEnabled(false)
+	menu.AddSeparator()
+	// 「保持唤醒」——一台机器的开关，不是一段会话的（awake.go）：勾上就是不让这台电脑因为
+	// 闲置而睡。它放在这里而不是窗口里，因为它与「看哪段对话」无关；手机上的设置页是同一个
+	// 开关的另一块屏，两边改完都会立刻落到对方身上（awake_changed）。
+	//
+	// 勾选状态由 applyAwakeUI 统一写入，不依赖点击时框架翻的那一下：到点自动关、手机改了
+	// 时长，这两条路都只有它。
+	d.trayAwake = menu.AddCheckbox(awakeMenuLabel(d.awakeState()), true).
+		OnClick(func(ctx *application.Context) {
+			// 读我们自己的状态、把点击当作一次「反转」：框架已经替我们翻过勾了，不能拿它
+			// 当真 —— 一个正在到点关闭的开关会和它不一致。
+			_, _ = d.setAwake(!d.awakeState().On, nil)
+		})
+	// 时长：默认 3 小时，到点自动关（awake.go 的偏好，落盘）。选一个只会改偏好；开着的时候
+	// 也顺手重新起算 —— 「改成 6 小时」对已经开着的开关自然就是这个意思。
+	durations := menu.AddSubmenu("唤醒时长")
+	d.trayAwakeNote = durations.Add("").SetEnabled(false)
+	d.trayAwakePresets = make(map[int]*application.MenuItem, len(awakeDurationChoices))
+	for _, m := range awakeDurationChoices {
+		minutes := m
+		d.trayAwakePresets[minutes] = durations.AddRadio(awakeDurationText(minutes), true).
+			OnClick(func(ctx *application.Context) {
+				_, _ = d.setAwake(d.awakeState().On, &minutes)
+			})
+	}
+	d.applyAwakeUI(d.awakeState())
 	menu.AddSeparator()
 	menu.Add("退出 Tachi Desktop").OnClick(func(ctx *application.Context) {
 		d.app.Quit()
@@ -114,8 +143,8 @@ func (d *desktopApp) newSessionFromMenuBar() {
 		return
 	}
 	d.revealWindow()
-	if d.app != nil {
-		d.app.Event.Emit(uiNewSessionEventName)
+	if d.hasUI() {
+		d.emit(uiNewSessionEventName, nil)
 	}
 }
 
@@ -169,5 +198,59 @@ func toFloat(v any) float64 {
 		return float64(n)
 	default:
 		return 0
+	}
+}
+
+// ── 保持唤醒（菜单里的那一半）──────────────────────────────────────────────────
+
+// awakeDurationChoices are the lengths the menu offers. 0 = 不自动关. They are only QUICK PICKS:
+// the stored preference can be any minute the phone、或一个手改过的 desktop_ui.json，写了什么就
+// 是什么，所以「当前：…」那行才是权威，这些选项里没有它的勾选时只是没有勾选（不是错误）。
+var awakeDurationChoices = []int{30, 60, 180, 360, 480, 0}
+
+// applyAwakeUI paints the switch onto the tray menu. It is called from awakeController.onChange,
+// i.e. on the tray-toggle path, from the phone, and when the deadline expires — the three ways the
+// state can move — so the menu never shows a state the machine is not in.
+func (d *desktopApp) applyAwakeUI(st awakeState) {
+	if d.trayAwake != nil {
+		d.trayAwake.SetChecked(st.On)
+		d.trayAwake.SetLabel(awakeMenuLabel(st))
+	}
+	if d.trayAwakeNote != nil {
+		d.trayAwakeNote.SetLabel("当前：" + awakeDurationText(st.DurationMin))
+	}
+	for minutes, item := range d.trayAwakePresets {
+		item.SetChecked(minutes == st.DurationMin)
+	}
+}
+
+// awakeMenuLabel is the checkbox's text: the switch's name, plus the deadline when there is one —
+// a switch that only says "保持唤醒" leaves the reader wondering whether it will still be awake
+// at dinner.
+func awakeMenuLabel(st awakeState) string {
+	if !st.On {
+		return "保持唤醒"
+	}
+	if st.Until == "" {
+		return "保持唤醒 · 不自动关"
+	}
+	if t, err := time.Parse(time.RFC3339, st.Until); err == nil {
+		return "保持唤醒 · 到 " + t.Local().Format("15:04") + " 自动关"
+	}
+	return "保持唤醒"
+}
+
+// awakeDurationText renders a length in what a person would say. Kept in one place so the menu's
+// 当前 line and its choices can never disagree about what "180" means.
+func awakeDurationText(minutes int) string {
+	switch {
+	case minutes == 0:
+		return "不自动关"
+	case minutes%60 == 0:
+		return fmt.Sprintf("%d 小时", minutes/60)
+	case minutes > 60:
+		return fmt.Sprintf("%d 小时 %d 分", minutes/60, minutes%60)
+	default:
+		return fmt.Sprintf("%d 分钟", minutes)
 	}
 }

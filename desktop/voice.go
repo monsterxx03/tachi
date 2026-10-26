@@ -1,3 +1,5 @@
+//go:build !headless
+
 package main
 
 import (
@@ -322,7 +324,7 @@ func (d *desktopApp) emitVoice(name string, payload map[string]any) {
 	if d.app == nil {
 		return
 	}
-	d.app.Event.Emit(name, payload)
+	d.emit(name, payload)
 }
 
 // voiceNotice 把一句要讲给用户的话送到界面（转写失败、没听到内容）。

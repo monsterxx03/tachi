@@ -14,13 +14,16 @@
 | **徽章（设备连接与语音）** | `desktop/link/`、`desktop/badge.go` 或 `desktop/stt/` 下的任何东西——**读 `docs/agents/badge.md`，不是本文件** |
 | **桌面语音输入** | 你碰输入框的麦克风按钮或 `voice:*` 事件（`desktop/voice.go`、`composer.tsx` 里语音那一半） |
 | **桌面后端（绑定与路径）** | 你碰 `AgentService`——一个方法、一条绑定、一条会话路径、一个打开/显示动作 |
+| **保持唤醒（不让机器睡）** | 你碰 `desktop/awake*.go`、托盘里那个勾选项和它的时长，或者任何「让这台机器别睡」的东西 |
 | **桌面 MCP** | 你碰 MCP 授权、MCP 面板、设置页的 MCP 服务器编辑器，或延迟加载的工具那条池/提醒链路 |
 | **桌面定时任务** | 你碰 desktop 的 cron（`desktop/cron.go`、调度器、任务面板、任务与会话的绑定），或改 `cron` 包的归属/时区行为 |
 | **桌面会话树** | 你碰 skill 发现、权限，或者其他任何解析「这个会话在哪个树里干活」的东西 |
 | **桌面单轮历史** | 你碰一轮的历史是怎么拼起来、合并、续下去的 |
+| **桌面一轮的 steer 检查** | 你碰 `handleEventIn` 的事件 switch 或 `steerCh`，或者觉得「工具调用之后总要卡一下」 |
 | **桌面压缩** | 你碰压缩链路（`agent/compact.go`、`desktop/compaction.go`、`AgentEventAutoCompactDone` 那个 case）、`RunningSessions`，或者其他任何解析**哪个 run 拥有一个会话**的东西 |
 | **桌面 UI 状态** | 你改前端：哪个模块拥有什么，以及每条约定守住的那条规则 |
 | **桌面主题** | 你碰颜色 |
+| **无头宿主（`-tags headless`）** | 你要让手机在没有窗口的机器上连上来（NAS、服务器、容器），或者给运行时文件里加一句 `d.app` / `d.emit` / 一个新的桌面能力 |
 
 ## 桌面冒烟验证（demo + mockllm）
 
@@ -234,6 +237,14 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **这个开关的可见形态是状态栏里那个下拉框，而它的一半住在会话记录里**：`GetSkipApproval`/`SetSkipApproval`（`desktop/permission.go`）读写 `session.Session.SkipApproval`，**写记录成功之后**才翻 agent 上那两个读者——写失败就把记录里的值放回去、不碰 agent，所以两边不可能各说一个模式。它在一处被**推导**出来：`buildAgentForSession` 从会话记录取回来（一个 agent 是一个会话的），以及 `followCompaction` 在把 run 搬到压缩出来的子会话之后重新指向（子会话的记录是新的、`skip_approval` 不在 `FinalizeCompact` 的白名单里，不重新指向就等于替它答了一个它没被问过的问题）；**分支**则带着它（`session/fork.go` 的白名单，与 thinking level / skip_dream 同一条规矩）。它显示的是这个会话的**模式**，不是「之后还有没有卡片」：卡片上答的「本会话都允许」是这一进程里的一个答案、不写进 meta，只在下拉框被切回「需要审批」时被一起清掉。它只管 bash 与文件工具——MCP 搜索费用卡片的会话答案在自己的字段上，不跟着动。冒烟：`perm-approval-off`。
 - **设备链路（AI Passport，`desktop/link/`）是那张待处理表的第二个读者，绝不是第二条回答路径**：每一条「有一轮停在用户身上」的记录都住在同一张 map 里（`d.asks`，`asks.go`）——bash 的 ask 和 AskUserQuestion 一样——而窗口、设备和 TUI 都通过同样那两个函数作答（`answerPermission` / `answerAskUser`）。这样换来四件事，而第二条路径会把它们丢掉：那一行携带**要显示什么**（权限预览、那些问题），因为光凭等待的 channel 说不出在等什么；AskUser 那一半在这里**没有** channel（它的等待活在 agent 自己的 `AskUserResp` 上），所以在一轮被停掉时没有任何东西把它解开，由 `endTurn` 按种类把它扫掉；链路按每条连接的 `ref` 而不是工具调用 id 来给一次回答寻址，并且拒绝一个过期的回答，就跟卡片那条路拒绝一张过期的卡完全一样；而传输方式（今天 serial / TCP，以后 BLE）由 `badge` 配置块选择，所以协议和回答路径对传输方式无感。它默认**关**着——串口是共享资源，`idf.py monitor` 对它跟我们一样有主张——而 `TACHI_BADGE` 是**覆盖**那个块而不是顶替它：一个把应用指向假设备的调试通道，绝不能被那个文件挡住。两条路都落到同一个 `startBadge`，它会先停掉旧的监听器——一个进程里两条链路就是两个 Server 在抢同一个串口。**会话列表是有序的，不是随意的**：设备把第一条当作「我屏幕上的那条」，所以**被显示**的会话（`activeID`）被排在最前，其余保持它们稳定的 id 顺序（链路的去抖是逐字节比较快照的，所以这个顺序必须保持确定性）。**从设备来的回答也必须广播回前端**（`agent:ask_answered`，由回答路径自己发出）：窗口里的卡片是**前端**在**它**作答时清掉的，所以一个设备回答会让那张卡片立在那儿——还可以点，而点它现在会以「没有这样的待处理请求」被拒绝。两个前端共享的任何状态都需要同样的处理：谁改了它，就告诉另一个，否则第二个会继续渲染一件已经过期的事实。
 
+## 保持唤醒（不让这台机器睡）
+
+- **它是一台机器的开关，所以只有一个写入方、一个广播出口**（`desktop/awake.go`）：托盘菜单的勾选、手机上的 `POST /v1/awake`、以及到点自动关，三条路都走 `desktopApp.setAwake`，改完都由 `onAwakeChanged` 重画菜单并广播 `awake_changed`。两块屏各写一条路的分歧长这样：「菜单说开着、手机上关着」，而两边都不觉得自己错。**它在 `newDesktopApp` 里建，不在 `main.go` 里** —— 无头宿主也有这个开关，手机那时是它唯一的界面（`applyAwakeUI` 在 headless 那半边是空函数）。
+- **断言跟着进程走，所以「开着」不落盘**：macOS 那半是 `caffeinate -i -w <我们的 pid>` 子进程（`awake_sleep_darwin.go`；**不用 cgo 的 IOPMAssertion**，因为无头构建关掉了 cgo，那样同一个开关会在两种构建下有两种行为 —— `-w` 让它盯着我们的 pid，进程没了它自己退出），Linux 那半是 logind 的一条 `Inhibit("idle:sleep", …, "block")`（`awake_sleep_linux.go`；**那个 fd 就是禁令本身**，关掉即解除，而 `sleep` 那一半正是让 `systemctl suspend` 被拒的东西 —— hypridle 这类空闲守护走的正是它）。崩溃、被杀、断电都不需要谁去释放：内核收回，机器回到它自己的睡眠行为。落盘的只有**时长偏好**（`desktop_ui.json` 的 `awakeMinutes`，默认 3 小时，0 = 不自动关；用指针存，因为「从没设过」和「设成不自动关」不是一个答案）。**系统的断言被拒时答案必须是「关着」加一句原因**，不能把开关画成开着的 —— 一个什么也没挡住的「保持唤醒」是这条链路上唯一会骗人的状态。
+- **挡的是「闲置睡」，不是「合盖睡」，也不是「屏幕黑」**：macOS 合上盖子（没接外接屏）就睡，用户态没有 API 拦得住；Linux 上屏幕变黑归桌面自己的守护进程（Hyprland 下是 hypridle），这条断言够不到。断言只取系统睡眠那一条、**故意不取显示器那一条**：为三小时的无人值守把一台笔记本的屏幕一直点亮，不是用户要的东西。
+- **这条链路没有冒烟场景，手动验的方法是这个**：托盘菜单在窗口外面（驱动只够得到 webview），所以自动化只到 `desktop/awake_test.go`（状态机 + 两个端点 + 广播，用假断言）为止。要证明「机器真的没睡」，开着开关之后看 `pmset -g assertions | grep -i caffeinate` / `systemd-inhibit --list`：前者会写着「caffeinate asserting on behalf of Process ID <pid>」，后者能看到 Tachi 那条 `idle:sleep`。**关掉之后它们必须消失** —— 那就是「关得掉」这件事的全部证据。
+- **时长是偏好，不是时长表**：托盘里那组（30 分 / 1 小时 / 3 小时 / 6 小时 / 8 小时 / 不自动关）只是快捷选项，手机上可以填任意分钟（5 – 1440）。所以菜单里那行「当前：…」才是权威，没有哪个快捷项被勾上时也不是错误。**到点自动关走同一个写入方**，所以它同样会重画菜单、同样会广播 —— 到点那一刻两块屏一起变，不需要谁去轮询。
+
 ## 桌面 MCP
 
 - **MCP server 配置只有一个作用域：全局那个。** `config.LoadMCPConfig` 读 `~/.tachi/mcp.json` 加上 `~/.tachi/mcp.<profile>.json`，别的什么都不读——一个 `<tree>/.tachi/mcp.json` 不会被读，也没有按树重载可调。换一种做法都不可能：一个共享池、每个 server 一条连接服务每个会话，所以「屏幕上哪个树」没有能决定一个全局集合的答案（项目作用域只能靠挑一个树当赢家来解析）。这个集合只在 bootstrap 时加载一次（`agent.Bootstrap` → `cfg.LoadMCPServers()`），之后唯一改变它的是 profile 切换——`switchMCPProfileTo` 就是那条路。
@@ -286,6 +297,11 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **一个重建出来的策略会继承这个会话的放行**（`Policy.InheritSessionApprovals`）：「本会话都允许」是一个用户回答，**必须**在一次重指里活下来，否则一次文件夹变更会重新弹问一个他已经回答过的问题。那些**规则**不跟着走——那正是重点——而 deny 在任何 ask 之前就被裁定，所以一个被继承的放行绝不可能复活一条被禁止的命令（`TestSetPermissionTrees_*`、`TestSessionTreeMove*`）。
 - **卡片的副标题是「为什么在问这条命令」的三种渲染之一**（一条匹配上的规则、那个解析不了的哨兵值，或者一个把它提出来的判断）：措辞是 agent 的（`askCause`），卡片逐字显示它——第二个渲染器会有自由去漂开，而一个错的理由会让读者去找一条他从没写过的规则。`docs/agents/permission.md` 拥有那三种（一次**文件**工具的 ask 有其中两种——一个路径总是能解析，所以哨兵值只属于命令那一半）；桌面拥有这张卡片、会话级的「本会话都允许」按钮，以及设备链路转发的东西。冒烟：`perm-unparseable`、`perm-files`。
 - **卡片内容永远是 agent 的预览字符串**，绝不是桌面自己造的一个渲染，而 `kind` 只挑静态的外壳（标题/副标题/提示）。一次文件 ask 带着 `kind: files` 到达——没有那个 kind，它会渲染成一张 bash 卡片，而那张卡片的文案会请读者放行一条不在卡片上的命令（`permEventKind`、`permCopy`）。桌面**确实**从调用里解析出来的那一个字段是通知的主题行（`askSubjectOf`：Bash 是那条命令，文件工具是那个路径）。
+
+## 桌面一轮的 steer 检查（工具边界）
+
+- **`AgentEventSteerCheck` 必须被回答，空答复也算答复。** agent 在每次工具结果之后发这个事件，然后**阻塞**等一个 `agent.SteerInput`；`defaultSteerTimeout`（5 秒）只是防呆的兜底，不是正常的等待时长。desktop 的答复是：从该会话的 run 上取 `steerCh`，非阻塞地塞一个**空的** `SteerInput` —— 那就是「没有插话」的信号（`steerFrom` 写之前会先 drain，所以真插话会挤掉这个空值；晚到一步的插话等下一个边界，和 `tui/model_events.go` 是同一个取舍）。
+- **它丢掉时的形态是「变慢」，不是「报错」**：switch 里没有这个 case 时，事件被静默忽略，每一轮带工具调用的回合都多等满 5 秒，屏幕上看着只是「工具跑完了，然后卡一下」。`itest/headless` 的两个审批用例量过它（5.2s → 0.19s）。
 
 ## 桌面单轮历史（被打断那轮的合并）
 
@@ -426,3 +442,37 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **限定整个调色板的是 `--text-faint` 的对比度下限，不是主墨的**（它落在最浅的平面上，所以它同时钉住了墨和梯子的顶端）：任何「调亮一点」的改动都是在跟它做交易，而验证它靠的是跨每个平面跑一遍 WCAG 比率检查，不是眼睛。绘制前的窗口颜色（`windowBgLight`/`windowBgDark`）是同一个决定在第二个地方 —— 改 `--bg` 时一起把它挪过去。
 - **每种模式一个定义，在 `frontend/public/base.css` 里**：那个深色块，由启动脚本 + `src/theme.ts` 解析。没有任何前端规则读 `prefers-color-scheme`，也没有任何别的文件带深色 —— 高亮器的 token 映射到那些语义 token 上，所以一次调色板改动免费覆盖代码块。
 - **要看一次调色板改动就渲染 token，而不是去截应用窗口** —— 一个 token 页面把两个变体并排放在一张图里（窗口截图在这里**可以**截：见冒烟套件规则与陷阱下的截图那条）：从 base.css 里把两个块抽出来（比对前用 `git show HEAD:desktop/frontend/public/base.css`），放进一个小 HTML 页面，它的色块读 `var(--token)`，每个变体一个作用域，然后给那个截图。
+
+## 无头宿主（`-tags headless`）
+
+手机的服务端和会话运行时**不需要窗口**：`-tags headless` 编出来的同一个程序只跑这两样，手机是它唯一的前端。它不是一个新的入口模式，也不是 channel —— 是同一个 `desktopApp`，换掉窗口那一层。
+
+```sh
+make headless                    # 本机：./tachi-headless-<goos>-<goarch>
+make headless-linux              # Linux amd64（NAS 最常见的那个）：./tachi-headless-linux-amd64
+make headless-linux-arm64        # Linux arm64
+cd desktop && make headless      # 只编桌面模块，产物在 desktop/bin/
+go build .                       # 仍然是 GUI
+```
+
+`make headless-linux` / `make headless-linux-arm64` 就是 `make headless GOOS=…` 的常用形态，命名和 `build-linux` / `build-linux-arm64` 对称：前缀说编什么，后缀说给哪个平台。**Linux 上没有桌面版可跑**（那个要 gtk，属于 `desktop/` 自己的 `make build`），所以「给 Linux 编一个」等于「编无头宿主」。产物落在仓库根、名字带平台，因为它下一步就是被 scp 到另一台机器上。
+
+构建标签与 `CGO_ENABLED=0` 只在 `desktop/Makefile` 定义一次；根目标只做转发与搬运。
+
+- **构建标签是窗口框架的开关，不是功能的开关**：碰 wails 或桌面能力的文件带 `!headless` —— `main.go`、`notify.go`、`remote.go`、`demo.go`、`tray*`、`menu*`、`uitheme.go`、`webview_awake*`、`singleinstance*`、`window_frame*`、`badge.go`、`voice.go`、`attach*`。`CGO_ENABLED=0` 下 wails 连编都编不过（它要 cgo 才有的类型），所以一个漏掉的 import 会立刻变成编译错误，而不是运行期惊喜。
+- **运行时文件里不许出现 `d.app` / `d.tray` / `d.window`**：窗口状态住在嵌入的 `windowHost` 里（`ui_state_ui.go` 有字段，`ui_state_headless.go` 是空结构），所以 headless 下写 `d.app` 就是编译失败 —— 这是故意的。要问「有没有人在看」用 `d.hasUI()`；要发事件用 `d.emit(name, data)`。
+- **所有推送走同一个出口**：每个 `d.app.Event.Emit` 都已经改成 `d.emit`，headless 版是空函数。加一条新事件时直接用 `d.emit`，不要碰 `d.app.Event`。
+- **桌面能力用空实现顶住调用点**：`refreshTray`（托盘读数）、`notifyLink` / `enqueueAlert` / `startBadge` / `stopBadge` / `applyBadgeLink`（BLE 与提示音）、`OpenPath` / `OpenURL`（系统 launcher）。运行时文件里的调用一行都不用改 —— 加一个新的桌面能力时照这个形状做，不要在每个调用点写 `if`。
+- **通知走接口**（`notifyHost`，`notify_host.go`）：窗口版是 `*notifier`，无头版是 `noNotifier{}`。**调用点一律写 `d.notifyHost()`，不要写 `d.notify.`** —— 字段是接口，一个用字面量构造出来的 `desktopApp`（测试会这么干）拿到的是 nil 接口，直接调用会 panic，而 `notifyHost()` 兜住了这一点。
+- **`alertKind` 有一份本地副本**（`alert_kind.go`）：值是设备链路协议的一部分，必须与 `link.AlertKind*` 一致；分开是因为无头构建不能编译那套 cgo 蓝牙栈。
+- **配对信息在启动时打出来，并且带二维码**（`main_headless.go` 的 `logMobilePairing` + `pairing_qr.go`）：无头进程没有设置页，所以它用**同一个** `GetMobilePairing`（桌面卡片渲染的就是它）打出一张终端二维码、每条可达地址（带「局域网 / Tailscale」这种给人看的标签）和令牌。二维码的内容就是那个 payload —— 和手机扫码解析的是同一个 JSON，所以扫一下等于填了**全部地址**加 43 个字符的令牌；手机连的时候并发试这些地址，谁先应答用谁（见 [mobile.md](mobile.md)）。
+  - **二维码只在 stdout 是终端时打印**（`os.ModeCharDevice`）：systemd 的 journal、重定向的日志、itest 的捕获里，那些方块是没人能扫的噪音。那种场景下文字就是全部答案（`journalctl -u tachi | grep -A3 pairing` —— 地址可能有好几条，别只 -A1）。
+  - **黑白方向跟着终端背景走**（`COLORFGBG`，判断不出按深色）：方向反了多数手机仍能扫，但一块配对屏不该赌「通常能扫」。
+  - **宽度超过 78 列就不打**：折行的二维码看着像能扫，其实扫不出来 —— 宁可只留文字。
+  - `mobile.listen` 只绑回环时会警告一句：那种配置下地址、令牌都对，手机却永远连不上。
+- **别把这个输出挪进「调试日志」**：对一台放在 NAS 上的宿主，它是用户唯一能拿到配对信息的途径。
+- **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → startMobile`，退出按相反顺序收。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
+- **定时任务照常跑**（`main_headless.go` 也调 `startCron`）：`Owns` 只认 `target_type: "desktop"`，所以桌面建的任务换到无头宿主上继续执行（旧任务空目标属于 channel，不会被它抢）。`laneCron` 的投影和普通轮次同一个出口，手机订着那个会话就能看到 `text` / `turn` / `idle`（连同广播的 `cron_changed`）。两条与「有没有窗口」无关、但值得知道的行为：① 定时回合里命中 ask 的命令**被拒绝**（`cronTurnContext` → `withoutAsk`），除非那个会话开了「无需审批」——没人能回答的卡片不该把任务挂到超时；② 桌面的系统通知在无头下是空的（`noNotifier`），而**手机没有推送**：没打开那个会话，就不会被主动告知，只能下次打开时看列表。
+- **手机是唯一前端，所以协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
+- **一台机器一个宿主，由一把锁保证**（`host_lock.go`）：同一份 `~/.tachi` 同时只允许一个进程跑 agent —— 桌面和无头都在 `main` 的第一行拿 `host.lock`（`pkg/flock`，进程死了内核自动释放，不留需要人工清理的东西）。后启动的那个**直接退出**并说明是谁在用这份数据：桌面走系统弹窗（macOS `osascript` / Linux `zenity`，因为 Wails 自己的 dialog 要等 `App.Run`），无头走 stderr。这不是礼貌：两个 agent 各自持有一份 history，往同一个 `messages.jsonl` 里追加，没有哪种合并是安全的。`open -n` 这类「故意开第二个」的用法只对**隔离 HOME** 的沙箱成立（冒烟套件正是如此），对真实 `~/.tachi` 会被这把锁拒掉。
+- **验证**：`make headless`（交叉时 `GOOS=linux GOARCH=amd64 make headless`）必须常绿 —— 它就是「不依赖桌面能力」的定义，CI 里那个 `desktop-headless` job 跑的是同一条命令的裸形式。本机能起一个沙箱验协议（隔离 `HOME` + `mobile.enabled` + `mobile.json` 的令牌，`/v1/ping` → `/v1/sessions` → 发一条消息）。`go test ./...` 和 GUI 构建走的是默认标签，**headless 这条路没有测试覆盖**，改它的人要自己把上面两条跑一遍。

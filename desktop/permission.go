@@ -163,8 +163,8 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 	// displayed session, so a background ask cannot hijack the foreground). The marker on
 	// this session's row comes from the ask registered above (see waitingSentence).
 	d.setSessionState(sessionID, AgentState{Status: StatusBusy, Label: "授权", Detail: "等待确认"})
-	if d.app != nil {
-		d.app.Event.Emit("agent:permission", PermissionEvent{
+	if d.hasUI() {
+		d.emit("agent:permission", PermissionEvent{
 			SessionID: sessionID,
 			ToolID:    toolID,
 			ToolName:  toolName,
@@ -172,7 +172,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 			Preview:   preview,
 		})
 	}
-	d.notify.notifyPermission(sessionID, askSubjectOf(toolName, args))
+	d.notifyHost().notifyPermission(sessionID, askSubjectOf(toolName, args))
 
 	select {
 	case decision := <-answer:

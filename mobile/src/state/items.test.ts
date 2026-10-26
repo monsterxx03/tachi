@@ -74,14 +74,20 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     );
 
     const kinds = items.map((i) => (i.kind === 'msg' ? i.msg.role : i.kind));
-    // 用户 / 说明 / 折叠 / 失败的卡片 / 结尾 —— 不再是一个工具一行
-    expect(kinds).toEqual(['user', 'assistant', 'process', 'tool_call', 'assistant']);
+    // 用户 / 折叠（中间那句「我先扫一遍」也在里面）/ 失败的卡片 / 结尾 —— 不再是一个工具一行
+    expect(kinds).toEqual(['user', 'process', 'tool_call', 'assistant']);
 
     const fold = items.find((i) => i.kind === 'process');
     if (fold?.kind !== 'process') throw new Error('没有折叠项');
-    expect(
-      fold.steps.map((s) => (s.kind === 'tool' ? s.pair.msg.toolCallId : 'thinking')),
-    ).toEqual(['a', 'b', 'c']);
+    expect(fold.steps.map((s) => (s.kind === 'tool' ? s.pair.msg.toolCallId : s.kind))).toEqual([
+      'note',
+      'a',
+      'b',
+      'c',
+    ]);
+    // 露在外面的只有最后那段（这一轮的答案）
+    const prose = items.filter((i) => i.kind === 'msg' && i.msg.role === 'assistant');
+    expect(prose.map((i) => (i.kind === 'msg' ? i.msg.content : ''))).toEqual(['13 个端点都过了 guard']);
   });
 
   it('中间夹着 thinking 和内容为空的 assistant，仍然折在一起（真实记录就是这个形状）', () => {
@@ -160,6 +166,29 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     ]);
   });
 
+  it('一轮里写了两段话、没有工具：前一段是过程，后一段才是答案', () => {
+    const items = buildItems(snap([user('讲讲'), assistant('先说背景'), assistant('结论是这些')]));
+    expect(items.map((i) => i.kind)).toEqual(['msg', 'process', 'msg']);
+    const fold = items[1];
+    if (fold.kind !== 'process') throw new Error('没有过程项');
+    expect(fold.steps.map((s) => (s.kind === 'note' ? s.msg.content : s.kind))).toEqual(['先说背景']);
+    const answer = items[2];
+    expect(answer.kind === 'msg' ? answer.msg.content : '').toBe('结论是这些');
+  });
+
+  it('SendFile 不折进过程：它是交付物，露在本轮结尾', () => {
+    const items = buildItems(
+      snap([user('把周报发我'), call('a', 'SendFile'), resultOf('a'), assistant('发你了')]),
+    );
+    // 过程那一行不该出现：折起来等于把「文件在哪」的答案藏在要展开的行后面
+    expect(items.some((i) => i.kind === 'process')).toBe(false);
+    // 文件卡片排在本轮最后，即使模型在它之后又说了一句
+    const last = items[items.length - 1];
+    expect(last.kind).toBe('msg');
+    expect(last.kind === 'msg' ? last.msg.toolName : '').toBe('SendFile');
+    expect(items.length).toBe(3);
+  });
+
   it('只有一个工具时照旧画成一张卡（折一行没有意义）', () => {
     const items = buildItems(snap([user('跑一下'), call('a'), resultOf('a')]));
     expect(items.map((i) => i.kind)).toEqual(['msg', 'msg']);
@@ -170,11 +199,11 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     const live: Live = {
       ...emptyLive,
       active: true,
-      text: '我先看看',
-      thinking: '想一想',
-      tools: [
-        { id: 'a', name: 'Read', title: 'a.go', result: 'ok' },
-        { id: 'b', name: 'Grep', title: 'x' },
+      parts: [
+        { type: 'thinking', text: '想一想' },
+        { type: 'tool', tool: { id: 'a', name: 'Read', title: 'a.go', result: 'ok' } },
+        { type: 'tool', tool: { id: 'b', name: 'Grep', title: 'x' } },
+        { type: 'text', text: '我先看看' },
       ],
     };
     const items = screen(snap([user('扫一遍')]), live);
@@ -198,7 +227,7 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     const live: Live = {
       ...emptyLive,
       active: true,
-      tools: [{ id: 'a', name: 'Bash', title: 'ls' }],
+      parts: [{ type: 'tool', tool: { id: 'a', name: 'Bash', title: 'ls' } }],
     };
     const items = screen(snap([user('跑一下')]), live);
     const card = items[1];
@@ -208,10 +237,52 @@ describe('buildItems —— 一轮的过程折成一行', () => {
     expect(card.running).toBe(true);
   });
 
+  it('跑着的时候也只露正在写的那一段：中间写过的话已经折进过程行', () => {
+    const live: Live = {
+      ...emptyLive,
+      active: true,
+      parts: [
+        { type: 'text', text: '我先扫一遍' },
+        { type: 'tool', tool: { id: 'a', name: 'Read', title: 'a.go', result: 'ok' } },
+        { type: 'tool', tool: { id: 'b', name: 'Grep', title: 'x', result: 'ok' } },
+        { type: 'text', text: '扫码这件事有三个入口' },
+      ],
+    };
+    const items = screen(snap([user('看一下')]), live);
+
+    // 过程一行 + 正在写的那一段：不把「我先扫一遍」也堆在下面
+    expect(items.map((i) => i.kind)).toEqual(['msg', 'process', 'live']);
+    const fold = items[1];
+    if (fold.kind !== 'process') throw new Error('没有过程项');
+    expect(fold.steps.map((s) => s.kind)).toEqual(['note', 'tool', 'tool']);
+    const tail = items[2];
+    expect(tail.kind === 'live' ? tail.text : '').toBe('扫码这件事有三个入口');
+  });
+
+  it('跑着的时候交出来的文件也钉在尾部，不折进过程', () => {
+    const live: Live = {
+      ...emptyLive,
+      active: true,
+      parts: [
+        { type: 'tool', tool: { id: 'a', name: 'Read', title: 'a.go', result: 'ok' } },
+        {
+          type: 'tool',
+          tool: { id: 'f', name: 'SendFile', title: '周报.pdf', args: '{"path":"/tmp/周报.pdf"}', result: '已发送' },
+        },
+        { type: 'text', text: '发你了' },
+      ],
+    };
+    const items = buildLiveTail(live);
+    // 只有一个工具时它照旧露成一张卡（单步不值得折），文件卡排在最后
+    expect(items.map((i) => i.kind)).toEqual(['msg', 'live', 'msg']);
+    const file = items[2];
+    expect(file.kind === 'msg' ? file.msg.toolName : '').toBe('SendFile');
+  });
+
   it('待答项永远在最后：正在跑的内容不能把卡片挤上去', () => {
     const s = snap([user('问一下'), call('a'), resultOf('a')]);
     s.asks = [{ kind: 'question', toolId: 'a', questions: [{ question: '放哪一层？', options: ['甲', '乙'] }] }];
-    const live: Live = { ...emptyLive, active: true, text: '正在写' };
+    const live: Live = { ...emptyLive, active: true, parts: [{ type: 'text', text: '正在写' }] };
     const items = screen(s, live);
     const last = items[items.length - 1];
     expect(last.kind === 'msg' ? last.ask?.toolId : '').toBe('a');

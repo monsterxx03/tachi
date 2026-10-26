@@ -60,7 +60,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build cli package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
+.PHONY: all build cli headless package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
 
 all: build
 
@@ -108,6 +108,20 @@ endif
 cli:
 	$(MAKE) -C .. --no-print-directory build CLI_OUT=$(CLI_OUT)
 	@echo "→ $(CLI_OUT)"
+
+# headless 构建**无窗口宿主**：会话运行时 + 手机服务端，没有窗口、托盘、菜单、通知、BLE、麦克风。
+#
+# 与 build 的区别是全部的：没有 wails3、没有 frontend（无头宿主没有 webview）、没有 cgo
+# （CGO_ENABLED=0，所以不需要 gtk / webkit 头文件），产物是一个静态链接的二进制。这就是它能在一台
+# 没有图形环境的机器上跑起来的原因（NAS、服务器、容器）——`file` 说它 statically linked，`otool -L`
+# / `ldd` 说它不依赖任何东西。
+#
+# 目标平台跟着宿主走：在 Mac 上产出的是 Mach-O，要给 Linux 用就 GOOS=linux GOARCH=amd64（或 arm64）。
+# 手机上要的那个令牌与开关在 ~/.tachi（mobile.enabled / mobile.json），不在构建里。
+HEADLESS_BIN = bin/tachi-headless
+headless:
+	CGO_ENABLED=0 $(GO) build -tags headless -trimpath -o $(HEADLESS_BIN) .
+	@echo "→ $(HEADLESS_BIN)"
 
 # package 是出包入口：Linux 是 deb / rpm / arch 三种，走 build/linux/Taskfile.yml 的
 # linux:package（nfpm 直接写这三种格式，不依赖宿主上的打包工具）；macOS 是一个 .pkg 安装器（app

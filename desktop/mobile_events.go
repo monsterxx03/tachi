@@ -153,11 +153,11 @@ func (d *desktopApp) notifyMobileAsk(a *pendingAsk) {
 // The desktop window draws its own bubble at submit time — that bubble never comes from an
 // event — so a message sent from the phone would otherwise appear as a reply to nothing. The
 // `origin` is what lets each screen skip its own echo.
-func (d *desktopApp) notifyMobileUserMessage(sessionID, text string, steer bool, origin messageOrigin) {
+func (d *desktopApp) notifyMobileUserMessage(sessionID, text, display string, steer bool, origin messageOrigin) {
 	d.mobileNotify(sessionID, map[string]any{
 		"type":        mobileEvUserMessage,
 		"text":        text,
-		"displayText": text,
+		"displayText": display,
 		"steer":       steer,
 		"origin":      string(origin),
 	})
@@ -171,8 +171,8 @@ func (d *desktopApp) notifyMobileUserMessage(sessionID, text string, steer bool,
 // by the WRITERS (switchProviderFor / setSkipApprovalFor), not by the endpoints, so the window's
 // own controls produce it too — there is one fact, and everyone who changed it says so.
 func (d *desktopApp) notifySessionPrefs(sessionID, provider string, skipApproval bool) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:session_prefs", map[string]any{
+	if d.hasUI() {
+		d.emit("agent:session_prefs", map[string]any{
 			"sessionId":    sessionID,
 			"provider":     provider,
 			"skipApproval": skipApproval,
@@ -196,15 +196,19 @@ func (d *desktopApp) sessionPrefs(id string) (provider string, skipApproval bool
 // echoUserMessage is the same echo on the desktop event bus. It is emitted for every origin: the
 // window ignores its own (origin == desktop) because it already drew that bubble, and appends
 // everyone else's.
-func (d *desktopApp) echoUserMessage(sessionID, text string, steer bool, origin messageOrigin) {
-	if d.app != nil {
-		d.app.Event.Emit("agent:user_message", map[string]any{
+//
+// text is what the record holds for the model and display is what the bubble shows; they differ
+// only where a screen attached files (text carries @-references there). The other screens draw
+// display — a path in a bubble is the one form of this message nobody can read.
+func (d *desktopApp) echoUserMessage(sessionID, text, display string, steer bool, origin messageOrigin) {
+	if d.hasUI() {
+		d.emit("agent:user_message", map[string]any{
 			"sessionId":   sessionID,
 			"text":        text,
-			"displayText": text,
+			"displayText": display,
 			"steer":       steer,
 			"origin":      string(origin),
 		})
 	}
-	d.notifyMobileUserMessage(sessionID, text, steer, origin)
+	d.notifyMobileUserMessage(sessionID, text, display, steer, origin)
 }

@@ -127,6 +127,8 @@ type session struct {
 	Snapshot
 	// 记录里的下一个 index（翻页与新增都用它）
 	nextIndex int
+	// 手机传上来的文件名：假服务端只留名字（不存字节），够验证「上传 → 发送」那条链
+	Uploads []string
 }
 
 func (s *session) append(m Message) Message {

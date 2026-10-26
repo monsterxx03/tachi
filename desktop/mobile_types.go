@@ -76,6 +76,16 @@ type mobileAttachment struct {
 	Downloadable bool   `json:"downloadable"`
 }
 
+// mobileUploadVO is what one upload answers: the name the server STORED the file under (which is
+// what the send request then cites — never a path), its size, and what @-expansion will make of
+// it. kind is the same vocabulary the composer's dropped-file rows use (image / text / binary), so
+// a phone can pick an icon without deciding anything for itself.
+type mobileUploadVO struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Kind string `json:"kind"`
+}
+
 type mobileWorkspace struct {
 	Primary    string   `json:"primary"`
 	Additional []string `json:"additional"`
@@ -154,7 +164,11 @@ const (
 	// mobileEvCronChanged 定时任务表变了（新建 / 改 / 暂停 / 删除 / 跑完一次）。和会话列表
 	// 一样是**广播**：这张表不属于任何一段对话，谁改的都要让另一块屏重读。
 	mobileEvCronChanged = "cron_changed"
-	mobileEvLagged      = "lagged"
+	// mobileEvAwakeChanged 这台电脑的「保持唤醒」变了（谁改的都算：托盘、手机、到点自动关）。
+	// 它同样**广播**给每一条连接，而且带着完整的新状态 —— 开关只有一个值，收到就照它画，
+	// 不需要重读什么。
+	mobileEvAwakeChanged = "awake_changed"
+	mobileEvLagged       = "lagged"
 )
 
 // 待答项的 kind：**线上的词**，不是内部那张表的 kind。两者只差一个（`ask_user` 在线上叫

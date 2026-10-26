@@ -34,22 +34,35 @@ function withSnapshot(partial: Partial<Snapshot> = {}): ChatState {
 }
 
 describe('applyEvent —— 增量怎么落到界面上', () => {
-  it('text 是一段段接起来的，不是替换', () => {
+  it('text 是一段段接起来的，不是替换；同类合并成一段', () => {
     let st = withSnapshot();
     st = applyEvent(st, { type: 'text', text: '你' }, 'mobile').state;
     st = applyEvent(st, { type: 'text', text: '好' }, 'mobile').state;
-    expect(st.live.text).toBe('你好');
+    expect(st.live.parts).toEqual([{ type: 'text', text: '你好' }]);
     expect(st.live.active).toBe(true);
+  });
+
+  it('一轮里写一段、调工具、再写一段：三段各自留在自己的位置上', () => {
+    let st = withSnapshot();
+    st = applyEvent(st, { type: 'text', text: '我先看看' }, 'mobile').state;
+    st = applyEvent(st, { type: 'tool_start', toolId: 't1', toolName: 'Read', title: 'a.go' }, 'mobile').state;
+    st = applyEvent(st, { type: 'tool_result', toolId: 't1', isError: false, result: 'ok', truncated: false }, 'mobile').state;
+    st = applyEvent(st, { type: 'text', text: '看完了' }, 'mobile').state;
+
+    // 顺序就是发生的顺序：文字没有全被并成一段，工具（含它的结果）夹在中间
+    expect(st.live.parts.map((p) => p.type)).toEqual(['text', 'tool', 'text']);
+    const tool = st.live.parts[1];
+    expect(tool.type === 'tool' && tool.tool.result).toBe('ok');
   });
 
   it('snapshot 一来就换掉整份，并把活气泡清空', () => {
     const st = applyEvent(
-      { ...withSnapshot(), live: { active: true, text: '半句话', thinking: '', tools: [] } },
+      { ...withSnapshot(), live: { active: true, parts: [{ type: 'text', text: '半句话' }] } },
       { type: 'snapshot', snapshot: snap({ messages: [{ index: 0, role: 'user', content: '喂' }] }) },
       'mobile',
     ).state;
     expect(st.snapshot?.messages).toHaveLength(1);
-    expect(st.live.text).toBe('');
+    expect(st.live.parts).toEqual([]);
     expect(st.live.active).toBe(false);
   });
 
@@ -107,9 +120,10 @@ describe('applyEvent —— 增量怎么落到界面上', () => {
     st = applyEvent(st, { type: 'tool_start', toolId: 't2', toolName: 'Grep', title: 'login' }, 'mobile').state;
     st = applyEvent(st, { type: 'tool_result', toolId: 't1', isError: false, result: '328M', truncated: false }, 'mobile').state;
 
-    expect(st.live.tools).toHaveLength(2);
-    expect(st.live.tools[0].result).toBe('328M');
-    expect(st.live.tools[1].result).toBeUndefined();
+    const tools = st.live.parts.flatMap((p) => (p.type === 'tool' ? [p.tool] : []));
+    expect(tools).toHaveLength(2);
+    expect(tools[0].result).toBe('328M');
+    expect(tools[1].result).toBeUndefined();
   });
 
   it('state 事件决定那句「在跑」是亮还是灭', () => {
