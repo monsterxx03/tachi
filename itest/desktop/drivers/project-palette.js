@@ -44,7 +44,7 @@
   }
   const activeIndex = (name) => rowsOf(name).findIndex((r) => r.classList.contains('active'))
   const selectedName = () => {
-    const sel = smoke.q('.palette-row.is-sel')
+    const sel = smoke.q('.palette-row[aria-selected="true"]')
     const n = sel && sel.querySelector('.palette-name')
     return n ? n.textContent.trim() : ''
   }

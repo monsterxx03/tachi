@@ -31,7 +31,7 @@
   const boxOpen = () => boxLabel() === '会话搜索'
   const names = () => smoke.allText('.palette-name')
   const rowCount = () => smoke.qa('.palette-row').length
-  const selected = () => smoke.text('.palette-row.is-sel .palette-name')
+  const selected = () => smoke.text('.palette-row[aria-selected="true"] .palette-name')
   const sessionId = () => smoke.q('.app').getAttribute('data-session-id')
   const activeTitle = () => smoke.text('.session.active .session-title')
   // 侧栏里有多少条会话：**不能数 `.session`** —— 同时只开一组（聚焦规则），所以那只数得到展开那一组
@@ -129,8 +129,11 @@
   // 唯一要在这张列表上读出来的东西。这是「绝不只靠颜色（一层填充）」那条规则的机器可读形式：两条
   // 都按**相对**比较（选中 vs 邻行），所以它不锁住任何具体色值，换主题、调色都照过。
   const rowsEls = smoke.qa('.palette-row')
-  const selEl = rowsEls.find((r) => r.classList.contains('is-sel'))
-  const plainEl = rowsEls.find((r) => !r.classList.contains('is-sel'))
+  // The highlight is cmdk's `aria-selected` now (the row is no longer tagged with a class): the
+  // two signals themselves are unchanged, and this driver only looks for WHICH row carries them.
+  const isSel = (r) => r.getAttribute('aria-selected') === 'true'
+  const selEl = rowsEls.find(isSel)
+  const plainEl = rowsEls.find((r) => !isSel(r))
   const bgOf = (el) => (el ? getComputedStyle(el).backgroundColor : '(没有这一行)')
   const inkOf = (el) => (el ? getComputedStyle(el.querySelector('.palette-name')).color : '(没有这一行)')
   smoke.check('选中的行是一个实心块：填充与邻行不同，且不是透明的',
