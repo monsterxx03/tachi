@@ -4,6 +4,7 @@ import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
 import { HASH_REF_MARK, actOnKey, copyText, fmtDur, fmtShare, hashNamespace, humanize, imeActive, listNav, useFilterInput } from './lib'
 import { isMod, MOD_KEY } from './platform'
+import { usePopoverPosition, type PopoverPosition } from './popover'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processStepLabel, processSummaryLine, type ProcessSummary } from './transcript'
@@ -78,7 +79,9 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
   const [open, setOpen] = useState(false)
   const [info, setInfo] = useState<ContextInfoVO | null>(null)
   const [loading, setLoading] = useState(false)
-  const boxRef = useRef<HTMLDivElement>(null)
+  // Placed against the ring by floating-ui (popover.ts): the breakdown is tall enough to be cut
+  // off by a short window when it only ever grew upward.
+  const pos = usePopoverPosition(open)
 
   const pct = w > 0 ? Math.min(100, (estimate / w) * 100) : 0
   const label = w > 0 ? `上下文 ${pct.toFixed(1)}%（${humanize(estimate)} / ${humanize(w)}）` : '上下文 —'
@@ -107,7 +110,7 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
     if (!open) return
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t) || t.closest('.ctx-btn')) return
+      if (!t || pos.isInside(t) || t.closest('.ctx-btn')) return
       setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
@@ -117,7 +120,7 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, pos.isInside])
 
   const toggle = () => setOpen((v) => !v)
 
@@ -125,9 +128,9 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
     // The wrapper is the popover's containing block: the panel cannot live
     // inside the <button> (a button may not contain a block element, and clicks
     // would land on it), so the ring's box is what the panel hangs off.
-    <span className="popover-anchor">
+    <span className="popover-anchor" ref={pos.anchorRef}>
       {open ? (
-        <div className="popover-panel ctx-panel" ref={boxRef}>
+        <div className="popover-panel ctx-panel" ref={pos.panelRef} style={pos.style}>
           <ContextPanel info={info} loading={loading} />
         </div>
       ) : null}
@@ -209,7 +212,7 @@ function ProviderPicker({ providers, value, model, onPick }: {
   onPick: (name: string) => void
 }) {
   const [open, setOpen] = useState(false)
-  const boxRef = useRef<HTMLSpanElement>(null)
+  const pos = usePopoverPosition(open)
 
   // Same dismissal contract as the context meter and the MCP panel: click outside, or Esc. It is
   // attached only while the menu is open, so a closed picker holds no document listeners.
@@ -217,19 +220,19 @@ function ProviderPicker({ providers, value, model, onPick }: {
     if (!open) return
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t)) return
+      if (!t || pos.isInside(t)) return
       setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
+  }, [open, pos.isInside])
 
   const list = providers ?? []
   return (
-    <span className="popover-anchor" ref={boxRef}>
+    <span className="popover-anchor" ref={pos.anchorRef}>
       {open ? (
         <ProviderMenu list={list} value={value} onPick={(name) => { setOpen(false); onPick(name) }}
-          onClose={() => setOpen(false)} />
+          onClose={() => setOpen(false)} floating={pos} />
       ) : null}
       <button type="button" className="provider-select" aria-haspopup="listbox" aria-expanded={open}
         title={model ? `模型：${model}` : undefined}
@@ -244,11 +247,13 @@ function ProviderPicker({ providers, value, model, onPick }: {
 // shown — which is what resets it: a filter box that kept last time's query would open onto a list
 // that is already filtered by something the reader cannot see, and the highlight would be wherever
 // they left it. Mounting gets every piece of that state fresh for free.
-function ProviderMenu({ list, value, onPick, onClose }: {
+function ProviderMenu({ list, value, onPick, onClose, floating }: {
   list: ProviderConfig[]
   value: string
   onPick: (name: string) => void
   onClose: () => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
   const filter = useFilterInput()
   const listRef = useRef<HTMLDivElement>(null)
@@ -332,7 +337,8 @@ function ProviderMenu({ list, value, onPick, onClose }: {
   }
 
   return (
-    <div className="popover-panel provider-menu" role="listbox" aria-label="模型">
+    <div className="popover-panel provider-menu" role="listbox" aria-label="模型"
+      ref={floating.panelRef} style={floating.style}>
       <input ref={inputRef} className="provider-menu-input" {...filter.inputProps}
         placeholder="输入过滤（名字或 model）" aria-label="过滤模型" onKeyDown={onKeyDown} />
       {shown.length === 0 ? (
@@ -585,12 +591,12 @@ function TurnMenu({ items, label, title }: {
   title: string
 }) {
   const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLSpanElement>(null)
+  const pos = usePopoverPosition(open)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node | null
-      if (t && wrapRef.current && wrapRef.current.contains(t)) return
+      if (t && pos.isInside(t)) return
       setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
@@ -600,15 +606,15 @@ function TurnMenu({ items, label, title }: {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, pos.isInside])
   return (
-    <span className="popover-anchor" ref={wrapRef}>
+    <span className="popover-anchor" ref={pos.anchorRef}>
       <button type="button" className="footer-btn turn-menu-btn" aria-haspopup="menu" aria-expanded={open}
         title={title} onClick={() => setOpen((v) => !v)}>
         {label}
       </button>
       {open ? (
-        <div className="turn-menu" role="menu">
+        <div className="turn-menu" role="menu" ref={pos.panelRef} style={pos.style}>
           {items.map((it) => it.stat
             ? <div key={it.key} className="ctx-item is-detail" role="none" title={it.title}>{it.label}</div>
             : (
@@ -812,7 +818,7 @@ function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, dura
   )
 }
 
-function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, onToggleTool, onToggleProfile, onAuthorize, onCompleteAuth }: {
+function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, onToggleTool, onToggleProfile, onAuthorize, onCompleteAuth, floating }: {
   servers: any[]
   loading: Record<string, boolean>
   profile: { active: string; available: string[] }
@@ -828,6 +834,8 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
   auth: Record<string, MCPAuthState>
   onAuthorize: (name: string) => void
   onCompleteAuth: (name: string, redirectURL: string) => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
   // Which servers the reader has opened, by name. EMPTY means "all folded", and the panel
   // opens as a list of servers — name, state, tool count, actions — with the tools appearing
@@ -869,24 +877,22 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
   // both, which is what its own row says (0 工具).
   const totalTools = (servers || []).reduce((n, s) => n + ((s.tools || []).length), 0)
   const totalLoaded = (servers || []).reduce((n, s) => n + ((s.tools || []).filter((t: any) => t.loaded).length), 0)
-  const boxRef = useRef<HTMLDivElement>(null)
-
   // Click outside closes the popover (its natural behaviour). The toggle button
   // is excluded: it owns open/close, and closing here would fight the reopen
   // from its own click handler.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t) || t.closest('.mcp-btn')) return
+      if (!t || floating.isInside(t) || t.closest('.mcp-btn')) return
       onClose()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [onClose])
+  }, [onClose, floating.isInside])
 
   return (
     <>
-      <div className="popover-panel mcp-panel" ref={boxRef}>
+      <div className="popover-panel mcp-panel" ref={floating.panelRef} style={floating.style}>
         <div className="mcp-head">
           {/* The head carries the totals the rows below add up to: how much of everything this
               session actually has. It is a subtitle under the title rather than a fourth item on
@@ -1097,7 +1103,7 @@ function BranchChip({ branch, detached }: { branch?: string; detached?: boolean 
 // goes back to the editable form when the project stops driving the session (deleted, or its
 // primary is gone), which is the same rule the backend's guards use: the panel must never be
 // read-only while the writers are open, or the user has no way to fix their workspace.
-function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose, onEditProject, onNewSessionInProject }: {
+function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose, onEditProject, onNewSessionInProject, floating }: {
   roots: SessionRootsVO | null
   error: string
   busy: boolean
@@ -1107,6 +1113,8 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
   onClose: () => void
   onEditProject: (projectId: string) => void
   onNewSessionInProject: (projectId: string) => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
   const primary = roots?.primary || ''
   const additional = roots?.additional || []
@@ -1115,14 +1123,12 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
   // projectMissing payload with a name means "still there, unusable" and with no name means
   // "gone" (see SessionRootsVO). Both are editable here, and both say which one it is.
   const managed = !!projectId && !roots?.projectMissing
-  const boxRef = useRef<HTMLDivElement>(null)
-
   // Same dismissal contract as the MCP panel: click outside, or Esc. The chip that
   // owns open/close is excluded, or closing here would fight its own click.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t) || t.closest('.work-dir')) return
+      if (!t || floating.isInside(t) || t.closest('.work-dir')) return
       onClose()
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -1132,10 +1138,10 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [onClose])
+  }, [onClose, floating.isInside])
 
   return (
-    <div className="popover-panel roots-panel" ref={boxRef}>
+    <div className="popover-panel roots-panel" ref={floating.panelRef} style={floating.style}>
       <div className="roots-head">
         <span className="roots-title">工作区目录</span>
         <span className="roots-sub">
@@ -1572,32 +1578,33 @@ function AgentsIcon() {
 //
 // It keeps no state of its own beyond which rows are open: what it draws is what the backend last
 // said, so a panel reopened after a refresh agrees with a live one.
-function AgentsPanel({ board, busy, onClose, onRefresh }: {
+function AgentsPanel({ board, busy, onClose, onRefresh, floating }: {
   board: PeerBoardVO | null
   busy: boolean
   onClose: () => void
   onRefresh: () => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const boxRef = useRef<HTMLDivElement>(null)
 
   // Click outside closes the popover, with its own trigger excluded: that button owns open/close,
   // and closing here would fight the reopen from its own click handler.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t) || t.closest('.agents-btn')) return
+      if (!t || floating.isInside(t) || t.closest('.agents-btn')) return
       onClose()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [onClose])
+  }, [onClose, floating.isInside])
 
   const peers = board?.peers || []
   const up = peers.filter((p) => p.reachable).length
 
   return (
-    <div className="popover-panel mcp-panel agents-panel" ref={boxRef}>
+    <div className="popover-panel mcp-panel agents-panel" ref={floating.panelRef} style={floating.style}>
       <div className="mcp-head">
         <span className="mcp-head-text">
           <span className="mcp-title">Agents</span>

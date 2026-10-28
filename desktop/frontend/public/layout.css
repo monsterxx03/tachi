@@ -1013,10 +1013,10 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 /* The shared popover shell opens UPWARD because its triggers sit on the composer's
    bottom row. A ring in the titlebar has nothing above it, so its panel drops down. */
-.titlebar .popover-panel {
-  top: calc(100% + 8px);
-  bottom: auto;
-}
+/* A titlebar popover (the context ring's breakdown) opens DOWNWARD, but that is not a rule
+   here any more: placement + flip in src/popover.ts decide it from the room there is, and the
+   same answer holds for every other panel. A titlebar-only rule would now be dead weight that
+   still reads as "the titlebar is special". */
 
 /* ── Theme switch (light / dark) ─────────────────────────────────────────── */
 /* A two-slot pill with a sliding thumb: which side is "on" reads at a glance,

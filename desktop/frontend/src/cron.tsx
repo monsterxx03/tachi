@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialogs } from '@wailsio/runtime'
+import type { PopoverPosition } from './popover'
 import {
   AgentService,
   type CronJobInput,
@@ -76,7 +77,7 @@ function isActive(job: CronJobVO): boolean {
 // ── panel (status bar) ─────────────────────────────────────────────────────
 
 export function CronPanel({
-  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow, onDelete,
+  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow, onDelete, floating,
 }: {
   jobs: CronJobVO[]
   loading: boolean
@@ -89,6 +90,8 @@ export function CronPanel({
   onTogglePaused: (job: CronJobVO) => void
   onRunNow: (job: CronJobVO) => void
   onDelete: (job: CronJobVO) => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
   // Deleting here is a two-step confirm INSIDE the row: the page has a dialog, but a popover
   // that opened a modal on top of itself would be a second surface for one question. The step
@@ -104,7 +107,8 @@ export function CronPanel({
     .sort()[0]
 
   return (
-    <div className="cron-panel popover-panel" role="dialog" aria-label="定时任务">
+    <div className="cron-panel popover-panel" role="dialog" aria-label="定时任务"
+      ref={floating.panelRef} style={floating.style}>
       <div className="cron-head">
         <div className="cron-head-text">
           <div className="cron-title">定时任务 <span className="cron-count">{jobs.length}</span></div>

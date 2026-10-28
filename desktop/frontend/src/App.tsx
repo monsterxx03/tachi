@@ -16,6 +16,7 @@ import {
   ProviderPicker,
   SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
+import { usePopoverPosition } from './popover'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { CronPage, CronPanel } from './cron'
@@ -579,6 +580,9 @@ function App() {
   // session is on screen, so the pairing costs nothing there.
   const [rootsFor, setRootsFor] = useState('')
   const [rootsOpen, setRootsOpen] = useState(false)
+  // The four status-bar popovers are placed by floating-ui (see popover.ts): each measures the
+  // room above its own trigger and flips or shrinks instead of letting the window cut it off.
+  const rootsPopover = usePopoverPosition(rootsOpen)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
   // Projects: the sidebar's groups (design §7.1). Fetched, never derived from the sessions —
@@ -724,6 +728,7 @@ function App() {
   // session changes.
   const [plan, setPlan] = useState<PlanVO | null>(null)
   const [planOpen, setPlanOpen] = useState(false)
+  const planPopover = usePopoverPosition(planOpen)
   const refreshPlan = useCallback(async (path = '') => {
     if (!currentId) { setPlan(null); return }
     try {
@@ -786,17 +791,23 @@ function App() {
   const [theme, toggleTheme] = useTheme()
   useThemeHostSync()
   const [mcpOpen, setMcpOpen] = useState(false)
+  // Where the two tall status-bar panels hang (see popover.ts). They are the ones that needed
+  // measuring: at 560px they do not fit above the composer in a short window at all, and the old
+  // right-aligned CSS simply let the window cut their top off.
+  const mcpPopover = usePopoverPosition(mcpOpen)
   // The node board: which machines this one may delegate to, and what each says about itself. The
   // data is read from the backend and NOT cached here — every field the panel shows is a fact about
   // a moment (who answered just now), and a copy kept across turns is exactly what the refresh
   // button exists to rule out.
   const [agentsOpen, setAgentsOpen] = useState(false)
+  const agentsPopover = usePopoverPosition(agentsOpen)
   const [agentsBoard, setAgentsBoard] = useState<PeerBoardVO | null>(null)
   const [agentsBusy, setAgentsBusy] = useState(false)
   // Scheduled tasks: the popover's data, the page's selection, and the two lists
   // the editor needs (conversations + projects). Everything here is PULLED on
   // open and re-pulled on agent:cron_changed; the backend owns the truth.
   const [cronOpen, setCronOpen] = useState(false)
+  const cronPopover = usePopoverPosition(cronOpen)
   const [cronJobs, setCronJobs] = useState<CronJobVO[]>([])
   const [cronLoading, setCronLoading] = useState(false)
   const [cronScheduled, setCronScheduled] = useState(false)
@@ -2960,7 +2971,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               {/* The run's numbers live with the conversation's name, not in the composer's status
                   row: that row answers "what will the next message use" (model, thinking, approval),
                   while these five are facts about the conversation on screen. The ring keeps its
-                  popover — which drops DOWN here, see .titlebar .popover-panel in layout.css. */}
+                  popover — and in the titlebar it opens DOWNWARD, which is now flip's decision
+                  (popover.ts: there is no room above a titlebar) rather than a titlebar-only
+                  CSS rule. */}
               <div className="titlebar-metrics">
                 {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
                   : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
@@ -3114,7 +3127,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 onStop={stopChat} onPageTurn={scrollByHalfPage} />
             )}
             <div className="composer-status">
-              <div className="work-dir-wrap popover-anchor">
+              <div className="work-dir-wrap popover-anchor" ref={rootsPopover.anchorRef}>
                 {rootsOpen ? (
                   <RootsPanel roots={roots} error={rootsError} busy={rootsBusy}
                     onPickPrimary={() => pickWorkDir(currentId)}
@@ -3129,7 +3142,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       openProjectEditor(p)
                     }}
                     onNewSessionInProject={(pid) => { setRootsOpen(false); void newChat(pid) }}
-                    onClose={() => setRootsOpen(false)} />
+                    onClose={() => setRootsOpen(false)} floating={rootsPopover} />
                 ) : null}
                 <button type="button" className="work-dir" aria-expanded={rootsOpen}
                   title={workDir ? `工作区目录：${workDir}（点击管理）` : '工作区目录（点击管理）'}
@@ -3149,10 +3162,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   visible chip that usually says "no plan" is a chip that trains you to
                   ignore it. */}
               {plan?.steps?.length ? (
-                <div className="plan-wrap popover-anchor">
+                <div className="plan-wrap popover-anchor" ref={planPopover.anchorRef}>
                   {planOpen ? <PlanPanel plan={plan} workDir={workDir}
                     onSelect={(p) => void refreshPlan(p)} onDelete={deletePlan}
-                    onClose={() => setPlanOpen(false)} /> : null}
+                    onClose={() => setPlanOpen(false)} floating={planPopover} /> : null}
                   <PlanChip plan={plan} open={planOpen} onToggle={() => setPlanOpen((v) => !v)} />
                 </div>
               ) : null}
@@ -3204,7 +3217,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   <option value="ask">需要审批</option>
                   <option value="skip">无需审批</option>
                 </select>
-                <span className="popover-anchor">
+                <span className="popover-anchor" ref={agentsPopover.anchorRef}>
                   <button className="agents-btn" title="Agents（可委派的节点）" onClick={() => setAgentsOpen((v) => !v)}>
                     <span className="agents-ico"><AgentsIcon /></span>
                     {/* The count is the number of nodes that ANSWERED the last probe, not the number
@@ -3221,10 +3234,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       busy={agentsBusy}
                       onClose={() => setAgentsOpen(false)}
                       onRefresh={() => void refreshAgents()}
+                      floating={agentsPopover}
                     />
                   )}
                 </span>
-                <span className="popover-anchor">
+                <span className="popover-anchor" ref={mcpPopover.anchorRef}>
                   <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
                     <span className="mcp-ico"><MCPIcon /></span>
                     <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
@@ -3245,10 +3259,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       onToggleProfile={toggleProfile}
                       onAuthorize={authorizeServer}
                       onCompleteAuth={completeMCPAuth}
+                      floating={mcpPopover}
                     />
                   )}
                 </span>
-                <span className="popover-anchor">
+                <span className="popover-anchor" ref={cronPopover.anchorRef}>
                   <button className="cron-btn"
                     title={currentCronCount > 0 ? `定时任务（本会话 ${currentCronCount} 个）` : '定时任务'}
                     aria-label="定时任务" onClick={() => setCronOpen((v) => !v)}>
@@ -3270,6 +3285,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       onTogglePaused={(job) => void toggleCronJob(job)}
                       onRunNow={(job) => void runCronNow(job)}
                       onDelete={(job) => void deleteCronJob(job)}
+                      floating={cronPopover}
                     />
                   ) : null}
                 </span>

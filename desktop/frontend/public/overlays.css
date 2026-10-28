@@ -6,7 +6,14 @@
    thing that opened it. Each trigger is wrapped in .popover-anchor (see
    chat.css); the panel then hangs off that wrapper with one shared gap and
    grows LEFT, so a trigger close to the window edge cannot push it out of the
-   window. */
+   window.
+
+   Every panel now gets its placement from usePopoverPosition (src/popover.ts),
+   delivered as an inline style: floating-ui writes top/left and cancels this
+   rule's right/bottom, so what is left here is a FALLBACK — a panel that somehow
+   renders without a placement still lands above its trigger instead of at the
+   corner. Panel classes keep their own max-height; the hook only ever tightens it
+   through --popover-max-h. */
 .popover-panel {
   position: absolute;
   right: -6px;
@@ -64,7 +71,10 @@
    the header stays put. */
 .mcp-panel {
   width: 360px;
-  max-height: min(70vh, 560px);
+  /* Three ceilings, the tightest wins: the reading comfort (70vh), the design limit (560px), and
+     the room the floating hook measured under the trigger (--popover-max-h). The panel's body
+     scrolls, so a smaller room costs rows, never a cut-off head. */
+  max-height: min(70vh, 560px, var(--popover-max-h, 100vh));
   z-index: 51;
   display: flex;
   flex-direction: column;

@@ -10,7 +10,8 @@
 // survive a restart, show plans saved by another frontend, and list a session's earlier
 // plans at all.
 
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
+import type { PopoverPosition } from './popover'
 import { AgentService, type PlanEntryVO, type PlanVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { FilePreviewOverlay } from './filepreview'
 import { MarkdownBlock } from './markdown'
@@ -59,7 +60,7 @@ export const PlanChip = memo(function PlanChip({ plan, open, onToggle }: {
   )
 })
 
-export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDelete, onClose }: {
+export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDelete, onClose, floating }: {
   plan: PlanVO | null
   workDir: string
   // Switch which plan is shown. The list is already in the payload; App re-reads the
@@ -67,8 +68,9 @@ export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDe
   onSelect?: (path: string) => void
   onDelete?: (path: string) => void
   onClose: () => void
+  /** Where it sits relative to its trigger (see popover.ts). */
+  floating: PopoverPosition
 }) {
-  const boxRef = useRef<HTMLDivElement>(null)
   const [peek, setPeek] = useState(false)
   const [showDoc, setShowDoc] = useState(false)
   const [confirm, setConfirm] = useState<PlanEntryVO | null>(null)
@@ -79,7 +81,7 @@ export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDe
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
-      if (!t || boxRef.current?.contains(t) || t.closest('.plan-chip')) return
+      if (!t || floating.isInside(t) || t.closest('.plan-chip')) return
       onClose()
     }
     const onKey = (e: KeyboardEvent) => {
@@ -93,7 +95,7 @@ export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDe
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [onClose, confirm])
+  }, [onClose, confirm, floating.isInside])
 
   const steps = plan?.steps || []
   const { done, total } = planProgress(plan)
@@ -103,7 +105,7 @@ export const PlanPanel = memo(function PlanPanel({ plan, workDir, onSelect, onDe
   const path = plan?.path || ''
 
   return (
-    <div className="popover-panel plan-panel" ref={boxRef}>
+    <div className="popover-panel plan-panel" ref={floating.panelRef} style={floating.style}>
       <div className="plan-head">
         <span className="plan-ico">☑</span>
         <span className="plan-title" title={plan?.title}>{plan?.title || '计划'}</span>
