@@ -57,6 +57,41 @@ export interface Picked {
   ping: PingResult;
 }
 
+/** 配对页探测的结论：无论通不通，都要给出一份**可以存下来**的配对。 */
+export interface ProbeOutcome {
+  pairing: Pairing;
+  /** 应答的那台机器的自我介绍；null = 一条都没应答（照样记下来，只是没有名字可抄） */
+  ping: PingResult | null;
+}
+
+/**
+ * 配对页那一次探测。
+ *
+ * 它不回答「能不能配对」——**能**，配对只要地址和令牌。它只回答两件顺带的事：这台电脑现在
+ * 走哪条地址（并发试全部，谁先应答用谁，见 `fastestPairing`），以及它叫什么名字。
+ *
+ * 一条都不应答时仍然返回一份带完整地址表的配对：地址可能只是**此刻**不通（那台电脑还没开、
+ * 或眼下这个网络进不去），记下来之后手机会自己继续找路（`heal` / 换下一条）。否则读者对着
+ * 一个填好的配对页干等一次系统超时，最后什么也没留下。
+ */
+export async function probePairing(
+  pairing: Pairing,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+  probe: (url: string, signal?: AbortSignal) => Promise<PingResult> = ping,
+): Promise<ProbeOutcome> {
+  const addresses = normalizeAddresses(pairing);
+  const picked = await fastestPairing(pairing, timeoutMs, probe);
+  if (picked) return { pairing: picked.pairing, ping: picked.ping };
+  return {
+    pairing: {
+      ...pairing,
+      baseUrl: addresses[0] ?? pairing.baseUrl,
+      urls: addresses.length > 1 ? addresses : undefined,
+    },
+    ping: null,
+  };
+}
+
 /**
  * 并发试这台电脑的全部地址，第一个应答的胜出；一条都不通时返回 null（调用方按原来的地址继续，
  * 界面上的「连不上」说的就是这件事）。

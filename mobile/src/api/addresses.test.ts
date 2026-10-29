@@ -1,4 +1,4 @@
-import { fastestPairing, nextAddress, normalizeAddresses, PROBE_TIMEOUT_MS } from './addresses';
+import { fastestPairing, nextAddress, normalizeAddresses, PROBE_TIMEOUT_MS, probePairing } from './addresses';
 import type { PingResult } from './client';
 
 const LAN = 'http://192.168.71.183:8787';
@@ -101,5 +101,32 @@ describe('fastestPairing —— 同时试，谁先应答用谁', () => {
     });
     expect(got).toBeNull();
     expect(called).toBe(0);
+  });
+});
+
+describe('probePairing —— 探测只用来挑地址和取名字，不是配对的门禁', () => {
+  it('有应答时用赢家，而且把整个地址表留着', async () => {
+    const got = await probePairing(
+      { baseUrl: LAN, token: 't', urls: [LAN, TS] },
+      PROBE_TIMEOUT_MS,
+      fakePing({ [TS]: 5 }), // 人在外面：局域网那条永远不应
+    );
+    expect(got.pairing.baseUrl).toBe(TS);
+    expect(got.pairing.urls).toEqual([TS, LAN]);
+    expect(got.ping).not.toBeNull();
+  });
+
+  it('一条都不应答时仍然给出一份能存下来的配对（地址表原样留着）', async () => {
+    const got = await probePairing({ baseUrl: LAN, token: 't', urls: [LAN, TS] }, 80, fakePing({}));
+    expect(got.ping).toBeNull();
+    expect(got.pairing.baseUrl).toBe(LAN);
+    expect(got.pairing.urls).toEqual([LAN, TS]);
+    expect(got.pairing.token).toBe('t');
+  });
+
+  it('只有一条地址且不通时也能存（手输地址那条路）', async () => {
+    const got = await probePairing({ baseUrl: LAN, token: 't' }, 80, fakePing({}));
+    expect(got.ping).toBeNull();
+    expect(got.pairing.baseUrl).toBe(LAN);
   });
 });

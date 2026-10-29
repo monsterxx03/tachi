@@ -37,7 +37,10 @@ export interface MobileApi {
   chat: ChatState;
   error: string | null;
   /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）、原始 hostname，以及那台电脑的全部地址 */
-  pair: (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => Promise<void>;
+  pair: (
+    p: Pairing,
+    meta?: { label?: string; hostname?: string; urls?: string[]; unreachable?: boolean },
+  ) => Promise<void>;
   /** 换一台电脑：断开这一条、清掉画面，再连过去 */
   switchDevice: (index: number) => Promise<void>;
   /** 给某一台改个名字：只写这台手机上的存储，不通知那台机器（协议里没有这个端点） */
@@ -568,7 +571,10 @@ export function useMobile(): MobileApi {
 
   // 同一台电脑再配一次（换了令牌或换了地址）按令牌去重：列表里不该出现两条同一个地址
   const pair = useCallback(
-    async (p: Pairing, meta?: { label?: string; hostname?: string; urls?: string[] }) => {
+    async (
+      p: Pairing,
+      meta?: { label?: string; hostname?: string; urls?: string[]; unreachable?: boolean },
+    ) => {
       const urls = normalizeAddresses({ baseUrl: p.baseUrl, urls: meta?.urls });
       const dev: Device = {
         ...p,
@@ -582,6 +588,11 @@ export function useMobile(): MobileApi {
       if (at >= 0) list[at] = dev;
       else list.push(dev);
       await activate(list, at >= 0 ? at : list.length - 1);
+      // 探测时一条地址都没应答（那台电脑没开、或眼下这个网络进不去）：设备照样存下来了，
+      // 但接下去那条会话列表的请求要等自己的超时才失败 —— 这十几秒里说一句，别让人以为白填了。
+      if (meta?.unreachable) {
+        setError('已记下这台电脑，但现在连不上（它没开，或不在同一个网络）');
+      }
     },
     [activate],
   );

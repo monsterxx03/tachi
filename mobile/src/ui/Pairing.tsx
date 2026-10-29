@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { ping, type Pairing as PairingInfo } from '../api/client';
+import type { Pairing as PairingInfo } from '../api/client';
+import { normalizeAddresses, probePairing } from '../api/addresses';
 import { deviceLabel } from '../api/label';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import { messageOfError } from '../state/mobile';
@@ -13,11 +14,20 @@ import { ScanPairing } from './ScanPairing';
 const DEV_URL = 'http://192.168.71.173:8787';
 const DEV_TOKEN = 'dev-token';
 
+/** 配对页交给上层的东西：名字与地址表都是探测顺手带回来的，探测失败时它们就不在 */
+interface PairedMeta {
+  label?: string;
+  hostname?: string;
+  urls?: string[];
+  /** 一条地址都没应答：照样存下来，但界面上要说一句「现在连不上」 */
+  unreachable?: boolean;
+}
+
 export function Pairing({
   onPaired,
   onClose,
 }: {
-  onPaired: (p: PairingInfo, meta?: { label: string; hostname?: string; urls?: string[] }) => void;
+  onPaired: (p: PairingInfo, meta?: PairedMeta) => void;
   /** 从设置页「添加电脑」进来时给一个返回；第一台配对时没有 */
   onClose?: () => void;
 }) {
@@ -30,17 +40,36 @@ export function Pairing({
   // 从设置页「添加电脑」进来时才有返回；首次配对没有上一屏，手势自然无效
   const back = useEdgeBack(onClose);
 
-  async function test(p: PairingInfo = { baseUrl: baseUrl.trim().replace(/\/+$/, ''), token: token.trim() }) {
+  async function test(given?: PairingInfo) {
+    const target: PairingInfo = given ?? {
+      baseUrl: baseUrl.trim().replace(/\/+$/, ''),
+      token: token.trim(),
+    };
+    // 手输的地址可能是空的、或者带了个别的 scheme。存下一条永远连不上的设备没有意义，
+    // 所以这里先拦一句 —— 扫码那条路进的地址由解析器保证形状。
+    if (normalizeAddresses(target).length === 0) {
+      setErr('地址要写成 http://192.168.1.10:8787 这样');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
-      const r = await ping(p.baseUrl);
-      // 名字一起交给上层：记住多台电脑时，列表里要认得出哪一台是哪一台。默认名取机器自报的
-      // hostname（老服务端没有这一项时退回「产品名 · 地址」）。
-      // urls 也一起带上：那台电脑可能不止一条地址（局域网 + Tailscale），全部记下来，
-      // 之后手机自己挑能用的那条，不需要读者知道自己在哪个网络里。
-      if (r.ok) onPaired(p, { label: deviceLabel(r, p.baseUrl), hostname: r.hostname, urls: r.urls });
-      else setErr('这台机器拒绝了这个地址');
+      // 那台电脑可能不止一条地址（局域网 + Tailscale）：一起试、谁先应答用谁。只试排第一的
+      // 那条的话，人在外面时它必然不通，而这里的请求没有自己的上限 —— 页面就一直转圈，
+      // 要等手机系统判 TCP 超时才给一句「连不上」。
+      const outcome = await probePairing(target);
+      // 通不通都记下来：探测只用来挑地址、取名字，不是配对的门禁（见 api/addresses.ts 的
+      // probePairing）。之后手机会自己继续找路，那台电脑一开就会连上。
+      onPaired(
+        outcome.pairing,
+        outcome.ping
+          ? {
+              label: deviceLabel(outcome.ping, outcome.pairing.baseUrl),
+              hostname: outcome.ping.hostname,
+              urls: outcome.pairing.urls,
+            }
+          : { unreachable: true },
+      );
     } catch (e) {
       setErr(messageOfError(e));
     } finally {
@@ -142,7 +171,10 @@ export function Pairing({
         ]}
       >
         {busy ? (
-          <ActivityIndicator color={t.onAccent} size="small" />
+          <View style={styles.btnBusy}>
+            <ActivityIndicator color={t.onAccent} size="small" />
+            <Text style={{ color: t.onAccent, fontSize: 14, fontWeight: '600' }}>正在找这台电脑</Text>
+          </View>
         ) : (
           <Text style={{ color: t.onAccent, fontSize: 14, fontWeight: '600' }}>测试连接</Text>
         )}
@@ -177,6 +209,7 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 12, fontSize: 14 },
   errBox: { borderWidth: 1, borderRadius: 10, padding: 11, marginTop: 16 },
   btn: { borderRadius: 10, paddingVertical: 14, alignItems: 'center', marginTop: 22 },
+  btnBusy: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   note: { fontSize: 11.5, lineHeight: 18, marginTop: 26 },
 });
 
