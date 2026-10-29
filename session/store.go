@@ -57,22 +57,28 @@ type FileStore struct {
 	// (measured: ~49ms for 1000 sessions, essentially all of it open/read/close).
 	// This holds one scan so the repeats are free.
 	//
-	// Correctness rests on three things:
+	// Correctness rests on four things:
 	//   - writes drop it (invalidate): a meta.json rewritten in place — title,
 	//     UpdatedAt — does NOT change the base directory's mtime, so the stamp
 	//     below cannot see it;
-	//   - reads re-stat baseDir and drop it when the mtime moved: that is what
-	//     covers a session created or DELETED by another process;
+	//   - reads compare baseDir's entry names with the ones the scan saw: a
+	//     session created or DELETED by another process changes exactly that set,
+	//     which is the condition this snapshot encodes. It cannot be missed the
+	//     way a timestamp can — a directory's mtime comes from the filesystem's
+	//     coarse clock (a jiffy on Linux), so a create landing in the same tick
+	//     leaves it EQUAL and the new session invisible;
+	//   - reads re-stat baseDir and drop it when the mtime moved, which still
+	//     covers a directory recreated under the same name within one tick;
 	//   - a scan publishes only if no write landed while it ran (gen), so a
 	//     snapshot taken before a concurrent write can never be installed.
 	//
-	// What survives all three is another process rewriting an EXISTING meta.json
-	// in place: the snapshot then lasts until the next create, delete or baseDir
-	// change. Only the title and timestamps can go stale through that door —
-	// project membership and the pinned flag cannot: both are written by the desktop
-	// alone (ProjectID on bind/detach/compaction, Pinned on the sidebar's toggle and
-	// on compaction) and every one of those writes goes through a store that
-	// invalidates.
+	// What survives all four is another process rewriting an EXISTING meta.json
+	// in place: neither the names nor the mtime move, so the snapshot then lasts
+	// until the next create, delete or baseDir change. Only the title and
+	// timestamps can go stale through that door — project membership and the
+	// pinned flag cannot: both are written by the desktop alone (ProjectID on
+	// bind/detach/compaction, Pinned on the sidebar's toggle and on compaction)
+	// and every one of those writes goes through a store that invalidates.
 	//
 	// The scan's own reads are safe for a second, independent reason: meta.json is
 	// written ATOMICALLY (tmp + rename, see UpdateMeta). A rewrite in place would
@@ -82,7 +88,10 @@ type FileStore struct {
 	mu       sync.Mutex
 	cached   []*Session
 	cacheDir time.Time // baseDir's mtime when cached was read
-	cacheOK  bool
+	// cacheNames are the session directory names that scan saw, in os.ReadDir's
+	// order: the snapshot's real validity condition (see cachedList).
+	cacheNames []string
+	cacheOK    bool
 	// gen counts writes, so a scan can tell whether the store changed under it.
 	gen uint64
 }
@@ -385,7 +394,7 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 	gen := s.gen
 	s.mu.Unlock()
 
-	sessions, err := s.scanSessions()
+	sessions, names, err := s.scanSessions()
 	if err != nil {
 		return nil, err
 	}
@@ -398,45 +407,78 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 	}
 	s.mu.Lock()
 	if s.gen == gen {
-		s.cached, s.cacheDir, s.cacheOK = sessions, info.ModTime(), true
+		s.cached, s.cacheNames, s.cacheDir, s.cacheOK = sessions, names, info.ModTime(), true
 	}
 	s.mu.Unlock()
 
 	return cloneSessions(sessions), nil
 }
 
-// cachedList returns a copy of the memoized list when it is still valid. The base
-// directory's mtime is the whole filesystem check: one stat, and it catches
-// exactly what our own writes cannot — a session created or deleted by another
-// process (both move the directory's mtime). See FileStore for what it misses.
+// cachedList returns a copy of the memoized list when it is still valid.
+//
+// Two filesystem checks, because neither is enough alone:
+//   - baseDir's entry names must match the ones the scan saw. That is the
+//     condition the snapshot encodes — a session created or deleted outside this
+//     store changes exactly that set — and unlike a timestamp it cannot be missed:
+//     a directory's mtime comes from the filesystem's coarse clock (a jiffy on
+//     Linux), so a create landing in the same tick as the previous list leaves it
+//     EQUAL. One batch readdir costs a fraction of the scan it saves, which is
+//     re-reading every meta.json.
+//   - baseDir's mtime must not have moved, which still covers a directory
+//     deleted and recreated under the same name within one tick.
+//
+// What both checks let through is another process rewriting an EXISTING
+// meta.json (see FileStore).
 func (s *FileStore) cachedList() ([]*Session, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.cacheOK {
+	cached, names, stamp, ok := s.cached, s.cacheNames, s.cacheDir, s.cacheOK
+	s.mu.Unlock()
+	if !ok {
 		return nil, false
 	}
+
 	info, err := os.Stat(s.baseDir)
-	if err != nil || !info.ModTime().Equal(s.cacheDir) {
+	if err != nil || !info.ModTime().Equal(stamp) {
 		return nil, false
 	}
-	return cloneSessions(s.cached), true
+	current, err := sessionDirNames(s.baseDir)
+	if err != nil || !slices.Equal(current, names) {
+		return nil, false
+	}
+	// A published snapshot is never mutated in place (a scan installs a whole new
+	// slice), so cloning it outside the lock is safe.
+	return cloneSessions(cached), true
 }
 
-// scanSessions reads every session's meta.json under the base directory. A
-// directory that does not parse is skipped, exactly as it always was.
-func (s *FileStore) scanSessions() ([]*Session, error) {
-	entries, err := os.ReadDir(s.baseDir)
+// sessionDirNames lists baseDir's directory names in os.ReadDir's sorted order —
+// exactly the set scanSessions walks. Sharing it is what keeps "the same names"
+// meaning the same thing on both sides of the cache.
+func sessionDirNames(baseDir string) ([]string, error) {
+	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("read session dir: %w", err)
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}
+
+// scanSessions reads every session's meta.json under the base directory, and
+// returns the directory names it walked so the snapshot can be validated later.
+// A directory that does not parse is skipped, exactly as it always was.
+func (s *FileStore) scanSessions() ([]*Session, []string, error) {
+	names, err := sessionDirNames(s.baseDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read session dir: %w", err)
 	}
 
 	var sessions []*Session
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		session, err := s.LoadMeta(entry.Name())
+	for _, name := range names {
+		session, err := s.LoadMeta(name)
 		if err != nil {
 			continue // skip invalid sessions
 		}
@@ -449,7 +491,7 @@ func (s *FileStore) scanSessions() ([]*Session, error) {
 		return b.CreatedAt.Compare(a.CreatedAt) // descending
 	})
 
-	return sessions, nil
+	return sessions, names, nil
 }
 
 // cloneSessions returns copies of the entries, because a snapshot outlives the
