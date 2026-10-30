@@ -10,18 +10,125 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/cron"
-	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // --- /cron ---
 
-// handleCronCommand handles the /cron slash command, listing cron jobs
-// scoped to the current thread. Pass an empty threadID to list all jobs.
-func (m *Manager) handleCronCommand(threadID string) (string, error) {
+// cronUsage is what /cron answers when it is given a verb without a job id.
+const cronUsage = "Usage:\n" +
+	"  /cron                  — list this thread's cron jobs\n" +
+	"  /cron <id>             — show one job in full\n" +
+	"  /cron pause <id>       — stop scheduling it\n" +
+	"  /cron resume <id>      — schedule it again\n" +
+	"  /cron run <id>         — fire it once now\n" +
+	"  /cron delete <id>      — delete it"
+
+// handleCronCommand handles the /cron slash command for one thread. Pass an
+// empty threadID to address every job (the unthreaded, global call).
+//
+//	/cron                   list the jobs of this thread
+//	/cron <id>              full detail of one job
+//	/cron pause|resume|run|delete <id>
+//
+// Every by-id action is scoped exactly like the list is: a job this thread
+// cannot see reads as "not found" rather than as a permission error, so an id
+// seen in another conversation cannot be operated on here by accident — the
+// same invariant the model-side Cron tool enforces with its allowed() check.
+// "Cannot see it" and "does not exist" are deliberately the same answer.
+func (m *Manager) handleCronCommand(threadID, args string) (string, error) {
 	if m.scheduler == nil {
 		return "Cron scheduler is not enabled. Set cron.enabled: true in config.yaml.", nil
 	}
 
+	verb, id := parseCronCommand(args)
+	if verb == "list" {
+		return m.listCronJobs(threadID)
+	}
+	if id == "" {
+		return cronUsage, nil
+	}
+
+	job, err := m.cronJobForThread(threadID, id)
+	if err != nil {
+		return "", err
+	}
+
+	switch verb {
+	case "get":
+		return cron.FormatJobDetail(job, threadID), nil
+	case "pause":
+		paused, err := m.scheduler.Pause(job.ID)
+		if err != nil {
+			return "", fmt.Errorf("cron: pause %s: %w", job.ID, err)
+		}
+		return "⏸️ Paused.\n\n" + cron.FormatJobDetail(paused, threadID), nil
+	case "resume":
+		resumed, err := m.scheduler.Resume(job.ID)
+		if err != nil {
+			return "", fmt.Errorf("cron: resume %s: %w", job.ID, err)
+		}
+		return "▶️ Resumed.\n\n" + cron.FormatJobDetail(resumed, threadID), nil
+	case "run":
+		// Asynchronous: the run goes through the same path as a scheduled fire,
+		// so LastRun and a oneshot's own cleanup behave identically.
+		if err := m.scheduler.RunNow(job.ID); err != nil {
+			return "", fmt.Errorf("cron: run %s: %w", job.ID, err)
+		}
+		return fmt.Sprintf("▶️ Triggered **%s** [%s] — running now; the result is delivered to this thread when it finishes.", job.Name, job.ID), nil
+	case "delete":
+		// Echo the full job BEFORE removing it: the prompt is the part that
+		// cannot be recovered afterwards, so the reply has to carry it.
+		detail := cron.FormatJobDetail(job, threadID)
+		if err := m.scheduler.Delete(job.ID); err != nil {
+			return "", fmt.Errorf("cron: delete %s: %w", job.ID, err)
+		}
+		return "🗑️ Deleted (shown below so it can be recreated):\n\n" + detail, nil
+	}
+
+	return cronUsage, nil
+}
+
+// parseCronCommand splits /cron arguments into a verb and a job id. A bare id
+// means "show it" — that is the shape people type first, and it matches what
+// the list prints next to each job.
+func parseCronCommand(args string) (verb, id string) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return "list", ""
+	}
+
+	switch fields[0] {
+	case "list":
+		return "list", ""
+	case "get", "show":
+		verb = "get"
+	case "pause", "resume", "run", "delete":
+		verb = fields[0]
+	default:
+		// Not a verb: the whole first field is the id.
+		return "get", fields[0]
+	}
+	if len(fields) > 1 {
+		id = fields[1]
+	}
+	return verb, id
+}
+
+// cronJobForThread loads one job and checks the thread may see it. Errors say
+// "not found" for both a missing id and a job owned by another thread.
+func (m *Manager) cronJobForThread(threadID, id string) (*cron.Job, error) {
+	job, err := m.scheduler.Get(id)
+	if err != nil {
+		return nil, fmt.Errorf("cron: get %s: %w", id, err)
+	}
+	if job == nil || (threadID != "" && job.TargetThreadID != threadID) {
+		return nil, fmt.Errorf("cron: job %q not found in this thread (use /cron to list)", id)
+	}
+	return job, nil
+}
+
+// listCronJobs renders the jobs this thread can see, oldest first.
+func (m *Manager) listCronJobs(threadID string) (string, error) {
 	allJobs, err := m.scheduler.List()
 	if err != nil {
 		return "", fmt.Errorf("cron: list: %w", err)
@@ -47,27 +154,12 @@ func (m *Manager) handleCronCommand(threadID string) (string, error) {
 	})
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "📋 Cron Jobs (%d)\n", len(jobs))
-
+	fmt.Fprintf(&sb, "📋 Cron Jobs (%d)\n\n", len(jobs))
 	for _, job := range jobs {
-		status := "🟢 Active"
-		if job.Status == cron.JobStatusPaused {
-			status = "⏸️ Paused"
-		}
-		if job.Type == cron.JobTypeOneshot {
-			status += " · Oneshot"
-		}
-		fmt.Fprintf(&sb, "\n%s **%s** [%s]\n", status, job.Name, job.ID)
-		fmt.Fprintf(&sb, "  Schedule: `%s`\n", job.Schedule)
-		fmt.Fprintf(&sb, "  Prompt: %s\n", strutil.Truncate(job.Prompt, 60))
-		if !job.LastRunAt.IsZero() {
-			icon := "✅"
-			if job.LastRunStatus == "error" {
-				icon = "❌"
-			}
-			fmt.Fprintf(&sb, "  Last run: %s %s\n", icon, job.LastRunAt.Format("01-02 15:04"))
-		}
+		sb.WriteString(cron.FormatJobSummary(job, threadID))
+		sb.WriteString("\n")
 	}
+	sb.WriteString("`/cron <id>` for details · `/cron pause|resume|run|delete <id>`")
 
 	return sb.String(), nil
 }

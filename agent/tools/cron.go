@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -33,11 +32,11 @@ type CronTarget struct {
 	ID func() string
 
 	// SelfID, when set, is the id this conversation has as a job TARGET (the
-	// value ID is written as). describeTarget labels a job whose destination
-	// equals it "this conversation", so the model does not have to reconcile
-	// the target id with the session id in its own prompt: on the desktop the
-	// target is the LOGICAL conversation id, which survives compaction and
-	// therefore need not equal the session the turn is running in.
+	// value ID is written as). cron.DescribeTarget labels a job whose
+	// destination equals it "this conversation", so the model does not have to
+	// reconcile the target id with the session id in its own prompt: on the
+	// desktop the target is the LOGICAL conversation id, which survives
+	// compaction and therefore need not equal the session the turn runs in.
 	SelfID func() string
 
 	// Matches decides which jobs `list` shows. A desktop caller sees jobs that
@@ -223,7 +222,7 @@ func (t *CronTool) handleList() (string, error) {
 	fmt.Fprintf(&sb, "📋 Cron Jobs (%d total)\n\n", len(jobs))
 
 	for _, job := range jobs {
-		sb.WriteString(formatJobSummary(job))
+		sb.WriteString(cron.FormatJobSummary(job, t.selfID()))
 		sb.WriteString("\n")
 	}
 
@@ -410,7 +409,7 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "▶️ Job %q (%s) resumed.\n", job.ID, job.Name)
 	fmt.Fprintf(&sb, "Schedule: %s\n", job.Schedule)
-	if nextRun := computeNextRun(job); nextRun != nil {
+	if nextRun := cron.NextRunAt(job); nextRun != nil {
 		fmt.Fprintf(&sb, "Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 	return sb.String(), nil
@@ -418,145 +417,26 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 
 // --- Formatting helpers ---
 
-// describeTarget is the tool-facing description of a job's destination. It is
-// deliberately not a session TITLE: the tool runs on the model side, where the
-// id is the stable fact. A destination that equals SelfID is marked as this
-// very conversation — see the field's comment for why the id can differ from
-// the session id the model was told about.
-func (t *CronTool) describeTarget(job *cron.Job) string {
-	if job.TargetType == cron.TargetTypeDesktop {
-		if job.Desktop == nil {
-			return "desktop"
-		}
-		if job.Desktop.SessionID != "" {
-			return "desktop conversation " + job.Desktop.SessionID + t.selfSuffix(job.Desktop.SessionID)
-		}
-		return "a new desktop conversation (created on the first run)"
-	}
-	return "channel thread " + job.TargetThreadID + t.selfSuffix(job.TargetThreadID)
-}
-
-func (t *CronTool) selfSuffix(targetID string) string {
-	if targetID == "" || t.target.SelfID == nil || t.target.SelfID() != targetID {
-		return ""
-	}
-	return " (this conversation)"
-}
-
-func formatJobSummary(job *cron.Job) string {
-	status := "🟢"
-	if job.Status == cron.JobStatusPaused {
-		status = "⏸️"
-	}
-
-	typeTag := ""
-	if job.Type == cron.JobTypeOneshot {
-		typeTag = " [oneshot]"
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s **%s** [%s] `%s`%s\n", status, job.Name, job.ID, job.Schedule, typeTag)
-
-	// Prompts can be long; show a snippet.
-	promptPreview := strutil.Truncate(job.Prompt, 80)
-	fmt.Fprintf(&sb, "  Prompt: %s\n", promptPreview)
-
-	nextRun := computeNextRun(job)
-	if nextRun != nil && job.Status == cron.JobStatusActive {
-		fmt.Fprintf(&sb, "  Next: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
-	}
-
-	if !job.LastRunAt.IsZero() {
-		lastStatus := job.LastRunStatus
-		if lastStatus == "" {
-			lastStatus = "unknown"
-		}
-		icon := "✅"
-		if lastStatus == "error" {
-			icon = "❌"
-		}
-		fmt.Fprintf(&sb, "  Last: %s %s", icon, job.LastRunAt.Format(strutil.TimeFormatDateTime))
-		if job.LastRunError != "" {
-			fmt.Fprintf(&sb, " (%s)", job.LastRunError)
-		}
-	}
-
-	return sb.String()
-}
-
-func (t *CronTool) formatJobDetail(job *cron.Job) string {
-	var sb strings.Builder
-
-	status := "Active"
-	if job.Status == cron.JobStatusPaused {
-		status = "Paused"
-	}
-
-	fmt.Fprintf(&sb, "**%s** [%s]\n", job.Name, job.ID)
-	fmt.Fprintf(&sb, "- Status: %s\n", status)
-	if job.Type == cron.JobTypeOneshot {
-		sb.WriteString("- Type: oneshot (auto-delete after execution)\n")
-	}
-	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
-
-	nextRun := computeNextRun(job)
-	if nextRun != nil && job.Status == cron.JobStatusActive {
-		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
-	}
-
-	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: %s\n", t.describeTarget(job))
-	if job.Notify == cron.NotifyWhenRelevant {
-		sb.WriteString("- Notify: when_relevant (suppresses if nothing new)\n")
-	}
-	if job.Timezone != "" {
-		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
-	}
-
-	fmt.Fprintf(&sb, "- Created: %s\n", job.CreatedAt.Format(strutil.TimeFormatDateTime))
-
-	if !job.LastRunAt.IsZero() {
-		fmt.Fprintf(&sb, "- Last run: %s (status: %s)", job.LastRunAt.Format(strutil.TimeFormatDateTime), job.LastRunStatus)
-		if job.LastRunError != "" {
-			fmt.Fprintf(&sb, " — %s", job.LastRunError)
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
 func (t *CronTool) formatJobCreated(job *cron.Job) string {
-	var sb strings.Builder
 	typeLabel := "recurring cron job"
 	if job.Type == cron.JobTypeOneshot {
 		typeLabel = "oneshot job (will auto-delete after execution)"
 	}
-	fmt.Fprintf(&sb, "✅ Created %s: **%s** (ID: `%s`)\n\n", typeLabel, job.Name, job.ID)
-	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
-
-	nextRun := computeNextRun(job)
-	if nextRun != nil {
-		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
-	}
-
-	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
-	fmt.Fprintf(&sb, "- Target: %s\n", t.describeTarget(job))
-
-	if job.Timezone != "" {
-		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
-	}
-
-	return sb.String()
+	return fmt.Sprintf("✅ Created %s: **%s** (ID: `%s`)\n\n%s", typeLabel, job.Name, job.ID, cron.FormatJobDetail(job, t.selfID()))
 }
 
-// computeNextRun parses a cron expression in the job's own timezone and
-// returns the next fire time. Returns nil when the expression or the timezone
-// cannot be resolved (the job will be reported as invalid by the UI).
-func computeNextRun(job *cron.Job) *time.Time {
-	next, err := cron.NextRun(job.Schedule, job.Timezone, time.Now())
-	if err != nil {
-		return nil
+// selfID is the id this conversation has as a job target, or "" when the
+// caller did not supply one. It only decides whether a job's destination is
+// labelled "this conversation".
+func (t *CronTool) selfID() string {
+	if t.target.SelfID == nil {
+		return ""
 	}
-	return &next
+	return t.target.SelfID()
+}
+
+// formatJobDetail renders the job through the shared formatter, so the model
+// and a /cron reader are shown the same facts.
+func (t *CronTool) formatJobDetail(job *cron.Job) string {
+	return cron.FormatJobDetail(job, t.selfID())
 }

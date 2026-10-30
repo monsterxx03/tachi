@@ -71,7 +71,7 @@ func (m *Manager) executeSlashCommand(ctx context.Context, cmd channel.SlashComm
 		text, err := m.handleUsageCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	case "cron":
-		text, err := m.handleCronCommand(cmd.ThreadID)
+		text, err := m.handleCronCommand(cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
 	case "cd":
 		text, err := m.handleCDCommand(cmd.ThreadID, cmd.Args)
