@@ -446,7 +446,7 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 
 ## 无头宿主（`-tags headless`）
 
-手机的服务端和会话运行时**不需要窗口**：`-tags headless` 编出来的同一个程序只跑这两样，手机是它唯一的前端。它不是一个新的入口模式，也不是 channel —— 是同一个 `desktopApp`，换掉窗口那一层。
+手机的服务端和会话运行时**不需要窗口**：`-tags headless` 编出来的同一个程序没有窗口、托盘、通知、BLE、麦克风，只跑会话运行时和它该服务的那几个前端——**手机接口和（配置里开着的）IM channel**，都由这一份配置决定。它不是一个新的入口模式：是同一个 `desktopApp`，换掉窗口那一层，再把 channel 那套运行时接在同一进程里。
 
 ```sh
 make headless                    # 本机：./tachi-headless-<goos>-<goarch>
@@ -472,8 +472,14 @@ go build .                       # 仍然是 GUI
   - **宽度超过 78 列就不打**：折行的二维码看着像能扫，其实扫不出来 —— 宁可只留文字。
   - `mobile.listen` 只绑回环时会警告一句：那种配置下地址、令牌都对，手机却永远连不上。
 - **别把这个输出挪进「调试日志」**：对一台放在 NAS 上的宿主，它是用户唯一能拿到配对信息的途径。
-- **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → startMobile`，退出按相反顺序收。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
+- **一台无头宿主 = 一个进程，服务手机和 IM**（`main_headless.go` 的 `startChannels`）。服务器上的部署就一个单元：`channel.channels` 里开着的那些（weixin / discord / mock）在**这个**进程里跑，用同一个 `~/.tachi`、同一批会话，手机看到的就是同一个列表。它取代的是「`tachi channel` 服务 + 无头宿主服务并排跑」——那种部署的两个进程各有自己的发现侧、要靠启动顺序决定 A2A 节点落在谁身上。
+  - **channel 插件在这个构建里点名**（`main_headless.go` 顶部的空导入，只有 `-tags headless` 编到）：配置点名了、二进制没编进来，报的是「`no factory registered`」而不是静默缺失。窗口版**不**带这些插件，它也不跑 channel —— 代价要知道：NotifyUser 要求宿主里编进了那个 channel，所以窗口版当 A2A 宿主时这条消息发不出去。
+  - **一套发送侧**：`channelmgr.NewWith(cfg, Dependencies{Delegator: desk.delegatorCache(cfg)})` 把宿主的那个借给 channel 运行时。两个各自建的话，就是一个进程两个发现浏览器、两份账本，而进程级那条 gossip 路由只会从最后登记的那一个答复；`Manager.Close` 也按 `ownsDelegator` 决定关不关（借来的不能关，`DelegatorCache.Close` 是终态）。
+  - **一份记忆整理**：宿主自己的 `startDream` 是唯一拥有者，channel 那份调度注册被跳过（`Dependencies.SkipDream`）。两份不会写坏东西（`dream.AcquireLock` 按记忆根序列化），但第二份是为一次注定跳过的整理做完整分组。
+  - **定时任务各归各**：两个调度器读同一个 `crons.json`，但 `Owns` 只认自己的目标类型（`desktop` / `channel`），所以谁也不会抢先跑别人的任务；`cron.Store` 每次操作都读盘并带文件锁，两份实例不会看到对方写之前的旧状态。
+  - **两边的失败都不拖走另一边**：channel 起不来记一行日志、手机照常服务；手机监听起不来（端口被占、地址不对）在有 channel 时也只警告一行、宿主继续跑——两样都没有才是「没有东西可服务」，直接退出。和节点服务失败同一个姿态。
+- **启动顺序照 GUI 抄，去掉窗口那一半**（`main_headless.go`）：`initAgent → startCron → startDream → node（可选）→ warmPeers → 各 channel → startMobile（可选）`，退出按相反顺序收（调度器先停，channel 再停，然后手机、发送侧、agent）。**没有模拟回合的降级**：无头进程没配好模型就直接退出，手机看到的是 `agent_unavailable`，那比编出假的回合诚实。
 - **定时任务照常跑**（`main_headless.go` 也调 `startCron`）：`Owns` 只认 `target_type: "desktop"`，所以桌面建的任务换到无头宿主上继续执行（旧任务空目标属于 channel，不会被它抢）。`laneCron` 的投影和普通轮次同一个出口，手机订着那个会话就能看到 `text` / `turn` / `idle`（连同广播的 `cron_changed`）。两条与「有没有窗口」无关、但值得知道的行为：① 定时回合里命中 ask 的命令**被拒绝**（`cronTurnContext` → `withoutAsk`），除非那个会话开了「无需审批」——没人能回答的卡片不该把任务挂到超时；② 桌面的系统通知在无头下是空的（`noNotifier`），而**手机没有推送**：没打开那个会话，就不会被主动告知，只能下次打开时看列表。
-- **手机是唯一前端，所以协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
+- **手机接口是这个宿主唯一有界面的前端，所以那个协议必须自己撑住一整轮**：`user_message → state → session_state → text → turn → idle`，工具卡、待答项、压缩换轨走的都是与桌面相同的投影。审批卡那条路也在这里（`ask` 表与权限模式没动），只是没有窗口守着。
 - **一台机器一个宿主，由一把锁保证**（`host_lock.go`）：同一份 `~/.tachi` 同时只允许一个进程跑 agent —— 桌面和无头都在 `main` 的第一行拿 `host.lock`（`pkg/flock`，进程死了内核自动释放，不留需要人工清理的东西）。后启动的那个**直接退出**并说明是谁在用这份数据：桌面走系统弹窗（macOS `osascript` / Linux `zenity`，因为 Wails 自己的 dialog 要等 `App.Run`），无头走 stderr。这不是礼貌：两个 agent 各自持有一份 history，往同一个 `messages.jsonl` 里追加，没有哪种合并是安全的。`open -n` 这类「故意开第二个」的用法只对**隔离 HOME** 的沙箱成立（冒烟套件正是如此），对真实 `~/.tachi` 会被这把锁拒掉。
-- **验证**：`make headless`（交叉时 `GOOS=linux GOARCH=amd64 make headless`）必须常绿 —— 它就是「不依赖桌面能力」的定义，CI 里那个 `desktop-headless` job 跑的是同一条命令的裸形式。本机能起一个沙箱验协议（隔离 `HOME` + `mobile.enabled` + `mobile.json` 的令牌，`/v1/ping` → `/v1/sessions` → 发一条消息）。`go test ./...` 和 GUI 构建走的是默认标签，**headless 这条路没有测试覆盖**，改它的人要自己把上面两条跑一遍。
+- **验证**：`make headless`（交叉时 `GOOS=linux GOARCH=amd64 make headless`）必须常绿 —— 它就是「不依赖桌面能力」的定义，CI 里那个 `desktop-headless` job 跑的是同一条命令的裸形式。`itest/headless`（`make itest-headless`）用**真二进制**驱动协议：手机那一半（`/v1/ping` → `/v1/sessions` → 真一轮），以及「只开 channel、没有手机」的宿主（它会起、会停，也不会绑手机端口）。`go test ./...` 和 GUI 构建走的是默认标签，看不见 headless 那条路 —— 改它的人要把上面两条跑一遍（[itest.md](itest.md)）。

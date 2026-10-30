@@ -6,7 +6,7 @@
 
 - 套件：`itest/run`、`itest/tui`、`itest/acp`、`itest/headless`、`itest/mockllm`（其余四个都依赖 mockllm）。
 - `make itest`（先过 `web-check`，再 `make -j5` 跑五个套件；run/tui/acp 用 `ginkgo -p`，headless 与 mockllm 跑的是 `go test`）；单个套件：`make itest-run|itest-tui|itest-acp|itest-headless|itest-mockllm`。
-- **`itest/headless` 是唯一不需要 GUI 的端到端套件**：它编 `desktop` 模块的 `-tags headless` 二进制（`GOWORK=off`、`CGO_ENABLED=0`，所以 Linux runner 上也能跑，不需要 gtk/webkit），然后起真进程、走手机的 HTTP/WS。五个用例：一轮真的流到手机**且**重订阅的快照里有它（实时与记录分开断言，只对一半会说另一半像丢了消息）、没有令牌是 401（`/v1/ping` 是配对页要的那个例外）、同一 HOME 的第二个宿主退出并说明原因（`host_lock.go` 那条规则的外部视角），以及审批卡的允许与拒绝 —— 命令带文件副作用，所以「真的执行了 / 真的没执行」由磁盘回答，而不是由模型说了什么；拒绝还钉住「这一轮继续、模型被再问一次」这个与中止不同的语义。它和 `itest/desktop` 的分工是「要不要窗口」：那个驱动真窗口因此进不了 CI，这个只要一个能监听回环的进程。
+- **`itest/headless` 是唯一不需要 GUI 的端到端套件**：它编 `desktop` 模块的 `-tags headless` 二进制（`GOWORK=off`、`CGO_ENABLED=0`，所以 Linux runner 上也能跑，不需要 gtk/webkit），然后起真进程、走手机的 HTTP/WS。六个用例：一轮真的流到手机**且**重订阅的快照里有它（实时与记录分开断言，只对一半会说另一半像丢了消息）、没有令牌是 401（`/v1/ping` 是配对页要的那个例外）、同一 HOME 的第二个宿主退出并说明原因（`host_lock.go` 那条规则的外部视角），以及审批卡的允许与拒绝 —— 命令带文件副作用，所以「真的执行了 / 真的没执行」由磁盘回答，而不是由模型说了什么；拒绝还钉住「这一轮继续、模型被再问一次」这个与中止不同的语义；还有一个**没有手机**的宿主 —— 只开 `channel: mock`，等的是日志里「IM channels running」而不是一次 ping，并断言它没绑手机端口（[desktop.md](desktop.md) 的无头宿主）。它和 `itest/desktop` 的分工是「要不要窗口」：那个驱动真窗口因此进不了 CI，这个只要一个能监听回环的进程。
 - **无头套件的端口从日志读，不从配置猜**：`listen: 127.0.0.1:0` 让内核分配，宿主打自己实际绑定的地址，用例等的是那一行。别改成「先 Listen 拿号再关掉」——那是下面节点 fixture 已经写过的临时端口陷阱。
 - `itest/tui` 在进程内用 `tea.NewProgram` 驱动真实的 `tui.Model` + `AIAgent`（按键经 `p.Send(tea.KeyPressMsg)`）；ANSI 变化流经 `itest/tui/vt.go` 回放，所以 `Screen()` 等于真实终端。
 - **`itest/` 只在 `-tags=integration` 下编译**：`go test ./...`（CI 的 test job）和 build job 都不看它。所以改了 `node/`、`agent/` 那类被四个入口共用的**导出签名**时，`make test` 全绿也不代表 CI 会绿 —— 编译这道门在 `make itest` 里。改这类签名后至少跑一次 `go vet -tags=integration ./itest/...`。`desktop/` 是独立 module，**它自己的测试不在根 `go test ./...` 里**——无头宿主那条路只有 `itest/headless`（行为）与 CI 的 `desktop-headless` job（能不能编）在看着。
@@ -27,7 +27,7 @@
 
 ## 没有终端的节点（两个真进程）
 
-- **只有三个入口承载节点**（`node.StartOrAttachNode`：TUI、desktop、channel），且**只有 channel 入口能无头跑**——但没启用任何 channel 时它拒绝启动。`channel/mock` 就是满足这一条的惰性 channel：`Name`/`OnStart`/`Run`，其中 `Run` 阻塞到关闭为止。它不面向用户（只有 `main_channels.go` 读注册表，所以没有任何东西会列出或提供它）。
+- **只有三个入口承载节点**（`node.StartOrAttachNode`：TUI、desktop、channel）。一台无终端的机器用**无头宿主**（`-tags headless`，它不需要任何 channel）；channel 入口是另一条路，而它在没启用任何 channel 时拒绝启动。`channel/mock` 就是满足这一条的惰性 channel：`Name`/`OnStart`/`Run`，其中 `Run` 阻塞到关闭为止。它不面向用户（只有 `Manager.AddEnabled` 读注册表，所以没有任何东西会列出或提供它）。
 - **fixture 必须自己写出 A2A 端口。** 承载进程的远端地址没有任何东西会公布——`local.json` 带的是本机控制地址、节点 id、实例 id 和令牌（外加 `pid`、`api_version`、`started_at`），没有任何远端地址——所以把对端放在独立进程里的用例要自己挑一个空闲端口（`0.0.0.0:<port>`，这同时让它离开 loopback、因而落在 mTLS 后面）并写进配置。**挑法本身是个陷阱：绝不能用 `:0` 拿号再关掉**——那个号来自内核的临时端口池，也就是全机每一次出站连接分配源端口的地方，所以关掉与宿主绑定之间任何一次 dial 都可能拿到同一个号；宿主绑不上，而 channel 入口**按设计**不会因此退出（它记一行日志就继续服务 channel），于是没有任何东西在监听，等待只能超时。`nodePort` 改成按 ginkgo worker 分块、取临时端口范围以下的号。
 - **等到 `local.json` 不等于等到了一个节点。** 这个文件按设计比它的写入者活得久（`Close` 会留下它，因为附着路径会重新核对实例 id 和握手，所以那里放着一份旧文件是无害的）——而一个刚发布完就死掉的入口也会把它留在原地。就绪 = 「文件出现了」且「端口上有人应答」（`net.Dial`；非 loopback 面上握手**本来就该**失败，所以能查的只有 TCP 连接）。进程在等待期间退出时，把它**自己的**输出报出来：「从未就绪」会让人往错的地方找，而答案——一个启用了却没注册的 channel、一个被占的端口——就摆在那儿。**降级的节点服务更隐蔽：它只写日志、不上 stderr**（channel 入口继续服务），所以这个等待在失败时也报进程自己的日志行，并在一行 `node service unavailable` 上立刻失败，而不是把 15 秒预算烧完。
 - 正是这一对让跨进程用例成为可能：两份身份、两份 TOFU pin 记录、两个数据目录、两份日志，各由自己的进程写出（`itest/run/node_host_test.go`）。**其余一切仍用进程内对端**：它不需要第二个进程就能证明 config→surface 这条路径，而只有进程边界才需要这套机制。

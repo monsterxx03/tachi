@@ -51,8 +51,9 @@ build-linux: web-check
 build-linux-arm64: web-check
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath $(TAGS) -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
 
-# headless 构建**无窗口宿主**：会话运行时 + 手机服务端，没有窗口、托盘、通知、BLE、麦克风。
-# 给一台没有图形环境的机器用（NAS、服务器、容器）——手机连它，不需要桌面开着。
+# headless 构建**无窗口宿主**：会话运行时 + 手机服务端 +（配置开着的）IM channel，没有窗口、托盘、
+# 通知、BLE、麦克风。给一台没有图形环境的机器用（NAS、服务器、容器）——手机连它、机器人也住在它里面，
+# 不需要桌面开着，也不需要第二个进程。
 #
 # 构建本身住在 desktop/Makefile（那边是独立 module，构建标签与 CGO_ENABLED=0 只定义一处）；
 # 这里只转发，并把产物搬到仓库根，和 tachi / tachi-linux-amd64 一样是「随手可拿」的位置：

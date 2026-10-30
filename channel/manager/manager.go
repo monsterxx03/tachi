@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,16 @@ type Manager struct {
 	// without touching the manager's guard — the nesting rule this package follows is one lock
 	// at a time.
 	delegator *node.DelegatorCache
+	// ownsDelegator is whether Close may close it. A manager built by the standalone channel entry
+	// built this cache and is the only holder, so it closes it; a manager handed the HOST's cache
+	// (NewWith) must not, because that cache is the process's one sending side and closing it is
+	// terminal — the host's own turns would lose delegation for the rest of the run.
+	ownsDelegator bool
+	// skipDream is set when THIS PROCESS already runs the memory pass, in another runtime it owns
+	// (the headless host's desktopApp, see main_headless.go). Two passes would not corrupt anything
+	// — dream.AcquireLock serializes them per memory root — but the second one is a full grouping
+	// pass over every session for a pass that is skipped anyway.
+	skipDream bool
 
 	// defaultResolvedProvider is the eagerly-resolved default provider, set
 	// once in New and immutable after construction (per-thread /model
@@ -238,24 +249,54 @@ type handlerResult struct {
 	attachments []channel.OutgoingAttachment
 }
 
+// Dependencies are the things the PROCESS may already own, handed in so a second runtime in the
+// same binary does not build a second one of each — see NewWith.
+type Dependencies struct {
+	// Delegator is the process's sending side. Nil means the manager builds its own and closes it,
+	// which is the standalone channel entry: there it is the only sender in the process.
+	Delegator *node.DelegatorCache
+	// SkipDream says this process already runs the memory pass (the headless host's own loop). Two
+	// passes are serialized per memory root by dream.AcquireLock, so this is about not paying for a
+	// second grouping pass, not about safety.
+	SkipDream bool
+}
+
 // New creates a Manager and eagerly resolves the default provider from cfg.
 // Returns an error when the provider cannot be resolved — the manager is
 // not constructed, so callers must not proceed (don't Start, don't handle
 // messages). Channels are interactive — the iteration budget is always
 // unlimited (0).
 func New(cfg *config.Config) (*Manager, error) {
+	return NewWith(cfg, Dependencies{})
+}
+
+// NewWith is New for a caller that runs another runtime beside this one in a single process.
+//
+// The merged headless host is that caller: it hosts the desktop runtime (the phone's conversations)
+// AND the IM channels, and both need a sending side and a memory pass. Built twice, those would be
+// two discovery browsers, two sighting ledgers, and a gossip route answering from whichever
+// registered last — node.md's "one browser per process" would quietly stop being true. So the host
+// passes its own in and this manager borrows it.
+func NewWith(cfg *config.Config, deps Dependencies) (*Manager, error) {
 	resolved, err := llm.DefaultProvider(cfg)
 	if err != nil {
 		return nil, err
 	}
-	// Where this manager's conversations live: what a peer's returned file is written under, and
-	// the one answer the agent wiring resolves per session anyway. Asked once, here, because the
-	// store a test injects (m.sessionStore) is set AFTER construction — tests never exercise a
-	// returned file, so the process's own session directory is both correct and all there is.
-	sessionsDir, _ := config.SessionDir()
+	delegator := deps.Delegator
+	ownsDelegator := delegator == nil
+	if ownsDelegator {
+		// Where this manager's conversations live: what a peer's returned file is written under, and
+		// the one answer the agent wiring resolves per session anyway. Asked once, here, because the
+		// store a test injects (m.sessionStore) is set AFTER construction — tests never exercise a
+		// returned file, so the process's own session directory is both correct and all there is.
+		sessionsDir, _ := config.SessionDir()
+		delegator = node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil, sessionsDir)
+	}
 	return &Manager{
 		cfg:                     cfg,
-		delegator:               node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil, sessionsDir),
+		delegator:               delegator,
+		ownsDelegator:           ownsDelegator,
+		skipDream:               deps.SkipDream,
 		defaultResolvedProvider: resolved,
 		skillStore:              skill.NewStore(config.FindProjectRoot()),
 		agents:                  newAgentPool(),
@@ -273,6 +314,46 @@ func (m *Manager) Add(ch channel.Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.channels = append(m.channels, ch)
+}
+
+// AddEnabled instantiates every channel the config has switched on and adds it to the manager.
+//
+// This is the ONE place `channel:` in config.yaml becomes running channels, for both entry points
+// that have them: the standalone channel entry and the headless host (which serves the phone and the
+// IM channels from one process). A copy of this loop per entry would drift on exactly the things it
+// decides — which registry answers, what an unknown name means, how many added is "enough".
+//
+// Returned: the names added, and the names the config enables that no factory answers for (the
+// plugin's package was not compiled into this binary). A factory error is returned as an error,
+// with the channel's name in it — the caller decides whether that is fatal.
+func (m *Manager) AddEnabled(cfg *config.Config) (added, missing []string, err error) {
+	if cfg == nil {
+		return nil, nil, nil
+	}
+	active := cfg.Channel.ActiveChannels()
+	// ActiveChannels returns a map, so the order (and with it the log lines and which channel gets
+	// built first) would otherwise change from run to run.
+	names := make([]string, 0, len(active))
+	for name := range active {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	registered := channel.ListRegistered()
+	for _, name := range names {
+		factory, ok := registered[name]
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		ch, err := factory(active[name])
+		if err != nil {
+			return added, missing, fmt.Errorf("channel %q: create: %w", name, err)
+		}
+		m.Add(ch)
+		added = append(added, name)
+	}
+	return added, missing, nil
 }
 
 // Start resolves the provider and launches all registered channels in their
@@ -372,7 +453,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Start system-level scheduler (AutoDream, etc.) — fully isolated from user cron.
-	if m.cfg != nil && m.cfg.Dream.Enabled {
+	// A host that runs another runtime beside this one owns the memory pass itself (SkipDream, see
+	// NewWith): two schedulers would each build a grouping plan over every session, and only one of
+	// the two would find the per-root lock free.
+	if m.cfg != nil && m.cfg.Dream.Enabled && !m.skipDream {
 		m.systemScheduler = cron.NewSystemScheduler(cron.SystemSchedulerConfig{
 			Logger: m.logger,
 		})
@@ -666,8 +750,9 @@ func (m *Manager) Close() {
 		m.systemScheduler.Stop()
 	}
 	// The discovery browser holds UDP sockets and a goroutine of its own; it is stopped with the
-	// manager rather than left to the process teardown (node/delegatorcache.go Close).
-	if m.delegator != nil {
+	// manager rather than left to the process teardown (node/delegatorcache.go Close) — but only
+	// when this manager built it. A borrowed cache belongs to the host, and closing one is terminal.
+	if m.delegator != nil && m.ownsDelegator {
 		m.delegator.Close()
 	}
 

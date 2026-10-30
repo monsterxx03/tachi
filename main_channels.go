@@ -16,7 +16,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/node"
-	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -49,33 +48,22 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("no channels enabled in config; enable at least one channel")
 	}
 
-	// Instantiate channels from registry.
-	registered := channel.ListRegistered()
-	instantiated := 0
-	for name, rawCfg := range active {
-		factory, ok := registered[name]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "[channel] WARNING: %q enabled in config but no factory registered (import its package?)\n", name)
-			continue
-		}
-
-		ch, err := factory(rawCfg)
-		if err != nil {
-			return fmt.Errorf("channel %q: create: %w", name, err)
-		}
-
-		mgr.Add(ch)
-		instantiated++
+	// Instantiate channels from registry. Which names exist, and what an unknown one means, is
+	// decided in ONE place (manager.AddEnabled) — this entry and the headless host both call it.
+	registered, missing, err := mgr.AddEnabled(cfg)
+	if err != nil {
+		return err
+	}
+	for _, name := range missing {
+		fmt.Fprintf(os.Stderr, "[channel] WARNING: %q enabled in config but no factory registered (import its package?)\n", name)
+	}
+	for _, name := range registered {
 		fmt.Fprintf(os.Stderr, "[channel] %s registered\n", name)
 	}
 
 	// Verify at least one channel was instantiated.
-	if instantiated == 0 {
-		names := make([]string, 0, len(active))
-		for name := range active {
-			names = append(names, name)
-		}
-		return fmt.Errorf("no channel factories registered for any enabled channel: %v", names)
+	if len(registered) == 0 {
+		return fmt.Errorf("no channel factories registered for any enabled channel: %v", missing)
 	}
 
 	if err := mgr.Start(ctx); err != nil {

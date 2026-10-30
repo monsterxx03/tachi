@@ -23,8 +23,18 @@ import (
 	"os/signal"
 	"syscall"
 
+	channelmgr "github.com/monsterxx03/tachi/channel/manager"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/logger"
+
+	// The IM plugins this host can serve. They are named HERE, in the headless build only, for the
+	// same reason main.go names them for the channel entry: a channel is linked in by importing it,
+	// and the windowed desktop build must not carry the bots it will never run. Without these, an
+	// enabled channel is "no factory registered" — visibly missing — instead of silently absent.
+	_ "github.com/monsterxx03/tachi/channel/discord"
+	_ "github.com/monsterxx03/tachi/channel/mock"
+	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
 
 func main() {
@@ -70,23 +80,53 @@ func main() {
 	}
 	desk.warmPeers()
 
-	// The phone interface: HTTP for commands, one WebSocket for the progress stream. It is off
-	// unless the config's mobile block enables it.
-	if !cfg.Mobile.Enabled {
-		log.Fatal("tachi: the phone interface is disabled; set mobile.enabled: true in config.yaml")
-	}
-	desk.startMobile(cfg)
-	srv := desk.mobileServer()
-	if srv == nil || srv.listenError() != "" {
-		reason := "no server"
-		if srv != nil {
-			reason = srv.listenError()
+	// IM channels: the ones config switched on run HERE, beside the phone interface, in this one
+	// process. That is the point of a host: the conversations a person has with the bot and with the
+	// phone are the same sessions under the same ~/.tachi, the A2A node is unambiguous (it is this
+	// process'), and there is one discovery browser instead of two.
+	//
+	// A channel that cannot start does not cost the user the phone: it is logged and the host serves
+	// what is left — the same posture as the node service above. When the phone is off as well,
+	// there is nothing left to serve and starting is pointless (below).
+	var channels *channelmgr.Manager
+	if len(cfg.Channel.ActiveChannels()) > 0 {
+		mgr, err := startChannels(ctx, desk, cfg)
+		if err != nil {
+			logger.New("headless").Error(ctx, "channels: not started; the host serves what is left", err)
+		} else {
+			channels = mgr
 		}
-		log.Fatalf("tachi: cannot listen on %s: %s", cfg.Mobile.MobileAddress(), reason)
 	}
 
-	log.Printf("tachi: headless host up, phone interface on %s", srv.listenAddr())
-	logMobilePairing(desk)
+	// The phone interface: HTTP for commands, one WebSocket for the progress stream. It is off
+	// unless the config's mobile block enables it.
+	if !cfg.Mobile.Enabled && channels == nil {
+		log.Fatal("tachi: nothing to serve — set mobile.enabled: true in config.yaml for the phone " +
+			"interface, or enable at least one channel")
+	}
+	if cfg.Mobile.Enabled {
+		desk.startMobile(cfg)
+		srv := desk.mobileServer()
+		if srv == nil || srv.listenError() != "" {
+			reason := "no server"
+			if srv != nil {
+				reason = srv.listenError()
+			}
+			// The mirror of the rule above: a phone that cannot listen must not cost the user the
+			// bots. With nothing else to serve there is no reason to keep running, and a port that
+			// cannot be opened is the answer the reader needs.
+			if channels == nil {
+				log.Fatalf("tachi: cannot listen on %s: %s", cfg.Mobile.MobileAddress(), reason)
+			}
+			log.Printf("tachi: WARNING the phone interface cannot listen on %s: %s — this host "+
+				"serves the IM channels only", cfg.Mobile.MobileAddress(), reason)
+		} else {
+			log.Printf("tachi: headless host up, phone interface on %s", srv.listenAddr())
+			logMobilePairing(desk)
+		}
+	} else {
+		log.Print("tachi: headless host up, IM channels only (mobile.enabled is off)")
+	}
 	// The one-host lock (host_lock.go) is already held: another entry point that tries this data
 	// directory while this process runs is refused, so nothing else can write these conversations.
 	log.Print("tachi: this process owns ~/.tachi while it runs; a second host (the desktop app or " +
@@ -95,15 +135,59 @@ func main() {
 	<-ctx.Done()
 
 	log.Print("tachi: shutting down")
-	// Same order as the desktop's shutdown hooks: schedulers first (they own turn goroutines),
-	// then the phone interface, then the things holding background sockets.
+	// Same order as the desktop's shutdown hooks: schedulers first (they own turn goroutines), then
+	// the frontends — channels before the phone, because a channel turn may be mid-write to a
+	// session the phone is reading — then the things holding background sockets.
 	desk.stopCron()
 	desk.stopDream()
+	if channels != nil {
+		channels.Close()
+	}
 	desk.stopMobile()
 	if cache := desk.delegator; cache != nil {
 		cache.Close()
 	}
 	desk.teardownAgent()
+}
+
+// startChannels builds and starts the IM side of this host, or returns an error explaining which
+// part of it could not come up.
+//
+// It exists as a function so the two things this process already owns reach the channel manager
+// explicitly (see channelmgr.Dependencies) rather than as a second copy:
+//
+//   - the sending side. The host built one for the phone's node picker and its own turns; a manager
+//     that built another would open a second discovery browser and a second sighting ledger, and the
+//     process-wide gossip route would answer from whichever registered last.
+//   - the memory pass. The host's own loop (startDream, above) is the one owner; the channel
+//     manager's scheduler registration is skipped.
+func startChannels(ctx context.Context, desk *desktopApp, cfg *config.Config) (*channelmgr.Manager, error) {
+	mgr, err := channelmgr.NewWith(cfg, channelmgr.Dependencies{
+		Delegator: desk.delegatorCache(cfg),
+		SkipDream: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	registered, missing, err := mgr.AddEnabled(cfg)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+	for _, name := range missing {
+		log.Printf("tachi: WARNING channel %q is enabled in config but this binary has no factory "+
+			"for it (its package was not imported)", name)
+	}
+	if len(registered) == 0 {
+		mgr.Close()
+		return nil, fmt.Errorf("no channel factories registered for any enabled channel: %v", missing)
+	}
+	if err := mgr.Start(ctx); err != nil {
+		mgr.Close()
+		return nil, fmt.Errorf("channel manager start: %w", err)
+	}
+	log.Printf("tachi: IM channels running: %v", registered)
+	return mgr, nil
 }
 
 // logMobilePairing prints what the phone needs, because there is no settings card here to show it.

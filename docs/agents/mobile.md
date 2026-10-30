@@ -1,6 +1,6 @@
 # Tachi —— 移动端手册
 
-`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。手机连的是那台机器。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
+`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。手机连的是那台机器 —— 同一个无头宿主还能同时把配置里的 IM channel 跑起来，所以一台服务器上一个进程就够（[desktop.md](desktop.md) 的无头宿主）。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
 
 `mobile/AGENTS.md` 是 Expo 模板带的、写给写代码的 agent 的通用建议（跟着 SDK 更新，值得读）。它与本文冲突时以本文为准——本文说的是这个项目怎么跑。
 

@@ -109,7 +109,8 @@ cli:
 	$(MAKE) -C .. --no-print-directory build CLI_OUT=$(CLI_OUT)
 	@echo "→ $(CLI_OUT)"
 
-# headless 构建**无窗口宿主**：会话运行时 + 手机服务端，没有窗口、托盘、菜单、通知、BLE、麦克风。
+# headless 构建**无窗口宿主**：会话运行时 + 手机服务端 +（配置开着的）IM channel，没有窗口、托盘、
+# 菜单、通知、BLE、麦克风。
 #
 # 与 build 的区别是全部的：没有 wails3、没有 frontend（无头宿主没有 webview）、没有 cgo
 # （CGO_ENABLED=0，所以不需要 gtk / webkit 头文件），产物是一个静态链接的二进制。这就是它能在一台
