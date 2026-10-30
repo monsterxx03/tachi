@@ -676,9 +676,15 @@ func splitJSONLAt(data []byte, keep int) (head, tail []byte, total int) {
 	// A last line without a trailing newline still counts as a record.
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		total++
-		if total <= keep {
-			offset = len(data)
-		}
+	}
+	// Keeping more records than the blob holds keeps ALL of them. Without this the
+	// loop above never reaches its keep-th newline, offset stays 0, and an uncut
+	// history is called an empty head — a fork at a turn whose checkpoint counts
+	// past the end of the file would then start with no conversation at all, and a
+	// reader would see a session that looks new but is titled after the branch it
+	// was supposed to carry.
+	if total <= keep {
+		offset = len(data)
 	}
 	return data[:offset], data[offset:], total
 }
