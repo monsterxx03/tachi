@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // drainEvents consumes all AgentEvents, returning the final assistant text or
@@ -63,6 +64,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				pushedTools[event.ToolID] = true
 				if err := onTextDelta(StreamEvent{
 					Type:     StreamEventToolCall,
+					ToolID:   event.ToolID,
 					ToolName: event.ToolName,
 					ToolArgs: event.ToolArgs,
 				}); err != nil {
@@ -174,6 +176,21 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			} else {
 				m.logger.Info(ctx, "channel: tool ok", "tool", event.ToolName, "bytes", len(event.ToolResult))
 			}
+			// The call was already announced (AgentEventToolCallArgs); this is
+			// what lets a channel finish that line with ✅/❌ and a duration
+			// instead of leaving every tool looking like it is still running.
+			if onTextDelta != nil {
+				if err := onTextDelta(StreamEvent{
+					Type:         StreamEventToolResult,
+					ToolID:       event.ToolID,
+					ToolName:     event.ToolName,
+					ToolResult:   toolResultPreview(event.ToolResult, event.ToolIsError),
+					ToolIsError:  event.ToolIsError,
+					ToolDuration: event.ToolDuration,
+				}); err != nil {
+					m.logger.Warn(ctx, "channel: streaming tool-result callback error", "error", err)
+				}
+			}
 
 		case agent.AgentEventAutoCompactStart:
 			// Compact is in progress; nothing to do yet.
@@ -239,6 +256,33 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 		return "", nil
 	}
 	return result, nil
+}
+
+// toolPreviewRunes caps the failure reason a channel may show in a compact tool
+// log. It is a log line, not a result: the full output is in the transcript.
+const toolPreviewRunes = 160
+
+// toolResultPreview reduces a tool result to the one line a channel can show
+// next to the call: the first non-empty line, whitespace collapsed, capped.
+//
+// A successful result yields "" on purpose — its first line is usually noise
+// ("ok", "{"), and no caller displays it. A FAILURE's first line is the reason,
+// which is exactly what a reader wants without expanding anything.
+func toolResultPreview(result string, isError bool) string {
+	if !isError || result == "" {
+		return ""
+	}
+	line := ""
+	for _, l := range strings.Split(result, "\n") {
+		if s := strings.TrimSpace(l); s != "" {
+			line = s
+			break
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	return strutil.Truncate(strings.Join(strings.Fields(line), " "), toolPreviewRunes)
 }
 
 // ensureSegmentBreak separates consecutive LLM iterations in the accumulated

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -122,6 +123,11 @@ type StreamEventType int
 const (
 	StreamEventTextDelta StreamEventType = iota // LLM text output
 	StreamEventToolCall                         // tool call with name + args
+	// StreamEventToolResult reports how a tool call ENDED. The call event can
+	// only say "started", so without this a channel can print 🔧 Tool but never
+	// ✅/❌ or a duration — which is what makes a tool log worth folding away
+	// versus worth reading.
+	StreamEventToolResult
 )
 
 // StreamEvent carries structured data from drainEvents to the channel's
@@ -130,8 +136,22 @@ const (
 type StreamEvent struct {
 	Type     StreamEventType
 	Text     string // for TextDelta
-	ToolName string // for ToolCall
+	ToolName string // for ToolCall / ToolResult
 	ToolArgs string // for ToolCall
+
+	// ToolID matches a ToolResult to the ToolCall that announced it: one turn
+	// can call the same tool many times, so name alone is not an identity.
+	ToolID string
+
+	// ToolResult is a BOUNDED preview of the tool's output (first line, capped) —
+	// it exists for a one-line log entry, not for echoing the result. A chat card
+	// has a hard size budget, and the full output is already in the transcript.
+	ToolResult string
+	// ToolIsError says the call failed. The first line of ToolResult is then the
+	// reason, which is the one line a reader needs without expanding anything.
+	ToolIsError bool
+	// ToolDuration is the wall-clock time the tool ran.
+	ToolDuration time.Duration
 }
 
 // StreamingCallback is called for each text delta or tool call during an

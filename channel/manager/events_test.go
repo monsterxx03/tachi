@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,4 +192,73 @@ func TestDrainEvents_SteerInjectCarriesImageParts(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("steer input not delivered")
 	}
+}
+
+// TestDrainEvents_ForwardsToolOutcome verifies a channel is told how a tool
+// ENDED, not only that it started: a card that can only print "🔧 Tool" leaves
+// every call looking like it is still running, which is exactly the state a
+// folded tool log is supposed to make readable.
+func TestDrainEvents_ForwardsToolOutcome(t *testing.T) {
+	mgr, _ := newOneoffTestManager(t, nil, "drain-tool-outcome-thread")
+
+	ch := make(chan agent.AgentEvent, 16)
+	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "先构建。"}
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventToolCallArgs, ToolName: "Bash", ToolID: "t1",
+		ToolArgs: `{"command":"go build ./..."}`,
+	}
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventToolResult, ToolName: "Bash", ToolID: "t1",
+		ToolIsError: true, ToolDuration: 1200 * time.Millisecond,
+		ToolResult: "exit status 1\n\nagent/tools/cron.go:8:2: unused import",
+	}
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventToolResult, ToolName: "Read", ToolID: "t2",
+		ToolResult: "{}\nsecond line",
+	}
+	close(ch)
+
+	var events []StreamEvent
+	_, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, func(e StreamEvent) error {
+		events = append(events, e)
+		return nil
+	})
+	require.NoError(t, err)
+
+	var calls, results []StreamEvent
+	for _, e := range events {
+		switch e.Type {
+		case StreamEventToolCall:
+			calls = append(calls, e)
+		case StreamEventToolResult:
+			results = append(results, e)
+		}
+	}
+	require.Len(t, calls, 1)
+	assert.Equal(t, "t1", calls[0].ToolID, "the id is what pairs a result with its call")
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "t1", results[0].ToolID)
+	assert.True(t, results[0].ToolIsError)
+	assert.Equal(t, 1200*time.Millisecond, results[0].ToolDuration)
+	assert.Equal(t, "exit status 1", results[0].ToolResult,
+		"only the first line, which is the reason — not the whole output")
+
+	assert.Empty(t, results[1].ToolResult,
+		"a successful result's first line is noise; channels never show it")
+}
+
+// TestToolResultPreview verifies the reduction a channel's one-line log relies
+// on: first non-empty line, whitespace collapsed, bounded.
+func TestToolResultPreview(t *testing.T) {
+	assert.Equal(t, "", toolResultPreview("anything", false))
+	assert.Equal(t, "", toolResultPreview("", true))
+	assert.Equal(t, "not found", toolResultPreview("\n  \n  not found  \nstack", true))
+	assert.Equal(t, "a b c", toolResultPreview("a  b\t\tc", true), "whitespace inside the line collapses")
+	assert.Equal(t, "a", toolResultPreview("a\nb", true), "and only the first line survives")
+
+	long := strings.Repeat("错", toolPreviewRunes*2)
+	got := toolResultPreview(long, true)
+	assert.LessOrEqual(t, len([]rune(got)), toolPreviewRunes+3, "cap plus strutil.Truncate's ellipsis")
+	assert.True(t, strings.HasSuffix(got, "..."))
 }
