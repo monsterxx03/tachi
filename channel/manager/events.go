@@ -30,12 +30,18 @@ import (
 // onTextDelta is an optional callback for streaming text output. It is called
 // for each AgentEventTextDelta so channel implementations can push text in
 // real time (e.g. Wave streaming cards). It may be nil.
-func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) (string, error) {
+func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback, observe TurnObserver) (string, error) {
 	var text strings.Builder
 	var lastErr error
 	pushedTools := make(map[string]bool) // tool IDs already streamed to card
 
 	for event := range ch {
+		// The observer sees the turn BEFORE this package decides what to do with it: a turn another
+		// frontend (the phone) asked for is projected from the same events, and it must see the ones
+		// this file treats as nobody's business (thinking, for one).
+		if observe != nil {
+			observe(event)
+		}
 		switch event.Type {
 		case agent.AgentEventTextDelta:
 			text.WriteString(event.TextDelta)

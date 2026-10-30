@@ -443,13 +443,24 @@ function CronList({
       {notice ? (
         <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 8 }}>{notice}</Text>
       ) : null}
-      {rows.map((j) => (
+      {rows.map((j) => {
+        // 这条任务属于谁：channel 的（在 discord / weixin 那段对话里建的，答复也发回那里）
+        // 还是本机的（窗口或手机建的，答复开后在这台机器上的会话）。两者在同一个列表里，
+        // 所以必须一眼分得开 —— 而渠道那些在这一屏上只读：跑一次要渠道运行时，改它属于
+        // 那段对话自己的命令。
+        const fromChannel = j.targetKind === 'channel';
+        return (
         <View key={j.id} style={styles.cronItem}>
           <View style={styles.panelRow}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
-                {j.name}
-              </Text>
+              <View style={styles.cronNameRow}>
+                <Text style={{ color: t.text, fontSize: 13.5, flexShrink: 1 }} numberOfLines={1}>
+                  {j.name}
+                </Text>
+                <Text style={[styles.cronSource, { color: t.faint, borderColor: t.border }]} numberOfLines={1}>
+                  {fromChannel ? `渠道 · ${j.targetTitle || '未知'}` : '本机'}
+                </Text>
+              </View>
               <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
                 {[j.scheduleText, j.targetTitle || '（会话不在了）'].filter(Boolean).join(' · ')}
               </Text>
@@ -467,18 +478,25 @@ function CronList({
               {j.status === 'paused' ? '已暂停' : '启用'}
             </Text>
           </View>
-          <View style={styles.cronActions}>
-            <CronBtn label={j.running ? '运行中…' : '运行一次'} disabled={j.running || busyId === j.id} onPress={() => onRun(j.id)} t={t} />
-            <CronBtn
-              label={j.status === 'paused' ? '恢复' : '暂停'}
-              disabled={busyId === j.id}
-              onPress={() => onPause(j.id, j.status !== 'paused')}
-              t={t}
-            />
-            <CronBtn label="删除" tone="red" disabled={busyId === j.id} onPress={() => onDelete(j)} t={t} />
-          </View>
+          {fromChannel ? (
+            <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 6 }}>
+              这条任务归属那段对话：跑一次、暂停、删除都在 {j.targetTitle || '原渠道'} 里做。
+            </Text>
+          ) : (
+            <View style={styles.cronActions}>
+              <CronBtn label={j.running ? '运行中…' : '运行一次'} disabled={j.running || busyId === j.id} onPress={() => onRun(j.id)} t={t} />
+              <CronBtn
+                label={j.status === 'paused' ? '恢复' : '暂停'}
+                disabled={busyId === j.id}
+                onPress={() => onPause(j.id, j.status !== 'paused')}
+                t={t}
+              />
+              <CronBtn label="删除" tone="red" disabled={busyId === j.id} onPress={() => onDelete(j)} t={t} />
+            </View>
+          )}
         </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -546,6 +564,8 @@ const styles = StyleSheet.create({
   empty: { fontSize: 12.5, lineHeight: 19, paddingVertical: 10 },
   errBox: { borderWidth: 1, borderRadius: 10, padding: 11 },
   cronItem: { paddingTop: 11 },
+  cronNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cronSource: { fontSize: 10.5, borderWidth: 1, borderRadius: 20, paddingHorizontal: 7, paddingVertical: 1 },
   cronActions: { flexDirection: 'row', gap: 8, paddingTop: 9 },
   cronBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   refreshBtn: {

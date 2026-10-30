@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -237,7 +238,62 @@ func (d *desktopApp) mobileSessionPanels(sessionID string) (*mobilePanels, int, 
 			LastRunStatus: j.LastRunState, LastRunError: j.LastRunError, Running: j.Running,
 		})
 	}
+
+	// A conversation a channel owns has scheduled jobs of ITS OWN — created from inside that
+	// conversation, firing back into its thread. Before this the phone could not see them at all
+	// (ListCronJobs deliberately excludes channel jobs), so a job you set up in discord was
+	// invisible from the phone even while reading the very conversation it fires into.
+	//
+	// Read-only HERE: running one needs the channel runtime that owns the thread, and creating or
+	// editing one belongs to that conversation's own commands — the same line the desktop panel
+	// already draws for channel jobs.
+	if ss, _, code := d.mobileSessionByID(sessionID); code == "" && ss.ThreadID != "" {
+		// The SAME name resolution the row tag uses (record first, live mapping second), so a job and
+		// the conversation it fires into can never name their channel differently.
+		platform := d.mobileChannelName(ss)
+		if platform == "" {
+			platform = "渠道会话"
+		}
+		out.Cron = append(out.Cron, d.mobileChannelCronRows(ss.ThreadID, platform)...)
+	}
 	return out, 0, ""
+}
+
+// mobileChannelCronRows lists one channel thread's scheduled jobs for the phone's panel.
+//
+// An empty TargetType reads as "channel": every job written before the desktop could schedule is one
+// of these (cron/job.go says so, and the channel's own scheduler reads it the same way).
+func (d *desktopApp) mobileChannelCronRows(threadID, platform string) []mobileCronRow {
+	jobs, err := d.cronJobRecords()
+	if err != nil {
+		return nil
+	}
+	var out []mobileCronRow
+	for _, job := range jobs {
+		if job.TargetThreadID != threadID {
+			continue
+		}
+		if job.TargetType != "" && job.TargetType != cron.TargetTypeChannel {
+			continue
+		}
+		row := mobileCronRow{
+			ID:            job.ID,
+			Name:          job.Name,
+			ScheduleText:  cron.DescribeSchedule(job.Schedule),
+			Status:        string(job.Status),
+			TargetKind:    "channel",
+			TargetTitle:   platform,
+			LastRunStatus: job.LastRunStatus,
+			LastRunError:  job.LastRunError,
+		}
+		if job.Status == cron.JobStatusActive {
+			if next, nerr := cron.NextRun(job.Schedule, job.Timezone, time.Now()); nerr == nil {
+				row.NextRun = mobileStamp(next)
+			}
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // mobileStamp renders a time for the wire, or "" when the job has never run / has no next run.

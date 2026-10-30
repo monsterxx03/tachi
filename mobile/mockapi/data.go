@@ -28,6 +28,9 @@ type SessionSummary struct {
 	ReadOnly   bool   `json:"readOnly"`
 	HeldByTask bool   `json:"heldByTask"`
 	Pinned     bool   `json:"pinned,omitempty"`
+	// 这段对话属于哪个 IM channel（宿主说不出来时 channelName 为空）
+	ChannelSession bool   `json:"channelSession,omitempty"`
+	ChannelName    string `json:"channelName,omitempty"`
 }
 
 type Message struct {
@@ -198,7 +201,8 @@ func seed() (order []string, byID map[string]*session) {
 	add(s2)
 
 	s3 := &session{}
-	s3.Session = SessionSummary{ID: "s3", Title: "周报整理", ProjectName: "个人", UpdatedAt: "2 小时前"}
+	s3.Session = SessionSummary{ID: "s3", Title: "周报整理", ProjectName: "个人", UpdatedAt: "2 小时前",
+		ChannelSession: true, ChannelName: "discord"}
 	s3.Model = "Alpha 4.5"
 	s3.SkipApprove = true
 	s3.Workspace = WorkspaceInfo{Primary: "~/notes"}

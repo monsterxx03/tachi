@@ -23,6 +23,10 @@ export interface SessionSummary {
   /** 被某台机器的任务占着 */
   heldByTask: boolean;
   pinned?: boolean;
+  /** 这段对话属于某个 IM channel（discord / weixin / 插件自己的名字）——答复发回那边 */
+  channelSession?: boolean;
+  /** 是哪个 channel；宿主说不出来时为空（重启之后、那段对话还没再说过话） */
+  channelName?: string;
 }
 
 /**
@@ -166,7 +170,7 @@ export interface CronPanelRow {
   name: string;
   scheduleText: string;
   status: string;
-  /** session / pending / missing */
+  /** session / pending / missing / channel —— channel 是本段对话所属渠道的定时任务 */
   targetKind: string;
   targetTitle: string;
   nextRun: string;

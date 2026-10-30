@@ -82,6 +82,12 @@ func (d *desktopApp) mobileSend(id, text, mode string, attachments []string) (in
 	if d.busySessions()[id] {
 		return http.StatusConflict, "held_by_task"
 	}
+	// A conversation a channel owns is driven by THAT runtime, not by this one: the two keep
+	// separate in-memory histories over the same session, so this side may speak but must not write.
+	// See channel_mirror.go.
+	if ss.ThreadID != "" {
+		return d.mobileSendToChannel(ss, id, text, mode, attachments)
+	}
 	refs, status, code := d.mobileUploadRefs(id, attachments)
 	if code != "" {
 		return status, code
@@ -186,6 +192,11 @@ func (d *desktopApp) mobileDeleteSession(id string) (int, string) {
 func (d *desktopApp) mobileRunState(id string) (running, hasSteer bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// A turn the phone asked a CHANNEL to run is in flight too, and its conversation steers (that is
+	// what the channel does with a message that lands mid-turn).
+	if _, ok := d.mirrors[id]; ok {
+		return true, true
+	}
 	r := d.ownerOfLocked(id)
 	if r == nil {
 		return false, false
@@ -196,7 +207,11 @@ func (d *desktopApp) mobileRunState(id string) (running, hasSteer bool) {
 func (d *desktopApp) stopTurnFor(id string) {
 	d.mu.Lock()
 	var cancel context.CancelFunc
-	if r := d.ownerOfLocked(id); r != nil {
+	if turn, ok := d.mirrors[id]; ok {
+		// A channel-owned conversation: Stop reaches the turn through the channel runtime, which
+		// owns it (see channel_mirror.go).
+		cancel = turn.cancel
+	} else if r := d.ownerOfLocked(id); r != nil {
 		cancel = r.turnCancel
 	}
 	d.mu.Unlock()

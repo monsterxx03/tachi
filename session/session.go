@@ -6,8 +6,15 @@ import (
 )
 
 type Session struct {
-	ID           string `json:"id"`
-	ThreadID     string `json:"thread_id,omitempty"` // channel ThreadID for session lookup
+	ID       string `json:"id"`
+	ThreadID string `json:"thread_id,omitempty"` // channel ThreadID for session lookup
+	// ChannelName is WHICH IM channel owns this conversation ("discord", "weixin", a plugin's own
+	// name) — written by the channel runtime on the conversation's first turn, so it survives a
+	// restart. The process's thread→channel mapping is rebuilt from inbound messages, which means it
+	// is empty right after a restart; without this on the record, a phone could only say "this
+	// belongs to a channel" and not which one. Empty for a conversation no channel owns (it is not
+	// what makes a conversation channel-owned — ThreadID is).
+	ChannelName  string `json:"channel_name,omitempty"`
 	Title        string `json:"title"`
 	ProviderName string `json:"provider_name,omitempty"` // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
 	WorkingDir   string `json:"working_dir,omitempty"`   // working directory at session creation time

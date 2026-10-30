@@ -95,6 +95,10 @@ func main() {
 			logger.New("headless").Error(ctx, "channels: not started; the host serves what is left", err)
 		} else {
 			channels = mgr
+			// The phone may SPEAK INTO a conversation a channel owns (and read its scheduled jobs),
+			// but the turn is run by the channel runtime — see desktop/channel_mirror.go. This is
+			// the one hand-off that makes that possible in a single process.
+			desk.setChannels(mgr)
 		}
 	}
 

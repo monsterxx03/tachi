@@ -96,7 +96,30 @@ func (d *desktopApp) mobileSummary(ss *session.Session, busy map[string]bool) mo
 		ReadOnly:    ss.Kind != "",
 		HeldByTask:  busy[ss.ID],
 		Pinned:      ss.Pinned,
+		// A conversation an IM channel owns: the phone tags it, and names the channel when this
+		// process can (see mobileSessionSummary.ChannelName).
+		ChannelSession: ss.ThreadID != "",
+		ChannelName:    d.mobileChannelName(ss),
 	}
+}
+
+// mobileChannelName is the channel that owns a conversation, or "" when this process cannot say.
+//
+// The RECORD comes first: the channel writes its own name onto the conversation on the first turn it
+// runs (channel/manager/turn_helpers.go), so the name survives a restart. The live mapping is the
+// fallback — it is what a process that has seen this thread's messages this run knows — and "" is
+// what both say when neither does, which is why the phone still has the flag to draw the tag with.
+func (d *desktopApp) mobileChannelName(ss *session.Session) string {
+	if ss == nil || ss.ThreadID == "" {
+		return ""
+	}
+	if ss.ChannelName != "" {
+		return ss.ChannelName
+	}
+	if turns := d.channelRuntime(); turns != nil {
+		return turns.ThreadPlatform(ss.ThreadID)
+	}
+	return ""
 }
 
 // mobilePage returns up to `limit` records whose index is strictly LESS than `before`

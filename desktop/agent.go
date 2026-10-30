@@ -167,6 +167,18 @@ type desktopApp struct {
 	peersMu sync.Mutex
 	peers   *node.PeerList
 
+	// channels is the IM runtime of THIS process, when it has one (the headless host runs the
+	// channels beside the phone — see main_headless.go). Nil in every build that serves no channel,
+	// and then a conversation a channel owns cannot be driven from the phone at all: the refusal is
+	// the point, because running such a turn here would write it from a second history
+	// (desktop/channel_mirror.go). Guarded by mu; written once, before the phone listener exists.
+	channels channelTurns
+
+	// mirrors are the turns the PHONE asked a channel to run, by session id, each with the cancel
+	// that stops it. They report as running to the phone's composer (so the next message becomes
+	// steer rather than a second turn) and to its Stop. Guarded by mu.
+	mirrors map[string]*mirrorTurn
+
 	// promptCache memoizes built system prompts, keyed by the exact build inputs
 	// (working directory + session ID) — see systemPromptFor. Guarded by
 	// promptMu, NOT by mu: the build is slow (it probes git) and must never run

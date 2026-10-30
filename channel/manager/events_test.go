@@ -29,7 +29,7 @@ func TestDrainEvents_SegmentBreakBetweenToolRounds(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "搜索结果是：x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "让我先搜索一下\n搜索结果是：x", text)
 }
@@ -45,7 +45,7 @@ func TestDrainEvents_NoDoubleBreakWhenEndsWithNewline(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "搜索结果是：x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "让我先搜索一下\n搜索结果是：x", text)
 }
@@ -61,7 +61,7 @@ func TestDrainEvents_NoLeadingBreakWhenToolCalledFirst(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "结果是 x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "结果是 x", text)
 }
@@ -79,7 +79,7 @@ func TestDrainEvents_SegmentBreakAcrossMultipleRounds(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "第三轮"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "第一轮\n第二轮\n第三轮", text)
 }
@@ -96,7 +96,7 @@ func TestDrainEvents_SegmentBreakOnSteerBoundary(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "后半"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "前半\n后半", text)
 }
@@ -177,7 +177,7 @@ func TestDrainEvents_SteerInjectCarriesImageParts(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventSteerCheck}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, ta, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, ta, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "前半", text)
 
@@ -222,7 +222,7 @@ func TestDrainEvents_ForwardsToolOutcome(t *testing.T) {
 	_, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, func(e StreamEvent) error {
 		events = append(events, e)
 		return nil
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	var calls, results []StreamEvent

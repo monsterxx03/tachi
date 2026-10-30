@@ -87,6 +87,9 @@
 | 待答项已被处理 | 409 `no_such_pending_request` | 已经在别处回答过了 |
 | 只读会话（子系统所有） | 409 `read_only` | 这段对话由别的任务占用 |
 | 节点任务正在执行 | 409 `held_by_task` | 有一项远端任务正在使用它 |
+| 这段对话属于某个 IM channel，而宿主里没有那个运行时 | 409 `channel_offline` | 这台机器现在没有跑那个渠道，等它起来 |
+| 对着 channel 的会话发了一条「答复走渠道」的命令（/model、/stop…） | 409 `channel_command` | 这类命令在原渠道里发 |
+| 对着 channel 的会话发了消息，但这一轮已被渠道那边结束 | 409 `turn_running` / `not_running` | 同普通会话 |
 | 删除一段正在跑的对话 | 409 `turn_running` | 它正在跑；插话或打断？ |
 | 删除失败（写盘出错等） | 500 `delete_failed` | 删不掉这段对话 |
 | 这台电脑建不出 agent（还没配 provider） | 409 `agent_unavailable` | 这台电脑还没配好模型，先在电脑上配置 |
@@ -161,8 +164,14 @@
 字段名就是这些，两边照抄。`?` 表示可省。
 
 ```
-SessionSummary  { id, title, projectName?, updatedAt, running, waiting, readOnly, heldByTask, pinned? }
+SessionSummary  { id, title, projectName?, updatedAt, running, waiting, readOnly, heldByTask, pinned?,
+                  channelSession?, channelName? }
                 waiting 只有两句：「等待你的授权」「等待你的回答」，空串表示没有在等
+                channelSession 表示这段对话属于某个 IM channel（手机在行上和标题旁边贴 tag，
+                并**不允许**编辑/删除之外的操作）；channelName 是哪个（discord / weixin /
+                插件自己的名字）。名字有两个来源，宿主取第一个能答的：会话记录上的
+                `channel_name`（那个 channel 在这段对话里跑过一轮就写下了，所以熬得过重启），
+                然后是本进程见过的 thread→channel 映射；两处都没有时为空 —— 那时 tag 只写「渠道」
 Message         { index, role, content, displayContent?, timestamp?, iteration?, seq?, turn?,
                   toolName?, toolCallId?, args?, title?, toolResult?, isError?, thinking? }
                 role ∈ user / assistant / tool_call / tool_result / reminder
@@ -173,7 +182,9 @@ Panels          { mcp:[{name, type, connected, needsAuth, loaded, tools}],
                          nextRun, lastRunStatus, lastRunError, running}] }
                 mcp.loaded / mcp.tools 是「这段对话载入几个 / 这个 server 一共几个」
                 agents.anyChecked=false 表示还没问过任何节点（不是「没有节点」）
-                cron.targetKind ∈ session / pending / missing
+                cron.targetKind ∈ session / pending / missing / channel
+                channel 的那几条是**这段对话所属线程**的定时任务（只出现在那个会话的面板里），
+                这一屏只读：跑一次需要拥有那个线程的渠道运行时，改它属于那段对话自己的命令
 AwakeState      { on, durationMin, until }
                 on 是开关；durationMin 是偏好（下次开启用多少分钟，0 = 不自动关）；
                 until 是这次开着时到点自动关的时刻（RFC3339），空串 = 关着或不自动关。
@@ -212,7 +223,8 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 6. **列表的增删改都是广播，不属于某一段会话的流。** 任何一块屏新建、删除、重命名、置顶对话都发 `sessions_changed`，收到的人重读 `/v1/sessions`（并把打开着的那段的标题等一并修掉）。删除走桌面同一条 `DeleteSession`：正在跑的那一轮**被拒绝**，不是被停下来；置顶走同一条 `SetSessionPinned`。
 7. **手机不改变桌面正在显示的会话。**
 8. **一段对话可以换 id，订阅要跟着走。** 通知里带着这一轮的结束原因：换轨与 `idle` 之间没有别的延迟，换订阅一定晚一步，`idle` 靠不住。 压缩成功时 agent 把历史搬进**子会话**，这一轮剩下的部分接着在子会话里跑。桌面在这一刻换轨（`agent:session_switched`），手机收到 `session_moved` 后把画面、订阅、排队中的消息一起搬到新 id。不搬的手机停在旧那一半：画面不动、状态永远「在跑」、队列发不出去（`idle` 已经发往子会话了）。换轨发生在**一轮结束之后**，不是压缩那一刻 —— 中途搬会把正在写的消息从画面底下抽走。
-9. **定时任务表是广播的。** 它不属于任何一段会话：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
+9. **定时任务表是广播的。** 它不属于任何一段会话（唯一的例外是 channel 的：那些跟着**打开的那段**会话出现在面板里，见线上类型的 `targetKind`）：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
 10. **「保持唤醒」是一台机器的一个值，所以它也是广播的。** 它不属于任何一段会话，手机发的 `POST /v1/awake` 与桌面托盘的勾选走同一个写入方（桌面的 `setAwake`），改完立刻广播 `awake_changed`、带完整的 `AwakeState` —— 两块屏照它画，没有第二条同步路径。**开着的时候关不关得掉由那台电脑说了算**：系统的断言被拒时，答案是「关着」加一句原因（500 `awake_failed`），而**不是**把开关画成开着的。`durationMin` 是偏好、落在那台电脑上，所以它熬得过重启；`on` 不是 —— 进程没了，断言就没了，重启后的状态永远是关。
 11. **手机送进来的文件只认名字，不认路径**（见「HTTP 端点」里附件那条）：上传回的 `name` 是发送时唯一能递的东西，服务端在那段会话的 `uploads/` 里解析。少这一步，「有令牌」就等于「能读这台机器上任何文件」。
 12. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**配对页走的是这同一条探测**（`probePairing`），而且它不是门禁：一条都不应答时也用完整地址表把设备存下来，只用来挑地址和取名字。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。
+13. **channel 拥有的会话（`channelSession`）：手机能读、能说，但那一轮由那个渠道的运行时跑。** 两边各有一份内存历史（channel 按线程、宿主按会话），谁写谁就必须是唯一那个写的人 —— 所以手机发来的消息被**交回**那个线程，走同一个 agent、同一份缓存、同一把线程锁，事件再投影回连接。由此得出的三条：① **没有那个运行时**（窗口版、或那个渠道没开）时明确拒绝 `channel_offline`，绝不退回自己跑一轮；② **同步命令**（`/model`、`/status` …，答复走渠道的那些）拒绝 `channel_command`；`/compact` 和技能激活是轮次形状的，照常可以发；③ 一轮在跑时这条会话报 `running`，手机的下一条会**并入**（steer），Stop 打到这一轮的 context 上；AskUser 的提问仍归渠道回答，不在手机上画第二张卡。手机**不能**反过来把这段对话的归属改成自己 —— 线程与会话是一对一的。

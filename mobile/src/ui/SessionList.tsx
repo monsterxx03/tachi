@@ -363,6 +363,13 @@ const SessionRow = memo(function SessionRow({
           <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
             {s.title}
           </Text>
+          {s.channelSession ? (
+            <View style={[styles.sourcePill, { borderColor: t.border }]}>
+              <Text style={[styles.sourcePillText, { color: t.faint }]} numberOfLines={1}>
+                {s.channelName || '渠道'}
+              </Text>
+            </View>
+          ) : null}
           {badge ? <Badge {...badge} t={t} /> : null}
         </View>
         <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
@@ -398,6 +405,8 @@ const styles = StyleSheet.create({
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: '600' },
   rowSub: { marginTop: 4, fontSize: 12 },
+  sourcePill: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 6, paddingVertical: 1, maxWidth: 88 },
+  sourcePillText: { fontSize: 10.5 },
 
   pill: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: 'transparent', borderRadius: 20, paddingHorizontal: 7, paddingVertical: 2 },
   pillText: { fontSize: 10.5 },

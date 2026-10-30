@@ -1,6 +1,6 @@
 # Tachi —— 移动端手册
 
-`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。手机连的是那台机器 —— 同一个无头宿主还能同时把配置里的 IM channel 跑起来，所以一台服务器上一个进程就够（[desktop.md](desktop.md) 的无头宿主）。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
+`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。手机连的是那台机器 —— 同一个无头宿主还能同时把配置里的 IM channel 跑起来，所以一台服务器上一个进程就够（[desktop.md](desktop.md) 的无头宿主）。**宿主跑着 channel 时，手机也能对那段对话说话**（行上和标题旁边带来源 tag，"你说的"交回那个渠道跑），细节见 [mobile-protocol.md](mobile-protocol.md) 不变量 13。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
 
 `mobile/AGENTS.md` 是 Expo 模板带的、写给写代码的 agent 的通用建议（跟着 SDK 更新，值得读）。它与本文冲突时以本文为准——本文说的是这个项目怎么跑。
 
@@ -166,7 +166,9 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 
 - **「开发者模式」不是一直存在的菜单项**：它要等 Xcode 真的认过这台手机（Devices 窗口里准备完 DDI）之后，才会出现在 设置 → 隐私与安全性；打开后手机重启、解锁时再确认一次。没开之前 `xcodebuild` 会直接报 `Developer Mode disabled`。
 - **免费个人团队装完第一次启动会被拦**：`FBSOpenApplicationErrorDomain error 3 / profile has not been explicitly trusted`。去 设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任那个 Apple ID，之后 `devicectl ... launch` 才通。免费签名 7 天过期，重装即可。
-- **Debug 包依赖 Metro**：JS 是从电脑的 8081 拉的，手机和电脑要在同一个 Wi-Fi（这时本地网络权限的弹窗就来了），Metro 一停 App 就是红屏。想要「装上去就能用」，打 `-configuration Release`（JS 打进包里）。
+- **Debug 包依赖 Metro**：JS 是从电脑的 8081 拉的，手机和电脑要在同一个 Wi-Fi（这时本地网络权限的弹窗就来了），Metro 一停 App 就是红屏。想要「装上去就能用」，打 `-configuration Release`（JS 打进包里）——同一条命令，只把 `Debug` 换成 `Release`、`Debug-iphoneos` 换成 `Release-iphoneos`。
+  - **产物在 DerivedData 里，不在 `ios/build/`**：不带 `-derivedDataPath` 时 `xcodebuild` 把 `.app` 写到 `~/Library/Developer/Xcode/DerivedData/Tachi-<hash>/Build/Products/Release-iphoneos/Tachi.app`，而 `mobile/ios/build/` 下可能躺着一份**几天前的**旧包（装上去的是旧 JS，症状是「改了没生效」）。装之前看一眼那个 `.app` 和里面 `main.jsbundle` 的时间戳；`-derivedDataPath build` 可以让它落回 `ios/build/`。
+  - Release 不连 Metro，所以**没配对过就直接进配对页**；配对存在 Keychain 里，重装同一个 bundle id 不会丢。
 
 **三个只在真机上才会撞的坑：**
 

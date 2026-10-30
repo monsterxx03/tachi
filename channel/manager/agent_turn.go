@@ -104,80 +104,112 @@ func (m *Manager) cancelOneoff(threadID string) bool {
 // is active are injected via steer and return immediately with Steered=true.
 func (m *Manager) buildHandler() channel.MessageHandler {
 	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-		m.logger.Info(ctx, "channel: recv", "thread", msg.ThreadID, "id", msg.MessageID, "len", len(msg.Content))
+		return m.handleMessage(ctx, msg, turnOptions{})
+	}
+}
 
-		// ---- Channel Whisper guard ----
-		// Only non-directed messages in group chat mode enter the ambient pipeline; with whisper off
-		// they are dropped entirely. Single-chat messages (even with Directed=false) never take the
-		// ambient path.
-		if res, done := m.routeGroupMessage(ctx, msg); done {
-			return res
+// turnOptions are the differences between a message the conversation's OWN channel delivered and one
+// another frontend (the phone) asked for. The turn itself — history, agent, session writes, steer — is
+// the same code; only what may reach the outside differs. See SubmitTurn.
+type turnOptions struct {
+	// observe, when set, receives every agent event of the turn. Another frontend renders the
+	// progress from the same events the channel would otherwise have turned into cards.
+	observe TurnObserver
+	// external marks a message that did NOT come from the channel: nothing the turn produces is
+	// posted back through it, and a command whose answer would go through the channel is refused
+	// instead of run (the reader would see the reply in a conversation they are not looking at).
+	external bool
+}
+
+// handleMessage is the one turn pipeline: the four decisions below, then the turn.
+//
+// It is a method rather than the closure above so a SECOND frontend can drive the same conversation
+// through exactly this code (SubmitTurn): a phone reading a conversation a channel owns must not get
+// its own copy of the pipeline — that is how two histories over one session start.
+func (m *Manager) handleMessage(ctx context.Context, msg channel.IncomingMessage, opts turnOptions) channel.HandlerResult {
+	m.logger.Info(ctx, "channel: recv", "thread", msg.ThreadID, "id", msg.MessageID, "len", len(msg.Content))
+
+	// ---- Channel Whisper guard ----
+	// Only non-directed messages in group chat mode enter the ambient pipeline; with whisper off
+	// they are dropped entirely. Single-chat messages (even with Directed=false) never take the
+	// ambient path.
+	if res, done := m.routeGroupMessage(ctx, msg); done {
+		return res
+	}
+
+	// ---- What this message asks for ----
+	// Either an agent turn (plain, /compact, or a skill activation) or one of the synchronous
+	// slash commands, which never reach an agent.
+	req, res, handled := m.classifyTurnInput(ctx, msg)
+	if handled {
+		// A synchronous command answers THROUGH the channel (sendToThread). Run from another
+		// frontend it would reply somewhere the reader is not looking and leave this one with
+		// nothing, so it is refused instead — before anything is written.
+		if opts.external {
+			return channel.HandlerResult{Err: ErrExternalCommand}
 		}
+		return res
+	}
 
-		// ---- What this message asks for ----
-		// Either an agent turn (plain, /compact, or a skill activation) or one of the synchronous
-		// slash commands, which never reach an agent.
-		req, res, handled := m.classifyTurnInput(ctx, msg)
-		if handled {
-			return res
-		}
-
-		// sendProgress pushes intermediate tool results in verbose mode.
-		sendProgress := func(text string) {
+	// sendProgress pushes intermediate tool results in verbose mode. A turn another frontend
+	// asked for posts nothing back into the channel.
+	var sendProgress func(string)
+	if !opts.external {
+		sendProgress = func(text string) {
 			m.sendToThread(ctx, msg.ThreadID, text, msg.MessageID)
 		}
+	}
 
-		ta := m.activateDirectedTurn(ctx, msg, req)
+	ta := m.activateDirectedTurn(ctx, msg, req)
 
-		// A message that lands while a turn is running either joins it (steer text, an AskUser answer)
-		// or replaces it: /compact and a skill activation need a fresh agent, because the LLM must see
-		// the rewritten instruction rather than the raw command.
-		next, joinedRes, joined := m.joinOrStartTurn(ctx, msg, ta, req)
-		if joined {
-			return joinedRes
+	// A message that lands while a turn is running either joins it (steer text, an AskUser answer)
+	// or replaces it: /compact and a skill activation need a fresh agent, because the LLM must see
+	// the rewritten instruction rather than the raw command.
+	next, joinedRes, joined := m.joinOrStartTurn(ctx, msg, ta, req)
+	if joined {
+		return joinedRes
+	}
+	ta = next
+
+	// First message for this thread (or a fresh activation after a cancelled running turn) —
+	// start the agent.
+	ta.mu.Lock()
+	ta.steerRespCh = make(chan agent.SteerInput)
+	ta.resultCh = make(chan handlerResult, 1)
+	ta.mu.Unlock()
+
+	// The LLM must see an instruction, not the raw command: /compact and a skill activation
+	// replace the content here.
+	msg.Content = req.rewrite(msg.Content)
+
+	// Run agent in a goroutine; handler blocks on the result channel.
+	// The streaming callback comes from the context (channel implementations such as Discord set
+	// it for real-time tool-call progress display) and is passed straight to runAgentTurn rather
+	// than going through context indirection.
+	go m.runAgentTurn(ta.ctx, msg, sendProgress, ta, streamingCallbackFromCtx(ctx), opts.observe)
+
+	select {
+	case result := <-ta.resultCh:
+		m.deactivateThread(msg.ThreadID, ta)
+		if ta.cancelled.Load() {
+			// Turn was cancelled by /stop or /new.
+			return channel.HandlerResult{Steered: true}
 		}
-		ta = next
-
-		// First message for this thread (or a fresh activation after a cancelled running turn) —
-		// start the agent.
-		ta.mu.Lock()
-		ta.steerRespCh = make(chan agent.SteerInput)
-		ta.resultCh = make(chan handlerResult, 1)
-		ta.mu.Unlock()
-
-		// The LLM must see an instruction, not the raw command: /compact and a skill activation
-		// replace the content here.
-		msg.Content = req.rewrite(msg.Content)
-
-		// Run agent in a goroutine; handler blocks on the result channel.
-		// The streaming callback comes from the context (channel implementations such as Discord set
-		// it for real-time tool-call progress display) and is passed straight to runAgentTurn rather
-		// than going through context indirection.
-		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta, streamingCallbackFromCtx(ctx))
-
-		select {
-		case result := <-ta.resultCh:
-			m.deactivateThread(msg.ThreadID, ta)
-			if ta.cancelled.Load() {
-				// Turn was cancelled by /stop or /new.
-				return channel.HandlerResult{Steered: true}
-			}
-			return m.replyForTurnResult(ctx, msg, result, req)
-		case <-ta.ctx.Done():
-			m.deactivateThread(msg.ThreadID, ta)
-			if ta.cancelled.Load() {
-				// Turn was cancelled by /stop or /new — suppress
-				// the "request cancelled" error reply.
-				return channel.HandlerResult{Steered: true}
-			}
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  "❌ request cancelled",
-					ReplyTo:  msg.MessageID,
-				},
-				Err: ta.ctx.Err(),
-			}
+		return m.replyForTurnResult(ctx, msg, result, req)
+	case <-ta.ctx.Done():
+		m.deactivateThread(msg.ThreadID, ta)
+		if ta.cancelled.Load() {
+			// Turn was cancelled by /stop or /new — suppress
+			// the "request cancelled" error reply.
+			return channel.HandlerResult{Steered: true}
+		}
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  "❌ request cancelled",
+				ReplyTo:  msg.MessageID,
+			},
+			Err: ta.ctx.Err(),
 		}
 	}
 }
@@ -228,8 +260,8 @@ func (r turnRequest) needsFreshAgent() bool { return r.compact || r.skillMsg != 
 //
 // handled reports that the caller must return the result as-is.
 func (m *Manager) classifyTurnInput(ctx context.Context, msg channel.IncomingMessage) (turnRequest, channel.HandlerResult, bool) {
-	if !strings.HasPrefix(msg.Content, "/") {
-		return turnRequest{}, channel.HandlerResult{}, false
+	if !m.isTurnRequest(msg.Content) {
+		return turnRequest{}, m.handleSlashCommand(ctx, msg), true
 	}
 
 	// /compact goes through the agent turn (with session context) rather than the synchronous
@@ -256,7 +288,23 @@ func (m *Manager) classifyTurnInput(ctx context.Context, msg channel.IncomingMes
 		return turnRequest{skillMsg: activationMsg}, channel.HandlerResult{}, false
 	}
 
-	return turnRequest{}, m.handleSlashCommand(ctx, msg), true
+	// Plain text: the ordinary agent turn.
+	return turnRequest{}, channel.HandlerResult{}, false
+}
+
+// isTurnRequest reports whether content runs through an agent turn: everything that is not a slash
+// command, plus the two slash commands that are turn-shaped (/compact and a skill activation). Every
+// OTHER slash command is answered synchronously by handleSlashCommand — through the channel — which is
+// exactly why another frontend cannot run one (see ErrExternalCommand).
+func (m *Manager) isTurnRequest(content string) bool {
+	if !strings.HasPrefix(content, "/") {
+		return true
+	}
+	if strings.HasPrefix(content, "/compact") {
+		return true
+	}
+	_, _, ok := m.isSkillActivation(content)
+	return ok
 }
 
 // activateDirectedTurn claims the thread for a directed message: it activates the thread (or joins the
@@ -465,7 +513,7 @@ func (m *Manager) finalizeCompactReply(ctx context.Context, msg channel.Incoming
 // The two modes share session loading, steer wiring, image attachment, and
 // drainEvents — only agent acquisition and the run's tool view differ, so
 // they're isolated in acquireForTurn.
-func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) {
+func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback, observe TurnObserver) {
 	defer func() {
 		// Unblock the handler on panic.
 		if r := recover(); r != nil {
@@ -580,7 +628,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	}, scope.ropts...)
-	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta)
+	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta, observe)
 
 	// Update the in-memory history cache with the full message slice from
 	// this turn (history + wrapped user msg + assistant + tool results).

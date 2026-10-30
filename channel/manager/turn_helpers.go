@@ -42,7 +42,33 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *llm.ResolvedPr
 			sm.SetThreadID(threadID)
 		}
 	}
+	m.recordThreadChannel(sm)
 	return sm, priorHistory
+}
+
+// recordThreadChannel writes WHICH channel owns this conversation onto its record.
+//
+// The process's thread→channel mapping is built by inbound messages, so right after a restart it is
+// empty — and a phone reading that conversation could only say "this belongs to a channel" without
+// naming it. The record is the durable half of the same fact (?Session.ThreadID is the other), and it
+// is written here because this is the one place every channel turn passes through with the session in
+// hand. A missing mapping writes nothing: an empty name is honest, a guessed one is not.
+func (m *Manager) recordThreadChannel(sm *session.Manager) {
+	if sm == nil {
+		return
+	}
+	sess := sm.Current()
+	if sess == nil || sess.ThreadID == "" {
+		return
+	}
+	ch := m.channelForThread(sess.ThreadID)
+	if ch == nil || ch.Name() == "" || sess.ChannelName == ch.Name() {
+		return
+	}
+	sess.ChannelName = ch.Name()
+	if err := sm.UpdateMeta(sess); err != nil {
+		m.logger.Error(context.Background(), "channel: persist channel name", err, "thread", sess.ThreadID)
+	}
 }
 
 // attachmentSink collects file attachments produced by the SendFile tool

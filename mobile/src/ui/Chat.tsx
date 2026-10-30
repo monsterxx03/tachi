@@ -632,9 +632,19 @@ export function Chat({
           <Feather name={onToggleList ? 'menu' : 'chevron-left'} size={onToggleList ? 19 : 22} color={t.dim} />
         </Pressable>
         <View style={styles.headInfo}>
-          <Text style={[styles.headTitle, { color: t.title }]} numberOfLines={1}>
-            {s.title}
-          </Text>
+          {/* 标题旁边说明这段对话属于哪个渠道：答复发在那边，而这一屏只能读和补充。 */}
+          <View style={styles.headTitleRow}>
+            <Text style={[styles.headTitle, { color: t.title }]} numberOfLines={1}>
+              {s.title}
+            </Text>
+            {s.channelSession ? (
+              <View style={[styles.headTag, { borderColor: t.border }]}>
+                <Text style={[styles.headTagText, { color: t.faint }]} numberOfLines={1}>
+                  {s.channelName || '渠道'}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={[styles.headSub, { color: t.faint }]} numberOfLines={1}>
             {s.projectName ? `${s.projectName} · ` : ''}
             {s.readOnly ? '来自别的任务' : s.running ? '正在跑' : '空闲'}
@@ -747,7 +757,10 @@ const styles = StyleSheet.create({
   },
   back: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   headInfo: { flex: 1, minWidth: 0, paddingHorizontal: 4 },
-  headTitle: { fontSize: 14.5, fontWeight: '600' },
+  headTitle: { fontSize: 14.5, fontWeight: '600', flexShrink: 1 },
+  headTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headTag: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 6, paddingVertical: 1 },
+  headTagText: { fontSize: 10.5 },
   headSub: { fontSize: 11.5, marginTop: 2 },
   statePill: { borderWidth: 1, borderColor: 'transparent', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3, marginRight: 4 },
 

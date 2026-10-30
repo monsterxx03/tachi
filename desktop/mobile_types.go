@@ -21,6 +21,19 @@ type mobileSessionSummary struct {
 	ReadOnly    bool   `json:"readOnly"`
 	HeldByTask  bool   `json:"heldByTask"`
 	Pinned      bool   `json:"pinned,omitempty"`
+
+	// ChannelSession marks a conversation an IM channel owns (the person is talking to the bot on
+	// discord / weixin / a plugin), and ChannelName says which one. The phone tags the row and the
+	// conversation's header with it: the reader must be able to tell "this is my discord thread"
+	// from "this is a conversation I started on the phone", because the two answer in different
+	// places and only one of them can be edited from here.
+	//
+	// ChannelName is "" only when nothing can name it: the conversation's record carries the name once
+	// a channel has run a turn in it (the durable half), and this process's thread→channel mapping
+	// covers the window right after a restart. The flag stays true regardless — it comes from the
+	// record (`ThreadID`), so the tag is drawn even when its name is missing.
+	ChannelSession bool   `json:"channelSession,omitempty"`
+	ChannelName    string `json:"channelName,omitempty"`
 }
 
 // mobileMessage 是历史里的一条记录。Index 是它在会话记录里的绝对位置 —— 翻页游标就是它

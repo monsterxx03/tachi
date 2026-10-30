@@ -385,6 +385,6 @@ func (m *Manager) drainOneOffEvents(ctx context.Context, ch <-chan agent.AgentEv
 		}
 	}()
 
-	text, err := m.drainEvents(ctx, tee, aiAgent, nil, nil, onTextDelta)
+	text, err := m.drainEvents(ctx, tee, aiAgent, nil, nil, onTextDelta, nil)
 	return text, err, incomplete
 }
