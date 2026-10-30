@@ -197,6 +197,27 @@ func TestForkSessionKeepsTheLastRecordWithoutATrailingNewline(t *testing.T) {
 	assert.Equal(t, `{"a":1}`+"\n"+`{"b":2}`, string(readLines(t, s.messagesPath(fork.ID))))
 }
 
+// TestForkSessionKeepsTheWholeHistoryWhenTheCutIsPastItsEnd: a cut point is a
+// checkpoint's record count, and a checkpoint can outlive the history it counts —
+// a rewind truncates the conversation first and drops the stale checkpoints after
+// it, so a failure in between leaves a count past the new end of the file. "Keep
+// the first N records" with N past the end means keeping them all; the other
+// reading is a fork that looks like a new conversation while carrying the title of
+// the turn it was cut at.
+func TestForkSessionKeepsTheWholeHistoryWhenTheCutIsPastItsEnd(t *testing.T) {
+	s := forkStore(t)
+	src := forkSource(t, s)
+	before := readLines(t, s.messagesPath(src.ID))
+
+	fork, err := s.ForkSession(src, 9, 9, "分支")
+	require.NoError(t, err)
+
+	assert.Equal(t, string(before), string(readLines(t, s.messagesPath(fork.ID))),
+		"a cut past the end of the history keeps every record")
+	assert.Equal(t, `{"seq":1,"system_prompt":"sys"}`+"\n"+`{"seq":2,"system_prompt":"sys"}`+"\n",
+		string(readLines(t, s.apiRequestsPath(fork.ID))))
+}
+
 // TestForkPublishesOnlyAWholeSession pins the write order: a fork's directory is
 // built first and its meta.json written LAST, and a session directory without a
 // meta.json is not a session at all (ListSessions skips what it cannot parse). So

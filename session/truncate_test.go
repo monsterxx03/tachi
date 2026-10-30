@@ -114,3 +114,40 @@ func TestTruncateMessagesWithNoFileIsANoOp(t *testing.T) {
 	assert.Zero(t, res.Removed)
 	assert.Empty(t, res.Sidecar)
 }
+
+// TestSplitJSONLAtCoverEveryCutPoint pins the ONE statement of "where does record
+// number N start", which a rewind and a fork share: a keep PAST the end of the
+// blob has to keep the whole blob. The loop that finds the keep-th newline never
+// gets there in that case, so without the guard at the end the split calls an
+// uncut history an empty head, and the fork that asked for it starts with no
+// conversation at all.
+func TestSplitJSONLAtCoverEveryCutPoint(t *testing.T) {
+	const twoLines = `{"a":1}` + "\n" + `{"b":2}` + "\n"
+	const twoLinesNoTrailing = `{"a":1}` + "\n" + `{"b":2}`
+
+	tests := []struct {
+		name      string
+		data      string
+		keep      int
+		wantHead  string
+		wantTail  string
+		wantTotal int
+	}{
+		{"keep past the end keeps everything", twoLines, 5, twoLines, "", 2},
+		{"keep past the end without a trailing newline", twoLinesNoTrailing, 5, twoLinesNoTrailing, "", 2},
+		{"keep equal to the count keeps everything", twoLines, 2, twoLines, "", 2},
+		{"keep equal without a trailing newline", twoLinesNoTrailing, 2, twoLinesNoTrailing, "", 2},
+		{"keep inside splits", twoLines, 1, `{"a":1}` + "\n", `{"b":2}` + "\n", 2},
+		{"keep zero takes everything", twoLines, 0, "", twoLines, 2},
+		{"an empty blob has nothing to split", "", 3, "", "", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			head, tail, total := splitJSONLAt([]byte(tt.data), tt.keep)
+			assert.Equal(t, tt.wantHead, string(head), "head")
+			assert.Equal(t, tt.wantTail, string(tail), "tail")
+			assert.Equal(t, tt.wantTotal, total, "total")
+		})
+	}
+}
