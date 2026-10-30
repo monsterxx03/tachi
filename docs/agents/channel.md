@@ -89,7 +89,7 @@ Channel 模式是 agent 在没人看着的地方跑的一种入口模式：消�
 
 ## cron 通知（`when_relevant`）
 
-**调度归属先说清楚：channel 的 `Scheduler` 只 `Owns` `TargetType == "channel"`（空也算老任务），desktop 的任务它既不建定时项也不触发。** 两个进程共享同一个 `crons.json`，所以 `cron.Store` 的写路径带一把跨进程文件锁（`pkg/flock`）；`CronTool` 也不再知道 channel，它通过一个 `tools.CronTarget` 绑定当前线程，list 的范围和 create 写下的目标在同一处声明。marker 政策的文字搬到了 `cron.MarkerNotificationPolicy`（desktop 也用它），channel 只决定「这一次用门禁那套还是 marker 那套」。
+**调度归属先说清楚：channel 的 `Scheduler` 只 `Owns` `TargetType == "channel"`（空也算老任务），desktop 的任务它既不建定时项也不触发。** 两个进程共享同一个 `crons.json`，所以 `cron.Store` 的写路径带一把跨进程文件锁（`pkg/flock`）；`CronTool` 也不再知道 channel，它通过一个 `tools.CronTarget` 绑定当前线程，list 的范围和 create 写下的目标在同一处声明。**任务的归属是「这个群的 cron home」，不是当前会话**：实现了 `channel.CronThreadChannel` 的通道（wave 把 `…:topic:…` 抬到 `wave:group:<chat_id>`）给出 home，`Manager.cronScope` 用这一个判断同时喂给斜杠命令和工具（看不见 = 不存在），于是话题里建的任务在主区和那个话题里都看得见、管得了；`CronTarget.ID` 仍是真实线程，`CreatedBy` 因此保留「它是在哪个话题里被建的」这条审计线索。没实现该接口的通道、以及查不到归属线程时，home 就是它自己——与话题出现之前的行为一致。marker 政策的文字搬到了 `cron.MarkerNotificationPolicy`（desktop 也用它），channel 只决定「这一次用门禁那套还是 marker 那套」。
 
 **一个跑完的任务的结果，靠 `judgeNotify`（`notify_gate.go`）里的一个决策抵达 channel——而不是靠碰巧投递它的那个分支。** 每一次 cron 运行都经过它，`notify=always` 也在内，所以这条策略只有一个家。它决定的是：
 

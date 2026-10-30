@@ -35,6 +35,10 @@ const cronUsage = "Usage:\n" +
 // seen in another conversation cannot be operated on here by accident — the
 // same invariant the model-side Cron tool enforces with its allowed() check.
 // "Cannot see it" and "does not exist" are deliberately the same answer.
+//
+// The scope itself is the chat's cron home, not this thread (see cronScope): a
+// job created in a topic belongs to the group, so it is listed and operated from
+// the main area too.
 func (m *Manager) handleCronCommand(threadID, args string) (string, error) {
 	if m.scheduler == nil {
 		return "Cron scheduler is not enabled. Set cron.enabled: true in config.yaml.", nil
@@ -115,14 +119,14 @@ func parseCronCommand(args string) (verb, id string) {
 }
 
 // cronJobForThread loads one job and checks the thread may see it. Errors say
-// "not found" for both a missing id and a job owned by another thread.
+// "not found" for both a missing id and a job owned by another conversation.
 func (m *Manager) cronJobForThread(threadID, id string) (*cron.Job, error) {
 	job, err := m.scheduler.Get(id)
 	if err != nil {
 		return nil, fmt.Errorf("cron: get %s: %w", id, err)
 	}
-	if job == nil || (threadID != "" && job.TargetThreadID != threadID) {
-		return nil, fmt.Errorf("cron: job %q not found in this thread (use /cron to list)", id)
+	if !isChannelCronJob(job) || !m.cronScope(threadID)(job) {
+		return nil, fmt.Errorf("cron: job %q not found in this conversation (use /cron to list)", id)
 	}
 	return job, nil
 }
@@ -134,10 +138,11 @@ func (m *Manager) listCronJobs(threadID string) (string, error) {
 		return "", fmt.Errorf("cron: list: %w", err)
 	}
 
-	// Filter by current thread, matching CronTool.handleList() behavior.
+	// Filter by this conversation's cron home, matching CronTool.handleList().
+	scope := m.cronScope(threadID)
 	var jobs []*cron.Job
 	for _, job := range allJobs {
-		if threadID == "" || job.TargetThreadID == threadID {
+		if isChannelCronJob(job) && scope(job) {
 			jobs = append(jobs, job)
 		}
 	}
@@ -146,7 +151,7 @@ func (m *Manager) listCronJobs(threadID string) (string, error) {
 		if threadID == "" {
 			return "No cron jobs configured.\n\nYou can ask me to create one! Example:\n\"帮我设置一个每天早上9点的日报提醒\"", nil
 		}
-		return "No cron jobs configured for this thread.", nil
+		return "No cron jobs configured in this conversation.", nil
 	}
 
 	slices.SortFunc(jobs, func(a, b *cron.Job) int {

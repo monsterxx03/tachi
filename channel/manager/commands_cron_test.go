@@ -168,3 +168,89 @@ func TestParseCronCommand(t *testing.T) {
 		assert.Equal(t, tc.wantID, id, "args=%q", tc.args)
 	}
 }
+
+// nestingChannel is a channel whose threads NEST (a topic inside a chat): it
+// implements channel.CronThreadChannel, which is the only hook these tests need.
+type nestingChannel struct {
+	mockChannel
+	home func(string) string
+}
+
+func (c *nestingChannel) CronThread(threadID string) string { return c.home(threadID) }
+
+// A job created inside a topic belongs to the CHAT: it must survive the topic and
+// stay manageable from the main area. The thread it was created in is still
+// recorded, for audit.
+func TestCronBelongsToTheChatNotTheTopic(t *testing.T) {
+	mgr := newCronTestManager(t)
+	const main, topic = "wave:group:oc_x", "wave:group:oc_x/topic:otc_y"
+	ch := &nestingChannel{home: func(string) string { return main }}
+	mgr.setThreadChannel(topic, ch)
+	mgr.setThreadChannel(main, ch)
+
+	// The model creates a job while the conversation sits in a topic.
+	tool := mgr.newThreadCronTool(topic)
+	_, err := tool.ExecuteContext(t.Context(),
+		`{"action":"create","name":"daily","schedule":"0 9 * * *","prompt":"p"}`)
+	require.NoError(t, err)
+
+	jobs, err := mgr.scheduler.List()
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	job := jobs[0]
+	assert.Equal(t, main, job.TargetThreadID, "the job fires into the group, not the topic")
+	assert.Equal(t, topic, job.CreatedBy, "the topic it was created in is still recorded")
+
+	// Both conversations of that chat can list and operate it.
+	for _, thread := range []string{main, topic} {
+		out, err := mgr.handleCronCommand(thread, "")
+		require.NoError(t, err)
+		assert.Contains(t, out, job.ID, "thread=%s", thread)
+
+		out, err = mgr.handleCronCommand(thread, job.ID)
+		require.NoError(t, err)
+		assert.Contains(t, out, "- Prompt: ", "thread=%s", thread)
+	}
+
+	// Another chat cannot see or touch it.
+	_, err = mgr.handleCronCommand("wave:group:oc_other", job.ID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+
+	// And the model, listing from the topic, sees the job it just created.
+	listOut, err := tool.ExecuteContext(t.Context(), `{"action":"list"}`)
+	require.NoError(t, err)
+	assert.Contains(t, listOut, job.ID)
+}
+
+// A job written before a channel lifted topics stays reachable from the topic it
+// was bound to — lifting must not strand existing work.
+func TestLegacyTopicJobStaysManageableFromItsTopic(t *testing.T) {
+	mgr := newCronTestManager(t)
+	const main, topic = "wave:group:oc_x", "wave:group:oc_x/topic:otc_y"
+	mgr.setThreadChannel(topic, &nestingChannel{home: func(string) string { return main }})
+
+	legacy, err := mgr.scheduler.Create(&cron.Job{
+		Name: "old", Schedule: "0 9 * * *", Prompt: "p",
+		TargetType: cron.TargetTypeChannel, TargetThreadID: topic,
+	})
+	require.NoError(t, err)
+
+	out, err := mgr.handleCronCommand(topic, "")
+	require.NoError(t, err)
+	assert.Contains(t, out, legacy.ID, "its own topic still sees it")
+
+	out, err = mgr.handleCronCommand(main, "")
+	require.NoError(t, err)
+	assert.NotContains(t, out, legacy.ID, "but the main area never did")
+}
+
+// Without the hook — a plain channel, or a thread the manager has not seen — the
+// thread is its own home, i.e. exactly the behaviour before topics existed.
+func TestCronHomeFallsBackToTheThread(t *testing.T) {
+	mgr := newCronTestManager(t)
+	mgr.setThreadChannel("plain", &mockChannel{name: "plain"})
+
+	assert.Equal(t, "plain", mgr.cronThread("plain"))
+	assert.Equal(t, "never-seen", mgr.cronThread("never-seen"))
+}

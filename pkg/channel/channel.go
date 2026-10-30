@@ -386,6 +386,21 @@ type ThreadDefaultsChannel interface {
 	SetThreadDefaultsHandler(handler func(threadID, workDir, providerName string))
 }
 
+// CronThreadChannel is an optional interface for channels whose conversations
+// NEST — a topic inside a chat. Scheduled work has to outlive the thread it was
+// created in, so such a channel says which thread a job created here belongs to.
+//
+// Without it a job created from a topic is bound to that topic: it fires into a
+// conversation nobody may visit again, and it is invisible (therefore
+// unmanageable) from the chat's main area. The Manager asks the channel that
+// owns the thread, so the rule stays the channel's own — the core never learns
+// what a topic is.
+type CronThreadChannel interface {
+	// CronThread maps threadID to the thread its cron jobs belong to. Returning
+	// "" or threadID itself means "no nesting, keep this thread".
+	CronThread(threadID string) string
+}
+
 // ThreadReminderChannel is an optional interface for channels that want to
 // inject a per-thread reminder into the LLM input through tachi's unified
 // <system-reminder> mechanism (agent/systemreminder Collector).

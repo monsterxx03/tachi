@@ -46,7 +46,15 @@ func (m *Manager) initCron(ctx context.Context) error {
 // for both call sites (a regular turn here, a cron-triggered run in cron.go):
 // the list scope and the target written on create must describe the same
 // thread, or a job created in one place would be invisible in the other.
+//
+// The two ids are deliberately different. `ID` is the conversation the model is
+// talking in and becomes CreatedBy (an audit trail); the TARGET is cronThread,
+// which a channel with nested conversations lifts to the parent. SelfID stays the
+// real thread: a job that will fire into the group's main area must not be
+// described as "this conversation" to a model sitting in a topic.
 func (m *Manager) newThreadCronTool(threadID string) *tools.CronTool {
+	scope := m.cronScope(threadID)
+	home := m.cronThread(threadID)
 	return tools.NewCronTool(m.scheduler, tools.CronTarget{
 		Type: cron.TargetTypeChannel,
 		ID: func() string {
@@ -56,16 +64,61 @@ func (m *Manager) newThreadCronTool(threadID string) *tools.CronTool {
 			return threadID
 		},
 		Matches: func(j *cron.Job) bool {
-			return (j.TargetType == "" || j.TargetType == cron.TargetTypeChannel) &&
-				j.TargetThreadID == threadID
+			return isChannelCronJob(j) && scope(j)
 		},
 		Prepare: func(j *cron.Job, mode string) error {
 			j.TargetType = cron.TargetTypeChannel
-			j.TargetThreadID = threadID
+			j.TargetThreadID = home
 			j.CreatedBy = threadID
 			return nil
 		},
 	})
+}
+
+// cronThread is the thread a cron job created from threadID belongs to.
+//
+// A channel whose threads nest (a topic inside a chat) implements
+// channel.CronThreadChannel to lift it to the parent, so a job outlives the topic
+// it was created in and stays manageable from the chat. Everything else — and any
+// lookup that fails — keeps the thread as its own home.
+func (m *Manager) cronThread(threadID string) string {
+	if threadID == "" {
+		return ""
+	}
+	ch := m.channelForThread(threadID)
+	if ch == nil {
+		return threadID
+	}
+	lifter, ok := ch.(channel.CronThreadChannel)
+	if !ok {
+		return threadID
+	}
+	if home := lifter.CronThread(threadID); home != "" {
+		return home
+	}
+	return threadID
+}
+
+// cronScope reports whether a job is one this thread may see and operate.
+//
+// It matches the thread's cron home (see cronThread) and, so that jobs written
+// before a channel lifted topics remain reachable, the thread itself. Both the
+// slash command and the model-side tool use this one predicate, which is what
+// keeps "not visible" and "does not exist" the same answer in both places.
+func (m *Manager) cronScope(threadID string) func(*cron.Job) bool {
+	if threadID == "" {
+		return func(*cron.Job) bool { return true }
+	}
+	home := m.cronThread(threadID)
+	return func(j *cron.Job) bool {
+		return j.TargetThreadID == home || j.TargetThreadID == threadID
+	}
+}
+
+// isChannelCronJob reports whether the job belongs to a channel conversation at
+// all; a desktop job is out of scope for every channel command.
+func isChannelCronJob(j *cron.Job) bool {
+	return j != nil && (j.TargetType == "" || j.TargetType == cron.TargetTypeChannel)
 }
 
 // OnCronTrigger is the TriggerHandler callback invoked by the cron scheduler
