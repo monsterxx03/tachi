@@ -398,6 +398,58 @@ func TestListSessionsSeesAnotherProcess(t *testing.T) {
 	}
 }
 
+// TestListSessionsSeesAnotherProcessInTheSameTick pins the half of the snapshot's
+// validity check that a timestamp cannot carry: a directory's mtime comes from the
+// filesystem's coarse clock (a jiffy on Linux), so a session another process creates
+// or deletes inside the same tick leaves that mtime EQUAL and the change invisible —
+// which is why cachedList compares baseDir's entry names as well.
+//
+// The coarse clock cannot be commanded from a test, so the tick is reproduced rather
+// than waited for: the directory is changed behind the store's back and then its
+// mtime is put BACK to the value the store already stamped, which is exactly the
+// state the clock produces on its own.
+func TestListSessionsSeesAnotherProcessInTheSameTick(t *testing.T) {
+	dir := t.TempDir()
+	mine, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	other, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 0 {
+		t.Fatalf("empty store: got %d titles, want 0", len(got))
+	}
+
+	stamp, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	const id = "2026-05-01-000000-eeeeeeee"
+
+	now := time.Now()
+	if err := other.CreateSession(&Session{ID: id, Title: "同 tick 建的", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := os.Chtimes(dir, stamp.ModTime(), stamp.ModTime()); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 1 || got[0] != "同 tick 建的" {
+		t.Errorf("a session created elsewhere in the same tick was missed: got %v", got)
+	}
+
+	if err := other.DeleteSession(id); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if err := os.Chtimes(dir, stamp.ModTime(), stamp.ModTime()); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 0 {
+		t.Errorf("a session deleted elsewhere in the same tick was missed: got %v", got)
+	}
+}
+
 // TestListSessionsHandsOutCopies pins that the snapshot is not handed out for
 // editing: a caller is free to mutate what it was given (the session manager loads
 // one into its current field and edits it in place), and the next reader must not
