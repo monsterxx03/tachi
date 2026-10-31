@@ -299,7 +299,9 @@ function defaultDraft(targets: CronTargetVO[], projects: ProjectVO[], job?: Cron
       projectID: current?.projectId || '',
       workingDir: current?.workingDir || '',
       providerName: current?.providerName || '',
-      skipApproval: current?.skipApproval || false,
+      // 专属会话是无人值守的：新任务的审批默认就是「无需审批」，不从正在看的这段对话继承
+      // （那个会话多半在问审批，而没人会回答专属会话的问题）。读者仍可以在下拉框里改回去。
+      skipApproval: true,
     }
   }
   const sched = parseSchedule(job.schedule)
@@ -456,7 +458,7 @@ export function CronPage({
         projectID: prev.projectID || current.projectId || '',
         workingDir: prev.workingDir || current.workingDir || '',
         providerName: prev.providerName || current.providerName || '',
-        skipApproval: current.skipApproval || false,
+        // 审批那条不在这里补：新任务默认「无需审批」，跟着这段对话的值改回去就白改了。
       }
     })
   }, [creating, targets])
@@ -756,7 +758,9 @@ export function CronPage({
                   </span>
                 </button>
                 <button className={`cron-choice${draft.reply === 'new' ? ' is-on' : ''}`}
-                  onClick={() => patch({ reply: 'new' })}>
+                  // 专属会话是无人值守的：切到这一边时审批默认就给「无需审批」，否则一条命中
+                  // ask 规则的命令在没人的时候只会被拒。读者仍可以在下面的审批下拉框里改回去。
+                  onClick={() => patch(draft.reply === 'new' ? { reply: 'new' } : { reply: 'new', skipApproval: true })}>
                   <span className="cron-radio" />
                   <span>
                     <span className="cron-choice-title">新建一个专属会话</span>
