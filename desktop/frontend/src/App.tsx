@@ -1618,9 +1618,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
   // A run started → show it. The reader just launched it, and this is where its output goes;
   // nothing else opens the panel on its own.
+  //
+  // The RESULT opens it too, and that is not belt-and-braces: a review against a fast model
+  // finishes inside one frame, so the start and end events arrive in the same React batch and
+  // 「live」 is never committed — the effect below would never run, and the reader would be left
+  // without the panel the run was for (measured: the whole run under a second against a mock).
+  // The panel is a READER over the record either way, so showing it on the way out is the same act.
   useEffect(() => {
-    if (oneoffRun.live) setOneOffOpen(true)
-  }, [oneoffRun.live?.at])
+    if (oneoffRun.live || oneoffRun.result) setOneOffOpen(true)
+  }, [oneoffRun.live?.at, oneoffRun.result?.at])
 
   // openDiffPanel is the turn's 「完整 diff」 entry: what THIS turn changed, in a lightbox over the
   // conversation, with real file line numbers. The baseline is the backend's choice, stated on the

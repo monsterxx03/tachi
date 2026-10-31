@@ -82,13 +82,35 @@
   const chatWidth = () => Math.round(smoke.q('.chat').getBoundingClientRect().width)
   const handle = smoke.q('.oneoff-resizer')
   if (!handle) return smoke.fail('面板有拖拽手柄', '找不到 .oneoff-resizer')
-  const box = handle.getBoundingClientRect()
-  const at = { x: box.left + 2, y: box.top + 40 }
+  // Read the handle EVERY time, never once: the panel is 6px wide at the handle and it MOVES when
+  // the drag commits, so a point captured before the first drag presses on nothing in the second
+  // (measured: the grow-drag read 320 — the floor it was already at — because the press missed).
+  // …and re-QUERYED every time too: the panel re-renders when a drag commits, and the node this
+  // file held from before that render is detached — an event dispatched on it reaches nothing.
+  const handlePoint = () => {
+    const el = smoke.q('.oneoff-resizer')
+    if (!el) return null
+    const box = el.getBoundingClientRect()
+    return { x: box.left + 2, y: box.top + 40 }
+  }
   // The moves land on the WINDOW: that is where the drag listens (a pointer that leaves the 6px
   // handle must keep resizing), and setPointerCapture would refuse a synthetic pointer.
-  const press = () => handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: at.x, clientY: at.y }))
-  const moveTo = (x) => window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: x, clientY: at.y }))
-  const release = (x) => window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: x, clientY: at.y }))
+  const press = () => {
+    const el = smoke.q('.oneoff-resizer')
+    const at = handlePoint()
+    if (!el || !at) return false
+    return el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: at.x, clientY: at.y }))
+  }
+  const moveTo = (dx) => {
+    const at = handlePoint()
+    if (!at) return
+    window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: at.x + dx, clientY: at.y }))
+  }
+  const release = (dx) => {
+    const at = handlePoint()
+    if (!at) return
+    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: at.x + dx, clientY: at.y }))
+  }
 
   const initial = panelWidth()
   press()
@@ -96,14 +118,14 @@
   // not depend on React having committed anything yet.
   smoke.check('按下手柄即进入拖拽态（指针事件到了面板）', document.body.classList.contains('is-resizing'),
     `body="${document.body.className}" width=${panelWidth()}px`)
-  moveTo(at.x + 5000); release(at.x + 5000) // far past the minimum
+  moveTo(5000); release(5000) // far past the minimum
   // Wait for the STATE, not for a duration: with a fixed sleep the same drag read 420 in one
   // run and 320 in the next, because a sleep measures the commit by luck.
   const atFloor = await smoke.waitFor(() => panelWidth() === 320, '拖到极限（钳在最小宽度）', 3000)
   smoke.check('拖到极限时面板停在最小宽度', atFloor,
     `${initial} → ${panelWidth()}px（inline=${smoke.q('.oneoff-panel').style.width}）`)
 
-  press(); moveTo(at.x - 5000); release(at.x - 5000) // and now to the ceiling
+  press(); moveTo(-5000); release(-5000) // and now to the ceiling
   const grew = await smoke.waitFor(() => panelWidth() > 320, '往外拖变宽', 3000)
   const widest = panelWidth()
   smoke.check('拖动手柄改变面板宽度', grew, `320 → ${widest}px`)
