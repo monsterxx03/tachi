@@ -15,6 +15,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"time"
 )
 
 type SessionSummary struct {
@@ -136,7 +137,15 @@ type session struct {
 	Uploads []string
 }
 
+// append 把一条假消息放进会话，并给它盖上时刻：手机现在会把它显示在气泡上，没有时刻的
+// 种子会让那一行永远空着 —— 空着的功能与没有这个功能在截图里长得一模一样。
+//
+// 时刻是「现在」，所以 mock 的这一屏永远像刚聊过；要演示「过去的日子显示日期」的那种，
+// 种子自己给 Timestamp（见 seed 里那条旧会话）。
 func (s *session) append(m Message) Message {
+	if m.Timestamp == "" {
+		m.Timestamp = time.Now().Format(time.RFC3339)
+	}
 	m.Index = s.nextIndex
 	s.nextIndex++
 	s.Messages = append(s.Messages, m)

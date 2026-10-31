@@ -41,3 +41,23 @@ export function formatUpdatedAt(raw: string, now: Date = new Date()): string {
   if (t.getFullYear() === now.getFullYear()) return `${t.getMonth() + 1}月${t.getDate()}日`;
   return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`;
 }
+
+/**
+ * 消息气泡上那个时刻。
+ *
+ * 和上面的「最近一次是什么时候」不是同一条规矩：那里回答「多久以前」（刚刚 / 3 分钟前），
+ * 这里回答「这句话是什么时候说的」——所以今天的一律给钟点，过去的给日期：一个钟点离开它
+ * 的日子没有意义，而「3 分钟前」写在一条旧消息旁边只会随读者看屏幕的时间漂。
+ *
+ * 认不出来的字符串原样返回，与 formatUpdatedAt 同一条规矩。
+ */
+export function formatMessageTime(raw: string, now: Date = new Date()): string {
+  if (!raw || !TIMESTAMP.test(raw)) return raw;
+  const t = new Date(raw);
+  const ms = t.getTime();
+  if (Number.isNaN(ms)) return raw;
+
+  if (sameDay(t, now)) return `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+  if (t.getFullYear() === now.getFullYear()) return `${t.getMonth() + 1}月${t.getDate()}日`;
+  return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`;
+}

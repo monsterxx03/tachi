@@ -4,6 +4,7 @@ import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-nativ
 import type { FileSource } from '../api/client';
 import type { AgentQuestion, AttachmentRef, PendingAsk, SessionMessage } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
+import { formatMessageTime } from './time';
 import { Markdown } from './Markdown';
 import { stripReminders } from './reminder';
 
@@ -412,6 +413,11 @@ export const MessageView = memo(function MessageView({
     return (
       <View style={[styles.userBubble, { backgroundColor: t.userBg }]}>
         <Markdown text={stripReminders(msg.displayContent ?? msg.content)} ink={t.userInk} />
+        {msg.timestamp ? (
+          <Text style={[styles.msgTime, { color: t.userInk, opacity: 0.55, textAlign: 'right' }]}>
+            {formatMessageTime(msg.timestamp)}
+          </Text>
+        ) : null}
       </View>
     );
 
@@ -420,6 +426,9 @@ export const MessageView = memo(function MessageView({
       <View>
         {msg.thinking ? <Thinking text={msg.thinking} /> : null}
         <AssistantText text={msg.content} />
+        {msg.timestamp ? (
+          <Text style={[styles.msgTime, { color: t.faint }]}>{formatMessageTime(msg.timestamp)}</Text>
+        ) : null}
       </View>
     );
   }
@@ -457,6 +466,9 @@ const styles = StyleSheet.create({
   body: { paddingVertical: 4 },
   assistantText: { fontSize: 15, lineHeight: 25 },
   codeBlock: { borderRadius: 8, padding: 10, marginVertical: 8 },
+  // 一条消息的时刻：小、灰、贴着它的气泡 —— 它是给「这是什么时候说的」这个问题的，
+  // 不该跟正文抢注意力（手机上这一屏的字本来就密）。
+  msgTime: { fontSize: 10.5, marginTop: 4 },
   userBubble: {
     alignSelf: 'flex-end',
     maxWidth: '82%',
