@@ -62,6 +62,22 @@ func TestAskUserToolParsesModelPayload(t *testing.T) {
 	assert.True(t, askErr.Questions[0].MultiSelect, "multiSelect must survive the tool boundary")
 }
 
+// TestAskUserToolRejectsEmptyQuestions pins the guard on an empty question set.
+// The schema admits `{"questions": []}` (no minItems, and `questions` counts as
+// present), so nothing stopped the call before it reached a frontend — and both
+// of them assume at least one question exists: the ACP path indexes
+// questions[0] (an index-out-of-range panic — the tool chain has no recover, so
+// it takes the whole process with it) and the TUI path opens a dialog with no
+// question in it, leaving the turn waiting for an answer that can never come.
+func TestAskUserToolRejectsEmptyQuestions(t *testing.T) {
+	_, err := AskUserTool{}.ExecuteContext(context.Background(), `{"questions":[]}`)
+
+	require.Error(t, err, "an empty question set must be refused, not handed to a frontend")
+	var askErr *AskUserQuestionError
+	assert.False(t, errors.As(err, &askErr), "an empty question set must not become a user-input request")
+	assert.Contains(t, err.Error(), "questions", "the model must be told which argument was wrong")
+}
+
 // TestBuildElicitationSchemaDegradesMultiSelect documents the ACP limit: form
 // schemas admit only flat objects with primitive/enum properties, so a
 // multi-select question is offered as a single choice there (never as an

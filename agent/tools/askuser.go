@@ -116,6 +116,15 @@ func (t AskUserTool) ExecuteContext(ctx context.Context, args string) (string, e
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
+	// The schema has no minItems, so `{"questions": []}` arrives here intact. Every
+	// frontend assumes at least one question: executeACP reads questions[0] (an
+	// index-out-of-range panic, and nothing on the tool path recovers it), while
+	// the TUI/channel path opens a dialog with nothing in it and leaves the turn
+	// waiting for an answer that can never arrive. Refuse it once, here — the only
+	// entry point both paths share.
+	if len(input.Questions) == 0 {
+		return "", fmt.Errorf("invalid arguments for tool %s: 'questions' must not be empty", ToolNameAskUser)
+	}
 
 	// ACP mode: use elicitation to ask the user.
 	// The ACP connection is attached to the context in streamToACP.
