@@ -434,7 +434,9 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 	killAndDrain := func() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		select {
-		case <-waitCh:
+		case err := <-waitCh:
+			// 已经被 SIGKILL：这次 wait 的错误没有可做的事，收下只为把它排空。
+			_ = err
 		case <-time.After(drainTimeout):
 		}
 	}
