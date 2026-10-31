@@ -61,9 +61,14 @@ func nodeConfig(t *testing.T, mock *mockllm.Server, workspace string) *config.Co
 }
 
 // nodeHome puts the node's data dir (and the session store) inside a temp dir, so a test
-// never touches the real ~/.tachi.
+// never touches the real ~/.tachi. The operating system's own agent skills (omarchy ships
+// them at $OMARCHY_PATH/default/agents/skills) are part of "this machine" too: the skill
+// store scans that tree as its last root, so on an omarchy host the Card would carry two
+// more entries than the fixture put there and an assertion about the set would be about
+// the host rather than the code. Point it at a directory that has none.
 func nodeHome(t *testing.T) string {
 	t.Helper()
+	t.Setenv("OMARCHY_PATH", filepath.Join(t.TempDir(), "not-omarchy"))
 	base := t.TempDir()
 	config.SetBaseDir(base)
 	t.Cleanup(func() { config.SetBaseDir("") })
