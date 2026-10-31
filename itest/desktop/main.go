@@ -297,6 +297,10 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 				"app 到底起没起，看 home/.tachi 与 debug.log", driverContactWindow)}},
 			time.Since(start), verbose)
 	}
+	// Before anything is measured: the window the driver is in. A compositor that decides
+	// geometry itself (a tiling one) gives a size the fixtures do not describe, and then the whole
+	// run reports layout as product (window_other.go, checkWindowSize).
+	checkWindowSize(sb.appPid)
 	// The live half starts HERE — while the driver is still running — because some scenarios need
 	// both directions at once: the window has to show a change another screen makes, which means
 	// the driver must be waiting for a fact this half is about to cause. It gets its own lines

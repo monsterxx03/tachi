@@ -106,6 +106,36 @@ func activationPolicy() application.ActivationPolicy {
 // demoNoActivate reports whether this run must keep its hands off the foreground.
 func demoNoActivate() bool { return os.Getenv(demoNoActivateEnv) == "1" }
 
+// demoWindowSizeEnv lets a scripted run open the window at a size it names ("1440x900").
+//
+// The smoke suite exists to measure layout: a panel is 360 wide only if the window leaves that
+// much room beside the sidebar and the conversation, so the size is part of every fixture. The
+// app's own default (1200x780) is what a reader gets, not what a fixture describes — and on
+// Linux the compositor may not even hand over the default (a tiling one decides by layout).
+// Nothing in the product reads this; unset means the default.
+const demoWindowSizeEnv = "TACHI_DEMO_WINDOW"
+
+// demoWindowSize is this run's window size: the default, or whatever TACHI_DEMO_WINDOW names.
+// A value it cannot parse is ignored rather than failing the launch — a wrong size shows up as
+// failed geometry assertions, which is exactly what the suite is for.
+func demoWindowSize() (int, int) {
+	const defW, defH = 1200, 780
+	v := strings.TrimSpace(os.Getenv(demoWindowSizeEnv))
+	if v == "" {
+		return defW, defH
+	}
+	w, h, ok := strings.Cut(v, "x")
+	if !ok {
+		return defW, defH
+	}
+	ww, errW := strconv.Atoi(strings.TrimSpace(w))
+	hh, errH := strconv.Atoi(strings.TrimSpace(h))
+	if errW != nil || errH != nil || ww <= 0 || hh <= 0 {
+		return defW, defH
+	}
+	return ww, hh
+}
+
 // demoBrowserFetchEnv replaces the MCP OAuth flow's browser with a headless fetch.
 //
 // A scripted run must not open a window on whoever's machine it is running on, and the

@@ -230,10 +230,14 @@ func main() {
 	// in the top-left while the content fills the window. InvisibleTitleBarHeight
 	// gives the top region a drag handle. There is no Linux counterpart of either,
 	// which is what Frameless answers there (see window_frame_*.go).
+	// The size, unless a scripted run asked for another one (see demoWindowSize): the smoke suite's
+	// fixtures measure layout — a panel's width against the room a specific window leaves — so the
+	// window's size is part of the fixture on that side.
+	windowWidth, windowHeight := demoWindowSize()
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Tachi",
-		Width:     1200,
-		Height:    780,
+		Width:     windowWidth,
+		Height:    windowHeight,
 		MinWidth:  900,
 		MinHeight: 600,
 		Frameless: framelessWindow,

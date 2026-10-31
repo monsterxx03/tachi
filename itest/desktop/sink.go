@@ -16,8 +16,8 @@ import (
 type Result struct {
 	Scenario string   `json:"scenario"`
 	Lines    []Line   `json:"lines"`
-	Error    string   `json:"error,omitempty"`   // a JS exception that ended the run early
-	Done     bool     `json:"done"`              // false = the driver died mid-way (watchdog)
+	Error    string   `json:"error,omitempty"` // a JS exception that ended the run early
+	Done     bool     `json:"done"`            // false = the driver died mid-way (watchdog)
 	MS       int      `json:"ms"`
 	Missing  []string `json:"missing,omitempty"` // selectors the driver waited for and never saw
 	// Console is everything the page logged, riding in the SAME body as the verdict.
@@ -60,14 +60,14 @@ func (r Result) OK() bool {
 // It also collects the driver's console output, which is where a WebKit-side error shows
 // up when the page never gets far enough to report anything itself.
 type sink struct {
-	url     string
-	mu      sync.Mutex
+	url      string
+	mu       sync.Mutex
 	result   *Result
 	progress []Line
 	console  []string
 	dom      []byte
-	done    chan struct{}
-	srv     *http.Server
+	done     chan struct{}
+	srv      *http.Server
 }
 
 func newSink() (*sink, error) {

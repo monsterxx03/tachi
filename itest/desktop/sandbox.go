@@ -32,8 +32,11 @@ import (
 type sandbox struct {
 	dir     string
 	appPath string
-	home    string
-	work    string
+	// appPid is the process of the app under test, once launch has started it. The window-size
+	// preflight asks the compositor about THIS window (window_other.go).
+	appPid int
+	home   string
+	work   string
 	// browserFetch asks the app to replace the MCP OAuth browser with a headless fetch
 	// (see launch): set by scenarios that authorize an MCP server, because a run must not
 	// open a window on the machine it is running on.
@@ -49,6 +52,16 @@ type sandbox struct {
 	// fixture's formatting, and the copy is the part that goes stale.
 	mcpConfig []byte
 }
+
+// smokeWindowSize is the window every scenario is written against, and the width that follows
+// from it. It is WIDER than the app's own default (1200x780): a fixture that measures a 360-wide
+// panel needs a window that leaves 360 beside the sidebar and the conversation's own 560-wide
+// minimum — at the default the panel clamps down to its 240 minimum and the fixture measures the
+// clamp instead of the product.
+const (
+	smokeWindowSize  = "1440x900"
+	smokeWindowWidth = 1440
+)
 
 // smokeExecName is deliberately unique: it names both the sandbox's copy of the app and the
 // process the suite starts, so `pkill -f TachiSmoke` can only ever reach a smoke run — while
@@ -91,6 +104,10 @@ func (sb *sandbox) demoEnv() map[string]string {
 		// scenario, not only the one that clicks a link: a run must never open a browser or a Finder
 		// window on the machine it is happening on, whoever's driver does the clicking.
 		"TACHI_DEMO_OPEN_LOG": filepath.Join(sb.dir, "opened.txt"),
+		// The window the fixtures describe. They measure layout — a 360-wide panel is 360 only if
+		// the window leaves that much room beside the sidebar and the conversation — so the size is
+		// part of the fixture, not a property of whoever's display the run happens on.
+		"TACHI_DEMO_WINDOW": smokeWindowSize,
 	}
 	if sb.browserFetch {
 		// The MCP OAuth flow would otherwise open a real browser — on the machine this run is

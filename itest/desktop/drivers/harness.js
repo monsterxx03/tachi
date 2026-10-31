@@ -268,8 +268,16 @@ const smoke = (() => {
   const waitGone = (sel, label, timeout) => waitFor(() => !q(sel), label || '元素消失 ' + sel, timeout)
 
   // ── Failure paths ─────────────────────────────────────────────────────────
+  // A ResizeObserver loop report is the browser complaining about its own layout cycle, not a
+  // script error: it arrives as an 'error' event with no filename and no exception object, and it
+  // fires WHILE a layout is being adjusted — which in this suite is most of the time (every panel
+  // width, every window that is resized under it). Counting it as the scenario's failure turns a
+  // passing run red for a reason that names nothing the product did.
+  const BENIGN = [/^ResizeObserver loop (limit exceeded|completed with undelivered notifications)\.?$/]
   window.addEventListener('error', (e) => {
-    error = e.message || String(e.type)
+    const msg = e.message || String(e.type)
+    if (BENIGN.some((re) => re.test(msg))) return
+    error = msg
   })
   window.addEventListener('unhandledrejection', (e) => {
     error = 'unhandled rejection: ' + ((e.reason && e.reason.message) || String(e.reason))

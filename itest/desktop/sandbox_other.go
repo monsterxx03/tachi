@@ -85,6 +85,9 @@ func (sb *sandbox) launch() error {
 	// Reap it in the background: we never wait for it (killAll ends it), but an exited child
 	// left unreaped is a zombie per scenario.
 	go func() { _ = cmd.Wait(); _ = logFile.Close() }()
+	// Remembered for the size preflight (main.go): a tiling compositor decides this window's
+	// size, and the suite can only be honest about that, not change it (window_other.go).
+	sb.appPid = cmd.Process.Pid
 	return nil
 }
 
