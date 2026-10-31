@@ -138,6 +138,7 @@ adb reverse tcp:8081 tcp:8081 && npx expo start   # Metro；dev 包要靠它加�
 - **停 mock 服务别用 `lsof -ti:9797`**：那个命令列出的是**所有碰过这个端口**的进程，包括**连着它的模拟器** —— 它会把模拟器一起杀掉（表现是模拟器莫名其妙退出，系统崩溃报告里是 `qemu-system-aarch64` 的 SIGABRT）。用 `lsof -ti:9797 -sTCP:LISTEN` 只挑监听的那一个，或者干脆按名字 `pkill -f mockapi`。
 - **写界面要用 `react-native-safe-area-context` 的 `SafeAreaView`**，RN 自带的那个已弃用（运行时会弹警告条）。
 - **mermaid 随包发**（`assets/mermaid.min.txt`，5 MB 全量构建）。它停在 `assets/` 而不是模块里：`metro.config.js` 把 `txt` 加进 `assetExts`，否则 Metro 会把它当 JS 模块去执行。运行时用 `expo-asset` + `expo-file-system` 读成字符串注进 WebView——这样第一次画图也不依赖网络。
+- **点图放大那一份是整屏 Modal，而且必须让出安全区**（`Mermaid.tsx` 的 `insets`）：Modal 从 y=0 开始，刘海机和状态栏会把图头吃掉一块，关闭键也会压到状态栏上。竖直方向上「居中」只在**图比屏幕短**时成立——页面里画完量出 svg 高度，`padding-top = max(16, (innerHeight - h) / 2)`；比屏幕长时停在 16，因为靠居中排的话上半截会跑到滚不到的地方（负方向没有滚动）。别改成纯 CSS 的 `align-items: center`。
 
 ## iOS（真机自己装，不分发）
 

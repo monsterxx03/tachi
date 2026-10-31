@@ -3,6 +3,7 @@ import { File } from 'expo-file-system';
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 
@@ -38,6 +39,8 @@ function escapeHtml(s: string): string {
 const INLINE_VIEWPORT = 'width=device-width,initial-scale=1,maximum-scale=1';
 /** 放大那份：允许捏合。上限 6 倍够看节点里的字，再大就只剩手指在屏幕上打滑 */
 const ZOOM_VIEWPORT = 'width=device-width,initial-scale=1,user-scalable=yes,maximum-scale=6';
+/** 放大那份图四周留的空（页面内边距与竖直居中时的下限），px */
+const ZOOM_PADDING = 16;
 
 /**
  * 同一段 HTML 的两个尺寸。
@@ -53,7 +56,7 @@ function buildMermaidHtml(
 ): string | null {
   if (!js) return null;
   const background = zoom ? theme.bg : 'transparent';
-  const wrapPadding = zoom ? '0' : '8px';
+  const wrapPadding = zoom ? `${ZOOM_PADDING}px` : '8px';
   const svgSize = zoom ? 'width:100%;height:auto' : 'max-width:100%;height:auto';
   const reportHeight = !zoom;
   return `<!doctype html>
@@ -100,12 +103,30 @@ function buildMermaidHtml(
     }
     report();
   })();
+
+  // 放大那一份：图比屏幕短就竖直居中（贴着顶上，刘海机和状态栏会把图头吃掉一块）；
+  // 比屏幕长就维持贴着上边 —— 居中的话上半截会跑到滚不到的地方去。
+  if (${zoom}) (function () {
+    var tries = 0;
+    function center() {
+      var svg = document.querySelector('.wrap svg');
+      if (!svg) {
+        if (tries++ < 60) setTimeout(center, 100);
+        return;
+      }
+      var h = svg.getBoundingClientRect().height;
+      var top = Math.max(${ZOOM_PADDING}, Math.round((window.innerHeight - h) / 2));
+      document.querySelector('.wrap').style.paddingTop = top + 'px';
+    }
+    center();
+  })();
 </script>
 </body></html>`;
 }
 
 export function Mermaid({ source, height = 220 }: { source: string; height?: number }) {
   const { tokens: t } = useTheme();
+  const insets = useSafeAreaInsets();
   const [js, setJs] = useState<string | null>(cachedJS);
   // 图有多高只有画完才知道。写死一个高度就会把下半张裁掉，而 WebView 里又滚不动
   // （scrollEnabled=false），所以让页面量完把高度报回来。
@@ -167,7 +188,19 @@ export function Mermaid({ source, height = 220 }: { source: string; height?: num
         // 安卓的返回键 = 关掉，和点空白处同一条路
         onRequestClose={() => setZoomed(false)}
       >
-        <View style={[styles.zoomRoot, { backgroundColor: t.bg }]}>
+        <View
+          style={[
+            styles.zoomRoot,
+            {
+              backgroundColor: t.bg,
+              // 整屏的 Modal 从 y=0 开始，刘海和状态栏会把图头吃掉：让出安全区。
+              paddingTop: insets.top,
+              paddingBottom: insets.bottom,
+              paddingLeft: insets.left,
+              paddingRight: insets.right,
+            },
+          ]}
+        >
           {zoomHtml ? (
             <WebView
               originWhitelist={['*']}
@@ -180,7 +213,15 @@ export function Mermaid({ source, height = 220 }: { source: string; height?: num
           ) : null}
           <Pressable
             onPress={() => setZoomed(false)}
-            style={[styles.closeBtn, { backgroundColor: t.panel, borderColor: t.border }]}
+            style={[
+              styles.closeBtn,
+              {
+                top: insets.top + 12,
+                right: insets.right + 16,
+                backgroundColor: t.panel,
+                borderColor: t.border,
+              },
+            ]}
             accessibilityRole="button"
             accessibilityLabel="关闭"
           >
@@ -197,9 +238,8 @@ const styles = StyleSheet.create({
   placeholder: { alignItems: 'center', justifyContent: 'center' },
   zoomRoot: { flex: 1 },
   closeBtn: {
+    // top / right 由安全区决定（见上面那个 Pressable）
     position: 'absolute',
-    top: 54,
-    right: 16,
     width: 34,
     height: 34,
     borderRadius: 17,
