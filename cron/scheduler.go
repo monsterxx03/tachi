@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/robfig/cron/v3"
@@ -66,7 +67,7 @@ type SchedulerConfig struct {
 	Handler          TriggerHandler
 	Logger           *logger.Logger
 	MaxConcurrent    int           // default: 3
-	ExecutionTimeout time.Duration // default: 5m
+	ExecutionTimeout time.Duration // default: config.DefaultCronExecutionTimeout
 	// Owns filters the jobs this process schedules. A store is shared by every
 	// entry point (a channel process and the desktop), but a job belongs to
 	// exactly one of them: without this filter both would fire it.
@@ -85,7 +86,7 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	}
 	timeout := cfg.ExecutionTimeout
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = config.DefaultCronExecutionTimeout
 	}
 	l := cfg.Logger
 

@@ -56,7 +56,16 @@ const (
 	// pkg/jev/testdata/files-ask.json; the field's own comment carries the
 	// corridor, what it misses, and when to re-sweep.
 	FilesJevThreshold = 0.60
-	configDirName     = ".tachi"
+	// DefaultCronExecutionTimeout is the bound a cron job's whole turn gets when
+	// config.yaml omits cron.execution_timeout — the same tag/constant duplication
+	// as the other defaults (the tag below carries "60m", config_test pins the two
+	// together). A cron prompt is a TASK, not a chat reply: the ones worth
+	// scheduling run the test suite, edit code and open a PR. A bound shorter than
+	// the task does not save the cost of the run, it throws it away — the job is
+	// marked failed and a oneshot is deleted, and the interruption lands wherever
+	// the work happened to be, which is often inside the final report.
+	DefaultCronExecutionTimeout = 60 * time.Minute
+	configDirName               = ".tachi"
 	configFileName    = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
@@ -739,7 +748,7 @@ type CronConfig struct {
 	Enabled          *bool         `yaml:"enabled" default:"true"` // whether to enable cron (default: true in both entry points)
 	StorePath        string        `yaml:"store_path"`             // custom store path (default: ~/.tachi/crons.json)
 	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`
-	ExecutionTimeout time.Duration `yaml:"execution_timeout" default:"5m"`
+	ExecutionTimeout time.Duration `yaml:"execution_timeout" default:"60m"` // default: DefaultCronExecutionTimeout
 
 	// NotifyMatcher picks how a notify=when_relevant job's result is judged:
 	// "marker" = the agent's [SILENT] marker, matched by
