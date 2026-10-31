@@ -277,6 +277,40 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	assert.Empty(t, msgs, "one-off run must not write to messages.jsonl")
 }
 
+// A review runs on a FORK, and a fork carries no session manager on purpose (§7.1.3: a fork of a
+// remote execution must not write into it). The record still belongs to the session that asked for
+// the review — without that, the recorder refuses ("session: no session directory") and the
+// findings live only in a stream nobody can re-read: the panel's 「意见」 tab stays empty after a
+// reload, and the run looks like it never happened.
+func TestRunOneOffStream_ForkWithoutASessionManagerStillFilesItsRecord(t *testing.T) {
+	previous := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(previous) })
+	_, _ = overrideOneoffDirs(t)
+
+	sessionDir, err := config.SessionDir()
+	require.NoError(t, err)
+	store, err := session.NewFileStore(sessionDir)
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+	_, err = sm.New("mock", t.TempDir())
+	require.NoError(t, err)
+	sessID := sm.Current().ID
+
+	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("reviewed")}}
+	a := newTestAgent(t, prov)
+	// The fork's shape: nothing to write an ordinary turn into.
+	require.Empty(t, a.SessionBaseDir())
+
+	_, _ = drainAgentEvents(a.RunOneOffStream(t.Context(), prov, "system prompt", "review the tree",
+		llm.ChatOptions{MaxTokens: 1024},
+		WithOneOffMeta(&OneOffMeta{Kind: "review", SessionID: sessID})))
+
+	path := a.LastOneoffTranscriptPath()
+	require.NotEmpty(t, path, "a forked review must still leave a record")
+	require.Equal(t, filepath.Join(sessionDir, sessID, "oneoff", filepath.Base(path)), path)
+}
+
 func TestRunOneOffStream_EmptyKindNoRecording(t *testing.T) {
 	sessionDir, homeDir := overrideOneoffDirs(t)
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("ok")}}

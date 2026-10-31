@@ -338,6 +338,32 @@ func (a *AIAgent) resolveOneoffSessionID(meta OneOffMeta) string {
 	return ""
 }
 
+// oneoffRecordBaseDir is where this run's record is filed, when it belongs to a session.
+//
+// Normally that is the agent's own store (SessionBaseDir). A FORK has none, deliberately: a fork
+// of a remote execution must not write into the session it forked from (§7.1.3,
+// TestAForkOfAManagedSessionHasNoSessionToWriteInto). But a review runs on a fork, and its record
+// DOES belong to the session that asked for it — without an answer here the recorder refuses
+// ("session: no session directory") and the findings exist only in a stream nobody can re-read:
+// the panel's 「意见」 tab stays empty, and the run looks like it never happened.
+//
+// The process's own session directory is the answer a forkless caller would have got from its
+// store: every entry point that runs reviews keeps its conversations there (`config.SessionDir`),
+// and the global one-off home is not right for a record that HAS a session id.
+func (a *AIAgent) oneoffRecordBaseDir(sessionID string) string {
+	if dir := a.SessionBaseDir(); dir != "" {
+		return dir
+	}
+	if sessionID == "" {
+		return ""
+	}
+	dir, err := config.SessionDir()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 // startOneoffRecorder creates a recorder for a run. The caller assigns the
 // result to rs.OneoffRec; the loop closes it via stopOneoffRecorder.
 // Returns nil (recording disabled or failed — logged, never fatal).
@@ -346,7 +372,7 @@ func (a *AIAgent) startOneoffRecorder(ctx context.Context, meta OneOffMeta, prov
 		return nil
 	}
 	sessionID := a.resolveOneoffSessionID(meta)
-	rec, err := newOneoffRecorder(meta, a.SessionBaseDir(), sessionID, provider, oneoffCWD(ctx), a.oneoffRetentionDays())
+	rec, err := newOneoffRecorder(meta, a.oneoffRecordBaseDir(sessionID), sessionID, provider, oneoffCWD(ctx), a.oneoffRetentionDays())
 	if err != nil {
 		a.logWarn(ctx, "oneoff: failed to create recorder", err, "kind", meta.Kind)
 		return nil
