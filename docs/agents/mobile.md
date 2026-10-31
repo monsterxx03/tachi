@@ -250,6 +250,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 | 触摸交互、扫码、手感、锁屏重连 | Maestro 驱动点击（`~/.local/maestro/bin/maestro`，装在仓库外） | 半自动 |
 | 真机验收 | 只能人看 | 人 |
 
+- **模拟器上的 App 认的是一个固定地址，不是「谁的 Metro 刚刚起来」**：debug 包从 `debug_http_host` 拉 JS，出厂值是 `10.0.2.2:8081`，而一台机器上通常只有一个 Metro——**它服务的是它被启动的那个目录**。所以在 worktree 里改界面时，模拟器看到的仍是主工作树的旧 JS：能打字、有反应、只是没有你的改动，没有任何报错。要看自己的改动：在 worktree 里 `npx expo start --port 8082`（**别关用户那份**），摇一摇 → Change Bundle Location 填 `10.0.2.2:8082`，验完改回 `10.0.2.2:8081` 并关掉自己那个。`mobile/e2e/run.sh` 同样只验证「当前连着的那个 Metro」，不是「这个分支的代码」。
 - **写界面时保持它能跑在 web 上**——那是 agent 能自己看见界面的另一条路。代价是原生模块要有一层平台适配（安全存储在 web 上退化成 localStorage），这层本来也该有。
 - **web 预览要连 mockapi 时，CORS 由 mockapi 自己补**（`mobile/mockapi/server.go` 的 `allowWebPreview`）：页面在 8082、接口在 9797，浏览器会拦掉 fetch。**真服务端绝不能开这个**——那等于让任意网页读到手机接口。WebSocket 不受 CORS 约束（mockapi 的 upgrader 本来就放开 Origin），所以只补 HTTP 那一半。
 - **「手机 + 真桌面」的联调不碰你自己的应用**：造一个隔离的 HOME——`config.yaml` 里 `mobile.enabled: true`，一个 `mobile.json` 写着想要的 token（`0600`），再在 `~/.tachi/session/<id>/` 手写一份 `meta.json` + `messages.jsonl`——然后 `open -n --env HOME=<sandbox> desktop/bin/tachi-desktop.app` 起第二个实例。手机端照旧 `adb reverse tcp:8787 tcp:8787` 连 `127.0.0.1:8787`。收工只杀那一个：从 `ps eww` 按 `HOME=` 认 pid，**别对整个 bundle `pkill`**（会命中用户自己那份）。没有配 provider 时发送会被 409 `agent_unavailable` 挡下，那正是错误透传那条路的现成用例（手机应显示「这台电脑还没配好模型，先在电脑上配置」，输入框里的字要留着）。
