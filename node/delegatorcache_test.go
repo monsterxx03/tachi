@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -47,14 +48,34 @@ func TestNoPeersMeansNoDelegator(t *testing.T) {
 	require.Nil(t, cache.For(t.Context(), []config.PeerConfig{}))
 }
 
+// quietBrowser gives the cache a browser that cannot browse. Every case below whose discovery is
+// "on" used to open a REAL multicast browse on whatever machine ran the tests, and then Close it —
+// which hung about half the time on a machine with peers and tailscale on the LAN (the library's
+// browse goroutine outliving the wait). What those cases are about is the CACHE: whether it hands
+// out a sender, when it rebuilds, what a Close leaves behind. None of that needs the socket, so the
+// browser each of them gets is built over an interface that exists on no machine (nowhereInterface).
+func quietBrowser(c *DelegatorCache) {
+	c.newBrowser = func(self string, _ config.MdnsDiscoveryConfig, log *logger.Logger, store *sightingsStore) (*mdnsBrowser, error) {
+		return browserOver([]net.Interface{nowhereInterface()}, self, log, store), nil
+	}
+}
+
 // With discovery ON and nothing configured, there is still a sending side: the whole point of
 // discovery is a node that has no config line, and refusing here would make that impossible.
+//
+// The browser it starts is built over an interface that exists on no machine (nowhereInterface),
+// not over this machine's real ones. That is the difference between a test and a coin flip: browses
+// really running here made this case hang in Close about half the time (the library's own goroutine
+// outliving the wait — see the issue this fixes), and what this case is about is the CACHE's
+// decision, which is answered before any socket exists. It still starts and closes a real
+// mdnsBrowser; that one just cannot browse.
 func TestDiscoveryAloneStillYieldsASender(t *testing.T) {
 	previous := config.BaseDir()
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil, "")
+	quietBrowser(cache)
 	require.NotNil(t, cache.For(t.Context(), nil), "a machine with discovery on can still delegate")
 	cache.Close()
 }
@@ -166,6 +187,7 @@ func TestAClosedCacheHandsOutNothing(t *testing.T) {
 	peers := []config.PeerConfig{{Name: "nas", URL: "https://127.0.0.1:1"}}
 	opens := 0
 	cache := NewDelegatorCache("", Discovery{Enabled: true}, nil, nil, "")
+	quietBrowser(cache)
 	cache.openFunc = func(p []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error) {
 		opens++
 		return OpenSender(p, "", nil, store, "")
@@ -190,6 +212,7 @@ func TestGossipComesUpAndGoesDownWithTheCache(t *testing.T) {
 
 	// Off: nothing of it exists — no store, no loop, so no packet can be sent.
 	quiet := NewDelegatorCache("", Discovery{Enabled: true, SelfAddrs: []string{lanAddr}}, nil, nil, "")
+	quietBrowser(quiet)
 	require.NotNil(t, quiet.For(t.Context(), nil))
 	require.Nil(t, quiet.gossip, "gossip off means no loop runs")
 	quiet.Close()
