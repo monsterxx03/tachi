@@ -127,9 +127,11 @@ func TestCronPromptIsStableAndCarriesThePolicy(t *testing.T) {
 
 func TestCronToolTargetBindsTheCurrentConversation(t *testing.T) {
 	d, store := cronTestApp(t)
+	// The creating conversation ASKS for permission on purpose: the dedicated conversation a job
+	// gets must not inherit that, because nobody is there to answer it.
 	sess := addSession(t, store, &session.Session{
 		ID: "s1", Title: "工作", WorkingDir: t.TempDir(),
-		ProviderName: "alpha", SkipApproval: true,
+		ProviderName: "alpha",
 	})
 	// sessionRecord resolves through the per-session run; give it one.
 	sm := session.NewManagerWithStore(store, nil)
@@ -157,7 +159,10 @@ func TestCronToolTargetBindsTheCurrentConversation(t *testing.T) {
 	assert.Empty(t, next.Desktop.SessionID)
 	assert.Equal(t, sess.WorkingDir, next.Desktop.WorkingDir)
 	assert.Equal(t, "alpha", next.Desktop.ProviderName)
-	assert.True(t, next.Desktop.SkipApproval)
+	assert.True(t, next.Desktop.SkipApproval,
+		"a dedicated conversation runs unattended, so it skips approval even when the creating one asks")
+	// The bound half is unaffected: it writes into a conversation that has its own mode.
+	assert.False(t, job.Desktop.SkipApproval)
 
 	assert.True(t, target.Matches(&cron.Job{
 		TargetType: cron.TargetTypeDesktop,

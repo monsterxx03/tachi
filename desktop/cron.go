@@ -867,8 +867,14 @@ func (d *desktopApp) cronToolTarget(sessionID string) tools.CronTarget {
 					t.WorkingDir = cur.WorkingDir
 					t.AdditionalDirs = append([]string(nil), cur.AdditionalDirs...)
 					t.ProviderName = cur.ProviderName
-					t.SkipApproval = cur.SkipApproval
 				}
+				// A dedicated conversation is unattended by construction: nobody is looking at it
+				// when it runs, so an ask rule could only be answered with a refusal (and the turn
+				// would fail with no error in the log). So the workspace, the model and the extra
+				// directories are inherited from the conversation that created the job, while the
+				// approval mode is NOT — it starts as "unattended" and the reader can still turn it
+				// back to asking in the job's own settings.
+				t.SkipApproval = true
 				j.Desktop = t
 				return nil
 			}
