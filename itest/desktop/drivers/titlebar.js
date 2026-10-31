@@ -49,8 +49,12 @@
   // 本身（不是侧栏的 padding）：没有灯的平台上它还得当窗口的把手，而拖拽区必须是真的元素。
   const stripEl = smoke.q('.sidebar .window-strip')
   const strip = stripEl ? stripEl.getBoundingClientRect().height : -1
-  smoke.check('侧栏顶部留着一条红绿灯的带（≥ 一条栏高）', strip >= 44,
-    `strip=${strip}px`)
+  // 一条栏高就是 CSS 里那个数（--titlebar-h），不在这里复述 44：窗口可能带一点缩放，量出来
+  // 会差百分之一个像素（实测 43.9877），而那正是「够高」和「没留」之间的界线之外的东西。
+  const barH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--titlebar-h'))
+  const minStrip = (Number.isFinite(barH) ? barH : 44) - 0.5
+  smoke.check('侧栏顶部留着一条红绿灯的带（≥ 一条栏高）', strip >= minStrip,
+    `strip=${strip}px · 栏高=${barH}px`)
 
   // 那条带在没有红绿灯的平台上就是窗口的把手 —— 无边框窗口没有别的地方可拖（这条断言钉的是
   // 机制：--wails-draggable 认的是「事件落到哪个元素上」，所以把手必须是一个真元素）。

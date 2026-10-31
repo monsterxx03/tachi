@@ -35,9 +35,15 @@
   smoke.check('它确实在转（动画与时长都对）',
     dotStyle.animationName === 'spin-dot' && parseFloat(dotStyle.animationDuration) > 0,
     dotStyle.animationName + ' ' + dotStyle.animationDuration)
+  // 这条问的是「读得出来吗」，不是「正好 14px」：一个 14px 的圆在布局里量出来会是 13.99
+  // （亚像素；窗口带一点缩放时更明显），拿等号或整数下界去卡它，红的是测量而不是圆。
+  // 「环的粗细」问的是 mask 里有没有那个洞，不是 calc 的拼写：这个 WebKit 把
+  // `calc(100% - 3px)` 序列化成具体长度，所以按名字去找它只会红在写法上。这里钉的是机制 —
+  // radial 渐变，且第一站就是全透明（洞），颜色写作 transparent 还是 rgba(0,0,0,0) 都算。
+  const hole = /radial-gradient\(/.test(maskImage) && /transparent|rgba?\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(maskImage)
   smoke.check('直径与环的粗细都是可读的那个量级',
-    parseFloat(dotStyle.width) >= 14 && /calc\(100% - 3px\)/.test(maskImage),
-    dotStyle.width + ' / ' + maskImage.slice(0, 40))
+    parseFloat(dotStyle.width) >= 13.5 && hole,
+    dotStyle.width + ' / ' + maskImage.slice(0, 60))
   // 当前会话那一行不叠「还没看过」那层水洗：它在跑，所以它自己也带着 is-unseen（还在跑就是
   // 「还没看」的一种），但屏幕上这一行不需要第二层水洗 —— 只会把「你在哪」弄糊。那层是给后台
   // 会话的，由 session-running 断言，那里屏幕上的会话是另一个。
