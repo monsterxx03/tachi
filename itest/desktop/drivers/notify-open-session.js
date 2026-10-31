@@ -32,9 +32,14 @@
     return smoke.finish()
   }
 
-  window._wails.dispatchWailsEvent({ name: 'ui:open_session', data: other })
-
-  if (!(await smoke.waitFor(() => shown() === other, '切到通知说的那个会话'))) return smoke.finish()
+  // 派发放进等待循环里，而不是只发一次：页面订阅 ui:open_session 的时刻晚于「会话已打开」，
+  // 一条早到的消息会被丢掉 —— 而它丢得毫无痕迹（等 15 秒，然后失败）。真实的通知点击不会
+  // 落在这个窗口里（人点不到一个还没起来的窗口），这里重发只是把那个竞态还原成一次送达。
+  const switched = await smoke.waitFor(() => {
+    window._wails.dispatchWailsEvent({ name: 'ui:open_session', data: other })
+    return shown() === other
+  }, '切到通知说的那个会话')
+  if (!switched) return smoke.finish()
 
   // 真的读了它，而不是只换了 id：那条会话的记录此前从没被渲染过，所以它只能来自一次 LoadSession。
   const loaded = await smoke.waitFor(
