@@ -570,12 +570,7 @@ func TestTheDefaultSetAsksOnlyForTrafficItCanCarry(t *testing.T) {
 // The interface named here exists on no machine, so the library cannot join a multicast group on it
 // and both families fail — the same shape as the real one, without touching the real network.
 func TestCloseReturnsEvenWhenBrowsingNeverStarted(t *testing.T) {
-	nowhere := net.Interface{
-		Name:  "tachi-test-nowhere",
-		Index: 1 << 20,
-		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
-	}
-	b := browserOver([]net.Interface{nowhere}, nasID, nil, newSightingsStore(nil))
+	b := browserOver([]net.Interface{nowhereInterface()}, nasID, nil, newSightingsStore(nil))
 	b.Start(context.Background())
 
 	closed := make(chan struct{})
@@ -587,6 +582,17 @@ func TestCloseReturnsEvenWhenBrowsingNeverStarted(t *testing.T) {
 	case <-closed:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Close() waited for an entries channel that will never be closed")
+	}
+}
+
+// nowhereInterface is an interface that exists on no machine: a browser built over it cannot join a
+// multicast group on either family, which is the shape every test that must not touch the real
+// network's multicast needs (this one, and the delegator cache's).
+func nowhereInterface() net.Interface {
+	return net.Interface{
+		Name:  "tachi-test-nowhere",
+		Index: 1 << 20,
+		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning,
 	}
 }
 

@@ -69,6 +69,11 @@ type DelegatorCache struct {
 	// one knows its own store root — a process with no conversations (`-p`) passes "".
 	sessionsDir string
 	openFunc    func(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error)
+	// newBrowser builds the mDNS browser, and it is a field for the same reason openFunc is: a test
+	// that needs a browser OBJECT — to prove what the cache does around one, and that Close comes
+	// back — must not open a multicast socket on whatever machine it runs on. Nil means
+	// newMDNSBrowser, which is every non-test caller.
+	newBrowser func(self string, cfg config.MdnsDiscoveryConfig, log *logger.Logger, store *sightingsStore) (*mdnsBrowser, error)
 }
 
 // openSender is the default openFunc: this cache's own sending side, carrying the session root this
@@ -356,7 +361,11 @@ func (c *DelegatorCache) startDiscovery(ctx context.Context) {
 	// discover — what fails here is about interfaces and ports, and the hearsay half needs neither —
 	// so this failure turns off THIS source and says so once, and leaves the rest of discovery alone.
 	if c.discovery.Enabled {
-		browser, err := newMDNSBrowser(self, config.MdnsDiscoveryConfig{
+		build := c.newBrowser
+		if build == nil {
+			build = newMDNSBrowser
+		}
+		browser, err := build(self, config.MdnsDiscoveryConfig{
 			Enabled:    c.discovery.Enabled,
 			Interfaces: c.discovery.Interfaces,
 		}, c.log, store)
