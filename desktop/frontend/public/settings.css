@@ -36,7 +36,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 100;
+  z-index: var(--z-page);
   display: flex;
   /* Opaque, and the same surface as the chat view (see --app-bg): this layer COVERS the window
      rather than sitting in it, so it has to paint a background of its own. */
@@ -73,7 +73,7 @@
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   text-align: left;
   color: var(--text-dim);
   border-radius: var(--radius-sm);
@@ -87,7 +87,7 @@
    larger than the entries below it, like a sidebar group header is larger than its rows. */
 .settings-group-label {
   padding: 8px 8px 6px;
-  font-size: 15px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
 }
@@ -102,7 +102,10 @@
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 14.5px;
+  /* An entry in the rail, not a heading: it stays one step under .settings-group-label (15), which
+     is the whole hierarchy this column has. It used to be 14.5 against 15 — half a pixel, which the
+     smoke scenario caught as "标题 15px vs 分类 15px" the moment the scale was collapsed. */
+  font-size: var(--fs-ui);
   text-align: left;
   color: var(--text-dim);
   border-radius: var(--radius-sm);
@@ -118,7 +121,7 @@
   font-weight: 560;
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.settings-cat-count { font-size: 12px; color: var(--text-faint); font-weight: 400; }
+.settings-cat-count { font-size: var(--fs-meta); color: var(--text-faint); font-weight: 400; }
 .settings-cat.is-active .settings-cat-count { color: var(--accent-2); }
 
 /* ── Right pane: one group's form ───────────────────────────────────────────── */
@@ -134,8 +137,8 @@
   flex-shrink: 0;
   padding: 20px 28px 12px;
 }
-.settings-title { margin: 0; font-size: 17.5px; font-weight: 600; }
-.settings-sub { margin-top: 5px; font-size: 13px; color: var(--text-faint); }
+.settings-title { margin: 0; font-size: var(--fs-title); font-weight: 600; }
+.settings-sub { margin-top: 5px; font-size: var(--fs-label); color: var(--text-faint); }
 
 /* The scrolling half. `min-height: 0` because a flex child will not shrink below
    its content otherwise, which would push the footer off the window. */
@@ -161,7 +164,7 @@
 
 .set-key {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.5;
   color: var(--text);
   word-break: break-all;
@@ -175,14 +178,14 @@
   padding: 0 5px;
   border: 1px solid var(--amber);
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--amber);
   vertical-align: 1px;
   white-space: nowrap;
 }
 .set-note {
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   line-height: 1.5;
   color: var(--text-faint);
 }
@@ -192,7 +195,7 @@
 .set-readonly {
   padding: 6px 0;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--text-faint);
 }
 
@@ -201,7 +204,7 @@
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
-  font-size: 14.5px;
+  font-size: var(--fs-body);
   color: var(--text);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
@@ -213,7 +216,7 @@
 .set-textarea:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-ring); }
 .set-textarea {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   line-height: 1.6;
   resize: vertical;
   min-height: 62px;
@@ -254,13 +257,13 @@
    marked, and the batch is never sent — see fieldError. */
 .set-row.is-invalid .set-input,
 .set-row.is-invalid .set-textarea { border-color: var(--red); }
-.set-field-error { margin-top: 4px; font-size: 12.5px; color: var(--red); }
+.set-field-error { margin-top: 4px; font-size: var(--fs-label); color: var(--red); }
 
 .set-check {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--fs-ui);
   color: var(--text-dim);
   cursor: pointer;
   padding: 4px 0;
@@ -269,7 +272,7 @@
 
 /* One list item per line. The hint is inside the control column rather than in the
    label, because it is about the BOX, not about the key. */
-.set-list-hint { margin-top: 4px; font-size: 12px; color: var(--text-faint); }
+.set-list-hint { margin-top: 4px; font-size: var(--fs-meta); color: var(--text-faint); }
 
 /* ── A block of one category ────────────────────────────────────────────────── */
 /* One heading per top-level config key (`web_search`, `debug.pprof`), so a category with several
@@ -283,7 +286,7 @@
 .set-section-head {
   padding: 0 0 8px;
   font-family: inherit;
-  font-size: 15px;
+  font-size: var(--fs-body);
   font-weight: 640;
   color: var(--text);
   border-bottom: 1px solid var(--border-2);
@@ -309,7 +312,7 @@
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-ui);
   text-align: left;
   color: var(--text);
   cursor: pointer;
@@ -319,7 +322,7 @@
 .set-elem-name { font-weight: 560; }
 .set-elem-path {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-faint);
 }
 /* The FILE an item is stored in — a provider lives in its own `provider.*.json`, so a card has to
@@ -327,7 +330,7 @@
    path beside it: it is a location, not a name. */
 .set-elem-source {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   opacity: 0.85;
   padding: 1px 6px;
@@ -339,8 +342,8 @@
    fold still has to say that it holds some (and a refused value has to say that too — a card
    with an error is forced open, so this is the case where the fold was already overridden). */
 .set-elem-flags { margin-left: auto; flex-shrink: 0; }
-.set-elem-count { font-size: 12.5px; color: var(--accent-2); }
-.set-elem-bad { font-size: 12.5px; color: var(--red); }
+.set-elem-count { font-size: var(--fs-label); color: var(--accent-2); }
+.set-elem-bad { font-size: var(--fs-label); color: var(--red); }
 .set-elem-body { padding: 2px 12px 6px; border-top: 1px solid var(--border); }
 /* Inside a card the labels are the tails of the paths, so the column can be narrower than the
    page's. */
@@ -358,7 +361,7 @@
   flex-wrap: wrap;
   padding: 10px 0 2px;
 }
-.set-add-empty { font-size: 12.5px; color: var(--text-faint); }
+.set-add-empty { font-size: var(--fs-label); color: var(--text-faint); }
 
 /* Removing takes the card out of the list at once and leaves this line in its place — the list IS
    the pending change, and the button is the way back. Nothing is written until the save, so the
@@ -369,12 +372,12 @@
   gap: 10px;
   flex-basis: 100%;
   padding: 6px 0 0;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-dim);
 }
 .set-removed .set-removed-item { text-decoration: line-through; color: var(--text-faint); }
-.set-removed .btn { padding: 2px 8px; font-size: 11.5px; }
-.set-elem-body > .btn { margin: 8px 0 4px; padding: 3px 10px; font-size: 12px; }
+.set-removed .btn { padding: 2px 8px; font-size: var(--fs-meta); }
+.set-elem-body > .btn { margin: 8px 0 4px; padding: 3px 10px; font-size: var(--fs-meta); }
 
 /* A dropdown in place of a text box: same box, same focus ring. `appearance` is left alone —
    the platform's own chevron is the affordance, and drawing one by hand would be a second thing
@@ -400,10 +403,10 @@
   background: var(--panel-solid);
 }
 .set-preview-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.set-preview-title { font-size: 13px; font-weight: 560; color: var(--text); }
-.set-preview-counts { display: inline-flex; gap: 6px; font-size: 11.5px; }
+.set-preview-title { font-size: var(--fs-label); font-weight: 560; color: var(--text); }
+.set-preview-counts { display: inline-flex; gap: 6px; font-size: var(--fs-meta); }
 /* The way out of the panel rides the right end: the same place the form's own rows put theirs. */
-.set-preview-head .btn { margin-left: auto; padding: 2px 10px; font-size: 11.5px; }
+.set-preview-head .btn { margin-left: auto; padding: 2px 10px; font-size: var(--fs-meta); }
 /* A preview of a form that moved on. Amber, because it is not an error and not a fact — it is a
    warning that what is below is no longer about what is above. */
 .set-preview-stale,
@@ -416,16 +419,16 @@
   margin-bottom: 6px;
   border-radius: var(--radius-sm);
   background: var(--wash);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
   color: var(--text-dim);
 }
 .set-preview-stale { color: var(--amber); }
-.set-preview-stale .btn { padding: 1px 8px; font-size: 11.5px; }
+.set-preview-stale .btn { padding: 1px 8px; font-size: var(--fs-meta); }
 /* The path is a path: it is what the reader will look for in Finder if they want the original. */
 .set-preview-path {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text);
 }
 /* One file of a save that writes more than one: a heading (which file, and its counts), then that
@@ -436,14 +439,14 @@
 .set-preview-file-head { display: flex; align-items: center; gap: 8px; padding: 0 0 2px; }
 .set-preview-file-head .set-preview-counts { margin-left: auto; }
 .set-preview-tag {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-2xs);
 }
-.set-preview-refused { padding: 4px 0; font-size: 13px; color: var(--red); }
-.set-preview-empty { padding: 4px 0; font-size: 12.5px; color: var(--text-faint); }
+.set-preview-refused { padding: 4px 0; font-size: var(--fs-label); color: var(--red); }
+.set-preview-empty { padding: 4px 0; font-size: var(--fs-label); color: var(--text-faint); }
 /* The diff itself is the app's own renderer, so it brings chat.css's line styles with it; the ONLY
    thing overridden here is the body's padding, which exists there to separate file groups. */
 .set-preview-diff .diff-body { padding: 2px 0 0; }
@@ -463,14 +466,14 @@
 /* The save's answer. `flex: 1` so the sentence gets the room and the button keeps
    its place at the end — the sentence is regularly long (it names the keys that
    need a restart). */
-.settings-notice { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; color: var(--text-dim); }
+.settings-notice { flex: 1; min-width: 0; font-size: var(--fs-ui); line-height: 1.5; color: var(--text-dim); }
 /* A refusal is red; a save that landed is not, because most of what the sentence
    says is "3 项已生效，2 项需重启后生效" — which is information, not a warning. */
 .settings-notice.is-bad { color: var(--red); }
-.settings-dirty-count { flex-shrink: 0; font-size: 13px; color: var(--text-faint); }
+.settings-dirty-count { flex-shrink: 0; font-size: var(--fs-label); color: var(--text-faint); }
 
-.settings-empty { padding: 24px 0; font-size: 14.5px; color: var(--text-faint); }
-.settings-error { padding: 24px 0; font-size: 14.5px; color: var(--red); }
+.settings-empty { padding: 24px 0; font-size: var(--fs-body); color: var(--text-faint); }
+.settings-error { padding: 24px 0; font-size: var(--fs-body); color: var(--red); }
 
 /* ── MCP servers (the one block that is not a config leaf) ─────────────────── */
 /* MCP servers live in mcp.json, so this block is not a row: it writes its own file, saves per
@@ -481,13 +484,13 @@
 .mcp-servers-file {
   margin-left: 10px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 400;
   color: var(--text-faint);
 }
 .mcp-servers-hint {
   padding: 8px 0 2px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   line-height: 1.5;
   color: var(--text-faint);
 }
@@ -511,10 +514,10 @@
   padding: 9px 12px;
 }
 .mcp-entry.is-open .mcp-entry-head { border-bottom: 1px solid var(--border); }
-.mcp-entry-name { font-weight: 560; font-size: 14px; color: var(--text); }
+.mcp-entry-name { font-weight: 560; font-size: var(--fs-ui); color: var(--text); }
 .mcp-entry-type {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   background: var(--wash);
@@ -522,22 +525,22 @@
 }
 .mcp-entry-src {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
 /* A disabled server is not an error: it is a choice the panel's toggle wrote into the file, so it
    reads as a muted fact rather than as a warning. */
-.mcp-entry-off { font-size: 11.5px; color: var(--amber); }
+.mcp-entry-off { font-size: var(--fs-meta); color: var(--amber); }
 /* The row's actions ride the right end, and the 授权 button sits among them because an oauth
    server is a row that cannot connect until a browser round trip. */
-.mcp-entry-head .btn { margin-left: 0; padding: 2px 10px; font-size: 11.5px; }
+.mcp-entry-head .btn { margin-left: 0; padding: 2px 10px; font-size: var(--fs-meta); }
 .mcp-entry-head .btn:first-of-type { margin-left: auto; }
 /* 删除要先确认一次：确认这一步就长在这一行里（和定时任务那一排同一个做法），不做弹窗 ——
    弹窗会盖住「删的是哪一条、在哪个文件里」。`.mcp-entry-head .btn:first-of-type` 的
    margin-left 在这里要让位给这个容器的右对齐。 */
 .mcp-confirm-row { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .mcp-confirm-hint {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   max-width: 320px;
   white-space: nowrap;
@@ -545,7 +548,7 @@
   text-overflow: ellipsis;
 }
 .mcp-entry-head .mcp-confirm-row .btn:first-of-type { margin-left: 0; }
-.mcp-entry-auth { padding: 0 12px 8px; font-size: 12.5px; color: var(--text-dim); }
+.mcp-entry-auth { padding: 0 12px 8px; font-size: var(--fs-label); color: var(--text-dim); }
 
 .mcp-form { padding: 12px; border-top: 1px solid var(--border); }
 /* Two columns where there are two fields to a row; a single field keeps the left one. The grid is
@@ -558,25 +561,25 @@
   margin-bottom: 10px;
 }
 .mcp-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.mcp-field-label { font-size: 12.5px; color: var(--text-dim); }
-.mcp-check { flex-direction: row; align-items: center; gap: 7px; font-size: 13px; color: var(--text-dim); }
+.mcp-field-label { font-size: var(--fs-label); color: var(--text-dim); }
+.mcp-check { flex-direction: row; align-items: center; gap: 7px; font-size: var(--fs-label); color: var(--text-dim); }
 .mcp-form-actions { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
-.mcp-form-actions .btn { padding: 4px 14px; font-size: 13px; }
+.mcp-form-actions .btn { padding: 4px 14px; font-size: var(--fs-label); }
 
 /* ── 手机配对 ─────────────────────────────────────────────────────────────── */
 /* 不是一行配置：地址与令牌来自 mobile.json（一份凭据文件），二维码是那条 payload 的渲染。
    所以它跟 MCP 编辑器一样是一块自己拿数据的卡片，而不是 SaveSettings 的一个叶子。 */
 .mobile-pair { display: grid; gap: 10px; margin-top: 8px; }
 .mobile-pair-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
-.mobile-pair-label { font-size: 13px; color: var(--text-faint); }
+.mobile-pair-label { font-size: var(--fs-label); color: var(--text-faint); }
 .mobile-pair-value {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 13px; color: var(--text);
+  font-size: var(--fs-label); color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mobile-pair-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mobile-pair-qr { display: flex; gap: 16px; align-items: flex-start; margin-top: 2px; }
 .mobile-pair-qr img { width: 168px; height: 168px; border-radius: var(--radius-sm); background: #fff; padding: 6px; }
-.mobile-pair-qr-hint { font-size: 12.5px; line-height: 1.6; color: var(--text-faint); max-width: 320px; }
-.mobile-pair-warn { font-size: 12.5px; line-height: 1.6; color: var(--amber); }
-.mobile-pair-ok { font-size: 12.5px; color: var(--accent-2); }
+.mobile-pair-qr-hint { font-size: var(--fs-label); line-height: 1.6; color: var(--text-faint); max-width: 320px; }
+.mobile-pair-warn { font-size: var(--fs-label); line-height: 1.6; color: var(--amber); }
+.mobile-pair-ok { font-size: var(--fs-label); color: var(--accent-2); }

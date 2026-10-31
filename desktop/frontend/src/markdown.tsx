@@ -9,6 +9,8 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { CopyIcon } from './components'
+import { ImageOff } from 'lucide-react'
+import { Icon } from './icons'
 import { copyText, actOnKey, linkTargetPath, toLocalAsset } from './lib'
 import { revealFileInTree } from './filereveal'
 import { FilePreviewOverlay } from './filepreview'
@@ -152,7 +154,19 @@ function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; tit
   const [failed, setFailed] = useState(false)
   const url = toLocalAsset(src, workDir)
   if (!src || failed) {
-    return <span className="md-img-failed" title={src || ''}>图片无法加载{alt ? `：${alt}` : ''}</span>
+    // Two lines: what happened, then which image it was. One line of the two facts run together
+    // ("图片无法加载：missing") reads as a caption that happened to fail; a dashed box with a mark,
+    // a title and the name underneath reads as a slot where a picture should be — which is what the
+    // reader has to act on (re-paste it, or fix the path).
+    return (
+      <span className="md-img-failed" title={src || ''}>
+        <Icon as={ImageOff} />
+        <span className="md-img-failed-text">
+          <span className="md-img-failed-title">图片无法加载</span>
+          {alt ? <span className="md-img-failed-why">{alt}</span> : null}
+        </span>
+      </span>
+    )
   }
   return (
     <>

@@ -45,8 +45,12 @@
   smoke.check('起始就是样式表自己的大小（--fs-scale: 1）', Math.abs(base.prose - 15.5) < 0.01, base.prose + 'px')
   smoke.check('正文里的标题按 em 跟着正文', Math.abs(base.heading / base.prose - 1.065) < 0.01,
     `h2 ${base.heading}px / 正文 ${base.prose}px`)
-  smoke.check('时间戳这类铬有自己的固定尺寸（不跟着 --fs-prose）',
-    Math.abs(base.stamp - 10.5) < 0.01, base.stamp + 'px')
+  // 这里钉的从来不是某个具体数字，而是「时间戳属于不跟着 --fs-prose 放大的那一类字」。所以它比
+  // 的是样式表自己的刻度 token（--fs-micro），而不是写死的 10.5 —— 那个数字在字号刻度收敛时
+  // 变成了一条假的失败，而读者看到的界面完全正确。
+  const microPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs-micro'))
+  smoke.check('时间戳这类铬取固定刻度（--fs-micro），不跟着 --fs-prose',
+    Math.abs(base.stamp - microPx) < 0.01 && base.stamp < base.prose, `${base.stamp}px / 刻度 ${microPx}px`)
 
   // ⌘= 放大一档：正文 +10%，标题按同一比例，铬不动。
   apply('=')

@@ -50,7 +50,7 @@
   position: absolute;
   right: 22px;
   bottom: 16px;
-  z-index: 3;
+  z-index: var(--z-float);
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -59,14 +59,14 @@
   border-radius: var(--radius-pill);
   background: var(--panel-solid);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 550;
   cursor: pointer;
   box-shadow: var(--shadow-2);
   transition: color 0.15s var(--ease), border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 .jump-latest:hover { color: var(--accent-2); border-color: var(--accent-line); box-shadow: var(--shadow-2); }
-.jump-ico { font-size: 12px; line-height: 1; }
+.jump-ico { font-size: var(--fs-meta); line-height: 1; }
 
 /* ── Messages ────────────────────────────────────────────────────────────── */
 .msg {
@@ -108,7 +108,7 @@
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-weight: 620;
   /* Inset sheen + drop shadow: reads as a small physical chip. */
   box-shadow:
@@ -120,7 +120,7 @@
   background: linear-gradient(165deg, var(--panel-solid), var(--panel-2));
   color: var(--accent-2);
   border: 1px solid var(--accent-line-soft);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   overflow: hidden;
 }
 /* The agent's face: the app-icon artwork, square-cropped. The hairline border
@@ -214,15 +214,20 @@
 .md-img-failed {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-2);
   max-width: 100%;
-  padding: 5px 10px;
+  padding: var(--sp-1) var(--sp-3);
   border: 1px dashed var(--border-2);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   overflow-wrap: anywhere;
 }
+.md-img-failed > svg { flex: none; opacity: 0.8; }
+/* What happened, then which image it was — two facts that were one run-on line. */
+.md-img-failed-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.md-img-failed-title { color: var(--text-dim); }
+.md-img-failed-why { font-size: var(--fs-meta); color: var(--text-faint); }
 
 /* Assistant prose is what the app is for, so it gets book-like leading: a
    generous line-height on a light warm page is what makes a long answer
@@ -275,20 +280,20 @@
 }
 .tool-head:hover { background: var(--accent-softer); }
 .tool-ico {
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--accent-2);
   opacity: 0.65;
   flex-shrink: 0;
 }
 .tool-name {
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-weight: 560;
   letter-spacing: 0.01em;
   color: var(--text-dim);
   transition: color 0.12s var(--ease);
 }
 .tool-head:hover .tool-name { color: var(--accent-2); }
-.tool-status { margin-left: auto; font-size: 11.5px; font-weight: 700; }
+.tool-status { margin-left: auto; font-size: var(--fs-meta); font-weight: 700; }
 .tool-status.ok { color: var(--green); }
 .tool-status.err { color: var(--red); }
 /* In flight. It is neither of the two above: the start event carries ok=true (nothing has gone
@@ -296,11 +301,11 @@
    mark for "this succeeded", drawn on a call nobody has run. */
 .tool-status.run { color: var(--accent-2); }
 /* Result copy + elapsed time live on the tool header line (not their own row). */
-.tool-dur { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.tool-dur { font-size: var(--fs-micro); color: var(--text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 /* Tool result: a scrollable block like the args — a long tool output expands
    inside its own bounded area instead of stretching the whole transcript. */
 .tool-summary {
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-dim);
   margin-top: 7px;
   padding: 8px 11px;
@@ -321,10 +326,10 @@
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
-.stopped-note .stop-square { font-size: 10px; }
+.stopped-note .stop-square { font-size: var(--fs-micro); }
 
 /* ── Composer ────────────────────────────────────────────────────────────── */
 /* The bar spans the window (it is chrome, like the titlebar), but the blocks
@@ -339,7 +344,7 @@
   box-shadow: inset 0 1px 0 var(--sheen);
   flex-shrink: 0;
   position: relative;
-  z-index: 2;
+  z-index: var(--z-sticky);
 }
 .pending-bar,
 .composer-box,
@@ -355,7 +360,7 @@
   width: 100%;
   max-width: var(--reading-width);
   margin: 0 auto 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--amber);
 }
 
@@ -384,7 +389,7 @@
 .pending-title {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 560;
   color: var(--accent-2);
   white-space: nowrap;
@@ -402,7 +407,7 @@
   border: none;
   background: var(--accent-strong);
   color: var(--on-accent);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 560;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
@@ -415,7 +420,7 @@
   border: 1px solid var(--border-2);
   background: var(--veil);
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 3px 9px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -426,7 +431,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   line-height: 1.5;
   color: var(--text-dim);
   padding: 2px 4px;
@@ -445,7 +450,7 @@
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   cursor: pointer;
   padding: 1px 4px;
   border-radius: var(--radius-sm);
@@ -495,7 +500,7 @@
      a textarea's UA default (~185px) is narrower than the box it sits in. */
   width: 100%;
   color: var(--text);
-  font-size: 14.5px;
+  font-size: var(--fs-body);
   line-height: 1.55;
   font-family: inherit;
   /* One line. The floor mirrors COMPOSER_INPUT_MIN_H in composer.tsx, so "dragged back down" and
@@ -579,6 +584,9 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
 .stop-btn:hover { background: var(--red-strong); color: var(--on-accent); }
 .stop-btn:hover::before { border-top-color: var(--on-accent); border-right-color: var(--sheen); }
 .stop-btn:active { transform: scale(0.96); }
+/* The stop glyph is a filled square, so it takes the ink twice: lucide draws it as an outlined
+   rounded rect, and the fill is what turns that into the button's shape. */
+.stop-btn .stop-glyph { fill: currentColor; }
 @keyframes stop-spin { to { transform: rotate(360deg); } }
 .composer-actions {
   display: flex;
@@ -597,7 +605,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   /* Sized to sit in the input's own row: as tall as the mic circle beside it. */
   padding: 6px 14px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-weight: 580;
   cursor: pointer;
   transition: filter 0.15s var(--ease), transform 0.08s var(--ease);
@@ -659,7 +667,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   flex-wrap: nowrap;
   gap: 7px;
   padding: 9px 6px 2px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   min-width: 0;
 }
@@ -682,7 +690,7 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   gap: 5px;
   color: var(--text-dim);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -715,7 +723,7 @@ button.work-dir {
    further than it. */
 .work-dir-count {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 0 4px;
   border-radius: var(--radius-pill);
   background: var(--accent-soft);
@@ -734,7 +742,7 @@ button.work-dir {
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -745,7 +753,7 @@ button.work-dir {
 .plan-ico { color: var(--text-faint); }
 .plan-chip-count {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   padding: 0 4px;
   border-radius: var(--radius-pill);
   background: var(--wash-2);
@@ -761,13 +769,13 @@ button.work-dir {
   left: 0;
   right: 0;
   bottom: calc(100% + 6px);
-  z-index: 5;
+  z-index: var(--z-bar);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-2);
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
 }
 .at-picker-head {
   display: flex;
@@ -778,7 +786,7 @@ button.work-dir {
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .at-picker-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .at-picker-query {
@@ -789,7 +797,7 @@ button.work-dir {
   white-space: nowrap;
 }
 .at-picker-count { color: var(--text-faint); flex-shrink: 0; }
-.at-picker-hint { color: var(--text-faint); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.at-picker-hint { color: var(--text-faint); font-size: var(--fs-micro); white-space: nowrap; flex-shrink: 0; }
 .at-picker-empty { padding: 12px 10px; color: var(--text-faint); text-align: center; }
 /* ~8 rows before the list scrolls itself. */
 .at-picker-list { max-height: 208px; overflow-y: auto; padding: 4px; }
@@ -810,7 +818,7 @@ button.work-dir {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.at-picker-tag { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
+.at-picker-tag { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: var(--fs-micro); }
 /* The root a match came from, shown only for additional roots: the same relative
    path can exist in two roots, so the label is a word rather than a colour. */
 .at-picker-root {
@@ -819,7 +827,7 @@ button.work-dir {
   background: var(--accent-soft);
   border-radius: var(--radius-sm);
   padding: 0 5px;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
 }
 
 /* A row's one-line explanation: what a '#' namespace names, or what a node says about itself.
@@ -830,7 +838,7 @@ button.work-dir {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-faint);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
 }
 
 /* Wails puts this class on the drop target (data-file-drop-target) while a
@@ -859,22 +867,22 @@ button.work-dir {
   gap: 8px;
   padding: 8px 10px;
 }
-.file-ico { font-size: 14px; line-height: 1; flex-shrink: 0; }
+.file-ico { font-size: var(--fs-ui); line-height: 1; flex-shrink: 0; }
 .file-name {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.file-size { flex-shrink: 0; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.file-size { flex-shrink: 0; font-size: var(--fs-micro); color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .file-actions { margin-left: auto; display: inline-flex; gap: 4px; flex-shrink: 0; }
 .file-btn {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -887,7 +895,7 @@ button.work-dir {
    opening anything. */
 .file-note {
   padding: 0 10px 9px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
 .file-preview-body {
@@ -927,7 +935,7 @@ button.work-dir {
 .csv-scroll { max-height: 420px; overflow: auto; background: var(--panel-solid); }
 .csv-table {
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   width: 100%;
 }
 .csv-table th,
@@ -945,7 +953,7 @@ button.work-dir {
 .csv-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   background: var(--panel-2);
   color: var(--text-dim);
   font-weight: 560;
@@ -957,7 +965,7 @@ button.work-dir {
 }
 .file-preview-note {
   padding: 9px 12px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   background: var(--wash);
 }
@@ -968,7 +976,7 @@ button.work-dir {
   position: absolute;
   top: 6px;
   right: 6px;
-  z-index: 1;
+  z-index: var(--z-base);
   width: 24px;
   height: 24px;
   display: grid;
@@ -977,7 +985,7 @@ button.work-dir {
   border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
@@ -1003,7 +1011,7 @@ button.work-dir {
 }
 .diff-path {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1011,12 +1019,12 @@ button.work-dir {
 }
 /* +N −M: the same glyphs the footer chip sums. Colour is a hint here, never the
    message — the signs carry it. */
-.diff-count { font-size: 11px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.diff-count { font-size: var(--fs-micro); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .diff-count.is-add { color: var(--green); }
 .diff-count.is-del { color: var(--red); }
 .diff-note {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--amber);
 }
 .diff-body {
@@ -1028,7 +1036,7 @@ button.work-dir {
   gap: 6px;
   padding: 0 10px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre;
 }
@@ -1078,7 +1086,7 @@ button.work-dir {
 .diff-hscroll {
   position: sticky;
   bottom: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   margin-top: 6px;
   background: var(--panel-solid);
   /* The strip above the scrollbar paints over the rows scrolling under it (the spacer is 1px). */
@@ -1102,7 +1110,7 @@ button.work-dir {
   border: 1px dashed var(--border-2);
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-family: inherit;
   padding: 3px 8px;
   border-radius: var(--radius-sm);
@@ -1119,7 +1127,7 @@ button.work-dir {
   border: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-family: inherit;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
@@ -1243,7 +1251,7 @@ button.work-dir {
   font: inherit;
   /* 12.5px is the app's control size (see .find-input), and the diff's own text is 11.5px: an
      index read to FIND a file may not be the smallest type on the surface. */
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   text-align: left;
   padding: 4px 7px;
@@ -1276,7 +1284,7 @@ button.work-dir {
 .diff-filelist-group {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -1295,11 +1303,11 @@ button.work-dir {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
-.diff-filelist-group-count { flex-shrink: 0; color: var(--text-faint); font-size: 11px; }
+.diff-filelist-group-count { flex-shrink: 0; color: var(--text-faint); font-size: var(--fs-micro); }
 .diff-panel-head {
   display: flex;
   align-items: baseline;
@@ -1314,7 +1322,7 @@ button.work-dir {
      hole a scrolling row shows through. Keep this 12px in step with the margin above it. */
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--z-sticky);
   background: var(--panel-solid);
   box-shadow: 0 12px 0 var(--panel-solid);
   /* This row, and the two below, WRAP instead of widening the pane. The panel is a narrow
@@ -1325,7 +1333,7 @@ button.work-dir {
      Wrapping costs a second line in a narrow panel and keeps every control in view. */
   flex-wrap: wrap;
 }
-.diff-panel-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.diff-panel-title { font-size: var(--fs-label); font-weight: 600; color: var(--text); }
 /* The two long-text items of a diff head (the repo root, and each file's path) take the line's
    spare room and TRUNCATE, instead of setting the line's width from their own text. `flex-basis:
    0` alone is not enough: with the default `min-width: auto` an item's minimum is its
@@ -1336,13 +1344,13 @@ button.work-dir {
 .viewer-doc.is-diff .diff-path { flex: 1 1 0; min-width: 0; }
 .diff-panel-root {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.diff-panel-note { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+.diff-panel-note { margin-left: auto; flex-shrink: 0; font-size: var(--fs-micro); color: var(--text-faint); }
 /* The 上下/左右 switch. Two buttons rather than one toggling button: the reader has to be able to
    see WHICH layout is on without hovering for a tooltip, and a label that changes under the
    cursor ("切到左右" → "切到上下") is a thing you have to read twice to be sure of. */
@@ -1360,7 +1368,7 @@ button.work-dir {
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   padding: 1px 7px;
   border-radius: var(--radius-sm);
@@ -1374,7 +1382,7 @@ button.work-dir {
 .diff-layout-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
 .diff-panel-empty {
   padding: 10px 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
 .diff-file + .diff-file { margin-top: 16px; }
@@ -1393,7 +1401,7 @@ button.work-dir {
 }
 .diff-badge {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   padding: 0 5px;
   border-radius: var(--radius-sm);
   background: var(--wash-2);
@@ -1406,7 +1414,7 @@ button.work-dir {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-family: inherit;
   padding: 2px 7px;
   border-radius: var(--radius-sm);
@@ -1441,7 +1449,7 @@ button.work-dir {
   user-select: none;
 }
 /* File headers in a diff get the room to breathe that a card header does not. */
-.viewer-doc.is-diff .diff-path { flex: 1; font-size: 12px; color: var(--text); }
+.viewer-doc.is-diff .diff-path { flex: 1; font-size: var(--fs-meta); color: var(--text); }
 
 /* ── Review findings (P2b) ────────────────────────────────────────────────── */
 /* A finding sits directly under the line it is about: a review comment belongs next
@@ -1455,7 +1463,7 @@ button.work-dir {
   margin-bottom: 12px;
   border-radius: var(--radius-sm);
   background: var(--wash);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .diff-findings-title { color: var(--text); font-weight: 560; }
 .finding-count {
@@ -1463,10 +1471,10 @@ button.work-dir {
   padding: 0 6px;
   border-radius: var(--radius-pill);
   background: var(--panel-solid);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
-.diff-findings-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+.diff-findings-hint { margin-left: auto; color: var(--text-faint); font-size: var(--fs-micro); }
 /* The walk between findings: two arrows and how far along it is. It lives in the sticky send
    bar (see .diff-sendbar) rather than next to the count: the count is a fact about the run,
    the walk is where the reader IS, and only the bar stays on screen while a long diff is read. */
@@ -1479,14 +1487,14 @@ button.work-dir {
   background: var(--panel-solid);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .diff-jump-btn:hover { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-line); }
 .diff-jump-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
-.diff-jump-pos { color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; padding: 0 2px; }
+.diff-jump-pos { color: var(--text-faint); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; padding: 0 2px; }
 .finding {
   display: flex;
   gap: 6px;
@@ -1511,7 +1519,7 @@ button.work-dir {
   padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   color: var(--text-faint);
   white-space: nowrap;
@@ -1541,7 +1549,7 @@ button.work-dir {
    says it can be followed. */
 .finding-body .md-link { color: var(--accent-2); text-decoration: underline dotted; cursor: pointer; }
 .finding-body .md-link:hover { text-decoration: underline; }
-.finding-orphan { color: var(--text-faint); font-size: 10.5px; }
+.finding-orphan { color: var(--text-faint); font-size: var(--fs-micro); }
 /* A finding whose file is not in the diff has no code column to be indented under. */
 .finding-list .finding { margin-left: 0; }
 /* The row an arrow landed on. Marked rather than selected: the tick box is what says
@@ -1580,7 +1588,7 @@ button.work-dir {
   background: var(--panel-solid);
   color: var(--text);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   line-height: 1.45;
   resize: none;
   overflow: hidden;
@@ -1608,7 +1616,7 @@ button.work-dir {
   border-radius: var(--radius-sm);
   background: var(--panel-solid);
   box-shadow: var(--shadow-up);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .diff-sendbar-count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .diff-sendbar-count strong { color: var(--text); font-weight: 600; }
@@ -1617,13 +1625,13 @@ button.work-dir {
   background: transparent;
   color: var(--accent-2);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 2px 5px;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .diff-sendbar-link:hover { background: var(--accent-soft); }
-.diff-sendbar-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+.diff-sendbar-hint { margin-left: auto; color: var(--text-faint); font-size: var(--fs-micro); }
 .diff-sendbar-go {
   flex-shrink: 0;
   border: none;
@@ -1631,7 +1639,7 @@ button.work-dir {
   background: var(--accent-strong);
   color: var(--on-accent);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 560;
   padding: 5px 12px;
   border-radius: var(--radius-sm);
@@ -1648,7 +1656,7 @@ button.work-dir {
 .diff-notice {
   flex-shrink: 0;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--amber);
   cursor: help;
 }
@@ -1661,7 +1669,7 @@ button.work-dir {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 
@@ -1690,12 +1698,12 @@ button.work-dir {
   gap: 8px;
   padding-bottom: 6px;
   border-bottom: 1px dashed var(--border);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 /* A note about a pane that has no content. `anywhere` is what keeps a long absolute PATH — the
    report pane names the file it was pointed at — from widening the column it sits in. */
-.oneoff-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; overflow-wrap: anywhere; }
+.oneoff-empty { font-size: var(--fs-meta); color: var(--text-faint); padding: 4px 0; overflow-wrap: anywhere; }
 /* The live marker: the run is still writing its record, and the panel is polling it. */
 .oneoff-live { color: var(--accent-2); }
 
@@ -1716,7 +1724,7 @@ button.work-dir {
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .oneoff-tab:hover { color: var(--text); }
@@ -1735,7 +1743,7 @@ button.work-dir {
   background: var(--wash);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   text-align: left;
   cursor: pointer;
 }

@@ -17,6 +17,8 @@ import {
   SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
 } from './components'
 import { usePopoverPosition } from './popover'
+import { Icon, ICON_MD, ICON_XS } from './icons'
+import { Clock, FileText, PanelLeft, PanelRight, PenLine, Search } from 'lucide-react'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { CronPage, CronPanel } from './cron'
@@ -2630,7 +2632,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             the number updates while a turn's Cron tool changes it. */}
         {(s.cronCount || 0) > 0 ? (
           <span className="session-cron" title={`${s.cronCount} 个定时任务`} aria-label={`${s.cronCount} 个定时任务`}>
-            <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+            <Icon as={Clock} size={ICON_XS} />
             {s.cronCount}
           </span>
         ) : null}
@@ -2746,7 +2748,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="sidebar-actions">
               <button className="sidebar-search" aria-label="搜索会话" title="搜索会话（⌘K）"
                 onClick={() => { setPaletteOpen(false); setSessionPaletteOpen(true) }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="10.8" cy="10.8" r="6.6" /><path d="m16 16 4 4" /></svg>
+                <Icon as={Search} size={ICON_MD} />
               </button>
               {/* The full page's other door. The popover in the composer is the quick look;
                   this one is where a reader goes to manage tasks — and it is beside search
@@ -2754,7 +2756,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <button className={`sidebar-search${view === 'cron' ? ' is-on' : ''}`}
                 aria-label="定时任务" title="定时任务（所有后台任务）"
                 onClick={() => openCronPage(null, false)}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+                <Icon as={Clock} size={ICON_MD} />
               </button>
             </div>
           </div>
@@ -2769,7 +2771,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               and that project's own ＋. */}
           <button className="new-chat" onClick={() => { void newChat('') }}
             title="新建会话（⌘⇧N）">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h8" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5Z" /></svg>
+            <Icon as={PenLine} size={ICON_MD} />
             <span>新会话</span>
           </button>
           {/* The list, then the organising action under it: 新建项目 is how a reader groups
@@ -2964,7 +2966,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               otherwise nothing on screen saying which one was open. */}
           <header className="titlebar drag-region">
             <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg>
+              <Icon as={PanelLeft} size={ICON_MD} />
             </button>
             <div className="titlebar-title" title={sessionTitle || undefined}>{sessionTitle}</div>
             <div className="titlebar-right no-drag">
@@ -2989,12 +2991,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <button className={`sidebar-toggle filetree-toggle no-drag ${fileTreeOpen ? '' : 'is-collapsed'}`}
                 onClick={() => setFileTreeVisible(!fileTreeOpen)}
                 title={fileTreeOpen ? '收起文件树' : `展开文件树（${MOD_KEY}E）`}>
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 2.5h6l3 3v8h-9z"/><path d="M6 7h4M6 9.5h4M6 12h2.5"/></svg>
+                <Icon as={FileText} size={ICON_MD} />
               </button>
               <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
                 onClick={() => setOneOffOpen(!oneoffOpen)}
                 title={oneoffOpen ? '收起旁路面板' : '展开旁路面板（评审 / 提交的过程）'}>
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="10" y1="2.5" x2="10" y2="13.5"/></svg>
+                <Icon as={PanelRight} size={ICON_MD} />
               </button>
               <ThemeToggle theme={theme} onToggle={toggleTheme} />
             </div>
@@ -3049,7 +3051,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             {loading ? <div className="chat-loading">加载会话…</div> : (
               <>
                 {messages.length === 0 && (
-                  <div className="welcome"><div className="welcome-mark">◆</div><div className="welcome-title">你好，我是 Tachi</div><div className="welcome-sub">在下方输入问题开始对话。左侧可切换或新建会话。</div></div>
+                  // An empty conversation says what this thing is and what it can be asked to do,
+                  // in the order a newcomer needs them: one sentence, then the three gestures that
+                  // are otherwise only discoverable by remembering a shortcut. No ornament — the
+                  // mark that used to sit here (a gradient ◆) was the SECOND thing claiming to be
+                  // this app's face, beside the agent's avatar in every reply; the greeting does
+                  // not need a logo, and a page with nothing on it does not need a second body.
+                  <div className="welcome">
+                    <div className="welcome-title">你好，我是 Tachi</div>
+                    <div className="welcome-sub">读代码、跑命令、改文件——把要做的事说出来就行。</div>
+                    <div className="welcome-hints">
+                      <span className="welcome-hint"><kbd>@</kbd>引用文件</span>
+                      <span className="welcome-hint"><kbd>#</kbd>引用会话或节点</span>
+                      <span className="welcome-hint"><kbd>{MOD_KEY}</kbd><kbd>K</kbd>找一段旧对话</span>
+                    </div>
+                  </div>
                 )}
                 {messages.map((m) => {
                   if (m.role === 'user') {
@@ -3268,7 +3284,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     title={currentCronCount > 0 ? `定时任务（本会话 ${currentCronCount} 个）` : '定时任务'}
                     aria-label="定时任务" onClick={() => setCronOpen((v) => !v)}>
                     <span className="cron-ico">
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.2l2 1.2" /></svg>
+                      <Icon as={Clock} size={ICON_XS} />
                     </span>
                     {currentCronCount > 0 ? <span className="cron-btn-count">{currentCronCount}</span> : null}
                   </button>

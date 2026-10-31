@@ -42,7 +42,7 @@
   top: 0;
   bottom: 0;
   width: 6px;
-  z-index: 6;
+  z-index: var(--z-above);
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s var(--ease);
@@ -78,7 +78,7 @@
   top: 0;
   bottom: 0;
   width: 6px;
-  z-index: 6;
+  z-index: var(--z-above);
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s var(--ease);
@@ -111,7 +111,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   top: 0;
   bottom: 0;
   width: 6px;
-  z-index: 6;
+  z-index: var(--z-above);
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s var(--ease);
@@ -131,7 +131,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 .filetree-title {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--text-dim);
   letter-spacing: 0.02em;
@@ -146,7 +146,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: var(--fs-label);
   cursor: pointer;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
@@ -169,7 +169,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
      塞在 24px 的盒子里会比侧栏的行显得更挤。 */
   height: 26px;
   padding-right: 8px;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   color: var(--text-dim);
   cursor: pointer;
   user-select: none;
@@ -182,18 +182,18 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .filetree-row.is-cursor { box-shadow: inset 2px 0 0 var(--accent-2); }
 .filetree-row.is-ignored { color: var(--text-faint); }
 .filetree-row.is-missing { color: var(--text-faint); opacity: 0.7; }
-.filetree-row.is-note { color: var(--text-faint); cursor: default; font-size: 12px; }
+.filetree-row.is-note { color: var(--text-faint); cursor: default; font-size: var(--fs-meta); }
 .filetree-caret { width: var(--caret-size); display: grid; place-items: center; color: var(--text-faint); flex-shrink: 0; }
 .filetree-caret.is-none { visibility: hidden; }
-.filetree-ico { width: 15px; text-align: center; font-size: 12.5px; flex-shrink: 0; }
+.filetree-ico { width: 15px; text-align: center; font-size: var(--fs-label); flex-shrink: 0; }
 .filetree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .filetree-label,
 .filetree-ignored,
-.filetree-size { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
-.filetree-branch { flex-shrink: 0; font-size: 11.5px; color: var(--accent-2); }
+.filetree-size { flex-shrink: 0; font-size: var(--fs-meta); color: var(--text-faint); }
+.filetree-branch { flex-shrink: 0; font-size: var(--fs-meta); color: var(--accent-2); }
 .filetree-ignored { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; }
 .filetree-size { font-variant-numeric: tabular-nums; }
-.filetree-link { font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
+.filetree-link { font-size: var(--fs-micro); color: var(--text-faint); flex-shrink: 0; }
 /* 变化标记：短促的一点（见 useFileTree 的 DIRTY_MARK_MS），点它重新读这一层。 */
 .filetree-dirty {
   border: none;
@@ -201,11 +201,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--accent-2);
   cursor: pointer;
   padding: 0 2px;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   flex-shrink: 0;
 }
-.filetree-empty { padding: 18px 14px; color: var(--text-faint); font-size: 12.5px; line-height: 1.6; }
-.filetree-hint { margin-top: 6px; font-size: 12px; }
+.filetree-empty { padding: 18px 14px; color: var(--text-faint); font-size: var(--fs-label); line-height: 1.6; }
+.filetree-hint { margin-top: 6px; font-size: var(--fs-meta); }
 
 /* ── File view（内容列换成文件） ───────────────────────────────────────────
    会话那一列的另一个视图，与设置页同一条规则：被它盖住的那一半（`.chat-covered`）保持挂载、
@@ -231,7 +231,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .file-view {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: var(--z-float);
   display: flex;
   flex-direction: column;
   /* 与 .app、.settings-view 同一张平面（--app-bg）：第三块不透明的面盖在内容列上，它跟旁边那块
@@ -253,20 +253,20 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--panel-solid);
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   transition: color 0.12s var(--ease), border-color 0.12s var(--ease);
 }
 .fileview-back:hover { color: var(--accent-2); border-color: var(--accent-line); }
 .fileview-name {
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-weight: 560;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fileview-size { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
+.fileview-size { flex-shrink: 0; font-size: var(--fs-meta); color: var(--text-faint); }
 .fileview-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 /* 这一行是一条脱离了树的路径文本，"同一个仓库的两份检出"正是会撞名字的情形——所以它带根标签，
    绝对路径留在 tooltip 里（与 diff 面板"只要其中一个必须带标签，每一行就都要带"同一个理由）。 */
@@ -274,7 +274,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   padding: 0 16px 8px;
   border-bottom: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -288,7 +288,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex-shrink: 0;
   padding: 7px 16px;
   background: var(--wash);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
 }
 .fileview-reload {
@@ -298,7 +298,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--panel-solid);
   color: var(--accent-2);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .fileview-reload:hover { border-color: var(--accent-line); }
@@ -310,9 +310,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .fileview-doc.is-table { max-width: 100%; padding: 16px 20px 32px; }
 .fileview-frame { display: block; width: 100%; height: 100%; min-height: 70vh; border: 0; }
 .fileview-img { display: block; max-width: 100%; margin: 0 auto; padding: 14px 0; cursor: zoom-in; }
-.fileview-empty { padding: 40px 24px; color: var(--text-faint); font-size: 13px; line-height: 1.7; }
-.fileview-hint { margin-top: 6px; font-size: 12px; }
-.find-bar.is-view { position: absolute; top: 10px; right: 22px; z-index: 6; }
+.fileview-empty { padding: 40px 24px; color: var(--text-faint); font-size: var(--fs-label); line-height: 1.7; }
+.fileview-hint { margin-top: 6px; font-size: var(--fs-meta); }
+.find-bar.is-view { position: absolute; top: 10px; right: 22px; z-index: var(--z-above); }
 
 .oneoff-head {
   display: flex;
@@ -325,7 +325,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 
 .oneoff-title {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--text-dim);
   letter-spacing: 0.02em;
@@ -342,7 +342,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--panel-solid);
   color: var(--text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 
 .oneoff-icon {
@@ -355,7 +355,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: var(--fs-label);
   cursor: pointer;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
@@ -379,7 +379,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* The ＋ glyph inside the sidebar's labelled create button (新建项目). It is a size of its own because
    that button carries text: the glyph sits beside the label at the same 14px the group headers draw
    their own ＋ at (.proj-add) — one gesture, "＋ 新建 X", at two ends of the list. */
-.new-chat-plus { font-size: 14px; }
+.new-chat-plus { font-size: var(--fs-ui); }
 
 .session-list {
   flex: 1;
@@ -433,7 +433,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--accent-line);
 }
 .session-title {
-  font-size: 14px;
+  font-size: var(--fs-ui);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -448,7 +448,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-faint);
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
@@ -470,7 +470,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   padding: 2px 8px 6px 11px;
 }
 .sidebar-brand {
-  font-size: 17px;
+  font-size: var(--fs-title);
   font-weight: 650;
   letter-spacing: -0.3px;
   color: var(--text);
@@ -510,7 +510,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   text-align: left;
   cursor: pointer;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
@@ -534,7 +534,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border: none;
   color: var(--text-faint);
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -579,20 +579,20 @@ body.is-resizing { cursor: col-resize; user-select: none; }
      that failure — true on paper, invisible on screen. The gap is smaller than it was (15 vs 14)
      because the header is no longer a card standing over the list; what has to survive is that it
      reads as a level above, not that it reads as a different component. */
-  font-size: 14.5px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.proj-count { flex-shrink: 0; font-size: 12.5px; color: var(--text-faint); }
+.proj-count { flex-shrink: 0; font-size: var(--fs-label); color: var(--text-faint); }
 /* "Your conversation is in this (collapsed) group": a compact tick, because the group's rows are
    not on screen to carry the highlight. It takes the active row's own accent pair, so the marker
    and the row it stands for read as one thing. */
 .proj-current {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   line-height: 1;
   color: var(--accent-2);
 }
@@ -606,7 +606,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--accent-2);
 }
@@ -619,7 +619,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    below sets the same bordered chip shape. */
 .proj-wait {
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 1.35;
   color: var(--amber);
@@ -633,7 +633,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    told apart by that colour and by the tooltip that names the conversations. */
 .proj-unseen {
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 1.35;
   color: var(--accent-2);
@@ -645,7 +645,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    again; the header says so instead of hiding the group (design §8.6). */
 .proj-bad {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--amber);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
@@ -656,7 +656,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 14px;
+  font-size: var(--fs-ui);
   padding: 0 4px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -667,7 +667,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-width: 0;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-weight: 600;
   color: var(--text);
   background: var(--panel-solid);
@@ -680,7 +680,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    stays open, so the reason has to be attached to it rather than to a toast. */
 .proj-notice {
   padding: 5px 10px 3px 24px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--red);
 }
 /* A group's rows are indented one step, inside their own container: a header-relative sibling
@@ -701,7 +701,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    group says so instead of looking broken (and instead of being hidden, which is worse). */
 .proj-empty {
   padding: 5px 8px 3px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-faint);
 }
 
@@ -725,7 +725,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 .session-chain {
   border-top: none;
@@ -753,7 +753,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: transparent;
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
 }
@@ -762,7 +762,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* A session kept only as the pre-compaction half of a chain: indented under its successor, and
    its own meta says so — the title alone cannot tell the two apart. */
 .session.is-compacted { margin-left: 12px; }
-.session.is-compacted .session-title { font-size: 13px; color: var(--text-faint); }
+.session.is-compacted .session-title { font-size: var(--fs-label); color: var(--text-faint); }
 /* A state chip in the row's meta line (压缩前 / 只读 · 某台机器). One line, always: it is a label,
    not a sentence — the sentence is the row's tooltip. `flex: 0 1 auto` + ellipsis means a long node
    name gives way to the timestamp rather than wrapping the row to five lines (which is exactly what
@@ -774,7 +774,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -807,7 +807,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   padding: 8px 26px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-2);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-dim);
 }
 .managed-banner-tag {
@@ -829,11 +829,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--chrome-1);
   color: var(--text-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .managed-banner-stop:hover { color: var(--accent-2); border-color: var(--accent-line); }
-.managed-banner-stop-note { color: var(--text-dim); font-size: 12px; }
+.managed-banner-stop-note { color: var(--text-dim); font-size: var(--fs-meta); }
 
 /* What stands in for the composer on such a session: the reason, in the place the input box
    would have been. The box is REMOVED rather than disabled because a greyed-out field still
@@ -844,7 +844,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   max-width: var(--reading-width);
   margin-inline: auto;
   padding: 8px 0 4px;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-dim);
   line-height: 1.45;
 }
@@ -880,7 +880,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border-radius: var(--radius-pill);
   background: var(--accent-softer);
   color: var(--accent-2);
-  font-size: 9.5px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   vertical-align: middle;
 }
@@ -902,7 +902,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-label);
   text-align: left;
   color: var(--text-dim);
   border-radius: var(--radius-sm);
@@ -912,7 +912,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .footer-item:hover { background: var(--hover); color: var(--text); }
 .footer-item:disabled { color: var(--text-faint); cursor: default; }
 .footer-item:disabled:hover { background: transparent; color: var(--text-faint); }
-.footer-ico { display: inline-flex; align-items: center; font-size: 14px; }
+.footer-ico { display: inline-flex; align-items: center; font-size: var(--fs-ui); }
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 .main {
@@ -958,7 +958,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   box-shadow: inset 0 1px 0 var(--sheen);
   flex-shrink: 0;
   position: relative;
-  z-index: 2;
+  z-index: var(--z-sticky);
   /* The lights' room belongs to the sidebar while it is open. Fold it away and the whole content
      column, this bar included, slides under them — so the left padding has to become their
      clearance, on the sidebar's own curve and duration. The two animate together, which is what
@@ -977,7 +977,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .titlebar-title {
   flex: 1;
   min-width: 0;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   font-weight: 560;
   color: var(--text);
   white-space: nowrap;
@@ -1003,7 +1003,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 .titlebar-sep {
   width: 1px;
@@ -1046,7 +1046,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .theme-toggle:hover { border-color: var(--accent-line); }
 .theme-ico {
   position: relative;
-  z-index: 1; /* above the thumb */
+  z-index: var(--z-base); /* above the thumb */
   display: grid;
   place-items: center;
   width: 26px; /* two slots fill the 52px content box exactly */

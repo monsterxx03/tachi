@@ -40,7 +40,7 @@
   border: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -48,7 +48,7 @@
 }
 .agents-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
 .agents-ico { display: inline-flex; align-items: center; }
-.agents-count { font-size: 10px; color: var(--green); font-weight: 600; }
+.agents-count { font-size: var(--fs-micro); color: var(--green); font-weight: 600; }
 .mcp-btn {
   display: inline-flex;
   align-items: center;
@@ -56,7 +56,7 @@
   border: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -64,7 +64,7 @@
 }
 .mcp-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
 .mcp-ico { display: inline-flex; align-items: center; }
-.mcp-count { font-size: 10px; color: var(--green); font-weight: 600; }
+.mcp-count { font-size: var(--fs-micro); color: var(--green); font-weight: 600; }
 
 /* MCP panel: the shared popover shell (.popover-panel) plus its own size and
    internal scrolling — the server list can be long, so the body scrolls while
@@ -75,7 +75,7 @@
      the room the floating hook measured under the trigger (--popover-max-h). The panel's body
      scrolls, so a smaller room costs rows, never a cut-off head. */
   max-height: min(70vh, 560px, var(--popover-max-h, 100vh));
-  z-index: 51;
+  z-index: var(--z-popover);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -85,10 +85,10 @@
 /* The title block stacks the head's totals under the name: side by side they would not fit
    beside the profile select and the close button in a 360px panel. */
 .mcp-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.mcp-title { font-size: 13px; font-weight: 600; }
-.mcp-total { font-size: 11px; color: var(--text-faint); }
+.mcp-title { font-size: var(--fs-label); font-weight: 600; }
+.mcp-total { font-size: var(--fs-micro); color: var(--text-faint); }
 .mcp-profile { display: inline-flex; align-items: center; gap: 6px; }
-.mcp-profile-label { font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.mcp-profile-label { font-size: var(--fs-micro); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .mcp-profile-select {
   -webkit-appearance: none;
   appearance: none;
@@ -99,16 +99,16 @@
   background-size: 10px 10px;
   border: 1px solid var(--border-2);
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 2px 16px 2px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .mcp-profile-select:disabled { opacity: 0.6; cursor: wait; }
-.mcp-close { border: none; background: transparent; cursor: pointer; color: var(--text-dim); font-size: 14px; }
+.mcp-close { border: none; background: transparent; cursor: pointer; color: var(--text-dim); font-size: var(--fs-ui); }
 .mcp-close:hover { color: var(--text); }
 .mcp-body { overflow-y: auto; padding: 6px 8px 10px; }
-.mcp-empty { padding: 18px 10px; color: var(--text-faint); font-size: 12.5px; }
+.mcp-empty { padding: 18px 10px; color: var(--text-faint); font-size: var(--fs-label); }
 
 /* ── Agents status-bar button + node board ─────────────────────────────── */
 /* The same shell as the MCP panel (.popover-panel plus .mcp-panel's size and scrolling): one
@@ -119,7 +119,7 @@
   border: 1px solid var(--border-2);
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -131,7 +131,7 @@
    a fact to compare, not prose to read. */
 .agents-id {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   flex-shrink: 0;
 }
@@ -142,7 +142,7 @@
    its worst case and half of one would say nothing. */
 .agents-src {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -165,7 +165,7 @@
   gap: 3px;
   padding: 2px 8px 10px 24px;
 }
-.agents-line { display: flex; gap: 8px; font-size: 11.5px; line-height: 1.5; }
+.agents-line { display: flex; gap: 8px; font-size: var(--fs-meta); line-height: 1.5; }
 .agents-k { flex-shrink: 0; width: 32px; color: var(--text-faint); }
 .agents-v { min-width: 0; color: var(--text-dim); word-break: break-word; }
 /* One skill per line inside the 技能 line's value column: the label is written ONCE for the list and
@@ -175,15 +175,15 @@
 .agents-skill { display: block; }
 .agents-skill + .agents-skill { margin-top: 3px; }
 .agents-skill-name { color: var(--text); }
-.agents-mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; }
+.agents-mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: var(--fs-micro); }
 .mcp-server { border-bottom: 1px solid var(--border); }
 .mcp-server:last-child { border-bottom: none; }
 .mcp-server-row { display: flex; align-items: center; gap: 8px; padding: 9px 6px; cursor: pointer; }
-.mcp-server-name { font-weight: 600; font-size: 12.5px; }
-.mcp-server-state { font-size: 11px; }
+.mcp-server-name { font-weight: 600; font-size: var(--fs-label); }
+.mcp-server-state { font-size: var(--fs-micro); }
 .mcp-server-state.on { color: var(--green); }
 .mcp-server-state.off { color: var(--red); }
-.mcp-toolcount { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+.mcp-toolcount { margin-left: auto; font-size: var(--fs-micro); color: var(--text-faint); }
 /* The row's disclosure caret (components.tsx's <Caret>). It is what makes a folded row read
    as something that OPENS: with the tools folded by default the row is a name, a state and a
    tool count, and a static-looking line gives a reader no reason to click it. */
@@ -193,7 +193,7 @@
   border: 1px solid var(--border-2);
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -214,9 +214,9 @@
 @keyframes mcp-spin { to { transform: rotate(360deg); } }
 .mcp-tool { display: flex; flex-direction: column; }
 .mcp-tool-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; cursor: pointer; }
-.mcp-tool-state { font-size: 11px; color: var(--text-faint); }
+.mcp-tool-state { font-size: var(--fs-micro); color: var(--text-faint); }
 .mcp-tool-state.loaded { color: var(--green); }
-.mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-tool-name { font-size: var(--fs-meta); color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A tool the server offers but this session has not loaded: listed all the same, greyed. The
    grey is the distinction the panel has to carry — under tool search a server auto-loads
    nothing, so an unloaded tool is the NORMAL state and "not loaded" must not read as "missing"
@@ -228,14 +228,14 @@
 /* A tool's own contract, opened on click: its description and one line per parameter.
    Fetched per tool (GetMCPToolSchema), which is why nothing here loads with the list. */
 .mcp-tool-detail { padding: 0 6px 8px 30px; display: flex; flex-direction: column; gap: 5px; }
-.mcp-tool-desc { font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
-.mcp-param { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 11.5px; }
+.mcp-tool-desc { font-size: var(--fs-meta); color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.mcp-param { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--fs-meta); }
 .mcp-param-name { color: var(--text); font-family: "SF Mono", ui-monospace, Menlo, monospace; }
 .mcp-param-req { color: var(--red); margin-left: 1px; }
-.mcp-param-type { color: var(--accent); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; }
+.mcp-param-type { color: var(--accent); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: var(--fs-micro); }
 .mcp-param-desc { color: var(--text-dim); flex: 1 1 100%; }
-.mcp-param-meta { color: var(--text-faint); font-size: 11px; }
-.mcp-param-none { font-size: 11.5px; color: var(--text-faint); }
+.mcp-param-meta { color: var(--text-faint); font-size: var(--fs-micro); }
+.mcp-param-none { font-size: var(--fs-meta); color: var(--text-faint); }
 
 /* ── MCP authorization ───────────────────────────────────────────────────── */
 /* One server's authorization: what the flow is doing, the URL to open (or copy into a
@@ -247,13 +247,13 @@
 .mcp-auth { padding: 4px 6px 10px 16px; display: flex; flex-direction: column; gap: 6px; }
 /* The instructions are multi-line prose on purpose (they are what the flow reported), so
    they keep their line breaks instead of collapsing into one paragraph. */
-.mcp-auth-msg { font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.mcp-auth-msg { font-size: var(--fs-meta); color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
 .mcp-auth-msg.err { color: var(--red); }
 .mcp-auth-url, .mcp-auth-paste { display: flex; align-items: center; gap: 6px; }
 .mcp-auth-url input, .mcp-auth-paste-input {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 6px;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
@@ -270,12 +270,12 @@
 .ctx-panel {
   width: 320px;
   padding: 12px 14px 10px;
-  z-index: 52;
+  z-index: var(--z-popover);
 }
 .ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.ctx-title { font-size: 13px; font-weight: 600; }
-.ctx-total { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
-.ctx-sub { margin-top: 2px; font-size: 11px; color: var(--text-faint); }
+.ctx-title { font-size: var(--fs-label); font-weight: 600; }
+.ctx-total { font-size: var(--fs-meta); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ctx-sub { margin-top: 2px; font-size: var(--fs-micro); color: var(--text-faint); }
 /* Stacked bar. Segments are sized by their token count via flex-grow, so the
    proportions need no rounding and the bar always fills its width exactly; the
    1px gap is what makes the parts read as parts. */
@@ -293,7 +293,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -307,14 +307,14 @@
   white-space: nowrap;
 }
 .ctx-pct { width: 40px; text-align: right; color: var(--text-faint); }
-.ctx-empty { padding: 14px 0 10px; text-align: center; font-size: 12px; line-height: 1.7; color: var(--text-faint); }
+.ctx-empty { padding: 14px 0 10px; text-align: center; font-size: var(--fs-meta); line-height: 1.7; color: var(--text-faint); }
 /* The estimate is a local heuristic — say so, so nobody reconciles it against a
    provider's bill. */
 .ctx-foot {
   margin-top: 11px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 
@@ -330,7 +330,7 @@
 /* ── Sidebar context menu + rename ─────────────────────────────────────── */
 .ctx-menu {
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-submenu);
   min-width: 128px;
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
@@ -348,7 +348,7 @@
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   text-align: left;
   color: var(--text);
   border-radius: var(--radius-sm);
@@ -370,7 +370,7 @@
   border-radius: var(--radius-sm);
   background: var(--panel-solid);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   padding: 2px 6px;
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-ring);
@@ -379,7 +379,7 @@
 .confirm-overlay {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-modal);
   background: var(--scrim-strong);
   display: grid;
   place-items: center;
@@ -396,11 +396,11 @@
   padding: 20px;
   animation: panel-in 0.2s var(--ease) both;
 }
-.confirm-msg { font-size: 14px; font-weight: 600; color: var(--text); }
-.confirm-sub { margin-top: 6px; font-size: 12px; color: var(--text-dim); }
+.confirm-msg { font-size: var(--fs-ui); font-weight: 600; color: var(--text); }
+.confirm-sub { margin-top: 6px; font-size: var(--fs-meta); color: var(--text-dim); }
 /* A refusal from the backend (the delete that could not run) sits between the
    question and the buttons: it explains why the button just pressed did nothing. */
-.confirm-error { margin-top: 10px; font-size: 12.5px; color: var(--red); }
+.confirm-error { margin-top: 10px; font-size: var(--fs-label); color: var(--red); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 /* Rewind preview: what a rewind would restore, and — the part that matters — what it
    would DELETE. The file list is capped in the markup; the counts always are not. */
@@ -408,32 +408,32 @@
 /* In conversation-only mode the list is a HINT, not a promise: what a full rewind would
    have changed. It is labelled at the top so the counts under it are not read as work
    this rewind is about to do. */
-.rewind-roots-head { font-size: 12px; color: var(--text-faint); }
-.rewind-root { font-size: 12px; color: var(--text-dim); }
+.rewind-roots-head { font-size: var(--fs-meta); color: var(--text-faint); }
+.rewind-root { font-size: var(--fs-meta); color: var(--text-dim); }
 .rewind-root-head { color: var(--text-faint); font-family: var(--mono, monospace); word-break: break-all; }
 .rewind-root-counts { margin-top: 2px; color: var(--text-dim); }
 .rewind-root-counts b { color: var(--red); font-weight: 600; }
 /* The benign workspace answer: "this turn wrote nothing, there is nothing to restore".
    Dim, because it is a fact rather than a warning — the file lists above are the
    destructive half and the red line is the "nothing was restored" one. */
-.rewind-note { margin-top: 10px; font-size: 12.5px; color: var(--text-faint); }
+.rewind-note { margin-top: 10px; font-size: var(--fs-label); color: var(--text-faint); }
 /* The scope toggle: whether the workspace goes back with the conversation. Sits between
    the sentence and the file hint, because it is what decides how to read that hint. */
 .rewind-scope {
   display: flex; align-items: center; gap: 7px; margin-top: 12px;
-  font-size: 12.5px; color: var(--text-dim); cursor: pointer; user-select: none;
+  font-size: var(--fs-label); color: var(--text-dim); cursor: pointer; user-select: none;
 }
 .rewind-scope input { margin: 0; cursor: pointer; accent-color: var(--red); }
 .rewind-added {
   margin: 4px 0 0; padding-left: 16px;
-  font-family: var(--mono, monospace); font-size: 11.5px; color: var(--text-faint);
+  font-family: var(--mono, monospace); font-size: var(--fs-meta); color: var(--text-faint);
   max-height: 110px; overflow: auto;
 }
 .btn {
   border: 1px solid var(--border-2);
   background: var(--veil);
   color: var(--text-dim);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-weight: 520;
   padding: 6px 14px;
   border-radius: var(--radius-sm);
@@ -444,7 +444,7 @@
 .btn.danger { border-color: var(--red-line); color: var(--red); }
 .btn.danger:hover { background: var(--red-strong); color: var(--on-accent); border-color: var(--red-strong); }
 .btn.ghost { border-color: transparent; background: transparent; }
-.btn.sm { padding: 3px 9px; font-size: 11.5px; }
+.btn.sm { padding: 3px 9px; font-size: var(--fs-meta); }
 .btn.primary { background: var(--accent-strong); border-color: transparent; color: var(--on-accent); font-weight: 550; }
 .btn.primary:hover { background: var(--accent-2); color: var(--on-accent); border-color: transparent; }
 /* A disabled .btn must LOOK disabled: buttons that silently do nothing (because
@@ -461,14 +461,14 @@
    place (e.g. the message area) get their own block. */
 .shortcut-section {
   margin: 14px 0 2px;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-faint);
 }
 .shortcut-section:first-of-type { margin-top: 6px; }
-.shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
+.shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-label); color: var(--text-dim); }
 .shortcut-row:last-of-type { border-bottom: none; }
 .shortcut-row kbd {
   display: inline-block;
@@ -482,7 +482,7 @@
   box-shadow: inset 0 -1.5px 0 var(--border-2), var(--shadow-1);
   color: var(--text);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 
 /* ── ⌘P / ⌘K 搜索浮层（项目 / 会话） ──────────────────────────────────────
@@ -492,7 +492,7 @@
 .palette-overlay {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-modal);
   background: var(--scrim);
   display: grid;
   place-items: start center;
@@ -516,13 +516,13 @@
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-ui);
   padding: 13px 16px;
   outline: none;
 }
 .palette-input::placeholder { color: var(--text-faint); }
 .palette-list { max-height: 48vh; overflow: auto; padding: 6px; }
-.palette-empty { padding: 14px 12px; font-size: 13px; color: var(--text-faint); }
+.palette-empty { padding: 14px 12px; font-size: var(--fs-label); color: var(--text-faint); }
 .palette-row {
   display: flex;
   align-items: center;
@@ -545,7 +545,7 @@
    one」 and 「the rest」 is the whole job of a block that has no rail to point with. Read at 13.5px
    against --panel-solid, --text-dim still clears 4.5:1 in both themes (the light theme by a wide
    margin), so nothing here is being traded for the effect. */
-.palette-name { font-size: 13.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-name { font-size: var(--fs-ui); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-row[aria-selected="true"] .palette-name { color: var(--text); }
 /* The row's second line. Its HEIGHT is fixed here rather than by its content: the two palettes put
    different things in it (⌘P a path, ⌘K a tag — a box taller than the plain word next to it), and a
@@ -561,7 +561,7 @@
 .palette-path {
   min-width: 0;
   font-family: var(--mono, monospace);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -583,7 +583,7 @@
   border-radius: var(--radius-sm);
   background: var(--wash-2);
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 15px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -593,31 +593,31 @@
   min-width: 0;
   max-width: 100%;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   line-height: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .palette-side { flex: 0 0 auto; text-align: right; }
-.palette-meta { font-size: 11px; color: var(--text-faint); }
+.palette-meta { font-size: var(--fs-micro); color: var(--text-faint); }
 /* What Enter will do, said before it is pressed. */
-.palette-action { margin-top: 2px; font-size: 11.5px; color: var(--text-dim); }
+.palette-action { margin-top: 2px; font-size: var(--fs-meta); color: var(--text-dim); }
 .palette-action.is-blocked { color: var(--amber); }
 /* Where the reader already is (⌘K's active conversation): an anchor for a list that has no other
    way of saying which row is the one on screen. */
-.palette-here { margin-top: 2px; font-size: 11.5px; color: var(--accent); }
+.palette-here { margin-top: 2px; font-size: var(--fs-meta); color: var(--accent); }
 .palette-notice {
   padding: 10px 16px;
   border-top: 1px solid var(--border);
   background: var(--wash);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--amber);
 }
 .palette-hint {
   padding: 8px 16px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 
@@ -641,20 +641,20 @@
   border-bottom: 1px solid var(--border);
   background: var(--accent-softer);
 }
-.ask-title { font-size: 13px; font-weight: 650; color: var(--text); }
-.ask-sub { font-size: 11.5px; color: var(--text-faint); }
+.ask-title { font-size: var(--fs-label); font-weight: 650; color: var(--text); }
+.ask-sub { font-size: var(--fs-meta); color: var(--text-faint); }
 .ask-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 16px; }
 .ask-q-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .ask-chip {
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-weight: 600;
   color: var(--accent-2);
   background: var(--accent-soft);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
 }
-.ask-question { font-size: 13px; color: var(--text); }
-.ask-tag { font-size: 11px; color: var(--text-faint); border: 1px solid var(--border-2); border-radius: var(--radius-pill); padding: 0 6px; }
+.ask-question { font-size: var(--fs-label); color: var(--text); }
+.ask-tag { font-size: var(--fs-micro); color: var(--text-faint); border: 1px solid var(--border-2); border-radius: var(--radius-pill); padding: 0 6px; }
 .ask-options { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 6px; }
 .ask-option {
   display: flex;
@@ -675,7 +675,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: var(--fs-micro);
   line-height: 1;
   color: var(--on-accent);
   border: 1px solid var(--border-2);
@@ -683,8 +683,8 @@
 .ask-mark.is-box { border-radius: 3px; }
 .ask-mark.is-radio { border-radius: 50%; }
 .ask-option.is-on .ask-mark { background: var(--accent); border-color: var(--accent); }
-.ask-label { font-size: 13px; color: var(--text); }
-.ask-desc { font-size: 11.5px; color: var(--text-faint); margin-left: auto; text-align: right; }
+.ask-label { font-size: var(--fs-label); color: var(--text); }
+.ask-desc { font-size: var(--fs-meta); color: var(--text-faint); margin-left: auto; text-align: right; }
 .ask-input {
   width: 100%;
   box-sizing: border-box;
@@ -693,7 +693,7 @@
   border-radius: var(--radius-sm);
   background: var(--panel-2);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-label);
   font-family: inherit;
 }
 .ask-input:focus { outline: none; border-color: var(--accent-line); }
@@ -705,7 +705,7 @@
   border-top: 1px solid var(--border);
   background: var(--wash);
 }
-.ask-hint { margin-right: auto; font-size: 11px; color: var(--text-faint); }
+.ask-hint { margin-right: auto; font-size: var(--fs-micro); color: var(--text-faint); }
 
 /* ── Bash permission confirm (inline in the transcript) ───────────────────── */
 /* Same shell and same placement as .ask-form above — it is the same situation
@@ -728,8 +728,8 @@
   border-bottom: 1px solid var(--border);
   background: var(--wash);
 }
-.perm-title { font-size: 13px; font-weight: 650; color: var(--amber); }
-.perm-sub { font-size: 11.5px; color: var(--text-faint); }
+.perm-title { font-size: var(--fs-label); font-weight: 650; color: var(--amber); }
+.perm-sub { font-size: var(--fs-meta); color: var(--text-faint); }
 /* The command is shown in the agent's own rendering, so the plane is monospace
    like every other code surface, and it does not wrap: a long pipeline scrolls
    sideways instead of breaking mid-token into something unreadable. */
@@ -737,13 +737,13 @@
   margin: 0;
   padding: 12px 14px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
   color: var(--text);
   white-space: pre;
   overflow-x: auto;
 }
-.perm-err { padding: 0 14px 10px; font-size: 12px; color: var(--amber); }
+.perm-err { padding: 0 14px 10px; font-size: var(--fs-meta); color: var(--amber); }
 .perm-actions {
   display: flex;
   flex-wrap: wrap; /* seven controls' worth of precedent: never widen the pane */
@@ -771,10 +771,10 @@
   width: min(440px, calc(100vw - 24px));
 }
 .roots-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
-.roots-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
-.roots-sub { font-size: 10.5px; color: var(--text-faint); }
+.roots-title { font-size: var(--fs-label); font-weight: 600; color: var(--text); }
+.roots-sub { font-size: var(--fs-micro); color: var(--text-faint); }
 .roots-sec {
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   letter-spacing: 0.04em;
   margin: 10px 0 4px;
@@ -792,7 +792,7 @@
 .roots-row.is-stale { opacity: 0.62; }
 .roots-name {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text);
   max-width: 130px;
   overflow: hidden;
@@ -803,7 +803,7 @@
   flex: 1;
   min-width: 0;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   /* Long paths keep their LAST segments visible (the tail is what tells two roots
      apart), which takes right-to-left overflow. The path itself is wrapped in
@@ -818,10 +818,10 @@
 .roots-path-main { color: var(--text-dim); }
 .roots-stale {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--amber);
 }
-.roots-empty { padding: 4px 8px 2px; font-size: 11px; color: var(--text-faint); }
+.roots-empty { padding: 4px 8px 2px; font-size: var(--fs-micro); color: var(--text-faint); }
 /* A root's git branch, beside its path: the one thing that tells two checkouts of the same
    repository apart, so it is a chip rather than more faint text. Mono, because branch names carry
    slashes and dashes that are easier to read that way. */
@@ -835,7 +835,7 @@
   border-radius: var(--radius-sm);
   background: var(--veil);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
 }
 .roots-branch svg { flex-shrink: 0; }
@@ -845,14 +845,14 @@
   border-radius: var(--radius-sm);
   background: var(--red-wash);
   color: var(--red);
-  font-size: 11px;
+  font-size: var(--fs-micro);
 }
 .roots-btn {
   flex-shrink: 0;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -867,7 +867,7 @@
   border: 1px dashed var(--border-2);
   background: transparent;
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-family: inherit;
   padding: 6px 0;
   border-radius: var(--radius-sm);
@@ -884,7 +884,7 @@
   border-radius: var(--radius-sm);
   background: var(--wash);
   border: 1px solid var(--border);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-dim);
   line-height: 1.5;
 }
@@ -903,7 +903,7 @@
   margin-bottom: 5px;
   /* Not the 10.5px a compact popover label can afford: this dialog is 520px wide, so its labels
      sat three steps below the 14px title and 13.5px field they belong to. */
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   letter-spacing: 0.04em;
   color: var(--text-faint);
 }
@@ -916,7 +916,7 @@
   border-radius: var(--radius-sm);
   color: var(--text);
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   outline: none;
 }
 .form-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -926,7 +926,7 @@
   flex: 1;
   min-width: 0;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   color: var(--text-dim);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
@@ -944,7 +944,7 @@
 .project-form .roots-path,
 .project-form .roots-empty,
 .project-form .roots-btn,
-.project-form .roots-add { font-size: 12.5px; }
+.project-form .roots-add { font-size: var(--fs-label); }
 .form-roots {
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
@@ -959,7 +959,7 @@
 .plan-panel {
   width: 420px;
   max-height: min(70vh, 520px);
-  z-index: 51;
+  z-index: var(--z-popover);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -968,7 +968,7 @@
 }
 .plan-head { display: flex; align-items: baseline; gap: 8px; }
 .plan-title {
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
@@ -977,14 +977,14 @@
 }
 .plan-count {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   padding: 0 6px;
   border-radius: var(--radius-pill);
   background: var(--wash-2);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
-.plan-note { font-size: 11.5px; color: var(--text-faint); }
+.plan-note { font-size: var(--fs-meta); color: var(--text-faint); }
 /* The session's other plans: only rendered when there is more than one, because a list of
    one is a header. The current plan is marked by weight, not by colour alone. */
 .plan-list {
@@ -1018,7 +1018,7 @@
 .plan-item-title {
   flex: 1;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1027,7 +1027,7 @@
 .plan-item.is-current .plan-item-title { color: var(--text); font-weight: 560; }
 .plan-item-meta {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
@@ -1037,7 +1037,7 @@
   background: transparent;
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 3px 6px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1055,14 +1055,14 @@
   align-items: baseline;
   gap: 7px;
   padding: 3px 0;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
 }
 .plan-step-ico {
   flex-shrink: 0;
   width: 13px;
   text-align: center;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
 }
 .plan-step-text { color: var(--text-dim); min-width: 0; }
@@ -1079,7 +1079,7 @@
   background: transparent;
   color: var(--accent-2);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 2px 0;
   cursor: pointer;
 }
@@ -1091,7 +1091,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--wash);
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 .plan-foot {
   display: flex;
@@ -1104,7 +1104,7 @@
   flex: 1;
   min-width: 0;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1116,7 +1116,7 @@
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1131,7 +1131,7 @@
 .rewind-chain-overlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-modal-top);
   background: var(--scrim-strong);
   display: grid;
   place-items: center;
@@ -1152,14 +1152,14 @@
 }
 .rewind-chain-head { padding: 14px 18px 12px; border-bottom: 1px solid var(--border); }
 .rewind-chain-title { display: flex; align-items: baseline; gap: 10px; }
-.rewind-chain-title b { font-size: 15px; }
-.rewind-chain-sess { color: var(--text-faint); font-size: 12px; }
+.rewind-chain-title b { font-size: var(--fs-body); }
+.rewind-chain-sess { color: var(--text-faint); font-size: var(--fs-meta); }
 .rewind-chain-close {
   margin-left: auto;
   background: none;
   border: 0;
   color: var(--text-faint);
-  font-size: 15px;
+  font-size: var(--fs-body);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
@@ -1167,7 +1167,7 @@
 .rewind-chain-close:hover { background: var(--hover); color: var(--text); }
 /* The rule of this surface, said once, before any row: a rewind takes the files AND
    the conversation back, and the turns after it are given up rather than kept. */
-.rewind-chain-why { margin-top: 7px; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.rewind-chain-why { margin-top: 7px; font-size: var(--fs-meta); color: var(--text-dim); line-height: 1.6; }
 .rewind-chain-why b { color: var(--text); font-weight: 560; }
 /* A chain that cannot run is said ONCE, at the top, with the way out — not
    rediscovered by clicking a row and reading a refusal. */
@@ -1177,7 +1177,7 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-2);
   background: var(--hover-2);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text);
   display: flex;
   gap: 10px;
@@ -1190,7 +1190,7 @@
   border: 1px solid var(--accent-line);
   border-radius: var(--radius-pill);
   color: var(--accent-2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 2px 10px;
   cursor: pointer;
   white-space: nowrap;
@@ -1204,7 +1204,7 @@
   gap: 8px;
   margin: 14px 18px 0;
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .rewind-chain-now::before {
   content: "";
@@ -1216,7 +1216,7 @@
 }
 .rewind-chain-now::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .rewind-chain-list { overflow: auto; padding: 6px 10px 10px; }
-.rewind-chain-empty { padding: 18px; color: var(--text-dim); font-size: 12.5px; }
+.rewind-chain-empty { padding: 18px; color: var(--text-dim); font-size: var(--fs-label); }
 .rewind-row {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr) auto;
@@ -1236,18 +1236,18 @@
 .rewind-row.is-here .rewind-row-prompt { color: var(--text-dim); }
 .rewind-row.is-blocked { cursor: default; opacity: 0.55; }
 .rewind-row.is-blocked:hover { background: transparent; }
-.rewind-row-when { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.rewind-row-when { font-size: var(--fs-meta); color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .rewind-row-when b { display: block; color: var(--text); font-weight: 560; }
-.rewind-row-when span { color: var(--text-faint); font-size: 11px; }
+.rewind-row-when span { color: var(--text-faint); font-size: var(--fs-micro); }
 .rewind-row-prompt {
-  font-size: 13.5px;
+  font-size: var(--fs-ui);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .rewind-row-badges { margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
 .rewind-badge {
-  font-size: 11px;
+  font-size: var(--fs-micro);
   padding: 1px 7px;
   border-radius: var(--radius-pill);
   border: 1px solid transparent;
@@ -1260,12 +1260,12 @@
 .rewind-badge.is-unknown { background: var(--hover-2); color: var(--amber); border-color: var(--border-2); }
 .rewind-badge.is-here { background: var(--accent); color: #fff; }
 .rewind-row.is-here .rewind-row-go { display: none; }
-.rewind-row-note { margin-top: 2px; font-size: 11px; color: var(--amber); }
+.rewind-row-note { margin-top: 2px; font-size: var(--fs-micro); color: var(--amber); }
 .rewind-row-stat {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -1280,7 +1280,7 @@
   border: 1px solid var(--border-2);
   border-radius: var(--radius-pill);
   color: var(--text-dim);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 3px 11px;
   cursor: pointer;
 }
@@ -1297,7 +1297,7 @@
   border: 1px dashed var(--border-2);
   border-radius: var(--radius-sm);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .rewind-chain-more:hover { background: var(--hover); color: var(--text); }
@@ -1308,13 +1308,13 @@
   padding: 9px 18px;
   border-top: 1px solid var(--border);
   color: var(--text-faint);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 .rewind-chain-foot kbd {
   border: 1px solid var(--border-2);
   border-radius: var(--radius-2xs);
   padding: 1px 5px;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   background: var(--hover);
   font-family: inherit;
 }
@@ -1331,7 +1331,7 @@
    同时在屏幕上。 */
 .sel-ask {
   position: fixed;
-  z-index: 95;
+  z-index: var(--z-selection);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1347,7 +1347,7 @@
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 5px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1363,7 +1363,7 @@
   background: transparent;
   color: var(--text);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   padding: 5px 9px;
   outline: none;
 }
@@ -1378,7 +1378,7 @@
   position: fixed;
   right: 18px;
   bottom: 18px;
-  z-index: 95;
+  z-index: var(--z-selection);
   width: 340px;
   max-height: 46vh;
   display: flex;
@@ -1395,10 +1395,10 @@
   gap: 6px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
 }
-.ask-q-count { color: var(--text-faint); font-size: 10.5px; }
+.ask-q-count { color: var(--text-faint); font-size: var(--fs-micro); }
 /* 一屏塞得下的是一个列表，不是一个滚动的盒子：项数通常只有两三。 */
 .ask-q-list { overflow: auto; padding: 4px; display: flex; flex-direction: column; }
 /* 两级分组：同一份文件的那几段归在一个组里、来源只写一次（组标题），组里同一句问题也只写一次
@@ -1406,7 +1406,7 @@
 .ask-q-group + .ask-q-group { border-top: 1px solid var(--border); }
 .ask-q-where {
   padding: 6px 8px 1px;
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1423,7 +1423,7 @@
 }
 .ask-q-line:hover { background: var(--hover); }
 .ask-q-text {
-  font-size: 12px;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1438,7 +1438,7 @@
   background: var(--panel-2);
   color: var(--text);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   padding: 4px 7px;
   margin-top: 4px;
   outline: none;
@@ -1449,7 +1449,7 @@
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-family: inherit;
   padding: 3px 6px;
   border-radius: var(--radius-sm);
@@ -1471,7 +1471,7 @@
   background: transparent;
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -1484,7 +1484,7 @@
   background: var(--accent-strong);
   color: var(--on-accent);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   padding: 6px 14px;
   border-radius: var(--radius-sm);
@@ -1500,7 +1500,7 @@
   background: var(--accent-soft);
   color: var(--accent-2);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   padding: 5px 9px;
   margin-left: 2px;
   border-radius: var(--radius-sm);
@@ -1520,7 +1520,7 @@
   left: 50%;
   bottom: 140px;
   transform: translateX(-50%);
-  z-index: 70;
+  z-index: var(--z-modal);
   max-width: min(460px, 72vw);
   padding: 7px 14px;
   border-radius: var(--radius-pill);
@@ -1528,7 +1528,7 @@
   border: 1px solid var(--border-2);
   box-shadow: var(--shadow-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   line-height: 1.5;
   text-align: center;
   pointer-events: none;

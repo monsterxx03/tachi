@@ -106,7 +106,6 @@
      calmer on the page. */
   --accent: #4a6cf5;         /* fills, rings, status dots, soft washes */
   --accent-2: #2f4bd6;       /* accent as ink (links, icons, labels) */
-  --accent-3: #7a95ff;       /* decorative gradients only (brand mark, marker) */
   --accent-strong: #3550d8;  /* saturated fill that carries white text */
   --accent-soft: rgba(74, 108, 245, 0.14);
   --accent-softer: rgba(74, 108, 245, 0.09);
@@ -181,8 +180,6 @@
   /* The one upward shadow (the 意见 pane's sticky send bar, chat.css) — a
      token so it follows the same ink as the others in both themes. */
   --shadow-up: 0 -8px 16px -12px rgba(62, 54, 44, 0.35);
-  /* Decorative accent glows (brand mark, welcome glyph). */
-  --glow-accent: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 
   /* Radius scale: two steps and two exceptions. Controls (rows, buttons, inputs, chips)
      take --radius-sm; panels that hold other surfaces (popovers, drawers, overlays) take
@@ -193,6 +190,37 @@
   --radius-sm: 8px;
   --radius-lg: 12px;
   --radius-pill: 999px;
+
+  /* Stacking order, named. There were fourteen bare numbers across six files, which is how a
+     menu ends up under the panel it was opened from and nobody notices until a screenshot.
+     Read top to bottom; each one only has to beat the one above it.
+       base      in-flow layering inside a scroller (a sticky table header, the titlebar)
+       sticky    a bar over content that scrolls under it (the composer)
+       float     floats over a column (jump-to-latest, the file view)
+       bar       the find bar at rest
+       above     a float that overlaps a bar — and the drag handles, which must stay grabbable
+                 where they cross it
+       menu      a menu attached to one turn
+       popover   a panel hung off a control (MCP, agents, context, plan, cron)
+       submenu   a menu opened FROM a popover (the context breakdown)
+       modal     a scrim and what sits on it (confirm, palettes, toasts)
+       modal-top a viewer opened over a confirm
+       viewer    the document / attachment viewer
+       selection the selection menu and the ask queue: they belong to the topmost text there is
+       page      a whole-window page (settings, the scheduled-task page) */
+  --z-base: 1;
+  --z-sticky: 2;
+  --z-float: 3;
+  --z-bar: 5;
+  --z-above: 6;
+  --z-menu: 40;
+  --z-popover: 50;
+  --z-submenu: 60;
+  --z-modal: 70;
+  --z-modal-top: 80;
+  --z-viewer: 90;
+  --z-selection: 95;
+  --z-page: 100;
 
   /* The disclosure caret is one size everywhere, and it is an ICON rather than the ▸/▾ glyphs:
      those are text, so their size follows the font, and at 9px they draw a dot ("the arrow is too
@@ -222,6 +250,43 @@
      document preview takes this same token (.viewer-doc) rather than a copy of
      its number, so a reply and a previewed file still read at one measure. */
   --reading-width: clamp(860px, 62vw, 1180px);
+
+  /* Spacing: a 4px baseline and only these six steps for the chrome this app draws — a row's
+     padding, a panel's inset, the gap between two blocks. The list stays short on purpose: the
+     stylesheet had ~170 distinct padding shorthands, most of them one pixel apart (5 vs 6, 7 vs
+     8, 9 vs 10), which is why two panels that were meant to look alike did not. A number that
+     is not on this ladder is now a decision to state, not a habit to repeat.
+     --sp-0 is the hairline (2px) a chip uses inside its own outline; nothing else uses it. */
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-2: 6px;
+  --sp-3: 8px;
+  --sp-4: 12px;
+  --sp-5: 16px;
+  --sp-6: 20px;
+
+  /* The type scale: FIVE content steps, then the display pair. It used to be eleven —
+     10 / 10.5 / 11 / 11.5 / 12 / 12.5 / 13 / 13.5 / 14 / 14.5 / 15 — where the distance
+     between a label and its metadata was half a pixel. Half a pixel is under one device pixel
+     on the panels this is read on, so the step was invisible while the two sizes were not the
+     same: the reader cannot tell whether a difference means anything, which is worse than not
+     having it. A step now has to be a whole pixel, and each one has ONE job:
+       micro  chrome nobody reads word by word — counts, badges, timestamps, keycaps, tiny labels
+       meta   metadata read at a glance — session times, hints, second lines
+       label  the app's own labels and controls — tool rows, buttons, form labels, palette rows
+       ui     what the reader picks from — session titles, panel headers, close buttons
+       body   what the reader writes, and a group heading — the composer, a project's name
+     The reading surfaces below keep their own two (--fs-prose / --fs-bubble) because those are
+     the sizes the reader tunes with ⌘= / ⌘-, and --fs-finding belongs to the review pane. The
+     two display sizes are page type: there is never a title and a hero in the same view, so
+     they do not compete. */
+  --fs-micro: 11px;
+  --fs-meta: 12px;
+  --fs-label: 13px;
+  --fs-ui: 14px;
+  --fs-body: 15px;
+  --fs-title: 18px;  /* a page's own title: settings, a scheduled task's form, the brand */
+  --fs-hero: 20px;   /* the one line on an empty app — nothing below it to rank against */
 
   /* Reading surfaces: the sizes a reader actually READS, in one place, so
      "the text is too small" is an edit here rather than a hunt through four
@@ -299,7 +364,6 @@
 
   --accent: #7c96ff;
   --accent-2: #9db1ff;
-  --accent-3: #6f8bfa;
   /* The flat button fill. Ayu's blue with the chroma pulled back (0.18 → 0.11):
      on the lifted grey planes the SATURATION was what made a primary button pop
      out of the page, not its lightness (fill vs --bg was 2.2:1 either way) —
@@ -358,7 +422,6 @@
   --shadow-1: 0 1px 2px rgba(8, 10, 14, 0.34), 0 1px 1px rgba(8, 10, 14, 0.24);
   --shadow-2: 0 6px 16px rgba(8, 10, 14, 0.42), 0 16px 40px rgba(8, 10, 14, 0.36);
   --shadow-up: 0 -8px 16px -12px rgba(8, 10, 14, 0.4);
-  --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.35));
   --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%239ca3b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   color-scheme: dark;
@@ -456,7 +519,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-2);
-  z-index: 5;
+  z-index: var(--z-bar);
 }
 /* The body's own padding would let content show through above a sticky bar pinned at 0. */
 .find-bar.is-panel { position: sticky; top: -10px; align-self: flex-end; }
@@ -464,7 +527,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
 /* Floating over the transcript (see App.tsx): the bar appears on a keypress, and a bar that took a
    row of the column would push every message down at the moment the reader is reading one. It sits
    above the grid pseudo-element and the scroller (z-index 0 and 1). */
-.find-bar.is-chat { position: absolute; top: 10px; right: 22px; z-index: 6; }
+.find-bar.is-chat { position: absolute; top: 10px; right: 22px; z-index: var(--z-above); }
 .find-input {
   width: 168px;
   padding: 3px 7px;
@@ -473,14 +536,14 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-label);
   outline: none;
 }
 .find-input:focus { border-color: var(--accent-line); }
 .find-count {
   min-width: 32px;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -493,7 +556,7 @@ html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
   color: var(--text-dim);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   line-height: 1;
   padding: 3px 5px;
   border-radius: var(--radius-sm);

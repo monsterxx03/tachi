@@ -12,6 +12,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { Events } from '@wailsio/runtime'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
+import { ArrowRight, Mic, Square } from 'lucide-react'
+import { Icon, ICON_MD } from './icons'
 import {
   AT_MAX_RESULTS,
   AT_SEARCH_DEBOUNCE_MS,
@@ -1230,11 +1232,7 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
                 onClick={toggleVoice}
                 disabled={voiceState === 'preparing' || voiceState === 'transcribing'}
                 title={voiceLabel} aria-label={voiceLabel}>
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="3" width="6" height="11" rx="3" />
-                  <path d="M5 11a7 7 0 0 0 14 0" />
-                  <line x1="12" y1="18" x2="12" y2="21" />
-                </svg>
+                <Icon as={Mic} />
               </button>
             )}
             {/* The stop control sits in this cluster rather than floating over the input: while a
@@ -1242,11 +1240,11 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
                 and floating it over a one-line box was exactly the blank the box carried. */}
             {running && (
               <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
-                <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+                <Icon as={Square} className="stop-glyph" />
               </button>
             )}
             <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+              <Icon as={ArrowRight} size={ICON_MD} />
               <span>{running ? '排队' : '发送'}</span>
             </button>
           </div>

@@ -11,6 +11,8 @@ import { processStepLabel, processSummaryLine, type ProcessSummary } from './tra
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, PeerBoardVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { ProviderConfig } from '../bindings/github.com/monsterxx03/tachi/config'
+import { Copy, Eye, EyeOff, Moon, Network, Pin, Plug, SlidersHorizontal, Sun } from 'lucide-react'
+import { Icon, ICON_XS } from './icons'
 
 // MoreRows is the tail of a group's row WINDOW in the sidebar (App.tsx owns the window itself): the
 // line that says how many of that group's conversations are not rendered yet, and the thing that
@@ -123,6 +125,14 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
   }, [open, pos.isInside])
 
   const toggle = () => setOpen((v) => !v)
+
+  // Nothing measured yet (a conversation nobody has sent a message in): there is no ring to draw,
+  // and an empty circle in the titlebar does not read as "0%" — it reads as a control that failed
+  // to load. It appears with the first API call, which is also the first moment the popover behind
+  // it could say anything. The button is the ONLY way into that popover, so this hides an entry
+  // point as well; that is the trade, and "还没有可用的估算" behind a circle that means nothing is
+  // the worse half of it.
+  if (pct <= 0) return null
 
   return (
     // The wrapper is the popover's containing block: the panel cannot live
@@ -643,12 +653,12 @@ function UserBubble({ children, onContextMenu }: { children: ReactNode; onContex
 }
 
 function CopyIcon() {
-  return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
+  return <Icon as={Copy} />
 }
 
-// Small 14px stroke icons for the sidebar footer and the MCP button. They
-// replace the ad-hoc glyphs (⚙ ¤ M) whose shape depends on whichever system
-// font happens to supply them.
+// Small stroke icons for the sidebar footer and the MCP button. They replace the ad-hoc glyphs
+// (⚙ ¤ M) whose shape depends on whichever system font happens to supply them — see icons.tsx for
+// why the set is shared and why nothing here sets a stroke width.
 // Caret is the disclosure arrow every foldable surface uses: a sidebar group, a compaction chain,
 // the thinking block, a turn's process row, a diff file, a directory in the @-picker.
 //
@@ -669,41 +679,26 @@ function Caret({ open }: { open?: boolean }) {
 }
 
 function SettingsIcon() {
-  return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="8" x2="20" y2="8" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="8" r="2.2" /><circle cx="15" cy="16" r="2.2" /></svg>)
+  return <Icon as={SlidersHorizontal} />
 }
 
 function MCPIcon() {
-  return (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v6" /><path d="M15 3v6" /><path d="M6 9h12v3a6 6 0 0 1-12 0V9z" /><path d="M12 18v3" /></svg>)
+  return <Icon as={Plug} size={ICON_XS} />
 }
 
 // PinIcon marks a pinned session row. It is drawn rather than written as 📌: the emoji's shape and
 // colour come from the system font (and it lands in whatever colours the OS picked), while this is
 // the same accent ink as the rest of the sidebar's marks at any size the sidebar can afford.
 function PinIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9.6 3h4.8" />
-      <path d="M10.6 3v5.2L7.4 11.4v2.4h9.2v-2.4l-3.2-3.2V3" />
-      <path d="M12 13.8V21" />
-    </svg>
-  )
+  return <Icon as={Pin} size={ICON_XS} />
 }
 
 function SunIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <circle cx="12" cy="12" r="4.1" />
-      <path d="M12 2.8v2.3M12 18.9v2.3M2.8 12h2.3M18.9 12h2.3M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6" />
-    </svg>
-  )
+  return <Icon as={Sun} size={ICON_XS} />
 }
 
 function MoonIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z" />
-    </svg>
-  )
+  return <Icon as={Moon} size={ICON_XS} />
 }
 
 // EyeIcon is the reveal control on a credential field, and it says the STATE the box is in — a
@@ -715,14 +710,7 @@ function MoonIcon() {
 // draws, in whatever colours it picked, and this one has to sit at the input's own size in
 // currentColor beside a monospace key.
 function EyeIcon({ open }: { open: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M2.2 12S5.9 5.6 12 5.6 21.8 12 21.8 12 18.1 18.4 12 18.4 2.2 12 2.2 12z" />
-      <circle cx="12" cy="12" r="2.7" />
-      {open ? null : <path d="M4.4 19.6 19.6 4.4" />}
-    </svg>
-  )
+  return <Icon as={open ? Eye : EyeOff} />
 }
 
 // ThemeToggle is the titlebar light/dark switch: a two-slot pill with a sliding
@@ -1544,18 +1532,10 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-// AgentsIcon marks the node board's trigger: three nodes and the links between them, which is what
-// this machine's peers are. Drawn rather than an emoji so it inherits the row's ink and size.
+// AgentsIcon marks the node board's trigger: the machines this one may delegate to, and the links
+// between them.
 function AgentsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.7"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="5.5" cy="12" r="2.5" />
-      <circle cx="18" cy="5.5" r="2.5" />
-      <circle cx="18" cy="18.5" r="2.5" />
-      <path d="M7.8 10.9 15.7 6.6M7.8 13.1l7.9 4.3" />
-    </svg>
-  )
+  return <Icon as={Network} size={ICON_XS} />
 }
 
 // AgentsPanel is the node board: the machines this one may delegate to, and what each of them says
