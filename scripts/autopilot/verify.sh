@@ -118,6 +118,8 @@ else  # ---------------------------------------------------------------- 核心�
   fi
 
   # ---------------------------------------------------------------- 手机：e2e
+  # desktop/mobile*.go 是桌面给手机用的那半边接口，落在它上面时上面那层桌面检查也一并触发：
+  # 一层是"桌面没坏"，一层是"手机端的协议还能跑通"，两边都要过。
   if printf '%s\n' "$CODE_CHANGED" | grep -qE '^(mobile/|desktop/mobile)'; then
     if command -v adb >/dev/null 2>&1 && [[ -n "$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')" ]]; then
       run "mobile e2e" bash mobile/e2e/run.sh
