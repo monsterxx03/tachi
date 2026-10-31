@@ -106,11 +106,11 @@ test-cover-html: web-check
 	go tool cover -html=coverage.out && \
 	rm -f coverage.out
 
-lint:
+lint: web-check
 	@echo "=== Running golangci-lint ==="
 	golangci-lint run ./...
 
-lint-fix:
+lint-fix: web-check
 	@echo "=== Running go fix ==="
 	go fix ./...
 	@echo "=== Running golangci-lint (with --fix) ==="

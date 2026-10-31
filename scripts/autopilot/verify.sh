@@ -93,7 +93,27 @@ CODE_CHANGED="$(printf '%s\n' "$CHANGED" \
 
 if [[ -z "$CODE_CHANGED" ]]; then
   skip "核心门禁" "只改了文档/说明文件"
-else  # ---------------------------------------------------------------- 核心：永远要过
+else
+  # ---------------------------------------------------------------- 脚本语法：门禁自己也在里面
+  # 没有这一层，改坏 scripts/autopilot/*.sh 只会触发 lint + unit tests，而这两层看不见 bash。
+  # bash -n 只能证语法，证不了逻辑——所以「PR 碰了 scripts/autopilot/」这件事本身要人看。
+  SH_CHANGED="$(printf '%s\n' "$CHANGED" | grep -E '\.sh$' || true)"
+  shell_syntax() {
+    local f rc=0
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      echo "    bash -n $f"
+      bash -n "$f" || rc=1
+    done <<< "$SH_CHANGED"
+    return $rc
+  }
+  if [[ -n "$SH_CHANGED" ]]; then
+    run "shell syntax" shell_syntax
+  else
+    skip "shell syntax" "没改 .sh"
+  fi
+
+  # ---------------------------------------------------------------- 核心：永远要过
   run "lint" make lint
   run "unit tests" make test
 

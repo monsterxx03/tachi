@@ -32,6 +32,20 @@
 2. **issue 优先**：`gh issue list --label auto --author @me`，取最上面一个。
 3. **其次自扫技术债**：跑测试找失败、读 TODO/FIXME、看近期 diff 里明显的坑；以及**自己发现的界面可优化项**（见「界面改动与截图」）。
 4. **同一个问题试过两次没成就标 `blocked`**，把试过什么、卡在哪写清楚，别再来第三次。没有这条它会在同一个坑里烧钱。
+5. **拿不准的事不提问、不猜，建 issue**——见下一节。
+
+## 拿不准的事：建 issue，不要提问
+
+无人值守时没有人能回答你，所以「问一句」只等于「这轮白跑」；而自己挑一条路走，等于替人做了一个他没做的决定。两者都不行。
+
+**什么算拿不准**：需求本身有歧义；两种实现都说得通且取舍取决于偏好；怀疑是 bug 但说不清影响面；要改产品行为、数据格式、协议、权限规则；要删/迁移已有数据；涉及花钱或对外发布。
+
+**做法**：
+- `gh issue create --title "<一句话说清要决定什么>" --body "<见下>" --label by-tachi`，**不打 `auto`**：`by-tachi` 说明「这是它自己发现、等你判断的」；`auto` 是「我已经看过并批准，去干吧」的信号，只有你能打。没打 `auto` 的 issue 不会出现在下一轮的队列里，直到你确认后补上。
+- body 必须写：在哪看到的（文件/命令/输出）、为什么拿不准（两条路各是什么、各自代价）、建议走哪条、复现方式。
+- 建之前先 `gh issue list --state open --label by-tachi --search "<关键词>"` 查一遍，同一个疑问只建一次。
+- 当轮回复里列出 issue 编号，然后**放下这件事**：去做别的能确定的任务，或者结束这一轮。
+- issue 也是公开的：别把真实会话内容、路径、token 贴进去。
 
 ## 任务来源的可信边界
 
@@ -54,11 +68,18 @@
 
 ## 隔离
 
-- **每轮都从最新的 `origin/main` 开 worktree**，不基于本地 `main`（它可能落后于远端），也不在上一轮的 worktree 里接着改：
-  `git fetch origin main && git worktree add -b auto/<slug> ../tachi-ap/<slug> origin/main`
-  开工前先 fetch，`verify.sh` 的基线也是 `origin/main`——它读的是本地记录的远端，不 fetch 就是在拿旧基线比较。
+- **每轮都从最新的 `origin/main` 开区**，用脚本，别手敲：
+  `scripts/autopilot/worktree.sh new <slug>` → 打印新区的绝对路径。
+  它做了四件事：`git fetch origin main`；`git worktree add --no-track -b auto/<slug> ../tachi-ap/<slug> origin/main`；把两个前端的 `node_modules` 符号链接到主工作树（**仅当 `package-lock.json` 与主仓逐字节相同**）；在本区各跑一次前端 build 生成 `dist`。
+  - **依赖共享是安全的，产物必须本地生成**：`node_modules` 只与 lock 有关，与源码无关，所以 lock 一致时它就是同一份东西，共享只读；而 `dist` 是编译结果，复制主仓的会让门禁看不见这一分支的前端改动，所以要自己 build。
+  - lock 不一致时脚本不链接，`make` 会自己 `npm ci` —— 共享一份对不上 lock 的依赖比慢更糟。
+  - 唯一的竞态：主仓（或另一个会话）同时跑 `npm ci` 会先删掉那份依赖，这一轮的 build 可能失败。重跑一次即可，别把它当成代码问题。
+  - 脚本会把这两条 `node_modules` 写进 `.git/info/exclude`。仓库的 `.gitignore` 写的是 `node_modules/`（带斜杠，只匹配目录），而符号链接在 git 眼里是个文件，不排除的话每个区都会被当成有未提交改动。
+  - **`--no-track` 不能省**：起点是个远端分支时 git 会把新分支的上游设成 `origin/main`，于是 `git pull` 会把 main 合进特性分支、`git push` 会试图往 main 推。第一次 `push -u` 之后才纠正，那之前是错的。
+- **每轮开头先回收**：`scripts/autopilot/worktree.sh gc`。判据只有一条——**没有 open PR，且最后一次提交早于 `--max-age` 天（默认 3）**。有未提交/未跟踪改动的一律保留；主工作树永远不在扫描范围；远端分支不删（合并后删头分支交给 GitHub）。`--dry-run` 先看会删什么。
 - **一律 `git worktree`**：`../tachi-ap/<slug>`，分支 `auto/<slug>`。主工作树随时可能有别的会话未提交的改动，绝不能在里干活。
 - **绝不推 main、绝不 force push、绝不合并 PR**。产出是普通 PR（不是 draft——draft 会被遗忘），body 里写清：改了什么、为什么、`verify.sh` 的结论、界面改动的截图。
+- **`scripts/autopilot/` 和这份手册本身不是任务目标**，除非你明确要求。门禁是它自己的裁判：让它顺手"澄清"一下门禁，哪怕只加注释，也是在动裁板。碰了这些文件的 PR 一律由人看完再合。
 - **不让它给自己排新任务**：定时任务自己持有 CronTool，"一个任务可以创建下一个"是特性，但在无人值守里是放大器。默认禁止，除非你明确要求。
 
 ## 每轮它收到的提示词
@@ -74,9 +95,13 @@ job 的 `Prompt` 就是这段话。它要和 `cronModelPrompt` 追加的那段�
 3. 挑任务：gh issue list --label auto --author @me 有就取最上面一个；
    否则自扫技术债（跑测试找失败、读 TODO/FIXME、看近期 diff 的坑），
    或自己发现一个明确的界面可优化项。同一个问题试过两次没成就标 blocked，别再来。
-4. 从最新的 origin/main 开 worktree：git worktree add -b auto/<slug> ../tachi-ap/<slug> origin/main。
+   拿不准的事不要提问、不要猜：gh issue create --label by-tachi 建一个 issue
+   （写清在哪看到的、两条路各是什么、建议哪条、怎么复现；不要打 auto），然后放下它。
+4. 每轮开头先 scripts/autopilot/worktree.sh gc（回收旧区），再从最新的 origin/main 开区：
+   scripts/autopilot/worktree.sh new <slug> —— 它打印新区的绝对路径。
    绝不直接改主工作树，绝不推 main，绝不 force push。
-5. 每轮最多 1 个 PR。90 分钟内做不完就停下，把进度写清楚。
+   scripts/autopilot/ 和 docs/agents/autopilot.md 不是你该改的文件，除非任务明确要求。
+5. 每轮最多 1 个 PR。40 分钟内做不完就停下（cron 有全局超时，别让它切断在写 PR body 的时候）。
 6. 完成条件只能是 scripts/autopilot/verify.sh 全绿。退出码 2 表示有层没验成，
    在 PR body 里写明，不许说"全绿"。
 7. 改了界面显示效果：必须用 scripts/autopilot/screenshot.sh 抓改动后的图（--upload）并贴进 PR。
@@ -94,6 +119,7 @@ job 的 `Prompt` 就是这段话。它要和 `cronModelPrompt` 追加的那段�
 | `agent/` `config/` `llm/` `node/` `channel/` `cron/` `dream/` `session/` `pkg/` `tui/` `web/` `itest/` `main*.go` `go.mod` | 再加 `make itest-headless` |
 | `desktop/` | 加 `make -C desktop test` + `make desktop-smoke` |
 | `mobile/` 或 `desktop/mobile*.go` | 加 `bash mobile/e2e/run.sh` |
+| 任何 `*.sh` | 加 `bash -n`（只证语法，证不了逻辑） |
 | 界面文件（`desktop/frontend/`、`mobile/src/`、`web/frontend/src/` 等） | 以上照跑，外加 `CHECK SHOT`：变了就要附截图 |
 | 只有 `docs/`、`*.md` | 什么都不跑 |
 
@@ -101,12 +127,13 @@ job 的 `Prompt` 就是这段话。它要和 `cronModelPrompt` 追加的那段�
 - **`make test` 的结果不能取决于这台机器装了什么**：`agent/skill` 会把操作系统自带的 agent 技能（`$OMARCHY_PATH/default/agents/skills`，未设置时 `/usr/share/omarchy`）当作扫描的最后一个根。门禁跑在最强的机器上，所以 fixture 自己隔离它（`nodeHome` 里 `t.Setenv`），否则装了 omarchy 的机器上会有一条测试红、而 CI 上是绿的。新写的、会数技能条数的用例同理——**把宿主环境钉掉，别把断言写成关于这台机器的**。
 - **真窗口那一层要么有显示、要么有 Xvfb**：无人值守时别依赖你正在用的 Hyprland（锁屏会盖住、DPMS、切 workspace 都可能影响），给 `desktop-smoke` 一个独立显示（`Xvfb :99` + `GDK_BACKEND=x11`，无 GPU 时 `WEBKIT_DISABLE_COMPOSITING_MODE=1`）。冒烟套件起的是改名后的应用副本，不会和你的实例抢单实例锁。
 - **手机那层用 `emulator -no-window`**：maestro 全程走 adb，和显示器无关；`mobile/e2e/run.sh` 每条 flow 前会重置 mockapi（它会消耗种子数据）。
-- **构建产物的坑**：真正的 Go 编译要求 `web/frontend/dist` 在位（`//go:embed`），`make` 的 target 自带 `web-check`；裸 `go build` 没有。
+- **构建产物的坑**：真正的 Go 编译要求 `web/frontend/dist` 在位（`//go:embed`）。`lint`、`test` 现在都挂了 `web-check`，所以全新 worktree 不会炸在 `pattern dist: no matching files found`——代价是**每个新 worktree 第一次跑门禁都要 `npm ci` + 构建**（几十秒到几分钟，取决于 npm 缓存）。这是每轮一次的固定开销，别把它算进模型的时间盒。
+- **`go test ./...` 会走进 `web/frontend/node_modules`**：`npm ci` 装进来的包里可能带 Go 代码（`flatted/golang/pkg/flatted` 就是），它会作为一个包出现在测试与 lint 的路径里。无害，但看到那条 `no test files` 不要以为是仓库里多了个包。
 
 ## 上下文与成本
 
 - 它写在**同一条会话**里，每轮都往上面叠。tachi 会压缩，但压缩后的行为会漂；所以**关键状态要落在文件里**（`blocked` 清单、试过什么），别指望只活在上下文里。
-- 一轮做不完就停：prompt 里给一个时间盒（比如 90 分钟），到点把进度写清楚。cron 触发本身没有超时参数。
+- 一轮做不完就停：prompt 里给一个时间盒，到点把进度写清楚。**cron 有一道全局超时 `cron.execution_timeout`**（默认 5m），到点会取消这一轮、job 记成 error（oneshot 还会被删掉）——所以 prompt 的时间盒要明显小于它，否则中断会发生在模型正写 PR body 的时候。
 - 用量看 `tachi usage`；成本失控时先降频，再考虑换更便宜的 provider。
 
 ## 出事了按哪几个按钮
