@@ -11,8 +11,10 @@ name: 主链路
 - launchApp
 
 # 列表：连着、有内容
+# 「已连接 · X」里的 X 是那台电脑的名字（配对时取它的 hostname），所以这里不钉具体名字：
+# 只有设备条目没名字时才会退成「这台电脑」，而 mock 的 ping 是带 hostname 的。
 - assertVisible: "会话"
-- assertVisible: "已连接 · 这台电脑"
+- assertVisible: ".*已连接.*"
 - assertVisible: "清理构建目录"
 
 # 进对话：历史、工具卡、权限卡都在

@@ -77,6 +77,19 @@ SDK 里放什么，分两类：
 
 **Gradle 的镜像**（可选）：想要阿里云那套就 `cp mobile/scripts/gradle-init.gradle ~/.gradle/init.gradle`——它必须放在仓库外，因为 `android/` 是生成物。网络能直通海外的话不配也行。
 
+### Linux（amd64）
+
+上面那一套是 macOS 的路径和工具；在 Arch 系上照抄会撞在下面这几处，其余步骤（prebuild → `prepare-android.sh` → `assembleDebug` → `adb`）一样。
+
+- **JDK 17 不在 mise 里**：`mise install java@…` 从 GitHub releases 拉 Temurin，直连超时（走代理才通）。这台机器上是清华 `mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/` 那份 tar.gz 解开，摆在 `~/.local/share/jdk/<版本>/`，再用 `~/.local/share/jdk/current` 这个软链指过去——`JAVA_HOME` 写的是**软链**，换版本只改链接。
+- **`JAVA_HOME` / `ANDROID_HOME=~/Android/sdk` / `PATH` 写在 `~/.bashrc` 的非交互 `return` 之前**。注意 `bash -c` 根本不读 `.bashrc`：脚本式调用（agent、CI 那样）要么自己 `export`，要么走 `bash -lc`。
+- **系统镜像用 `x86_64`**，不是 `arm64-v8a`——这台是 amd64：`avdmanager create avd -n tachi-phone -k "system-images;android-36;google_apis;x86_64" -d pixel_8`。模拟器靠 KVM：`emulator -accel-check` 得回 `KVM … is installed and usable`，`/dev/kvm` 不在就是内核没开。
+- **AVD 目录跟着 XDG**：设了 XDG 的机器上 `avdmanager` 把配置建在 `~/.config/.android/avd/<名>.avd/config.ini`（不是 `~/.android/avd/`），上面那条 GPU / 内存的调整要去那里改。而 `emulator` 只按 `$ANDROID_AVD_HOME` → `$ANDROID_SDK_HOME/avd` → `~/.android/avd` 找，找不到就报 `Unknown AVD name [tachi-phone]`（`-list-avds` 也是空的）——所以要 `export ANDROID_AVD_HOME="$HOME/.config/.android/avd"` 让两边对齐。
+- **给模拟器构建要钉 ABI**：`./gradlew assembleDebug -PreactNativeArchitectures=x86_64`；真机才是 `arm64-v8a`。
+- **`sed -i ''` 是 BSD 语法，GNU sed 会把 `''` 当脚本**——`prepare-android.sh` 里已有 `sed_inplace`（按 `sed --version` 分辨），新的原地替换一律用它，否则脚本在 Linux 上静默改不动文件。
+- **Maestro 的 zip 要从 GitHub releases 拿，直连不通**（`curl -x http://127.0.0.1:7890` 约 8 MB/s，包 349 MB），解开就是 `~/.local/maestro`，`e2e/run.sh` 按绝对路径调它。`run.sh` 里的 `JAVA_HOME` 原来是 `/usr/libexec/java_home`（macOS 的），现在按 JAVA_HOME → PATH 里的 java → `~/.local/share/jdk/current` 依次解析，找不到就报错退出。
+- **两类下载的速度是分开看的**：SDK 组件从 `dl.google.com` 直连就有 ~25 MB/s，所以 `sdkmanager` 直接装（cmdline-tools、platform-tools、emulator、系统镜像），平台与 build-tools 仍交给 Gradle 自补。但 **Maven Central 直连只有 ~0.7 MB/s**，构建会长时间卡在解析依赖上、日志一动不动（Gradle 下载期不打印）——`~/.gradle/init.gradle` 那份阿里云镜像在这台机器上是**必须**的：`cp mobile/scripts/gradle-init.gradle ~/.gradle/init.gradle`。
+
 ## 国内镜像
 
 | 什么 | 走哪 | 配在哪 |
@@ -230,7 +243,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 - **写界面时保持它能跑在 web 上**——那是 agent 能自己看见界面的另一条路。代价是原生模块要有一层平台适配（安全存储在 web 上退化成 localStorage），这层本来也该有。
 - **web 预览要连 mockapi 时，CORS 由 mockapi 自己补**（`mobile/mockapi/server.go` 的 `allowWebPreview`）：页面在 8082、接口在 9797，浏览器会拦掉 fetch。**真服务端绝不能开这个**——那等于让任意网页读到手机接口。WebSocket 不受 CORS 约束（mockapi 的 upgrader 本来就放开 Origin），所以只补 HTTP 那一半。
 - **「手机 + 真桌面」的联调不碰你自己的应用**：造一个隔离的 HOME——`config.yaml` 里 `mobile.enabled: true`，一个 `mobile.json` 写着想要的 token（`0600`），再在 `~/.tachi/session/<id>/` 手写一份 `meta.json` + `messages.jsonl`——然后 `open -n --env HOME=<sandbox> desktop/bin/tachi-desktop.app` 起第二个实例。手机端照旧 `adb reverse tcp:8787 tcp:8787` 连 `127.0.0.1:8787`。收工只杀那一个：从 `ps eww` 按 `HOME=` 认 pid，**别对整个 bundle `pkill`**（会命中用户自己那份）。没有配 provider 时发送会被 409 `agent_unavailable` 挡下，那正是错误透传那条路的现成用例（手机应显示「这台电脑还没配好模型，先在电脑上配置」，输入框里的字要留着）。
-- **端到端用 `mobile/e2e/`**：`bash mobile/e2e/run.sh`（每条 flow 之前都把 mockapi 重启成种子状态：`main.yaml` 是主链路，`compact.yaml` 是运行中压缩换轨 + 队列补发）。三个踩过的点：**Maestro 的文本匹配默认是整串相等**（要包含就写成 `".*命令跑完了.*"`）；**iOS 上一行在无障碍树里是合并后的一整串**（`移动端接入方案, tachi · 昨天`），所以点会话要用 `.*标题.*`，Android 上是分开的元素；flow 会消耗种子数据（点掉那张待答卡、造出子会话），所以每条之前都得重置 mock 服务 —— 脚本做这件事。
+- **端到端用 `mobile/e2e/`**：`bash mobile/e2e/run.sh`（每条 flow 之前都把 mockapi 重启成种子状态：`main.yaml` 是主链路，`compact.yaml` 是运行中压缩换轨 + 队列补发）。四个踩过的点：**Maestro 的文本匹配默认是整串相等**（要包含就写成 `".*命令跑完了.*"`）；**iOS 上一行在无障碍树里是合并后的一整串**（`移动端接入方案, tachi · 昨天`），所以点会话要用 `.*标题.*`，Android 上是分开的元素；flow 会消耗种子数据（点掉那张待答卡、造出子会话），所以每条之前都得重置 mock 服务 —— 脚本做这件事；**`tapOn` 默认等界面静止，而流式输出永远静止不下来** —— 在这一轮跑着的时候发那句话（`compact.yaml` 要验的正是这个），点击会一直阻塞到这一轮结束，等它返回时压缩已经演完、画面都换轨了，后面那句 `正在跑` 必然落空（15 秒超时，现场截图里已经是「压缩摘要 + 空闲」）。那一次点击要带 `waitToSettleTimeoutMs: 0`。同理，`已连接 · X` 里的 X 是配对时记下的 hostname（mock 的 ping 自带 `mock-machine`），「这台电脑」只是名字为空时的兜底，别拿它当断言。
 - **模拟器扫不了码**：它的相机没有真实画面，所以扫码这条路只能验到"界面能打开、权限流程正常"，二维码的解析由 `src/api/qr.test.ts` 钉住（码里装的是 `{"v":1,"url":"…","token":"…"}`）。
 - 桌面的会话记录是权威，实时流只延长尾巴；验界面时以"重读快照后画面正确"为准，不要只信流。
 - **拿 `adb shell input swipe` 判断「倒序（inverted）列表能不能滚」会得到假答案**：注入的滑动在这类列表上不产生滚动，截图前后完全一样，看着像坏了；同一时刻真人手指滑得好好的，而把 `inverted` 关掉注入滑动又「恢复」了 —— 于是很容易得出「倒序列表在 Android 上滚不动」这种错误结论，再照着它重写整个列表。滚动、手感这一类只能用真手验（或者问用户），自动化那一层只覆盖点按与文案。

@@ -12,9 +12,25 @@ device="${1:-emulator-5554}"
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 
-export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17)}"
+# JDK 17：优先用环境里的 JAVA_HOME；否则 macOS 问 java_home，Linux 从 PATH 里的 java 反推，
+# 最后认本仓库文档里那个 Linux 位置（~/.local/share/jdk/current）。都找不到就停下来说清楚。
+resolve_java_home() {
+  if [[ -x /usr/libexec/java_home ]]; then
+    /usr/libexec/java_home -v 17
+  elif command -v java >/dev/null 2>&1; then
+    dirname "$(dirname "$(readlink -f "$(command -v java)")")"
+  elif [[ -d $HOME/.local/share/jdk/current ]]; then
+    echo "$HOME/.local/share/jdk/current"
+  fi
+}
+
+export JAVA_HOME="${JAVA_HOME:-$(resolve_java_home)}"
+if [[ ! -x $JAVA_HOME/bin/java ]]; then
+  echo "找不到可用的 JDK 17（JAVA_HOME=${JAVA_HOME:-空}）：装一个，或 export JAVA_HOME 指过去" >&2
+  exit 1
+fi
 # maestro 是 Java 程序，它按 PATH 里的 java 认版本；只设 JAVA_HOME 它会报「Java 17 or higher is required」
-export PATH="$JAVA_HOME/bin:$HOME/Library/Android/sdk/platform-tools:$PATH"
+export PATH="$JAVA_HOME/bin:${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools:$PATH"
 
 reset_mock() {
   echo "== 重置 mock 服务 =="

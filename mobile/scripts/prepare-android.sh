@@ -16,11 +16,22 @@ if [[ ! -f "$wrapper" ]]; then
   exit 1
 fi
 
+# GNU sed 与 BSD sed 的 `-i` 后要不要给后缀不一样：`sed -i '' -E` 在 Linux 上会把
+# `''` 当成脚本、把真正的脚本当成文件名，于是改不动文件（macOS 上才是对的）。
+# 这里按有没有 `--version` 分辨，两边都用得上。
+sed_inplace() {
+  if sed --version >/dev/null 2>&1; then
+    sed -i -E "$@"
+  else
+    sed -i '' -E "$@"
+  fi
+}
+
 # 1) Gradle 发行版走腾讯镜像（默认的 services.gradle.org 在国内要绕代理）。
 if grep -q 'mirrors.cloud.tencent.com/gradle' "$wrapper"; then
   echo "gradle 发行版已是腾讯镜像"
 else
-  sed -i '' -E \
+  sed_inplace \
     's#^distributionUrl=https\\://services\.gradle\.org/distributions/#distributionUrl=https\\://mirrors.cloud.tencent.com/gradle/#' \
     "$wrapper"
 fi
@@ -43,7 +54,7 @@ fi
 if grep -q 'gradle-9.5.1-bin.zip' "$wrapper"; then
   echo "gradle 版本已是 9.5.1"
 else
-  sed -i '' -E 's#gradle-[0-9.]+-bin\.zip#gradle-9.5.1-bin.zip#' "$wrapper"
+  sed_inplace 's#gradle-[0-9.]+-bin\.zip#gradle-9.5.1-bin.zip#' "$wrapper"
   echo "gradle 版本 -> 9.5.1"
 fi
 grep '^distributionUrl' "$wrapper"

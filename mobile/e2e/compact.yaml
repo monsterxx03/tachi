@@ -20,7 +20,11 @@ name: 压缩换轨
 # 这一轮会压缩：跑起来之后再说一句，它先进队列
 - tapOn: "补一句…"
 - inputText: "compact"
-- tapOn: "发送"
+# 别等界面静止：这一轮在流式输出，等它静止就是等到这一轮结束（那时压缩已经演完、画面已换轨），
+# 「正在跑」的窗口就永远错过了。
+- tapOn:
+    text: "发送"
+    waitToSettleTimeoutMs: 0
 - extendedWaitUntil:
     visible: ".*正在跑.*"
     timeout: 15000
