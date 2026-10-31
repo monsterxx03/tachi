@@ -37,6 +37,8 @@ make desktop-smoke ARGS="-keep"                         # keep the sandbox after
 
 **套件在两个平台上都跑**，平台差异只留在两半代码里：`itest/desktop/sandbox_darwin.go` 和 `sandbox_other.go`——macOS 拷一份 `.app` bundle，重新识别、重新签名，再 `open -g`；Linux 拷裸二进制，当子进程起。在 Linux 上这要付的代价是：运行是可见的，合成器可能顺手给每个窗口聚焦（GTK 没有「显示但不激活」这个杠杆，而被隐藏的窗口会把页面按 0×0 布局——driver 就会拿着零去断言）；而且应用自己的 stdout 会作为 `app.log` 留在沙箱里（macOS 上 `open` 会把它丢掉，所以那份产物只有 Linux 有）。
 
+**窗口尺寸是 fixture 的一部分，而平铺合成器会把它抢走。** sandbox 用 `TACHI_DEMO_WINDOW` 让被测应用开到 1440×900（`desktop/demo.go`；应用自己的默认是 1200×780，读者用的那个）。场景量的是布局——一个 360 宽的面板只有在窗口留得出那么多时才真是 360——所以在 1200 下 `file-tree` 量到的是面板被夹到的最小宽度 240。而平铺合成器（Hyprland 就是）按布局给窗口定尺寸，应用说了不算：窗口和别的窗口并排时它会被压窄，点击落到看不见的元素上，于是**一批**场景以「chip 不见了」「等了 30 秒」的样子失败，看着像产品坏了。套件现在开场量一次窗口，尺寸不对就一句话说清楚、退出 2，不再跑那些注定量的错误的断言。给这一层一个**窗口尺寸由我们决定的显示**：Xvfb :99 + `GDK_BACKEND=x11`（最干净），或者在这个合成器里给冒烟窗口一条「浮动 + 1440×900」的窗口规则——别把它和你在用的工作区混在一起。
+
 **沙箱的 HOME 必须遮蔽父进程的，而不是摆在它旁边**（`envWith`，sandbox_other.go）：重复的 `HOME`，Go 按后者胜解析，它下面的 GLib/GTK 栈按前者胜解析，所以不管这两份拷贝是哪个顺序，两个读取者里总有一个拿到真的 home。实测：套件曾让应用对着用户自己的 `~/.tachi` 跑、在里面建会话，然后把这些结果报成 UI 失败。
 
 ### 该跑哪些场景 —— 跑碰到的那些，不要跑整套
@@ -275,7 +277,7 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **`Cron` 工具的 `list` 和所有按 id 的动作都过同一个 `Matches`**：桌面侧是「目标是这条对话」或 `CreatedBy` 是这条对话。只过滤 `list` 会让模型拿一个见过的 id 去改/删另一条对话的任务；越界的 id 一律读作「not found」。
 - **一次定时回合走 `laneCron`，和普通回合共享事件路径。** 正在看这条会话的人会实时看到思考、工具卡片和正文；不在看时侧栏行显示运行中，完成时通知，之后打开会话能看到完整记录。`laneCron` 与 `laneTranscript` 的唯一区别是完成通知的文案（说任务名）和 `when_relevant` 的静默判断。通知失败/完成都走 `notifyCronDone`/`notifyCronFailed`，仍受 `watching` 约束。
 - **定时回合不接受 steer。** 用户在那个会话里输入的消息进待发送队列，不会被注入任务；任务自然结束后自动发出，`立即发送 · 打断` 可以停掉任务接管。前端靠 `agent:cron_turn` 知道这一点，并把待发送条的文案从「工具调用结束后插入」换成「等定时任务结束后发送」。`runCronTurn` 因此显式把 `r.steerCh` 清空，且不把 channel 交给 agent。
-- **无人值守的审批跟会话走。** 目标会话是「需要审批」时，`cronTurnContext` 打上 `withoutAsk`——命中 `ask` 的命令被拒绝并说明原因；是「无需审批」时留着，agent 的会话级开关（构建时从记录应用、`SetSkipApproval` 时更新）让 ask 规则静默。专属会话的模板默认就是「无需审批」——`cronToolTarget` 的 `Prepare` 不从创建它的会话继承这个开关，因为那个会话很可能正在问审批，而没人会回答专属会话的问题；建好之后仍以会话记录为准。不要改成 channel 那种「`PermissionModeSkip` 一律放行」。
+- **无人值守的审批跟会话走。** 目标会话是「需要审批」时，`cronTurnContext` 打上 `withoutAsk`——命中 `ask` 的命令被拒绝并说明原因；是「无需审批」时留着，agent 的会话级开关（构建时从记录应用、`SetSkipApproval` 时更新）让 ask 规则静默。专属会话第一次创建时用模板的 `SkipApproval` 初始化，之后以会话记录为准。不要改成 channel 那种「`PermissionModeSkip` 一律放行」。
 - **模型正文必须逐次相同。** `cronModelPrompt` 只拼任务提示词 + `when_relevant` 政策（`cron.MarkerNotificationPolicy`）+ 无人值守说明，**不拼时间戳**；否则每次都会打穿这条会话的提示缓存。显示文字走另一条路（`WithDisplayUserMessage`，`⏰ 任务名 + 提示词摘要`），它会落进 `display_content`，所以重新加载也能看到。
 - **`when_relevant` 在桌面只抑制通知。** 回复本来就写在会话里，能收的是系统通知和提示音；判断用 `cron.Job.ShouldSuppressResult`（最终回复为空或含 `[SILENT]`）。channel 的 Jev 门禁不参与——它决定的是「投不投递」，桌面没有投递这一半。
 - **两个入口：** 侧栏搜索图标旁的时钟打开完整页（左列表右编辑，`CronPage`），输入框状态栏的时钟打开弹层（`CronPanel`）。它们是同一组绑定的两个读法；新建从弹层跳到完整页；完整页里按 Esc 返回对话（删除确认框打开时先关确认框）。**状态栏时钟上的数字是当前会话的任务数，侧栏行的徽章也是同一个数**：`SessionInfo.CronCount` 由后端用 `cronCountsByLogical` 从任务文件推导，不写进会话记录；`Cron` 工具在一次回合里增删任务时，`SetOnChange` 发 `agent:cron_changed`，前端重新拉会话列表，所以数字是实时的。
