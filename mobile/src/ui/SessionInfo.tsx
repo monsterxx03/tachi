@@ -2,6 +2,7 @@ import { Feather } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
+import { cronTargetText } from './cronTarget';
 import type { Live } from '../state/chat';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
@@ -462,7 +463,7 @@ function CronList({
                 </Text>
               </View>
               <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
-                {[j.scheduleText, j.targetTitle || '（会话不在了）'].filter(Boolean).join(' · ')}
+                {[j.scheduleText, cronTargetText(j)].filter(Boolean).join(' · ')}
               </Text>
               <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
                 {j.running ? '正在跑' : j.nextRun ? `下次 ${shortTime(j.nextRun)}` : '不会自动跑'}
