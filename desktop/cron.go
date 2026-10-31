@@ -380,6 +380,76 @@ func (d *desktopApp) syncCronProtection() {
 	}
 }
 
+// purgeOrphanCronJobs removes desktop jobs whose target conversation is gone.
+//
+// Deleting a conversation used to leave its jobs behind: the next fire found no leaf, paused
+// the job, and the panel kept a row pointing at a conversation the sidebar can no longer show.
+// The deletion is the moment the job stops having a destination, so this runs right after every
+// successful session delete. The job is removed rather than re-pointed — silently writing into
+// another conversation's transcript is not a repair.
+//
+// The live set is the LEAVES of every compaction chain, because a job's target is the logical
+// conversation id and only a leaf answers it. A failed read removes nothing: an unreadable list
+// must never be mistaken for "every conversation is gone". A job that has not been bound yet
+// (mode=new, no SessionID) has its own future conversation and is left alone.
+func (d *desktopApp) purgeOrphanCronJobs() {
+	if d.sm == nil {
+		return
+	}
+	sessions, err := d.sm.List()
+	if err != nil {
+		logger.New("desktop").Warn(context.Background(),
+			"cron: could not read sessions to retire orphaned jobs", "err", err)
+		return
+	}
+	live := make(map[string]bool, len(sessions))
+	for _, s := range sessions {
+		if s.CompactedChildID == "" {
+			live[s.LogicalConversationID()] = true
+		}
+	}
+	jobs, err := d.cronJobRecords()
+	if err != nil {
+		logger.New("desktop").Warn(context.Background(),
+			"cron: could not read jobs after a session delete", "err", err)
+		return
+	}
+	sched := d.cronScheduler()
+	// Read only when the scheduler is absent: with cron disabled the panel still reads and
+	// writes the store directly, and a job left behind would still fire once cron came back.
+	var store *cron.Store
+	if sched == nil {
+		store = cron.NewStore(d.cronStorePath())
+	}
+	removed := 0
+	for _, j := range jobs {
+		if j.TargetType != cron.TargetTypeDesktop || j.Desktop == nil || j.Desktop.SessionID == "" {
+			continue
+		}
+		if live[j.Desktop.SessionID] {
+			continue
+		}
+		if sched != nil {
+			err = sched.Delete(j.ID)
+		} else {
+			err = store.Delete(j.ID)
+		}
+		if err != nil {
+			logger.New("desktop").Warn(context.Background(),
+				"cron: could not remove a job whose conversation is gone", "id", j.ID, "err", err)
+			continue
+		}
+		removed++
+		logger.New("desktop").Info(context.Background(),
+			"cron: removed a job whose conversation is gone",
+			"id", j.ID, "conversation", j.Desktop.SessionID)
+		d.emitCronChanged(j.ID)
+	}
+	if removed > 0 {
+		d.syncCronProtection()
+	}
+}
+
 // resolveCronTarget returns the session this run writes into, creating and
 // binding a dedicated conversation the first time a "new" job fires.
 func (d *desktopApp) resolveCronTarget(ctx context.Context, job *cron.Job) (string, error) {

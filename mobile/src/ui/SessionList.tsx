@@ -319,7 +319,10 @@ const SessionRow = memo(function SessionRow({
       icon: 'trash-2',
       tone: 'red',
       onPress: () =>
-        Alert.alert('删除这段对话？', s.title, [
+        Alert.alert('删除这段对话？', (s.cron ?? 0) > 0
+          // 任务和会话一起走：后端删掉目标会话时会把绑在它上面的任务一并删掉，所以先说出来。
+          ? `${s.title}\n\n这个会话的 ${s.cron} 个定时任务也会一并删除。`
+          : s.title, [
           { text: '取消', style: 'cancel' },
           { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
         ]),

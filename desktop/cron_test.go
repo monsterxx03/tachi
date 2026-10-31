@@ -266,6 +266,90 @@ func TestSyncCronProtectionFollowsJobsAndLeaves(t *testing.T) {
 	assert.False(t, gotChild.CronBound, "deleting the job must release the session")
 }
 
+// TestDeletingASessionRemovesTheJobsBoundToIt pins the delete half of the
+// cron/session relationship: the conversation a task writes into is gone, so the
+// task has no destination left and must not outlive it in the panel. Jobs that
+// write elsewhere — another conversation, or a dedicated one not created yet —
+// are somebody else's and stay.
+func TestDeletingASessionRemovesTheJobsBoundToIt(t *testing.T) {
+	d, store := cronTestApp(t)
+	addSession(t, store, &session.Session{ID: "keep", Title: "keep"})
+	addSession(t, store, &session.Session{ID: "gone", Title: "gone"})
+	sched := cron.NewScheduler(cron.SchedulerConfig{
+		Store:   cron.NewStore(filepath.Join(t.TempDir(), "crons.json")),
+		Handler: func(context.Context, *cron.Job) error { return nil },
+	})
+	d.cron = sched
+
+	bound, err := sched.Create(&cron.Job{
+		Name: "bound to the deleted one", Schedule: "0 9 * * *", Prompt: "p",
+		TargetType: cron.TargetTypeDesktop,
+		Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: "gone"},
+	})
+	require.NoError(t, err)
+	other, err := sched.Create(&cron.Job{
+		Name: "bound elsewhere", Schedule: "0 9 * * *", Prompt: "p",
+		TargetType: cron.TargetTypeDesktop,
+		Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: "keep"},
+	})
+	require.NoError(t, err)
+	pending, err := sched.Create(&cron.Job{
+		Name: "dedicated conversation not created yet", Schedule: "0 9 * * *", Prompt: "p",
+		TargetType: cron.TargetTypeDesktop,
+		Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeNew, WorkingDir: t.TempDir()},
+	})
+	require.NoError(t, err)
+
+	if got := (&AgentService{desk: d}).DeleteSession("gone"); got != "ok" {
+		t.Fatalf("DeleteSession = %q, want ok", got)
+	}
+
+	job, err := sched.Get(bound.ID)
+	require.NoError(t, err)
+	assert.Nil(t, job, "the task's conversation was deleted; the task must go with it")
+
+	job, err = sched.Get(other.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, job, "a task writing into another conversation must survive")
+
+	job, err = sched.Get(pending.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, job, "a task with its own future conversation must survive")
+}
+
+// TestDeletingACompactionParentKeepsTheConversationJobs: a job belongs to the
+// CONVERSATION, not to one page of it. Deleting the folded-away parent leaves the
+// leaf — the session the job actually resolves to — in place, so the job is still
+// exactly as valid as it was.
+func TestDeletingACompactionParentKeepsTheConversationJobs(t *testing.T) {
+	d, store := cronTestApp(t)
+	parent := addSession(t, store, &session.Session{ID: "p1", Title: "parent"})
+	addSession(t, store, &session.Session{
+		ID: "c1", Title: "child", LogicalID: "p1", CompactedParentID: "p1",
+	})
+	parent.CompactedChildID = "c1"
+	require.NoError(t, store.UpdateMeta(parent))
+
+	sched := cron.NewScheduler(cron.SchedulerConfig{
+		Store:   cron.NewStore(filepath.Join(t.TempDir(), "crons.json")),
+		Handler: func(context.Context, *cron.Job) error { return nil },
+	})
+	d.cron = sched
+	job, err := sched.Create(&cron.Job{
+		Name: "writes into the conversation", Schedule: "0 9 * * *", Prompt: "p",
+		TargetType: cron.TargetTypeDesktop,
+		Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: "p1"},
+	})
+	require.NoError(t, err)
+
+	if got := (&AgentService{desk: d}).DeleteSession("p1"); got != "ok" {
+		t.Fatalf("DeleteSession = %q, want ok", got)
+	}
+	got, err := sched.Get(job.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, got, "the conversation still lives in the child, so its task is not orphaned")
+}
+
 func TestPreviewCron(t *testing.T) {
 	svc := &AgentService{desk: newDesktopApp()}
 	p := svc.PreviewCron("0 9 * * *", "")

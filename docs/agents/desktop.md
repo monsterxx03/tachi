@@ -284,6 +284,7 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **设置页的 `cron` 行是 `applyRestart`**（原来是 `applyUnused`）：desktop 现在真的读 `cron.enabled/store_path/max_concurrent/execution_timeout`，启动时构造调度器；`notify_matcher`/`jev_threshold` 仍只被 channel 读，块的 Note 必须同时说清这两件事。
 - **应用退出后任务不跑，也不补跑。** 关窗口只是隐藏，进程还在，调度器照常；⌘Q 之后 `OnShutdown` 里的 `stopCron` 会取消 `s.ctx` 并等在跑的回合结束。不要给它加「启动时补跑」而不重新想清楚：那会让一次快速重启多跑一次。
 - **会话清理的保护落在 `Session.CronBound` 上，不是 retention 的 hold。** `syncCronProtection` 从 `crons.json` 推导哪些逻辑会话有 desktop 任务，启动时、任务增删/改绑时、以及每次跑完（oneshot 会删掉自己）写回**叶子**会话；压缩把它搬到子会话、父会话清掉。`Manager.CleanupOldSessions` 跳过这个标记，而它在每个入口都读得到——清理没有理由去读 cron store。不要用 `session.Retention`：那里的 reason 只表示「此刻有执行在跑」，定时任务是长期绑定，不是执行。
+- **删除会话会把目标已不存在的任务一起删掉。** `DeleteSession` 成功之后跑 `purgeOrphanCronJobs`：活着的对话是压缩链的叶子集合，`Desktop.SessionID` 不在其中的 desktop 任务被删除（`sched.Delete`；cron 关着时直接写 store），并先于 `agent:sessions_changed` 发出，所以侧栏重读时行上的任务数已经是对的。删掉压缩链的父会话不动任务（对话还在子会话里），`mode=new`、还没建出专属对话的任务也不动。`agent:sessions_changed` 与手机端共用这一条路径；窗口和手机的删除确认框在 `cronCount`/`cron` > 0 时都会先说明「任务也会一并删除」。
 
 ## 桌面会话树（每一条按树取值的路径都必须来自会话）
 

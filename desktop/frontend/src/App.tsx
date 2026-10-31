@@ -437,7 +437,10 @@ function App() {
   // The delete confirmation. `error` holds the backend's refusal (a session with a turn
   // in flight cannot be deleted) so it lands in the box that asked the question, next to
   // the button that was just pressed — a console-only failure would read as a no-op.
-  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; error?: string } | null>(null)
+  // `cron` is how many scheduled tasks write into this conversation: deleting it takes them
+  // with it (the backend's DeleteSession retires jobs whose conversation is gone), so the box
+  // has to say that before the button is pressed.
+  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; cron?: number; error?: string } | null>(null)
   // The delete box's element. Focus is TAKEN here explicitly rather than with `autoFocus`: that is an
   // attribute, and WebKit honours it on form controls — on a div it does nothing, which is exactly the
   // trap this box has to avoid (its Enter means 确认; left in the composer, the same key sends a message).
@@ -2088,7 +2091,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // session not listed yet shows 未命名会话, which is the words its row would carry too.
   const askDeleteCurrent = useCallback(() => {
     if (!currentId) return
-    setConfirmDel({ sid: currentId, title: sessions.find((s) => s.id === currentId)?.title || '未命名会话' })
+    const cur = sessions.find((s) => s.id === currentId)
+    setConfirmDel({ sid: currentId, title: cur?.title || '未命名会话', cron: cur?.cronCount || 0 })
   }, [currentId, sessions])
 
   // The menu bar's 「新会话」 arrives as ui:new_session (desktop/tray.go): the shell brings the
@@ -3478,7 +3482,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
             title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}
-            onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
+            onClick={() => { const row = sessions.find((x) => x.id === menu.sid); setConfirmDel({ sid: menu.sid, title: row?.title || '', cron: row?.cronCount || 0 }); setMenu(null) }}>删除</button>
         </div>
       )}
       {actionNotice && <div className="app-toast" role="status" aria-live="polite">{actionNotice}</div>}
@@ -3586,6 +3590,9 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               if (e.key === 'Enter') { e.preventDefault(); confirmDelete(confirmDel.sid) }
             }}>
             <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
+            {confirmDel.cron ? (
+              <div className="confirm-sub">这个会话的 {confirmDel.cron} 个定时任务也会一并删除。</div>
+            ) : null}
             <div className="confirm-sub">此操作不可恢复。</div>
             {confirmDel.error ? <div className="confirm-error">⚠ {confirmDel.error}</div> : null}
             <div className="confirm-actions">

@@ -210,6 +210,10 @@ func (s *AgentService) DeleteSession(id string) string {
 		d.activeID = ""
 	}
 	d.mu.Unlock()
+	// The conversation is gone, so a scheduled task bound to it has no destination left. This
+	// runs BEFORE the list event: a reader that reloads the sidebar on agent:sessions_changed
+	// also re-reads the per-row cron counts, and those must already exclude the retired jobs.
+	d.purgeOrphanCronJobs()
 	// Outside the lock: mobileBroadcast reads the server pointer under d.mu.
 	d.emitSessionsChanged(id)
 	return "ok"
