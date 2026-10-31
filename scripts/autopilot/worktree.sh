@@ -3,6 +3,7 @@
 # 自动工作区的开与收。
 #
 #   scripts/autopilot/worktree.sh new <slug>              从最新 origin/main 开区并备好依赖
+#   scripts/autopilot/worktree.sh resume <slug>           接着上一轮的 PR 改（区在就用，不在就重建）
 #   scripts/autopilot/worktree.sh gc [--dry-run] [--max-age <天>]
 #   scripts/autopilot/worktree.sh list
 #
@@ -110,13 +111,21 @@ cmd_new() {
 }
 
 cmd_gc() {
+  local force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) DRY=1; shift ;;
+      --force) force=1; shift ;;
       --max-age) MAX_AGE_DAYS="${2:?}"; shift 2 ;;
       *) die "未知参数：$1" ;;
     esac
   done
+
+  # --max-age 0 等于「删掉所有没有 open PR 的区」——包括正在被这一轮用的那个。
+  # 它是个有用的开关（合并后立刻收工），但绝不该是手滑的默认。
+  if [[ "$MAX_AGE_DAYS" -lt 1 && $force -eq 0 ]]; then
+    die "--max-age 小于 1 天会删掉所有没有 open PR 的区（含刚建的）。确认的话加 --force。"
+  fi
 
   [[ -d "$WT_ROOT" ]] || { echo "没有需要回收的工作区（$WT_ROOT 不存在）"; return 0; }
   ensure_exclude
@@ -179,9 +188,43 @@ cmd_list() {
   git -C "$MAIN_WT" worktree list
 }
 
+# cmd_resume —— 接着上一轮的 PR 改时用它：区还在就直接用，不在就从原分支重建。
+# 新一轮绝不能换个 slug 重开一个分支 —— 那就成了第二个 PR，评论里的意见全丢在原地。
+cmd_resume() {
+  local slug="${1:-}"
+  [[ -n "$slug" ]] || die "用法：$0 resume <slug>"
+  slug="$(printf '%s' "$slug" | tr '/ ' '--' | tr -cd 'A-Za-z0-9._-')"
+  local path="$WT_ROOT/$slug" branch="${BRANCH_PREFIX}${slug}"
+
+  if [[ -d "$path" ]]; then
+    echo "== 区还在，直接续用"
+  else
+    echo "== fetch origin"
+    git -C "$MAIN_WT" fetch -q origin || die "fetch 失败"
+    if git -C "$MAIN_WT" show-ref --verify --quiet "refs/heads/$branch"; then
+      git -C "$MAIN_WT" worktree add "$path" "$branch" >/dev/null || die "worktree 重建失败"
+    elif git -C "$MAIN_WT" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+      git -C "$MAIN_WT" worktree add -b "$branch" "$path" "origin/$branch" >/dev/null \
+        || die "worktree 重建失败"
+    else
+      die "找不到分支 $branch（本地和 origin 都没有）"
+    fi
+  fi
+
+  ensure_exclude
+  link_modules "$path" web/frontend
+  link_modules "$path" desktop/frontend
+  build_frontend "$path" web/frontend
+  build_frontend "$path" desktop/frontend
+
+  echo ""
+  echo "$path"
+}
+
 case "${1:-}" in
-  new)  shift; cmd_new "$@" ;;
-  gc)   shift; cmd_gc "$@" ;;
-  list) cmd_list ;;
-  *)    sed -n '3,10p' "${BASH_SOURCE[0]}"; exit 1 ;;
+  new)    shift; cmd_new "$@" ;;
+  resume) shift; cmd_resume "$@" ;;
+  gc)     shift; cmd_gc "$@" ;;
+  list)   cmd_list ;;
+  *)      sed -n '3,11p' "${BASH_SOURCE[0]}"; exit 1 ;;
 esac
