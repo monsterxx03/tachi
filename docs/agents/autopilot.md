@@ -133,7 +133,7 @@ job 的 `Prompt` 就是这段话。它要和 `cronModelPrompt` 追加的那段�
 ## 上下文与成本
 
 - 它写在**同一条会话**里，每轮都往上面叠。tachi 会压缩，但压缩后的行为会漂；所以**关键状态要落在文件里**（`blocked` 清单、试过什么），别指望只活在上下文里。
-- 一轮做不完就停：prompt 里给一个时间盒，到点把进度写清楚。**cron 有一道全局超时 `cron.execution_timeout`**（默认 5m），到点会取消这一轮、job 记成 error（oneshot 还会被删掉）——所以 prompt 的时间盒要明显小于它，否则中断会发生在模型正写 PR body 的时候。
+- 一轮做不完就停：prompt 里给一个时间盒，到点把进度写清楚。**cron 有一道全局超时 `cron.execution_timeout`**（默认 60m，`config.DefaultCronExecutionTimeout`），到点会取消这一轮、job 记成 error（oneshot 还会被删掉）——所以 prompt 的时间盒要明显小于它，否则中断会发生在模型正写 PR body 的时候。
 - 用量看 `tachi usage`；成本失控时先降频，再考虑换更便宜的 provider。
 
 ## 出事了按哪几个按钮

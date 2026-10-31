@@ -95,6 +95,10 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
 	assert.Equal(t, FilesJevAuto, cfg.Permissions.Files.Jev)
 	assert.Equal(t, FilesJevThreshold, cfg.Permissions.Files.JevThreshold)
 	assert.Equal(t, DefaultFilesJevBudget, cfg.Permissions.Files.JevBudget)
+	// Same tag/constant duplication for cron.execution_timeout: a tag cannot name a
+	// constant, so this line is what notices the day the tag or the constant moves.
+	// The number decides whether a scheduled job finishes or is cut off mid-way.
+	assert.Equal(t, DefaultCronExecutionTimeout, cfg.Cron.ExecutionTimeout)
 }
 
 func TestSaveAndLoad(t *testing.T) {

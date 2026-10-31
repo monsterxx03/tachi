@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,20 @@ func newTestScheduler(t *testing.T, handler TriggerHandler) (*Scheduler, *Store)
 	})
 
 	return scheduler, store
+}
+
+func TestScheduler_ZeroExecutionTimeoutFallsBackToTheConfigDefault(t *testing.T) {
+	// A scheduler built without going through config.yaml (channel builds one from cfg, tests
+	// from literals) must land on the SAME bound the config tag names — a second number here
+	// would drift from it, and the drift would only show up as a job cut off mid-way.
+	_ = logger.Init(t.TempDir(), *logger.DefaultConfig())
+
+	scheduler := NewScheduler(SchedulerConfig{
+		Store:  NewStore(filepath.Join(t.TempDir(), "crons.json")),
+		Logger: logger.Default(),
+	})
+
+	assert.Equal(t, config.DefaultCronExecutionTimeout, scheduler.executionTimeout)
 }
 
 func TestScheduler_Create(t *testing.T) {
