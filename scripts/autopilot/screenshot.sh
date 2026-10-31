@@ -6,7 +6,7 @@
 #
 #   scripts/autopilot/screenshot.sh mobile  --name 会话列表 --upload
 #   scripts/autopilot/screenshot.sh web     --name 会话页 --url http://127.0.0.1:8787 --upload
-#   scripts/autopilot/screenshot.sh desktop --name 主窗口          # 预期在 Xvfb 里跑
+#   scripts/autopilot/screenshot.sh desktop --name 主窗口
 #
 # 选项：
 #   --name <名字>   文件名（默认时间戳）
@@ -76,8 +76,7 @@ capture() {
       ;;
     desktop)
       if [[ -n "${DISPLAY:-}" ]] && command -v import >/dev/null 2>&1; then
-        # X11 这条路的前提是「这个 DISPLAY 上只有被测应用」——也就是 Xvfb。
-        # 在真桌面上截全屏会把你的其它窗口一起推上公开仓库。
+        # X11 这条路截的是整个屏，前提是屏上只有被测应用；真桌面上会把别的窗口一起推上公开仓库。
         import -window root -display "$DISPLAY" "$SHOT" || return 1
       elif [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v grim >/dev/null 2>&1; then
         local geo

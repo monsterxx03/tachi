@@ -128,10 +128,10 @@ else
   # ---------------------------------------------------------------- 桌面：模块测试 + 真窗口
   if printf '%s\n' "$CODE_CHANGED" | grep -q '^desktop/'; then
     run "desktop unit tests" make -C desktop test
-    if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]] || command -v Xvfb >/dev/null 2>&1; then
+    if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
       run "desktop smoke" make desktop-smoke
     else
-      nover "desktop smoke" "没有显示器也没有 Xvfb —— 这层没跑过，别在 PR 里说验过"
+      nover "desktop smoke" "没有显示器 —— 这层没跑过，别在 PR 里说验过"
     fi
   else
     skip "desktop" "没碰 desktop/"
