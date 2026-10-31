@@ -6,6 +6,7 @@
 
 - **`@` 名字是路径，`#` 名字是实体。** 边界规则只有一条（`atfile.IsRefBoundary`：行首或空白之后开始，到下一个空白为止），但 `#` **只由 `AgentRefPrefix`（`a:`）和 `SessionRefPrefix`（`s:`）开门**——别的一律是普通文本，不查磁盘、不开弹窗。这就是 `#include`、`#123`、一个 Markdown 标题、`C#` 不会被误伤的原因，也意味着加第三种实体引用要同时改拼写前缀与选择器的候选列表。
 - **语法归 Go 所有，前端只负责插入与路由。** 引用文本由 `RefForPath` / `RefForAgent` / `RefForSession` 渲染，展开由 `atfile.Expand` 做（调用点在 `tui/commands_agent.go`、`desktop/agent_turn.go`——**加一种引用要同时接进两个前端**）；而「这串 keystroke 属于哪个命名空间」只有 `atfile.HashQueryNamespace` 一个答案，桌面那份是 `lib.ts` 的 `hashNamespace` 镜像。**一份东西两个说法，就是这两边开始互相不认的方式。**
+- **手机只有 `#s:` 这一半**（`mobile/src/ui/refs.ts`，插入与补全在 `ui/Chat.tsx`）：手机拿到的 agent 面板行里没有身份字段（`desktop/mobile_manage.go` 的 `mobileAgentRow`），而一个插进去解析不了的 `#a:` 比没有更糟，所以那里的候选只有会话，且来自手机手里已有的那份列表（不为补全多问一次服务端）；手打 `#a:<id>` 仍照常展开。边界、前缀、插入后补空格这几条规则和另外两处是同一条，由 `refs.test.ts` 钉住——三处答案不一致，补全列出来的东西和真正会展开的东西就对不上。
 - **一条消息里可以有任意多个引用，两种 mark 混着也行**：扫描器逐词处理，所以每个引用各自展开；前端的游标扫描（`atfile.LastRefStart` / `lib.ts` 的 `atRefAt`）反过来找**光标所在的那一个**——多引用不是特例，只有在弹窗里假设「只有一个引用」的代码才会把它当特例。计数（选择器那句「已引用 N 个」）与 `#` 用同一条前缀规则，否则 `#include` 会把数字算虚。
 
 ## `#s:` 与 `#a:` 都是指针，绝不是内容

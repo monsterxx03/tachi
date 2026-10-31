@@ -76,6 +76,7 @@ function ChatPane({
   if (inChat && m.chat.snapshot)
     return (
       <Chat
+        sessions={m.sessions}
         snapshot={m.chat.snapshot}
         live={m.chat.live}
         fileSource={(a) => (m.pairing && m.openId ? api.file(m.pairing, m.openId, a) : null)}

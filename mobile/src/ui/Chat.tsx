@@ -21,11 +21,13 @@ import type {
   PendingMessage,
   SendMode,
   SessionMessage,
+  SessionSummary,
   Snapshot,
   UploadedFile,
 } from '../api/types';
 import type { Live } from '../state/mobile';
 import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep } from '../state/items';
+import { hashRefAt, matchSessions, sessionQuery, sessionRef, spliceRef } from './refs';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import Animated, {
   Easing,
@@ -146,6 +148,9 @@ type Attach = { key: string; name: string; size?: number; file?: UploadedFile; e
 /** 待发送那一条：往上划够这么远 = 现在就发，往下划够这么远 = 删掉 */
 const PENDING_SWIPE = 26;
 
+/** `#s:` 候选最多列几行：手机屏幕就那么大，够不着的那几条不如让读者多打一个字。 */
+const REF_PICK_LIMIT = 6;
+
 /**
  * 待发送队列里的一条。**上滑 = 现在就发这一条**（正在跑就先停这一轮，见 state 的
  * `sendPending`），**下滑 = 从队列里删掉**。右边那个 × 留着：手势要有人解释，它不用。
@@ -262,6 +267,8 @@ function Composer({
   onClearPending,
   onSendPendingNow,
   onStop,
+  sessions,
+  currentId,
 }: {
   running: boolean;
   waiting: string;
@@ -275,9 +282,19 @@ function Composer({
   onClearPending: () => void;
   onSendPendingNow: () => void;
   onStop: () => void;
+  /** `#s:` 的候选：所有对话 */
+  sessions: SessionSummary[];
+  /** 正在写的这一段：引用自己不会展开出任何有用的东西，所以它不出现在候选里 */
+  currentId: string;
 }) {
   const { tokens: t } = useTheme();
   const [text, setText] = useState('');
+  // 光标所在的那个 `#` 查询；null = 没有候选面板。起止点都记下来：插入时要把
+  // `#s:abc` 整段换掉，而不只是接在后面。
+  const [refPick, setRefPick] = useState<{ start: number; end: number; query: string } | null>(null);
+  const caretRef = useRef(0);
+  // 文本的镜像：onSelectionChange 里的闭包可能是上一个 render 的，读 state 会晚一拍。
+  const textRef = useRef('');
   // 待发的文件：传完的带 file，正在传的没有，失败的那条带 error（读者可以删掉它再来一次）
   const [files, setFiles] = useState<Attach[]>([]);
   const [menu, setMenu] = useState(false);
@@ -290,6 +307,43 @@ function Composer({
   const ready = files.filter((f): f is Attach & { file: UploadedFile } => !!f.file);
   // 能发的东西：一句话，或者至少一个传完的文件（只发一张图、什么也不说是合法的）
   const canSend = !!text.trim() || ready.length > 0;
+
+  // ── `#s:` 补全 ────────────────────────────────────────────────────────────
+  // 一条对话引用就是一段文本 `#s:<id>`：展开发生在桌面那一侧（agent/atfile），手机只负责
+  // 把拼写写对。所以「什么算引用」必须和 desktop/frontend/src/lib.ts、agent/atfile 同一条
+  // 规则（都在 refs.ts 里，和它一起被测）。
+  const syncPick = useCallback((value: string, caret: number) => {
+    const ref = hashRefAt(value, caret);
+    if (!ref || sessionQuery(ref.query).kind === 'none') {
+      setRefPick(null);
+      return;
+    }
+    setRefPick({ start: ref.start, end: caret, query: ref.query });
+  }, []);
+
+  // 还没敲完 `s:` 时列出全部对话 —— 那几行就是「# 能干什么」的答案；敲完之后按标题/id 过滤。
+  const rows = useMemo(() => {
+    if (!refPick) return [];
+    const q = sessionQuery(refPick.query);
+    if (q.kind === 'none') return [];
+    return matchSessions(sessions, q.kind === 'sessions' ? q.rest : '', currentId, REF_PICK_LIMIT);
+  }, [refPick, sessions, currentId]);
+
+  const insertRef = useCallback(
+    (id: string) => {
+      if (!refPick) return;
+      const out = spliceRef(textRef.current, refPick.start, refPick.end, sessionRef(id));
+      textRef.current = out.value;
+      caretRef.current = out.caret;
+      setText(out.value);
+      setRefPick(null);
+      // 光标跟着落到那个补上的空格后面。不落的话这次插入还停在引用里，面板会立刻再弹回来。
+      requestAnimationFrame(() =>
+        inputRef.current?.setNativeProps({ selection: { start: out.caret, end: out.caret } }),
+      );
+    },
+    [refPick],
+  );
 
   // 挑到一个文件就先把它画成一条 chip，再传：上传要几秒，而这段时间里屏幕上是空的，
   // 读起来就是「点了没反应」。传完 chip 才变成能发的；失败的那条留在原地说为什么。
@@ -367,14 +421,18 @@ function Composer({
     const sent = ready.map((f) => f.file);
     if (running) {
       onQueue(v, sent);
+      textRef.current = '';
       setText('');
+      setRefPick(null);
       setFiles([]);
       return;
     }
     // 不在跑：服务端没收下就把字还给读者（拒绝的原因在顶部横幅里）—— 文件也留着，重发还是那几个
     void onSend(v, 'send', sent).then((ok) => {
       if (ok) {
+        textRef.current = '';
         setText('');
+        setRefPick(null);
         setFiles([]);
       }
     });
@@ -467,6 +525,28 @@ function Composer({
           </Text>
         </View>
       ) : null}
+      {/* `#s:` 的候选。它挂在输入行上面而不是浮成一个覆盖层：手机上覆盖层会把正在写的那句话
+          挡住，而读者做选择时正需要看那句话。 */}
+      {rows.length > 0 ? (
+        <View style={[styles.refBar, styles.column, { borderColor: t.border, backgroundColor: t.inputBg }]}>
+          <Text style={{ color: t.faint, fontSize: 10.5 }}>引用另一段对话</Text>
+          {rows.map((row) => (
+            <Pressable
+              key={row.id}
+              onPress={() => insertRef(row.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`引用 ${row.title || row.id}`}
+              style={({ pressed }) => [styles.refRow, pressed && { backgroundColor: t.wash }]}
+            >
+              <Feather name="corner-up-left" size={12} color={t.faint} />
+              <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={1}>
+                {row.title || '（无标题）'}
+              </Text>
+              <Text style={{ color: t.faint, fontSize: 11 }}>{row.id.slice(0, 8)}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       <View style={[styles.inputRow, styles.column]}>
         <Pressable
           onPress={() => setMenu((m) => !m)}
@@ -480,7 +560,22 @@ function Composer({
           <TextInput
             ref={inputRef}
             value={text}
-            onChangeText={setText}
+            onChangeText={(v) => {
+              const prev = textRef.current;
+              textRef.current = v;
+              setText(v);
+              // 多出来的那几个字落在光标处：按这个差推进光标，末尾追加（最常见）才准；
+              // 删除时往回收，准确位置由紧接着的 onSelectionChange 补上。
+              const caret = Math.min(v.length, caretRef.current + Math.max(0, v.length - prev.length));
+              caretRef.current = caret;
+              syncPick(v, caret);
+            }}
+            // 光标移动（含打字之后）都要重算：补全面板跟着光标走，而不是跟着输入框的末尾。
+            onSelectionChange={(e) => {
+              const caret = e.nativeEvent.selection.start;
+              caretRef.current = caret;
+              syncPick(textRef.current, caret);
+            }}
             placeholder="补一句…"
             placeholderTextColor={t.faint}
             style={[styles.input, { color: t.text }]}
@@ -621,8 +716,11 @@ export function Chat({
   onSendPending,
   onClearPending,
   onSendPendingNow,
+  sessions,
 }: {
   snapshot: Snapshot;
+  /** 全部对话，`#s:` 的候选就来自这里 —— 手机手里本来就有这份列表，不必为补全再问一次服务端。 */
+  sessions: SessionSummary[];
   live: Live;
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
@@ -896,6 +994,8 @@ export function Chat({
           onClearPending={onClearPending}
           onSendPendingNow={onSendPendingNow}
           onStop={onStop}
+          sessions={sessions}
+          currentId={s.id}
         />
       )}
 
@@ -1024,6 +1124,8 @@ const styles = StyleSheet.create({
   runHint: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 16, paddingBottom: 6 },
   runDot: { width: 5, height: 5, borderRadius: 2.5 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12 },
+  refBar: { marginHorizontal: 12, marginBottom: 8, paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderRadius: 12, gap: 2 },
+  refRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5, paddingHorizontal: 2, borderRadius: 8 },
   attachBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   attachBar: { paddingHorizontal: 12, paddingBottom: 6, gap: 5 },
   fileChip: {
