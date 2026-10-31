@@ -59,6 +59,11 @@ func New(token string) *Server {
 			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "status": "paused",
 				"targetKind": "missing", "targetTitle": "", "nextRun": "",
 				"lastRunStatus": "error", "lastRunError": "会话已经不在了", "running": false},
+			// pending：专属会话还没创建（第一次运行才建）。它和 missing 一样没有标题，
+			// 所以这一行是「没有标题不等于会话没了」那条规则在种子数据里的活样本。
+			{"id": "c3", "name": "每日站会总结", "scheduleText": "每个工作日 09:30", "status": "active",
+				"targetKind": "pending", "targetTitle": "", "nextRun": "2026-10-21T09:30:00+08:00",
+				"lastRunStatus": "", "lastRunError": "", "running": false},
 		},
 	}
 }
