@@ -13,6 +13,10 @@
   smoke.type('.composer-input', '看一下工作目录')
   smoke.click('.send-btn')
   if (!(await smoke.waitText('.chat', '这是一段很长的历史内容', 30000))) return smoke.finish()
+  // The reply's text arrives WHILE the turn is still running, and until it ends that same button is
+  // 「停止」: typing and clicking straight after the text aborts the turn instead of sending. The
+  // second turn then never leaves the composer — which reads as "compaction never happened".
+  if (!(await smoke.waitFor(() => !smoke.q('.stop-btn'), '第一轮结束（停止按钮消失）'))) return smoke.finish()
 
   // The ring's own label: `上下文 X%（A / B），点击查看明细`. It is on the BUTTON — the SVG is
   // aria-hidden — and read as a number, so the assertion is about the quantity, not the string.
@@ -29,6 +33,8 @@
   smoke.type('.composer-input', '继续')
   smoke.click('.send-btn')
   if (!(await smoke.waitText('.chat', '第二轮回复', 30000))) return smoke.finish()
+  // Same boundary before the command: `/compact` typed into a running turn would steer THAT turn.
+  if (!(await smoke.waitFor(() => !smoke.q('.stop-btn'), '第二轮结束（停止按钮消失）'))) return smoke.finish()
 
   // The first turn is a big reply on purpose (see the scenario), so the estimate it leaves behind
   // is clearly above the system-prompt floor — waiting for the reply TEXT alone would race the
