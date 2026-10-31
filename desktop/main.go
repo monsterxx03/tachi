@@ -136,7 +136,9 @@ func main() {
 		reportHostLocked(lockErr)
 		return
 	}
-	defer hostLock.Release()
+	// The process is on its way out: a failed unlock/close is not actionable, and the kernel
+	// releases the fd anyway (pkg/flock documents that as the reason this is flock and not a PID file).
+	defer func() { _ = hostLock.Release() }()
 
 	desk := newDesktopApp()
 

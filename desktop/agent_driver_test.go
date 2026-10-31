@@ -167,6 +167,11 @@ func TestSessionSkillStoreFollowsTheSessionTree(t *testing.T) {
 // global skills alone, and never the process cwd (skill.NewStore("")). Without an
 // existing session the same rule applies.
 func TestSessionSkillStoreWithoutWorkspace(t *testing.T) {
+	// This machine may genuinely run omarchy, whose agent-skills tree the store scans as its
+	// LAST root — that would make Dirs() carry a second entry and make this assertion about
+	// the host rather than about the code. Point it at a directory that has none.
+	t.Setenv("OMARCHY_PATH", t.TempDir())
+
 	sm := newSessionManagerForTest(t, "")
 	sm.EndCurrent()
 	d := newTestApp()

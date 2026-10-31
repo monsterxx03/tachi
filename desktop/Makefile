@@ -60,6 +60,16 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
+# wails v3 的 linux_cgo.c 调 GTK4 里已弃用的 X11 接口（gdk_x11_display_get_xdisplay、
+# gdk_x11_surface_get_xid，见 window_move_x11 / window_get_position_x11 /
+# window_send_always_on_top_x11），GTK 给它们标了 deprecated，于是每个冷编译都吐满一屏
+# -Wdeprecated-declarations。那是上游的代码（v3.0.0 里仍在），本地改不了，只能在 cgo 这一层
+# 把这一类关掉；别的警告照旧。CGO_CFLAGS 的默认值是 go env 的 "-O2 -g"，一旦设置就整份覆盖，
+# 所以默认值必须带上。build/linux/Taskfile.yml 的 build:native 里有一份同样的（直接
+# `wails3 package` 不经过 make）——改值要两处一起改。
+CGO_CFLAGS ?= -O2 -g
+export CGO_CFLAGS := $(CGO_CFLAGS) -Wno-deprecated-declarations
+
 .PHONY: all build cli headless package package-appimage dev appicon frontend bar-widget tidy clean run sign-local stt-shim
 
 all: build

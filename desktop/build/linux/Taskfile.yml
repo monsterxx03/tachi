@@ -82,6 +82,12 @@ tasks:
     env:
       GOOS: linux
       CGO_ENABLED: 1
+      # wails v3 的 linux_cgo.c 调 GTK4 里已弃用的 X11 接口（gdk_x11_display_get_xdisplay、
+      # gdk_x11_surface_get_xid），每个冷编译都吐一屏 -Wdeprecated-declarations；那是上游的
+      # 代码，本地改不了，所以在 cgo 这一层把这一类关掉。desktop/Makefile 里有一份同样的
+      # （`make build` 走那条路）——改值要两处一起改。-O2 -g 是 go env 的默认值，设置
+      # CGO_CFLAGS 就整份覆盖，所以要带上。
+      CGO_CFLAGS: '-O2 -g -Wno-deprecated-declarations'
       GOARCH: '{{.ARCH | default ARCH}}'
 
   package:

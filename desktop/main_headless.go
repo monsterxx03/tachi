@@ -44,7 +44,8 @@ func main() {
 	if lockErr != nil {
 		log.Fatal(lockErr)
 	}
-	defer hostLock.Release()
+	// Same as the windowed host's defer (main.go): nothing to do with a failed unlock on the way out.
+	defer func() { _ = hostLock.Release() }()
 
 	desk := newDesktopApp()
 
