@@ -34,6 +34,11 @@ type mobileSessionSummary struct {
 	// record (`ThreadID`), so the tag is drawn even when its name is missing.
 	ChannelSession bool   `json:"channelSession,omitempty"`
 	ChannelName    string `json:"channelName,omitempty"`
+
+	// Cron is how many timed jobs write into this conversation (the same count the sidebar's
+	// badge draws). The phone marks the row with it: a conversation a task keeps waking up is
+	// not the same thing as one the reader left alone, and it cannot be judged from the title.
+	Cron int `json:"cron,omitempty"`
 }
 
 // mobileMessage 是历史里的一条记录。Index 是它在会话记录里的绝对位置 —— 翻页游标就是它

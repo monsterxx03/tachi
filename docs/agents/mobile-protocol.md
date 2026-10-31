@@ -165,13 +165,19 @@
 
 ```
 SessionSummary  { id, title, projectName?, updatedAt, running, waiting, readOnly, heldByTask, pinned?,
-                  channelSession?, channelName? }
+                  channelSession?, channelName?, cron? }
                 waiting 只有两句：「等待你的授权」「等待你的回答」，空串表示没有在等
                 channelSession 表示这段对话属于某个 IM channel（手机在行上和标题旁边贴 tag，
                 并**不允许**编辑/删除之外的操作）；channelName 是哪个（discord / weixin /
                 插件自己的名字）。名字有两个来源，宿主取第一个能答的：会话记录上的
                 `channel_name`（那个 channel 在这段对话里跑过一轮就写下了，所以熬得过重启），
                 然后是本进程见过的 thread→channel 映射；两处都没有时为空 —— 那时 tag 只写「渠道」
+                cron 是有几个**定时任务**写进这段对话（桌面侧栏那颗徽章的同一个数，按逻辑 id
+                算，所以压缩链上数的是整条对话）；缺省 = 没有。手机在行上画一个小闹钟，
+                多于一小时带条数
+                updatedAt 是 **RFC3339**（带时区）。手机自己折成「刚刚 / N 分钟前 / HH:mm /
+                昨天 / M月D日」——**别改成相对时间发过来**：那样「几点」只在发出去那一刻成立，
+                列表停在手机上几分钟就会说谎
 Message         { index, role, content, displayContent?, timestamp?, iteration?, seq?, turn?,
                   toolName?, toolCallId?, args?, title?, toolResult?, isError?, thinking? }
                 role ∈ user / assistant / tool_call / tool_result / reminder

@@ -7,7 +7,13 @@ import { useTheme } from '../theme/ThemeContext';
 import { Markdown } from './Markdown';
 import { stripReminders } from './reminder';
 
-/** 助手的一段回复：整段交给 Markdown（围栏里的 mermaid 也在它的 fence 规则里接管） */
+/**
+ * 助手的一段回复：整段交给 Markdown（围栏里的 mermaid 也在它的 fence 规则里接管）。
+ *
+ * **长按归系统。** 正文是 `selectable` 的，长按弹出原生选区（在 Android 上可以拖选择柄圈一段）
+ * —— 那是手机上唯一能只复制半句的办法，所以这一层不加任何自己的长按手势：包一层
+ * `Pressable onLongPress` 的话，原生选区在 Android 上就被吃掉了（做过，又撤了）。
+ */
 function AssistantText({ text }: { text: string }) {
   const clean = stripReminders(text);
   if (!clean) return null;

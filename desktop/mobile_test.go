@@ -19,6 +19,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -163,6 +164,49 @@ func TestMobileListFoldsTheCompactionChain(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID != child.ID {
 		t.Fatalf("rows = %v, want only the leaf %s", ids, child.ID)
+	}
+}
+
+// TestMobileRowCarriesTheCronCount: a conversation a timed job writes into is marked on its
+// row. The number comes from the same scan the sidebar's badge uses (per logical id, so a
+// compaction chain counts as one conversation), and the phone only draws it.
+func TestMobileRowCarriesTheCronCount(t *testing.T) {
+	d, sm := newMobileApp(t)
+	s, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	other, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "crons.json")
+	store := cron.NewStore(path)
+	for _, id := range []string{"c1", "c2"} {
+		if err := store.Create(&cron.Job{
+			ID: id, Name: id, Schedule: "@every 1h", Prompt: "p",
+			TargetType: cron.TargetTypeDesktop,
+			Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: s.LogicalConversationID()},
+		}); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+	}
+	d.cfg = &config.Config{Language: "en", Cron: config.CronConfig{StorePath: path}}
+
+	rows, err := d.mobileSessions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byID := map[string]mobileSessionSummary{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	if got := byID[s.ID].Cron; got != 2 {
+		t.Fatalf("cron on the bound row = %d, want 2", got)
+	}
+	if got := byID[other.ID].Cron; got != 0 {
+		t.Fatalf("cron on an unbound row = %d, want 0", got)
 	}
 }
 

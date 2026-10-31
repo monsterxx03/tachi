@@ -10,8 +10,8 @@ import { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'r
  * 手势区和它们不重叠 —— 在代码块上横划永远落不到这个手势里。
  */
 const EDGE_BACK_ZONE = 16;
-/** 页面跟着手指走的整屏宽度 */
-const SCREEN = Dimensions.get('window').width;
+/** 页面跟着手指走的整屏宽度；会话列表那一页的整页手势也用这个上界 */
+export const SCREEN = Dimensions.get('window').width;
 
 /**
  * 从屏幕左缘往右划 = 返回上一屏。**手势与动画都在 UI 线程**（gesture-handler + reanimated），
@@ -88,6 +88,54 @@ export function EdgeBackZone({ gesture }: { gesture: ReturnType<typeof Gesture.P
       <View style={styles.zone} />
     </GestureDetector>
   );
+}
+
+/** 整页右滑：往右推够这么多才认领（单个正数只设那一端 —— 见下面那段窗口语义） */
+const PAGE_SWIPE = 32;
+
+/**
+ * 整页往右推 = 进下一个页面（现在只有会话列表页用它：推到设置页 —— 选电脑的那一屏）。
+ *
+ * **为什么不是左缘那一条。** 那看起来更对称（和返回同一个起手位置），但在 Android 上
+ * 左缘那一划归系统的返回手势，App 根本收不到 —— 实测就是直接退回桌面。所以这一页只能
+ * 铺满：整页的任何位置往右推都算。
+ *
+ * **铺满的代价是阈值必须给对。** gesture-handler 的两端是「窗口」语义：数组 `[a, b]` 表示
+ * `dx < a` 或 `dx > b` 都算激活 —— 写成 `[12, SCREEN]` 的话 `dx < 12` 恒成立，真机上手指
+ * 一动就激活，点击、长按、行左滑全被这一层抢走（这一屏就只剩右滑好用，这是踩过的）。
+ * 单个正数只设右半边，32px 远超点击与长按的手指抖动，而真正的划动远不止这些。
+ *
+ * 行的手势因此不用改：它的 `activeOffsetX([-8, 8])` 只在往左那半边赢，往右落不到它手里。
+ */
+export function usePageSwipe(onSwipe?: () => void) {
+  const tx = useSharedValue(0);
+
+  const gesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(!!onSwipe)
+        // 只认往右，够 32px 才认领；竖着动 18px 就交给列表去滚
+        .activeOffsetX(PAGE_SWIPE)
+        .failOffsetY([-18, 18])
+        .onUpdate((e) => {
+          tx.value = Math.max(0, Math.min(SCREEN, e.translationX));
+        })
+        .onEnd((e) => {
+          const done = tx.value > SCREEN * 0.3 || e.velocityX > 900;
+          if (done && onSwipe) {
+            // 和返回那条一样：先把「推走」补完，再真的换屏 —— 中途换会闪
+            tx.value = withTiming(SCREEN, { duration: 180, easing: Easing.out(Easing.quad) }, () => {
+              runOnJS(onSwipe)();
+            });
+            return;
+          }
+          tx.value = withTiming(0, { duration: 160, easing: Easing.out(Easing.cubic) });
+        }),
+    [onSwipe, tx],
+  );
+
+  const style = useAnimatedStyle(() => ({ transform: [{ translateX: tx.value }] }));
+  return { gesture, style };
 }
 
 const styles = StyleSheet.create({

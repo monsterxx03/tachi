@@ -76,6 +76,11 @@ export interface MobileApi {
   queueMessage: (text: string, files?: UploadedFile[]) => void;
   dropPending: (index: number) => void;
   clearPending: () => void;
+  /**
+   * 队列里的一条「现在就发」：从队列里摘掉，直接发出去 —— 正在跑就先停这一轮，停下来的
+   * 那一刻先发它，队列里剩下的照旧等着。发不出去会放回队尾（读者打的那句话不能弄丢）。
+   */
+  sendPending: (index: number) => void;
   /** 「立即发送 · 打断」：停掉这一轮，等它真的结束了再把队列发出去 */
   sendPendingNow: () => void;
   /** 只打断，不发队列 */
@@ -138,6 +143,8 @@ export function useMobile(): MobileApi {
   const pendingRef = useRef<Record<string, PendingMessage[]>>({});
   // 「立即发送·打断」之后即使这一轮以 interrupted 结束，也要把队列发出去
   const forceFlush = useRef<Record<string, boolean>>({});
+  // 「这一条现在就发」：那一轮停下之后先发它，队列里剩下的照旧留着
+  const immediate = useRef<Record<string, PendingMessage>>({});
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
@@ -452,6 +459,10 @@ export function useMobile(): MobileApi {
             delete forceFlush.current[ev.from];
             forceFlush.current[ev.to] = true;
           }
+          if (immediate.current[ev.from]) {
+            immediate.current[ev.to] = immediate.current[ev.from];
+            delete immediate.current[ev.from];
+          }
           if (openIdRef.current === ev.from) {
             openIdRef.current = ev.to;
             setOpenId(ev.to);
@@ -481,11 +492,19 @@ export function useMobile(): MobileApi {
         if (ev.type === 'idle') {
           const id = openIdRef.current;
           if (id) {
-            const forced = forceFlush.current[id] === true;
-            const queued = (pendingRef.current[id] ?? []).length > 0;
-            if (queued && (ev.end === 'complete' || forced)) {
-              forceFlush.current[id] = false;
-              void flushPending('send');
+            // 「上滑立即发送」的那一条排在最前：这一轮正是为它停下来的，先发它；
+            // 队列里剩下的照旧留着（下一轮自然结束才走）
+            const one = immediate.current[id];
+            if (one) {
+              delete immediate.current[id];
+              void sendImmediate(one);
+            } else {
+              const forced = forceFlush.current[id] === true;
+              const queued = (pendingRef.current[id] ?? []).length > 0;
+              if (queued && (ev.end === 'complete' || forced)) {
+                forceFlush.current[id] = false;
+                void flushPending('send');
+              }
             }
           }
         }
@@ -831,6 +850,16 @@ export function useMobile(): MobileApi {
     writePending(id, [...list, { text, files }]);
   }, [writePending]);
 
+  // 一条排队的话「现在就发」。**发不出去就放回队尾**：读者的字已经不在输入框里了，
+  // 丢掉它等于把刚打的一句话吞掉。
+  const sendImmediate = useCallback(
+    async (item: PendingMessage) => {
+      const ok = await send(item.text, 'send', item.files);
+      if (!ok) queueMessage(item.text, item.files);
+    },
+    [send, queueMessage],
+  );
+
   const dropPending = useCallback((index: number) => {
     const id = openIdRef.current;
     if (!id) return;
@@ -861,6 +890,24 @@ export function useMobile(): MobileApi {
     if (!pairing || !id) return;
     await withError(() => api.stop(pairing, id));
   }, [pairing, withError]);
+
+  // 队列里的一条「现在就发」（上滑）：从队列里摘掉，直接发出去它。
+  // 正在跑就不能直接发 —— 会撞上 turn_running。先停这一轮，idle 到了再发这一条
+  // （见事件路径里的 immediate）；队列里剩下的照旧等下一轮。
+  const sendPending = useCallback((index: number) => {
+    const id = openIdRef.current;
+    if (!id) return;
+    const list = pendingRef.current[id] ?? [];
+    const item = list[index];
+    if (!item) return;
+    writePending(id, list.filter((_, i) => i !== index));
+    if (!chatRef.current.snapshot?.session.running) {
+      void sendImmediate(item);
+      return;
+    }
+    immediate.current[id] = item;
+    void stop();
+  }, [sendImmediate, stop, writePending]);
 
   // 「立即发送 · 打断」：先停这一轮，等 idle 到了再把队列发出去（桌面同一条路）。
   // 直接在这里发会撞上 turn_running —— 那一轮还没真的结束。
@@ -1059,6 +1106,7 @@ export function useMobile(): MobileApi {
     queueMessage,
     dropPending,
     clearPending,
+    sendPending,
     sendPendingNow,
     stop,
     decide,

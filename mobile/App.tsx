@@ -96,10 +96,13 @@ function ChatPane({
         pending={m.pending}
         onQueue={m.queueMessage}
         onDropPending={m.dropPending}
+        onSendPending={m.sendPending}
         onClearPending={m.clearPending}
         onSendPendingNow={m.sendPendingNow}
         onLoadOlder={() => void m.loadOlder()}
         olderLoading={m.olderLoading}
+        // 和列表里长按一行写的是同一个地方
+        onRename={m.renameSession}
         // 窄屏就是「返回列表」；宽屏侧栏收起时把它拉回来
         onEdgeBack={onToggleList ?? m.close}
       />
@@ -198,7 +201,8 @@ function Shell() {
     return () => sub.remove();
   }, [m]);
 
-  const list = (
+  // 列表页。`onForward` 只有窄屏传 —— 宽屏时它是常驻侧栏，推走没有意义
+  const list = (onForward?: () => void) => (
     <SessionList
       sessions={m.sessions}
       currentId={m.openId}
@@ -214,6 +218,7 @@ function Shell() {
       onDelete={m.deleteSession}
       onPin={m.setPinned}
       onRename={m.renameSession}
+      onForward={onForward}
     />
   );
 
@@ -282,7 +287,7 @@ function Shell() {
         ) : wide ? (
           <View style={styles.wide}>
             {sideCollapsed ? null : (
-              <View style={[styles.wideSide, { borderRightColor: t.border, backgroundColor: t.sid }]}>{list}</View>
+              <View style={[styles.wideSide, { borderRightColor: t.border, backgroundColor: t.sid }]}>{list()}</View>
             )}
             <View style={styles.wideMain}>
               <ChatPane
@@ -304,7 +309,8 @@ function Shell() {
             setOpenFile={setOpenFile}
           />
         ) : (
-          list
+          // 整页往右推 = 进设置页（左滑已经归了行上的置顶 / 删除）
+          list(() => setShowSettings(true))
         )}
       </View>
     </SafeAreaView>

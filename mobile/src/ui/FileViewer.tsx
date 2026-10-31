@@ -1,10 +1,98 @@
 import { Feather } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  Easing,
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { api, type Pairing } from '../api/client';
 import type { AttachmentRef } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
 import { ZoomableImage } from './Zoomable';
+
+/** 1 倍就是 1 倍：捏合与双击都会让它离 1 有一点小数级的偏差 */
+const BASE_SCALE = 1.01;
+/** 拖过屏幕高度的这个比例就关掉，短于此弹回去 */
+const DISMISS_RATIO = 0.14;
+/** 甩得比这快就不用拖那么远（pt/s） */
+const DISMISS_VELOCITY = 900;
+
+/**
+ * 图片那一屏：捏合、放大后拖动、双击来回**归缩放**（见 ./Zoomable），
+ * **竖直往下拖 = 关掉**（相册那张图的手感）。原来只有一个返回箭头在左上角。
+ *
+ * 两套手势不打架，靠的是同一个 `scale`：库自己的平移在按下那一刻发现只有 1 倍就主动
+ * fail（`useGestures` 的 `onTouchesDown`），所以 1 倍时纵向只剩这一条；放大之后反过来，
+ * 我们这条在按下时让位 —— 放大过的图要能上下拖到边角，不能一拖就关屏。
+ */
+function ImagePane({
+  source,
+  onClose,
+}: {
+  source: { uri: string; headers?: Record<string, string> };
+  onClose: () => void;
+}) {
+  const { height } = useWindowDimensions();
+  const scale = useSharedValue(1);
+  const ty = useSharedValue(0);
+
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        // 放大着的时候让位给库的平移：它一激活，我们就不该存在
+        .onTouchesDown((_e, manager) => {
+          if (scale.value > BASE_SCALE) manager.fail();
+        })
+        // 竖着划够 12px 才认领；横着先划够 14px 就放弃（横划归缩放/平移）
+        .activeOffsetY([-12, 12])
+        .failOffsetX([-14, 14])
+        .onUpdate((e) => {
+          // 只跟往下：往上拖没有对应的动作，停在原地
+          ty.value = Math.max(0, e.translationY);
+        })
+        .onEnd((e) => {
+          const done = ty.value > height * DISMISS_RATIO || e.velocityY > DISMISS_VELOCITY;
+          if (done) {
+            ty.value = withTiming(height, { duration: 160, easing: Easing.out(Easing.quad) }, () => {
+              runOnJS(onClose)();
+            });
+            return;
+          }
+          ty.value = withTiming(0, { duration: 150, easing: Easing.out(Easing.cubic) });
+        })
+        // 被别处接管（比如双指捏合赢了）：归位，别停在半路
+        .onFinalize((_e, success) => {
+          if (!success) ty.value = withTiming(0, { duration: 120, easing: Easing.out(Easing.cubic) });
+        }),
+    [height, onClose, scale, ty],
+  );
+
+  // 拖下去的同时淡一点：让人看得出这一下是「把它送走」，不是把它挪到别处
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: ty.value }],
+    opacity: 1 - Math.min(0.6, ty.value / (height * 0.7)),
+  }));
+
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View style={[styles.imageHost, style]}>
+        <ZoomableImage source={source} scale={scale} />
+      </Animated.View>
+    </GestureDetector>
+  );
+}
 
 /**
  * 附件阅读器：手机上能看的，只有 agent 在这段对话里用 SendFile 交出去的那几个。
@@ -75,11 +163,9 @@ export function FileViewer({
       </View>
 
       {isImage ? (
-        // 捏合放大 / 拖动 / 双击（见 ./Zoomable）。原来那个 ScrollView 的 maximumZoomScale
-        // 只有 iOS 认，安卓上是一张不会动的图。
-        <View style={{ flex: 1, padding: 16 }}>
-          <ZoomableImage source={{ uri: remote.url, headers: remote.headers }} />
-        </View>
+        // 捏合放大 / 拖动 / 双击（见 ./Zoomable），往下拖关闭（见上面的 ImagePane）。
+        // 原来那个 ScrollView 的 maximumZoomScale 只有 iOS 认，安卓上是一张不会动的图。
+        <ImagePane source={{ uri: remote.url, headers: remote.headers }} onClose={onClose} />
       ) : isText ? (
         <ScrollView contentContainerStyle={styles.textWrap}>
           {loading ? (
@@ -117,8 +203,7 @@ const styles = StyleSheet.create({
   back: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   headInfo: { flex: 1, minWidth: 0, paddingHorizontal: 4 },
   title: { fontSize: 14.5, fontWeight: '600' },
-  imageWrap: { padding: 16 },
-  image: { width: '100%', height: 420, borderWidth: 1, borderRadius: 10 },
+  imageHost: { flex: 1, padding: 16 },
   textWrap: { padding: 16 },
   doc: {
     borderWidth: 1,

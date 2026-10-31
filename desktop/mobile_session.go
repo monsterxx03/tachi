@@ -55,12 +55,14 @@ func (d *desktopApp) mobileSessions() ([]mobileSessionSummary, error) {
 		}
 	}
 	busy := d.busySessions()
+	// 一次扫描算完整个列表：定时任务的条数是**那段对话**的属性（逻辑 id），不是某一页的
+	crons := d.cronCountsByLogical()
 	out := make([]mobileSessionSummary, 0, len(list))
 	for _, ss := range list {
 		if parents[ss.ID] {
 			continue
 		}
-		out = append(out, d.mobileSummary(ss, busy))
+		out = append(out, d.mobileSummaryWith(ss, busy, crons))
 	}
 	// Pinned first, then newest — the same order the desktop sidebar gives a group, and the
 	// order the protocol asks for.
@@ -77,6 +79,13 @@ func (d *desktopApp) mobileSessions() ([]mobileSessionSummary, error) {
 // the sidebar reads (sessionRunning, waitingSentence, the retention record): a phone that
 // disagreed with the window about "who is waiting" would be worse than no phone at all.
 func (d *desktopApp) mobileSummary(ss *session.Session, busy map[string]bool) mobileSessionSummary {
+	// 单行调用方（快照 / 翻页 / 新建）各扫一遍就够了；列表那条路走 mobileSummaryWith，只扫一次
+	return d.mobileSummaryWith(ss, busy, d.cronCountsByLogical())
+}
+
+// mobileSummaryWith 是列表那份：`crons` 由调用方扫一次传进来（每行各扫一遍 crons.json 是
+// 白花的）。
+func (d *desktopApp) mobileSummaryWith(ss *session.Session, busy map[string]bool, crons map[string]int) mobileSessionSummary {
 	running, _ := d.sessionRunning(ss.ID)
 	waiting := ""
 	if running {
@@ -100,6 +109,8 @@ func (d *desktopApp) mobileSummary(ss *session.Session, busy map[string]bool) mo
 		// process can (see mobileSessionSummary.ChannelName).
 		ChannelSession: ss.ThreadID != "",
 		ChannelName:    d.mobileChannelName(ss),
+		// 定时任务写进这段对话的条数（桌面侧栏那颗徽章的同一个数）
+		Cron: crons[ss.LogicalConversationID()],
 	}
 }
 

@@ -1,16 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { memo, useCallback, useState } from 'react';
-import {
-  Alert,
-  FlatList,
-  Modal,
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -22,6 +12,9 @@ import Animated, {
 import type { SessionSummary } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
+import { usePageSwipe } from './edgeBack';
+import { formatUpdatedAt } from './time';
+import { RenameDialog } from './RenameDialog';
 
 /** 一行右边的标记：只读 > 等你授权 > 等你回答 > 在跑（与侧栏同一套先后） */
 function badgeOf(s: SessionSummary): { text: string; tone: 'mute' | 'amber' | 'live' } | null {
@@ -75,8 +68,10 @@ function SwipeRow({ children, actions }: { children: React.ReactNode; actions: S
   const [revealed, setRevealed] = useState(false);
 
   const pan = Gesture.Pan()
-    // 横向划够 8px 才认领这一行；纵向先划够 14px 就交还给列表去滚
-    .activeOffsetX([-8, 8])
+    // **只认往左**（单个负数只设那一端）。写成数组 `[-8, 8]` 的话 `dx > 8` 也激活：往右那
+    // 一划会先被这一行接住、然后一动不动，整页的「右滑进设置」就永远轮不到（这一行在
+    // 列表里铺满整屏，等于把整页手势废掉了）。
+    .activeOffsetX(-8)
     .failOffsetY([-14, 14])
     .onUpdate((e) => {
       const base = opened.value ? -reveal : 0;
@@ -153,6 +148,7 @@ export function SessionList({
   onDelete,
   onPin,
   onRename,
+  onForward,
 }: {
   sessions: SessionSummary[];
   currentId: string | null;
@@ -169,29 +165,28 @@ export function SessionList({
   onPin: (id: string, pinned: boolean) => void;
   /** 改标题；写的是那台电脑上的记录，成功之后 sessions_changed 让每一块屏都跟着改 */
   onRename: (id: string, title: string) => void;
+  /**
+   * 整页往右推：进设置页（选电脑的那一屏）。**只在窄屏传** —— 宽屏时列表是常驻侧栏，
+   * 把一条侧栏推走没有意义。
+   */
+  onForward?: () => void;
 }) {
   const { tokens: t } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
-  // 长按打开的那个对话框。draft 是本地草稿：没按「保存」之前，那台电脑上的标题一个字都不动
+  // 长按打开的那个对话框。草稿在 RenameDialog 里：没按「保存」之前，那台电脑上的标题一个字都不动
   const [renaming, setRenaming] = useState<SessionSummary | null>(null);
-  const [draft, setDraft] = useState('');
   const online = conn === 'open';
 
-  const askRename = useCallback((s: SessionSummary) => {
-    setRenaming(s);
-    setDraft(s.title);
-  }, []);
-  const closeRename = useCallback(() => setRenaming(null), []);
-  const commitRename = useCallback(() => {
-    const title = draft.trim();
-    const id = renaming?.id;
-    setRenaming(null);
-    if (!id || !title || title === renaming?.title) return;
-    onRename(id, title);
-  }, [draft, renaming, onRename]);
+  // 整页往右推 = 进设置页（选电脑的那一屏）。Android 上左缘那一划归系统的返回手势，
+  // 所以这条只能铺满整页 —— 阈值的写法见 ./edgeBack 的 usePageSwipe（给错一个数字，这一屏
+  // 的点击、长按、行左滑就全被它吃掉了）
+  const page = usePageSwipe(onForward);
+
+  const askRename = useCallback((s: SessionSummary) => setRenaming(s), []);
 
   return (
-    <View style={[styles.root, { backgroundColor: t.sid }]}>
+    <GestureDetector gesture={page.gesture}>
+      <Animated.View style={[styles.root, { backgroundColor: t.sid }, page.style]}>
       <View style={styles.head}>
         <View style={styles.headText}>
           <Text style={[styles.brand, { color: t.title }]}>会话</Text>
@@ -269,35 +264,21 @@ export function SessionList({
       />
 
       {/* 长按一行改名字。标题是那台电脑上的记录，这里只递交一个词：保存之后由 sessions_changed
-          让每一块屏重读 —— 桌面上那一行不会停在旧名字上，这一段也不会各留一份。 */}
-      <Modal visible={!!renaming} transparent animationType="fade" onRequestClose={closeRename}>
-        <Pressable style={styles.backdrop} onPress={closeRename}>
-          <View style={[styles.dialog, { backgroundColor: t.panel, borderColor: t.border }]}>
-            <Text style={[styles.dialogTitle, { color: t.text }]}>重命名</Text>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              autoFocus
-              selectTextOnFocus
-              placeholder="这段对话叫什么"
-              placeholderTextColor={t.faint}
-              style={[styles.dialogInput, { color: t.text, borderColor: t.border, backgroundColor: t.inputBg }]}
-              // 键盘上的回车就是「保存」：这一屏没有第二件事要用它
-              submitBehavior="submit"
-              onSubmitEditing={commitRename}
-            />
-            <View style={styles.dialogRow}>
-              <Pressable onPress={closeRename} hitSlop={8} accessibilityRole="button">
-                <Text style={{ color: t.faint, fontSize: 14 }}>取消</Text>
-              </Pressable>
-              <Pressable onPress={commitRename} hitSlop={8} accessibilityRole="button">
-                <Text style={{ color: t.accent2, fontSize: 14, fontWeight: '600' }}>保存</Text>
-              </Pressable>
-            </View>
-          </View>
-        </Pressable>
-      </Modal>
-    </View>
+          让每一块屏重读 —— 桌面上那一行不会停在旧名字上，这一段也不会各留一份。
+          对话框与对话顶栏长按标题用的是同一个（./RenameDialog）。 */}
+      {renaming ? (
+        <RenameDialog
+          initial={renaming.title}
+          onCancel={() => setRenaming(null)}
+          onSave={(title) => {
+            const id = renaming.id;
+            setRenaming(null);
+            onRename(id, title);
+          }}
+        />
+      ) : null}
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -370,11 +351,24 @@ const SessionRow = memo(function SessionRow({
               </Text>
             </View>
           ) : null}
+          {/* 有定时任务写进这段对话：一个闹钟（多于一个时带条数）。它和「渠道」不是一回事 ——
+              这里的话是别的东西在替它说话，而标题上看不出来。 */}
+          {(s.cron ?? 0) > 0 ? (
+            <View
+              style={[styles.sourcePill, styles.cronPill, { borderColor: t.border }]}
+              accessibilityLabel={s.cron === 1 ? '有 1 个定时任务' : `有 ${s.cron} 个定时任务`}
+            >
+              <Feather name="clock" size={10} color={t.faint} />
+              {(s.cron ?? 0) > 1 ? (
+                <Text style={[styles.sourcePillText, { color: t.faint }]}>{s.cron}</Text>
+              ) : null}
+            </View>
+          ) : null}
           {badge ? <Badge {...badge} t={t} /> : null}
         </View>
         <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
           {s.projectName ? `${s.projectName} · ` : ''}
-          {s.updatedAt}
+          {formatUpdatedAt(s.updatedAt)}
         </Text>
       </Pressable>
     </SwipeRow>
@@ -390,11 +384,6 @@ const styles = StyleSheet.create({
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   sub: { fontSize: 12, flexShrink: 1 },
   errLine: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, marginTop: 6 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  dialog: { width: '100%', maxWidth: 420, borderRadius: 14, borderWidth: 1, padding: 16, gap: 12 },
-  dialogTitle: { fontSize: 15, fontWeight: '600' },
-  dialogInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
-  dialogRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 20, paddingTop: 2 },
   gear: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
 
   listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
@@ -406,6 +395,8 @@ const styles = StyleSheet.create({
   rowTitle: { flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: '600' },
   rowSub: { marginTop: 4, fontSize: 12 },
   sourcePill: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 6, paddingVertical: 1, maxWidth: 88 },
+  // 闹钟那一条：图标 + 条数并排，比渠道那个窄很多
+  cronPill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 5, maxWidth: undefined },
   sourcePillText: { fontSize: 10.5 },
 
   pill: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: 'transparent', borderRadius: 20, paddingHorizontal: 7, paddingVertical: 2 },

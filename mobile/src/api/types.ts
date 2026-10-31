@@ -27,6 +27,8 @@ export interface SessionSummary {
   channelSession?: boolean;
   /** 是哪个 channel；宿主说不出来时为空（重启之后、那段对话还没再说过话） */
   channelName?: string;
+  /** 有几个定时任务写进这段对话（缺省 = 没有）。列表靠它画那个小闹钟 */
+  cron?: number;
 }
 
 /**

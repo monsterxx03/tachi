@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } 
 import {
   ActivityIndicator,
   FlatList,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Modal,
   Platform,
   Pressable,
@@ -27,15 +29,26 @@ import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep }
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import Animated, {
   Easing,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withTiming,
 } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { MessageView, Thinking, ToolCard } from './Message';
 import { Markdown } from './Markdown';
+import { RenameDialog } from './RenameDialog';
+
+/**
+ * 离底部多远才算「滚上去读历史了」。一屏的一半上下：比这更近时往回滑两下就到底了，
+ * 浮出胶囊反而挡消息。
+ */
+const STAY_AWAY = 320;
+/** 两次点击间隔在这以内算双击（回到底部） */
+const DOUBLE_TAP = 300;
 
 /** 细条：这一段对话花了多少、跑多快、上下文占了多少、用的哪个模型 */
 function MetaStrip({
@@ -130,6 +143,90 @@ function StopRing({ t }: { t: ThemeTokens }) {
 /** 输入框里挂着的一个待发文件：传完的带 file，正在传的没有，失败的那条带 error。 */
 type Attach = { key: string; name: string; size?: number; file?: UploadedFile; error?: string };
 
+/** 待发送那一条：往上划够这么远 = 现在就发，往下划够这么远 = 删掉 */
+const PENDING_SWIPE = 26;
+
+/**
+ * 待发送队列里的一条。**上滑 = 现在就发这一条**（正在跑就先停这一轮，见 state 的
+ * `sendPending`），**下滑 = 从队列里删掉**。右边那个 × 留着：手势要有人解释，它不用。
+ *
+ * 跟手时整行换底色（上 = 发出去，下 = 删掉），松手前就知道会发生什么；松手过了阈值就顺着
+ * 那个方向滑出去再落地，没过就弹回来。
+ */
+function PendingRow({
+  text,
+  onSendNow,
+  onDrop,
+}: {
+  text: string;
+  onSendNow: () => void;
+  onDrop: () => void;
+}) {
+  const { tokens: t } = useTheme();
+  const ty = useSharedValue(0);
+  // -1 = 往上是「发」，1 = 往下是「删」，0 = 没动
+  const dir = useSharedValue(0);
+
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        // 竖着 10px 才认领；横着先动 16px 就放弃（这里没有横向的事要做）
+        .activeOffsetY([-10, 10])
+        .failOffsetX([-16, 16])
+        .onUpdate((e) => {
+          ty.value = e.translationY;
+          dir.value = e.translationY < 0 ? -1 : 1;
+        })
+        .onEnd((e) => {
+          const send = ty.value < -PENDING_SWIPE || e.velocityY < -700;
+          const drop = ty.value > PENDING_SWIPE || e.velocityY > 700;
+          if (send) {
+            ty.value = withTiming(-64, { duration: 150, easing: Easing.out(Easing.quad) }, () => {
+              runOnJS(onSendNow)();
+            });
+            return;
+          }
+          if (drop) {
+            ty.value = withTiming(64, { duration: 150, easing: Easing.out(Easing.quad) }, () => {
+              runOnJS(onDrop)();
+            });
+            return;
+          }
+          ty.value = withTiming(0, { duration: 140, easing: Easing.out(Easing.cubic) });
+          dir.value = 0;
+        })
+        // 被别处接管：归位，别停在半路
+        .onFinalize((_e, success) => {
+          if (success) return;
+          ty.value = withTiming(0, { duration: 120, easing: Easing.out(Easing.cubic) });
+          dir.value = 0;
+        }),
+    [dir, onDrop, onSendNow, ty],
+  );
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateY: ty.value }],
+    opacity: 1 - Math.min(1, Math.abs(ty.value) / 70),
+    backgroundColor: dir.value === 0 ? 'transparent' : dir.value < 0 ? t.accentSoft : t.redWash,
+  }));
+
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View
+        style={[styles.pendingItem, styles.pendingRow, style]}
+        accessibilityHint="上滑立即发送，下滑删掉"
+      >
+        <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={2}>
+          {text}
+        </Text>
+        <Pressable onPress={onDrop} hitSlop={8}>
+          <Feather name="x" size={13} color={t.faint} />
+        </Pressable>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
 /** 回形针展开的三个入口之一。 */
 function AttachItem({ icon, label, onPress }: { icon: keyof typeof Feather.glyphMap; label: string; onPress: () => void }) {
   const { tokens: t } = useTheme();
@@ -161,6 +258,7 @@ function Composer({
   onUpload,
   onQueue,
   onDropPending,
+  onSendPending,
   onClearPending,
   onSendPendingNow,
   onStop,
@@ -172,6 +270,8 @@ function Composer({
   onUpload: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
   onQueue: (text: string, files?: UploadedFile[]) => void;
   onDropPending: (index: number) => void;
+  /** 队列里的一条「现在就发」（上滑） */
+  onSendPending: (index: number) => void;
   onClearPending: () => void;
   onSendPendingNow: () => void;
   onStop: () => void;
@@ -299,14 +399,12 @@ function Composer({
             </Pressable>
           </View>
           {pending.map((p, i) => (
-            <View key={`${i}-${p.text.slice(0, 8)}`} style={styles.pendingItem}>
-              <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={2}>
-                {[p.text, ...p.files.map((f) => `📎 ${f.name}`)].filter(Boolean).join('\n')}
-              </Text>
-              <Pressable onPress={() => onDropPending(i)} hitSlop={8}>
-                <Feather name="x" size={13} color={t.faint} />
-              </Pressable>
-            </View>
+            <PendingRow
+              key={`${i}-${p.text.slice(0, 8)}`}
+              text={[p.text, ...p.files.map((f) => `📎 ${f.name}`)].filter(Boolean).join('\n')}
+              onSendNow={() => onSendPending(i)}
+              onDrop={() => onDropPending(i)}
+            />
           ))}
         </View>
       ) : null}
@@ -516,9 +614,11 @@ export function Chat({
   onLoadOlder,
   olderLoading,
   onEdgeBack,
+  onRename,
   pending,
   onQueue,
   onDropPending,
+  onSendPending,
   onClearPending,
   onSendPendingNow,
 }: {
@@ -547,12 +647,16 @@ export function Chat({
    * 只认「起点在左缘 24pt 内」的手势，否则会跟消息里的横向操作打架。
    */
   onEdgeBack?: () => void;
+  /** 改这一段对话的名字（和列表里长按一行是同一个写入方、同一个对话框） */
+  onRename: (id: string, title: string) => void;
   /** 待发送队列（运行中发的消息，连着挂在上面的文件）；渲染在输入框上方 */
   pending: PendingMessage[];
   onQueue: (text: string, files?: UploadedFile[]) => void;
   /** 把一个本地文件传给那台电脑；答案里是它存下来的名字，或者为什么没成 */
   onUpload: (f: PickedFile) => Promise<{ file?: UploadedFile; error?: string }>;
   onDropPending: (index: number) => void;
+  /** 队列里的一条「现在就发」（待发送那一行往上划） */
+  onSendPending: (index: number) => void;
   onClearPending: () => void;
   onSendPendingNow: () => void;
 }) {
@@ -619,8 +723,48 @@ export function Chat({
   };
 
   const back = useEdgeBack(onEdgeBack);
-  // inverted 列表本来就贴着最新那条；这个 ref 只留给出错时手动定位，不参与常规滚动
+  // inverted 列表：offset 0 就是**最新那条**，越往上翻越大。所以「回到底部」= 滚到 0。
   const listRef = useRef<FlatList<Item>>(null);
+  // 滚离底部时浮出那个胶囊。只有跨过阈值的那一帧过 JS —— 滚动事件一秒几十条，
+  // 每条都 setState 的话，正是这段代码想避开的「整列重画」。
+  const [away, setAway] = useState(false);
+  const awayRef = useRef(false);
+  const toBottom = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const next = e.nativeEvent.contentOffset.y > STAY_AWAY;
+    if (next === awayRef.current) return;
+    awayRef.current = next;
+    setAway(next);
+  }, []);
+  // 换一段对话要归位：列表数据换了、偏移也从 0 重新开始，那颗胶囊不该留在屏上
+  useEffect(() => {
+    awayRef.current = false;
+    setAway(false);
+  }, [s.id]);
+  // 发出去就跳回底部：读者刚说完话，等的是下面那条回复
+  const send = useCallback(
+    async (text: string, mode: SendMode, files?: UploadedFile[]) => {
+      const ok = await onSend(text, mode, files);
+      if (ok) toBottom();
+      return ok;
+    },
+    [onSend, toBottom],
+  );
+  // 顶栏：双击回到底部、长按改名。两件事挂在同一个 Pressable 上不会互相误伤 ——
+  // RN 里长按触发之后 onPress 就不再来了。
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  const tapAt = useRef(0);
+  const onPressTitle = useCallback(() => {
+    const now = Date.now();
+    if (now - tapAt.current < DOUBLE_TAP) {
+      tapAt.current = 0;
+      toBottom();
+      return;
+    }
+    tapAt.current = now;
+  }, [toBottom]);
 
   return (
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
@@ -631,7 +775,15 @@ export function Chat({
         >
           <Feather name={onToggleList ? 'menu' : 'chevron-left'} size={onToggleList ? 19 : 22} color={t.dim} />
         </Pressable>
-        <View style={styles.headInfo}>
+        {/* 标题这一块是双击回到底部、长按改名的地方（见 onPressTitle）。它本来就不是按钮，
+            单击不做任何事，所以这两个手势不会盖掉谁的点击。 */}
+        <Pressable
+          onPress={onPressTitle}
+          onLongPress={() => setRenaming({ id: s.id, title: s.title })}
+          delayLongPress={400}
+          accessibilityHint="双击回到底部，长按改名"
+          style={styles.headInfo}
+        >
           {/* 标题旁边说明这段对话属于哪个渠道：答复发在那边，而这一屏只能读和补充。 */}
           <View style={styles.headTitleRow}>
             <Text style={[styles.headTitle, { color: t.title }]} numberOfLines={1}>
@@ -649,20 +801,29 @@ export function Chat({
             {s.projectName ? `${s.projectName} · ` : ''}
             {s.readOnly ? '来自别的任务' : s.running ? '正在跑' : '空闲'}
           </Text>
-        </View>
+        </Pressable>
         <StatePill session={s} t={t} />
       </View>
 
       <MetaStrip snapshot={snapshot} live={live} onOpenInfo={onOpenInfo} onOpenModels={onOpenModels} />
 
+      <View style={styles.listWrap}>
       <FlatList
         ref={listRef}
+        style={styles.list}
         data={reversed}
         keyExtractor={(it) => it.key}
         contentContainerStyle={[styles.messages, styles.column]}
         // inverted：最新的一条在底部，偏移 0 就是「贴底」。这样打开会话自然停在最新处，
         // 往上翻出来的一页接在数组末尾（视觉上是顶部），画面一动不动 —— 不用去补偿滚动位置。
         inverted
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        // 手指在消息上往上滑就收键盘（iOS 跟手收，Android 滑一下就收）。少了这一条，
+        // 键盘会一直占着下半屏，只能点别处或按返回 —— 而读历史正是要滑的。
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        // 键盘弹着时点消息里的卡片要能点开，别被「先收键盘」吃掉这一下
+        keyboardShouldPersistTaps="handled"
         onEndReached={wantOlder}
         onEndReachedThreshold={0.2}
         ListFooterComponent={
@@ -699,6 +860,25 @@ export function Chat({
         renderItem={renderRow}
       />
 
+      {/* 滚上去读历史时，最新那条在屏幕外面 —— 这一段对话还在跑也好、刚跑完也好，
+          滑回去要滑很久。胶囊只在真滚远了才出现（判据见 STAY_AWAY）。 */}
+      {away ? (
+        <Pressable
+          onPress={toBottom}
+          accessibilityRole="button"
+          accessibilityLabel="回到底部"
+          style={({ pressed }) => [
+            styles.jump,
+            { backgroundColor: pressed ? t.washStrong : t.panel, borderColor: t.border },
+          ]}
+        >
+          <Feather name="arrow-down" size={13} color={t.dim} />
+          <Text style={{ color: t.dim, fontSize: 11.5 }}>回到底部</Text>
+          {s.running ? <View style={[styles.jumpDot, { backgroundColor: t.amber }]} /> : null}
+        </Pressable>
+      ) : null}
+      </View>
+
       {s.readOnly ? (
         <View style={[styles.readOnlyNote, { borderTopColor: t.border }]}>
           <Text style={{ color: t.faint, fontSize: 12.5 }}>这段对话由别的任务占用，只能查看</Text>
@@ -708,15 +888,30 @@ export function Chat({
           running={s.running}
           waiting={s.waiting}
           pending={pending}
-          onSend={onSend}
+          onSend={send}
           onUpload={onUpload}
           onQueue={onQueue}
           onDropPending={onDropPending}
+          onSendPending={onSendPending}
           onClearPending={onClearPending}
           onSendPendingNow={onSendPendingNow}
           onStop={onStop}
         />
       )}
+
+      {/* 长按顶栏标题打开它。和列表里长按一行是同一个写入方 —— 改完 sessions_changed
+          回来，这一段的标题跟着换，桌面上那一行也换。 */}
+      {renaming ? (
+        <RenameDialog
+          initial={renaming.title}
+          onCancel={() => setRenaming(null)}
+          onSave={(title) => {
+            const id = renaming.id;
+            setRenaming(null);
+            onRename(id, title);
+          }}
+        />
+      ) : null}
         <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
   );
@@ -787,6 +982,27 @@ const styles = StyleSheet.create({
   iconBtn: { width: 26, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
 
   messages: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 },
+  // 列表与那个浮出的胶囊共用一块：胶囊绝对定位在它的底部（= 输入框上方）
+  listWrap: { flex: 1 },
+  list: { flex: 1 },
+  jump: {
+    position: 'absolute',
+    bottom: 10,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 20,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  jumpDot: { width: 5, height: 5, borderRadius: 2.5 },
   olderHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 10 },
   // 平板那种宽屏下，一行别横跨整屏 —— 读一句话要来回甩头
   column: { width: '100%', maxWidth: 760, alignSelf: 'center' },
@@ -803,6 +1019,8 @@ const styles = StyleSheet.create({
   pendingBar: { paddingHorizontal: 12, paddingBottom: 6 },
   pendingHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingBottom: 5, paddingTop: 2 },
   pendingItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 },
+  // 上滑 / 下滑时整行换底色，圆角让它看起来是「一条」而不是一段
+  pendingRow: { borderRadius: 8 },
   runHint: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 16, paddingBottom: 6 },
   runDot: { width: 5, height: 5, borderRadius: 2.5 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12 },

@@ -31,6 +31,8 @@ type SessionSummary struct {
 	// 这段对话属于哪个 IM channel（宿主说不出来时 channelName 为空）
 	ChannelSession bool   `json:"channelSession,omitempty"`
 	ChannelName    string `json:"channelName,omitempty"`
+	// 有几个定时任务写进这段对话（0 / 缺省 = 没有）：列表上那颗小闹钟
+	Cron int `json:"cron,omitempty"`
 }
 
 type Message struct {
@@ -202,7 +204,7 @@ func seed() (order []string, byID map[string]*session) {
 
 	s3 := &session{}
 	s3.Session = SessionSummary{ID: "s3", Title: "周报整理", ProjectName: "个人", UpdatedAt: "2 小时前",
-		ChannelSession: true, ChannelName: "discord"}
+		ChannelSession: true, ChannelName: "discord", Cron: 2}
 	s3.Model = "Alpha 4.5"
 	s3.SkipApprove = true
 	s3.Workspace = WorkspaceInfo{Primary: "~/notes"}
@@ -253,7 +255,7 @@ func seed() (order []string, byID map[string]*session) {
 
 	// 带图片附件的一段：手机端那条「缩略图铺在气泡里 → 点开进阅读器」的路要有真像素可走
 	s6 := &session{}
-	s6.Session = SessionSummary{ID: "s6", Title: "索引估值提醒", ProjectName: "投资", UpdatedAt: "昨天"}
+	s6.Session = SessionSummary{ID: "s6", Title: "索引估值提醒", ProjectName: "投资", UpdatedAt: "昨天", Cron: 1}
 	s6.Model = "Delta V3"
 	s6.Workspace = WorkspaceInfo{Primary: "~/repos/lixinger"}
 	s6.Usage = UsageInfo{Cost: 0.02}
