@@ -308,17 +308,28 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 	job2 := &Job{ID: "cr_t2", Name: "J2", Schedule: "@every 1h", Prompt: "P2", Status: JobStatusActive}
 
 	// Fire job1 in background — handler blocks on blockCh.
-	go scheduler.fire(job1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); scheduler.fire(job1) }()
+	// Cleanups run in LIFO order, so this waits out the run before TempDir's RemoveAll.
+	t.Cleanup(wg.Wait)
 
-	// Wait for job1 to acquire the semaphore.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for job1 to HOLD the semaphore, not for a fixed sleep to elapse: the handler runs only
+	// after fire acquired the slot, and it appends before blocking on blockCh — so one entry in
+	// triggered is the state this test needs. A sleep is a bet that the goroutine got there in time;
+	// on a loaded runner it is not, and then job2 fires into a free slot and the count comes out 2.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(triggered) == 1
+	}, 5*time.Second, 5*time.Millisecond, "job1 should reach its handler and hold the only slot")
 
 	// Fire job2 synchronously — should be skipped because semaphore is full.
 	scheduler.fire(job2)
 
-	// Unblock and wait.
+	// Unblock and wait for job1 to finish writing last_run.
 	close(blockCh)
-	time.Sleep(100 * time.Millisecond)
+	wg.Wait()
 
 	mu.Lock()
 	count := len(triggered)
