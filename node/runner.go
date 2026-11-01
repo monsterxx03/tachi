@@ -488,14 +488,18 @@ func (r *runner) shutdown() {
 	for _, id := range ids {
 		r.stopTurn(id)
 	}
-	if len(ids) == 0 {
-		return
-	}
 
 	// A bounded wait, then carry on: the design allows terminating what will not stop
 	// (§3.4). Without the wait, a process can exit while a turn is mid-write — the file
 	// writes are atomic, so nothing is torn, but a caller reading the task record right
 	// afterwards sees a state the node was about to update.
+	//
+	// The wait is on the TURNS, not on the table that lists them: stopTurn (and
+	// questionExpired) forget a turn the moment it is ended, while the loop behind it goes on
+	// unwinding — it writes its session to the end and then releases its retention hold, which
+	// rewrites the retention record. Waiting only when r.turns was non-empty returned from
+	// Close() with such a turn still writing, so whoever removed the data dir right afterwards
+	// found a directory somebody was still filling.
 	unwound := make(chan struct{})
 	go func() {
 		r.unwound.Wait()
@@ -505,7 +509,7 @@ func (r *runner) shutdown() {
 	case <-unwound:
 	case <-time.After(shutdownGrace):
 		r.logger.Warn(context.Background(), "node: turns did not finish before shutdown",
-			"turns", len(ids), "waited", shutdownGrace.String())
+			"stopped", len(ids), "waited", shutdownGrace.String())
 	}
 }
 
@@ -624,8 +628,6 @@ func (r *runner) beginTurn(
 		settle:    r.settleTurn(taskID, contextID),
 		unwound:   make(chan struct{}),
 	}
-	r.unwound.Add(1)
-
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -634,6 +636,12 @@ func (r *runner) beginTurn(
 		return nil, errors.New("node: this node is shutting down")
 	}
 	r.turns[taskID] = lt
+	// Counted HERE, under the same lock that puts it in the table, and never in the branch above:
+	// shutdown waits out this counter, so a turn that was refused (and therefore will never run,
+	// never drain, never settle) must not be in it — that would make the counter un-finishable and
+	// every Close() after it pay the whole shutdownGrace for nothing. Doing it under the lock also
+	// puts every Add before shutdown's Wait: that one takes the lock to set closed first.
+	r.unwound.Add(1)
 	r.mu.Unlock()
 	return lt, nil
 }
