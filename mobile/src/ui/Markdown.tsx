@@ -99,8 +99,26 @@ function styleOf(t: ThemeTokens, color: string): MarkdownStyleMap {
     },
     fence_language_label: { color: t.faint, fontSize: 11, ...mono },
     fence_copy_text: { color: t.faint, fontSize: 11 },
-    fence_code: { backgroundColor: t.codeBg, padding: 10 },
+    // 底色只画在 fence 这一层。库把代码放进一个横向 ScrollView，里面那层 fence_code 的宽度
+    // 跟着内容走 —— 两层都涂 codeBg 的话，右半边就只剩一层，看起来是一道竖着的浅色缝（缝的
+    // 位置随最长那行漂）。半透明的 codeBg 叠两次只会更深，不会看不出来。
+    //
+    // 必须显式写 transparent：外层 MarkdownView 开了 mergeStyle，样式是「库默认 + 我们的」
+    // 合并出来的 —— 这个键不写，落回来的不是「不上色」，而是库默认的 #f5f5f5，缝一样在。
+    fence_code: { backgroundColor: 'transparent', padding: 10 },
     fence_token: { color: t.codeInk, fontSize: 12.5, lineHeight: 19, ...mono },
+    // 缩进式代码块（四个空格）走的是另一条规则，样式表里没有它就落回库的默认浅灰 + 冷色边框，
+    // 和围栏站在一起是两种灰。给它同一套：一种底色、一条边框、圆角、等宽。
+    code_block: {
+      color: t.codeInk,
+      backgroundColor: t.codeBg,
+      borderColor: t.border,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: 8,
+      padding: 10,
+      marginVertical: 8,
+      ...mono,
+    },
     // 表格：等宽的列 + 细网格。默认样式没有竖线，窄屏上两列会黏在一起。
     table: {
       borderColor: t.border,

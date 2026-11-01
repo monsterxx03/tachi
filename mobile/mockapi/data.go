@@ -278,6 +278,19 @@ func seed() (order []string, byID map[string]*session) {
 	s6.append(Message{Role: "assistant", Content: "沪深300 当前 PE 分位 38%，处在中低区间；银行和红利板块的分位更低一些（21% / 26%）。要不要我把这条挂成每日收盘后的提醒？"})
 	s6.append(Message{Role: "tool_call", ToolName: "SendFile", ToolCallID: "a-3", Title: "hs300-valuation.png"})
 	s6.append(Message{Role: "tool_result", ToolName: "SendFile", ToolCallID: "a-3", ToolResult: "已交付 hs300-valuation.png"})
+	// 围栏代码块在手机上曾经有两道底色：短行那块右边浅、长行那块右边也浅，缝跟着最长那行跑。
+	// 这里放一段短行 yaml 和一段长行 sh，截图与回归都靠它看见那道缝。
+	s6.append(Message{Role: "assistant", Content: "写成配置就是这样：\n\n" + "```yaml" + `
+push:
+  enabled: true
+  keys: ["<这里填通道的 key>"]
+` + "```" + `
+
+地址不用写，默认就指向官方那个。配完先手动发一条确认：
+
+` + "```sh" + `
+curl "https://api.example.com/<key>/测试/来自-tachi"
+` + "```"})
 	s6.Attachments = []AttachmentRef{{ID: "a-3", Name: "hs300-valuation.png", MimeType: "image/png", Size: 186000, Downloadable: true}}
 	add(s6)
 
