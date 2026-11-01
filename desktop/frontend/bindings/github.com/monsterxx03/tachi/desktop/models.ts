@@ -1493,6 +1493,12 @@ export interface SessionMessage {
      * session shows the same diffs with no migration.
      */
     "change"?: FileChangeVO | null;
+
+    /**
+     * AutoExpand marks a call the USER typed (the desktop's /sh): the transcript shows its output
+     * unfolded, and it is deliberately absent from the model's history (see session.Message).
+     */
+    "autoExpand"?: boolean;
 }
 
 /**

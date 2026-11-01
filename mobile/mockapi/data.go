@@ -49,6 +49,8 @@ type Message struct {
 	ToolResult     string `json:"toolResult,omitempty"`
 	IsError        bool   `json:"isError,omitempty"`
 	Thinking       string `json:"thinking,omitempty"`
+	// AutoExpand：用户自己点名的调用（/sh）。手机上卡片直接摊开，和真实现同一个字段名。
+	AutoExpand bool `json:"autoExpand,omitempty"`
 }
 
 type PermissionAsk struct {

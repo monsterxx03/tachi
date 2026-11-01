@@ -272,6 +272,40 @@ func mobileAPIRoundTrip(c *liveCtx) {
 	c.check("/sh 没有被当成用户消息回传", !cmdEchoed, stream)
 	c.check("/sh 没停在权限卡上（自己敲的命令，和桌面一样）", !cmdAsked, stream)
 	c.check("/sh 的一轮以 turn 结束", cmdTurn, stream)
+
+	// ── and it survives a re-open ─────────────────────────────────────────
+	// The phone rebuilds a conversation from the SNAPSHOT, so a hint that only lived on the event
+	// would make the card fold itself the next time the conversation is opened. The record carries
+	// it (session.Message.AutoExpand) — which is what this asks the server for, from scratch.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"open","sessionId":"`+sessionID+`"}`)); err != nil {
+		c.check("重新 open 这段对话", false, err.Error())
+		return
+	}
+	// The turn's own tail (idle) can still be in flight, so the answer to `open` is whatever
+	// snapshot arrives first — read until it does rather than trusting the next frame.
+	var snap *mobileEvent
+	for i := 0; i < 12; i++ {
+		ev := readEvent(conn, 10*time.Second)
+		if ev == nil {
+			break
+		}
+		if ev.Snapshot != nil {
+			snap = ev
+			break
+		}
+	}
+	if snap == nil {
+		c.check("重新 open 得到快照", false, "12 个事件里没有 snapshot")
+		return
+	}
+	keptOpen, keptText := false, ""
+	for _, m := range snap.Snapshot.Messages {
+		if m.Role == "tool_call" && m.AutoExpand {
+			keptOpen = true
+			keptText = m.ToolName + " " + m.Title
+		}
+	}
+	c.check("重新打开时那张卡仍是展开的（标记进了会话记录）", keptOpen, keptText)
 }
 
 // readEvent reads one decoded server event, or nil when nothing arrives in time.
@@ -318,6 +352,14 @@ type mobileEvent struct {
 		State        struct {
 			Status string `json:"status"`
 		} `json:"state"`
+		// Messages is the conversation as the record has it — what a re-open draws. Only the fields
+		// a reopened card needs are read here.
+		Messages []struct {
+			Role       string `json:"role"`
+			ToolName   string `json:"toolName"`
+			Title      string `json:"title"`
+			AutoExpand bool   `json:"autoExpand"`
+		} `json:"messages"`
 	} `json:"snapshot"`
 }
 

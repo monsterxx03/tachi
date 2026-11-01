@@ -211,8 +211,10 @@ func (s *Server) runTurn(sess *session, text, mode string) {
 			time.Sleep(700 * time.Millisecond)
 			s.broadcast(id, Event{Type: "tool_result", ToolID: toolID, Result: step.toolOut})
 			s.mu.Lock()
-			sess.append(Message{Role: "tool_call", ToolName: step.toolName, ToolCallID: toolID, Title: title})
-			sess.append(Message{Role: "tool_result", ToolName: step.toolName, ToolCallID: toolID, ToolResult: step.toolOut})
+			// autoExpand 一起写进"记录"，与真实现一致：桌面把 /sh 的那一对也落了盘
+			// （session.Message.AutoExpand），手机重新载入后仍是展开的。
+			sess.append(Message{Role: "tool_call", ToolName: step.toolName, ToolCallID: toolID, Title: title, AutoExpand: step.autoExpand})
+			sess.append(Message{Role: "tool_result", ToolName: step.toolName, ToolCallID: toolID, ToolResult: step.toolOut, AutoExpand: step.autoExpand})
 			s.mu.Unlock()
 		}
 	}

@@ -59,6 +59,9 @@ type mobileMessage struct {
 	ToolResult     string `json:"toolResult,omitempty"`
 	IsError        bool   `json:"isError,omitempty"`
 	Thinking       string `json:"thinking,omitempty"`
+	// AutoExpand：这次调用是用户自己点名的（桌面的 /sh）。手机据此把卡片直接摊开——输出就是
+	// 他要看的东西。它只影响显示（见 session.Message.AutoExpand）。
+	AutoExpand bool `json:"autoExpand,omitempty"`
 }
 
 // mobileAsk 是一条等待。权限与提问是两种外壳，靠 kind 分：

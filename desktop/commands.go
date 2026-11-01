@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"encoding/json"
@@ -25,7 +26,9 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/shutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // CommandVO describes a slash command for the composer's "/" palette.
@@ -758,9 +761,14 @@ func runShellCommand(c *commandRun) error {
 
 	// The Bash arg shape, so tools.ToolArgsSummary renders the same title the
 	// agent's own Bash calls get.
+	//
+	// The id matters beyond the transcript: this call is RECORDED (below) so the output survives a
+	// reload and reaches the phone, and a record's call and result are paired by this id.
+	callID := "sh_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	args, _ := json.Marshal(map[string]string{"command": command})
 	c.ech <- agent.AgentEvent{
 		Type:           agent.AgentEventToolCallStart,
+		ToolID:         callID,
 		ToolName:       tools.ToolNameBash,
 		ToolArgs:       string(args),
 		ToolAutoExpand: true, // the user asked for this output: show it, don't fold it
@@ -782,14 +790,57 @@ func runShellCommand(c *commandRun) error {
 	case code != 0:
 		note = fmt.Sprintf("(exit %d)", code)
 	}
+	result := shellEcho(out, note)
 	c.ech <- agent.AgentEvent{
 		Type:         agent.AgentEventToolResult,
+		ToolID:       callID,
 		ToolName:     tools.ToolNameBash,
-		ToolResult:   shellEcho(out, note),
+		ToolResult:   result,
 		ToolIsError:  note != "",
 		ToolDuration: time.Since(start),
 	}
+	// Record the pair, marked display-only: a reloaded conversation (and the phone) must still show
+	// what the user asked for, while the model's history skips it — it never made this call
+	// (session.Message.AutoExpand, agent/session_convert.go). A write failure is reported in the
+	// transcript rather than swallowed: the output is on screen either way, but the record is what
+	// makes it survive leaving this window.
+	c.desk.recordShellEcho(c.id, callID, command, string(args), result, note != "", time.Since(start))
 	return nil
+}
+
+// recordShellEcho appends a /sh run's tool call and result to the session record. Both halves carry
+// AutoExpand, which is what keeps the card unfolded on reload while keeping the pair out of the
+// model's history.
+func (d *desktopApp) recordShellEcho(id, callID, command, args, result string, isError bool, took time.Duration) {
+	if d.store == nil {
+		return
+	}
+	now := time.Now()
+	call := &session.Message{
+		Type:       session.MessageTypeToolCall,
+		Name:       tools.ToolNameBash,
+		Args:       args,
+		ToolCallID: callID,
+		AutoExpand: true,
+		Timestamp:  now,
+	}
+	if err := d.store.AppendMessage(id, call); err != nil {
+		logger.New("desktop").Error(context.Background(), "shell echo: record call", err, "session", id)
+		return
+	}
+	res := &session.Message{
+		Type:       session.MessageTypeToolResult,
+		Name:       tools.ToolNameBash,
+		Result:     result,
+		ToolCallID: callID,
+		AutoExpand: true,
+		IsError:    isError,
+		DurationMs: took.Milliseconds(),
+		Timestamp:  time.Now(),
+	}
+	if err := d.store.AppendMessage(id, res); err != nil {
+		logger.New("desktop").Error(context.Background(), "shell echo: record result", err, "session", id)
+	}
 }
 
 // shellEcho is the tool card body for /sh: the command's combined output plus the
