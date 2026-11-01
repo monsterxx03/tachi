@@ -1,9 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AppState,
   BackHandler,
   Keyboard,
+  Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -25,14 +26,36 @@ import { NewSession } from './src/ui/NewSession';
 import { Settings } from './src/ui/Settings';
 import { Opening } from './src/ui/Opening';
 
-/** 一条常驻的提示（连不上、令牌失效、服务端的拒绝原因） */
-function NoticeBar({ text }: { text: string }) {
+/**
+ * 顶上那条红字（连不上、令牌失效、服务端的拒绝原因）。
+ *
+ * 它以前没有出路：挂上去之后只有「下一次同类操作成功」才会让位，于是一次失败的发送能在
+ * 顶上留很久，久到读者会把它当成现在的状态读。现在两条路——点它（或那颗 ×）立即收起；
+ * 没人点的时候 8 秒后自己退场。报错值得读两遍，不值得一直占着一行。
+ */
+const NOTICE_MS = 8000;
+
+function NoticeBar({ text, onDismiss }: { text: string; onDismiss: () => void }) {
   const { tokens: t } = useTheme();
+  // 回调每帧都是新的（store 每次渲染都返回一个新箭头），把它放进 ref 里，计时只跟着 text
+  // 重来 —— 否则那条 8 秒的计时会被任何一次无关的重渲染推后，永远不到点。
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  useEffect(() => {
+    const timer = setTimeout(() => dismissRef.current(), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
   return (
-    <View style={[styles.notice, { backgroundColor: t.redWash, borderBottomColor: t.border }]}>
+    <Pressable
+      onPress={onDismiss}
+      accessibilityRole="button"
+      accessibilityLabel="收起提示"
+      style={[styles.notice, { backgroundColor: t.redWash, borderBottomColor: t.border }]}
+    >
       <View style={[styles.noticeDot, { backgroundColor: t.red }]} />
       <Text style={{ color: t.red, fontSize: 12, flex: 1 }}>{text}</Text>
-    </View>
+      <Text style={{ color: t.red, fontSize: 15, paddingHorizontal: 4 }}>×</Text>
+    </Pressable>
   );
 }
 
@@ -244,7 +267,9 @@ function Shell() {
       <View style={[styles.root, { paddingBottom: keyboard > 0 ? keyboard : insets.bottom }]}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
         {/* 配对那一屏自己有错误位；把上一台的连接错误压在它上面只会吓人一跳 */}
-        {m.pairing && m.error && !addingDevice && !showNew ? <NoticeBar text={m.error} /> : null}
+        {m.pairing && m.error && !addingDevice && !showNew ? (
+          <NoticeBar text={m.error} onDismiss={m.dismissError} />
+        ) : null}
 
         {!m.pairing || addingDevice ? (
           <Pairing

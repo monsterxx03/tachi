@@ -36,6 +36,8 @@ export interface MobileApi {
   openId: string | null;
   chat: ChatState;
   error: string | null;
+  /** 收起顶上那条红字（看过、或者它挂得够久了） */
+  dismissError: () => void;
   /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）、原始 hostname，以及那台电脑的全部地址 */
   pair: (
     p: Pairing,
@@ -1075,6 +1077,10 @@ export function useMobile(): MobileApi {
   );
 
   return {
+    // 顶上那条红字没有自己的出路：一次失败的发送留下的原因会一直挂在这里，直到下一次
+    // 同类操作成功。读者看过了就该能收起来（App 那条横幅点一下就调它），而且没人点的时候
+    // 它也会自己退场 —— 见 App.tsx 的 NoticeBar。
+    dismissError: () => setError(null),
     ready,
     pairing,
     devices,
