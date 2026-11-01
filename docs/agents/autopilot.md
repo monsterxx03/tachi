@@ -150,7 +150,7 @@ scripts/autopilot/worktree.sh resume <slug>   # 接着上一轮的 PR 改
 
 ## 验证：`scripts/autopilot/verify.sh`
 
-完成条件只能它全绿。它按改动路径决定跑哪层（lint / unit / itest / desktop / mobile / `bash -n`），
+完成条件只能它全绿。它按改动路径决定跑哪层（lint / unit / **race** / itest / desktop / mobile / `bash -n`），
 你不用自己挑。
 
 - 退出码 **0** 才是全绿。
