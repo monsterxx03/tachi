@@ -66,7 +66,7 @@ const (
 	// the work happened to be, which is often inside the final report.
 	DefaultCronExecutionTimeout = 60 * time.Minute
 	configDirName               = ".tachi"
-	configFileName    = "config.yaml"
+	configFileName              = "config.yaml"
 	// backupSuffix is what the pre-first-save copy of config.yaml is kept as (see backupOnce):
 	// the hand-written original, beside the file the settings page now owns.
 	backupSuffix              = ".bak"
@@ -1500,7 +1500,7 @@ func (m MobileConfig) MaxAttachmentBytes() int64 {
 type PushConfig struct {
 	// Enabled is the master switch. Off by default: a machine that starts pinging a phone
 	// without being asked is a surprise, and an empty block must do nothing.
-	Enabled bool `yaml:"enabled"`
+	Enabled bool           `yaml:"enabled"`
 	Bark    BarkPushConfig `yaml:"bark"`
 	Ntfy    NtfyPushConfig `yaml:"ntfy"`
 }
@@ -1538,7 +1538,6 @@ func (p PushConfig) Wants() bool {
 	}
 	return len(p.Bark.Keys) > 0 || p.Ntfy.Topic != ""
 }
-
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files
 // capturing the full execution of side-channel LLM runs (/commit, /review,

@@ -11,8 +11,8 @@ import (
 // overwrite the oldest data. It is safe for concurrent use.
 type RingBuf struct {
 	buf     []byte
-	pos     int    // next write position
-	written int    // total bytes written (never decremented)
+	pos     int // next write position
+	written int // total bytes written (never decremented)
 	mu      sync.Mutex
 }
 

@@ -306,4 +306,3 @@ func formatPercent(pct float64) string {
 	}
 	return fmt.Sprintf("%.0f%%", pct)
 }
-

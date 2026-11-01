@@ -1,5 +1,15 @@
 version: "2"
 
+# 格式化也是一道门禁，不是编辑器里的顺手事。
+#
+# 从前这里只开 linters（govet / staticcheck / errcheck / ineffassign / unused），全是「检查器」——
+# 而格式化漂移永远不会让任何一道门禁变红：`origin/main` 上曾经同时存在 23 个不是 gofmt 干净的
+# .go 文件，`make lint` 一直绿，只能靠人眼发现。formatters 是 v2 才有的那一半，gofmt 进去之后
+# `golangci-lint run`（也就是 make lint）会把它当问题报出来。
+formatters:
+  enable:
+    - gofmt
+
 linters:
   default: none
   enable:

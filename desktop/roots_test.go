@@ -627,7 +627,7 @@ func TestBuildSessionMessagesCarriesChange(t *testing.T) {
 	raw := []session.Message{
 		{Type: session.MessageTypeUser, Content: "edit it", Timestamp: time.Now()},
 		{Type: session.MessageTypeToolCall, Name: "EditFile", ToolCallID: "c1",
-			Args: map[string]any{"path": "/a.go", "old_string": "old\n", "new_string": "new\n"},
+			Args:      map[string]any{"path": "/a.go", "old_string": "old\n", "new_string": "new\n"},
 			Timestamp: time.Now()},
 		{Type: session.MessageTypeToolCall, Name: "ReadFile", ToolCallID: "c2",
 			Args: map[string]any{"path": "/a.go"}, Timestamp: time.Now()},

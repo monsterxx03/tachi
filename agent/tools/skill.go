@@ -122,7 +122,7 @@ func (t *SkillTool) Description() string {
 func (t *SkillTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"operation": {
-			Type:        "string",
+			Type: "string",
 			// The enum carries the five values; this only says what the two
 			// read-only ones DO, which an enum cannot express.
 			Description: `"list" to browse, "view" to load one skill's content, "create", "update", "delete".`,

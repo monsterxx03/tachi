@@ -32,19 +32,19 @@ func extraForkTools(cfg ForkConfig) []tools.Tool {
 
 // ForkConfig controls child agent creation from a parent AIAgent.
 type ForkConfig struct {
-	Provider      llm.Provider   // required — LLM provider
-	MaxIterations int            // 0 = unlimited
-	MaxTokens     int            // 0 = default (4096)
-	AllowedTools  []string       // empty = copy all parent tools
+	Provider      llm.Provider // required — LLM provider
+	MaxIterations int          // 0 = unlimited
+	MaxTokens     int          // 0 = default (4096)
+	AllowedTools  []string     // empty = copy all parent tools
 	// ForReview marks a code-review fork. It gets tools.ReportFindingTool on top of
 	// the whitelist — the tool that records a finding as a session record. It is
 	// deliberately NOT in the main registry: the agent has no business declaring
 	// findings about its own work, and a review fork is the only place that output is
 	// consumed.
-	ForReview     bool
-	NoMCP         bool           // true = don't inherit shared MCP Manager
-	Logger        *logger.Logger // nil = use parent logger
-	SessionID     string         // logging hint
+	ForReview bool
+	NoMCP     bool           // true = don't inherit shared MCP Manager
+	Logger    *logger.Logger // nil = use parent logger
+	SessionID string         // logging hint
 }
 
 // ForkedAgent wraps a restricted child AIAgent created by Fork().

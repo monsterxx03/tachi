@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 )
 
 // A file that arrived from another machine lands in the session's own directory, under received/ —

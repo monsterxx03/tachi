@@ -125,7 +125,8 @@ func TestUpsertServerInFileFollowsTheArraysOwnLayout(t *testing.T) {
 	assert.Equal(t, want, readTmpMCP(t, path))
 }
 
-func TestUpsertServerInFileFillsAnEmptyArray(t *testing.T) {	path := writeTmpMCP(t, "{\n  \"servers\": []\n}\n")
+func TestUpsertServerInFileFillsAnEmptyArray(t *testing.T) {
+	path := writeTmpMCP(t, "{\n  \"servers\": []\n}\n")
 
 	require.NoError(t, UpsertServerInFile(path, MCPServerConfig{
 		Name: "alpha", Type: MCPTransportStdio, Command: "/bin/alpha",

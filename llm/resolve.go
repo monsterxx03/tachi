@@ -279,11 +279,11 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 	supportsVision := ProviderConfigSupportsVision(pCfg)
 
 	return &ResolvedProvider{
-		Type:           pCfg.Type,
-		Model:          pCfg.Model,
-		BaseURL:        pCfg.BaseURL,
-		APIKey:         apiKey,
-		ContextWindow:  contextWindow,
+		Type:            pCfg.Type,
+		Model:           pCfg.Model,
+		BaseURL:         pCfg.BaseURL,
+		APIKey:          apiKey,
+		ContextWindow:   contextWindow,
 		Name:            pCfg.Name,
 		Thinking:        thinking,
 		ThinkingEffort:  thinkingEffort,

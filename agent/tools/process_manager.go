@@ -85,7 +85,6 @@ type ManagedProcess struct {
 	done chan struct{}
 }
 
-
 // toInfo returns a snapshot of the process for external consumption. Lock-free.
 func (mp *ManagedProcess) toInfo() *ManagedProcessInfo {
 	s := mp.status.Load()
@@ -278,7 +277,6 @@ func (mp *ManagedProcess) setTerminal(to, exitCode int32) bool {
 	close(mp.done)
 	return true
 }
-
 
 // Stop terminates a background process by name. Sends SIGTERM to the process
 // group first, then SIGKILL after a 5-second grace period. Removes from the

@@ -43,7 +43,7 @@ func TestAddEnabled(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Channel.Channels = map[string]map[string]any{
-		testEnabledChannel: {"enabled": true},
+		testEnabledChannel:        {"enabled": true},
 		"add-enabled-test-absent": {"enabled": true},
 		"add-enabled-test-off":    {"enabled": false},
 	}
