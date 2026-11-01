@@ -90,9 +90,7 @@ func (s *vtScreen) handleSeq(seq []byte, p *ansi.Parser) {
 	if len(seq) == 1 {
 		switch seq[0] {
 		case '\n': // LF: down one line; the renderer maps newline → col 0
-			if s.curY < s.height-1 {
-				s.curY++
-			}
+			s.index()
 			s.curX = 0
 		case '\r':
 			s.curX = 0
@@ -118,17 +116,13 @@ func (s *vtScreen) handleSeq(seq []byte, p *ansi.Parser) {
 	case '8': // DECRC restore cursor
 		s.curX, s.curY = s.savedX, s.savedY
 	case 'M': // RI (Reverse Index): cursor up one line, same column
-		if s.curY > 0 {
+		if s.curY > s.top {
 			s.curY--
 		} else {
 			s.scrollDown(1)
 		}
 	case 'D': // IND (Index): cursor down one line, same column
-		if s.curY < s.height-1 {
-			s.curY++
-		} else {
-			s.scrollUp(1)
-		}
+		s.index()
 	default: // other ESC sequences: ignore
 	}
 }
@@ -333,6 +327,20 @@ func (s *vtScreen) move(x, y int) {
 func (s *vtScreen) clamp() {
 	s.curX = max(min(s.curX, s.width-1), 0)
 	s.curY = max(min(s.curY, s.height-1), 0)
+}
+
+// index is LF / IND: one line down inside the SCROLL REGION. On the region's last row the region
+// scrolls; above it the cursor simply moves. The region matters: with ESC[20;39r set the renderer
+// relies on newline-at-the-bottom scrolling ONLY rows 20..39 — testing s.height-1 instead leaves the
+// region's last row unwritten and puts everything one line lower than a terminal would, which reads
+// as a duplicated row and a missing one in the screen the tests compare against.
+func (s *vtScreen) index() {
+	switch {
+	case s.curY == s.bot:
+		s.scrollUp(1)
+	case s.curY < s.height-1:
+		s.curY++
+	}
 }
 
 // scrollUp shifts the scroll region up n lines; blank lines appear at the
