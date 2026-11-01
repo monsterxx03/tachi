@@ -162,6 +162,12 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **冒烟窗口「不做」动画：窗口被遮挡时 WebKit 会把过渡时长塌到约 0**（在沙箱里工具栏自己的 `transition` 读到 `padding-left 0.00001s`，所以点击后立刻读到的值已经是终态）。`keepPageAwake` 解除的是**定时器**节流，不是这个。所以 driver 可以断言一个动画的**两端**以及那个属性是过渡的，绝不断言中间帧——而「侧栏滑开了」在这里根本不可断言。
 - **控制台是报告的一部分**：driver 的 `console.error` 行坐在 `Result.Console` 里，对通过的运行也打印。
 
+## 桌面模块的测试（`GOWORK=off`）
+
+- **`desktop` 是独立的 go module，它自己的 `go test ./...` 需要一个前端产物才能编译。** 模块根包有 `//go:embed all:frontend/dist`，产物不在时**整包编译失败**，报的是 `main.go:50: pattern all:frontend/dist: no matching files found` —— 看起来像用例挂了，实际只是前端没建。`make -C desktop frontend` 生成它。
+- **新工作区一定会撞上**：`worktree.sh new` 在 `desktop/frontend` 没有依赖时会跳过构建（"留给 web-check"），而 `make -C desktop test` 自己**不**建前端（它的前置只有 `stt-shim`）。所以一个干净工作区里第一次跑桌面测试，先 `make -C desktop frontend`。
+- 单独跑某个包时同理：`cd desktop && GOWORK=off go test -race ./link/ ./stt/` 不需要前端产物（那两个包不 embed），`./...` 需要。
+
 ## 桌面构建与签名（macOS）
 
 - **desktop 只出两个目标平台：macOS 和 Linux——wails 模板的另外三套脚手架（`build/windows/`、`build/ios/`、`build/android/`）和整套 docker 交叉编译（`build/docker/Dockerfile.cross`、`setup:docker`，以及各平台 Taskfile 里 `{{if eq OS …}}build:native{{else}}build:docker{{end}}` 那条兜底）都已经删掉了，别照模板再加回来。** 加回来不是免费的：每个平台 Taskfile 现在只有一个 `build:native`，`build/universal:lipo`、`codesign:adhoc` 这些「非 macOS 宿主」的孪生分支也一并没了（`{{if eq OS …}}` 这类分派是它们唯一的存在方式）；`common:generate:icons` 那里有个真的陷阱——那个 CLI 的 `-windowsfilename` **默认**就写 `build/windows/icon.ico`，目录不在就直接失败（`open build/windows/icon.ico: no such file or directory`，而且是在写完 icons.icns **之前**失败，把图标一起带走），所以现在显式传 `-windowsfilename ""` 来跳过 Windows，那个空参数不能删。**`wails3 update build-assets` 也一起从 Taskfile 里删了**：它把 wails 的整棵 asset 树解到 `build/` 上，会把这些目录写回来、并覆盖手工改过的平台 Taskfile（`config.yml` 里留了警告）。**剩下那个 `build/docker/Dockerfile.server` 跟交叉编译无关**，它是服务端模式的镜像（`build:docker`/`run:docker` 那对，HTTP-only，没有 GUI）。Linux 自己的打包与平台差异在下一节。
