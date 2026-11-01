@@ -184,8 +184,11 @@ bar-widget:
 # test 跑这个模块的测试。前置 stt-shim 是必需的，而不是顺手：desktop/stt 要链接那个
 # 静态库，缺了它是**整个包编译不过**（不是个别用例失败），而报错藏在 cgo 的一长串
 # 命令行里。所以走这个目标比手敲 go test 稳。
+# -race：这个模块是独立 go module，根目录那道 CI race job 看不见它，而它起 goroutine
+# 的地方最多（链路/调度器/手机推送）。desktop/link 的 seq 计数器就是这么暴露出来的 ——
+# 一条路径在 Run 的 goroutine 里不加锁地 ++，另一条（语音转写）在 emit 里拿着锁改同一个字段。
 test: stt-shim
-	$(GO) test ./...
+	$(GO) test -race ./...
 
 tidy:
 	$(GO) mod tidy

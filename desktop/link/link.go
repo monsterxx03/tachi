@@ -270,7 +270,7 @@ func (s *Server) flushAlerts() {
 		if a.Kind == "" {
 			continue
 		}
-		s.write(map[string]any{"t": "alert", "seq": s.nextSeq(), "kind": a.Kind})
+		s.writeSeq(map[string]any{"t": "alert", "kind": a.Kind})
 	}
 }
 
@@ -364,8 +364,8 @@ func (s *Server) handle(line []byte) {
 	switch msg.T {
 	case "hello":
 		if msg.Proto != Proto {
-			s.write(map[string]any{
-				"t": "error", "seq": s.nextSeq(),
+			s.writeSeq(map[string]any{
+				"t":       "error",
 				"message": fmt.Sprintf("protocol mismatch: device speaks %d, host speaks %d", msg.Proto, Proto),
 			})
 			return
@@ -408,8 +408,8 @@ func (s *Server) answer(msg inbound) {
 	})
 	if err != nil {
 		// 回音：设备上按下的那一下不能没有结果，否则它会一直举着这个问题。
-		s.write(map[string]any{
-			"t": "error", "seq": s.nextSeq(), "ref": msg.Ref, "message": err.Error(),
+		s.writeSeq(map[string]any{
+			"t": "error", "ref": msg.Ref, "message": err.Error(),
 		})
 	}
 }
@@ -433,7 +433,7 @@ func (s *Server) push(force bool) {
 	if body, err := json.Marshal(snap.Sessions); err == nil {
 		if string(body) != s.lastSessions {
 			s.lastSessions = string(body)
-			s.write(map[string]any{"t": "state", "seq": s.nextSeq(), "sessions": snap.Sessions})
+			s.writeSeq(map[string]any{"t": "state", "sessions": snap.Sessions})
 		}
 	}
 
@@ -473,7 +473,7 @@ func (s *Server) push(force bool) {
 		delete(s.byKey, key)
 		delete(s.byRef, ref)
 		delete(s.sentBody, ref)
-		s.write(map[string]any{"t": "ask_gone", "seq": s.nextSeq(), "ref": ref})
+		s.writeSeq(map[string]any{"t": "ask_gone", "ref": ref})
 	}
 }
 
@@ -522,14 +522,29 @@ const (
 	kindAskUser    = "ask_user"
 )
 
+// nextSeq 分配一个号。它**必须**在 wmu 里：emit 会从链路自己的 goroutine 之外改同一个
+// s.seq（语音转写跑在另一条 goroutine 上），两条路都碰这个计数器，就都得拿同一把锁。
 func (s *Server) nextSeq() uint64 {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	s.seq++
 	return s.seq
 }
 
+// writeSeq 是「分配一个号并立刻发出去」的那条路：递增与写出在**同一个临界区**里，所以
+// 跨 goroutine 的两条生产者不会写出顺序颠倒的 seq（谁先加的不一定谁先发出去）。它和 emit
+// 是同一件事的两个入口 —— emit 给那些「消息体已经建好、只差 seq」的跨 goroutine 调用方。
+func (s *Server) writeSeq(body map[string]any) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.seq++
+	body["seq"] = s.seq
+	s.writeLocked(body)
+}
+
 // writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。
 func (s *Server) writeReset() {
-	s.write(map[string]any{"t": "reset", "seq": s.nextSeq()})
+	s.writeSeq(map[string]any{"t": "reset"})
 }
 
 // VoiceText 把一次语音转写的结果回给设备：它说了什么，以及那句话到哪了。
@@ -561,19 +576,21 @@ func (s *Server) emit(body map[string]any) {
 
 	s.seq++
 	body["seq"] = s.seq
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return
-	}
-	_, _ = s.tr.Write(append(append([]byte(prefix), raw...), '\n'))
+	s.writeLocked(body)
 }
 
 func (s *Server) write(v any) {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	s.writeLocked(v)
+}
+
+// writeLocked 是 write 的本体，调用方必须已经持有 wmu —— writeSeq / emit 要在同一个临界区里
+// 先算 seq 再写，中间不能放开锁。
+func (s *Server) writeLocked(v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		return
 	}
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
 	_, _ = s.tr.Write(append(append([]byte(prefix), body...), '\n'))
 }
