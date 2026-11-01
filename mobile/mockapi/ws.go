@@ -185,7 +185,13 @@ func (c *client) enqueueEvent(v any) {
 	}
 }
 
-// broadcast 只发订阅了该会话的连接；ask_answered 例外（它可能属于任何会话）
+// broadcast 发给订阅了该会话的连接；**sessionID 为空就是广播** —— 与真服务器同一条判据
+// （desktop/mobile.go 的 wants：空 id 谁都发）。不属于任何一段会话的流都走这条：
+// sessions_changed、cron_changed、awake_changed、ask_answered。
+//
+// 从前这里按事件类型白名单判，漏掉了 awake_changed —— 于是手机一旦 open 过某段会话
+// （c.sessionID != ""），就再也收不到「保持唤醒」的变化，界面上那张卡片不会跟着动。
+// 类型白名单换个事件就会再漏一次；判「空 id」不会。
 func (s *Server) broadcast(sessionID string, ev Event) {
 	data, err := json.Marshal(ev)
 	if err != nil {
@@ -194,8 +200,7 @@ func (s *Server) broadcast(sessionID string, ev Event) {
 	s.mu.Lock()
 	targets := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
-		// ask_answered / sessions_changed / cron_changed 是广播：它们不属于某一段会话的流
-		if ev.Type == "ask_answered" || ev.Type == "sessions_changed" || ev.Type == "cron_changed" || c.sessionID == sessionID {
+		if sessionID == "" || c.sessionID == sessionID {
 			targets = append(targets, c)
 		}
 	}
