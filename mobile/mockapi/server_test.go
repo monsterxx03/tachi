@@ -16,9 +16,17 @@ import (
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	ts := httptest.NewServer(New("test-token").Handler())
-	t.Cleanup(ts.Close)
+	ts, _ := newTestServerWithServer(t)
 	return ts
+}
+
+// newTestServerWithServer 连带把 *Server 交出来：广播规则是包内的事，只从 HTTP 面看不全。
+func newTestServerWithServer(t *testing.T) (*httptest.Server, *Server) {
+	t.Helper()
+	srv := New("test-token")
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts, srv
 }
 
 func get(t *testing.T, ts *httptest.Server, path, token string) *http.Response {
@@ -77,6 +85,9 @@ func TestEverythingElseNeedsToken(t *testing.T) {
 func TestAwakeIsOneSwitchForTheWholeMachine(t *testing.T) {
 	ts := newTestServer(t)
 	conn := dialWS(t, ts, "test-token")
+	if snap := subscribe(t, conn, "s1"); snap == nil {
+		t.Fatal("订阅之后应当先收到一份快照")
+	}
 
 	resp := get(t, ts, "/v1/awake", "test-token")
 	var read struct {
@@ -97,9 +108,12 @@ func TestAwakeIsOneSwitchForTheWholeMachine(t *testing.T) {
 	if code := postJSON(t, ts, "/v1/awake", map[string]any{"on": true, "durationMin": 45}); code != http.StatusOK {
 		t.Fatalf("开启应当 200，得到 %d", code)
 	}
+	// 这条连接**订阅着 s1**：awake_changed 不属于任何一段会话，订阅过也必须收得到。
+	// 从前 mock 按「事件类型白名单」筛广播，白名单里没有它就漏掉了 —— 手机上开着对话时，
+	// 那张「保持唤醒」的卡片不会跟着变（issue #100）。
 	ev := readEvent(t, conn)
 	if ev.Type != "awake_changed" || ev.Awake == nil {
-		t.Fatalf("开启之后应当广播 awake_changed，得到 %+v", ev)
+		t.Fatalf("开启之后应当广播 awake_changed（订阅过会话的连接也要收到），得到 %+v", ev)
 	}
 	if !ev.Awake.On || ev.Awake.DurationMin != 45 || ev.Awake.Until == "" {
 		t.Fatalf("广播的状态应当是开着、45 分钟、带到期时刻，得到 %+v", ev.Awake)
@@ -154,6 +168,64 @@ func dialWS(t *testing.T, ts *httptest.Server, token string) *websocket.Conn {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return conn
+}
+
+// TestBroadcastRule pins the one rule the whitelist used to encode by hand: an event that belongs
+// to a conversation goes to the connections subscribed to it, and an event with NO session (a
+// broadcast: sessions_changed / cron_changed / awake_changed / ask_answered) goes to everyone —
+// including connections that are busy reading a conversation, which is the case that was broken.
+func TestBroadcastRule(t *testing.T) {
+	ts, srv := newTestServerWithServer(t)
+	conn := dialWS(t, ts, "test-token")
+	if subscribe(t, conn, "s1") == nil {
+		t.Fatal("订阅之后应当先收到一份快照")
+	}
+
+	// Sent FIRST, so receiving it would be the failure: this connection reads s1, not s3.
+	srv.broadcast("s3", Event{Type: "state", State: &SessionState{Status: "working"}})
+	// …and this one belongs to no conversation at all, so it must arrive here.
+	srv.broadcast("", Event{Type: "awake_changed", Awake: &AwakeState{On: true, DurationMin: 45}})
+
+	ev, ok := nextEvent(t, conn, 2*time.Second)
+	if !ok {
+		t.Fatal("广播没有到达订阅过会话的连接（issue #100 的那个 bug）")
+	}
+	if ev.Type != "awake_changed" || ev.Awake == nil || !ev.Awake.On {
+		t.Fatalf("应当只收到广播那一条，得到 %+v", ev)
+	}
+}
+
+// nextEvent reads one event, or reports that nothing arrived in time. Unlike readEvent it does not
+// fail the test on a timeout: "nothing arrived" is the answer some assertions need.
+func nextEvent(t *testing.T, conn *websocket.Conn, wait time.Duration) (Event, bool) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		return Event{}, false
+	}
+	var ev Event
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	return ev, true
+}
+
+// subscribe 让这条连接 open 一段会话，并读到那份快照。
+//
+// 读到快照还有第二个作用：它是「服务端已经登记这条连接、订阅也已生效」的屏障。dialWS 在握手
+// 完成时就返回了，而服务端是在那之后才把连接放进 clients 的 —— 紧接着 POST 一个改动，广播可能
+// 发给了零个人，用例于是等满读超时（一次 5s 的假失败）。
+func subscribe(t *testing.T, conn *websocket.Conn, sessionID string) *Snapshot {
+	t.Helper()
+	if err := conn.WriteJSON(map[string]string{"type": "open", "sessionId": sessionID}); err != nil {
+		t.Fatalf("open %s: %v", sessionID, err)
+	}
+	ev := readEvent(t, conn)
+	if ev.Type != "snapshot" {
+		t.Fatalf("open 之后应当先收到快照，得到 %q", ev.Type)
+	}
+	return ev.Snapshot
 }
 
 func readEvent(t *testing.T, conn *websocket.Conn) Event {

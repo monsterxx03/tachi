@@ -808,7 +808,9 @@ func (s *Server) handlePermission(w http.ResponseWriter, r *http.Request) {
 	sess.State = SessionState{Status: "working", Label: "在跑", Detail: "已收到授权"}
 	s.mu.Unlock()
 
-	s.broadcast(sess.Session.ID, Event{Type: "ask_answered", ToolID: toolID})
+	// ask_answered 是广播：真服务器那条走 mobileBroadcast（不带会话 id），回答它的那块屏
+	// 未必正看着这一段会话。
+	s.broadcast("", Event{Type: "ask_answered", ToolID: toolID})
 	// 待答项没了、状态变了 —— 让另一块屏重读一份快照（快照只能从 WS 的 open 拿）
 	s.pushSnapshot(sess.Session.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
@@ -848,7 +850,9 @@ func (s *Server) handleQuestions(w http.ResponseWriter, r *http.Request) {
 	sess.State = SessionState{Status: "working", Label: "在跑", Detail: "已收到回答"}
 	s.mu.Unlock()
 
-	s.broadcast(sess.Session.ID, Event{Type: "ask_answered", ToolID: toolID})
+	// ask_answered 是广播：真服务器那条走 mobileBroadcast（不带会话 id），回答它的那块屏
+	// 未必正看着这一段会话。
+	s.broadcast("", Event{Type: "ask_answered", ToolID: toolID})
 	s.pushSnapshot(sess.Session.ID)
 	go s.finishTurn(sess, "按你选的来 ——「"+joinAnswers(req.Answers)+"」，我照着改。")
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
