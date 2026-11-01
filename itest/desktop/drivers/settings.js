@@ -77,9 +77,17 @@
       smoke.check('沙箱里接口是关的，卡片说出来',
         smoke.text('.mobile-pair-block').indexOf('移动接口现在是关闭的') >= 0,
         smoke.text('.mobile-pair-block').slice(0, 80))
-      // 第二个 .mobile-pair-value 才是令牌（第一个是地址）。
-      const values = smoke.qa('.mobile-pair-value')
-      const tokenText = values[1] ? smoke.text(values[1]) : ''
+      // 按**标签**找那一行，绝不按下标：卡片在有多条地址时多一行「备用」，于是「第二个」
+      // 在一台单网卡机器上是令牌、在这台（loopback + 局域网 + 隧道）上是第二个地址 ——
+      // 断言会红在一个什么都没错的行上。同样的规矩 harness 的 menuItem 也立着：by NAME,
+      // never by position。
+      const pairValue = (label) => {
+        const row = smoke
+          .qa('.mobile-pair-row')
+          .find((r) => smoke.text(r.querySelector('.mobile-pair-label')).trim() === label)
+        return row ? smoke.text(row.querySelector('.mobile-pair-value')) : ''
+      }
+      const tokenText = pairValue('令牌')
       smoke.check('令牌默认是掩码（共享屏幕时看不到值）', tokenText.indexOf('•') >= 0, tokenText || '(没有令牌行)')
       // 多网卡才有选择器：一块网卡的机器上它不该出现。出现时至少要有一个「自动」+ 一个候选，
       // 否则那个下拉框点了什么都不会变。
