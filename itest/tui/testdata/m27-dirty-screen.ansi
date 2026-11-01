@@ -1,0 +1,33 @@
+[?2026$p[?2027$p[>4m[=0;1u[?1049h[?25l[?2004h[?1002h[?1006h[>4;2m[=1;1u[?u[H[2J[19dSelect provider (↑↓ Enter Esc) — 25 个，输入以过滤
+ * mock     openai (mock-model)[K
+   mock-01  openai (mock-01-model)
+   mock-02  openai (mock-02-model)
+   mock-03  openai (mock-03-model)
+   mock-04  openai (mock-04-model)
+   mock-05  openai (mock-05-model)
+   mock-06  openai (mock-06-model)
+   mock-07  openai (mock-07-model)
+   mock-08  openai (mock-08-model)
+   mock-09  openai (mock-09-model)
+   mock-10  openai (mock-10-model)
+   mock-11  openai (mock-11-model)
+   mock-12  openai (mock-12-model)
+   mock-13  openai (mock-13-model)
+   mock-14  openai (mock-14-model)
+   mock-15  openai (mock-15-model)
+   mock-16  openai (mock-16-model)
+   mock-17  openai (mock-17-model)
+   mock-18  openai (mock-18-model)
+
+ ● tachi | openai (mock-model) think:default | MCP: ready[20d * mock     openai (mock-model)[K[9B   mock-09  openai (mock-09-model)[K   mock-09  openai (mock-09-model)[K
+
+   mock-11  openai (mock-11-model)[K[20;39r[39;1H[3S[1;40r[28;1H   mock-11  openai (mock-11-model)[K[8B   mock-19  openai (mock-19-model)
+   mock-20  openai (mock-20-model)
+   mock-21  openai (mock-21-model)[K[20;39r[39;1H[2S[1;40r[36;1H   mock-21  openai (mock-21-model)[K
+   mock-22  openai (mock-22-model)
+   mock-23  openai (mock-23-model)[K[20;39r[39;1H
+[1;40r[37;1H   mock-23  openai (mock-23-model)[K
+   mock-24  openai (mock-24-model)[K[22d[J[19;17H/mock-07 (↑↓ Enter Esc Backspace) — 1/25 个
+   mock-07  openai (mock-07-model)[K
+[K
+ ● tachi | openai (mock-model) think:default | MCP: ready

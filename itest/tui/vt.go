@@ -90,9 +90,7 @@ func (s *vtScreen) handleSeq(seq []byte, p *ansi.Parser) {
 	if len(seq) == 1 {
 		switch seq[0] {
 		case '\n': // LF: down one line; the renderer maps newline → col 0
-			if s.curY < s.height-1 {
-				s.curY++
-			}
+			s.index()
 			s.curX = 0
 		case '\r':
 			s.curX = 0
@@ -118,17 +116,13 @@ func (s *vtScreen) handleSeq(seq []byte, p *ansi.Parser) {
 	case '8': // DECRC restore cursor
 		s.curX, s.curY = s.savedX, s.savedY
 	case 'M': // RI (Reverse Index): cursor up one line, same column
-		if s.curY > 0 {
+		if s.curY > s.top {
 			s.curY--
 		} else {
 			s.scrollDown(1)
 		}
 	case 'D': // IND (Index): cursor down one line, same column
-		if s.curY < s.height-1 {
-			s.curY++
-		} else {
-			s.scrollUp(1)
-		}
+		s.index()
 	default: // other ESC sequences: ignore
 	}
 }
@@ -200,14 +194,14 @@ func (s *vtScreen) handleCSI(p *ansi.Parser) {
 	case 'J': // ED: 0 → below, 1 → above, 2/3 → whole screen
 		switch param(0, 0) {
 		case 0:
-			s.eraseLine(s.curX, s.width-1)
+			s.eraseRow(s.curY, s.curX, s.width-1)
 			for y := s.curY + 1; y < s.height; y++ {
-				s.eraseLine(0, s.width-1)
+				s.eraseRow(y, 0, s.width-1)
 			}
 		case 1:
-			s.eraseLine(0, s.curX)
+			s.eraseRow(s.curY, 0, s.curX)
 			for y := 0; y < s.curY; y++ {
-				s.eraseLine(0, s.width-1)
+				s.eraseRow(y, 0, s.width-1)
 			}
 		case 2, 3:
 			s.clear()
@@ -317,11 +311,19 @@ func (s *vtScreen) clearCovered(y, x, w int) {
 	}
 }
 
-func (s *vtScreen) eraseLine(from, to int) {
+func (s *vtScreen) eraseLine(from, to int) { s.eraseRow(s.curY, from, to) }
+
+// eraseRow blanks part of row y. eraseLine is the same on the CURSOR row — and that difference
+// matters: ED (J) must clear the rows *below/above* the cursor, and a loop that called
+// eraseLine for each of them would blank the cursor row N times and leave every other row alone.
+func (s *vtScreen) eraseRow(y, from, to int) {
+	if y < 0 || y >= s.height {
+		return
+	}
 	from = max(from, 0)
 	to = min(to, s.width-1)
 	for x := from; x <= to; x++ {
-		s.grid[s.curY][x] = vtCell{text: " ", width: 1}
+		s.grid[y][x] = vtCell{text: " ", width: 1}
 	}
 }
 
@@ -335,6 +337,20 @@ func (s *vtScreen) clamp() {
 	s.curY = max(min(s.curY, s.height-1), 0)
 }
 
+// index is LF / IND: one line down inside the SCROLL REGION. On the region's last row the region
+// scrolls; above it the cursor simply moves. The region matters: with ESC[20;39r set the renderer
+// relies on newline-at-the-bottom scrolling ONLY rows 20..39 — testing s.height-1 instead leaves the
+// region's last row unwritten and puts everything one line lower than a terminal would, which reads
+// as a duplicated row and a missing one in the screen the tests compare against.
+func (s *vtScreen) index() {
+	switch {
+	case s.curY == s.bot:
+		s.scrollUp(1)
+	case s.curY < s.height-1:
+		s.curY++
+	}
+}
+
 // scrollUp shifts the scroll region up n lines; blank lines appear at the
 // bottom of the region.
 func (s *vtScreen) scrollUp(n int) {
@@ -342,7 +358,10 @@ func (s *vtScreen) scrollUp(n int) {
 		return
 	}
 	for y := s.top; y <= s.bot-n; y++ {
-		s.grid[y] = s.grid[y+n]
+		// copy, not assignment: s.grid[y] = s.grid[y+n] would make the two rows share one
+		// backing array, and the blanking loop below would then wipe the content that was just
+		// moved (the last rows alias the ones they were copied from).
+		copy(s.grid[y], s.grid[y+n])
 	}
 	for y := s.bot - n + 1; y <= s.bot; y++ {
 		for x := range s.grid[y] {
@@ -358,7 +377,7 @@ func (s *vtScreen) scrollDown(n int) {
 		return
 	}
 	for y := s.bot; y >= s.top+n; y-- {
-		s.grid[y] = s.grid[y-n]
+		copy(s.grid[y], s.grid[y-n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.top; y < s.top+n; y++ {
 		for x := range s.grid[y] {
@@ -374,7 +393,7 @@ func (s *vtScreen) insertLines(n int) {
 		return
 	}
 	for y := s.bot; y >= s.curY+n; y-- {
-		s.grid[y] = s.grid[y-n]
+		copy(s.grid[y], s.grid[y-n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.curY; y < min(s.curY+n, s.bot+1); y++ {
 		for x := range s.grid[y] {
@@ -390,7 +409,7 @@ func (s *vtScreen) deleteLines(n int) {
 		return
 	}
 	for y := s.curY; y <= s.bot-n; y++ {
-		s.grid[y] = s.grid[y+n]
+		copy(s.grid[y], s.grid[y+n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.bot - n + 1; y <= s.bot; y++ {
 		for x := range s.grid[y] {
