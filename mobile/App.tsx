@@ -100,6 +100,10 @@ function ChatPane({
     return (
       <Chat
         sessions={m.sessions}
+        loadAgents={async () => {
+          const { panels } = await m.loadPanels();
+          return panels?.agents.peers ?? [];
+        }}
         snapshot={m.chat.snapshot}
         live={m.chat.live}
         fileSource={(a) => (m.pairing && m.openId ? api.file(m.pairing, m.openId, a) : null)}

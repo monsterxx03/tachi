@@ -183,7 +183,10 @@ Message         { index, role, content, displayContent?, timestamp?, iteration?,
                 role ∈ user / assistant / tool_call / tool_result / reminder
                 index 是它在会话记录文件里的绝对位置 —— 翻页游标就是它
 Panels          { mcp:[{name, type, connected, needsAuth, loaded, tools}],
-                  agents:{peers:[{name, label, url, note, reach, skills[], err}], checkedAt, anyChecked},
+                  agents:{peers:[{name, label, id, url, note, reach, skills[], err}], checkedAt, anyChecked},
+                  // id 是节点的**身份**（pin 住的那一个），也是 #a: 引用唯一认的东西。
+                  // 空 = 这台机器从没往它那儿拨过，于是这一行不能被当成可引用的：
+                  // 一个空的 #a: 看着像引用、插进去解析不了。
                   cron:[{id, name, scheduleText, status, targetKind, targetTitle,
                          nextRun, lastRunStatus, lastRunError, running}] }
                 mcp.loaded / mcp.tools 是「这段对话载入几个 / 这个 server 一共几个」
