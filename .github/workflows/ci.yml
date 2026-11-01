@@ -29,6 +29,32 @@ jobs:
       - name: Test
         run: go test ./...
 
+  # The race detector. `go test ./...` above cannot see a data race at all, and both races this
+  # repo has actually found were visible ONLY here (node/peerlist_test.go's reachable flag,
+  # mobile/mockapi's sessionID). Scoped to the packages that START goroutines — agent, node,
+  # session, channel, cron, the mock server, pkg and the two frontends' backends — because
+  # `-race ./...` doubles the whole matrix to catch the same shape in code that never spawns one.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # A Go compile of this module needs dist/ in place (see the test job).
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Race detector
+        run: go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/ ./pkg/... ./tui/ ./web/
+
   build:
     runs-on: ubuntu-latest
     steps:
