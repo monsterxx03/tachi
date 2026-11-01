@@ -92,6 +92,65 @@ jobs:
         working-directory: desktop
         run: CGO_ENABLED=0 go build -tags headless -trimpath -o /tmp/tachi-headless .
 
+  # 两个前端，上面没有一个 job 会碰它们：桌面那套 bundle 只在 macOS 的 `make build` 里编，
+  # 手机那套在 runner 上根本不编 —— 所以任何一边的类型错误或坏掉的单测合并时都是静默的，
+  # 过几天才在某个把应用跑起来的人那里炸。`tsc` 几秒钟就能挡住绝大部分，桌面这边再多跑一步
+  # `vite build`，因为它就是 `make build` 跑的那条命令。
+  desktop-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop/frontend
+        run: npm ci
+
+      # tsc, then the production bundle — the same command `make -C desktop frontend` runs.
+      - name: Type-check and build
+        working-directory: desktop/frontend
+        run: npm run build
+
+  # 手机那半边：它的单测（jest，15 个套件）和它的 TypeScript。**Node 22，不是上面那些 job 用的 20** ——
+  # React Native 0.88 的 engines 是 ^22.13 || ^24.3 || >=26，20 会在装依赖时以 EBADENGINE 起步，
+  # 而且报错的位置跟真正的原因毫不相干（docs/agents/mobile.md）。
+  mobile:
+    runs-on: ubuntu-latest
+    # 那两个套件（`time.test.ts` / `cronSchedule.test.ts`）的时间断言是按 +08:00 写的：它们验的是
+    # 「本地怎么显示」，而 runner 是 UTC，于是同一条断言在两种机器上给出两种答案。这里钉住 fixture
+    # 当初的那个时区让门禁先跑起来；真正该改的是那几条断言（用本地分量造时间戳，见 issue #125）。
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Type-check
+        working-directory: mobile
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        working-directory: mobile
+        run: npx jest --ci
+
   # Integration tests (docs/2026-07-31-tui-integration-test.md): `make itest`
   # runs the five suites in parallel (-j5) — mockllm contract tests, itest/run
   # (-p pipe, real binary), itest/tui (in-process bubbletea: real Model +

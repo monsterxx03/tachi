@@ -259,7 +259,7 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 | 协议与桌面那半边 | Go 测试（`httptest` 打接口）+ 冒烟场景 `mobile-api`（真进程上打 HTTP/WebSocket，`make desktop-smoke ARGS="-run mobile-api -v"`） | 全自动 |
 | 手机上传 / 发送带附件 | `desktop/mobile_upload_test.go`（端点是真 HTTP，multipart）、`mobile/src/state/attach.test.ts`（气泡那一行）；手验：`npm run web` + `go run ./mockapi -token dev-token` | 全自动 |
 | 无头宿主（没有窗口的那条路） | `make itest-headless`：编 `-tags headless` 的真二进制、起进程、HTTP 建会话、WS 收一轮、重订阅核对记录，外加锁与鉴权 | 全自动（不需要 GUI，CI 能跑） |
-| 手机端纯逻辑 | `npx tsc --noEmit` + `npm test`（jest-expo；`src/state/chat.test.ts` 钉的是事件归并和错误文案那层纯函数，`src/api/addresses.test.ts` 钉的是「并发试地址、谁先应答用谁」） | 全自动 |
+| 手机端纯逻辑 | `npx tsc --noEmit` + `npm test`（jest-expo；`src/state/chat.test.ts` 钉的是事件归并和错误文案那层纯函数，`src/api/addresses.test.ts` 钉的是「并发试地址、谁先应答用谁」） | 全自动：CI 的 `mobile` job 跑这两条（**Node 22**，不是别处那个 20） |
 | 手机端界面 | **web 目标**：`npm run web`，浏览器里自己点、截图、看 console 与网络 | 全自动（agent 用浏览器工具） |
 | 模拟器上的真界面 | `adb exec-out screencap -p > x.png` 看一眼；改代码后 Metro 会热重载，不用重装 | 全自动 |
 | 触摸交互、扫码、手感、锁屏重连 | Maestro 驱动点击（`~/.local/maestro/bin/maestro`，装在仓库外） | 半自动 |
