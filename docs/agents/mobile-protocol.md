@@ -58,6 +58,17 @@
 | POST | `/v1/sessions/{id}/permissions/{toolId}` | `{decision}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/questions` | `{answers}` 或 `{decline: true}` | `{accepted: true}` |
 | GET | `/v1/sessions/{id}/files/{attachmentId}` | — | 文件本身 |
+
+**以 `/` 开头的 `text` 是一条命令，不是要说给模型听的话**（桌面 composer 的 `route` 是同一条规则）：
+服务器按命令表分派，`mode` 只能是 `send`（命令没有可插话的回合），带 `attachments` 直接 `bad_request`
+（命令不吃引用，静默丢掉附件比拒绝更糟）。只放行「输出就是这段对话」的命令 —— 今天就是 `/sh` 与
+`/compact`；一次性命令（`/review`、`/commit`、`/dream`）的输出在桌面那块侧面板里，手机没地方显示，
+按名字拒绝（`command_desktop_only`）。
+
+- `/sh` 的输出以一**张工具卡**回来：`tool_start` 带 `autoExpand`，手机把卡片直接摊开；不走模型，也没有
+  `user_message` 回声。
+- `/compact` 的摘要以正文（`text`）流回来，然后 `session_moved` 把这段对话换到子会话 —— 手机照
+  `session_moved` 那条规矩跟过去（重新 `open` 新 id）。
 | GET | `/v1/sessions/{id}/panels` | — | `{panels: Panels}`，MCP / agent / 定时任务三个只读面板 |
 | POST | `/v1/cron/{id}/run` | — | `{accepted: true}`，立刻跑一次（异步） |
 | POST | `/v1/cron/{id}/pause` | `{paused}` | `{accepted: true}` |

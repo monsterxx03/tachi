@@ -306,6 +306,77 @@ func mobileAPIRoundTrip(c *liveCtx) {
 		}
 	}
 	c.check("重新打开时那张卡仍是展开的（标记进了会话记录）", keptOpen, keptText)
+
+	// ── /compact from the phone ────────────────────────────────────────────
+	// The second command the issue asks for, and the only one that MOVES the conversation: /compact
+	// writes the history into a child session, and a phone that did not follow would keep reading a
+	// conversation nothing will ever write to again. Its subscription follows the id, not the row.
+	cmdText = "/compact"
+	body = `{"text":"` + cmdText + `","mode":"send"}`
+	req, _ = http.NewRequest("POST", base+"/v1/sessions/"+url.PathEscape(sessionID)+"/messages", strings.NewReader(body))
+	res, err = client.Do(auth(req))
+	if err != nil {
+		c.check("手机发出的 /compact 被接受", false, err.Error())
+		return
+	}
+	accepted = struct {
+		Accepted bool   `json:"accepted"`
+		Error    string `json:"error"`
+	}{}
+	_ = json.NewDecoder(res.Body).Decode(&accepted)
+	res.Body.Close()
+	c.check("手机发出的 /compact 被接受", res.StatusCode == http.StatusOK && accepted.Accepted,
+		fmt.Sprintf("%d %s", res.StatusCode, accepted.Error))
+
+	// What a TYPED /compact looks like on the phone: the summary streams in as text (that IS the
+	// command's output), then the conversation moves. compact_start / compact_done belong to AUTO
+	// compaction — a command has no "正在压缩" wait to announce, and the desktop draws its own notice.
+	var summarySeen bool
+	movedTo := ""
+	var movedSeen []string
+	for i := 0; i < 200 && movedTo == ""; i++ {
+		ev := readEvent(conn, 30*time.Second)
+		if ev == nil {
+			break
+		}
+		movedSeen = append(movedSeen, ev.Type)
+		switch ev.Type {
+		case "text":
+			summarySeen = summarySeen || strings.Contains(ev.Text, "压缩摘要")
+		case "session_moved":
+			movedTo = ev.To
+		}
+	}
+	stream = strings.Join(movedSeen, " → ")
+	c.check("/compact 的摘要以正文到达手机", summarySeen, stream)
+	c.check("/compact 之后手机被告知换到了子会话", movedTo != "" && movedTo != sessionID, movedTo)
+
+	// The step the phone itself performs on session_moved: it re-opens the child on the same socket.
+	// Doing it here proves the move is addressable — the id the event named really is a session this
+	// server will draw, with the summary as its first message.
+	if movedTo != "" {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"open","sessionId":"`+movedTo+`"}`)); err != nil {
+			c.check("换轨之后在新会话上 open", false, err.Error())
+			return
+		}
+		var opened *mobileEvent
+		for i := 0; i < 12 && opened == nil; i++ {
+			ev := readEvent(conn, 10*time.Second)
+			if ev == nil {
+				break
+			}
+			if ev.Snapshot != nil {
+				opened = ev
+			}
+		}
+		first := ""
+		if opened != nil && len(opened.Snapshot.Messages) > 0 {
+			first = opened.Snapshot.Messages[0].Content
+		}
+		c.check("换轨之后能在新会话上拿到快照", opened != nil, movedTo)
+		c.check("新会话的第一条是这次压缩的摘要", strings.Contains(first, "历史摘要"),
+			strings.Join(strings.Fields(first), " ")[:min(80, len(strings.Join(strings.Fields(first), " ")))])
+	}
 }
 
 // readEvent reads one decoded server event, or nil when nothing arrives in time.
@@ -336,6 +407,10 @@ type mobileEvent struct {
 	// tool_start: whether the USER asked for this call (the desktop's /sh) — the phone opens the
 	// card with its output instead of folding it.
 	AutoExpand bool `json:"autoExpand"`
+	// session_moved carries the ids; compact_done carries an error only when it failed.
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Error string `json:"error"`
 	// session_prefs: the two switches another screen changed.
 	Provider     string `json:"provider"`
 	SkipApproval bool   `json:"skipApproval"`
@@ -356,6 +431,7 @@ type mobileEvent struct {
 		// a reopened card needs are read here.
 		Messages []struct {
 			Role       string `json:"role"`
+			Content    string `json:"content"`
 			ToolName   string `json:"toolName"`
 			Title      string `json:"title"`
 			AutoExpand bool   `json:"autoExpand"`

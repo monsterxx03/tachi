@@ -4600,6 +4600,8 @@ permissions:
 			steps: []mockllm.Step{
 				{Reply: bashStream("echo mobile-e2e", "call_mob1")},
 				{Reply: textStream("手机发来的命令跑完了。", 1200)},
+				// /sh takes no model call at all; this one is the summary /compact asks for.
+				{Reply: textStream("手机联调：这一段的压缩摘要。", 600)},
 			},
 			live: mobileAPIRoundTrip,
 			after: func(c *checkCtx) {

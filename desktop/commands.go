@@ -804,14 +804,14 @@ func runShellCommand(c *commandRun) error {
 	// (session.Message.AutoExpand, agent/session_convert.go). A write failure is reported in the
 	// transcript rather than swallowed: the output is on screen either way, but the record is what
 	// makes it survive leaving this window.
-	c.desk.recordShellEcho(c.id, callID, command, string(args), result, note != "", time.Since(start))
+	c.desk.recordShellEcho(c.id, callID, string(args), result, note != "", time.Since(start))
 	return nil
 }
 
 // recordShellEcho appends a /sh run's tool call and result to the session record. Both halves carry
 // AutoExpand, which is what keeps the card unfolded on reload while keeping the pair out of the
 // model's history.
-func (d *desktopApp) recordShellEcho(id, callID, command, args, result string, isError bool, took time.Duration) {
+func (d *desktopApp) recordShellEcho(id, callID, args, result string, isError bool, took time.Duration) {
 	if d.store == nil {
 		return
 	}
