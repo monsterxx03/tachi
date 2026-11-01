@@ -17,6 +17,9 @@ import (
 type Server struct {
 	mu      sync.Mutex
 	token   string
+	// 这台「机器」的名字与稳定身份：起两个实例时给不一样的值，手机才认得出是两台
+	hostname string
+	deviceID string
 	order   []string
 	byID    map[string]*session
 	clients map[*client]struct{}
@@ -43,10 +46,24 @@ const (
 	mockAwakeMaxMinutes     = 24 * 60
 )
 
+// 默认名字与身份：单实例开发时用这两个，手机列表上看起来就是一台「mock-machine」
+const (
+	defaultHostname = "mock-machine"
+	defaultDeviceID = "mock-device"
+)
+
 func New(token string) *Server {
+	return NewNamed(token, defaultHostname, defaultDeviceID)
+}
+
+// NewNamed 让同一个假服务端在多个端口上扮演不同的电脑 —— 手机连多台的那个功能，
+// 单实例验不出来（两台同一身份会被当成同一台）。
+func NewNamed(token, hostname, deviceID string) *Server {
 	order, byID := seed()
 	return &Server{
-		token:   token,
+		token:    token,
+		hostname: hostname,
+		deviceID: deviceID,
 		order:   order,
 		byID:    byID,
 		clients: map[*client]struct{}{},
@@ -177,11 +194,11 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"name":     "tachi-mockapi",
-		"hostname": "mock-machine",
+		"hostname": s.hostname,
 		"version":  "0.1",
 		"urls":     []string{"http://" + r.Host},
 		// 推送深链里带的机器 id：假服务端固定一个，手机那侧靠它认出「这条通知是哪台电脑的」
-		"deviceId": "mock-device",
+		"deviceId": s.deviceID,
 		// 上传上限跟着真服务端那份配置走；假服务端取默认的 50 MB
 		"maxUploadMb": 50,
 	})

@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { api, ApiError, normalizeSnapshot, uploadCapMb, type Pairing } from '../api/client';
 import { fastestPairing, nextAddress, normalizeAddresses } from '../api/addresses';
-import { loadDevices, saveDevices, type Device } from '../api/storage';
+import { loadSessionCache, saveSessionCache, type SessionCache } from '../api/cache';
+import { deviceKey, loadDevices, saveDevices, type Device } from '../api/storage';
 import { deviceLabel } from '../api/label';
-import { parseDeepLink, type DeepLink } from '../api/link';
+import { parseDeepLink } from '../api/link';
 import type { PickedFile } from '../api/pick';
 import type { AwakeState, Panels, PendingMessage, ProjectRef, SessionSummary, UploadedFile } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
 import { displayOf } from './attach';
 import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
+import { buildOverview, waitingCount, type OverviewRow } from './overview';
 
 /**
  * 掉线触发的「重新比地址」节流。一次掉线会连着重试好几次（1s/2s/4s…），而一次探测最长要
@@ -17,6 +20,19 @@ import { applyEvent, emptyChat, messageOfError, type ChatState } from './chat';
 const DROP_HEAL_GAP_MS = 5_000;
 /** 探测全失败时换地址的节流。它比探测间隔长：换过去之后要留出重连的时间，否则会来回跳。 */
 const ROTATE_GAP_MS = 12_000;
+
+/**
+ * 首页那一列多久重新问一遍每台电脑。
+ *
+ * 只有正在打开的那一段有实时流；别的段在不在跑、在不在等，电脑不会主动说（广播只在
+ * 我们已经订阅着那台时才会收到），所以隔一会儿问一次。前台才问 —— 后台问是拿电量换
+ * 一个没人看的数字。
+ */
+const REFRESH_MS = 15_000;
+/** 聚合刷新时每台的等待上限：一台睡着的电脑不该让整列停在「正在读」15 秒 */
+const REFRESH_TIMEOUT_MS = 6_000;
+/** 会话缓存落盘的节流：一次刷新会把每台都写一遍，没必要每条都碰磁盘 */
+const CACHE_SAVE_MS = 2_000;
 
 // 这一层只管副作用（连接、存储、请求）；事件的归并是纯函数，在 ./chat 里，单独测
 export { applyEvent, emptyChat, emptyLive, messageOfError } from './chat';
@@ -30,10 +46,29 @@ export interface MobileApi {
   /** devices 里当前那一台的下标 */
   activeDevice: number;
   conn: WsStatus | 'idle';
+  /** 当前这一台的会话（对话页的 `#s:` 补全、标题查找用）。首页那一列是下面的 overview */
   sessions: SessionSummary[];
+  /**
+   * 首页那一列：所有电脑的会话拼在一起，等你的在最上面，每行带着机器名。
+   *
+   * 它是从「每台最后一次读到的列表」拼出来的（`api/cache.ts`），所以某台连不上时那些行
+   * 还在 —— 淡化显示，时间说明是几小时前的，而不是整台消失。
+   */
+  overview: OverviewRow[];
+  /** 每台电脑这一轮读到了没有（键是 deviceKey）。false = 这一轮明确失败了，别把它们当成「没有会话」 */
+  reachable: Record<string, boolean>;
+  /** 每台电脑最后读到列表的时刻（毫秒，0 = 从没读到过） */
+  syncedAt: (key: string) => number;
   providers: string[];
-  /** 新建会话时可挑的项目（桌面上的那份，只读） */
+  /** 新建会话时可挑的项目（桌面上的那份，只读），跟着正在连的那一台走 */
   projects: ProjectRef[];
+  /**
+   * 某一台上能挑的项目。
+   *
+   * 新建会话要先选机器，而项目是**那台**的事：拿着当前这台的列表去建另一台，项目 id 在
+   * 那边根本不存在。读不到就返回空数组 —— 「无项目」那条路照样能建。
+   */
+  projectsFor: (deviceIndex: number) => Promise<ProjectRef[]>;
   openId: string | null;
   chat: ChatState;
   error: string | null;
@@ -44,8 +79,6 @@ export interface MobileApi {
     p: Pairing,
     meta?: { label?: string; hostname?: string; urls?: string[]; deviceId?: string; unreachable?: boolean },
   ) => Promise<void>;
-  /** 换一台电脑：断开这一条、清掉画面，再连过去 */
-  switchDevice: (index: number) => Promise<void>;
   /** 给某一台改个名字：只写这台手机上的存储，不通知那台机器（协议里没有这个端点） */
   renameDevice: (index: number, label: string) => Promise<void>;
   /**
@@ -55,9 +88,33 @@ export interface MobileApi {
   selectAddress: (index: number, url: string | null) => Promise<void>;
   /** 从列表里删掉一台；删的是当前那台时会顺位切到剩下的 */
   removeDevice: (index: number) => Promise<void>;
-  unpair: () => Promise<void>;
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
+  /**
+   * 打开某台电脑上的某一段：必要时先把它变成正在连的那一台（一条 socket 只连一台）。
+   *
+   * 对读者是「点哪段开哪段」——切换发生在背后，画面上只是那段对话打开了。
+   */
+  openOn: (deviceIndex: number, id: string) => Promise<void>;
+  /**
+   * 在某台电脑上新建一段并打开它。
+   *
+   * 建的时候直接用目标的地址发请求，不先切连接 —— 会话 id 要在切换之前就知道，才能像
+   * 深链那样「先记下、等切过去再打开」。
+   */
+  createSessionOn: (
+    deviceIndex: number,
+    opts: { projectId?: string; workingDir?: string },
+  ) => Promise<SessionSummary | null>;
+  /**
+   * 按设备寻址的写操作：删 / 置顶 / 改名。
+   *
+   * 它们直接拿那一台的地址发请求，**不切连接** —— 切过去会断掉正在跑的那一段的订阅（以及
+   * 正在等的授权），就为了改一个标题，代价不成比例。
+   */
+  deleteSessionOn: (deviceIndex: number, id: string) => Promise<void>;
+  setPinnedOn: (deviceIndex: number, id: string, pinned: boolean) => Promise<void>;
+  renameSessionOn: (deviceIndex: number, id: string, title: string) => Promise<void>;
   close: () => void;
   /** App 进后台：退订当前会话（宿主据此判断「没人在看」，见 background 的注释） */
   background: () => void;
@@ -109,28 +166,28 @@ export interface MobileApi {
   setSkipApproval: (skip: boolean) => Promise<void>;
   /** 这一段对话的手机推送开关（off = 别推）。全局开关在那台电脑的设置里。 */
   setNotifyOff: (off: boolean) => Promise<void>;
-  /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
-  deleteSession: (id: string) => Promise<void>;
-  /** 改标题。走桌面同一条写入路径，成功后 sessions_changed 落到每一块屏上（含桌面上那一行）。 */
+  /**
+   * 改标题（当前打开的这一段）。
+   *
+   * 列表里每一行用的是 `renameSessionOn` —— 它按设备寻址，因为那一行可能在别的机器上。
+   */
   renameSession: (id: string, title: string) => Promise<void>;
-  /** 置顶 / 取消置顶。位置由服务端广播的 sessions_changed 落到每一块屏上。 */
-  setPinned: (id: string, pinned: boolean) => Promise<void>;
-  /** 新建一段对话；成功时返回新的一行（失败返回 null，原因在 error 上） */
-  createSession: (opts: { projectId?: string; workingDir?: string }) => Promise<SessionSummary | null>;
   /**
    * 当前对话的三个只读面板（MCP / agent / 定时任务）。失败时返回原因而不是塞进全局
    * error —— 面板读不到是这一屏的事，不该在顶上挂一条红色横幅，更不该触发重试风暴。
    */
   loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
   /**
-   * 这台电脑的「保持唤醒」开关。null = 还没读到（没配对、那台电脑是旧版本，或者还没请求）。
+   * **当前这一台**的「保持唤醒」开关。null = 还没读到（没配对、那台电脑是旧版本，或者还没请求）。
    * 它是一台机器的值，和「打开着哪段对话」无关。
    */
   awake: AwakeState | null;
-  /** 读一次；设置页打开时调 */
-  loadAwake: () => Promise<void>;
-  /** 开关 / 改时长。成功返回 null，失败返回那句原因（此时会顺手重读一次真实状态）。 */
-  setAwake: (on: boolean, durationMin?: number) => Promise<string | null>;
+  /** 某一台的开关（详情页看的是任意一台，不一定正在连的那一台） */
+  awakeOf: (key: string) => AwakeState | null;
+  /** 读某一台（缺省 = 正在连的那一台）；详情页打开时调 */
+  loadAwake: (deviceIndex?: number) => Promise<void>;
+  /** 改某一台的开关 / 时长。成功返回 null，失败返回那句原因（此时会顺手重读一次真实状态）。 */
+  setAwake: (deviceIndex: number, on: boolean, durationMin?: number) => Promise<string | null>;
 }
 
 export function useMobile(): MobileApi {
@@ -140,13 +197,24 @@ export function useMobile(): MobileApi {
   const [activeDevice, setActiveDevice] = useState(0);
   const [conn, setConn] = useState<WsStatus | 'idle'>('idle');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  /**
+   * 每台电脑最后一次读到的会话列表（键是 deviceKey）。
+   *
+   * 首页那一列从这个对象拼出来，所以某台连不上时它上面的行还在（显示成几小时前的样子）。
+   * 它也是「当前这一台」的列表的来源 —— 写入时两份一起更新（见 applySessions）。
+   */
+  const [cache, setCache] = useState<SessionCache>({});
+  const cacheRef = useRef<SessionCache>({});
+  /** 这一轮读到了没有（键同上）。只有明确失败才记 false —— 见 overview.ts 的注释 */
+  const [reachable, setReachable] = useState<Record<string, boolean>>({});
   const [providers, setProviders] = useState<string[]>([]);
   const [projects, setProjects] = useState<ProjectRef[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [olderLoading, setOlderLoading] = useState(false);
   const [cronVersion, setCronVersion] = useState(0);
-  const [awake, setAwakeState] = useState<AwakeState | null>(null);
+  // 「保持唤醒」按机器存：详情页可能正在看一台没在连的电脑
+  const [awakeByKey, setAwakeByKey] = useState<Record<string, AwakeState>>({});
   // 待发送队列按会话存：切走再回来，没发出去的那句还在（桌面也是这么做的）
   const [pending, setPending] = useState<Record<string, PendingMessage[]>>({});
   const pendingRef = useRef<Record<string, PendingMessage[]>>({});
@@ -154,9 +222,9 @@ export function useMobile(): MobileApi {
   const forceFlush = useRef<Record<string, boolean>>({});
   // 「这一条现在就发」：那一轮停下之后先发它，队列里剩下的照旧留着
   const immediate = useRef<Record<string, PendingMessage>>({});
-  // 推送点开、而那个会话在另一台电脑上：切过去之后才打开它（见 handleLink）。
-  // 切设备会重建 socket，立刻 open 会订阅到旧那一条上。
-  const pendingOpen = useRef<DeepLink | null>(null);
+  // 要打开的会话在另一台电脑上：切过去之后才打开它（一条 socket 只连一台）。
+  // 立刻 open 会订阅到旧那一条上，所以「先记下、等配对真的换过去再开」。
+  const pendingOpen = useRef<{ sessionId: string; deviceIndex: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
@@ -185,6 +253,43 @@ export function useMobile(): MobileApi {
   const activeDeviceRef = useRef(0);
   activeDeviceRef.current = activeDevice;
 
+  // 会话缓存：内存立刻更新，文件两秒后落一次（一次刷新会把每台都写一遍，没必要每条都碰磁盘）
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleCacheSave = useCallback(() => {
+    if (saveTimer.current) return;
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      void saveSessionCache(cacheRef.current);
+    }, CACHE_SAVE_MS);
+  }, []);
+
+  /** 记下某台这一轮的列表。它只影响「看」，不参与任何写入判断 */
+  const patchCache = useCallback(
+    (key: string, list: SessionSummary[]) => {
+      const next = { ...cacheRef.current, [key]: { at: Date.now(), sessions: list } };
+      cacheRef.current = next;
+      setCache(next);
+      scheduleCacheSave();
+    },
+    [scheduleCacheSave],
+  );
+
+  /**
+   * 写某台电脑的会话列表：缓存（所有设备共用）与「当前这一台」的镜像一起更新。
+   *
+   * 两份存在的原因是它们回答不同的问题：缓存回答「首页要画什么」，`sessions` 回答「我现在
+   * 打开的这台有哪些对话」（对话页的 `#s:` 补全、标题查找）。同一个写入口保证它们不会各说一套。
+   */
+  const applySessions = useCallback(
+    (index: number, list: SessionSummary[]) => {
+      const dev = devicesRef.current[index];
+      if (!dev) return;
+      patchCache(deviceKey(dev), list);
+      if (index === activeDeviceRef.current) setSessions(list);
+    },
+    [patchCache],
+  );
+
   // 每次「这一台电脑」被重新确定（启动 / 切设备 / 回前台 / 掉线）就 +1。地址探测要几百毫秒，
   // 回来时读者可能已经切到另一台了 —— 那次结果只属于上一台，不能写回去。
   const connectSeq = useRef(0);
@@ -206,13 +311,64 @@ export function useMobile(): MobileApi {
       const list = devicesRef.current.slice();
       const at = list.findIndex((d) => d.token === dev.token && d.baseUrl === dev.baseUrl);
       if (at < 0) return;
+      // 已经一模一样就不写：聚合刷新每十几秒会复核一次地址，每次都落盘没有意义
+      const cur = list[at];
+      const same =
+        cur.baseUrl === baseUrl &&
+        [...normalizeAddresses(cur)].sort().join('|') === [...urls].sort().join('|') &&
+        (!deviceId || cur.deviceId === deviceId);
+      if (same) return;
       // deviceId 只在 ping 说了的时候才写：老服务端没有这一项，不能把已经存下的值抹掉。
-      list[at] = { ...list[at], baseUrl, urls, ...(deviceId ? { deviceId } : {}) };
+      list[at] = { ...cur, baseUrl, urls, ...(deviceId ? { deviceId } : {}) };
       setDevices(list);
       await saveDevices(list, activeDeviceRef.current);
     },
     [],
   );
+
+  /**
+   * 只校正「不是当前这台」的地址：赢的那条写回存储，**不动正在连的那台**。
+   *
+   * 聚合列表会把每一台都问一遍，失败的那台很可能只是换了网络。这里不能走 `heal` ——
+   * 那个函数在地址变了会 `setPairing`，等于把正在用的连接切到别处去。
+   */
+  const healQuiet = useCallback(
+    async (dev: Device) => {
+      if (dev.pinned) return;
+      const picked = await fastestPairing(dev);
+      if (!picked) return;
+      await rememberAddress(dev, picked.pairing.baseUrl, picked.urls, picked.ping.deviceId);
+    },
+    [rememberAddress],
+  );
+
+  /**
+   * 把所有电脑的列表重新读一遍，拼成首页那一列。
+   *
+   * 并发、各带自己的超时：一台睡着的电脑不该让整列停在「正在读」。读到就更新那台的缓存；
+   * 读不到就把它标成陈旧（首页淡化那一组），并在后台校正一次地址 —— 只是换了网络的机器，
+   * 下一轮刷新就能回来。
+   *
+   * 失败**不挂全局红条**：几台里坏一台是很正常的事（人在地铁上，家里那台就是连不上），
+   * 顶上一条红字会让人以为全都坏了。哪台不在，由 chip 和行上的淡化来说。
+   */
+  const refreshAll = useCallback(async () => {
+    const list = devicesRef.current;
+    if (list.length === 0) return;
+    await Promise.all(
+      list.map(async (d, index) => {
+        const key = deviceKey(d);
+        try {
+          const r = await api.listSessions(d, REFRESH_TIMEOUT_MS);
+          applySessions(index, r.sessions);
+          setReachable((m) => (m[key] === true ? m : { ...m, [key]: true }));
+        } catch {
+          setReachable((m) => (m[key] === false ? m : { ...m, [key]: false }));
+          void healQuiet(d);
+        }
+      }),
+    );
+  }, [applySessions, healQuiet]);
 
   /**
    * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
@@ -288,8 +444,13 @@ export function useMobile(): MobileApi {
     [heal, rotate],
   );
 
-  // 启动时读一次「记住的电脑」：列表 + 当前那一台
+  // 启动时读一次「记住的电脑」：列表 + 当前那一台；同时把上次看到的会话列表画出来
   useEffect(() => {
+    // 缓存先读：设备簿还没出来之前，首页那一列已经有东西可画（而且离线的那几台也在）
+    void loadSessionCache().then((c) => {
+      cacheRef.current = c;
+      setCache(c);
+    });
     void loadDevices().then((book) => {
       setDevices(book.devices);
       setActiveDevice(book.active);
@@ -304,10 +465,23 @@ export function useMobile(): MobileApi {
     });
   }, [heal]);
 
+  /**
+   * 首页那一列的节拍：设备簿一就绪先读一遍，之后每十几秒一次。
+   *
+   * 只有「正在打开的那一段」有实时流；别的段在不在跑、在不在等，那台电脑不会主动说 ——
+   * 它的广播只发给我们订阅着的那一条 socket。所以这里定时问一次，退到后台就停。
+   */
+  useEffect(() => {
+    if (!ready || devices.length === 0) return;
+    void refreshAll();
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') void refreshAll();
+    }, REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [ready, devices.length, refreshAll]);
+
   // 有配对就拉列表并挂上连接
   useEffect(() => {
-    // 这台电脑的开关跟着配对走：换了电脑就先把上一台的值丢掉，别一秒钟里拿别人的状态去画。
-    setAwakeState(null);
     if (!pairing) return;
     let cancelled = false;
 
@@ -315,7 +489,7 @@ export function useMobile(): MobileApi {
       .listSessions(pairing)
       .then((r) => {
         if (cancelled) return;
-        setSessions(r.sessions);
+        applySessions(activeDeviceRef.current, r.sessions);
         // 连上了就把上一次的「连不上」撤掉 —— 那条横幅不能一直挂着
         setError(null);
       })
@@ -337,7 +511,9 @@ export function useMobile(): MobileApi {
     void api
       .awake(pairing)
       .then((r) => {
-        if (!cancelled) setAwakeState(r.awake);
+        if (cancelled) return;
+        const key = deviceKey(pairing);
+        setAwakeByKey((m) => ({ ...m, [key]: r.awake }));
       })
       .catch(() => {
         // 读不到就只是卡片留空：那台电脑可能还是旧版本，不值得打断这一屏
@@ -408,7 +584,22 @@ export function useMobile(): MobileApi {
           return;
         }
         if (ev.type === 'session_state') {
-          // 列表那一行的「在跑 / 在等」：没订阅那段会话的也要看到
+          // 列表那一行的「在跑 / 在等」：没订阅那段会话的也要看到。
+          // 缓存是首页那一列的来源，镜像给对话页的标题查找 —— 两份一起改。
+          const index = activeDeviceRef.current;
+          const dev = devicesRef.current[index];
+          if (dev) {
+            const key = deviceKey(dev);
+            const entry = cacheRef.current[key];
+            if (entry) {
+              patchCache(
+                key,
+                entry.sessions.map((s) =>
+                  s.id === ev.sessionId ? { ...s, running: ev.running, waiting: ev.waiting } : s,
+                ),
+              );
+            }
+          }
           setSessions((list) =>
             list.map((s) =>
               s.id === ev.sessionId ? { ...s, running: ev.running, waiting: ev.waiting } : s,
@@ -423,7 +614,7 @@ export function useMobile(): MobileApi {
           void api
             .listSessions(pairing)
             .then((r) => {
-              setSessions(r.sessions);
+              applySessions(activeDeviceRef.current, r.sessions);
               const id = openIdRef.current;
               if (!id) return;
               const row = r.sessions.find((s) => s.id === id);
@@ -458,7 +649,12 @@ export function useMobile(): MobileApi {
         if (ev.type === 'awake_changed') {
           // 一台机器的开关，谁改的都落在这里：桌面的托盘、另一台手机、以及到点自己关的时候。
           // 带着完整状态，照它画即可 —— 不重读，也就不会有两块屏各说一套的窗口。
-          setAwakeState(ev.awake);
+          // 广播只来我们订阅着的那一台，所以写成它的键。
+          const cur = devicesRef.current[activeDeviceRef.current];
+          if (cur) {
+            const key = deviceKey(cur);
+            setAwakeByKey((m) => ({ ...m, [key]: ev.awake }));
+          }
           return;
         }
         if (ev.type === 'cron_changed') {
@@ -557,7 +753,7 @@ export function useMobile(): MobileApi {
       },
       onReconnected: () => {
         void reload(openIdRef.current);
-        void api.listSessions(pairing).then((r) => setSessions(r.sessions));
+        void refreshAll();
       },
       // 掉线（含心跳判死）：先别急着重连到旧地址，比一遍 —— 赢的那条会通过 setPairing 换上去
       onDisconnected: () => healOnDrop(pairing),
@@ -642,15 +838,6 @@ export function useMobile(): MobileApi {
     [activate],
   );
 
-  const switchDevice = useCallback(
-    async (index: number) => {
-      const list = devicesRef.current;
-      if (index < 0 || index >= list.length) return;
-      await activate(list.slice(), index);
-    },
-    [activate],
-  );
-
   // 改名是本地的事：devices 是这台手机自己的簿子，那台机器并不知道（也不需要知道）。
   // 它刻意不走 activate —— 改名不该断开并重连一条正在用的 WebSocket。
   const renameDevice = useCallback(
@@ -703,20 +890,10 @@ export function useMobile(): MobileApi {
     [activate, activeDevice],
   );
 
-  const unpair = useCallback(async () => {
-    await removeDevice(activeDevice);
-  }, [removeDevice, activeDevice]);
-
+  /** 下拉刷新 = 把所有电脑都问一遍（不是只问当前这台） */
   const refresh = useCallback(async () => {
-    if (!pairing) return;
-    try {
-      const r = await api.listSessions(pairing);
-      setSessions(r.sessions);
-      setError(null);
-    } catch (e) {
-      setError(messageOfError(e));
-    }
-  }, [pairing]);
+    await refreshAll();
+  }, [refreshAll]);
 
   /** 回到前台时用：挂后台期间可能什么都没收到，回来先重读一遍 */
   const reloadCurrent = useCallback(async () => {
@@ -727,13 +904,9 @@ export function useMobile(): MobileApi {
     // 回前台最常见的变化是「网络换了」（离开家 / 回到家）：比一次才知道该走哪条地址。
     // 它不挡着下面的读取 —— 真要换地址，那次 setPairing 会自己把连接重建一遍。
     void heal(pairing);
-    try {
-      const r = await api.listSessions(pairing);
-      setSessions(r.sessions);
-    } catch {
-      // 下一次刷新再说
-    }
-  }, [reload, pairing, heal]);
+    // 所有机器一起重读：挂后台期间别的机器上也发生了事，只重读当前这台会留下过时的列表
+    await refreshAll();
+  }, [reload, pairing, heal, refreshAll]);
 
   /**
    * 上滑翻页：游标是画面上最旧一条的记录序号（协议里那条：不是时间戳 —— 时间戳会撞）。
@@ -776,6 +949,27 @@ export function useMobile(): MobileApi {
     setChat(emptyChat);
     socketRef.current?.subscribe(id);
   }, []);
+
+  /**
+   * 打开某台电脑上的某一段。
+   *
+   * 不是当前这一台时先切过去（一条 socket 只连一台），切换会清空画面 —— 所以先把目标记进
+   * pendingOpen，等配对真的换过去之后再由下面那个 effect 打开它。会话 id 只在那台机器上
+   * 有意义，在旧机器上打开同一个 id 只会得到「没有这段对话」。
+   */
+  const openOn = useCallback(
+    async (deviceIndex: number, id: string) => {
+      const list = devicesRef.current;
+      if (!list[deviceIndex]) return;
+      if (deviceIndex === activeDeviceRef.current) {
+        await open(id);
+        return;
+      }
+      pendingOpen.current = { sessionId: id, deviceIndex };
+      await activate(list.slice(), deviceIndex);
+    },
+    [activate, open],
+  );
 
   const close = useCallback(() => {
     setOpenId(null);
@@ -827,21 +1021,21 @@ export function useMobile(): MobileApi {
           return;
         }
         if (at !== activeDeviceRef.current) {
-          pendingOpen.current = target;
-          void switchDevice(at);
+          pendingOpen.current = { sessionId: target.sessionId, deviceIndex: at };
+          void activate(list.slice(), at);
           return;
         }
       }
       void open(target.sessionId);
     },
-    [open, switchDevice],
+    [open, activate],
   );
 
   // 切设备那一帧的 socket 重建先跑（它声明在上面），这里再打开会话。
   useEffect(() => {
     const p = pendingOpen.current;
     if (!p || !pairing) return;
-    if (p.deviceId && pairing.deviceId !== p.deviceId) return;
+    if (activeDeviceRef.current !== p.deviceIndex) return;
     pendingOpen.current = null;
     void open(p.sessionId);
   }, [pairing, open]);
@@ -1058,37 +1252,104 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
-  /** 删一段对话。删除成功后服务端会广播 sessions_changed，列表靠那条事件回到一致。 */
-  const deleteSession = useCallback(
-    (id: string) =>
+  /**
+   * 删 / 置顶 / 改名：按设备寻址。
+   *
+   * 直接拿那一台的地址发请求，**不切连接** —— 切过去会断掉正在跑的那一段的订阅（以及
+   * 正在等的授权），就为了改一个标题，代价不成比例。
+   *
+   * 广播（sessions_changed）只会来我们正在订阅的那一台，所以本地先把那一行改掉；当前这
+   * 一台随后还会因为广播重读一次，两边结果一样。
+   */
+  const deleteSessionOn = useCallback(
+    (deviceIndex: number, id: string) =>
       withError(async () => {
-        if (!pairing) return;
-        await api.deleteSession(pairing, id);
-        if (openIdRef.current === id) {
+        const d = devicesRef.current[deviceIndex];
+        if (!d) return;
+        await api.deleteSession(d, id);
+        const entry = cacheRef.current[deviceKey(d)];
+        if (entry) applySessions(deviceIndex, entry.sessions.filter((s) => s.id !== id));
+        if (deviceIndex === activeDeviceRef.current && openIdRef.current === id) {
           setOpenId(null);
           setChat(emptyChat);
         }
       }),
-    [pairing, withError],
+    [withError, applySessions],
   );
 
-  /** 置顶 / 取消置顶。列表的次序由服务端广播的 sessions_changed 重新读出来。 */
-  const setPinned = useCallback(
-    (id: string, pinned: boolean) =>
+  const setPinnedOn = useCallback(
+    (deviceIndex: number, id: string, pinned: boolean) =>
       withError(async () => {
-        if (pairing) await api.setPinned(pairing, id, pinned);
+        const d = devicesRef.current[deviceIndex];
+        if (!d) return;
+        await api.setPinned(d, id, pinned);
+        const entry = cacheRef.current[deviceKey(d)];
+        if (entry) {
+          applySessions(
+            deviceIndex,
+            entry.sessions.map((s) => (s.id === id ? { ...s, pinned } : s)),
+          );
+        }
       }),
-    [pairing, withError],
+    [withError, applySessions],
   );
 
-  // 改标题和置顶是同一类事：它是列表里那一行的字段，写完之后由 sessions_changed 落到每一块屏。
-  // 这里不先改本地那一份 —— 广播马上就到，两份状态各改一次就该对不上了。
+  // 改标题和置顶是同一类事：它是列表里那一行的字段（见上）。这里不先改本地那一份 ——
+  // 广播马上就到，两份状态各改一次就该对不上了。
+  const renameSessionOn = useCallback(
+    (deviceIndex: number, id: string, title: string) =>
+      withError(async () => {
+        const d = devicesRef.current[deviceIndex];
+        if (!d) return;
+        await api.renameSession(d, id, title);
+        const entry = cacheRef.current[deviceKey(d)];
+        if (entry) {
+          applySessions(
+            deviceIndex,
+            entry.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+          );
+        }
+      }),
+    [withError, applySessions],
+  );
+
+  /** 对话页顶栏长按改标题：那一段一定在正在连的那一台上 */
   const renameSession = useCallback(
-    (id: string, title: string) =>
-      withError(async () => {
-        if (pairing) await api.renameSession(pairing, id, title);
-      }),
-    [pairing, withError],
+    (id: string, title: string) => renameSessionOn(activeDeviceRef.current, id, title),
+    [renameSessionOn],
+  );
+
+  /**
+   * 在某台电脑上新建一段并打开它。
+   *
+   * 建的时候直接用目标的地址发请求：会话 id 要在切换之前就知道，才能像深链那样「先记下、
+   * 等切过去再打开」。切换本身会清空画面，所以顺序不能反。
+   */
+  const createSessionOn = useCallback(
+    async (
+      deviceIndex: number,
+      opts: { projectId?: string; workingDir?: string },
+    ): Promise<SessionSummary | null> => {
+      const d = devicesRef.current[deviceIndex];
+      if (!d) return null;
+      try {
+        const r = await api.createSession(d, opts);
+        setError(null);
+        const entry = cacheRef.current[deviceKey(d)];
+        applySessions(deviceIndex, [r.session, ...(entry?.sessions ?? []).filter((s) => s.id !== r.session.id)]);
+        if (deviceIndex !== activeDeviceRef.current) {
+          pendingOpen.current = { sessionId: r.session.id, deviceIndex };
+          await activate(devicesRef.current.slice(), deviceIndex);
+        } else {
+          void open(r.session.id);
+        }
+        return r.session;
+      } catch (e) {
+        setError(messageOfError(e));
+        return null;
+      }
+    },
+    [applySessions, activate, open],
   );
 
   // 三个动作走同一层：错误就地还给面板，不挂全局横幅（面板自己有位置说）
@@ -1107,32 +1368,48 @@ export function useMobile(): MobileApi {
     [pairing],
   );
 
-  const loadAwake = useCallback(async () => {
-    if (!pairing) return;
+  const loadAwake = useCallback(async (deviceIndex?: number) => {
+    const d = devicesRef.current[deviceIndex ?? activeDeviceRef.current];
+    if (!d) return;
     try {
-      const r = await api.awake(pairing);
-      setAwakeState(r.awake);
+      const r = await api.awake(d);
+      const key = deviceKey(d);
+      setAwakeByKey((m) => ({ ...m, [key]: r.awake }));
     } catch {
       // 同上：读不到只是一张空卡片，不挂全局横幅
     }
-  }, [pairing]);
+  }, []);
 
   const setAwake = useCallback(
-    async (on: boolean, durationMin?: number): Promise<string | null> => {
-      if (!pairing) return '还没有配对电脑';
+    async (deviceIndex: number, on: boolean, durationMin?: number): Promise<string | null> => {
+      const d = devicesRef.current[deviceIndex];
+      if (!d) return '还没有配对电脑';
       try {
-        const r = await api.setAwake(pairing, on, durationMin);
-        setAwakeState(r.awake);
+        const r = await api.setAwake(d, on, durationMin);
+        const key = deviceKey(d);
+        setAwakeByKey((m) => ({ ...m, [key]: r.awake }));
         return null;
       } catch (e) {
         // 服务端说没成功 = 那台机器现在是关的（系统的断言被拒、或者时长不合法）。
         // 重读一次，让开关停在真实状态上，而不是读者刚点的那一下。
-        void loadAwake();
+        void loadAwake(deviceIndex);
         return messageOfError(e);
       }
     },
-    [pairing, loadAwake],
+    [loadAwake],
   );
+
+  const projectsFor = useCallback(async (deviceIndex: number): Promise<ProjectRef[]> => {
+    const d = devicesRef.current[deviceIndex];
+    if (!d) return [];
+    try {
+      const r = await api.projects(d);
+      return r.projects;
+    } catch {
+      // 读不到项目只是少一个下拉框：无项目那条路照样能建
+      return [];
+    }
+  }, []);
 
   const loadPanels = useCallback(async (): Promise<{ panels: Panels | null; error: string | null }> => {
     const id = openIdRef.current;
@@ -1150,24 +1427,24 @@ export function useMobile(): MobileApi {
     }
   }, [pairing]);
 
-  // 新建会话：服务端建的是真正的那一段（记录在电脑上），这里只把它插进列表并打开。
-  // 两件事都由 sessions_changed 再确认一次 —— 但它可能比这个响应先到，所以本地也插一行，
-  // 插的时候按 id 去重。
-  const createSession = useCallback(
-    async (opts: { projectId?: string; workingDir?: string }): Promise<SessionSummary | null> => {
-      if (!pairing) return null;
-      try {
-        const r = await api.createSession(pairing, opts);
-        setError(null);
-        setSessions((list) => [r.session, ...list.filter((s) => s.id !== r.session.id)]);
-        return r.session;
-      } catch (e) {
-        setError(messageOfError(e));
-        return null;
-      }
-    },
-    [pairing],
+  /** 当前这一台的开关（其余代码用；详情页用 awakeOf 按 key 取） */
+  const awake = useMemo(() => {
+    const d = devices[activeDevice];
+    return d ? awakeByKey[deviceKey(d)] ?? null : null;
+  }, [devices, activeDevice, awakeByKey]);
+
+  const awakeOf = useCallback((key: string) => awakeByKey[key] ?? null, [awakeByKey]);
+
+  /**
+   * 首页那一列：所有电脑的会话拼在一起。
+   *
+   * 依赖 cache 而不是 sessions —— 后者只是正在连的那一台的镜像，连不上的机器要从缓存里来。
+   */
+  const overview = useMemo(
+    () => buildOverview(devices, cache, reachable),
+    [devices, cache, reachable],
   );
+  const syncedAt = useCallback((key: string) => cacheRef.current[key]?.at ?? 0, []);
 
   return {
     // 顶上那条红字没有自己的出路：一次失败的发送留下的原因会一直挂在这里，直到下一次
@@ -1180,17 +1457,19 @@ export function useMobile(): MobileApi {
     activeDevice,
     conn,
     sessions,
+    overview,
+    reachable,
+    syncedAt,
     providers,
     projects,
+    projectsFor,
     openId,
     chat,
     error,
     pair,
-    switchDevice,
     renameDevice,
     selectAddress,
     removeDevice,
-    unpair,
     refresh,
     reloadCurrent,
     loadOlder,
@@ -1198,6 +1477,11 @@ export function useMobile(): MobileApi {
     cronVersion,
     cronAction,
     open,
+    openOn,
+    createSessionOn,
+    deleteSessionOn,
+    setPinnedOn,
+    renameSessionOn,
     close,
     background,
     handleLink,
@@ -1216,12 +1500,10 @@ export function useMobile(): MobileApi {
     setProvider,
     setSkipApproval,
     setNotifyOff,
-    deleteSession,
-    setPinned,
     renameSession,
-    createSession,
     loadPanels,
     awake,
+    awakeOf,
     loadAwake,
     setAwake,
   };

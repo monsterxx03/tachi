@@ -759,12 +759,20 @@ export function Chat({
   onSendPendingNow,
   sessions,
   loadAgents,
+  machine,
 }: {
   snapshot: Snapshot;
   /** 全部对话，`#s:` 的候选就来自这里 —— 手机手里本来就有这份列表，不必为补全再问一次服务端。 */
   sessions: SessionSummary[];
   /** `#a:` 的候选：节点身份只在那台电脑上，所以要问一次（见 `loadPanels`） */
   loadAgents: () => Promise<AgentPanelRow[]>;
+  /**
+   * 这一段在哪台电脑上（手机上给它起的名字）。
+   *
+   * 首页把几台机器混在一列里，点进来之后必须能一眼确认「我在哪台上说话」—— 同一段标题
+   * 在两台机器上都可能存在，而这一屏能做的事（跑什么、读哪个目录）完全由那台决定。
+   */
+  machine?: string;
   live: Live;
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
@@ -940,6 +948,8 @@ export function Chat({
             ) : null}
           </View>
           <Text style={[styles.headSub, { color: t.faint }]} numberOfLines={1}>
+            {machine ? <Text style={{ color: t.accent2 }}>{machine}</Text> : null}
+            {machine ? ' · ' : ''}
             {s.projectName ? `${s.projectName} · ` : ''}
             {s.readOnly ? '来自别的任务' : s.running ? '正在跑' : '空闲'}
           </Text>

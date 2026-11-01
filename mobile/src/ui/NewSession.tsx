@@ -1,6 +1,8 @@
 import { Feather } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { Device } from '../api/storage';
+import { deviceKey } from '../api/storage';
 import type { ProjectRef } from '../api/types';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
@@ -11,23 +13,50 @@ import { EdgeBackZone, useEdgeBack } from './edgeBack';
  * 所以这里就是一个文本框，`~` 由电脑那边展开成它的主目录。留空就是 `~/workspace`。
  */
 export function NewSession({
-  projects,
+  devices,
+  reachable,
+  loadProjects,
   busy,
   onClose,
   onCreate,
 }: {
-  projects: ProjectRef[];
+  devices: Device[];
+  /** 这一轮读到没有（键是 deviceKey）：连不上的那台仍然可以选，只是先说一声 */
+  reachable: Record<string, boolean>;
+  /** 某一台上能挑的项目（项目属于那台机器，不是这台手机的） */
+  loadProjects: (deviceIndex: number) => Promise<ProjectRef[]>;
   busy: boolean;
   onClose: () => void;
-  onCreate: (opts: { projectId?: string; workingDir?: string }) => void;
+  onCreate: (deviceIndex: number, opts: { projectId?: string; workingDir?: string }) => void;
 }) {
   const { tokens: t } = useTheme();
   const back = useEdgeBack(onClose);
+  // 每次都要先选建在哪台：几台机器各有各的项目和目录，默认一个很容易建错地方
+  const [deviceIndex, setDeviceIndex] = useState<number | null>(null);
+  const [projects, setProjects] = useState<ProjectRef[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
   // '' = 无项目（普通会话），否则就是项目 id
   const [projectId, setProjectId] = useState('');
   const [workingDir, setWorkingDir] = useState('~/workspace');
 
   const pick = (id: string) => setProjectId(id);
+
+  // 换了一台电脑，项目列表也换了 —— 拿着上一台的项目 id 去建，在那边根本不存在
+  useEffect(() => {
+    if (deviceIndex == null) return;
+    let dead = false;
+    setProjects([]);
+    setProjectId('');
+    setLoadingProjects(true);
+    void loadProjects(deviceIndex).then((list) => {
+      if (!dead) setProjects(list);
+    }).finally(() => {
+      if (!dead) setLoadingProjects(false);
+    });
+    return () => {
+      dead = true;
+    };
+  }, [deviceIndex, loadProjects]);
 
   return (
       <Animated.View style={[styles.root, { backgroundColor: t.bg }, back.style]}>
@@ -40,6 +69,32 @@ export function NewSession({
 
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
+          <Text style={[styles.cardTitle, { color: t.text }]}>建在哪台</Text>
+          {devices.map((d, i) => {
+            const dead = reachable[deviceKey(d)] === false;
+            return (
+              <Row
+                key={deviceKey(d)}
+                label={d.label || d.baseUrl}
+                hint={dead ? '现在连不上，建的时候要它在线' : d.baseUrl.replace(/^https?:\/\//, '')}
+                on={deviceIndex === i}
+                onPress={() => {
+                  setDeviceIndex(i);
+                  // 换机器时把「无项目 + 默认目录」重置一次，避免把上一台的输入带过去
+                  setWorkingDir('~/workspace');
+                }}
+                t={t}
+              />
+            );
+          })}
+        </View>
+
+        {deviceIndex == null ? (
+          <Text style={[styles.hint, { color: t.faint, textAlign: 'center' }]}>
+            先选一台电脑，再挑项目或工作目录。
+          </Text>
+        ) : (
+          <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
           <Text style={[styles.cardTitle, { color: t.text }]}>项目</Text>
           <Row
             label="无项目"
@@ -62,9 +117,13 @@ export function NewSession({
           <Text style={[styles.hint, { color: t.faint }]}>
             项目会带来它的工作目录与附加目录，和电脑上新建一个绑定项目的会话一样。
           </Text>
+          {loadingProjects ? (
+            <Text style={[styles.hint, { color: t.faint }]}>正在读这台电脑上的项目…</Text>
+          ) : null}
         </View>
+        )}
 
-        {projectId === '' ? (
+        {deviceIndex != null && projectId === '' ? (
           <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
             <Text style={[styles.cardTitle, { color: t.text }]}>工作目录</Text>
             <TextInput
@@ -83,13 +142,20 @@ export function NewSession({
         ) : null}
 
         <Pressable
-          disabled={busy}
+          disabled={busy || deviceIndex == null}
           onPress={() =>
-            onCreate(projectId === '' ? { workingDir: workingDir.trim() } : { projectId })
+            deviceIndex != null &&
+            onCreate(
+              deviceIndex,
+              projectId === '' ? { workingDir: workingDir.trim() } : { projectId },
+            )
           }
           style={({ pressed }) => [
             styles.btn,
-            { backgroundColor: pressed || busy ? t.accentStrong : t.accent, opacity: busy ? 0.8 : 1 },
+            {
+              backgroundColor: pressed || busy ? t.accentStrong : t.accent,
+              opacity: busy || deviceIndex == null ? 0.5 : 1,
+            },
           ]}
         >
           {busy ? (

@@ -28,6 +28,17 @@ export interface Device extends Pairing {
   hostname?: string;
 }
 
+/**
+ * 一台电脑在这台手机上的稳定键。
+ *
+ * 用它而不是 devices 的下标：删掉前面一台，下面的全都会挪位置，而缓存、深链、正在读的
+ * 那一段都还指着一个具体的人。deviceId 是那台机器自己生成、不随名字和地址变的那个值；
+ * 老配对还没有它（协议后加的），退回到令牌 —— 令牌在重新配对之前也是稳定的。
+ */
+export function deviceKey(d: { deviceId?: string; token: string }): string {
+  return d.deviceId || d.token;
+}
+
 export interface DeviceBook {
   devices: Device[];
   /** 当前那一台在 devices 里的下标；列表空时无意义 */
@@ -68,7 +79,7 @@ export async function saveDevices(devices: Device[], active: number): Promise<vo
 }
 
 async function readRaw(key: string): Promise<string | null> {
-  if (Platform.OS === 'web') return webGet(key);
+  if (Platform.OS === 'web') return readWebStorage(key);
   try {
     return await SecureStore.getItemAsync(key);
   } catch {
@@ -78,7 +89,7 @@ async function readRaw(key: string): Promise<string | null> {
 
 async function writeRaw(key: string, raw: string): Promise<void> {
   if (Platform.OS === 'web') {
-    webSet(key, raw);
+    writeWebStorage(key, raw);
     return;
   }
   await SecureStore.setItemAsync(key, raw);
@@ -86,7 +97,7 @@ async function writeRaw(key: string, raw: string): Promise<void> {
 
 async function removeRaw(key: string): Promise<void> {
   if (Platform.OS === 'web') {
-    webSet(key, '');
+    writeWebStorage(key, '');
     return;
   }
   try {
@@ -96,7 +107,8 @@ async function removeRaw(key: string): Promise<void> {
   }
 }
 
-function webGet(key: string): string | null {
+/** web 目标上的「存储」：原生有钥匙串，浏览器只有 localStorage（隐私模式下还可能没有） */
+export function readWebStorage(key: string): string | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
   } catch {
@@ -104,7 +116,7 @@ function webGet(key: string): string | null {
   }
 }
 
-function webSet(key: string, raw: string): void {
+export function writeWebStorage(key: string, raw: string): void {
   try {
     if (typeof localStorage === 'undefined') return;
     if (raw) localStorage.setItem(key, raw);

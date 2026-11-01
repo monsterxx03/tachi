@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
-import { memo, useCallback, useState } from 'react';
-import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Alert, FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
@@ -9,7 +9,10 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import type { Device } from '../api/storage';
+import { deviceKey } from '../api/storage';
 import type { SessionSummary } from '../api/types';
+import { type OverviewRow, type Section, sectionOf } from '../state/overview';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { usePageSwipe } from './edgeBack';
@@ -42,6 +45,13 @@ function Badge({ text, tone, t }: { text: string; tone: 'mute' | 'amber' | 'live
 
 /** 左滑露出来的那一截：每个动作一个按钮的宽度 */
 const ACTION_WIDTH = 84;
+
+/** 三段的标题。放英文小写是因为它是一块「状态区」的标签，不是一句话 */
+const SECTION_LABEL: Record<Section, string> = {
+  waiting: '等待',
+  running: '正在跑',
+  rest: '其余',
+};
 
 export interface SwipeAction {
   label: string;
@@ -135,11 +145,19 @@ function SwipeRow({ children, actions }: { children: React.ReactNode; actions: S
   );
 }
 
+/** 列表里的一项：分段标题，或者一行对话 */
+type Item =
+  | { kind: 'section'; section: Section; count: number }
+  | { kind: 'row'; row: OverviewRow };
+
 export function SessionList({
-  sessions,
+  rows,
+  devices,
+  reachable,
   currentId,
   conn,
-  deviceName,
+  filterKey,
+  onFilter,
   onOpen,
   onSettings,
   onNew,
@@ -150,23 +168,31 @@ export function SessionList({
   onRename,
   onForward,
 }: {
-  sessions: SessionSummary[];
+  /** 所有电脑的会话拼成一列（`buildOverview` 的结果，顺序就是显示顺序） */
+  rows: OverviewRow[];
+  devices: Device[];
+  /** 这一轮读到没有（键是 deviceKey）。false 的那台，行会淡化 */
+  reachable: Record<string, boolean>;
   currentId: string | null;
   conn: string;
-  /** 当前那台电脑在手机上的名字（用户可以改）；空 = 还没配对信息，退回「这台电脑」 */
-  deviceName?: string;
-  onOpen: (id: string) => void;
+  /** 只看某一台（键是 deviceKey）；null = 全部 */
+  filterKey: string | null;
+  onFilter: (key: string | null) => void;
+  /**
+   * 打开某台电脑上的一段。切换发生在状态层（一条 socket 只连一台），这一屏只管把人送过去。
+   */
+  onOpen: (deviceIndex: number, id: string) => void;
   onSettings: () => void;
   onNew: () => void;
   onRefresh: () => void;
   /** 连上了但读不到东西时的那句话（null = 一切正常） */
   error?: string | null;
-  onDelete: (id: string) => void;
-  onPin: (id: string, pinned: boolean) => void;
+  onDelete: (deviceIndex: number, id: string) => void;
+  onPin: (deviceIndex: number, id: string, pinned: boolean) => void;
   /** 改标题；写的是那台电脑上的记录，成功之后 sessions_changed 让每一块屏都跟着改 */
-  onRename: (id: string, title: string) => void;
+  onRename: (deviceIndex: number, id: string, title: string) => void;
   /**
-   * 整页往右推：进设置页（选电脑的那一屏）。**只在窄屏传** —— 宽屏时列表是常驻侧栏，
+   * 整页往右推：进电脑清单。**只在窄屏传** —— 宽屏时列表是常驻侧栏，
    * 把一条侧栏推走没有意义。
    */
   onForward?: () => void;
@@ -174,109 +200,257 @@ export function SessionList({
   const { tokens: t } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   // 长按打开的那个对话框。草稿在 RenameDialog 里：没按「保存」之前，那台电脑上的标题一个字都不动
-  const [renaming, setRenaming] = useState<SessionSummary | null>(null);
+  const [renaming, setRenaming] = useState<OverviewRow | null>(null);
   const online = conn === 'open';
+  // 筛选的那台可能刚被删掉：那就退回到「全部」，别停在一个空列表上
+  const filter = filterKey && devices.some((d) => deviceKey(d) === filterKey) ? filterKey : null;
 
-  // 整页往右推 = 进设置页（选电脑的那一屏）。Android 上左缘那一划归系统的返回手势，
-  // 所以这条只能铺满整页 —— 阈值的写法见 ./edgeBack 的 usePageSwipe（给错一个数字，这一屏
-  // 的点击、长按、行左滑就全被它吃掉了）
+  // 整页往右推 = 进电脑清单（左滑已经归了行上的置顶 / 删除）
   const page = usePageSwipe(onForward);
 
-  const askRename = useCallback((s: SessionSummary) => setRenaming(s), []);
+  // 每台有几段在等你 / 在跑：chip 上那个点和数字。用全部行算，不受当前筛选影响
+  const { waitingByKey, runningByKey } = useMemo(() => {
+    const waiting: Record<string, number> = {};
+    const running: Record<string, number> = {};
+    for (const r of rows) {
+      if (r.session.waiting) waiting[r.key] = (waiting[r.key] ?? 0) + 1;
+      if (r.session.running) running[r.key] = (running[r.key] ?? 0) + 1;
+    }
+    return { waitingByKey: waiting, runningByKey: running };
+  }, [rows]);
+
+  /**
+   * chip 的次序：有东西等你的排最前，其次有在跑的，再是其余。
+   *
+   * 机器多了之后横滚会把远的那几台藏起来 —— 而最该被看见的恰恰是「这台在等你」。同一档
+   * 里保持设备簿的顺序（稳定排序），否则每次刷新 chip 都会跳一下。
+   */
+  const chipDevices = useMemo(() => {
+    const rank = (key: string) =>
+      (waitingByKey[key] ?? 0) > 0 ? 0 : (runningByKey[key] ?? 0) > 0 ? 1 : 2;
+    return devices
+      .map((d, index) => ({ d, index, key: deviceKey(d), n: waitingByKey[deviceKey(d)] ?? 0 }))
+      .map((x) => ({ ...x, rank: rank(x.key) }))
+      .sort((a, b) => a.rank - b.rank);
+  }, [devices, waitingByKey, runningByKey]);
+
+  /**
+   * 三段分组。`rows` 已经按「等你 > 在跑 > 其余」排好了，所以这里只需要在切换段的时候
+   * 插一个标题 —— 不重新排序，否则两处排序规则迟早会各说一套。
+   */
+  const items = useMemo<Item[]>(() => {
+    const shown = filter ? rows.filter((r) => r.key === filter) : rows;
+    const out: Item[] = [];
+    let last: Section | null = null;
+    let lastIndex = -1;
+    for (const row of shown) {
+      const sec = sectionOf(row.session);
+      if (sec !== last) {
+        out.push({ kind: 'section', section: sec, count: 1 });
+        last = sec;
+        lastIndex = out.length - 1;
+      } else {
+        const head = out[lastIndex];
+        if (head.kind === 'section') head.count++;
+      }
+      out.push({ kind: 'row', row });
+    }
+    return out;
+  }, [rows, filter]);
+
+  const offline = devices.filter((d) => reachable[deviceKey(d)] === false).length;
+  const filtered = devices.find((d) => deviceKey(d) === filter);
+
+  const askRename = useCallback((row: OverviewRow) => setRenaming(row), []);
+
+  const confirmDelete = useCallback(
+    (row: OverviewRow) => {
+      if (row.stale) {
+        Alert.alert('这台电脑现在连不上', `${row.machine} 现在连不上，删除要等它回来。`);
+        return;
+      }
+      const s = row.session;
+      Alert.alert(
+        '删除这段对话？',
+        (s.cron ?? 0) > 0
+          ? // 任务和会话一起走：后端删掉目标会话时会把绑在它上面的任务一并删掉，所以先说出来。
+            `${s.title}\n\n这个会话的 ${s.cron} 个定时任务也会一并删除。`
+          : s.title,
+        [
+          { text: '取消', style: 'cancel' },
+          { text: '删除', style: 'destructive', onPress: () => onDelete(row.device, s.id) },
+        ],
+      );
+    },
+    [onDelete],
+  );
+
+  const togglePin = useCallback(
+    (row: OverviewRow) => {
+      if (row.stale) {
+        Alert.alert('这台电脑现在连不上', `${row.machine} 现在连不上，置顶要等它回来。`);
+        return;
+      }
+      onPin(row.device, row.session.id, !row.session.pinned);
+    },
+    [onPin],
+  );
 
   return (
     <GestureDetector gesture={page.gesture}>
       <Animated.View style={[styles.root, { backgroundColor: t.sid }, page.style]}>
-      <View style={styles.head}>
-        <View style={styles.headText}>
-          <Text style={[styles.brand, { color: t.title }]}>会话</Text>
-          <View style={styles.subRow}>
-            <View style={[styles.onlineDot, { backgroundColor: online ? t.green : t.amber }]} />
-            <Text style={[styles.sub, { color: t.faint }]} numberOfLines={1}>
-              {online
-                ? `已连接 · ${deviceName || '这台电脑'}`
-                : conn === 'connecting'
-                ? '正在连接电脑…'
-                : '连不上电脑'}
-            </Text>
-          </View>
-          {/* 「已连接」和「读得到东西」是两件事：WebSocket 通了不代表 HTTP 请求回来了。
-              这里只有真的有问题时才出现，平时不占地方。 */}
-          {error ? (
-            <Pressable
-              onPress={onRefresh}
-              style={({ pressed }) => [
-                styles.errLine,
-                { backgroundColor: pressed ? t.redWash : 'transparent' },
-              ]}
-            >
-              <Text style={{ color: t.red, fontSize: 11.5 }} numberOfLines={2}>
-                {error} · 点这里重试
+        <View style={styles.head}>
+          <View style={styles.headText}>
+            <Text style={[styles.brand, { color: t.title }]}>所有对话</Text>
+            <View style={styles.subRow}>
+              <View style={[styles.onlineDot, { backgroundColor: offline > 0 ? t.amber : t.green }]} />
+              <Text style={[styles.sub, { color: t.faint }]} numberOfLines={1}>
+                {filtered
+                  ? `${filtered.label || filtered.baseUrl} · ${items.filter((i) => i.kind === 'row').length} 段对话${
+                      reachable[deviceKey(filtered)] === false ? ' · 连不上' : ''
+                    }`
+                  : `${devices.length} 台电脑 · ${devices.length - offline} 台在线`}
               </Text>
-            </Pressable>
-          ) : null}
+            </View>
+            {/* 「连上了」和「读得到东西」是两件事：WebSocket 通了不代表 HTTP 请求回来了。
+                这里只有真的有问题时才出现，平时不占地方。 */}
+            {error ? (
+              <Pressable
+                onPress={onRefresh}
+                style={({ pressed }) => [styles.errLine, { backgroundColor: pressed ? t.redWash : 'transparent' }]}
+              >
+                <Text style={{ color: t.red, fontSize: 11.5 }} numberOfLines={2}>
+                  {error} · 点这里重试
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <Pressable
+            onPress={onNew}
+            accessibilityLabel="新建对话"
+            style={({ pressed }) => [
+              styles.gear,
+              { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
+            ]}
+          >
+            <Feather name="plus" size={18} color={t.faint} />
+          </Pressable>
+          <Pressable
+            onPress={onSettings}
+            accessibilityLabel="电脑与设置"
+            style={({ pressed }) => [
+              styles.gear,
+              { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
+            ]}
+          >
+            <Feather name="settings" size={17} color={t.faint} />
+          </Pressable>
         </View>
-        <Pressable
-          onPress={onNew}
-          style={({ pressed }) => [
-            styles.gear,
-            { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
-          ]}
-        >
-          <Feather name="plus" size={18} color={t.faint} />
-        </Pressable>
-        <Pressable
-          onPress={onSettings}
-          style={({ pressed }) => [
-            styles.gear,
-            { borderColor: t.border, backgroundColor: pressed ? t.wash : 'transparent' },
-          ]}
-        >
-          <Feather name="settings" size={17} color={t.faint} />
-        </Pressable>
-      </View>
 
-      <FlatList
-        data={sessions}
-        keyExtractor={(s) => s.id}
-        contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              onRefresh();
-              setTimeout(() => setRefreshing(false), 600);
-            }}
-            tintColor={t.faint}
-          />
-        }
-        renderItem={({ item }) => (
-          <SessionRow
-            s={item}
-            selected={item.id === currentId}
-            onOpen={onOpen}
-            onDelete={onDelete}
-            onPin={onPin}
-            onRename={askRename}
-          />
-        )}
-      />
+        {/* 一排机器：点一下就只看那一台，再点回全部。有东西等你的那台带一个琥珀点和数字。
+            「全部」固定在最左边 —— 机器一多横滚会把它推出屏幕，回来就没路了。 */}
+        <View style={styles.chipsRow}>
+          <Pressable
+            onPress={() => onFilter(null)}
+            style={[
+              styles.chip,
+              { borderColor: 'transparent' },
+              filter === null && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
+            ]}
+          >
+            <Text style={[styles.chipText, { color: filter === null ? t.accent2 : t.dim }]}>全部</Text>
+          </Pressable>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chips}
+            contentContainerStyle={styles.chipsInner}
+          >
+            {chipDevices.map(({ d, key, n }) => {
+              const on = filter === key;
+              const dead = reachable[key] === false;
+              return (
+                <Pressable
+                  key={key}
+                  onPress={() => onFilter(on ? null : key)}
+                  style={[
+                    styles.chip,
+                    { borderColor: t.border },
+                    on && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
+                    dead && { opacity: 0.45 },
+                  ]}
+                >
+                  {n > 0 ? <View style={[styles.needDot, { backgroundColor: t.amber }]} /> : null}
+                  <Text style={[styles.chipText, { color: on ? t.accent2 : t.dim }]} numberOfLines={1}>
+                    {d.label || d.baseUrl.replace(/^https?:\/\//, '')}
+                  </Text>
+                  {n > 0 ? <Text style={[styles.chipCount, { color: t.amber }]}>{n}</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
 
-      {/* 长按一行改名字。标题是那台电脑上的记录，这里只递交一个词：保存之后由 sessions_changed
-          让每一块屏重读 —— 桌面上那一行不会停在旧名字上，这一段也不会各留一份。
-          对话框与对话顶栏长按标题用的是同一个（./RenameDialog）。 */}
-      {renaming ? (
-        <RenameDialog
-          initial={renaming.title}
-          onCancel={() => setRenaming(null)}
-          onSave={(title) => {
-            const id = renaming.id;
-            setRenaming(null);
-            onRename(id, title);
-          }}
+        <FlatList
+          data={items}
+          keyExtractor={(it) => (it.kind === 'section' ? `s:${it.section}` : `${it.row.key}:${it.row.session.id}`)}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                setRefreshing(true);
+                onRefresh();
+                setTimeout(() => setRefreshing(false), 600);
+              }}
+              tintColor={t.faint}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={{ color: t.faint, fontSize: 13 }}>
+                {filter ? '这台电脑上还没有对话' : '还没有对话'}
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) =>
+            item.kind === 'section' ? (
+              <View style={styles.sect}>
+                <Text style={[styles.sectText, { color: item.section === 'waiting' ? t.amber : t.faint }]}>
+                  {SECTION_LABEL[item.section]}
+                </Text>
+                <Text style={[styles.sectCount, { color: item.section === 'waiting' ? t.amber : t.faint }]}>
+                  {item.count}
+                </Text>
+              </View>
+            ) : (
+              <SessionRow
+                row={item.row}
+                selected={item.row.session.id === currentId}
+                machine={filter === null}
+                onOpen={onOpen}
+                onDelete={() => confirmDelete(item.row)}
+                onPin={() => togglePin(item.row)}
+                onRename={askRename}
+              />
+            )
+          }
         />
-      ) : null}
+
+        {/* 长按一行改名字。标题是那台电脑上的记录，这里只递交一个词：保存之后由 sessions_changed
+            让每一块屏重读 —— 桌面上那一行不会停在旧名字上，这一段也不会各留一份。
+            对话框与对话顶栏长按标题用的是同一个（./RenameDialog）。 */}
+        {renaming ? (
+          <RenameDialog
+            initial={renaming.session.title}
+            onCancel={() => setRenaming(null)}
+            onSave={(title) => {
+              const row = renaming;
+              setRenaming(null);
+              onRename(row.device, row.session.id, title);
+            }}
+          />
+        ) : null}
       </Animated.View>
     </GestureDetector>
   );
@@ -289,22 +463,26 @@ export function SessionList({
  * 状态变了才会重画。
  */
 const SessionRow = memo(function SessionRow({
-  s,
+  row,
   selected,
+  machine,
   onOpen,
   onDelete,
   onPin,
   onRename,
 }: {
-  s: SessionSummary;
+  row: OverviewRow;
   selected: boolean;
-  onOpen: (id: string) => void;
-  onDelete: (id: string) => void;
-  onPin: (id: string, pinned: boolean) => void;
+  /** 显示机器名（筛选某台时不显示：整屏都是一台，说两遍只是噪音） */
+  machine: boolean;
+  onOpen: (deviceIndex: number, id: string) => void;
+  onDelete: () => void;
+  onPin: () => void;
   /** 长按一行：改名字。左滑只有两个动作，第三个放不下，也不该挤掉「删除」的宽度 */
-  onRename: (s: SessionSummary) => void;
+  onRename: (row: OverviewRow) => void;
 }) {
   const { tokens: t } = useTheme();
+  const s = row.session;
   const badge = badgeOf(s);
 
   const actions: SwipeAction[] = [
@@ -312,69 +490,80 @@ const SessionRow = memo(function SessionRow({
       label: s.pinned ? '取消置顶' : '置顶',
       icon: 'bookmark',
       tone: 'accent',
-      onPress: () => onPin(s.id, !s.pinned),
+      onPress: onPin,
     },
     {
       label: '删除',
       icon: 'trash-2',
       tone: 'red',
-      onPress: () =>
-        Alert.alert('删除这段对话？', (s.cron ?? 0) > 0
-          // 任务和会话一起走：后端删掉目标会话时会把绑在它上面的任务一并删掉，所以先说出来。
-          ? `${s.title}\n\n这个会话的 ${s.cron} 个定时任务也会一并删除。`
-          : s.title, [
-          { text: '取消', style: 'cancel' },
-          { text: '删除', style: 'destructive', onPress: () => onDelete(s.id) },
-        ]),
+      onPress: onDelete,
     },
   ];
 
   return (
-    <SwipeRow actions={actions}>
-      <Pressable
-        onPress={() => onOpen(s.id)}
-        onLongPress={() => onRename(s)}
-        // 长按要「按住一会儿」才算，不是一碰就弹：这一屏的主要动作是打开会话
-        delayLongPress={400}
-        style={({ pressed }) => [
-          styles.row,
-          selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
-          !selected && pressed && { backgroundColor: t.wash },
-        ]}
-      >
-        <View style={styles.rowTop}>
-          {s.pinned ? <Feather name="bookmark" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
-          <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
-            {s.title}
-          </Text>
-          {s.channelSession ? (
-            <View style={[styles.sourcePill, { borderColor: t.border }]}>
-              <Text style={[styles.sourcePillText, { color: t.faint }]} numberOfLines={1}>
-                {s.channelName || '渠道'}
-              </Text>
-            </View>
-          ) : null}
-          {/* 有定时任务写进这段对话：一个闹钟（多于一个时带条数）。它和「渠道」不是一回事 ——
-              这里的话是别的东西在替它说话，而标题上看不出来。 */}
-          {(s.cron ?? 0) > 0 ? (
-            <View
-              style={[styles.sourcePill, styles.cronPill, { borderColor: t.border }]}
-              accessibilityLabel={s.cron === 1 ? '有 1 个定时任务' : `有 ${s.cron} 个定时任务`}
-            >
-              <Feather name="clock" size={10} color={t.faint} />
-              {(s.cron ?? 0) > 1 ? (
-                <Text style={[styles.sourcePillText, { color: t.faint }]}>{s.cron}</Text>
-              ) : null}
-            </View>
-          ) : null}
-          {badge ? <Badge {...badge} t={t} /> : null}
-        </View>
-        <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
-          {s.projectName ? `${s.projectName} · ` : ''}
-          {formatUpdatedAt(s.updatedAt)}
-        </Text>
-      </Pressable>
-    </SwipeRow>
+    <View style={row.stale ? styles.stale : undefined}>
+      <SwipeRow actions={actions}>
+        <Pressable
+          onPress={() => onOpen(row.device, s.id)}
+          onLongPress={() => onRename(row)}
+          // 长按要「按住一会儿」才算，不是一碰就弹：这一屏的主要动作是打开会话
+          delayLongPress={400}
+          style={({ pressed }) => [
+            styles.row,
+            selected && { backgroundColor: t.accentSoft, borderColor: t.accentLine },
+            !selected && pressed && { backgroundColor: t.wash },
+          ]}
+        >
+          <View style={styles.rowTop}>
+            {s.pinned ? <Feather name="bookmark" size={12} color={t.faint} style={{ marginTop: 1 }} /> : null}
+            <Text style={[styles.rowTitle, { color: t.title }]} numberOfLines={1}>
+              {s.title}
+            </Text>
+            {s.channelSession ? (
+              <View style={[styles.sourcePill, { borderColor: t.border }]}>
+                <Text style={[styles.sourcePillText, { color: t.faint }]} numberOfLines={1}>
+                  {s.channelName || '渠道'}
+                </Text>
+              </View>
+            ) : null}
+            {/* 有定时任务写进这段对话：一个闹钟（多于一个时带条数）。它和「渠道」不是一回事 ——
+                这里的话是别的东西在替它说话，而标题上看不出来。 */}
+            {(s.cron ?? 0) > 0 ? (
+              <View
+                style={[styles.sourcePill, styles.cronPill, { borderColor: t.border }]}
+                accessibilityLabel={s.cron === 1 ? '有 1 个定时任务' : `有 ${s.cron} 个定时任务`}
+              >
+                <Feather name="clock" size={10} color={t.faint} />
+                {(s.cron ?? 0) > 1 ? (
+                  <Text style={[styles.sourcePillText, { color: t.faint }]}>{s.cron}</Text>
+                ) : null}
+              </View>
+            ) : null}
+            {badge ? <Badge {...badge} t={t} /> : null}
+          </View>
+          <View style={styles.rowSubRow}>
+            {machine ? (
+              <>
+                <Text style={[styles.rowMachine, { color: t.accent2 }]} numberOfLines={1}>
+                  {row.machine}
+                </Text>
+                <Text style={[styles.rowSub, { color: t.faint }]}>·</Text>
+              </>
+            ) : null}
+            <Text style={[styles.rowSub, { color: t.faint }]} numberOfLines={1}>
+              {s.projectName ? `${s.projectName} · ` : ''}
+              {formatUpdatedAt(s.updatedAt)}
+            </Text>
+            {row.stale ? (
+              <>
+                <Text style={[styles.rowSub, { color: t.faint }]}>·</Text>
+                <Text style={[styles.rowSub, { color: t.faint }]}>连不上</Text>
+              </>
+            ) : null}
+          </View>
+        </Pressable>
+      </SwipeRow>
+    </View>
   );
 });
 
@@ -389,14 +578,42 @@ const styles = StyleSheet.create({
   errLine: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, marginTop: 6 },
   gear: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
 
-  listContent: { paddingHorizontal: 8, paddingTop: 4, paddingBottom: 16 },
+  chipsRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingLeft: 16, paddingBottom: 8 },
+  // 机器的部分自己横滚；「全部」在它外面，固定不动
+  chips: { flexGrow: 0, flexShrink: 1 },
+  chipsInner: { gap: 7, alignItems: 'center', paddingRight: 16 },
+  chip: {
+    height: 30,
+    borderRadius: 15,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: 180,
+  },
+  chipText: { fontSize: 12.5 },
+  chipCount: { fontSize: 11 },
+  needDot: { width: 6, height: 6, borderRadius: 3 },
+
+  listContent: { paddingHorizontal: 8, paddingTop: 2, paddingBottom: 16 },
+  empty: { alignItems: 'center', paddingTop: 48 },
+  sect: { flexDirection: 'row', alignItems: 'baseline', gap: 7, paddingTop: 12, paddingHorizontal: 10, paddingBottom: 4 },
+  sectText: { fontSize: 11.5, fontWeight: '600', letterSpacing: 0.4 },
+  sectCount: { fontSize: 11, opacity: 0.75 },
+
   swipeWrap: { borderRadius: 10, overflow: 'hidden', marginVertical: 2 },
   actionLayer: { position: 'absolute', right: 0, top: 0, bottom: 0, flexDirection: 'row' },
   actionBtn: { width: ACTION_WIDTH, alignItems: 'center', justifyContent: 'center' },
   row: { borderRadius: 10, borderWidth: 1, borderColor: 'transparent', paddingTop: 12, paddingHorizontal: 12, paddingBottom: 11 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: '600' },
-  rowSub: { marginTop: 4, fontSize: 12 },
+  rowSubRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 },
+  rowMachine: { fontSize: 12, fontWeight: '500', maxWidth: 120 },
+  rowSub: { fontSize: 12 },
+  // 连不上的那台：整行淡下去。状态标记照旧画，但那可能是几小时前的
+  stale: { opacity: 0.5 },
   sourcePill: { borderWidth: 1, borderRadius: 20, paddingHorizontal: 6, paddingVertical: 1, maxWidth: 88 },
   // 闹钟那一条：图标 + 条数并排，比渠道那个窄很多
   cronPill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 5, maxWidth: undefined },

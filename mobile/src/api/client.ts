@@ -81,11 +81,17 @@ function noteReq(rec: ReqRecord): void {
   if (recentReqs.length > 12) recentReqs.shift();
 }
 
-async function req<T>(conn: Pairing, path: string, init?: RequestInit): Promise<T> {
+async function req<T>(
+  conn: Pairing,
+  path: string,
+  init?: RequestInit,
+  // 聚合刷新会一次问好几台：一台睡着的电脑不该把整列拖住 15 秒（调用方给更短的上限）
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const started = Date.now();
   // 调用方自己的 signal 也要能生效（附件下载这类），所以两者合并
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const forwardAbort = () => ctrl.abort();
   init?.signal?.addEventListener('abort', forwardAbort);
   let res: Response;
@@ -287,7 +293,8 @@ export async function ping(baseUrl: string, signal?: AbortSignal): Promise<PingR
 }
 
 export const api = {
-  listSessions: (c: Pairing) => req<{ sessions: SessionSummary[] }>(c, '/v1/sessions'),
+  listSessions: (c: Pairing, timeoutMs?: number) =>
+    req<{ sessions: SessionSummary[] }>(c, '/v1/sessions', undefined, timeoutMs),
 
   providers: (c: Pairing) => req<{ providers: { name: string; model: string }[] }>(c, '/v1/providers'),
 

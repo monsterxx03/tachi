@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppState,
   BackHandler,
@@ -15,6 +15,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AttachmentRef } from './src/api/types';
 import { api } from './src/api/client';
+import { deviceKey } from './src/api/storage';
 import type { MobileApi } from './src/state/mobile';
 import { useMobile } from './src/state/mobile';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
@@ -24,7 +25,8 @@ import { Pairing } from './src/ui/Pairing';
 import { SessionInfo } from './src/ui/SessionInfo';
 import { SessionList } from './src/ui/SessionList';
 import { NewSession } from './src/ui/NewSession';
-import { Settings } from './src/ui/Settings';
+import { Devices } from './src/ui/Devices';
+import { DeviceDetail } from './src/ui/DeviceDetail';
 import { Opening } from './src/ui/Opening';
 
 /**
@@ -102,6 +104,7 @@ function ChatPane({
     return (
       <Chat
         sessions={m.sessions}
+        machine={m.devices[m.activeDevice]?.label}
         loadAgents={async () => {
           const { panels } = await m.loadPanels();
           return panels?.agents.peers ?? [];
@@ -142,7 +145,10 @@ function ChatPane({
   // 这一屏取代的正是「点了没反应」——快照要一个来回（读记录 + 算用量 + 传一百多条消息），
   // 这段时间里没有任何反馈，读起来就是卡住。
   if (m.openId) {
-    const row = m.sessions.find((s) => s.id === m.openId);
+    // 先找聚合那份：打开的是别的机器上的会话时，当前这台的镜像里还没有它
+    const row =
+      m.overview.find((r) => r.session.id === m.openId)?.session ??
+      m.sessions.find((s) => s.id === m.openId);
     return (
       <Opening
         title={row?.title}
@@ -166,6 +172,11 @@ function Shell() {
   const insets = useSafeAreaInsets();
   const wide = width >= 768; // 平板：列表和对话并排
   const [showSettings, setShowSettings] = useState(false);
+  // 正在看哪一台的详情（null = 电脑清单）。和 showSettings 一起表示「在电脑这块」。
+  const [deviceDetail, setDeviceDetail] = useState<number | null>(null);
+  // 首页「只看某一台」的筛选（键是 deviceKey）。不放列表内部：进出对话一趟回来还保持着，
+  // 比每次回来都被重置更符合预期；重开 App 才回到「全部」。
+  const [filterKey, setFilterKey] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [addingDevice, setAddingDevice] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -205,7 +216,8 @@ function Shell() {
         return true;
       }
       if (showSettings) {
-        setShowSettings(false);
+        if (deviceDetail != null) setDeviceDetail(null);
+        else setShowSettings(false);
         return true;
       }
       if (m.openId) {
@@ -221,7 +233,7 @@ function Shell() {
       return false;
     });
     return () => sub.remove();
-  }, [openFile, showInfo, showNew, showSettings, addingDevice, m, wide, sideCollapsed]);
+  }, [openFile, showInfo, showNew, showSettings, deviceDetail, addingDevice, m, wide, sideCollapsed]);
 
   // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态。
   // 进后台则退订当前会话 —— 那是宿主判断「人还在不在看」的依据，也是推送该不该响的依据：
@@ -252,36 +264,42 @@ function Shell() {
     };
   }, [m.ready, m.handleLink]);
 
+  // 详情页那一台的「保持唤醒」：读的是那一台，不是正在连的那一台。引用要稳定 ——
+  // 一页里那个 effect 靠它决定「什么时候再读一次」，每帧新建一个新箭头就会自己喂自己。
+  const loadAwakeFor = useCallback(() => {
+    void m.loadAwake(deviceDetail ?? undefined);
+  }, [m.loadAwake, deviceDetail]);
+
   // 列表页。`onForward` 只有窄屏传 —— 宽屏时它是常驻侧栏，推走没有意义
   const list = (onForward?: () => void) => (
     <SessionList
-      sessions={m.sessions}
+      rows={m.overview}
+      devices={m.devices}
+      reachable={m.reachable}
       currentId={m.openId}
       conn={m.conn}
-      deviceName={m.devices[m.activeDevice]?.label}
+      filterKey={filterKey}
+      onFilter={setFilterKey}
       // 「连上了但列表没读回来」单独说 —— 这条横幅平时不出现
-      error={m.conn === 'open' && m.sessions.length === 0 ? m.error : null}
+      error={m.error}
       // 这些必须是稳定引用：行组件 memo 过，回调每帧新建的话 memo 等于没有
-      onOpen={m.open}
+      onOpen={m.openOn}
       onSettings={() => setShowSettings(true)}
       onNew={() => setShowNew(true)}
       onRefresh={m.refresh}
-      onDelete={m.deleteSession}
-      onPin={m.setPinned}
-      onRename={m.renameSession}
+      onDelete={m.deleteSessionOn}
+      onPin={m.setPinnedOn}
+      onRename={m.renameSessionOn}
       onForward={onForward}
     />
   );
 
-  // 新建会话：建好就进去。失败原因由顶部那条提示说（m.error）。
-  const create = async (opts: { projectId?: string; workingDir?: string }) => {
+  // 新建会话：先选机器、再建，建好就进去。失败原因由顶部那条提示说（m.error）。
+  const create = async (deviceIndex: number, opts: { projectId?: string; workingDir?: string }) => {
     setCreating(true);
     try {
-      const s = await m.createSession(opts);
-      if (s) {
-        setShowNew(false);
-        void m.open(s.id);
-      }
+      const s = await m.createSessionOn(deviceIndex, opts);
+      if (s) setShowNew(false);
     } finally {
       setCreating(false);
     }
@@ -309,34 +327,42 @@ function Shell() {
           />
         ) : showNew ? (
           <NewSession
-            projects={m.projects}
+            devices={m.devices}
+            reachable={m.reachable}
+            loadProjects={m.projectsFor}
             busy={creating}
             onClose={() => setShowNew(false)}
-            onCreate={(opts) => void create(opts)}
+            onCreate={(i, opts) => void create(i, opts)}
           />
         ) : showSettings ? (
-          <Settings
-            pairing={m.pairing}
-            devices={m.devices}
-            activeDevice={m.activeDevice}
-            conn={m.conn}
-            onSwitchDevice={(i) => {
-              setShowSettings(false);
-              void m.switchDevice(i);
-            }}
-            onRemoveDevice={(i) => void m.removeDevice(i)}
-            onRenameDevice={(i, label) => void m.renameDevice(i, label)}
-            onSelectAddress={(i, url) => void m.selectAddress(i, url)}
-            onAddDevice={() => setAddingDevice(true)}
-            onBack={() => setShowSettings(false)}
-            awake={m.awake}
-            onLoadAwake={m.loadAwake}
-            onSetAwake={m.setAwake}
-            onUnpair={() => {
-              setShowSettings(false);
-              void m.unpair();
-            }}
-          />
+          deviceDetail != null && m.devices[deviceDetail] ? (
+            <DeviceDetail
+              device={m.devices[deviceDetail]}
+              online={m.reachable[deviceKey(m.devices[deviceDetail])] !== false}
+              conn={deviceDetail === m.activeDevice ? m.conn : 'idle'}
+              syncedAt={m.syncedAt(deviceKey(m.devices[deviceDetail]))}
+              onBack={() => setDeviceDetail(null)}
+              onRemove={() => {
+                const at = deviceDetail;
+                setDeviceDetail(null);
+                void m.removeDevice(at);
+              }}
+              onRename={(label) => void m.renameDevice(deviceDetail, label)}
+              onSelectAddress={(url) => void m.selectAddress(deviceDetail, url)}
+              awake={m.awakeOf(deviceKey(m.devices[deviceDetail]))}
+              onLoadAwake={loadAwakeFor}
+              onSetAwake={(on, min) => m.setAwake(deviceDetail, on, min)}
+            />
+          ) : (
+            <Devices
+              devices={m.devices}
+              reachable={m.reachable}
+              syncedAt={m.syncedAt}
+              onAddDevice={() => setAddingDevice(true)}
+              onOpen={(i) => setDeviceDetail(i)}
+              onBack={() => setShowSettings(false)}
+            />
+          )
         ) : wide ? (
           <View style={styles.wide}>
             {sideCollapsed ? null : (

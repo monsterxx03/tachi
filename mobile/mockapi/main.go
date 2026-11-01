@@ -20,9 +20,12 @@ import (
 func main() {
 	token := flag.String("token", "dev-token", "配对令牌（手机端填这个）")
 	listen := flag.String("listen", "0.0.0.0:9797", "监听地址")
+	// 起第二个实例时给不同的名字与身份，手机才会把它当成另一台电脑
+	hostname := flag.String("name", defaultHostname, "这台「机器」的名字（ping 的 hostname）")
+	deviceID := flag.String("id", defaultDeviceID, "这台「机器」的稳定身份（ping 的 deviceId）")
 	flag.Parse()
 
-	srv := New(*token)
+	srv := NewNamed(*token, *hostname, *deviceID)
 	log := logger.New("mockapi")
 	log.Info(context.Background(), "mockapi 起来了", "listen", *listen)
 
