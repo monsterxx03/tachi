@@ -109,7 +109,7 @@ case "${1:-}" in
   *) die "未知参数：$1" ;;
 esac
 
-[[ -r "$KEY" ]] || die "找不到私钥 $KEY（App 设置页 Private keys → Generate a private key）"
+[[ -r "$KEY" ]] || die "找不到私钥 ${KEY}（App 设置页 Private keys → Generate a private key）"
 [[ -r "$META" ]] || die "找不到 $META"
 
 if [[ -f "$TOKEN_FILE" ]]; then

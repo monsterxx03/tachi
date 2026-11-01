@@ -34,7 +34,7 @@ swiftc -O -parse-as-library -emit-library -static \
 SWIFT_LIB="$(cd "$(dirname "$(xcrun --find swiftc)")/../lib/swift/macosx" && pwd)"
 for lib in libswiftCompatibility56.a libswiftCompatibilityPacks.a; do
     if [ ! -f "$SWIFT_LIB/$lib" ]; then
-        echo "toolchain 里没有 $lib（找的是 $SWIFT_LIB）——换个 toolchain 或者重新看这段注释" >&2
+        echo "toolchain 里没有 ${lib}（找的是 ${SWIFT_LIB}）——换个 toolchain 或者重新看这段注释" >&2
         exit 1
     fi
     ln -sf "$SWIFT_LIB/$lib" "$HERE/$lib"

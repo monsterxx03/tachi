@@ -117,12 +117,12 @@ cmd_new() {
   [[ -n "$slug" ]] || die "slug 清理后为空"
 
   local path="$WT_ROOT/$slug" branch="${BRANCH_PREFIX}${slug}"
-  [[ -e "$path" ]] && die "目标已存在：$path（先 $0 gc，或换个 slug）"
+  [[ -e "$path" ]] && die "目标已存在：${path}（先 $0 gc，或换个 slug）"
   git -C "$MAIN_WT" show-ref --verify --quiet "refs/heads/$branch" && die "本地分支已存在：$branch"
 
   echo "== fetch origin main"
   git -C "$MAIN_WT" fetch -q origin main || die "fetch 失败"
-  echo "== 开 worktree：$path（分支 $branch，基于 origin/main）"
+  echo "== 开 worktree：${path}（分支 ${branch}，基于 origin/main）"
   # --no-track：起点是远端分支时 git 会把上游设成 origin/main，那会让 pull 把 main 合进来。
   git -C "$MAIN_WT" worktree add --no-track -b "$branch" "$path" origin/main >/dev/null \
     || die "worktree 创建失败"
@@ -175,21 +175,21 @@ cmd_gc() {
     age_days=$(( (now - commit_ts) / 86400 ))
 
     if [[ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]]; then
-      echo "  keep   $branch（有未提交改动，${age_days}天）"; kept=$((kept+1)); continue
+      echo "  keep   ${branch}（有未提交改动，${age_days}天）"; kept=$((kept+1)); continue
     fi
     if printf '%s\n' "$open_branches" | grep -qxF "$branch"; then
-      echo "  keep   $branch（有 open PR，${age_days}天）"; kept=$((kept+1)); continue
+      echo "  keep   ${branch}（有 open PR，${age_days}天）"; kept=$((kept+1)); continue
     fi
     if [[ "$commit_ts" -gt "$cutoff" ]]; then
-      echo "  keep   $branch（${age_days}天，未到 $MAX_AGE_DAYS 天）"; kept=$((kept+1)); continue
+      echo "  keep   ${branch}（${age_days}天，未到 $MAX_AGE_DAYS 天）"; kept=$((kept+1)); continue
     fi
 
     if [[ $DRY -eq 1 ]]; then
-      echo "  would  remove $branch（${age_days}天，无 open PR）"
+      echo "  would  remove ${branch}（${age_days}天，无 open PR）"
       continue
     fi
 
-    echo "  remove $branch（${age_days}天，无 open PR）"
+    echo "  remove ${branch}（${age_days}天，无 open PR）"
     # 先摘掉依赖链接：它们指向主仓，删目录时留着没有意义。用 -rf 是因为这里既可能是
     # 符号链接（共享来的，只摘链接本身），也可能是 npm ci 装出来的真目录（一并删掉）。
     rm -rf "$path/web/frontend/node_modules" "$path/desktop/frontend/node_modules"
@@ -203,7 +203,7 @@ cmd_gc() {
   # 目录被手工删掉时，git 那边还留着一条记录。
   git -C "$MAIN_WT" worktree prune
 
-  echo "回收完成：删除 $removed，保留 $kept。"
+  echo "回收完成：删除 ${removed}，保留 ${kept}。"
 }
 
 # list_worktrees_under_root：只输出 WT_ROOT 下的 worktree 路径（主工作树永远不在里面）。
@@ -236,7 +236,7 @@ cmd_resume() {
       git -C "$MAIN_WT" worktree add -b "$branch" "$path" "origin/$branch" >/dev/null \
         || die "worktree 重建失败"
     else
-      die "找不到分支 $branch（本地和 origin 都没有）"
+      die "找不到分支 ${branch}（本地和 origin 都没有）"
     fi
   fi
 

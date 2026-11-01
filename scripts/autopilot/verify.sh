@@ -58,7 +58,7 @@ run() {
   echo "    \$ $*"
   local start=$SECONDS
   if "$@"; then
-    pass "$label（$((SECONDS - start))s）"
+    pass "${label}（$((SECONDS - start))s）"
     return 0
   fi
   fail "$label"
@@ -69,7 +69,7 @@ run() {
 # 改动是什么
 # ---------------------------------------------------------------------------
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
-  echo "找不到基线 ref：$BASE（先 git fetch origin，或用 --base 指定）" >&2
+  echo "找不到基线 ref：${BASE}（先 git fetch origin，或用 --base 指定）" >&2
   exit 2
 fi
 
@@ -82,7 +82,7 @@ if [[ -z "$CHANGED" ]]; then
   exit 1
 fi
 
-echo "基线：$BASE（merge-base $MERGE_BASE）"
+echo "基线：${BASE}（merge-base ${MERGE_BASE}）"
 echo "注意：基线是本地记录的远端。开工前没 git fetch origin main 的话，你比的是旧的 main。"
 echo "改动：$(printf '%s\n' "$CHANGED" | wc -l) 个文件"
 printf '%s\n' "$CHANGED" | sed 's/^/  /'
@@ -90,6 +90,27 @@ printf '%s\n' "$CHANGED" | sed 's/^/  /'
 # docs/ 与纯说明文件不带动任何东西。其余任何路径都算「动了代码」。
 CODE_CHANGED="$(printf '%s\n' "$CHANGED" \
   | grep -vE '^(docs/|\.github/|\.tachi\.md$|README|LICENSE|.*\.md$)' || true)"
+
+# ---------------------------------------------------------------------------
+# 这台机器能接什么活
+# ---------------------------------------------------------------------------
+# 共用同一个 issue 队列的两台机器能力不一样：一台弱的 VPS 跑不动 smoke / e2e，它就不该接界面活。
+# 边界写在这个仓库的公共 git 目录里（.git/autopilot-no-ui，装机时手动放，内容随便写一句人话），
+# 不在提示词里——提示词会被遗忘，脚本不会。
+#
+# 为什么是硬失败而不是 UNVERIFIED：交出一个「界面没验过」的 PR，等于把风险丢给看 PR 的人；
+# 宁可这一轮白跑，也要让它在这里响亮地停下来。
+LIMITS_FILE="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo .git)/autopilot-no-ui"
+if [[ -f "$LIMITS_FILE" ]]; then
+  BLOCKED="$(printf '%s\n' "$CHANGED" | grep -E '^(desktop/|mobile/|web/frontend/src/)' || true)"
+  if [[ -n "$BLOCKED" ]]; then
+    echo ""
+    echo "这台机器不接界面活（$LIMITS_FILE = $(head -c 200 "$LIMITS_FILE" | tr -d '\n')）："
+    printf '%s\n' "$BLOCKED" | sed 's/^/  /'
+    echo "换一台能跑 smoke / e2e 的机器做，或者把这件留在原 issue 上。"
+    exit 1
+  fi
+fi
 
 if [[ -z "$CODE_CHANGED" ]]; then
   skip "核心门禁" "只改了文档/说明文件"

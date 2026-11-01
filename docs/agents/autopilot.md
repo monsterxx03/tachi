@@ -30,6 +30,13 @@ CI，也扫不出确定的技术债）。
 **同一个问题试过两次没成就停手**：把试过什么、卡在哪回在原 issue 下，打 `waiting-user`，
 别再来第三次。这个次数是按问题算的，不是按圈算的——下一圈别再捡同一件。
 
+**队列是共用的**：跑的不止这一台机器，另一台也在按同一份文档干活。所以：
+
+- 这台机器能接什么活由脚本决定，不由你判断。装机的人在 `.git/autopilot-no-ui` 里写了边界，
+  `verify.sh` 会照它硬拦——碰了它不许改主意，把活留在原处，去做别的。
+- 建 `by-tachi` issue 之前先搜一遍：另一边可能刚刚提过同一个。
+- 挑到一件、开了 PR 之后，另一台看到这个 PR 就不会再挑同一件；所以在开 PR 之前别磨太久。
+
 ## 身份：每一个 GitHub 动作都以 bot 出现
 
 你开的 issue、PR、评论和提交，作者是一个独立的 GitHub App（`tachi-autopilot[bot]`），**不是仓库主人**。
@@ -154,9 +161,21 @@ scripts/autopilot/screenshot.sh <desktop|mobile|web> --name <名字> --upload
   （`app.pem` + `app.json`），**换机器就只拷这两个文件**，令牌由 `bot-token.sh` 现换、不落盘到仓库。
   改了 App 的权限之后要去设置页重新批准一次，否则令牌照发但权限还是旧的。
 - **main 加保护**：必须走 PR、且要主人批准才能合。bot 有写权限，这条规则是唯一挡住它自己合的东西。
+- **装一台新机器**（第二台、第三台共用同一个队列）：
+  1. 拷 `app.pem` + `app.json` 到那台的 `$TACHI_HOME/autopilot/`——同一个 App，两份凭证都有效。
+  2. 仓库克隆要最新：脚本是按新版走的，旧克隆会照旧规矩干活。
+  3. 放能力标记决定它不接什么活：`touch <仓库>/.git/autopilot-no-ui` 就是「跑不动界面的机器」，
+     `verify.sh` 读到它就拒掉 `desktop/`、`mobile/`、`web/frontend/src/`。标记写在 `.git/` 里，
+     拉代码不会冲掉，也不进仓库历史。
+  4. 确认 `web/frontend/dist`、`web/frontend/node_modules` 在位：少了它们每次验证都要重装一遍依赖，
+     弱机器上那是几十分钟。
+  5. 定时任务的 prompt 只写「读这份文档并严格照做」，**不要把规则抄进去**——抄一份就会有两份不一致的规则。
+  6. 两台的启动时间错开（比如 :00 和 :30），重叠越少，两台同时挑中一件的机会越少。
 - 建定时任务时，目标会话必须已经开着「无需审批」，否则任何 ask 规则在无人值守时都会被直接拒绝，
   而日志里没有报错。
 - 想停：把 job 设成 paused。**别删那条会话**，删会话会连带删掉这个 job。
 - 要加约束：补在 `scripts/autopilot/` 或 deny 规则里，不要只写在 prompt 里——prompt 会被遗忘，脚本不会。
+- **改脚本时**：`$变量` 后面紧跟中文标点要写成 `${变量}`。UTF-8 语言环境下 bash 会把全角括号、全角逗号
+  当成变量名的一部分，报「未绑定的变量」——deskmini 恰好是 POSIX 语言环境才一直没暴露，换台机器就炸。
 
 Related: [`.tachi.md`](../../.tachi.md)、[desktop.md](desktop.md)、[permission.md](permission.md)、[itest.md](itest.md)。
