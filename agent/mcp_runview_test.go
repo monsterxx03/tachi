@@ -61,8 +61,9 @@ func TestNamingTheSearchToolAloneDoesNotMakeARunAnMCPRun(t *testing.T) {
 // reads the pool directly, so a missing check there puts a schema into a request
 // whose tool the executor would refuse as an unknown tool.
 func TestADiscoveredMCPToolOnlyReachesARunThatAdmitsMCP(t *testing.T) {
+	previous := config.BaseDir()
 	config.SetBaseDir(t.TempDir())
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	a := newResolverAgent("Bash", "ReadFile", tools.ToolNameMCPSearchTools, "mcp__srv__a")
 	mgr := mcp.NewManager(t.Context(), nil, logger.Default())

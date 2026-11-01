@@ -40,8 +40,9 @@ func newMCPBudgetAgentWith(t *testing.T, provider llm.Provider, tokens int64, bu
 	t.Helper()
 	// The discovered-set path is keyed on files under the base dir; a test must
 	// not read or write the user's own ~/.tachi.
+	previous := config.BaseDir()
 	config.SetBaseDir(t.TempDir())
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previous) })
 
 	a := newTestAgent(t, provider)
 	a.Config.Logger = logger.Default()
