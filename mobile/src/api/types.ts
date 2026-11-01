@@ -176,6 +176,8 @@ export interface CronPanelRow {
   id: string;
   name: string;
   scheduleText: string;
+  /** recurring = 反复跑；oneshot = 只跑一次，跑完自己删掉。空值按 oneshot 读（老数据） */
+  type: string;
   status: string;
   /** session / pending / missing / channel —— channel 是本段对话所属渠道的定时任务 */
   targetKind: string;

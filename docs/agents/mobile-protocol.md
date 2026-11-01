@@ -189,10 +189,12 @@ Panels          { mcp:[{name, type, connected, needsAuth, loaded, tools}],
                   // id 是节点的**身份**（pin 住的那一个），也是 #a: 引用唯一认的东西。
                   // 空 = 这台机器从没往它那儿拨过，于是这一行不能被当成可引用的：
                   // 一个空的 #a: 看着像引用、插进去解析不了。
-                  cron:[{id, name, scheduleText, status, targetKind, targetTitle,
+                  cron:[{id, name, scheduleText, type, status, targetKind, targetTitle,
                          nextRun, lastRunStatus, lastRunError, running}] }
                 mcp.loaded / mcp.tools 是「这段对话载入几个 / 这个 server 一共几个」
                 agents.anyChecked=false 表示还没问过任何节点（不是「没有节点」）
+                cron.type ∈ recurring / oneshot（一次性跑完自删）。一次性任务的 scheduleText 是
+                「哪天几点」在 cron 语法里的写法（`30 13 1 11 *`），手机不照着念，只报下次运行的具体时刻
                 cron.targetKind ∈ session / pending / missing / channel
                 channel 的那几条是**这段对话所属线程**的定时任务（只出现在那个会话的面板里），
                 这一屏只读：跑一次需要拥有那个线程的渠道运行时，改它属于那段对话自己的命令
