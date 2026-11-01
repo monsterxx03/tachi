@@ -20,6 +20,8 @@ import Animated, {
 import { api, type Pairing } from '../api/client';
 import type { AttachmentRef } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
+import { fileKind } from './fileKind';
+import { Markdown } from './Markdown';
 import { ZoomableImage } from './Zoomable';
 
 /** 1 倍就是 1 倍：捏合与双击都会让它离 1 有一点小数级的偏差 */
@@ -112,8 +114,11 @@ export function FileViewer({
   onClose: () => void;
 }) {
   const { tokens: t } = useTheme();
-  const isImage = file.mimeType.startsWith('image/');
-  const isText = file.mimeType.startsWith('text/') || file.mimeType === 'application/json';
+  const kind = fileKind(file);
+  const isImage = kind === 'image';
+  const isMarkdown = kind === 'markdown';
+  // markdown 也是取回来的一段文本，只是拿去渲染而不是摊开
+  const isText = kind === 'text' || isMarkdown;
   const [text, setText] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(isText);
@@ -157,7 +162,7 @@ export function FileViewer({
             {file.name}
           </Text>
           <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }}>
-            {isImage ? '图片' : isText ? '文本' : '其他'} · {sizeText}
+            {isImage ? '图片' : isMarkdown ? 'Markdown' : isText ? '文本' : '其他'} · {sizeText}
           </Text>
         </View>
       </View>
@@ -166,6 +171,20 @@ export function FileViewer({
         // 捏合放大 / 拖动 / 双击（见 ./Zoomable），往下拖关闭（见上面的 ImagePane）。
         // 原来那个 ScrollView 的 maximumZoomScale 只有 iOS 认，安卓上是一张不会动的图。
         <ImagePane source={{ uri: remote.url, headers: remote.headers }} onClose={onClose} />
+      ) : isMarkdown ? (
+        // 一份 md 是给人读的，不是给人看源码的：交给正文同一个渲染器（表格、列表、
+        // 代码块都有；围栏里的 mermaid 也是那张图），外层只负责滚动和内边距。
+        <ScrollView contentContainerStyle={styles.textWrap}>
+          {loading ? (
+            <ActivityIndicator color={t.faint} style={{ marginTop: 30 }} />
+          ) : failed ? (
+            <Text style={{ color: t.red, fontSize: 13 }}>取不到这个文件了。</Text>
+          ) : (
+            <View style={[styles.docCard, { backgroundColor: t.panel, borderColor: t.border }]}>
+              <Markdown text={text ?? ''} />
+            </View>
+          )}
+        </ScrollView>
       ) : isText ? (
         <ScrollView contentContainerStyle={styles.textWrap}>
           {loading ? (
@@ -213,5 +232,7 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontFamily: 'monospace',
   },
+  /** 渲染出来的 markdown：同一张卡片，但里面是正文样式，所以不要 monospace、不要行高。 */
+  docCard: { borderWidth: 1, borderRadius: 10, padding: 14, overflow: 'hidden' },
   notice: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
 });
