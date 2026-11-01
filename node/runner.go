@@ -488,14 +488,18 @@ func (r *runner) shutdown() {
 	for _, id := range ids {
 		r.stopTurn(id)
 	}
-	if len(ids) == 0 {
-		return
-	}
 
 	// A bounded wait, then carry on: the design allows terminating what will not stop
 	// (§3.4). Without the wait, a process can exit while a turn is mid-write — the file
 	// writes are atomic, so nothing is torn, but a caller reading the task record right
 	// afterwards sees a state the node was about to update.
+	//
+	// The wait is on the TURNS, not on the table that lists them: stopTurn (and
+	// questionExpired) forget a turn the moment it is ended, while the loop behind it goes on
+	// unwinding — it writes its session to the end and then releases its retention hold, which
+	// rewrites the retention record. Waiting only when r.turns was non-empty returned from
+	// Close() with such a turn still writing, so whoever removed the data dir right afterwards
+	// found a directory somebody was still filling.
 	unwound := make(chan struct{})
 	go func() {
 		r.unwound.Wait()
@@ -505,7 +509,7 @@ func (r *runner) shutdown() {
 	case <-unwound:
 	case <-time.After(shutdownGrace):
 		r.logger.Warn(context.Background(), "node: turns did not finish before shutdown",
-			"turns", len(ids), "waited", shutdownGrace.String())
+			"stopped", len(ids), "waited", shutdownGrace.String())
 	}
 }
 
