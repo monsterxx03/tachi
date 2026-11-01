@@ -122,7 +122,12 @@ if [[ -f "$LIMITS_FILE" ]]; then
 fi
 
 if [[ -z "$CODE_CHANGED" ]]; then
-  skip "核心门禁" "只改了文档/说明文件"
+  # 措辞要说实话：只有 .github/ 时，"只改了文档" 是一句假话 —— 它会跑，只是不在这里跑。
+  if [[ -n "$WORKFLOW_CHANGED" ]]; then
+    skip "核心门禁" "没有本地能跑的东西 —— 改的是 .github/，见下面那行"
+  else
+    skip "核心门禁" "只改了文档/说明文件"
+  fi
 else
   # ---------------------------------------------------------------- 脚本语法：门禁自己也在里面
   # 没有这一层，改坏 scripts/autopilot/*.sh 只会触发 lint + unit tests，而这两层看不见 bash。
