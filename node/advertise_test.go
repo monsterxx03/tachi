@@ -10,7 +10,6 @@ import (
 	"github.com/libp2p/zeroconf/v2"
 	"github.com/stretchr/testify/require"
 
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -65,8 +64,11 @@ func TestTheAnnouncementSaysThreeFactsAndNothingElse(t *testing.T) {
 		announced.TXT[key] = value
 	}
 	// A browser of a DIFFERENT machine, because this machine's own announcement is one it must ignore.
-	other, err := newMDNSBrowser("ffffffffffffffffffffffffffffffff", config.MdnsDiscoveryConfig{}, nil, newSightingsStore(nil))
-	require.NoError(t, err)
+	// browserOver rather than newMDNSBrowser: this test is about which KEYS travel, and building a
+	// browser from the host's own interfaces would make it fail on a machine that has no local network
+	// to browse on at all (a VPS with only loopback and tunnels) — for a reason that has nothing to do
+	// with the thing being tested.
+	other := browserOver(nil, "ffffffffffffffffffffffffffffffff", nil, newSightingsStore(nil))
 	cand, why := other.decide(announcement{
 		Instance: "some-machine",
 		TXT:      announced.TXT,

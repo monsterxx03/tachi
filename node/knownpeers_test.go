@@ -126,6 +126,12 @@ func TestTwoMachinesMayShareALabelInTheRecord(t *testing.T) {
 // A pin that did not reach disk must not count as verified: the next conversation is checked against
 // what is IN the file, so an unwritable path has to fail the handshake rather than pass it.
 func TestAPinThatCannotBeWrittenIsNotVerified(t *testing.T) {
+	// The premise is a write that the OS refuses, and a 0500 directory only refuses it for a normal
+	// user: root writes into it anyway, so the pin lands and the test fails on its own setup rather
+	// than on the behaviour it is about. pkg/fileutil/textfile_test.go skips the same way.
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
 	base := t.TempDir()
 	config.SetBaseDir(base)
 	t.Cleanup(func() { config.SetBaseDir("") })
