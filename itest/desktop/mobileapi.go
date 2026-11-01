@@ -210,6 +210,68 @@ func mobileAPIRoundTrip(c *liveCtx) {
 		ran = requestHasText(reqs[1], "mobile-e2e")
 	}
 	c.check("第二条请求带着命令的输出（权限放行后才跑的）", ran, requestCount(reqs))
+
+	// ── a command, not something to say ────────────────────────────────────
+	// "/sh …" has to reach the same dispatcher the desktop composer uses, run LOCALLY, and come
+	// back as a card the reader can see without tapping. This is the phone's half of #87: before
+	// it, "/sh ls" was handed to the model as prose.
+	//
+	// The text deliberately matches this scenario's consent rule (`echo mobile-*`): /sh is the
+	// user's OWN command, so it must run without parking on a permission card — the same line the
+	// desktop draws (runShellCommand calls shutil.Shell directly).
+	cmdText := "/sh echo mobile-cmd-ok"
+	body = `{"text":"` + cmdText + `","mode":"send"}`
+	req, _ = http.NewRequest("POST", base+"/v1/sessions/"+url.PathEscape(sessionID)+"/messages", strings.NewReader(body))
+	res, err = client.Do(auth(req))
+	if err != nil {
+		c.check("手机发出的 /sh 被接受", false, err.Error())
+		return
+	}
+	accepted = struct {
+		Accepted bool   `json:"accepted"`
+		Error    string `json:"error"`
+	}{}
+	_ = json.NewDecoder(res.Body).Decode(&accepted)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !accepted.Accepted {
+		c.check("手机发出的 /sh 被接受", false, fmt.Sprintf("%d %s", res.StatusCode, accepted.Error))
+		return
+	}
+	c.check("手机发出的 /sh 被接受", true, "")
+
+	var (
+		cmdStart, cmdResult, cmdTurn bool
+		cmdAutoExpand                bool
+		cmdEchoed, cmdAsked          bool
+		cmdSeen                      []string
+	)
+	for !cmdTurn {
+		ev := readEvent(conn, 30*time.Second)
+		if ev == nil {
+			break
+		}
+		cmdSeen = append(cmdSeen, ev.Type)
+		switch ev.Type {
+		case "tool_start":
+			cmdStart = ev.ToolName == "Bash"
+			cmdAutoExpand = ev.AutoExpand
+		case "tool_result":
+			cmdResult = strings.Contains(ev.Result, "mobile-cmd-ok")
+		case "user_message":
+			cmdEchoed = cmdEchoed || ev.Text == cmdText
+		case "ask":
+			cmdAsked = true
+		case "turn":
+			cmdTurn = true
+		}
+	}
+	stream := strings.Join(cmdSeen, " → ")
+	c.check("/sh 以一个工具调用到达手机", cmdStart, stream)
+	c.check("那张卡带着 autoExpand（手机直接摊开，不用点）", cmdAutoExpand, fmt.Sprint(cmdAutoExpand))
+	c.check("/sh 的输出回到了手机", cmdResult, stream)
+	c.check("/sh 没有被当成用户消息回传", !cmdEchoed, stream)
+	c.check("/sh 没停在权限卡上（自己敲的命令，和桌面一样）", !cmdAsked, stream)
+	c.check("/sh 的一轮以 turn 结束", cmdTurn, stream)
 }
 
 // readEvent reads one decoded server event, or nil when nothing arrives in time.
@@ -229,12 +291,17 @@ func readEvent(conn *websocket.Conn, wait time.Duration) *mobileEvent {
 // mobileEvent is the subset of the wire's events this scenario reads. Field names are the
 // protocol's (mobile-protocol.md) — nothing here is reshaped for the test.
 type mobileEvent struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	ToolID  string `json:"toolId"`
-	IsError bool   `json:"isError"`
-	End     string `json:"end"`
-	Origin  string `json:"origin"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ToolID   string `json:"toolId"`
+	ToolName string `json:"toolName"`
+	Result   string `json:"result"`
+	IsError  bool   `json:"isError"`
+	End      string `json:"end"`
+	Origin   string `json:"origin"`
+	// tool_start: whether the USER asked for this call (the desktop's /sh) — the phone opens the
+	// card with its output instead of folding it.
+	AutoExpand bool `json:"autoExpand"`
 	// session_prefs: the two switches another screen changed.
 	Provider     string `json:"provider"`
 	SkipApproval bool   `json:"skipApproval"`

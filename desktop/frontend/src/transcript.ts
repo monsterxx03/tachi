@@ -305,8 +305,17 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
       return
     }
 
+    // A call the USER asked for (`expand`, see Part.expand — the desktop's /sh) is not process:
+    // its output IS the answer, so it belongs on screen, not behind the strip's row. This is the
+    // half that was missing: the hint only ever opened the CARD, and a card folded into a closed
+    // strip is never drawn at all — which is why /sh looked like nothing but 「1 步」.
+    //
+    // The consequence for a command-only turn is deliberate: with nothing left folded the strip
+    // does not render at all (see App's `view.folded.length > 0`), so a /sh turn shows the card
+    // and no summary row above it. While it runs the strip is still the status line.
     const staysVisible =
       part.type === 'notice' ||
+      (part.type === 'tool' && part.expand === true) ||
       index === conclusionIndex ||
       index === askIndex ||
       index === parkedIndex ||

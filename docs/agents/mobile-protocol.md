@@ -92,6 +92,9 @@
 | 这段对话属于某个 IM channel，而宿主里没有那个运行时 | 409 `channel_offline` | 这台机器现在没有跑那个渠道，等它起来 |
 | 对着 channel 的会话发了一条「答复走渠道」的命令（/model、/stop…） | 409 `channel_command` | 这类命令在原渠道里发 |
 | 对着 channel 的会话发了消息，但这一轮已被渠道那边结束 | 409 `turn_running` / `not_running` | 同普通会话 |
+| 消息以 `/` 开头，但它不是一个已知命令 | 400 `unknown_command` | 没有这个命令 |
+| 命令是一次性的（/review、/commit、/dream），输出在电脑那块侧面板里 | 409 `command_desktop_only` | 这类命令要在电脑上运行 |
+| 命令没能启动（agent 没就绪、这一轮已经在跑等） | 409 `command_refused` | 这条命令没能执行，在电脑上试试 |
 | 删除一段正在跑的对话 | 409 `turn_running` | 它正在跑；插话或打断？ |
 | 删除失败（写盘出错等） | 500 `delete_failed` | 删不掉这段对话 |
 | 这台电脑建不出 agent（还没配 provider） | 409 `agent_unavailable` | 这台电脑还没配好模型，先在电脑上配置 |
@@ -137,7 +140,7 @@
 | `snapshot` | `snapshot` | 每次 `open` |
 | `text` | `text` | 助手的文字，增量 |
 | `thinking` | `text` | 思考增量（默认折叠） |
-| `tool_start` | `toolId`, `toolName`, `title` | 工具开始 |
+| `tool_start` | `toolId`, `toolName`, `title`, `autoExpand` | 工具开始 |
 | `tool_args` | `toolId`, `args` | 参数（可能分次） |
 | `tool_result` | `toolId`, `isError`, `result`, `truncated` | 工具结束，结果**截断到 2 KiB** |
 | `turn` | `durationMs`, `iterations`, `end` | 一轮结束，`end` 是 `complete`/`interrupted`/`error` |
@@ -158,6 +161,7 @@
 | `lagged` | — | 你跟不上了，重读快照 |
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
+- `tool_start.autoExpand` 说的是「这次调用是**用户自己点名**的」（桌面的 `/sh`），所以它的输出就是要看的东西：手机要把卡片**直接摊开**，别让人再点一下才看见自己刚要求的输出。缺省/`false` 表示模型自己决定调用的，照旧折叠。这一条只是显示提示，不改任何数据。
 - `origin` 是 `desktop` / `mobile` / `badge` / `cron`：一块屏改了共享状态要告诉另一块，收到时**自己发的那条**不重复画。
 - `session_prefs` 没有 origin：这几个开关是**幂等**的共享状态，谁改的都要落到每一块屏上，收到就照它更新即可（开关写的是会话记录，事件只是让它立刻可见）。
 

@@ -73,6 +73,11 @@ export interface SessionMessage {
   title?: string;
   toolResult?: string;
   isError?: boolean;
+  /**
+   * 这次调用是**用户自己点名**的（桌面的 /sh）——输出就是要看的东西，卡片直接摊开。
+   * 只有实时那一轮带它：记录里没有这个字段（它是一次显示提示，不是对话内容）。
+   */
+  autoExpand?: boolean;
   /** 折叠起来的思考增量 */
   thinking?: string;
 }
@@ -224,7 +229,7 @@ export type ServerEvent =
   | { type: 'snapshot'; snapshot: Snapshot }
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
-  | { type: 'tool_start'; toolId: string; toolName: string; title: string }
+  | { type: 'tool_start'; toolId: string; toolName: string; title: string; autoExpand?: boolean }
   | { type: 'tool_args'; toolId: string; args: string }
   | { type: 'tool_result'; toolId: string; isError: boolean; result: string; truncated: boolean }
   | { type: 'turn'; durationMs: number; iterations: number; end: TurnEnd }

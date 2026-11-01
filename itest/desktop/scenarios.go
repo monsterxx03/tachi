@@ -746,6 +746,35 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// /sh 的输出必须自己出现在屏幕上。这一轮的开头没有任何模型调用：`/sh echo …` 是本地
+		// 执行，结果以一次「用户点名的工具调用」进对话（`ToolAutoExpand`）。它从前只被用来
+		// 打开卡片，却仍被折进过程条 —— 而过程条默认收起、卡片压根不渲染，于是屏幕上只剩
+		// 「1 步」，用户要的输出一个字也看不到（issue #87 的桌面那一半）。
+		//
+		// 对照轮把边界钉住：模型自己跑的 shell 照旧折进过程条，这条改动只对「用户点名」的
+		// 调用生效 —— 否则就等于把每一次工具调用的输出都摊开了。
+		{
+			name: "sh-unfolded",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe sh-unfolded scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 只有对照轮会问模型。
+				{Reply: bashStream("echo control-ok", "call_c1")},
+				{Reply: textStream("对照轮跑完了。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// /sh 是本地执行：模型连看都不该看到它。这一条也是"命令没被当成 prompt"的判据。
+				if n, seen := c.requestSeen("/sh echo"); seen {
+					c.check("/sh 没有发给模型（本地执行）", false, fmt.Sprintf("第 %d 个请求里出现了它", n))
+				} else {
+					c.check("/sh 没有发给模型（本地执行）", true, "")
+				}
+				c.check("只有对照轮问了模型（两次请求）", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
+		//
 		// 消息区里的富文本控件：代码块的头栏（语言 / 复制 / 折行）与正文图片的放大。三样都是"看得见、
 		// 点得动"的东西，单测看不见，所以各自钉一条最容易被改坏的：头栏必须真的在代码之上（不是像
 		// 从前那样浮在第一行代码上）、折行开关必须真的改变换行方式（长行从溢出变成不溢出）、图片必须
@@ -4583,6 +4612,12 @@ permissions:
 					}
 				}
 				c.check("手机发出的消息写进了会话记录", found != "", fileList(sessionFiles(c.home)))
+				// /sh 是本地执行：模型一次都不该看到它 —— 这也是"命令没被当成 prompt"的判据。
+				if n, seen := c.requestSeen("mobile-cmd-ok"); seen {
+					c.check("/sh 没有发给模型", false, fmt.Sprintf("第 %d 个请求里出现了它", n))
+				} else {
+					c.check("/sh 没有发给模型", true, "")
+				}
 			},
 		},
 	}

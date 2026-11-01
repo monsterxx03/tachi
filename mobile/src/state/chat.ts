@@ -11,6 +11,8 @@ export interface ToolRun {
   args?: string;
   result?: string;
   isError?: boolean;
+  /** 用户自己点名的调用（桌面的 /sh）：卡片默认摊开，见 mobile-protocol.md 的 tool_start */
+  autoExpand?: boolean;
 }
 
 /**
@@ -91,7 +93,13 @@ export function applyEvent(
         live: {
           ...st.live,
           active: true,
-          parts: [...st.live.parts, { type: 'tool', tool: { id: ev.toolId, name: ev.toolName, title: ev.title } }],
+          parts: [
+            ...st.live.parts,
+            {
+              type: 'tool',
+              tool: { id: ev.toolId, name: ev.toolName, title: ev.title, autoExpand: ev.autoExpand },
+            },
+          ],
         },
       });
 
@@ -206,6 +214,13 @@ export function messageOfError(e: unknown): string {
         return '有一项远端任务正在使用它';
       case 'agent_unavailable':
         return '这台电脑还没配好模型，先在电脑上配置';
+      case 'unknown_command':
+        return '没有这个命令';
+      case 'command_desktop_only':
+        // 一次性命令（/review、/commit…）的输出在电脑那块侧面板里，手机上无处可看
+        return '这类命令要在电脑上运行';
+      case 'command_refused':
+        return '这条命令没能执行，在电脑上试试';
       case 'no_project':
         return '这个项目已经不在了（或它的目录不可用）';
       case 'bad_working_dir':

@@ -145,21 +145,30 @@ func (s *AgentService) ListCommands() []CommandVO {
 // frontend shows that as a notice in the transcript instead of pretending a
 // turn happened.
 func (s *AgentService) RunCommand(text string) string {
+	name, args, refusal := parseCommand(text)
+	if refusal != "" {
+		return refusal
+	}
+	// A typed command has no turn behind it: the review it starts covers the whole tree.
+	return s.desk.startCommand(s.desk.currentID(), name, args, reviewScope{}, "", laneFor(name), desktopCommandHandlers[name])
+}
+
+// parseCommand splits "/sh ls -l" into the registry's command name and its args, or answers why it
+// cannot: empty, unknown, or a registry entry this frontend never implemented. Shared with the
+// phone's message path, so "what counts as a command" is decided in exactly one place.
+func parseCommand(text string) (name, args, refusal string) {
 	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "/"))
 	if body == "" {
-		return "空命令"
+		return "", "", "空命令"
 	}
 	def := cmds.FindByPrefix(body)
 	if def == nil {
-		return fmt.Sprintf("未知命令：/%s", strings.Fields(body)[0])
+		return "", "", fmt.Sprintf("未知命令：/%s", strings.Fields(body)[0])
 	}
-	handler, ok := desktopCommandHandlers[def.Name]
-	if !ok {
-		return fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
+	if _, ok := desktopCommandHandlers[def.Name]; !ok {
+		return "", "", fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
 	}
-	args := strings.TrimSpace(strings.TrimPrefix(body, def.Name))
-	// A typed command has no turn behind it: the review it starts covers the whole tree.
-	return s.desk.startCommand(def.Name, args, reviewScope{}, "", laneFor(def.Name), handler)
+	return def.Name, strings.TrimSpace(strings.TrimPrefix(body, def.Name)), ""
 }
 
 // ReviewChanges runs a review SCOPED to the files a turn changed: the desktop's
@@ -228,7 +237,7 @@ func (s *AgentService) startReview(sessionID string, scope reviewScope, reviewed
 			return notice
 		}
 	}
-	return d.startCommand(commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
+	return d.startCommand(active, commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
 }
 
 // wholeTreeScope is ReviewAllChanges' subject: every uncommitted file in the session's roots, or
@@ -380,13 +389,14 @@ func (d *desktopApp) emitOneOff(id string, payload map[string]any) {
 	d.emit("agent:oneoff", payload)
 }
 
-func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
-	d.mu.Lock()
-	id := d.activeID
+// startCommand starts a command run for ONE session. The id is explicit rather than read from
+// activeID: the phone drives conversations it is not displaying, and a review's own entries pass
+// the displayed one only after checking the two match (see startReview).
+func (d *desktopApp) startCommand(id, name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
 	if id == "" {
-		d.mu.Unlock()
 		return refuseNoSession
 	}
+	d.mu.Lock()
 	// getRun resolves the child of a compaction that is still in flight to the run producing
 	// into it, so a command typed while that child is on screen meets the same busy check below
 	// rather than starting a second run over one conversation (see ownerOfLocked).

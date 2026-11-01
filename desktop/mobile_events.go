@@ -39,6 +39,10 @@ func (d *desktopApp) mobileProjectEvent(id string, ev agent.AgentEvent, lane run
 			"toolId":   ev.ToolID,
 			"toolName": ev.ToolName,
 			"title":    tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
+			// autoExpand: the user asked for this call directly (the desktop's /sh), so its output IS
+			// the answer. The phone opens the card with it instead of making the reader tap a folded
+			// header to see what they just requested — the same hint the desktop transcript uses.
+			"autoExpand": ev.ToolAutoExpand,
 		})
 	case agent.AgentEventToolCallArgs:
 		d.mobileNotify(id, map[string]any{

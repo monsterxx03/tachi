@@ -99,6 +99,7 @@ function liveToolStep(tool: ToolRun): Extract<ProcessStep, { kind: 'tool' }> {
         toolCallId: tool.id,
         title: tool.title,
         args: tool.args,
+        autoExpand: tool.autoExpand,
       },
       result:
         tool.result === undefined
