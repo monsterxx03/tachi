@@ -16,6 +16,7 @@ import {
 import type { FileSource } from '../api/client';
 import { pickDocument, pickPhoto, type PickedFile } from '../api/pick';
 import type {
+  AgentPanelRow,
   AttachmentRef,
   PendingAsk,
   PendingMessage,
@@ -27,7 +28,7 @@ import type {
 } from '../api/types';
 import type { Live } from '../state/mobile';
 import { buildAskItems, buildItems, buildLiveTail, type Item, type ProcessStep } from '../state/items';
-import { hashRefAt, matchSessions, sessionQuery, sessionRef, spliceRef } from './refs';
+import { agentRef, hashQuery, hashRefAt, matchAgents, matchSessions, sessionRef, spliceRef } from './refs';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import Animated, {
   Easing,
@@ -269,6 +270,7 @@ function Composer({
   onStop,
   sessions,
   currentId,
+  loadAgents,
 }: {
   running: boolean;
   waiting: string;
@@ -286,6 +288,8 @@ function Composer({
   sessions: SessionSummary[];
   /** 正在写的这一段：引用自己不会展开出任何有用的东西，所以它不出现在候选里 */
   currentId: string;
+  /** `#a:` 的候选：向那台电脑要一次节点面板（一次会话里不会变） */
+  loadAgents: () => Promise<AgentPanelRow[]>;
 }) {
   const { tokens: t } = useTheme();
   const [text, setText] = useState('');
@@ -314,25 +318,45 @@ function Composer({
   // 规则（都在 refs.ts 里，和它一起被测）。
   const syncPick = useCallback((value: string, caret: number) => {
     const ref = hashRefAt(value, caret);
-    if (!ref || sessionQuery(ref.query).kind === 'none') {
+    if (!ref || hashQuery(ref.query).kind === 'none') {
       setRefPick(null);
       return;
     }
     setRefPick({ start: ref.start, end: caret, query: ref.query });
   }, []);
 
-  // 还没敲完 `s:` 时列出全部对话 —— 那几行就是「# 能干什么」的答案；敲完之后按标题/id 过滤。
-  const rows = useMemo(() => {
-    if (!refPick) return [];
-    const q = sessionQuery(refPick.query);
-    if (q.kind === 'none') return [];
-    return matchSessions(sessions, q.kind === 'sessions' ? q.rest : '', currentId, REF_PICK_LIMIT);
-  }, [refPick, sessions, currentId]);
+  const pickKind = refPick ? hashQuery(refPick.query) : { kind: 'none' as const };
+  const rest = 'rest' in pickKind ? pickKind.rest : '';
+  // 节点候选取一次就够：一次会话里节点不会变，而那一趟要等网络（那是打开 `#a:` 的人在等）。
+  // 失败就空着 —— 手打 `#a:<身份>` 仍然照常可用，展开在桌面那一侧。
+  const [agents, setAgents] = useState<AgentPanelRow[]>([]);
+  const agentsAsked = useRef(false);
+  useEffect(() => {
+    if (pickKind.kind !== 'agents' || agentsAsked.current) return;
+    agentsAsked.current = true;
+    void loadAgents()
+      .then((rows) => setAgents(rows))
+      .catch(() => setAgents([]));
+  }, [pickKind.kind, loadAgents]);
+
+  // 两个命名空间各列各的：`#s:` 是其它对话（手机手里就有），`#a:` 是节点（要问一次那台电脑）。
+  // 还没敲完前缀（`#`、`#a`、`#s`）时两组都可以列 —— 那几行就是「# 能干什么」的答案。
+  const sessionRows = useMemo(
+    () => (pickKind.kind === 'sessions' || pickKind.kind === 'candidates'
+      ? matchSessions(sessions, rest, currentId, REF_PICK_LIMIT)
+      : []),
+    [pickKind.kind, rest, sessions, currentId],
+  );
+  const agentRows = useMemo(
+    () => (pickKind.kind === 'agents' ? matchAgents(agents, rest, REF_PICK_LIMIT) : []),
+    [pickKind.kind, rest, agents],
+  );
 
   const insertRef = useCallback(
-    (id: string) => {
+    (id: string, kind: 'session' | 'agent') => {
       if (!refPick) return;
-      const out = spliceRef(textRef.current, refPick.start, refPick.end, sessionRef(id));
+      const ref = kind === 'agent' ? agentRef(id) : sessionRef(id);
+      const out = spliceRef(textRef.current, refPick.start, refPick.end, ref);
       textRef.current = out.value;
       caretRef.current = out.caret;
       setText(out.value);
@@ -527,13 +551,15 @@ function Composer({
       ) : null}
       {/* `#s:` 的候选。它挂在输入行上面而不是浮成一个覆盖层：手机上覆盖层会把正在写的那句话
           挡住，而读者做选择时正需要看那句话。 */}
-      {rows.length > 0 ? (
+      {sessionRows.length > 0 || agentRows.length > 0 ? (
         <View style={[styles.refBar, styles.column, { borderColor: t.border, backgroundColor: t.inputBg }]}>
-          <Text style={{ color: t.faint, fontSize: 10.5 }}>引用另一段对话</Text>
-          {rows.map((row) => (
+          <Text style={{ color: t.faint, fontSize: 10.5 }}>
+            {agentRows.length > 0 ? '引用一台节点（派活用）' : '引用另一段对话'}
+          </Text>
+          {sessionRows.map((row) => (
             <Pressable
               key={row.id}
-              onPress={() => insertRef(row.id)}
+              onPress={() => insertRef(row.id, 'session')}
               accessibilityRole="button"
               accessibilityLabel={`引用 ${row.title || row.id}`}
               style={({ pressed }) => [styles.refRow, pressed && { backgroundColor: t.wash }]}
@@ -543,6 +569,21 @@ function Composer({
                 {row.title || '（无标题）'}
               </Text>
               <Text style={{ color: t.faint, fontSize: 11 }}>{row.id.slice(0, 8)}</Text>
+            </Pressable>
+          ))}
+          {agentRows.map((row) => (
+            <Pressable
+              key={row.id}
+              onPress={() => insertRef(row.id, 'agent')}
+              accessibilityRole="button"
+              accessibilityLabel={`引用节点 ${row.label || row.name || row.id}`}
+              style={({ pressed }) => [styles.refRow, pressed && { backgroundColor: t.wash }]}
+            >
+              <Feather name="cpu" size={12} color={t.faint} />
+              <Text style={{ color: t.dim, fontSize: 12.5, flex: 1 }} numberOfLines={1}>
+                {row.label || row.name || row.id.slice(0, 8)}
+              </Text>
+              <Text style={{ color: t.faint, fontSize: 11 }}>{row.reach || ''}</Text>
             </Pressable>
           ))}
         </View>
@@ -717,10 +758,13 @@ export function Chat({
   onClearPending,
   onSendPendingNow,
   sessions,
+  loadAgents,
 }: {
   snapshot: Snapshot;
   /** 全部对话，`#s:` 的候选就来自这里 —— 手机手里本来就有这份列表，不必为补全再问一次服务端。 */
   sessions: SessionSummary[];
+  /** `#a:` 的候选：节点身份只在那台电脑上，所以要问一次（见 `loadPanels`） */
+  loadAgents: () => Promise<AgentPanelRow[]>;
   live: Live;
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
@@ -996,6 +1040,7 @@ export function Chat({
           onStop={onStop}
           sessions={sessions}
           currentId={s.id}
+          loadAgents={loadAgents}
         />
       )}
 

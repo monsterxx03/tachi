@@ -235,9 +235,9 @@ func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
 			"anyChecked": true,
 			"checkedAt":  "刚刚",
 			"peers": []map[string]any{
-				{"name": "构建机", "label": "ci-vm", "url": "http://10.0.0.8:8790", "note": "能跑发布与回归",
+				{"name": "构建机", "label": "ci-vm", "id": "a1b2c3d4e5f60718", "url": "http://10.0.0.8:8790", "note": "能跑发布与回归",
 					"reach": "可达", "skills": []string{"build", "deploy"}, "err": ""},
-				{"name": "笔记本", "label": "", "url": "http://10.0.0.9:8790", "note": "",
+				{"name": "笔记本", "label": "", "id": "", "url": "http://10.0.0.9:8790", "note": "",
 					"reach": "连不上", "skills": []string{}, "err": "timeout"},
 			},
 		},

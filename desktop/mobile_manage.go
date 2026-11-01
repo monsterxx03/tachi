@@ -156,8 +156,13 @@ type mobileAgentPanel struct {
 }
 
 type mobileAgentRow struct {
-	Name   string   `json:"name"`
-	Label  string   `json:"label"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// ID is the node's pinned identity — the one thing a peer cannot claim, and the only thing a
+	// `#a:` reference resolves by (agentref.ResolveID). Empty when this machine has never called
+	// that node outbound, and a row without an identity is a row the phone must not offer as a
+	// reference: a bare `#a:` looks like one and expands to nothing.
+	ID     string   `json:"id"`
 	URL    string   `json:"url"`
 	Note   string   `json:"note"`
 	Reach  string   `json:"reach"`
@@ -219,7 +224,7 @@ func (d *desktopApp) mobileSessionPanels(sessionID string) (*mobilePanels, int, 
 	out.Agents.AnyChecked = board.AnyChecked
 	for _, p := range board.Peers {
 		row := mobileAgentRow{
-			Name: p.Name, Label: p.Label, URL: p.URL, Note: p.Note, Reach: p.Reach, Err: p.Err,
+			Name: p.Name, Label: p.Label, ID: p.NodeID, URL: p.URL, Note: p.Note, Reach: p.Reach, Err: p.Err,
 			Skills: make([]string, 0, 4),
 		}
 		if p.Card != nil {

@@ -5,13 +5,14 @@
 // 认得的命名空间前缀才算引用，别的一律是普通文本（`#include`、`#123` 不会被弹窗打断）。
 // 三处必须一致 —— 手机列出来的候选和桌面真正会展开的东西对不上，比没有候选更糟。
 //
-// **这一版只认 `#s:`。** `#a:` 的候选是节点身份，而手机拿到的 agent 面板行里没有身份字段
-// （`desktop/mobile_manage.go` 的 `mobileAgentRow`）—— 一个插进去解析不了的 `#a:` 比没有更糟，
-// 所以这里宁可不列。手打 `#a:<id>` 仍然照常可用：展开发生在桌面那一侧。
+// 两个命名空间都认：`#s:<id>` 是另一段对话，`#a:<身份>` 是一台可以派活的节点。`#a:` 的候选
+// 只列**有身份**的行（`AgentPanelRow.id`）—— 一个空的 `#a:` 看着像引用、插进去解析不了
+// （agentref 只按身份解析），那比没有更糟。
 
-import type { SessionSummary } from '../api/types'
+import type { AgentPanelRow, SessionSummary } from '../api/types'
 
 export const HASH_REF_MARK = '#'
+export const HASH_AGENT_PREFIX = 'a:'
 export const HASH_SESSION_PREFIX = 's:'
 
 /** 引用与它前面的字之间的边界，和 `atfile.IsRefBoundary` 是同一组字符。 */
@@ -41,15 +42,53 @@ export function hashRefAt(value: string, caret: number): { start: number; query:
  * `candidates` 是「`#` 还没敲完命名空间」（空查询、或 `s` —— `s:` 的前缀）：这时的候选就是
  * 会话，因为手机这里只有这一种实体引用。`none` 是别的命名空间和普通文本 —— 不弹窗。
  */
-export type SessionQuery = { kind: 'none' } | { kind: 'candidates' } | { kind: 'sessions'; rest: string }
+export type HashQuery =
+  | { kind: 'none' }
+  | { kind: 'candidates' }
+  | { kind: 'sessions'; rest: string }
+  | { kind: 'agents'; rest: string }
 
-export function sessionQuery(query: string): SessionQuery {
+/**
+ * 一段 `#` 之后的查询在问哪个命名空间。
+ *
+ * 两个前缀与桌面的 `hashNamespace`、以及真正做展开的 `atfile.HashQueryNamespace` 是同一条
+ * 规则：`a:` 是节点、`s:` 是会话，别的一律普通文本。没敲完前缀（空查询、`a`、`s`）时是
+ * candidates —— 那时候两组都可以列。
+ */
+export function hashQuery(query: string): HashQuery {
+  if (query.startsWith(HASH_AGENT_PREFIX)) return { kind: 'agents', rest: query.slice(HASH_AGENT_PREFIX.length) }
   if (query.startsWith(HASH_SESSION_PREFIX)) return { kind: 'sessions', rest: query.slice(HASH_SESSION_PREFIX.length) }
-  if (HASH_SESSION_PREFIX.startsWith(query)) return { kind: 'candidates' }
+  for (const prefix of [HASH_AGENT_PREFIX, HASH_SESSION_PREFIX]) {
+    if (prefix.startsWith(query)) return { kind: 'candidates' }
+  }
   return { kind: 'none' }
 }
 
 /** 引用要插进去的文本：`#s:<id>`。 */
+/** 节点引用的文本：`#a:<身份>`。 */
+export function agentRef(id: string): string {
+  return HASH_REF_MARK + HASH_AGENT_PREFIX + id
+}
+
+/**
+ * 节点候选：**只列有身份的那几行**。
+ *
+ * 一个空的 `#a:` 看着像引用，插进去却解析不了（agentref 只按身份/唯一前缀解析），所以本机
+ * 手里没有身份的节点在这一屏上连一行都不该有 —— 这与桌面那份选择器是同一条规矩。
+ */
+export function matchAgents(rows: AgentPanelRow[], rest: string, limit: number): AgentPanelRow[] {
+  const q = rest.trim().toLowerCase()
+  const out: AgentPanelRow[] = []
+  for (const row of rows) {
+    if (!row.id) continue
+    const name = (row.label || row.name || row.id).toLowerCase()
+    if (q && !name.includes(q) && !row.id.toLowerCase().includes(q) && !(row.note || '').toLowerCase().includes(q)) continue
+    out.push(row)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 export function sessionRef(id: string): string {
   return HASH_REF_MARK + HASH_SESSION_PREFIX + id
 }

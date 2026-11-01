@@ -159,6 +159,11 @@ export interface AgentPanel {
 export interface AgentPanelRow {
   name: string;
   label: string;
+  /**
+   * 节点的身份（pin 住的那一个）。`#a:` 引用只认它 —— 而它是空的时候这一行**不能**被当成
+   * 可引用的：一个空的 `#a:` 看着像引用，插进去却解析不了。
+   */
+  id: string;
   url: string;
   note: string;
   /** 最近一次探测的结论（同一批文案给桌面那份面板用） */

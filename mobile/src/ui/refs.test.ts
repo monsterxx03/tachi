@@ -1,5 +1,6 @@
 import type { SessionSummary } from '../api/types';
-import { hashRefAt, matchSessions, sessionQuery, sessionRef, spliceRef } from './refs';
+import type { AgentPanelRow } from '../api/types';
+import { agentRef, hashQuery, hashRefAt, matchAgents, matchSessions, sessionRef, spliceRef } from './refs';
 
 function session(id: string, title: string): SessionSummary {
   return { id, title, updatedAt: '刚刚', running: false, waiting: '', readOnly: false, heldByTask: false };
@@ -35,21 +36,21 @@ describe('hashRefAt', () => {
   });
 });
 
-describe('sessionQuery', () => {
+describe('hashQuery', () => {
   it('opens the session list for the session prefix', () => {
-    expect(sessionQuery('s:')).toEqual({ kind: 'sessions', rest: '' });
-    expect(sessionQuery('s:清理')).toEqual({ kind: 'sessions', rest: '清理' });
+    expect(hashQuery('s:')).toEqual({ kind: 'sessions', rest: '' });
+    expect(hashQuery('s:清理')).toEqual({ kind: 'sessions', rest: '清理' });
   });
 
   it('treats a bare # and the prefix being typed as candidates', () => {
-    expect(sessionQuery('')).toEqual({ kind: 'candidates' });
-    expect(sessionQuery('s')).toEqual({ kind: 'candidates' });
+    expect(hashQuery('')).toEqual({ kind: 'candidates' });
+    expect(hashQuery('s')).toEqual({ kind: 'candidates' });
   });
 
   it('leaves everything else alone', () => {
     // 这是「#include 不会被弹窗打断」的那条规则在手机上的同一个答案
-    for (const q of ['include', '123', 'a:', 'x', 'S:']) {
-      expect(sessionQuery(q)).toEqual({ kind: 'none' });
+    for (const q of ['include', '123', 'x', 'S:']) {
+      expect(hashQuery(q)).toEqual({ kind: 'none' });
     }
   });
 });
@@ -94,4 +95,43 @@ describe('spliceRef', () => {
     expect(out.value).toBe('#s:s1 ');
     expect(out.caret).toBe(6);
   });
+});
+
+describe('hashQuery 的 a: 命名空间', () => {
+  it('opens the node list for the agent prefix', () => {
+    expect(hashQuery('a:')).toEqual({ kind: 'agents', rest: '' })
+    expect(hashQuery('a:9e47')).toEqual({ kind: 'agents', rest: '9e47' })
+  })
+
+  it('still opens the session list for s:', () => {
+    expect(hashQuery('s:清理')).toEqual({ kind: 'sessions', rest: '清理' })
+  })
+});
+
+describe('matchAgents', () => {
+  const row = (id: string, label: string): AgentPanelRow => ({
+    name: label || id,
+    label,
+    id,
+    url: 'http://x:8790',
+    note: '',
+    reach: '可达',
+    skills: [],
+    err: '',
+  });
+  const rows = [row('9e47c7a3aaaa', 'nas'), row('db0906d1bbbb', ''), row('', 'unpinned')]
+
+  it('never offers a row this machine holds no identity for', () => {
+    // 空的 #a: 看着像引用、插进去解析不了：宁可没有这一行
+    expect(matchAgents(rows, '', 10).map((r) => r.id)).toEqual(['9e47c7a3aaaa', 'db0906d1bbbb'])
+  })
+
+  it('filters by label or by identity prefix', () => {
+    expect(matchAgents(rows, 'NAS', 10).map((r) => r.id)).toEqual(['9e47c7a3aaaa'])
+    expect(matchAgents(rows, 'db09', 10).map((r) => r.id)).toEqual(['db0906d1bbbb'])
+  })
+
+  it('renders the reference with the identity, which is what agentref resolves', () => {
+    expect(agentRef('9e47c7a3aaaa')).toBe('#a:9e47c7a3aaaa')
+  })
 });
