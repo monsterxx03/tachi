@@ -30,10 +30,17 @@ f="$(git rev-parse --path-format=absolute --git-common-dir)/autopilot-no-ui"
 
 每一圈都是同样的顺序：
 
-1. **先看自己的 open PR**：`gh pr list --label auto --state open`。
-   - 有仓库主人写的评论或 review → 按它改，这是最高优先级。
-   - CI 红 → 修到绿。
-   - 都干净 → 才接新任务。
+1. **先看开着的 PR——自己开的和主人开的**。按作者查，**不按 `auto` 标签**：bot 开 PR 时不会打它，
+   拿标签筛就等于筛掉自己全部的 PR。`auto` 在 issue 上才是「已批准」，在 PR 上没有任何含义。
+
+   ```bash
+   scripts/autopilot/gh pr list --author app/tachi-autopilot --state open
+   scripts/autopilot/gh pr list --author monsterxx03 --state open
+   ```
+
+   - **自己的那条**：有仓库主人写的评论或 review → 按它改，这是最高优先级；CI 红 → 修到绿；
+     都干净 → 才接新任务。
+   - **主人的那条**：只读。知道哪一块正在被动就够了——那是他自己的分支，别往上推。
    接着改用 `scripts/autopilot/worktree.sh resume <slug>` 回原区、原分支。**不要换 slug**——
    换了就是第二个 PR，他的意见留在原地没人管。
 2. **挑任务**：`gh issue list --label auto` 有就取最上面一个（带 `waiting-user` 的跳过，球在人那边）；
