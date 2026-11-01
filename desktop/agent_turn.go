@@ -155,6 +155,12 @@ func (d *desktopApp) steerFrom(sessionID, text, display string, origin messageOr
 	}
 }
 
+// desktopSteerGrace is how long the loop is left waiting for the PAGE's own answer to a
+// steer_check before this side answers 「nothing queued」 on its behalf. It only bounds the
+// fallback: an answer that arrives in time takes the slot, the timer's send then finds the
+// channel full (or already consumed) and does nothing.
+const desktopSteerGrace = 20 * time.Millisecond
+
 // startTurn dispatches to the named session's real agent when configured, otherwise to the
 // simulated fallback so the UI always responds.
 //
@@ -625,10 +631,21 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		}
 		d.mu.Unlock()
 		if steerCh != nil {
-			select {
-			case steerCh <- agent.SteerInput{}:
-			default:
-			}
+			// Answer on the page's BEHALF, but not before it has had its say. The window answers
+			// this same steer_check with the queued text (composer.tsx's answerSteer → Steer),
+			// and that answer crosses the bridge a few milliseconds after this event — so an
+			// immediate empty reply wins the race, the loop reports 「nothing queued」, and the
+			// reader's message waits for the NEXT tool boundary: the model takes another step
+			// before it sees what was typed (measured: the text landed in the third request of
+			// the turn it was typed into). A short grace is enough — the answer is already in
+			// flight — and when nothing IS queued the page answers too, so the fallback below
+			// normally never fires.
+			time.AfterFunc(desktopSteerGrace, func() {
+				select {
+				case steerCh <- agent.SteerInput{}:
+				default:
+				}
+			})
 		}
 	case agent.AgentEventSessionTitle:
 		// 这段对话的标题刚被生成（第一轮里，且只发生一次）—— 它是列表里那一行的一个字段，
