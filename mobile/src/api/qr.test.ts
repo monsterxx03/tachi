@@ -1,4 +1,4 @@
-import { parsePairingQR } from './qr';
+import { pairingQRPayload, parsePairingQR } from './qr';
 
 describe('parsePairingQR —— 只认电脑上那个码', () => {
   it('正常的一张码', () => {
@@ -52,5 +52,27 @@ describe('parsePairingQR —— 只认电脑上那个码', () => {
     const got = parsePairingQR('{"v":1,"url":"http://192.168.1.10:8787","urls":[],"token":"t"}');
     expect(got).toEqual({ baseUrl: 'http://192.168.1.10:8787', token: 't' });
     expect(got?.urls).toBeUndefined();
+  });
+});
+
+describe('pairingQRPayload', () => {
+  it('round-trips through the scanner’s own parser', () => {
+    // 出示（手机生成）与扫入（同一台或另一台手机解析）是同一份形状的两端：对不上就是
+    // 「扫了没反应」，而那是最难查的一种坏法。
+    const p = {
+      baseUrl: 'http://192.168.1.10:8787',
+      token: 'tok-1',
+      urls: ['http://192.168.1.10:8787', 'http://100.98.1.2:8787'],
+    };
+    const back = parsePairingQR(pairingQRPayload(p));
+    expect(back?.baseUrl).toBe('http://192.168.1.10:8787');
+    expect(back?.token).toBe('tok-1');
+    expect(back?.urls).toEqual(['http://192.168.1.10:8787', 'http://100.98.1.2:8787']);
+  });
+
+  it('does not say the same address twice', () => {
+    // 只有一条地址时 urls 不出现：码越密越难扫，而 origin 已经把它写了一遍
+    const raw = pairingQRPayload({ baseUrl: 'http://a:8787', token: 't', urls: ['http://a:8787'] });
+    expect(JSON.parse(raw).urls).toBeUndefined();
   });
 });

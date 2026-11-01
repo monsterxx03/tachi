@@ -9,6 +9,7 @@ import { defaultLabel } from '../api/label';
 import Animated from 'react-native-reanimated';
 import { Switch } from './controls';
 import { useTheme } from '../theme/ThemeContext';
+import { PairingQR } from './PairingQR';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 import type { ThemeMode } from '../theme/tokens';
 
@@ -88,6 +89,8 @@ export function Settings({
   const [editing, setEditing] = useState<number | null>(null);
   // 哪一台展开了「用哪条地址」的选择（null = 都收着）
   const [picking, setPicking] = useState<number | null>(null);
+  // 正在出示配对码的那一台（换新手机时扫它，不必走到电脑跟前）。
+  const [showingQR, setShowingQR] = useState<number | null>(null);
   // 诊断：最近几次请求的去向与结果。手机上没有控制台，这一行是唯一能读到的证据。
   const [reqs, setReqs] = useState<ReqRecord[]>([]);
   useEffect(() => {
@@ -216,6 +219,19 @@ export function Settings({
                       <Text style={{ color: t.accent2, fontSize: 11 }}>
                         {picking === i ? '收起' : d.pinned ? '换个地址' : '用哪条地址'}
                       </Text>
+                    </Pressable>
+                  ) : null}
+                  {/* 「出示配对码」：换新手机时扫这一张，等于扫电脑上那一张。和上面那条一样是
+                      一行小字，挂在同一列里 —— 右侧那两颗按钮（改名 / 删除）是对这一行的操作，
+                      而这一条是对「另一台手机」的动作，混进去会读成同一类事。 */}
+                  {!renaming ? (
+                    <Pressable
+                      hitSlop={6}
+                      onPress={() => setShowingQR(i)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }}
+                    >
+                      <Feather name="grid" size={12} color={t.accent2} />
+                      <Text style={{ color: t.accent2, fontSize: 11 }}>出示配对码</Text>
                     </Pressable>
                   ) : null}
                   {picking === i ? (
@@ -438,6 +454,10 @@ export function Settings({
         >
           <Text style={{ color: t.red, fontSize: 13.5, fontWeight: '600' }}>解除当前这一台的配对</Text>
         </Pressable>
+      <PairingQR
+        pairing={showingQR !== null ? devices[showingQR] ?? null : null}
+        onClose={() => setShowingQR(null)}
+      />
       </ScrollView>
         <EdgeBackZone gesture={back.gesture} />
       </Animated.View>
