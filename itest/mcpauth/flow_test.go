@@ -3,7 +3,9 @@ package mcpauth_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"sync"
 
 	"testing"
 	"time"
@@ -140,9 +142,23 @@ func TestManualFlowCompletesWithAPastedRedirectURL(t *testing.T) {
 
 	// The WAITING phase is the one that means "a listener is up, but the URL has to be
 	// opened by hand" — the phase whose URL is worth having.
+	// Every phase, so a timeout says WHERE the flow was instead of only that it never got there.
+	// This one has failed on a loaded CI runner before (15s, "never reported an authorization
+	// URL") and left nothing behind to look at.
+	var mu sync.Mutex
+	var phases []string
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), phases...)
+	}
+
 	authURL := make(chan string, 1)
 	go func() {
 		_ = mcp.RunOAuthFlowWithProgress(ctx, srvCfg, func(p mcp.OAuthProgress) {
+			mu.Lock()
+			phases = append(phases, fmt.Sprintf("%s (authURL=%t, %q)", p.Phase, p.AuthURL != "", p.Message))
+			mu.Unlock()
 			if p.Phase == mcp.OAuthPhaseWaiting && p.AuthURL != "" {
 				select {
 				case authURL <- p.AuthURL:
@@ -153,10 +169,12 @@ func TestManualFlowCompletesWithAPastedRedirectURL(t *testing.T) {
 	}()
 
 	var raw string
+	start := time.Now()
 	select {
 	case raw = <-authURL:
 	case <-time.After(15 * time.Second):
-		t.Fatal("the manual flow never reported an authorization URL")
+		t.Fatalf("the manual flow never reported an authorization URL after %s; phases seen: %v",
+			time.Since(start).Round(time.Millisecond), snapshot())
 	}
 
 	// The test plays the browser: it fetches the authorization URL WITHOUT following the
