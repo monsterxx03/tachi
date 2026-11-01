@@ -48,14 +48,16 @@ function Badge({ text, tone, t }: { text: string; tone: 'mute' | 'amber' | 'live
  * 一行上那颗小闹钟：这段对话什么时候会**自己**醒过来。
  *
  * 时间取最近的那一次 —— 后端算的，和桌面侧栏是同一份事实（`cronNext`），所以两屏不会各说各话。
- * 条数只在多于一个时跟在后面：一个任务旁边写个「1」什么也没多说，而这一行本来就窄。
+ * 条数只在多于一个时跟在后面，写成 `×N`：时间的第一档是裸的日子（`2日 00:32`），条数写在前面
+ * 会被读成月份（`3 · 2日` 像 3 月 2 日），而 `×` 不可能被当成日期的一截。时间在前也是对的 ——
+ * 这颗徽章要说的是「什么时候」。
  *
  * 全都暂停时没有时间，条数留下 —— 徽章仍要说「有任务绑在这段对话上」，因为删掉会话会把它们
  * 一起带走（那一句在删除确认里说得更清楚）。
  */
 function CronPill({ cron, next, t }: { cron: number; next?: string; t: ThemeTokens }) {
   const when = formatNextWake(next);
-  const text = [cron > 1 ? String(cron) : '', when].filter(Boolean).join(' · ');
+  const text = !when ? (cron > 1 ? String(cron) : '') : cron > 1 ? `${when} ×${cron}` : when;
   const jobs = cron === 1 ? '有 1 个定时任务' : `有 ${cron} 个定时任务`;
   return (
     <View

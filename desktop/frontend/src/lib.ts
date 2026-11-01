@@ -82,11 +82,16 @@ export function fmtNextRun(iso?: string, now: Date = new Date()): string {
 // the badge does not already say, and the row is narrow. No time at all (every job paused, or a
 // schedule that cannot be resolved) leaves the count — the mark still has to say a task is bound
 // to this conversation, because deleting the conversation takes it along.
+//
+// The TIME comes first and the count trails it as `×N`, which is not cosmetic: the time's own first
+// rung is a bare day ("2日 00:32"), so a leading count read as a month — "3 · 2日" looks like
+// 3 March. A × between them cannot be mistaken for part of a date, and the thing the badge is for
+// (when does this wake up) is also the thing the eye reaches first.
 export function cronMarkLabel(count: number, next?: string, now: Date = new Date()): { text: string; label: string } {
   const when = fmtNextRun(next, now)
   const jobs = `${count} 个定时任务`
-  const text = [count > 1 ? String(count) : '', when].filter(Boolean).join(' · ')
-  return { text, label: when ? `${jobs}，下次 ${when} 运行` : jobs }
+  if (!when) return { text: count > 1 ? String(count) : '', label: jobs }
+  return { text: count > 1 ? `${when} ×${count}` : when, label: `${jobs}，下次 ${when} 运行` }
 }
 
 // fmtDur renders a millisecond duration as a concise human-readable string.
