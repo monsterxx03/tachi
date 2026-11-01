@@ -108,6 +108,13 @@ func (sb *sandbox) demoEnv() map[string]string {
 		// the window leaves that much room beside the sidebar and the conversation — so the size is
 		// part of the fixture, not a property of whoever's display the run happens on.
 		"TACHI_DEMO_WINDOW": smokeWindowSize,
+		// GTK 的缩放也固定成 1。断言量的是 CSS px（一个 360 宽的面板、一条 520 宽的弹窗），
+		// 而 GDK_SCALE=2 会让整棵树按 2 倍渲染：量到的数字全部对不上，且**看起来像产品坏了**
+		// （实测同一份代码：带 GDK_SCALE=2 时 5 条里红 2 条、耗时 26s；去掉之后 5/5 通过、12s）。
+		// 这个值来自跑测试的那个人（或它的 shell、或另一台 agent 的会话），所以和 HOME、
+		// 窗口尺寸一样属于「fixture 的一部分」，由这里兜住，不指望环境干净。
+		"GDK_SCALE":     "1",
+		"GDK_DPI_SCALE": "1",
 	}
 	if sb.browserFetch {
 		// The MCP OAuth flow would otherwise open a real browser — on the machine this run is
