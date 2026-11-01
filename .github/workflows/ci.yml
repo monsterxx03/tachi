@@ -26,6 +26,11 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      # The web console's eslint, in the job that already installed its deps (web-build
+      # above). It lives on `make web-lint` so this and `make lint` are one definition.
+      - name: Lint web frontend
+        run: make web-lint
+
       - name: Test
         run: go test ./...
 

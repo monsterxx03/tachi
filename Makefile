@@ -106,7 +106,19 @@ test-cover-html: web-check
 	go tool cover -html=coverage.out && \
 	rm -f coverage.out
 
-lint: web-check
+# The web console's eslint. It has its own definition because CI calls it too (the
+# `test` job, right after web-build has installed the deps) — one command, two callers.
+# Skipped with a loud line when the deps are not installed: `make lint` used to work on a
+# tree with no node_modules, and that must stay true. CI always has them, so CI never skips.
+web-lint:
+	@if [ -d web/frontend/node_modules ]; then \
+		echo "=== Running eslint (web/frontend) ==="; \
+		cd web/frontend && npm run lint; \
+	else \
+		echo "=== web/frontend 没有 node_modules：跳过 eslint（先 make web-build 装一次） ==="; \
+	fi
+
+lint: web-check web-lint
 	@echo "=== Running golangci-lint ==="
 	golangci-lint run ./...
 
