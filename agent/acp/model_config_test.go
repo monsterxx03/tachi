@@ -15,12 +15,27 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// isolateHome keeps a test's writes out of the reader's real ~/.tachi.
+//
+// Building an agent (and running an ACP command on one) reaches the PROCESS-GLOBAL base dir
+// through config: the session manager the agent creates, and the one-off recorder's "no session"
+// branch (agent/oneoff_recorder.go — the `-c` / dream case). Without this, `/review` files its
+// rounds under <home>/oneoff/review-round-N and a manager leaves <home>/session behind — in the
+// reader's real home. Tests only ever write into t.TempDir() (.tachi.md, 「测试安全」).
+func isolateHome(t *testing.T) {
+	t.Helper()
+	orig := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(orig) })
+}
+
 // newTestAgent builds an AIAgent wired to cfg. switchSessionModel resolves
 // provider names via the agent's FullConfig (SetResolvedProvider), so tests
 // that switch models must wire it. A temp usage recorder keeps provider
 // calls off <home>/usage.
 func newTestAgent(t *testing.T, provider llm.Provider, cfg *config.Config) *agent.AIAgent {
 	t.Helper()
+	isolateHome(t)
 	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
 		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: 0,
@@ -38,6 +53,7 @@ func newTestAgent(t *testing.T, provider llm.Provider, cfg *config.Config) *agen
 // setup) for tests that don't resolve provider names.
 func newBareTestAgent(t *testing.T, provider llm.Provider, maxIter int) *agent.AIAgent {
 	t.Helper()
+	isolateHome(t)
 	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
 		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: maxIter,
