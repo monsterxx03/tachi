@@ -365,10 +365,14 @@ func TestDetailsAndSnapshotShareOneProbe(t *testing.T) {
 // heartbeat — every re-read asks the entry point for the next probe, so a round that repeated the
 // last answers and still reported itself would tick for ever.
 func TestPeerListTellsItsListenerOnlyWhenTheAnswersChange(t *testing.T) {
-	reachable := true
+	// atomic, because the provider below runs on the probe's goroutine while this test flips the
+	// answer: a plain bool is a data race (the -race build says so), and the read could then see the
+	// old value and make the round look like it repeated itself.
+	var reachable atomic.Bool
+	reachable.Store(true)
 	answers := func() []PeerReport {
 		return []PeerReport{
-			{Key: ugreenID, Reachable: reachable, Card: &PeerCard{Name: "home-nas"}},
+			{Key: ugreenID, Reachable: reachable.Load(), Card: &PeerCard{Name: "home-nas"}},
 			{Key: "@https://100.64.0.9:7080"},
 		}
 	}
@@ -390,7 +394,7 @@ func TestPeerListTellsItsListenerOnlyWhenTheAnswersChange(t *testing.T) {
 	}
 
 	// A peer that goes down IS news, and it arrives on the same listener.
-	reachable = false
+	reachable.Store(false)
 	list.ProbeNow()
 	select {
 	case <-told:
