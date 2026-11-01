@@ -22,14 +22,14 @@ func TestReadTool(t *testing.T) {
 
 	// Create a test file
 	content := "Hello, World!"
-	err := os.WriteFile("/tmp/test_read.txt", []byte(content), 0644)
+	path := filepath.Join(t.TempDir(), "test_read.txt")
+	err := os.WriteFile(path, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read.txt")
 
 	// Test Read
-	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read.txt"}`)
+	result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("ReadTool.Execute failed: %v", err)
 	}
@@ -55,11 +55,11 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line%d", i))
 	}
 	content := strings.Join(lines, "\n")
-	err := os.WriteFile("/tmp/test_read_offset.txt", []byte(content), 0644)
+	path := filepath.Join(t.TempDir(), "test_read_offset.txt")
+	err := os.WriteFile(path, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_offset.txt")
 
 	tests := []struct {
 		name   string
@@ -83,13 +83,13 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var args string
 			if tt.offset != 0 && tt.limit > 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "offset": %d, "limit": %d}`, tt.offset, tt.limit)
+				args = fmt.Sprintf(`{"path": %q, "offset": %d, "limit": %d}`, path, tt.offset, tt.limit)
 			} else if tt.offset != 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "offset": %d}`, tt.offset)
+				args = fmt.Sprintf(`{"path": %q, "offset": %d}`, path, tt.offset)
 			} else if tt.limit > 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "limit": %d}`, tt.limit)
+				args = fmt.Sprintf(`{"path": %q, "limit": %d}`, path, tt.limit)
 			} else {
-				args = `{"path": "/tmp/test_read_offset.txt"}`
+				args = fmt.Sprintf(`{"path": %q}`, path)
 			}
 
 			result, err := tool.ExecuteContext(context.TODO(), args)
@@ -108,13 +108,13 @@ func TestReadToolBinary(t *testing.T) {
 
 	// Create a binary file with null bytes
 	binaryContent := []byte{0x00, 0x01, 0x02, 'h', 'e', 'l', 'l', 'o'}
-	err := os.WriteFile("/tmp/test_binary.bin", binaryContent, 0644)
+	path := filepath.Join(t.TempDir(), "test_binary.bin")
+	err := os.WriteFile(path, binaryContent, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create binary test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_binary.bin")
 
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_binary.bin"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err == nil {
 		t.Error("Expected error for binary file")
 	}
@@ -139,14 +139,14 @@ func TestReadToolTooLarge(t *testing.T) {
 	for i := len(prefix); i < len(largeContent); i++ {
 		largeContent[i] = 'a'
 	}
-	err := os.WriteFile("/tmp/test_large.txt", largeContent, 0644)
+	path := filepath.Join(t.TempDir(), "test_large.txt")
+	err := os.WriteFile(path, largeContent, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create large test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_large.txt")
 
 	// Full read (no limit) should still fail
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err == nil {
 		t.Error("Expected error for large file (full read)")
 	}
@@ -158,7 +158,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	}
 
 	// Offset-only (no limit) should also fail — unbounded from offset to EOF
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "offset": 5}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q, "offset": 5}`, path))
 	if err == nil {
 		t.Error("Expected error for large file with offset only (no limit)")
 	}
@@ -167,7 +167,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	}
 
 	// With offset+limit, should succeed — output is bounded
-	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "offset": 2, "limit": 3}`)
+	result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q, "offset": 2, "limit": 3}`, path))
 	if err != nil {
 		t.Fatalf("Large file with offset+limit should succeed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	}
 
 	// Limit-only (no offset) should also succeed
-	result, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "limit": 2}`)
+	result, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q, "limit": 2}`, path))
 	if err != nil {
 		t.Fatalf("Large file with limit-only should succeed: %v", err)
 	}
@@ -195,14 +195,14 @@ func TestReadToolAtLimit(t *testing.T) {
 	for i := range limitContent {
 		limitContent[i] = 'a'
 	}
-	err := os.WriteFile("/tmp/test_at_limit.txt", limitContent, 0644)
+	path := filepath.Join(t.TempDir(), "test_at_limit.txt")
+	err := os.WriteFile(path, limitContent, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create limit test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_at_limit.txt")
 
 	// Should not error - exactly at limit
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_at_limit.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Errorf("Should not error at exactly 256KB, got: %v", err)
 	}
@@ -212,14 +212,14 @@ func TestReadToolCacheHit(t *testing.T) {
 	tool := NewReadTool()
 
 	content := "Hello, World!"
-	err := os.WriteFile("/tmp/test_read_cache.txt", []byte(content), 0644)
+	path := filepath.Join(t.TempDir(), "test_read_cache.txt")
+	err := os.WriteFile(path, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_cache.txt")
 
 	// First read — should return full content
-	result1, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_cache.txt"}`)
+	result1, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestReadToolCacheHit(t *testing.T) {
 	}
 
 	// Second read — file unchanged, should return cache hint
-	result2, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_cache.txt"}`)
+	result2, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("Second read failed: %v", err)
 	}
@@ -244,14 +244,14 @@ func TestReadToolCacheMissAfterModify(t *testing.T) {
 	tool := NewReadTool()
 
 	content1 := "Hello"
-	err := os.WriteFile("/tmp/test_read_modify.txt", []byte(content1), 0644)
+	path := filepath.Join(t.TempDir(), "test_read_modify.txt")
+	err := os.WriteFile(path, []byte(content1), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_modify.txt")
 
 	// First read
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_modify.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
@@ -259,13 +259,13 @@ func TestReadToolCacheMissAfterModify(t *testing.T) {
 	// Modify file — sleep to ensure mtime changes
 	time.Sleep(50 * time.Millisecond)
 	content2 := "Hello, World!"
-	err = os.WriteFile("/tmp/test_read_modify.txt", []byte(content2), 0644)
+	err = os.WriteFile(path, []byte(content2), 0644)
 	if err != nil {
 		t.Fatalf("Failed to modify test file: %v", err)
 	}
 
 	// Second read — should return new content (cache miss)
-	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_modify.txt"}`)
+	result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("Second read failed: %v", err)
 	}
@@ -283,20 +283,20 @@ func TestReadToolDifferentOffsetNotCached(t *testing.T) {
 		lines[i] = fmt.Sprintf("line%d", i+1)
 	}
 	content := strings.Join(lines, "\n")
-	err := os.WriteFile("/tmp/test_read_offset_cache.txt", []byte(content), 0644)
+	path := filepath.Join(t.TempDir(), "test_read_offset_cache.txt")
+	err := os.WriteFile(path, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_offset_cache.txt")
 
 	// Read full file
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_offset_cache.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
 
 	// Read with offset=5 — different cache key, should NOT hit cache
-	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_offset_cache.txt", "offset": 5}`)
+	result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q, "offset": 5}`, path))
 	if err != nil {
 		t.Fatalf("Offset read failed: %v", err)
 	}
@@ -310,16 +310,16 @@ func TestReadToolConcurrentCache(t *testing.T) {
 	tool := NewReadTool()
 
 	content := "concurrent test"
-	err := os.WriteFile("/tmp/test_read_concurrent.txt", []byte(content), 0644)
+	path := filepath.Join(t.TempDir(), "test_read_concurrent.txt")
+	err := os.WriteFile(path, []byte(content), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_concurrent.txt")
 
 	var wg sync.WaitGroup
 	for range 10 {
 		wg.Go(func() {
-			result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_concurrent.txt"}`)
+			result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 			if err != nil {
 				t.Errorf("Concurrent read failed: %v", err)
 				return
@@ -363,15 +363,15 @@ func TestReadToolImage(t *testing.T) {
 	tool := NewReadTool()
 
 	pngData := minimalPNG()
-	err := os.WriteFile("/tmp/test_read_image.png", pngData, 0644)
+	path := filepath.Join(t.TempDir(), "test_read_image.png")
+	err := os.WriteFile(path, pngData, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test image: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_image.png")
 
 	// Use context with image carrier — similar to what Registry.Invoke does.
 	ctx := WithImagePartsCarrier(context.TODO())
-	result, err := tool.ExecuteContext(ctx, `{"path": "/tmp/test_read_image.png"}`)
+	result, err := tool.ExecuteContext(ctx, fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("ReadTool.Execute on image failed: %v", err)
 	}
@@ -434,13 +434,13 @@ func TestReadToolImageUnknownExtBinary(t *testing.T) {
 
 	// A binary file with an unrecognized extension should still error
 	binaryContent := []byte{0x00, 0x01, 0x02, 'h', 'e', 'l', 'l', 'o'}
-	err := os.WriteFile("/tmp/test_not_image.bin", binaryContent, 0644)
+	path := filepath.Join(t.TempDir(), "test_not_image.bin")
+	err := os.WriteFile(path, binaryContent, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create binary test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_not_image.bin")
 
-	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_not_image.bin"}`)
+	_, err = tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err == nil {
 		t.Error("Expected error for non-image binary file")
 	}
@@ -455,12 +455,12 @@ func TestReadToolLongLineTruncation(t *testing.T) {
 	// A single line longer than maxLineChars plus a normal second line.
 	long := strings.Repeat("x", maxLineChars+50)
 	content := long + "\nnormal"
-	if err := os.WriteFile("/tmp/test_longline.txt", []byte(content), 0644); err != nil {
+	path := filepath.Join(t.TempDir(), "test_longline.txt")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_longline.txt")
 
-	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_longline.txt"}`)
+	result, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, path))
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -484,10 +484,10 @@ func TestReadToolTailOffsetWithTrailingNewline(t *testing.T) {
 	// File ends with "\n" — strings.Split would yield a phantom trailing
 	// empty element; line counting and tail offsets must ignore it.
 	content := "line1\nline2\nline3\n"
-	if err := os.WriteFile("/tmp/test_read_tail_nl.txt", []byte(content), 0644); err != nil {
+	path := filepath.Join(t.TempDir(), "test_read_tail_nl.txt")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
-	defer os.Remove("/tmp/test_read_tail_nl.txt")
 
 	tests := []struct {
 		name   string
@@ -505,13 +505,13 @@ func TestReadToolTailOffsetWithTrailingNewline(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var args string
 			if tt.offset != 0 && tt.limit > 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "offset": %d, "limit": %d}`, tt.offset, tt.limit)
+				args = fmt.Sprintf(`{"path": %q, "offset": %d, "limit": %d}`, path, tt.offset, tt.limit)
 			} else if tt.offset != 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "offset": %d}`, tt.offset)
+				args = fmt.Sprintf(`{"path": %q, "offset": %d}`, path, tt.offset)
 			} else if tt.limit > 0 {
-				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "limit": %d}`, tt.limit)
+				args = fmt.Sprintf(`{"path": %q, "limit": %d}`, path, tt.limit)
 			} else {
-				args = `{"path": "/tmp/test_read_tail_nl.txt"}`
+				args = fmt.Sprintf(`{"path": %q}`, path)
 			}
 
 			result, err := tool.ExecuteContext(context.TODO(), args)
@@ -528,12 +528,9 @@ func TestReadToolTailOffsetWithTrailingNewline(t *testing.T) {
 func TestReadToolDirectory(t *testing.T) {
 	tool := NewReadTool()
 
-	if err := os.MkdirAll("/tmp/test_read_dir", 0755); err != nil {
-		t.Fatalf("Failed to create test dir: %v", err)
-	}
-	defer os.Remove("/tmp/test_read_dir")
+	dir := t.TempDir()
 
-	_, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_dir"}`)
+	_, err := tool.ExecuteContext(context.TODO(), fmt.Sprintf(`{"path": %q}`, dir))
 	if err == nil {
 		t.Fatal("Expected error for directory read")
 	}
