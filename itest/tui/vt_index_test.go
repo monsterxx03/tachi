@@ -30,16 +30,18 @@ func TestNewlineScrollsTheRegionNotTheScreen(t *testing.T) {
 	s.feed("\x1b[20;39r")
 	// Two markers: one above the region (row 1) and one in the region's first row (row 20).
 	s.feed("\x1b[1;1HABOVE")
-	s.feed("\x1b[20;1HROW20")
-	// Bottom of the region, then a newline: ROW20 must move up one row inside the region.
+	// A marker in the MIDDLE of the region: a scroll up moves it one row up. (The region's first row
+	// is the one a scroll up discards — putting the marker there would test nothing.)
+	s.feed("\x1b[30;1HMID")
+	// Bottom of the region, then a newline: the region scrolls by one.
 	s.feed("\x1b[39;1H\n")
 
 	got := rows(s)
 	if got[0] != "ABOVE" {
 		t.Fatalf("row 1 (outside the region) changed: %q — a region scroll must not touch it", got[0])
 	}
-	if got[18] != "ROW20" {
-		t.Fatalf("row 19 = %q, want %q: the region scrolled up, so row 20's content moved up one", got[18], "ROW20")
+	if got[28] != "MID" {
+		t.Fatalf("row 29 = %q, want %q: the region scrolled up, so row 30's content moved up one", got[28], "MID")
 	}
 	if got[38] != "" {
 		t.Fatalf("row 39 (region bottom) = %q, want blank: that is the line a scroll frees up", got[38])
