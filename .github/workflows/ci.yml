@@ -123,6 +123,11 @@ jobs:
   # 而且报错的位置跟真正的原因毫不相干（docs/agents/mobile.md）。
   mobile:
     runs-on: ubuntu-latest
+    # 那两个套件（`time.test.ts` / `cronSchedule.test.ts`）的时间断言是按 +08:00 写的：它们验的是
+    # 「本地怎么显示」，而 runner 是 UTC，于是同一条断言在两种机器上给出两种答案。这里钉住 fixture
+    # 当初的那个时区让门禁先跑起来；真正该改的是那几条断言（用本地分量造时间戳，见 issue #125）。
+    env:
+      TZ: Asia/Shanghai
     steps:
       - name: Checkout
         uses: actions/checkout@v4
