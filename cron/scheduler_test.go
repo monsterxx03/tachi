@@ -387,9 +387,17 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 	}
 	require.NoError(t, store.Create(recurJob))
 
-	// Fire both jobs.
-	go scheduler.fire(oneshotJob)
-	go scheduler.fire(recurJob)
+	// Fire both jobs. Each goroutine is tracked so the test cannot return while a run is still
+	// writing: the assertions below stop at "the oneshot job is gone", but the recurring job's own
+	// last_run write happens after its handler returns — possibly after that point. A write landing
+	// while t.TempDir removes the directory fails the test on cleanup ("directory not empty") with
+	// no assertion of ours having failed, which reads like unrelated flakiness.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); scheduler.fire(oneshotJob) }()
+	go func() { defer wg.Done(); scheduler.fire(recurJob) }()
+	// Cleanups run in LIFO order, so this waits out both runs before TempDir's RemoveAll.
+	t.Cleanup(wg.Wait)
 
 	// Wait for both HANDLERS to have run — which is the moment the runs STARTED, not the moment they
 	// finished: fire still has to write last_run and then delete the oneshot job, and nothing in this
