@@ -219,7 +219,7 @@ const DefaultReplyLanguage = "the user's language"
 // reader's config, the same `language` the session replies in.
 //
 // language comes from config.Language verbatim (see ReviewOptions.Language); an empty value falls
-// back to the system prompt's sentinel, so the section is never a hollow "write in ''".
+// back to the system prompt's sentinel, so the section is never a hollow "write in ”".
 func ReviewLanguageSection(language string) string {
 	if language == "" {
 		language = DefaultReplyLanguage

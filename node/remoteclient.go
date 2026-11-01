@@ -65,7 +65,7 @@ type remoteClient struct {
 	// scatter them into a directory nothing reads. Empty means this process has no conversations
 	// at all, and then a returned file goes to spillDir.
 	sessionsDir string
-	http     *http.Client
+	http        *http.Client
 
 	// store is the discovery side's ledger, when this process has one: a connection this client
 	// completes SUCCESSFULLY is a contact with that machine, and the store is where "who has this

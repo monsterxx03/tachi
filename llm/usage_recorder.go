@@ -28,17 +28,17 @@ import (
 type UsageKind string
 
 const (
-	UsageKindConversation     UsageKind = "conversation"
-	UsageKindTitle            UsageKind = "title"
-	UsageKindKeyword          UsageKind = "keyword"
-	UsageKindCompact          UsageKind = "compact"
-	UsageKindCommit           UsageKind = "commit"
-	UsageKindReview           UsageKind = "review"
-	UsageKindAmbient          UsageKind = "ambient"
-	UsageKindDream            UsageKind = "dream"
-	UsageKindSubagent         UsageKind = "subagent"
-	UsageKindResearchQuery    UsageKind = "research-query"
-	UsageKindResearchReport   UsageKind = "research-report"
+	UsageKindConversation   UsageKind = "conversation"
+	UsageKindTitle          UsageKind = "title"
+	UsageKindKeyword        UsageKind = "keyword"
+	UsageKindCompact        UsageKind = "compact"
+	UsageKindCommit         UsageKind = "commit"
+	UsageKindReview         UsageKind = "review"
+	UsageKindAmbient        UsageKind = "ambient"
+	UsageKindDream          UsageKind = "dream"
+	UsageKindSubagent       UsageKind = "subagent"
+	UsageKindResearchQuery  UsageKind = "research-query"
+	UsageKindResearchReport UsageKind = "research-report"
 	// UsageKindVision marks image-description calls: a vision-capable
 	// provider describing an image on behalf of a text-only model (see
 	// agent.describeImages). Grouped separately so the fallback cost is

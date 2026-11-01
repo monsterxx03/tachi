@@ -353,4 +353,3 @@ func (d *desktopApp) openSession(sessionID string) {
 	}
 	d.emit(openSessionEventName, sessionID)
 }
-

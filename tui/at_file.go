@@ -199,6 +199,7 @@ func (i *InputArea) atAgentRows(query string) []atMatch {
 func agentRowLabel(t atfile.AgentTarget) string {
 	return fmt.Sprintf("%s  %s  %s", t.Name, agentref.IDLabel(t), agentref.ReachWord(t))
 }
+
 // this stays cheap enough to run on every keystroke.
 func (i *InputArea) searchAtFiles(query string) ([]fileindex.Match, error) {
 	cwd, err := os.Getwd()

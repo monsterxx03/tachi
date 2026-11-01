@@ -150,9 +150,9 @@ type mobileSnapshot struct {
 	// 因为两块屏要看到的是同一组开关。
 	NotifyOff   bool               `json:"notifyOff"`
 	Workspace   mobileWorkspace    `json:"workspace"`
-	Usage        mobileUsage          `json:"usage"`
-	Context      mobileContext        `json:"context"`
-	Attachments  []mobileAttachment   `json:"attachments"`
+	Usage       mobileUsage        `json:"usage"`
+	Context     mobileContext      `json:"context"`
+	Attachments []mobileAttachment `json:"attachments"`
 }
 
 // 服务端 → 手机的事件名。它们是协议的一部分，两边照抄。

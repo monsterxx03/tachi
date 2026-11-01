@@ -60,7 +60,7 @@ type RemoteTaskInfo struct {
 	// delegated before this machine named peers by identity.
 	NodeID string `json:"node_id,omitempty"`
 	Title  string `json:"title"`
-	State string `json:"state"`
+	State  string `json:"state"`
 	// Result is the answer (or, for a failed task, why it failed).
 	Result string `json:"result,omitempty"`
 	// Question is the question the task is waiting on, present only while it waits.

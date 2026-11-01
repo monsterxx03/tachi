@@ -527,7 +527,6 @@ func (s *Server) nextSeq() uint64 {
 	return s.seq
 }
 
-
 // writeReset 告诉设备丢掉它手里的全部等待项，见 Run 里的注释。
 func (s *Server) writeReset() {
 	s.write(map[string]any{"t": "reset", "seq": s.nextSeq()})

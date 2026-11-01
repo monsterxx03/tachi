@@ -49,4 +49,3 @@ func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearc
 		cfg.MaxTokens,
 	), nil
 }
-

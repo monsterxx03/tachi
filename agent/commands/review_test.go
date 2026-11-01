@@ -1121,7 +1121,7 @@ func TestReviewLanguageReachesThePrompt(t *testing.T) {
 	}
 }
 
-// TestReviewLanguageEmptyFallsBack: an unset `language` must not leave a hollow "write in ''" —
+// TestReviewLanguageEmptyFallsBack: an unset `language` must not leave a hollow "write in ”" —
 // the same sentinel the system prompt uses applies here (DefaultReplyLanguage). Asserted through
 // both prompt builders rather than on the section alone: the fallback matters where it lands.
 func TestReviewLanguageEmptyFallsBack(t *testing.T) {

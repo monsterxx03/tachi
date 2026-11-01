@@ -12,32 +12,32 @@ func TestFileChangeForTool(t *testing.T) {
 		wantText string // for failure messages
 	}{
 		{
-			name: "edit carries both fragments",
-			tool: ToolNameEdit,
-			args: `{"path":"/repo/a.go","old_string":"old\n","new_string":"new\n"}`,
-			want: FileChange{Path: "/repo/a.go", OldText: "old\n", NewText: "new\n"},
+			name:   "edit carries both fragments",
+			tool:   ToolNameEdit,
+			args:   `{"path":"/repo/a.go","old_string":"old\n","new_string":"new\n"}`,
+			want:   FileChange{Path: "/repo/a.go", OldText: "old\n", NewText: "new\n"},
 			wantOK: true,
 		},
 		{
-			name: "replace_all is recorded for the UI",
-			tool: ToolNameEdit,
-			args: `{"path":"/repo/a.go","old_string":"x","new_string":"y","replace_all":true}`,
-			want: FileChange{Path: "/repo/a.go", OldText: "x", NewText: "y", ReplaceAll: true},
+			name:   "replace_all is recorded for the UI",
+			tool:   ToolNameEdit,
+			args:   `{"path":"/repo/a.go","old_string":"x","new_string":"y","replace_all":true}`,
+			want:   FileChange{Path: "/repo/a.go", OldText: "x", NewText: "y", ReplaceAll: true},
 			wantOK: true,
 		},
 		{
 			// An insertion: the old side is empty on purpose, and that is still a change.
-			name: "edit that only inserts",
-			tool: ToolNameEdit,
-			args: `{"path":"/repo/a.go","old_string":"","new_string":"added\n"}`,
-			want: FileChange{Path: "/repo/a.go", NewText: "added\n"},
+			name:   "edit that only inserts",
+			tool:   ToolNameEdit,
+			args:   `{"path":"/repo/a.go","old_string":"","new_string":"added\n"}`,
+			want:   FileChange{Path: "/repo/a.go", NewText: "added\n"},
 			wantOK: true,
 		},
 		{
-			name: "write is a create with no old text",
-			tool: ToolNameWrite,
-			args: `{"path":"/repo/new.go","content":"package main\n"}`,
-			want: FileChange{Path: "/repo/new.go", NewText: "package main\n"},
+			name:   "write is a create with no old text",
+			tool:   ToolNameWrite,
+			args:   `{"path":"/repo/new.go","content":"package main\n"}`,
+			want:   FileChange{Path: "/repo/new.go", NewText: "package main\n"},
 			wantOK: true,
 		},
 		{
