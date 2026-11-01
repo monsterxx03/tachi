@@ -58,13 +58,32 @@ var upgrader = websocket.Upgrader{
 }
 
 type client struct {
-	srv       *Server
-	conn      *websocket.Conn
+	srv  *Server
+	conn *websocket.Conn
+
+	// sessionID 是这条连接订阅的会话，由 mu 保护：写的一方是它自己的读循环（收到 open），
+	// 读的一方是 broadcast（拿着 s.mu 遍历连接）。两把锁的次序只有 s.mu → mu 一个方向
+	// —— subscribe 是在 readLoop 里调的，那时手里没有 s.mu，所以不会反过来。
 	sessionID string
+	mu        sync.Mutex
 
 	send   chan []byte
 	closed chan struct{}
 	once   sync.Once
+}
+
+// subscribe 替换这条连接的订阅（协议：一次只订阅一个会话，第二次 open 覆盖第一次）。
+func (c *client) subscribe(sessionID string) {
+	c.mu.Lock()
+	c.sessionID = sessionID
+	c.mu.Unlock()
+}
+
+// wants 报告这条连接该不该收到关于 sessionID 的事件（和 desktop/mobile.go 的同名方法一致）。
+func (c *client) wants(sessionID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessionID == sessionID
 }
 
 func (c *client) enqueue(data []byte) {
@@ -169,7 +188,7 @@ func (c *client) readLoop() {
 		switch msg.Type {
 		case "open":
 			// 一次只订阅一个会话，第二次 open 替换订阅
-			c.sessionID = msg.SessionID
+			c.subscribe(msg.SessionID)
 			if snap := c.srv.snapshot(msg.SessionID); snap != nil {
 				c.enqueueEvent(Event{Type: "snapshot", Snapshot: snap})
 			}
@@ -200,7 +219,7 @@ func (s *Server) broadcast(sessionID string, ev Event) {
 	s.mu.Lock()
 	targets := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
-		if sessionID == "" || c.sessionID == sessionID {
+		if sessionID == "" || c.wants(sessionID) {
 			targets = append(targets, c)
 		}
 	}
