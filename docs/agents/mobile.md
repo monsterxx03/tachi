@@ -196,6 +196,8 @@ xcrun devicectl device process launch --device <devicectl-id> dev.tachi.mobile
 
 ## 界面
 
+- **样式表是「库默认 + 我们的」合并出来的，不是替换**：`MarkdownView` 开着 `mergeStyle`（`createRenderer.ts` 的 `getStyle` 做 `{...base, ...ours}`）。所以想关掉库自带的底色、边框，必须显式写值（`backgroundColor: 'transparent'`）；**把那个键删掉不是「不上色」，而是落回库的默认色**——一个 `#f5f5f5` 会凭空出现在皮肤里，比原来还显眼。同理，`color`/`borderWidth` 这类也都被库兜着底。
+- **一个背景只画一层**：半透明的主题色（`codeBg` 是 `rgba(62,54,44,0.07)`）叠两次就是 13.5%，和只叠一层的 7% 差 12 个色阶——肉眼是一道缝。围栏代码块就是这样：外层 `fence` 涂一次，里面 `fence_code` 又涂一次，而后者在横向 `ScrollView` 里只跟内容一样宽，于是右半边只剩一层。底色只留最外层。
 - **正文的 markdown 交给 `@ronradtke/react-native-markdown-display`**（RN 原生的 markdown-it 渲染，表格 / 列表 / 代码块都是它自己的规则）；我们只补两件事：围栏里的 `mermaid` 换成 WebView 那张图，以及所有文字可长按选中。别引 `react-markdown`——那是渲染 DOM 的，手机上用不了。
 - **`<system-reminder>` 不进消息流**：桌面把它折成正文旁边一个小标记，手机上没人会点开，所以 `stripReminders` 直接抽掉，`role: 'reminder'` 整条不画。
 - **实时那一轮和历史记录必须用同一套组件**（`Message.tsx` 的 `ToolCard` / `Thinking`）。两边各画一套的后果是「正在跑的时候工具卡点不开、也没有参数，停下来切个会话又正常了」。
