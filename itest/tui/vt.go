@@ -194,14 +194,14 @@ func (s *vtScreen) handleCSI(p *ansi.Parser) {
 	case 'J': // ED: 0 → below, 1 → above, 2/3 → whole screen
 		switch param(0, 0) {
 		case 0:
-			s.eraseLine(s.curX, s.width-1)
+			s.eraseRow(s.curY, s.curX, s.width-1)
 			for y := s.curY + 1; y < s.height; y++ {
-				s.eraseLine(0, s.width-1)
+				s.eraseRow(y, 0, s.width-1)
 			}
 		case 1:
-			s.eraseLine(0, s.curX)
+			s.eraseRow(s.curY, 0, s.curX)
 			for y := 0; y < s.curY; y++ {
-				s.eraseLine(0, s.width-1)
+				s.eraseRow(y, 0, s.width-1)
 			}
 		case 2, 3:
 			s.clear()
@@ -311,11 +311,19 @@ func (s *vtScreen) clearCovered(y, x, w int) {
 	}
 }
 
-func (s *vtScreen) eraseLine(from, to int) {
+func (s *vtScreen) eraseLine(from, to int) { s.eraseRow(s.curY, from, to) }
+
+// eraseRow blanks part of row y. eraseLine is the same on the CURSOR row — and that difference
+// matters: ED (J) must clear the rows *below/above* the cursor, and a loop that called
+// eraseLine for each of them would blank the cursor row N times and leave every other row alone.
+func (s *vtScreen) eraseRow(y, from, to int) {
+	if y < 0 || y >= s.height {
+		return
+	}
 	from = max(from, 0)
 	to = min(to, s.width-1)
 	for x := from; x <= to; x++ {
-		s.grid[s.curY][x] = vtCell{text: " ", width: 1}
+		s.grid[y][x] = vtCell{text: " ", width: 1}
 	}
 }
 
