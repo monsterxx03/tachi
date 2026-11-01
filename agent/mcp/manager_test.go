@@ -204,8 +204,9 @@ func TestManager_Reconnect_ServerNotConnected(t *testing.T) {
 	m := NewManager(t.Context(), nil, nil)
 
 	// ConnectAll to an empty config — should succeed with no tools
+	previousBase := config.BaseDir()
 	config.SetBaseDir(t.TempDir())
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	tools, errs := m.ConnectAll(t.Context(), nil)
 	assert.Empty(t, tools)
@@ -265,8 +266,9 @@ func TestManager_Close_SomeErrors(t *testing.T) {
 func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 	m := NewManager(t.Context(), nil, nil)
 	baseDir := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(baseDir)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	// A disabled server should be skipped
 	servers := []config.MCPServerConfig{

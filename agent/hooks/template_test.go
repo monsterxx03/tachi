@@ -12,8 +12,9 @@ import (
 // config.BaseDir() (honoring --home) instead of a hardcoded ~/.tachi/hooks.
 func TestExpandVars_HooksDirRespectsBaseDir(t *testing.T) {
 	tmpBase := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(tmpBase)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	out := expandVars("bash {{HOOKS_DIR}}/notify.sh", "sess1", "/ws")
 	want := "bash " + filepath.Join(tmpBase, "hooks", "notify.sh")
@@ -26,8 +27,9 @@ func TestExpandVars_HooksDirRespectsBaseDir(t *testing.T) {
 // still expand correctly.
 func TestExpandVars_SessionAndWorkspace(t *testing.T) {
 	tmpBase := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(tmpBase)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	out := expandVars("echo {{SESSION_ID}} {{WORKSPACE_DIR}} {{TIMESTAMP}}", "abc123", "/proj")
 	for _, want := range []string{"abc123", "/proj"} {

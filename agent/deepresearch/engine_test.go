@@ -360,8 +360,9 @@ func TestReportPath_SetByRun(t *testing.T) {
 
 	// Redirect the research dir so the report lands in a temp dir.
 	researchDir := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(researchDir)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	_, err := engine.Run(context.Background(), "t", 1, 1, nil)
 	if err != nil {

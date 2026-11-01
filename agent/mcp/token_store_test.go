@@ -149,8 +149,9 @@ func TestTokenStore_TokenExpiry(t *testing.T) {
 
 func TestTokenStore_MultipleServers(t *testing.T) {
 	baseDir := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(baseDir)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	store1, err := NewFileTokenStore("server-a")
 	require.NoError(t, err)
@@ -170,8 +171,9 @@ func TestTokenStore_MultipleServers(t *testing.T) {
 
 func TestTokenStore_PathStructure(t *testing.T) {
 	baseDir := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(baseDir)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	store, err := NewFileTokenStore("my-server")
 	require.NoError(t, err)
@@ -186,8 +188,9 @@ func TestTokenStore_PathStructure(t *testing.T) {
 func newTestTokenStore(t *testing.T) *FileTokenStore {
 	t.Helper()
 	baseDir := t.TempDir()
+	previousBase := config.BaseDir()
 	config.SetBaseDir(baseDir)
-	t.Cleanup(func() { config.SetBaseDir("") })
+	t.Cleanup(func() { config.SetBaseDir(previousBase) })
 
 	store, err := NewFileTokenStore("test-server")
 	require.NoError(t, err)
