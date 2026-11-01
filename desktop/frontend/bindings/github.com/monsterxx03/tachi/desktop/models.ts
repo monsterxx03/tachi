@@ -1352,6 +1352,18 @@ export interface SessionInfo {
     "cronCount"?: number;
 
     /**
+     * CronNextRun is when this conversation next wakes up on its own: the EARLIEST fire among its
+     * active tasks, zero when none is scheduled (no tasks, or every one paused). Derived in the
+     * same scan as CronCount, and omitted when zero so a row with nothing scheduled is drawn
+     * exactly as before.
+     * 
+     * It is the time, not a rendered string: each frontend says it in its own voice (the sidebar's
+     * ladder starts at the clock, the phone's differs), and the same rule the composer follows —
+     * the frontend formats, the backend reports facts.
+     */
+    "cronNextRun"?: string;
+
+    /**
      * SkipDream says background memory consolidation leaves this conversation alone
      * (session.Session.SkipDream). The sidebar needs it to label the action correctly
      * (跳过 / 恢复), so it travels with the row.
@@ -1488,17 +1500,17 @@ export interface SessionMessage {
     "isError"?: boolean;
 
     /**
+     * AutoExpand marks a call the USER typed (the desktop's /sh): the transcript shows its output
+     * unfolded, and it is deliberately absent from the model's history (see session.Message).
+     */
+    "autoExpand"?: boolean;
+
+    /**
      * Change is the file change this tool call set out to make (nil for tools that
      * change no text). It is DERIVED from Args, never persisted, so reloading any old
      * session shows the same diffs with no migration.
      */
     "change"?: FileChangeVO | null;
-
-    /**
-     * AutoExpand marks a call the USER typed (the desktop's /sh): the transcript shows its output
-     * unfolded, and it is deliberately absent from the model's history (see session.Message).
-     */
-    "autoExpand"?: boolean;
 }
 
 /**

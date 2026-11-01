@@ -210,6 +210,76 @@ func TestMobileRowCarriesTheCronCount(t *testing.T) {
 	}
 }
 
+// TestMobileRowCarriesTheNextRun: the row says when the conversation comes alive again — the
+// EARLIEST of its active jobs, since that is the next thing that will actually happen (the last
+// one would name a moment by which everything already had). A paused job still COUNTS — something
+// is bound to this conversation and a delete would take it with it — but it schedules nothing, so
+// a conversation whose jobs are all paused keeps the number and carries no time.
+func TestMobileRowCarriesTheNextRun(t *testing.T) {
+	d, sm := newMobileApp(t)
+	soon, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	pausedOnly, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	plain, err := sm.New("p", t.TempDir())
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "crons.json")
+	store := cron.NewStore(path)
+	job := func(id, schedule string, status cron.JobStatus, target string) {
+		t.Helper()
+		if err := store.Create(&cron.Job{
+			ID: id, Name: id, Schedule: schedule, Prompt: "p", Status: status,
+			TargetType: cron.TargetTypeDesktop,
+			Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: target},
+		}); err != nil {
+			t.Fatalf("create job %s: %v", id, err)
+		}
+	}
+	// Two active jobs far apart in time, so "earliest" and "latest" are different answers.
+	job("c-soon", "@every 1m", cron.JobStatusActive, soon.LogicalConversationID())
+	job("c-later", "@every 5h", cron.JobStatusActive, soon.LogicalConversationID())
+	job("c-paused", "@every 1m", cron.JobStatusPaused, pausedOnly.LogicalConversationID())
+	d.cfg = &config.Config{Language: "en", Cron: config.CronConfig{StorePath: path}}
+
+	rows, err := d.mobileSessions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byID := map[string]mobileSessionSummary{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+
+	got := byID[soon.ID]
+	if got.Cron != 2 {
+		t.Fatalf("cron on the bound row = %d, want 2", got.Cron)
+	}
+	if got.CronNext == "" {
+		t.Fatal("an active job says nothing about when it runs")
+	}
+	next, err := time.Parse(time.RFC3339, got.CronNext)
+	if err != nil {
+		t.Fatalf("cronNext %q is not RFC3339: %v", got.CronNext, err)
+	}
+	if d := time.Until(next); d < 30*time.Second || d > 90*time.Second {
+		t.Fatalf("next run in %v, want the 1m job's (~60s) — the 5h one must not win", d)
+	}
+
+	if p := byID[pausedOnly.ID]; p.Cron != 1 || p.CronNext != "" {
+		t.Fatalf("all-paused row = (%d, %q), want (1, \"\"): it counts, it schedules nothing", p.Cron, p.CronNext)
+	}
+	if p := byID[plain.ID]; p.Cron != 0 || p.CronNext != "" {
+		t.Fatalf("no-job row = (%d, %q), want (0, \"\")", p.Cron, p.CronNext)
+	}
+}
+
 // TestMobilePageUsesTheRecordIndex is the cursor rule: `before` is a record index, so two
 // records written in the same instant still page one at a time. A timestamp cursor would have
 // dropped or duplicated them.

@@ -56,7 +56,7 @@ func (d *desktopApp) mobileSessions() ([]mobileSessionSummary, error) {
 	}
 	busy := d.busySessions()
 	// 一次扫描算完整个列表：定时任务的条数是**那段对话**的属性（逻辑 id），不是某一页的
-	crons := d.cronCountsByLogical()
+	crons := d.cronFactsByLogical()
 	out := make([]mobileSessionSummary, 0, len(list))
 	for _, ss := range list {
 		if parents[ss.ID] {
@@ -80,12 +80,12 @@ func (d *desktopApp) mobileSessions() ([]mobileSessionSummary, error) {
 // disagreed with the window about "who is waiting" would be worse than no phone at all.
 func (d *desktopApp) mobileSummary(ss *session.Session, busy map[string]bool) mobileSessionSummary {
 	// 单行调用方（快照 / 翻页 / 新建）各扫一遍就够了；列表那条路走 mobileSummaryWith，只扫一次
-	return d.mobileSummaryWith(ss, busy, d.cronCountsByLogical())
+	return d.mobileSummaryWith(ss, busy, d.cronFactsByLogical())
 }
 
 // mobileSummaryWith 是列表那份：`crons` 由调用方扫一次传进来（每行各扫一遍 crons.json 是
 // 白花的）。
-func (d *desktopApp) mobileSummaryWith(ss *session.Session, busy map[string]bool, crons map[string]int) mobileSessionSummary {
+func (d *desktopApp) mobileSummaryWith(ss *session.Session, busy map[string]bool, crons map[string]cronFacts) mobileSessionSummary {
 	running, _ := d.sessionRunning(ss.ID)
 	waiting := ""
 	if running {
@@ -95,6 +95,8 @@ func (d *desktopApp) mobileSummaryWith(ss *session.Session, busy map[string]bool
 	if p, ok := d.projects.get(ss.ProjectID); ok {
 		project = p.Name
 	}
+	// 这段对话的定时任务事实（同一次扫描，两屏共用）：条数、下次自己醒来的时刻
+	cron := crons[ss.LogicalConversationID()]
 	return mobileSessionSummary{
 		ID:          ss.ID,
 		Title:       ss.Title,
@@ -109,9 +111,20 @@ func (d *desktopApp) mobileSummaryWith(ss *session.Session, busy map[string]bool
 		// process can (see mobileSessionSummary.ChannelName).
 		ChannelSession: ss.ThreadID != "",
 		ChannelName:    d.mobileChannelName(ss),
-		// 定时任务写进这段对话的条数（桌面侧栏那颗徽章的同一个数）
-		Cron: crons[ss.LogicalConversationID()],
+		// 定时任务写进这段对话的条数，和它下一次自己醒来的时候（桌面侧栏那颗徽章的同一份事实）
+		Cron:     cron.Count,
+		CronNext: mobileCronNext(cron.Next),
 	}
+}
+
+// mobileCronNext renders "when this conversation next wakes up on its own" for the wire. A zero
+// time and an absent one are the SAME fact here — nothing is scheduled — so zero is "" and the
+// phone draws no time rather than 0001-01-01.
+func mobileCronNext(next time.Time) string {
+	if next.IsZero() {
+		return ""
+	}
+	return next.Format(time.RFC3339)
 }
 
 // mobileChannelName is the channel that owns a conversation, or "" when this process cannot say.

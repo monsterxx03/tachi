@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, copyText, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, sessionGroupKey, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedChip, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
+import { buildTurns, copyText, cronMarkLabel, fmtCredit, fmtDur, fmtTime, imeActive, tpsTier, actOnKey, sessionGroups, sessionGroupKey, rewindTargetForMessage, latestSessionOf, newestOf, looseMembers, nextSessionAfter, LOOSE_LABEL, LOOSE_GROUP_KEY, managedLabel, managedChip, managedReadOnlyNote, type SessionRow, type SessionGroup } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
@@ -2590,6 +2590,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     AgentService.Stop().catch(() => {})
   }, [])
 
+  // cronMark draws a row's clock badge. One function so the visible text and its tooltip come from
+  // the same formatting call (see cronMarkLabel), and so the row body stays a list of marks.
+  const cronMark = (s: SessionItem) => {
+    const { text, label } = cronMarkLabel(s.cronCount || 0, s.cronNextRun)
+    return (
+      <span className="session-cron" title={label} aria-label={label}>
+        <Icon as={Clock} size={ICON_XS} />
+        {text}
+      </span>
+    )
+  }
+
   // sessionRow renders one session's line in the sidebar. It is a function rather than an inline
   // map body because the chain folding needs it twice: once for the conversation's newest link and
   // once per session it was compacted from (see sessionRows). `data-sid` is the row's own handle,
@@ -2637,15 +2649,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           ? <span className="wait-dot" role="img" aria-label={waitingOf(s.id)} title={waitingOf(s.id)} />
           : null}
         {runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
-        {/* A conversation a scheduled task writes into. Derived by the backend from
-            crons.json, so deleting or re-binding the task clears it with no migration;
-            the number updates while a turn's Cron tool changes it. */}
-        {(s.cronCount || 0) > 0 ? (
-          <span className="session-cron" title={`${s.cronCount} 个定时任务`} aria-label={`${s.cronCount} 个定时任务`}>
-            <Icon as={Clock} size={ICON_XS} />
-            {s.cronCount}
-          </span>
-        ) : null}
+        {/* A conversation a scheduled task writes into: the clock says when it next wakes up by
+            itself, plus the number of jobs when there is more than one. Both are derived by the
+            backend from crons.json, so deleting or re-binding a task clears them with no
+            migration, and both move while a turn's Cron tool changes the table. */}
+        {(s.cronCount || 0) > 0 ? cronMark(s) : null}
         {/* A pinned row says so on its own line: the list is sorted pinned-first, and a row that
             jumped to the top with no mark would read as an arbitrary order. The title states the
             RULE, so the reader learns where the pin applies (this group) without having to try it. */}

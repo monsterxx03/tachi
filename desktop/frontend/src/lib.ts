@@ -52,6 +52,48 @@ export function fmtTime(ts?: string): string {
   return `${md} ${hhmm}`
 }
 
+// fmtNextRun says when a conversation next wakes up on its own (a scheduled task). It is NOT
+// fmtTime's question: fmtTime answers "when did this last happen" and its ladder stops at the
+// month, because a past time further away than that is old enough to be one fact. Here the time is
+// always in the future and its DISTANCE is the news, so the ladder climbs instead of stopping: the
+// clock today, the day when it is this month, the month when it is this year, the year beyond that.
+// A row also has to stay narrow — `2027/10/15 08:00` on every line would be a wall of digits where
+// one was wanted.
+//
+// Missing or unreadable gives '' — the caller then says only what it knows (the badge keeps its
+// count and drops the time) rather than printing Invalid Date.
+export function fmtNextRun(iso?: string, now: Date = new Date()): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`
+  const sameYear = d.getFullYear() === now.getFullYear()
+  if (sameYear && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) return hm
+  if (sameYear && d.getMonth() === now.getMonth()) return `${d.getDate()}日 ${hm}`
+  if (sameYear) return `${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${hm}`
+  return `${d.getFullYear()}/${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${hm}`
+}
+
+// cronMarkLabel is what the sidebar row's clock badge says, and what hovers over it. Both halves
+// come from one call so the visible text and its tooltip cannot drift apart.
+//
+// The number is drawn only when there is more than one job: beside a time, a lone "1" says nothing
+// the badge does not already say, and the row is narrow. No time at all (every job paused, or a
+// schedule that cannot be resolved) leaves the count — the mark still has to say a task is bound
+// to this conversation, because deleting the conversation takes it along.
+//
+// The TIME comes first and the count trails it as `×N`, which is not cosmetic: the time's own first
+// rung is a bare day ("2日 00:32"), so a leading count read as a month — "3 · 2日" looks like
+// 3 March. A × between them cannot be mistaken for part of a date, and the thing the badge is for
+// (when does this wake up) is also the thing the eye reaches first.
+export function cronMarkLabel(count: number, next?: string, now: Date = new Date()): { text: string; label: string } {
+  const when = fmtNextRun(next, now)
+  const jobs = `${count} 个定时任务`
+  if (!when) return { text: count > 1 ? String(count) : '', label: jobs }
+  return { text: count > 1 ? `${when} ×${count}` : when, label: `${jobs}，下次 ${when} 运行` }
+}
+
 // fmtDur renders a millisecond duration as a concise human-readable string.
 export function fmtDur(ms: number): string {
   if (ms <= 0) return '0s'

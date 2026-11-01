@@ -29,6 +29,11 @@ export interface SessionSummary {
   channelName?: string;
   /** 有几个定时任务写进这段对话（缺省 = 没有）。列表靠它画那个小闹钟 */
   cron?: number;
+  /**
+   * 这些任务下一次叫醒这段对话是什么时候（RFC3339，缺省 = 没有排上：一个任务都没有，或者全暂停了）。
+   * 取的是最近的那一次 —— 列表回答的是「它什么时候会自己动」，不是「最后一次是什么时候」。
+   */
+  cronNext?: string;
 }
 
 /**

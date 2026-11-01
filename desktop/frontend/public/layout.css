@@ -867,9 +867,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   vertical-align: -1px;
 }
 
-/* 「这个会话有 N 个定时任务」. A small pill, not just a clock: the number is what
-   tells a reader whether one task or five will act on its own. Same slot as the
-   pin, quieter colour. */
+/* 「这个会话什么时候自己醒过来」. A small pill: the time is what the reader wants (when will
+   something act on its own), and the number of tasks joins it only when there is more than one —
+   beside a time, a lone "1" says nothing. Same slot as the pin, quieter colour. */
 .session-cron {
   display: inline-flex;
   align-items: center;

@@ -17,7 +17,7 @@ import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { usePageSwipe } from './edgeBack';
 import { machineColor } from './machineColor';
-import { formatUpdatedAt } from './time';
+import { formatNextWake, formatUpdatedAt } from './time';
 import { RenameDialog } from './RenameDialog';
 
 /** 一行右边的标记：只读 > 等你授权 > 等你回答 > 在跑（与侧栏同一套先后） */
@@ -40,6 +40,32 @@ function Badge({ text, tone, t }: { text: string; tone: 'mute' | 'amber' | 'live
     <View style={[styles.pill, toneStyle]}>
       {tone === 'live' ? <View style={[styles.liveDot, { backgroundColor: t.accent }]} /> : null}
       <Text style={[styles.pillText, { color: toneStyle.color }]}>{text}</Text>
+    </View>
+  );
+}
+
+/**
+ * 一行上那颗小闹钟：这段对话什么时候会**自己**醒过来。
+ *
+ * 时间取最近的那一次 —— 后端算的，和桌面侧栏是同一份事实（`cronNext`），所以两屏不会各说各话。
+ * 条数只在多于一个时跟在后面，写成 `×N`：时间的第一档是裸的日子（`2日 00:32`），条数写在前面
+ * 会被读成月份（`3 · 2日` 像 3 月 2 日），而 `×` 不可能被当成日期的一截。时间在前也是对的 ——
+ * 这颗徽章要说的是「什么时候」。
+ *
+ * 全都暂停时没有时间，条数留下 —— 徽章仍要说「有任务绑在这段对话上」，因为删掉会话会把它们
+ * 一起带走（那一句在删除确认里说得更清楚）。
+ */
+function CronPill({ cron, next, t }: { cron: number; next?: string; t: ThemeTokens }) {
+  const when = formatNextWake(next);
+  const text = !when ? (cron > 1 ? String(cron) : '') : cron > 1 ? `${when} ×${cron}` : when;
+  const jobs = cron === 1 ? '有 1 个定时任务' : `有 ${cron} 个定时任务`;
+  return (
+    <View
+      style={[styles.sourcePill, styles.cronPill, { borderColor: t.border }]}
+      accessibilityLabel={when ? `${jobs}，下次 ${when} 运行` : jobs}
+    >
+      <Feather name="clock" size={10} color={t.faint} />
+      {text ? <Text style={[styles.sourcePillText, { color: t.faint }]}>{text}</Text> : null}
     </View>
   );
 }
@@ -535,19 +561,9 @@ const SessionRow = memo(function SessionRow({
                 </Text>
               </View>
             ) : null}
-            {/* 有定时任务写进这段对话：一个闹钟（多于一个时带条数）。它和「渠道」不是一回事 ——
+            {/* 有定时任务写进这段对话：一个闹钟，带上它下次自己醒来的时间。它和「渠道」不是一回事 ——
                 这里的话是别的东西在替它说话，而标题上看不出来。 */}
-            {(s.cron ?? 0) > 0 ? (
-              <View
-                style={[styles.sourcePill, styles.cronPill, { borderColor: t.border }]}
-                accessibilityLabel={s.cron === 1 ? '有 1 个定时任务' : `有 ${s.cron} 个定时任务`}
-              >
-                <Feather name="clock" size={10} color={t.faint} />
-                {(s.cron ?? 0) > 1 ? (
-                  <Text style={[styles.sourcePillText, { color: t.faint }]}>{s.cron}</Text>
-                ) : null}
-              </View>
-            ) : null}
+            {(s.cron ?? 0) > 0 ? <CronPill cron={s.cron ?? 0} next={s.cronNext} t={t} /> : null}
             {badge ? <Badge {...badge} t={t} /> : null}
           </View>
           <View style={styles.rowSubRow}>

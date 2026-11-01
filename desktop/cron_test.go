@@ -426,3 +426,51 @@ func TestCronJobRecordsReadsTheStoreWhenTheSchedulerIsOff(t *testing.T) {
 	require.Len(t, jobs, 1)
 	assert.Equal(t, "off", jobs[0].Name)
 }
+
+// TestCronFactsSayWhenTheConversationWakesUp is the sidebar badge's half of the same fact the
+// phone draws: how many jobs write into a conversation, and when it next comes alive on its own.
+// The EARLIEST active job is the answer (that is the next thing that will happen), a paused job
+// keeps counting but schedules nothing, and a conversation with no jobs gets nothing at all — so
+// the row is drawn exactly as it was before this field existed.
+func TestCronFactsSayWhenTheConversationWakesUp(t *testing.T) {
+	d, store := cronTestApp(t)
+	bound := addSession(t, store, &session.Session{ID: "s1", Title: "bound"})
+	pausedOnly := addSession(t, store, &session.Session{ID: "s2", Title: "paused"})
+	plain := addSession(t, store, &session.Session{ID: "s3", Title: "plain"})
+
+	path := filepath.Join(t.TempDir(), "crons.json")
+	jobs := cron.NewStore(path)
+	job := func(id, schedule string, status cron.JobStatus, target string) {
+		t.Helper()
+		require.NoError(t, jobs.Create(&cron.Job{
+			ID: id, Name: id, Schedule: schedule, Prompt: "p", Status: status,
+			TargetType: cron.TargetTypeDesktop,
+			Desktop:    &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: target},
+		}))
+	}
+	job("c-soon", "@every 1m", cron.JobStatusActive, bound.ID)
+	job("c-later", "@every 5h", cron.JobStatusActive, bound.ID)
+	job("c-paused", "@every 1m", cron.JobStatusPaused, pausedOnly.ID)
+	d.cfg = &config.Config{Cron: config.CronConfig{StorePath: path}}
+
+	facts := d.cronFactsByLogical()
+	require.Equal(t, 2, facts[bound.ID].Count)
+	// The 1m job, not the 5h one: the row answers "what happens next", not "when is everything done".
+	assert.WithinDuration(t, time.Now().Add(time.Minute), facts[bound.ID].Next, 30*time.Second)
+	assert.Equal(t, 1, facts[pausedOnly.ID].Count, "a paused job is still a job")
+	assert.True(t, facts[pausedOnly.ID].Next.IsZero(), "a paused job schedules nothing")
+	_, ok := facts[plain.ID]
+	assert.False(t, ok, "a conversation with no jobs has no entry at all")
+
+	// And the same facts reach the sidebar through ListSessions (the field is what the frontend
+	// reads; deriving it and then not sending it is the bug this pins).
+	rows := (&AgentService{desk: d}).ListSessions()
+	byID := map[string]SessionInfo{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	assert.Equal(t, 2, byID[bound.ID].CronCount)
+	assert.WithinDuration(t, time.Now().Add(time.Minute), byID[bound.ID].CronNextRun, 30*time.Second)
+	assert.True(t, byID[pausedOnly.ID].CronNextRun.IsZero())
+	assert.True(t, byID[plain.ID].CronNextRun.IsZero())
+}
