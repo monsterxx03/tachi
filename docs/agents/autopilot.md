@@ -181,7 +181,9 @@ scripts/autopilot/screenshot.sh <desktop|mobile|web> --name <名字> --upload
 
 - **身份**：bot 是 GitHub App `tachi-autopilot`（`tachi-autopilot[bot]`），装在 `deskmini-local` 上，
   权限就是 Contents / Issues / Pull requests / Actions 读写——够开分支、开 PR、打标签、看测试结果，
-  不够改仓库设置、不够加人。私钥和 id 在 `$TACHI_HOME/autopilot/`
+  不够改仓库设置、不够加人。**也不能改 `.github/workflows/`**：push 会被拒（`without workflows
+  permission`），所以「改 CI 配置」这类活要么先拿到该权限，要么把补丁贴在 issue 里等人合。私钥和 id 在
+  `$TACHI_HOME/autopilot/`
   （`app.pem` + `app.json`），**换机器就只拷这两个文件**，令牌由 `bot-token.sh` 现换、不落盘到仓库。
   改了 App 的权限之后要去设置页重新批准一次，否则令牌照发但权限还是旧的。
 - **main 加保护**：必须走 PR、且要主人批准才能合。bot 有写权限，这条规则是唯一挡住它自己合的东西。
