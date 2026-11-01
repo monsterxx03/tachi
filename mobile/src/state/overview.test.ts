@@ -79,6 +79,15 @@ describe('buildOverview', () => {
     expect(rows.find((r) => r.session.id === 'm1')?.stale).toBe(false);
   });
 
+  it('同一段里陈旧的行排在新鲜的行后面（连不上的机器不能盖住真的等待）', () => {
+    const cache: SessionCache = {
+      mac: { at: 1, sessions: [s({ id: 'old-wait', updatedAt: '2026-11-01T10:00:00Z', waiting: '等待你的授权' })] },
+      nas: { at: 1, sessions: [s({ id: 'new-wait', updatedAt: '2026-10-01T10:00:00Z', waiting: '等待你的回答' })] },
+    };
+    const rows = buildOverview(devices, cache, { mac: false });
+    expect(rows.map((r) => r.session.id)).toEqual(['new-wait', 'old-wait']);
+  });
+
   it('没有缓存的机器不出行（不是出一行空的分组标题）', () => {
     expect(buildOverview(devices, { mac: { at: 1, sessions: [] } }, {})).toEqual([]);
   });

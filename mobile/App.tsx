@@ -26,6 +26,7 @@ import { SessionInfo } from './src/ui/SessionInfo';
 import { SessionList } from './src/ui/SessionList';
 import { NewSession } from './src/ui/NewSession';
 import { Devices } from './src/ui/Devices';
+import { machineColor } from './src/ui/machineColor';
 import { DeviceDetail } from './src/ui/DeviceDetail';
 import { Opening } from './src/ui/Opening';
 
@@ -78,7 +79,7 @@ function ChatPane({
   setOpenFile: (f: AttachmentRef | null) => void;
   onToggleList?: () => void;
 }) {
-  const { tokens: t } = useTheme();
+  const { tokens: t, isDark } = useTheme();
   const inChat = Boolean(m.openId && m.chat.snapshot);
 
   if (openFile && m.pairing && m.openId)
@@ -105,6 +106,11 @@ function ChatPane({
       <Chat
         sessions={m.sessions}
         machine={m.devices[m.activeDevice]?.label}
+        machineColor={
+          m.devices[m.activeDevice]
+            ? machineColor(deviceKey(m.devices[m.activeDevice]), isDark)
+            : undefined
+        }
         loadAgents={async () => {
           const { panels } = await m.loadPanels();
           return panels?.agents.peers ?? [];

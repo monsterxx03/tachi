@@ -760,6 +760,7 @@ export function Chat({
   sessions,
   loadAgents,
   machine,
+  machineColor,
 }: {
   snapshot: Snapshot;
   /** 全部对话，`#s:` 的候选就来自这里 —— 手机手里本来就有这份列表，不必为补全再问一次服务端。 */
@@ -773,6 +774,8 @@ export function Chat({
    * 在两台机器上都可能存在，而这一屏能做的事（跑什么、读哪个目录）完全由那台决定。
    */
   machine?: string;
+  /** 那台机器的身份色（`ui/machineColor.ts`）；不给就退回主题的蓝 */
+  machineColor?: string;
   live: Live;
   fileSource?: (a: AttachmentRef) => FileSource | null;
   onBack: () => void;
@@ -948,7 +951,7 @@ export function Chat({
             ) : null}
           </View>
           <Text style={[styles.headSub, { color: t.faint }]} numberOfLines={1}>
-            {machine ? <Text style={{ color: t.accent2 }}>{machine}</Text> : null}
+            {machine ? <Text style={{ color: machineColor ?? t.accent2 }}>{machine}</Text> : null}
             {machine ? ' · ' : ''}
             {s.projectName ? `${s.projectName} · ` : ''}
             {s.readOnly ? '来自别的任务' : s.running ? '正在跑' : '空闲'}

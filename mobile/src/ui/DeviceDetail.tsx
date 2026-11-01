@@ -4,8 +4,10 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import Animated from 'react-native-reanimated';
 import { defaultLabel, hostOf } from '../api/label';
 import type { Device } from '../api/storage';
+import { deviceKey } from '../api/storage';
 import type { AwakeState } from '../api/types';
 import { useTheme } from '../theme/ThemeContext';
+import { machineColor } from './machineColor';
 import { Switch } from './controls';
 import { PairingQR } from './PairingQR';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
@@ -87,7 +89,7 @@ export function DeviceDetail({
   /** 开关 / 改时长。返回失败的那句话，成功返回 null。 */
   onSetAwake: (on: boolean, durationMin?: number) => Promise<string | null>;
 }) {
-  const { tokens: t } = useTheme();
+  const { tokens: t, isDark } = useTheme();
   const back = useEdgeBack(onBack);
   const [editingName, setEditingName] = useState(false);
   const [draft, setDraft] = useState(device.label);
@@ -148,9 +150,13 @@ export function DeviceDetail({
           <Feather name="chevron-left" size={22} color={t.dim} />
         </Pressable>
         <View style={styles.headInfo}>
-          <Text style={[styles.title, { color: t.title }]} numberOfLines={1}>
-            {device.label}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+            {/* 和首页那一行同一个颜色：这台机器在哪儿都是这个色 */}
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: machineColor(deviceKey(device), isDark) }} />
+            <Text style={[styles.title, { color: t.title, flexShrink: 1 }]} numberOfLines={1}>
+              {device.label}
+            </Text>
+          </View>
           <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
             {status}
           </Text>

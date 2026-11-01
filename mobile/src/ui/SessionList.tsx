@@ -16,6 +16,7 @@ import { type OverviewRow, type Section, sectionOf } from '../state/overview';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeTokens } from '../theme/tokens';
 import { usePageSwipe } from './edgeBack';
+import { machineColor } from './machineColor';
 import { formatUpdatedAt } from './time';
 import { RenameDialog } from './RenameDialog';
 
@@ -197,7 +198,7 @@ export function SessionList({
    */
   onForward?: () => void;
 }) {
-  const { tokens: t } = useTheme();
+  const { tokens: t, isDark } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   // 长按打开的那个对话框。草稿在 RenameDialog 里：没按「保存」之前，那台电脑上的标题一个字都不动
   const [renaming, setRenaming] = useState<OverviewRow | null>(null);
@@ -226,13 +227,18 @@ export function SessionList({
    * 里保持设备簿的顺序（稳定排序），否则每次刷新 chip 都会跳一下。
    */
   const chipDevices = useMemo(() => {
-    const rank = (key: string) =>
-      (waitingByKey[key] ?? 0) > 0 ? 0 : (runningByKey[key] ?? 0) > 0 ? 1 : 2;
+    // 连不上的永远排最后：它上面的一切都是几小时前的，不能占着最该被看见的位置
+    const rank = (key: string) => {
+      if (reachable[key] === false) return 3;
+      if ((waitingByKey[key] ?? 0) > 0) return 0;
+      if ((runningByKey[key] ?? 0) > 0) return 1;
+      return 2;
+    };
     return devices
       .map((d, index) => ({ d, index, key: deviceKey(d), n: waitingByKey[deviceKey(d)] ?? 0 }))
       .map((x) => ({ ...x, rank: rank(x.key) }))
       .sort((a, b) => a.rank - b.rank);
-  }, [devices, waitingByKey, runningByKey]);
+  }, [devices, waitingByKey, runningByKey, reachable]);
 
   /**
    * 三段分组。`rows` 已经按「等你 > 在跑 > 其余」排好了，所以这里只需要在切换段的时候
@@ -381,7 +387,10 @@ export function SessionList({
                   ]}
                 >
                   {n > 0 ? <View style={[styles.needDot, { backgroundColor: t.amber }]} /> : null}
-                  <Text style={[styles.chipText, { color: on ? t.accent2 : t.dim }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.chipText, { color: machineColor(key, isDark) }]}
+                    numberOfLines={1}
+                  >
                     {d.label || d.baseUrl.replace(/^https?:\/\//, '')}
                   </Text>
                   {n > 0 ? <Text style={[styles.chipCount, { color: t.amber }]}>{n}</Text> : null}
@@ -481,7 +490,7 @@ const SessionRow = memo(function SessionRow({
   /** 长按一行：改名字。左滑只有两个动作，第三个放不下，也不该挤掉「删除」的宽度 */
   onRename: (row: OverviewRow) => void;
 }) {
-  const { tokens: t } = useTheme();
+  const { tokens: t, isDark } = useTheme();
   const s = row.session;
   const badge = badgeOf(s);
 
@@ -544,7 +553,10 @@ const SessionRow = memo(function SessionRow({
           <View style={styles.rowSubRow}>
             {machine ? (
               <>
-                <Text style={[styles.rowMachine, { color: t.accent2 }]} numberOfLines={1}>
+                <Text
+                  style={[styles.rowMachine, { color: machineColor(row.key, isDark) }]}
+                  numberOfLines={1}
+                >
                   {row.machine}
                 </Text>
                 <Text style={[styles.rowSub, { color: t.faint }]}>·</Text>

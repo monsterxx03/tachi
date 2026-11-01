@@ -7,6 +7,7 @@ import type { ProjectRef } from '../api/types';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
+import { machineColor } from './machineColor';
 
 /**
  * 新建一段对话。项目是可选的；选择「无项目」时可以改工作目录 —— 手机上没有文件选择器，
@@ -29,7 +30,7 @@ export function NewSession({
   onClose: () => void;
   onCreate: (deviceIndex: number, opts: { projectId?: string; workingDir?: string }) => void;
 }) {
-  const { tokens: t } = useTheme();
+  const { tokens: t, isDark } = useTheme();
   const back = useEdgeBack(onClose);
   // 每次都要先选建在哪台：几台机器各有各的项目和目录，默认一个很容易建错地方
   const [deviceIndex, setDeviceIndex] = useState<number | null>(null);
@@ -75,6 +76,7 @@ export function NewSession({
             return (
               <Row
                 key={deviceKey(d)}
+                dot={machineColor(deviceKey(d), isDark)}
                 label={d.label || d.baseUrl}
                 hint={dead ? '现在连不上，建的时候要它在线' : d.baseUrl.replace(/^https?:\/\//, '')}
                 on={deviceIndex === i}
@@ -177,6 +179,7 @@ export function NewSession({
 function Row({
   label,
   hint,
+  dot,
   on,
   disabled,
   onPress,
@@ -184,6 +187,8 @@ function Row({
 }: {
   label: string;
   hint?: string;
+  /** 机器身份色的小圆点（只有「建在哪台」那几行有） */
+  dot?: string;
   on: boolean;
   disabled?: boolean;
   onPress: () => void;
@@ -203,7 +208,10 @@ function Row({
       ]}
     >
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={{ color: t.text, fontSize: 13.5 }}>{label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {dot ? <View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: dot }} /> : null}
+          <Text style={{ color: t.text, fontSize: 13.5 }}>{label}</Text>
+        </View>
         {hint ? (
           <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
             {hint}

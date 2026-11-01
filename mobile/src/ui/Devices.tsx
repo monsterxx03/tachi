@@ -6,6 +6,7 @@ import { recentRequests, type ReqRecord } from '../api/client';
 import { hostOf } from '../api/label';
 import { type Device, deviceKey } from '../api/storage';
 import { useTheme } from '../theme/ThemeContext';
+import { machineColor } from './machineColor';
 import type { ThemeMode } from '../theme/tokens';
 import { EdgeBackZone, useEdgeBack } from './edgeBack';
 
@@ -40,7 +41,7 @@ export function Devices({
   onOpen: (index: number) => void;
   onBack: () => void;
 }) {
-  const { tokens: t, mode, setMode } = useTheme();
+  const { tokens: t, isDark, mode, setMode } = useTheme();
   const back = useEdgeBack(onBack);
   // 诊断：最近几次请求的去向与结果。手机上没有控制台，这一行是唯一能读到的证据。
   const [reqs, setReqs] = useState<ReqRecord[]>([]);
@@ -96,7 +97,10 @@ export function Devices({
                 ]}
               >
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={{ color: t.text, fontSize: 13.5 }} numberOfLines={1}>
+                  <Text
+                    style={{ color: machineColor(key, isDark), fontSize: 13.5, fontWeight: '500' }}
+                    numberOfLines={1}
+                  >
                     {d.label || d.baseUrl}
                   </Text>
                   <Text

@@ -72,6 +72,9 @@ function compare(a: OverviewRow, b: OverviewRow): number {
   const sa = SECTION_ORDER.indexOf(sectionOf(a.session));
   const sb = SECTION_ORDER.indexOf(sectionOf(b.session));
   if (sa !== sb) return sa - sb;
+  // 同一段里，新鲜的在前面 —— 一台连不上的机器上「等你授权」可能是几小时前的，那时人早
+  // 处理完了。它仍然留在「等待」组里（chip 上的数字也没丢），但不该盖住真正新鲜的等待。
+  if (a.stale !== b.stale) return a.stale ? 1 : -1;
   if (Boolean(a.session.pinned) !== Boolean(b.session.pinned)) return a.session.pinned ? -1 : 1;
   const ta = updatedAt(a.session);
   const tb = updatedAt(b.session);

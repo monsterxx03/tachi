@@ -15,15 +15,15 @@ import (
 
 // Server 是那个假服务端：内存里几个会话 + 一条广播出去的事件流。
 type Server struct {
-	mu      sync.Mutex
-	token   string
+	mu    sync.Mutex
+	token string
 	// 这台「机器」的名字与稳定身份：起两个实例时给不一样的值，手机才认得出是两台
 	hostname string
 	deviceID string
-	order   []string
-	byID    map[string]*session
-	clients map[*client]struct{}
-	log     *logger.Logger
+	order    []string
+	byID     map[string]*session
+	clients  map[*client]struct{}
+	log      *logger.Logger
 	// cron 是假服务端的定时任务表：手机上那三个动作要改得动它，面板才看得出同步
 	cron []map[string]any
 	// awake 是这台「电脑」的保持唤醒开关。它不属于任何会话，所以和 cron 一样是一份独立状态，
@@ -64,11 +64,11 @@ func NewNamed(token, hostname, deviceID string) *Server {
 		token:    token,
 		hostname: hostname,
 		deviceID: deviceID,
-		order:   order,
-		byID:    byID,
-		clients: map[*client]struct{}{},
-		log:     logger.New("mockapi"),
-		awake:   AwakeState{DurationMin: mockAwakeDefaultMinutes},
+		order:    order,
+		byID:     byID,
+		clients:  map[*client]struct{}{},
+		log:      logger.New("mockapi"),
+		awake:    AwakeState{DurationMin: mockAwakeDefaultMinutes},
 		cron: []map[string]any{
 			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "type": "recurring", "status": "active",
 				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
