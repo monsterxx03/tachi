@@ -29,6 +29,34 @@ jobs:
       - name: Test
         run: go test ./...
 
+  # The job above runs WITHOUT -race: a data race is invisible there, and the ones this project has
+  # had (a listener reading a flag a probe goroutine writes; a mock server's per-connection session
+  # id written by its read loop and read by the broadcaster) sit quietly for months until someone
+  # happens to build with -race. A full -race run costs about twice the test job; the packages that
+  # actually start goroutines are where the races live, and on a 2-core box that subset costs ~1.4x
+  # the same packages without it (43s → 80s). Widen it if a race ever shows up outside these.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # web/frontend/dist is gitignored and embedded via //go:embed dist, so
+      # build it before any Go compile (go test covers web/frontend).
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Test (race)
+        run: go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/
+
   build:
     runs-on: ubuntu-latest
     steps:
