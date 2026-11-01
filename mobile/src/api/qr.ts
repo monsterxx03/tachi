@@ -37,3 +37,23 @@ export function parsePairingQR(raw: string): Pairing | null {
 
   return rest.length > 0 ? { baseUrl, token, urls: addresses } : { baseUrl, token };
 }
+
+/**
+ * 把一台已经记住的电脑变成二维码里装的那串字（`parsePairingQR` 的逆）。
+ *
+ * 手机自己出示配对码这件事，只有「已经配对过」的机器才做得到 —— 新手机扫这一张，等于
+ * 把电脑那一屏上的码拍一次：同样的 `{v,url,urls,token}`，同样的 token。所以形状只有
+ * 一处定义，另一处（解析）就在上面几行：**两边必须能对上**，`qr.test.ts` 用往返钉住。
+ *
+ * `urls` 只在一台电脑有多条地址时出现：单条地址时 `url` 就是全部，写两遍只会让码更密。
+ */
+export function pairingQRPayload(p: Pairing): string {
+  const urls = (p.urls ?? []).filter((u) => u && u !== p.baseUrl);
+  const shape: { v: number; url: string; urls?: string[]; token: string } = {
+    v: 1,
+    url: p.baseUrl,
+    token: p.token,
+  };
+  if (urls.length > 0) shape.urls = [p.baseUrl, ...urls];
+  return JSON.stringify(shape);
+}
