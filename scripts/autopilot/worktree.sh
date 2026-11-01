@@ -82,6 +82,34 @@ build_frontend() {
     || echo "    $rel: build 失败 —— 交还给 make 去报错"
 }
 
+# prepare_bot_identity <worktree> —— 让这个区里的提交和推送都以 bot 的身份发生。
+#
+# 三件事都写进这个 worktree 自己的 config（extensions.worktreeConfig），主工作树不受影响：
+#   1. 作者名/邮箱 = GitHub App 的 bot 账号（邮箱必须是它的 noreply 地址，GitHub 才会把提交认到它名下）
+#   2. 推送走 https，不走主人的 SSH key —— 那条路一用就是主人的身份
+#   3. 凭证助手只回答 github.com，答的是 App 现换的令牌（见 bot-token.sh）
+#
+# 拿不到 bot 身份就硬失败：宁可这一轮不开区，也不要出一批挂在主人名下、他自己都没印象的提交。
+prepare_bot_identity() {
+  local wt="$1" ident name email url slug
+  ident="$("$SCRIPT_DIR/bot-token.sh" --identity)" \
+    || die "拿不到 bot 身份（见 scripts/autopilot/bot-token.sh），拒绝开区"
+  name="${ident%% <*}"; email="${ident#*<}"; email="${email%>}"
+
+  url="$(git -C "$wt" remote get-url origin)"
+  slug="$(printf '%s' "$url" | sed -E 's#^git@github\.com:##; s#^https?://github\.com/##; s#\.git$##')"
+  [[ "$slug" == */* ]] || die "看不懂 origin 地址：$url"
+
+  git -C "$MAIN_WT" config extensions.worktreeConfig true
+  git -C "$wt" config --worktree user.name "$name"
+  git -C "$wt" config --worktree user.email "$email"
+  git -C "$wt" config --worktree remote.origin.pushurl "https://github.com/$slug.git"
+  # 先清掉继承来的助手（它答的可能是主人自己的凭证），再挂上我们的。
+  git -C "$wt" config --worktree --replace-all credential.helper ""
+  git -C "$wt" config --worktree --add credential.helper "!$SCRIPT_DIR/git-credential.sh"
+  echo "    身份：$name"
+}
+
 cmd_new() {
   local slug="${1:-}"
   [[ -n "$slug" ]] || die "用法：$0 new <slug>"
@@ -101,6 +129,7 @@ cmd_new() {
 
   echo "== 复用依赖"
   ensure_exclude
+  prepare_bot_identity "$path"
   link_modules "$path" web/frontend
   link_modules "$path" desktop/frontend
   build_frontend "$path" web/frontend
@@ -212,6 +241,7 @@ cmd_resume() {
   fi
 
   ensure_exclude
+  prepare_bot_identity "$path"
   link_modules "$path" web/frontend
   link_modules "$path" desktop/frontend
   build_frontend "$path" web/frontend

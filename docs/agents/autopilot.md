@@ -15,9 +15,9 @@
    - 都干净 → 才接新任务。
    接着改用 `scripts/autopilot/worktree.sh resume <slug>` 回原区、原分支。**不要换 slug**——
    换了就是第二个 PR，他的意见留在原地没人管。
-2. **挑任务**：`gh issue list --label auto --author @me` 有就取最上面一个（带 `waiting-user` 的跳过，
-   球在人那边）；否则自扫技术债（跑测试找失败、读 TODO/FIXME、看近期 diff 的坑），或自己发现一个
-   明确的界面可优化项。
+2. **挑任务**：`gh issue list --label auto` 有就取最上面一个（带 `waiting-user` 的跳过，球在人那边）；
+   否则自扫技术债（跑测试找失败、读 TODO/FIXME、看近期 diff 的坑），或自己发现一个明确的界面可优化项。
+   别按作者过滤：`auto` 只有主人打得出来，那个标签本身就是「已批准」。
 3. **做完就回第 1 步**，再走一圈。开出一个 PR 不算结束这一轮，但**也不守着它等 CI**：下一圈走到第 1 步
    时它自然就红了或者绿了，那时再修。
 
@@ -29,6 +29,19 @@ CI，也扫不出确定的技术债）。
 
 **同一个问题试过两次没成就停手**：把试过什么、卡在哪回在原 issue 下，打 `waiting-user`，
 别再来第三次。这个次数是按问题算的，不是按圈算的——下一圈别再捡同一件。
+
+## 身份：每一个 GitHub 动作都以 bot 出现
+
+你开的 issue、PR、评论和提交，作者是一个独立的 GitHub App（`tachi-autopilot[bot]`），**不是仓库主人**。
+这是有意的：他在自己的列表里要一眼看出「这条是机器干的」，也才分得清哪句话是他写给自己看的。
+
+- **命令行里的 `gh` 一律写成 `scripts/autopilot/gh`**——下面各节里的 `gh ...` 都是简写。它换的是 App
+  的令牌（一小时一换，脚本自己管）。直接敲 `gh` 用的是这台机器上主人自己的登录，开出来的东西全挂他名下。
+- **git 不用管**：`worktree.sh new/resume` 已经把作者名、邮箱、推送凭证配在这个区**自己的** config 里。
+  别用 `git config user.*` 改回去，也别把 remote 换成 SSH 地址——SSH 那条路认的是主人的 key，一推就是他的身份。
+- **别跑 `gh auth login` / `gh auth switch`**：那动的是这台机器上主人自己的登录，不是你的。
+- 令牌和私钥住在 `$TACHI_HOME/autopilot/` 下，**永远不进仓库、不进 PR body、不进日志**——PR 是公开的。
+- 开区时如果报「拿不到 bot 身份」，说明这台机器上的凭证没配好：如实写下来、结束这一轮，**别绕过去用主人身份干活**。
 
 ## 拿不准就写下来，不要提问
 
@@ -135,6 +148,12 @@ scripts/autopilot/screenshot.sh <desktop|mobile|web> --name <名字> --upload
 
 ## 维护者备注
 
+- **身份**：bot 是 GitHub App `tachi-autopilot`（`tachi-autopilot[bot]`），装在 `deskmini-local` 上，
+  权限就是 Contents / Issues / Pull requests / Actions 读写——够开分支、开 PR、打标签、看测试结果，
+  不够改仓库设置、不够加人。私钥和 id 在 `$TACHI_HOME/autopilot/`
+  （`app.pem` + `app.json`），**换机器就只拷这两个文件**，令牌由 `bot-token.sh` 现换、不落盘到仓库。
+  改了 App 的权限之后要去设置页重新批准一次，否则令牌照发但权限还是旧的。
+- **main 加保护**：必须走 PR、且要主人批准才能合。bot 有写权限，这条规则是唯一挡住它自己合的东西。
 - 建定时任务时，目标会话必须已经开着「无需审批」，否则任何 ask 规则在无人值守时都会被直接拒绝，
   而日志里没有报错。
 - 想停：把 job 设成 paused。**别删那条会话**，删会话会连带删掉这个 job。

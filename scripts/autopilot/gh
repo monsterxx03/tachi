@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# autopilot 的 gh：以 bot 的身份执行，参数原样透传。
+#
+#   scripts/autopilot/gh issue list --label auto        ← 和 gh 的用法一模一样
+#
+# 为什么不是直接 gh：这台机器上 gh 登的是仓库主人自己的账号，用它开出来的 issue 和 PR 全都挂在
+# 人名下，和「谁在干活」分不开。令牌由 bot-token.sh 现换（见那个脚本），这里只负责把它塞进
+# GH_TOKEN（gh 优先读环境变量，而不是 keyring 里的登录），然后交给真正的 gh。
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 把这个目录从 PATH 里摘掉再找 gh，否则找到的可能就是它自己。
+CLEAN_PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$HERE" | paste -sd: -)"
+REAL="$(PATH="$CLEAN_PATH" command -v gh || true)"
+
+if [[ -z "$REAL" ]] || [[ "$(readlink -f "$REAL" 2>/dev/null || echo "$REAL")" == "$(readlink -f "$0")" ]]; then
+  echo "autopilot/gh: 找不到真正的 gh（它不能指向自己）" >&2
+  exit 1
+fi
+
+GH_TOKEN="$("$HERE/bot-token.sh")" exec "$REAL" "$@"

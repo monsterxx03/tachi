@@ -97,7 +97,11 @@ else
   # ---------------------------------------------------------------- 脚本语法：门禁自己也在里面
   # 没有这一层，改坏 scripts/autopilot/*.sh 只会触发 lint + unit tests，而这两层看不见 bash。
   # bash -n 只能证语法，证不了逻辑——所以「PR 碰了 scripts/autopilot/」这件事本身要人看。
-  SH_CHANGED="$(printf '%s\n' "$CHANGED" | grep -E '\.sh$' || true)"
+  # 按有没有 shebang 认，而不是按 .sh 后缀：脚本不一定带后缀（autopilot/gh 就是个没有后缀的可执行
+  # 文件），靠后缀的那道门禁会静默放过它。
+  SH_CHANGED="$(printf '%s\n' "$CHANGED" | while IFS= read -r f; do
+    [[ -f "$f" ]] && [[ "$(head -c 2 "$f" 2>/dev/null)" == '#!' ]] && echo "$f"
+  done)"
   shell_syntax() {
     local f rc=0
     while IFS= read -r f; do
