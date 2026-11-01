@@ -142,6 +142,16 @@ else
   run "lint" make lint
   run "unit tests" make test
 
+  # ---------------------------------------------------------------- 数据竞争：只有 -race 看得见
+  # `make test` 是不带 -race 的：竞争在那里完全不可见（这个仓库已经有过两条，都是会起 goroutine
+  # 的包里那些「不报错的错」）。只跑那几个包——全量 -race 大概翻倍，而这几个是竞争住的地方。
+  if printf '%s\n' "$CODE_CHANGED" \
+      | grep -qE '^(agent/|node/|session/|channel/|cron/|mobile/|pkg/)'; then
+    run "race" go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/
+  else
+    skip "race" "没碰会起 goroutine 的包"
+  fi
+
   # ---------------------------------------------------------------- 集成：改了共用面
   if printf '%s\n' "$CODE_CHANGED" \
       | grep -qE '^(agent/|config/|llm/|node/|channel/|cron/|dream/|session/|pkg/|tui/|web/|itest/|main[^/]*\.go$|go\.(mod|sum)$)'; then
