@@ -145,9 +145,11 @@ else
   # ---------------------------------------------------------------- 数据竞争：只有 -race 看得见
   # `make test` 是不带 -race 的：竞争在那里完全不可见（这个仓库已经有过两条，都是会起 goroutine
   # 的包里那些「不报错的错」）。只跑那几个包——全量 -race 大概翻倍，而这几个是竞争住的地方。
+  # 触发集合与命令里的包必须一一对应：`pkg/` 曾经在触发里、不在命令里，于是改了 pkg/ 会跑一次
+  # 不含它的竞态检查（看起来验了，其实没验）。
   if printf '%s\n' "$CODE_CHANGED" \
       | grep -qE '^(agent/|node/|session/|channel/|cron/|mobile/|pkg/)'; then
-    run "race" go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/
+    run "race" go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/ ./pkg/...
   else
     skip "race" "没碰会起 goroutine 的包"
   fi
