@@ -26,10 +26,27 @@ type scriptStep struct {
 	// repeat 把同一个工具连出几次：手机端「跑的时候就把过程折成一行、步数实时往上走」
 	// 需要一轮里有好几个工具才看得出来。
 	repeat int
+	// autoExpand 让这个工具调用走「用户自己点名」那条路（真实现是桌面的 /sh）：它的输出就是
+	// 答案，手机上卡片要直接摊开。剧本里只有 /sh 那一条会置它。
+	autoExpand bool
 }
 
 func pickScript(text string) scriptStep {
 	switch {
+	// /sh：真实现里这是本地执行（不过模型），输出就是一个「用户点名的工具调用」。mock 跑不了
+	// shell，所以这里给一段固定输出 —— 手机端要看的是**卡片直接摊开**（autoExpand）这件事。
+	case strings.HasPrefix(strings.TrimSpace(text), "/sh"):
+		cmd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "/sh"))
+		if cmd == "" {
+			cmd = "ls"
+		}
+		return scriptStep{
+			reply:      "跑完了，输出在上面那张卡里。",
+			toolName:   "Bash",
+			toolArgs:   cmd,
+			toolOut:    "README.md\npackage.json\nsrc/\n… 4 项",
+			autoExpand: true,
+		}
 	case strings.Contains(text, "slow"):
 		return scriptStep{
 			slow: true,
@@ -188,7 +205,7 @@ func (s *Server) runTurn(sess *session, text, mode string) {
 		if k := toolAfter(i); k > 0 {
 			toolID := "call-" + itoa(k)
 			title := step.toolArgs + " #" + itoa(k)
-			s.broadcast(id, Event{Type: "tool_start", ToolID: toolID, ToolName: step.toolName, Title: title})
+			s.broadcast(id, Event{Type: "tool_start", ToolID: toolID, ToolName: step.toolName, Title: title, AutoExpand: step.autoExpand})
 			s.broadcast(id, Event{Type: "tool_args", ToolID: toolID, Args: step.toolArgs})
 			// 跑得久一点：手机端要能在「还在跑」的时候看到折叠行上的步数
 			time.Sleep(700 * time.Millisecond)
