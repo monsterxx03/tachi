@@ -14,7 +14,8 @@
 # 退出码：
 #   0  —— 该跑的跑了且全过（含「只改了文档，无需重验证」）
 #   1  —— 有东西没通过
-#   2  —— 环境不具备，某层**没跑成**。这不是通过：PR 里必须写明哪层没验。
+#   2  —— 环境不具备，某层**没跑成**（没有显示器、没有 adb 设备、改动只有 `.github/` 那个
+#          只能在 GitHub 上验的桶）。这不是通过：PR 里必须写明哪层没验。
 #
 # 本脚本只读仓库、只往仓库内的既有构建产物目录写，绝不碰 ~/.tachi。
 set -uo pipefail
@@ -88,8 +89,16 @@ echo "改动：$(printf '%s\n' "$CHANGED" | wc -l) 个文件"
 printf '%s\n' "$CHANGED" | sed 's/^/  /'
 
 # docs/ 与纯说明文件不带动任何东西。其余任何路径都算「动了代码」。
+# `.github/` 既不是文档也不是「动了代码」：它跑起来就是 CI，但它的验证只能发生在 GitHub 上
+# （matrix、runner、action），本地一条命令都替不了。所以它单独一桶，见下面那条 nover。
 CODE_CHANGED="$(printf '%s\n' "$CHANGED" \
   | grep -vE '^(docs/|\.github/|\.tachi\.md$|README|LICENSE|.*\.md$)' || true)"
+
+# workflow / action 的改动永远验不了，无论同一次改动里还有没有别的东西 —— 所以它不是
+# 「无需验证」，是「这一层在这里没验成」，走 nover（退出码 2）。
+# 以前它被归进 docs：纯 workflow 改动会打印「全绿」，而实际上一个 SIG 都没验过；改 CI 的 PR
+# 于是在本地看上去毫无风险，风险全留给它自己跑起来那一次。
+WORKFLOW_CHANGED="$(printf '%s\n' "$CHANGED" | grep -E '^\.github/' || true)"
 
 # ---------------------------------------------------------------------------
 # 这台机器能接什么活
@@ -182,6 +191,12 @@ else
   else
     skip "mobile" "没碰 mobile/"
   fi
+fi
+
+# workflow / action 的改动：本地没有能替它跑的东西。放在结论之前，所以不管这次改动里还有
+# 没有别的层，这一行都会出现 —— 它不会被「其它层全绿」盖过去，也不该被悄悄归进 SKIP。
+if [[ -n "$WORKFLOW_CHANGED" ]]; then
+  nover "workflow / action 改动" ".github/ 只能在 GitHub 上验：看这个 PR 自己那次 CI"
 fi
 
 # ---------------------------------------------------------------------------
