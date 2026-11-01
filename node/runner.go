@@ -628,8 +628,6 @@ func (r *runner) beginTurn(
 		settle:    r.settleTurn(taskID, contextID),
 		unwound:   make(chan struct{}),
 	}
-	r.unwound.Add(1)
-
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -638,6 +636,12 @@ func (r *runner) beginTurn(
 		return nil, errors.New("node: this node is shutting down")
 	}
 	r.turns[taskID] = lt
+	// Counted HERE, under the same lock that puts it in the table, and never in the branch above:
+	// shutdown waits out this counter, so a turn that was refused (and therefore will never run,
+	// never drain, never settle) must not be in it — that would make the counter un-finishable and
+	// every Close() after it pay the whole shutdownGrace for nothing. Doing it under the lock also
+	// puts every Add before shutdown's Wait: that one takes the lock to set closed first.
+	r.unwound.Add(1)
 	r.mu.Unlock()
 	return lt, nil
 }
