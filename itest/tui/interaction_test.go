@@ -183,6 +183,22 @@ var _ = ginkgo.Describe("TUI 交互", func() {
 		// 一开始必须在屏幕之外 —— 否则下面那条"滚过去才看得见"的断言证明不了任何事。
 		mock, home := startMock(mockllm.ProtocolOpenAI, nil, harness.WithExtraProviders(names...))
 		s := launch(home, mock)
+		// When this one fails, the screen IS the evidence — and one level below the screen is what
+		// the vt replayed it from. The raw ANSI tail says whether the renderer ever erased the rows
+		// the screen still shows (a ghost a real terminal would show too) or emitted a clear our vt
+		// does not model (a harness gap). Only on failure, and only the tail: the whole stream of a
+		// scenario is megabytes. %q keeps the escapes visible.
+		ginkgo.DeferCleanup(func() {
+			if !ginkgo.CurrentSpecReport().Failed() {
+				return
+			}
+			const tail = 4000
+			raw := s.DebugRaw()
+			if len(raw) > tail {
+				raw = raw[len(raw)-tail:]
+			}
+			ginkgo.GinkgoWriter.Printf("--- raw ANSI tail (last %d bytes, quoted):\n%q\n", tail, raw)
+		})
 
 		s.Command("/model")
 		gomega.Eventually(s.Screen, specTimeout).Should(gomega.ContainSubstring("25 个"))
