@@ -43,12 +43,11 @@ function pageFor(js: string, payload: string): string {
 <body><div id="q"></div>
 <script>${js}</script>
 <script>
-  try {
-    var svg = QRCodeLib.toString(${encoded}, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
-    document.getElementById('q').innerHTML = svg;
-  } catch (e) {
-    document.getElementById('q').textContent = '这个码画不出来：' + e;
-  }
+  // toString 不带回调时返回一个 Promise（它自己也支持回调式写法）—— 直接把它塞进
+  // innerHTML，屏幕上就是「[object Promise]」。
+  Promise.resolve(QRCodeLib.toString(${encoded}, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }))
+    .then(function (svg) { document.getElementById('q').innerHTML = svg; })
+    .catch(function (e) { document.getElementById('q').textContent = '这个码画不出来：' + e; });
 </script></body></html>`;
 }
 
@@ -101,6 +100,7 @@ export function PairingQR({ pairing, onClose }: { pairing: (Pairing & { label?: 
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.45)' },
-  card: { borderWidth: 1, borderRadius: 16, padding: 18, alignItems: 'center', maxWidth: '88%' },
-  qr: { marginTop: 12, borderRadius: 10, padding: 6 },
+  // 尺寸都写死：WebView 没有内在高度，交给 flex 去算它会一路撑到整屏，把标题挤到状态栏后面。
+  card: { width: 320, borderWidth: 1, borderRadius: 16, padding: 18, alignItems: 'center' },
+  qr: { marginTop: 12, borderRadius: 10, padding: 6, width: 272, height: 272 },
 });
