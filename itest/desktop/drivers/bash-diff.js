@@ -24,8 +24,13 @@
   // The numbers are git's own (3 + 2 lines added), not a sum of fragments — there were none.
   smoke.check('数字是真实 numstat（2 个文件 +5）',
     smoke.text(chip).indexOf('2 files') >= 0 && smoke.text(chip).indexOf('+5') >= 0, smoke.text(chip))
+  // 它要说的那件事是「数字从哪儿来」，用读者认得出的话说：跟**这一轮开始时**比，而不是
+  // 把工具调用报的片段加起来。「检查点」是这套机制的名字，界面只在**兜底**那条路上才说它
+  // （`来自工具调用的片段行数…；检查点没有这一轮的数字`），所以按名字去卡这一条，红的是
+  // 措辞而不是行为 —— 断言应该读它实际说的那句话。
   smoke.check('chip 标明来源，而不是笼统地报一个数',
-    smoke.text(chip).indexOf('来自工具调用') < 0 && (chip.getAttribute('title') || '').indexOf('检查点') >= 0,
+    smoke.text(chip).indexOf('来自工具调用') < 0 &&
+      (chip.getAttribute('title') || '').indexOf('与这一轮开始时对比') >= 0,
     chip.getAttribute('title') || '(没有 title)')
 
   // The chip's OWN click: this turn has no fragment diffs to unfold (no tool call declared a

@@ -31,6 +31,10 @@
   // 失败由**计数**说出来，不靠整条染色：这一行仍然带 `failed` 标记（DOM 层的语义锚点，也是计数
   // span 的依据），但底色必须和没有失败的那一轮一样——两天前它还是整条红底，把"有一小步失败"
   // 变成了整轮的警报。两轮底色的比较在对照轮那段（那时才有第二个过程条可对照）。
+  // 底色必须在过程条**离开 live 之后**才读：停止按钮消失与那一行改类名不是同一帧，先读到的
+  // 是 `live` 的 --accent-soft（蓝调），而对照轮读的是收尾后的 wash —— 两轮"底色相同"会红在
+  // 一个只差一帧的中间态上（实测差的就是这半帧）。
+  if (!(await smoke.waitFor(() => !smoke.q('.process-head.live'), '过程条不再是 live', 5000))) return smoke.finish()
   const failedBg = getComputedStyle(strip).backgroundColor
   smoke.check('失败的行带标记，但不整条染色', strip.className.indexOf('failed') >= 0, strip.className)
   smoke.check('过程条提示中间还有正文（召回的口子）', label.indexOf('含 2 段过程说明') >= 0, label)
