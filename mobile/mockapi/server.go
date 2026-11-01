@@ -53,16 +53,21 @@ func New(token string) *Server {
 		log:     logger.New("mockapi"),
 		awake:   AwakeState{DurationMin: mockAwakeDefaultMinutes},
 		cron: []map[string]any{
-			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "status": "active",
+			{"id": "c1", "name": "每日收盘估值", "scheduleText": "每个工作日 15:30", "type": "recurring", "status": "active",
 				"targetKind": "session", "targetTitle": "索引估值提醒", "nextRun": "2026-10-20T15:30:00+08:00",
 				"lastRunStatus": "complete", "lastRunError": "", "running": false},
-			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "status": "paused",
+			{"id": "c2", "name": "清理旧日志", "scheduleText": "每天 04:00", "type": "recurring", "status": "paused",
 				"targetKind": "missing", "targetTitle": "", "nextRun": "",
 				"lastRunStatus": "error", "lastRunError": "会话已经不在了", "running": false},
 			// pending：专属会话还没创建（第一次运行才建）。它和 missing 一样没有标题，
 			// 所以这一行是「没有标题不等于会话没了」那条规则在种子数据里的活样本。
-			{"id": "c3", "name": "每日站会总结", "scheduleText": "每个工作日 09:30", "status": "active",
+			{"id": "c3", "name": "每日站会总结", "scheduleText": "每个工作日 09:30", "type": "recurring", "status": "active",
 				"targetKind": "pending", "targetTitle": "", "nextRun": "2026-10-21T09:30:00+08:00",
+				"lastRunStatus": "", "lastRunError": "", "running": false},
+			// 一次性任务：scheduleText 就是后台发来的原样 —— 从「哪天几点」折出来的 cron 写法，
+			// 手机上不该照着念（见 mobile/src/ui/cronSchedule.ts）。这一条是那条规则的活样本。
+			{"id": "c4", "name": "上线前跑一遍验收", "scheduleText": "30 13 1 11 *", "type": "oneshot", "status": "active",
+				"targetKind": "session", "targetTitle": "上线清单", "nextRun": "2026-11-01T13:30:00+08:00",
 				"lastRunStatus": "", "lastRunError": "", "running": false},
 		},
 	}

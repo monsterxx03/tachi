@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -261,4 +262,66 @@ func TestMobilePanels_IncludeTheThreadsScheduledJobs(t *testing.T) {
 	assert.Equal(t, "discord", row.TargetTitle)
 	assert.NotEmpty(t, row.NextRun, "an active job says when it runs next")
 	assert.NotContains(t, byID, "job-other-thread", "another thread's job is not this conversation's")
+}
+
+// TestMobilePanels_CronJobType: the phone has to know whether a job repeats, because an oneshot
+// job's scheduleText is the cron spelling of a single moment ("30 13 1 11 *" for 11 月 1 日 13:30)
+// — printed verbatim it reads like a yearly task. Asserted on the WIRE for both job kinds.
+func TestMobilePanels_CronJobType(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	d, store := cronTestApp(t)
+	sess := addSession(t, store, &session.Session{ID: "s1", Title: "上线清单"})
+	d.cron = cron.NewScheduler(cron.SchedulerConfig{
+		Store:   cron.NewStore(filepath.Join(t.TempDir(), "crons.json")),
+		Handler: func(context.Context, *cron.Job) error { return nil },
+	})
+
+	desktopTarget := &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: sess.LogicalConversationID()}
+	_, err := d.cron.Create(&cron.Job{
+		Name: "上线前跑一遍", Schedule: "30 13 1 11 *", Prompt: "p", Type: cron.JobTypeOneshot,
+		TargetType: cron.TargetTypeDesktop, Desktop: desktopTarget,
+	})
+	require.NoError(t, err)
+	_, err = d.cron.Create(&cron.Job{
+		Name: "每天收盘", Schedule: "30 15 * * *", Prompt: "p", Type: cron.JobTypeRecurring,
+		TargetType: cron.TargetTypeDesktop, Desktop: desktopTarget,
+	})
+	require.NoError(t, err)
+
+	panels, status, code := d.mobileSessionPanels("s1")
+	require.Zero(t, status, code)
+
+	byName := map[string]mobileCronRow{}
+	for _, row := range panels.Cron {
+		byName[row.Name] = row
+	}
+	require.Len(t, byName, 2, "both desktop jobs are this conversation's")
+	assert.Equal(t, "oneshot", byName["上线前跑一遍"].Type)
+	assert.Equal(t, "recurring", byName["每天收盘"].Type)
+	// The expression still travels: the phone decides what to draw, and the desktop panel keeps
+	// saying it. Only the phone stops reading it out for an oneshot.
+	assert.NotEmpty(t, byName["上线前跑一遍"].ScheduleText)
+	assert.NotEmpty(t, byName["上线前跑一遍"].NextRun, "an active oneshot still says when it runs")
+}
+
+// TestMobileCronRow_EmptyTypeReadsAsOneshot: jobs written before Job.Type existed have none, and
+// Scheduler.Create has always defaulted that to oneshot. The phone must not fall back to drawing
+// the cron expression for them — that is the same bug, just on older data.
+func TestMobileCronRow_EmptyTypeReadsAsOneshot(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	d, store := cronTestApp(t)
+	sess := addSession(t, store, &session.Session{ID: "s1", Title: "上线清单"})
+
+	// Straight to the STORE: the scheduler is what fills in defaults, and this job predates them.
+	cs := cron.NewStore(d.cronStorePath())
+	require.NoError(t, cs.Create(&cron.Job{
+		ID: "j-old", Name: "老任务", Schedule: "30 13 1 11 *", Prompt: "p",
+		TargetType: cron.TargetTypeDesktop, Status: cron.JobStatusActive,
+		Desktop: &cron.DesktopTarget{Mode: cron.DesktopModeSession, SessionID: sess.LogicalConversationID()},
+	}))
+
+	panels, status, code := d.mobileSessionPanels("s1")
+	require.Zero(t, status, code)
+	require.Len(t, panels.Cron, 1)
+	assert.Equal(t, "oneshot", panels.Cron[0].Type)
 }

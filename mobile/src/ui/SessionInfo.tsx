@@ -2,7 +2,7 @@ import { Feather } from '@expo/vector-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AgentPanel, CronPanelRow, MCPPanelRow, Panels, Snapshot } from '../api/types';
-import { cronTargetText } from './cronTarget';
+import { cronPlanText, cronWhenText } from './cronSchedule';
 import type { Live } from '../state/chat';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../theme/ThemeContext';
@@ -18,15 +18,6 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'agents', label: 'Agent' },
   { key: 'cron', label: '定时' },
 ];
-
-/** RFC3339 → 本地「MM-DD HH:mm」；空串照旧空着（没有下次运行就是没有） */
-function shortTime(ts: string): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 /** 分项条的四档：同一个色系由深到浅，别用语义色（绿/琥珀说的是「好/警告」，这里说的是「占比」） */
 function partColors(t: ReturnType<typeof useTheme>['tokens']): string[] {
@@ -476,10 +467,10 @@ function CronList({
                 </Text>
               </View>
               <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
-                {[j.scheduleText, cronTargetText(j)].filter(Boolean).join(' · ')}
+                {cronPlanText(j)}
               </Text>
               <Text style={{ color: t.faint, fontSize: 11.5, marginTop: 2 }} numberOfLines={1}>
-                {j.running ? '正在跑' : j.nextRun ? `下次 ${shortTime(j.nextRun)}` : '不会自动跑'}
+                {cronWhenText(j)}
                 {j.lastRunStatus ? ` · 上次 ${j.lastRunStatus}` : ''}
               </Text>
               {j.lastRunError ? (

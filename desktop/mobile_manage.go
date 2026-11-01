@@ -172,9 +172,14 @@ type mobileAgentRow struct {
 
 // mobileCronRow is one scheduled job as the phone lists it.
 type mobileCronRow struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	ScheduleText  string `json:"scheduleText"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	ScheduleText string `json:"scheduleText"`
+	// Type says whether the schedule is a repeating one ("recurring") or a single moment
+	// ("oneshot": fires once, then deletes itself). The phone needs it because for an oneshot the
+	// cron expression says nothing a reader wants — "30 13 1 11 *" is how the wire spells
+	// "11 月 1 日 13:30 跑一次".
+	Type          string `json:"type"`
 	Status        string `json:"status"`
 	TargetKind    string `json:"targetKind"`
 	TargetTitle   string `json:"targetTitle"`
@@ -238,6 +243,7 @@ func (d *desktopApp) mobileSessionPanels(sessionID string) (*mobilePanels, int, 
 	for _, j := range svc.ListCronJobs() {
 		out.Cron = append(out.Cron, mobileCronRow{
 			ID: j.ID, Name: j.Name, ScheduleText: j.ScheduleText, Status: j.Status,
+			Type:       mobileJobType(cron.JobType(j.Type)),
 			TargetKind: j.TargetKind, TargetTitle: j.TargetTitle,
 			NextRun:       mobileStamp(j.NextRun),
 			LastRunStatus: j.LastRunState, LastRunError: j.LastRunError, Running: j.Running,
@@ -285,6 +291,7 @@ func (d *desktopApp) mobileChannelCronRows(threadID, platform string) []mobileCr
 			ID:            job.ID,
 			Name:          job.Name,
 			ScheduleText:  cron.DescribeSchedule(job.Schedule),
+			Type:          mobileJobType(job.Type),
 			Status:        string(job.Status),
 			TargetKind:    "channel",
 			TargetTitle:   platform,
@@ -299,6 +306,16 @@ func (d *desktopApp) mobileChannelCronRows(threadID, platform string) []mobileCr
 		out = append(out, row)
 	}
 	return out
+}
+
+// mobileJobType spells a job's type for the wire. An empty type reads as oneshot, which is what
+// Scheduler.Create has always defaulted it to — so a job written before the field existed is one
+// too, and the phone must not fall back to drawing its cron expression.
+func mobileJobType(t cron.JobType) string {
+	if t == "" {
+		return string(cron.JobTypeOneshot)
+	}
+	return string(t)
 }
 
 // mobileStamp renders a time for the wire, or "" when the job has never run / has no next run.

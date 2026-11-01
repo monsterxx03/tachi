@@ -23,12 +23,18 @@ function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+/** 认得出才给 Date，认不出给 null —— 三个格式化函数共同的「原样返回」入口 */
+function parseStamp(raw: string): Date | null {
+  if (!raw || !TIMESTAMP.test(raw)) return null;
+  const t = new Date(raw);
+  return Number.isNaN(t.getTime()) ? null : t;
+}
+
 /** `now` 只给测试用；调用方一个参数就够 */
 export function formatUpdatedAt(raw: string, now: Date = new Date()): string {
-  if (!raw || !TIMESTAMP.test(raw)) return raw;
-  const t = new Date(raw);
+  const t = parseStamp(raw);
+  if (!t) return raw;
   const ms = t.getTime();
-  if (Number.isNaN(ms)) return raw;
 
   const diff = now.getTime() - ms;
   // 差一点点就到「未来」的那种（对表偏差）也算刚刚，不然会显示成负数的分钟
@@ -52,12 +58,37 @@ export function formatUpdatedAt(raw: string, now: Date = new Date()): string {
  * 认不出来的字符串原样返回，与 formatUpdatedAt 同一条规矩。
  */
 export function formatMessageTime(raw: string, now: Date = new Date()): string {
-  if (!raw || !TIMESTAMP.test(raw)) return raw;
-  const t = new Date(raw);
-  const ms = t.getTime();
-  if (Number.isNaN(ms)) return raw;
+  const t = parseStamp(raw);
+  if (!t) return raw;
 
   if (sameDay(t, now)) return `${pad(t.getHours())}:${pad(t.getMinutes())}`;
   if (t.getFullYear() === now.getFullYear()) return `${t.getMonth() + 1}月${t.getDate()}日`;
   return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`;
+}
+
+/**
+ * 定时任务行的「下一次」。
+ *
+ * 两次运行之间通常只有几小时到一天，所以「MM-DD HH:mm」够读、也最短。
+ */
+export function formatNextRun(raw: string): string {
+  const t = parseStamp(raw);
+  if (!t) return raw;
+  return `${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
+}
+
+/**
+ * 一次性任务「哪一刻跑」。
+ *
+ * 和 formatNextRun 不是同一条规矩：那个时刻可能在未来的某一天、甚至明年，一个裸的
+ * 「11-01 13:30」读起来就像今天 —— 而这行字右边就是它的删除按钮。所以今天说「今天」，
+ * 今年内说月日，再往后补上年。
+ */
+export function formatRunAt(raw: string, now: Date = new Date()): string {
+  const t = parseStamp(raw);
+  if (!t) return raw;
+  const hm = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+  if (sameDay(t, now)) return `今天 ${hm}`;
+  if (t.getFullYear() === now.getFullYear()) return `${t.getMonth() + 1}月${t.getDate()}日 ${hm}`;
+  return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日 ${hm}`;
 }
