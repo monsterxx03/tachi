@@ -342,7 +342,10 @@ func (s *vtScreen) scrollUp(n int) {
 		return
 	}
 	for y := s.top; y <= s.bot-n; y++ {
-		s.grid[y] = s.grid[y+n]
+		// copy, not assignment: s.grid[y] = s.grid[y+n] would make the two rows share one
+		// backing array, and the blanking loop below would then wipe the content that was just
+		// moved (the last rows alias the ones they were copied from).
+		copy(s.grid[y], s.grid[y+n])
 	}
 	for y := s.bot - n + 1; y <= s.bot; y++ {
 		for x := range s.grid[y] {
@@ -358,7 +361,7 @@ func (s *vtScreen) scrollDown(n int) {
 		return
 	}
 	for y := s.bot; y >= s.top+n; y-- {
-		s.grid[y] = s.grid[y-n]
+		copy(s.grid[y], s.grid[y-n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.top; y < s.top+n; y++ {
 		for x := range s.grid[y] {
@@ -374,7 +377,7 @@ func (s *vtScreen) insertLines(n int) {
 		return
 	}
 	for y := s.bot; y >= s.curY+n; y-- {
-		s.grid[y] = s.grid[y-n]
+		copy(s.grid[y], s.grid[y-n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.curY; y < min(s.curY+n, s.bot+1); y++ {
 		for x := range s.grid[y] {
@@ -390,7 +393,7 @@ func (s *vtScreen) deleteLines(n int) {
 		return
 	}
 	for y := s.curY; y <= s.bot-n; y++ {
-		s.grid[y] = s.grid[y+n]
+		copy(s.grid[y], s.grid[y+n]) // copy, not assignment: see scrollUp
 	}
 	for y := s.bot - n + 1; y <= s.bot; y++ {
 		for x := range s.grid[y] {
