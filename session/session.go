@@ -82,6 +82,17 @@ type Session struct {
 	// one, and nobody was asked whether it wants the asks off.
 	SkipApproval bool `json:"skip_approval,omitempty"`
 
+	// NotifyOff is this session's answer to 「这一段对话要不要推到手机上」. true = 不推。
+	//
+	// 默认 false（推），因为推送本身就是这台机器上全局打开之后才有的事；这一段关掉是
+	// 一个例外，而不是每段对话都要单独打开的东西。它和 SkipApproval 一样是记录上的
+	// 偏好：手机和桌面改的是同一个值，重启之后仍然成立。
+	//
+	// It travels with a FORK, and — unlike SkipApproval — it also travels into a compaction's
+	// child: 压缩只是把同一段对话写成了两半，用户关掉的正是「这段对话别烦我」，在压缩点
+	// 上重新开始推送是最容易让人误会的一种行为。
+	NotifyOff bool `json:"notify_off,omitempty"`
+
 	// Kind marks a session that a SUBSYSTEM owns rather than the person at the keyboard:
 	// today only a receiving node's A2A execution (KindA2AExecution) — design §2.2. Empty
 	// is an ordinary conversation, which is what every session written before this field

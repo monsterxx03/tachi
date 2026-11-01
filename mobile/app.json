@@ -5,6 +5,7 @@
     "version": "0.1.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
+    "scheme": "tachi",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,

@@ -48,6 +48,9 @@ func main() {
 	defer func() { _ = hostLock.Release() }()
 
 	desk := newDesktopApp()
+	// 无头宿主没有窗口，所以这一半通知只有手机的推送。把它装上之后，运行时那些调用点
+	// （回合结束、出错、等待）在无头进程里也会真的叫到人 —— 这正是它存在的意义。
+	desk.notify = newPusher(desk)
 
 	// Boot the tachi agent. There is no simulated-turn fallback here on purpose: a headless host
 	// with no provider can only mislead the phone, and the protocol already has a code for it

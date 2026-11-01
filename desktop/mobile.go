@@ -80,6 +80,31 @@ func (d *desktopApp) setMobileServer(m *mobileServer) {
 	d.mu.Unlock()
 }
 
+// mobileWatching reports whether some phone is connected AND subscribed to this conversation
+// right now — the phone half of "somebody is already looking at it".
+//
+// The subscription is the right test rather than "the app is open": a phone on the session
+// list is not reading this conversation, and a phone that never opened it would otherwise
+// suppress its notifications. The app unsubscribes when it goes to the background (the way it
+// already does on leaving a conversation), so a pocketed phone stops counting.
+func (d *desktopApp) mobileWatching(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	m := d.mobileServer()
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for c := range m.conns {
+		if !c.isClosed() && c.wants(sessionID) {
+			return true
+		}
+	}
+	return false
+}
+
 // startMobile brings the interface up when the config asks for it. A failure to listen is
 // reported and swallowed — an interface that cannot bind must not cost the user their desktop
 // (same posture as the node service).
@@ -223,6 +248,7 @@ func (m *mobileServer) handler() http.Handler {
 	mux.HandleFunc("POST /v1/sessions/{id}/title", m.guard(m.handleRename))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", m.guard(m.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", m.guard(m.handleSkipApproval))
+	mux.HandleFunc("POST /v1/sessions/{id}/notify", m.guard(m.handleNotify))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", m.guard(m.handlePermission))
 	mux.HandleFunc("POST /v1/cron/{id}/run", m.guard(m.handleCronRun))
 	mux.HandleFunc("POST /v1/cron/{id}/pause", m.guard(m.handleCronPause))

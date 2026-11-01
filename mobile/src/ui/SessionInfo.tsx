@@ -84,6 +84,7 @@ export function SessionInfo({
   onClose,
   onPickModel,
   onToggleSkip,
+  onToggleNotify,
   loadPanels,
   cronVersion,
   onCronAction,
@@ -94,6 +95,8 @@ export function SessionInfo({
   onClose: () => void;
   onPickModel: (name: string) => void;
   onToggleSkip: (skip: boolean) => void;
+  /** 这一段对话的手机推送开关（关掉这段，其它照推） */
+  onToggleNotify: (off: boolean) => void;
   /** 三个只读面板的数据源（打开面板才拉） */
   loadPanels: () => Promise<{ panels: Panels | null; error: string | null }>;
   /** 定时任务表的版本号：另一块屏改了任务就 +1 */
@@ -285,6 +288,16 @@ export function SessionInfo({
           {readOnly ? (
             <Text style={[styles.hint, { color: t.faint, marginTop: 8 }]}>这段对话由别的任务占用，改不了。</Text>
           ) : null}
+        </View>
+
+        {/* 通知：这一段自己的推送开关 */}
+        <View style={[styles.card, { borderColor: t.border, backgroundColor: t.panel }]}>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cardTitle, { color: t.text }]}>推送</Text>
+            </View>
+            <Switch on={!snapshot.notifyOff} disabled={readOnly} onPress={() => onToggleNotify(!snapshot.notifyOff)} t={t} />
+          </View>
         </View>
 
         {/* 用量 */}

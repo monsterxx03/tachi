@@ -20,6 +20,7 @@ function snap(messages: SessionMessage[]): Snapshot {
     asks: [],
     model: 'p',
     skipApproval: false,
+    notifyOff: false,
     workspace: { primary: '/tmp', additional: [] },
     usage: { cost: 0 },
     context: { estimate: 0, window: 0, parts: [] },

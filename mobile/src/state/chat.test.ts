@@ -21,6 +21,7 @@ function snap(partial: Partial<Snapshot> = {}): Snapshot {
     asks: [],
     model: 'Alpha 4.5',
     skipApproval: false,
+    notifyOff: false,
     workspace: { primary: '~/repos/tachi', additional: [] },
     usage: { cost: 0.12 },
     context: { estimate: 100, window: 1000, parts: [] },
@@ -107,7 +108,7 @@ describe('applyEvent —— 增量怎么落到界面上', () => {
   it('两个会话开关被另一块屏改了，这边立刻跟着变（不用等重读）', () => {
     const st = applyEvent(
       withSnapshot(),
-      { type: 'session_prefs', provider: 'smoke-alt', skipApproval: true },
+      { type: 'session_prefs', provider: 'smoke-alt', skipApproval: true, notifyOff: false },
       'mobile',
     ).state;
     expect(st.snapshot?.model).toBe('smoke-alt');

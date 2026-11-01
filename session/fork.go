@@ -183,6 +183,7 @@ func forkedSession(src *Session, title string) *Session {
 		ThinkingLevel:  src.ThinkingLevel,
 		SkipDream:      src.SkipDream,
 		SkipApproval:   src.SkipApproval,
+		NotifyOff:      src.NotifyOff,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

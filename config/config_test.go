@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creasty/defaults"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -1195,4 +1196,19 @@ func TestJevQuestionsPerRequestResolvesFromBaseURL(t *testing.T) {
 		assert.Equal(t, n, JevConfig{BaseURL: "https://api.commandcode.ai/provider", MaxQuestionsPerRequest: n}.QuestionsPerRequest())
 		assert.Equal(t, n, JevConfig{MaxQuestionsPerRequest: n}.QuestionsPerRequest())
 	}
+}
+
+// 读者只需要填自己的 key / 主题：官方地址是这两个服务"开箱即用"的那一半，没写就落到它上面。
+// 自建只是把同一个字段换成另一个地址，代码里没有第二套路径。
+func TestPushURLsDefaultToThePublicServices(t *testing.T) {
+	cfg := &Config{}
+	require.NoError(t, defaults.Set(cfg))
+	assert.Equal(t, "https://api.day.app", cfg.Push.Bark.URL)
+	assert.Equal(t, "https://ntfy.sh", cfg.Push.Ntfy.URL)
+	// 默认地址不等于"配好了"：没有 key / topic 就什么都不发。
+	assert.False(t, cfg.Push.Wants())
+	cfg.Push.Enabled = true
+	assert.False(t, cfg.Push.Wants(), "两个渠道都还没填 key/topic")
+	cfg.Push.Ntfy.Topic = "tachi-test"
+	assert.True(t, cfg.Push.Wants())
 }

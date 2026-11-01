@@ -741,6 +741,14 @@ export interface MobilePairingVO {
     "host": string;
 
     /**
+     * DeviceID is this machine's stable identity on the phone's side. It rides in the QR
+     * payload too, because a push notification says 「那台机器上的那一段对话」 and the phone
+     * must be able to tell which of its saved computers that is — a name can be changed on the
+     * phone, an address changes with the network.
+     */
+    "deviceId": string;
+
+    /**
      * Interface is the one the reader picked, or "" for automatic.
      */
     "interface": string;

@@ -51,6 +51,10 @@ func (m *mobileServer) handlePing(w http.ResponseWriter, r *http.Request) {
 		"hostname": m.hostname,
 		"version":  mobileVersion,
 		"urls":     m.pairingURLs(),
+		// deviceId is the machine's stable identity on the phone's side: a push notification
+		// names a session ON A MACHINE, and the phone may remember several. It is the same value
+		// the QR payload carries, so a phone paired a while ago learns it on its next ping.
+		"deviceId": machineID(),
 		// maxUploadMb is this machine's ceiling for a file the phone sends. It rides on ping
 		// because a picker should be able to refuse a 90 MB video BEFORE spending the upload: the
 		// number is the machine's configuration, and the phone has no way to know it otherwise.
@@ -195,6 +199,35 @@ func (m *mobileServer) handleSkipApproval(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := m.desk.setSkipApprovalFor(id, req.Skip); err != nil {
+		mobileFail(w, http.StatusConflict, err.Error())
+		return
+	}
+	mobileWriteJSON(w, map[string]any{"accepted": true})
+}
+
+type mobileNotifyReq struct {
+	Off bool `json:"off"`
+}
+
+// handleNotify flips this conversation's push switch from the phone. Same shape as
+// skip-approval: the record is the truth, and the event it broadcasts updates every screen.
+func (m *mobileServer) handleNotify(w http.ResponseWriter, r *http.Request) {
+	var req mobileNotifyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		mobileFail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	id := r.PathValue("id")
+	ss := m.desk.sessionRecord(id)
+	if ss == nil {
+		mobileFail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	if ss.Kind != "" {
+		mobileFail(w, http.StatusConflict, "read_only")
+		return
+	}
+	if err := m.desk.setNotifyOffFor(id, req.Off); err != nil {
 		mobileFail(w, http.StatusConflict, err.Error())
 		return
 	}

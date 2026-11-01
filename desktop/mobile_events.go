@@ -163,25 +163,28 @@ func (d *desktopApp) notifyMobileUserMessage(sessionID, text, display string, st
 	})
 }
 
-// notifySessionPrefs tells the OTHER screens that a session's two switches moved (the model it
-// runs on, and whether ask rules still raise a card).
+// notifySessionPrefs tells the OTHER screens that a session's switches moved: the model it
+// runs on, whether ask rules still raise a card, and whether its turns are pushed to a phone.
 //
-// Both travel together because they are the two per-session facts a phone can change, and a
-// screen that re-read one without the other could show a pair that never existed. It is emitted
-// by the WRITERS (switchProviderFor / setSkipApprovalFor), not by the endpoints, so the window's
-// own controls produce it too — there is one fact, and everyone who changed it says so.
-func (d *desktopApp) notifySessionPrefs(sessionID, provider string, skipApproval bool) {
+// They travel together because they are the per-session facts a phone can change, and a
+// screen that re-read one without the others could show a combination that never existed. It
+// is emitted by the WRITERS (switchProviderFor / setSkipApprovalFor / setNotifyOffFor), not by
+// the endpoints, so the window's own controls produce it too — there is one fact, and everyone
+// who changed it says so.
+func (d *desktopApp) notifySessionPrefs(sessionID, provider string, skipApproval, notifyOff bool) {
 	if d.hasUI() {
 		d.emit("agent:session_prefs", map[string]any{
 			"sessionId":    sessionID,
 			"provider":     provider,
 			"skipApproval": skipApproval,
+			"notifyOff":    notifyOff,
 		})
 	}
 	d.mobileNotify(sessionID, map[string]any{
 		"type":         mobileEvSessionPrefs,
 		"provider":     provider,
 		"skipApproval": skipApproval,
+		"notifyOff":    notifyOff,
 	})
 }
 
@@ -191,6 +194,18 @@ func (d *desktopApp) sessionPrefs(id string) (provider string, skipApproval bool
 		return ss.ProviderName, ss.SkipApproval
 	}
 	return "", false
+}
+
+// sessionNotifyOff reports whether this conversation has been muted for phone push.
+//
+// "Off" is the exception, so a missing record (a conversation deleted a moment ago) answers
+// false: the notification is about to be dropped by the sender anyway, and the safe direction
+// for a missing record is the one that keeps the user informed.
+func (d *desktopApp) sessionNotifyOff(id string) bool {
+	if ss := d.sessionRecord(id); ss != nil {
+		return ss.NotifyOff
+	}
+	return false
 }
 
 // echoUserMessage is the same echo on the desktop event bus. It is emitted for every origin: the

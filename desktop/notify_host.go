@@ -40,6 +40,67 @@ func (noNotifier) notifyCronFailed(string, string)              {}
 func (noNotifier) notifyOneOffDone(string, string, int, string) {}
 func (noNotifier) notifyPermission(string, string)              {}
 
+// compositeNotifier sends one event to every destination this process has.
+//
+// 两个目的地是同一件事的不同终点：窗口有前台时由系统通知中心叫一声，人不在电脑前时由
+// 手机上的推送叫一声。调用点只认这一个接口（见 agent_turn.go 等处），所以加一种送达方式
+// 不需要碰运行时的任何一行。
+//
+// focused is answered by whichever part knows about the window. The pusher always says false
+// (it has no window), so the answer stays the windowed notifier's.
+type compositeNotifier []notifierHost
+
+func (c compositeNotifier) focused() bool {
+	for _, n := range c {
+		if n.focused() {
+			return true
+		}
+	}
+	return false
+}
+
+func (c compositeNotifier) notifyAsk(sessionID string, questions []string) {
+	for _, n := range c {
+		n.notifyAsk(sessionID, questions)
+	}
+}
+
+func (c compositeNotifier) notifyTurnDone(sessionID string, iterations int, took time.Duration) {
+	for _, n := range c {
+		n.notifyTurnDone(sessionID, iterations, took)
+	}
+}
+
+func (c compositeNotifier) notifyTurnFailed(sessionID string, err error) {
+	for _, n := range c {
+		n.notifyTurnFailed(sessionID, err)
+	}
+}
+
+func (c compositeNotifier) notifyCronDone(sessionID, jobName string) {
+	for _, n := range c {
+		n.notifyCronDone(sessionID, jobName)
+	}
+}
+
+func (c compositeNotifier) notifyCronFailed(sessionID, jobName string) {
+	for _, n := range c {
+		n.notifyCronFailed(sessionID, jobName)
+	}
+}
+
+func (c compositeNotifier) notifyOneOffDone(sessionID, kind string, findings int, outcome string) {
+	for _, n := range c {
+		n.notifyOneOffDone(sessionID, kind, findings, outcome)
+	}
+}
+
+func (c compositeNotifier) notifyPermission(sessionID, command string) {
+	for _, n := range c {
+		n.notifyPermission(sessionID, command)
+	}
+}
+
 // notifyHost is the notifier every runtime call site goes through.
 //
 // The nil check is not decoration: a *desktopApp built by a struct literal (tests do this, and the

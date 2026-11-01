@@ -37,6 +37,13 @@ export interface Pairing {
    * 只有「记住的电脑」（`Device`）会用到，临时拼出来的 Pairing 不带。
    */
   pinned?: boolean;
+  /**
+   * 那台电脑的稳定身份（它自己生成的，配对时带过来，ping 里也会再报一次）。
+   *
+   * 只有「记住的电脑」（`Device`）会一直有；推送通知点开时要靠它决定切到哪一台 —— 名字
+   * 可以在这台手机上改，地址会随网络变，只有这个值不跟着动。老配对在下次 ping 时学会。
+   */
+  deviceId?: string;
 }
 
 /**
@@ -238,6 +245,8 @@ async function upload(c: Pairing, id: string, f: PickedFile): Promise<{ file: Up
 /** /v1/ping 的答案。`hostname` 是那台机器自己的名字（老服务端没有这一项）。 */
 export interface PingResult {
   ok: boolean;
+  /** 那台电脑的稳定身份：推送的深链里带的就是它（老服务端没有这一项） */
+  deviceId?: string;
   /** 产品名，每台安装都一样；只用来判明「这是不是一个 Tachi」 */
   name?: string;
   /** 机器名（hostname），手机列表里默认显示它 */
@@ -395,6 +404,13 @@ export const api = {
     req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}/skip-approval`, {
       method: 'POST',
       body: JSON.stringify({ skip }),
+    }),
+
+  /** 这一段对话的手机推送开关（off = 不要推）。全局开关在那台电脑上。 */
+  setNotifyOff: (c: Pairing, id: string, off: boolean) =>
+    req<{ accepted: boolean }>(c, `/v1/sessions/${encodeURIComponent(id)}/notify`, {
+      method: 'POST',
+      body: JSON.stringify({ off }),
     }),
 
   /**

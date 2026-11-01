@@ -147,6 +147,10 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// memory by the next Dream pass (design §2.2, §2.3).
 	newSess.Kind = oldSess.Kind
 	newSess.SkipDream = oldSess.SkipDream
+	// NotifyOff is the opposite of SkipApproval below: 用户关掉的是「这段对话别推到我手机上」，
+	// 压缩把同一段对话写成了两半，在压缩点上重新开始推送会让人莫名其妙 —— 而那正是
+	// 「一轮跑完，手机突然响了」的样子。
+	newSess.NotifyOff = oldSess.NotifyOff
 	// SkipApproval is deliberately NOT copied, and that is the one entry in this block that is
 	// here to say so: it is the parent's answer about the asks in the conversation the reader was
 	// sitting in, and the child is a different conversation that nobody was asked about. The

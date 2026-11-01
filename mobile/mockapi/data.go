@@ -122,6 +122,7 @@ type Snapshot struct {
 	Asks        []any           `json:"asks"`
 	Model       string          `json:"model"`
 	SkipApprove bool            `json:"skipApproval"`
+	NotifyOff   bool            `json:"notifyOff"`
 	Workspace   WorkspaceInfo   `json:"workspace"`
 	Usage       UsageInfo       `json:"usage"`
 	Context     ContextInfo     `json:"context"`

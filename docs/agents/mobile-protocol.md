@@ -38,7 +38,7 @@
 
 | 方法 | 路径 | 请求 | 返回 |
 | --- | --- | --- | --- |
-| GET | `/v1/ping` | — | `{ok, name, hostname, version, urls, maxUploadMb}`，配对页用它验证地址与令牌 |
+| GET | `/v1/ping` | — | `{ok, name, hostname, version, urls, deviceId, maxUploadMb}`，配对页用它验证地址与令牌 |
 | GET | `/v1/sessions` | — | `{sessions: [SessionSummary]}` |
 | POST | `/v1/sessions` | `{projectId?, workingDir?}` | `{session: SessionSummary}` |
 | GET | `/v1/projects` | — | `{projects: [ProjectRef]}`，新建会话时的项目下拉框 |
@@ -54,6 +54,7 @@
 | POST | `/v1/sessions/{id}/title` | `{title}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/provider` | `{name}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/skip-approval` | `{skip}` | `{accepted: true}` |
+| POST | `/v1/sessions/{id}/notify` | `{off}` | `{accepted: true}`，这一段对话的手机推送开关 |
 | POST | `/v1/sessions/{id}/permissions/{toolId}` | `{decision}` | `{accepted: true}` |
 | POST | `/v1/sessions/{id}/questions` | `{answers}` 或 `{decline: true}` | `{accepted: true}` |
 | GET | `/v1/sessions/{id}/files/{attachmentId}` | — | 文件本身 |
@@ -69,6 +70,7 @@
 - **重命名与桌面同一条写入方**（`RenameSession`），成功即广播 `sessions_changed`：标题是行在列表里的身份，两块屏都靠重读它 —— 手机上改的名字，桌面上那一行立刻跟着变（反过来也一样）。空标题是 `400 bad_request`；标题是装饰性的，所以只读会话也改得。
 - **置顶是列表的事实**：`pinned` 写进会话记录，成功即广播 `sessions_changed` —— 两块屏的次序都由重新读列表得出，不各算一份。
 - **`hostname` 是那台机器自己的名字**（`os.Hostname()`，见 `mobile_http.go`），它和 `name` 不是一回事：`name` 是产品名，每台安装都一样。「记住多台电脑」的手机拿它当默认显示名（去掉 macOS 的 `.local`），用户可以在手机上改名 —— **改名只在手机上生效，协议里没有写回它的端点**。
+- **`deviceId` 是那台机器稳定的身份**（`~/.tachi/machine.json`，随机、首次用到时生成）：手机可以记住好几台电脑，而会话 id 只在一台机器上有意义，所以推送的深链（`tachi://session/<id>?device=<deviceId>`）必须说清是哪一台。它和 `hostname` 不通用：名字会改、地址会变，这个值不变。老配对没有它，下次 ping 时手机把它补上。
 - **附件端点不接受路径**：`attachmentId` 就是那次 `SendFile` 调用的 id，只回记录里反查，查不到就是 404。记录里的 `path` 可能是相对的，按那次调用所属会话的工作目录解析。这样「令牌 = 任意文件读取」这个洞从一开始就不存在。
 - **手机发文件是两步，而且第二步只认名字。** 上传（`POST .../files`）把字节写进**这段会话自己的目录**（`uploads/`，与 `pasted/` 并排：删会话一起删，绝不落进用户的工作区），回的是它存下来的 `name`、大小和 `kind`。发送时 `attachments` 递的就是那个 `name` —— 服务端只在**这段会话的 `uploads/` 里**按名字解析，递一个 `../../x` 或一个不存在的名字都是拒绝（`bad_request` / `no_such_upload`），不是跳过。所以令牌仍然不等于「读那台机器上任意文件」。
 - **文件不经过另一条路进模型**：解析出来的名字变成一句 `@<绝对路径>`，和桌面上拖进来的文件是同一个引用，展开（文本内联 / 图片变多模态 / 其它让 agent 用工具读）走 `atfile.Expand`。附件只是「这句话里带着几个文件」，没有第二种传输。
@@ -149,7 +151,7 @@
 | `ask` | `ask` | 新增一条等待（权限或提问） |
 | `ask_answered` | `toolId` | 一条等待已被回答 |
 | `user_message` | `text`, `displayText`, `steer`, `origin` | **另一块屏**发来的用户消息 |
-| `session_prefs` | `provider`, `skipApproval` | 这段对话的模型 / 审批开关被**某一块屏**改了（桌面或手机）；两种开关一起发 |
+| `session_prefs` | `provider`, `skipApproval`, `notifyOff` | 这段对话的模型 / 审批 / 推送开关被**某一块屏**改了（桌面或手机）；三个一起发 |
 | `sessions_changed` | — | 会话列表变了：任何一块屏新建 / 删除 / **重命名 / 置顶**了一段对话。**广播给每一条连接**（列表不属于某一段会话的流）；手机收到后要重读列表，并把**打开着的那段**的标题、项目、置顶一并修掉 |
 | `cron_changed` | `id` | 定时任务表变了：任意一块屏新建 / 改 / 暂停 / 恢复 / 删除，或者调度器跑完一次。**广播给每一条连接**；手机上重读面板（没打开就等下次打开，别去轮询） |
 | `awake_changed` | `awake` | 这台电脑的「保持唤醒」变了：桌面托盘勾的、另一块屏改的、或者到点自己关的。**广播给每一条连接**，带着完整的 `AwakeState` —— 收到就照它画，不用再读什么 |
@@ -157,7 +159,7 @@
 
 - 参数与结果都截断：一条 `ReadFile` 的结果可以有几十 KB，而手机屏幕本来就会折叠它们。**完整输出是桌面的事。**
 - `origin` 是 `desktop` / `mobile` / `badge` / `cron`：一块屏改了共享状态要告诉另一块，收到时**自己发的那条**不重复画。
-- `session_prefs` 没有 origin：两个开关是**幂等**的共享状态，谁改的都要落到每一块屏上，收到就照它更新即可（开关写的是会话记录，事件只是让它立刻可见）。
+- `session_prefs` 没有 origin：这几个开关是**幂等**的共享状态，谁改的都要落到每一块屏上，收到就照它更新即可（开关写的是会话记录，事件只是让它立刻可见）。
 
 ## 线上类型
 
@@ -214,7 +216,7 @@ SessionState    { status, label, detail, waiting }
 WorkspaceInfo   { primary, additional[] }
 UsageInfo       { cost, credit?, cacheHitRate? }
 ContextInfo     { estimate, window, parts:[{label, tokens}] }
-Snapshot        { session, messages[], hasMore, state, asks[], model, skipApproval,
+Snapshot        { session, messages[], hasMore, state, asks[], model, skipApproval, notifyOff,
                   workspace, usage, context, attachments[] }
 ```
 
@@ -235,5 +237,7 @@ Snapshot        { session, messages[], hasMore, state, asks[], model, skipApprov
 9. **定时任务表是广播的。** 它不属于任何一段会话（唯一的例外是 channel 的：那些跟着**打开的那段**会话出现在面板里，见线上类型的 `targetKind`）：任何一块屏（窗口、手机、调度器自己）改了任务，都发 `cron_changed`，另一块屏重读 `/panels`。手机上三个动作走桌面同一条写入路径（`RunCronJobNow` / `SetCronJobPaused` / `DeleteCronJob`），所以两块屏对「这个任务现在是什么状态」不会各说一套。
 10. **「保持唤醒」是一台机器的一个值，所以它也是广播的。** 它不属于任何一段会话，手机发的 `POST /v1/awake` 与桌面托盘的勾选走同一个写入方（桌面的 `setAwake`），改完立刻广播 `awake_changed`、带完整的 `AwakeState` —— 两块屏照它画，没有第二条同步路径。**开着的时候关不关得掉由那台电脑说了算**：系统的断言被拒时，答案是「关着」加一句原因（500 `awake_failed`），而**不是**把开关画成开着的。`durationMin` 是偏好、落在那台电脑上，所以它熬得过重启；`on` 不是 —— 进程没了，断言就没了，重启后的状态永远是关。
 11. **手机送进来的文件只认名字，不认路径**（见「HTTP 端点」里附件那条）：上传回的 `name` 是发送时唯一能递的东西，服务端在那段会话的 `uploads/` 里解析。少这一步，「有令牌」就等于「能读这台机器上任何文件」。
-12. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**配对页走的是这同一条探测**（`probePairing`），而且它不是门禁：一条都不应答时也用完整地址表把设备存下来，只用来挑地址和取名字。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。
+12. **一台电脑可能有几条地址，手机全部记住、并发试。** 配对码是 `{"v":1,"url":…,"urls":[…],"token":…,"deviceId":…}`：`url` 是最先用的那条（旧客户端只读它，所以它不能删），`urls` 是那台电脑当前**全部**可达地址，局域网在前、Tailscale 在后。手机把它们一起存下来，连的时候**同时**去 ping，谁先应答用谁（`mobile/src/api/addresses.ts`）—— 顺序试的代价是「人在外面时每次都要先等局域网那条超时」。`/v1/ping` 的 `urls` 是同一份，每次连上都报一遍，所以桌面换了网络、开了 Tailscale，手机不用重新扫码就知道。**配对页走的是这同一条探测**（`probePairing`），而且它不是门禁：一条都不应答时也用完整地址表把设备存下来，只用来挑地址和取名字。**加一种新的地址 = 改桌面那一个发现函数**（`desktop/mobile_token.go` 的 `lanUsable` / `lanCandidateKind`），两块屏不要各自判一遍「哪些地址能用」。
 13. **channel 拥有的会话（`channelSession`）：手机能读、能说，但那一轮由那个渠道的运行时跑。** 两边各有一份内存历史（channel 按线程、宿主按会话），谁写谁就必须是唯一那个写的人 —— 所以手机发来的消息被**交回**那个线程，走同一个 agent、同一份缓存、同一把线程锁，事件再投影回连接。由此得出的三条：① **没有那个运行时**（窗口版、或那个渠道没开）时明确拒绝 `channel_offline`，绝不退回自己跑一轮；② **同步命令**（`/model`、`/status` …，答复走渠道的那些）拒绝 `channel_command`；`/compact` 和技能激活是轮次形状的，照常可以发；③ 一轮在跑时这条会话报 `running`，手机的下一条会**并入**（steer），Stop 打到这一轮的 context 上；AskUser 的提问仍归渠道回答，不在手机上画第二张卡。手机**不能**反过来把这段对话的归属改成自己 —— 线程与会话是一对一的。
+
+14. **推送开关是会话自己的一个值，两端说的是同一个。** `notifyOff` 写在会话记录上（和 `skipApproval` 同一种东西），写入方是 `setNotifyOffFor`，成功后广播 `session_prefs`；手机上在会话信息页改，桌面上读的是同一条记录。它和「这台电脑的全局推送开关」是两件事：全局关了就谁都不推，这一段关掉只影响这一段。fork 继承它，压缩的子会话也继承（`SkipApproval` 不继承——那是两件不同的意思：一个问「这段要不要问你」，一个问「这段要不要叫你」）。点开推送走 `tachi://session/<id>?device=<deviceId>`：**先按 `deviceId` 找到那台电脑（必要时切过去），再打开会话**，别在旧电脑上打开同 id 的一段。

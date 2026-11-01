@@ -4,6 +4,7 @@ import {
   AppState,
   BackHandler,
   Keyboard,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -90,6 +91,7 @@ function ChatPane({
         onClose={() => setShowInfo(false)}
         onPickModel={(name) => void m.setProvider(name)}
         onToggleSkip={(skip) => void m.setSkipApproval(skip)}
+        onToggleNotify={(off) => void m.setNotifyOff(off)}
         loadPanels={m.loadPanels}
         cronVersion={m.cronVersion}
         onCronAction={m.cronAction}
@@ -221,13 +223,34 @@ function Shell() {
     return () => sub.remove();
   }, [openFile, showInfo, showNew, showSettings, addingDevice, m, wide, sideCollapsed]);
 
-  // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态
+  // 从后台回来先重读一遍：挂后台期间连接可能早断了，界面还停在旧状态。
+  // 进后台则退订当前会话 —— 那是宿主判断「人还在不在看」的依据，也是推送该不该响的依据：
+  // 揣进口袋的手机若还订阅着，回合结束时就不会响，而那正是最该响的时刻。
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') void m.reloadCurrent();
+      else if (state === 'background') m.background();
     });
     return () => sub.remove();
   }, [m]);
+
+  // 点开一条推送 = 系统用 tachi://… 打开这个 App。冷启动从 getInitialURL 拿，热启动从
+  // 事件拿；两条路都交给 handleLink（它会先切到那台电脑，再打开那段对话）。
+  //
+  // 冷启动那一条要等 ready：设备簿是从钥匙串异步读出来的，早一帧拿到链接会看到一本空簿子，
+  // 于是明明配对过的电脑被报成「还没在这部手机上配对」。
+  useEffect(() => {
+    if (!m.ready) return;
+    let cancelled = false;
+    void Linking.getInitialURL().then((url) => {
+      if (url && !cancelled) m.handleLink(url);
+    });
+    const sub = Linking.addEventListener('url', (e) => m.handleLink(e.url));
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [m.ready, m.handleLink]);
 
   // 列表页。`onForward` 只有窄屏传 —— 宽屏时它是常驻侧栏，推走没有意义
   const list = (onForward?: () => void) => (

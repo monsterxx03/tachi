@@ -21,7 +21,7 @@ export function parsePairingQR(raw: string): Pairing | null {
   }
   if (typeof parsed !== 'object' || parsed === null) return null;
 
-  const v = parsed as { v?: unknown; url?: unknown; urls?: unknown; token?: unknown };
+  const v = parsed as { v?: unknown; url?: unknown; urls?: unknown; token?: unknown; deviceId?: unknown };
   if (v.v !== 1) return null;
   if (typeof v.url !== 'string' || typeof v.token !== 'string') return null;
 
@@ -35,7 +35,9 @@ export function parsePairingQR(raw: string): Pairing | null {
   const [baseUrl, ...rest] = addresses;
   if (!baseUrl) return null;
 
-  return rest.length > 0 ? { baseUrl, token, urls: addresses } : { baseUrl, token };
+  const deviceId = typeof v.deviceId === 'string' && v.deviceId.trim() ? v.deviceId.trim() : undefined;
+  const base = rest.length > 0 ? { baseUrl, token, urls: addresses } : { baseUrl, token };
+  return deviceId ? { ...base, deviceId } : base;
 }
 
 /**
@@ -49,11 +51,12 @@ export function parsePairingQR(raw: string): Pairing | null {
  */
 export function pairingQRPayload(p: Pairing): string {
   const urls = (p.urls ?? []).filter((u) => u && u !== p.baseUrl);
-  const shape: { v: number; url: string; urls?: string[]; token: string } = {
+  const shape: { v: number; url: string; urls?: string[]; token: string; deviceId?: string } = {
     v: 1,
     url: p.baseUrl,
     token: p.token,
   };
+  if (p.deviceId) shape.deviceId = p.deviceId;
   if (urls.length > 0) shape.urls = [p.baseUrl, ...urls];
   return JSON.stringify(shape);
 }

@@ -19,6 +19,8 @@ interface PairedMeta {
   label?: string;
   hostname?: string;
   urls?: string[];
+  /** 那台电脑的稳定身份（ping 报的）；推送点开时要靠它认机器 */
+  deviceId?: string;
   /** 一条地址都没应答：照样存下来，但界面上要说一句「现在连不上」 */
   unreachable?: boolean;
 }
@@ -67,6 +69,7 @@ export function Pairing({
               label: deviceLabel(outcome.ping, outcome.pairing.baseUrl),
               hostname: outcome.ping.hostname,
               urls: outcome.pairing.urls,
+              deviceId: outcome.ping.deviceId,
             }
           : { unreachable: true },
       );

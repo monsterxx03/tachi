@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/cron/{id}", s.guard(s.handleCronDelete))
 	mux.HandleFunc("POST /v1/sessions/{id}/provider", s.guard(s.handleProvider))
 	mux.HandleFunc("POST /v1/sessions/{id}/skip-approval", s.guard(s.handleSkipApproval))
+	mux.HandleFunc("POST /v1/sessions/{id}/notify", s.guard(s.handleNotifyOff))
 	mux.HandleFunc("POST /v1/sessions/{id}/permissions/{toolId}", s.guard(s.handlePermission))
 	mux.HandleFunc("POST /v1/sessions/{id}/questions", s.guard(s.handleQuestions))
 	return allowWebPreview(mux)
@@ -174,6 +175,8 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		"hostname": "mock-machine",
 		"version":  "0.1",
 		"urls":     []string{"http://" + r.Host},
+		// 推送深链里带的机器 id：假服务端固定一个，手机那侧靠它认出「这条通知是哪台电脑的」
+		"deviceId": "mock-device",
 		// 上传上限跟着真服务端那份配置走；假服务端取默认的 50 MB
 		"maxUploadMb": 50,
 	})
@@ -744,6 +747,30 @@ func (s *Server) handleSkipApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	sess.SkipApprove = req.Skip
+	s.mu.Unlock()
+	s.pushSnapshot(sess.Session.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
+}
+
+type notifyReq struct {
+	Off bool `json:"off"`
+}
+
+// handleNotifyOff 是这一段对话自己的推送开关。和 skip-approval 一样：写进去，然后把快照
+// 重推一遍 —— 另一块屏看到的就是同一个值。
+func (s *Server) handleNotifyOff(w http.ResponseWriter, r *http.Request) {
+	sess := s.get(r.PathValue("id"))
+	if sess == nil {
+		fail(w, http.StatusNotFound, "no_session")
+		return
+	}
+	var req notifyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	s.mu.Lock()
+	sess.NotifyOff = req.Off
 	s.mu.Unlock()
 	s.pushSnapshot(sess.Session.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})

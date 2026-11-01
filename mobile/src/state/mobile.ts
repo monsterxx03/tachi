@@ -3,6 +3,7 @@ import { api, ApiError, normalizeSnapshot, uploadCapMb, type Pairing } from '../
 import { fastestPairing, nextAddress, normalizeAddresses } from '../api/addresses';
 import { loadDevices, saveDevices, type Device } from '../api/storage';
 import { deviceLabel } from '../api/label';
+import { parseDeepLink, type DeepLink } from '../api/link';
 import type { PickedFile } from '../api/pick';
 import type { AwakeState, Panels, PendingMessage, ProjectRef, SessionSummary, UploadedFile } from '../api/types';
 import { MobileSocket, type WsStatus } from '../api/ws';
@@ -41,7 +42,7 @@ export interface MobileApi {
   /** meta 是配对页从 /v1/ping 拿到的默认名（机器名）、原始 hostname，以及那台电脑的全部地址 */
   pair: (
     p: Pairing,
-    meta?: { label?: string; hostname?: string; urls?: string[]; unreachable?: boolean },
+    meta?: { label?: string; hostname?: string; urls?: string[]; deviceId?: string; unreachable?: boolean },
   ) => Promise<void>;
   /** 换一台电脑：断开这一条、清掉画面，再连过去 */
   switchDevice: (index: number) => Promise<void>;
@@ -58,6 +59,10 @@ export interface MobileApi {
   refresh: () => Promise<void>;
   open: (id: string) => Promise<void>;
   close: () => void;
+  /** App 进后台：退订当前会话（宿主据此判断「没人在看」，见 background 的注释） */
+  background: () => void;
+  /** 一条推送被点开（tachi://session/…）：打开那段对话，必要时先切到那台电脑 */
+  handleLink: (url: string) => void;
   /**
    * true = 服务端收下了；false 时输入框把文字还给读者。运行中请用 queueMessage。
    * `files` 是已经传上去的资料（uploadFile 换回来的名字），随这条消息一起交给那台电脑。
@@ -102,6 +107,8 @@ export interface MobileApi {
   decline: () => Promise<void>;
   setProvider: (name: string) => Promise<void>;
   setSkipApproval: (skip: boolean) => Promise<void>;
+  /** 这一段对话的手机推送开关（off = 别推）。全局开关在那台电脑的设置里。 */
+  setNotifyOff: (off: boolean) => Promise<void>;
   /** 删一段对话；服务端会广播 sessions_changed，列表自己回到一致 */
   deleteSession: (id: string) => Promise<void>;
   /** 改标题。走桌面同一条写入路径，成功后 sessions_changed 落到每一块屏上（含桌面上那一行）。 */
@@ -147,6 +154,9 @@ export function useMobile(): MobileApi {
   const forceFlush = useRef<Record<string, boolean>>({});
   // 「这一条现在就发」：那一轮停下之后先发它，队列里剩下的照旧留着
   const immediate = useRef<Record<string, PendingMessage>>({});
+  // 推送点开、而那个会话在另一台电脑上：切过去之后才打开它（见 handleLink）。
+  // 切设备会重建 socket，立刻 open 会订阅到旧那一条上。
+  const pendingOpen = useRef<DeepLink | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const socketRef = useRef<MobileSocket | null>(null);
@@ -191,14 +201,18 @@ export function useMobile(): MobileApi {
    * 它**不阻塞**界面：调用方先用记住的地址连，这条在后台把结果换上去（真的不用换时什么也不做）。
    */
   /** 把「这台电脑现在走哪条地址」写进存储（下次启动从这里开始试，但仍然会并发复核）。 */
-  const rememberAddress = useCallback(async (dev: Pairing, baseUrl: string, urls: string[]) => {
-    const list = devicesRef.current.slice();
-    const at = list.findIndex((d) => d.token === dev.token && d.baseUrl === dev.baseUrl);
-    if (at < 0) return;
-    list[at] = { ...list[at], baseUrl, urls };
-    setDevices(list);
-    await saveDevices(list, activeDeviceRef.current);
-  }, []);
+  const rememberAddress = useCallback(
+    async (dev: Pairing, baseUrl: string, urls: string[], deviceId?: string) => {
+      const list = devicesRef.current.slice();
+      const at = list.findIndex((d) => d.token === dev.token && d.baseUrl === dev.baseUrl);
+      if (at < 0) return;
+      // deviceId 只在 ping 说了的时候才写：老服务端没有这一项，不能把已经存下的值抹掉。
+      list[at] = { ...list[at], baseUrl, urls, ...(deviceId ? { deviceId } : {}) };
+      setDevices(list);
+      await saveDevices(list, activeDeviceRef.current);
+    },
+    [],
+  );
 
   /**
    * 校正这台电脑的地址：并发试它已知的全部地址，赢的那条记下来，并写回这台手机的存储。
@@ -210,7 +224,16 @@ export function useMobile(): MobileApi {
    */
   const heal = useCallback(
     async (dev: Pairing, onNothing?: () => void) => {
-      if (dev.pinned) return;
+      if (dev.pinned) {
+        // 手动选过地址：自动换地址这一步不该做，但「这台是谁」仍要学 —— 否则一条推送
+        // 永远认不出它，点开只会说「还没配对」。
+        const picked = await fastestPairing(dev);
+        const id = picked?.ping.deviceId;
+        if (id && id !== dev.deviceId) {
+          await rememberAddress(dev, dev.baseUrl, normalizeAddresses(dev), id);
+        }
+        return;
+      }
       const seq = ++connectSeq.current;
       const picked = await fastestPairing(dev);
       if (seq !== connectSeq.current) return;
@@ -219,7 +242,7 @@ export function useMobile(): MobileApi {
         return;
       }
       const { pairing: next, urls } = picked;
-      await rememberAddress(dev, next.baseUrl, urls);
+      await rememberAddress(dev, next.baseUrl, urls, picked.ping.deviceId);
       // 换了一条才重建连接：同一条地址（只是地址表变新了）不该断开正在用的那条 socket
       if (next.baseUrl !== dev.baseUrl) setPairing(next);
     },
@@ -594,7 +617,7 @@ export function useMobile(): MobileApi {
   const pair = useCallback(
     async (
       p: Pairing,
-      meta?: { label?: string; hostname?: string; urls?: string[]; unreachable?: boolean },
+      meta?: { label?: string; hostname?: string; urls?: string[]; deviceId?: string; unreachable?: boolean },
     ) => {
       const urls = normalizeAddresses({ baseUrl: p.baseUrl, urls: meta?.urls });
       const dev: Device = {
@@ -603,6 +626,7 @@ export function useMobile(): MobileApi {
         urls: urls.length > 1 ? urls : undefined,
         label: meta?.label || deviceLabel({}, p.baseUrl),
         hostname: meta?.hostname,
+        deviceId: meta?.deviceId || p.deviceId,
       };
       const list = devicesRef.current.slice();
       const at = list.findIndex((d) => d.token === p.token || d.baseUrl === p.baseUrl);
@@ -760,6 +784,67 @@ export function useMobile(): MobileApi {
     // 纯负担 —— 左滑列表的每一帧都在跟它抢 JS 线程。
     socketRef.current?.subscribe(null);
   }, []);
+
+  /**
+   * App 进了后台：退订当前会话，但**不**清掉 openId。
+   *
+   * 宿主用「有没有手机订阅着这段对话」来判断人是不是正在看（推送的四个问题之一）。留在后台
+   * 却还订阅着，等于告诉那台电脑「我还在看」—— 于是回合结束时手机不会响，而那正是用户把
+   * 手机揣进口袋的时刻。回前台走 reloadCurrent，它会重新订阅。
+   */
+  const background = useCallback(() => {
+    socketRef.current?.subscribe(null);
+  }, []);
+
+  /**
+   * 一条推送被点开：打开它说的那段对话，必要时先切到它说的那台电脑。
+   *
+   * 顺序必须是「先切、再开」：会话 id 只在一台机器上有意义，而切设备会重建 socket。所以
+   * 切的那一下先记在 pendingOpen 里，等配对真的换过去之后（同一个 commit 的 effect）再打开。
+   * 找不到那台机器时说一句 —— 静默什么也不做，点通知的人只会以为坏了。
+   */
+  const handleLink = useCallback(
+    (url: string) => {
+      const target = parseDeepLink(url);
+      if (!target) return;
+      if (target.deviceId) {
+        const list = devicesRef.current;
+        const at = list.findIndex((d) => d.deviceId === target.deviceId);
+        if (at < 0) {
+          // 设备簿还没学到这个 id：老配对（配对时还没有这一项）、手动选过地址所以没走过
+          // 自动探测，或者 App 刚重开还没来得及比一次。当前这台身上还空着的话，就是它 ——
+          // 就地学会再打开，比让人对着一条点不开的通知强。
+          const cur = activeDeviceRef.current;
+          if (cur >= 0 && list[cur] && !list[cur].deviceId) {
+            const next = list.slice();
+            next[cur] = { ...next[cur], deviceId: target.deviceId };
+            setDevices(next);
+            void saveDevices(next, cur);
+            void open(target.sessionId);
+            return;
+          }
+          setError('这条通知来自一台还没在这部手机上配对的电脑');
+          return;
+        }
+        if (at !== activeDeviceRef.current) {
+          pendingOpen.current = target;
+          void switchDevice(at);
+          return;
+        }
+      }
+      void open(target.sessionId);
+    },
+    [open, switchDevice],
+  );
+
+  // 切设备那一帧的 socket 重建先跑（它声明在上面），这里再打开会话。
+  useEffect(() => {
+    const p = pendingOpen.current;
+    if (!p || !pairing) return;
+    if (p.deviceId && pairing.deviceId !== p.deviceId) return;
+    pendingOpen.current = null;
+    void open(p.sessionId);
+  }, [pairing, open]);
 
   const withError = useCallback(async (fn: () => Promise<unknown>) => {
     try {
@@ -965,6 +1050,14 @@ export function useMobile(): MobileApi {
     [pairing, withError],
   );
 
+  const setNotifyOff = useCallback(
+    (off: boolean) =>
+      withError(async () => {
+        if (pairing && openIdRef.current) await api.setNotifyOff(pairing, openIdRef.current, off);
+      }),
+    [pairing, withError],
+  );
+
   /** 删一段对话。删除成功后服务端会广播 sessions_changed，列表靠那条事件回到一致。 */
   const deleteSession = useCallback(
     (id: string) =>
@@ -1106,6 +1199,8 @@ export function useMobile(): MobileApi {
     cronAction,
     open,
     close,
+    background,
+    handleLink,
     send,
     uploadFile,
     pending: openId ? pending[openId] ?? [] : [],
@@ -1120,6 +1215,7 @@ export function useMobile(): MobileApi {
     decline,
     setProvider,
     setSkipApproval,
+    setNotifyOff,
     deleteSession,
     setPinned,
     renameSession,

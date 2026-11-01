@@ -331,7 +331,9 @@ func main() {
 	// goes to the conversation it named (openSession). Permission is asked once,
 	// in the background, so the prompt is not tied to the first notification.
 	notifier := newNotifier(notifyService, window, desk)
-	desk.notify = notifier
+	// 同一个事件有两个终点：窗口有前台时由系统通知中心叫一声，人不在电脑前时由手机上的
+	// 推送叫一声。两者各自判断"要不要叫"（watching 与 push 的四问），所以这里只是并列。
+	desk.notify = compositeNotifier{notifier, newPusher(desk)}
 	notifier.onNotificationClick()
 	go notifier.requestAuthorization()
 

@@ -311,6 +311,19 @@ var settingsTable = []settingApply{
 		Note:     "手机可下载的单个附件上限（只算 SendFile 交付的）。",
 	},
 
+	// --- phone push (Bark for iOS, ntfy for Android) ---
+	// Every leaf is read at the moment a notification is sent (push.go builds the senders
+	// from the live config), so saving the addresses takes effect on the next turn — no
+	// reconnect, no restart.
+	// 每个叶子一行，各说各的：一条 note 会被贴在那个 block 的每一个字段下面，
+	// 写在 block 上就等于同一句话重复三四遍。
+	{Key: "push.enabled", Category: catExtend, Mode: applyLazy, Note: "人不在电脑前时提醒我。"},
+	{Key: "push.bark.url", Category: catExtend, Mode: applyLazy, Note: "默认 api.day.app。"},
+	{Key: "push.bark.keys", Category: catExtend, Mode: applyLazy, Note: "每台 iPhone 一个。"},
+	{Key: "push.ntfy.url", Category: catExtend, Mode: applyLazy, Note: "默认 ntfy.sh。"},
+	{Key: "push.ntfy.topic", Category: catExtend, Mode: applyLazy, Note: "主题名就是密码。"},
+	{Key: "push.ntfy.token", Category: catExtend, Mode: applyLazy, Note: "服务器开了鉴权才填。"},
+
 	// --- model and providers ---
 	// Prices and credit rates are read lazily by the usage ledger, but resolving a
 	// provider is a per-session fact (SetResolvedProvider), so the row is a push.

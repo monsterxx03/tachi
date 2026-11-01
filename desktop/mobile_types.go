@@ -143,7 +143,10 @@ type mobileSnapshot struct {
 	Asks         []mobileAsk          `json:"asks"`
 	Model        string               `json:"model"`
 	SkipApproval bool                 `json:"skipApproval"`
-	Workspace    mobileWorkspace      `json:"workspace"`
+	// NotifyOff 是「这一段对话不推到我手机上」。它和 SkipApproval 一起走 session_prefs，
+	// 因为两块屏要看到的是同一组开关。
+	NotifyOff   bool               `json:"notifyOff"`
+	Workspace   mobileWorkspace    `json:"workspace"`
 	Usage        mobileUsage          `json:"usage"`
 	Context      mobileContext        `json:"context"`
 	Attachments  []mobileAttachment   `json:"attachments"`

@@ -14,6 +14,7 @@
 | **徽章（设备连接与语音）** | `desktop/link/`、`desktop/badge.go` 或 `desktop/stt/` 下的任何东西——**读 `docs/agents/badge.md`，不是本文件** |
 | **桌面语音输入** | 你碰输入框的麦克风按钮或 `voice:*` 事件（`desktop/voice.go`、`composer.tsx` 里语音那一半） |
 | **桌面后端（绑定与路径）** | 你碰 `AgentService`——一个方法、一条绑定、一条会话路径、一个打开/显示动作 |
+| **通知与手机推送** | 你碰 `notifierHost` / `desktop/notify*.go` / `desktop/push.go`，或者改「回合结束时叫不叫人」的那条判断——系统通知那一半在本文件下面，手机那一半见 [push.md](push.md) |
 | **保持唤醒（不让机器睡）** | 你碰 `desktop/awake*.go`、托盘里那个勾选项和它的时长，或者任何「让这台机器别睡」的东西 |
 | **桌面 MCP** | 你碰 MCP 授权、MCP 面板、设置页的 MCP 服务器编辑器，或延迟加载的工具那条池/提醒链路 |
 | **桌面定时任务** | 你碰 desktop 的 cron（`desktop/cron.go`、调度器、任务面板、任务与会话的绑定），或改 `cron` 包的归属/时区行为 |

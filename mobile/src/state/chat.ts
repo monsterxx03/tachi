@@ -124,7 +124,7 @@ export function applyEvent(
     }
 
     case 'session_prefs': {
-      // 两个开关是共享状态：谁改的都落到这里，这块屏立刻显示同一对值。
+      // 这几个开关是共享状态：谁改的都落到这里，这块屏立刻显示同一组值。
       if (!st.snapshot) return same(st);
       return same({
         ...st,
@@ -132,6 +132,7 @@ export function applyEvent(
           ...st.snapshot,
           model: ev.provider,
           skipApproval: ev.skipApproval,
+          notifyOff: ev.notifyOff,
         },
       });
     }

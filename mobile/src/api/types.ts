@@ -196,6 +196,8 @@ export interface Snapshot {
   asks: PendingAsk[];
   model: string;
   skipApproval: boolean;
+  /** 这一段对话关掉手机推送了吗（会话自己的开关；全局开关在那台电脑的设置里） */
+  notifyOff: boolean;
   workspace: WorkspaceInfo;
   usage: UsageInfo;
   context: ContextInfo;
@@ -240,8 +242,8 @@ export type ServerEvent =
   | { type: 'ask'; ask: PendingAsk }
   | { type: 'ask_answered'; toolId: string }
   | { type: 'user_message'; text: string; displayText?: string; steer: boolean; origin: MessageOrigin }
-  /** 这一段对话的模型 / 审批开关被某一块屏改了；两种开关一起发 */
-  | { type: 'session_prefs'; provider: string; skipApproval: boolean }
+  /** 这一段对话的模型 / 审批 / 推送开关被某一块屏改了；三个一起发 */
+  | { type: 'session_prefs'; provider: string; skipApproval: boolean; notifyOff: boolean }
   /** 会话列表变了（桌面或手机新建 / 删除）；广播给每一条连接 */
   | { type: 'sessions_changed' }
   /** 定时任务表变了（新建 / 改 / 暂停 / 删除 / 跑完），`id` 是变的那一条；广播给每一条连接 */

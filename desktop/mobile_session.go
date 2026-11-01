@@ -221,6 +221,7 @@ func (d *desktopApp) mobileSnapshot(id string) (*mobileSnapshot, error) {
 		Asks:         d.mobileAsks(id),
 		Model:        model,
 		SkipApproval: ss.SkipApproval,
+		NotifyOff:    ss.NotifyOff,
 		Workspace:    mobileWorkspace{Primary: primary, Additional: additional},
 		Usage:        d.mobileUsage(id),
 		Context:      mobileContext{Estimate: est, Window: window, Parts: parts},

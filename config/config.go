@@ -1393,6 +1393,7 @@ type Config struct {
 	Web               WebConfig            `yaml:"web"`                             // Web console (tachi web)
 	Badge             BadgeConfig          `yaml:"badge"`                           // Device link (AI Passport: a small screen for parked asks)
 	Mobile            MobileConfig         `yaml:"mobile"`                          // LAN interface the phone app connects to (same conversations, third screen)
+	Push              PushConfig           `yaml:"push"`                            // Phone push (Bark for iOS, ntfy for Android) when nobody is looking
 	Node              NodeConfig           `yaml:"node"`                            // Node service for multi-node collaboration
 	Peers             []PeerConfig         `yaml:"peers"`                           // Other Tachi nodes THIS machine may delegate work to
 
@@ -1486,6 +1487,56 @@ func (m MobileConfig) MaxAttachmentBytes() int64 {
 		mb = 50
 	}
 	return int64(mb) << 20
+}
+
+// PushConfig 是「把通知推到手机上」的那一半配置。
+//
+// 它和 channel 的通知是两件事：channel 让对话在 IM 里继续，push 只是在没人在看的时候
+// 叫一声。两者可以同时开着，也可以只开一个。
+//
+// 为什么不是我们自己的 App 收推送：iOS 要付费开发者账号的推送证书，Android 国内要逐家
+// 接厂商通道。所以这里是一个「信箱」——Bark（iOS）和 ntfy（Android）各收一条 HTTP，
+// 由它们负责把通知弹到手机上。地址留成配置，自建和公共服务用同一套代码。
+type PushConfig struct {
+	// Enabled is the master switch. Off by default: a machine that starts pinging a phone
+	// without being asked is a surprise, and an empty block must do nothing.
+	Enabled bool `yaml:"enabled"`
+	Bark    BarkPushConfig `yaml:"bark"`
+	Ntfy    NtfyPushConfig `yaml:"ntfy"`
+}
+
+// BarkPushConfig addresses Bark, the iOS app. No keys means "iOS gets nothing".
+type BarkPushConfig struct {
+	// URL is the bark-server address. The default is the public service, so the only thing a
+	// reader must supply is their own key; a self-hosted server is the same field with another
+	// address. It is never empty in practice, so "configured" is decided by the keys below.
+	URL string `yaml:"url" default:"https://api.day.app"`
+	// Keys are per-device keys, one per iPhone/iPad. A single request carries all of them,
+	// so every device on the account rings at once.
+	Keys []string `yaml:"keys"`
+}
+
+// NtfyPushConfig addresses ntfy, the Android app (and an iOS one, if you prefer one app).
+type NtfyPushConfig struct {
+	// URL is the ntfy server address. The default is the public service; a self-hosted server
+	// is the same field with another address. "Configured" is decided by the topic, not this.
+	URL string `yaml:"url" default:"https://ntfy.sh"`
+	// Topic is the subscription name. On a public server it IS the password — pick
+	// something long and random, and do not reuse it.
+	Topic string `yaml:"topic"`
+	// Token is optional: only for a server that turns on authentication.
+	Token string `yaml:"token"`
+}
+
+// Wants reports whether any phone can be reached at all.
+//
+// The addresses do not take part: both have a default, so "configured" is decided by the half
+// a reader must supply — Bark's keys and ntfy's topic.
+func (p PushConfig) Wants() bool {
+	if !p.Enabled {
+		return false
+	}
+	return len(p.Bark.Keys) > 0 || p.Ntfy.Topic != ""
 }
 
 

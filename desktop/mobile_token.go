@@ -159,6 +159,11 @@ type MobilePairingVO struct {
 	Token string `json:"token"`
 	// Host is the IPv4 address the URL was built from ("" when there is nothing usable).
 	Host string `json:"host"`
+	// DeviceID is this machine's stable identity on the phone's side. It rides in the QR
+	// payload too, because a push notification says 「那台机器上的那一段对话」 and the phone
+	// must be able to tell which of its saved computers that is — a name can be changed on the
+	// phone, an address changes with the network.
+	DeviceID string `json:"deviceId"`
 	// Interface is the one the reader picked, or "" for automatic.
 	Interface string `json:"interface"`
 	// Candidates are the addresses this machine can offer. More than one is the normal case on
@@ -246,6 +251,7 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 		return out
 	}
 	out.Token = token
+	out.DeviceID = machineID()
 	// The port comes from the listener when there is one: a configured 0 means the OS picks, and a
 	// card (or a QR code) built from the config would then name a port nothing is listening on.
 	m := d.mobileServer()
@@ -273,7 +279,7 @@ func (s *AgentService) GetMobilePairing() MobilePairingVO {
 	out.URLs = mobilePairingURLs(out.Candidates, out.URL)
 	// "urls" rides along with "url" instead of replacing it: an older build of the phone reads the
 	// first one and stops there, so a code it scans still pairs (it just knows only one address).
-	payload, _ := json.Marshal(map[string]any{"v": 1, "url": out.URL, "urls": out.URLs, "token": token})
+	payload, _ := json.Marshal(map[string]any{"v": 1, "url": out.URL, "urls": out.URLs, "token": token, "deviceId": out.DeviceID})
 	out.Payload = string(payload)
 	if m != nil {
 		if err := m.listenError(); err != "" {

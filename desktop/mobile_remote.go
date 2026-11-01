@@ -302,7 +302,7 @@ func (d *desktopApp) switchProviderFor(id, name string) error {
 	d.mu.Lock()
 	r.agentProvider = name
 	d.mu.Unlock()
-	d.notifySessionPrefs(id, name, d.skipApprovalFor(id))
+	d.notifySessionPrefs(id, name, d.skipApprovalFor(id), d.sessionNotifyOff(id))
 	return nil
 }
 
@@ -357,7 +357,7 @@ func (d *desktopApp) setSkipApprovalFor(id string, skip bool) error {
 				r.agent.SetAllowAllAsksForSession(skip)
 			}
 			provider, _ := d.sessionPrefs(id)
-			d.notifySessionPrefs(id, provider, skip)
+			d.notifySessionPrefs(id, provider, skip, d.sessionNotifyOff(id))
 			return nil
 		}
 	}
@@ -377,7 +377,57 @@ func (d *desktopApp) setSkipApprovalFor(id string, skip bool) error {
 		ss.SkipApproval = prev
 		return fmt.Errorf("保存会话失败：%v", err)
 	}
-	d.notifySessionPrefs(id, ss.ProviderName, skip)
+	d.notifySessionPrefs(id, ss.ProviderName, skip, ss.NotifyOff)
+	return nil
+}
+
+// setNotifyOffFor is the per-session push switch, addressed by session.
+//
+// It is the same shape as setSkipApprovalFor — record first, live object second, and no
+// prepareSession (a preference on the record must be writable on a machine between providers,
+// which is exactly when a phone should still be able to silence a conversation). It differs in
+// one way: there is no agent half to update, because the switch is read by the pusher at the
+// moment it sends, off the record it already has.
+func (d *desktopApp) setNotifyOffFor(id string, off bool) error {
+	if d.config() == nil {
+		return errors.New("agent not ready")
+	}
+	if id == "" {
+		return errors.New(refuseNoSession)
+	}
+	if r := d.runOf(id); r != nil && r.sm != nil {
+		if cur := r.sm.Current(); cur != nil {
+			if cur.NotifyOff == off {
+				return nil
+			}
+			prev := cur.NotifyOff
+			cur.NotifyOff = off
+			if err := r.sm.UpdateMeta(cur); err != nil {
+				cur.NotifyOff = prev
+				return fmt.Errorf("保存会话失败：%v", err)
+			}
+			provider, skip := d.sessionPrefs(id)
+			d.notifySessionPrefs(id, provider, skip, off)
+			return nil
+		}
+	}
+	if d.sm == nil {
+		return errors.New(refuseNoSession)
+	}
+	ss := d.sessionRecord(id)
+	if ss == nil {
+		return errors.New(refuseNoSession)
+	}
+	if ss.NotifyOff == off {
+		return nil
+	}
+	prev := ss.NotifyOff
+	ss.NotifyOff = off
+	if err := d.sm.UpdateMeta(ss); err != nil {
+		ss.NotifyOff = prev
+		return fmt.Errorf("保存会话失败：%v", err)
+	}
+	d.notifySessionPrefs(id, ss.ProviderName, ss.SkipApproval, off)
 	return nil
 }
 
