@@ -71,6 +71,10 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 	// follow-up after a restart.
 	var pendingReminders []string
 
+	// skippedCalls remembers the tool-call ids that are display-only (see session.Message.AutoExpand),
+	// so their RESULTS are dropped too even if only one half of the pair carries the marker.
+	skippedCalls := map[string]bool{}
+
 	flushAssistant := func() {
 		if len(thinkingBlocks) == 0 && assistantText == "" && len(toolCalls) == 0 {
 			return
@@ -150,6 +154,14 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			assistantText = msg.Content
 
 		case session.MessageTypeToolCall:
+			// A call the USER typed (/sh) is display-only: the model never made it, so it is not
+			// part of the history the next request is rebuilt from. Its result is skipped too
+			// (below, by the same marker) — otherwise the pair would read as a tool_result with no
+			// tool_use, and every provider rejects that.
+			if msg.AutoExpand {
+				skippedCalls[msg.ToolCallID] = true
+				continue
+			}
 			argsStr, err := convertArgsToString(msg.Args)
 			if err != nil {
 				return nil, fmt.Errorf("tool_call %s: %w", msg.Name, err)
@@ -164,6 +176,10 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			})
 
 		case session.MessageTypeToolResult:
+			// See the tool_call case: a user-typed command's result is not history either.
+			if msg.AutoExpand || skippedCalls[msg.ToolCallID] {
+				continue
+			}
 			// Buffer tool results — they'll be flushed after the assistant
 			// message that contains their tool_calls.
 			pendingToolResults = append(pendingToolResults, llm.Message{

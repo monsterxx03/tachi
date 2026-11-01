@@ -119,6 +119,9 @@ type SessionMessage struct {
 	Title      string         `json:"title,omitempty"` // human-readable args summary
 	Args       string         `json:"args,omitempty"`  // raw JSON args
 	IsError    bool           `json:"isError,omitempty"`
+	// AutoExpand marks a call the USER typed (the desktop's /sh): the transcript shows its output
+	// unfolded, and it is deliberately absent from the model's history (see session.Message).
+	AutoExpand bool `json:"autoExpand,omitempty"`
 	// Change is the file change this tool call set out to make (nil for tools that
 	// change no text). It is DERIVED from Args, never persisted, so reloading any old
 	// session shows the same diffs with no migration.
@@ -589,7 +592,7 @@ func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turn
 			argsJSON := marshalArgs(rm.Args)
 			out = append(out, emit(SessionMessage{
 				Index: index, Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
-				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
+				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON), AutoExpand: rm.AutoExpand,
 				Change:    changeVO(rm.Name, argsJSON),
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			}, stamp))

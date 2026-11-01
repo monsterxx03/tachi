@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -87,6 +88,20 @@ func (d *desktopApp) mobileSend(id, text, mode string, attachments []string) (in
 	// See channel_mirror.go.
 	if ss.ThreadID != "" {
 		return d.mobileSendToChannel(ss, id, text, mode, attachments)
+	}
+	// A leading "/" is a SLASH COMMAND, not something to say to the model — the same rule the
+	// desktop composer applies when a message is committed (composer.tsx's route). Without this the
+	// phone's "/sh ls" went to the model as prose, which is the half of issue #87 that made /sh
+	// unreachable from this screen at all.
+	//
+	// send only: a command has no turn to steer, and treating it as steer text would inject it into
+	// whatever the model is doing.
+	if mode == "send" && strings.HasPrefix(strings.TrimSpace(text), "/") {
+		if len(attachments) > 0 {
+			// The attachments would vanish silently: a command takes no @-references.
+			return http.StatusBadRequest, "bad_request"
+		}
+		return d.mobileRunCommand(id, text)
 	}
 	refs, status, code := d.mobileUploadRefs(id, attachments)
 	if code != "" {
@@ -185,6 +200,32 @@ func (d *desktopApp) mobileDeleteSession(id string) (int, string) {
 	default:
 		return http.StatusInternalServerError, "delete_failed"
 	}
+}
+
+// mobileRunCommand runs a slash command for the conversation the PHONE is reading.
+//
+// The parse is the desktop composer's own (parseCommand), so what counts as a command cannot drift
+// between the two screens. What differs is only WHICH commands may run here: the ones whose output
+// IS the conversation. A one-off (/review, /commit, /dream) writes its content to the desktop's
+// side panel, which this screen does not have — running one from the phone would leave an anchor
+// line with nothing behind it, so those are refused by name instead of silently doing half the job.
+func (d *desktopApp) mobileRunCommand(id, text string) (int, string) {
+	name, args, refusal := parseCommand(text)
+	if refusal != "" {
+		return http.StatusBadRequest, "unknown_command"
+	}
+	if laneFor(name) != laneTranscript {
+		return http.StatusConflict, "command_desktop_only"
+	}
+	// Checked before startCommand so the phone gets the code that tells it what to do (send later or
+	// interrupt), rather than a generic refusal.
+	if running, _ := d.mobileRunState(id); running {
+		return http.StatusConflict, "turn_running"
+	}
+	if refusal := d.startCommand(id, name, args, reviewScope{}, "", laneFor(name), desktopCommandHandlers[name]); refusal != "" {
+		return http.StatusConflict, "command_refused"
+	}
+	return 0, ""
 }
 
 // mobileRunState reads a session's turn state WITHOUT creating a run entry: a lookup that

@@ -159,6 +159,10 @@ describe('messageOfError —— 服务端拒绝的原因要原样变成人话', 
     expect(messageOfError(new ApiError(409, 'no_such_pending_request'))).toBe('已经在别处回答过了');
     expect(messageOfError(new ApiError(409, 'agent_unavailable'))).toBe('这台电脑还没配好模型，先在电脑上配置');
     expect(messageOfError(new ApiError(409, 'read_only'))).toBe('这段对话由别的任务占用');
+    // 手机发命令这条路（issue #87）：不认识的命令、只在电脑上有输出的命令、起不来的命令
+    expect(messageOfError(new ApiError(400, 'unknown_command'))).toBe('没有这个命令');
+    expect(messageOfError(new ApiError(409, 'command_desktop_only'))).toBe('这类命令要在电脑上运行');
+    expect(messageOfError(new ApiError(409, 'command_refused'))).toBe('这条命令没能执行，在电脑上试试');
   });
 
   it('没见过的码也要说得出话，不能是空白', () => {

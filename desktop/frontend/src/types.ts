@@ -43,9 +43,11 @@ export interface Part {
   // diffOpen: whether the card shows its diff. Owned here (not inside the card)
   // because the turn footer's chip opens/closes every diff of the turn at once.
   diffOpen?: boolean
-  // expand: the card opens with its output showing. Set for tool calls the USER
-  // asked for directly (the /sh slash command) — that output is the answer, so
-  // folding it away would hide what was requested.
+  // expand: the card opens with its output showing, AND the part is never folded into the
+  // turn's process strip. Set for tool calls the USER asked for directly (the /sh slash
+  // command) — that output is the answer, so folding it away would hide what was requested.
+  // Both halves are needed: a card inside a closed strip is not drawn at all, so opening it
+  // alone left /sh showing nothing but 「1 步」.
   expand?: boolean
 }
 

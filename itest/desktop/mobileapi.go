@@ -210,6 +210,173 @@ func mobileAPIRoundTrip(c *liveCtx) {
 		ran = requestHasText(reqs[1], "mobile-e2e")
 	}
 	c.check("第二条请求带着命令的输出（权限放行后才跑的）", ran, requestCount(reqs))
+
+	// ── a command, not something to say ────────────────────────────────────
+	// "/sh …" has to reach the same dispatcher the desktop composer uses, run LOCALLY, and come
+	// back as a card the reader can see without tapping. This is the phone's half of #87: before
+	// it, "/sh ls" was handed to the model as prose.
+	//
+	// The text deliberately matches this scenario's consent rule (`echo mobile-*`): /sh is the
+	// user's OWN command, so it must run without parking on a permission card — the same line the
+	// desktop draws (runShellCommand calls shutil.Shell directly).
+	cmdText := "/sh echo mobile-cmd-ok"
+	body = `{"text":"` + cmdText + `","mode":"send"}`
+	req, _ = http.NewRequest("POST", base+"/v1/sessions/"+url.PathEscape(sessionID)+"/messages", strings.NewReader(body))
+	res, err = client.Do(auth(req))
+	if err != nil {
+		c.check("手机发出的 /sh 被接受", false, err.Error())
+		return
+	}
+	accepted = struct {
+		Accepted bool   `json:"accepted"`
+		Error    string `json:"error"`
+	}{}
+	_ = json.NewDecoder(res.Body).Decode(&accepted)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !accepted.Accepted {
+		c.check("手机发出的 /sh 被接受", false, fmt.Sprintf("%d %s", res.StatusCode, accepted.Error))
+		return
+	}
+	c.check("手机发出的 /sh 被接受", true, "")
+
+	var (
+		cmdStart, cmdResult, cmdTurn bool
+		cmdAutoExpand                bool
+		cmdEchoed, cmdAsked          bool
+		cmdSeen                      []string
+	)
+	for !cmdTurn {
+		ev := readEvent(conn, 30*time.Second)
+		if ev == nil {
+			break
+		}
+		cmdSeen = append(cmdSeen, ev.Type)
+		switch ev.Type {
+		case "tool_start":
+			cmdStart = ev.ToolName == "Bash"
+			cmdAutoExpand = ev.AutoExpand
+		case "tool_result":
+			cmdResult = strings.Contains(ev.Result, "mobile-cmd-ok")
+		case "user_message":
+			cmdEchoed = cmdEchoed || ev.Text == cmdText
+		case "ask":
+			cmdAsked = true
+		case "turn":
+			cmdTurn = true
+		}
+	}
+	stream := strings.Join(cmdSeen, " → ")
+	c.check("/sh 以一个工具调用到达手机", cmdStart, stream)
+	c.check("那张卡带着 autoExpand（手机直接摊开，不用点）", cmdAutoExpand, fmt.Sprint(cmdAutoExpand))
+	c.check("/sh 的输出回到了手机", cmdResult, stream)
+	c.check("/sh 没有被当成用户消息回传", !cmdEchoed, stream)
+	c.check("/sh 没停在权限卡上（自己敲的命令，和桌面一样）", !cmdAsked, stream)
+	c.check("/sh 的一轮以 turn 结束", cmdTurn, stream)
+
+	// ── and it survives a re-open ─────────────────────────────────────────
+	// The phone rebuilds a conversation from the SNAPSHOT, so a hint that only lived on the event
+	// would make the card fold itself the next time the conversation is opened. The record carries
+	// it (session.Message.AutoExpand) — which is what this asks the server for, from scratch.
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"open","sessionId":"`+sessionID+`"}`)); err != nil {
+		c.check("重新 open 这段对话", false, err.Error())
+		return
+	}
+	// The turn's own tail (idle) can still be in flight, so the answer to `open` is whatever
+	// snapshot arrives first — read until it does rather than trusting the next frame.
+	var snap *mobileEvent
+	for i := 0; i < 12; i++ {
+		ev := readEvent(conn, 10*time.Second)
+		if ev == nil {
+			break
+		}
+		if ev.Snapshot != nil {
+			snap = ev
+			break
+		}
+	}
+	if snap == nil {
+		c.check("重新 open 得到快照", false, "12 个事件里没有 snapshot")
+		return
+	}
+	keptOpen, keptText := false, ""
+	for _, m := range snap.Snapshot.Messages {
+		if m.Role == "tool_call" && m.AutoExpand {
+			keptOpen = true
+			keptText = m.ToolName + " " + m.Title
+		}
+	}
+	c.check("重新打开时那张卡仍是展开的（标记进了会话记录）", keptOpen, keptText)
+
+	// ── /compact from the phone ────────────────────────────────────────────
+	// The second command the issue asks for, and the only one that MOVES the conversation: /compact
+	// writes the history into a child session, and a phone that did not follow would keep reading a
+	// conversation nothing will ever write to again. Its subscription follows the id, not the row.
+	cmdText = "/compact"
+	body = `{"text":"` + cmdText + `","mode":"send"}`
+	req, _ = http.NewRequest("POST", base+"/v1/sessions/"+url.PathEscape(sessionID)+"/messages", strings.NewReader(body))
+	res, err = client.Do(auth(req))
+	if err != nil {
+		c.check("手机发出的 /compact 被接受", false, err.Error())
+		return
+	}
+	accepted = struct {
+		Accepted bool   `json:"accepted"`
+		Error    string `json:"error"`
+	}{}
+	_ = json.NewDecoder(res.Body).Decode(&accepted)
+	res.Body.Close()
+	c.check("手机发出的 /compact 被接受", res.StatusCode == http.StatusOK && accepted.Accepted,
+		fmt.Sprintf("%d %s", res.StatusCode, accepted.Error))
+
+	// What a TYPED /compact looks like on the phone: the summary streams in as text (that IS the
+	// command's output), then the conversation moves. compact_start / compact_done belong to AUTO
+	// compaction — a command has no "正在压缩" wait to announce, and the desktop draws its own notice.
+	var summarySeen bool
+	movedTo := ""
+	var movedSeen []string
+	for i := 0; i < 200 && movedTo == ""; i++ {
+		ev := readEvent(conn, 30*time.Second)
+		if ev == nil {
+			break
+		}
+		movedSeen = append(movedSeen, ev.Type)
+		switch ev.Type {
+		case "text":
+			summarySeen = summarySeen || strings.Contains(ev.Text, "压缩摘要")
+		case "session_moved":
+			movedTo = ev.To
+		}
+	}
+	stream = strings.Join(movedSeen, " → ")
+	c.check("/compact 的摘要以正文到达手机", summarySeen, stream)
+	c.check("/compact 之后手机被告知换到了子会话", movedTo != "" && movedTo != sessionID, movedTo)
+
+	// The step the phone itself performs on session_moved: it re-opens the child on the same socket.
+	// Doing it here proves the move is addressable — the id the event named really is a session this
+	// server will draw, with the summary as its first message.
+	if movedTo != "" {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"open","sessionId":"`+movedTo+`"}`)); err != nil {
+			c.check("换轨之后在新会话上 open", false, err.Error())
+			return
+		}
+		var opened *mobileEvent
+		for i := 0; i < 12 && opened == nil; i++ {
+			ev := readEvent(conn, 10*time.Second)
+			if ev == nil {
+				break
+			}
+			if ev.Snapshot != nil {
+				opened = ev
+			}
+		}
+		first := ""
+		if opened != nil && len(opened.Snapshot.Messages) > 0 {
+			first = opened.Snapshot.Messages[0].Content
+		}
+		c.check("换轨之后能在新会话上拿到快照", opened != nil, movedTo)
+		c.check("新会话的第一条是这次压缩的摘要", strings.Contains(first, "历史摘要"),
+			strings.Join(strings.Fields(first), " ")[:min(80, len(strings.Join(strings.Fields(first), " ")))])
+	}
 }
 
 // readEvent reads one decoded server event, or nil when nothing arrives in time.
@@ -229,12 +396,21 @@ func readEvent(conn *websocket.Conn, wait time.Duration) *mobileEvent {
 // mobileEvent is the subset of the wire's events this scenario reads. Field names are the
 // protocol's (mobile-protocol.md) — nothing here is reshaped for the test.
 type mobileEvent struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	ToolID  string `json:"toolId"`
-	IsError bool   `json:"isError"`
-	End     string `json:"end"`
-	Origin  string `json:"origin"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ToolID   string `json:"toolId"`
+	ToolName string `json:"toolName"`
+	Result   string `json:"result"`
+	IsError  bool   `json:"isError"`
+	End      string `json:"end"`
+	Origin   string `json:"origin"`
+	// tool_start: whether the USER asked for this call (the desktop's /sh) — the phone opens the
+	// card with its output instead of folding it.
+	AutoExpand bool `json:"autoExpand"`
+	// session_moved carries the ids; compact_done carries an error only when it failed.
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Error string `json:"error"`
 	// session_prefs: the two switches another screen changed.
 	Provider     string `json:"provider"`
 	SkipApproval bool   `json:"skipApproval"`
@@ -251,6 +427,15 @@ type mobileEvent struct {
 		State        struct {
 			Status string `json:"status"`
 		} `json:"state"`
+		// Messages is the conversation as the record has it — what a re-open draws. Only the fields
+		// a reopened card needs are read here.
+		Messages []struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolName   string `json:"toolName"`
+			Title      string `json:"title"`
+			AutoExpand bool   `json:"autoExpand"`
+		} `json:"messages"`
 	} `json:"snapshot"`
 }
 

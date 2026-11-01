@@ -598,3 +598,59 @@ func TestConvertSessionToLLMMessages_DropsAnAssistantMessageThatLosesEveryCall(t
 		t.Fatalf("expected the orphaned assistant message to be dropped, got %+v", result)
 	}
 }
+
+// A call the user typed (/sh) is recorded for the transcript but is NOT history: the model never
+// made it. Both halves must vanish, and the surrounding turns must come out exactly as they would
+// without them — a stray tool_result would be rejected by every provider, and a synthetic tool_use
+// would tell the model it ran something it never did (and shift the cached prefix).
+func TestConvertSessionToLLMMessages_SkipsUserTypedToolCall(t *testing.T) {
+	withEcho := []session.Message{
+		{Type: session.MessageTypeUser, Content: "my name is xiao"},
+		{Type: session.MessageTypeAssistant, Content: "noted"},
+		// /sh echo hi — display only
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "sh_1", AutoExpand: true},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "hi", ToolCallID: "sh_1", AutoExpand: true},
+		{Type: session.MessageTypeUser, Content: "what did I just say?"},
+		{Type: session.MessageTypeAssistant, Content: "your name is xiao"},
+	}
+	without := []session.Message{
+		{Type: session.MessageTypeUser, Content: "my name is xiao"},
+		{Type: session.MessageTypeAssistant, Content: "noted"},
+		{Type: session.MessageTypeUser, Content: "what did I just say?"},
+		{Type: session.MessageTypeAssistant, Content: "your name is xiao"},
+	}
+
+	got, err := ConvertSessionToLLMMessages(withEcho, "anthropic", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := ConvertSessionToLLMMessages(without, "anthropic", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("/sh pair leaked into the model history:\n  got:  %+v\n  want: %+v", got, want)
+	}
+	for _, m := range got {
+		if m.Role == "tool" {
+			t.Fatalf("a tool result reached the history: %+v", m)
+		}
+	}
+
+	// Only the marker decides it: the same pair WITHOUT AutoExpand is history, and must survive as a
+	// well-formed assistant(tool_use) + tool(result).
+	asHistory := []session.Message{
+		{Type: session.MessageTypeUser, Content: "list files"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "call_1"},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "output", ToolCallID: "call_1"},
+		{Type: session.MessageTypeAssistant, Content: "done"},
+	}
+	kept, err := ConvertSessionToLLMMessages(asHistory, "anthropic", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(kept) != 4 || kept[1].Role != "assistant" || len(kept[1].ToolCalls) != 1 ||
+		kept[2].Role != "tool" || kept[3].Role != "assistant" {
+		t.Fatalf("an ordinary tool call stopped being history: %+v", kept)
+	}
+}

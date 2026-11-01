@@ -29,15 +29,17 @@ type Event struct {
 	ToolID      string        `json:"toolId,omitempty"`
 	ToolName    string        `json:"toolName,omitempty"`
 	Title       string        `json:"title,omitempty"`
-	Args        string        `json:"args,omitempty"`
-	Result      string        `json:"result,omitempty"`
-	IsError     bool          `json:"isError,omitempty"`
-	Truncated   bool          `json:"truncated,omitempty"`
-	End         string        `json:"end,omitempty"`
-	DurationMs  int64         `json:"durationMs,omitempty"`
-	Iterations  int           `json:"iterations,omitempty"`
-	Message     string        `json:"message,omitempty"`
-	Interrupted bool          `json:"interrupted,omitempty"`
+	// AutoExpand：这次调用是用户自己点名的（桌面的 /sh），手机上卡片该直接摊开
+	AutoExpand  bool   `json:"autoExpand,omitempty"`
+	Args        string `json:"args,omitempty"`
+	Result      string `json:"result,omitempty"`
+	IsError     bool   `json:"isError,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	End         string `json:"end,omitempty"`
+	DurationMs  int64  `json:"durationMs,omitempty"`
+	Iterations  int    `json:"iterations,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
 	// From / To 是 session_moved 的两个 id：这段对话从哪搬到哪（压缩写进子会话）
 	From    string     `json:"from,omitempty"`
 	To      string     `json:"to,omitempty"`

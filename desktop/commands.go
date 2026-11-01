@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"encoding/json"
@@ -25,7 +26,9 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/shutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // CommandVO describes a slash command for the composer's "/" palette.
@@ -145,21 +148,30 @@ func (s *AgentService) ListCommands() []CommandVO {
 // frontend shows that as a notice in the transcript instead of pretending a
 // turn happened.
 func (s *AgentService) RunCommand(text string) string {
+	name, args, refusal := parseCommand(text)
+	if refusal != "" {
+		return refusal
+	}
+	// A typed command has no turn behind it: the review it starts covers the whole tree.
+	return s.desk.startCommand(s.desk.currentID(), name, args, reviewScope{}, "", laneFor(name), desktopCommandHandlers[name])
+}
+
+// parseCommand splits "/sh ls -l" into the registry's command name and its args, or answers why it
+// cannot: empty, unknown, or a registry entry this frontend never implemented. Shared with the
+// phone's message path, so "what counts as a command" is decided in exactly one place.
+func parseCommand(text string) (name, args, refusal string) {
 	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "/"))
 	if body == "" {
-		return "空命令"
+		return "", "", "空命令"
 	}
 	def := cmds.FindByPrefix(body)
 	if def == nil {
-		return fmt.Sprintf("未知命令：/%s", strings.Fields(body)[0])
+		return "", "", fmt.Sprintf("未知命令：/%s", strings.Fields(body)[0])
 	}
-	handler, ok := desktopCommandHandlers[def.Name]
-	if !ok {
-		return fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
+	if _, ok := desktopCommandHandlers[def.Name]; !ok {
+		return "", "", fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
 	}
-	args := strings.TrimSpace(strings.TrimPrefix(body, def.Name))
-	// A typed command has no turn behind it: the review it starts covers the whole tree.
-	return s.desk.startCommand(def.Name, args, reviewScope{}, "", laneFor(def.Name), handler)
+	return def.Name, strings.TrimSpace(strings.TrimPrefix(body, def.Name)), ""
 }
 
 // ReviewChanges runs a review SCOPED to the files a turn changed: the desktop's
@@ -228,7 +240,7 @@ func (s *AgentService) startReview(sessionID string, scope reviewScope, reviewed
 			return notice
 		}
 	}
-	return d.startCommand(commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
+	return d.startCommand(active, commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
 }
 
 // wholeTreeScope is ReviewAllChanges' subject: every uncommitted file in the session's roots, or
@@ -380,13 +392,14 @@ func (d *desktopApp) emitOneOff(id string, payload map[string]any) {
 	d.emit("agent:oneoff", payload)
 }
 
-func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
-	d.mu.Lock()
-	id := d.activeID
+// startCommand starts a command run for ONE session. The id is explicit rather than read from
+// activeID: the phone drives conversations it is not displaying, and a review's own entries pass
+// the displayed one only after checking the two match (see startReview).
+func (d *desktopApp) startCommand(id, name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
 	if id == "" {
-		d.mu.Unlock()
 		return refuseNoSession
 	}
+	d.mu.Lock()
 	// getRun resolves the child of a compaction that is still in flight to the run producing
 	// into it, so a command typed while that child is on screen meets the same busy check below
 	// rather than starting a second run over one conversation (see ownerOfLocked).
@@ -748,9 +761,14 @@ func runShellCommand(c *commandRun) error {
 
 	// The Bash arg shape, so tools.ToolArgsSummary renders the same title the
 	// agent's own Bash calls get.
+	//
+	// The id matters beyond the transcript: this call is RECORDED (below) so the output survives a
+	// reload and reaches the phone, and a record's call and result are paired by this id.
+	callID := "sh_" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	args, _ := json.Marshal(map[string]string{"command": command})
 	c.ech <- agent.AgentEvent{
 		Type:           agent.AgentEventToolCallStart,
+		ToolID:         callID,
 		ToolName:       tools.ToolNameBash,
 		ToolArgs:       string(args),
 		ToolAutoExpand: true, // the user asked for this output: show it, don't fold it
@@ -772,14 +790,57 @@ func runShellCommand(c *commandRun) error {
 	case code != 0:
 		note = fmt.Sprintf("(exit %d)", code)
 	}
+	result := shellEcho(out, note)
 	c.ech <- agent.AgentEvent{
 		Type:         agent.AgentEventToolResult,
+		ToolID:       callID,
 		ToolName:     tools.ToolNameBash,
-		ToolResult:   shellEcho(out, note),
+		ToolResult:   result,
 		ToolIsError:  note != "",
 		ToolDuration: time.Since(start),
 	}
+	// Record the pair, marked display-only: a reloaded conversation (and the phone) must still show
+	// what the user asked for, while the model's history skips it — it never made this call
+	// (session.Message.AutoExpand, agent/session_convert.go). A write failure is reported in the
+	// transcript rather than swallowed: the output is on screen either way, but the record is what
+	// makes it survive leaving this window.
+	c.desk.recordShellEcho(c.id, callID, string(args), result, note != "", time.Since(start))
 	return nil
+}
+
+// recordShellEcho appends a /sh run's tool call and result to the session record. Both halves carry
+// AutoExpand, which is what keeps the card unfolded on reload while keeping the pair out of the
+// model's history.
+func (d *desktopApp) recordShellEcho(id, callID, args, result string, isError bool, took time.Duration) {
+	if d.store == nil {
+		return
+	}
+	now := time.Now()
+	call := &session.Message{
+		Type:       session.MessageTypeToolCall,
+		Name:       tools.ToolNameBash,
+		Args:       args,
+		ToolCallID: callID,
+		AutoExpand: true,
+		Timestamp:  now,
+	}
+	if err := d.store.AppendMessage(id, call); err != nil {
+		logger.New("desktop").Error(context.Background(), "shell echo: record call", err, "session", id)
+		return
+	}
+	res := &session.Message{
+		Type:       session.MessageTypeToolResult,
+		Name:       tools.ToolNameBash,
+		Result:     result,
+		ToolCallID: callID,
+		AutoExpand: true,
+		IsError:    isError,
+		DurationMs: took.Milliseconds(),
+		Timestamp:  time.Now(),
+	}
+	if err := d.store.AppendMessage(id, res); err != nil {
+		logger.New("desktop").Error(context.Background(), "shell echo: record result", err, "session", id)
+	}
 }
 
 // shellEcho is the tool card body for /sh: the command's combined output plus the

@@ -264,7 +264,7 @@ func mobileMessages(raw []session.Message, kept []int) []mobileMessage {
 			argsJSON := marshalArgs(rm.Args)
 			out = append(out, mobileMessage{
 				Index: index, Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
-				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
+				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON), AutoExpand: rm.AutoExpand,
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			})
 		case session.MessageTypeToolResult:

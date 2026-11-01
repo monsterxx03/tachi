@@ -36,6 +36,10 @@ function prettyArgs(args?: string): string {
  *
  * 实时那一轮和历史记录用同一个组件 —— 两边各画一套的结果是「正在跑的时候点不开、
  * 停下来才恢复正常」，那种差异没有理由存在。
+ *
+ * `defaultOpen` 只决定**初始**那一帧：用户自己点名的调用（桌面的 /sh，见
+ * mobile-protocol.md 的 tool_start.autoExpand）自带输出就是要看的东西，让它再点一下才看见
+ * 自己刚要求的输出没有道理。之后的展开/收起照旧是读者说了算。
  */
 export function ToolCard({
   name,
@@ -44,6 +48,7 @@ export function ToolCard({
   result,
   isError,
   running,
+  defaultOpen,
 }: {
   name: string;
   title?: string;
@@ -51,9 +56,10 @@ export function ToolCard({
   result?: string;
   isError?: boolean;
   running?: boolean;
+  defaultOpen?: boolean;
 }) {
   const { tokens: t } = useTheme();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!defaultOpen);
   const summary = title || prettyArgs(args).split('\n')[0] || '';
 
   return (
@@ -449,6 +455,7 @@ export const MessageView = memo(function MessageView({
         result={toolResult?.toolResult}
         isError={toolResult?.isError}
         running={running}
+        defaultOpen={msg.autoExpand}
       />
     );
   }

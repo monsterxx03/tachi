@@ -282,6 +282,16 @@ type Message struct {
 	// actually saw, invalidating the provider's prompt cache and retroactively rewriting
 	// what the history says it was told.
 	DisplayContent string `json:"display_content,omitempty"`
+
+	// AutoExpand marks a tool_call (and its tool_result) that the USER asked for directly — a
+	// frontend slash command such as the desktop's /sh — rather than one the model chose. Its
+	// output is what the user asked to see, so a frontend shows the card unfolded.
+	//
+	// It is DISPLAY ONLY in the strongest sense: the model never made this call, so
+	// ConvertSessionToLLMMessages SKIPS such a pair. Recording it as history would invent a
+	// tool_use the model never emitted, and would make the rebuilt prefix differ from the one
+	// that was actually sent — the same trap DisplayContent documents above.
+	AutoExpand bool `json:"auto_expand,omitempty"`
 }
 
 // APITool is a tool definition as sent to the LLM in one API request.
