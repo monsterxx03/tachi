@@ -34,6 +34,9 @@ type SessionSummary struct {
 	ChannelName    string `json:"channelName,omitempty"`
 	// 有几个定时任务写进这段对话（0 / 缺省 = 没有）：列表上那颗小闹钟
 	Cron int `json:"cron,omitempty"`
+	// 这些任务下一次叫醒这段对话的时刻（RFC3339，缺省 = 没有排上）。假数据里按「现在」往后算，
+	// 截图上的说法（今天 08:00 / 3日 08:00 / 12月1日 08:00）才不会是一个越看越旧的日期。
+	CronNext string `json:"cronNext,omitempty"`
 }
 
 type Message struct {
@@ -157,6 +160,13 @@ func (s *session) append(m Message) Message {
 
 // seed 造出几个能覆盖各种状态的会话：在跑、等你授权、等你回答、只读、空闲。
 func seed() (order []string, byID map[string]*session) {
+	// 定时任务的「下一次」按现在往后算：写死一个时刻，过几天截图里就变成去年的日期。
+	now := time.Now()
+	inHours := func(h float64) string {
+		return now.Add(time.Duration(h * float64(time.Hour))).Format(time.RFC3339)
+	}
+	// 明天上午九点：列表上走的是「3日 09:00」那一档，而不是今天的钟点。
+	tomorrow9 := time.Date(now.Year(), now.Month(), now.Day()+1, 9, 0, 0, 0, now.Location()).Format(time.RFC3339)
 	byID = map[string]*session{}
 	order = []string{}
 
@@ -216,7 +226,7 @@ func seed() (order []string, byID map[string]*session) {
 
 	s3 := &session{}
 	s3.Session = SessionSummary{ID: "s3", Title: "周报整理", ProjectName: "个人", UpdatedAt: "2 小时前",
-		ChannelSession: true, ChannelName: "discord", Cron: 2}
+		ChannelSession: true, ChannelName: "discord", Cron: 2, CronNext: inHours(2)}
 	s3.Model = "Alpha 4.5"
 	s3.SkipApprove = true
 	s3.Workspace = WorkspaceInfo{Primary: "~/notes"}
@@ -267,7 +277,7 @@ func seed() (order []string, byID map[string]*session) {
 
 	// 带图片附件的一段：手机端那条「缩略图铺在气泡里 → 点开进阅读器」的路要有真像素可走
 	s6 := &session{}
-	s6.Session = SessionSummary{ID: "s6", Title: "索引估值提醒", ProjectName: "投资", UpdatedAt: "昨天", Cron: 1}
+	s6.Session = SessionSummary{ID: "s6", Title: "索引估值提醒", ProjectName: "投资", UpdatedAt: "昨天", Cron: 1, CronNext: tomorrow9}
 	s6.Model = "Delta V3"
 	s6.Workspace = WorkspaceInfo{Primary: "~/repos/lixinger"}
 	s6.Usage = UsageInfo{Cost: 0.02}

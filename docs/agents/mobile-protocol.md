@@ -182,7 +182,7 @@
 
 ```
 SessionSummary  { id, title, projectName?, updatedAt, running, waiting, readOnly, heldByTask, pinned?,
-                  channelSession?, channelName?, cron? }
+                  channelSession?, channelName?, cron?, cronNext? }
                 waiting 只有两句：「等待你的授权」「等待你的回答」，空串表示没有在等
                 channelSession 表示这段对话属于某个 IM channel（手机在行上和标题旁边贴 tag，
                 并**不允许**编辑/删除之外的操作）；channelName 是哪个（discord / weixin /
@@ -192,6 +192,10 @@ SessionSummary  { id, title, projectName?, updatedAt, running, waiting, readOnly
                 cron 是有几个**定时任务**写进这段对话（桌面侧栏那颗徽章的同一个数，按逻辑 id
                 算，所以压缩链上数的是整条对话）；缺省 = 没有。手机在行上画一个小闹钟，
                 多于一小时带条数
+                cronNext 是它们下一次叫醒这段对话的时刻（RFC3339）：取**最近**的那一次，因为
+                行上回答的是「它什么时候会自己动」；缺省 = 没有排上（一个任务都没有，或者全都
+                暂停了）。它和 cron 出自同一次扫描，所以两屏的数字与时刻永远对得上。手机把它折成
+                「今天给钟点 / 本月给日子 / 今年给月日 / 再远给年月」
                 updatedAt 是 **RFC3339**（带时区）。手机自己折成「刚刚 / N 分钟前 / HH:mm /
                 昨天 / M月D日」——**别改成相对时间发过来**：那样「几点」只在发出去那一刻成立，
                 列表停在手机上几分钟就会说谎

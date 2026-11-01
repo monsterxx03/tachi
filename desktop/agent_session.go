@@ -58,6 +58,15 @@ type SessionInfo struct {
 	// the badge disappear with no migration. The sidebar row and the composer's
 	// clock badge both read it.
 	CronCount int `json:"cronCount,omitempty"`
+	// CronNextRun is when this conversation next wakes up on its own: the EARLIEST fire among its
+	// active tasks, zero when none is scheduled (no tasks, or every one paused). Derived in the
+	// same scan as CronCount, and omitted when zero so a row with nothing scheduled is drawn
+	// exactly as before.
+	//
+	// It is the time, not a rendered string: each frontend says it in its own voice (the sidebar's
+	// ladder starts at the clock, the phone's differs), and the same rule the composer follows —
+	// the frontend formats, the backend reports facts.
+	CronNextRun time.Time `json:"cronNextRun,omitzero"`
 	// SkipDream says background memory consolidation leaves this conversation alone
 	// (session.Session.SkipDream). The sidebar needs it to label the action correctly
 	// (跳过 / 恢复), so it travels with the row.
@@ -166,13 +175,16 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	// read per row. An id with no pinned record stays unresolved, and the frontend says "unknown"
 	// rather than inventing a name.
 	peers := node.PeerAliases()
-	cronCounts := s.desk.cronCountsByLogical()
+	cron := s.desk.cronFactsByLogical()
 	infos := make([]SessionInfo, 0, len(list))
 	for _, ss := range list {
 		info := toSessionInfo(ss)
 		info.HeldByTask = busy[ss.ID]
 		info.SourceNode = peers[ss.SourceNodeID]
-		info.CronCount = cronCounts[ss.LogicalConversationID()]
+		if f, ok := cron[ss.LogicalConversationID()]; ok {
+			info.CronCount = f.Count
+			info.CronNextRun = f.Next
+		}
 		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].UpdatedAt.After(infos[j].UpdatedAt) })

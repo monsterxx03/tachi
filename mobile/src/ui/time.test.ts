@@ -1,4 +1,4 @@
-import { formatMessageTime, formatNextRun, formatRunAt, formatUpdatedAt } from './time';
+import { formatMessageTime, formatNextRun, formatNextWake, formatRunAt, formatUpdatedAt } from './time';
 
 // 固定一个「现在」：这些断言说的是规则（几分钟前 / 今天 / 昨天 / 更早），不是今天的日期
 const now = new Date('2026-10-31T18:30:00+08:00');
@@ -80,5 +80,24 @@ describe('formatRunAt', () => {
   it('returns what it cannot recognise unchanged', () => {
     expect(formatRunAt('', now)).toBe('');
     expect(formatRunAt('下周三', now)).toBe('下周三');
+  });
+});
+
+describe('formatNextWake', () => {
+  // 月中，「本月」和「今年」才各有一个未来时刻可指
+  const now = new Date('2026-10-10T20:00:00+08:00');
+
+  it('今天只给钟点，本月给日子，今年给月日，再远给年月', () => {
+    // 这一行里已经有时刻、标题和「最近一次」，时间只是那颗小闹钟的定语，所以能省就省
+    expect(formatNextWake('2026-10-10T23:00:00+08:00', now)).toBe('23:00');
+    expect(formatNextWake('2026-10-21T08:30:00+08:00', now)).toBe('21日 08:30');
+    expect(formatNextWake('2026-12-01T07:05:00+08:00', now)).toBe('12月1日 07:05');
+    expect(formatNextWake('2027-01-04T09:00:00+08:00', now)).toBe('2027年1月4日 09:00');
+  });
+
+  it('缺着或认不出来就是空串：徽章只说它知道的那半句', () => {
+    expect(formatNextWake(undefined, now)).toBe('');
+    expect(formatNextWake('', now)).toBe('');
+    expect(formatNextWake('明天', now)).toBe('');
   });
 });

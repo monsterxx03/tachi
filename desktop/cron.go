@@ -308,23 +308,43 @@ func (d *desktopApp) leafSessionsByLogical() map[string]*session.Session {
 	return out
 }
 
-// cronCountsByLogical is how many desktop jobs write into each conversation.
-// It is what the sidebar's badge and the composer's clock count are drawn
-// from: one scan for the whole list, and the count is a property of the
-// conversation (its logical id), not of one page of a compaction chain.
-func (d *desktopApp) cronCountsByLogical() map[string]int {
-	out := make(map[string]int)
+// cronFacts is what a conversation's timed jobs say about it: how many there are, and when it will
+// next wake up by itself.
+type cronFacts struct {
+	// Count is how many desktop jobs write into the conversation.
+	Count int
+	// Next is the EARLIEST next run among them, zero when nothing is scheduled (no active job:
+	// every one is paused, or its schedule cannot be resolved). A row answers "when does this
+	// conversation come alive again", so the soonest fire is the answer — the last one would name
+	// a moment by which everything has already happened.
+	Next time.Time
+}
+
+// cronFactsByLogical reads the job table once for a whole list of conversations. The facts are a
+// property of the CONVERSATION (its logical id), not of one page of a compaction chain, and they
+// are derived on every read rather than stored: pausing, re-binding or deleting a job has to move
+// the badge with no migration.
+//
+// A job still waiting for its conversation (Desktop.SessionID == "", created on the first run) has
+// no row to belong to, so it contributes to none — the same rule the count has always had.
+func (d *desktopApp) cronFactsByLogical() map[string]cronFacts {
+	out := make(map[string]cronFacts)
 	jobs, err := d.cronJobRecords()
 	if err != nil {
 		return out
 	}
 	for _, j := range jobs {
-		if j.TargetType != cron.TargetTypeDesktop || j.Desktop == nil {
+		if j.TargetType != cron.TargetTypeDesktop || j.Desktop == nil || j.Desktop.SessionID == "" {
 			continue
 		}
-		if j.Desktop.SessionID != "" {
-			out[j.Desktop.SessionID]++
+		f := out[j.Desktop.SessionID]
+		f.Count++
+		// NextRunAt is nil for a paused (or unresolvable) job, so a conversation whose jobs are
+		// all paused keeps its count and loses the time — which is exactly what has happened.
+		if next := cron.NextRunAt(j); next != nil && (f.Next.IsZero() || next.Before(f.Next)) {
+			f.Next = *next
 		}
+		out[j.Desktop.SessionID] = f
 	}
 	return out
 }

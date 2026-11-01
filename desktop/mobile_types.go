@@ -39,6 +39,12 @@ type mobileSessionSummary struct {
 	// badge draws). The phone marks the row with it: a conversation a task keeps waking up is
 	// not the same thing as one the reader left alone, and it cannot be judged from the title.
 	Cron int `json:"cron,omitempty"`
+
+	// CronNext is when those jobs next wake this conversation up, RFC3339 ("" = nothing
+	// scheduled: it has no jobs, or every one of them is paused). The EARLIEST fire, because the
+	// row answers "when does this conversation come alive again" — the same fact, and the same
+	// derivation, as the window's sidebar badge.
+	CronNext string `json:"cronNext,omitempty"`
 }
 
 // mobileMessage 是历史里的一条记录。Index 是它在会话记录里的绝对位置 —— 翻页游标就是它

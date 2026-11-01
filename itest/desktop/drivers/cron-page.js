@@ -68,16 +68,21 @@
   if (!(await smoke.waitFor('.cron-btn', 'Esc 回到对话（状态栏时钟在）'))) return smoke.finish()
   smoke.check('Esc 之后完整页已经关掉', !smoke.q('.cron-view'), '')
 
-  // The count is derived from the session list, and the save event refreshes it
-  // asynchronously; poll rather than read once.
+  // The badge is derived from the session list, and the save event refreshes it
+  // asynchronously; poll rather than read once. What it says now is WHEN the task
+  // next runs (the count joins in only when there is more than one), so the check
+  // is the clock time itself, not a number that no longer stands for anything.
   let rowBadge = ''
   const badgeDeadline = Date.now() + 3000
   while (Date.now() < badgeDeadline) {
     rowBadge = smoke.text('.session.active .session-cron')
-    if (rowBadge.indexOf('1') >= 0) break
+    if (/\d{1,2}:\d{2}/.test(rowBadge)) break
     await smoke.sleep(50)
   }
-  smoke.check('会话行徽章显示任务数', rowBadge.indexOf('1') >= 0, rowBadge)
+  smoke.check('会话行徽章写着下次运行时间', /\d{1,2}:\d{2}/.test(rowBadge), rowBadge)
+  const badgeEl = smoke.q('.session.active .session-cron')
+  const badgeTitle = badgeEl ? badgeEl.getAttribute('title') || '' : ''
+  smoke.check('徽章的 title 说明这是定时任务的下次运行', badgeTitle.indexOf('下次') >= 0, badgeTitle || '(没有 title)')
   const statusCount = smoke.text('.cron-btn .cron-btn-count')
   smoke.check('状态栏时钟角标显示本会话的任务数', statusCount === '1', statusCount)
 

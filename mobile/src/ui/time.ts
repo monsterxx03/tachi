@@ -67,6 +67,28 @@ export function formatMessageTime(raw: string, now: Date = new Date()): string {
 }
 
 /**
+ * 会话列表那颗小闹钟上的「下一次自己醒过来」。
+ *
+ * 和 `formatNextRun`（定时任务面板那一行）不是同一条规矩：那里写的是一个任务的确切时刻，
+ * 「MM-DD HH:mm」最短也够读；这里是**一段对话**会被什么叫醒，而列表一行里还要放标题、
+ * 项目名和「最近一次」。所以能省的都省掉，一层层往上加：今天是钟点，本月是日子，今年是月日，
+ * 再远才写年月。它总是在未来，所以从不出现「昨天」这种说法。
+ *
+ * 认不出来（缺失 / 不是带时区的时间戳）给空串：徽章就只说它知道的那半句，不画一个假时间。
+ */
+export function formatNextWake(raw: string | undefined, now: Date = new Date()): string {
+  const t = raw ? parseStamp(raw) : null;
+  if (!t) return '';
+  const hm = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
+  if (sameDay(t, now)) return hm;
+  if (t.getFullYear() === now.getFullYear() && t.getMonth() === now.getMonth()) {
+    return `${t.getDate()}日 ${hm}`;
+  }
+  if (t.getFullYear() === now.getFullYear()) return `${t.getMonth() + 1}月${t.getDate()}日 ${hm}`;
+  return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日 ${hm}`;
+}
+
+/**
  * 定时任务行的「下一次」。
  *
  * 两次运行之间通常只有几小时到一天，所以「MM-DD HH:mm」够读、也最短。
