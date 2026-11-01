@@ -916,5 +916,10 @@ export function panelRoom(min: number, max: number): number {
 // gets stored stays the width the reader chose, so a narrow window limits what is shown without
 // overwriting the choice — and widening the window gives the chosen width back.
 export function clampPanelWidth(px: number, room: number, min: number): number {
-  return Math.max(min, Math.min(room, Math.round(px)))
+  // 取整放在**最后**，不只是对请求值取整：room 是 `content - keep`，本身就是浮点，所以
+  // 「拖过上限」时返回的正是 room —— 一个 378.0097… 这样的数。这个值会被交给后端的
+  // SetXxxWidth(int)，非整数在绑定那一层就失败了，而调用处是 `.catch(() => {})`：
+  // 拖动手感正常、屏幕上正是那个宽度，**只有它没被记住**（实测 desktop_ui.json 停在
+  // 320 的地板值）。尺寸是给像素世界的数，取整就该在这里发生一次。
+  return Math.round(Math.max(min, Math.min(room, px)))
 }
