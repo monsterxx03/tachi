@@ -29,20 +29,18 @@ jobs:
       - name: Test
         run: go test ./...
 
-  # The job above runs WITHOUT -race: a data race is invisible there, and the ones this project has
-  # had (a listener reading a flag a probe goroutine writes; a mock server's per-connection session
-  # id written by its read loop and read by the broadcaster) sit quietly for months until someone
-  # happens to build with -race. A full -race run costs about twice the test job; the packages that
-  # actually start goroutines are where the races live, and on a 2-core box that subset costs ~1.4x
-  # the same packages without it (43s → 80s). Widen it if a race ever shows up outside these.
+  # The race detector. `go test ./...` above cannot see a data race at all, and both races this
+  # repo has actually found were visible ONLY here (node/peerlist_test.go's reachable flag,
+  # mobile/mockapi's sessionID). Scoped to the packages that START goroutines — agent, node,
+  # session, channel, cron, the mock server, pkg and the two frontends' backends — because
+  # `-race ./...` doubles the whole matrix to catch the same shape in code that never spawns one.
   race:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # web/frontend/dist is gitignored and embedded via //go:embed dist, so
-      # build it before any Go compile (go test covers web/frontend).
+      # A Go compile of this module needs dist/ in place (see the test job).
       - name: Build web frontend
         uses: ./.github/actions/web-build
 
@@ -54,8 +52,8 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      - name: Test (race)
-        run: go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/
+      - name: Race detector
+        run: go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/ ./pkg/... ./tui/ ./web/
 
   build:
     runs-on: ubuntu-latest
