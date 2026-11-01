@@ -6,6 +6,8 @@ package acp_test
 // (spec.timeout) aborts a hanging upstream fast instead of wedging the editor.
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	acpapi "github.com/coder/acp-go-sdk"
@@ -22,6 +24,30 @@ var _ = ginkgo.Describe("ACP edge cases (triple protocol)", func() {
 			client, mock, sid, _ := startACPTurn(p, []mockllm.Step{
 				{Reply: mockllm.Hold()},
 			}, nil, []harness.Option{harness.WithSpecTimeout(200 * time.Millisecond)})
+
+			// When this one fails it fails as a TIMEOUT (ginkgo's 15s), because prompt() never
+			// returned — and a timeout asserts nothing: every Expect below is skipped. So the
+			// evidence has to be collected on the way out. What we want to know is whether the
+			// request was ever sent (and how many times: the Anthropic path is the one that also
+			// retries inside the SDK) and what the editor was told. Both recorders are
+			// mutex-guarded, so reading them while a turn is still stuck is safe.
+			ginkgo.DeferCleanup(func() {
+				if !ginkgo.CurrentSpecReport().Failed() {
+					return
+				}
+				events := client.Rec.All()
+				var b strings.Builder
+				for i, n := range events {
+					if i >= 40 {
+						fmt.Fprintf(&b, "... (%d more events)\n", len(events)-i)
+						break
+					}
+					fmt.Fprintf(&b, "%+v\n", n)
+				}
+				ginkgo.GinkgoWriter.Printf(
+					"--- %s: mock requests=%d mockErr=%v acp events=%d\ntext so far: %q\n%s\n",
+					p, len(mock.Requests()), mock.Error(), len(events), client.Rec.Text(), b.String())
+			})
 
 			start := time.Now()
 			resp := prompt(client, sid, "hi")
