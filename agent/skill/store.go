@@ -466,9 +466,13 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 
 	fm, existingBody, parseErr := parseFrontmatter(string(data))
 	if parseErr != nil {
-		// Parse error — treat as raw body without frontmatter
-		fm = &frontmatter{Name: name}
-		existingBody = string(data)
+		// Refuse instead of guessing. Where the body starts is exactly what a broken frontmatter
+		// makes unknowable, so "rewrite it without the frontmatter" folds the old YAML into the new
+		// body: the file still parses next time (the broken block is now just text), feeds its own
+		// metadata to the model as content, and every later Update stacks another copy. The reader
+		// keeps the whole original on disk this way, plus one error that names the file.
+		return nil, fmt.Errorf("skill %q: SKILL.md at %s has broken frontmatter, fix it by hand first: %w",
+			name, skillFile, parseErr)
 	}
 
 	// Apply updates (zero means keep existing)
