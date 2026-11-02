@@ -91,8 +91,6 @@
 
   const panelNames = smoke.allText('.cron-job-name')
   smoke.check('弹层里能看到刚建的任务', panelNames.indexOf('冒烟巡检') >= 0, panelNames.join(' | '))
-  const hint = smoke.text('.cron-foot-hint')
-  smoke.check('弹层写了退出后不补跑', hint.indexOf('不会补跑') >= 0, hint)
 
   // 弹层里也能删：先问一次（就在这一行里），取消之后那排动作回来。这里不真的删 ——
   // Go 那一半还要读 crons.json。

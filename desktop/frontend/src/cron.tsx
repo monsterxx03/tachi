@@ -198,7 +198,6 @@ export function CronPanel({
       </div>
 
       <div className="cron-foot">
-        <div className="cron-foot-hint">任务在 Tachi 里运行。退出应用后不会执行，也不会补跑。</div>
         <button className="cron-foot-link" onClick={onOpenPage}>打开完整页面 →</button>
       </div>
     </div>
@@ -569,7 +568,6 @@ export function CronPage({
             </button>
           ))}
         </div>
-        <div className="cron-rail-foot">任务在 Tachi 里运行；退出应用后不会执行，也不会补跑。</div>
       </aside>
 
       <main className="cron-main">
