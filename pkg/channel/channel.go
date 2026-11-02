@@ -490,9 +490,13 @@ type ToolProvider interface {
 //
 // Typical use: a channel with interactive cards (AskUserQuestion) uses this
 // to tell the LLM to proactively ask the user for clarification.
+//
+// The thread ID is passed because some suffixes depend on which conversation
+// the turn belongs to — e.g. Discord's per-channel prompt overrides
+// (channel_prompts), which are keyed by Discord channel ID.
 type SystemPromptSuffixer interface {
 	Channel
-	SystemPromptSuffix() string
+	SystemPromptSuffix(threadID string) string
 }
 
 // Autocompleter is an optional interface for channels that want to receive

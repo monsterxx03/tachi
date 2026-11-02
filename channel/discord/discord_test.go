@@ -160,6 +160,50 @@ func TestResolveThreadParent_HappyPath(t *testing.T) {
 	}
 }
 
+// TestSystemPromptSuffix_ChannelPrompts covers the per-channel prompt
+// overrides configured under `channel_prompts`: the suffix must carry the
+// platform section always, and the configured prompt only for the channel
+// the conversation actually lives in.
+func TestSystemPromptSuffix_ChannelPrompts(t *testing.T) {
+	prompts := map[string]string{
+		"c1":  "This channel is for code review.",
+		"dm9": "Be brief in DMs.",
+	}
+
+	tests := []struct {
+		name     string
+		threadID string
+		prompts  map[string]string
+		want     string // "" = the override must not appear
+	}{
+		{"no prompts configured", "guild:g1:channel:c1", nil, ""},
+		{"guild channel matches", "guild:g1:channel:c1", prompts, "This channel is for code review."},
+		{"dm matches", "dm:dm9", prompts, "Be brief in DMs."},
+		{"other channel does not match", "guild:g1:channel:c2", prompts, ""},
+		{"unparseable threadID does not match", "invalid", prompts, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &DiscordChannel{cfg: DiscordConfig{ChannelPrompts: tt.prompts}}
+			got := ch.SystemPromptSuffix(tt.threadID)
+
+			if !strings.Contains(got, "## Current Channel: Discord") {
+				t.Fatalf("suffix lost the platform section:\n%s", got)
+			}
+			if tt.want == "" {
+				if strings.Contains(got, "This Channel's Instructions") {
+					t.Fatalf("suffix carries an override it should not have:\n%s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("suffix missing %q:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 // TestIsDM tests the isDM function.
 func TestIsDM(t *testing.T) {
 	tests := []struct {
