@@ -137,11 +137,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event string, payload Payload
 		return
 	}
 
+	// Two passes: every callback first (inline), then the commands. That is what the package
+	// comment and this method's godoc promise, and registration order alone did NOT deliver it —
+	// production registers the config commands (agent_configure.go) before the built-in Herdr
+	// callback, so a slow synchronous hook script made the built-in bookkeeping wait for it.
+	//
+	// Within each kind the registered order still decides.
 	for _, h := range handlers {
-		switch h.Type {
-		case HandlerCallback:
+		if h.Type == HandlerCallback {
 			d.runCallback(ctx, h, event, jsonBytes)
-		case HandlerCommand:
+		}
+	}
+	for _, h := range handlers {
+		if h.Type == HandlerCommand {
 			d.runCommand(ctx, h, jsonBytes, payload)
 		}
 	}
