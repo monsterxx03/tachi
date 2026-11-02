@@ -39,11 +39,19 @@
   const rows = smoke.allText('.session-title')
   smoke.log('侧栏里的会话', rows.join(' | '))
 
+  // gapDetail is what a failed "stays at the newest message" check needs in order to be actionable
+  // WITHOUT -v: how far from the bottom, plus the two facts that decide it — how tall the transcript
+  // ended up, and whether the diagram had painted yet. sample() already writes both to smoke.log,
+  // but a log line only exists in a -v run, and the red one is what gets read later.
+  const gapDetail = (px) =>
+    `距底 ${px}px（转写高 ${smoke.q('.chat')?.scrollHeight ?? '?'}px，` +
+    `图已渲染=${!!smoke.q('.chat .mermaid svg')}，回到最新消息按钮=${!!smoke.q('.jump-latest')}）`
+
   // First visit: the transcript comes off disk, the diagram renders on top of it.
   if (!clickRow(target)) return smoke.fail('点未加载的会话', '行找不到：' + rows.join(' | '))
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') === target, '切到未加载的会话', 10000))) return smoke.finish()
   const first = await sample('首访「' + target + '」')
-  smoke.check('首访未加载的会话停在最新消息', first >= 0 && first <= 4, `距底 ${first}px`)
+  smoke.check('首访未加载的会话停在最新消息', first >= 0 && first <= 4, gapDetail(first))
 
   // Second visit: same session, now served from the in-memory copy.
   if (!clickRow('冒烟会话')) return smoke.fail('切回空会话', '行找不到')
@@ -52,7 +60,7 @@
   if (!clickRow(target)) return smoke.fail('再点未加载的会话', '行找不到')
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') === target, '第二次切到该会话', 10000))) return smoke.finish()
   const again = await sample('再访「' + target + '」（已缓存）')
-  smoke.check('再访（缓存）也停在最新消息', again >= 0 && again <= 4, `距底 ${again}px`)
+  smoke.check('再访（缓存）也停在最新消息', again >= 0 && again <= 4, gapDetail(again))
 
   // The mechanism, tested directly rather than inferred: while the app is following, the content
   // grows from OUTSIDE React (no message update, no state change — exactly what an asynchronous

@@ -245,6 +245,12 @@
   // opening anything), and the MENU ITEM says it too — and it is the item that must stay
   // clickable, because it is the one that opens the running review.
   const seen = []
+  // When each change happened, relative to the click. Without it the failure trail reads
+  // `⋯ → 已评审`, and that is two different problems at once: the middle state may never have
+  // existed (a regression, and the whole point of this scenario), or it existed for less than a
+  // tick because the webview was busy (the sampling was starved — the comment below records one
+  // run where that happened). The gap between the two entries is what tells them apart.
+  let clickedAt = 0
   const tick = setInterval(() => {
     const text = smoke.turnMenuLabel(bubble())
     if (!text) return
@@ -253,16 +259,21 @@
     // than recorded as "no state": the next tick, 10ms later, reads it.
     const item = smoke.menuItem(bubble(), '评审本轮改动')
     if (!item) return
-    if (!seen.length || seen[seen.length - 1].text !== text) seen.push({ text, disabled: item.disabled })
+    if (!seen.length || seen[seen.length - 1].text !== text) {
+      seen.push({ text, disabled: item.disabled, at: clickedAt ? Date.now() - clickedAt : null })
+    }
   }, 10)
   const startTurn = await smoke.waitFor(() => smoke.menuItem(bubble(), '评审本轮改动'), '菜单里的评审入口', 8000)
   if (!startTurn) return smoke.finish()
   startTurn.click()
+  clickedAt = Date.now()
   const after = await smoke.waitFor(
     () => smoke.menuItem(bubble(), '已评审'),
     'footer 变成「已评审 N 条 · 查看」', 30000)
   clearInterval(tick)
-  const trail = seen.map((s) => s.text).join(' → ')
+  const trail = seen
+    .map((s) => `${s.text}${s.at === null ? '(点击前)' : '@+' + s.at + 'ms'}`)
+    .join(' → ')
 
   const pending = seen.find((s) => s.text.indexOf('评审中') >= 0)
   smoke.check('评审期间 footer 经过「评审中…」（而不是直接跳到已评审）', !!pending, trail)
