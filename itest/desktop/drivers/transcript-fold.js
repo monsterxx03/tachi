@@ -35,7 +35,20 @@
   // 是 `live` 的 --accent-soft（蓝调），而对照轮读的是收尾后的 wash —— 两轮"底色相同"会红在
   // 一个只差一帧的中间态上（实测差的就是这半帧）。
   if (!(await smoke.waitFor(() => !smoke.q('.process-head.live'), '过程条不再是 live', 5000))) return smoke.finish()
-  const failedBg = getComputedStyle(strip).backgroundColor
+  // 底色不是「类名一换就定了」：换类名之后 CSS 还在做一次过渡，`getComputedStyle` 在这一段里
+  // 返回的是**插值中的中间色**（实测同一处读到过 rgba(69,87,168,.082) 这种 live 的蓝调，也读到过
+  // 落在 wash 上的灰）。所以要等颜色自己不动了再取值 —— 两轮用同一把尺子量。
+  const settledBg = async (el) => {
+    let prev = getComputedStyle(el).backgroundColor
+    for (let i = 0; i < 50; i++) {
+      await smoke.sleep(40)
+      const now = getComputedStyle(el).backgroundColor
+      if (now === prev) return now
+      prev = now
+    }
+    return prev
+  }
+  const failedBg = await settledBg(strip)
   smoke.check('失败的行带标记，但不整条染色', strip.className.indexOf('failed') >= 0, strip.className)
   smoke.check('过程条提示中间还有正文（召回的口子）', label.indexOf('含 2 段过程说明') >= 0, label)
   smoke.check('结论正文恒显（未展开也在）',
@@ -74,9 +87,10 @@
     !!controlStrip && controlStrip.className.indexOf('failed') < 0,
     controlStrip ? controlStrip.className : '(没有过程条)')
   // 两级比较：有失败的那一轮与这一轮底色完全相同 —— 失败不是用颜色说的，是用那一行文字说的。
+  const controlBg = controlStrip ? await settledBg(controlStrip) : ''
   smoke.check('两轮底色相同（失败不染色）',
-    !!controlStrip && getComputedStyle(controlStrip).backgroundColor === failedBg,
-    controlStrip ? getComputedStyle(controlStrip).backgroundColor + ' vs ' + failedBg : '(没有过程条)')
+    !!controlStrip && controlBg === failedBg,
+    controlStrip ? controlBg + ' vs ' + failedBg : '(没有过程条)')
   const bubbles = smoke.qa('.msg-assistant')
   const lastText = bubbles.length ? bubbles[bubbles.length - 1].textContent.replace(/\s+/g, ' ').trim() : ''
   smoke.check('对照轮：中间正文同样折起来（与失败无关）',
