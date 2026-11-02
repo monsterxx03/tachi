@@ -102,11 +102,9 @@ func TestDispatchRunsCallbacksInOrderWithOnePayload(t *testing.T) {
 // Both handler types fire for the same event: a user's command hook and a Go callback registered
 // on one event each run once.
 //
-// The order BETWEEN the two types is deliberately not asserted here. The package comment and
-// Dispatch's doc say "callbacks run first, then commands", but Dispatch walks one list in
-// registration order, and production registers the config commands before the built-in callback
-// (agent/agent_configure.go:204, then :220) — so what actually happens is the reverse. Which side
-// is right is a behaviour decision, not something this test gets to settle.
+// The order BETWEEN the two types is its own business: dispatch_order_test.go pins it (callbacks
+// first, then commands, whatever order they were registered in). This one only has to say that
+// neither kind gets dropped when both are registered.
 func TestBothHandlerTypesFire(t *testing.T) {
 	cmd, out := hookScript(t, `printf 'command\n' >> "$OUT"`)
 	d := NewDispatcher(nil)
