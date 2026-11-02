@@ -179,8 +179,21 @@ else
   # ---------------------------------------------------------------- 桌面：模块测试 + 真窗口
   if printf '%s\n' "$CODE_CHANGED" | grep -q '^desktop/'; then
     run "desktop unit tests" make -C desktop test
-    if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
-      run "desktop smoke" make desktop-smoke
+    # 冒烟要一个**窗口尺寸由我们决定**的显示（手册：Xvfb :99，里面还要有一个窗口管理器）。
+    # 沿用环境里那个是不行的：这台机器上 DISPLAY 是 :0，也就是运行者自己的屏幕 ——
+    # 平铺合成器按自己的布局给窗口定尺寸，面板被压到最小宽度，点击落到看不见的元素上，
+    # 于是「chip 不见了」「等了 30 秒」那一批红看起来像产品坏了；而这套东西本来也不该
+    # 开着窗口去抢一个人的焦点、把合成按键送进他的窗口里。
+    # 只有在 :99 真有 X 显示时才切过去（socket 在就算），否则沿用环境里的并说一句。
+    SMOKE_DISPLAY="${DISPLAY:-}"
+    SMOKE_ENV=()
+    if [[ -S /tmp/.X11-unix/X99 ]]; then
+      SMOKE_DISPLAY=":99"
+      SMOKE_ENV=(env DISPLAY=:99 GDK_BACKEND=x11)
+    fi
+    if [[ -n "$SMOKE_DISPLAY" || -n "${WAYLAND_DISPLAY:-}" ]]; then
+      echo "    desktop smoke 用显示：${SMOKE_DISPLAY:-$WAYLAND_DISPLAY}"
+      run "desktop smoke" "${SMOKE_ENV[@]}" make desktop-smoke
     else
       nover "desktop smoke" "没有显示器 —— 这层没跑过，别在 PR 里说验过"
     fi
