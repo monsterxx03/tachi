@@ -31,12 +31,9 @@
 package atfile
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,9 +48,6 @@ import (
 const (
 	// MaxInlineSize is the largest text file inlined into the message.
 	MaxInlineSize = 256 * 1024
-	// textProbeSize is how many leading bytes are scanned for NUL to tell text
-	// files from binary ones.
-	textProbeSize = 8000
 	// dirListingTimeout bounds the ripgrep call that expands a directory.
 	dirListingTimeout = 10 * time.Second
 
@@ -337,7 +331,7 @@ func Classify(path string) (kind Kind, size int64) {
 	if size > MaxInlineSize {
 		return KindBinary, size
 	}
-	isText, err := looksLikeText(path)
+	isText, err := fileutil.LooksLikeText(path)
 	switch {
 	case err != nil:
 		return KindBinary, size
@@ -611,24 +605,6 @@ func writeContent(b *strings.Builder, label, content string) {
 	fmt.Fprintf(b, contentBeginFmt, label)
 	b.WriteString(content)
 	fmt.Fprintf(b, contentEndFmt, label)
-}
-
-// looksLikeText reports whether a file looks like text: no NUL byte within the
-// first textProbeSize bytes.
-func looksLikeText(path string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-
-	buf := make([]byte, textProbeSize)
-	n, err := f.Read(buf)
-	// An empty file (immediate EOF) is text; any other read error is not.
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	return !bytes.Contains(buf[:n], []byte{0}), nil
 }
 
 // readImagePart reads a supported image file as a base64 content part.
