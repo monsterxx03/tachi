@@ -153,6 +153,7 @@ scripts/autopilot/worktree.sh resume <slug>   # 接着上一轮的 PR 改
 完成条件只能它全绿。它按改动路径决定跑哪层（lint / unit / **race** / itest / desktop / mobile / `bash -n`），
 你不用自己挑。
 
+- **桌面那层由脚本挑显示**：`:99` 的 X socket 在就用 `env DISPLAY=:99 GDK_BACKEND=x11` 跑冒烟，否则沿用环境里的并打一行说明。别自己改成沿用环境 —— 那会让场景开到运行者自己的屏幕上，被平铺合成器压小，然后以「chip 不见了」「等了 30 秒」的样子失败。
 - 退出码 **0** 才是全绿。
 - **2 是"有层没验成"**（没有显示器、没有 adb 设备、改动只落在 `.github/` 那个只能在 GitHub 上验的桶里），不是通过——PR body 里必须写明哪层没跑。
 - 它红了就修代码，**不要改它来变绿**。
