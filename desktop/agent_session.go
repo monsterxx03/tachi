@@ -305,12 +305,11 @@ func (s *AgentService) RenameSession(id, title string) string {
 	if strings.TrimSpace(title) == "" {
 		return "empty title"
 	}
-	sess, err := d.sm.Load(id)
-	if err != nil {
-		return err.Error()
-	}
-	sess.Title = title
-	if err := d.sm.UpdateMeta(sess); err != nil {
+	// updateSessionMeta, not d.sm directly: a session bound to a run has an in-memory copy (the
+	// one a running turn is mutating) and THAT copy is what the phone's snapshot reads back
+	// (sessionRecord). Writing only the stable manager left the message page showing the old
+	// title while the list — which reads the store — showed the new one (issue #153).
+	if err := d.updateSessionMeta(id, func(sess *session.Session) { sess.Title = title }); err != nil {
 		return err.Error()
 	}
 	// The title is the row's whole identity, and the phone has no other way to learn it: a
