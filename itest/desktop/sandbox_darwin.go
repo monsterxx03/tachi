@@ -19,6 +19,14 @@ import (
 // defaultAppPath is what `-app` defaults to: the bundle `make -C desktop build` leaves behind.
 func defaultAppPath() string { return "desktop/bin/tachi-desktop.app" }
 
+// executableUnderTest is the file whose bytes a scenario actually runs: prepareApp refreshes the
+// bundle's executable from the BARE binary next to it, so the bundle's own mtime — it is a
+// directory, touched only when a file is added or removed inside — says nothing about the code in
+// it. The freshness preflight (stale.go) has to look at the same file the sandbox copies.
+func executableUnderTest(srcApp string) string {
+	return filepath.Join(filepath.Dir(srcApp), "tachi-desktop")
+}
+
 // smokeAppPath is the sandbox's private copy of the app under test — renamed, so that no
 // pkill/`open` aimed at it can reach the user's own running Tachi (see the bundle rules in
 // docs/agents/desktop.md).
