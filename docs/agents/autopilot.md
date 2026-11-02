@@ -44,7 +44,7 @@ f="$(git rev-parse --path-format=absolute --git-common-dir)/autopilot-no-ui"
 然后一圈一圈，每圈三步，直到 §6 的停手条件：
 
 1. **看开着的 PR** —— 自己的和主人的。
-2. **挑一件活**。
+2. **挑一件活** —— 挑到先占位（§2.2）。
 3. **做完，回第 1 步**。
 
 开出一个 PR 不算结束这一轮，但**也不守着它等 CI**：下一圈走到第 1 步时它自然就红了或者绿了，那时再修。
@@ -60,7 +60,8 @@ scripts/autopilot/gh pr list --author monsterxx03 --state open
 ```
 
 - **自己的那条**：有仓库主人写的评论或 review → 按它改，这是最高优先级；CI 红 → 修到绿；
-  都干净 → 才接新活。
+  都干净 → 才接新活。**动手前先占位**：`scripts/autopilot/claim.sh take <PR 号>`（0=归你，
+  1=另一台在改）。两台机器共用 bot 身份，"自己的 PR"分不清是哪台的，占位就是那只手。
 - **主人的那条**：只读。知道哪一块正在被动就够了——那是他自己的分支，别往上推。
 
 改自己的 PR 走 `scripts/autopilot/worktree.sh resume <slug>`，回原区、原分支。**不要换 slug**——
@@ -70,6 +71,17 @@ scripts/autopilot/gh pr list --author monsterxx03 --state open
 
 `gh issue list --label auto` 有就取最上面一个（带 `waiting-user` 的跳过，球在人那边）；没有就从 §3
 的菜单里自己找。**别按作者过滤**：`auto` 只有主人打得出来，那个标签本身就是「已批准」。
+
+**挑到之后立刻占位，再动手**：
+
+```bash
+scripts/autopilot/claim.sh take <issue 号>   # 0 = 归你了；1 = 另一台在干，换下一个
+```
+
+被挡就换列表里的下一个，不是换一类活、也不是收工。干完（PR 开了）、放弃、或转 `waiting-user`
+时 `claim.sh release <issue 号> [说明]`。细则见 §4.5。
+
+自扫类的活没有 issue 可占，靠 §3.2 的确定性 slug 让分支名撞车（§4.2 的 `new` 会发现）。
 
 ## 3. 挑什么活
 
@@ -112,6 +124,17 @@ scripts/autopilot/gh pr list --author monsterxx03 --state open
   `scripts/autopilot/gh pr list --author monsterxx03 --state open --json number,title,files` 挑活前看一眼；
   撞上的代价是冲突要人来解，比不做还贵。
 
+**slug 只从「类别 + 位置」派生，别自己起名字**：
+
+```bash
+scripts/autopilot/slug.sh doc docs/agents/mcp.md    # → doc-docs-agents-mcp-md
+scripts/autopilot/slug.sh bug agent/permission/paths.go
+```
+
+类别就是 §3.1 那四个（`doc` / `dedupe` / `bug` / `test`），位置写**要改的文件或目录**，不写症状描述。
+两台机器扫到同一件事必须算出同一个名字——分支名一样，push 就是互斥；随手起的名字一定不一样，
+于是两台各开一个重复 PR。一次要改几个文件的，用最主要的那个，或者它们共同的目录。
+
 ### 3.3 重构与补测试的边界
 
 - **重构一次一个包**，净行数减少优先，公共 API 不变；PR body 明写「行为不变」和凭什么这么说（跑的哪
@@ -142,6 +165,9 @@ scripts/autopilot/worktree.sh gc              # 每轮开头，回收旧区
 scripts/autopilot/worktree.sh new <slug>      # 从最新 origin/main 开区，打印路径
 scripts/autopilot/worktree.sh resume <slug>   # 接着上一轮的 PR 改
 ```
+
+`new` 会先查远端有没有同名分支：报「远端已有分支」就是另一台在干这件活，换一件——那比做完一圈
+在 push 时被拒便宜得多。
 
 所有改动只在这个区的目录里。**一个区只装一件活**：换任务就是换 slug（`new <新 slug>`），别把两件事的
 改动塞进同一个 PR（唯一的例外见 §3.2 的同类文档修正）。**绝不**直接改主工作树，**绝不**推 main，
@@ -211,6 +237,26 @@ gh issue create --title "<一句话说清要决定什么>" --body "<见下>" --l
 - 建完放下它，接着走下一圈。
 - issue 是公开的：别贴真实会话内容、路径、token。
 
+### 4.5 占位：两台机器同一份队列
+
+两台机器用同一个 bot 身份，PR 和评论的作者一模一样，「这条是我发的还是那台发的」在 GitHub 上答不出来。
+所以「有人在做」只能显式写在被抢的那件活上，并且带上机器号（就是 hostname）。
+
+```bash
+scripts/autopilot/claim.sh take <n>             # 0 = 归你；1 = 有人占着
+scripts/autopilot/claim.sh status <n>           # 现在谁占着、要不要接管
+scripts/autopilot/claim.sh release <n> [说明]    # 干完或放弃，让出来
+```
+
+- issue 和 PR 都用同一个号，`take` 一样管用。
+- 占位是一条带 `in-progress` 标签的评论。打标签、发评论都不是原子操作，所以两边都写、读回来看
+  **评论 id 小的赢**，输的那台删掉自己那条走人。
+- **租约 120 分钟**（`AUTOPILOT_LEASE_MINUTES` 可改）：超过这么久没动静，下一台可以接管。
+  这是给崩掉的机器留的门——没有过期的锁，第一次崩就把那件活永久封死。
+- 挡的是「同时」，不是「以后」：已经开了 PR 的活靠 PR 本身挡（§2.1）。**干完一定 release**，
+  否则这个 issue 会被一直跳过，直到租约过期。
+- 自扫类的活没有 issue 可占：靠 §3.2 的 slug 和 `worktree.sh new` 的远端检查挡。
+
 ## 5. 怎么算做完
 
 ### 5.1 `scripts/autopilot/verify.sh`
@@ -265,8 +311,8 @@ CI，菜单上四类也都挑不出一件确定能做的）。
 **同一个问题试过两次没成就停手**：把试过什么、卡在哪回在原 issue 下，打 `waiting-user`，
 别再来第三次。这个次数是按问题算的，不是按圈算的——下一圈别再捡同一件。
 
-**队列是共用的**：另一台也在按同一份文档干活。建 `by-tachi` issue 之前先搜一遍——它可能刚提过同一个；
-挑到一件就尽快开 PR，另一台看到这个 PR 就不会再挑同一件。
+**队列是共用的**：另一台也在按同一份文档干活。挑到一件先占位（§4.5），抢不到就换下一件；
+自扫类的活靠 §3.2 的确定性 slug 让分支名撞车；建 `by-tachi` issue 之前先搜一遍——它可能刚提过同一个。
 
 用量看 `tachi usage`。
 
@@ -274,7 +320,8 @@ CI，菜单上四类也都挑不出一件确定能做的）。
 
 这一节是给人看的，不是给你的动作清单。
 
-- **身份**：bot 是 GitHub App `tachi-autopilot`（`tachi-autopilot[bot]`），装在 `deskmini-local` 上，
+- **身份**：bot 是 GitHub App `tachi-autopilot`（`tachi-autopilot[bot]`），每台跑 autopilot 的机器
+  各装一份（先装的是 `deskmini-local`），
   权限就是 Contents / Issues / Pull requests / Actions 读写——够开分支、开 PR、打标签、看测试结果，
   不够改仓库设置、不够加人。私钥和 id 在 `$TACHI_HOME/autopilot/`
   （`app.pem` + `app.json`），**换机器就只拷这两个文件**，令牌由 `bot-token.sh` 现换、不落盘到仓库。
@@ -289,7 +336,9 @@ CI，菜单上四类也都挑不出一件确定能做的）。
   4. 确认 `web/frontend/dist`、`web/frontend/node_modules` 在位：少了它们每次验证都要重装一遍依赖，
      弱机器上那是几十分钟。
   5. 定时任务的 prompt 只写「读这份文档并严格照做」，**不要把规则抄进去**——抄一份就会有两份不一致的规则。
-  6. 两台的启动时间错开（比如 :00 和 :30），重叠越少，两台同时挑中一件的机会越少。
+  6. 确认 `hostname -s` 在两台上不同：占位评论用它认机器（§4.5），同名会让两台互相认成自己。
+  7. 启动时间错开（比如 :00 和 :30）只是把「同时扫到同一件活」的窗口缩小，不是互斥——真正的互斥是
+     §4.5 的占位和 §3.2 的确定性 slug。别再往错峰上加依赖。
 - 建定时任务时，目标会话必须已经开着「无需审批」，否则任何 ask 规则在无人值守时都会被直接拒绝，
   而日志里没有报错。
 - 想停：把 job 设成 paused。**别删那条会话**，删会话会连带删掉这个 job。

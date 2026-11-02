@@ -59,13 +59,22 @@ func TestIsSinglePathElementRefusesTraversal(t *testing.T) {
 // 存在（含符号链接，要落到真实路径）与不存在（退到最近的存在的祖先之上拼回去）。
 func TestCanonicalPathResolvesWhatExistsAndKeepsTheRest(t *testing.T) {
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real")
-	if err := os.MkdirAll(real, 0o755); err != nil {
+	realPath := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Fatalf("symlink: %v", err)
+	}
+
+	// 期望值也要把「真实路径」算一遍，而不是直接拿 t.TempDir() 拼出来的字符串：
+	// 临时目录自己就可能在一个符号链接下面（macOS 上 /var → /private/var），而
+	// CanonicalPath 解析的是所有存在的链接。Linux 上这两者恰好相同，所以只比原始路径
+	// 的话，这条用例在 Linux 上绿、在 macOS 上红。
+	real, err := filepath.EvalSymlinks(realPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(real): %v", err)
 	}
 
 	// 存在的东西：符号链接落到真实路径，且一个点、两个点都被清理掉。

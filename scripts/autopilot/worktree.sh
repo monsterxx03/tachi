@@ -120,6 +120,17 @@ cmd_new() {
   [[ -e "$path" ]] && die "目标已存在：${path}（先 $0 gc，或换个 slug）"
   git -C "$MAIN_WT" show-ref --verify --quiet "refs/heads/$branch" && die "本地分支已存在：$branch"
 
+  # 远端已有同名分支 = 另一台机器正在干（或已经干过）这件活。在这里挡住，而不是等做完一圈
+  # 在 push 时被拒 —— 那时候所有工作都白费了。只读操作；ls-remote 失败（断网、凭证）不当成
+  # 「远端没有」，而是跳过这道检查继续，否则网络抖一下这一轮就开不了工。
+  echo "== 确认远端没有同名分支"
+  local remote_ref
+  if remote_ref="$(git -C "$MAIN_WT" ls-remote --heads origin "refs/heads/$branch" 2>&1)"; then
+    [[ -z "$remote_ref" ]] || die "远端已有分支 ${branch} —— 另一台机器在干这件活。换一件，或用 resume ${slug} 接着改它的 PR"
+  else
+    echo "    ls-remote 失败，跳过这道检查：$remote_ref" >&2
+  fi
+
   echo "== fetch origin main"
   git -C "$MAIN_WT" fetch -q origin main || die "fetch 失败"
   echo "== 开 worktree：${path}（分支 ${branch}，基于 origin/main）"

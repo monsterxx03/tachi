@@ -75,7 +75,10 @@ if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
 fi
 
 MERGE_BASE="$(git merge-base "$BASE" HEAD 2>/dev/null)" || MERGE_BASE="$BASE"
-CHANGED="$(git diff --name-only "$MERGE_BASE" HEAD; git diff --name-only; git diff --cached --name-only)"
+# 未跟踪的新文件也要算进来（--others --exclude-standard 会跳过 gitignore 的构建产物）：
+# 否则新加一个脚本或一个源文件时，按路径挑门禁的那几层根本看不见它，等于没验。
+CHANGED="$(git diff --name-only "$MERGE_BASE" HEAD; git diff --name-only; \
+  git diff --cached --name-only; git ls-files --others --exclude-standard)"
 CHANGED="$(printf '%s\n' "$CHANGED" | sed '/^$/d' | sort -u)"
 
 if [[ -z "$CHANGED" ]]; then

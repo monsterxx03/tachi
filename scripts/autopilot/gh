@@ -19,4 +19,8 @@ if [[ -z "$REAL" ]] || [[ "$(readlink -f "$REAL" 2>/dev/null || echo "$REAL")" =
   exit 1
 fi
 
-GH_TOKEN="$("$HERE/bot-token.sh")" exec "$REAL" "$@"
+# 令牌必须拿到再 exec：写成 `GH_TOKEN="$(...)" exec` 时，命令替换失败不会中止脚本，
+# gh 会拿空令牌退回用这台机器上主人自己的登录 —— 那正是这个脚本要防的事。所以分两步。
+TOKEN="$("$HERE/bot-token.sh")" \
+  || { echo "autopilot/gh: 拿不到 bot 令牌，拒绝以其它身份执行" >&2; exit 1; }
+GH_TOKEN="$TOKEN" exec "$REAL" "$@"
