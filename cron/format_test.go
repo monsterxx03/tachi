@@ -182,7 +182,8 @@ func TestFormatJobDetail(t *testing.T) {
 		ID: "cr_3", Name: "n", Schedule: "@daily", Prompt: "p", Type: JobTypeOneshot,
 		Status: JobStatusPaused, Notify: NotifyWhenRelevant, MaxRetries: 2, Timezone: "Asia/Shanghai",
 		CreatedAt: time.Date(2026, 10, 1, 8, 0, 0, 0, time.Local),
-		LastRunAt: time.Date(2026, 11, 2, 9, 0, 0, 0, time.Local), LastRunStatus: "ok",
+		LastRunAt: time.Date(2026, 11, 2, 9, 0, 0, 0, time.Local), LastRunStatus: "error",
+		LastRunError: "provider down",
 	}
 	got = FormatJobDetail(full, "")
 	for _, want := range []string{
@@ -192,7 +193,8 @@ func TestFormatJobDetail(t *testing.T) {
 		"- Max retries: 2",
 		"- Timezone: Asia/Shanghai",
 		"- Last run: ",
-		"(status: ok)",
+		"(status: error)",
+		" — provider down",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("detail is missing %q:\n%s", want, got)
