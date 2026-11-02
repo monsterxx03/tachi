@@ -253,6 +253,12 @@ func TestResolvePath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, "notes/a.md"), ResolvePath("/root", "~/notes/a.md"))
+	assert.Equal(t, home, ResolvePath("/root", "~"), "裸 ~ 就是家目录本身")
+
+	// `~user` 不是「家目录 + user」：那是 shell 的用户展开，Go 不懂。以前这里会把
+	// `~bob/x` 拼成 `$HOME/bob/x` —— 一个看起来像要去的、几乎肯定不存在的路径。
+	assert.Equal(t, "/root/~bob/x", ResolvePath("/root", "~bob/x"))
+	assert.Equal(t, "/root/~bob", ResolvePath("/root", "~bob"))
 }
 
 // TestExpandOversizedImageAnnotated pins the image budget shared with the Read

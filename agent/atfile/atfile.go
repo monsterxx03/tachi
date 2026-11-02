@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -296,14 +297,17 @@ func LastRefStart(s string) int {
 	return -1
 }
 
-// ResolvePath turns a reference into an absolute path: "~" expands to the home
-// directory, an absolute reference is used as-is, and a relative one is joined
-// to root.
+// ResolvePath turns a reference into an absolute path: "~" and "~/…" expand to the home
+// directory, an absolute reference is used as-is, and a relative one is joined to root.
+//
+// `~user` is NOT expanded, and that is the point of going through fileutil.ExpandHome: the
+// old code here treated ANY leading "~" as home and joined the rest onto it, so `~bob/x`
+// became `$HOME/bob/x` — a path that almost certainly does not exist while looking exactly
+// like the one that was asked for. `~user` is shell user-expansion, which Go does not know;
+// leaving it alone makes it a relative reference (joined to root) instead of a guess.
 func ResolvePath(root, ref string) string {
-	if strings.HasPrefix(ref, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(ref, "~"), "/"))
-		}
+	if expanded := fileutil.ExpandHome(ref); expanded != ref {
+		return expanded
 	}
 	if filepath.IsAbs(ref) {
 		return filepath.Clean(ref)

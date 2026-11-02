@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // --- /new ---
@@ -68,6 +70,27 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 
 // --- /cd ---
 
+// expandCDDir applies the `~` rule to a /cd argument, through the one implementation of that rule
+// (fileutil.ExpandHome).
+//
+// A leading `~user` is shell user-expansion, which Go cannot do: it is left alone rather than
+// joined onto $HOME, so `/cd ~bob/x` no longer becomes `$HOME/bob/x` — a path that looks like the
+// one the user asked for and almost certainly is not.
+//
+// /cd is typed by a person, so a `~` that cannot be expanded still says so instead of quietly
+// turning into a relative directory literally named "~".
+func expandCDDir(dir string) (string, error) {
+	if expanded := fileutil.ExpandHome(dir); expanded != dir {
+		return expanded, nil
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		if _, err := os.UserHomeDir(); err != nil {
+			return "", fmt.Errorf("cannot expand ~: %w", err)
+		}
+	}
+	return dir, nil
+}
+
 // handleCDCommand changes the working directory for the current thread.
 // The new directory takes effect on the next agent turn; all tools (Bash,
 // Read, Write, Edit, Glob, etc.) resolve relative paths against it.
@@ -76,17 +99,9 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 		return "Usage: /cd <directory>", nil
 	}
 
-	// Expand ~ to home directory.
-	if strings.HasPrefix(dir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("cannot expand ~: %w", err)
-		}
-		if dir == "~" {
-			dir = home
-		} else {
-			dir = filepath.Join(home, dir[1:])
-		}
+	dir, err := expandCDDir(dir)
+	if err != nil {
+		return "", err
 	}
 
 	// Read or create the cached agent — on a new thread before the first
