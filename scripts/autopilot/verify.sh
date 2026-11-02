@@ -165,8 +165,12 @@ else
   # 触发集合与命令里的包必须一一对应：`pkg/` 曾经在触发里、不在命令里，于是改了 pkg/ 会跑一次
   # 不含它的竞态检查（看起来验了，其实没验）。
   if printf '%s\n' "$CODE_CHANGED" \
-      | grep -qE '^(agent/|node/|session/|channel/|cron/|mobile/|pkg/)'; then
+      | grep -qE '^(agent/|node/|session/|channel/|cron/|mobile/|pkg/|itest/)'; then
     run "race" go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/ ./pkg/...
+    # 集成套件也要过一遍：`itest/tui` 在进程内驱动真实的 Model + AIAgent，acp / headless 走真进程
+    # 与真 HTTP/WS——而上面那条命令**编不到它们**（它们要 `-tags=integration`），所以这些竞争在
+    # 任何一道门禁里都看不见。本机（2 核）实测：tui 23s、acp 14s、headless 9s。
+    run "race (itest)" go test -race -tags=integration ./itest/tui/ ./itest/acp/ ./itest/headless/
   else
     skip "race" "没碰会起 goroutine 的包"
   fi
