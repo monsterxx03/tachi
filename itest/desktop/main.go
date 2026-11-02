@@ -451,10 +451,13 @@ func selectScenarios(all []scenario, only string) []scenario {
 // works from any working directory.
 func driverDir() (string, error) {
 	// The runner is always built from source in this repo; locate the dir next to it.
+	var tried []string
 	exe, err := os.Executable()
 	if err == nil {
 		if dir := filepath.Join(filepath.Dir(exe), "drivers"); dirExists(dir) {
 			return dir, nil
+		} else {
+			tried = append(tried, dir)
 		}
 	}
 	for _, dir := range []string{
@@ -464,8 +467,12 @@ func driverDir() (string, error) {
 		if dirExists(dir) {
 			return dir, nil
 		}
+		tried = append(tried, dir)
 	}
-	return "", fmt.Errorf("drivers/ not found (run from the repo root: go run ./itest/desktop)")
+	// 找过哪几处要说出来：这条错误以前只说「run from the repo root」，而从 `desktop/` 里跑时
+	// 读者看不出它到底找了哪儿、也不知道它还会去二进制旁边找 —— 白猜一轮。
+	return "", fmt.Errorf("drivers/ not found: looked in %s — run from the repo root (go run ./itest/desktop)",
+		strings.Join(tried, ", "))
 }
 
 func dirExists(p string) bool {
