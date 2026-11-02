@@ -140,11 +140,17 @@ func TestManualFlowCompletesWithAPastedRedirectURL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// The WAITING phase is the one that means "a listener is up, but the URL has to be
-	// opened by hand" — the phase whose URL is worth having.
-	// Every phase, so a timeout says WHERE the flow was instead of only that it never got there.
-	// This one has failed on a loaded CI runner before (15s, "never reported an authorization
-	// URL") and left nothing behind to look at.
+	// 任何**带着 AuthURL** 的阶段都算数，不钉死 WAITING。
+	//
+	// 这一条以前只收 `OAuthPhaseWaiting`，而那一阶段只在「回调监听器起得来」时才发：
+	// 监听器绑的是 `OAuth.CallbackPort`（默认 18273），**端口被占**就静默降级成
+	// `OAuthPhaseManual` —— 同一个 URL、同一件要做的事，只是没有监听器。于是测试在等一个
+	// 永远不会来的阶段，15 秒后报「never reported an authorization URL」，而失败日志里的
+	// phases 明明写着 `browser (authURL=true …)` 和 `manual (authURL=true …)`。
+	//
+	// 这条用例要验的是「URL 能从一个**字段**里拿到，不用去猜指令那句话」，两条路都满足；
+	// 真正需要监听器的是另一条用例。所以这里收 AuthURL，并且把见过的阶段留在超时信息里
+	// （下面那句 Fatalf）—— 下一次红能直接看出走的是哪条路。
 	var mu sync.Mutex
 	var phases []string
 	snapshot := func() []string {
@@ -159,7 +165,7 @@ func TestManualFlowCompletesWithAPastedRedirectURL(t *testing.T) {
 			mu.Lock()
 			phases = append(phases, fmt.Sprintf("%s (authURL=%t, %q)", p.Phase, p.AuthURL != "", p.Message))
 			mu.Unlock()
-			if p.Phase == mcp.OAuthPhaseWaiting && p.AuthURL != "" {
+			if p.AuthURL != "" {
 				select {
 				case authURL <- p.AuthURL:
 				default:
