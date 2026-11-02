@@ -480,3 +480,34 @@ func TestSessionRequestCostsPairsConversationRows(t *testing.T) {
 		t.Fatalf("cost[1] = %v, want 0.0069", charges[1].Cost)
 	}
 }
+
+// TestSessionIDRejectsEscapedSegment pins the guard on {id} routes.
+//
+// ServeMux hands PathValue the UNESCAPED segment, so "%2e%2e%2f%2e%2e" arrives
+// as "../../" in a single segment — the mux's own dot-segment cleaning never
+// sees it. Without the guard that value reaches filepath.Join(sessionRoot, id)
+// and walks out of the session tree, so every {id} route must answer 400.
+func TestSessionIDRejectsEscapedSegment(t *testing.T) {
+	s := newListSessionsServer(t, 1)
+	h := s.Handler()
+
+	traversal := "%2e%2e%2f%2e%2e" // "../../"
+	paths := []string{
+		"/api/sessions/" + traversal,
+		"/api/sessions/" + traversal + "/oneoff",
+		"/api/sessions/" + traversal + "/oneoff/x.jsonl",
+		"/api/sessions/" + traversal + "/transcript",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, httptest.NewRequest("GET", p, nil))
+			if rr.Code != 400 {
+				t.Fatalf("status = %d, want 400 (body %s)", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "invalid session id") {
+				t.Fatalf("body = %s, want the invalid-session-id error", rr.Body.String())
+			}
+		})
+	}
+}

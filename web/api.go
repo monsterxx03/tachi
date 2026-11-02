@@ -21,6 +21,25 @@ import (
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+// sessionID reads the {id} path segment, answering 400 and returning "" when
+// it cannot be a session ID.
+//
+// The guard is here, not in the store, because the DECODING is what makes it
+// necessary: ServeMux matches the pattern against the raw path but PathValue
+// hands back the unescaped segment, so "/api/sessions/%2e%2e%2f%2e%2e/oneoff"
+// arrives as "../../" in a single segment — past the mux's own dot-segment
+// cleaning, and straight into filepath.Join(sessionRoot, id, ...) below. Every
+// route taking an {id} must go through this; an ID the app generates is
+// "YYYY-MM-DD-HHMMSS-uuid", so a separator can only come from outside.
+func sessionID(w http.ResponseWriter, r *http.Request) string {
+	id := r.PathValue("id")
+	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		writeJSONError(w, http.StatusBadRequest, "invalid session id")
+		return ""
+	}
+	return id
+}
+
 // sessionOneOffDir returns <the server's session root>/<id>/oneoff.
 //
 // The root is the store this console reads sessions through (Store.BaseDir), so the side-channel
@@ -300,7 +319,10 @@ type oneOffSummary struct {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := sessionID(w, r)
+	if id == "" {
+		return
+	}
 	sess := s.readSession(w, id)
 	if sess == nil {
 		return
@@ -431,7 +453,10 @@ func readOneOffMeta(path string) (oneoffMetaLine, bool) {
 
 // GET /api/sessions/{id}/oneoff
 func (s *Server) handleListSessionOneOffs(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := sessionID(w, r)
+	if id == "" {
+		return
+	}
 	if s.readSession(w, id) == nil {
 		return
 	}
@@ -442,7 +467,10 @@ func (s *Server) handleListSessionOneOffs(w http.ResponseWriter, r *http.Request
 
 // GET /api/sessions/{id}/oneoff/{file}
 func (s *Server) handleGetOneOff(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := sessionID(w, r)
+	if id == "" {
+		return
+	}
 	file := r.PathValue("file")
 	if strings.Contains(file, "/") || strings.Contains(file, "..") {
 		writeJSONError(w, http.StatusBadRequest, "invalid file name")
@@ -581,7 +609,10 @@ func summarizeUsage(rows []llm.UsageRow, cfg *config.Config) *usageSummary {
 // handleTranscript renders the session as the same HTML report that
 // `tachi transcript show` produces, for in-browser export.
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id := sessionID(w, r)
+	if id == "" {
+		return
+	}
 	sess := s.readSession(w, id)
 	if sess == nil {
 		return
