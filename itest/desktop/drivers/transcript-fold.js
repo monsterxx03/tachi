@@ -35,7 +35,20 @@
   // 是 `live` 的 --accent-soft（蓝调），而对照轮读的是收尾后的 wash —— 两轮"底色相同"会红在
   // 一个只差一帧的中间态上（实测差的就是这半帧）。
   if (!(await smoke.waitFor(() => !smoke.q('.process-head.live'), '过程条不再是 live', 5000))) return smoke.finish()
-  const failedBg = getComputedStyle(strip).backgroundColor
+  // 底色不是「类名一换就定了」：换类名之后 CSS 还在做一次过渡，`getComputedStyle` 在这一段里
+  // 返回的是**插值中的中间色**（实测同一处读到过 rgba(69,87,168,.082) 这种 live 的蓝调，
+  // 也读到过落在 wash 上的灰）。所以要等颜色自己不动了再取值 —— 两轮用同一把尺子量。
+  const settledBg = async (el) => {
+    let prev = getComputedStyle(el).backgroundColor
+    for (let i = 0; i < 50; i++) {
+      await smoke.sleep(40)
+      const now = getComputedStyle(el).backgroundColor
+      if (now === prev) return now
+      prev = now
+    }
+    return prev
+  }
+  const failedBg = await settledBg(strip)
   smoke.check('失败的行带标记，但不整条染色', strip.className.indexOf('failed') >= 0, strip.className)
   smoke.check('过程条提示中间还有正文（召回的口子）', label.indexOf('含 2 段过程说明') >= 0, label)
   smoke.check('结论正文恒显（未展开也在）',
@@ -69,14 +82,20 @@
   smoke.click('.send-btn')
   if (!(await smoke.waitText('.msg-assistant .msg-content', '对照轮的收尾结论。', 30000))) return smoke.finish()
   if (!(await smoke.waitFor(() => !smoke.q('.stop-btn'), '对照轮结束'))) return smoke.finish()
+  // 同一把尺子：对照轮的过程条也要**离开 live 之后**才读底色。上面那一轮已经因为这件事红过
+  // 一次（停止按钮消失与改类名不是同一帧，注释在 failedBg 那里），这里原来漏了 —— 于是读到的
+  // 是过渡途中的一个中间色，而且**每次跑都不一样**（rgba(64,63,77) / rgba(64,64,81)），永远等
+  // 于不了另一轮那个已经落定的值。这不是「两轮底色不同」，是取样早了。
+  if (!(await smoke.waitFor(() => !smoke.q('.process-head.live'), '对照轮的过程条不再是 live', 5000))) return smoke.finish()
   const controlStrip = smoke.qa('.process-head')[smoke.qa('.process-head').length - 1]
   smoke.check('对照轮没有失败（过程条不带失败标记）',
     !!controlStrip && controlStrip.className.indexOf('failed') < 0,
     controlStrip ? controlStrip.className : '(没有过程条)')
   // 两级比较：有失败的那一轮与这一轮底色完全相同 —— 失败不是用颜色说的，是用那一行文字说的。
+  const controlBg = controlStrip ? await settledBg(controlStrip) : ''
   smoke.check('两轮底色相同（失败不染色）',
-    !!controlStrip && getComputedStyle(controlStrip).backgroundColor === failedBg,
-    controlStrip ? getComputedStyle(controlStrip).backgroundColor + ' vs ' + failedBg : '(没有过程条)')
+    !!controlStrip && controlBg === failedBg,
+    controlStrip ? controlBg + ' vs ' + failedBg : '(没有过程条)')
   const bubbles = smoke.qa('.msg-assistant')
   const lastText = bubbles.length ? bubbles[bubbles.length - 1].textContent.replace(/\s+/g, ' ').trim() : ''
   smoke.check('对照轮：中间正文同样折起来（与失败无关）',
