@@ -11,7 +11,15 @@
 // drift from what the app parses: the client reads this with the same struct, and a hand-written
 // JSON literal would be a second description of the protocol.
 //
-// The fixture speaks plain HTTP on loopback. A peer's URL may be http only when the host is
+// The fixture speaks **https** on loopback with its OWN ed25519 self-signed certificate (see
+// selfSignedEd25519): `node/peers.go`
+// refuses any peer that is not https, loopback included, because a plaintext peer proves no identity
+// and an identity is the only thing a delegation can name a peer by. It said "on loopback" here once
+// — that exemption is gone, and this fixture kept serving http long after it, so the whole
+// directory was refused and the panel was empty (which is why `agents-panel` was red everywhere
+// while its unit-test half, which sets cfg.Peers in code, stayed green).
+//
+// Original note (kept for the shape it describes): A peer's URL may be http only when the host is
 // loopback (config.PeerConfig says why), and this fixture IS loopback — which also keeps the
 // sandbox from needing a certificate. What that costs is the identity half: nothing is pinned over
 // plaintext, so this peer reports no identity, and pinning stays where it belongs (the TLS path,
@@ -22,11 +30,19 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -45,11 +61,13 @@ const (
 
 // peerFixture is one running fake node.
 type peerFixture struct {
-	// URL is the origin, e.g. "http://127.0.0.1:53421" — what the sandbox's `peers[].url` gets.
+	// URL is the origin, e.g. "https://127.0.0.1:53421" — what the sandbox's `peers[].url` gets.
+	// https because the app refuses anything else (see the file comment).
 	URL string
 
-	ln  net.Listener
-	srv *http.Server
+	ts *httptest.Server
+	// card is the Agent Card JSON, built once the origin above is known and read by the handler.
+	card []byte
 
 	mu sync.Mutex
 	// cardRequests counts the card reads, so the Go half can tell "the panel asked" from "the
@@ -59,11 +77,32 @@ type peerFixture struct {
 
 // newPeerFixture starts the fake node on a loopback port. Close it when done.
 func newPeerFixture() (*peerFixture, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	f := &peerFixture{}
+	// Unstarted first, so the card can be built once the origin is known (below): the card names the
+	// address that actually answers, which is only fixed after the listener exists.
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != a2asrv.WellKnownAgentCardPath {
+			http.NotFound(w, r)
+			return
+		}
+		f.mu.Lock()
+		f.cardRequests++
+		card := f.card
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(card)
+	}))
+	// ed25519，不是 httptest 默认的 RSA：app 认的是**身份**（node/auth.go 拒任何非 ed25519 的对端），
+	// 而 httptest 的自签证书是 RSA —— 那样握手能过、读卡会被拒，报
+	// 「presented a *rsa.PublicKey key; this node pins ed25519 identities」。
+	cert, err := selfSignedEd25519()
 	if err != nil {
+		ts.Close()
 		return nil, err
 	}
-	f := &peerFixture{ln: ln, URL: "http://" + ln.Addr().String()}
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	ts.StartTLS()
+	f.ts, f.URL = ts, ts.URL
 
 	// The card names the address that actually answers — the fixture's own origin — because that is
 	// the rule a real node follows too (node/advertisedURL: a Card that named somewhere else sends
@@ -87,20 +126,13 @@ func newPeerFixture() (*peerFixture, error) {
 		},
 	})
 	if err != nil {
-		_ = ln.Close()
+		ts.Close()
 		return nil, err
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(a2asrv.WellKnownAgentCardPath, func(w http.ResponseWriter, _ *http.Request) {
-		f.mu.Lock()
-		f.cardRequests++
-		f.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(card)
-	})
-	f.srv = &http.Server{Handler: mux}
-	go func() { _ = f.srv.Serve(ln) }()
+	f.mu.Lock()
+	f.card = card
+	f.mu.Unlock()
 	return f, nil
 }
 
@@ -112,10 +144,7 @@ func (f *peerFixture) CardRequests() int {
 }
 
 // Close stops the fake node.
-func (f *peerFixture) Close() {
-	_ = f.srv.Close()
-	_ = f.ln.Close()
-}
+func (f *peerFixture) Close() { f.ts.Close() }
 
 // peerSeed is one entry of the sandbox's `peers:` list, declared by a scenario.
 //
@@ -191,4 +220,28 @@ func peerCardReads(fixtures []*peerFixture) int {
 		total += f.CardRequests()
 	}
 	return total
+}
+
+// selfSignedEd25519 makes the certificate a real Tachi node would present: self-signed and ed25519.
+// The key type is the load-bearing part — the app pins identities by ed25519 public key and refuses
+// anything else (node/auth.go), so an RSA certificate cannot even be looked at.
+func selfSignedEd25519() (tls.Certificate, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "smoke-peer"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}, nil
 }

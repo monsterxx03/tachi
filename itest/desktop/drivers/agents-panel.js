@@ -132,8 +132,13 @@
       .find((el) => smoke.text(el.querySelector('.agents-k')) === '卡片')
     return line ? smoke.text(line.querySelector('.agents-v')) : ''
   })()
+  // 三种「说得出原因」的形状都认：包过的那句（`did not answer with a card` / `它没有回答`），以及
+  // **连接被立刻拒绝**时 Go 的原话（`dial tcp 127.0.0.1:1: connect: connection refused`）—— 端口 1
+  // 就是被设计成立刻拒的，所以这条在能跑的机器上永远走第三种形状，只认前两种等于让断言永远红。
   smoke.check('没有 card 的时候说的是原因，而不是编一个名字',
-    cardLine.length > 0 && (cardLine.indexOf('它没有回答') >= 0 || cardLine.indexOf('did not answer with a card') >= 0)
+    cardLine.length > 0
+    && (cardLine.indexOf('它没有回答') >= 0 || cardLine.indexOf('did not answer with a card') >= 0
+      || cardLine.indexOf('connection refused') >= 0)
     && cardLine.indexOf('smoke-peer-node') < 0, cardLine)
 
   // ── 会答话的那一个：卡片自己的字段 ─────────────────────────────────────────
