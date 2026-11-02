@@ -210,7 +210,7 @@ func switchSessionThinkingEffort(ctx context.Context, sess *ACPSession, level st
 			cur.UpdatedAt = time.Now()
 			if err := sess.sessMgr.UpdateMeta(cur); err != nil {
 				if l != nil {
-					l.Error(ctx, "ACP: failed to persist reasoning effort to session meta", err)
+					l.Error(ctx, "ACP: failed to persist reasoning effort to session meta", err, "session", sess.ID)
 				}
 			}
 		}
@@ -361,7 +361,7 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 			cur.ProviderName = resolved.Name
 			// UpdateMeta is best-effort; don't fail the switch if persistence fails.
 			if err := sess.sessMgr.UpdateMeta(cur); err != nil {
-				l.Error(ctx, "ACP: failed to persist provider switch to session meta", err)
+				l.Error(ctx, "ACP: failed to persist provider switch to session meta", err, "session", sess.ID)
 			}
 		}
 		// Re-apply the session's per-session thinking override (set via the
