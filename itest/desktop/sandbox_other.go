@@ -22,6 +22,10 @@ import (
 // NOT a bundle — there is no bundling step on this platform (see desktop/Makefile).
 func defaultAppPath() string { return "desktop/bin/tachi-desktop" }
 
+// executableUnderTest is the file whose bytes a scenario actually runs: on this platform the app
+// IS the bare binary, so the path given is the thing to look at (stale.go's freshness preflight).
+func executableUnderTest(srcApp string) string { return srcApp }
+
 // smokeAppPath is the sandbox's private copy of the app under test. The name is unique for the
 // same reason the macOS one is: `pkill -f` in killAll must never reach the user's own Tachi.
 func smokeAppPath(dir string) string { return filepath.Join(dir, smokeExecName) }

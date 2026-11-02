@@ -75,6 +75,16 @@ func main() {
 		fatal("a %s instance is still running; kill it first (pkill -f %s)", smokeExecName, smokeExecName)
 	}
 
+	// The second failure mode that silently corrupts a run: measuring a build from before the
+	// change. Same reason as above — the scenarios would report on code nobody edited, and every
+	// line of them would look like a finding. See stale.go.
+	runExe := executableUnderTest(*appPath)
+	if moduleDir, ok := desktopModuleDir(runExe); ok {
+		if stale, behind := findStaleApp(runExe, moduleDir, staleSlack); behind {
+			fatal("%s", stale)
+		}
+	}
+
 	sandboxDir, err := os.MkdirTemp("", "tachi-desktop-smoke-")
 	if err != nil {
 		fatal("sandbox: %v", err)
