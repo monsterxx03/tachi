@@ -107,5 +107,35 @@
     smoke.check('取消之后回到那排动作', !!smoke.q('.cron-job .cron-danger'), '')
   }
 
+  // ── 弹层自己关得掉：这是和 MCP / agents / plan 三个面板同一条契约 ───────────────
+  // 「按到外面就关」是这三个面板一直有的自然行为，弹层少了它就会压在读者正在读的会话上，
+  // 而且屏幕上唯一的关闭方式是那个小小的 ×。Esc 属于同一条契约，但有一档在前面：正在问
+  // 「删除…?」的时候，Esc 收回的是那个问题（它在屏幕上），再按一次才关弹层。
+  const reopenConfirm = () => {
+    const again = smoke.q('.cron-job .cron-danger')
+    if (!again) return false
+    smoke.click(again)
+    return true
+  }
+  if (!reopenConfirm()) return smoke.fail('重新打开那一行的删除确认', '')
+  await smoke.sleep(60)
+  smoke.check('前提：确认条又在屏幕上', !!smoke.q('.cron-confirm-row'), smoke.text('.cron-confirm-row'))
+  smoke.key(document.body, 'Escape')
+  await smoke.sleep(80)
+  smoke.check('Esc 先收回那条确认（弹层还在）',
+    !smoke.q('.cron-confirm-row') && !!smoke.q('.cron-panel'),
+    '确认条=' + !!smoke.q('.cron-confirm-row') + ' · 弹层=' + !!smoke.q('.cron-panel'))
+  smoke.key(document.body, 'Escape')
+  await smoke.waitGone('.cron-panel', 'Esc 关掉弹层', 4000)
+  smoke.check('再按一次 Esc，弹层关掉', !smoke.q('.cron-panel'), '')
+
+  // 点外面关：派发的是 mousedown 而不是 click —— 面板听的是 mousedown（一次按下才算「点进去」），
+  // 而 smoke.click 只发 click 事件。
+  smoke.click('.cron-btn')
+  if (!(await smoke.waitFor('.cron-panel', '弹层重新打开', 8000))) return smoke.finish()
+  smoke.q('.chat-content').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  await smoke.waitGone('.cron-panel', '按到弹层外面就关掉', 4000)
+  smoke.check('按到外面就关（和其他三个面板一样）', !smoke.q('.cron-panel'), '')
+
   smoke.finish()
 })()

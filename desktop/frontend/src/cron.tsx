@@ -100,6 +100,32 @@ export function CronPanel({
   useEffect(() => {
     if (confirming && !jobs.some((j) => j.id === confirming)) setConfirming(null)
   }, [jobs, confirming])
+
+  // The dismissal contract every other popover in this status row already has (MCP / agents /
+  // plan): a press outside closes it. A popover with its own close button but no outside press
+  // reads as stuck — the reader clicks into the conversation and the box stays on top of it. The
+  // clock that owns open/close is excluded, or closing here would fight the reopen from its own
+  // click. Esc is part of the same contract, with one step in front of it: while a row is asking
+  // 「删除…?」, Escape takes the QUESTION back (it is what is on screen), and only the next one
+  // closes the panel.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || floating.isInside(t) || t.closest('.cron-btn')) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (confirming) { setConfirming(null); return }
+      onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose, confirming, floating.isInside])
   const active = jobs.filter(isActive).length
   const next = jobs
     .filter((j) => isActive(j) && j.nextRun)

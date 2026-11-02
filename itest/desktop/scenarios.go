@@ -3356,6 +3356,28 @@ permissions:
 			},
 		},
 		//
+		// session-palette-scroll: ⌘K 的列表比它的盒子长时，键盘走位（Ctrl+N / Ctrl+P）必须把高亮
+		// 一起滚进视野。这条走位是**我们**在改 value（受控），而 cmdk 自己那次 scrollIntoView 只挂在
+		// 它自己的 setState 上 —— 受控 value 被直接写进它的 store、绕过那一步，于是选择在走、屏幕
+		// 不动，Enter 打开的是读者没看见的那一行。
+		//
+		// fixture 是 30 个无项目会话（seedLoose）+ 冒烟会话：行数必须真的大于 48vh 的盒子，否则
+		// 这条用例什么也证明不了。几何断言全在 driver 里，见 drivers/session-palette-scroll.js；
+		// Go 这一半只钉「滚一下不惊动任何人」。
+		{
+			name: "session-palette-scroll",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-palette-scroll scenario's working directory\n",
+			},
+			seedLoose: 30,
+			after: func(c *checkCtx) {
+				c.check("滚动高亮没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("滚一下没有建过也没有删过会话（磁盘上仍是 31 个）", len(c.sessionMetas()) == 31,
+					fmt.Sprintf("%d 个", len(c.sessionMetas())))
+			},
+		},
+		//
 		// session-palette-busy: ⌘K 里「在跑 / 在等你」的会话排最前面 —— 打开这个浮层最常见的理由，
 		// 正是「刚才停下来等我的那次对话叫什么来着」：读者打不出那个标题，而「最近更新」也不会把
 		// 它顶上来（被 park 的那一轮自 park 之后就没再写过，中途跑完的对话反而更新）。

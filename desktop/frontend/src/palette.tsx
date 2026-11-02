@@ -89,6 +89,33 @@ function paletteKeys({ keys, value, setValue, onClose, onEnter, composingRef }: 
   }
 }
 
+// useKeepSelectionInView scrolls the highlighted row into the list's own box whenever `value` moves.
+//
+// cmdk does scroll — but only for the moves IT makes: its key handler and its item registration go
+// through `setState`, which schedules `scrollIntoView` for the selected item. A CONTROLLED `value`
+// (which is exactly what lets Ctrl+N / Ctrl+P walk the list) is written straight into its store by a
+// layout effect and never reaches that path. Without this, a list longer than its 48vh box keeps its
+// highlight below the fold: the reader presses Ctrl+N, the selection moves, and nothing on screen
+// moves with it.
+//
+// The row is found by cmdk's own `data-value`, never by `aria-selected`: the store publishes the aria
+// state one commit AFTER this prop arrives (store → useSyncExternalStore), so at this point the DOM
+// still marks the row the reader just left — scrolling by it would follow the wrong one. `data-value`
+// is written when the row mounts and does not move with the selection.
+function useKeepSelectionInView(listRef: React.RefObject<HTMLDivElement>, value: string) {
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list || !value) return
+    for (const el of list.querySelectorAll('[cmdk-item]')) {
+      if (el.getAttribute('data-value') === value) {
+        // `nearest`, the same block cmdk uses: a row already on screen must not move a pixel.
+        el.scrollIntoView({ block: 'nearest' })
+        return
+      }
+    }
+  }, [listRef, value])
+}
+
 // ProjectPalette is ⌘P: type to filter the desktop's projects and the 无项目 bucket, Enter to open
 // the chosen one. "Open" is the only decision it makes — switch to that row's most recent
 // conversation, or make one — and it makes it by delegating: `onPick` returns the refusal REASON (or
@@ -135,6 +162,8 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
   const [value, setValue] = useState(() => (rows[0] ? choiceKey(rows[0]) : ''))
   const [notice, setNotice] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useKeepSelectionInView(listRef, value)
 
   // …and keep it inside the list afterwards. cmdk picks the first row once, on mount, and does NOT
   // re-pick when the selected row filters away (with shouldFilter={false} it never re-runs its own
@@ -155,7 +184,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
 
   // A refusal belongs to the query that produced it: retype, and it goes away. The selection needs
   // no reset here — it follows the COMMITTED query (so an IME composition does not walk it), and
-  // cmdk both drops a selection whose row filtered out and keeps the selected row in view.
+  // cmdk drops a selection whose row filtered out (our own re-seat effect above backs that up).
   useEffect(() => { setNotice('') }, [query])
 
   // pick hands the choice to the parent and closes only when it says it acted. A refusal
@@ -215,7 +244,7 @@ export function ProjectPalette({ projects, sessions, onPick, onClose }: {
           value={value} onValueChange={setValue} onKeyDown={onKeyDown}>
           <input ref={inputRef} className="palette-input" {...inputProps}
             placeholder="搜索项目（名字或目录）" />
-          <Command.List className="palette-list" aria-label="项目">
+          <Command.List ref={listRef} className="palette-list" aria-label="项目">
             {rows.length === 0 ? (
               <div className="palette-empty">没有匹配的项目</div>
             ) : rows.map((choice) => {
@@ -292,6 +321,8 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
   // would otherwise leave the list with no highlight at all and Enter would do nothing).
   const [value, setValue] = useState(() => rows[0]?.id ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useKeepSelectionInView(listRef, value)
 
   // Layout, not passive — the array has to carry a highlight before the paint (see ProjectPalette).
   useLayoutEffect(() => {
@@ -303,9 +334,8 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
   // it would make typing filter nothing.
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  // The selection follows the COMMITTED query (so an IME composition does not walk it); cmdk
-  // re-selects the first surviving row when a filter drops the selected one, and scrolls it into
-  // view itself — the two effects this component used to carry by hand.
+  // The selection follows the COMMITTED query (so an IME composition does not walk it); cmdk drops
+  // the selection when its row filters out, and the re-seat effect above backs that up.
 
   // The tag says which PROJECT a conversation belongs to, and that it belongs to one AT ALL — the
   // one fact about a row that its title cannot say. Only a project that still EXISTS names a group
@@ -341,7 +371,7 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
           value={value} onValueChange={setValue} onKeyDown={onKeyDown}>
           <input ref={inputRef} className="palette-input" {...inputProps}
             placeholder="搜索会话标题" />
-          <Command.List className="palette-list" aria-label="会话">
+          <Command.List ref={listRef} className="palette-list" aria-label="会话">
             {rows.length === 0 ? (
               // The empty state names the OTHER search: a reader who typed a project (or a word from
               // the conversation rather than from its title) is one keystroke away from ⌘P, and
