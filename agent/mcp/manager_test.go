@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -551,5 +553,59 @@ func TestRecomputeAutoLoadDropsNamesThatLeftThePool(t *testing.T) {
 	}
 	if set.Contains("mcp__srv__beta") {
 		t.Error("the session's set still advertises a tool that no longer exists")
+	}
+}
+
+// A connect error has to name the server it came from. Reconnect is the path a user takes from the
+// desktop settings toggle and the TUI's MCP panel, and it used to hand back a bare "command is
+// required for stdio transport" — with a dozen servers configured, that says nothing about which
+// one is half-written.
+func TestReconnectErrorNamesTheServer(t *testing.T) {
+	m := NewManager(t.Context(), nil, nil)
+	tests := []struct {
+		name string
+		srv  config.MCPServerConfig
+		why  string
+	}{
+		{
+			name: "stdio without a command",
+			srv:  config.MCPServerConfig{Name: "postgres", Type: config.MCPTransportStdio},
+			why:  "command is required for stdio transport",
+		},
+		{
+			name: "http without a url",
+			srv:  config.MCPServerConfig{Name: "docs-api", Type: config.MCPTransportHTTP},
+			why:  "url is required for http transport",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := m.Reconnect(t.Context(), &tc.srv)
+			if err == nil {
+				t.Fatal("connect of a half-written server succeeded")
+			}
+			if !strings.Contains(err.Error(), "mcp server "+strconv.Quote(tc.srv.Name)) {
+				t.Errorf("error %q does not name the server %q", err, tc.srv.Name)
+			}
+			if !strings.Contains(err.Error(), tc.why) {
+				t.Errorf("error %q lost the reason (%q)", err, tc.why)
+			}
+		})
+	}
+}
+
+// And the name appears ONCE: ConnectAll already labelled its errors per server, so putting the name
+// on the way out of connect means that wrapper had to go — otherwise the reader gets
+// `mcp server "postgres": mcp server "postgres": …` and starts wondering about two servers.
+func TestConnectAllNamesTheServerOnce(t *testing.T) {
+	m := NewManager(t.Context(), nil, nil)
+	_, errs := m.ConnectAll(t.Context(), []config.MCPServerConfig{
+		{Name: "postgres", Type: config.MCPTransportStdio},
+	})
+	if len(errs) != 1 {
+		t.Fatalf("got %d errors, want 1: %v", len(errs), errs)
+	}
+	if got := strings.Count(errs[0].Error(), `"postgres"`); got != 1 {
+		t.Errorf("error %q names the server %d times, want once", errs[0], got)
 	}
 }

@@ -756,7 +756,9 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Errorf("mcp server %q: %w", srv.Name, err))
+				// No second "mcp server %q" prefix: connect already puts the name on it, and
+				// wrapping again reads as two servers.
+				errs = append(errs, err)
 				return
 			}
 			tools = append(tools, serverTools...)
@@ -779,7 +781,23 @@ func isAuthRequired(err error) bool {
 }
 
 // connect establishes a connection to a single MCP server and discovers its tools.
+//
+// The server's NAME is added here, once, rather than by each caller or each error site: Reconnect
+// (the desktop settings toggle, the TUI's panel, a profile switch) hands this error straight back
+// to the user, and a bare "command is required for stdio transport" names nobody — with a dozen
+// servers configured there is no way to tell which one is half-written. Wrapping here covers every
+// path below at once; the OAuth sentinel survives it because callers find it with errors.AsType,
+// which walks the %w chain.
 func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
+	tools, err := m.connectServer(ctx, srv)
+	if err != nil {
+		return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+	}
+	return tools, nil
+}
+
+// connectServer is connect without the server name on its errors (see there).
+func (m *Manager) connectServer(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
 	timeout := time.Duration(srv.Timeout)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

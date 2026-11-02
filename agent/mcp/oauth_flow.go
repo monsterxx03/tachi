@@ -386,7 +386,10 @@ func discoverAuthServerMetadataURL(ctx context.Context, srv *config.MCPServerCon
 	}
 
 	logger.FromContext(ctx).Info(ctx, "MCP: exhausted all authorization servers, no registration_endpoint found")
-	return "", fmt.Errorf("no authorization server with registration_endpoint found")
+	// The server's name, because this text reaches the user through three "DCR:" layers and none of
+	// them says which server's discovery walked all those URLs (see connect's comment on the same
+	// point — the rule is that a connect failure names its server).
+	return "", fmt.Errorf("mcp server %q: no authorization server with registration_endpoint found", srv.Name)
 }
 
 // fetchAuthorizationServers fetches a PRM document and returns its
