@@ -165,7 +165,12 @@ func TestManualFlowCompletesWithAPastedRedirectURL(t *testing.T) {
 			mu.Lock()
 			phases = append(phases, fmt.Sprintf("%s (authURL=%t, %q)", p.Phase, p.AuthURL != "", p.Message))
 			mu.Unlock()
-			if p.AuthURL != "" {
+			// 只收**当前这次尝试**的 URL：`waiting`（监听器起着）或 `manual`（没有监听器）。
+			// **不收 `browser`** —— 那条属于先试浏览器的那次尝试，它有自己的一套 state，
+			// 而落败之后手动路径会生成并**覆盖**持久化的 state：拿 browser 的 URL 去
+			// CompleteManualAuth，服务端读到的是 state mismatch（CI 上就是这么红的，
+			// 0.01s，快得不像超时）。
+			if p.AuthURL != "" && (p.Phase == mcp.OAuthPhaseWaiting || p.Phase == mcp.OAuthPhaseManual) {
 				select {
 				case authURL <- p.AuthURL:
 				default:
