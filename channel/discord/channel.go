@@ -241,6 +241,10 @@ Platform characteristics:
 // Tells the agent it's currently operating as a Discord bot, and appends the
 // per-channel override configured under `channel_prompts` (keyed by Discord
 // channel ID) when the conversation lives in that channel.
+//
+// The key is the channel the message was sent in, so a THREAD carries its own
+// ID and does not inherit the parent channel's prompt — a thread has a channel
+// ID of its own in Discord, and that is what ThreadID embeds.
 func (ch *DiscordChannel) SystemPromptSuffix(threadID string) string {
 	suffix := discordChannelSuffix
 	if prompt := ch.cfg.ChannelPrompts[channelIDFromThreadID(threadID)]; prompt != "" {
