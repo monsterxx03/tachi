@@ -213,10 +213,10 @@ func (ch *DiscordChannel) SetThinkingLevels(levels []string) {
 	ch.thinkingLevels = levels
 }
 
-// SystemPromptSuffix implements channel.SystemPromptSuffixer.
-// Tells the agent it's currently operating as a Discord bot.
-func (ch *DiscordChannel) SystemPromptSuffix() string {
-	return `## Current Channel: Discord
+// discordChannelSuffix is the platform section of the Discord system prompt:
+// what Discord is and what it can render. It does not depend on the
+// conversation, so it is a constant.
+const discordChannelSuffix = `## Current Channel: Discord
 
 You are currently operating as a Discord bot. Your responses are delivered
 through Discord guild channels, direct messages, and threads.
@@ -236,6 +236,21 @@ Platform characteristics:
 - AskUserQuestion renders as interactive buttons / select menus — use it
   to ask the user multiple-choice questions and get answers through UI
   clicks (questions without options fall back to a text reply)`
+
+// SystemPromptSuffix implements channel.SystemPromptSuffixer.
+// Tells the agent it's currently operating as a Discord bot, and appends the
+// per-channel override configured under `channel_prompts` (keyed by Discord
+// channel ID) when the conversation lives in that channel.
+//
+// The key is the channel the message was sent in, so a THREAD carries its own
+// ID and does not inherit the parent channel's prompt — a thread has a channel
+// ID of its own in Discord, and that is what ThreadID embeds.
+func (ch *DiscordChannel) SystemPromptSuffix(threadID string) string {
+	suffix := discordChannelSuffix
+	if prompt := ch.cfg.ChannelPrompts[channelIDFromThreadID(threadID)]; prompt != "" {
+		suffix += "\n\n## This Channel's Instructions\n\n" + prompt
+	}
+	return suffix
 }
 
 // Send implements channel.MessageSender for proactive message delivery

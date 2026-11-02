@@ -519,7 +519,8 @@ func readStdinLine(prompt string) (string, error) {
 // SystemPromptSuffix implements channel.SystemPromptSuffixer.
 // Tells the agent it's currently operating as a personal WeChat bot
 // connected via the iLink protocol, with platform-specific markdown limitations.
-func (ch *Channel) SystemPromptSuffix() string {
+// WeChat has no per-conversation prompt overrides, so threadID is unused.
+func (ch *Channel) SystemPromptSuffix(threadID string) string {
 	return `## Current Channel: WeChat (微信)
 
 You are currently operating as a personal WeChat bot, connected via the iLink

@@ -613,7 +613,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// Append channel-specific system prompt suffix (e.g., interactive
 	// channels telling the LLM to use AskUserQuestion proactively).
 	if s, ok := m.channelForThread(msg.ThreadID).(channel.SystemPromptSuffixer); ok {
-		if suffix := s.SystemPromptSuffix(); suffix != "" {
+		if suffix := s.SystemPromptSuffix(msg.ThreadID); suffix != "" {
 			systemPrompt += "\n" + suffix
 		}
 	}

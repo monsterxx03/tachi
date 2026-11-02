@@ -284,13 +284,8 @@ type statusEmbedView struct {
 func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threadID string, dm, directed, isThread bool) channel.IncomingMessage {
 	content := cleanContentForLLM(m.Content)
 
-	// TODO: Channel prompts should be injected into the system prompt via
-	// SystemPromptSuffixer, not prepended to user messages. However, the
-	// current SystemPromptSuffix() interface has no way to know which
-	// Discord channel the current message belongs to. Once the interface
-	// is extended to carry context (e.g., a context.Context parameter),
-	// wire ch.cfg.ChannelPrompts into SystemPromptSuffix() using
-	// channelIDFromThreadID(threadID) to look up the prompt.
+	// Per-channel prompt overrides (channel_prompts) reach the model through
+	// SystemPromptSuffix, not by being prepended to the user message.
 
 	senderName := resolveSenderName(m.Author)
 
