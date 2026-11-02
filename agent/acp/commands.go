@@ -215,7 +215,9 @@ func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
 	}
 	history, err := sess.agent.LoadSessionHistory()
 	if err != nil {
-		logger.FromContext(ctx).Error(ctx, "ACP: load session history failed", err)
+		// The session id, because one ACP process drives several: a log line saying only "failed"
+		// leaves the reader unable to tell which conversation lost its history.
+		logger.FromContext(ctx).Error(ctx, "ACP: load session history failed", err, "session", sess.ID)
 		return nil
 	}
 	return history
