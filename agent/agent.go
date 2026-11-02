@@ -28,8 +28,11 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// DefaultMaxTokens is the fallback max_tokens value for LLM API calls
-// when no explicit value is configured.
+// DefaultMaxTokens is the output budget this package falls back to when a run is started without
+// one: a subagent, a one-off run whose caller passed none, and an ambient channel turn. It is not
+// "the" default for LLM calls in general — a normal turn reads config.MaxTokens, and the ACP and
+// commit paths pass config.DefaultMaxTokens explicitly. Those two constants are one name apart and
+// far apart in value; that is issue #169, not a rule to copy from here.
 const DefaultMaxTokens = 4096
 
 type IterationBudget struct {
