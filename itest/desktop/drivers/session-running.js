@@ -52,7 +52,16 @@
 
   // Away, to the session that is NOT running.
   if (!smoke.click(rowByTitle(otherTitle))) return smoke.fail('在侧边栏找到第二个会话', otherTitle)
-  if (!(await smoke.waitFor(() => sessionId() === otherId, '切到没在跑的会话', 10000))) return smoke.finish()
+  if (!(await smoke.waitFor(() => sessionId() === otherId, '切到没在跑的会话', 10000))) {
+    // Two different failures read the same way here: the click landed on a row whose title matched
+    // but whose id is not `otherId` (a duplicate 「未命名会话」 row — the comment at the top says the
+    // title is not unique as soon as a second session exists), or the switch was accepted and never
+    // arrived. The ids on the rows tell them apart, and this check has failed in the wild once.
+    const same = smoke.qa('.session').filter((s) => smoke.text(s.querySelector('.session-title')) === otherTitle)
+    return smoke.fail('切到没在跑的会话（期望的 id 与它对应的行）',
+      `期望 ${otherId}「${otherTitle}」，现在 ${sessionId()}；同名行 ${same.length} 个` +
+      `（${same.map((r) => r.getAttribute('data-sid') || '(无 id)').join(', ') || '—'}）`)
+  }
   const away = await smoke.waitGone('.stop-btn', '没在跑的会话里停止按钮消失', 3000)
   smoke.check('切到没在跑的会话后停止按钮消失', !!away,
     '残留的按钮会一直转，而且点它没有任何效果（Stop 作用在屏幕上的会话）')
