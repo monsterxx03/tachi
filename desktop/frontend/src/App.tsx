@@ -1841,7 +1841,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       scrollToBottom(true)
     } else {
       const ns = await AgentService.NewSession('').catch(() => null)
-      if (ns) {
+      // `ns.id`, not just `ns`: NewSession answers with a ZERO-VALUE SessionInfo when it could not
+      // create one (no session manager, or sm.New failed — desktop/agent_session.go), and a zero
+      // struct is truthy. Treating that as success set the current session to "", opened it, and
+      // drew an empty conversation — a failure that looks like an app with no sessions at all.
+      if (ns && ns.id) {
         setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
         openSession(ns.id)
         clearUsage(); resetTps()
@@ -1947,7 +1951,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (arrived) focusGroup(sessionGroupKey(arrived, projects))
     // Always sync the backend's active session (cheap) so provider/thinking
     // selectors reflect this session even when its messages are already cached.
-    await (AgentService as any).ActivateSession?.(id).catch(() => {})
+    //
+    // The value is a STRING, not a thrown error: "ok", or what went wrong
+    // (ActivateSession reports through its return, see desktop/agent_session.go
+    // — prepareSession's failure becomes the string). Ignoring it is how a switch
+    // the backend REFUSED looked exactly like one that landed: the reader stays on
+    // the old conversation, and the only thing on screen that disagreed was the
+    // session list's highlight. Same shape as toggleSkipDream above.
+    const activated = await (AgentService as any).ActivateSession?.(id).catch((e: unknown) => String(e))
+    if (activated && activated !== 'ok') flashAction(activated)
     if (!msgCache[id]) {
       setLoading(true)
       const page: any = await (AgentService as any).LoadSession?.(id, PAGE_SIZE)
@@ -1963,7 +1975,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     refreshProvider()
     refreshMCP()
     refreshWorkspace(id)
-  }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
+  }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, flashAction])
 
   // forkFrom copies the conversation up to the start of `turn` into a NEW session and lands in it.
   //
@@ -2045,7 +2057,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // writes the snapshot and project_id, so nothing here needs to know about roots.
   const newChat = useCallback(async (projectID = '') => {
     const ns = await AgentService.NewSession(projectID).catch(() => null)
-    if (ns) {
+    // Same guard as loadAll: a zero-value SessionInfo means the backend could not create the
+    // session, and a zero struct is truthy — continuing with its empty id would switch to "",
+    // fail ActivateSession, and leave the reader on an empty conversation with no explanation.
+    if (ns && ns.id) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
       openSession(ns.id)
       clearUsage(); resetTps()
