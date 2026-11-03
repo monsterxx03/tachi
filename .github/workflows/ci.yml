@@ -60,6 +60,14 @@ jobs:
       - name: Race detector
         run: go test -race ./agent/... ./node/ ./session/ ./channel/... ./cron/ ./mobile/mockapi/ ./pkg/... ./tui/ ./web/
 
+      # The integration suites only compile with the tag, so the line above cannot see them —
+      # and they are where the concurrency is thickest: itest/tui drives the real Model and
+      # AIAgent in-process, itest/acp and itest/headless start real processes over real
+      # HTTP/WS. The local gate (scripts/autopilot/verify.sh) runs this layer; CI did not, so a
+      # race reachable only from itest/ was invisible on the one gate everybody trusts.
+      - name: Race detector (integration suites)
+        run: go test -race -tags=integration ./itest/tui/ ./itest/acp/ ./itest/headless/
+
   build:
     runs-on: ubuntu-latest
     steps:
