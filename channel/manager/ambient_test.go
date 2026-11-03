@@ -308,7 +308,7 @@ func TestChannelWhisperConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 5, cfg.Channel.Whisper.AmbientMaxIterations)
 	assert.Equal(t, 10, cfg.Channel.Whisper.AmbientMaxBuffer)
 	assert.Empty(t, cfg.Channel.Whisper.AmbientTools)
-	assert.Equal(t, 0, cfg.Channel.Whisper.AmbientMaxTokens) // zero; fallback is agent.DefaultMaxTokens in code
+	assert.Equal(t, 0, cfg.Channel.Whisper.AmbientMaxTokens) // zero; fallback is agent.FallbackMaxTokens in code
 }
 
 func TestChannelWhisperConfig_CustomValues(t *testing.T) {

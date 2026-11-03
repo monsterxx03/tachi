@@ -359,7 +359,7 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = DefaultMaxTokens
+			opts.MaxTokens = FallbackMaxTokens
 		}
 
 		// Fresh history (nil) — one-off runs never inherit messages.
@@ -458,7 +458,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		ctx = withToolView(ctx, buildToolView(params))
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = DefaultMaxTokens
+			opts.MaxTokens = FallbackMaxTokens
 		}
 
 		messages, reminderPieces := a.prepareTurnMessages(ctx, params.delegatorForRun(), history, userMessage, systemPrompt)

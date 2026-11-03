@@ -1114,7 +1114,7 @@ type ChannelWhisperConfig struct {
 	AmbientTools []string `yaml:"ambient_tools"`
 
 	// AmbientMaxTokens is the max_tokens budget for ambient turns.
-	// Default: falls back to agent.DefaultMaxTokens.
+	// Default: falls back to agent.FallbackMaxTokens.
 	AmbientMaxTokens int `yaml:"ambient_max_tokens"`
 }
 
