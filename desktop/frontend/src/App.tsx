@@ -2657,10 +2657,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // map body because the chain folding needs it twice: once for the conversation's newest link and
   // once per session it was compacted from (see sessionRows). `data-sid` is the row's own handle,
   // the only way to find one row among rows that carry the same classes (see the revealRow effect).
+  // Which row is "active" is read off `currentId`, NOT off a field the row carries. A row can
+  // arrive from a list read that predates the switch (`refreshProjects` triggers exactly that),
+  // and a field set by that writer says "nobody is active" while the transcript is already showing
+  // the new conversation — the reader then has no row for what they are looking at. One source of
+  // truth, and it is the same one `.app[data-session-id]` reads.
   const sessionRow = (s: SessionItem, compacted: boolean) => (
     /* Row (not a <button>): it hosts a rename <input> and a context
        menu, so it takes role/tabIndex + Enter/Space instead. */
-    <div key={s.id} className={`session ${s.active ? 'active' : ''}${runningSet.has(s.id) || unseen[s.id] ? ' is-unseen' : ''}${compacted ? ' is-compacted' : ''}`}
+    <div key={s.id} className={`session ${currentId === s.id ? 'active' : ''}${runningSet.has(s.id) || unseen[s.id] ? ' is-unseen' : ''}${compacted ? ' is-compacted' : ''}`}
       data-sid={s.id}
       onClick={() => clickSession(s.id)}
       role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
