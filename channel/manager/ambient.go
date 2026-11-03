@@ -266,7 +266,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 
 	maxTokens := whisperCfg.AmbientMaxTokens
 	if maxTokens <= 0 {
-		maxTokens = agent.DefaultMaxTokens
+		maxTokens = agent.FallbackMaxTokens
 	}
 
 	allowedTools := whisperCfg.AmbientTools
