@@ -2079,6 +2079,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     // fail ActivateSession, and leave the reader on an empty conversation with no explanation.
     if (ns && ns.id) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
+      // The row and its `active` land HERE — in the same render as `currentId`, not after the
+      // `ListSessions` read below. That read is an IPC round trip, and in between the sidebar can
+      // already hold rows from another writer (`refreshProjects` triggers one) with NONE of them
+      // marked active: the reader sees the new conversation's title in the transcript but no row
+      // highlighted for it, and clicking away is then a one-way trip. The smoke driver's
+      // `新建的会话就是当前会话（未命名）— 标题（空）` is exactly that window: a row exists,
+      // `.session.active` does not. The read below still replaces this provisional row with the
+      // backend's own record — it just cannot be what makes the session appear at all.
+      setSessions((prev) => [
+        { ...ns, active: true },
+        ...prev.filter((s) => s.id !== ns.id),
+      ].map((s) => ({ ...s, active: s.id === ns.id })))
       openSession(ns.id)
       clearUsage(); resetTps()
       // The new session is an empty conversation, so the caret belongs in the composer and
