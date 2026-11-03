@@ -28,16 +28,6 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// FallbackMaxTokens is the output budget this package falls back to when a run is started without
-// one: a subagent, a one-off run whose caller passed none, and an ambient channel turn. It is not
-// "the" default for LLM calls in general — a normal turn reads config.MaxTokens, whose own default
-// is config.DefaultMaxTokens (128000), and the ACP/commit paths pass that one explicitly.
-//
-// The name says what it is rather than what it is not: two different numbers answering to
-// "DefaultMaxTokens" was how a reader ended up thinking this one governed every call (#169).
-// Whether 4096 is the right number for these runs is a separate question from what to call it.
-const FallbackMaxTokens = 4096
-
 type IterationBudget struct {
 	Remaining int
 	Unlimited bool // When true, consume() always returns true.

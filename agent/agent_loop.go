@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -359,7 +360,7 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = FallbackMaxTokens
+			opts.MaxTokens = config.DefaultMaxTokens
 		}
 
 		// Fresh history (nil) — one-off runs never inherit messages.
@@ -458,7 +459,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		ctx = withToolView(ctx, buildToolView(params))
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = FallbackMaxTokens
+			opts.MaxTokens = config.DefaultMaxTokens
 		}
 
 		messages, reminderPieces := a.prepareTurnMessages(ctx, params.delegatorForRun(), history, userMessage, systemPrompt)

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	DefaultMaxTokens     = 128000
+	DefaultMaxTokens     = 64000
 	DefaultMaxIterations = 50
 	// DefaultJevTimeout is the bound ONE Jev HTTP attempt gets when the file omits
 	// jev.timeout. The number lives twice by necessity — a struct tag cannot be a
@@ -1114,7 +1114,7 @@ type ChannelWhisperConfig struct {
 	AmbientTools []string `yaml:"ambient_tools"`
 
 	// AmbientMaxTokens is the max_tokens budget for ambient turns.
-	// Default: falls back to agent.FallbackMaxTokens.
+	// Default: falls back to DefaultMaxTokens.
 	AmbientMaxTokens int `yaml:"ambient_max_tokens"`
 }
 
@@ -1350,7 +1350,7 @@ func (c PprofConfig) Addr() string {
 
 type Config struct {
 	Provider               string `yaml:"provider"`
-	MaxTokens              int    `yaml:"max_tokens" default:"128000"`
+	MaxTokens              int    `yaml:"max_tokens" default:"64000"`
 	MaxIterations          *int   `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
 	SessionCleanupMaxCount int    `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
 	// MCPServers is loaded from mcp.json (LoadMCPServers), not from config.yaml. Providers stay
