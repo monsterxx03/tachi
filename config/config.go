@@ -17,8 +17,16 @@ import (
 )
 
 const (
-	DefaultMaxTokens     = 64000
-	DefaultMaxIterations = 50
+	// DefaultMaxTokens is the output budget a main-loop turn gets when
+	// max_tokens is absent from the config. Sub-agents default lower — see
+	// DefaultSubagentMaxTokens.
+	DefaultMaxTokens = 128000
+	// DefaultSubagentMaxTokens is the output budget a sub-agent run gets when
+	// its options leave MaxTokens at zero. It is deliberately smaller than the
+	// main loop's: a sub-agent's report is read back by its parent, so a huge
+	// ceiling buys nothing and costs latency.
+	DefaultSubagentMaxTokens = 64000
+	DefaultMaxIterations     = 50
 	// DefaultJevTimeout is the bound ONE Jev HTTP attempt gets when the file omits
 	// jev.timeout. The number lives twice by necessity — a struct tag cannot be a
 	// constant, which is the same reason DefaultMaxTokens appears in the MaxTokens tag
@@ -1350,7 +1358,7 @@ func (c PprofConfig) Addr() string {
 
 type Config struct {
 	Provider               string `yaml:"provider"`
-	MaxTokens              int    `yaml:"max_tokens" default:"64000"`
+	MaxTokens              int    `yaml:"max_tokens" default:"128000"`
 	MaxIterations          *int   `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
 	SessionCleanupMaxCount int    `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
 	// MCPServers is loaded from mcp.json (LoadMCPServers), not from config.yaml. Providers stay

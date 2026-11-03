@@ -80,7 +80,7 @@ func (c *childAdapter) Run(
 		child := forked.Agent()
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = config.DefaultMaxTokens
+			opts.MaxTokens = config.DefaultSubagentMaxTokens
 		}
 
 		// Run via RunOneOffStream — we consume parent agent events and
