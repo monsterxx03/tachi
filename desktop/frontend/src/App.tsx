@@ -1947,7 +1947,15 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (arrived) focusGroup(sessionGroupKey(arrived, projects))
     // Always sync the backend's active session (cheap) so provider/thinking
     // selectors reflect this session even when its messages are already cached.
-    await (AgentService as any).ActivateSession?.(id).catch(() => {})
+    //
+    // The value is a STRING, not a thrown error: "ok", or what went wrong
+    // (ActivateSession reports through its return, see desktop/agent_session.go
+    // — prepareSession's failure becomes the string). Ignoring it is how a switch
+    // the backend REFUSED looked exactly like one that landed: the reader stays on
+    // the old conversation, and the only thing on screen that disagreed was the
+    // session list's highlight. Same shape as toggleSkipDream above.
+    const activated = await (AgentService as any).ActivateSession?.(id).catch((e: unknown) => String(e))
+    if (activated && activated !== 'ok') flashAction(activated)
     if (!msgCache[id]) {
       setLoading(true)
       const page: any = await (AgentService as any).LoadSession?.(id, PAGE_SIZE)
@@ -1963,7 +1971,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     refreshProvider()
     refreshMCP()
     refreshWorkspace(id)
-  }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
+  }, [sessions, projects, focusGroup, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, flashAction])
 
   // forkFrom copies the conversation up to the start of `turn` into a NEW session and lands in it.
   //
