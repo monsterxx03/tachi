@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
@@ -266,7 +267,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 
 	maxTokens := whisperCfg.AmbientMaxTokens
 	if maxTokens <= 0 {
-		maxTokens = agent.FallbackMaxTokens
+		maxTokens = config.DefaultMaxTokens
 	}
 
 	allowedTools := whisperCfg.AmbientTools
