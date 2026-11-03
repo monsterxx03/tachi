@@ -1188,9 +1188,15 @@ func toBool(v any) bool {
 // MemoryConfig holds configuration for the memory system.
 // Type selects the backend: "" (disabled) or "topic".
 type MemoryConfig struct {
-	Type              string        `yaml:"type"`                             // "topic" or "" (disabled)
-	KeywordProvider   string        `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
-	Timeout           time.Duration `yaml:"timeout" default:"10s"`            // context deadline for Store/Recall/Forget
+	Type            string        `yaml:"type"`                  // "topic" or "" (disabled)
+	KeywordProvider string        `yaml:"keyword_provider"`      // optional: provider name for keyword extraction (defaults to main provider)
+	Timeout         time.Duration `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
+	// KeywordTimeout is the budget for the one LLM call per turn that turns the
+	// user's question into search terms. It runs BEFORE the message is sent, so
+	// it must both fit inside Timeout and be long enough for the model to answer
+	// — a budget shorter than the model's own latency costs the full budget
+	// every turn and still yields nothing.
+	KeywordTimeout    time.Duration `yaml:"keyword_timeout" default:"8s"`
 	RecallLimit       int           `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
 	DecayHalfLifeDays int           `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
 	BaseDir           string        `yaml:"-"`                                // runtime-only: state base dir, injected by the agent (not serialized)

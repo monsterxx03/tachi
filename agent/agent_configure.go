@@ -544,7 +544,7 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 	// current session. The row's provider name comes from the provider
 	// itself (BuildProvider-resolved).
 	sp := wrapForUsage(resolved.Provider, a.usageRecorder(), cfg)
-	ext := NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.Config.Logger)
+	ext := NewLLMKeywordExtractor(sp, resolved.Model, keywordExtractionBudget(cfg.Memory), a.Config.Logger)
 	ext.SetSessionIDResolver(a.sessionID)
 	tb.SetKeywordExtractor(ext)
 	a.Config.Logger.Info(context.Background(), "Memory: keyword extractor re-wired with dedicated provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)

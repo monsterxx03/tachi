@@ -147,7 +147,7 @@ func (a *AIAgent) initMemoryBackend(ctx context.Context, memCfg config.MemoryCon
 	// Wire keyword extractor for topic backend. Requires an LLM provider — skip when nil
 	// (e.g. `tachi tools`).
 	if tb, ok := backend.(*memory.TopicBackend); ok && a.Provider() != nil {
-		ext := NewLLMKeywordExtractor(a.Provider(), a.Model(), memCfg.Timeout, a.Config.Logger)
+		ext := NewLLMKeywordExtractor(a.Provider(), a.Model(), keywordExtractionBudget(memCfg), a.Config.Logger)
 		ext.SetSessionIDResolver(a.sessionID)
 		tb.SetKeywordExtractor(ext)
 		a.Config.Logger.Info(ctx, "Memory: keyword extractor wired for topic backend")

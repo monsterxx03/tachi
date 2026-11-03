@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -30,19 +31,41 @@ type LLMKeywordExtractor struct {
 	sessionID func() string
 }
 
-// maxKeywordExtractionTimeout bounds the extraction call. The extractor runs on
-// the critical path: recall happens BEFORE the user's message is sent, so a
-// slow provider here delays the reply itself. A value at or above this cap
-// (memory.timeout defaults to 10s) used to spend the whole recall budget before
-// a single grep ran — the log had whole recalls abandoned at the deadline.
-const maxKeywordExtractionTimeout = 3 * time.Second
+// maxKeywordExtractionTimeout bounds the extraction call even when memory.keyword_timeout
+// asks for more: extraction is best-effort, and a provider that takes 15 seconds to name five
+// keywords has already cost the user more than the keywords are worth.
+const maxKeywordExtractionTimeout = 15 * time.Second
+
+// defaultKeywordExtractionTimeout is the budget when memory.keyword_timeout is unset. It has
+// to clear the model's own latency, not just the network's: the chat model answers this prompt
+// in several seconds, so a shorter cap returns nothing while the turn has already paid the wait.
+const defaultKeywordExtractionTimeout = 8 * time.Second
+
+// keywordExtractionBudget resolves the extractor's per-call budget from memory.*.
+//
+// Two bounds meet here: memory.keyword_timeout, and memory.timeout — the deadline Recall
+// itself runs under, since extraction happens inside it. A budget above the recall deadline
+// can only ever be cut short by the parent context, and the log would then blame the keyword
+// call for a timeout the user set for something else.
+func keywordExtractionBudget(mem config.MemoryConfig) time.Duration {
+	budget := mem.KeywordTimeout
+	if budget <= 0 {
+		budget = defaultKeywordExtractionTimeout
+	}
+	if mem.Timeout > 0 && budget > mem.Timeout {
+		budget = mem.Timeout
+	}
+	return budget
+}
 
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
-// timeout is CLAMPED to maxKeywordExtractionTimeout (and defaults to it when
-// zero): extraction is best-effort, and the terms a slow call would have
-// produced are worth less than the seconds it costs.
+// timeout is the per-call budget; zero means defaultKeywordExtractionTimeout,
+// and anything above maxKeywordExtractionTimeout is clamped to it.
 func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Duration, l *logger.Logger) *LLMKeywordExtractor {
-	if timeout <= 0 || timeout > maxKeywordExtractionTimeout {
+	if timeout <= 0 {
+		timeout = defaultKeywordExtractionTimeout
+	}
+	if timeout > maxKeywordExtractionTimeout {
 		timeout = maxKeywordExtractionTimeout
 	}
 	return &LLMKeywordExtractor{
