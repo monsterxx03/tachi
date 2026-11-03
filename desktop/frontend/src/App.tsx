@@ -2074,13 +2074,20 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       refreshWorkspace(ns.id)
       void refreshProjects()
       const list = (await AgentService.ListSessions().catch(() => null)) || []
-      setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
+      // The backend just said this session exists (`ns.id` is set), so the sidebar has to show it.
+      // A read that came back WITHOUT it would leave the current conversation with no row at all:
+      // nothing on screen is marked active, and switching away is a one-way trip the reader cannot
+      // undo by clicking (the smoke driver's `session-running` red is exactly this — a fresh
+      // session's `data-session-id` did not match any row's `data-sid`). The same read already
+      // carries this fallback for the GROUP below; this is the row half of it.
+      const rows = list.some((s) => s.id === ns.id) ? list : [{ ...ns, active: true }, ...list]
+      setSessions(rows.map((s) => ({ ...s, active: s.id === ns.id })))
       // The group the new session ACTUALLY landed in opens, asked of the record just read back: a
       // project that cannot drive a session produces a 无项目 one (the backend binds nothing), and
       // focusing the requested project's group would fold the only group holding a row — the one
       // the ＋ just made. The requested id is the fallback for a list read that came back without
       // it, because the group it names is where the session was meant to be.
-      const created = list.find((s) => s.id === ns.id)
+      const created = rows.find((s) => s.id === ns.id)
       focusGroup(created ? sessionGroupKey(created, projects) : projectID || LOOSE_GROUP_KEY)
       refreshProvider()
     }
