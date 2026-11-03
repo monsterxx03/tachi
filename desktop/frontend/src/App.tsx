@@ -488,6 +488,11 @@ function App() {
   // The scroll position the app last accounted for: the one its own pins wrote, or the one the
   // last scroll event reported. handleScroll reads the reader's movement against it (see there).
   const lastTopRef = useRef(0)
+  // The content height the last scroll event saw. A transcript that GREW while the viewport stayed
+  // put is how the browser's own scroll anchoring looks: scrollTop moves UP (the anchoring keeps
+  // the visible content where it was) and scrollHeight moves with it. handleScroll needs both
+  // numbers to tell that from a reader's hand (see there).
+  const lastHeightRef = useRef(0)
   const [showJump, setShowJump] = useState(false)
 
   // pinBottom puts the newest message in view — and RECORDS where that landed, so the scroll event
@@ -497,6 +502,7 @@ function App() {
     if (!el) return
     el.scrollTop = el.scrollHeight
     lastTopRef.current = el.scrollTop
+    lastHeightRef.current = el.scrollHeight
   }, [])
 
   const scrollToBottom = useCallback((force = false) => {
@@ -980,8 +986,19 @@ function App() {
     // OFF and the view rested short of the newest message, with 回到最新消息 showing — and it was
     // intermittent, because it needs that growth to land before the queued event is delivered.
     // pinBottom records where each pin lands, so a scroll event it caused reads as no movement.
+    //
+    // Two things move scrollTop UP without the reader: a pin's own assignment (recorded above) and
+    // the browser's scroll anchoring — when content arrives ABOVE the viewport (a mermaid diagram,
+    // an image), the browser lowers scrollTop to keep what is visible in place, and lower is exactly
+    // what "the reader moved up" looks like. That one is told apart by scrollHeight: anchoring only
+    // happens because the content GREW. Without this, one diagram painting after a session switch
+    // switched following OFF for good — the view stayed 1093px short of the newest message with
+    // 回到最新消息 showing, and nothing the reader did had caused it.
     const top = el.scrollTop
-    const movedUp = top < lastTopRef.current - 1
+    const height = el.scrollHeight
+    const grew = height > lastHeightRef.current + 1
+    lastHeightRef.current = height
+    const movedUp = top < lastTopRef.current - 1 && !grew
     lastTopRef.current = top
     if (followBottomRef.current) {
       if (movedUp) {
