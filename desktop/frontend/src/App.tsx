@@ -1841,7 +1841,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       scrollToBottom(true)
     } else {
       const ns = await AgentService.NewSession('').catch(() => null)
-      if (ns) {
+      // `ns.id`, not just `ns`: NewSession answers with a ZERO-VALUE SessionInfo when it could not
+      // create one (no session manager, or sm.New failed — desktop/agent_session.go), and a zero
+      // struct is truthy. Treating that as success set the current session to "", opened it, and
+      // drew an empty conversation — a failure that looks like an app with no sessions at all.
+      if (ns && ns.id) {
         setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
         openSession(ns.id)
         clearUsage(); resetTps()
@@ -2053,7 +2057,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // writes the snapshot and project_id, so nothing here needs to know about roots.
   const newChat = useCallback(async (projectID = '') => {
     const ns = await AgentService.NewSession(projectID).catch(() => null)
-    if (ns) {
+    // Same guard as loadAll: a zero-value SessionInfo means the backend could not create the
+    // session, and a zero struct is truthy — continuing with its empty id would switch to "",
+    // fail ActivateSession, and leave the reader on an empty conversation with no explanation.
+    if (ns && ns.id) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
       openSession(ns.id)
       clearUsage(); resetTps()
