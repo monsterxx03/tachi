@@ -3,7 +3,6 @@ package discord
 import (
 	"fmt"
 	"os"
-	"time"
 )
 
 // DiscordConfig holds all configuration for the Discord channel.
@@ -31,24 +30,15 @@ type DiscordConfig struct {
 	IgnoredChannels []string `yaml:"ignored_channels"` // Never reply in these channels
 	AllowedChannels []string `yaml:"allowed_channels"` // Only reply in these channels (empty = all allowed)
 
-	// Thread
-	AutoThread       bool     `yaml:"auto_thread"`        // Auto-create thread on @mention (default: false)
-	NoThreadChannels []string `yaml:"no_thread_channels"` // Channels that skip auto-thread
-
 	// Attachments
+	//
+	// Any file type is accepted, up to MaxAttachmentBytes. There is no
+	// allow-list, so there is no `allow_any_attachment` knob: that key existed
+	// only as a field in this struct and was never read (see #173).
 	MaxAttachmentBytes int64 `yaml:"max_attachment_bytes"` // Max attachment size (default: 32MiB)
-	AllowAnyAttachment bool  `yaml:"allow_any_attachment"` // Allow arbitrary file types (default: false)
 
 	// Feedback
-	Reactions bool `yaml:"reactions"` // Enable 👀✅❌ reactions (default: true)
-	Typing    bool `yaml:"typing"`    // Enable typing indicator (default: true)
-
-	// Session
-	GroupSessionsPerUser bool `yaml:"group_sessions_per_user"` // Per-user session isolation (default: false)
-
-	// History backfill (Phase 2)
-	HistoryBackfill      bool `yaml:"history_backfill"`       // Enable context backfill (default: true)
-	HistoryBackfillLimit int  `yaml:"history_backfill_limit"` // Backfill scan limit (default: 50)
+	Typing bool `yaml:"typing"` // Enable typing indicator (default: true)
 
 	// Per-channel system prompt overrides
 	ChannelPrompts map[string]string `yaml:"channel_prompts"`
@@ -64,16 +54,8 @@ type DiscordConfig struct {
 	// link previews for URLs in the bot's messages.
 	SuppressEmbeds bool `yaml:"suppress_embeds"`
 
-	// Embed
-	EmbedEnabled bool `yaml:"embed_enabled"` // Enable Embed message sending (Phase 2+, default: false)
-
 	// Proxy
 	Proxy string `yaml:"proxy"` // HTTP/HTTPS/SOCKS5 proxy URL (e.g. "http://127.0.0.1:7890")
-
-	// Reconnect
-	ReconnectMaxAttempts int           `yaml:"reconnect_max_attempts"` // Max reconnect attempts (0 = infinite)
-	ReconnectBackoff     time.Duration `yaml:"reconnect_backoff"`      // Initial backoff (default: 1s)
-	ReconnectMaxBackoff  time.Duration `yaml:"reconnect_max_backoff"`  // Max backoff (default: 30s)
 }
 
 // setDefaults populates unset fields with their default values.
@@ -81,15 +63,6 @@ type DiscordConfig struct {
 func (c *DiscordConfig) setDefaults() {
 	if c.MaxAttachmentBytes == 0 {
 		c.MaxAttachmentBytes = 32 * 1024 * 1024 // 32 MiB
-	}
-	if c.ReconnectBackoff == 0 {
-		c.ReconnectBackoff = 1 * time.Second
-	}
-	if c.ReconnectMaxBackoff == 0 {
-		c.ReconnectMaxBackoff = 30 * time.Second
-	}
-	if c.HistoryBackfillLimit == 0 {
-		c.HistoryBackfillLimit = 50
 	}
 
 	// Bools and zero-value fields: safe to set unconditionally since yaml
@@ -108,16 +81,9 @@ func newDefaultConfig() DiscordConfig {
 		RequireMention:       true,
 		ThreadRequireMention: false,
 		IgnoreOtherMentions:  true,
-		AutoThread:           false,
 		MaxAttachmentBytes:   32 * 1024 * 1024,
-		Reactions:            true,
 		Typing:               true,
-		GroupSessionsPerUser: false,
-		HistoryBackfill:      true,
-		HistoryBackfillLimit: 50,
 		SuppressEmbeds:       true,
-		ReconnectBackoff:     1 * time.Second,
-		ReconnectMaxBackoff:  30 * time.Second,
 	}
 }
 

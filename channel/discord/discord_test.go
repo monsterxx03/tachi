@@ -663,12 +663,6 @@ func TestNewDefaultConfig(t *testing.T) {
 	if cfg.MaxAttachmentBytes != 32*1024*1024 {
 		t.Error("default MaxAttachmentBytes should be 32MiB")
 	}
-	if cfg.HistoryBackfillLimit != 50 {
-		t.Error("default HistoryBackfillLimit should be 50")
-	}
-	if !cfg.Reactions {
-		t.Error("default Reactions should be true")
-	}
 }
 
 func TestSetDefaults(t *testing.T) {
@@ -677,12 +671,6 @@ func TestSetDefaults(t *testing.T) {
 
 	if cfg.MaxAttachmentBytes != 32*1024*1024 {
 		t.Error("setDefaults should set MaxAttachmentBytes")
-	}
-	if cfg.ReconnectBackoff != 1*time.Second {
-		t.Error("setDefaults should set ReconnectBackoff")
-	}
-	if cfg.ReconnectMaxBackoff != 30*time.Second {
-		t.Error("setDefaults should set ReconnectMaxBackoff")
 	}
 }
 
