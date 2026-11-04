@@ -994,6 +994,29 @@ export function useComposer(deps: ComposerDeps) {
     composerRef.current?.focus()
   }, [closeAt, insertAtCaret])
 
+  // insertDraft puts a whole message into the box instead of sending it — the ask panel's 发送, and
+  // the same reason the microphone's text lands here (see the voice input effect): a message composed
+  // somewhere else is worth one look before it becomes a turn, and a sent turn cannot be taken back.
+  //
+  // It APPENDS rather than riding the caret (unlike insertRef): this is a whole block with its own
+  // 「文件：…」 head and its own question, and a reader who had left the caret in the middle of a
+  // sentence would get it spliced in there. A blank line separates it from what was already typed —
+  // run together, the two read as one message. Focus and the caret land after it.
+  const insertDraft = useCallback((text: string) => {
+    const body = text.trim()
+    if (!body) return
+    closeAt()
+    const before = inputRef.current.trimEnd()
+    const value = before ? before + '\n\n' + body : body
+    setInput(value)
+    requestAnimationFrame(() => {
+      const node = composerRef.current
+      if (!node) return
+      node.focus()
+      node.setSelectionRange(value.length, value.length)
+    })
+  }, [closeAt, setInput])
+
   // The "/" palette is DERIVED from the input rather than stored, so it can never disagree
   // with what would actually be dispatched: it is open while the input is a bare command name
   // still being typed (a space means arguments follow, an exact name means it is complete),
@@ -1017,7 +1040,7 @@ export function useComposer(deps: ComposerDeps) {
     // bash permission (a policy `ask` rule parked the turn on the user)
     perm: perms[currentId] || null, answerPerm: answerPermCurrent, clearPerm,
     // sending
-    send, submit, answerSteer, noticeCommandResult,
+    send, submit, insertDraft, answerSteer, noticeCommandResult,
     // pasted images
     onPaste, pasteError,
     // voice input (the microphone button; the backend owns the state, this reads it)

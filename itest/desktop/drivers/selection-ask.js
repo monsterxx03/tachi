@@ -367,16 +367,27 @@
     !!qRow(LINE_A) && !!qRow(LINE_B) && !!qRow(LINE_C) && !qRow(LINE_D),
     smoke.allText('.ask-q-text').join(' | '))
 
-  // 一次发送：整队列拼成一条消息，然后人回到会话（回答在那儿）。
+  // 一次发送：整队列拼成一条消息，但**落进输入框**（不是直接发出去）—— 一起攒的几段值得先看
+  // 一眼、顺一遍再发，而发出去撤不回来。人回到会话（那几行就在那儿等着），消息还在框里。
+  const usersBeforeDraft = users()
   smoke.click('.ask-q-send')
   const back = await smoke.waitFor(() => (!smoke.q('.file-view') ? true : null), '发送之后回到会话', 5000)
-  smoke.check('发送之后自动回到会话（回答在那儿）', !!back, '')
+  smoke.check('发送之后自动回到会话（那几句话在那儿）', !!back, '')
   smoke.check('发送之后队列空了', !smoke.q('.ask-queue'), '')
+  smoke.check('「发送」没有替读的人按下那一回车', users() === usersBeforeDraft, users() + ' 条用户消息')
+  const drafted = await smoke.waitFor(() => {
+    const box = smoke.q('.composer-input')
+    return box && box.value.indexOf(LINE_A) >= 0 && box.value.indexOf(LINE_B) >= 0 ? box.value : null
+  }, '整队列落在输入框里', 5000)
+  smoke.check('「发送」把整队列放进输入框（不是直接发出去）', !!drafted, drafted ? '' : '(输入框里没有)')
+  // 读的人看过、改过，自己按发送 —— 从这里开始才是会话里的一条用户消息。
+  smoke.click('.send-btn')
   const both = await smoke.waitFor(
     () => smoke.qa('.msg-user .msg-content').find(
       (m) => smoke.text(m).indexOf(LINE_A) >= 0 && smoke.text(m).indexOf(LINE_B) >= 0) || null,
     '几段在同一条消息里', 5000)
   smoke.check('几段拼成了同一条消息（一次提问）', !!both, both ? smoke.text(both) : '(没有这样的消息)')
+  smoke.check('发出去之后输入框空了', !smoke.q('.composer-input').value, JSON.stringify(smoke.q('.composer-input').value))
   const batch = both ? smoke.text(both) : ''
   smoke.check('同一份文件的来源只写了一次', countOf(batch, '文件：') === 1, countOf(batch, '文件：') + ' 次')
   smoke.check('同一句默认问题只写了一次', countOf(batch, DEFAULT_ASK) === 1, countOf(batch, DEFAULT_ASK) + ' 次')
@@ -404,7 +415,15 @@
     smoke.qa('.ask-q-askgroup').length === 1 && smoke.qa('.ask-q-ask').length === 1,
     smoke.qa('.ask-q-askgroup').length + ' 个问题组')
 
+  // 同一条路，宿主三：整队列先落在输入框里，读的人再按发送。
   smoke.click('.ask-q-send')
+  const chatDrafted = await smoke.waitFor(() => {
+    const box = smoke.q('.composer-input')
+    return box && box.value.indexOf(CHAT_LINE1) >= 0 && box.value.indexOf(CHAT_LINE2) >= 0 ? box.value : null
+  }, '会话那两段落在输入框里', 5000)
+  smoke.check('「发送」把对话里选的那两段也放进输入框', !!chatDrafted, chatDrafted ? '' : '(输入框里没有)')
+  smoke.check('发送之后队列空了', !smoke.q('.ask-queue'), '')
+  smoke.click('.send-btn')
   const chatBatch = await smoke.waitFor(
     () => smoke.qa('.msg-user .msg-content').find(
       (m) => smoke.text(m).indexOf(CHAT_LINE1) >= 0 && smoke.text(m).indexOf(CHAT_LINE2) >= 0 &&
@@ -413,7 +432,6 @@
   smoke.check('会话全文里选中的两段一起问了出去', !!chatBatch, chatBatch ? smoke.text(chatBatch) : '(没有这条消息)')
   const chatMsg = chatBatch ? smoke.text(chatBatch) : ''
   smoke.check('那两段共用一个默认问题', countOf(chatMsg, DEFAULT_ASK) === 1, countOf(chatMsg, DEFAULT_ASK) + ' 次')
-  smoke.check('发送之后队列空了', !smoke.q('.ask-queue'), '')
   if (!(await smoke.waitText('.msg-assistant', '两句一起问的回答', 20000))) return smoke.finish()
 
   smoke.finish()

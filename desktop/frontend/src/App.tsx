@@ -1114,15 +1114,20 @@ function App() {
   }, [tree])
 
   // 选中一段文字就能「问当前会话」：菜单浮出来的地方有两个（文件视图、附件卡片展开的预览，
-  // 见 selask.tsx），而把那条消息送进会话的只有这里 —— 所以「发给谁」由 App 说了算（屏幕上这个
-  // 会话）。发完把人带回会话：回答流在会话全文里，站在文件上看不见它。
+  // 见 selask.tsx），而把那条消息交给会话的只有这里 —— 所以「发给谁」由 App 说了算（屏幕上这个
+  // 会话）。
   //
-  // 走 composer.submit 而不是直连绑定：一轮还在跑时它会排队等下一个插话点，而 sendMessage 会
-  // 被当场拒掉 —— 跟评审面板的「发给 agent」是同一条路、同一个理由。
-  useEffect(() => onAskSelection((text) => {
-    composer.submit(text)
+  // 两种落地方式（`AskDelivery`）：Shift+回车是当场发，走 composer.submit（不是直连绑定：一轮还在
+  // 跑时它会排队等下一个插话点，而 sendMessage 会被当场拒掉 —— 跟评审面板的「发给 agent」是同一条
+  // 路、同一个理由）；面板上的「发送」则是**放进输入框**（composer.insertDraft），由读的人看一眼、
+  // 改完自己发 —— 一起攒的几段拼出来常常值得顺一遍，而发出去就撤不回来了。
+  //
+  // 两种都把人带回会话：回答流（或那几句话）在会话全文里，站在文件上看不见它。
+  useEffect(() => onAskSelection((text, how) => {
+    if (how === 'draft') composer.insertDraft(text)
+    else composer.submit(text)
     setView('chat')
-  }), [composer.submit])
+  }), [composer.submit, composer.insertDraft])
 
   // 插入 @ 引用: the tree hands over a path, the backend spells the reference (atfile.RefForPath,
   // through the same binding a dropped file uses), and the composer puts it at the caret. Nothing here

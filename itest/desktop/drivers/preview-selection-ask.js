@@ -101,13 +101,17 @@
   smoke.check('面板上写着它来自哪个文件', smoke.text(panel).indexOf('PREVIEW.md') >= 0,
     smoke.text(panel).slice(0, 160))
 
-  // 发送：整队列拼成一条消息交给会话。浮层开着不妨碍这件事 —— 它走的是 composer.submit，
-  // 而这条消息的回答会落在会话全文里（浮层后面），所以这里只断言"发出去"，回答由 Go 那一半
-  // 在 LLM 边界上验。
+  // 发送：整队列拼成一条消息，**放进输入框**（不是直接发出去）—— 浮层开着不妨碍这件事，因为
+  // 输入框就在它后面、人马上会回去。一起攒的几段值得先看一眼再发，发出去撤不回来。
   const send = smoke.qa('.ask-queue button').find((b) => smoke.text(b) === '发送')
   if (!send) return smoke.fail('队列面板上有「发送」', smoke.allText('.ask-queue button').join(' / '))
   smoke.click(send)
   await smoke.waitFor(() => (!smoke.q('.ask-queue') ? true : null), '发送之后队列清空', 4000)
+  const drafted = await smoke.waitFor(() => {
+    const box = smoke.q('.composer-input')
+    return box && box.value.indexOf(LINE.slice(0, 12)) >= 0 ? box.value : null
+  }, '整队列落在输入框里', 4000)
+  smoke.check('「发送」把这一段放进输入框（不是直接发出去）', !!drafted, drafted ? '' : '(输入框里没有)')
 
   smoke.finish()
 })()
