@@ -15,6 +15,7 @@
 ;(async () => {
   if (!(await smoke.waitForSession())) return smoke.finish()
   const LINE = '这是一份可以全屏打开、然后选中提问的文档。'
+  const ASK = '这份文档是做什么的？'
 
   // selectIn 只选中那一句文字本身（不是它所在的那个块）—— 读者拖选一段话时拿到的是这段字，
   // 不是整节包含下一段的文本。range.selectNodeContents(el) 会连标题、连下一段一起带走，
@@ -88,7 +89,7 @@
   if (!smoke.click(askBtn)) return smoke.finish()
   const input = await smoke.waitFor('.sel-ask-input', '提问框出现', 3000)
   if (!input) return smoke.finish()
-  smoke.type('.sel-ask-input', '这份文档是做什么的？')
+  smoke.type('.sel-ask-input', ASK)
   // 回车 = 加入待提问（不是发出去），于是菜单收起来、队列面板浮出来。
   smoke.key('.sel-ask-input', 'Enter')
   const panel = await smoke.waitFor('.ask-queue', '待提问面板出现', 4000)
@@ -112,6 +113,20 @@
     return box && box.value.indexOf(LINE.slice(0, 12)) >= 0 ? box.value : null
   }, '整队列落在输入框里', 4000)
   smoke.check('「发送」把这一段放进输入框（不是直接发出去）', !!drafted, drafted ? '' : '(输入框里没有)')
+  smoke.check('浮层还开着（那一下只把话搬进输入框，没把浮层关掉）', !!smoke.q('.viewer-overlay'), '')
+
+  // 关掉浮层（Esc 归它 —— 菜单早就收起来了），然后由读的人自己按发送：那条消息这时才真正进
+  // 会话，Go 那一半在 LLM 边界上断言的就是它的正文。
+  // 两次 Esc：那一句话刚刚落进输入框、焦点还在它里面，而浮层里的字段拥有第一次 Esc（只把它
+  // blur 掉，见 viewer.tsx），第二次才轮到浮层。
+  esc()
+  esc()
+  if (!(await smoke.waitFor(() => (!smoke.q('.viewer-overlay') ? true : null), 'Esc 关掉浮层', 4000))) return smoke.finish()
+  smoke.click('.send-btn')
+  const sent = await smoke.waitFor(
+    () => smoke.qa('.msg-user .msg-content').find((m) => smoke.text(m).indexOf(ASK) >= 0) || null,
+    '读的人按发送之后那条进了会话', 5000)
+  smoke.check('按发送之后那条进了会话', !!sent, sent ? '' : '(没有这条消息)')
 
   smoke.finish()
 })()

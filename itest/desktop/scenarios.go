@@ -2285,8 +2285,8 @@ func scenarios() []scenario {
 			steps: []mockllm.Step{
 				{Reply: sendFileStream("PREVIEW.md", "call_preview")},
 				{Reply: textStream("已经发给你了。", 700)},
-				// The ask itself goes out through the composer, so the driver's 发送 button ends
-				// this turn.
+				// The ask lands in the composer first (the panel's 发送 only drafts it); the
+				// driver then presses send itself, and that ends this turn.
 				{Reply: textStream("这份文档是 smoke 场景的样例。", 700)},
 			},
 			after: func(c *checkCtx) {
