@@ -7,7 +7,9 @@
 //
 // 提问不是一条一条发出去的，而是先收进一个**待提问队列**：读一份文档时往往是「这段 + 那段 +
 // 那儿」一起问，分三条消息发出去，模型会当成三个不相干的问题分别回答。所以回车是把这一项收进
-// 队列，队列上的「发送」才把整队列拼成一条消息（`askQueueMessage`）发进会话。
+// 队列，队列上的「发送」才把整队列拼成一条消息（`askQueueMessage`）—— 而这条消息**落在输入框
+// 里**，读的人看一眼、顺一遍，自己按回车才发出去（一起攒的东西值得这一眼，而发出去撤不回来）。
+// 只有 Shift+回车是当场发。
 //
 // 五条规矩住在这里，别处不复述：
 //
@@ -20,8 +22,8 @@
 //     自己的选区：点「提问」之后焦点进了输入框，浏览器的选区就没了，而读者问的正是屏幕上那几行。
 //   - 位置。选区矩形是**视口**坐标，而宿主自己是个滚动容器，所以菜单 portal 到 body 上、用 fixed
 //     定位，并在宿主一滚动时就收起来 —— 那一刻这个位置已经指到别处去了。
-//   - 发出的那条消息由 `askQueueMessage` 一处组装，而真正把它送进会话的是 App 注册的那个槽：
-//     这个文件既不认识「当前会话」是谁，也不该认识。
+//   - 发出的那条消息由 `askQueueMessage` 一处组装，而把它交给会话的是 App 注册的那个槽（怎么交
+//     由 `AskDelivery` 决定：当场发，还是放进输入框）：这个文件既不认识「当前会话」是谁，也不该认识。
 //
 // 队列的生命周期是「承载它的界面」的生命周期：文件视图一关、卡片预览一收，队列跟着清掉
 // （不留确认 —— 那个上下文已经离开了）。
@@ -79,11 +81,13 @@ export function askQueueMessage(items: readonly AskBlock[]): string {
 		.join('\n\n')
 }
 
-// askHandler 是 App 在挂载期间注册的那一个「把它送进当前会话」。
-let askHandler: ((text: string) => void) | null = null
+// askHandler 是 App 在挂载期间注册的那一个「把它交给当前会话」。`how` 说的是怎么交：'send'
+// 当场发出去（Shift+回车），'draft' 放进输入框让人改（面板上的「发送」）。
+export type AskDelivery = 'send' | 'draft'
+let askHandler: ((text: string, how: AskDelivery) => void) | null = null
 
 // onAskSelection 注册处理器，返回的函数据此注销（与 filereveal.ts 同一个形状）。
-export function onAskSelection(fn: (text: string) => void): () => void {
+export function onAskSelection(fn: (text: string, how: AskDelivery) => void): () => void {
 	askHandler = fn
 	return () => {
 		if (askHandler === fn) askHandler = null
@@ -91,8 +95,8 @@ export function onAskSelection(fn: (text: string) => void): () => void {
 }
 
 // askAboutSelection 把组装好的那条消息交出去；没有人注册时它什么也不做。
-export function askAboutSelection(text: string): void {
-	if (text) askHandler?.(text)
+export function askAboutSelection(text: string, how: AskDelivery): void {
+	if (text) askHandler?.(text, how)
 }
 
 // ── 那一份队列 ─────────────────────────────────────────────────────────────
@@ -141,18 +145,31 @@ function askItemFor(source: string, text: string, prompt: string): AskBlock {
 	return { source, text, question: prompt.trim() }
 }
 
-// sendAskQueue 把队列（连同 append 进来的这一项）拼成一条消息发出去；队列空着又没 append 时
-// 什么也不做。
+// takeAskQueue 把队列（连同 append 进来的这一项）拼成一条消息并清空队列；队列空着又没 append
+// 时返回空串。
 //
-// 面板上的「发送」和 Shift+回车走的是同一条路：Shift+回车不是「绕过队列发送」，而是「加上这一项，
-// 然后整队列发出去」—— 队列空着的时候它正好就是「就这一段直接问」。
-function sendAskQueue(append?: AskBlock): void {
+// 面板上的「发送」和 Shift+回车都从这里取消息，但**落地方式不同**：Shift+回车是当场发出去
+// （队列空着的时候它就是「就这一段直接问」），而面板上那一条是**放进输入框**——一起攒的几段
+// 拼出来的东西值得先看一眼、顺一遍再发，而发出去的消息撤不回来。
+function takeAskQueue(append?: AskBlock): string {
 	const items = append ? [...askQueue, newAskItem(append)] : askQueue
-	if (!items.length) return
+	if (!items.length) return ''
 	const message = askQueueMessage(items)
 	setQueue([])
 	paintSelection(null)
-	askAboutSelection(message)
+	return message
+}
+
+// sendAskQueue 是 Shift+回车那条路：拼好就发。
+function sendAskQueue(append?: AskBlock): void {
+	const message = takeAskQueue(append)
+	if (message) askAboutSelection(message, 'send')
+}
+
+// draftAskQueue 是面板上「发送」那条路：拼好放进输入框，读的人改完再按回车。
+function draftAskQueue(): void {
+	const message = takeAskQueue()
+	if (message) askAboutSelection(message, 'draft')
 }
 
 // clearAskQueue 清空整份队列 —— 面板上那个「清空」按钮。清完面板自己就没了。
@@ -405,8 +422,8 @@ export function SelectionAsk({ hostRef, source }: {
 							queueAsk(askItemFor(source, spot.text, prompt), e.shiftKey ? 'send' : 'queue')
 						}} />
 					{/* 「加入待提问」是这条路的入口（跟回车一样）：做成看得见的按钮，不认回车的人也能用。
-					    **发出去**只有两条：Shift+回车，以及队列面板上的「发送」—— 一起问的几段要凑齐了
-					    再走。 */}
+					    **当场发**只有 Shift+回车一条；队列面板上那枚「发送」把整队列拼好后**放进输入框**，
+					    让人看一眼再发 —— 一起问的几段要先凑齐，凑齐了也常常值得顺一遍。 */}
 					<button type="button" className="sel-ask-add" title="加入待提问（回车）"
 						onClick={() => queueAsk(askItemFor(source, spot.text, prompt), 'queue')}>加入待提问</button>
 				</>
@@ -508,7 +525,7 @@ export function AskQueuePanel() {
 			<div className="ask-q-foot">
 				{/* 清空之后面板自己就没了（它画的是一份非空的队列）。 */}
 				<button type="button" className="ask-q-clear" onClick={() => clearAskQueue()}>清空</button>
-				<button type="button" className="ask-q-send" onClick={() => sendAskQueue()}>发送</button>
+				<button type="button" className="ask-q-send" onClick={() => draftAskQueue()}>发送</button>
 			</div>
 		</div>,
 		document.body,
