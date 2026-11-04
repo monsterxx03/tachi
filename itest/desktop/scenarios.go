@@ -1182,10 +1182,27 @@ func scenarios() []scenario {
 				// something that would have been.
 				{Reply: bashStream("echo conv-only > convonly.txt", "call_c")},
 				{Reply: textStream("又写好了。", 800)},
+				// Turn 5, stopped by the driver mid-stream. A stopped turn has a checkpoint like
+				// any other — `Begin` runs at the turn's start — so its own prompt must still
+				// offer 「回退到这里」. On a live bubble that number can only come from the
+				// terminal event, and a stop concludes the turn through the ERROR event, not
+				// turn_complete; leaving it off that one made exactly this turn un-rewindable.
+				{Reply: mockllm.Stream(
+					mockllm.Text("这一轮还没说完，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("就被停掉了。"),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 60, 800, 20),
+					mockllm.Done(),
+				)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("四轮共六次调用", len(c.requests) == 6, requestCount(c.requests))
+				c.check("五轮共七次调用（最后一轮是停掉的）", len(c.requests) == 7, requestCount(c.requests))
 
 				// The shell command's changes are the ones a rewind has to undo. These run
 				// AFTER the read-only turn's own rewind too, so they also say that a turn with

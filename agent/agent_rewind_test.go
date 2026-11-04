@@ -9,6 +9,7 @@ import (
 
 	agent_checkpoint "github.com/monsterxx03/tachi/agent/checkpoint"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -355,6 +356,55 @@ func TestUnreadableHistoryRecordsNoCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, p.Blocked)
 	assert.Zero(t, p.Records)
+}
+
+// TestInterruptedTurnStillNamesItsCheckpoint keeps a stopped turn rewindable.
+//
+// The checkpoint is recorded at the turn's START, so a turn that never completes has one all the
+// same — but for a while only the COMPLETED-turn event carried its number. A frontend that names
+// its own live user bubble from that event (the desktop does: the bubble never sees a record
+// index) was therefore unable to offer 「回退到这里」 on exactly the prompt a reader most wants
+// to go back to: the one whose turn they stopped.
+func TestInterruptedTurnStillNamesItsCheckpoint(t *testing.T) {
+	a, _, ctx := checkpointTestAgentWith(t, &mockStreamProvider{
+		name: "anthropic",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"echo hi"}`),
+			nil, // hangs until the turn is stopped — the shape of a manual stop
+		},
+	})
+	a.RegisterTool(echoStub())
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := a.RunConversationStream(ctx, nil, "这一轮会被停掉", "", llm.ChatOptions{MaxTokens: 4096})
+
+	var terminal *AgentEvent
+	for ev := range ch {
+		// Stop it after its first tool round: the turn's boundary is recorded before the loop
+		// begins, so from here on this is just a stopped turn.
+		if ev.Type == AgentEventToolResult {
+			cancel()
+		}
+		if ev.Type == AgentEventError || ev.Type == AgentEventTurnComplete {
+			e := ev
+			terminal = &e
+		}
+	}
+	require.NotNil(t, terminal)
+	assert.Equal(t, AgentEventError, terminal.Type)
+	assert.Equal(t, ExitReasonInterrupted, terminal.Result.ExitReason)
+
+	turns, err := a.RewindTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, 1, terminal.CheckpointTurn, "the terminal event must name the turn it belongs to")
+	assert.Equal(t, terminal.CheckpointTurn, turns[0].Turn)
+
+	p, err := a.PreviewRewind(context.Background(), turns[0].Turn)
+	require.NoError(t, err)
+	assert.Empty(t, p.Blocked, "a stopped turn is a rewind target like any other")
+	assert.Equal(t, "这一轮会被停掉", p.UserText)
 }
 
 // TestRewindWithCheckpointsOffSaysSo: with the feature off there is nothing to

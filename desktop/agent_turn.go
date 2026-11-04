@@ -866,7 +866,17 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
 		// patching "the newest assistant" would hit the turn the review was FOR.
 		if toTranscript {
-			d.emit("agent:error", map[string]any{"sessionId": id, "error": detail, "interrupted": interrupted})
+			// checkpointTurn rides along even here: a turn that was stopped (or failed) still has
+			// a checkpoint — `Begin` runs at the turn's start — and the live user bubble on the
+			// other side has no record index to resolve it by, so this event is its only way to
+			// learn which turn 「回退到这里」 would mean. Without it a stopped turn's own prompt
+			// offers no rewind at all (the menu says 这一轮没有检查点).
+			d.emit("agent:error", map[string]any{
+				"sessionId":      id,
+				"error":          detail,
+				"interrupted":    interrupted,
+				"checkpointTurn": ev.CheckpointTurn,
+			})
 		}
 	}
 	// Forward the raw event for every session so the frontend can keep a

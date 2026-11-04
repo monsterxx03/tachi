@@ -300,5 +300,37 @@
   smoke.check('提示说清了只有对话动了',
     scopedChat.indexOf('只回退对话，工作区文件保持不动') >= 0, scopedChat.slice(-200))
 
+  // ── 停掉的一轮，它的提示词照样能回退 ─────────────────────────────────────
+  // 检查点是在一轮的开头记下的，所以「被手动终止的轮次」和别人一样有检查点。但前端那个实时
+  // 气泡没有记录下标（它是自己拼出来的），它的轮次只能从终结事件里来 —— 而一次停止走的是
+  // error 事件，不是 turn_complete。少了那一半，读者最想回到的那条消息反而是唯一一条回不
+  // 去的：右键它，菜单说「这一轮没有检查点」。
+  smoke.type('.composer-input', '这一轮会被停掉')
+  smoke.click('.send-btn')
+  if (!(await smoke.waitFor('.stop-btn', '这一轮跑起来了', 15000))) return smoke.finish()
+  if (!(await smoke.waitText('.msg-assistant', '这一轮还没说完', 15000))) return smoke.finish()
+  smoke.click(smoke.q('.stop-btn'))
+  if (!(await smoke.waitGone('.stop-btn', '回合停下来', 30000))) return smoke.finish()
+
+  const stopped = smoke.qa('.msg-user')
+  smoke.check('停掉的一轮里那条提示词还在', stopped.length === 1, String(stopped.length))
+  if (stopped.length !== 1) return smoke.finish()
+  stopped[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 260 }))
+  if (!(await smoke.waitFor('.ctx-menu', '停掉的那一轮的回退菜单出现', 5000))) return smoke.finish()
+  const stopItem = smoke.qa('.ctx-menu .ctx-item')[0]
+  smoke.check('停掉的一轮也有回退入口（不被当成「没有检查点」）',
+    !!stopItem && !stopItem.disabled, stopItem ? (stopItem.title || '可点') : '找不到菜单项')
+  if (!stopItem || stopItem.disabled) return smoke.finish()
+  stopItem.click()
+  if (!(await smoke.waitFor('.confirm-box', '停掉的那一轮的确认卡出现', 5000))) return smoke.finish()
+  const stopCard = smoke.text('.confirm-box')
+  smoke.check('卡片不拒绝一个被停掉的轮次', stopCard.indexOf('不能回退') < 0, stopCard.slice(0, 200))
+  smoke.check('卡片带着这一轮的原提示词', stopCard.indexOf('这一轮会被停掉') >= 0, stopCard.slice(0, 200))
+  // 这一场到这里就够了：退一次会把这唯一一条消息也带走，后面没有别的要验的。
+  const stopCancel = smoke.qa('.confirm-box .btn.ghost')[0]
+  if (stopCancel) stopCancel.click()
+  await smoke.waitFor(() => !smoke.q('.confirm-box'), '取消后卡片关闭', 3000)
+  smoke.check('取消不动任何东西', smoke.qa('.msg-user').length === 1, String(smoke.qa('.msg-user').length))
+
   smoke.finish()
 })()

@@ -161,11 +161,16 @@ type AgentEvent struct {
 	// card.
 	ToolAutoExpand bool
 	// CheckpointTurn is the checkpoint this turn was recorded as (see
-	// agent_checkpoint.go), on AgentEventTurnComplete; 0 when the turn has none
-	// (checkpoints off, a one-off run, or the record failed). A frontend needs it
-	// to name the turn its own user bubble started — the bubble is assembled live
-	// on that side, so it never sees the record index a reload would give it, and
-	// "回退到这里" would have no turn to point at without this.
+	// agent_checkpoint.go); 0 when the turn has none (checkpoints off, a one-off
+	// run, or the record failed). A frontend needs it to name the turn its own
+	// user bubble started — the bubble is assembled live on that side, so it never
+	// sees the record index a reload would give it, and "回退到这里" would have no
+	// turn to point at without this.
+	//
+	// It rides EVERY terminal event, not just AgentEventTurnComplete: a stopped or
+	// failed turn ends through AgentEventError, has a checkpoint all the same (Begin
+	// runs at the turn start, so its boundary is recorded before anything can go
+	// wrong), and is exactly the turn a reader most wants to go back to.
 	CheckpointTurn int
 }
 
@@ -976,9 +981,10 @@ func (a *AIAgent) terminalError(ctx context.Context, rs *RunState, exitReason st
 		ErrorMessage: err.Error(),
 	})
 	return AgentEvent{
-		Type:     AgentEventError,
-		Messages: msgs,
-		Result:   &RunResult{ExitReason: exitReason, IterationsUsed: rs.APICalls, Duration: rs.elapsed(), Error: err},
+		Type:           AgentEventError,
+		Messages:       msgs,
+		CheckpointTurn: rs.CheckpointTurn(),
+		Result:         &RunResult{ExitReason: exitReason, IterationsUsed: rs.APICalls, Duration: rs.elapsed(), Error: err},
 	}
 }
 
@@ -1141,9 +1147,10 @@ func (a *AIAgent) executeAndAppendTools(
 	toolMsgs, err := a.executeToolCalls(ctx, rs, acc.toolCalls, ch)
 	if err != nil {
 		ch <- AgentEvent{
-			Type:     AgentEventError,
-			Messages: rs.Messages,
-			Result:   &RunResult{ExitReason: ExitReasonCancelled, Duration: rs.elapsed(), Error: err},
+			Type:           AgentEventError,
+			Messages:       rs.Messages,
+			CheckpointTurn: rs.CheckpointTurn(),
+			Result:         &RunResult{ExitReason: ExitReasonCancelled, Duration: rs.elapsed(), Error: err},
 		}
 		return outcomeStop
 	}
@@ -1217,9 +1224,10 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 		return outcomeContinue
 	case <-ctx.Done():
 		ch <- AgentEvent{
-			Type:     AgentEventError,
-			Messages: rs.Messages,
-			Result:   &RunResult{ExitReason: ExitReasonInterrupted, Duration: rs.elapsed(), Error: ctx.Err()},
+			Type:           AgentEventError,
+			Messages:       rs.Messages,
+			CheckpointTurn: rs.CheckpointTurn(),
+			Result:         &RunResult{ExitReason: ExitReasonInterrupted, Duration: rs.elapsed(), Error: ctx.Err()},
 		}
 		return outcomeStop
 	}

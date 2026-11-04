@@ -388,18 +388,26 @@ export function useAgentStream(deps: AgentStreamDeps) {
 
   useEffect(() => {
     const off = Events.On('agent:error', (event) => {
-      const d = event.data as { sessionId: string; error: string; interrupted?: boolean }
+      const d = event.data as { sessionId: string; error: string; interrupted?: boolean; checkpointTurn?: number }
       // The turn is over, so its question cannot still be waiting — in EVERY session, which
       // is why this runs before the current-session guard below.
       clearAsk(d.sessionId)
       if (d.sessionId !== currentId) return
       const interrupted = !!d.interrupted
+      // A stopped or failed turn concludes HERE and never through agent:turn, and the live
+      // user bubble learns which checkpoint it started from that event alone (it has no
+      // record index — the frontend assembled it). So the same stamp is done here, and
+      // BEFORE the assistant bubble is looked for: a turn stopped before it produced a card
+      // at all is exactly the one a reader wants to go back to.
+      const turn = d.checkpointTurn || undefined
       updateSession(currentId, (list) => {
+        const bubble = turn ? [...list].reverse().find((m) => m.role === 'user' && !m.steer) : undefined
+        const stamped = bubble ? list.map((m) => (m.id === bubble.id ? { ...m, checkpointTurn: turn } : m)) : list
         // The turn being concluded is the newest assistant message. Unlike a running-scan,
         // this still works when agent:event has already flipped running off (listener order
         // is not guaranteed). Mutations are idempotent so double-handling is harmless.
-        const target = [...list].reverse().find((m) => m.role === 'assistant')
-        if (!target) return list
+        const target = [...stamped].reverse().find((m) => m.role === 'assistant')
+        if (!target) return stamped
         const conclude = (m: Message): Message => {
           // After a stop no tool_result event arrives for in-flight calls, so close their
           // cards; a real error is surfaced as a trailing text part (the transcript renders
@@ -409,7 +417,7 @@ export function useAgentStream(deps: AgentStreamDeps) {
             : [...(m.parts || []), { type: 'text' as const, text: '⚠ ' + (d.error || '出错') }]
           return { ...m, running: false, stopped: interrupted || m.stopped, parts }
         }
-        return list.map((m) => (m.id === target.id ? conclude(m) : m))
+        return stamped.map((m) => (m.id === target.id ? conclude(m) : m))
       })
     })
     return () => off?.()

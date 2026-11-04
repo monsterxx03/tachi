@@ -45,17 +45,29 @@ type checkpointManifest struct {
 // resolve it, and a test must leave nothing in the real ~/.tachi either way.
 func checkpointTestAgent(t *testing.T) (*AIAgent, string, context.Context) {
 	t.Helper()
+	// A provider is required: rebuilding a session's history converts the records
+	// with the provider's type (see LoadSessionHistory), which a rewind does.
+	return checkpointTestAgentWith(t, &mockStreamProvider{name: "anthropic"})
+}
+
+// checkpointTestAgentWith is the same setup with a provider the caller keeps — a scenario that
+// has to script what the MODEL does (a turn that hangs until it is stopped, say) hands its own
+// mock in, since the agent wraps whatever it is given and the wrapper is not the mock.
+func checkpointTestAgentWith(t *testing.T, provider llm.Provider) (*AIAgent, string, context.Context) {
+	t.Helper()
 	oldBase := config.BaseDir()
 	t.Cleanup(func() { config.SetBaseDir(oldBase) })
 	config.SetBaseDir(t.TempDir())
 
 	work := t.TempDir()
-	enabled := true
-	// A provider is required: rebuilding a session's history converts the records
-	// with the provider's type (see LoadSessionHistory), which a rewind does.
-	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSessionIn(t.TempDir()))
+	enabled, noAutoCompact := true, false
+	a := newTestAgent(t, provider, withFakeSessionIn(t.TempDir()))
 	a.Config.FullConfig = &config.Config{
 		Checkpoints: config.CheckpointConfig{Enabled: &enabled},
+		// Off, and not out of tidiness: a config built in code leaves Compact.Threshold at 0,
+		// so a turn that actually runs would "cross the threshold" on every iteration and
+		// spend the whole iteration budget on a compaction its provider cannot serve.
+		Compact: config.CompactConfig{Auto: &noAutoCompact},
 	}
 	_, err := a.Config.SessionManager.New("test", work)
 	require.NoError(t, err)
