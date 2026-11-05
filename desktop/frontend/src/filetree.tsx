@@ -10,7 +10,7 @@
 // Design: docs/2026-10-13-desktop-file-tree-design.md §4.
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AgentService, type FileNodeVO, type SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type FileNodeVO, type GitStatusVO, type SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { Caret } from './components'
 import { onRevealFile } from './filereveal'
 import { KIND_ICON } from './filepreview'
@@ -54,6 +54,13 @@ type TreeRow = {
 	note?: string
 }
 
+// GIT_TONE picks the colour a status letter draws in. It lives here rather than in the VO because
+// the letter and its words are git's answer (gitstatus.go), while the tone is this palette's: the
+// two are allowed to change for different reasons.
+const GIT_TONE: Record<string, string> = {
+	U: 'is-new', A: 'is-new', M: 'is-mod', D: 'is-del', R: 'is-move', C: 'is-move', '!': 'is-conflict',
+}
+
 // fileIconFor picks a row's glyph from the SAME kind table the attachment card and the file view use,
 // so the three surfaces cannot disagree about what a file is. An unknown extension gets the neutral
 // document (which is a hint, never a refusal: what a file really is, is settled when it is opened).
@@ -75,7 +82,7 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 	onInsertRef: (path: string) => void
 	onClose: () => void
 }) {
-	const { expanded, listing, toggle, dirty, selected, cursor, setCursor, revealRequest, clearReveal, reload, refresh, openFile } = api
+	const { expanded, listing, toggle, dirty, selected, cursor, setCursor, revealRequest, clearReveal, reload, refresh, openFile, gitStatus } = api
 	const [menu, setMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null)
 	const [room, setRoom] = useState(() => panelRoom(FILE_TREE_MIN_WIDTH, FILE_TREE_MAX_WIDTH))
 	const treeRef = useRef<HTMLDivElement>(null)
@@ -354,6 +361,7 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 						selected={!row.isDir && !!selected && selected.path === row.path}
 						cursor={cursor === row.key}
 						dirty={dirty.has(row.path)}
+						git={row.isDir ? undefined : gitStatus[row.path]}
 						onActivate={() => { setCursor(row.key); openRow(row) }}
 						onToggle={() => { setCursor(row.key); toggle(row.path) }}
 						onReload={() => reload(row.path)}
@@ -378,13 +386,14 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 
 // TreeLine draws one line. It is memoized on the row's own data: the tree can hold several hundred
 // rows after two clicks, and a poll that changed one directory must not re-render the other nine.
-const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty, onActivate, onToggle, onReload, onMenu }: {
+const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty, git, onActivate, onToggle, onReload, onMenu }: {
 	row: TreeRow
 	id: string
 	open: boolean
 	selected: boolean
 	cursor: boolean
 	dirty: boolean
+	git?: GitStatusVO
 	onActivate: () => void
 	onToggle: () => void
 	onReload: () => void
@@ -395,6 +404,7 @@ const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty
 	const isNote = !!row.note && !row.isDir
 	const title = [
 		row.path,
+		git ? `未提交的改动：${git.label}` : '',
 		row.link ? '符号链接' : '',
 		row.ignored ? `被 git 忽略：${row.ignored}` : '',
 		row.error ? `读不到：${row.error}` : '',
@@ -421,6 +431,13 @@ const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty
 			) : <span className="filetree-caret is-none" />}
 			<span className="filetree-ico" aria-hidden="true">{isNote ? '…' : fileIconFor(row)}</span>
 			<span className="filetree-name">{row.name}</span>
+			{/* git's answer about this file, right after its name: it is the one piece of metadata
+			    a reader scans the column FOR (what did the agent just touch, what did I change), so
+			    it sits before the labels that describe the row itself. */}
+			{git ? (
+				<span className={`filetree-git ${GIT_TONE[git.code] || ''}`}
+					title={`未提交的改动：${git.label}`}>{git.code}</span>
+			) : null}
 			{row.link ? <span className="filetree-link" title="符号链接">🔗</span> : null}
 			{/* The root row's own facts: its label only when it says something the name does not (a base
 			    name repeated beside itself is noise; the full path is news), and its git branch (two

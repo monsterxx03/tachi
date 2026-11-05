@@ -5,6 +5,8 @@
 //     （标签是后端 rootLabels 的答案，前端自己算不出来）；主目录那一行没有标签。
 //   · 一层是惰性列的：展开一个目录才多出一层。
 //   · 被 git 忽略的文件照旧**显示**，只是灰掉 + 一枚「忽略」——树回答的是"磁盘上有什么"。
+//   · 每一行的 git 状态：新文件标 U，原地被改的**已提交**文件标 M —— 后者所在目录的 mtime 一动
+//     没动，所以它只可能来自那个按时轮询的状态读取，不是重新列目录的副产物。
 //   · 文件在**会话那一列**打开（文件视图），而树还在旁边：这正是它不复用旁路面板的地方。
 //   · 会话在文件视图盖着时保持挂载（只是 inert），所以草稿还在、滚动没丢。
 //   · agent 写完文件后树自己更新（轮询 / 一轮结束触发）。
@@ -156,6 +158,33 @@
   await smoke.waitFor(() => !smoke.q('.stop-btn'), '这一轮结算', 15000)
   const fresh = await waitRow('agent-notes.md', 'agent 写完的文件出现在树里（自动刷新）', 15000)
   smoke.check('agent 改完文件，树自己长出了新的一行', !!fresh, fresh ? '' : '等不到 docs/agent-notes.md')
+
+  // ── 8b. 每一行的 git 状态 ──────────────────────────────────────────────────
+  // 新文件是未跟踪的（U）。文件新增确实会动 docs 的 mtime，所以它证明的是「状态真的被画出来了」，
+  // 而不是它自己的时机；不过行和它的 mark 走的是两条时钟（listing 与状态各 2s 一轮），所以这里
+  // 等的是**mark 出现**这件事，不是「行刚出现时它就在」。第一条（M）才是时机的断言。
+  const gitBadge = (name) => {
+    const row = rowEl(name)
+    const el = row && row.querySelector('.filetree-git')
+    return el ? { code: smoke.text(el), title: el.getAttribute('title') || '' } : null
+  }
+  const freshGit = await smoke.waitFor(() => {
+    const g = gitBadge('agent-notes.md')
+    return g && g.code === 'U' ? g : null
+  }, 'agent 写的新文件标着 U（未跟踪）', 15000)
+  smoke.check('agent 写的新文件标着 U（未跟踪）',
+    !!freshGit && freshGit.title.indexOf('未跟踪') >= 0,
+    freshGit ? freshGit.code + ' / ' + freshGit.title : '(没有状态标记)')
+  // 原地修改一个**已提交**的文件（main.go）：目录的 mtime 一点没动，所以这条只能由按时轮询的
+  // 状态读取带来 —— 行上的 mark 会变，而那一层从来没被重新列过。这正是状态不挂在 listing 上的
+  // 理由，也是这条断言唯一能看见的东西。
+  const mainGit = await smoke.waitFor(() => {
+    const g = gitBadge('main.go')
+    return g && g.code === 'M' ? g : null
+  }, 'main.go 原地修改后带上 M（不需要重新列目录）', 15000)
+  smoke.check('原地修改的已提交文件带上 M，且说明是已修改',
+    !!mainGit && mainGit.title.indexOf('已修改') >= 0,
+    mainGit ? mainGit.code + ' / ' + mainGit.title : '(没有状态标记)')
 
   // ── 9. 关掉面板再打开：展开态与选中的文件都还在 ────────────────────────────
   smoke.key(document.body, 'e', { metaKey: true })

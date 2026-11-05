@@ -599,6 +599,28 @@ export interface ForkResultVO {
 }
 
 /**
+ * GitStatusVO is one path as git sees it right now.
+ */
+export interface GitStatusVO {
+    /**
+     * Path is absolute, resolved against the session's own root, so the frontend can merge it onto
+     * a row without knowing anything about repositories or where they start.
+     */
+    "path": string;
+
+    /**
+     * Code is the one letter the row shows: M A D R C U ! — see gitStatusCode.
+     */
+    "code": string;
+
+    /**
+     * Label says what that letter means in the reader's words. It travels with the letter because
+     * the letter→word table is this side's answer; a second copy in the frontend is free to drift.
+     */
+    "label": string;
+}
+
+/**
  * MCPServerEntryVO is one server as the editor handles it: the RAW contents of the file
  * (config.LoadMCPConfigRaw — an absent field stays absent, so pressing save on an entry the user
  * only looked at does not write this process's defaults into a file he wrote by hand) plus the

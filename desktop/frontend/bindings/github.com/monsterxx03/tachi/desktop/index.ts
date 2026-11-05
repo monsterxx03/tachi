@@ -34,6 +34,7 @@ export type {
     FileTreeMemoVO,
     FindingVO,
     ForkResultVO,
+    GitStatusVO,
     MCPServerEntryVO,
     MCPServerVO,
     MCPToolParamVO,

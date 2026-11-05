@@ -191,6 +191,14 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .filetree-ignored,
 .filetree-size { flex-shrink: 0; font-size: var(--fs-meta); color: var(--text-faint); }
 .filetree-branch { flex-shrink: 0; font-size: var(--fs-meta); color: var(--accent-2); }
+/* git 状态：一个字母，紧跟在名字后面。颜色是**这一列自己的**决定（后端只给字母和它的含义）；
+   M 是琥珀而不是红 —— 一个还在改的文件是常态，不是错误，红留给删除和冲突。 */
+.filetree-git { flex-shrink: 0; font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
+.filetree-git.is-new { color: var(--green); }
+.filetree-git.is-mod { color: var(--amber); }
+.filetree-git.is-del { color: var(--red); }
+.filetree-git.is-move { color: var(--accent-2); }
+.filetree-git.is-conflict { color: var(--red); font-weight: 600; }
 .filetree-ignored { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 4px; }
 .filetree-size { font-variant-numeric: tabular-nums; }
 .filetree-link { font-size: var(--fs-micro); color: var(--text-faint); flex-shrink: 0; }

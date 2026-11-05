@@ -19,7 +19,7 @@
 //     (design §8.4), so the file view shows 「文件已更新」 and waits to be asked.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AgentService, type DirListingVO, type PathStateVO, type SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type DirListingVO, type GitStatusVO, type PathStateVO, type SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // FILE_TREE_POLL_MS is how often an OPEN tree asks what moved. Two seconds is fast enough to watch
 // an agent work and slow enough that the cost (one stat per expanded directory) is nothing. A covered
@@ -82,6 +82,11 @@ export type FileTreeApi = {
 	// polledState is what the last poll said about one path — how the file view decides whether what
 	// it is showing is still what is on disk.
 	polledState: (path: string) => PathStateVO | undefined
+	// gitStatus is what git says about a path right now, keyed by ABSOLUTE path. It is merged onto
+	// rows at render time rather than stored on them: a directory's listing is refetched when its
+	// entries change, while a file edited in place changes no such thing — so the status has to
+	// travel on its own clock and the two answers must not be able to disagree.
+	gitStatus: Record<string, GitStatusVO>
 	// memoReady is false until the remembered expansion for this workspace has been applied: writing
 	// before that would replace what the reader left with the defaults.
 	memoReady: boolean
@@ -128,6 +133,18 @@ function sameStates(a: Record<string, PathStateVO>, b: Record<string, PathStateV
 	return true
 }
 
+// sameGitStatus compares two status tables field by field, for the same reason sameStates exists:
+// an unchanged answer must not re-render the tree every two seconds.
+function sameGitStatus(a: Record<string, GitStatusVO>, b: Record<string, GitStatusVO>): boolean {
+	const keys = Object.keys(b)
+	if (keys.length !== Object.keys(a).length) return false
+	for (const key of keys) {
+		const x = a[key]
+		if (!x || x.code !== b[key].code) return false
+	}
+	return true
+}
+
 export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	sessionId: string
 	roots: SessionRootsVO | null
@@ -144,6 +161,7 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	const [selected, setSelected] = useState<OpenFile | null>(null)
 	const [cursor, setCursor] = useState<string | null>(null)
 	const [states, setStates] = useState<Record<string, PathStateVO>>({})
+	const [gitStatus, setGitStatus] = useState<Record<string, GitStatusVO>>({})
 	const [revealRequest, setRevealRequest] = useState<string | null>(null)
 	const [memoReady, setMemoReady] = useState(false)
 
@@ -161,6 +179,9 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	const dirtyTimers = useRef<Record<string, number>>({})
 	const memoryTimer = useRef<number | null>(null)
 	const pending = useRef<{ sid: string; dirs: string[]; file: string } | null>(null)
+	// Guards the status call so a slow `git status` (a big repository) cannot queue up behind the
+	// poll: the next tick asks again anyway, and one answer is all a column needs.
+	const statusInFlight = useRef(false)
 
 	// load fetches one directory. Every listing in the tree comes through here, so they all came from
 	// one call with one set of rules.
@@ -184,12 +205,33 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 		AgentService.SetFileTreeMemo(sid, dirs, file).catch(() => { /* the next launch just starts fresh */ })
 	}, [])
 
+	// loadGitStatus asks what is uncommitted under this session's roots. It is the SECOND reader of
+	// the workspace, on its own clock: a file edited in place (an Edit tool, a formatting run) moves
+	// no directory's mtime, so nothing in the poll above would ever re-list the row that shows it —
+	// and a row that keeps saying "clean" is worse than no mark at all. Failures are silent on
+	// purpose: a workspace with no repository, or no git, answers empty, and both look exactly like
+	// a clean tree (the rows are the same either way).
+	const loadGitStatus = useCallback(async () => {
+		if (statusInFlight.current) return // one slow `git status` must not stack up behind the next tick
+		statusInFlight.current = true
+		const asked = sessionId
+		try {
+			const list = (await AgentService.GetWorkspaceGitStatus(asked)) || []
+			if (ownerRef.current !== asked) return
+			const next: Record<string, GitStatusVO> = {}
+			for (const st of list) next[st.path] = st
+			setGitStatus((prev) => (sameGitStatus(prev, next) ? prev : next))
+		} catch { /* the next tick asks again */ } finally {
+			statusInFlight.current = false
+		}
+	}, [sessionId])
+
 	// A session became the current one: this is a different tree. Everything resets, and the remembered
 	// shape of ITS workspace is applied by the effect below — which waits for that session's ROOTS,
 	// because the remembered paths are absolute and there is nothing to attribute them to before then.
 	useEffect(() => {
 		const sid = sessionId
-		setExpanded(new Set()); setListings({}); setDirty(new Set()); setStates({}); setCursor(null); setSelected(null)
+		setExpanded(new Set()); setListings({}); setDirty(new Set()); setStates({}); setGitStatus({}); setCursor(null); setSelected(null)
 		stampsRef.current = {}
 		appliedFor.current = ''
 		setMemoReady(false)
@@ -325,6 +367,9 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 		let inFlight = false
 		const tick = async () => {
 			if (inFlight) return // a slow answer must not stack up behind the next tick
+			// The rows' git marks ride on the same tick but not on the same question: they are
+			// asked only while the COLUMN is on screen, because that is the only place they show.
+			if (open) void loadGitStatus()
 			const paths = [...expanded]
 			if (selected?.path) paths.push(selected.path)
 			if (!paths.length) return
@@ -354,7 +399,7 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 		void tick()
 		const timer = window.setInterval(() => void tick(), FILE_TREE_POLL_MS)
 		return () => { alive = false; window.clearInterval(timer) }
-	}, [open, fileVisible, sessionId, expanded, selected?.path, load, markDirty])
+	}, [open, fileVisible, sessionId, expanded, selected?.path, load, markDirty, loadGitStatus])
 
 	const toggle = useCallback((dir: string) => {
 		setExpanded((prev) => {
@@ -376,7 +421,10 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	const refresh = useCallback(() => {
 		stampsRef.current = {}
 		for (const dir of expanded) void load(dir)
-	}, [expanded, load])
+		// ↻ is the reader saying "now": the marks are re-asked in the same gesture rather than up
+		// to two seconds later.
+		void loadGitStatus()
+	}, [expanded, load, loadGitStatus])
 
 	const openFile = useCallback((file: { path: string; name: string }, root: string, label: string) => {
 		setSelected({ path: file.path, name: file.name, root, label })
@@ -399,6 +447,6 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 
 	return useMemo(() => ({
 		expanded, listing, toggle, dirty, selected, openFile, cursor, setCursor,
-		revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady,
-	}), [expanded, listing, toggle, dirty, selected, openFile, cursor, revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady])
+		revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus,
+	}), [expanded, listing, toggle, dirty, selected, openFile, cursor, revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus])
 }

@@ -1107,8 +1107,10 @@ func scenarios() []scenario {
 			},
 			steps: []mockllm.Step{
 				// The agent writes a NEW file into a directory the driver has expanded: the tree has to
-				// grow a row for it on its own (the poll, or the end of the turn).
-				{Reply: bashStream("printf 'from the agent\\n' > docs/agent-notes.md", "call_ft1")},
+				// grow a row for it on its own (the poll, or the end of the turn). It also edits a
+				// TRACKED file IN PLACE (main.go) — that moves no directory's mtime, so the row's git
+				// mark can only come from the status reader that runs on its own clock.
+				{Reply: bashStream("printf 'from the agent\\n' > docs/agent-notes.md; printf '\\n// from the agent\\n' >> main.go", "call_ft1")},
 				{Reply: textStream("写好了。", 800)},
 			},
 			after: func(c *checkCtx) {
@@ -1120,6 +1122,13 @@ func scenarios() []scenario {
 				written := filepath.Join(c.work, "docs", "agent-notes.md")
 				data, err := os.ReadFile(written)
 				c.check("agent 真的写了新文件: docs/agent-notes.md", err == nil && strings.Contains(string(data), "from the agent"),
+					fmt.Sprintf("err=%v", err))
+
+				// The in-place edit of a TRACKED file (see the steps above): the row's M mark is
+				// asserted by the driver, and this is the fact behind it — the file really changed on
+				// disk, so the mark is not coming from a fixture.
+				edited, err := os.ReadFile(filepath.Join(c.work, "main.go"))
+				c.check("agent 真的原地改了 main.go", err == nil && strings.Contains(string(edited), "from the agent"),
 					fmt.Sprintf("err=%v", err))
 
 				// The memo was written BACK: the expansion the driver produced (docs/dist…, whichever it

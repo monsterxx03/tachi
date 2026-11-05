@@ -420,6 +420,18 @@ export function GetWorkingTreeChanges(sessionID: string): $CancellablePromise<$m
 }
 
 /**
+ * GetWorkspaceGitStatus answers what is uncommitted under the session's roots.
+ * 
+ * Every root is asked, and a path that two NESTED roots share keeps the first root's answer — the
+ * same precedence rootContaining gives it everywhere else in this app. A root that is not a
+ * repository (or has no git at all) contributes nothing: an empty answer is not an error here,
+ * because the tree draws the same rows either way.
+ */
+export function GetWorkspaceGitStatus(sessionID: string): $CancellablePromise<$models.GitStatusVO[] | null> {
+    return $Call.ByID(4287250909, sessionID);
+}
+
+/**
  * IsCronScheduled reports whether the desktop scheduler is running; the panel
  * uses it to say "已在设置里关闭" instead of leaving a silent empty list.
  */
