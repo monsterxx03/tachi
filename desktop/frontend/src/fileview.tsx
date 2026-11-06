@@ -20,14 +20,15 @@
 //     under the pointer is the same text.
 
 import { useEffect, useRef, useState } from 'react'
-import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type FilePreviewVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { DiffCounts, DiffLines, setDiffSplit, useDiffSplit } from './diff'
 import { FileBody } from './filepreview'
 import { FindBar, FindButton, useFind } from './find'
 import { copyText, fmtBytes, toLocalAsset } from './lib'
 import { REVEAL_LABEL } from './platform'
 import { SelectionAsk } from './selask'
 import { ImageViewer } from './viewer'
-import type { FileTreeApi } from './useFileTree'
+import type { FileTreeApi, FileViewMode } from './useFileTree'
 
 // relPath is a file's path as the header shows it: the part below its root, with the root's label in
 // front of it when that root has one. The label comes from the BACKEND (rootLabels: "" is the primary
@@ -46,6 +47,82 @@ function stampTime(ms: number): string {
 	return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+// FileDiffBody is the OTHER reading of the file this view holds: its uncommitted changes, against
+// git HEAD. The tree's 「只看改动」 list opens a row in this mode — reviewing what is uncommitted is
+// one gesture there and should not dead-end in 「打开文件」 — and the header offers the switch both
+// ways, so the two readings of one file are one view with a flag rather than two surfaces.
+//
+// The diff is read ONCE per open, like the file itself: it is a statement about a moment (the
+// backend diffs the working tree as it is now), and the poll's 「文件已更新」 line is what tells the
+// reader the disk has moved since they opened it.
+function FileDiffBody({ sessionId, path }: { sessionId: string; path: string }) {
+	const [diff, setDiff] = useState<TurnDiffVO | null>(null)
+	const [error, setError] = useState('')
+	const split = useDiffSplit()
+
+	useEffect(() => {
+		let alive = true
+		setDiff(null)
+		setError('')
+		AgentService.GetTurnDiff(sessionId, [path])
+			.then((vo) => { if (alive) setDiff(vo || null) })
+			.catch((e) => { if (alive) setError(String(e)) })
+		return () => { alive = false }
+	}, [sessionId, path])
+
+	if (error) {
+		return <div className="fileview-empty"><div>读不到这个文件的改动</div><div className="fileview-hint">{error}</div></div>
+	}
+	if (!diff) return <div className="fileview-empty">读取改动…</div>
+
+	const file = (diff.files || [])[0]
+	if (!file) {
+		// A file that is no longer uncommitted (committed, reverted, ignored) is not an error — the
+		// answer is the fact, and the backend's note explains the case that has one.
+		return (
+			<div className="fileview-empty">
+				<div>这个文件现在没有未提交的改动（可能已经提交）</div>
+				{diff.note ? <div className="fileview-hint">{diff.note}</div> : null}
+			</div>
+		)
+	}
+	return (
+		<div className="fileview-diff">
+			{/* The header already names the file, so this line carries only what the DIFF says about
+			    it: its badges, the comparison and the counts. */}
+			<div className="fileview-diff-head">
+				{file.oldPath && file.oldPath !== file.path ? (
+					<span className="diff-badge" title={`原路径 ${file.oldPath}`}>重命名</span>
+				) : null}
+				{file.created ? <span className="diff-badge is-new">新增</span> : null}
+				{file.deleted ? <span className="diff-badge is-gone">删除</span> : null}
+				{file.binary ? <span className="diff-badge">二进制</span> : null}
+				<span className="fileview-diff-source">与 git HEAD 对照</span>
+				{/* The same layout switch the review panel has, in this surface too — and the same ONE
+				    setting behind it (setDiffSplit): the reader picked 左右 because that is how they read
+				    a diff, not because of which surface they were standing in. A second, local copy is
+				    how one file comes out 上下 here and 左右 in the panel. */}
+				<span className="diff-layout" role="group" aria-label="diff 布局">
+					<button type="button" className={`diff-layout-btn${split ? '' : ' is-on'}`}
+						aria-pressed={!split} title="上下：改动的两个版本逐行对照，长行整行横着看"
+						onClick={() => setDiffSplit(false)}>上下</button>
+					<button type="button" className={`diff-layout-btn${split ? ' is-on' : ''}`}
+						aria-pressed={split} title="左右：旧的一列、新的一列，一行一行对齐着看"
+						onClick={() => setDiffSplit(true)}>左右</button>
+				</span>
+				<DiffCounts added={file.added} removed={file.removed} />
+			</div>
+			{file.binary ? (
+				<div className="diff-panel-empty">二进制文件，git 不逐行比较</div>
+			) : file.hunks?.length ? (
+				<DiffLines hunks={file.hunks} lineNumbers split={split} />
+			) : (
+				<div className="diff-panel-empty">没有内容改动（可能是权限或重命名）</div>
+			)}
+		</div>
+	)
+}
+
 export function FileView({ api, sessionId, onBack }: {
 	api: FileTreeApi
 	sessionId: string
@@ -53,6 +130,9 @@ export function FileView({ api, sessionId, onBack }: {
 }) {
 	const selected = api.selected
 	const path = selected?.path || ''
+	// What this view is reading: the file, or its uncommitted changes. The row that opened it decides
+	// (see useFileTree's OpenFile.mode); the buttons in the header switch it from either side.
+	const [mode, setMode] = useState<FileViewMode>(selected?.mode || 'preview')
 	const [meta, setMeta] = useState<FilePreviewVO | null>(null)
 	const [zoom, setZoom] = useState(false)
 	// What the file looked like when this view READ it. The poll's answer for the same path is
@@ -62,11 +142,21 @@ export function FileView({ api, sessionId, onBack }: {
 	const bodyRef = useRef<HTMLDivElement>(null)
 	const find = useFind(bodyRef)
 
+	// The row that opened this file says what to read first (a change-list row is a diff, a file-tree
+	// row is the file). Keyed by the SELECTION object, not by path and mode: clicking the same diff row
+	// again means "show me the diff" again, and by then the reader may have switched to the file.
+	useEffect(() => {
+		setMode(selected?.mode || 'preview')
+	}, [selected])
+
 	// One read per file (and per explicit re-read). The stamp is taken AFTER the content, from the
 	// same stat the poll uses, so the two are comparable — and a content read that failed still gets a
 	// stamp, because "it is gone" is exactly what the header has to be able to say.
+	//
+	// Nothing is read while the diff is on screen: it is a different question, asked by FileDiffBody,
+	// and reading a 50MB file to head a diff the reader is not looking at would be work for nobody.
 	useEffect(() => {
-		if (!path) { setMeta(null); setRead(null); return }
+		if (!path || mode !== 'preview') { setMeta(null); setRead(null); return }
 		let alive = true
 		setMeta(null)
 		void (async () => {
@@ -85,7 +175,7 @@ export function FileView({ api, sessionId, onBack }: {
 			} catch { if (alive) setRead(null) }
 		})()
 		return () => { alive = false }
-	}, [path, sessionId, nonce, selected?.name])
+	}, [path, sessionId, nonce, mode, selected?.name])
 
 	// Esc leaves the view. Claimed (preventDefault) so nothing behind it treats the same press as its
 	// own dismissal — the chat is inert here but its window-level listeners are alive. A bar that is
@@ -113,14 +203,25 @@ export function FileView({ api, sessionId, onBack }: {
 			: meta.kind === 'dir' ? '目录本身不是一个可预览的文件'
 				: !meta.previewable ? '不支持预览，用「打开」' : ''
 	const target = path || ''
+	// The file is uncommitted, so both readings exist. The button is the way BETWEEN them: a diff is
+	// about a moment, the file is the thing itself, and a reader reviewing changes needs the file as
+	// often as the change.
+	const changed = !!target && !!api.gitStatus[target]
 
 	return (
 		<section className="file-view" aria-label="文件">
 			<header className="fileview-head">
 				<button type="button" className="fileview-back" onClick={onBack} title="返回会话（Esc）">← 返回会话</button>
 				<span className="fileview-name" title={target}>{selected?.name || '没有打开的文件'}</span>
-				{meta && meta.size > 0 ? <span className="fileview-size">{fmtBytes(meta.size)}</span> : null}
+				{meta && meta.size > 0 && mode === 'preview' ? <span className="fileview-size">{fmtBytes(meta.size)}</span> : null}
 				<span className="fileview-actions">
+					{mode === 'diff' ? (
+						<button type="button" className="file-btn" title="看这个文件本身"
+							onClick={() => setMode('preview')}>预览</button>
+					) : changed ? (
+						<button type="button" className="file-btn" title="看这个文件未提交的改动（与 git HEAD 对照）"
+							onClick={() => setMode('diff')}>改动</button>
+					) : null}
 					<FindButton find={find} />
 					{target ? (
 						<>
@@ -142,8 +243,9 @@ export function FileView({ api, sessionId, onBack }: {
 			</div>
 			{/* The stale line is an OFFER, not an action: the content changes only when the reader says
 			    so (design §8.4). It replaces nothing — it sits above the text, which is still the text
-			    they were reading. */}
-			{moved || gone ? (
+			    they were reading. It is about the FILE, so a diff (a statement about a moment) does not
+			    get one. */}
+			{mode === 'preview' && (moved || gone) ? (
 				<div className="fileview-stale">
 					<span>{gone ? '文件已不存在（可能已被移动或删除）' : `文件已更新（${stampTime(current?.mtimeMs || 0)}）`}</span>
 					<button type="button" className="fileview-reload" onClick={() => setNonce((n) => n + 1)}>重新读取</button>
@@ -152,18 +254,19 @@ export function FileView({ api, sessionId, onBack }: {
 			<div className="fileview-body" ref={bodyRef}>
 				{find.open ? <FindBar find={find} className="is-view" /> : null}
 				{!path ? <div className="fileview-empty">在右侧文件树里点一个文件，它就在这里打开</div>
-					: !meta ? <div className="fileview-empty">读取中…</div>
-						: note ? (
-							<div className="fileview-empty">
-								<div>{note}</div>
-								{meta.error ? <div className="fileview-hint">{meta.error}</div> : null}
-							</div>
-						) : (
-							<FileBody meta={meta} path={path} name={selected?.name || ''} variant="view"
-								onExpand={() => setZoom(true)} />
-						)}
+					: mode === 'diff' ? <FileDiffBody sessionId={sessionId} path={path} />
+						: !meta ? <div className="fileview-empty">读取中…</div>
+							: note ? (
+								<div className="fileview-empty">
+									<div>{note}</div>
+									{meta.error ? <div className="fileview-hint">{meta.error}</div> : null}
+								</div>
+							) : (
+								<FileBody meta={meta} path={path} name={selected?.name || ''} variant="view"
+									onExpand={() => setZoom(true)} />
+							)}
 			</div>
-			{zoom && path ? <ImageViewer src={toLocalAsset(path, '')} alt={selected?.name || ''} onClose={() => setZoom(false)} /> : null}
+			{zoom && path && mode === 'preview' ? <ImageViewer src={toLocalAsset(path, '')} alt={selected?.name || ''} onClose={() => setZoom(false)} /> : null}
 			{/* 选中的文字可以复制、也可以就它提问。宿主是正文那一块（不是整个视图）：查找条、
 			    头部按钮上的选中都不该弹出这个菜单。来源用绝对路径——它要落在消息里给模型看，
 			    而模型去读那个文件时不受谁的工作目录影响；同时它也是关掉这个视图时「哪些待提问

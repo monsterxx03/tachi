@@ -44,7 +44,14 @@ export type OpenFile = {
 	// the session's primary root) — the backend's own rootLabels answer, carried along from the row.
 	root: string
 	label: string
+	// mode says what the content column shows: the file itself, or its uncommitted changes. The row
+	// the reader clicked decides (the tree's 「只看改动」 list opens diffs), and the file view offers
+	// the switch from either side — so it travels with the SELECTION rather than being a second piece
+	// of state the two surfaces could disagree about.
+	mode: FileViewMode
 }
+
+export type FileViewMode = 'preview' | 'diff'
 
 // Stamp is one path's state as a poll saw it.
 type Stamp = { exists: boolean; mtimeMs: number; size: number }
@@ -63,7 +70,8 @@ export type FileTreeApi = {
 	// openFile opens a row in the content column. App switches its own view in the same gesture: the
 	// tree owns what is selected, the app owns which column is on screen. The shape is the two fields
 	// a row actually has (a path and a name); the rest of a FileNodeVO belongs to the row, not here.
-	openFile: (file: { path: string; name: string }, root: string, label: string) => void
+	// mode decides whether the column reads the file or its diff; omitted, it reads the file.
+	openFile: (file: { path: string; name: string; mode?: FileViewMode }, root: string, label: string) => void
 	// cursor is the row the keyboard is on, kept apart from the selection: walking the tree with the
 	// arrow keys must not open a file per keypress.
 	cursor: string | null
@@ -87,6 +95,10 @@ export type FileTreeApi = {
 	// entries change, while a file edited in place changes no such thing — so the status has to
 	// travel on its own clock and the two answers must not be able to disagree.
 	gitStatus: Record<string, GitStatusVO>
+	// gitStatusReady is false until the first status answer has landed for this session. The tree's
+	// 「只看改动」 list draws nothing out of an empty table, and 「还在问」 and 「真的没有改动」 are
+	// different sentences — this is what tells them apart.
+	gitStatusReady: boolean
 	// memoReady is false until the remembered expansion for this workspace has been applied: writing
 	// before that would replace what the reader left with the defaults.
 	memoReady: boolean
@@ -162,6 +174,7 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	const [cursor, setCursor] = useState<string | null>(null)
 	const [states, setStates] = useState<Record<string, PathStateVO>>({})
 	const [gitStatus, setGitStatus] = useState<Record<string, GitStatusVO>>({})
+	const [gitStatusReady, setGitStatusReady] = useState(false)
 	const [revealRequest, setRevealRequest] = useState<string | null>(null)
 	const [memoReady, setMemoReady] = useState(false)
 
@@ -221,6 +234,7 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 			const next: Record<string, GitStatusVO> = {}
 			for (const st of list) next[st.path] = st
 			setGitStatus((prev) => (sameGitStatus(prev, next) ? prev : next))
+			setGitStatusReady(true)
 		} catch { /* the next tick asks again */ } finally {
 			statusInFlight.current = false
 		}
@@ -231,7 +245,7 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 	// because the remembered paths are absolute and there is nothing to attribute them to before then.
 	useEffect(() => {
 		const sid = sessionId
-		setExpanded(new Set()); setListings({}); setDirty(new Set()); setStates({}); setGitStatus({}); setCursor(null); setSelected(null)
+		setExpanded(new Set()); setListings({}); setDirty(new Set()); setStates({}); setGitStatus({}); setGitStatusReady(false); setCursor(null); setSelected(null)
 		stampsRef.current = {}
 		appliedFor.current = ''
 		setMemoReady(false)
@@ -266,7 +280,9 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 				})
 				if (memo?.file) {
 					const { root, label } = rootOf(roots, memo.file)
-					setSelected({ path: memo.file, name: memo.file.split('/').pop() || memo.file, root, label })
+					// The remembered thing is WHERE the reader was, not which of the two readings of it
+					// was on screen — a diff is about a moment, and there is no honest way to restore one.
+					setSelected({ path: memo.file, name: memo.file.split('/').pop() || memo.file, root, label, mode: 'preview' })
 				}
 				setMemoReady(true)
 			})
@@ -426,8 +442,8 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 		void loadGitStatus()
 	}, [expanded, load, loadGitStatus])
 
-	const openFile = useCallback((file: { path: string; name: string }, root: string, label: string) => {
-		setSelected({ path: file.path, name: file.name, root, label })
+	const openFile = useCallback((file: { path: string; name: string; mode?: FileViewMode }, root: string, label: string) => {
+		setSelected({ path: file.path, name: file.name, root, label, mode: file.mode || 'preview' })
 		setCursor(file.path)
 	}, [])
 
@@ -447,6 +463,6 @@ export function useFileTree({ sessionId, roots, open, fileVisible }: {
 
 	return useMemo(() => ({
 		expanded, listing, toggle, dirty, selected, openFile, cursor, setCursor,
-		revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus,
-	}), [expanded, listing, toggle, dirty, selected, openFile, cursor, revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus])
+		revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus, gitStatusReady,
+	}), [expanded, listing, toggle, dirty, selected, openFile, cursor, revealRequest, clearReveal, reveal, reload, refresh, polledState, memoReady, gitStatus, gitStatusReady])
 }

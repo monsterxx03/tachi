@@ -85,7 +85,7 @@ let diffSplit = storedDiffSplit()
 const layoutListeners = new Set<() => void>()
 
 /** Sets the diff layout (and remembers it) and re-renders every pane (both surfaces). */
-function setDiffSplit(on: boolean) {
+export function setDiffSplit(on: boolean) {
   if (diffSplit === on) return
   diffSplit = on
   try {
@@ -101,7 +101,7 @@ function subscribeDiffLayout(cb: () => void): () => void {
   return () => { layoutListeners.delete(cb) }
 }
 
-function useDiffSplit(): boolean {
+export function useDiffSplit(): boolean {
   return useSyncExternalStore(subscribeDiffLayout, () => diffSplit, () => diffSplit)
 }
 
@@ -432,7 +432,7 @@ export const DiffBlock = memo(function DiffBlock({ change }: { change: FileChang
   )
 })
 
-function DiffCounts({ added, removed }: { added: number; removed: number }) {
+export function DiffCounts({ added, removed }: { added: number; removed: number }) {
   return (
     <>
       {added > 0 ? <span className="diff-count is-add">+{added}</span> : null}

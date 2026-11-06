@@ -151,6 +151,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 .filetree-icon:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The 「只看改动」 switch, while it is on: the accent colour is the state, because a toggle that
+   only looks like a button is one the reader cannot tell is on (it also carries aria-pressed). */
+.filetree-icon.is-on { background: var(--accent-soft); color: var(--accent-2); }
 
 /* 只有一个滚动器：这个盒子自己滚，别的东西不嵌套一个 overflow（查找会去搜错误的盒子）。 */
 .filetree-body {
@@ -329,6 +332,18 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .fileview-img { display: block; max-width: 100%; margin: 0 auto; padding: 14px 0; cursor: zoom-in; }
 .fileview-empty { padding: 40px 24px; color: var(--text-faint); font-size: var(--fs-label); line-height: 1.7; }
 .fileview-hint { margin-top: 6px; font-size: var(--fs-meta); }
+/* 一个文件的改动（与 git HEAD 对照）：行本身是 diff.tsx 的 DiffLines，这里只给它一条说"这是什么
+   比较"的头部。没有第二条渲染路径 —— 同一条改动在改动面板里和在这里长得一样。 */
+.fileview-diff { padding: 4px 0 24px; }
+.fileview-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.fileview-diff-source { color: var(--text-faint); }
 .find-bar.is-view { position: absolute; top: 10px; right: 22px; z-index: var(--z-above); }
 
 .oneoff-head {

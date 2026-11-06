@@ -1124,7 +1124,7 @@ function App() {
   // from a conversation link) goes through the hook directly: the reader already opened that file in
   // the overlay they clicked, and the tree's answer is where it lives — not a second surface for it.
   const openTreeFile = useCallback((file: OpenFile) => {
-    tree.openFile(file, file.root, file.label)
+    tree.openFile({ path: file.path, name: file.name, mode: file.mode }, file.root, file.label)
     setView('file')
   }, [tree])
 
@@ -1133,7 +1133,7 @@ function App() {
   // the tree uses — the selection lives in useFileTree, so the two cannot disagree about what is on
   // screen (and the remembered "file I was reading" follows either way).
   const openSearchedFile = useCallback((f: FileMatchVO) => {
-    openTreeFile({ path: f.absPath, name: f.path.split('/').pop() || f.absPath, root: f.rootPath, label: f.root })
+    openTreeFile({ path: f.absPath, name: f.path.split('/').pop() || f.absPath, root: f.rootPath, label: f.root, mode: 'preview' })
   }, [openTreeFile])
 
   // 选中一段文字就能「问当前会话」：菜单浮出来的地方有两个（文件视图、附件卡片展开的预览，

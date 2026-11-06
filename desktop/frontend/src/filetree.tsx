@@ -61,6 +61,80 @@ const GIT_TONE: Record<string, string> = {
 	U: 'is-new', A: 'is-new', M: 'is-mod', D: 'is-del', R: 'is-move', C: 'is-move', '!': 'is-conflict',
 }
 
+// CHANGES_ONLY_KEY remembers the tree's 「只看改动」 switch across launches. It lives in
+// localStorage rather than desktop_ui.json for the reason the diff layout does (see diff.tsx): this
+// is a preference about READING, not geometry — Go never has to honour it before the window exists.
+const CHANGES_ONLY_KEY = 'tachi.desktop.fileTreeChangesOnly'
+
+function storedChangesOnly(): boolean {
+	try {
+		return localStorage.getItem(CHANGES_ONLY_KEY) === '1'
+	} catch {
+		return false // storage can be blocked; the switch still works for this session
+	}
+}
+
+function storeChangesOnly(on: boolean) {
+	try {
+		localStorage.setItem(CHANGES_ONLY_KEY, on ? '1' : '0')
+	} catch {
+		/* storage blocked: this session still switches, it just will not persist */
+	}
+}
+
+// insideRoot is the one containment test the change list does by hand. It is the same rule the
+// backend applies when it attributes a path to a root (GetWorkspaceGitStatus asks the roots in
+// order and the first answer wins), spelled once here so the tree cannot attribute a path
+// differently from the table it was handed.
+function insideRoot(root: string, path: string): boolean {
+	return !!root && (path === root || path.startsWith(root.replace(/\/+$/, '') + '/'))
+}
+
+// changeNode is one level of the change list's own hierarchy: the statuses come as absolute PATHS,
+// and the directories on them are only implied by those paths. Nothing is listed from disk here —
+// a directory exists in this tree because something under it changed, which is the whole point of
+// the switch.
+type changeNode = { name: string; path: string; dir: boolean; children: Map<string, changeNode> }
+
+// pushChangeRows flattens one root's statuses into rows: directories first, then files, each by
+// name, exactly the order a listing gives (entries come back directories-first) so the two modes
+// read the same way down.
+//
+// Collapsed directories are the reader's own doing — in this mode every directory starts OPEN,
+// because the list exists to be read, not to be walked.
+function pushChangeRows(root: string, label: string, statuses: GitStatusVO[], collapsed: Set<string>, depth: number, out: TreeRow[]) {
+	const base = root.replace(/\/+$/, '')
+	const head: changeNode = { name: '', path: base, dir: true, children: new Map() }
+	for (const st of statuses) {
+		const rel = st.path.startsWith(base + '/') ? st.path.slice(base.length + 1) : ''
+		if (!rel) continue
+		const parts = rel.split('/')
+		let node = head
+		for (const name of parts.slice(0, -1)) {
+			let child = node.children.get(name)
+			if (!child) {
+				child = { name, path: `${node.path.replace(/\/+$/, '')}/${name}`, dir: true, children: new Map() }
+				node.children.set(name, child)
+			}
+			node = child
+		}
+		node.children.set(parts[parts.length - 1], { name: parts[parts.length - 1], path: st.path, dir: false, children: new Map() })
+	}
+	const walk = (node: changeNode, d: number) => {
+		const kids = [...node.children.values()].sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1))
+		for (const k of kids) {
+			out.push({
+				key: k.path, path: k.path, name: k.name, isDir: k.dir, link: false, size: 0,
+				// The status answer carries no kind, and a status is not worth a second listing: the
+				// neutral document is what an unknown extension gets in the full tree too.
+				kind: k.dir ? 'dir' : 'text', ignored: '', error: '', depth: d, root, label,
+			})
+			if (k.dir && !collapsed.has(k.path)) walk(k, d + 1)
+		}
+	}
+	walk(head, depth)
+}
+
 // dirChangeTitle words a folded directory's count: the total, then the breakdown by what git called
 // each one. The labels come from the VO, so this file never spells a status a second time.
 function dirChangeTitle(c: { total: number; byLabel: Map<string, number> }): string {
@@ -91,9 +165,14 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 	onInsertRef: (path: string) => void
 	onClose: () => void
 }) {
-	const { expanded, listing, toggle, dirty, selected, cursor, setCursor, revealRequest, clearReveal, reload, refresh, openFile, gitStatus } = api
+	const { expanded, listing, toggle, dirty, selected, cursor, setCursor, revealRequest, clearReveal, reload, refresh, openFile, gitStatus, gitStatusReady } = api
 	const [menu, setMenu] = useState<{ x: number; y: number; row: TreeRow } | null>(null)
 	const [room, setRoom] = useState(() => panelRoom(FILE_TREE_MIN_WIDTH, FILE_TREE_MAX_WIDTH))
+	// 只看改动: the tree shows the working tree's uncommitted files instead of the directory listing —
+	// the column becomes a change list. Every directory starts open here (see pushChangeRows), so this
+	// holds the ones the READER folded, not the ones that are open.
+	const [changesOnly, setChangesOnly] = useState(storedChangesOnly)
+	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
 	const treeRef = useRef<HTMLDivElement>(null)
 
 	// The panel is its own Esc-free zone (it is a layout choice, like the sidebar) — EXCEPT while its
@@ -136,7 +215,7 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 	// order they were declared. A root expands like any directory — same gesture, same "fetch this
 	// layer" — except that the DEFAULT is the primary open and the additional ones closed: an extra
 	// root is often on a mounted volume, and opening the panel must not pay for listing all of them.
-	const rows = useMemo<TreeRow[]>(() => {
+	const listingRows = useMemo<TreeRow[]>(() => {
 		const out: TreeRow[] = []
 		if (!roots?.primary) return out
 		const walk = (entries: FileNodeVO[], depth: number, root: string, label: string) => {
@@ -199,6 +278,63 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 		return out
 	}, [roots, expanded, listing])
 
+	// ── 只看改动：the same column, listing the working tree's changes instead ──
+	// Rows come from the STATUS table (the backend already answers for the whole workspace, not just
+	// the layers on screen), so nothing here is listed from disk and nothing needs expanding to be
+	// found: a change three directories down is one row, on screen. A root and each directory leading
+	// to a change get a row of their own so the tree still reads as a tree, and folding one hides its
+	// subtree — the same gesture, a different set of remembered paths (these directories may never
+	// have been listed at all).
+	const changeRows = useMemo<TreeRow[]>(() => {
+		const out: TreeRow[] = []
+		if (!roots?.primary) return out
+		type owner = { root: string; label: string; branch?: string; detached?: boolean; exists?: boolean; statuses: GitStatusVO[] }
+		const owners: owner[] = [{
+			root: roots.primary, label: '', branch: roots.primaryBranch, detached: roots.primaryDetached, statuses: [],
+		}]
+		for (const extra of roots.additional || []) {
+			owners.push({
+				root: extra.path, label: extra.label || '', branch: extra.branch, detached: extra.detached,
+				exists: extra.exists, statuses: [],
+			})
+		}
+		for (const st of Object.values(gitStatus)) {
+			const at = owners.find((o) => insideRoot(o.root, st.path))
+			if (at) at.statuses.push(st)
+		}
+		for (const o of owners) {
+			// A root with nothing changed is not a section of a change list.
+			if (!o.statuses.length || o.exists === false) continue
+			out.push({
+				key: 'root:' + o.root, path: o.root, name: o.root.split('/').filter(Boolean).pop() || o.root,
+				isDir: true, link: false, size: 0, kind: 'dir', ignored: '', error: '', depth: 0,
+				root: o.root, label: o.label, branch: o.branch, detached: o.detached,
+			})
+			if (!collapsed.has(o.root)) pushChangeRows(o.root, o.label, o.statuses, collapsed, 1, out)
+		}
+		return out
+	}, [roots, gitStatus, collapsed])
+
+	const rows = changesOnly ? changeRows : listingRows
+
+	// Whether a directory's children are on screen. The two modes keep different memories: the full
+	// tree's (persisted per workspace, see useFileTree) and the change list's (this panel, every
+	// directory open unless the reader said otherwise).
+	const isOpen = useCallback((path: string, isDir: boolean) => {
+		if (!isDir) return false
+		return changesOnly ? !collapsed.has(path) : expanded.has(path)
+	}, [changesOnly, collapsed, expanded])
+
+	const toggleRow = useCallback((path: string) => {
+		if (!changesOnly) { toggle(path); return }
+		setCollapsed((prev) => {
+			const next = new Set(prev)
+			if (next.has(path)) next.delete(path)
+			else next.add(path)
+			return next
+		})
+	}, [changesOnly, toggle])
+
 	// ── What a COLLAPSED directory holds ─────────────────────────────────────
 	// A folded directory draws no rows under it, so a change inside one would otherwise be invisible
 	// until the reader opened every folder to look. It reports the lot in one line instead, derived
@@ -255,8 +391,11 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 
 	const openRow = (row: TreeRow) => {
 		if (row.note && !row.isDir) return
-		if (row.isDir) { toggle(row.path); return }
-		onOpenFile({ path: row.path, name: row.name, root: row.root, label: row.label })
+		if (row.isDir) { toggleRow(row.path); return }
+		// In the change list a file is a DIFF: the reader turned the column into a change list to
+		// review what is uncommitted, so the content column follows the row they clicked. The file
+		// view still offers the switch back to the file itself.
+		onOpenFile({ path: row.path, name: row.name, root: row.root, label: row.label, mode: changesOnly ? 'diff' : 'preview' })
 	}
 
 	const onTreeKey = useCallback((e: React.KeyboardEvent) => {
@@ -267,17 +406,17 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 		if (e.key === 'Enter') { e.preventDefault(); openRow(row); return }
 		if (e.key === 'ArrowRight' && row.isDir) {
 			e.preventDefault()
-			if (!expanded.has(row.path)) toggle(row.path)
+			if (!isOpen(row.path, true)) toggleRow(row.path)
 			return
 		}
 		if (e.key === 'ArrowLeft') {
 			e.preventDefault()
-			if (row.isDir && expanded.has(row.path)) { toggle(row.path); return }
+			if (isOpen(row.path, row.isDir)) { toggleRow(row.path); return }
 			// On a file (or a collapsed directory): ← goes to the parent directory's row.
 			const parent = row.path.replace(/\/[^/]+$/, '')
 			focusRow(rows.find((r) => r.path === parent))
 		}
-	}, [rows, cursor, expanded, moveCursor, toggle, focusRow])
+	}, [rows, cursor, isOpen, toggleRow, moveCursor, focusRow])
 
 	// The reveal request: the ancestors are already expanded by the hook, so this looks for the row
 	// and — once the layer it lives in has arrived — selects it. A path that is not in the tree (a file
@@ -373,6 +512,13 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 				onPointerDown={startDrag} onKeyDown={onHandleKey} />
 			<div className="filetree-head">
 				<span className="filetree-title">文件</span>
+				{/* 只看改动：the switch that turns the column into the working tree's change list. It
+				    carries its state in aria-pressed and in the accent colour, because a toggle that
+				    only looks like a button is one the reader cannot tell is on. */}
+				<button type="button" className={`filetree-icon filetree-changes-toggle${changesOnly ? ' is-on' : ''}`}
+					aria-pressed={changesOnly}
+					title={changesOnly ? '只看改动：开（点一下看全部文件）' : '只看 git 有改动的文件'}
+					onClick={() => setChangesOnly((prev) => { storeChangesOnly(!prev); return !prev })}>±</button>
 				<button type="button" className="filetree-icon" title="重新读取已展开的目录" onClick={refresh}>↻</button>
 				<button type="button" className="filetree-icon" title="收起文件树" onClick={onClose}>✕</button>
 			</div>
@@ -380,7 +526,8 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 				aria-activedescendant={cursorAt >= 0 ? `filetree-row-${cursorAt}` : undefined}
 				onKeyDown={onTreeKey}>
 				{/* 空态分两种，且都不该在"还没读到"的时候出现：没有工作目录（面板指向下方状态栏的 ⌂），
-				    以及主目录本身是空的（每一层的"（空目录）"由行自己的 note 说）。 */}
+				    以及主目录本身是空的（每一层的"（空目录）"由行自己的 note 说）。只看改动时还有第三种：
+				    改动列表是空的 —— 而它与"还没问到 git"必须分开说。 */}
 				{!roots?.primary ? (
 					<div className="filetree-empty">
 						<div>这个会话还没有工作目录</div>
@@ -390,24 +537,29 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 						<div className="filetree-hint">在下方状态栏的 ⌂ 里选择工作目录</div>
 					</div>
 				) : null}
-				{roots?.primary && listing(roots.primary) && (listing(roots.primary)?.entries || []).length === 0
+				{changesOnly && roots?.primary ? (
+					!gitStatusReady ? <div className="filetree-empty">正在读取 git 状态…</div>
+						: rows.length ? null : <div className="filetree-empty">工作树里没有未提交的改动</div>
+				) : null}
+				{!changesOnly && roots?.primary && listing(roots.primary) && (listing(roots.primary)?.entries || []).length === 0
 					&& !listing(roots.primary)?.error
 					? <div className="filetree-empty">（空目录）</div>
 					: null}
 				{rows.map((row, i) => {
 					// A folded directory speaks for what it hides; an expanded one is spoken for by its
-					// own rows (see dirChanges).
-					const hidden = row.isDir && !expanded.has(row.path) ? dirChanges.get(row.path) : undefined
+					// own rows (see dirChanges). In the change list both rules still hold — a folded
+					// directory there is one the READER folded.
+					const hidden = row.isDir && !isOpen(row.path, true) ? dirChanges.get(row.path) : undefined
 					return (
 						<TreeLine key={row.key} row={row} id={`filetree-row-${i}`}
-							open={row.isDir && expanded.has(row.path)}
+							open={isOpen(row.path, row.isDir)}
 							selected={!row.isDir && !!selected && selected.path === row.path}
 							cursor={cursor === row.key}
 							dirty={dirty.has(row.path)}
 							git={row.isDir ? undefined : gitStatus[row.path]}
 							dirGit={hidden ? dirChangeTitle(hidden) : undefined}
 							onActivate={() => { setCursor(row.key); openRow(row) }}
-							onToggle={() => { setCursor(row.key); toggle(row.path) }}
+							onToggle={() => { setCursor(row.key); toggleRow(row.path) }}
 							onReload={() => reload(row.path)}
 							onMenu={(x, y) => { setCursor(row.key); setMenu({ x, y, row }) }}
 						/>

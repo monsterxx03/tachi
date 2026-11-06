@@ -203,6 +203,83 @@
   smoke.check('展开着的目录不重复标（行自己会说）',
     !(docsRow && docsRow.querySelector('.filetree-git')), docsRow ? docsRow.className : '(docs 行不在)')
 
+  // ── 8c. 只看改动：这一列变成工作树的改动清单，点开的文件是 diff ──────────────
+  // 清单不是"把树过滤一下"：它的行是从**状态表的路径**长出来的（后端答的是整个工作区），
+  // 所以一个从没被展开过的目录（pkg/）也在里面，而且它的目录行是展开的。
+  const changesToggle = smoke.q('.filetree-changes-toggle')
+  smoke.check('文件树头部有「只看改动」开关', !!changesToggle, changesToggle ? '在' : '(没有按钮)')
+  if (!changesToggle) return smoke.finish()
+  changesToggle.click()
+  const namesNow = () => smoke.qa('.filetree-row .filetree-name').map((n) => smoke.text(n))
+  const changeList = await smoke.waitFor(() => {
+    const names = namesNow()
+    return names.indexOf('agent-notes.md') >= 0 && names.indexOf('README.md') < 0 ? names : null
+  }, '只看改动：只剩工作树有改动的文件', 10000)
+  smoke.check('开关把状态画出来（aria-pressed + 高亮）',
+    smoke.q('.filetree-changes-toggle').getAttribute('aria-pressed') === 'true' &&
+    smoke.q('.filetree-changes-toggle').className.indexOf('is-on') >= 0,
+    smoke.q('.filetree-changes-toggle').className)
+  smoke.check('只看改动时未改动的文件从树里消失了', !!changeList,
+    changeList ? changeList.join(' | ') : '此刻的行：' + namesNow().join(' | '))
+  smoke.check('未跟踪的新文件也在清单里（不只是已跟踪的改动）',
+    !!changeList && changeList.indexOf('agent-notes.md') >= 0, changeList ? changeList.join(' | ') : '')
+  smoke.check('折叠着的目录里的改动也在清单里（pkg/util.go）',
+    !!changeList && changeList.indexOf('util.go') >= 0, changeList ? changeList.join(' | ') : '')
+
+  if (!(await clickRow('main.go'))) return smoke.finish()
+  if (!(await smoke.waitFor('.file-view', '内容列打开', 8000))) return smoke.finish()
+  const diffShown = await smoke.waitFor(() => {
+    const added = smoke.qa('.file-view .diff-line.is-add')
+    if (!smoke.q('.file-view .fileview-diff') || !added.length) return null
+    // 一行是"行号 + 符号 + 文本"三块，所以拼起来整份去找那一句，别只看第一行的开头。
+    return { text: smoke.allText('.file-view .diff-line.is-add').join(' ') }
+  }, '改动清单里点开一个文件，内容列显示的是 diff', 10000)
+  smoke.check('点开有改动的文件直接显示 diff，不显示预览', !!diffShown && !smoke.q('.file-view .fileview-doc'),
+    diffShown ? diffShown.text : smoke.text('.file-view').slice(0, 120))
+  smoke.check('diff 里是这次真正改的那一行', !!diffShown && diffShown.text.indexOf('from the agent') >= 0,
+    diffShown ? diffShown.text : '(没有新增行)')
+  smoke.check('它不是浮层：diff 就在内容列里，树还在旁边',
+    !!smoke.q('.file-view .fileview-diff') && !!smoke.q('.filetree-panel'), '')
+  smoke.check('diff 说清它和谁比', smoke.text('.fileview-diff-head').indexOf('git HEAD') >= 0,
+    smoke.text('.fileview-diff-head'))
+
+  // 同一条改动两种读法：上下（逐行对照）与左右（旧的一列、新的一列）。开关与评审面板是同一份偏好
+  // （setDiffSplit），所以这里断言的是"这个界面也能切"，不是"它自己有一套"。
+  const diffBody = () => smoke.q('.file-view .fileview-diff .diff-body')
+  smoke.check('diff 默认是上下（逐行对照）', !!diffBody() && diffBody().className.indexOf('is-split') < 0,
+    diffBody() ? diffBody().className : '(没有 diff body)')
+  const splitBtn = smoke.qa('.fileview-diff .diff-layout-btn').filter((b) => smoke.text(b) === '左右')[0]
+  smoke.check('文件视图的 diff 头上有布局开关', !!splitBtn, splitBtn ? '' : '(没有布局按钮)')
+  if (splitBtn) splitBtn.click()
+  const splitOn = await smoke.waitFor(() => {
+    const body = diffBody()
+    return body && body.className.indexOf('is-split') >= 0 && smoke.q('.fileview-diff .diff-split-row') ? true : null
+  }, '切成左右（两列对齐）', 4000)
+  smoke.check('能切到左右：两列并排，一行一行对齐', !!splitOn,
+    diffBody() ? diffBody().className : '(没有 diff body)')
+  const unifiedBtn = smoke.qa('.fileview-diff .diff-layout-btn').filter((b) => smoke.text(b) === '上下')[0]
+  if (unifiedBtn) unifiedBtn.click()
+  const backUnified = await smoke.waitFor(() => {
+    const body = diffBody()
+    return body && body.className.indexOf('is-split') < 0 ? true : null
+  }, '切回上下', 4000)
+  smoke.check('能切回上下', !!backUnified, diffBody() ? diffBody().className : '(没有 diff body)')
+
+  // 反过来也要有出路：diff 是一条关于"此刻"的话，文件本身仍然是可读的。
+  const previewBtn = smoke.qa('.fileview-head .file-btn').filter((b) => smoke.text(b) === '预览')[0]
+  if (previewBtn) previewBtn.click()
+  const previewDoc = await smoke.waitFor(() => (smoke.q('.file-view .fileview-doc') ? true : null),
+    'diff 头部切回文件本身', 8000)
+  smoke.check('diff 头部能切回文件本身（预览）', !!previewDoc && !smoke.q('.file-view .fileview-diff'),
+    previewDoc ? '' : smoke.text('.file-view').slice(0, 120))
+
+  smoke.click('.fileview-back')
+  await smoke.waitGone('.file-view', '回到会话', 6000)
+  smoke.q('.filetree-changes-toggle').click()
+  const backToListing = await smoke.waitFor(() => (namesNow().indexOf('README.md') >= 0 ? true : null),
+    '关掉开关后完整目录回来', 8000)
+  smoke.check('关掉开关后完整目录回来（未改动的文件重新出现）', !!backToListing, namesNow().join(' | '))
+
   // ── 9. 关掉面板再打开：展开态与选中的文件都还在 ────────────────────────────
   smoke.key(document.body, 'e', { metaKey: true })
   if (!(await smoke.waitGone('.filetree-panel', '面板收起', 6000))) return smoke.finish()
