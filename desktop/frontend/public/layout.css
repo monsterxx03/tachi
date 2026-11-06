@@ -194,6 +194,15 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* git 状态：一个字母，紧跟在名字后面。颜色是**这一列自己的**决定（后端只给字母和它的含义）；
    M 是琥珀而不是红 —— 一个还在改的文件是常态，不是错误，红留给删除和冲突。 */
 .filetree-git { flex-shrink: 0; font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
+/* 折叠着的目录：一个点，说明「里面有未提交的改动」—— 展开时由下面那些行自己说（与侧栏折叠分组
+   同一条规则）。它也是**删除**唯一看得见的地方：被删掉的文件没有行。 */
+.filetree-git.is-dir {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
 .filetree-git.is-new { color: var(--green); }
 .filetree-git.is-mod { color: var(--amber); }
 .filetree-git.is-del { color: var(--red); }

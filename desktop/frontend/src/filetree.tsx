@@ -61,6 +61,15 @@ const GIT_TONE: Record<string, string> = {
 	U: 'is-new', A: 'is-new', M: 'is-mod', D: 'is-del', R: 'is-move', C: 'is-move', '!': 'is-conflict',
 }
 
+// dirChangeTitle words a folded directory's count: the total, then the breakdown by what git called
+// each one. The labels come from the VO, so this file never spells a status a second time.
+function dirChangeTitle(c: { total: number; byLabel: Map<string, number> }): string {
+	const parts = [...c.byLabel.entries()]
+		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+		.map(([label, n]) => `${label} ${n}`)
+	return `${c.total} 处未提交的改动：${parts.join('、')}`
+}
+
 // fileIconFor picks a row's glyph from the SAME kind table the attachment card and the file view use,
 // so the three surfaces cannot disagree about what a file is. An unknown extension gets the neutral
 // document (which is a hint, never a refusal: what a file really is, is settled when it is opened).
@@ -189,6 +198,36 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 		}
 		return out
 	}, [roots, expanded, listing])
+
+	// ── What a COLLAPSED directory holds ─────────────────────────────────────
+	// A folded directory draws no rows under it, so a change inside one would otherwise be invisible
+	// until the reader opened every folder to look. It reports the lot in one line instead, derived
+	// from the SAME status table the file rows draw (the backend answers for the whole workspace, not
+	// just the layers on screen) — and that covers two things a row cannot say even when expanded: a
+	// DELETED file has no row at all, and a collapsed root hides its entire tree.
+	//
+	// Only folded directories get it. An expanded one has its own rows saying it, which is the rule
+	// the sidebar's folded groups already follow: when the rows are on screen, they do the talking.
+	const dirChanges = useMemo(() => {
+		const counts = new Map<string, { total: number; byLabel: Map<string, number> }>()
+		const allRoots = [roots?.primary, ...(roots?.additional || []).map((r) => r.path)].filter(Boolean) as string[]
+		if (!allRoots.length) return counts
+		const inside = (p: string) => allRoots.some((root) => p === root || p.startsWith(root.replace(/\/+$/, '') + '/'))
+		for (const st of Object.values(gitStatus)) {
+			let dir = st.path.replace(/\/[^/]+$/, '')
+			// Walk up until the root that owns the file: above it there is nothing this tree draws.
+			while (dir && dir !== '/' && inside(dir)) {
+				const cur = counts.get(dir) || { total: 0, byLabel: new Map<string, number>() }
+				cur.total++
+				cur.byLabel.set(st.label, (cur.byLabel.get(st.label) || 0) + 1)
+				counts.set(dir, cur)
+				const parent = dir.replace(/\/[^/]+$/, '')
+				if (parent === dir) break
+				dir = parent
+			}
+		}
+		return counts
+	}, [gitStatus, roots])
 
 	// One focusable container with a cursor (aria-activedescendant), rather than one tab stop per row:
 	// this is the shape a tree control has, and it means the arrow keys work the moment the reader has
@@ -355,19 +394,25 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 					&& !listing(roots.primary)?.error
 					? <div className="filetree-empty">（空目录）</div>
 					: null}
-				{rows.map((row, i) => (
-					<TreeLine key={row.key} row={row} id={`filetree-row-${i}`}
-						open={row.isDir && expanded.has(row.path)}
-						selected={!row.isDir && !!selected && selected.path === row.path}
-						cursor={cursor === row.key}
-						dirty={dirty.has(row.path)}
-						git={row.isDir ? undefined : gitStatus[row.path]}
-						onActivate={() => { setCursor(row.key); openRow(row) }}
-						onToggle={() => { setCursor(row.key); toggle(row.path) }}
-						onReload={() => reload(row.path)}
-						onMenu={(x, y) => { setCursor(row.key); setMenu({ x, y, row }) }}
-					/>
-				))}
+				{rows.map((row, i) => {
+					// A folded directory speaks for what it hides; an expanded one is spoken for by its
+					// own rows (see dirChanges).
+					const hidden = row.isDir && !expanded.has(row.path) ? dirChanges.get(row.path) : undefined
+					return (
+						<TreeLine key={row.key} row={row} id={`filetree-row-${i}`}
+							open={row.isDir && expanded.has(row.path)}
+							selected={!row.isDir && !!selected && selected.path === row.path}
+							cursor={cursor === row.key}
+							dirty={dirty.has(row.path)}
+							git={row.isDir ? undefined : gitStatus[row.path]}
+							dirGit={hidden ? dirChangeTitle(hidden) : undefined}
+							onActivate={() => { setCursor(row.key); openRow(row) }}
+							onToggle={() => { setCursor(row.key); toggle(row.path) }}
+							onReload={() => reload(row.path)}
+							onMenu={(x, y) => { setCursor(row.key); setMenu({ x, y, row }) }}
+						/>
+					)
+				})}
 			</div>
 			{menu ? (
 				<div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
@@ -386,7 +431,7 @@ export function FileTreePanel({ api, roots, width, onResizeCommit, onOpenFile, o
 
 // TreeLine draws one line. It is memoized on the row's own data: the tree can hold several hundred
 // rows after two clicks, and a poll that changed one directory must not re-render the other nine.
-const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty, git, onActivate, onToggle, onReload, onMenu }: {
+const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty, git, dirGit, onActivate, onToggle, onReload, onMenu }: {
 	row: TreeRow
 	id: string
 	open: boolean
@@ -394,6 +439,9 @@ const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty
 	cursor: boolean
 	dirty: boolean
 	git?: GitStatusVO
+	// What a FOLDED directory hides, already worded (see dirChanges): a folded row is the only thing on
+	// screen about its subtree, so it has to say that there is something in it.
+	dirGit?: string
 	onActivate: () => void
 	onToggle: () => void
 	onReload: () => void
@@ -405,6 +453,7 @@ const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty
 	const title = [
 		row.path,
 		git ? `未提交的改动：${git.label}` : '',
+		dirGit || '',
 		row.link ? '符号链接' : '',
 		row.ignored ? `被 git 忽略：${row.ignored}` : '',
 		row.error ? `读不到：${row.error}` : '',
@@ -438,6 +487,8 @@ const TreeLine = memo(function TreeLine({ row, id, open, selected, cursor, dirty
 				<span className={`filetree-git ${GIT_TONE[git.code] || ''}`}
 					title={`未提交的改动：${git.label}`}>{git.code}</span>
 			) : null}
+			{/* A folded directory: one dot, and its tooltip says how many and of what kind. */}
+			{dirGit ? <span className="filetree-git is-dir" title={dirGit} aria-hidden="true" /> : null}
 			{row.link ? <span className="filetree-link" title="符号链接">🔗</span> : null}
 			{/* The root row's own facts: its label only when it says something the name does not (a base
 			    name repeated beside itself is noise; the full path is news), and its git branch (two

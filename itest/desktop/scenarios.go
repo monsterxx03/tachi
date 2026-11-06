@@ -1091,6 +1091,10 @@ func scenarios() []scenario {
 				"long.md":     longMarkdown(60),
 				"dist/app.js": "console.log(1)\n",
 				"run.log":     "noise\n",
+				// A directory that starts COLLAPSED and never gets opened: the only row that can say
+				// anything about a change inside it is its own aggregate mark, and that is what the
+				// driver asserts on it (the agent edits this file below).
+				"pkg/util.go": "package pkg\n\nfunc util() {}\n",
 			},
 			// Two roots whose BASE NAMES collide: the label a root is shown under then degrades to its
 			// full path (rootLabels), and the frontend cannot derive that itself — it has to be the
@@ -1110,7 +1114,7 @@ func scenarios() []scenario {
 				// grow a row for it on its own (the poll, or the end of the turn). It also edits a
 				// TRACKED file IN PLACE (main.go) — that moves no directory's mtime, so the row's git
 				// mark can only come from the status reader that runs on its own clock.
-				{Reply: bashStream("printf 'from the agent\\n' > docs/agent-notes.md; printf '\\n// from the agent\\n' >> main.go", "call_ft1")},
+				{Reply: bashStream("printf 'from the agent\\n' > docs/agent-notes.md; printf '\\n// from the agent\\n' >> main.go; printf '\\n// from the agent\\n' >> pkg/util.go", "call_ft1")},
 				{Reply: textStream("写好了。", 800)},
 			},
 			after: func(c *checkCtx) {
@@ -1129,6 +1133,12 @@ func scenarios() []scenario {
 				// disk, so the mark is not coming from a fixture.
 				edited, err := os.ReadFile(filepath.Join(c.work, "main.go"))
 				c.check("agent 真的原地改了 main.go", err == nil && strings.Contains(string(edited), "from the agent"),
+					fmt.Sprintf("err=%v", err))
+
+				// The change inside the COLLAPSED pkg/ — the driver can only see it as the folder row's
+				// aggregate mark, so the file itself is asserted here.
+				hidden, err := os.ReadFile(filepath.Join(c.work, "pkg", "util.go"))
+				c.check("agent 改了折叠着的 pkg/util.go", err == nil && strings.Contains(string(hidden), "from the agent"),
 					fmt.Sprintf("err=%v", err))
 
 				// The memo was written BACK: the expansion the driver produced (docs/dist…, whichever it

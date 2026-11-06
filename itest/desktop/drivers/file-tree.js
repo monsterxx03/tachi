@@ -7,6 +7,8 @@
 //   · 被 git 忽略的文件照旧**显示**，只是灰掉 + 一枚「忽略」——树回答的是"磁盘上有什么"。
 //   · 每一行的 git 状态：新文件标 U，原地被改的**已提交**文件标 M —— 后者所在目录的 mtime 一动
 //     没动，所以它只可能来自那个按时轮询的状态读取，不是重新列目录的副产物。
+//   · 折叠着的目录（pkg/，全程没被展开过）用一个点说出里面有未提交的改动 —— 展开着的那一层不再
+//     重复标一次，因为它的行自己会说。
 //   · 文件在**会话那一列**打开（文件视图），而树还在旁边：这正是它不复用旁路面板的地方。
 //   · 会话在文件视图盖着时保持挂载（只是 inert），所以草稿还在、滚动没丢。
 //   · agent 写完文件后树自己更新（轮询 / 一轮结束触发）。
@@ -185,6 +187,21 @@
   smoke.check('原地修改的已提交文件带上 M，且说明是已修改',
     !!mainGit && mainGit.title.indexOf('已修改') >= 0,
     mainGit ? mainGit.code + ' / ' + mainGit.title : '(没有状态标记)')
+
+  // 折叠着的目录自己说它藏着什么：pkg/ 全程没被展开过，所以那条 mark 是它唯一能说的话 ——
+  // 而「一个目录折着就什么都看不见」正是这个功能最开始缺的那一半。
+  const pkgDot = await smoke.waitFor(() => {
+    const row = rowEl('pkg')
+    const dot = row && row.querySelector('.filetree-git.is-dir')
+    const title = dot ? dot.getAttribute('title') || '' : ''
+    return dot && title.indexOf('已修改') >= 0 ? { title } : null
+  }, '折叠的 pkg 目录标出里面有未提交的改动', 15000)
+  smoke.check('折叠的目录标出里面有未提交的改动，并说明是什么',
+    !!pkgDot, pkgDot ? pkgDot.title : '(没有聚合标记)')
+  // 展开着的那一层不重复标一次：下面的行自己会说（与侧栏折叠分组同一条规则）。
+  const docsRow = rowEl('docs')
+  smoke.check('展开着的目录不重复标（行自己会说）',
+    !(docsRow && docsRow.querySelector('.filetree-git')), docsRow ? docsRow.className : '(docs 行不在)')
 
   // ── 9. 关掉面板再打开：展开态与选中的文件都还在 ────────────────────────────
   smoke.key(document.body, 'e', { metaKey: true })
