@@ -1,15 +1,14 @@
-/* Scrollbars — overlay style: thin, transparent track, only the thumb shows. */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--scrollbar);
-  border-radius: var(--radius-sm);
-  /* Transparent border + clipped background = inset thumb without a track. */
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
-::-webkit-scrollbar-corner { background: transparent; }
+/* No scrollbar styling, on purpose — do not add `::-webkit-scrollbar*` rules back.
+   Styling a scrollbar turns it into a legacy always-visible bar: the webview stops asking the
+   platform for its overlay scroller, and "only while scrolling" has to be re-implemented by hand
+   (a class toggled from `scroll` events, plus geometry to guess at hover) — a worse copy of
+   something the OS already does. Left alone, WKWebView (macOS) and WebKitGTK (Linux) draw their
+   native overlay bars: they appear while the box moves, fade after it stops, and stay grabbable
+   with the mouse. They also take no gutter, so `scrollbar-gutter: stable` in a few panes is inert
+   here rather than load-bearing.
+   The one thing that still names a scrollbar is `.diff-hscroll { scrollbar-width: none }` in
+   chat.css: a bar deliberately hidden, which the standard property does without opting the box
+   into legacy rendering. */
 
 /* Welcome empty state */
 /* An empty conversation. It used to lead with a 46px gradient ◆ that floated up and down and

@@ -84,9 +84,6 @@
   --hover: rgba(62, 54, 44, 0.055);
   --hover-2: rgba(62, 54, 44, 0.08);
 
-  --scrollbar: rgba(62, 54, 44, 0.2);
-  --scrollbar-hover: rgba(62, 54, 44, 0.32);
-
   --text: #2b2621;
   --text-dim: #5b554d;
   /* Metadata (timestamps, session times, tool durations, thinking label) runs
@@ -353,9 +350,6 @@
   --wash-2: rgba(255, 255, 255, 0.07);
   --hover: rgba(255, 255, 255, 0.05);
   --hover-2: rgba(255, 255, 255, 0.08);
-
-  --scrollbar: rgba(255, 255, 255, 0.16);
-  --scrollbar-hover: rgba(255, 255, 255, 0.3);
 
 
   --text: #cecdc6;
