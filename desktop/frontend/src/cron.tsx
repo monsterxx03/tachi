@@ -63,7 +63,12 @@ function targetLabel(job: CronJobVO): { text: string; cls: string; title: string
 }
 
 function lastRunText(job: CronJobVO): { text: string; bad: boolean } {
-  if (!job.lastRunAt) return { text: '还没跑过', bad: false }
+  if (!job.lastRunAt) {
+    // 远端面板只给状态、不给时间（协议如此）。说了跑过就别再显示「还没跑过」——那是另一件事。
+    if (job.lastRunStatus === 'error') return { text: '上次失败', bad: true }
+    if (job.lastRunStatus) return { text: '上次成功', bad: false }
+    return { text: '还没跑过', bad: false }
+  }
   if (job.lastRunStatus === 'error') {
     return { text: `上次失败 · ${fmtWhen(job.lastRunAt)}`, bad: true }
   }
@@ -77,21 +82,24 @@ function isActive(job: CronJobVO): boolean {
 // ── panel (status bar) ─────────────────────────────────────────────────────
 
 export function CronPanel({
-  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow, onDelete, floating,
+  jobs, loading, scheduled, notice, onClose, onNew, onEdit, onOpenPage, onTogglePaused, onRunNow, onDelete, floating, readonly,
 }: {
   jobs: CronJobVO[]
   loading: boolean
   scheduled: boolean
   notice?: string
   onClose: () => void
-  onNew: () => void
-  onEdit: (job: CronJobVO) => void
-  onOpenPage: () => void
+  /** 新建 / 编辑 / 完整页面在只读视图里没有对应物（远端的手机接口只开放「跑、暂停、删」），
+   *  于是它们是可选的回调：没有就不画那个按钮，而不是画一个点不动的。 */
+  onNew?: () => void
+  onEdit?: (job: CronJobVO) => void
+  onOpenPage?: () => void
   onTogglePaused: (job: CronJobVO) => void
   onRunNow: (job: CronJobVO) => void
   onDelete: (job: CronJobVO) => void
   /** Where it sits relative to its trigger (see popover.ts). */
   floating: PopoverPosition
+  readonly?: boolean
 }) {
   // Deleting here is a two-step confirm INSIDE the row: the page has a dialog, but a popover
   // that opened a modal on top of itself would be a second surface for one question. The step
@@ -145,7 +153,7 @@ export function CronPanel({
           </div>
         </div>
         <div className="cron-head-actions">
-          <button className="btn sm" onClick={onNew} disabled={!scheduled}>＋ 新建</button>
+          {!readonly && onNew ? <button className="btn sm" onClick={onNew} disabled={!scheduled}>＋ 新建</button> : null}
           <button className="cron-x" onClick={onClose} title="关闭" aria-label="关闭">×</button>
         </div>
       </div>
@@ -206,7 +214,7 @@ export function CronPanel({
                         {job.running ? '运行中…' : '运行一次'}
                       </button>
                     ) : null}
-                    <button className="btn ghost sm" onClick={() => onEdit(job)}>编辑</button>
+                    {!readonly && onEdit ? <button className="btn ghost sm" onClick={() => onEdit(job)}>编辑</button> : null}
                     {scheduled ? (
                       <button className="btn ghost sm" onClick={() => onTogglePaused(job)}>
                         {isActive(job) ? '暂停' : '恢复'}
@@ -223,9 +231,11 @@ export function CronPanel({
         )}
       </div>
 
-      <div className="cron-foot">
-        <button className="cron-foot-link" onClick={onOpenPage}>打开完整页面 →</button>
-      </div>
+      {!readonly && onOpenPage ? (
+        <div className="cron-foot">
+          <button className="cron-foot-link" onClick={onOpenPage}>打开完整页面 →</button>
+        </div>
+      ) : null}
     </div>
   )
 }

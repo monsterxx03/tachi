@@ -30,6 +30,14 @@ export function ActivateSession(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * AddRemoteHost pairs one machine and remembers it. 同一台机器再配对一次就是更新
+ * （按 deviceId 认），不会在列表里多出一行。
+ */
+export function AddRemoteHost(payload: string): $CancellablePromise<[$models.RemoteHostVO, string]> {
+    return $Call.ByID(853906767, payload);
+}
+
+/**
  * AddSessionRoots appends directories the user picked to the session's root set.
  * Returns "ok", or a human-readable reason the UI shows instead (see the validation
  * rules at the top of this file).
@@ -546,6 +554,14 @@ export function ListProviders(): $CancellablePromise<config$0.ProviderConfig[] |
 }
 
 /**
+ * ListRemoteHosts 只回答「记住了哪些机器」，一次网络都不碰：它是页面打开时画列表用的，
+ * 一台离线的机器不该让列表等一个超时。可达性是另一次读取的事（RemoteSessions/RemoteOpen）。
+ */
+export function ListRemoteHosts(): $CancellablePromise<$models.RemoteHostVO[] | null> {
+    return $Call.ByID(2996757789);
+}
+
+/**
  * ListSessions returns all tachi sessions, most recently updated first.
  */
 export function ListSessions(): $CancellablePromise<$models.SessionInfo[] | null> {
@@ -749,6 +765,161 @@ export function RegenerateMobileToken(): $CancellablePromise<string> {
     return $Call.ByID(238092313);
 }
 
+export function RemoteAnswerPermission(hostID: string, sessionID: string, toolID: string, decision: string): $CancellablePromise<string> {
+    return $Call.ByID(2122055539, hostID, sessionID, toolID, decision);
+}
+
+export function RemoteAnswerQuestion(hostID: string, sessionID: string, answers: { [_ in string]?: string } | null): $CancellablePromise<string> {
+    return $Call.ByID(937522480, hostID, sessionID, answers);
+}
+
+export function RemoteDeclineQuestion(hostID: string, sessionID: string): $CancellablePromise<string> {
+    return $Call.ByID(2911935172, hostID, sessionID);
+}
+
+export function RemoteDeleteCronJob(hostID: string, jobID: string): $CancellablePromise<string> {
+    return $Call.ByID(2820514448, hostID, jobID);
+}
+
+/**
+ * RemoteDeleteSession deletes a conversation on the other machine. That machine refuses a
+ * conversation with a turn in flight (turn_running); the refusal goes back to the confirmation
+ * box, exactly like the native one, so the reader acts on the same words either way.
+ */
+export function RemoteDeleteSession(hostID: string, sessionID: string): $CancellablePromise<string> {
+    return $Call.ByID(392814087, hostID, sessionID);
+}
+
+/**
+ * RemoteDisconnect drops the live connection to one machine. Leaving the remote view calls
+ * this: a connection nobody draws should not keep collecting another machine's events.
+ */
+export function RemoteDisconnect(hostID: string): $CancellablePromise<void> {
+    return $Call.ByID(4198222348, hostID);
+}
+
+/**
+ * RemoteDownloadFile fetches one attachment the other machine's agent delivered (a SendFile call)
+ * and writes it under this machine's Downloads. The id is that tool call's id — the only handle
+ * the protocol offers, and the reason a token cannot be turned into "read any file over there".
+ */
+export function RemoteDownloadFile(hostID: string, sessionID: string, attachmentID: string, name: string): $CancellablePromise<[string, string]> {
+    return $Call.ByID(3813141532, hostID, sessionID, attachmentID, name);
+}
+
+/**
+ * RemoteNewSession creates a conversation on the OTHER machine — same endpoint the phone uses,
+ * so it lands under that machine's own default working directory (~/workspace) rather than
+ * borrowing anything from this window. Returning the row (not just "ok") is what lets the page
+ * open it right away: the list refresh may not have reached the caller yet.
+ */
+export function RemoteNewSession(hostID: string): $CancellablePromise<[$models.RemoteSessionVO, string]> {
+    return $Call.ByID(267423056, hostID);
+}
+
+export function RemoteOpenSession(hostID: string, sessionID: string): $CancellablePromise<[$models.RemoteSnapshotVO, string]> {
+    return $Call.ByID(3741020054, hostID, sessionID);
+}
+
+export function RemotePage(hostID: string, sessionID: string, before: number, limit: number): $CancellablePromise<[$models.RemotePageVO, string]> {
+    return $Call.ByID(27425553, hostID, sessionID, before, limit);
+}
+
+/**
+ * RemotePanels reads the three panels for one conversation on the other machine. A read: it
+ * builds nothing there and forces no probe — the agents half is whatever that machine's last
+ * look found, which is exactly why it carries `checkedAt`.
+ */
+export function RemotePanels(hostID: string, sessionID: string): $CancellablePromise<[$models.RemotePanelsVO, string]> {
+    return $Call.ByID(167247409, hostID, sessionID);
+}
+
+export function RemotePauseCronJob(hostID: string, jobID: string, paused: boolean): $CancellablePromise<string> {
+    return $Call.ByID(774230459, hostID, jobID, paused);
+}
+
+export function RemoteProviders(hostID: string): $CancellablePromise<[$models.RemoteProviderVO[] | null, string]> {
+    return $Call.ByID(2908662108, hostID);
+}
+
+/**
+ * RemoteRenameSession renames a conversation on the other machine. An empty title is refused by
+ * that machine (bad_request), not silently ignored here — the reader typed something and the
+ * refusal is the only way they learn why nothing changed.
+ */
+export function RemoteRenameSession(hostID: string, sessionID: string, title: string): $CancellablePromise<string> {
+    return $Call.ByID(1719971952, hostID, sessionID, title);
+}
+
+/**
+ * RemoteRunCronJob runs one scheduled job now. The reply is only "accepted": the run happens
+ * over there, and what it does arrives as a normal turn in the conversation it belongs to.
+ */
+export function RemoteRunCronJob(hostID: string, jobID: string): $CancellablePromise<string> {
+    return $Call.ByID(2538934030, hostID, jobID);
+}
+
+/**
+ * RemoteSend posts one message. mode is send / steer / interrupt, the protocol's own three
+ * words: the composer's decision (排队 or 直接发) is the same decision it makes locally.
+ * attachments are the NAMES an upload answered with (RemoteUploadFile), never paths — one of the
+ * protocol's own rules, and the reason a token cannot be turned into "read that machine's files".
+ */
+export function RemoteSend(hostID: string, sessionID: string, text: string, mode: string, attachments: string[] | null): $CancellablePromise<string> {
+    return $Call.ByID(2402662792, hostID, sessionID, text, mode, attachments);
+}
+
+export function RemoteSessions(hostID: string): $CancellablePromise<[$models.RemoteSessionVO[] | null, string]> {
+    return $Call.ByID(2704863047, hostID);
+}
+
+export function RemoteSetProvider(hostID: string, sessionID: string, name: string): $CancellablePromise<string> {
+    return $Call.ByID(2209365159, hostID, sessionID, name);
+}
+
+/**
+ * RemoteSetSessionNotify flips this conversation's phone-push switch on the other machine. The
+ * value lives in that machine's session record (the same field its own desktop reads), and the
+ * broadcast `session_prefs` is how every screen hears about it.
+ */
+export function RemoteSetSessionNotify(hostID: string, sessionID: string, off: boolean): $CancellablePromise<string> {
+    return $Call.ByID(97780379, hostID, sessionID, off);
+}
+
+/**
+ * RemoteSetSessionPinned pins (or unpins) a conversation on the other machine. The list is
+ * ordered pinned-first by the server, so the row's new place comes from the refresh it broadcasts
+ * — this side must not sort a copy of its own.
+ */
+export function RemoteSetSessionPinned(hostID: string, sessionID: string, pinned: boolean): $CancellablePromise<string> {
+    return $Call.ByID(140575080, hostID, sessionID, pinned);
+}
+
+export function RemoteSetSkipApproval(hostID: string, sessionID: string, skip: boolean): $CancellablePromise<string> {
+    return $Call.ByID(1839963418, hostID, sessionID, skip);
+}
+
+export function RemoteStop(hostID: string, sessionID: string): $CancellablePromise<string> {
+    return $Call.ByID(373461490, hostID, sessionID);
+}
+
+/**
+ * RemoteUploadFile sends one local file to the other machine's session and returns the name that
+ * machine stored it under. `path` names a file on THIS machine — it is read here, and only its
+ * bytes travel.
+ */
+export function RemoteUploadFile(hostID: string, sessionID: string, path: string): $CancellablePromise<[$models.RemoteUploadVO, string]> {
+    return $Call.ByID(400732433, hostID, sessionID, path);
+}
+
+/**
+ * RemoveRemoteHost forgets one machine. 它同时断掉那条连接：一个已经不该被信任的
+ * 地址上留着的长连接，比没有连接更糟。
+ */
+export function RemoveRemoteHost(id: string): $CancellablePromise<string> {
+    return $Call.ByID(3626333700, id);
+}
+
 /**
  * RemoveSessionRoot drops one additional root. The primary is not removable (the
  * UI offers "change" instead), so a path equal to it is simply not found here.
@@ -763,6 +934,15 @@ export function RemoveSessionRoot(id: string, dir: string): $CancellablePromise<
  */
 export function RenameProject(id: string, name: string): $CancellablePromise<string> {
     return $Call.ByID(3088019471, id, name);
+}
+
+/**
+ * RenameRemoteHost gives a machine the name the reader chose. The name lives HERE, not on the
+ * other machine — the phone's rule too: a probe reports the machine's hostname, and there is no
+ * endpoint that writes a label back, so 「我管这台叫 NAS」 is this side's business.
+ */
+export function RenameRemoteHost(id: string, name: string): $CancellablePromise<[$models.RemoteHostVO, string]> {
+    return $Call.ByID(2375370670, id, name);
 }
 
 /**

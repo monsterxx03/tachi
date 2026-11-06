@@ -1164,6 +1164,215 @@ export interface ProjectVO {
     "createdAt": string;
 }
 
+export interface RemoteAgentRowVO {
+    "name": string;
+    "label": string;
+    "id": string;
+    "url": string;
+    "note": string;
+    "reach": string;
+    "err": string;
+    "skills": string[] | null;
+}
+
+export interface RemoteAgentsVO {
+    "peers": RemoteAgentRowVO[] | null;
+    "checkedAt": string;
+    "anyChecked": boolean;
+}
+
+export interface RemoteAskVO {
+    /**
+     * permission / question
+     */
+    "kind": string;
+    "toolId": string;
+    "toolName"?: string;
+
+    /**
+     * bash / files / mcp_search
+     */
+    "permissionKind"?: string;
+    "preview"?: string;
+    "questions"?: RemoteQuestionVO[] | null;
+}
+
+export interface RemoteAttachmentVO {
+    "id": string;
+    "name": string;
+    "mimeType": string;
+    "size": number;
+    "downloadable": boolean;
+}
+
+/**
+ * RemoteContextPartVO is one bucket of the context breakdown. The wire carries a LABEL, not the
+ * local colour key (the phone paints these with its own palette), so the remote popover lists
+ * them without the native per-bucket colours.
+ */
+export interface RemoteContextPartVO {
+    "label": string;
+    "tokens": number;
+}
+
+export interface RemoteContextVO {
+    "estimate": number;
+    "window": number;
+    "parts": RemoteContextPartVO[] | null;
+}
+
+export interface RemoteCronRowVO {
+    "id": string;
+    "name": string;
+    "scheduleText": string;
+    "type": string;
+    "status": string;
+    "targetKind": string;
+    "targetTitle": string;
+    "nextRun": string;
+    "lastRunStatus": string;
+    "lastRunError": string;
+    "running": boolean;
+}
+
+/**
+ * RemoteHostVO 是机器表给界面看的那一份。**没有 token**：界面不需要它，而一个进过
+ * webview 的凭据就多了一处要擦的地方。
+ */
+export interface RemoteHostVO {
+    "id": string;
+    "name": string;
+    "version": string;
+    "urls": string[] | null;
+    "deviceId": string;
+    "reachable": boolean;
+    "error": string;
+}
+
+export interface RemoteMCPRowVO {
+    "name": string;
+    "type": string;
+    "connected": boolean;
+    "needsAuth": boolean;
+
+    /**
+     * Loaded is how many of this server's Tools this conversation has loaded; Tools is how many
+     * it offers. The pair is the number the native panel draws as `n/m 工具`.
+     */
+    "loaded": number;
+    "tools": number;
+}
+
+export interface RemoteMessageVO {
+    "index": number;
+    "role": string;
+    "content": string;
+    "displayContent"?: string;
+    "timestamp"?: string;
+    "iteration"?: number;
+    "seq"?: number;
+    "turn"?: number;
+    "toolName"?: string;
+    "toolCallId"?: string;
+    "args"?: string;
+    "title"?: string;
+    "toolResult"?: string;
+    "isError"?: boolean;
+    "thinking"?: string;
+    "autoExpand"?: boolean;
+}
+
+export interface RemotePageVO {
+    "messages": RemoteMessageVO[] | null;
+    "hasMore": boolean;
+}
+
+export interface RemotePanelsVO {
+    "mcp": RemoteMCPRowVO[] | null;
+    "agents": RemoteAgentsVO;
+    "cron": RemoteCronRowVO[] | null;
+}
+
+export interface RemoteProviderVO {
+    "name": string;
+    "model": string;
+}
+
+export interface RemoteQuestionVO {
+    "question": string;
+    "options"?: string[] | null;
+    "multiSelect"?: boolean;
+}
+
+export interface RemoteSessionVO {
+    "id": string;
+    "title": string;
+    "projectName"?: string;
+    "updatedAt": string;
+    "running": boolean;
+    "waiting": string;
+    "readOnly": boolean;
+    "heldByTask": boolean;
+    "pinned"?: boolean;
+    "channelSession"?: boolean;
+    "channelName"?: string;
+
+    /**
+     * Cron is how many scheduled jobs write into this conversation, and CronNext the earliest
+     * wake-up (RFC3339). The phone draws a clock with them; the desktop's delete confirmation
+     * uses the count to say 「任务也会一并删除」 — the same sentence this machine's own sidebar
+     * shows for its own sessions.
+     */
+    "cron"?: number;
+    "cronNext"?: string;
+}
+
+/**
+ * RemoteSnapshotVO 是打开一段远端对话时先给的那一份完整快照，之后才是增量。
+ */
+export interface RemoteSnapshotVO {
+    "session": RemoteSessionVO;
+    "messages": RemoteMessageVO[] | null;
+    "hasMore": boolean;
+    "state": RemoteStateVO;
+    "asks": RemoteAskVO[] | null;
+    "model": string;
+    "skipApproval": boolean;
+    "notifyOff": boolean;
+    "workspace": RemoteWorkspaceVO;
+    "usage": RemoteUsageVO;
+    "context": RemoteContextVO;
+    "attachments": RemoteAttachmentVO[] | null;
+}
+
+export interface RemoteStateVO {
+    "status": string;
+    "label": string;
+    "detail": string;
+    "waiting": string;
+}
+
+/**
+ * RemoteUploadVO is one upload's answer — the name the OTHER machine stored the file under, which
+ * is what the send request cites (never a path).
+ */
+export interface RemoteUploadVO {
+    "name": string;
+    "size": number;
+    "kind": string;
+}
+
+export interface RemoteUsageVO {
+    "cost": number;
+    "credit"?: number;
+    "cacheHitRate"?: number;
+}
+
+export interface RemoteWorkspaceVO {
+    "primary": string;
+    "additional": string[] | null;
+}
+
 /**
  * RewindChainVO is what the rewind-chain surface needs in ONE call: the session's rewind
  * points, and — when the chain as a whole is unusable — why.
