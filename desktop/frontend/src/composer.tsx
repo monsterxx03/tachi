@@ -8,7 +8,7 @@
 // feeds is what stops the two from drifting apart; the queue is also the state that has to
 // follow its own conversation (keyed by session, moved on auto-compaction).
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Events } from '@wailsio/runtime'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -1089,6 +1089,88 @@ function readAsDataURL(f: File): Promise<string> {
 
 export type ComposerApi = ReturnType<typeof useComposer>
 
+// ── The pieces the remote view shares ────────────────────────────────────────
+// The desktop's input row is not one component the remote page can mount: useComposer owns
+// local-only capabilities (the @/# pickers, slash commands, voice, file drops, the drag
+// resizer) and talks to this app's AgentService. What the two views DO have in common is the
+// queue and the two controls — so those are extracted here rather than copied, and a change to
+// "排队 or 发送" or to the stop button's red ring reaches both.
+
+// pendingBarTitle is the one sentence above the queue. `cronRunning` says the turn in flight is
+// a scheduled task's, which refuses steering — a different promise from "will be inserted".
+export function pendingBarTitle(running: boolean, cronRunning: boolean): string {
+  if (!running) return '待发送消息'
+  return cronRunning ? '⏸ 待发送 · 等定时任务结束后发送' : '⏸ 待发送 · 会在本轮工具调用结束后自动插入'
+}
+
+export function PendingBar({ running, cronRunning, items, sendingNow, onSendNow, onClear, onDrop }: {
+  running: boolean
+  cronRunning?: boolean
+  items: string[]
+  sendingNow?: boolean
+  onSendNow: () => void
+  onClear: () => void
+  onDrop: (index: number) => void
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="pending-bar">
+      <div className="pending-head">
+        <span className="pending-title">{pendingBarTitle(running, !!cronRunning)}</span>
+        <span className="pending-actions">
+          <button className="pending-send" disabled={sendingNow} onClick={onSendNow}>
+            {sendingNow ? '正在停止…' : running ? '立即发送 · 打断' : '发送'}
+          </button>
+          <button className="pending-clear" onClick={onClear} title="清空待发送队列">清空</button>
+        </span>
+      </div>
+      {items.map((t, i) => (
+        <div className="pending-item" key={`${i}-${t.slice(0, 8)}`}>
+          <span className="pending-bullet">·</span>
+          <span className="pending-text" title={t}>{t}</span>
+          <button className="pending-del" title="撤回该条" onClick={() => onDrop(i)}>✕</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ComposerStatus is the row under the box, and its children ARE its modules: the desktop passes
+// the working directory, the plan and the model/approval/agents/MCP/cron cluster; the remote view
+// passes only the model and the approval switch, because the other modules act on THIS machine
+// and would be dead controls there. The container is shared so the row cannot drift apart in
+// padding, order or alignment between the two.
+export function ComposerStatus({ children, className }: { children?: ReactNode; className?: string }) {
+  return <div className={`composer-status${className ? ' ' + className : ''}`}>{children}</div>
+}
+
+// ComposerControls is the right-hand cluster: the stop control (with the red ring that says a
+// turn is in flight) and the send button whose word is the queue's promise. `children` is where
+// the desktop puts the microphone; the remote view has nothing to put there.
+export function ComposerControls({ running, canSend, sendingNow, onSend, onStop, children }: {
+  running: boolean
+  canSend: boolean
+  sendingNow?: boolean
+  onSend: () => void
+  onStop: () => void
+  children?: ReactNode
+}) {
+  return (
+    <div className="composer-actions">
+      {children}
+      {running && (
+        <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
+          <Icon as={Square} className="stop-glyph" />
+        </button>
+      )}
+      <button className="send-btn" onClick={onSend} disabled={!canSend || sendingNow}>
+        <Icon as={ArrowRight} size={ICON_MD} />
+        <span>{running ? '排队' : '发送'}</span>
+      </button>
+    </div>
+  )
+}
+
 // Composer renders the input row: the pending queue above it, the two pickers and the
 // textarea, and the stop/send buttons. It owns no state — `api` is useComposer's return
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
@@ -1103,30 +1185,8 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
 
   return (
     <>
-      {pending.length > 0 && (
-        <div className="pending-bar">
-          <div className="pending-head">
-            <span className="pending-title">
-              {running
-                ? (cronRunning ? '⏸ 待发送 · 等定时任务结束后发送' : '⏸ 待发送 · 会在本轮工具调用结束后自动插入')
-                : '待发送消息'}
-            </span>
-            <span className="pending-actions">
-              <button className="pending-send" disabled={sendingNow} onClick={sendPendingNow}>
-                {sendingNow ? '正在停止…' : running ? '立即发送 · 打断' : '发送'}
-              </button>
-              <button className="pending-clear" onClick={clearPending} title="清空待发送队列">清空</button>
-            </span>
-          </div>
-          {pending.map((t, i) => (
-            <div className="pending-item" key={`${i}-${t.slice(0, 8)}`}>
-              <span className="pending-bullet">·</span>
-              <span className="pending-text" title={t}>{t}</span>
-              <button className="pending-del" title="撤回该条" onClick={() => dropPending(i)}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
+      <PendingBar running={running} cronRunning={cronRunning} items={pending} sendingNow={sendingNow}
+        onSendNow={sendPendingNow} onClear={clearPending} onDrop={dropPending} />
       <div className="composer-box" data-file-drop-target="true">
         {/* The grab strip along the box's top edge: a real focusable separator, and the only way
             the reader says "I need more room to write this than the text itself asks for". It sits
@@ -1246,7 +1306,8 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
               onPaste={onPaste}
               placeholder={running ? '正在运行…Enter 加入待发送' : '发送消息给 Tachi…（@ 文件，# 会话/节点）'} />
           </div>
-          <div className="composer-actions">
+          <ComposerControls running={running} canSend={!!input.trim()} sendingNow={sendingNow}
+            onSend={send} onStop={onStop}>
             {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，
                 因为它产出的东西就落在旁边那个输入框里——两件事是同一个动作的两半。 */}
             {voiceAvailable && (
@@ -1258,19 +1319,7 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
                 <Icon as={Mic} />
               </button>
             )}
-            {/* The stop control sits in this cluster rather than floating over the input: while a
-                turn runs it is one of the two things this box can do (stop it, or queue behind it),
-                and floating it over a one-line box was exactly the blank the box carried. */}
-            {running && (
-              <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
-                <Icon as={Square} className="stop-glyph" />
-              </button>
-            )}
-            <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
-              <Icon as={ArrowRight} size={ICON_MD} />
-              <span>{running ? '排队' : '发送'}</span>
-            </button>
-          </div>
+          </ComposerControls>
         </div>
       </div>
     </>

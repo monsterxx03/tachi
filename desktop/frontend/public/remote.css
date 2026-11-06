@@ -1,0 +1,412 @@
+/* ── Remote machines page ───────────────────────────────────────────────────────
+   The same app, as a client of another machine's headless host. It is a whole view
+   (like settings) because it is a different SUBJECT — this window's own conversations
+   are not what is on screen — and it covers the window so nothing behind it can be
+   mistaken for the machine being driven.
+
+   Only one machine at a time: the left column is that machine's conversations, not a
+   mix of every machine's. Two machines' session ids mean different things, and a list
+   that mixed them could not answer "which machine does this row act on". */
+
+.remote-page {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-page);
+  display: flex;
+  background: var(--app-bg);
+}
+
+/* ── Left column: machines, then that machine's conversations ──────────────── */
+
+.remote-side {
+  width: 286px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 10px 12px;
+  background: var(--chrome);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.remote-side-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 10px;
+}
+
+.remote-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  font-size: var(--fs-ui);
+}
+
+.remote-side-title {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.remote-hosts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.remote-host {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+}
+.remote-host:hover { background: var(--hover); }
+.remote-host.is-on { background: var(--accent-soft); }
+
+.remote-host-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.remote-host.is-on .remote-host-pick { color: var(--text); }
+.remote-host-pick:hover { color: var(--text); }
+
+.remote-host-name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 就地改名：和会话行的 .session-rename 同一个手势（双击 / 右键 → 重命名），这里是那块
+   输入框在机器行里的宽度。 */
+.remote-host-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 4px 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-ui);
+}
+.remote-host-rename:focus { outline: none; border-color: var(--accent-2); }
+
+.remote-host-meta {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-host-del {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+}
+.remote-host:hover .remote-host-del,
+.remote-host-del:focus-visible { opacity: 1; }
+.remote-host-del:hover { color: var(--red); background: var(--hover); }
+
+.remote-host-confirm {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.remote-host-confirm .btn { padding: 3px 6px; font-size: var(--fs-meta); }
+
+.remote-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.remote-add:hover { background: var(--hover); color: var(--text); }
+
+.remote-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+}
+
+.remote-add-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-label);
+  line-height: 1.4;
+}
+.remote-add-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.remote-add-error {
+  font-size: var(--fs-meta);
+  color: var(--red);
+  line-height: 1.4;
+}
+
+/* 新会话：和侧栏那颗同一套皮（.new-chat），只是它建在另一台机器上。 */
+.remote-new-chat { margin-top: 8px; }
+
+.remote-session-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 10px 8px 6px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--text-faint);
+}
+.remote-session-loading { color: var(--text-faint); }
+
+.remote-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.remote-session {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.remote-session:hover { background: var(--hover); }
+.remote-session.is-on { background: var(--accent-soft); color: var(--text); }
+
+.remote-session-title {
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.remote-empty,
+.remote-list-error {
+  padding: 8px;
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.remote-list-error { color: var(--red); }
+
+/* ── Right column: the conversation ───────────────────────────────────────── */
+
+.remote-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.remote-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  min-height: var(--titlebar-h);
+}
+
+.remote-head-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.remote-head-host {
+  font-size: var(--fs-label);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.remote-head-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-reconnecting {
+  font-size: var(--fs-meta);
+  color: var(--amber);
+  white-space: nowrap;
+}
+.remote-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.remote-notice {
+  margin: 8px 18px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.remote-open-error {
+  margin: 8px 18px 0;
+  font-size: var(--fs-label);
+  color: var(--red);
+}
+
+.remote-chat-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.remote-welcome {
+  max-width: var(--reading-width);
+  margin: 56px auto 0;
+  padding: 0 24px;
+}
+.remote-welcome-title {
+  font-size: var(--fs-hero);
+  font-weight: 600;
+  color: var(--text);
+}
+.remote-welcome-sub {
+  margin-top: 10px;
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.remote-user-text { white-space: pre-wrap; }
+
+
+/* 附件：已经传到对面、还没随消息发出的文件。发送时递的是它们的名字（协议如此）。 */
+.remote-files {
+  width: 100%;
+  max-width: var(--reading-width);
+  margin: 0 auto 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.remote-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  background: var(--panel-solid);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.remote-file-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-file-del {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0 2px;
+  font-family: inherit;
+  font-size: inherit;
+}
+.remote-file-del:hover { color: var(--red); }
+
+/* 对面交付的文件：一行，点它就是下载到本机。 */
+.remote-file-row {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  font-family: inherit;
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.remote-file-row:hover:not(:disabled) { border-color: var(--accent-2); color: var(--text); }
+.remote-file-row:disabled { cursor: default; opacity: 0.7; }
+.remote-file-row-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-file-row-action { color: var(--accent-2); }
+.remote-file-row:disabled .remote-file-row-action { color: var(--text-faint); }
+
+.remote-composer { padding-top: 8px; }
+.remote-composer .composer-box { margin-top: 0; }

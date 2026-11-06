@@ -1,6 +1,6 @@
 # Tachi —— 移动端手册
 
-`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑 —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。**手机可以记住好几台**（自己的电脑、家里 NAS、一台 VPS），首页把它们上面的对话拼成一列；同一时刻只有一条连接，跟着「正在看的那一段」走 —— 点别的机器上的一段，背后会把连接换过去（见下面「界面」）。同一个无头宿主还能同时把配置里的 IM channel 跑起来，所以一台服务器上一个进程就够（[desktop.md](desktop.md) 的无头宿主）。**宿主跑着 channel 时，手机也能对那段对话说话**（行上和标题旁边带来源 tag，"你说的"交回那个渠道跑），细节见 [mobile-protocol.md](mobile-protocol.md) 不变量 13。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
+`mobile/` 是手机 App（Expo / React Native + TypeScript）。**它只有界面**：会话、工具、审批都在宿主进程里跑（桌面 App 也能连同一台宿主，是这套接口的另一个客户端，能力同样收窄 —— 见 [desktop.md](desktop.md) 的「远端机器」） —— 桌面 App，或者一台无头的 `tachi`（`-tags headless`，见 [desktop.md](desktop.md) 的「无头宿主」）。**手机可以记住好几台**（自己的电脑、家里 NAS、一台 VPS），首页把它们上面的对话拼成一列；同一时刻只有一条连接，跟着「正在看的那一段」走 —— 点别的机器上的一段，背后会把连接换过去（见下面「界面」）。同一个无头宿主还能同时把配置里的 IM channel 跑起来，所以一台服务器上一个进程就够（[desktop.md](desktop.md) 的无头宿主）。**宿主跑着 channel 时，手机也能对那段对话说话**（行上和标题旁边带来源 tag，"你说的"交回那个渠道跑），细节见 [mobile-protocol.md](mobile-protocol.md) 不变量 13。桌面那半边（`desktop/mobile*.go`、那个移动接口）见本手册末尾。
 
 `mobile/AGENTS.md` 是 Expo 模板带的、写给写代码的 agent 的通用建议（跟着 SDK 更新，值得读）。它与本文冲突时以本文为准——本文说的是这个项目怎么跑。
 

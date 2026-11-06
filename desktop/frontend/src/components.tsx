@@ -10,7 +10,6 @@ import type { Theme } from './theme'
 import { processStepLabel, processSummaryLine, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionKind, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, PeerBoardVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import type { ProviderConfig } from '../bindings/github.com/monsterxx03/tachi/config'
 import { Copy, Eye, EyeOff, Moon, Network, Pin, Plug, SlidersHorizontal, Sun } from 'lucide-react'
 import { Icon, ICON_XS } from './icons'
 
@@ -213,8 +212,14 @@ function ContextPanel({ info, loading }: { info: ContextInfoVO | null; loading: 
 // is what the toolbar shows (`goat-claude-sonnet-5-5`) while the model is what goes to the API
 // (`anthropic/claude-sonnet-5-5`) — so "anthropic" or "stealth/" is only findable through the
 // second one.
+// ProviderChoice is the structural minimum this menu needs. It used to be config.ProviderConfig:
+// the remote view feeds the SAME picker with the other machine's providers (which are this
+// app's own type across the wire), and naming one concrete type there would have meant a second
+// picker that only looks the same.
+type ProviderChoice = { name?: string; model?: string }
+
 function ProviderPicker({ providers, value, model, onPick }: {
-  providers: ProviderConfig[] | undefined
+  providers: ProviderChoice[] | undefined
   /** The active provider's config name — the row that is marked 当前. */
   value: string
   /** Its model string, for the button's tooltip (the old <select>'s title). */
@@ -258,7 +263,7 @@ function ProviderPicker({ providers, value, model, onPick }: {
 // that is already filtered by something the reader cannot see, and the highlight would be wherever
 // they left it. Mounting gets every piece of that state fresh for free.
 function ProviderMenu({ list, value, onPick, onClose, floating }: {
-  list: ProviderConfig[]
+  list: ProviderChoice[]
   value: string
   onPick: (name: string) => void
   onClose: () => void
@@ -330,7 +335,7 @@ function ProviderMenu({ list, value, onPick, onClose, floating }: {
     if (e.key === 'Enter') {
       e.preventDefault()
       const pick = shown[idx]
-      if (pick) onPick(pick.name)
+      if (pick) onPick(pick.name || '')
       return
     }
     if (e.key === 'Escape') {
@@ -362,8 +367,8 @@ function ProviderMenu({ list, value, onPick, onClose, floating }: {
               onMouseEnter={() => setRemembered({ query: filter.committed, idx: i })}
               // onMouseDown with preventDefault: the filter box must keep focus, or the click would
               // blur it mid-gesture (the @-file picker's own reason, minus the caret).
-              onMouseDown={(e) => { e.preventDefault(); onPick(p.name) }}>
-              <span className="provider-menu-name">{p.name}</span>
+              onMouseDown={(e) => { e.preventDefault(); onPick(p.name || '') }}>
+              <span className="provider-menu-name">{p.name || ''}</span>
               {p.name === value ? <span className="provider-menu-tag">当前</span> : null}
             </div>
           ))}
@@ -1760,4 +1765,24 @@ function AgentsPanel({ board, busy, onClose, onRefresh, floating }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, WorktreeForm, BranchIcon, AtFilePicker, AskForm, PermissionForm, SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }
+// ApprovalSelect is 「命中 ask 规则时要不要先问你」— one switch, two readers (the agent's
+// session-level allow and the card). It is its own component because the remote view shows the
+// SAME switch for a conversation on another machine: one control, one wording, in both footers.
+function ApprovalSelect({ skip, disabled, title, onChange }: {
+  skip: boolean
+  disabled?: boolean
+  title?: string
+  onChange: (skip: boolean) => void
+}) {
+  return (
+    <select className="provider-select approval-select" value={skip ? 'skip' : 'ask'} disabled={disabled}
+      aria-label="权限审批"
+      title={title || '命中 ask 规则时是否先问你'}
+      onChange={(e) => onChange(e.target.value === 'skip')}>
+      <option value="ask">需要审批</option>
+      <option value="skip">无需审批</option>
+    </select>
+  )
+}
+
+export { ContextMeter, ContextRing, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, WorktreeForm, BranchIcon, AtFilePicker, AskForm, PermissionForm, SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker, ApprovalSelect }

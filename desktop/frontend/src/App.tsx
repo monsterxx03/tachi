@@ -13,13 +13,13 @@ import { buildTurns, copyText, cronMarkLabel, fmtCredit, fmtDur, fmtTime, imeAct
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, processLiveText, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
-  ProviderPicker,
+  ProviderPicker, ApprovalSelect,
   SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, WorktreeForm, BranchIcon,
   type TurnMenuItem, type WorktreeFormState,
 } from './components'
 import { usePopoverPosition } from './popover'
 import { Icon, ICON_MD, ICON_XS } from './icons'
-import { Clock, FileText, PanelLeft, PanelRight, PenLine, Search } from 'lucide-react'
+import { Clock, FileText, PanelLeft, PanelRight, PenLine, Search, Server } from 'lucide-react'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { CronPage, CronPanel } from './cron'
@@ -34,6 +34,7 @@ import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO, CronJobVO, CronTargetVO, FileMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
+import { RemotePage } from './remote'
 import { FindBar, useFind } from './find'
 import { useSidebarWidth } from './sidebar'
 import { bumpFontScale, reconcileFontScale, resetFontScale } from './fontsize'
@@ -46,7 +47,7 @@ import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } fr
 import { useSessionTranscript } from './useTranscript'
 
 import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady, usePeersChanged, useUnseenSessions, useCronRunningSessions } from './agentEvents'
-import { useComposer, Composer } from './composer'
+import { useComposer, Composer, ComposerStatus } from './composer'
 // CHAT_FIND_SCOPE is what ⌘F may find in the CONVERSATION: the reader's own words and the model's
 // prose, and nothing else. Most of a session's text is tool arguments and tool output — a search over
 // the whole transcript is a search over file dumps (issue #35). Positive rather than a skip list, for
@@ -804,7 +805,7 @@ function App() {
   // local state than a route could rebuild (collapsed project groups, the composer's draft, the
   // transcript's scroll offset), and coming back must not cost any of it. The file view takes the
   // CONTENT COLUMN (the chat is inert under it); the settings page covers the whole window.
-  const [view, setView] = useState<'chat' | 'settings' | 'file' | 'cron'>('chat')
+  const [view, setView] = useState<'chat' | 'settings' | 'file' | 'cron' | 'remote'>('chat')
   // ⌘F over the conversation. It is the LOWEST host in find.tsx's stack (the chat mounts first), so
   // any overlay or panel on top keeps the key for itself — the rule that lets a preview, a review's
   // pane or the file view search its own text. While either other view is up the chat is not the
@@ -2385,7 +2386,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // keeps the transcript's scroll offset and the composer's draft alive across the round trip.
   const appBodyRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
-    appBodyRef.current?.toggleAttribute('inert', view === 'settings' || view === 'cron')
+    appBodyRef.current?.toggleAttribute('inert', view === 'settings' || view === 'cron' || view === 'remote')
   }, [view])
 
   // The chat surfaces are INERT while the file view is up, for exactly the same reason and by exactly
@@ -2413,7 +2414,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // focus is deliberate: the chat view is still MOUNTED (inert), so its windows-level
       // listeners are alive, and ⌘N on the settings page must not quietly start a session
       // behind it. Escape is gated with the rest — the page's own dismissals are its own.
-      if (view === 'settings' || view === 'cron') return
+      if (view === 'settings' || view === 'cron' || view === 'remote') return
       if (e.key === 'Escape') {
         // Claim the gesture only when something here was actually dismissed: the side panel
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
@@ -2960,6 +2961,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 onClick={() => openCronPage(null, false)}>
                 <Icon as={Clock} size={ICON_MD} />
               </button>
+              {/* 别的机器：一台跑在 NAS / VPS 上的无头宿主。它是同一个应用的第二块屏，能力收窄
+                  （见 remote.tsx），所以给的是一个页面而不是第三条侧栏入口。 */}
+              <button className={`sidebar-search${view === 'remote' ? ' is-on' : ''}`}
+                aria-label="远端机器" title="远端机器（连上一台无头宿主）"
+                onClick={() => setView('remote')}>
+                <Icon as={Server} size={ICON_MD} />
+              </button>
             </div>
           </div>
           {/* 新会话 — the sidebar's own create button, and the only one that is not tied to a
@@ -3344,7 +3352,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                 cronRunning={!!cronRunningSessions[currentId]}
                 onStop={stopChat} onPageTurn={scrollByHalfPage} />
             )}
-            <div className="composer-status">
+            <ComposerStatus>
               <div className="work-dir-wrap popover-anchor" ref={rootsPopover.anchorRef}>
                 {rootsOpen ? (
                   <RootsPanel roots={roots} error={rootsError} busy={rootsBusy}
@@ -3415,19 +3423,12 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     住在会话记录里，所以换个会话、重启应用都跟着它；压缩出来的新会话不带过去。
                     被拒时就重读（跟旁边那个思考级别选择器同一条规矩），免得控件显示一个并不
                     生效的模式。 */}
-                <select className="provider-select approval-select" value={skipApproval ? 'skip' : 'ask'}
-                  disabled={!currentId}
-                  aria-label="权限审批"
-                  title="命中 ask 规则时是否先问你"
-                  onChange={async (e) => {
-                    const skip = e.target.value === 'skip'
+                <ApprovalSelect skip={skipApproval} disabled={!currentId}
+                  onChange={async (skip) => {
                     const res = await (AgentService as any).SetSkipApproval?.(skip)
                     if (res && res !== 'ok') { refreshProvider(); return }
                     setSkipApproval(skip)
-                  }}>
-                  <option value="ask">需要审批</option>
-                  <option value="skip">无需审批</option>
-                </select>
+                  }} />
                 <span className="popover-anchor" ref={agentsPopover.anchorRef}>
                   <button className="agents-btn" title="Agents（可委派的节点）" onClick={() => setAgentsOpen((v) => !v)}>
                     <span className="agents-ico"><AgentsIcon /></span>
@@ -3501,7 +3502,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   ) : null}
                 </span>
               </div>
-            </div>
+            </ComposerStatus>
           </footer>
           </div>
           {/* The file view covers the conversation (CSS), and it is rendered INSIDE the column it
@@ -3887,6 +3888,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           of the schema on the way in is exactly what makes the values on screen the values in
           the file. */}
       {view === 'settings' ? <SettingsPage onBack={() => setView('chat')} onSaved={onSettingsSaved} /> : null}
+      {view === 'remote' ? <RemotePage onBack={() => setView('chat')} /> : null}
       {view === 'cron' ? (
         <CronPage
           jobs={cronJobs}

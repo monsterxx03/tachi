@@ -9,8 +9,9 @@
 | 手机端 | `mobile/src/api/`（`types.ts` 是本文的 TypeScript 镜像） |
 | 桌面端 | `desktop/mobile*.go` |
 | 假服务端（给手机端单独开发用） | `mobile/mockapi/`（Go，`main.go` 可执行） |
+| 桌面客户端（桌面连另一台无头宿主） | `desktop/remote_*.go`（同一套 HTTP + WebSocket，见 [desktop.md](desktop.md) 的「远端机器」） |
 
-**改协议 = 同一轮里改这四处**：本文 → 桌面实现 → `mobile/src/api/types.ts` → `mobile/mockapi/`。只改其中一处，表现是「某个字段永远空着」或「某类事件永远不来」，不会报错 —— 这是这条链路上最难查的一类故障。字段名、事件名一律**不缩写、不改写**：两边照着抄，不要各自"顺手改顺眼一点"。
+**改协议 = 同一轮里改这四处（加上桌面那个客户端）**：本文 → 桌面实现 → `mobile/src/api/types.ts` → `mobile/mockapi/`。只改其中一处，表现是「某个字段永远空着」或「某类事件永远不来」，不会报错 —— 这是这条链路上最难查的一类故障。字段名、事件名一律**不缩写、不改写**：两边照着抄，不要各自"顺手改顺眼一点"。
 
 东西还没实现的部分（桌面侧的接口）见 [mobile.md](mobile.md)。
 

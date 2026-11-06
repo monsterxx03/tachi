@@ -197,6 +197,18 @@ type desktopApp struct {
 	// Guarded by mu.
 	mobile *mobileServer
 
+	// remoteHostsMu guards the remembered machines file (desktop/remote_hosts.go). It is one
+	// document rewritten whole, so two pairings racing would lose one.
+	remoteHostsMu sync.Mutex
+	// remoteMu guards remoteConn — the one outbound connection to another machine's host
+	// (desktop/remote_ws.go). Separate from mu because it is touched by the socket's own
+	// goroutines, and neither should wait behind a turn.
+	remoteMu   sync.Mutex
+	remoteConn *remoteConn
+	// remoteRetryCancel stops a reconnection in flight (desktop/remote_ws.go). It lives beside
+	// remoteConn because "is there a connection and is one being rebuilt" are one question.
+	remoteRetryCancel context.CancelFunc
+
 	// usageCache memoizes one session's cost for the phone's snapshot (mobile_session.go): the
 	// ledger scan is the most expensive part of opening a conversation, and a reader tapping
 	// through three of them should pay for it once. Its own lock lives inside it.
