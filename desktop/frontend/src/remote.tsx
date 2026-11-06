@@ -81,6 +81,17 @@ function hostAddr(h: RemoteHostVO): string {
   }
 }
 
+// pairPayload turns the add dialog's two fields into the one line the backend pairs from. It
+// reads JSON as well as copied prose, and an address typed WITHOUT a scheme ("nas:8787") is the
+// common case — a bare host:port would not be picked out of that prose, so it gets one here.
+// http is the default: a headless host prints an http address for the LAN, and a reader who
+// serves it over TLS types the whole URL.
+function pairPayload(addr: string, token: string): string {
+  const trimmed = addr.trim().replace(/\/+$/, '')
+  const url = /^https?:\/\//i.test(trimmed) ? trimmed : 'http://' + trimmed
+  return JSON.stringify({ urls: [url], token: token.trim() })
+}
+
 // ── The live turn ────────────────────────────────────────────────────────────
 // A turn that is still being written. It is ONE Message so the pieces keep their real order
 // (thinking, a tool card, more prose) through the same helpers the local transcript uses.
@@ -483,7 +494,10 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
   busyRef.current = busy
 
   const [addOpen, setAddOpen] = useState(false)
-  const [pairingText, setPairingText] = useState('')
+  // 配对只需要两样东西，所以是两行、不是一个粘贴框：地址和令牌是那两个问题的答案，读者
+  // 照着无头宿主打印的那两行抄，不用先弄清楚「整段要粘多少」。
+  const [pairAddr, setPairAddr] = useState('')
+  const [pairToken, setPairToken] = useState('')
   const [addError, setAddError] = useState('')
   const [adding, setAdding] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState('')
@@ -1199,20 +1213,28 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
 
   // ── Adding a machine ──────────────────────────────────────────────────────
   const addMachine = useCallback(async () => {
-    if (!pairingText.trim()) return
+    const addr = pairAddr.trim()
+    const token = pairToken.trim()
+    if (!addr || !token) return
     setAdding(true)
     setAddError('')
-    const [vo, why] = await AgentService.AddRemoteHost(pairingText).catch(() => [null, '配对失败'] as [null, string])
+    const [vo, why] = await AgentService.AddRemoteHost(pairPayload(addr, token)).catch(() => [null, '配对失败'] as [null, string])
     setAdding(false)
     if (why || !vo) {
-      setAddError(remoteErrorText(why || ''))
+      setAddError(remoteErrorText(why || '') || '配对失败')
       return
     }
-    setPairingText('')
+    setPairAddr('')
+    setPairToken('')
     setAddOpen(false)
     await loadHosts()
     selectHost(vo.id)
-  }, [loadHosts, pairingText, selectHost])
+  }, [loadHosts, pairAddr, pairToken, selectHost])
+
+  const closeAdd = useCallback(() => {
+    setAddOpen(false)
+    setAddError('')
+  }, [])
 
   const removeMachine = useCallback(async (id: string) => {
     const why = await AgentService.RemoveRemoteHost(id).catch((e) => String(e))
@@ -1245,6 +1267,8 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
       // 「Esc 先收掉浮层」同一条规矩。
       if (menu) { e.preventDefault(); setMenu(null); return }
       if (confirmDel) { e.preventDefault(); setConfirmDel(null); return }
+      // 配对弹窗盖在页面上：Esc 先收它，而不是连它带页面一起退掉。
+      if (addOpen) { e.preventDefault(); closeAdd(); return }
       if (editingId || renamingHost) {
         e.preventDefault()
         setEditingId(''); setEditTitle(''); setRenamingHost(''); setHostName('')
@@ -1265,7 +1289,7 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [confirmDel, editingId, menu, onBack, openPanel, renamingHost])
+  }, [addOpen, closeAdd, confirmDel, editingId, menu, onBack, openPanel, renamingHost])
 
   // The two read-only panels dismiss on a press outside, the same contract the native popovers
   // have. CronPanel registers its own (it also has a two-step delete to unwind first).
@@ -1361,68 +1385,6 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
           <span className="remote-side-title">远端机器</span>
         </div>
 
-        <div className="remote-hosts">
-          {hosts.map((h) => (
-            <div key={h.id} className={`remote-host${h.id === hostID ? ' is-on' : ''}`}
-              onContextMenu={(e) => { e.preventDefault(); setMenu({ kind: 'host', id: h.id, x: e.clientX, y: e.clientY }) }}>
-              {renamingHost === h.id ? (
-                <input className="remote-host-rename" autoFocus value={hostName}
-                  onChange={(e) => setHostName(e.target.value)}
-                  onBlur={() => void commitHostRename(h.id)}
-                  onKeyDown={(e) => {
-                    if (imeActive(e)) return
-                    if (e.key === 'Enter') { e.stopPropagation(); void commitHostRename(h.id) }
-                    else if (e.key === 'Escape') { e.stopPropagation(); setRenamingHost(''); setHostName('') }
-                  }} />
-              ) : (
-                <button className="remote-host-pick" onClick={() => selectHost(h.id)}
-                  title={h.urls?.join('\n') || h.id}>
-                  <span className="remote-host-name"
-                    onDoubleClick={() => { setRenamingHost(h.id); setHostName(h.name || h.deviceId.slice(0, 8)); setMenu(null) }}>
-                    {h.name || h.deviceId.slice(0, 8)}
-                  </span>
-                  <span className="remote-host-meta">
-                    {hostAddr(h)}{h.reachable ? ' · 刚刚应答过' : ''}
-                  </span>
-                </button>
-              )}
-              {confirmDelete === h.id ? (
-                <span className="remote-host-confirm">
-                  删掉？<button className="btn ghost" onClick={() => setConfirmDelete('')}>取消</button>
-                  <button className="btn ghost" onClick={() => void removeMachine(h.id)}>删除</button>
-                </span>
-              ) : (
-                <button className="remote-host-del" title="从这台机器上删掉它的配对信息"
-                  onClick={() => setConfirmDelete(h.id)}>
-                  <Icon as={Trash2} size={ICON_SM} />
-                </button>
-              )}
-            </div>
-          ))}
-          <button className="remote-add" onClick={() => setAddOpen((v) => !v)}>
-            <Icon as={Plus} size={ICON_SM} />
-            添加机器
-          </button>
-          {addOpen ? (
-            <div className="remote-add-form">
-              <textarea
-                className="remote-add-input"
-                rows={4}
-                placeholder="把远端主机启动时打印的配对信息粘到这里（一段 JSON，或「地址 令牌」）"
-                value={pairingText}
-                onChange={(e) => setPairingText(e.target.value)}
-              />
-              {addError ? <div className="remote-add-error">{addError}</div> : null}
-              <div className="remote-add-actions">
-                <button className="btn ghost" onClick={() => { setAddOpen(false); setAddError('') }}>取消</button>
-                <button className="btn" disabled={adding || !pairingText.trim()} onClick={() => void addMachine()}>
-                  {adding ? '连接中…' : '连接'}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
         <button className="new-chat remote-new-chat" onClick={() => void newSession()}
           disabled={!hostID || creating} title={`在这台机器上新建会话（${MOD_KEY} N）`}>
           <Icon as={PenLine} size={ICON_MD} />
@@ -1471,6 +1433,57 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
             </div>
           ))}
         </nav>
+
+        {/* 机器选择器贴在左栏底部：这一页的主角是那台机器上的会话，换机器比换会话少得多，
+            但它必须随时够得着（换机器换的是整列会话，藏进菜单里就找不到回本机的路）。 */}
+        <div className="remote-hosts">
+          <div className="remote-hosts-head">
+            <span>机器</span>
+            <button className="remote-add" onClick={() => setAddOpen(true)}>
+              <Icon as={Plus} size={ICON_XS} />
+              添加机器
+            </button>
+          </div>
+          <div className="remote-host-list">
+            {hosts.map((h) => (
+              <div key={h.id} className={`remote-host${h.id === hostID ? ' is-on' : ''}`}
+                onContextMenu={(e) => { e.preventDefault(); setMenu({ kind: 'host', id: h.id, x: e.clientX, y: e.clientY }) }}>
+                {renamingHost === h.id ? (
+                  <input className="remote-host-rename" autoFocus value={hostName}
+                    onChange={(e) => setHostName(e.target.value)}
+                    onBlur={() => void commitHostRename(h.id)}
+                    onKeyDown={(e) => {
+                      if (imeActive(e)) return
+                      if (e.key === 'Enter') { e.stopPropagation(); void commitHostRename(h.id) }
+                      else if (e.key === 'Escape') { e.stopPropagation(); setRenamingHost(''); setHostName('') }
+                    }} />
+                ) : (
+                  <button className="remote-host-pick" onClick={() => selectHost(h.id)}
+                    title={h.urls?.join('\n') || h.id}>
+                    <span className="remote-host-name"
+                      onDoubleClick={() => { setRenamingHost(h.id); setHostName(h.name || h.deviceId.slice(0, 8)); setMenu(null) }}>
+                      {h.name || h.deviceId.slice(0, 8)}
+                    </span>
+                    <span className="remote-host-meta">
+                      {hostAddr(h)}{h.reachable ? ' · 刚刚应答过' : ''}
+                    </span>
+                  </button>
+                )}
+                {confirmDelete === h.id ? (
+                  <span className="remote-host-confirm">
+                    删掉？<button className="btn ghost" onClick={() => setConfirmDelete('')}>取消</button>
+                    <button className="btn ghost" onClick={() => void removeMachine(h.id)}>删除</button>
+                  </span>
+                ) : (
+                  <button className="remote-host-del" title="从这台机器上删掉它的配对信息"
+                    onClick={() => setConfirmDelete(h.id)}>
+                    <Icon as={Trash2} size={ICON_SM} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </aside>
 
       <main className="remote-main">
@@ -1703,6 +1716,45 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
         </div>
         )
       })()}
+
+      {addOpen && (
+        <div className="confirm-overlay" onClick={closeAdd}>
+          <div className="confirm-box remote-pair-box" role="dialog" aria-label="添加远端机器"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-msg">添加一台远端机器</div>
+            <div className="confirm-sub">在远端主机上启动无头宿主，它启动时会打印地址和令牌。</div>
+            <div className="form-row">
+              <label className="form-label" htmlFor="pair-addr">地址</label>
+              <input id="pair-addr" className="form-input mono" autoFocus value={pairAddr}
+                placeholder="http://192.168.1.9:8787"
+                onChange={(e) => setPairAddr(e.target.value)}
+                onKeyDown={(e) => {
+                  if (imeActive(e)) return
+                  if (e.key === 'Enter') { e.preventDefault(); void addMachine() }
+                }} />
+              <div className="form-hint">不带 http:// 也行，默认按 http 连。</div>
+            </div>
+            <div className="form-row">
+              <label className="form-label" htmlFor="pair-token">令牌</label>
+              <input id="pair-token" className="form-input mono" value={pairToken}
+                placeholder="那台机器打印的 token"
+                onChange={(e) => setPairToken(e.target.value)}
+                onKeyDown={(e) => {
+                  if (imeActive(e)) return
+                  if (e.key === 'Enter') { e.preventDefault(); void addMachine() }
+                }} />
+            </div>
+            {addError ? <div className="confirm-error">⚠ {addError}</div> : null}
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={closeAdd}>取消</button>
+              <button className="btn" disabled={adding || !pairAddr.trim() || !pairToken.trim()}
+                onClick={() => void addMachine()}>
+                {adding ? '连接中…' : '连接'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmDel && (
         <div className="confirm-overlay" onClick={() => setConfirmDel(null)}>

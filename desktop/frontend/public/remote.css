@@ -50,13 +50,39 @@
   color: var(--text-dim);
 }
 
+/* 机器选择器：左栏最后一块，钉在底部。会话列表占满上面的空间，机器这块按内容长（机器多时
+   自己滚），换机器等于换整列会话，所以它得一直看得见，而不是滚到哪算哪。 */
 .remote-hosts {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
+
+.remote-hosts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.remote-host-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+/* 配对弹窗：两行字段，比通用确认框宽一点 —— 地址和令牌都是要照着抄的一长串。 */
+.remote-pair-box { max-width: 420px; }
 
 .remote-host {
   display: flex;
@@ -148,53 +174,18 @@
 .remote-add {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 6px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   border: none;
   background: transparent;
   font-family: inherit;
-  font-size: var(--fs-label);
+  font-size: var(--fs-meta);
+  font-weight: 400;
   color: var(--text-dim);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .remote-add:hover { background: var(--hover); color: var(--text); }
-
-.remote-add-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--panel-solid);
-}
-
-.remote-add-input {
-  width: 100%;
-  resize: vertical;
-  min-height: 64px;
-  padding: 6px 8px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font-family: inherit;
-  font-size: var(--fs-label);
-  line-height: 1.4;
-}
-.remote-add-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-.remote-add-error {
-  font-size: var(--fs-meta);
-  color: var(--red);
-  line-height: 1.4;
-}
 
 /* 新会话：和侧栏那颗同一套皮（.new-chat），只是它建在另一台机器上。 */
 .remote-new-chat { margin-top: 8px; }
