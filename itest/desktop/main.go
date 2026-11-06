@@ -732,11 +732,16 @@ func (sb *sandbox) seedProject(p *projectSeed) (string, error) {
 		CreatedAt: now, UpdatedAt: now,
 	}}
 	if p.emptyName != "" {
-		// Older, so the sidebar (newest first) lists it after the member's project. Its directory
-		// is the sandbox work dir: nothing has to be created for it, and an empty project's roots
-		// are never resolved (no member session exists to resolve them for).
+		// Older, so the sidebar (newest first) lists it after the member's project. Its directory is
+		// its OWN, named after the project — the workspace chip names the DIRECTORY a session stands
+		// in (two sessions of one project routinely stand in different trees), so pointing this
+		// project at the sandbox's own work dir would make ⌘P's chip assertion say 「work」.
+		emptyDir := filepath.Join(sb.dir, p.emptyName)
+		if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+			return "", err
+		}
 		projects = append(projects, fileProject{
-			ID: emptyID, Name: p.emptyName, WorkingDir: sb.work,
+			ID: emptyID, Name: p.emptyName, WorkingDir: emptyDir,
 			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 		})
 	}
