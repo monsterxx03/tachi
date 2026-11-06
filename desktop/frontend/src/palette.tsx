@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Command } from 'cmdk'
-import type { ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type FileMatchVO, type ProjectVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { fmtTime, imeActive, latestSessionOf, looseMatches, looseMembers, newestOf, projectMatches, sessionChoices, sessionMatches, useFilterInput, LOOSE_LABEL, LOOSE_LABEL_HINT, LOOSE_GROUP_KEY } from './lib'
 import { MOD_KEY } from './platform'
 import type { SessionItem } from './types'
@@ -403,6 +403,134 @@ export function SessionPalette({ sessions, projects, activeId, waitingOf, runnin
           </Command.List>
         </Command>
         <div className="palette-hint">↑↓ 选择 · Enter 打开 · Esc 关闭（进行中、在等你的会话排最前）</div>
+      </div>
+    </div>
+  )
+}
+
+// FILE_PALETTE_LIMIT is how many matches a keystroke asks for: one screenful of rows the reader can
+// walk with ↑↓. The backend caps a root's share of it, so a big root cannot crowd the others out.
+const FILE_PALETTE_LIMIT = 50
+
+// FILE_PALETTE_DEBOUNCE_MS is how long typing settles before the search runs. The index is cached
+// (fileindex), but a keystroke is still a round trip — and the typing that follows one is what the
+// reader is actually spending it on.
+const FILE_PALETTE_DEBOUNCE_MS = 120
+
+// FilePalette is ⌘O: type to fuzzy-match the files of this session's workspace, Enter to open the
+// chosen one in the file view.
+//
+// It is the third box in the same place and deliberately the same keyboard as ⌘P / ⌘K
+// (useFilterInput, the cmdk row list, paletteKeys for ↑↓ / Ctrl+N·P / Enter / Esc), because the
+// three are one gesture apart. What it decides for itself:
+//
+//   • the rows come from the BACKEND (SearchFiles): the same fuzzy index @-completion uses, over
+//     every root of the session — so a file in an additional root is reachable here too, and a
+//     directory the reader cannot browse from the tree is still searchable by name.
+//   • only FILES are rows. This palette opens a preview, and a directory has nothing to read;
+//     a list where half the rows do nothing would make Enter a guess.
+//   • a pick carries the absolute path AND the root the backend attributed it to (AbsPath /
+//     RootPath / Root), never a relative path re-resolved here: two roots can hold the same
+//     relative path, and resolving against the wrong one would open a file the reader never saw.
+//   • the search is DEBOUNCED and its answers are sequence-guarded: a slow answer for an earlier
+//     query must never replace the rows of a later one.
+export function FilePalette({ sessionId, onPick, onClose }: {
+  // The session whose workspace is searched — the one on screen.
+  sessionId: string
+  onPick: (f: FileMatchVO) => void
+  onClose: () => void
+}) {
+  // The list filters by the COMMITTED query, exactly as the other two palettes do: an IME's
+  // candidate keys must not re-search (and re-order) the list under the reader.
+  const { committed: query, composingRef, inputProps } = useFilterInput()
+  const [rows, setRows] = useState<FileMatchVO[]>([])
+  const [loading, setLoading] = useState(true)
+  const seq = useRef(0)
+
+  useEffect(() => {
+    // No session on screen yet (the shell renders before one is opened): there is no workspace to
+    // search, and asking anyway would reach for the process cwd — the one answer that is never a
+    // workspace here.
+    if (!sessionId) { seq.current++; setRows([]); setLoading(false); return }
+    const mine = ++seq.current
+    setLoading(true)
+    const timer = window.setTimeout(() => {
+      let call: Promise<FileMatchVO[] | null>
+      try {
+        call = AgentService.SearchFiles(sessionId, query, FILE_PALETTE_LIMIT)
+      } catch {
+        // A backend that cannot answer at all still has to clear the spinner: a box stuck on
+        // 「搜索中…」 reads as a hang, not as "no workspace".
+        setRows([]); setLoading(false)
+        return
+      }
+      call
+        .then((res) => {
+          if (mine !== seq.current) return // superseded by a newer query
+          setRows((res || []).filter((m) => !m.isDir))
+          setLoading(false)
+        })
+        .catch(() => {
+          if (mine !== seq.current) return
+          setRows([]); setLoading(false)
+        })
+    }, FILE_PALETTE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [sessionId, query])
+
+  // Start on the FIRST row and re-seat when a re-search drops the selected one — the same two rules
+  // the other palettes carry (see ProjectPalette): a controlled `value` is what makes Ctrl+N·P work,
+  // and it also takes away cmdk's own initial pick.
+  const [value, setValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useKeepSelectionInView(listRef, value)
+  useLayoutEffect(() => {
+    if (value && rows.some((f) => f.absPath === value)) return
+    if (rows.length > 0) setValue(rows[0].absPath)
+  }, [rows, value])
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const keys = useMemo(() => rows.map((f) => f.absPath), [rows])
+  const onKeyDown = paletteKeys({
+    keys, value, setValue, onClose, composingRef,
+    onEnter: (key) => {
+      const f = rows.find((x) => x.absPath === key)
+      if (f) { onPick(f); onClose() }
+    },
+  })
+
+  // where is the row's second line: the path below its root, with the root's label in front when
+  // that root has one — the same spelling the file view's header uses, so a row and the document it
+  // opens agree about where the file is.
+  const where = (f: FileMatchVO) => (f.root ? `${f.root}/${f.path}` : f.path)
+  const nameOf = (f: FileMatchVO) => f.path.split('/').pop() || f.absPath
+
+  return (
+    <div className="palette-overlay" onClick={onClose}>
+      <div className="palette-box" role="dialog" aria-label="文件搜索" onClick={(e) => e.stopPropagation()}>
+        {/* shouldFilter={false}: the backend already ranked the rows (its fuzzy score, per root), and
+            filtering them a second time here would only disagree with it. */}
+        <Command loop shouldFilter={false} vimBindings={false}
+          value={value} onValueChange={setValue} onKeyDown={onKeyDown}>
+          <input ref={inputRef} className="palette-input" {...inputProps}
+            placeholder="搜索工作区的文件（名字或路径）" />
+          <Command.List ref={listRef} className="palette-list" aria-label="文件">
+            {rows.length === 0 ? (
+              <div className="palette-empty">{loading ? '搜索中…' : '没有匹配的文件'}</div>
+            ) : rows.map((f) => (
+              <Command.Item key={f.absPath} value={f.absPath} className="palette-row"
+                onSelect={() => { onPick(f); onClose() }}>
+                <div className="palette-main">
+                  <div className="palette-name">{nameOf(f)}</div>
+                  <div className="palette-path" title={f.absPath}>{where(f)}</div>
+                </div>
+              </Command.Item>
+            ))}
+          </Command.List>
+        </Command>
+        <div className="palette-hint">↑↓ 选择 · Enter 打开预览 · Esc 关闭（搜的是这个会话的工作区）</div>
       </div>
     </div>
   )

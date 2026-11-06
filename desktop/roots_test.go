@@ -251,6 +251,11 @@ func TestSearchFilesAcrossRoots(t *testing.T) {
 	}
 	if got := inPrimary[0]; got.Ref != "@src/main.go" || got.Root != "" || got.Path != "src/main.go" {
 		t.Errorf("primary hit = %+v, want a relative ref and no label", got)
+	} else if got.AbsPath != filepath.Join(primary, "src/main.go") || got.RootPath != primary {
+		// The file palette OPENS a row: the absolute path and the root it belongs to
+		// travel with the hit, so a caller never re-resolves a relative path against
+		// some root of its own (two roots can hold the same relative path).
+		t.Errorf("primary hit abs = %q root = %q, want %q under %q", got.AbsPath, got.RootPath, "src/main.go", primary)
 	}
 
 	inExtra := svc.SearchFiles(sid, "util", 10)
@@ -263,6 +268,8 @@ func TestSearchFilesAcrossRoots(t *testing.T) {
 		t.Errorf("additional hit label = %q, want %q", got.Root, filepath.Base(extra))
 	} else if got.Path != "lib/util.go" {
 		t.Errorf("additional hit display path = %q, want it relative to its root", got.Path)
+	} else if got.AbsPath != filepath.Join(extra, "lib/util.go") || got.RootPath != extra {
+		t.Errorf("additional hit abs = %q root = %q, want the file under %q", got.AbsPath, got.RootPath, extra)
 	}
 
 	// Every reference the picker hands out must be one the backend can expand

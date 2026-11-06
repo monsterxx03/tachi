@@ -44,8 +44,15 @@ type FileDropEvent struct {
 type FileMatchVO struct {
 	// Path is what the picker SHOWS: always relative to the root the match came
 	// from (that is what keeps a row readable — "[shared-lib] src/x.go").
-	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
+	Path string `json:"path"`
+	// AbsPath is the match itself. The @-picker never needs it (it inserts Ref),
+	// but the file palette OPENS the row — and a relative path resolved against
+	// the wrong root would show a same-named file from another tree.
+	AbsPath string `json:"absPath"`
+	// RootPath is the absolute directory AbsPath is relative to, with the label in
+	// Root: the pair a caller needs to open the file the way the tree would.
+	RootPath string `json:"rootPath"`
+	IsDir    bool   `json:"isDir"`
 	// Ref is the complete reference to insert into the input, '@' included. It is
 	// the authoritative form: a match under the primary root resolves to "@rel",
 	// one under an additional root to an absolute "@abs" (agent/atfile.RefForPath
@@ -368,7 +375,7 @@ func matchVO(primary string, root searchRoot, abs, rel string, isDir bool) FileM
 		// row usable rather than dropping it mid-keystroke.
 		ref = "@" + filepath.ToSlash(abs)
 	}
-	return FileMatchVO{Path: rel, IsDir: isDir, Ref: ref, Root: root.label}
+	return FileMatchVO{Path: rel, AbsPath: abs, RootPath: root.path, IsDir: isDir, Ref: ref, Root: root.label}
 }
 
 // searchRoots returns the roots @-file completion walks: the primary first, then

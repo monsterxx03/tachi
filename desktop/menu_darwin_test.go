@@ -138,6 +138,7 @@ func TestApplicationMenuFreesTheFrontendKeys(t *testing.T) {
 		{"Cmd+Shift+Backspace", "⌘⇧⌫ 删除当前会话"},
 		{"Cmd+P", "⌘P 项目搜索"},
 		{"Cmd+K", "⌘K 会话搜索"},
+		{"Cmd+O", "⌘O 文件搜索"},
 		{"Cmd+B", "⌘B 折叠侧栏"},
 		{"Cmd+/", "⌘/ 聚焦输入框"},
 		{"Cmd+,", "⌘, 打开设置"},

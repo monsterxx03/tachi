@@ -2216,6 +2216,26 @@ func scenarios() []scenario {
 		// view — two hosts with the conversation still mounted underneath, which is the state the
 		// ownership rule can get wrong. The file repeats one line so the driver can name the
 		// count. The Go half is the usual two-call script.
+		// ⌘O 文件搜索：模糊匹配这个会话工作区里的文件，回车在内容列里打开预览。它读盘、不派活
+		// 给模型，所以 Go 那一半断言的是「一个请求都没发」——而所有有意义的事实都在 driver 那边：
+		// 回车打开的到底是哪一行。两个根里各有一份 notes.md 是同名文件那一半的 fixture。
+		{
+			name: "file-palette",
+			files: map[string]string{
+				"README.md":              "# smoke\n\n顶层说明。\n",
+				"notes.md":               "# smoke\n\nPRIMARY-NOTES\n",
+				"docs/agents/desktop.md": "# 桌面手册\n\n文件模糊搜索要打开的文档。\n",
+			},
+			extraRoots: map[string]map[string]string{
+				"shared-lib": {
+					"notes.md":     "# smoke\n\nEXTRA-ROOT-NOTES\n",
+					"lib/util.txt": "EXTRA-ROOT-UTIL\n",
+				},
+			},
+			after: func(c *checkCtx) {
+				c.check("搜文件不改动对话：一个请求都没发", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
 		{
 			name: "file-find",
 			files: map[string]string{
