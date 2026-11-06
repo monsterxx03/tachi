@@ -165,8 +165,9 @@ func (s *FileStore) discardFork(dir string) {
 //
 // What IS copied is what makes the fork the same place to work: the provider and
 // thinking level (otherwise the copied prefix stops matching the provider's prompt
-// cache on the first request), the roots and the project binding (otherwise the
-// conversation's paths do not resolve), and SkipDream, which is the reader's own
+// cache on the first request), the roots and the project/worktree provenance
+// (otherwise the conversation's paths and its sidebar group do not resolve), and
+// SkipDream, which is the reader's own
 // standing choice about that conversation. SkipApproval is the same kind of
 // standing choice — a branch of a conversation being worked in 「无需审批」 stays
 // that way — and it is the one field here that a COMPACTION does not carry (see
@@ -180,6 +181,8 @@ func forkedSession(src *Session, title string) *Session {
 		WorkingDir:     src.WorkingDir,
 		AdditionalDirs: slices.Clone(src.AdditionalDirs),
 		ProjectID:      src.ProjectID,
+		WorktreeOf:     src.WorktreeOf,
+		WorktreeBranch: src.WorktreeBranch,
 		ThinkingLevel:  src.ThinkingLevel,
 		SkipDream:      src.SkipDream,
 		SkipApproval:   src.SkipApproval,

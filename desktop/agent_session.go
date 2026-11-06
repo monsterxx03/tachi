@@ -47,6 +47,18 @@ type SessionInfo struct {
 	// travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
 	// project relabels every row without touching a single session (design §3.3).
 	ProjectID string `json:"projectId,omitempty"`
+	// WorktreeBranch is set when this session works in a git worktree TACHI created: the branch
+	// checked out there. The sidebar shows it beside the row (「这个会话的改动不在主目录里」) and
+	// does so from the record — probing git per row would be one subprocess per conversation in
+	// the list.
+	WorktreeBranch string `json:"worktreeBranch,omitempty"`
+	// WorktreePath is that checkout's directory — the session's primary, carried separately so the
+	// delete dialog can name the directory it is offering to remove.
+	WorktreePath string `json:"worktreePath,omitempty"`
+	// WorkspaceChanged says this session's directory no longer matches what its project would hand
+	// a NEW session. It is computed at list time (it has to move the moment either side moves) and
+	// is what the row's small dot reads.
+	WorkspaceChanged bool `json:"workspaceChanged,omitempty"`
 	// Pinned keeps this session at the top of ITS OWN group in the sidebar — a project's members,
 	// or the project-less bucket. It never crosses a group boundary, and it is the session
 	// record's own field (session.Session.Pinned), so the order survives a restart and every
@@ -179,6 +191,7 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	infos := make([]SessionInfo, 0, len(list))
 	for _, ss := range list {
 		info := toSessionInfo(ss)
+		info.WorkspaceChanged = s.desk.workspaceChanged(ss)
 		info.HeldByTask = busy[ss.ID]
 		info.SourceNode = peers[ss.SourceNodeID]
 		if f, ok := cron[ss.LogicalConversationID()]; ok {
@@ -195,16 +208,31 @@ func (s *AgentService) ListSessions() []SessionInfo {
 // deleted session is the currently displayed one, activeID is cleared so the
 // UI falls back to choosing/creating a session.
 //
+// alsoWorktree removes the git worktree THIS session created, when it has one. It is refused —
+// before anything is deleted — while that checkout still has uncommitted or untracked files: the
+// directory is a whole working copy, and losing an agent's uncommitted hour of work must be a
+// decision the user makes after committing, not a checkbox they left ticked. The branch itself is
+// never deleted, so committed work stays reachable from the main repository.
+//
 // A session with a turn in flight is REFUSED, not stopped: the turn owns a
 // goroutine that keeps calling the model and running tools, and its writes to
 // the session directory (AppendMessage) and to the run map (setSessionState via
 // getRun) are keyed by nothing but this id — deleting underneath it loses the
 // transcript silently and can leave a rebuilt directory (a meta.json with no
 // messages.jsonl) behind. The stop is the user's call, made explicit.
-func (s *AgentService) DeleteSession(id string) string {
+func (s *AgentService) DeleteSession(id string, alsoWorktree bool) string {
 	d := s.desk
 	if d.sm == nil {
 		return "no session manager"
+	}
+	// Read what the worktree half needs BEFORE the record goes away, and decide everything that
+	// can refuse up front: a half-done delete (record gone, directory kept by accident) is the
+	// shape of bug this ordering prevents.
+	sess := d.sessionRecord(id)
+	if alsoWorktree {
+		if reason := d.worktreeDeleteRefusal(sess); reason != "" {
+			return reason
+		}
 	}
 	// Read the flag and remove the run in ONE critical section: a turn starting
 	// between the two would otherwise be cancelled out of the map mid-flight.
@@ -229,6 +257,19 @@ func (s *AgentService) DeleteSession(id string) string {
 	// runs BEFORE the list event: a reader that reloads the sidebar on agent:sessions_changed
 	// also re-reads the per-row cron counts, and those must already exclude the retired jobs.
 	d.purgeOrphanCronJobs()
+	// The record is gone; the checkout it described is not, unless the user asked for that and the
+	// removal passes its own checks (which were run above, so this cannot refuse).
+	if alsoWorktree {
+		if reason := d.removeSessionWorktree(sess); reason != "" {
+			// Refusals that matter (dirty checkout, repo gone) were already answered by
+			// worktreeDeleteRefusal before anything was deleted, so reaching here means the
+			// removal failed after the fact. The session IS gone; leaving the directory and
+			// saying so in the log is the safe direction — a half-deleted delete that reports
+			// failure would keep a row the user can no longer act on.
+			logger.New("desktop").Warn(context.Background(),
+				"删除会话：worktree 没能删除，目录留了下来", "session", id, "err", reason)
+		}
+	}
 	// Outside the lock: mobileBroadcast reads the server pointer under d.mu.
 	d.emitSessionsChanged(id)
 	return "ok"
@@ -389,13 +430,12 @@ func (s *AgentService) CurrentSession() *SessionInfo {
 // NewSession creates a fresh session and its own per-session agent, making it
 // active. The in-memory history starts empty.
 //
-// projectID is "" for an ordinary session (today's behavior, word for word). Otherwise the
-// session is created INSIDE that project (design §6.1) and this is the ONE place a binding is
-// ever made: the project's roots as they are right now are written into the record as the
-// session's snapshot, alongside project_id. A project that cannot drive a session at this
-// moment (deleted, or its primary directory gone) yields an ordinary session instead of one
-// bound to nothing — §8.6's degradation is for a project that disappears UNDER a session,
-// which is not the same as being asked for one that is not there.
+// projectID is "" for an ordinary session. Otherwise the session is created INSIDE that project
+// and takes its roots as they are right now — a copy, not a link: the project can be edited,
+// renamed or deleted afterwards and this session keeps the directory it started in. This is the
+// ONE place a project's roots are copied into a session (the upgrade migration is the other, and
+// runs once). A project that cannot hand out its roots at this moment (deleted, or its primary
+// directory gone) yields an ordinary session instead of one bound to nothing.
 func (s *AgentService) NewSession(projectID string) SessionInfo {
 	d := s.desk
 	pname := "default"
@@ -410,13 +450,13 @@ func (s *AgentService) NewSession(projectID string) SessionInfo {
 	// the @-file index would cover everything, and relative paths would resolve against a
 	// directory that is not a project. With nothing to inherit the session starts WITHOUT a
 	// workspace and the composer asks for one (see defaultWorkspaceFor / wideRootReason).
-	var snapshot []string
+	var proj project
 	boundID := ""
 	wd := ""
 	if p, primary, ok := d.projects.drives(projectID); ok {
 		// The primary comes back cleaned/expanded, since projects.json is hand-editable.
 		wd = primary
-		snapshot = append([]string(nil), p.AdditionalDirs...)
+		proj = p
 		boundID = p.ID
 	} else {
 		wd = d.defaultWorkspaceFor()
@@ -430,10 +470,9 @@ func (s *AgentService) NewSession(projectID string) SessionInfo {
 		return SessionInfo{}
 	}
 	if boundID != "" {
-		// sm.New carries only the provider and the primary directory, so the rest of the
-		// snapshot — and the binding — are written by hand, in one update.
-		sess.ProjectID = boundID
-		sess.AdditionalDirs = snapshot
+		// sm.New carries only the provider and the primary directory, so the rest of the copied
+		// root set — and the binding — are written by hand, in one update.
+		copyProjectRoots(sess, proj, wd)
 		if err := sm.UpdateMeta(sess); err != nil {
 			// The session itself exists, and this API has no error channel to report into
 			// (it answers with SessionInfo like every other creation path). Returning a zero
@@ -661,6 +700,14 @@ func (d *desktopApp) pageSessionMessages(r *sessionRun, id, before string, limit
 	return pool, offset, hasMore
 }
 
+// worktreePath is the recorded checkout's directory, or "" when this session is not in one.
+func worktreePath(ss *session.Session) string {
+	if ss.WorktreeOf == "" {
+		return ""
+	}
+	return ss.WorkingDir
+}
+
 func toSessionInfo(ss *session.Session) SessionInfo {
 	return SessionInfo{
 		ID:                   ss.ID,
@@ -671,6 +718,8 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		CompactedParentID:    ss.CompactedParentID,
 		CompactedParentTitle: ss.CompactedParentTitle,
 		ProjectID:            ss.ProjectID,
+		WorktreeBranch:       ss.WorktreeBranch,
+		WorktreePath:         worktreePath(ss),
 		Pinned:               ss.Pinned,
 		SkipDream:            ss.SkipDream,
 		Kind:                 ss.Kind,
@@ -710,9 +759,6 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return "empty dir"
 	}
-	if reason := d.projectGuard(id); reason != "" {
-		return reason
-	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err.Error()
@@ -724,6 +770,13 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 		return reason
 	}
 	if err := d.updateSessionMeta(id, func(sess *session.Session) {
+		// Pointing the session at another directory ends the worktree binding: the recorded
+		// checkout is no longer where this conversation works, so deleting the session must not
+		// offer to remove it.
+		if sess.WorkingDir != abs {
+			sess.WorktreeOf = ""
+			sess.WorktreeBranch = ""
+		}
 		sess.WorkingDir = abs
 		// A directory that just BECAME the primary is no longer an additional root:
 		// re-normalizing drops it (and any duplicate), so the root set stays

@@ -194,7 +194,7 @@ func TestDeletingTheCompactionChildIsRefusedWhileItsTurnRuns(t *testing.T) {
 
 	// The turn is appending to the child right now: deleting it would lose the conversation
 	// under a turn whose writes are keyed by that very id.
-	if got := svc.DeleteSession(child.ID); got != refuseDeleteRunning {
+	if got := svc.DeleteSession(child.ID, false); got != refuseDeleteRunning {
 		t.Errorf("DeleteSession(child) = %q, want the running refusal", got)
 	}
 	if _, err := sm.Load(child.ID); err != nil {

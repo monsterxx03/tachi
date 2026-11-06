@@ -49,8 +49,9 @@ func (d *desktopApp) mobileCreateSession(projectID, workingDir string) (mobileSe
 		pname = cfg.DefaultProviderName()
 	}
 	wd := ""
-	boundID := ""
-	var additional []string
+	// proj is the project whose roots get COPIED into the new session (creation only — see
+	// copyProjectRoots); nil means an ordinary session at workingDir.
+	var proj *project
 	if strings.TrimSpace(projectID) != "" {
 		p, primary, ok := d.projects.drives(projectID)
 		if !ok {
@@ -59,8 +60,7 @@ func (d *desktopApp) mobileCreateSession(projectID, workingDir string) (mobileSe
 			return mobileSessionSummary{}, http.StatusConflict, "no_project"
 		}
 		wd = primary
-		boundID = p.ID
-		additional = append([]string(nil), p.AdditionalDirs...)
+		proj = &p
 	} else {
 		raw := strings.TrimSpace(workingDir)
 		if raw == "" {
@@ -84,9 +84,8 @@ func (d *desktopApp) mobileCreateSession(projectID, workingDir string) (mobileSe
 	if err != nil {
 		return mobileSessionSummary{}, http.StatusInternalServerError, "create_failed"
 	}
-	if boundID != "" {
-		sess.ProjectID = boundID
-		sess.AdditionalDirs = additional
+	if proj != nil {
+		copyProjectRoots(sess, *proj, wd)
 		if err := sm.UpdateMeta(sess); err != nil {
 			// The session exists; its binding did not stick. Report it rather than hand back a
 			// row that claims a project it is not bound to.

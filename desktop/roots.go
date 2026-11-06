@@ -83,31 +83,48 @@ type SessionRootsVO struct {
 	PrimaryDetached bool   `json:"primaryDetached,omitempty"`
 
 	Additional []SessionRootVO `json:"additional"`
-	// ProjectID / ProjectName are set when a desktop project owns this session's workspace.
-	// The panel then renders read-only and points at the project (design §7.2).
+
+	// ProjectID / ProjectName name the project this session was STARTED from. They are
+	// provenance, not ownership: the roots above are the session's own, and the panel is
+	// editable for every session.
 	ProjectID   string `json:"projectId,omitempty"`
 	ProjectName string `json:"projectName,omitempty"`
-	// ProjectMissing is true when the session carries a project_id that no longer DRIVES it
-	// — the project was deleted, or its roots stopped validating (design §5). The roots above
-	// are then the session's own snapshot, and the panel must say so while staying EDITABLE:
-	// a read-only panel plus three refused writers would leave the user no way out. An empty
-	// ProjectName with this flag set means "gone"; a name means "still there, unusable".
-	ProjectMissing bool `json:"projectMissing,omitempty"`
+	// ProjectGone is true when ProjectID names a project that is no longer usable here — deleted,
+	// or its primary directory has vanished. The panel keeps the id out of the way and says so.
+	ProjectGone bool `json:"projectGone,omitempty"`
+	// InWorktree says the session's primary IS a checkout Tachi created (Session.WorktreeOf), and
+	// CanWorktree says the panel may offer to create one: not already in a worktree, and the primary
+	// is inside a git repository (a branch probe that answers nothing is not one).
+	InWorktree     bool   `json:"inWorktree,omitempty"`
+	CanWorktree    bool   `json:"canWorktree,omitempty"`
+	WorktreeBranch string `json:"worktreeBranch,omitempty"`
+	// ProjectPrimary is where the project points NOW — the answer to 「恢复」 and the second line
+	// under the 「已改动」 tag. Empty when the project is gone or unusable.
+	ProjectPrimary string `json:"projectPrimary,omitempty"`
+	// Changed is true when these roots are no longer what the project would hand a session
+	// created right now. It is what the panel's 「已改动」 tag and the sidebar's dot read, and it
+	// is computed, never stored: the comparison has to move the moment either side moves.
+	Changed bool `json:"changed,omitempty"`
 }
 
 // GetSessionRoots returns the session's root set for the UI, with each additional
 // root's current existence. It never fails: an unknown session yields the zero
 // value, which the UI renders as "no roots yet".
 func (s *AgentService) GetSessionRoots(id string) SessionRootsVO {
-	// The record is loaded ONCE and both the roots and the project marks are derived from
-	// it: loading it twice (once inside sessionRoots, once for the marks) would read
-	// meta.json twice and resolve the project's roots twice for a single panel open.
+	// The record is loaded ONCE and both the roots and the project marks are derived from it:
+	// loading it twice (once inside sessionRoots, once for the marks) would read meta.json twice
+	// for a single panel open.
 	sess := s.desk.sessionRecord(id)
 	primary, additional := s.desk.sessionRootsFrom(sess)
 	vo := SessionRootsVO{Primary: primary, Additional: make([]SessionRootVO, 0, len(additional))}
 	if primary != "" {
 		primaryVO := rootVO(primary)
 		vo.PrimaryBranch, vo.PrimaryDetached = primaryVO.Branch, primaryVO.Detached
+	}
+	if sess != nil {
+		vo.InWorktree = sess.WorktreeOf != ""
+		vo.WorktreeBranch = sess.WorktreeBranch
+		vo.CanWorktree = !vo.InWorktree && primary != "" && vo.PrimaryBranch != ""
 	}
 	// The labels are resolved ONCE for the whole set, because that is what the rule needs: a label
 	// only degrades to a full path when TWO roots share a base name, which no single root can know.
@@ -122,31 +139,31 @@ func (s *AgentService) GetSessionRoots(id string) SessionRootsVO {
 		if p, ok := s.desk.projects.get(sess.ProjectID); ok {
 			vo.ProjectName = p.Name
 		}
-		if _, ok := s.desk.projects.usable(sess.ProjectID); !ok {
-			vo.ProjectMissing = true
+		// A project that cannot drive a NEW session (deleted, or its directory gone) is gone as a
+		// reference too; a live one lets us say whether this session still matches it.
+		if p, primary, ok := s.desk.projects.drives(sess.ProjectID); ok {
+			vo.ProjectPrimary = primary
+			vo.Changed = rootsDiffer(p, primary, sess)
+		} else {
+			vo.ProjectGone = true
 		}
 	}
 	return vo
 }
 
-// projectGuard is the refusal every session-workspace writer starts with: a session whose
-// workspace a project owns may not be pointed somewhere else from here (design §5). The
-// check is the same predicate the resolver uses (projectTable.usable), so a session can
-// never be "owned" for a read and editable for a write.
-//
-// A dangling or unusable project deliberately yields "" (editable): the project can no
-// longer drive the session, and refusing there would lock the user out of their own
-// workspace with no way back (design §5, §8.6).
-func (d *desktopApp) projectGuard(id string) string {
-	sess := d.sessionRecord(id)
-	if sess == nil || sess.ProjectID == "" {
-		return ""
+// sameRoots reports whether two additional-root sets are the same set in the same order. Order is
+// part of it: the prompt and the @-file search print them in this order, and a reordered list is a
+// change a user made on purpose.
+func sameRoots(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	p, ok := d.projects.usable(sess.ProjectID)
-	if !ok {
-		return ""
+	for i := range a {
+		if filepath.Clean(a[i]) != filepath.Clean(b[i]) {
+			return false
+		}
 	}
-	return fmt.Sprintf("项目「%s」管理该会话的工作区：请到项目里改目录", p.Name)
+	return true
 }
 
 // AddSessionRoots appends directories the user picked to the session's root set.
@@ -155,9 +172,6 @@ func (d *desktopApp) projectGuard(id string) string {
 func (s *AgentService) AddSessionRoots(id string, dirs []string) string {
 	if len(dirs) == 0 {
 		return "没有选择目录"
-	}
-	if reason := s.desk.projectGuard(id); reason != "" {
-		return reason
 	}
 	primary, existing := s.desk.sessionRoots(id)
 	if primary == "" {
@@ -190,9 +204,6 @@ func (s *AgentService) AddSessionRoots(id string, dirs []string) string {
 func (s *AgentService) RemoveSessionRoot(id, dir string) string {
 	// The guard comes first, like the other two writers: a project-owned session is refused
 	// for what it IS, not for whether the path it was handed happens to parse.
-	if reason := s.desk.projectGuard(id); reason != "" {
-		return reason
-	}
 	abs, err := expandRootPath(dir)
 	if err != nil {
 		return err.Error()
@@ -257,27 +268,17 @@ func (d *desktopApp) sessionRoots(id string) (primary string, additional []strin
 //
 // It takes an already-loaded record rather than an id because one caller (agent
 // construction) holds a session manager instead of the run map, and because an agent is
-// built BEFORE its run is bound (see buildAgentForSession). It takes no lock of the APP's
-// own, but for a session in a project it does read the project table — projects.mu, and on
-// the very first use projects.json off disk, plus an existence check of the project's
-// primary — following the d.mu → projects.mu order projects.go documents. So it is still
-// safe to call with d.mu held, which is what beginTurn and expansionRoot do.
+// built BEFORE its run is bound (see buildAgentForSession).
 //
-// A session in a desktop project resolves through the project: the project's roots win,
-// and the record's own WorkingDir/AdditionalDirs become the snapshot the other entry points
-// (TUI, ACP) and the degraded cases still read. Nothing is written to session meta on the
-// way — this is a pure read path, which is why editing a project needs no fan-out.
-// See docs/2026-09-14-desktop-project-design.md §2.
+// The answer is ALWAYS the record's own two fields. A project is where a session STARTED,
+// not what its workspace is: NewSession copies the project's roots in when the session is
+// created, and from then on the session owns them — editing the project moves the next
+// session, never this one. That is also why this path reads no project table and can be
+// called with d.mu held (beginTurn, expansionRoot).
 func (d *desktopApp) sessionRootsFrom(sess *session.Session) (primary string, additional []string) {
 	if sess == nil {
 		return "", nil
 	}
-	if primary, additional, ok := d.projects.projectRootsForSession(sess); ok {
-		return primary, additional
-	}
-	// No project, a dangling project_id, or a project whose roots no longer validate: the
-	// session's own snapshot is the answer. It is never a wide root — it was validated when
-	// it was written (creation or detach) — so degrading here cannot hand the tools / or $HOME.
 	return sess.WorkingDir, append([]string(nil), sess.AdditionalDirs...)
 }
 

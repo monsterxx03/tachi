@@ -705,7 +705,9 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
 /* A member session's chip wears the PROJECT's name (design §7.2): the directory belongs to
    the project, and naming it is what tells the reader that an edit here moves neighbours too.
    The full path stays in the chip's title. */
-.work-dir-project {
+/* The chip names the directory (its last segment), not the project: a session owns its workspace,
+   so two sessions of one project can be in two different trees — one of them in a worktree. */
+.work-dir-name {
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;

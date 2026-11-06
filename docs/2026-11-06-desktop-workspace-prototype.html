@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tachi · 工作区继承与 worktree 设计预览</title>
+<style>
+  :root {
+    --bg: #f7f4ee;
+    --chrome: #f3efe7;
+    --chrome-2: #fdfbf7;
+    --panel-solid: #fffefa;
+    --panel-2: #f2ede5;
+    --panel-veil-a: rgba(255, 254, 250, 0.95);
+    --veil: rgba(255, 254, 250, 0.75);
+    --border: rgba(62, 54, 44, 0.12);
+    --border-2: rgba(62, 54, 44, 0.17);
+    --wash: rgba(62, 54, 44, 0.05);
+    --hover: rgba(62, 54, 44, 0.055);
+    --text: #2b2621;
+    --text-dim: #5b554d;
+    --text-faint: #6b655c;
+    --accent: #4a6cf5;
+    --accent-2: #2f4bd6;
+    --accent-strong: #3550d8;
+    --accent-soft: rgba(74, 108, 245, 0.14);
+    --accent-softer: rgba(74, 108, 245, 0.09);
+    --accent-line: rgba(74, 108, 245, 0.5);
+    --green: #0d6f45;
+    --red: #bf2831;
+    --red-wash: rgba(191, 40, 49, 0.11);
+    --amber: #8a4b08;
+    --amber-wash: rgba(138, 75, 8, 0.1);
+    --user-grad-a: #eaf0fb;
+    --user-grad-b: #e5ecf9;
+    --shadow-2: 0 2px 6px rgba(62, 54, 44, 0.06), 0 5px 18px rgba(62, 54, 44, 0.05);
+    --shadow-4: 0 14px 32px rgba(62, 54, 44, 0.12), 0 32px 72px rgba(62, 54, 44, 0.14);
+    --scrim: rgba(62, 54, 44, 0.2);
+    --page: #ece8df;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font: 13px/1.55 "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC",
+          "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    font-feature-settings: "tnum";
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── 说明页的骨架 ───────────────────────────────────────────── */
+  .doc { max-width: 1280px; margin: 0 auto; padding: 44px 32px 96px; }
+  .doc-head { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 40px; }
+  .doc-head h1 { font-size: 21px; font-weight: 620; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .doc-head .sub { color: var(--text-dim); font-size: 12.5px; line-height: 1.7; max-width: 720px; }
+  .doc-head .sub code { font-family: var(--mono); font-size: 11.5px; background: var(--wash);
+    padding: 1px 5px; border-radius: 4px; }
+  .doc-head .spacer { flex: 1; }
+  .jump { display: flex; flex-direction: column; gap: 2px; font-size: 12px; min-width: 148px; }
+  .jump a { color: var(--text-faint); text-decoration: none; padding: 3px 8px; border-radius: 6px; }
+  .jump a:hover { background: var(--hover); color: var(--text); }
+
+  section { margin-bottom: 56px; }
+  .sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .sec-tag { font-size: 11px; font-weight: 620; letter-spacing: 0.04em; color: var(--accent-2);
+    background: var(--accent-softer); border-radius: 5px; padding: 2px 6px; }
+  .sec-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .sec-lead { color: var(--text-dim); font-size: 12.5px; margin: 0 0 18px; max-width: 760px; line-height: 1.7; }
+  .sec-lead b { font-weight: 600; color: var(--text); }
+
+  /* ── 窗口外框 ──────────────────────────────────────────────── */
+  .window {
+    position: relative;
+    display: flex;
+    height: 664px;
+    border-radius: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    box-shadow: 0 20px 48px rgba(62, 54, 44, 0.12), 0 2px 6px rgba(62, 54, 44, 0.06);
+    overflow: hidden;
+  }
+  .window.is-tall { height: 700px; }
+
+  /* ── 侧栏 ──────────────────────────────────────────────────── */
+  .side { width: 272px; flex: 0 0 272px; background: var(--chrome); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-width: 0; }
+  .strip { height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 16px; flex: none; }
+  .light { width: 11.5px; height: 11.5px; border-radius: 50%; background: #ddd7cb; }
+  .side-head { display: flex; align-items: center; gap: 4px; padding: 0 12px 10px 16px; }
+  .brand { font-size: 13.5px; font-weight: 620; letter-spacing: 0.01em; }
+  .grow { flex: 1; }
+  .icon-btn { width: 26px; height: 26px; display: grid; place-items: center; border: 0;
+    background: transparent; color: var(--text-faint); border-radius: 6px; cursor: default; }
+  .icon-btn:hover { background: var(--hover); color: var(--text-dim); }
+
+  .nav { flex: 1; overflow: hidden; padding: 0 8px; }
+  .group { margin-bottom: 2px; }
+  .proj-head { display: flex; align-items: center; gap: 5px; padding: 5px 6px 5px 4px;
+    border-radius: 7px; }
+  .proj-head:hover { background: var(--hover); }
+  .caret { width: 11px; height: 11px; color: var(--text-faint); flex: none; }
+  .proj-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .proj-head.is-loose .proj-name { font-weight: 480; color: var(--text-dim); }
+  .proj-count { font-size: 12px; color: var(--text-faint); flex: none; }
+  .proj-add { margin-left: auto; width: 20px; height: 20px; border: 0; background: transparent;
+    color: var(--text-faint); font-size: 14px; border-radius: 5px; cursor: default; flex: none; }
+  .proj-head:hover .proj-add { color: var(--text-dim); }
+  .proj-rows { margin: 2px 0 6px 14px; padding-left: 6px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 1px; }
+  .srow { display: flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 6px;
+    color: var(--text-dim); font-size: 13px; }
+  .srow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow.active { background: var(--panel-veil-a); color: var(--text); font-weight: 520;
+    box-shadow: inset 0 0 0 1px var(--border), 0 1px 2px rgba(62, 54, 44, 0.05); }
+  .srow:hover:not(.active) { background: var(--hover); }
+
+  /* 会话行上的两个新标记 */
+  .wt-chip { flex: none; display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono);
+    font-size: 10.5px; line-height: 1; color: var(--accent-2); background: var(--accent-softer);
+    border-radius: 4px; padding: 3px 5px; max-width: 108px; overflow: hidden; }
+  .wt-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dirty-dot { flex: none; width: 6px; height: 6px; border-radius: 50%;
+    box-shadow: inset 0 0 0 1.2px var(--text-faint); }
+
+  .new-project { margin: 6px 12px 0; display: flex; align-items: center; gap: 6px; border: 1px dashed var(--border-2);
+    background: transparent; color: var(--text-faint); font: inherit; font-size: 12.5px;
+    padding: 7px 10px; border-radius: 8px; cursor: default; }
+  .new-project:hover { color: var(--text-dim); border-color: var(--accent-line); }
+  .side-foot { display: flex; align-items: center; gap: 7px; padding: 10px 16px 14px;
+    color: var(--text-faint); font-size: 12.5px; border-top: 1px solid var(--border); margin-top: 8px; }
+
+  /* ── 内容列 ────────────────────────────────────────────────── */
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .titlebar { height: 44px; flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--chrome-2); }
+  .tb-title { font-size: 13.5px; font-weight: 560; }
+  .tb-right { margin-left: auto; display: flex; align-items: center; gap: 12px;
+    font-size: 11.5px; color: var(--text-faint); }
+  .meter { width: 34px; height: 4px; border-radius: 2px; background: var(--wash); position: relative; }
+  .meter i { position: absolute; inset: 0 42% 0 0; border-radius: 2px; background: var(--accent); opacity: 0.55; }
+
+  .transcript { flex: 1; overflow: hidden; padding: 26px 40px 8px; max-width: 900px; margin: 0 auto; width: 100%; }
+  .msg-user { margin-left: auto; width: fit-content; max-width: 76%;
+    background: linear-gradient(var(--user-grad-a), var(--user-grad-b));
+    border: 1px solid var(--border); border-radius: 12px 12px 4px 12px;
+    padding: 9px 13px; font-size: 13.5px; line-height: 1.65; }
+  .msg-a { margin-top: 20px; font-size: 13.5px; line-height: 1.75; color: var(--text); }
+  .msg-a p { margin: 0 0 10px; }
+  .tool { margin-top: 14px; border: 1px solid var(--border); background: var(--panel-solid);
+    border-radius: 9px; overflow: hidden; }
+  .tool-head { display: flex; align-items: center; gap: 8px; padding: 7px 11px; font-size: 12px;
+    color: var(--text-dim); background: var(--wash); }
+  .tool-name { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+  .tool-out { font-family: var(--mono); font-size: 11.5px; line-height: 1.7; color: var(--text-dim);
+    padding: 9px 12px; white-space: pre; }
+  .ok { color: var(--green); }
+  .bad { color: var(--red); }
+
+  /* ── composer + 状态栏 ─────────────────────────────────────── */
+  .composer { flex: none; padding: 0 20px 12px; }
+  .composer-inner { max-width: 900px; margin: 0 auto; }
+  .input-box { border: 1px solid var(--border-2); background: var(--panel-solid);
+    border-radius: 12px; padding: 11px 13px 9px; box-shadow: var(--shadow-2); }
+  .input-ph { color: var(--text-faint); font-size: 13.5px; }
+  .composer-status { display: flex; align-items: center; gap: 8px; padding: 9px 2px 0;
+    font-size: 12px; color: var(--text-faint); }
+  .work-dir { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+    border-radius: 6px; background: var(--accent-soft); color: var(--accent-2); font-size: 12px; }
+  .work-dir .ico { opacity: 0.75; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 6px;
+    background: var(--veil); box-shadow: inset 0 0 0 1px var(--border); font-size: 12px; }
+  .status-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  /* ── 工作区面板 ────────────────────────────────────────────── */
+  .panel-anchor { position: relative; }
+  .roots-panel { position: absolute; bottom: calc(100% + 10px); left: -2px; width: 404px;
+    background: var(--panel-solid); border: 1px solid var(--border-2); border-radius: 12px;
+    box-shadow: var(--shadow-4); padding: 13px 13px 11px; }
+  .roots-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 11px; padding: 0 2px; }
+  .roots-head-row { display: flex; align-items: center; gap: 8px; }
+  .roots-title { font-size: 13px; font-weight: 600; }
+  .roots-tag { font-size: 10.5px; line-height: 1; padding: 3px 6px; border-radius: 4px;
+    background: var(--accent-softer); color: var(--accent-2); }
+  .roots-tag.is-changed { background: var(--amber-wash); color: var(--amber); }
+  .roots-tag.is-gone { background: var(--wash); color: var(--text-faint); }
+  .roots-sub { font-size: 11.5px; color: var(--text-faint); line-height: 1.5; }
+  .roots-sub code { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .roots-sec { font-size: 11px; color: var(--text-faint); margin: 10px 2px 4px; letter-spacing: 0.02em; }
+  .roots-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px;
+    min-height: 28px; }
+  .roots-row:hover { background: var(--hover); }
+  .roots-path { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .roots-path-main { font-size: 12px; color: var(--text); }
+  .roots-name { font-size: 12px; color: var(--text); flex: none; max-width: 84px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .branch { flex: none; display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono);
+    font-size: 10.5px; color: var(--text-faint); }
+  .roots-btn { flex: none; border: 0; background: transparent; color: var(--text-faint); font: inherit;
+    font-size: 11.5px; padding: 2px 6px; border-radius: 5px; cursor: default; }
+  .roots-row:hover .roots-btn { color: var(--text-dim); background: var(--wash); }
+  .roots-add { margin-top: 2px; border: 0; background: transparent; color: var(--text-faint);
+    font: inherit; font-size: 11.5px; padding: 4px 8px; border-radius: 6px; cursor: default; }
+  .roots-add:hover { color: var(--text-dim); background: var(--hover); }
+  .roots-div { height: 1px; background: var(--border); margin: 9px 0 6px; }
+  .roots-foot { display: flex; align-items: center; gap: 6px; }
+  .roots-foot .grow { flex: 1; }
+  .roots-action { display: inline-flex; align-items: center; gap: 5px; border: 0;
+    background: var(--wash); color: var(--text-dim); font: inherit; font-size: 11.5px;
+    padding: 5px 9px; border-radius: 7px; cursor: default; }
+  .roots-action:hover { background: var(--hover); color: var(--text); }
+  .roots-action.primary { background: var(--accent-soft); color: var(--accent-2); }
+  .roots-action.primary:hover { background: var(--accent-softer); }
+
+  /* 面板三态并排展示 */
+  .trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: start; }
+  .trio .card { background: var(--chrome-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; box-shadow: var(--shadow-2); }
+  .trio .cap { font-size: 11.5px; color: var(--text-faint); margin: 9px 2px 0; line-height: 1.6; }
+  .trio .cap b { color: var(--text-dim); font-weight: 560; }
+  .trio .roots-panel { position: static; bottom: auto; left: auto; width: auto; box-shadow: none;
+    background: transparent; border: 0; padding: 0; }
+
+  /* ── 弹窗 ──────────────────────────────────────────────────── */
+  .scrim { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(1.5px);
+    display: grid; place-items: center; padding: 24px; }
+  .modal { width: 452px; background: var(--panel-solid); border: 1px solid var(--border-2);
+    border-radius: 13px; box-shadow: var(--shadow-4); padding: 18px; }
+  .modal-title { font-size: 14.5px; font-weight: 620; margin-bottom: 5px; }
+  .modal-sub { font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-bottom: 14px; }
+  .frow { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 11px; }
+  .flabel { width: 74px; flex: none; font-size: 12px; color: var(--text-faint); padding-top: 6px; }
+  .fbody { flex: 1; min-width: 0; }
+  .input, .select { width: 100%; border: 1px solid var(--border-2); background: var(--bg);
+    border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 12.5px; color: var(--text);
+    display: flex; align-items: center; gap: 7px; }
+  .input.mono { font-family: var(--mono); font-size: 11.5px; }
+  .input .ph { color: var(--text-faint); }
+  .select { justify-content: space-between; }
+  .select .m { font-family: var(--mono); font-size: 11.5px; }
+  .fhint { font-size: 11px; color: var(--text-faint); margin-top: 4px; line-height: 1.5; }
+  .fhint.amber { color: var(--amber); }
+  .fhint.red { color: var(--red); }
+  .banner { display: flex; gap: 7px; font-size: 11.5px; line-height: 1.6; color: var(--amber);
+    background: var(--amber-wash); border-radius: 7px; padding: 7px 9px; margin: 4px 0 12px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .btn { border: 1px solid var(--border-2); background: var(--bg); color: var(--text-dim);
+    font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 8px; cursor: default; }
+  .btn.primary { background: var(--accent-strong); border-color: transparent; color: #fff; font-weight: 520; }
+  .btn.ghost { border-color: transparent; background: transparent; }
+  .form-note { font-size: 11.5px; color: var(--text-faint); line-height: 1.65; margin-top: 5px; }
+  .confirm-check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--wash); }
+  .confirm-check .cb { width: 13px; height: 13px; margin-top: 2px; flex: none; border-radius: 3px;
+    border: 1px solid var(--border-2); background: var(--bg); }
+  .confirm-check .cb.is-off { border-style: dashed; }
+  .confirm-check-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12.5px; }
+  .confirm-check-text code { font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .confirm-check-note { font-size: 11px; color: var(--text-faint); }
+  .btn.danger { background: var(--red); border-color: transparent; color: #fff; font-weight: 520; }
+
+  /* ── 对照表 ────────────────────────────────────────────────── */
+  table.rules { width: 100%; border-collapse: collapse; font-size: 12.5px;
+    background: var(--chrome-2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  table.rules th, table.rules td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    vertical-align: top; }
+  table.rules th { font-size: 11px; font-weight: 560; color: var(--text-faint); background: var(--wash);
+    letter-spacing: 0.02em; }
+  table.rules td:first-child { color: var(--text); width: 30%; }
+  table.rules td { color: var(--text-dim); }
+  table.rules tr:last-child td { border-bottom: 0; }
+  table.rules .none { color: var(--text-faint); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 16px; font-size: 12px;
+    color: var(--text-dim); }
+  .legend > div { display: flex; align-items: center; gap: 7px; }
+  .legend .k { font-size: 11px; color: var(--text-faint); }
+  .todo { background: var(--chrome-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 18px; font-size: 12.5px; color: var(--text-dim); line-height: 1.8; }
+  .todo b { color: var(--text); font-weight: 600; }
+  .todo ol { margin: 8px 0 0; padding-left: 20px; }
+  .todo li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <header class="doc-head">
+    <div>
+      <h1>Tachi · 项目工作区改成「起点」</h1>
+      <div class="sub">
+        静态设计稿，不是可运行页面；配色按桌面浅色主题取样。<br>
+        一句话：<b>新建会话时把项目当时的工作区复制一份给会话，之后两边各走各的</b>。
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <nav class="jump">
+      <a href="#window">A · 整个窗口</a>
+      <a href="#states">B · 面板三态</a>
+      <a href="#worktree">C · 建 worktree</a>
+      <a href="#delete">D · 删除勾选</a>
+      <a href="#project">E · 项目表单</a>
+      <a href="#rules">行为对照</a>
+    </nav>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="window">
+    <div class="sec-head"><span class="sec-tag">A</span><h2>整个窗口：侧栏的标记 + 打开的工作区面板</h2></div>
+    <p class="sec-lead">
+      <b>修登录超时</b> 在 worktree 里；<b>排查慢查询</b> 改过目录，带一个空心点；当前打开的
+      <b>补单测</b> 没动过，面板标签是「继承自 my-repo」。
+    </p>
+
+    <div class="window">
+      <aside class="side">
+        <div class="strip"><span class="light"></span><span class="light"></span><span class="light"></span></div>
+        <div class="side-head">
+          <span class="brand">Tachi</span>
+          <span class="grow"></span>
+          <button class="icon-btn" title="搜索会话（⌘K）">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.6"/><path d="m16 16 4 4"/></svg>
+          </button>
+          <button class="icon-btn" title="定时任务">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.2"/></svg>
+          </button>
+        </div>
+
+        <nav class="nav">
+          <div class="group">
+            <div class="proj-head">
+              <svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.6 4.6 6 8l3.4-3.4"/></svg>
+              <span class="proj-name">my-repo</span>
+              <span class="proj-count">(4)</span>
+              <button class="proj-add" title="在该项目里新建会话">＋</button>
+            </div>
+            <div class="proj-rows">
+              <div class="srow active"><span class="t">补单测</span></div>
+              <div class="srow">
+                <span class="t">修登录超时</span>
+                <span class="wt-chip" title="这个会话在自己的 git worktree 里：~/work/my-repo-wt/tachi-fix-login">
+                  <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+                  <span>tachi/fix-login</span>
+                </span>
+              </div>
+              <div class="srow"><span class="t">重构权限模块</span></div>
+              <div class="srow">
+                <span class="t">排查慢查询</span>
+                <span class="dirty-dot" title="工作区已改动，不再跟随项目：~/work/db-lab"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="proj-head">
+              <svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4.6 2.6 8 6l-3.4 3.4"/></svg>
+              <span class="proj-name">other-repo</span>
+              <span class="proj-count">(2)</span>
+              <button class="proj-add">＋</button>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="proj-head is-loose">
+              <svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4.6 2.6 8 6l-3.4 3.4"/></svg>
+              <span class="proj-name">无项目</span>
+              <span class="proj-count">(37)</span>
+              <button class="proj-add">＋</button>
+            </div>
+          </div>
+        </nav>
+
+        <button class="new-project"><span>＋</span> 新建项目</button>
+        <div class="side-foot">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1"/></svg>
+          设置
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="titlebar">
+          <span class="tb-title">补单测</span>
+          <div class="tb-right">
+            <span>32/s</span>
+            <span class="meter"><i></i></span>
+            <span>¥0.184</span>
+          </div>
+        </header>
+
+        <div class="transcript">
+          <div class="msg-user">把 agent/skill 那几个测试补一下，先跑一遍看看哪些没过</div>
+          <div class="msg-a">
+            <p>先跑一遍现有的。</p>
+          </div>
+          <div class="tool">
+            <div class="tool-head"><span class="tool-name">bash</span><span>go test ./agent/skill/...</span></div>
+            <div class="tool-out"><span class="bad">FAIL</span>  agent/skill           0.508s   --- TestStoreSymlinkScan
+<span class="ok">ok</span>    agent/skill/omarchy   0.231s
+ok    agent/skill/store     0.412s</div>
+          </div>
+          <div class="msg-a"><p>一个没过：<code>TestStoreSymlinkScan</code>。看着是链接被当成普通文件了，我补两条用例再修。</p></div>
+        </div>
+
+        <footer class="composer">
+          <div class="composer-inner">
+            <div class="input-box"><div class="input-ph">给 agent 发消息…</div></div>
+            <div class="composer-status">
+              <div class="panel-anchor">
+                <span class="work-dir">
+                  <span class="ico">
+                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h4l1.2 1.6H14v7H2z"/></svg>
+                  </span>
+                  my-repo
+                </span>
+
+                <div class="roots-panel">
+                  <div class="roots-head">
+                    <div class="roots-head-row">
+                      <span class="roots-title">工作区目录</span>
+                      <span class="roots-tag">继承自 my-repo</span>
+                    </div>
+                  </div>
+
+                  <div class="roots-sec">主目录</div>
+                  <div class="roots-row">
+                    <span class="roots-path roots-path-main">~/work/my-repo</span>
+                    <span class="branch">
+                      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+                      main
+                    </span>
+                    <button class="roots-btn">更换…</button>
+                  </div>
+
+                  <div class="roots-sec">附加目录（1）</div>
+                  <div class="roots-row">
+                    <span class="roots-name">shared</span>
+                    <span class="roots-path">~/work/shared</span>
+                    <span class="branch">
+                      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+                      main
+                    </span>
+                    <button class="roots-btn">移除</button>
+                  </div>
+                  <button class="roots-add">＋ 添加目录</button>
+
+                  <div class="roots-div"></div>
+                  <div class="roots-foot">
+                    <button class="roots-action">
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+                      用 worktree 隔离…
+                    </button>
+                    <span class="grow"></span>
+                  </div>
+                </div>
+              </div>
+
+              <span class="chip">模型 deepseek-v4</span>
+              <span class="status-right">
+                <span class="chip">手动确认</span>
+                <span>12.4k / 200k</span>
+              </span>
+            </div>
+          </div>
+        </footer>
+      </main>
+    </div>
+
+    <div class="legend">
+      <div><span class="wt-chip" style="max-width:none">
+        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+        <span>tachi/fix-login</span></span>
+        <span class="k">这个会话在独立 worktree 里</span></div>
+      <div><span class="dirty-dot"></span><span class="k">目录被改过，不再跟着项目走</span></div>
+      <div><span class="k">两个标记都不出现 = 和项目现在一样</span></div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="states">
+    <div class="sec-head"><span class="sec-tag">B</span><h2>工作区面板的三态</h2></div>
+    <p class="sec-lead">
+      面板对任何会话都可编辑。三种状态只差一个标签和右下角那个按钮。
+    </p>
+
+    <div class="trio">
+      <!-- 态 1 -->
+      <div class="card">
+        <div class="roots-panel">
+          <div class="roots-head">
+            <div class="roots-head-row">
+              <span class="roots-title">工作区目录</span>
+              <span class="roots-tag">继承自 my-repo</span>
+            </div>
+          </div>
+          <div class="roots-sec">主目录</div>
+          <div class="roots-row">
+            <span class="roots-path roots-path-main">~/work/my-repo</span>
+            <span class="branch">
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+              main
+            </span>
+            <button class="roots-btn">更换…</button>
+          </div>
+          <div class="roots-sec">附加目录（1）</div>
+          <div class="roots-row">
+            <span class="roots-name">shared</span>
+            <span class="roots-path">~/work/shared</span>
+            <button class="roots-btn">移除</button>
+          </div>
+          <button class="roots-add">＋ 添加目录</button>
+          <div class="roots-div"></div>
+          <div class="roots-foot">
+            <button class="roots-action" style="display:inline-flex;align-items:center;gap:5px"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" style="flex:none"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>用 worktree 隔离…</button>
+          </div>
+        </div>
+        <div class="cap"><b>① 还没动过</b> · 新建时拿到的样子</div>
+      </div>
+
+      <!-- 态 2 -->
+      <div class="card">
+        <div class="roots-panel">
+          <div class="roots-head">
+            <div class="roots-head-row">
+              <span class="roots-title">工作区目录</span>
+              <span class="roots-tag is-changed">已改动</span>
+            </div>
+            <span class="roots-sub">项目现在 <code>~/work/my-repo</code></span>
+          </div>
+          <div class="roots-sec">主目录</div>
+          <div class="roots-row">
+            <span class="roots-path roots-path-main">~/work/db-lab</span>
+            <span class="branch">
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+              dev
+            </span>
+            <button class="roots-btn">更换…</button>
+          </div>
+          <div class="roots-sec">附加目录（0）</div>
+          <button class="roots-add">＋ 添加目录</button>
+          <div class="roots-div"></div>
+          <div class="roots-foot">
+            <button class="roots-action" style="display:inline-flex;align-items:center;gap:5px"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" style="flex:none"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>用 worktree 隔离…</button>
+            <span class="grow"></span>
+            <button class="roots-action primary">恢复为项目当前工作区</button>
+          </div>
+        </div>
+        <div class="cap"><b>② 自己改过</b> · 点「恢复」搬回项目现在那份</div>
+      </div>
+
+      <!-- 态 3 -->
+      <div class="card">
+        <div class="roots-panel">
+          <div class="roots-head">
+            <div class="roots-head-row">
+              <span class="roots-title">工作区目录</span>
+              <span class="roots-tag is-gone">项目已删除</span>
+            </div>
+          </div>
+          <div class="roots-sec">主目录</div>
+          <div class="roots-row">
+            <span class="roots-path roots-path-main">~/work/my-repo</span>
+            <span class="branch">
+              <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>
+              main
+            </span>
+            <button class="roots-btn">更换…</button>
+          </div>
+          <div class="roots-sec">附加目录（1）</div>
+          <div class="roots-row">
+            <span class="roots-name">shared</span>
+            <span class="roots-path">~/work/shared</span>
+            <button class="roots-btn">移除</button>
+          </div>
+          <button class="roots-add">＋ 添加目录</button>
+          <div class="roots-div"></div>
+          <div class="roots-foot">
+            <button class="roots-action" style="display:inline-flex;align-items:center;gap:5px"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" style="flex:none"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg>用 worktree 隔离…</button>
+          </div>
+        </div>
+        <div class="cap"><b>③ 项目没了</b> · 删项目只解除关系，不动目录</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="worktree">
+    <div class="sec-head"><span class="sec-tag">C</span><h2>在独立 worktree 里工作</h2></div>
+    <p class="sec-lead">
+      从面板底部打开。默认新建分支——一个分支只能被一个目录签出，默认新建就绕开了撞车。
+    </p>
+
+    <div class="window is-tall">
+      <aside class="side">
+        <div class="strip"><span class="light"></span><span class="light"></span><span class="light"></span></div>
+        <div class="nav" style="padding-top:8px">
+          <div class="group">
+            <div class="proj-head"><svg class="caret" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.6 4.6 6 8l3.4-3.4"/></svg><span class="proj-name">my-repo</span><span class="proj-count">(4)</span></div>
+            <div class="proj-rows">
+              <div class="srow active"><span class="t">补单测</span></div>
+              <div class="srow"><span class="t">修登录超时</span>
+                <span class="wt-chip"><svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="6.4" r="1.7"/><path d="M4.6 5.1v5.8"/><path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1"/></svg><span>tachi/fix-login</span></span>
+              </div>
+              <div class="srow"><span class="t">重构权限模块</span></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+      <main class="content">
+        <header class="titlebar"><span class="tb-title">补单测</span></header>
+        <div class="transcript" style="opacity:.45">
+          <div class="msg-user">把 agent/skill 那几个测试补一下，先跑一遍看看哪些没过</div>
+          <div class="msg-a"><p>先跑一遍现有的。</p></div>
+        </div>
+        <footer class="composer"><div class="composer-inner">
+          <div class="input-box"><div class="input-ph">给 agent 发消息…</div></div>
+          <div class="composer-status"><span class="work-dir">my-repo</span></div>
+        </div></footer>
+      </main>
+
+      <div class="scrim">
+        <div class="modal">
+          <div class="modal-title">在单独的 worktree 里工作</div>
+          <div class="modal-sub">改动只在这个新目录里，主目录和其他会话都不受影响。</div>
+
+          <div class="frow">
+            <span class="flabel">基于分支</span>
+            <div class="fbody">
+              <div class="select"><span class="m">main</span>
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.6 4.6 6 8l3.4-3.4"/></svg>
+              </div>
+              <div class="fhint">当前分支</div>
+            </div>
+          </div>
+
+          <div class="frow">
+            <span class="flabel">新分支名</span>
+            <div class="fbody">
+              <div class="input mono">tachi/fix-skill-test</div>
+              <div class="fhint">目录名默认取它</div>
+            </div>
+          </div>
+
+          <div class="frow">
+            <span class="flabel">放在</span>
+            <div class="fbody">
+              <div class="input mono" style="align-items:center">
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">~/work/my-repo-wt/tachi-fix-skill-test</span>
+                <button class="roots-btn" style="flex:none;background:var(--wash)">选择…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="banner">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="flex:none;margin-top:2px"><path d="M8 2.4 14 13H2z"/><path d="M8 6.4v3"/><circle cx="8" cy="11.4" r=".7" fill="currentColor" stroke="none"/></svg>
+            <span>主目录有 3 个未提交的改动，不会带过去。</span>
+          </div>
+
+          <div class="modal-foot">
+            <button class="btn ghost">取消</button>
+            <button class="btn primary">创建并切换</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <div><span class="k">选一个已经被别处签出的分支时，当场说清是谁占着、怎么办：</span></div>
+    </div>
+
+    <!-- 撞车提示的特写 -->
+    <div class="card" style="margin-top:14px;max-width:452px;background:var(--chrome-2);border:1px solid var(--border);border-radius:12px;padding:15px;box-shadow:var(--shadow-2)">
+      <div class="frow">
+        <span class="flabel">基于分支</span>
+        <div class="fbody">
+          <div class="select" style="border-color:var(--red)"><span class="m">dev</span>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.6 4.6 6 8l3.4-3.4"/></svg>
+          </div>
+          <div class="fhint red">dev 已被 ~/work/my-repo-wt/dev 占用</div>
+        </div>
+      </div>
+      <div class="frow" style="margin-bottom:0">
+        <span class="flabel">放在</span>
+        <div class="fbody"><div class="input mono" style="opacity:.5">~/work/my-repo-wt/dev</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="delete">
+    <div class="sec-head"><span class="sec-tag">D</span><h2>删除会话时的勾选</h2></div>
+    <p class="sec-lead">
+      只在这个会话确实有自己的 worktree 时出现，默认不勾；工作树有未提交改动就整条拒绝。
+    </p>
+
+    <div class="scrim" style="position:static;padding:24px;border-radius:12px">
+      <div class="modal">
+        <div class="modal-title">删除会话「补单测」？</div>
+        <div class="modal-sub">这个会话的 1 个定时任务也会一并删除。</div>
+
+        <div class="confirm-check">
+          <span class="cb" aria-hidden="true"></span>
+          <span class="confirm-check-text">
+            同时删掉它的 worktree 目录
+            <code>~/work/my-repo-wt/tachi-fix-skill-test</code>
+            <span class="confirm-check-note">分支 tachi/fix-skill-test 会留着；有未提交的改动就删不了</span>
+          </span>
+        </div>
+
+        <div class="modal-sub" style="margin-top:12px">此操作不可恢复。</div>
+        <div class="modal-foot">
+          <button class="btn ghost">取消</button>
+          <button class="btn danger">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;max-width:520px">
+      <div class="card" style="background:var(--chrome-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+        <div class="confirm-check" style="margin-top:0">
+          <span class="cb is-off" aria-hidden="true"></span>
+          <span class="confirm-check-text">
+            同时删掉它的 worktree 目录
+            <span class="confirm-check-note" style="color:var(--amber)">有 3 个未提交的改动，先提交（或取消勾选）再删</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="project">
+    <div class="sec-head"><span class="sec-tag">E</span><h2>项目表单：字段不变，文案改口径</h2></div>
+    <p class="sec-lead">
+      字段和校验都不动，只把口径从「共用目录」改成「起点」。
+    </p>
+
+    <div class="card" style="max-width:560px;background:var(--chrome-2);border:1px solid var(--border);border-radius:12px;padding:18px;box-shadow:var(--shadow-2)">
+      <div class="modal-title">新建项目</div>
+      <div class="modal-sub">新建会话从这份目录起步；改这里不影响已有会话。</div>
+      <div class="frow">
+        <span class="flabel">名字</span>
+        <div class="fbody"><div class="input"><span class="ph">留空则取主目录的名字</span></div></div>
+      </div>
+      <div class="frow">
+        <span class="flabel">主目录</span>
+        <div class="fbody"><div class="input mono"><span style="flex:1">~/work/my-repo</span><button class="roots-btn" style="flex:none;background:var(--wash)">更换…</button></div></div>
+      </div>
+      <div class="frow">
+        <span class="flabel">附加目录</span>
+        <div class="fbody">
+          <div class="roots-row" style="background:var(--bg);border:1px solid var(--border);border-radius:7px;margin-bottom:4px">
+            <span class="roots-path">~/work/shared</span><button class="roots-btn">移除</button>
+          </div>
+          <button class="roots-add">＋ 添加目录</button>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn ghost">取消</button><button class="btn primary">保存</button></div>
+    </div>
+
+    <p class="sec-lead" style="margin-top:18px">
+      另外两处文案：右键菜单的「编辑目录」改成「<b>编辑项目工作区</b>」；删项目的确认框说「这 4 个会话会保留下来（目录不变）」。
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <section id="rules">
+    <div class="sec-head"><span class="sec-tag">F</span><h2>行为对照：每个动作动了谁</h2></div>
+    <table class="rules">
+      <thead>
+        <tr><th>你做的事</th><th>变化的</th><th>不变的</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>在项目里新建会话（＋）</td>
+          <td>新会话拿到一份项目当前目录的副本</td>
+          <td class="none">项目、其他会话</td>
+        </tr>
+        <tr>
+          <td>改项目的主目录 / 附加目录</td>
+          <td>项目记录本身；之后新建的会话</td>
+          <td>所有已经存在的会话</td>
+        </tr>
+        <tr>
+          <td>在会话面板里改目录</td>
+          <td>只有这个会话；它变成「已改动」</td>
+          <td class="none">项目、其他会话</td>
+        </tr>
+        <tr>
+          <td>点「恢复为项目当前工作区」</td>
+          <td>这个会话的目录回到项目现在那份</td>
+          <td class="none">文件、git 状态（只换 agent 看哪个目录）</td>
+        </tr>
+        <tr>
+          <td>建 worktree</td>
+          <td>这个会话的主目录换成新目录 + 新分支；侧栏出现分支标记</td>
+          <td>会话历史、项目、主目录的文件</td>
+        </tr>
+        <tr>
+          <td>删项目</td>
+          <td>侧栏少一个分组；成员变成「无项目」</td>
+          <td>每个会话的目录（本来就已经是各自的）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-tag">?</span><h2>还没定的事</h2></div>
+    <div class="todo">
+      <b>这几件需要你拍板，我没写进稿子里：</b>
+      <ol>
+        <li><b>worktree 的回收。</b>会话删掉时，那个目录要不要一起删？我倾向不删，只在面板里说「这个目录是 tachi 建的」并给一个手动「移除 worktree」。</li>
+        <li><b>「已改动」那个点要不要上侧栏。</b>稿子里上了；如果嫌吵，只留分支标记，改动只在面板里体现。</li>
+        <li><b>新建时就能选 worktree 吗。</b>稿子只在会话面板里建（建完再决定隔离更常见，＋ 保持一键）。要的话可以在 ＋ 上挂右键菜单「在 worktree 里新建」。</li>
+        <li><b>会话能不能换到另一个项目。</b>稿子留了「挂到别的项目」，但没细设计。</li>
+      </ol>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

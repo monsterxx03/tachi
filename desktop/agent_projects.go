@@ -9,12 +9,15 @@ package main
 // rename from needing a fan-out into the sidebar's rows (design §3.3, §7.4).
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -117,9 +120,10 @@ func (s *AgentService) RenameProject(id, name string) string {
 	return "ok"
 }
 
-// SetProjectRoots replaces a project's workspaces. Every member session follows on its
-// NEXT read — no session meta is written here at all (design §2), which is what makes this
-// a single file write however many sessions the project has.
+// SetProjectRoots replaces a project's workspaces. This moves NO existing session — a session
+// owns its roots from the moment it is created (see copyProjectRoots) — so it is a single file
+// write however many sessions the project has, and the next session created here starts in the
+// new directory.
 func (s *AgentService) SetProjectRoots(id, primary string, additional []string) string {
 	d := s.desk
 	p, ok := d.projects.get(id)
@@ -136,55 +140,32 @@ func (s *AgentService) SetProjectRoots(id, primary string, additional []string) 
 	if err := d.projects.upsert(p); err != nil {
 		return fmt.Sprintf("保存项目失败：%v", err)
 	}
-	// Members whose agent is already alive have a skill store whose scan roots were fixed
-	// when it was built (design §4.1): the tools, the prompt and @-references pick the new
-	// directory up on their own, the skills would not. They are INVALIDATED rather than
-	// re-pointed here — see invalidateMemberSkills.
-	d.invalidateMemberSkills(id)
-	// Every member's workspace just moved, and the frontend holds that state by value.
+	// No member's workspace moved (that is the point of the model), so no live agent needs its
+	// skill store re-pointed either — invalidateMemberSkills belongs to moving ONE session (see
+	// SetSessionWorkingDir / CreateSessionWorktree), which is where it is called.
 	d.notifyMCPRootsChanged()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
 
-// DeleteProject removes a project and DETACHES its members (design §6.2): each one keeps its
-// workspace, becoming an ordinary session whose snapshot is refreshed to the project's roots
-// as they are at this moment. Detaching rather than refusing or cascading is the point — after
-// a project has collected dozens of conversations, "go move each one first" is a punishment,
-// and deleting the conversations is data loss.
+// DeleteProject removes a project and DETACHES its members: each one keeps the workspace it has
+// (it owns it already), and only loses the group. Deleting the conversations instead would be data
+// loss, and asking the user to move each one first would be a punishment — after a project has
+// collected dozens of conversations, the removal of a heading is not a reason to touch any of them.
 //
-// Refused while any member is running a turn, like DeleteSession, because the detach rewrites
-// session meta: a turn appending to that session's directory in parallel is the clobber the
-// meta path exists to avoid. For the same reason the check and the writes share ONE critical
-// section (d.mu) — a turn starting in between would be writing while we rewrite.
+// Refused while any member is running a turn, like DeleteSession: the detach rewrites session meta,
+// and a turn appending to that session's record in parallel is the clobber the meta path exists to
+// avoid. The check and the writes share ONE critical section (d.mu).
 //
-// The project entry goes last: if a member's write fails, the project is still there and the
-// user can retry. (The other order would leave them detached with the container gone.)
+// The project entry goes last: if a member's write fails, the project is still there and the user
+// can retry.
 func (s *AgentService) DeleteProject(id string) string {
 	d := s.desk
-	p, ok := d.projects.get(id)
-	if !ok {
+	if _, ok := d.projects.get(id); !ok {
 		return "项目不存在"
 	}
 	members := d.memberSessions(id)
-
-	// The snapshot the members fall back to, taken BEFORE anything is written. A project that
-	// cannot drive its sessions (its own primary is gone) has no roots worth copying: the
-	// members are already on their last known-good snapshot, and overwriting that with a path
-	// that does not exist would hand bash a cwd that is not there.
-	refreshSnapshot := false
-	snapPrimary := ""
-	var snapAdditional []string
-	if _, primary, ok := d.projects.drives(id); ok {
-		refreshSnapshot = true
-		snapPrimary = primary
-		snapAdditional = append([]string(nil), p.AdditionalDirs...)
-	}
-
-	// The check and the writes share ONE critical section, inside detachMembers; the event is
-	// sent after it AND after the table write, so a reader that reacts to it sees the finished
-	// state (and the emit never runs with d.mu held).
-	if reason := d.detachMembers(members, refreshSnapshot, snapPrimary, snapAdditional); reason != "" {
+	if reason := d.detachMembers(members); reason != "" {
 		return reason
 	}
 	if err := d.projects.remove(id); err != nil {
@@ -198,10 +179,9 @@ func (s *AgentService) DeleteProject(id string) string {
 // detachMembers unbinds every member session in ONE d.mu critical section and returns "" on
 // success, or the refusal/error to show the user. Callers must NOT hold d.mu.
 //
-// refresh says whether the members' snapshot is rewritten to the project's roots (primary,
-// additional); when false the record keeps the snapshot it already had — the caller decided the
-// project has no roots worth copying (see DeleteProject).
-func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, primary string, additional []string) string {
+// Nothing about a member's workspace is written: its roots were copied in at creation and are its
+// own, so detaching is exactly one field.
+func (d *desktopApp) detachMembers(members []*session.Session) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, sess := range members {
@@ -212,25 +192,107 @@ func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, pri
 		}
 	}
 	for _, sess := range members {
-		// updateSessionMetaLocked, not updateSessionMeta: we are inside the critical section
-		// that makes the check above meaningful (see its doc).
 		if err := d.updateSessionMetaLocked(sess.ID, func(cur *session.Session) {
-			if refresh {
-				cur.WorkingDir = primary
-				cur.AdditionalDirs = append([]string(nil), additional...)
-			}
 			cur.ProjectID = ""
 		}); err != nil {
 			return fmt.Sprintf("删除项目失败：%v", err)
 		}
-		// A live member's agent must not keep serving the tree it was pointed at while the
-		// project owned it (design §4.1/§6.2). The paths are normally identical, and the mark
-		// is what keeps that from being silently assumed.
-		if r := d.ownerOfLocked(sess.ID); r != nil && r.agent != nil {
-			r.treeStale = true
-		}
 	}
 	return ""
+}
+
+// copyProjectRoots gives a session created FROM a project the project's roots as its own. It is
+// the only place a project's roots enter a session record, and it runs once per session: at
+// creation (NewSession, the phone's create) or in the one-time upgrade migration below. Nothing
+// re-copies them later — that is what makes an existing session immune to a project edit.
+//
+// Additional roots are expanded here the same way the primary was (projects.json is hand-editable,
+// and a stored "~/" must not reach bash as a literal "~"); one that cannot be expanded is dropped,
+// because a root that cannot be resolved is not a place the session can work in.
+func copyProjectRoots(sess *session.Session, p project, primary string) {
+	sess.ProjectID = p.ID
+	sess.WorkingDir = primary
+	sess.AdditionalDirs = make([]string, 0, len(p.AdditionalDirs))
+	for _, dir := range p.AdditionalDirs {
+		abs, err := expandRootPath(dir)
+		if err != nil {
+			continue
+		}
+		sess.AdditionalDirs = append(sess.AdditionalDirs, abs)
+	}
+	if len(sess.AdditionalDirs) == 0 {
+		sess.AdditionalDirs = nil
+	}
+}
+
+// rootsDiffer reports whether a session's own roots are no longer the project's current ones —
+// the comparison behind the panel's 「已改动」 tag and the sidebar's dot.
+func rootsDiffer(p project, primary string, sess *session.Session) bool {
+	return filepath.Clean(primary) != filepath.Clean(sess.WorkingDir) ||
+		!sameRoots(p.AdditionalDirs, sess.AdditionalDirs)
+}
+
+// workspaceChanged is rootsDiffer for a session that may not have a usable project at all: a
+// project-less session, or one whose project is gone, has nothing to differ from.
+func (d *desktopApp) workspaceChanged(sess *session.Session) bool {
+	if sess == nil || sess.ProjectID == "" {
+		return false
+	}
+	p, primary, ok := d.projects.drives(sess.ProjectID)
+	if !ok {
+		return false
+	}
+	return rootsDiffer(p, primary, sess)
+}
+
+// migrateProjectWorkspaces is the ONE fan-out write in this design, and it runs once per data dir:
+// projects.json older than projectFileVersion describes sessions whose workspace lived on the
+// project, so each member's record gets the project's CURRENT roots — the workspace it has been
+// working in all along — and then the file is stamped so this never happens again.
+//
+// Without it, the new model would silently move every conversation created before its project's
+// last directory change back to the directory it was created in.
+//
+// It runs at startup, before any turn can be in flight, and a failure on one session leaves that
+// session on its old snapshot rather than aborting the rest.
+func (d *desktopApp) migrateProjectWorkspaces() {
+	if d.sm == nil || !d.projects.needsWorkspaceMigration() {
+		return
+	}
+	list, err := d.sm.List()
+	if err != nil {
+		logger.New("desktop").Warn(context.Background(),
+			"工作区迁移：读取会话列表失败，下次启动再试", "err", err)
+		return
+	}
+	moved := 0
+	for _, sess := range list {
+		if sess.ProjectID == "" {
+			continue
+		}
+		p, primary, ok := d.projects.drives(sess.ProjectID)
+		if !ok || !rootsDiffer(p, primary, sess) {
+			continue
+		}
+		id := sess.ID
+		if err := d.updateSessionMeta(id, func(cur *session.Session) {
+			copyProjectRoots(cur, p, primary)
+		}); err != nil {
+			logger.New("desktop").Warn(context.Background(),
+				"工作区迁移：写入会话失败", "session", id, "err", err)
+			continue
+		}
+		moved++
+	}
+	if err := d.projects.markWorkspacesMigrated(); err != nil {
+		logger.New("desktop").Warn(context.Background(),
+			"工作区迁移：标记 projects.json 版本失败，下次启动会重跑", "err", err)
+		return
+	}
+	if moved > 0 {
+		logger.New("desktop").Info(context.Background(),
+			"工作区迁移完成：会话现在各自持有自己的工作区", "sessions", moved)
+	}
 }
 
 // emitWorkspaceChanged tells the frontend that a project write moved the ground under some
@@ -254,22 +316,6 @@ func (d *desktopApp) emitWorkspaceChanged(projectID, sessionID string) {
 		payload["sessionId"] = sessionID
 	}
 	d.emit("agent:workspace_changed", payload)
-}
-
-// invalidateMemberSkills marks every LIVE member session's agent as needing its skill store
-// re-pointed, which happens at that session's next turn start (beginTurn).
-//
-// It deliberately does not call ReloadSkillsIn itself: this runs on the UI goroutine while
-// member sessions may be mid-turn (sessions run in parallel), and the reload rewrites the
-// agent's skill store and tool registry — a data race with the turn reading them. The
-// session's own turn is the only place that can prove the agent is quiescent, and the
-// store is only ever read during a turn, so nothing observes the stale one in between.
-// Sessions without an agent are skipped on purpose: theirs will be built from the new
-// directory, which is persisted by the time anyone reads it.
-func (d *desktopApp) invalidateMemberSkills(projectID string) {
-	for _, sess := range d.memberSessions(projectID) {
-		d.markTreeStale(sess.ID)
-	}
 }
 
 // memberSessions lists the sessions bound to a project, newest first.

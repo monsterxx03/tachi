@@ -14,7 +14,8 @@ import { lastRunningAssistantIndex, lastAssistantIndex, turnView, answerTextOf, 
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, TurnMenu, MCPPanel, AgentsPanel, AskForm, PermissionForm,
   ProviderPicker,
-  SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, type TurnMenuItem,
+  SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, RootsPanel, Caret, MoreRows, WorktreeForm, BranchIcon,
+  type TurnMenuItem, type WorktreeFormState,
 } from './components'
 import { usePopoverPosition } from './popover'
 import { Icon, ICON_MD, ICON_XS } from './icons'
@@ -440,7 +441,12 @@ function App() {
   // `cron` is how many scheduled tasks write into this conversation: deleting it takes them
   // with it (the backend's DeleteSession retires jobs whose conversation is gone), so the box
   // has to say that before the button is pressed.
-  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; cron?: number; error?: string } | null>(null)
+  // alsoWorktree is the 「连带删掉 worktree 目录」 checkbox. It starts UNCHECKED every time: a delete
+  // is a frequent action, and throwing a working copy away must never be the remembered default.
+  // worktreePath is "" for a session that is not in one — the checkbox is not rendered then.
+  const [confirmDel, setConfirmDel] = useState<{
+    sid: string; title: string; cron?: number; worktreePath?: string; alsoWorktree?: boolean; error?: string
+  } | null>(null)
   // The delete box's element. Focus is TAKEN here explicitly rather than with `autoFocus`: that is an
   // attribute, and WebKit honours it on form controls — on a div it does nothing, which is exactly the
   // trap this box has to avoid (its Enter means 确认; left in the composer, the same key sends a message).
@@ -596,6 +602,11 @@ function App() {
   const rootsPopover = usePopoverPosition(rootsOpen)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
+  // The create-worktree form (null = closed). Its fields live in one object so a failed create keeps
+  // everything the user typed.
+  const [worktreeForm, setWorktreeForm] = useState<WorktreeFormState | null>(null)
+  const [worktreeBusy, setWorktreeBusy] = useState(false)
+  const [worktreeError, setWorktreeError] = useState('')
   // Projects: the sidebar's groups (design §7.1). Fetched, never derived from the sessions —
   // a project with no members yet still has a header, and its name is joined in at render
   // time so a rename needs no session write.
@@ -2029,6 +2040,92 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     if (userText) composer.setInput(userText)
   }, [updateSession, clickSession, composer])
 
+  // restoreFromProject puts the session back on what its project points at NOW. It is a plain
+  // directory change (the project owns nothing here), which is also why it is safe: no file moves.
+  const restoreFromProject = useCallback(async (id: string) => {
+    const target = roots?.projectPrimary
+    if (!target) return
+    setRootsBusy(true)
+    setRootsError('')
+    try {
+      const res = await (AgentService as any).SetSessionWorkingDir?.(id, target).catch((e: unknown) => String(e))
+      if (res && res !== 'ok') setRootsError(res)
+      await refreshWorkspace(id)
+      await loadAll()
+    } finally {
+      setRootsBusy(false)
+    }
+  }, [roots?.projectPrimary, refreshWorkspace, loadAll])
+
+  // openWorktree reads what the form needs (repo, branches, which ones are already checked out) and
+  // opens it. A session that cannot have a worktree comes back with err set — that is the sentence
+  // the panel shows, rather than a button that does nothing.
+  const openWorktree = useCallback(async (id: string) => {
+    setRootsError('')
+    setRootsBusy(true)
+    try {
+      const vo = await AgentService.GetWorktreeBranches(id)
+      if (vo.err) { setRootsError(vo.err); return }
+      const branches = vo.branches || []
+      setWorktreeError('')
+      setWorktreeForm({
+        sessionId: id,
+        repo: vo.repo,
+        current: vo.current || '',
+        branches,
+        checkedOut: (vo.checkedOut || {}) as Record<string, string>,
+        // Default the base to where the session stands now; if HEAD is detached, the first branch.
+        base: vo.current && branches.includes(vo.current) ? vo.current : (branches[0] || ''),
+        branch: vo.suggestedBranch || '',
+        dir: vo.suggestedDir || '',
+      })
+    } catch (e) {
+      setRootsError(String(e))
+    } finally {
+      setRootsBusy(false)
+    }
+  }, [])
+
+  const patchWorktree = useCallback((patch: Partial<WorktreeFormState>) => {
+    setWorktreeForm((prev) => (prev ? { ...prev, ...patch } : prev))
+  }, [])
+
+  // pickWorktreeDir is the checkout's destination. It defaults under Tachi's state dir, so the
+  // common path never opens a picker; this is for the reader who wants the checkout beside the repo.
+  const pickWorktreeDir = useCallback(async () => {
+    try {
+      const picked = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+        CanCreateDirectories: true,
+        AllowsMultipleSelection: false,
+        Title: 'worktree 放在哪里',
+        Directory: worktreeForm?.dir || worktreeForm?.repo || undefined,
+      })
+      if (typeof picked !== 'string' || !picked) return
+      patchWorktree({ dir: picked })
+    } catch { /* ignore */ }
+  }, [worktreeForm?.dir, worktreeForm?.repo, patchWorktree])
+
+  const createWorktree = useCallback(async () => {
+    const f = worktreeForm
+    if (!f) return
+    setWorktreeBusy(true)
+    setWorktreeError('')
+    try {
+      const res = await AgentService.CreateSessionWorktree(f.sessionId, f.base, f.branch.trim(), f.dir)
+      if (res !== 'ok') { setWorktreeError(res || '创建失败'); return }
+      setWorktreeForm(null)
+      setRootsOpen(false)
+      await refreshWorkspace(f.sessionId)
+      await loadAll()
+    } catch (e) {
+      setWorktreeError(String(e))
+    } finally {
+      setWorktreeBusy(false)
+    }
+  }, [worktreeForm, refreshWorkspace, loadAll])
+
   // confirmDelete deletes for real and hands the reader to the NEXT session — the row below the
   // deleted one inside its own group, or the row above when it was that group's last (nextSessionAfter).
   // Two rules make that safe. The successor is computed BEFORE the reload, because `sessions` still
@@ -2041,8 +2138,8 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   //
   // It sits AFTER clickSession because it now calls it — a useCallback's dependency array is read
   // while the component renders, so naming a const declared below would be a TDZ error.
-  const confirmDelete = useCallback(async (id: string) => {
-    const res = await (AgentService as any).DeleteSession?.(id).catch(() => null)
+  const confirmDelete = useCallback(async (id: string, alsoWorktree = false) => {
+    const res = await (AgentService as any).DeleteSession?.(id, alsoWorktree).catch(() => null)
     // "ok" (or a missing binding) is the only success. Anything else — in practice the
     // backend refusing because a turn is still running — keeps the box open with the
     // reason in it, and does NOT reload the list (nothing changed).
@@ -2154,7 +2251,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   const askDeleteCurrent = useCallback(() => {
     if (!currentId) return
     const cur = sessions.find((s) => s.id === currentId)
-    setConfirmDel({ sid: currentId, title: cur?.title || '未命名会话', cron: cur?.cronCount || 0 })
+    setConfirmDel({ sid: currentId, title: cur?.title || '未命名会话', cron: cur?.cronCount || 0, worktreePath: cur?.worktreePath || '', alsoWorktree: false })
   }, [currentId, sessions])
 
   // The menu bar's 「新会话」 arrives as ui:new_session (desktop/tray.go): the shell brings the
@@ -2724,6 +2821,20 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         {s.kind ? (
           <span className="session-tag is-managed" title={managedLabel(s.kind, s.sourceNodeId, s.sourceNode)}>{managedChip(s.kind, s.sourceNodeId, s.sourceNode)}</span>
         ) : null}
+        {/* A conversation working in its own checkout: the branch is the one thing that says 「your
+            changes are not in the main directory」, and it is read from the record rather than
+            probed — one git process per row is not a price a list of conversations should pay. */}
+        {s.worktreeBranch ? (
+          <span className="session-wt" title={`独立的 worktree：${s.worktreePath || ''}（分支 ${s.worktreeBranch}）`}>
+            <BranchIcon />{s.worktreeBranch}
+          </span>
+        ) : null}
+        {/* Moved away from what its project would hand a new session. A dot, not a word: the panel
+            is where the difference is explained, and the row only has to make it visible. */}
+        {s.workspaceChanged ? (
+          <span className="session-dot" role="img" aria-label="工作区已改动，不再跟随项目"
+            title="工作区已改动，不再跟随项目" />
+        ) : null}
       </div>
     </div>
   )
@@ -3223,28 +3334,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                     onPickPrimary={() => pickWorkDir(currentId)}
                     onAdd={() => addRoots(currentId)}
                     onRemove={(p) => removeRoot(currentId, p)}
-                    onEditProject={(pid) => {
-                      const p = projects.find((x) => x.id === pid)
-                      // Editing from the panel implies the project exists; if the group list is
-                      // stale the form still opens, empty, and the backend refuses a save that
-                      // names no project — better than a dead button.
-                      setRootsOpen(false)
-                      openProjectEditor(p)
-                    }}
-                    onNewSessionInProject={(pid) => { setRootsOpen(false); void newChat(pid) }}
+                    onRestore={() => void restoreFromProject(currentId)}
+                    onWorktree={() => void openWorktree(currentId)}
+                    canWorktree={!!roots?.canWorktree}
                     onClose={() => setRootsOpen(false)} floating={rootsPopover} />
                 ) : null}
                 <button type="button" className="work-dir" aria-expanded={rootsOpen}
                   title={workDir ? `工作区目录：${workDir}（点击管理）` : '工作区目录（点击管理）'}
                   onClick={() => { setRootsError(''); setRootsOpen((v) => !v) }}>
                   <span className="work-dir-ico">⌂</span>
-                  {/* A member session wears its PROJECT's name (design §7.2): the directory is
-                      the project's, and naming the project is what tells the reader that
-                      anything they do to it moves their neighbours too. The full path is in the
-                      chip's title and in the panel. */}
-                  {roots?.projectId && !roots.projectMissing
-                    ? <span className="work-dir-project" title={workDir || undefined}>{roots.projectName || '项目'}</span>
-                    : (workDir || '未设置工作目录')}
+                  {/* The chip names the DIRECTORY, not the project: the directory is the session's
+                      own now, and two sessions of one project routinely stand in different trees
+                      (one of them may be in a worktree). The full path is the chip's title. */}
+                  {workDir
+                    ? <span className="work-dir-name" title={workDir}>{workDir.split('/').filter(Boolean).pop()}</span>
+                    : '未设置工作目录'}
                   {extraRootCount > 0 ? <span className="work-dir-count" title={`${extraRootCount} 个附加目录`}>+{extraRootCount}</span> : null}
                 </button>
               </div>
@@ -3552,7 +3656,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
             title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}
-            onClick={() => { const row = sessions.find((x) => x.id === menu.sid); setConfirmDel({ sid: menu.sid, title: row?.title || '', cron: row?.cronCount || 0 }); setMenu(null) }}>删除</button>
+            onClick={() => { const row = sessions.find((x) => x.id === menu.sid); setConfirmDel({ sid: menu.sid, title: row?.title || '', cron: row?.cronCount || 0, worktreePath: row?.worktreePath || '', alsoWorktree: false }); setMenu(null) }}>删除</button>
         </div>
       )}
       {actionNotice && <div className="app-toast" role="status" aria-live="polite">{actionNotice}</div>}
@@ -3646,6 +3750,11 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           </div>
         </div>
       )}
+      {worktreeForm && (
+        <WorktreeForm form={worktreeForm} busy={worktreeBusy} error={worktreeError}
+          onChange={patchWorktree} onPickDir={() => void pickWorktreeDir()}
+          onSubmit={() => void createWorktree()} onClose={() => setWorktreeForm(null)} />
+      )}
       {confirmDel && (
         <div className="confirm-overlay" onClick={() => setConfirmDel(null)}>
           {/* The box TAKES FOCUS (see confirmBoxRef): Enter has to mean 「确认」 here, and a box that
@@ -3657,17 +3766,31 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             onKeyDown={(e) => {
               // IME composition keys belong to the candidate window, as everywhere else in the app.
               if (imeActive(e)) return
-              if (e.key === 'Enter') { e.preventDefault(); confirmDelete(confirmDel.sid) }
+              if (e.key === 'Enter') { e.preventDefault(); void confirmDelete(confirmDel.sid, !!confirmDel.alsoWorktree) }
             }}>
             <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
             {confirmDel.cron ? (
               <div className="confirm-sub">这个会话的 {confirmDel.cron} 个定时任务也会一并删除。</div>
             ) : null}
+            {/* The worktree half is offered ONLY for a session that has a checkout of ours, and it
+                starts unchecked: the conversation is the thing being deleted, the directory is an
+                extra decision. That is also why it lives in this box rather than in the row menu. */}
+            {confirmDel.worktreePath ? (
+              <label className="confirm-check">
+                <input type="checkbox" checked={!!confirmDel.alsoWorktree}
+                  onChange={(e) => setConfirmDel({ ...confirmDel, alsoWorktree: e.target.checked, error: undefined })} />
+                <span className="confirm-check-text">
+                  同时删掉它的 worktree 目录
+                  <code>{confirmDel.worktreePath}</code>
+                  <span className="confirm-check-note">分支会留着；有未提交的改动就删不了</span>
+                </span>
+              </label>
+            ) : null}
             <div className="confirm-sub">此操作不可恢复。</div>
             {confirmDel.error ? <div className="confirm-error">⚠ {confirmDel.error}</div> : null}
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setConfirmDel(null)}>取消</button>
-              <button className="btn danger" onClick={() => { const id = confirmDel.sid; confirmDelete(id) }}>删除</button>
+              <button className="btn danger" onClick={() => { const c = confirmDel; void confirmDelete(c.sid, !!c.alsoWorktree) }}>删除</button>
             </div>
           </div>
         </div>

@@ -349,20 +349,15 @@ func (s *AgentService) SetFileTreeWidth(px int) {
 	})
 }
 
-// fileTreeKey is the ONE definition of "the same workspace": a session driven by a usable project
-// belongs to that project (every conversation in it shares one expansion — the tree's identity is
-// the trees, not this conversation); anything else belongs to its primary directory. The two
-// prefixes keep the two kinds of key from ever colliding (an id is not a path). "" means "nothing to
-// remember": a project that no longer drives the session, or a session with no primary directory.
+// fileTreeKey is the ONE definition of "the same workspace": the PRIMARY DIRECTORY. Two sessions
+// share an expansion state exactly when they look at the same tree — which, now that every session
+// owns its directory and can move into a worktree, is a question a project id cannot answer (one
+// project's sessions routinely stand in two different checkouts). "" means "nothing to remember":
+// a session with no primary directory.
 func (d *desktopApp) fileTreeKey(sessionID string) string {
 	sess := d.sessionRecord(sessionID)
 	if sess == nil {
 		return ""
-	}
-	if sess.ProjectID != "" {
-		if _, _, ok := d.projects.drives(sess.ProjectID); ok {
-			return "p:" + sess.ProjectID
-		}
 	}
 	if primary, _ := d.sessionRootsFrom(sess); primary != "" {
 		return "d:" + primary

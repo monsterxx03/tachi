@@ -1058,61 +1058,68 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
 //
 // It draws its own icon rather than using a character: ⎇ and friends depend on the font, which is
 // how the disclosure carets ended up as dots (see Caret).
+function BranchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor"
+      strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <circle cx="4.6" cy="3.4" r="1.7" />
+      <circle cx="4.6" cy="12.6" r="1.7" />
+      <circle cx="11.4" cy="6.4" r="1.7" />
+      <path d="M4.6 5.1v5.8" />
+      <path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1" />
+    </svg>
+  )
+}
+
 function BranchChip({ branch, detached }: { branch?: string; detached?: boolean }) {
   if (!branch) return null
   return (
     <span className="roots-branch"
       title={detached ? `游离 HEAD，不在任何分支上（${branch}）` : `git 分支：${branch}`}>
-      <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor"
-        strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-        <circle cx="4.6" cy="3.4" r="1.7" />
-        <circle cx="4.6" cy="12.6" r="1.7" />
-        <circle cx="11.4" cy="6.4" r="1.7" />
-        <path d="M4.6 5.1v5.8" />
-        <path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1" />
-      </svg>
+      <BranchIcon />
       {branch}
     </span>
   )
 }
 
-// RootsPanel is the workspace popover behind the composer's directory chip: the
-// session's primary directory plus its additional roots, and the two actions the
-// list needs — change the primary, add more.
+// RootsPanel is the workspace popover behind the composer's directory chip: the session's primary
+// directory, its additional roots, and the two things a session can do to its own workspace — pick
+// another directory, or move into a git worktree of its own.
 //
-// The primary is not removable (only replaceable): bash's cwd, relative paths and
-// the git probe all hang off it, so "no primary" is not a state worth offering.
-// A root whose directory has vanished is shown greyed rather than dropped — does an
-// unmounted volume come back? That is the user's call, not ours.
+// Every session is editable here. A project gives a session its STARTING roots when it is created
+// and nothing after that (see desktop/projects.go), so there is no 「owned elsewhere」 state to
+// render — only a tag saying where the session came from and, when it has moved since, one line
+// saying where the project points now.
 //
-// A session in a PROJECT has no roots of its own to manage (design §7.2): the panel is
-// read-only and points at the project instead, because the backend refuses those three writers
-// while a project drives the session — buttons that can only fail are worse than no buttons. It
-// goes back to the editable form when the project stops driving the session (deleted, or its
-// primary is gone), which is the same rule the backend's guards use: the panel must never be
-// read-only while the writers are open, or the user has no way to fix their workspace.
-function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose, onEditProject, onNewSessionInProject, floating }: {
+// The primary is not removable (only replaceable): bash's cwd, relative paths and the git probe all
+// hang off it, so "no primary" is not a state worth offering. A root whose directory has vanished is
+// shown greyed rather than dropped: does an unmounted volume come back? That is the user's call.
+function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onRestore, onWorktree, canWorktree, onClose, floating }: {
   roots: SessionRootsVO | null
   error: string
   busy: boolean
   onPickPrimary: () => void
   onAdd: () => void
   onRemove: (path: string) => void
+  /** Move the session back onto what its project currently points at. */
+  onRestore: () => void
+  /** Open the create-worktree form. */
+  onWorktree: () => void
+  /** False when this session cannot have one (not a repo, already in a worktree). */
+  canWorktree: boolean
   onClose: () => void
-  onEditProject: (projectId: string) => void
-  onNewSessionInProject: (projectId: string) => void
   /** Where it sits relative to its trigger (see popover.ts). */
   floating: PopoverPosition
 }) {
   const primary = roots?.primary || ''
   const additional = roots?.additional || []
   const projectId = roots?.projectId || ''
-  // A project still DRIVES this session only while it exists and its primary is usable; a
-  // projectMissing payload with a name means "still there, unusable" and with no name means
-  // "gone" (see SessionRootsVO). Both are editable here, and both say which one it is.
-  const managed = !!projectId && !roots?.projectMissing
-  // Same dismissal contract as the MCP panel: click outside, or Esc. The chip that
-  // owns open/close is excluded, or closing here would fight its own click.
+  // Three states of the one tag: still matching the project, moved since, or the project is gone
+  // (deleted, or its directory is unusable). Nothing else in the panel changes between them.
+  const gone = !!projectId && !!roots?.projectGone
+  const changed = !!projectId && !gone && !!roots?.changed
+  // Same dismissal contract as the MCP panel: click outside, or Esc. The chip that owns open/close
+  // is excluded, or closing here would fight its own click.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
@@ -1131,87 +1138,140 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
   return (
     <div className="popover-panel roots-panel" ref={floating.panelRef} style={floating.style}>
       <div className="roots-head">
-        <span className="roots-title">工作区目录</span>
-        <span className="roots-sub">
-          {managed
-            ? `由项目「${roots?.projectName || '项目'}」管理`
-            : '相对路径以主目录为准，附加目录用绝对路径访问'}
-        </span>
+        <div className="roots-head-row">
+          <span className="roots-title">工作区目录</span>
+          {gone
+            ? <span className="roots-tag is-gone">项目已删除</span>
+            : changed
+              ? <span className="roots-tag is-changed">已改动</span>
+              : projectId
+                ? <span className="roots-tag" title="这个会话从这个项目开始，目录已归它自己">继承自 {roots?.projectName || '项目'}</span>
+                : null}
+        </div>
+        {changed && roots?.projectPrimary
+          ? <span className="roots-sub">项目现在 <code>{roots.projectPrimary}</code></span>
+          : null}
       </div>
 
-      {managed ? (
-        <>
-          {/* Read-only branch (design §7.2): the project owns these roots, the backend refuses
-              writes to them from here, and the two actions below are the way out. */}
-          <div className="roots-sec">主目录</div>
-          <div className="roots-row">
-            <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
-            <BranchChip branch={roots?.primaryBranch} detached={roots?.primaryDetached} />
-          </div>
-          <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
-          {additional.length === 0
-            ? <div className="roots-empty">还没有附加目录</div>
-            : additional.map((r) => (
-              <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
-                <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
-                <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
-                <BranchChip branch={r.branch} detached={r.detached} />
-                {r.exists ? null : <span className="roots-stale">已失效</span>}
-              </div>
-            ))}
-          <div className="roots-note">该项目下的会话共用这组目录，修改项目会影响其中所有会话。</div>
-          <div className="roots-actions">
-            <button className="roots-add" onClick={() => onEditProject(projectId)}>编辑项目…</button>
-            <button className="roots-add" onClick={() => onNewSessionInProject(projectId)}>新建项目会话</button>
-          </div>
-        </>
-      ) : (
-        <>
-          {projectId ? (
-            // The session still carries a project_id the project no longer DRIVES (deleted, or
-            // its primary directory is gone). The panel stays editable on purpose — a read-only
-            // panel plus three refused writers would leave the user no way out (design §5) — but
-            // it must say why the project stopped applying.
-            <div className="roots-note roots-note-warn">
-              ⚠ {roots?.projectName
-                ? `项目「${roots.projectName}」的目录不可用，该会话暂时使用自己的快照，可以编辑；目录恢复后会自动回到项目。`
-                : '该项目已不存在，该会话已回到自己的工作区，可以编辑。'}
-            </div>
-          ) : null}
+      <div className="roots-sec">主目录</div>
+      <div className="roots-row">
+        <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
+        <BranchChip branch={roots?.primaryBranch} detached={roots?.primaryDetached} />
+        <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
+      </div>
 
-          <div className="roots-sec">主目录</div>
-          <div className="roots-row">
-            <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
-            <BranchChip branch={roots?.primaryBranch} detached={roots?.primaryDetached} />
-            <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
+      <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
+      {additional.length === 0
+        ? <div className="roots-empty">还没有附加目录</div>
+        : additional.map((r) => (
+          <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
+            <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
+            <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+            <BranchChip branch={r.branch} detached={r.detached} />
+            {r.exists ? null : (
+              <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
+            )}
+            <button className="roots-btn" disabled={busy} title="从附加目录中移除" onClick={() => onRemove(r.path)}>移除</button>
           </div>
+        ))}
+      <button className="roots-add" disabled={busy || !primary}
+        title={primary ? '添加附加目录（可多选）' : '请先设置主目录'}
+        onClick={onAdd}>＋ 添加目录</button>
 
-          <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
-          {additional.length === 0
-            ? <div className="roots-empty">还没有附加目录</div>
-            : additional.map((r) => (
-              <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
-                <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
-                <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
-                <BranchChip branch={r.branch} detached={r.detached} />
-                {r.exists ? null : (
-                  <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
-                )}
-                <button className="roots-btn" disabled={busy} title="从附加目录中移除" onClick={() => onRemove(r.path)}>移除</button>
-              </div>
-            ))}
+      {error ? <div className="roots-error">{error}</div> : null}
 
-          {error ? <div className="roots-error">{error}</div> : null}
-
-          <div className="roots-actions">
-            <button className="roots-add" disabled={busy || !primary}
-              title={primary ? '添加附加目录（可多选）' : '请先设置主目录'}
-              onClick={onAdd}>＋ 添加目录</button>
-          </div>
-        </>
-      )}
+      <div className="roots-div" />
+      <div className="roots-foot">
+        <button className="roots-action" disabled={busy || !canWorktree}
+          title={canWorktree ? '把这个会话搬到一个独立的 git worktree' : '主目录不在 git 仓库里，或这个会话已经在 worktree 里'}
+          onClick={onWorktree}>
+          <BranchIcon />用 worktree 隔离…
+        </button>
+        {changed
+          ? <button className="roots-action is-primary" disabled={busy} onClick={onRestore}>恢复为项目当前工作区</button>
+          : null}
+      </div>
     </div>
   )
+}
+
+// WorktreeForm is the create-worktree dialog: which branch to start from, what to call the new one,
+// and where the checkout goes. It is deliberately a form and not a wizard — three fields, defaults
+// filled in, one button.
+//
+// 「新分支名」 empty means 「check out the branch above as-is」, which is why the placeholder says so:
+// the same field answers both questions without a mode switch, and the one that costs nothing to get
+// wrong (a new branch) is the prefill.
+function WorktreeForm({ form, busy, error, onChange, onPickDir, onSubmit, onClose }: {
+  form: WorktreeFormState
+  busy: boolean
+  error: string
+  onChange: (patch: Partial<WorktreeFormState>) => void
+  onPickDir: () => void
+  onSubmit: () => void
+  onClose: () => void
+}) {
+  // Checking out an EXISTING branch is blocked by whoever holds it; using that same branch as the
+  // BASE of a new one is not (git allows it — the new branch starts at the same commit). So the
+  // occupancy only matters once 新分支名 is empty, which is the one case that means 「签出它」.
+  const checkoutExisting = form.branch.trim() === ''
+  const taken = checkoutExisting ? (form.checkedOut[form.base] || '') : ''
+  return (
+    <div className="confirm-overlay" onClick={onClose}>
+      <div className="confirm-box worktree-form" role="dialog" aria-label="在 worktree 里工作" onClick={(e) => e.stopPropagation()}>
+        <div className="confirm-msg">在单独的 worktree 里工作</div>
+        <div className="confirm-sub">改动只在这个新目录里，主目录和其他会话都不受影响。</div>
+
+        <div className="form-row">
+          <label className="form-label" htmlFor="wt-base">基于分支</label>
+          <select id="wt-base" className="form-input form-select" value={form.base}
+            onChange={(e) => onChange({ base: e.target.value })}>
+            {form.branches.map((b) => (
+              <option key={b} value={b}>{b}{form.checkedOut[b] ? `（已在 ${form.checkedOut[b]}）` : ''}</option>
+            ))}
+          </select>
+          {taken
+            ? <div className="form-hint is-warn">{form.base} 已被 {taken} 签出，不能直接签出；填一个新分支名就从它开始</div>
+            : <div className="form-hint">当前在 {form.current || '游离 HEAD'}，新分支从选中的分支开始</div>}
+        </div>
+
+        <div className="form-row">
+          <label className="form-label" htmlFor="wt-branch">新分支名</label>
+          <input id="wt-branch" className="form-input mono" value={form.branch} disabled={!!taken}
+            placeholder="留空 = 直接签出上面的分支"
+            onChange={(e) => onChange({ branch: e.target.value })} />
+        </div>
+
+        <div className="form-row">
+          <label className="form-label" htmlFor="wt-dir">放在</label>
+          <div className="form-path">
+            <input id="wt-dir" className="form-input mono" value={form.dir}
+              onChange={(e) => onChange({ dir: e.target.value })} />
+            <button className="roots-btn" onClick={onPickDir}>选择…</button>
+          </div>
+        </div>
+
+        {error ? <div className="confirm-error">⚠ {error}</div> : null}
+        <div className="confirm-actions">
+          <button className="btn ghost" onClick={onClose}>取消</button>
+          <button className="btn" disabled={busy || !form.dir || !!taken} onClick={onSubmit}>创建并切换</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// WorktreeFormState is what the form holds while it is open.
+export interface WorktreeFormState {
+  sessionId: string
+  repo: string
+  current: string
+  branches: string[]
+  /** branch → the worktree that already has it checked out. */
+  checkedOut: Record<string, string>
+  base: string
+  branch: string
+  dir: string
 }
 
 // baseName is the display name of a root: its last path segment.
@@ -1700,4 +1760,4 @@ function AgentsPanel({ board, busy, onClose, onRefresh, floating }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, TurnMenu, CommandPicker, CopyIcon, ToolCard, MCPPanel, AgentsPanel, RootsPanel, WorktreeForm, BranchIcon, AtFilePicker, AskForm, PermissionForm, SettingsIcon, MCPIcon, AgentsIcon, PinIcon, ThemeToggle, Caret, EyeIcon, MoreRows, ProviderPicker }

@@ -27,11 +27,18 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 	if err != nil {
 		d.setConfig(nil)
 		d.sm = d.newSessionManager()
+		// Even with no config the session list is readable, and it is the one thing the migration
+		// needs — a data dir must be upgraded exactly once, whatever bootstrapping did.
+		d.migrateProjectWorkspaces()
 		return err
 	}
 	cfg := boot.Config
 	d.setConfig(cfg)
 	d.sm = d.newSessionManager()
+	// One-time, before anything can read a session's roots: projects.json older than
+	// projectFileVersion describes sessions whose workspace lived on the project (see
+	// migrateProjectWorkspaces).
+	d.migrateProjectWorkspaces()
 	// The system prompt is deliberately NOT built here: it is session-derived
 	// (working directory, ID), so systemPromptFor resolves it per turn — and that
 	// builder is where the Mermaid capability of this frontend is declared.

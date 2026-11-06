@@ -192,7 +192,7 @@ func (d *desktopApp) mobileDeleteSession(id string) (int, string) {
 	if d.sessionRecord(id) == nil {
 		return http.StatusNotFound, "no_session"
 	}
-	switch res := (&AgentService{desk: d}).DeleteSession(id); res {
+	switch res := (&AgentService{desk: d}).DeleteSession(id, false); res {
 	case "ok":
 		return 0, ""
 	case refuseDeleteRunning:

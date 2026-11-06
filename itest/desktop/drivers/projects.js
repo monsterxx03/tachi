@@ -1,10 +1,10 @@
-// projects — 项目组、只读工作区面板,以及项目写操作之后已经打开的界面必须跟着变。
+// projects — 项目组、工作区面板，以及项目写操作之后已经打开的界面必须跟着变。
 //
-// 这个场景的 fixture 里,会话记录自己的 WorkingDir 是沙箱 work 目录(一个「旧快照」),
-// 而项目的主目录是另一个目录:凡是界面上出现的路径,只要不是那个旧快照,就证明它是从
-// **项目**解析出来的 —— 这正是 §2 的机制,也是「快照还在、项目却搬走了」时唯一能区分两者的
-// 判据。改名与删除都走组头右键菜单(不需要 native picker),分别覆盖 §7.4 的刷新契约和
-// §6.2 的 detach;prompt 那一半由 Go 侧在 LLM 边界断言。
+// 模型：项目是会话的**起点**。fixture 里种下的成员会话带着一条「旧快照」的 WorkingDir 和 project_id，
+// 而项目的主目录是另一个目录 —— 按 projectFileVersion 的一次性迁移，启动时会把它补成项目主目录，
+// 所以凡是界面上出现的路径只要不是旧快照，就证明「创建时复制」这条路走通了。之后的项目改名、
+// 删项目都不再移动任何会话的目录，变的只是那枚出处标签（以及分组）。prompt 那一半由 Go 侧在 LLM
+// 边界断言。
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
   if (!(await smoke.waitForSession())) return smoke.finish()
@@ -91,15 +91,18 @@
     && getComputedStyle(projAdd).backgroundColor === btnStyle.backgroundColor,
     projAdd ? btnStyle.fontSize + ' vs ' + getComputedStyle(projAdd).fontSize : '(项目组头没有 ＋)')
 
-  // ── 2. 进成员会话，chip 说的是项目而不是目录 ────────────────────────────
+  // ── 2. 进成员会话，chip 说的是它自己的目录 ───────────────────────────────
   // 显式点进去：fixture 里有两个会话，谁被启动时选中是 fixture 的顺序细节，不该成为断言的前提。
   const member = smoke.q('.proj-rows:not(.is-loose) .session')
   if (!member) return smoke.fail('找到项目组里的成员行', '没有 .proj-rows:not(.is-loose) .session')
   member.click()
-  const chipProject = await smoke.waitFor(
-    () => (smoke.text('.work-dir').indexOf('smoke-proj') >= 0 ? true : null),
-    'chip 显示项目名', 10000)
-  smoke.check('chip 显示项目名', !!chipProject, smoke.text('.work-dir'))
+  // 会话的工作区是它自己的：成员与项目同目录，是因为**创建时复制**过（fixture 里那条旧快照由
+  // 一次性迁移补成了项目主目录）。所以 chip 报的是目录名 project-root，而不是项目名 —— 项目不再是
+  // 「这个会话在哪里工作」的答案，只是它从哪儿开始的。
+  const chipOwn = await smoke.waitFor(
+    () => (smoke.text('.work-dir').indexOf('project-root') >= 0 ? true : null),
+    'chip 显示会话自己的目录', 10000)
+  smoke.check('chip 显示会话自己的目录', !!chipOwn, smoke.text('.work-dir'))
   smoke.check('chip 不是会话记录里的旧快照', smoke.text('.work-dir').indexOf('work') < 0, smoke.text('.work-dir'))
 
   // ── 组头这一块的三种手势（收起时的位置提示 / 点组头即折叠 / 双击不再改名 / 会话改名失焦即退）──
@@ -182,9 +185,9 @@
     smoke.qa('.proj-rows:not(.is-loose) .session.active').length === 1,
     smoke.qa('.proj-rows:not(.is-loose) .session.active').length + ' 行 active')
   const chipAfterCmdN = await smoke.waitFor(
-    () => (smoke.text('.work-dir').indexOf('smoke-proj') >= 0 ? true : null),
-    '⌘N 之后 chip 还是项目', 8000)
-  smoke.check('⌘N 之后 chip 还是项目（工作区没掉）', !!chipAfterCmdN, smoke.text('.work-dir'))
+    () => (smoke.text('.work-dir').indexOf('project-root') >= 0 ? true : null),
+    '⌘N 之后 chip 还在项目目录里', 8000)
+  smoke.check('⌘N 之后 chip 在项目目录里（新会话复制了项目的工作区）', !!chipAfterCmdN, smoke.text('.work-dir'))
 
   // ── 2c. 置顶在项目内部生效，不跨组 ──────────────────────────────────────
   // 置顶的语义是「排到本组最前」：项目里的会话在项目里排，不会越到别的组头上，也不重排项目本身。
@@ -291,7 +294,7 @@
     rowsNow().length + ' 行，active 下标 ' + activeAt())
   smoke.check('跨组没有被动过：无项目那一组还在原处', !!smoke.q('.proj-head.is-loose'), smoke.text('.proj-head.is-loose'))
 
-  // ── 3. 工作区面板只读,并指向项目 ────────────────────────────────────────
+  // ── 3. 工作区面板：可编辑，并说明这个会话从哪个项目开始 ──────────────────
   smoke.click('.work-dir')
   if (!(await smoke.waitFor('.roots-panel', '工作区面板打开', 8000))) return smoke.finish()
   // 这个 chip 在状态行的**左**端：面板必须向右长。共用的外壳是向左长的（右端那两个触发器
@@ -300,14 +303,19 @@
   smoke.check('面板完整落在窗口里（从 chip 向右长）', pr.left >= 0 && pr.right <= document.documentElement.clientWidth + 1,
     JSON.stringify({ left: Math.round(pr.left), right: Math.round(pr.right), vw: document.documentElement.clientWidth }))
   const paneText = smoke.text('.roots-panel')
-  smoke.check('面板说明由项目管理', paneText.indexOf('由项目') >= 0, paneText.slice(0, 160))
-  smoke.check('只读：没有「更换主目录」', smoke.qa('.roots-panel .roots-btn').every((b) => b.textContent.indexOf('更换') < 0),
+  // 出处是一枚标签，不是一整句解释：继承自 / 已改动 / 项目已删除。这个会话的工作区就是项目的那份。
+  smoke.check('面板标出会话从哪个项目开始', paneText.indexOf('继承自') >= 0 && paneText.indexOf('smoke-proj') >= 0,
+    paneText.slice(0, 160))
+  // 每个会话都能改自己的工作区 —— 两个写入入口都在（成员也不例外，后端也不再拒绝）。
+  smoke.check('面板可编辑：有「更换主目录」', smoke.qa('.roots-panel .roots-btn').some((b) => b.textContent.indexOf('更换') >= 0),
     smoke.allText('.roots-panel .roots-btn').join(' | ') || '(没有按钮)')
-  smoke.check('只读：没有「添加目录」', smoke.qa('.roots-panel .roots-add').every((b) => b.textContent.indexOf('添加目录') < 0),
+  smoke.check('面板可编辑：有「添加目录」', smoke.qa('.roots-panel .roots-add').some((b) => b.textContent.indexOf('添加目录') >= 0),
     smoke.allText('.roots-panel .roots-add').join(' | ') || '(没有按钮)')
-  smoke.check('面板给出两个出口', paneText.indexOf('编辑项目') >= 0 && paneText.indexOf('新建项目会话') >= 0, paneText.slice(0, 200))
-  // 后端拒绝是权威的（desktop/roots.go 的 projectGuard），前端还要让「为什么不能点」一眼可见：
-  // 面板里既没有编辑按钮，也解释了原因。
+  // 这一条目录不是一个 git 仓库：worktree 按钮在，但按不动（按钮说明原因，见 title）。
+  const wtBtn = smoke.qa('.roots-panel .roots-action').find((b) => b.textContent.indexOf('worktree') >= 0)
+  smoke.check('面板有「用 worktree 隔离…」', !!wtBtn, smoke.allText('.roots-panel .roots-action').join(' | '))
+  smoke.check('不是 git 仓库时 worktree 按钮不可用', !!wtBtn && wtBtn.disabled,
+    wtBtn ? 'disabled=' + wtBtn.disabled : '(没有按钮)')
   smoke.key(document.body, 'Escape')
   await smoke.waitGone('.roots-panel', '面板关闭', 5000)
 
@@ -346,10 +354,16 @@
     () => (smoke.text('.proj-head').indexOf('smoke-proj-renamed') >= 0 ? true : null),
     '组头显示新名字', 8000)
   smoke.check('组头跟着改名', !!renamed, smoke.text('.proj-head'))
-  const chipRenamed = await smoke.waitFor(
-    () => (smoke.text('.work-dir').indexOf('smoke-proj-renamed') >= 0 ? true : null),
-    'chip 跟着改名（不切会话）', 8000)
-  smoke.check('chip 跟着改名，无需切会话', !!chipRenamed, smoke.text('.work-dir'))
+  // chip 说的是目录，改名不动它；变的是面板里那枚出处标签 —— 这正是 §7.4 的刷新契约：
+  // 打开着的界面必须跟着后端的新事实走，而不是等用户切一次会话。
+  smoke.click('.work-dir')
+  if (!(await smoke.waitFor('.roots-panel', '改名后打开面板', 8000))) return smoke.finish()
+  const tagRenamed = await smoke.waitFor(
+    () => (smoke.text('.roots-panel').indexOf('smoke-proj-renamed') >= 0 ? true : null),
+    '面板出处标签跟着改名', 8000)
+  smoke.check('面板的出处标签跟着改名（无需切会话）', !!tagRenamed, smoke.text('.roots-panel').slice(0, 120))
+  smoke.key(document.body, 'Escape')
+  await smoke.waitGone('.roots-panel', '面板关闭', 5000)
 
   // 重名要拒绝，且原因留在组头自己的输入框下面（关掉编辑框会让用户以为程序没反应）。
   menu = await openProjectMenu('再次打开项目菜单')
@@ -380,15 +394,18 @@
   smoke.check('删除后只剩那个还没会话的项目',
     !!leftHeads && smoke.text(leftHeads[0]).indexOf('smoke-empty') >= 0,
     smoke.allText('.proj-head:not(.is-loose)').join(' | ') || '(没有组头)')
-  // detach 之后会话是普通会话：chip 回到自己的目录（快照已刷成项目主目录）、面板重新可编辑。
+  // detach 之后会话是普通会话：目录原样不动（它本来就归会话），少的是那枚出处标签。
   const chipDetached = await smoke.waitFor(
     () => (smoke.text('.work-dir').indexOf('project-root') >= 0 ? true : null),
-    'chip 回到会话自己的目录', 10000)
-  smoke.check('detach 后 chip 显示自己的目录', !!chipDetached, smoke.text('.work-dir'))
+    'detach 后目录不变', 10000)
+  smoke.check('detach 后 chip 还是同一个目录', !!chipDetached, smoke.text('.work-dir'))
   smoke.click('.work-dir')
   if (!(await smoke.waitFor('.roots-panel', '面板再次打开', 8000))) return smoke.finish()
-  const editable = smoke.qa('.roots-panel .roots-btn').some((b) => b.textContent.indexOf('更换') >= 0)
-  smoke.check('detach 后面板可编辑（后端也放行）', editable, smoke.text('.roots-panel').slice(0, 160))
+  const paneAfter = smoke.text('.roots-panel')
+  smoke.check('detach 后没有出处标签了', paneAfter.indexOf('继承自') < 0 && paneAfter.indexOf('项目已删除') < 0,
+    paneAfter.slice(0, 160))
+  smoke.check('detach 后面板仍可编辑', smoke.qa('.roots-panel .roots-btn').some((b) => b.textContent.indexOf('更换') >= 0),
+    paneAfter.slice(0, 160))
 
   smoke.finish()
 })()

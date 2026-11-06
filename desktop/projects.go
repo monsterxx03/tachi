@@ -1,23 +1,26 @@
 package main
 
-// Desktop projects: a named workspace (primary + additional roots) that OWNS a group of
-// sessions. A session in a project stores only `project_id`; its roots are resolved from
-// the project on every read (see sessionRootsFrom), so editing a project moves every
-// member session at once with one file write and no fan-out into session meta.
+// Desktop projects: a NAMED STARTING POINT (primary + additional roots) plus the sidebar group
+// its sessions live in. A project is a template, not an owner: NewSession copies the project's
+// roots into the new session's own record, and from then on the two are independent — editing a
+// project moves the next session to be created and leaves every existing one where it is.
 //
-// Design: docs/2026-09-14-desktop-project-design.md §2, §3.1.
+// Design: docs/2026-09-14-desktop-project-design.md (§2 no longer describes the resolver).
 //
 // Three properties of this file are load-bearing:
 //
 //   - The table is the only place a project is read from or written to, and it lives in
-//     memory once loaded, because sessionRootsFrom asks it on every turn — a disk read
-//     there would put a meta.json worth of I/O in the prompt-building path.
+//     memory once loaded: NewSession, the panel's 「已改动」 comparison and the sidebar's
+//     group labels all ask it, and a disk read per ask would put a meta.json worth of I/O in
+//     the prompt-building path (NewSession) and the list path (the comparison).
 //   - Roots are validated on the way IN (a user typed them) and on the way OUT
-//     (projects.json is a file anyone can edit): a hand-edited `/` or `$HOME` must not
-//     reach bash's cwd, the @-file index or a checkpoint.
+//     (projects.json is a file anyone can edit): a hand-edited `/` or `$HOME` must not be
+//     copied into a session that would then hand it to bash's cwd, the @-file index or a
+//     checkpoint.
 //   - Nothing here takes d.mu or calls back into the app. The lock order is
 //     d.mu → projects.mu; the reverse (holding this lock while touching the app) is what
-//     would deadlock, so it is never done.
+//     would deadlock, so it is never done. (Copying roots INTO sessions is therefore the
+//     app's job — see copyProjectRoots / migrateProjectWorkspaces — not this table's.)
 
 import (
 	"context"
@@ -34,7 +37,6 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // projectsFileName is the project table, next to desktop_ui.json in tachi's state dir.
@@ -54,9 +56,20 @@ type project struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+// projectFileVersion is the schema this build writes.
+//
+// Version 1 — and an absent field, which is what every pre-existing file has — is a file whose
+// member sessions did NOT own their workspace: they carried a creation-time snapshot while the
+// project's roots were resolved on every read. The first start of this build copies each
+// project's CURRENT roots into its members once (migrateProjectWorkspaces) and then records 2,
+// so the sessions keep working where they worked before the upgrade. Writing 2 afterwards is
+// what keeps a later project edit from ever reaching them again.
+const projectFileVersion = 2
+
 // projectFile is the on-disk shape. A slice rather than a map so the file keeps a stable,
 // readable order and a hand-edit cannot silently drop an entry to a duplicated key.
 type projectFile struct {
+	Version  int        `json:"version,omitempty"`
 	Projects []*project `json:"projects"`
 }
 
@@ -71,6 +84,9 @@ type projectTable struct {
 	mu       sync.RWMutex
 	projects []*project
 	loaded   bool
+	// version is what projects.json declared when it was read; 0 means a file written before the
+	// version field existed (see projectFileVersion).
+	version int
 	// broken records that projects.json EXISTS but could not be read or parsed. The
 	// table then holds no projects, and saving MUST NOT happen: a write would replace a
 	// file the user can still repair with just the entry being added right now, losing
@@ -107,6 +123,7 @@ func (t *projectTable) load() {
 func (t *projectTable) readLocked() {
 	t.projects = nil
 	t.broken = false
+	t.version = 0
 
 	path := projectsPath()
 	var pf projectFile
@@ -118,6 +135,7 @@ func (t *projectTable) readLocked() {
 		}
 		return
 	}
+	t.version = pf.Version
 	// Entries are kept even when their roots no longer validate: dropping one here would
 	// unbind every member session AND delete the project on the next save. Unusable
 	// entries are filtered at read time instead (projectTable.drives).
@@ -161,15 +179,14 @@ func (t *projectTable) get(id string) (project, bool) {
 	return project{}, false
 }
 
-// drives reports whether a project can drive its member sessions RIGHT NOW, and with which
-// primary: it exists and its PRIMARY root is still usable (see resolveProjectPrimary).
-// This is THE predicate — the resolver (sessionRootsFrom), the write guards (projectGuard)
-// and the UI's rootsUsable all read it, so the read and write paths can never disagree
-// about whether a session is a project member.
+// drives reports whether a project can start a NEW session right now, and with which primary:
+// it exists and its PRIMARY root is still usable (see resolveProjectPrimary).
+// This is THE predicate — NewSession, the panel's 「已改动」 comparison, the sidebar's
+// rootsUsable and the phone's picker all read it, so no two of them can disagree about
+// whether a project is usable.
 //
-// A project whose primary directory has vanished does not drive on purpose: handing a tree
-// that is not there to bash would leave the session with no working directory at all, and
-// the snapshot is the last known-good workspace. Additional roots do NOT get a say — they
+// A project whose primary directory has vanished does not drive on purpose: copying a tree
+// that is not there into a new session would leave it with no working directory at all. Additional roots do NOT get a say — they
 // follow the session rule instead (an unmounted one is reported exists=false and skipped
 // by the prompt and the @-file search), because one unmounted volume must not relocate
 // every member session back to its snapshot.
@@ -249,11 +266,47 @@ func (t *projectTable) remove(id string) error {
 
 // saveLocked writes the table out. Callers hold t.mu.
 func (t *projectTable) saveLocked() error {
-	pf := projectFile{Projects: t.projects}
+	pf := projectFile{Version: projectFileVersion, Projects: t.projects}
 	if pf.Projects == nil {
 		pf.Projects = []*project{}
 	}
 	return fileutil.AtomicWriteJSONShared(projectsPath(), pf)
+}
+
+// needsWorkspaceMigration reports whether projects.json predates session-owned workspaces (see
+// projectFileVersion). It is asked once per start, before anything reads a session's roots.
+func (t *projectTable) needsWorkspaceMigration() bool {
+	if t == nil {
+		return false
+	}
+	t.load()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.version < projectFileVersion
+}
+
+// markWorkspacesMigrated records that the copy-into-members pass has run. It does NOT write when
+// there is no project at all: with nothing to migrate there is also nothing to record a version
+// for, and creating an empty projects.json just to say "done" would be a file the user never asked
+// for. The next real save carries the version.
+func (t *projectTable) markWorkspacesMigrated() error {
+	if t == nil {
+		return nil
+	}
+	t.load()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.version >= projectFileVersion {
+		return nil
+	}
+	t.version = projectFileVersion
+	if len(t.projects) == 0 {
+		return nil
+	}
+	if err := t.writableLocked(); err != nil {
+		return err
+	}
+	return t.saveLocked()
 }
 
 // projectNameFor is the default name for a project rooted at primary: the directory's base
@@ -356,22 +409,4 @@ func normalizedAdditionalRoots(primary string, dirs []string) ([]string, error) 
 		return nil, err
 	}
 	return agent.NormalizeAdditionalRoots(primary, abs)
-}
-
-// projectRootsForSession is the resolver shared with the agent side (the checkpoint's
-// RootFunc): "which trees do this session's tools and snapshots cover?" — the project's
-// roots when one owns the session and still drives it, otherwise the record's own snapshot
-// (reported as false, so the caller falls back to the record it already has).
-//
-// The primary comes back cleaned/expanded, because projects.json is hand-editable and the
-// stored string may be a "~/" path: this value ends up as bash's cwd.
-func (t *projectTable) projectRootsForSession(sess *session.Session) (string, []string, bool) {
-	if sess == nil || sess.ProjectID == "" {
-		return "", nil, false
-	}
-	p, primary, ok := t.drives(sess.ProjectID)
-	if !ok {
-		return "", nil, false
-	}
-	return primary, append([]string(nil), p.AdditionalDirs...), true
 }

@@ -305,7 +305,7 @@ func TestDeletingASessionRemovesTheJobsBoundToIt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	if got := (&AgentService{desk: d}).DeleteSession("gone"); got != "ok" {
+	if got := (&AgentService{desk: d}).DeleteSession("gone", false); got != "ok" {
 		t.Fatalf("DeleteSession = %q, want ok", got)
 	}
 
@@ -347,7 +347,7 @@ func TestDeletingACompactionParentKeepsTheConversationJobs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	if got := (&AgentService{desk: d}).DeleteSession("p1"); got != "ok" {
+	if got := (&AgentService{desk: d}).DeleteSession("p1", false); got != "ok" {
 		t.Fatalf("DeleteSession = %q, want ok", got)
 	}
 	got, err := sched.Get(job.ID)

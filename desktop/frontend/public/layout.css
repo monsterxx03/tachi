@@ -1102,3 +1102,36 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   transition: transform 0.22s var(--ease);
 }
 .theme-toggle[data-state="dark"] .theme-thumb { transform: translateX(26px); }
+
+/* A conversation working in its own checkout. The branch is the one fact that makes 「the edits are
+   not in the main directory」 visible from the list; it is recorded on the session (never probed
+   per row) and it is a quiet fill rather than accent ink, because it is a place, not a state. */
+.session-wt {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 6px;
+  padding: 0 5px 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-softer);
+  color: var(--accent-2);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-wt svg { flex-shrink: 0; }
+/* Moved away from what its project would hand a new session. A hollow dot, not a word: the panel
+   says what changed and offers the way back, and a second label on every such row would read as a
+   state the reader has to act on. */
+.session-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--text-faint);
+}

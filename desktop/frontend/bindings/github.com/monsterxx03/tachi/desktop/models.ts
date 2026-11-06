@@ -1357,6 +1357,27 @@ export interface SessionInfo {
     "projectId"?: string;
 
     /**
+     * WorktreeBranch is set when this session works in a git worktree TACHI created: the branch
+     * checked out there. The sidebar shows it beside the row (「这个会话的改动不在主目录里」) and
+     * does so from the record — probing git per row would be one subprocess per conversation in
+     * the list.
+     */
+    "worktreeBranch"?: string;
+
+    /**
+     * WorktreePath is that checkout's directory — the session's primary, carried separately so the
+     * delete dialog can name the directory it is offering to remove.
+     */
+    "worktreePath"?: string;
+
+    /**
+     * WorkspaceChanged says this session's directory no longer matches what its project would hand
+     * a NEW session. It is computed at list time (it has to move the moment either side moves) and
+     * is what the row's small dot reads.
+     */
+    "workspaceChanged"?: boolean;
+
+    /**
      * Pinned keeps this session at the top of ITS OWN group in the sidebar — a project's members,
      * or the project-less bucket. It never crosses a group boundary, and it is the session
      * record's own field (session.Session.Pinned), so the order survives a restart and every
@@ -1591,20 +1612,40 @@ export interface SessionRootsVO {
     "additional": SessionRootVO[] | null;
 
     /**
-     * ProjectID / ProjectName are set when a desktop project owns this session's workspace.
-     * The panel then renders read-only and points at the project (design §7.2).
+     * ProjectID / ProjectName name the project this session was STARTED from. They are
+     * provenance, not ownership: the roots above are the session's own, and the panel is
+     * editable for every session.
      */
     "projectId"?: string;
     "projectName"?: string;
 
     /**
-     * ProjectMissing is true when the session carries a project_id that no longer DRIVES it
-     * — the project was deleted, or its roots stopped validating (design §5). The roots above
-     * are then the session's own snapshot, and the panel must say so while staying EDITABLE:
-     * a read-only panel plus three refused writers would leave the user no way out. An empty
-     * ProjectName with this flag set means "gone"; a name means "still there, unusable".
+     * ProjectGone is true when ProjectID names a project that is no longer usable here — deleted,
+     * or its primary directory has vanished. The panel keeps the id out of the way and says so.
      */
-    "projectMissing"?: boolean;
+    "projectGone"?: boolean;
+
+    /**
+     * InWorktree says the session's primary IS a checkout Tachi created (Session.WorktreeOf), and
+     * CanWorktree says the panel may offer to create one: not already in a worktree, and the primary
+     * is inside a git repository (a branch probe that answers nothing is not one).
+     */
+    "inWorktree"?: boolean;
+    "canWorktree"?: boolean;
+    "worktreeBranch"?: string;
+
+    /**
+     * ProjectPrimary is where the project points NOW — the answer to 「恢复」 and the second line
+     * under the 「已改动」 tag. Empty when the project is gone or unusable.
+     */
+    "projectPrimary"?: string;
+
+    /**
+     * Changed is true when these roots are no longer what the project would hand a session
+     * created right now. It is what the panel's 「已改动」 tag and the sidebar's dot read, and it
+     * is computed, never stored: the comparison has to move the moment either side moves.
+     */
+    "changed"?: boolean;
 }
 
 /**
@@ -2050,4 +2091,44 @@ export interface UIStateVO {
      */
     "fileTreeOpen": boolean;
     "fileTreeWidth"?: number;
+}
+
+/**
+ * WorktreeBranchesVO answers the create-worktree form: which repo the session is in, where it
+ * stands, and which branches are free to check out.
+ */
+export interface WorktreeBranchesVO {
+    /**
+     * Repo is the work tree's top level — the repository the new worktree is cut from.
+     */
+    "repo": string;
+
+    /**
+     * Current / Detached are the primary directory's branch, as the panel shows it.
+     */
+    "current"?: string;
+    "detached"?: boolean;
+
+    /**
+     * Branches is every local branch, current one included (the form offers it as the base).
+     */
+    "branches": string[] | null;
+
+    /**
+     * CheckedOut maps a branch to the worktree that already has it checked out. A branch in here
+     * cannot be checked out again — git refuses — so the form greys it out and names the holder.
+     */
+    "checkedOut"?: { [_ in string]?: string } | null;
+
+    /**
+     * SuggestedBranch / SuggestedDir prefill the form: a fresh branch under tachi/ and a directory
+     * under Tachi's state dir, where a checkout nobody asked to keep is obviously ours to remove.
+     */
+    "suggestedBranch"?: string;
+    "suggestedDir"?: string;
+
+    /**
+     * Err explains why no form can be shown ("" when it can): not a git repo, already a worktree.
+     */
+    "err"?: string;
 }

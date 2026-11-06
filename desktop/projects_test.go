@@ -39,14 +39,13 @@ func must(t *testing.T, err error, what string) {
 	}
 }
 
-// newProjectApp returns an app holding one project rooted at projectDir and ONE session
-// that belongs to it. The session's own WorkingDir is deliberately a different directory
-// (the snapshot it was created with), so a test can tell "resolved from the project" apart
-// from "read the record".
+// newProjectApp returns an app holding one project rooted at projectDir and ONE session that
+// was started from it. The session's roots are COPIED from the project (copyProjectRoots), which
+// is exactly what NewSession does, so the fixture is a normal session of the new model rather than
+// a hand-built half-state.
 //
-// The project is created through the API — it is the only writer — and the binding is
-// written through the session's own update path, so nothing here is reading a structure it
-// also built by hand.
+// The project is created through the API — it is the only writer — and the copy is written through
+// the session's own update path, so nothing here is reading a structure it also built by hand.
 func newProjectApp(t *testing.T, name, projectDir string) (d *desktopApp, svc *AgentService, sessionID, projectID string) {
 	t.Helper()
 	snapshot := t.TempDir() // the session's record: stale by construction
@@ -68,7 +67,11 @@ func newProjectApp(t *testing.T, name, projectDir string) (d *desktopApp, svc *A
 	}
 	pid := projects[0].ID
 
-	must(t, d.updateSessionMeta(sid, func(s *session.Session) { s.ProjectID = pid }), "bind session")
+	proj, primary, ok := d.projects.drives(pid)
+	if !ok {
+		t.Fatal("fixture: the project does not drive")
+	}
+	must(t, d.updateSessionMeta(sid, func(s *session.Session) { copyProjectRoots(s, proj, primary) }), "bind session")
 	return d, svc, sid, pid
 }
 
@@ -231,72 +234,98 @@ func TestCreateProjectValidation(t *testing.T) {
 	}
 }
 
-// TestMemberSessionResolvesThroughItsProject is the core of the design: the session's own
-// record is a stale snapshot and the PROJECT's roots win on every read, without anything
-// writing to session meta.
-func TestMemberSessionResolvesThroughItsProject(t *testing.T) {
+// TestProjectEditLeavesMembersAlone is the model in one test: a project is a STARTING POINT.
+// Editing it moves the next session to be created and leaves every existing one exactly where it
+// was — same primary, same additional roots, same everything the tools read.
+func TestProjectEditLeavesMembersAlone(t *testing.T) {
 	projectDir, movedDir, extra := t.TempDir(), t.TempDir(), t.TempDir()
 	d, svc, sid, pid := newProjectApp(t, "p", projectDir)
 
-	primary, _ := d.sessionRoots(sid)
-	eq(t, "member primary", primary, projectDir)
-	eq(t, "GetSessionWorkingDir", svc.GetSessionWorkingDir(sid), projectDir)
+	eq(t, "member primary", svc.GetSessionWorkingDir(sid), projectDir)
 
-	snapshot := d.sessionRecord(sid).WorkingDir
-
-	// Move the project: the next read follows, and nothing touched the session.
 	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, movedDir, []string{extra}), "ok")
-	primary, additional := d.sessionRoots(sid)
-	eq(t, "primary after the move", primary, movedDir)
-	eqSlices(t, "additional after the move", additional, []string{extra})
-	eq(t, "session meta is a snapshot", d.sessionRecord(sid).WorkingDir, snapshot)
 
-	// Every other consumer reads the same exit.
+	// The existing session did not move — not on disk, not in the resolution the tools read.
+	primary, additional := d.sessionRoots(sid)
+	eq(t, "primary after the move", primary, projectDir)
+	if len(additional) != 0 {
+		t.Errorf("additional after the move = %v, want none", additional)
+	}
+	eq(t, "the record did not move", d.sessionRecord(sid).WorkingDir, projectDir)
+
+	// …and every consumer still agrees, because they all read that one exit.
 	r := d.getRun(sid)
-	eq(t, "expansionRoot", d.expansionRoot(r), movedDir)
+	eq(t, "expansionRoot", d.expansionRoot(r), projectDir)
 	ctx, cancel, _, _, ok := d.beginTurn(sid, r)
 	if !ok {
 		t.Fatal("beginTurn refused")
 	}
 	t.Cleanup(cancel)
-	eq(t, "turn wdctx", wdctx.Dir(ctx), movedDir)
-	if prompt := d.systemPromptFor(sid); !strings.Contains(prompt, movedDir) {
-		t.Error("the prompt must name the project's directory")
+	eq(t, "turn wdctx", wdctx.Dir(ctx), projectDir)
+	if prompt := d.systemPromptFor(sid); !strings.Contains(prompt, projectDir) {
+		t.Error("the prompt must still name the session's own directory")
+	}
+
+	// The panel can say the session no longer matches the project…
+	roots := svc.GetSessionRoots(sid)
+	eq(t, "primary in the panel", roots.Primary, projectDir)
+	if !roots.Changed {
+		t.Error("the panel must be able to say the session no longer matches its project")
+	}
+	if roots.ProjectGone {
+		t.Error("a usable project is not gone")
+	}
+	if !d.workspaceChanged(d.sessionRecord(sid)) {
+		t.Error("the sidebar's dot reads the same comparison and must agree")
+	}
+
+	// …and the NEXT session starts where the project now points.
+	info := svc.NewSession(pid)
+	if info.ID == "" {
+		t.Fatal("NewSession returned no session")
+	}
+	rec := d.sessionRecord(info.ID)
+	eq(t, "the new session starts in the project's current directory", rec.WorkingDir, movedDir)
+	eqSlices(t, "the new session's roots", rec.AdditionalDirs, []string{extra})
+	if d.workspaceChanged(rec) {
+		t.Error("a freshly created session matches its project by definition")
 	}
 }
 
-// TestProjectWriteGuards: while a project owns the workspace the three session-level
-// writers refuse — in the BACKEND, not by hiding buttons — and nothing is persisted.
-func TestProjectWriteGuards(t *testing.T) {
+// TestSessionOwnsItsWorkspace: the session-level writers are open to every session, including one
+// started from a project, and they move the session WITHOUT touching the project.
+func TestSessionOwnsItsWorkspace(t *testing.T) {
 	projectDir := t.TempDir()
-	d, svc, sid, _ := newProjectApp(t, "shared-lib", projectDir)
-	snapshotDir := d.sessionRecord(sid).WorkingDir
+	d, svc, sid, pid := newProjectApp(t, "shared-lib", projectDir)
 
-	for name, call := range map[string]func() string{
-		"SetSessionWorkingDir": func() string { return svc.SetSessionWorkingDir(sid, t.TempDir()) },
-		"AddSessionRoots":      func() string { return svc.AddSessionRoots(sid, []string{t.TempDir()}) },
-		"RemoveSessionRoot":    func() string { return svc.RemoveSessionRoot(sid, t.TempDir()) },
-	} {
-		if got := call(); !strings.Contains(got, "shared-lib") {
-			t.Errorf("%s = %q, want a refusal naming the project", name, got)
-		}
+	newDir := t.TempDir()
+	eq(t, "SetSessionWorkingDir", svc.SetSessionWorkingDir(sid, newDir), "ok")
+	eq(t, "the session moved", d.sessionRecord(sid).WorkingDir, newDir)
+
+	extra := t.TempDir()
+	eq(t, "AddSessionRoots", svc.AddSessionRoots(sid, []string{extra}), "ok")
+	eqSlices(t, "roots", d.sessionRecord(sid).AdditionalDirs, []string{extra})
+	eq(t, "RemoveSessionRoot", svc.RemoveSessionRoot(sid, extra), "ok")
+	eqSlices(t, "roots after remove", d.sessionRecord(sid).AdditionalDirs, []string{})
+
+	// The project is where it always was: one session changing its own directory is not an edit.
+	projects := svc.ListProjects()
+	if len(projects) != 1 || projects[0].ID != pid {
+		t.Fatalf("projects = %+v, want the one project", projects)
 	}
+	eq(t, "project primary", projects[0].WorkingDir, projectDir)
+	eq(t, "project name", projects[0].Name, "shared-lib")
 
 	roots := svc.GetSessionRoots(sid)
-	eq(t, "primary", roots.Primary, projectDir)
-	if len(roots.Additional) != 0 {
-		t.Errorf("a refused write was persisted: %+v", roots.Additional)
+	eq(t, "project name is still provenance", roots.ProjectName, "shared-lib")
+	if !roots.Changed {
+		t.Error("a session moved away from its project must report the difference")
 	}
-	eq(t, "project name", roots.ProjectName, "shared-lib")
-	if roots.ProjectMissing {
-		t.Error("a usable project must not be reported as missing")
-	}
-	eq(t, "the snapshot is untouched", d.sessionRecord(sid).WorkingDir, snapshotDir)
 }
 
-// TestDanglingProjectDegradesToSnapshot: a project_id that no longer resolves (deleted, or
-// projects.json lost) must not LOCK the session — roots fall back to the snapshot, the
-// writers work again, and the panel is told what happened.
+// TestDanglingProjectIsOnlyProvenance: a project_id that no longer resolves (deleted, or
+// projects.json lost) changes nothing about the session's workspace — it was the session's own all
+// along — and the panel says the reference is gone.
 func TestDanglingProjectDegradesToSnapshot(t *testing.T) {
 	snapshotDir := t.TempDir()
 	d, svc, sid := newAppWithSession(t, snapshotDir)
@@ -310,17 +339,20 @@ func TestDanglingProjectDegradesToSnapshot(t *testing.T) {
 
 	roots := svc.GetSessionRoots(sid)
 	eq(t, "projectId", roots.ProjectID, "no-such-project")
-	if !roots.ProjectMissing {
+	if !roots.ProjectGone {
 		t.Error("the UI must be able to say the project is gone")
+	}
+	if roots.Changed {
+		t.Error("a gone project is not something a session can differ from")
 	}
 	eq(t, "projectName", roots.ProjectName, "")
 
-	eq(t, "editable again", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
+	eq(t, "still editable", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
 }
 
 // TestProjectReadSideValidation: projects.json is a file anyone can edit, so an entry whose
-// roots stopped validating must not reach the tools. It degrades exactly like a missing
-// project — snapshot, editable — while staying nameable in the UI.
+// roots stopped validating must never be copied into a session. A session already bound to such a
+// project keeps its own roots and the panel reports the reference as gone.
 func TestProjectReadSideValidation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -346,21 +378,23 @@ func TestProjectReadSideValidation(t *testing.T) {
 			eq(t, "primary", primary, snapshot)
 
 			roots := svc.GetSessionRoots(sid)
-			if !roots.ProjectMissing {
-				t.Error("an unusable project must be reported as not driving the session")
+			if !roots.ProjectGone {
+				t.Error("an unusable project must be reported as gone")
 			}
 			eq(t, "projectName", roots.ProjectName, "bad")
-			eq(t, "editable again", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
+			eq(t, "still editable", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
+			// And a session created here is an ordinary one: a broken project cannot hand out roots.
+			if info := svc.NewSession("p1"); info.ProjectID == "p1" {
+				t.Error("a project that cannot hand out roots must not bind a new session")
+			}
 		})
 	}
 }
 
-// TestProjectSkillStoreFollowsTheProject: skills are the one thing a project edit does NOT
-// move by itself — a store's scan roots are fixed when it is built — so every live member
-// has to be re-pointed. The edit only MARKS them (invalidateMemberSkills): it runs on the
-// UI goroutine while members may be mid-turn, and the reload rewrites the store and the
-// tool registry. Each member's own next turn applies it.
-func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
+// TestDirectoryChangeMarksTreeStale: skills are the one thing a directory change does NOT move by
+// itself — a store's scan roots are fixed when it is built — so the session's own directory change
+// has to mark the agent. A PROJECT edit does not: no member's workspace moved with it.
+func TestDirectoryChangeMarksTreeStale(t *testing.T) {
 	treeA, treeB := t.TempDir(), t.TempDir()
 	writeProjectSkillFixture(t, treeA, "skill-a", "from tree A")
 	writeProjectSkillFixture(t, treeB, "skill-b", "from tree B")
@@ -380,14 +414,16 @@ func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
 	r := d.getRun(sid)
 	r.agent = a
 
+	// Editing the project moves nothing, so it must not invalidate a live member.
 	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, treeB, nil), "ok")
-
-	// The edit itself must not touch a live agent: the member can be mid-turn.
-	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
-		t.Error("a project edit must not rewrite a live agent's skill store")
+	if r.treeStale {
+		t.Error("a project edit must not mark a member's tree stale — it did not move")
 	}
+
+	// Moving the SESSION does, and the next turn applies it.
+	eq(t, "SetSessionWorkingDir", svc.SetSessionWorkingDir(sid, treeB), "ok")
 	if !r.treeStale {
-		t.Fatal("the member must be marked as needing a skill-store reload")
+		t.Fatal("a directory change must mark the session as needing a skill-store reload")
 	}
 
 	ctx, cancel, _, _, ok := d.beginTurn(sid, r)
@@ -399,7 +435,7 @@ func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
 
 	names := storeSkillNames(a.SkillStore())
 	if !slices.Contains(names, "skill-b") {
-		t.Errorf("the store must follow the project, got %v", names)
+		t.Errorf("the store must follow the session, got %v", names)
 	}
 	if slices.Contains(names, "skill-a") {
 		t.Errorf("the old tree's skills must be gone, got %v", names)
@@ -409,18 +445,21 @@ func TestProjectSkillStoreFollowsTheProject(t *testing.T) {
 	}
 }
 
-// TestCheckpointRootsFollowTheProject: the agent resolves its checkpoint roots through the
-// same exit, so a turn inside a project snapshots the tree the tools actually wrote in
-// rather than the snapshot in the session record. A project-less session keeps the agent's
-// own default shape exactly — including the empty primary — so nobody else's snapshots
-// change (the agent package pins the hook itself in TestCheckpointRootsUsesRootsFunc).
-func TestCheckpointRootsFollowTheProject(t *testing.T) {
-	projectDir, extra := t.TempDir(), t.TempDir()
+// TestCheckpointRootsComeFromTheSession: the agent resolves its checkpoint roots through the same
+// exit, and that exit now reads the SESSION only — so a project edit cannot move what a turn
+// snapshots. A project-less session keeps the agent's own default shape exactly (the empty primary).
+func TestCheckpointRootsComeFromTheSession(t *testing.T) {
+	projectDir, extra, added := t.TempDir(), t.TempDir(), t.TempDir()
 	d, svc, sid, pid := newProjectApp(t, "p", projectDir)
 	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, projectDir, []string{extra}), "ok")
 
-	eqSlices(t, "member checkpoint roots", d.checkpointRootsFor(d.sessionRecord(sid)),
-		[]string{projectDir, extra})
+	// The project's extra root did not come along: this session was created before it.
+	eqSlices(t, "checkpoint roots", d.checkpointRootsFor(d.sessionRecord(sid)), []string{projectDir})
+
+	// The session's OWN root does.
+	eq(t, "AddSessionRoots", svc.AddSessionRoots(sid, []string{added}), "ok")
+	eqSlices(t, "checkpoint roots after adding", d.checkpointRootsFor(d.sessionRecord(sid)),
+		[]string{projectDir, added})
 
 	plainApp, _, plainSID := newAppWithSession(t, "")
 	eqSlices(t, "project-less checkpoint roots",
@@ -468,21 +507,24 @@ func TestProjectNameUniqueness(t *testing.T) {
 	}
 }
 
-// TestDeadAdditionalRootDoesNotUndoTheProject: an additional root that disappeared (an
-// unmounted volume) is a fact about that ONE directory. It is reported the way a plain
-// session reports it — kept in the set, exists=false, skipped by the prompt and the
-// @-file search — and must not take the whole project out of the picture: that would
-// relocate every member session to its stale snapshot because a drive is unplugged.
-func TestDeadAdditionalRootDoesNotUndoTheProject(t *testing.T) {
+// TestDeadAdditionalRootSurvivesInTheSession: an additional root that disappeared (an unmounted
+// volume) is a fact about that ONE directory: it stays in the session's set, is reported as
+// exists=false, and the prompt/@-file search skip it. Nothing else degrades with it.
+func TestDeadAdditionalRootSurvivesInTheSession(t *testing.T) {
 	projectDir, dead := t.TempDir(), filepath.Join(t.TempDir(), "unmounted")
 	must(t, os.MkdirAll(dead, 0o755), "mkdir the extra root")
 
-	d, svc, sid, pid := newProjectApp(t, "p", projectDir)
+	d, svc, _, pid := newProjectApp(t, "p", projectDir)
 	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, projectDir, []string{dead}), "ok")
+	// Created AFTER the edit, so the dead root is copied in — a mounted-then-unmounted volume.
+	info := svc.NewSession(pid)
+	if info.ID == "" {
+		t.Fatal("NewSession returned no session")
+	}
+	sid := info.ID
 
 	must(t, os.RemoveAll(dead), "unmount the extra root")
 
-	// The roots still resolve THROUGH THE PROJECT, not through the session's snapshot.
 	primary, additional := d.sessionRoots(sid)
 	eq(t, "primary", primary, projectDir)
 	eqSlices(t, "additional", additional, []string{dead})
@@ -493,22 +535,16 @@ func TestDeadAdditionalRootDoesNotUndoTheProject(t *testing.T) {
 	}
 
 	roots := svc.GetSessionRoots(sid)
-	if roots.ProjectMissing {
-		t.Error("the project still drives this session")
-	}
 	if len(roots.Additional) != 1 || roots.Additional[0].Exists {
 		t.Errorf("the dead root must be reported with exists=false: %+v", roots.Additional)
 	}
-	// Still a member, so the session-level writers still refuse.
-	if res := svc.SetSessionWorkingDir(sid, t.TempDir()); !strings.Contains(res, "管理该会话的工作区") {
-		t.Errorf("SetSessionWorkingDir = %q, want the project refusal", res)
-	}
+	// And the session is editable like any other.
+	eq(t, "editable", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
 }
 
-// TestNewSessionInsideProject is design §6.1: creating a session inside a project is the ONE
-// place a binding is made. The project's roots are copied into the record as the session's
-// snapshot, project_id goes in with them, and from then on the ordinary resolution (project
-// first, snapshot as the fallback) takes over — including following a later project edit.
+// TestNewSessionInsideProject: creating a session inside a project copies the project's roots as
+// they are at that moment — a copy, not a link. From then on the session is on its own, so a later
+// project edit moves the NEXT session and not this one.
 func TestNewSessionInsideProject(t *testing.T) {
 	projectDir, extra := t.TempDir(), t.TempDir()
 	d, svc, _, pid := newProjectApp(t, "p", projectDir)
@@ -518,30 +554,24 @@ func TestNewSessionInsideProject(t *testing.T) {
 	if info.ID == "" {
 		t.Fatal("NewSession returned no session")
 	}
-	eq(t, "binding", info.ProjectID, pid)
+	eq(t, "provenance", info.ProjectID, pid)
 
-	// The record carries the snapshot AND the binding: the snapshot is what the non-desktop
-	// readers and the degraded cases see, and it is the project's roots as of now.
+	// The record carries the roots themselves, so every reader (desktop or not) agrees.
 	rec := d.sessionRecord(info.ID)
-	eq(t, "snapshot primary", rec.WorkingDir, projectDir)
-	eqSlices(t, "snapshot additional", rec.AdditionalDirs, []string{extra})
-
-	// The session works in the project's tree, through the one exit.
-	primary, additional := d.sessionRoots(info.ID)
-	eq(t, "resolved primary", primary, projectDir)
-	eqSlices(t, "resolved additional", additional, []string{extra})
+	eq(t, "primary", rec.WorkingDir, projectDir)
+	eqSlices(t, "additional", rec.AdditionalDirs, []string{extra})
 	eq(t, "GetSessionWorkingDir", svc.GetSessionWorkingDir(info.ID), projectDir)
 
-	// It is a member like any other: a later project edit moves it, and its snapshot stays put.
+	// A later project edit does not reach it…
 	moved := t.TempDir()
 	eq(t, "move the project", svc.SetProjectRoots(pid, moved, nil), "ok")
-	eq(t, "member follows", svc.GetSessionWorkingDir(info.ID), moved)
-	eq(t, "snapshot untouched", d.sessionRecord(info.ID).WorkingDir, projectDir)
+	eq(t, "the session stays", svc.GetSessionWorkingDir(info.ID), projectDir)
+	eq(t, "it differs from the project now", svc.GetSessionRoots(info.ID).Changed, true)
 
-	// And it is guarded like any other member.
-	if res := svc.SetSessionWorkingDir(info.ID, t.TempDir()); !strings.Contains(res, "管理该会话的工作区") {
-		t.Errorf("SetSessionWorkingDir on a fresh member = %q, want the project refusal", res)
-	}
+	// …and it is editable like any other session.
+	own := t.TempDir()
+	eq(t, "SetSessionWorkingDir", svc.SetSessionWorkingDir(info.ID, own), "ok")
+	eq(t, "the project did not move", svc.ListProjects()[0].WorkingDir, moved)
 }
 
 // TestNewSessionWithUnusableProjectIsUnbound: asking for a session in a project that cannot
@@ -582,19 +612,15 @@ func TestCreateProjectDoesNotRememberWorkspace(t *testing.T) {
 	eq(t, "lastWorkspace unchanged", loadUIState().LastWorkspace, before)
 }
 
-// TestDeleteProjectDetachesMembers is design §6.2: deleting a project hands every member an
-// ordinary session whose snapshot is refreshed to the project's roots AS OF NOW (not the stale
-// creation snapshot), clears the binding on disk and in the live manager, and refuses outright
-// while a member is mid-turn.
+// TestDeleteProjectDetachesMembers: deleting a project removes the GROUP and nothing else. Every
+// member keeps the directory it was working in (it owns it already), loses only project_id, and the
+// delete is refused outright while a member is mid-turn.
 func TestDeleteProjectDetachesMembers(t *testing.T) {
-	projectDir, extra := t.TempDir(), t.TempDir()
+	projectDir := t.TempDir()
 	d, svc, sid, pid := newProjectApp(t, "p", projectDir)
-	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, projectDir, []string{extra}), "ok")
 
-	snapshotBefore := d.sessionRecord(sid).WorkingDir
-	if snapshotBefore == projectDir {
-		t.Fatal("fixture: the creation snapshot must differ from the project's directory")
-	}
+	before := d.sessionRecord(sid).WorkingDir
+	eq(t, "fixture: the session works in the project's directory", before, projectDir)
 
 	// A running member refuses the delete, and nothing is written.
 	r := d.getRun(sid)
@@ -612,11 +638,10 @@ func TestDeleteProjectDetachesMembers(t *testing.T) {
 		t.Errorf("the project must be gone from the table, got %+v", got)
 	}
 
-	// The member is an ordinary session, on the project's current roots — deleting the
-	// container must not move the user's workspace.
+	// The member is an ordinary session on the same directory — deleting the container must not
+	// move anyone's workspace.
 	rec := d.sessionRecord(sid)
-	eq(t, "snapshot primary", rec.WorkingDir, projectDir)
-	eqSlices(t, "snapshot additional", rec.AdditionalDirs, []string{extra})
+	eq(t, "primary unchanged", rec.WorkingDir, before)
 	eq(t, "unbound", rec.ProjectID, "")
 	// The bound manager was updated too, not just a loaded copy: otherwise the next UpdateMeta
 	// writes the binding back from the in-memory struct (see UpdateMeta's doc).
@@ -625,13 +650,12 @@ func TestDeleteProjectDetachesMembers(t *testing.T) {
 	loaded, err := d.sm.Load(sid)
 	must(t, err, "reload the detached session")
 	eq(t, "on disk", loaded.ProjectID, "")
-	eq(t, "on disk primary", loaded.WorkingDir, projectDir)
+	eq(t, "on disk primary", loaded.WorkingDir, before)
 
-	// Detached means editable again: the panel's read-only branch is driven by project_id.
 	roots := svc.GetSessionRoots(sid)
 	eq(t, "no project marks", roots.ProjectID, "")
-	if roots.ProjectMissing {
-		t.Error("an unbound session is not a missing project")
+	if roots.ProjectGone || roots.Changed {
+		t.Error("an unbound session has no project to be gone or different from")
 	}
 	eq(t, "editable", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
 

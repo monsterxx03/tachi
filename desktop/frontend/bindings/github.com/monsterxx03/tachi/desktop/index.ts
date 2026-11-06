@@ -77,5 +77,6 @@ export type {
     ToolCallVo,
     TurnChangesVO,
     TurnDiffVO,
-    UIStateVO
+    UIStateVO,
+    WorktreeBranchesVO
 } from "./models.js";

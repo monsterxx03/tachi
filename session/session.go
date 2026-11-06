@@ -25,14 +25,25 @@ type Session struct {
 	// Empty for sessions that never added one, so old session files read back with
 	// identical behavior.
 	AdditionalDirs []string `json:"additional_dirs,omitempty"`
-	// ProjectID binds this session to a desktop project (docs/2026-09-14-desktop-project-design.md):
-	// when set and the project exists, the PROJECT's roots win and WorkingDir/AdditionalDirs
-	// above hold only the snapshot taken when the session was created. Desktop-only — no other
-	// entry point resolves it, they read the snapshot as the session's own roots. Empty for every
-	// session created outside a project, so old meta.json files read back identically.
-	ProjectID string    `json:"project_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// ProjectID says which desktop project this session was STARTED from. It is provenance and a
+	// sidebar group, nothing more: the roots above are this session's own from the moment it is
+	// created, and nothing outside rewrites them — editing the project moves future sessions only.
+	// Desktop-only, and empty for every session created outside a project, so old meta.json files
+	// read back identically.
+	ProjectID string `json:"project_id,omitempty"`
+	// WorktreeOf / WorktreeBranch record that this session's primary directory is a linked git
+	// worktree that TACHI created: the repository it was cut from, and the branch checked out in
+	// it. They exist for the two things a path alone cannot answer — the sidebar's branch label,
+	// which must not cost a git probe per row, and "may this directory be deleted along with the
+	// session?", which must never be answered for a worktree the user made by hand.
+	//
+	// WorktreeOf empty is the ordinary case (a plain directory). Deleting the session removes the
+	// directory only when BOTH are set, the path is still the one recorded, and git says the tree
+	// is clean.
+	WorktreeOf     string    `json:"worktree_of,omitempty"`
+	WorktreeBranch string    `json:"worktree_branch,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 	// Pinned marks a session the reader keeps at hand. It is a property of the RECORD
 	// rather than of the reader's window, because it has to mean the same thing to every
 	// process that touches the list:

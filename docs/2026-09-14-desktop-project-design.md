@@ -1,6 +1,9 @@
 # Desktop Project（会话管理容器）设计
 
-> 版本: 1.0 | 日期: 2026-09-15 | 状态: P0 / P1 / P2 / P3 与 §14.1、§14.2 已落地；P4（worktree）未实现
+> 版本: 1.1 | 日期: 2026-11-06 | 状态: P0–P3 已落地；**本文 §2 的「项目驱动会话根集」已作废**——
+> 现在项目是会话的**起点**：建会话时复制项目的根，之后各走各的（`desktop/projects.go` 的注释与
+> [agents/desktop.md](agents/desktop.md) 是现状；本文件只作历史设计记录）。P4（worktree）已落地，
+> 见 `desktop/worktree.go`。
 > 前置: [2026-09-11-desktop-multi-workspace-design.md](2026-09-11-desktop-multi-workspace-design.md)（根集语义、
 >       校验层、prompt 缓存键、`@`-file 多根已落地）
 > 关联: [desktop/roots.go](../desktop/roots.go)、[desktop/agent_session.go](../desktop/agent_session.go)、

@@ -38,7 +38,7 @@ func TestDeleteSessionRefusesARunningSession(t *testing.T) {
 	d, svc, sid, dir := newDeleteApp(t)
 	d.getRun(sid).running = true
 
-	if got := svc.DeleteSession(sid); got != refuseDeleteRunning {
+	if got := svc.DeleteSession(sid, false); got != refuseDeleteRunning {
 		t.Fatalf("DeleteSession = %q, want %q", got, refuseDeleteRunning)
 	}
 	if _, err := os.Stat(dir); err != nil {
@@ -61,7 +61,7 @@ func TestDeleteSessionRefusesWithoutSideEffects(t *testing.T) {
 	d.activeID = sid
 	d.getRun(sid).running = true
 
-	if got := svc.DeleteSession(sid); got != refuseDeleteRunning {
+	if got := svc.DeleteSession(sid, false); got != refuseDeleteRunning {
 		t.Fatalf("DeleteSession = %q, want %q", got, refuseDeleteRunning)
 	}
 	if d.activeID != sid {
@@ -83,7 +83,7 @@ func TestDeleteSessionDeletesAnIdleSession(t *testing.T) {
 	d, svc, sid, dir := newDeleteApp(t)
 	d.activeID = sid
 
-	if got := svc.DeleteSession(sid); got != "ok" {
+	if got := svc.DeleteSession(sid, false); got != "ok" {
 		t.Fatalf("DeleteSession = %q, want ok", got)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {

@@ -124,6 +124,17 @@ export function CreateProject(name: string, primary: string, additional: string[
 }
 
 /**
+ * CreateSessionWorktree cuts a worktree off the session's primary directory and moves the session
+ * into it. newBranch says whether to create a branch: non-empty means 「新分支 newBranch，基于
+ * base」, empty means 「签出已有分支 base」.
+ * 
+ * Returns "ok" or the reason to show; nothing is written and nothing is created on a refusal.
+ */
+export function CreateSessionWorktree(id: string, base: string, newBranch: string, dir: string): $CancellablePromise<string> {
+    return $Call.ByID(1561405033, id, base, newBranch, dir);
+}
+
+/**
  * CurrentSession returns the active (displayed) session (nil if none).
  */
 export function CurrentSession(): $CancellablePromise<$models.SessionInfo | null> {
@@ -157,19 +168,17 @@ export function DeletePlan(sessionID: string, path: string): $CancellablePromise
 }
 
 /**
- * DeleteProject removes a project and DETACHES its members (design §6.2): each one keeps its
- * workspace, becoming an ordinary session whose snapshot is refreshed to the project's roots
- * as they are at this moment. Detaching rather than refusing or cascading is the point — after
- * a project has collected dozens of conversations, "go move each one first" is a punishment,
- * and deleting the conversations is data loss.
+ * DeleteProject removes a project and DETACHES its members: each one keeps the workspace it has
+ * (it owns it already), and only loses the group. Deleting the conversations instead would be data
+ * loss, and asking the user to move each one first would be a punishment — after a project has
+ * collected dozens of conversations, the removal of a heading is not a reason to touch any of them.
  * 
- * Refused while any member is running a turn, like DeleteSession, because the detach rewrites
- * session meta: a turn appending to that session's directory in parallel is the clobber the
- * meta path exists to avoid. For the same reason the check and the writes share ONE critical
- * section (d.mu) — a turn starting in between would be writing while we rewrite.
+ * Refused while any member is running a turn, like DeleteSession: the detach rewrites session meta,
+ * and a turn appending to that session's record in parallel is the clobber the meta path exists to
+ * avoid. The check and the writes share ONE critical section (d.mu).
  * 
- * The project entry goes last: if a member's write fails, the project is still there and the
- * user can retry. (The other order would leave them detached with the container gone.)
+ * The project entry goes last: if a member's write fails, the project is still there and the user
+ * can retry.
  */
 export function DeleteProject(id: string): $CancellablePromise<string> {
     return $Call.ByID(3732041524, id);
@@ -180,6 +189,12 @@ export function DeleteProject(id: string): $CancellablePromise<string> {
  * deleted session is the currently displayed one, activeID is cleared so the
  * UI falls back to choosing/creating a session.
  * 
+ * alsoWorktree removes the git worktree THIS session created, when it has one. It is refused —
+ * before anything is deleted — while that checkout still has uncommitted or untracked files: the
+ * directory is a whole working copy, and losing an agent's uncommitted hour of work must be a
+ * decision the user makes after committing, not a checkbox they left ticked. The branch itself is
+ * never deleted, so committed work stays reachable from the main repository.
+ * 
  * A session with a turn in flight is REFUSED, not stopped: the turn owns a
  * goroutine that keeps calling the model and running tools, and its writes to
  * the session directory (AppendMessage) and to the run map (setSessionState via
@@ -187,8 +202,8 @@ export function DeleteProject(id: string): $CancellablePromise<string> {
  * transcript silently and can leave a rebuilt directory (a meta.json with no
  * messages.jsonl) behind. The stop is the user's call, made explicit.
  */
-export function DeleteSession(id: string): $CancellablePromise<string> {
-    return $Call.ByID(3827341809, id);
+export function DeleteSession(id: string, alsoWorktree: boolean): $CancellablePromise<string> {
+    return $Call.ByID(3827341809, id, alsoWorktree);
 }
 
 /**
@@ -432,6 +447,14 @@ export function GetWorkspaceGitStatus(sessionID: string): $CancellablePromise<$m
 }
 
 /**
+ * GetWorktreeBranches returns what the create-worktree form needs for one session. It never fails:
+ * a session that cannot have a worktree comes back with Err set, which is what the UI shows.
+ */
+export function GetWorktreeBranches(id: string): $CancellablePromise<$models.WorktreeBranchesVO> {
+    return $Call.ByID(1611171097, id);
+}
+
+/**
  * IsCronScheduled reports whether the desktop scheduler is running; the panel
  * uses it to say "已在设置里关闭" instead of leaving a silent empty list.
  */
@@ -578,13 +601,12 @@ export function LoadSessionMore(id: string, before: string, limit: number): $Can
  * NewSession creates a fresh session and its own per-session agent, making it
  * active. The in-memory history starts empty.
  * 
- * projectID is "" for an ordinary session (today's behavior, word for word). Otherwise the
- * session is created INSIDE that project (design §6.1) and this is the ONE place a binding is
- * ever made: the project's roots as they are right now are written into the record as the
- * session's snapshot, alongside project_id. A project that cannot drive a session at this
- * moment (deleted, or its primary directory gone) yields an ordinary session instead of one
- * bound to nothing — §8.6's degradation is for a project that disappears UNDER a session,
- * which is not the same as being asked for one that is not there.
+ * projectID is "" for an ordinary session. Otherwise the session is created INSIDE that project
+ * and takes its roots as they are right now — a copy, not a link: the project can be edited,
+ * renamed or deleted afterwards and this session keeps the directory it started in. This is the
+ * ONE place a project's roots are copied into a session (the upgrade migration is the other, and
+ * runs once). A project that cannot hand out its roots at this moment (deleted, or its primary
+ * directory gone) yields an ordinary session instead of one bound to nothing.
  */
 export function NewSession(projectID: string): $CancellablePromise<$models.SessionInfo> {
     return $Call.ByID(3312312366, projectID);
@@ -1112,9 +1134,10 @@ export function SetOneOffPanelWidth(px: number): $CancellablePromise<void> {
 }
 
 /**
- * SetProjectRoots replaces a project's workspaces. Every member session follows on its
- * NEXT read — no session meta is written here at all (design §2), which is what makes this
- * a single file write however many sessions the project has.
+ * SetProjectRoots replaces a project's workspaces. This moves NO existing session — a session
+ * owns its roots from the moment it is created (see copyProjectRoots) — so it is a single file
+ * write however many sessions the project has, and the next session created here starts in the
+ * new directory.
  */
 export function SetProjectRoots(id: string, primary: string, additional: string[] | null): $CancellablePromise<string> {
     return $Call.ByID(1527886598, id, primary, additional);

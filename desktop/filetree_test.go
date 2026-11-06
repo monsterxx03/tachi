@@ -400,16 +400,21 @@ func TestPollWorkspacePathsNeedsWorkspace(t *testing.T) {
 }
 
 // TestFileTreeKeyIsTheWorkspace: the key is derived here so "what counts as the same workspace" has
-// one definition — a project drives its members (so they share one expansion), anything else is its
-// primary directory, and a session with no workspace remembers nothing at all.
+// one definition — the PRIMARY DIRECTORY. Two sessions of one project share an expansion only while
+// they look at the same tree, and one of them can move into a worktree at any time.
 func TestFileTreeKeyIsTheWorkspace(t *testing.T) {
-	// A project-driven session, and a second member of the SAME project: one key for both.
-	d, _, sid, pid := newProjectApp(t, "tachi", t.TempDir())
-	eq(t, "project key", d.fileTreeKey(sid), "p:"+pid)
-	second, err := d.sm.New("", t.TempDir())
+	// Two members of the same project, same directory: one key.
+	projectDir := t.TempDir()
+	d, _, sid, _ := newProjectApp(t, "tachi", projectDir)
+	eq(t, "project member key", d.fileTreeKey(sid), "d:"+projectDir)
+	second, err := d.sm.New("", projectDir)
 	must(t, err, "second session")
-	must(t, d.updateSessionMeta(second.ID, func(s *session.Session) { s.ProjectID = pid }), "bind second session")
-	eq(t, "the other member of the same project", d.fileTreeKey(second.ID), "p:"+pid)
+	eq(t, "the other member of the same tree", d.fileTreeKey(second.ID), "d:"+projectDir)
+
+	// …and a member that moved elsewhere is a different workspace, project or not.
+	elsewhere := t.TempDir()
+	must(t, d.updateSessionMeta(second.ID, func(s *session.Session) { s.WorkingDir = elsewhere }), "move second session")
+	eq(t, "the moved member", d.fileTreeKey(second.ID), "d:"+elsewhere)
 
 	// Ordinary sessions: their primary directory, and two unrelated ones are two keys.
 	d1, _, sid1 := newTreeApp(t, t.TempDir())

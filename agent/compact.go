@@ -122,13 +122,15 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// while the tools keep writing into the others — a root set the session no longer
 	// records (and a checkpoint manager that no longer covers them).
 	newSess.AdditionalDirs = append([]string(nil), oldSess.AdditionalDirs...)
-	// ProjectID is the same trap with a wider blast radius: the desktop resolves a
-	// member's roots from the PROJECT, and WorkingDir/AdditionalDirs above are only
-	// the snapshot taken when the session was created. Dropping the id would leave the
-	// child reading that stale snapshot as its own roots — tools, prompt and checkpoints
-	// agreeing with each other in the WRONG tree (the failure RootsFunc exists to prevent),
-	// plus a sidebar group and write guards the conversation silently left.
+	// ProjectID is the same trap with a wider blast radius: it is what puts the child in the same
+	// sidebar group and keeps the "started from project X" provenance the panel shows. (The roots
+	// above are the session's own — a project no longer decides them — so dropping the id would
+	// move the conversation to another group, not to another tree.)
 	newSess.ProjectID = oldSess.ProjectID
+	// The worktree binding travels with the directory it describes: same working tree, same branch,
+	// and the same answer to "may deleting this session remove that directory?".
+	newSess.WorktreeOf = oldSess.WorktreeOf
+	newSess.WorktreeBranch = oldSess.WorktreeBranch
 	// The pin travels with the conversation, and it MOVES rather than being copied: the
 	// sidebar's row for this conversation is the child now (the parent folds under it as
 	// 「压缩前」), so a pin left on the parent would be invisible state that also keeps an

@@ -861,7 +861,6 @@
 }
 .roots-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-2); }
 .roots-btn:disabled { opacity: 0.5; cursor: default; }
-.roots-actions { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); }
 .roots-add {
   width: 100%;
   border: 1px dashed var(--border-2);
@@ -876,21 +875,6 @@
 }
 .roots-add:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-line); }
 .roots-add:disabled { opacity: 0.5; cursor: default; }
-/* The read-only branch's explanation, and the degraded case's warning: one is a statement
-   about who owns these roots, the other is the reason the panel is editable again. */
-.roots-note {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--wash);
-  border: 1px solid var(--border);
-  font-size: var(--fs-micro);
-  color: var(--text-dim);
-  line-height: 1.5;
-}
-.roots-note-warn { border-color: var(--amber); color: var(--text); }
-/* The read-only branch keeps the same two actions, side by side. */
-.roots-actions { display: flex; gap: 8px; }
 
 /* ── Project form (create / edit) ─────────────────────────────────────────── */
 /* Its own width, and its own max-width with it: the shared box caps at 380px, which silently
@@ -1534,3 +1518,101 @@
   pointer-events: none;
   animation: panel-in 0.15s var(--ease) both;
 }
+
+/* ── Workspace panel: where the session came from, and what it can do about it ── */
+/* The tag is the WHOLE state, which is why the panel carries no explanation sentence: three
+   values (inherited / moved / project gone) and one line naming the project's current directory
+   when it matters. A reader who wants to know why a session differs from its neighbours has the
+   tag and 「恢复为项目当前工作区」 — the two facts that answer it. */
+.roots-head-row { display: flex; align-items: center; gap: 8px; }
+.roots-tag {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-softer);
+  color: var(--accent-2);
+  font-size: var(--fs-micro);
+  line-height: 1;
+  white-space: nowrap;
+}
+.roots-tag.is-changed { background: var(--amber-wash); color: var(--amber); }
+.roots-tag.is-gone { background: var(--wash); color: var(--text-faint); }
+.roots-sub code {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.roots-div { height: 1px; background: var(--border); margin: 10px 0 8px; }
+.roots-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.roots-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: var(--wash);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-micro);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.roots-action svg { flex-shrink: 0; }
+.roots-action:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.roots-action:disabled { opacity: 0.5; cursor: default; }
+/* The way back, pushed to the far end: it is the other half of the 「已改动」 tag, not a sibling of
+   the worktree action beside it. */
+.roots-action.is-primary { margin-left: auto; background: var(--accent-soft); color: var(--accent-2); }
+.roots-action.is-primary:hover:not(:disabled) { background: var(--accent-softer); }
+
+/* ── The create-worktree dialog ───────────────────────────────────────────── */
+/* Three fields and a warning at most; wide enough that a checkout path is readable, which the
+   shared 380px box is not. */
+.worktree-form { width: 460px; max-width: 460px; }
+.form-input.mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: var(--fs-label); }
+/* The branch picker keeps the app's borderless caret (--icon-caret) rather than the OS widget. */
+.form-select {
+  appearance: none;
+  background-image: var(--icon-caret);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+.form-hint { margin-top: 4px; font-size: var(--fs-micro); color: var(--text-faint); }
+.form-hint.is-warn { color: var(--amber); }
+
+/* ── 「同时删掉 worktree 目录」 in the delete dialog ───────────────────────── */
+/* A checkbox with its own small print: the sentence above it says what is going, this one says
+   what else COULD go and what stays (the branch). It sits inside the box because it is a second
+   decision about the same delete, not a separate menu item. */
+.confirm-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--wash);
+  cursor: pointer;
+}
+.confirm-check input { margin-top: 2px; accent-color: var(--accent); }
+.confirm-check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--text);
+}
+.confirm-check-text code {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.confirm-check-note { font-size: var(--fs-micro); color: var(--text-faint); }
