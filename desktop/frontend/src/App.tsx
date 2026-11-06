@@ -29,9 +29,9 @@ import { FileView } from './fileview'
 import { onAskSelection, SelectionAsk, AskQueuePanel } from './selask'
 import { useFileTree, type OpenFile } from './useFileTree'
 import { RewindChainOverlay } from './rewindchain'
-import { ProjectPalette, SessionPalette, type ProjectChoice } from './palette'
+import { ProjectPalette, SessionPalette, FilePalette, type ProjectChoice } from './palette'
 import type { OneOffRun } from './agentEvents'
-import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO, CronJobVO, CronTargetVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffVO, PeerBoardVO, ProjectVO, RewindPreviewVO, RewindTurnVO, CronJobVO, CronTargetVO, FileMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { SettingsPage } from './settings'
 import { FindBar, useFind } from './find'
@@ -475,6 +475,10 @@ function App() {
   // ⌘K: the session palette. It reads the list the sidebar already renders — no fetch — and picks
   // a conversation by TITLE; ⌘P is the project one.
   const [sessionPaletteOpen, setSessionPaletteOpen] = useState(false)
+  // ⌘O: the file palette — fuzzy search over the session's workspace, Enter opens the file in the
+  // content column. One box with the other two (same place, same keyboard), so opening it closes
+  // them and vice versa.
+  const [filePaletteOpen, setFilePaletteOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
   const [editTitle, setEditTitle] = useState('')
@@ -1123,6 +1127,14 @@ function App() {
     tree.openFile(file, file.root, file.label)
     setView('file')
   }, [tree])
+
+  // ⌘O hands over a match from the backend's own search, which carries the ABSOLUTE path and the
+  // root it belongs to (AbsPath / RootPath / Root). Opening it goes through the same door a click in
+  // the tree uses — the selection lives in useFileTree, so the two cannot disagree about what is on
+  // screen (and the remembered "file I was reading" follows either way).
+  const openSearchedFile = useCallback((f: FileMatchVO) => {
+    openTreeFile({ path: f.absPath, name: f.path.split('/').pop() || f.absPath, root: f.rootPath, label: f.root })
+  }, [openTreeFile])
 
   // 选中一段文字就能「问当前会话」：菜单浮出来的地方有两个（文件视图、附件卡片展开的预览，
   // 见 selask.tsx），而把那条消息交给会话的只有这里 —— 所以「发给谁」由 App 说了算（屏幕上这个
@@ -2409,14 +2421,14 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         // Escape before the panel's handler could see it as unclaimed.
         if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain
           || projectMenu || projectForm || confirmDelProject || editingProject || paletteOpen
-          || sessionPaletteOpen) e.preventDefault()
+          || sessionPaletteOpen || filePaletteOpen) e.preventDefault()
         setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
         setRewindCard(null); setReminderModal(null); setChain(null)
         // The project surfaces dismiss with the same gesture. The rename editor is last: it is
         // the one the user is typing in, so a stray Escape there closes the editor, not the
         // window's other layers.
         setProjectMenu(null); setConfirmDelProject(null); setEditingProject(null)
-        setPaletteOpen(false); setSessionPaletteOpen(false)
+        setPaletteOpen(false); setSessionPaletteOpen(false); setFilePaletteOpen(false)
         if (projectForm) setProjectForm(null)
         return
       }
@@ -2428,7 +2440,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
       // such rule — its navigation is Ctrl while its shortcuts are ⌘ — which is why the collision
       // only ever showed up on Linux. ⌘K stays out of it: no list key is named k, so its toggle
       // still closes the box (see the two branches below).
-      const paletteUp = (paletteOpen || sessionPaletteOpen) && !IS_MAC
+      const paletteUp = (paletteOpen || sessionPaletteOpen || filePaletteOpen) && !IS_MAC
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key === ',') { e.preventDefault(); setView('settings') }
       // The reading size. ⌘= / ⌘⇧= and ⌘- / ⌘⇧- are the same press on a US layout (the shifted
@@ -2446,13 +2458,18 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         e.preventDefault()
         setFileTreeVisible(!fileTreeOpen)
       }
-      // The two palettes are the same box in the same place, so opening one closes the other —
+      // All three palettes are the same box in the same place, so opening one closes the others —
       // and each is a toggle, so its own key closes it again.
       else if (e.key.toLowerCase() === 'p' && !e.shiftKey && !paletteUp) {
-        e.preventDefault(); setSessionPaletteOpen(false); setPaletteOpen((v) => !v)
+        e.preventDefault(); setSessionPaletteOpen(false); setFilePaletteOpen(false); setPaletteOpen((v) => !v)
       }
       else if (e.key.toLowerCase() === 'k' && !e.shiftKey) {
-        e.preventDefault(); setPaletteOpen(false); setSessionPaletteOpen((v) => !v)
+        e.preventDefault(); setPaletteOpen(false); setFilePaletteOpen(false); setSessionPaletteOpen((v) => !v)
+      }
+      // ⌘O is 「打开文件」: the third palette, and the keyboard's way into the file view (the tree is
+      // the pointer's). It is a toggle like the other two, and it closes them: same box, same place.
+      else if (e.key.toLowerCase() === 'o' && !e.shiftKey) {
+        e.preventDefault(); setPaletteOpen(false); setSessionPaletteOpen(false); setFilePaletteOpen((v) => !v)
       }
       else if (e.key.toLowerCase() === 'n' && !e.shiftKey && !paletteUp) {
         e.preventDefault()
@@ -2494,7 +2511,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, newChatLikeCurrent, askDeleteCurrent, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, view,
+    projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen, sessionPaletteOpen, filePaletteOpen, view,
     // ⌘E carries the column's own state (it is a toggle), so both halves are dependencies.
     fileTreeOpen, setFileTreeVisible,
     // Listed because it is captured by value: availability arrives once, after mount, and a closure
@@ -3804,6 +3821,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           waitingOf={waitingOf} running={runningSet}
           onPick={pickSession} onClose={() => setSessionPaletteOpen(false)} />
       )}
+      {filePaletteOpen && (
+        <FilePalette sessionId={currentId} onPick={openSearchedFile}
+          onClose={() => setFilePaletteOpen(false)} />
+      )}
       {shortcutsOpen && (
         <div className="confirm-overlay" onClick={() => setShortcutsOpen(false)}>
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
@@ -3821,6 +3842,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ ⌫</kbd><span>删除当前会话（先弹确认框，按 Enter 确认）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} K</kbd><span>会话搜索（按标题过滤，回车切到该会话）</span></div>
+              <div className="shortcut-row"><kbd>{MOD_KEY} O</kbd><span>文件搜索（模糊匹配工作区里的文件名或路径，回车打开预览）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ ↑ / ↓</kbd><span>加高 / 变矮输入框（在输入框里按）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
               <div className="shortcut-row"><kbd>{MOD_KEY} ⇧ M</kbd><span>语音输入：开始 / 结束录音（文字进输入框，不自动发送）</span></div>

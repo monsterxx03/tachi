@@ -429,6 +429,19 @@ export interface FileMatchVO {
      * from (that is what keeps a row readable — "[shared-lib] src/x.go").
      */
     "path": string;
+
+    /**
+     * AbsPath is the match itself. The @-picker never needs it (it inserts Ref),
+     * but the file palette OPENS the row — and a relative path resolved against
+     * the wrong root would show a same-named file from another tree.
+     */
+    "absPath": string;
+
+    /**
+     * RootPath is the absolute directory AbsPath is relative to, with the label in
+     * Root: the pair a caller needs to open the file the way the tree would.
+     */
+    "rootPath": string;
     "isDir": boolean;
 
     /**
