@@ -11,6 +11,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AgentService, type FilePreviewVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { CodeView, TEXT_HIGHLIGHT_MAX } from './codeview'
 import { fmtBytes, toLocalAsset, toLocalPath } from './lib'
 import { revealFileInTree } from './filereveal'
 import { REVEAL_LABEL } from './platform'
@@ -34,11 +35,9 @@ export const KIND_ICON: Record<string, string> = {
   missing: '⚠️',
 }
 
-// TEXT_HIGHLIGHT_MAX is where a text preview stops being tokenised: highlight.js
-// is linear but not free (roughly a second per megabyte), and a wall of colour is
-// not what a 1MB log is for. Past this the same content is shown as plain,
-// copyable text.
-const TEXT_HIGHLIGHT_MAX = 256 * 1024
+// The cap on tokenising a text preview and the reader that draws one live in
+// codeview.tsx: the reading surfaces render through it, and the card's compact
+// preview reads the same cap from there — one number, not two.
 
 // attachmentPath resolves the path the way the SendFile tool did: an absolute one
 // as-is, a relative one against the session's working directory — the model may
@@ -151,7 +150,26 @@ export function FileBody({ meta, path, name, variant = 'card', onExpand }: {
         </div>
       )
     case 'markdown':
+      return (
+        <div className={frame.doc}>
+          {note}
+          <MarkdownBlock text={meta.text || ''} workDir={dirOf(path)} />
+          {expand}
+        </div>
+      )
     case 'text':
+      // A text file is SOURCE, and a surface the reader opened a file in draws it as source
+      // (codeview.tsx): line numbers, lines that are not re-broken under them, the whole column.
+      // The CARD keeps the compact quoted-code look — it is a glance at the file, not the place
+      // the reader came to read it.
+      if (variant !== 'card') {
+        return (
+          <>
+            {note}
+            <CodeView text={meta.text || ''} language={meta.language} />
+          </>
+        )
+      }
       return (
         <div className={frame.doc}>
           {note}
@@ -308,10 +326,10 @@ function FileFullscreen({ file, path, meta, onClose }: {
   )
 }
 
-// AttachmentText renders the text kinds: markdown as markdown (mermaid fences
-// drawn — a diagram in a README is usually the point), everything else as
-// highlighted source. Shared by the inline preview and the lightbox so the two
-// cannot drift apart.
+// AttachmentText renders the text kinds for the CARD's inline preview: markdown as markdown
+// (mermaid fences drawn — a diagram in a README is usually the point), everything else as
+// highlighted source through the reply pipeline. The reading surfaces (the file view and the
+// lightbox) do not come through here — a file opened to be read is source, and gets codeview.tsx.
 function AttachmentText({ path, meta }: { path: string; meta: FilePreviewVO }) {
   const text = meta.text || ''
   if (meta.kind === 'markdown') return <MarkdownBlock text={text} workDir={dirOf(path)} />

@@ -40,6 +40,11 @@ const HL_CURRENT = 'tachi-find-current'
 // it holds the query in its own text nodes, and a hit on the word being typed is noise.
 const BAR_SELECTOR = '.find-bar'
 
+// SKIP_SELECTOR marks text that is drawn BESIDE a document rather than being part of it. The code
+// reader's line numbers (codeview.tsx) are the one case today: the reader's query is about the
+// file, and a hit on every "12" would bury the one they meant.
+const SKIP_SELECTOR = '[data-find-skip]'
+
 // findRanges is one Range per occurrence of `query` under `root`, in document order. The match is
 // case-insensitive and stays within a single text node: a hit spanning inline markup (half a word
 // inside a <code> span) is missed, the trade every find UI without a text extractor makes. Worth
@@ -59,6 +64,7 @@ function findRanges(root: HTMLElement, query: string, scope?: string): Range[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const text = node as Text
     if (!text.data || !text.parentElement || text.parentElement.closest(BAR_SELECTOR)) continue
+    if (text.parentElement.closest(SKIP_SELECTOR)) continue
     if (scope && !text.parentElement.closest(scope)) continue
     const hay = text.data.toLowerCase()
     let at = hay.indexOf(needle)

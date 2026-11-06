@@ -89,6 +89,13 @@
   if (!(await smoke.waitFor('.file-view', '内容列换成文件视图', 8000))) return smoke.finish()
   const codeText = await smoke.waitText('.file-view', 'package main', 8000)
   smoke.check('代码文件的内容显示出来了', !!codeText, smoke.text('.file-view').slice(0, 120))
+  // 一个打开来「读」的文件画成代码阅读器（codeview.tsx）：行号是一列真 DOM，而这不再是
+  // 回答里那种带框的代码块（.code-wrap）。两条一起钉，因为「看起来像代码」这一条单看是
+  // 会绿的 —— 换掉的正是那个外壳。
+  const lines = smoke.qa('.file-view .codeview .cv-ln')
+  smoke.check('代码文件画成阅读器：带行号（不是回答里那种代码块）',
+    !!smoke.q('.file-view .codeview') && !smoke.q('.file-view .code-wrap') && lines.length >= 3,
+    '行号=' + lines.length + ' code-wrap=' + !!smoke.q('.file-view .code-wrap'))
   smoke.check('文件视图立着时树仍然在（这次改形态的原因）', !!smoke.q('.filetree-panel'), '')
   smoke.check('会话被 inert 而不是被卸载（草稿与滚动位置靠这个活着）',
     !!smoke.q('.chat') && smoke.q('.chat-covered')?.hasAttribute('inert') === true,
@@ -234,7 +241,7 @@
     // 一行是"行号 + 符号 + 文本"三块，所以拼起来整份去找那一句，别只看第一行的开头。
     return { text: smoke.allText('.file-view .diff-line.is-add').join(' ') }
   }, '改动清单里点开一个文件，内容列显示的是 diff', 10000)
-  smoke.check('点开有改动的文件直接显示 diff，不显示预览', !!diffShown && !smoke.q('.file-view .fileview-doc'),
+  smoke.check('点开有改动的文件直接显示 diff，不显示预览', !!diffShown && !smoke.q('.file-view .fileview-doc, .file-view .codeview'),
     diffShown ? diffShown.text : smoke.text('.file-view').slice(0, 120))
   smoke.check('diff 里是这次真正改的那一行', !!diffShown && diffShown.text.indexOf('from the agent') >= 0,
     diffShown ? diffShown.text : '(没有新增行)')
@@ -268,7 +275,7 @@
   // 反过来也要有出路：diff 是一条关于"此刻"的话，文件本身仍然是可读的。
   const previewBtn = smoke.qa('.fileview-head .file-btn').filter((b) => smoke.text(b) === '预览')[0]
   if (previewBtn) previewBtn.click()
-  const previewDoc = await smoke.waitFor(() => (smoke.q('.file-view .fileview-doc') ? true : null),
+  const previewDoc = await smoke.waitFor(() => (smoke.q('.file-view .fileview-doc, .file-view .codeview') ? true : null),
     'diff 头部切回文件本身', 8000)
   smoke.check('diff 头部能切回文件本身（预览）', !!previewDoc && !smoke.q('.file-view .fileview-diff'),
     previewDoc ? '' : smoke.text('.file-view').slice(0, 120))

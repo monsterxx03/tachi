@@ -330,6 +330,97 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .fileview-doc.is-table { max-width: 100%; padding: 16px 20px 32px; }
 .fileview-frame { display: block; width: 100%; height: 100%; min-height: 70vh; border: 0; }
 .fileview-img { display: block; max-width: 100%; margin: 0 auto; padding: 14px 0; cursor: zoom-in; }
+
+/* ── 代码阅读器（codeview.tsx）────────────────────────────────────────────────
+   一个「打开来读」的文本文件不取阅读量度：代码的行宽是自己的事，被 --reading-width
+   收窄只会让长行更早开始横向滚动。它拿整列，铺在自己的纸面上 —— 行号要有一块不透明
+   的底才能在横向滚动时压住从下面经过的代码，而这块底在文件视图和全屏浮层里是同一张纸。
+   行的间距与字号在 --cv-line 一处：行号列、行高、空行的高度都按它算。 */
+.codeview {
+  --cv-line: 20px;
+  /* 纸面铺满这一列：短文件也不该在自己下面留一块别的颜色（文件视图的底是 --app-bg）。宽度
+     也取内容宽 —— 它随内容一起横向滚动，若只有视口那么宽，滚到右边就会露出一条别人的底色。 */
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  background: var(--panel-solid);
+  color: var(--text);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: var(--fs-label);
+  line-height: var(--cv-line);
+  padding-bottom: 40px;
+}
+/* 工具栏 sticky：读一份长文件时「折行 / 复制」不该跟着代码滚走。它和 ⌘F 的查找条分居两侧
+   （本条靠左、查找条浮在右上），所以两者同时出现时不打架。 */
+.cv-bar {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: var(--z-base);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 10px;
+  min-height: 28px;
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--border-2);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+.cv-lang { letter-spacing: 0.02em; }
+.cv-count { color: var(--text-faint); }
+/* 工具靠左排，不推到右边：那半条是 ⌘F 的查找条浮着的地方（layout.css 的 .find-bar.is-view，
+   top:10 / right:22），两者同时出现时谁也别压着谁。 */
+.cv-tools { display: inline-flex; align-items: center; gap: 2px; }
+.cv-tool {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--fs-micro);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.cv-tool:hover { background: var(--accent-soft); color: var(--accent-2); }
+.cv-tool[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-2); }
+.cv-tool.is-done { color: var(--green); }
+/* 一行 = 左列行号 + 右列那一行源码。整行宽度由最长的那行撑开（max-content），于是短的
+   文件也占满整列（min-width），长的文件让外面的 .fileview-body 横向滚动。 */
+.cv-line {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  min-height: var(--cv-line);
+}
+/* 行号跟着横向滚动 pin 在左边，否则长行一滚，读者就不知道自己在第几行。它不进复制、不进
+   ⌘F（data-find-skip，见 find.tsx），因为行号是画出来的标尺，不是文件的内容。 */
+.cv-ln {
+  position: sticky;
+  left: 0;
+  flex: 0 0 auto;
+  width: calc(var(--cv-gutter) + 22px);
+  padding-right: 10px;
+  text-align: right;
+  color: var(--text-faint);
+  background: var(--panel-solid);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+.cv-src { flex: 0 0 auto; white-space: pre; padding-right: 24px; }
+/* 悬停标一行：底色叠在不透明的纸面上（背景层 + 渐变），行号那一格跟着一起亮，否则横向滚动
+   时行号的底会把这一行切成两段。 */
+.cv-line:hover { background-image: linear-gradient(var(--hover), var(--hover)); }
+.cv-line:hover .cv-ln { background-image: linear-gradient(var(--hover), var(--hover)); }
+/* 折行是读者对这份文件的决定：长行换行显示，行号那一格仍然钉着。折行时纸面回到列宽 ——
+   内容已经不再横向溢出，max-content 只会让它比窗口还宽。 */
+.codeview.is-wrapped { width: auto; }
+/* 折行时源码那一格必须能被压窄（flex-grow/shrink 都放开），否则它按自己最长的那行定宽，
+   换行永远不会发生 —— flex-shrink: 0 是「不折行」时那个宽度成立的另一半。 */
+.codeview.is-wrapped .cv-src { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.codeview.is-wrapped .cv-line { width: auto; }
 .fileview-empty { padding: 40px 24px; color: var(--text-faint); font-size: var(--fs-label); line-height: 1.7; }
 .fileview-hint { margin-top: 6px; font-size: var(--fs-meta); }
 /* 一个文件的改动（与 git HEAD 对照）：行本身是 diff.tsx 的 DiffLines，这里只给它一条说"这是什么
