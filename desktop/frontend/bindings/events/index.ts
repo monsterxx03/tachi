@@ -44,9 +44,9 @@ export const AgentSessionsChanged = "agent:sessions_changed";
 export const AgentState = "agent:state";
 
 /**
- * Name of the custom event "launcher:icons".
+ * Name of the custom event "launcher:changed".
  */
-export const LauncherIcons = "launcher:icons";
+export const LauncherChanged = "launcher:changed";
 
 /**
  * Name of the custom event "launcher:open".

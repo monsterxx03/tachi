@@ -167,3 +167,12 @@ html.is-launcher #root {
 .launcher-hotkey {
   opacity: 0.8;
 }
+
+/* A launch that failed says so in the hint row, where the reader is already looking — the panel
+   deliberately stays open for it (see launcher.go's launch). */
+.launcher-error {
+  color: var(--red, #ff6b6b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

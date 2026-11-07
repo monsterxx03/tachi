@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -174,5 +175,48 @@ func TestListDropsEverythingWhenNothingMatches(t *testing.T) {
 	l.apps = []*launcherApp{appFixture("Zed")}
 	if items := l.list("微信"); len(items) != 0 {
 		t.Fatalf("got %d rows, want none", len(items))
+	}
+}
+
+// The panel before anything is typed is a SHORT list of what this machine actually launches — not
+// the whole library. Typing is the way to everything else.
+func TestListIdleShowsAFewMostUsed(t *testing.T) {
+	l := newLauncher()
+	for i := 0; i < 20; i++ {
+		l.apps = append(l.apps, appFixture(fmt.Sprintf("App %02d", i)))
+	}
+	l.usage["/Applications/App 15.app"] = launcherUse{Count: 5, Last: time.Now()}
+
+	items := l.list("")
+	if len(items) != launcherIdleResults {
+		t.Fatalf("empty query returned %d rows, want %d", len(items), launcherIdleResults)
+	}
+	if items[0].Name != "App 15" {
+		t.Errorf("first row is %q, want the used app", items[0].Name)
+	}
+
+	// A typed query is not held to that number: the point of the short idle list is that typing
+	// reaches the rest.
+	if typed := l.list("app"); len(typed) != 20 {
+		t.Errorf("query returned %d rows, want all 20", len(typed))
+	}
+}
+
+// A row that failed to launch is dropped from the catalog (launcher.launch → forget), so the panel
+// stops offering an app that is no longer there.
+func TestForgetDropsAnApp(t *testing.T) {
+	l := newLauncher()
+	gone := appFixture("Gone")
+	l.apps = []*launcherApp{gone, appFixture("Alive")}
+	l.icons[gone.Path] = "/tmp/icon.png"
+
+	l.forget(gone.Path)
+
+	items := l.list("")
+	if len(items) != 1 || items[0].Name != "Alive" {
+		t.Fatalf("catalog after forget = %v, want only Alive", items)
+	}
+	if _, ok := l.icons[gone.Path]; ok {
+		t.Error("the forgotten app kept its icon entry")
 	}
 }

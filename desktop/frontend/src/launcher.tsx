@@ -45,10 +45,14 @@ function LauncherBox() {
   const [items, setItems] = useState<LauncherItem[]>([])
   const [selected, setSelected] = useState(0)
   const [hotkey, setHotkey] = useState<LauncherHotkeyVO>({ shortcut: '' })
-  // Icons are drawn in the background (see launcher.go's generateIcons), so the list may arrive
-  // first. A bump re-lists — without it a panel opened in the first seconds of a run would keep its
-  // letter tiles until the next press.
-  const [iconsDrawn, setIconsDrawn] = useState(0)
+  // The catalog is refreshed in the background (see launcher.go's refreshAsync): icons get drawn,
+  // an app installed a minute ago appears. A bump re-lists — without it a panel opened in the first
+  // seconds of a run would keep its letter tiles, and a freshly installed app would be missing until
+  // the next press.
+  const [catalogVersion, setCatalogVersion] = useState(0)
+  // What went wrong with the last Enter. It is the ONLY feedback a failed launch can give: the panel
+  // stays open precisely so this line has somewhere to be said (see launcher.go's launch).
+  const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   // Every query is answered asynchronously, and a fast typist can have three in flight: only the
@@ -60,7 +64,7 @@ function LauncherBox() {
     LauncherService.Hotkey()
       .then(setHotkey)
       .catch(() => setHotkey({ shortcut: '' }))
-    const off = Events.On('launcher:icons', () => setIconsDrawn((n) => n + 1))
+    const off = Events.On('launcher:changed', () => setCatalogVersion((n) => n + 1))
     return () => off()
   }, [])
 
@@ -88,6 +92,8 @@ function LauncherBox() {
         if (query !== lastQueryRef.current) {
           lastQueryRef.current = query
           setSelected(0)
+          // A fresh query is a fresh attempt: yesterday's failure is not about what is being typed.
+          setError('')
         } else {
           setSelected((current) => Math.min(current, Math.max(0, next.length - 1)))
         }
@@ -95,7 +101,7 @@ function LauncherBox() {
       .catch(() => {
         if (asked === answeredRef.current) setItems([])
       })
-  }, [filter.committed, iconsDrawn])
+  }, [filter.committed, catalogVersion])
 
   // The window follows the list: a query that leaves two matches must not leave a tall empty
   // panel behind, and a full list must not be a window nobody can scroll.
@@ -111,8 +117,13 @@ function LauncherBox() {
 
   const launch = useCallback((item: LauncherItem | undefined) => {
     if (!item) return
-    // The backend hides the panel first and starts the app second, so the app is not behind us.
-    LauncherService.Launch(item.path).catch(() => {})
+    LauncherService.Launch(item.path).catch((err: unknown) => {
+      // The backend starts the app and only then closes the panel, so a rejection means the panel
+      // is still up and this is the moment to say why nothing happened.
+      setError(describeLaunchError(err))
+      // The row is probably gone (uninstalled/moved) — re-list so it stops offering itself.
+      setCatalogVersion((n) => n + 1)
+    })
   }, [])
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -172,7 +183,16 @@ function LauncherBox() {
         />
       </div>
 
-      <div className="launcher-list" ref={listRef} role="listbox">
+      <div
+        className="launcher-list"
+        ref={listRef}
+        role="listbox"
+        // Clicking the empty part of the list dismisses the panel, the same as clicking outside it
+        // or pressing Esc: a launcher whose blank area swallows clicks feels stuck.
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) LauncherService.Hide().catch(() => {})
+        }}
+      >
         {items.map((item, index) => (
           <div
             key={item.path}
@@ -200,16 +220,30 @@ function LauncherBox() {
       </div>
 
       <div className="launcher-hint">
-        <span>
-          <kbd>↑</kbd>
-          <kbd>↓</kbd> 选择 <kbd>⏎</kbd> 打开 <kbd>esc</kbd> 关闭
-        </span>
+        {error ? (
+          <span className="launcher-error" role="status">
+            {error}
+          </span>
+        ) : (
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> 选择 <kbd>⏎</kbd> 打开 <kbd>esc</kbd> 关闭
+          </span>
+        )}
         <span className="launcher-hotkey">
           {hotkey.error ? `${hotkey.shortcut} 被占用` : hotkey.shortcut}
         </span>
       </div>
     </div>
   )
+}
+
+// describeLaunchError turns what the binding rejected with into the sentence the hint row shows.
+// The backend's message is already a plain sentence (it knows the app's name); this only strips the
+// wrapper the binding layer puts in front of it.
+function describeLaunchError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '')
+  return raw.replace(/^Error:\s*/, '') || '这个应用没能启动'
 }
 
 // AppTile is an app's picture — the bundle's real icon when the backend has drawn one, else a

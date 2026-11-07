@@ -101,9 +101,9 @@ func init() {
 	// The launcher panel just came up: its page clears the box and re-ranks against an empty
 	// query (see launcher.go's show).
 	application.RegisterEvent[string](launcherOpenEventName)
-	// The panel's icons were just drawn (they happen after the list is already usable): an open
-	// panel re-lists, a closed one does not care.
-	application.RegisterEvent[string](launcherIconsEventName)
+	// The catalog got better — icons drawn, or an application installed/updated/removed since the
+	// panel listed. An open panel re-lists; a closed one does not care.
+	application.RegisterEvent[string](launcherChangedEventName)
 	// A scheduled turn just started: its user bubble (the backend never types
 	// into a conversation the way a person does) plus enough detail for the
 	// pending bar to say 「等定时任务结束后发送」.

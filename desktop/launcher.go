@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -38,8 +39,9 @@ const (
 	launcherURL = "/?window=launcher"
 
 	launcherWindowWidth = 660
-	// launcherWindowHeight is the panel's ceiling: enough rows to scroll, not a window.
-	launcherWindowHeight = 420
+	// launcherWindowHeight is the panel's ceiling: launcherIdleResults rows plus the two fixed bars,
+	// i.e. a longer query scrolls this many and no more.
+	launcherWindowHeight = 460
 	// launcherWindowMinHeight is one input row plus the hint line — what an empty query needs.
 	launcherWindowMinHeight = 120
 	// launcherTopInset is how far below the screen's work area the panel's top edge sits. It is
@@ -49,6 +51,14 @@ const (
 	// launcherMaxResults bounds what a query can return. The window scrolls; this is only the
 	// point past which a list stops helping.
 	launcherMaxResults = 200
+	// launcherIdleResults is what an EMPTY query shows. Before anything is typed the panel is a
+	// short list of what this machine actually launches — not the whole library: a wall of rows
+	// says nothing about what to do next, and typing is the way to reach everything else.
+	launcherIdleResults = 8
+	// launcherScanInterval is the least time between two directory rescans. Every press asks for
+	// one (a newly installed app should simply be there), and the interval is what keeps a hand
+	// drumming the hotkey from turning into a scan loop.
+	launcherScanInterval = 2 * time.Second
 
 	// launcherOpenEventName tells the panel's page it just came up: clear the box, focus it, and
 	// re-rank against the empty query. Emitting an unregistered event is silently dropped, so it
@@ -71,9 +81,9 @@ const (
 	// launcherIconPixels is the icon's size on disk. The panel draws it at 28 CSS points, so this
 	// is a 2x/3x asset with room to spare, and small enough that a whole library is a few MB.
 	launcherIconPixels = 96
-	// launcherIconsEventName tells an open panel that icons arrived (they are drawn in the
-	// background, after the list is already usable). Registered in main.go's init.
-	launcherIconsEventName = "launcher:icons"
+	// launcherChangedEventName tells an open panel that the catalog got better — icons drawn, or an
+	// application installed/updated/removed since it listed. Registered in main.go's init.
+	launcherChangedEventName = "launcher:changed"
 )
 
 // LauncherItem is one row of the panel: the name to draw, and the bundle it belongs to. The path is
@@ -187,6 +197,12 @@ type launcher struct {
 	// there and rows without an entry draw their letter tile.
 	icons map[string]string
 
+	// scanMu guards the rescan's bookkeeping — whether one is running, and when the last one
+	// finished. It is NOT mu: a scan holds nothing and must never wait behind a List.
+	scanMu    sync.Mutex
+	scanning  bool
+	scannedAt time.Time
+
 	// hotkey and hotkeyErr are what was asked for and why it did not take. The panel shows the
 	// failure: a launcher whose key is owned by Spotlight must say so, not look broken.
 	hotkey    string
@@ -254,10 +270,7 @@ func (l *launcher) install(app *application.App) {
 	})
 
 	l.registerHotkey()
-	go func() {
-		l.refreshCatalog()
-		l.generateIcons()
-	}()
+	l.refreshAsync()
 }
 
 // registerHotkey binds the system-wide key. A failure is NOT fatal: the tray item is the other way
@@ -298,6 +311,9 @@ func (l *launcher) show() {
 	l.window.Show()
 	l.window.Focus()
 	l.app.Event.Emit(launcherOpenEventName, "")
+	// An app installed since the last press should simply be there. The scan is cheap enough to
+	// ask for every time (see launcherScanInterval) and runs in the background.
+	l.refreshAsync()
 }
 
 func (l *launcher) hide() {
@@ -306,18 +322,43 @@ func (l *launcher) hide() {
 	}
 }
 
-// place puts the panel where it is looked for: centred on the primary screen, its top edge a fixed
-// distance down. Called on every show, because the screen a person is on can change between two
-// presses.
+// place puts the panel where it is looked for: centred on the screen the POINTER is on, its top edge
+// a fixed distance down. Called on every show, because both the screen a person is on and the number
+// of screens can change between two presses.
+//
+// Following the pointer rather than the main window is the whole point: the reader presses the key
+// while looking at the screen they are working on, and a panel that opens somewhere else costs them
+// a head turn — the same reason Spotlight appears where the mouse is.
 func (l *launcher) place() {
 	width, height := launcherWindowWidth, l.currentHeight()
-	x, y := 0, launcherTopInset
-	if screen := l.app.Screen.GetPrimary(); screen != nil {
-		x = screen.WorkArea.X + (screen.WorkArea.Width-width)/2
-		y = screen.WorkArea.Y + launcherTopInset
-	}
+	area := l.targetWorkArea()
+	x := area.X + (area.Width-width)/2
+	y := area.Y + launcherTopInset
 	l.window.SetSize(width, height)
 	l.window.SetPosition(x, y)
+}
+
+// targetWorkArea is the work area of the screen under the pointer, or the primary screen's when the
+// platform cannot say where the pointer is.
+func (l *launcher) targetWorkArea() application.Rect {
+	primary := application.Rect{}
+	if screen := l.app.Screen.GetPrimary(); screen != nil {
+		primary = screen.WorkArea
+	}
+	px, py, ok := launcherCursor()
+	if !ok {
+		return primary
+	}
+	for _, screen := range l.app.Screen.GetAll() {
+		if screen == nil {
+			continue
+		}
+		b := screen.Bounds
+		if px >= b.X && px < b.X+b.Width && py >= b.Y && py < b.Y+b.Height {
+			return screen.WorkArea
+		}
+	}
+	return primary
 }
 
 func (l *launcher) currentHeight() int {
@@ -378,8 +419,13 @@ func (l *launcher) list(query string) []LauncherItem {
 		}
 		return hits[i].app.Name < hits[j].app.Name
 	})
-	if len(hits) > launcherMaxResults {
-		hits = hits[:launcherMaxResults]
+	limit := launcherMaxResults
+	if q == "" {
+		// Nothing typed yet: what this machine actually launches, and no more.
+		limit = launcherIdleResults
+	}
+	if len(hits) > limit {
+		hits = hits[:limit]
 	}
 
 	items := make([]LauncherItem, len(hits))
@@ -394,15 +440,63 @@ func (l *launcher) list(query string) []LauncherItem {
 	return items
 }
 
-// launch hides the panel first and starts the app second. The order matters: the panel is a
-// floating window, and starting an app while it is still up leaves that app behind the panel.
+// launch starts an app and then closes the panel.
+//
+// The order is launch-then-hide, and both halves are deliberate:
+//   - the bundle is checked for BEFORE anything happens, because an app that has been uninstalled
+//     still sits in the cache until the next scan — pressing Enter on it would otherwise hide the
+//     panel and leave the reader staring at nothing, unable to tell a slow launch from a dead row;
+//   - the panel closes only after the launch succeeded, so a failure can still be said out loud in
+//     the one place the reader is looking. A panel that hides first has already spent its voice.
 func (l *launcher) launch(path string) error {
-	l.hide()
-	if err := openApp(path); err != nil {
-		return err
+	name := l.knownName(path)
+	if _, err := os.Stat(path); err != nil {
+		l.forget(path)
+		return fmt.Errorf("「%s」找不到了，可能已经卸载或移动", name)
 	}
+	if err := openApp(path); err != nil {
+		return fmt.Errorf("「%s」没能启动：%w", name, err)
+	}
+	l.hide()
 	l.recordUse(path)
 	return nil
+}
+
+// knownName is the row's title, for a message about it after it is gone.
+func (l *launcher) knownName(path string) string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, app := range l.apps {
+		if app.Path == path {
+			return app.Name
+		}
+	}
+	return filepath.Base(path)
+}
+
+// forget drops a bundle from the catalog because it is no longer there.
+//
+// Both containers are REPLACED, never edited: a List call hands the slice and the icon map it read
+// out to code that runs outside the lock, so deleting a row in place would either hand it a
+// half-built slice or, for the map, race with its reads outright. A fresh map per forgotten app is
+// a few hundred entries — cheaper than the bug.
+func (l *launcher) forget(path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	kept := make([]*launcherApp, 0, len(l.apps))
+	for _, app := range l.apps {
+		if app.Path != path {
+			kept = append(kept, app)
+		}
+	}
+	l.apps = kept
+	icons := make(map[string]string, len(l.icons))
+	for p, icon := range l.icons {
+		if p != path {
+			icons[p] = icon
+		}
+	}
+	l.icons = icons
 }
 
 // recordUse bumps one app's history and writes it. It is written on every launch rather than at
@@ -417,6 +511,40 @@ func (l *launcher) recordUse(path string) {
 	if err := fileutil.AtomicWriteJSONPrivate(launcherUsagePath(), launcherUsage{Apps: l.usage}); err != nil {
 		log.Printf("launcher: recording usage failed: %v", err)
 	}
+}
+
+// refreshAsync brings the catalog up to date in the background: what is installed now, and the
+// icons that go with it.
+//
+// It is asked for on every press (and once at startup) and answers immediately — the panel is drawn
+// from whatever the catalog says right now. A directory scan is cheap (five ReadDir calls; a plutil
+// only runs for a bundle whose Info.plist changed) but it is not instant, and no one is going to
+// wait for it before typing.
+//
+// Scanning is serialised by scanMu and rate-limited by launcherScanInterval, which is what keeps a
+// hand drumming the hotkey from becoming a scan loop.
+func (l *launcher) refreshAsync() {
+	l.scanMu.Lock()
+	if l.scanning || time.Since(l.scannedAt) < launcherScanInterval {
+		l.scanMu.Unlock()
+		return
+	}
+	l.scanning = true
+	l.scanMu.Unlock()
+
+	go func() {
+		changed := l.refreshCatalog()
+		drew := l.generateIcons()
+		l.scanMu.Lock()
+		l.scanning = false
+		l.scannedAt = time.Now()
+		l.scanMu.Unlock()
+		// Told AFTER both halves are in place, so an open panel re-lists into a finished state
+		// rather than a half-drawn one — and only when there is something new to show.
+		if (changed || drew) && l.app != nil {
+			l.app.Event.Emit(launcherChangedEventName, "")
+		}
+	}()
 }
 
 // loadCatalog answers from the cache written by the previous run, so the first press after a launch
@@ -438,11 +566,12 @@ func (l *launcher) loadCatalog() {
 }
 
 // refreshCatalog rescans the application directories and re-reads only the bundles whose Info.plist
-// changed, then writes the cache back.
-func (l *launcher) refreshCatalog() {
+// changed, then writes the cache back. It answers whether anything changed — a rescan that found the
+// same bundles must not cost a cache write or a re-list of an open panel.
+func (l *launcher) refreshCatalog() bool {
 	paths := scanAppBundles()
 	if len(paths) == 0 {
-		return
+		return false
 	}
 
 	previous := make(map[string]*launcherApp)
@@ -479,9 +608,15 @@ func (l *launcher) refreshCatalog() {
 	for i, app := range readApps(fresh) {
 		apps[position[fresh[i]]] = app
 	}
+
+	// A bundle that appeared, was updated or went away — the three things a reader would notice.
+	changed := len(fresh) > 0 || len(previous) != len(apps)
 	l.replaceCatalog(apps)
-	l.saveCatalog(apps)
-	log.Printf("launcher: %d applications (%d re-read)", len(apps), len(fresh))
+	if changed {
+		l.saveCatalog(apps)
+		log.Printf("launcher: %d applications (%d re-read)", len(apps), len(fresh))
+	}
+	return changed
 }
 
 func (l *launcher) replaceCatalog(apps []*launcherApp) {
@@ -545,12 +680,13 @@ func launcherIconPath(appPath string) string {
 // nothing in front of every first press.
 //
 // An icon is stale when the bundle that produced it has been updated — the same Info.plist mtime the
-// catalog itself is cached against.
-func (l *launcher) generateIcons() {
+// catalog itself is cached against. It answers whether anything was drawn, which is what decides
+// whether an open panel is worth re-listing.
+func (l *launcher) generateIcons() bool {
 	dir := launcherIconDirPath()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("launcher: creating the icon directory failed: %v", err)
-		return
+		return false
 	}
 
 	l.mu.RLock()
@@ -559,7 +695,7 @@ func (l *launcher) generateIcons() {
 
 	icons := make(map[string]string, len(apps))
 	keep := make(map[string]bool, len(apps))
-	failed := 0
+	failed, drawn := 0, 0
 	for _, app := range apps {
 		path := launcherIconPath(app.Path)
 		keep[path] = true
@@ -570,6 +706,7 @@ func (l *launcher) generateIcons() {
 				failed++
 				continue
 			}
+			drawn++
 		}
 		icons[app.Path] = path
 	}
@@ -582,11 +719,7 @@ func (l *launcher) generateIcons() {
 	if failed > 0 {
 		log.Printf("launcher: %d of %d icons could not be drawn", failed, len(apps))
 	}
-	// Told AFTER the map is in place, so a panel that is already open re-lists into the finished
-	// state rather than a half-drawn one.
-	if l.app != nil {
-		l.app.Event.Emit(launcherIconsEventName, "")
-	}
+	return drawn > 0
 }
 
 // iconFresh reports whether the PNG on disk still belongs to this version of the bundle.
