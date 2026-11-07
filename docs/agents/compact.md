@@ -7,6 +7,7 @@
 | 章节 | 什么时候读 |
 | --- | --- |
 | **两个触发器，一套机制** | 你动任何前端的 `/compact`、自动压缩那次触发，或一次把工具全藏起来的运行 |
+| **裁剪（/trim）——不换会话的那条路** | 你动 `agent/trim.go`、`session/trim.go`、任一前端的 `/trim`，或有人问「为什么工具输出不见了」 |
 | **子会话的记录** | 你动 `FinalizeCompact`，或给会话 meta 加字段 |
 | **前端欠这次交接什么** | 你动某个前端的压缩命令，或 `AgentEventAutoCompact*` 的处理器 |
 
@@ -15,6 +16,17 @@
 - **手打的 `/compact` 就是一轮普通对话**，它的用户消息本身就是压缩指令（`agent/commands.BuildCompactInstruction`）——模型必须**看见**整段历史才总结得出来，侧信道调用做不到这一点。循环的自动压缩（`maybeAutoCompact`，阈值在 `compact.threshold`）是另一个触发器。两者都止于 `FinalizeCompact`：对话搬进一个**子**会话，子会话的记录以摘要和「请基于以上摘要继续对话。」开头，父会话留着压缩前的历史，两者互链（`compacted_child_id` / `compacted_parent_id`）。
 - **一次压缩运行带着 `agent.CompactRunOptions()`——两半都要，而第二半才是承重的那半。** 隐藏工具让回复保持为文本；**把本循环自己的自动压缩关掉**才是让指令留在模型眼前的那一半。陷阱：压缩运行的历史**按定义**就已经越过阈值（不然读者也不会打 `/compact`），于是循环会先在自己这一轮的顶上压缩、用摘要替换掉 `rs.Messages`——请求里就再也没有那条指令了。模型于是回答一段延续，而前端把这个回复当成摘要收下，又压缩了**第二**次：两个新会话，读者最终落在的那个，摘要是对话的一个片段。桌面冒烟场景 `compact-race` 钉住它。
 - **一次把工具全藏起来的请求，可能连模型自己的工具调用标记都当文本收回来**（某款 DeepSeek 系模型会把它原生的 `｜｜DSML｜｜` 块写进普通内容，而 Tachi 逐字渲染——没有清洗器）。无工具的运行没东西拿它去解析，所以一次无工具运行必须是「答案按构造就是文本」的那一种；`WithNoTools()` 在全仓库只有 `CompactRunOptions` 一个调用点（另一类隐藏工具的运行——节点那次受管执行——限制工具集用的是 `WithToolSet(names…)`），而它并不是把一次运行标记为压缩的东西。
+
+## 裁剪（/trim）——不换会话的那条路
+
+- **裁剪和压缩是两件事，别让它们互相冒充。** 压缩调用一次模型、把对话搬进子会话；裁剪不调模型、不动会话，只把**旧工具输出的正文**换成一行说明（`agent/trim.go` 的 `planToolResultTrim`，落盘在 `session/trim.go` 的 `TrimToolResults`）。它存在的原因是体积分布：一个 4MB 的会话里约 45% 是工具输出、约 48% 是思考块，真正的对话只有几个百分点。
+- **触发只有手动一种**（`/trim`，桌面与 TUI；channel / ACP 不在注册表里）。不要把它挂进 `maybeAutoCompact`：一次裁剪会让 provider 的前缀缓存在**第一条被裁的记录**处断开（`docs/agents/prompt-cache.md`），这次重读是花钱买空间，该由用户决定何时买。压缩则本来就要花一次 API 调用，性质不同。
+- **改写只碰它点名的行。** `FileStore.TrimToolResults` 逐行处理 messages.jsonl：只有命中的 `tool_result` 记录会被重新序列化，其余每一行都**逐字节**原样抄回。重排一个未改动的记录（`Args` 的 JSON 键序、一个浮点数）就足以让前缀从那里起漂移——这是整个操作赖以成立的那条不变量。
+- **原文必须留着。** 改写前先把整份 messages.jsonl 抄进会话目录的 `trimmed/messages-<tag>.jsonl`（在改写**之前**写，和 `truncateJSONL` 同一顺序：崩在中间只会多一份，不会少）。`TrimReport.Sidecar` 会把它报出去；TUI 的提示和桌面的通知都把这句话说给用户听。
+- **`AskUserQuestion` 的结果永远不裁**（`trimKeepTools`）。它的「输出」是用户做过的选择，模型没有别的办法再问一次；`SubAgent` / `DelegateTask` / `RemoteTask` 同样保留，那是别人已经蒸馏过的答案。其余规则：窗口是**位置**不是计数（最新 8 条结果一律不动，小结果也算在窗口里），小于 2000 字符不动，带图片的结果不论多长都算候选——裁掉图片 part 是目的之一，blob 留在 `images/` 下不删。
+- **图片另有一条按字节的规则，而且能越过那 8 条窗口**（`trimImageBudgetBytes`，4MB）。最新的那张永远留着，更旧的从新往旧按预算留；一串截图后面没有更老的结果可裁、请求却还是发不出去，这就是 413 的形状，所以近窗口里超预算的图也裁。字节从 `SessionManager.LoadImage` 问（`imageSizeLookup`，每个 ref 只读一次）。报数时 `TrimReport.BytesSaved`（图片）与 `CharsSaved`（文字）分开：一张截图在字符上只有一行说明的长度，混在一起就会报出「释放 121 字符」这种把失败说成成功的数字。
+- **记录才是真相，所以活着的 history 要跟着重来。** `agent.TrimToolResults` 读的是会话记录、改完再用 `LoadSessionHistory` 重建（和 rewind 同一个规矩），`TrimReport.History` 就是重建结果，前端直接采纳；估计值用 `reestimateAfterHistoryRewrite` 重算并丢掉锚点（它描述的是还带着那些输出的一次真实请求）。`compactEstimate` 也一起清掉。
+- **桌面的 transcript 收到 `agent:trimmed` 后会从磁盘重载**（`App.tsx`）：屏幕上的卡片还显示着已经被改写的输出，只有记录知道现在的对话长什么样——和 rewind 同一个理由。TUI 不重绘，卡片保持原样直到会话被重新加载；这不是 bug，是没做。
 
 ## 子会话的记录
 

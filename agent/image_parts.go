@@ -72,14 +72,14 @@ func rebuildParts(parts []session.Part, images *partImages) []llm.ContentPart {
 		case session.PartTypeText:
 			out = append(out, llm.ContentPart{Type: llm.ContentPartText, Text: p.Text})
 		case session.PartTypeImage:
-			data, ok := images.base64For(p)
+			sent, ok := images.base64For(p)
 			if !ok {
 				continue
 			}
 			out = append(out, llm.ContentPart{
 				Type:      llm.ContentPartImage,
-				MediaType: p.MediaType,
-				Data:      data,
+				MediaType: sent.mediaType,
+				Data:      sent.data,
 			})
 		}
 	}
@@ -98,42 +98,63 @@ func rebuildParts(parts []session.Part, images *partImages) []llm.ContentPart {
 // it.
 type partImages struct {
 	resolver ImageResolver
-	cache    map[string]string // ref → base64, as it will be sent
+	cache    map[string]sentImage // ref → payload, already fitted
 	warned   map[string]bool
 }
 
-func newPartImages(resolver ImageResolver) *partImages {
-	return &partImages{resolver: resolver, cache: map[string]string{}, warned: map[string]bool{}}
+// sentImage is one image part as it goes on the wire: base64 bytes and the type that
+// matches them, which is not necessarily the record's (a downscaled PNG becomes JPEG).
+type sentImage struct {
+	data      string
+	mediaType string
 }
 
-// base64For returns the base64 payload of one image part, false when it cannot be produced.
-func (pi *partImages) base64For(p session.Part) (string, bool) {
+func newPartImages(resolver ImageResolver) *partImages {
+	return &partImages{resolver: resolver, cache: map[string]sentImage{}, warned: map[string]bool{}}
+}
+
+// base64For returns one image part as it will be sent, false when it cannot be produced.
+//
+// A blob over the inline budget is downscaled on the way out (llm.FitImage): sessions
+// recorded before images were fitted at ingest still hold 4MB screenshots, and a
+// conversation that has already happened must not become unsendable because of it.
+// Fitting is deterministic per blob, so a rebuilt request keeps matching the one that
+// was sent and the provider's prefix cache survives.
+func (pi *partImages) base64For(p session.Part) (sentImage, bool) {
 	// The record's own bytes win when it has them: a record that has not been through the
 	// store yet (an in-memory session manager, a record being converted inside the run that
 	// produced it) carries its image inline, and asking a resolver for a blob that does not
-	// exist would drop an image we are holding.
+	// exist would drop an image we are holding. Those bytes came from a tool call in this
+	// very run, so AddImageParts already fitted them — re-decoding them here would be work
+	// with nothing to show for it.
 	if p.Data != "" {
-		return p.Data, true
+		return sentImage{data: p.Data, mediaType: p.MediaType}, true
 	}
 	if p.Ref == "" {
 		pi.warn("agent: image part carries no stored bytes, dropping it", p)
-		return "", false
+		return sentImage{}, false
 	}
 	if cached, ok := pi.cache[p.Ref]; ok {
 		return cached, true
 	}
 	if pi.resolver == nil {
 		pi.warn("agent: no image resolver for this conversion, dropping image part", p)
-		return "", false
+		return sentImage{}, false
 	}
 	raw, err := pi.resolver.LoadImage(p.Ref)
 	if err != nil {
 		pi.warn("agent: image blob unreadable, dropping image part", p, "err", err)
-		return "", false
+		return sentImage{}, false
 	}
-	encoded := base64.StdEncoding.EncodeToString(raw)
-	pi.cache[p.Ref] = encoded
-	return encoded, true
+	sent := sentImage{data: base64.StdEncoding.EncodeToString(raw), mediaType: p.MediaType}
+	if len(raw) > llm.InlineImageBytes {
+		fit := llm.FitImage(raw, p.MediaType)
+		if fit.Changed {
+			sent = sentImage{data: base64.StdEncoding.EncodeToString(fit.Data), mediaType: fit.MediaType}
+		}
+	}
+	pi.cache[p.Ref] = sent
+	return sent, true
 }
 
 // warn logs a dropped image part once per reference: a conversion that silently loses an image

@@ -479,12 +479,16 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// rebuilds this request rather than a text-only shadow of it.
 		if params != nil && len(params.pendingImages) > 0 {
 			userMsg := &messages[len(messages)-1]
-			parts := make([]llm.ContentPart, 0, 1+len(params.pendingImages))
+			// Fitted on the way in, the same as a tool's image: a pasted retina
+			// screenshot is 4MB of PNG, and what the model needs is the picture, not
+			// the resolution it cannot resolve anyway.
+			images := llm.FittedImageParts(params.pendingImages)
+			parts := make([]llm.ContentPart, 0, 1+len(images))
 			parts = append(parts, llm.ContentPart{
 				Type: llm.ContentPartText,
 				Text: userMsg.Content,
 			})
-			parts = append(parts, params.pendingImages...)
+			parts = append(parts, images...)
 			userMsg.ContentParts = parts
 		}
 		userRecordParts := RecordParts(messages[len(messages)-1].ContentParts)
@@ -1191,9 +1195,10 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 		}
 		msg := llm.Message{Role: llm.RoleSteer, Content: steerInput.Text}
 		if len(steerInput.Images) > 0 {
-			msg.ContentParts = make([]llm.ContentPart, 0, 1+len(steerInput.Images))
+			images := llm.FittedImageParts(steerInput.Images)
+			msg.ContentParts = make([]llm.ContentPart, 0, 1+len(images))
 			msg.ContentParts = append(msg.ContentParts, llm.ContentPart{Type: llm.ContentPartText, Text: steerInput.Text})
-			msg.ContentParts = append(msg.ContentParts, steerInput.Images...)
+			msg.ContentParts = append(msg.ContentParts, images...)
 		}
 		rs.append(msg)
 		a.Config.Logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", strutil.Truncate(steerInput.Text, 80))

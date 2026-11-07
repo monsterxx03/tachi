@@ -94,6 +94,7 @@ type commandRun struct {
 // registry entry without an implementation is simply not advertised.
 var desktopCommandHandlers = map[string]func(*commandRun) error{
 	"compact":     runCompactCommand,
+	"trim":        runTrimCommand,
 	"dream":       runDreamCommand,
 	commandReview: runReviewCommand,
 	commandCommit: runCommitCommand,
@@ -114,6 +115,7 @@ const (
 // one place so the split cannot drift per call site.
 var commandLane = map[string]runLane{
 	"compact":     laneTranscript,
+	"trim":        laneTranscript,
 	"sh":          laneTranscript,
 	commandReview: laneOneOff,
 	commandCommit: laneOneOff,
@@ -594,6 +596,59 @@ func runCompactCommand(c *commandRun) error {
 	// The notice deliberately carries no summary: the summary IS this command's
 	// streamed output, already in the transcript above it.
 	c.desk.emit("agent:compact_done", map[string]any{"sessionId": c.id, "oldCount": len(history)})
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// /trim
+// ---------------------------------------------------------------------------
+
+// runTrimCommand frees context in THIS session by replacing old tool outputs with a
+// one-line note — no model call, no new session (agent.TrimToolResults).
+//
+// It is the counterpart of /compact for the case the reader is in most: the window
+// is filling up, but what is filling it is not the conversation. Nothing about the
+// session's identity, files or checkpoints moves, so the only thing to hand back is
+// the rebuilt history (what a reload would produce) and the numbers for the notice.
+func runTrimCommand(c *commandRun) error {
+	res, err := c.run.agent.TrimToolResults(c.ctx)
+	if err != nil {
+		return err
+	}
+	if res.Blocked != "" {
+		return errors.New(res.Blocked)
+	}
+	if res.Trimmed == 0 {
+		// A usage answer, not an error: the turn ends normally with what the rule is,
+		// exactly like /sh with no arguments.
+		c.ech <- agent.AgentEvent{
+			Type: agent.AgentEventTextDelta,
+			TextDelta: "没有可裁剪的东西：只有较早、且较大的结果才会被裁掉；" +
+				"图片另有按体积的预算，只保留较新的几张" +
+				"（AskUserQuestion 的选择和子任务结论始终保留）。",
+		}
+		return nil
+	}
+	if res.History != nil {
+		// The next turn must send the shorter history, not the one this command just
+		// rewrote: the run holds its own copy, and only the session records changed.
+		c.desk.setRunHistory(c.id, res.History)
+	}
+	// The ring and the cost row are pushed for the same reason a rewind pushes them:
+	// the estimate was recomputed for the history that REMAINS, and the frontend only
+	// ever learns these numbers from this event.
+	c.desk.emitUsage(c.id, c.desk.currentID() == c.id, nil)
+	if c.desk.hasUI() {
+		// The transcript is reloaded from disk on this event rather than patched: the
+		// cards on screen still show the output the records no longer hold, and only the
+		// session's own records know what the conversation looks like now.
+		c.desk.emit("agent:trimmed", map[string]any{
+			"sessionId":  c.id,
+			"trimmed":    res.Trimmed,
+			"charsSaved": res.CharsSaved,
+			"bytesSaved": res.BytesSaved,
+		})
+	}
 	return nil
 }
 

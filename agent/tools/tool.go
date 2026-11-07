@@ -221,15 +221,26 @@ func WithImagePartsCarrier(ctx context.Context) context.Context {
 	return context.WithValue(ctx, imagePartsCtxKey{}, &imagePartsCarrier{})
 }
 
-// AddImageParts stores image content parts on the carrier embedded in ctx.
+// AddImageParts stores image content parts on the carrier embedded in ctx, and
+// returns them as they will be SENT — after llm.FittedImageParts has brought any
+// oversized one within the inline budget.
+//
+// This is the one door every tool-produced image walks through (the Read tool,
+// MCP screenshots), which is why the shrinking happens here rather than in each
+// of them: a retina screenshot is 4–5MB, three of those in one history is a
+// request body the provider refuses with 413, and no tool should have to know
+// that. The returned slice is what the caller should describe to the model.
+//
 // No-op if ctx was not created via WithImagePartsCarrier. Safe for tools to
 // call with nil/empty parts (carrier stays empty).
-func AddImageParts(ctx context.Context, parts []llm.ContentPart) {
+func AddImageParts(ctx context.Context, parts []llm.ContentPart) []llm.ContentPart {
+	parts = llm.FittedImageParts(parts)
 	carrier, ok := ctx.Value(imagePartsCtxKey{}).(*imagePartsCarrier)
 	if !ok {
-		return
+		return parts
 	}
 	carrier.parts = parts
+	return parts
 }
 
 // SubagentEventSink allows subagent executor to report internal tool calls

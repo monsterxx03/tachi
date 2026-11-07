@@ -637,18 +637,18 @@ func (s *convState) snapshotBreakdown() tokenbreakdown.Breakdown {
 	return s.tokenBreakdown
 }
 
-// resetAfterRewind drops the parts of the conversation state that describe a
+// resetAfterHistoryRewrite drops the parts of the conversation state that describe a
 // history this session no longer has.
 //
 // The anchor goes because it is the REAL prompt size of the last call, and that
-// call's prompt contained messages the rewind just removed: keeping it would
+// call's prompt contained messages the rewrite just removed: keeping it would
 // report a size for a conversation that is not there (the estimate, which the
 // caller recomputes right after, is the honest answer until the next call
 // anchors again). The compaction baseline goes for the same reason — it may
 // refer to a compaction that is now in the discarded future, which would hold
 // the cooldown closed and block the compaction the shorter history may still
 // need.
-func (s *convState) resetAfterRewind() {
+func (s *convState) resetAfterHistoryRewrite() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastPromptReal, s.lastPromptEstimate = 0, 0

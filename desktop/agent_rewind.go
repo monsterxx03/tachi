@@ -223,7 +223,7 @@ func (s *AgentService) ApplyRewind(id string, turn int, conversationOnly bool) s
 	}
 	// The status bar has to be re-pushed, for the same reason it is pushed at turn end: the
 	// rewind recomputed the estimate for the history that REMAINS and dropped the anchor
-	// that measured the history it removed (agent.Rewind's reestimateAfterRewind), and the
+	// that measured the history it removed (agent.Rewind's reestimateAfterHistoryRewrite), and the
 	// frontend only ever learns these numbers from this push. Without it the context ring
 	// kept pointing at the size of the conversation the rewind had just taken away, until
 	// the next turn's first API call — the same ring-lags-behind asymmetry that a long turn

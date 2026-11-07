@@ -72,6 +72,18 @@ function groupKey(g: SessionGroup<SessionItem>): string {
   return g.project?.id || LOOSE_GROUP_KEY
 }
 
+// trimFreed says what a /trim freed, in the units it was freed in. Text and images are
+// reported apart because they are different problems: "释放约 121 字符" after removing a
+// screenshot is exactly the sentence that made an oversized request look inexplicable.
+function trimFreed(chars: number, imageBytes: number): string {
+  const images = imageBytes > 0
+    ? (imageBytes >= 1024 * 1024 ? `${(imageBytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(imageBytes / 1024)} KB`) + ' 图片'
+    : ''
+  if (images && chars > 0) return `${images} + ${chars} 字符`
+  if (images) return images
+  return `${chars} 字符`
+}
+
 // ── Memoized transcript pieces ──────────────────────────────────────────────
 // Streaming replaces only the message being written (its siblings keep the
 // same object references), so memoization here means every earlier turn — and
@@ -2738,6 +2750,36 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     })
     return () => { off?.() }
   }, [updateSession, setSessionPage, composer])
+
+  // A completed /trim rewrote old tool outputs in place: the session is the same one,
+  // with the same turns, but some result cards no longer hold what they showed. The
+  // transcript is reloaded from disk for exactly the reason a rewind reloads it — the
+  // records are the only thing that knows what the conversation looks like now — and
+  // the notice says what was removed and that the original is still on disk.
+  useEffect(() => {
+    const off = Events.On('agent:trimmed', async (event) => {
+      const d = event.data as { sessionId: string; trimmed?: number; charsSaved?: number; bytesSaved?: number }
+      const page: any = await (AgentService as any).LoadSession?.(d.sessionId, PAGE_SIZE)
+      if (page?.messages) {
+        setSessionPage(d.sessionId, {
+          messages: buildTurns(page.messages), hasMore: !!page.hasMore,
+          earliestTs: page.messages[0]?.timestamp || '',
+        })
+      }
+      // Its own message rather than applyToSession: a trim does not run inside an
+      // assistant reply, so there may be no running message to attach it to.
+      updateSession(d.sessionId, (list) => [...list, {
+        id: `notice-trim-${Date.now()}`, role: 'assistant',
+        parts: [{
+          type: 'notice',
+          label: `已裁剪 ${d.trimmed ?? 0} 条旧工具输出`,
+          summary: `释放约 ${trimFreed(d.charsSaved ?? 0, d.bytesSaved ?? 0)}，原文仍在会话目录里；下一次请求会重读一遍剩余历史，之后就小了`,
+          done: true,
+        }],
+      }])
+    })
+    return () => { off?.() }
+  }, [updateSession, setSessionPage])
 
   // toggleGroup opens/closes a sidebar group — a project's, or the 无项目 bucket's, which is why it
   // takes a group KEY and not a project id. The header owns the click; the caret button keeps its

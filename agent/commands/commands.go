@@ -41,6 +41,7 @@ var Registry = []Def{
 	{Name: "thinking", Description: "Set thinking level for this session", InputHint: "none | low | medium | high | xhigh | max | default", Modes: []Mode{ModeTUI, ModeChannel}},
 	{Name: "commit", Description: "Generate commit message and commit via git", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
 	{Name: "compact", Description: "Compress conversation history into a summary", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
+	{Name: "trim", Description: "Replace old tool outputs in this session with a one-line note to free context (no LLM call)", Modes: []Mode{ModeTUI, ModeDesktop}},
 	{Name: "init", Description: "Generate .tachi.md project context file", Modes: []Mode{ModeTUI, ModeACP}},
 	{Name: "mcp", Description: "Manage MCP servers (list, toggle, reconnect, auth, profile)", InputHint: "list | toggle | reconnect | auth | profile [<name>]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "sessions", Description: "Browse and reload previous sessions", Modes: []Mode{ModeTUI}},

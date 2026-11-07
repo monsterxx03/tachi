@@ -638,6 +638,44 @@ func (m *Manager) TruncateTo(keepMessages, keepAPIRequests int, tag string) (Tru
 	return msgs, reqs, nil
 }
 
+// sessionToolResultTrimmer is the optional half of a Store: one that can rewrite
+// the content of recorded tool results in place. FileStore can; a test double that
+// keeps its sessions in memory has nothing to rewrite. Asked as an interface for
+// the same reason sessionForker is.
+type sessionToolResultTrimmer interface {
+	TrimToolResults(id string, replacements map[string]string, tag string) (TrimResult, error)
+}
+
+// TrimToolResults replaces the content of the CURRENT session's recorded tool
+// results: replacements maps a tool call id to the text that takes the place of
+// what the tool printed, and the untouched file is preserved under tag.
+//
+// It reports the same TrimResult the store does, so a caller can say how many
+// results it removed and where the original went.
+func (m *Manager) TrimToolResults(replacements map[string]string, tag string) (TrimResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return TrimResult{}, fmt.Errorf("no active session")
+	}
+	trimmer, ok := m.store.(sessionToolResultTrimmer)
+	if !ok {
+		return TrimResult{}, fmt.Errorf("this session store cannot trim tool results")
+	}
+	res, err := trimmer.TrimToolResults(m.current.ID, replacements, tag)
+	if err != nil {
+		return res, err
+	}
+	if res.Trimmed > 0 {
+		m.current.UpdatedAt = time.Now()
+		// Best-effort, like TruncateTo: the records have already changed, and
+		// failing here would report a trim that happened as one that did not.
+		_ = m.store.UpdateMeta(m.current)
+	}
+	return res, nil
+}
+
 // sessionForker is the optional half of a Store: one that can copy a
 // conversation's head into a new session. FileStore can; a test double that keeps
 // its sessions in memory has nothing to copy into. Asked as an interface rather

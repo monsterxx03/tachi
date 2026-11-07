@@ -26,6 +26,7 @@ require (
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.8.0
+	golang.org/x/image v0.44.0
 	golang.org/x/net v0.58.0
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1

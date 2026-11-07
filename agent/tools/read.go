@@ -141,16 +141,14 @@ func (t *ReadTool) readViaClient(ctx context.Context, conn acpFileReader, filePa
 	// bytes for image extensions anyway still gets the image treatment.
 	content := []byte(resp.Content)
 	if mime := detectImageMime(filePath, content); mime != "" {
-		encoded := base64.StdEncoding.EncodeToString(content)
-		AddImageParts(ctx, []llm.ContentPart{
+		sent := AddImageParts(ctx, []llm.ContentPart{
 			{
 				Type:      llm.ContentPartImage,
 				MediaType: mime,
-				Data:      encoded,
+				Data:      base64.StdEncoding.EncodeToString(content),
 			},
 		})
-		return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
-			filepath.Base(filePath), mime, len(content), len(encoded)), nil
+		return imageToolResult(filepath.Base(filePath), mime, len(content), sent), nil
 	}
 
 	// Reject other binary files.
@@ -227,16 +225,14 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	// generic binary check. This ensures images are always detected even if
 	// they happen to lack null bytes in the first 8KB (some JPEGs, etc.).
 	if mime := detectImageMime(filePath, content); mime != "" {
-		encoded := base64.StdEncoding.EncodeToString(content)
-		AddImageParts(ctx, []llm.ContentPart{
+		sent := AddImageParts(ctx, []llm.ContentPart{
 			{
 				Type:      llm.ContentPartImage,
 				MediaType: mime,
-				Data:      encoded,
+				Data:      base64.StdEncoding.EncodeToString(content),
 			},
 		})
-		return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
-			filepath.Base(filePath), mime, len(content), len(encoded)), nil
+		return imageToolResult(filepath.Base(filePath), mime, len(content), sent), nil
 	}
 
 	// Not an image — reject other binary files.
@@ -394,4 +390,25 @@ func isBlockedDevicePath(filePath string) bool {
 func isBinaryFile(content []byte) bool {
 	checkLen := min(len(content), 8000)
 	return bytes.Contains(content[:checkLen], []byte{0})
+}
+
+// imageToolResult is what the Read tool returns for an image, and it describes the
+// image that was actually SENT rather than the file that was opened.
+//
+// The two differ whenever the image was over the inline budget and AddImageParts
+// downscaled it. Saying "4724195 bytes" after sending 166KB would make the next
+// oversized-request complaint impossible to understand, so the note names both the
+// file and the smaller thing that went out.
+func imageToolResult(name, mediaType string, fileBytes int, sent []llm.ContentPart) string {
+	if len(sent) != 1 {
+		// Nothing attached (no carrier) — describe the file, which is all there was.
+		return fmt.Sprintf("[Image: %s, %s, %d bytes]", name, mediaType, fileBytes)
+	}
+	sentBytes := len(sent[0].Data) * 3 / 4
+	if sent[0].MediaType == mediaType && sentBytes == fileBytes {
+		return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
+			name, mediaType, fileBytes, len(sent[0].Data))
+	}
+	return fmt.Sprintf("[Image: %s, %s, %d bytes → 已缩放到 %d 字节的 %s 后发送]",
+		name, mediaType, fileBytes, sentBytes, sent[0].MediaType)
 }

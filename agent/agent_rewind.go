@@ -274,7 +274,7 @@ func (a *AIAgent) rewind(ctx context.Context, turn int, conversationOnly bool) (
 	if err != nil {
 		return RewindResult{Preview: preview}, fmt.Errorf("%s，但重建历史失败: %w", moved, err)
 	}
-	a.reestimateAfterRewind(ctx, history)
+	a.reestimateAfterHistoryRewrite(ctx, history)
 	a.Config.Logger.Info(ctx, "Agent: rewound",
 		"turn", turn, "target", preview.Target, "summary", describeRewindPreview(preview))
 	return RewindResult{
@@ -284,21 +284,23 @@ func (a *AIAgent) rewind(ctx context.Context, turn int, conversationOnly bool) (
 	}, nil
 }
 
-// reestimateAfterRewind recomputes the context estimate for the history that
-// remains, and drops the anchor: it describes the last call's REAL prompt, and
-// that prompt contained messages the rewind just removed.
+// reestimateAfterHistoryRewrite recomputes the context estimate for the history
+// that remains after a rewrite, and drops the anchor: it describes the last call's
+// REAL prompt, and that prompt contained what the rewrite just removed. It has two
+// callers, and the reason is the same for both — a rewind removes the tail, a trim
+// replaces tool output in the middle.
 //
 // The system prompt is taken from the session's own request log when there is a
 // surviving record — the agent does not own it (each frontend passes it in), and
 // estimating without it would under-report by the system prompt and the tool
 // schemas, which is a visible dip in the ring and an empty pair of buckets in
 // the popover right after a rewind.
-func (a *AIAgent) reestimateAfterRewind(ctx context.Context, history []llm.Message) {
+func (a *AIAgent) reestimateAfterHistoryRewrite(ctx context.Context, history []llm.Message) {
 	if sys := a.recordedSystemPrompt(); sys != "" {
 		history = append([]llm.Message{{Role: "system", Content: sys}}, history...)
 	}
 	a.EstimateAndUpdateTokens(nil, history)
-	a.conv.resetAfterRewind()
+	a.conv.resetAfterHistoryRewrite()
 }
 
 // recordedSystemPrompt is the system prompt of the newest recorded API request,
