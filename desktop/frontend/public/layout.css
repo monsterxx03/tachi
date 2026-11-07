@@ -1069,6 +1069,23 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-height: 0;
 }
+/* While a page COVERS this shell (settings / cron / remote) the shell keeps its layout but stops
+   painting: `content-visibility: hidden` skips the subtree's PAINT (and layout, which it re-runs
+   from the same DOM on the way back) while the elements stay alive — state, scroll offset and the
+   composer's draft all survive, exactly as they do under `inert`.
+
+   Why this and not "make the rails transparent": on the glass window (macOS) the rails are veils
+   over the desktop frost, so a page's own rail sitting on top of the shell's rail is TWO veils in
+   one place — a nearly solid block, and the frost shows through neither. Dropping only the veil
+   fixed that and then showed the SHELL's text through the page's rail instead: its session titles
+   were legible through 「远端机器」, which is worse than the block. The shell's job while a page is
+   up is to be preserved, not to be seen.
+
+   NOT `visibility: hidden` and not `display: none`, for the reasons in the `inert` note below. */
+.app-body.is-covered {
+  content-visibility: hidden;
+}
+
 /* The app body while the settings page is up (App.tsx sets `inert` on it). The settings view is
    fixed, opaque and covers the window, so what is behind it is not seen — but it must not be
    HIDDEN from paint either:

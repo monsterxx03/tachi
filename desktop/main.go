@@ -253,17 +253,41 @@ func main() {
 	// in the top-left while the content fills the window. InvisibleTitleBarHeight
 	// gives the top region a drag handle. There is no Linux counterpart of either,
 	// which is what Frameless answers there (see window_frame_*.go).
-	// The size, unless a scripted run asked for another one (see demoWindowSize): the smoke suite's
-	// fixtures measure layout — a panel's width against the room a specific window leaves — so the
-	// window's size is part of the fixture on that side.
+	// Where the window goes.
+	//
+	// A scripted run's size is a FIXTURE (demoWindowSize): the smoke suite measures layout — a panel
+	// is 360 wide only if the window leaves that much room — so the reader's remembered frame must
+	// not override it, and the run must not write its own fixture frame back into the reader's
+	// preferences. A real launch opens where the reader left it, and verifyFrame checks that place
+	// against the displays once Wails has told us which ones are attached.
 	windowWidth, windowHeight := demoWindowSize()
+	stored, haveStored := windowFrame{}, false
+	if !demoEnabled() {
+		stored, haveStored = startupFrame()
+	}
+
+	// Two answers from the same record: the size to open at, and the place (or the platform's own).
+	startPosition := application.WindowCentered
+	startX, startY := 0, 0
+	if haveStored {
+		windowWidth, windowHeight = stored.Width, stored.Height
+		startPosition, startX, startY = application.WindowXY, stored.X, stored.Y
+	}
+
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Tachi",
 		Width:     windowWidth,
 		Height:    windowHeight,
-		MinWidth:  900,
-		MinHeight: 600,
+		MinWidth:  minWindowWidth,
+		MinHeight: minWindowHeight,
 		Frameless: framelessWindow,
+		// The remembered place, when there is one; otherwise the platform's own choice (centred).
+		// X/Y are only read with WindowXY, so the no-memory case leaves the mode alone rather than
+		// passing coordinates it does not have. A stored SIZE wins over the default too: it is the
+		// reader's, and the fixture's size only applies to a scripted run.
+		InitialPosition: startPosition,
+		X:               startX,
+		Y:               startY,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 44,
 			// Glass on macOS: macOS frosts the desktop behind the window and the page
@@ -461,6 +485,19 @@ func main() {
 	if demoEnabled() {
 		app.Event.OnApplicationEvent(events.Common.ApplicationStarted,
 			func(*application.ApplicationEvent) { go runJsDemo(window) })
+	}
+
+	// The window opened at the frame from desktop_ui.json, but that frame was written on whatever
+	// displays the reader had THAT day. This is the first moment the screens attached now are known
+	// (Wails fills its screen cache inside the same launch event ApplicationStarted maps to), so the
+	// place is checked here and the window moved if it no longer lands anywhere grabbable. A scripted
+	// run keeps its fixture frame untouched.
+	if !demoEnabled() {
+		app.Event.OnApplicationEvent(events.Common.ApplicationStarted,
+			func(*application.ApplicationEvent) {
+				verifyFrame(window, currentScreenAreas(app))
+				desk.watchFrame(window)
+			})
 	}
 
 	// Run the application.

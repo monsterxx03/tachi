@@ -73,6 +73,31 @@ type uiState struct {
 	// 0 = 不自动关. It is a POINTER because "never set" (→ the 3-hour default) and "set to 不自动关"
 	// are different answers, and omitempty would collapse them into the same file.
 	AwakeMinutes *int `json:"awakeMinutes,omitempty"`
+	// WindowFrame is where the window was when it last went away (see window_geometry.go for why a
+	// remembered frame is checked rather than trusted). Only the WINDOWED build writes it; a headless
+	// host shares this file but has no window, so it leaves the field alone rather than clearing it.
+	WindowFrame *windowFrame `json:"windowFrame,omitempty"`
+}
+
+// SetWindowFrame records where the window was, so the next launch opens there. The caller (the
+// windowed build's frame tracker) decides WHEN that is worth a write; this only stores what it was
+// given, refusing a rectangle the window itself could never have had.
+//
+// It hangs off desktopApp rather than AgentService because it is not a frontend binding: the webview
+// never asks where the window is, the window's own events do. Everything on AgentService is callable
+// from the page; this is the app talking to itself.
+func (d *desktopApp) SetWindowFrame(f windowFrame) {
+	if f.Width < minWindowWidth || f.Height < minWindowHeight ||
+		f.Width > maxWindowWidth || f.Height > maxWindowHeight {
+		return
+	}
+	updateUIState(func(st *uiState) bool {
+		if st.WindowFrame != nil && *st.WindowFrame == f {
+			return false
+		}
+		st.WindowFrame = &f
+		return true
+	})
 }
 
 // The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it

@@ -56,6 +56,18 @@
     return el ? getComputedStyle(el).visibility : '(没有侧栏)'
   })()
   smoke.check('侧栏没有被藏起来（藏了就丢标题，issue #27）', sidebarVis === 'visible', sidebarVis)
+  // …and it must not be PAINTED either, which is a different property from being hidden: the shell's
+  // rails are veils over the window's frost, and the settings page draws its own rail in the same
+  // place. Left painting, the two veils composite into a nearly solid block; left TRANSPARENT only,
+  // the shell's own text shows through the page's rail (that was the reported bug: session titles
+  // legible across 「远端机器」). `content-visibility` skips the paint and keeps the DOM, which is the
+  // one combination that satisfies both.
+  const sidebarPaint = (() => {
+    const el = smoke.q('.app-body')
+    return el ? getComputedStyle(el).contentVisibility : '(没有 app-body)'
+  })()
+  smoke.check('侧栏所在的壳在整页下面是「不画但仍挂载」（content-visibility: hidden）',
+    sidebarPaint === 'hidden', sidebarPaint)
 
   // ── 左栏：分组与顺序都由后端给 ────────────────────────────────────────────
   const cats = smoke.qa('.settings-cat').map((b) => smoke.text(b.firstElementChild))

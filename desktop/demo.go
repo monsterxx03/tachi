@@ -119,7 +119,7 @@ const demoWindowSizeEnv = "TACHI_DEMO_WINDOW"
 // A value it cannot parse is ignored rather than failing the launch — a wrong size shows up as
 // failed geometry assertions, which is exactly what the suite is for.
 func demoWindowSize() (int, int) {
-	const defW, defH = 1200, 780
+	const defW, defH = defaultWindowWidth, defaultWindowHeight
 	v := strings.TrimSpace(os.Getenv(demoWindowSizeEnv))
 	if v == "" {
 		return defW, defH

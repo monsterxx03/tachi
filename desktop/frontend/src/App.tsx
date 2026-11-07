@@ -2385,9 +2385,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
   // something repainted the row (issue #27). `inert` leaves the paint alone, which is also what
   // keeps the transcript's scroll offset and the composer's draft alive across the round trip.
   const appBodyRef = useRef<HTMLDivElement>(null)
+  // The three views that COVER this window rather than appear inside it. One fact, read in two
+  // places (the inert effect below and the is-covered class on the shell), so the shell cannot be
+  // left painting a second veil under a page that is already drawing one.
+  const pageCovering = view === 'settings' || view === 'cron' || view === 'remote'
   useLayoutEffect(() => {
-    appBodyRef.current?.toggleAttribute('inert', view === 'settings' || view === 'cron' || view === 'remote')
-  }, [view])
+    appBodyRef.current?.toggleAttribute('inert', pageCovering)
+  }, [pageCovering])
 
   // The chat surfaces are INERT while the file view is up, for exactly the same reason and by exactly
   // the same mechanism as the settings page: that view covers them, so they must leave the tab order and
@@ -2930,7 +2934,13 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           slides under the window's own traffic lights, and the titlebar has to buy their room back
           (see the .titlebar rules in layout.css). Where there are no lights the clearance is the
           bar's own padding, so the class changes nothing — it stays on for the macOS rule. */}
-      <div className={`app-body${sidebarCollapsed ? ' sidebar-folded' : ''}`} ref={appBodyRef}>
+      {/* is-covered: a full page (settings / cron / remote) is over this shell. It still has to stay
+          MOUNTED and PAINTED (see the inert effect above), but on the glass window its rails are
+          themselves veils over the desktop, and the covering page draws its own rail right on top of
+          this one — two veils in the same place is a nearly solid block where the frost should be.
+          So while a page is up, this shell stops painting its veil and lets the page's own rail be the
+          one you see. */}
+      <div className={`app-body${sidebarCollapsed ? ' sidebar-folded' : ''}${pageCovering ? ' is-covered' : ''}`} ref={appBodyRef}>
         <aside ref={sidebarW.ref as React.RefObject<HTMLElement>}
           className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}${sidebarW.resizing ? ' is-resizing' : ''}`}
           style={sidebarW.width === null ? undefined : { width: sidebarW.width, minWidth: sidebarW.width }}>

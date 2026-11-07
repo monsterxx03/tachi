@@ -4561,6 +4561,16 @@ permissions:
 				c.check("界面上建的任务写进了 crons.json", found, "")
 			},
 		},
+		// remote-page: 远端页是**盖住整个窗口**的那类视图里最容易被忘掉的一个 —— 它把会话壳盖在
+		// 下面，而壳的导轨在 macOS 上是一层半透明罩。罩子留着画，两层面在同一处 = 近乎实色的方块；
+		// 只把罩子改透明，壳自己的会话标题就从页面的导轨里透出来（就是这条驱动存在的那个 bug）。
+		// 所以断言两个方向：盖住时壳**不画但仍挂载**，回来时标题**还在**（issue #27 的现场）。
+		{
+			name: "remote-page",
+			files: map[string]string{
+				"README.md": "# smoke\n\nremote-page scenario's working directory\n",
+			},
+		},
 		// cron-run: 定时任务真的跑了。种子是一条 `@every 2s` 的一次性任务，目标就是冒烟会话；
 		// 应用启动后调度器自己触发它，消息区和会话文件都应该出现「⏰ 快速巡检」和回答。
 		// 这一半是单元测试看不到的：它跨了调度器、桌面 run、laneCron、会话记录和一次性清理。
