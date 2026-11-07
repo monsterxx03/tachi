@@ -67,6 +67,8 @@ github.com/monsterxx03/acp-go-sdk v0.13.6-0.20260808163713-6be58aef93e8 h1:Qmmn0
 github.com/monsterxx03/acp-go-sdk v0.13.6-0.20260808163713-6be58aef93e8/go.mod h1:yKzM/3R9uELp4+nBAwwtkS0aN1FOFjo11CNPy37yFko=
 github.com/monsterxx03/go-openai v1.41.2-extrabody h1:AVr+zIn57ACPq16mO3S7X0WtnFt24UnhnWlmcpjP79k=
 github.com/monsterxx03/go-openai v1.41.2-extrabody/go.mod h1:lj5b/K+zjTSFxVLijLSTDZuP7adOgerWeFyZLUhAKRg=
+github.com/mozillazg/go-pinyin v0.21.0 h1:Wo8/NT45z7P3er/9YSLHA3/kjZzbLz5hR7i+jGeIGao=
+github.com/mozillazg/go-pinyin v0.21.0/go.mod h1:iR4EnMMRXkfpFVV5FMi4FNB6wGq9NV6uDWbUuPhP4Yc=
 github.com/openai/openai-go/v3 v3.49.0 h1:/BObwLKdgHJ3AbJ7AXK8BRDfjuTAV+eTmEQFbG86wnQ=
 github.com/openai/openai-go/v3 v3.49.0/go.mod h1:nCqcbgPr2jYDV8wiCWPA2tRL56mWXdb6QavBmBwzSis=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

@@ -634,6 +634,37 @@ export interface GitStatusVO {
 }
 
 /**
+ * LauncherHotkeyVO is what the panel needs to explain itself when the key did not take.
+ */
+export interface LauncherHotkeyVO {
+    "shortcut": string;
+    "error"?: string;
+}
+
+/**
+ * LauncherItem is one row of the panel: the name to draw, and the bundle it belongs to. The path is
+ * the identity — names are not unique (two bundles may both be called 「Xcode」) and a name is what
+ * the reader can change by renaming a file.
+ */
+export interface LauncherItem {
+    "path": string;
+    "name": string;
+
+    /**
+     * Detail is the quiet second line: the bundle's location, so two rows with one name can be
+     * told apart without opening either.
+     */
+    "detail"?: string;
+
+    /**
+     * Icon is the absolute path of this bundle's PNG (see launcherIconDir), or "" while it has not
+     * been drawn yet — the panel then shows its letter tile. A path rather than image data: the
+     * page loads it through the same /local route every other local picture uses.
+     */
+    "icon"?: string;
+}
+
+/**
  * MCPServerEntryVO is one server as the editor handles it: the RAW contents of the file
  * (config.LoadMCPConfigRaw — an absent field stays absent, so pressing save on an entry the user
  * only looked at does not write this process's defaults into a file he wrote by hand) plus the

@@ -77,6 +77,10 @@ type uiState struct {
 	// remembered frame is checked rather than trusted). Only the WINDOWED build writes it; a headless
 	// host shares this file but has no window, so it leaves the field alone rather than clearing it.
 	WindowFrame *windowFrame `json:"windowFrame,omitempty"`
+	// LauncherHotkey is the system-wide key that opens the launcher panel (launcher.go). "" = never
+	// chosen (Cmd+Space); a key another app already owns cannot be bound, and the panel itself says
+	// so rather than the launcher looking broken.
+	LauncherHotkey string `json:"launcherHotkey,omitempty"`
 }
 
 // SetWindowFrame records where the window was, so the next launch opens there. The caller (the

@@ -7,6 +7,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/monsterxx03/tachi v0.0.0
+	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v3 v3.0.0

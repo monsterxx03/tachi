@@ -98,6 +98,12 @@ func init() {
 	// openSession). Registered rather than emitted bare, like ui:theme: that is
 	// what gives the frontend a typed handler.
 	application.RegisterEvent[string](openSessionEventName)
+	// The launcher panel just came up: its page clears the box and re-ranks against an empty
+	// query (see launcher.go's show).
+	application.RegisterEvent[string](launcherOpenEventName)
+	// The panel's icons were just drawn (they happen after the list is already usable): an open
+	// panel re-lists, a closed one does not care.
+	application.RegisterEvent[string](launcherIconsEventName)
 	// A scheduled turn just started: its user bubble (the backend never types
 	// into a conversation the way a person does) plus enough detail for the
 	// pending bar to say 「等定时任务结束后发送」.
@@ -167,6 +173,10 @@ func main() {
 	defer func() { _ = hostLock.Release() }()
 
 	desk := newDesktopApp()
+	// The launcher panel (launcher.go): a second, hidden window plus a system-wide key. It is
+	// built here because it is a service the page can call, and installed below because a window
+	// cannot be created before the application exists.
+	launcherPanel := newLauncher()
 
 	// Scripted-run hooks, installed before anything can use them (both self-gate on
 	// their env var, so a normal launch is untouched): the MCP OAuth flow's browser is
@@ -188,6 +198,7 @@ func main() {
 		Description: "Tachi — AI Agent desktop companion",
 		Services: []application.Service{
 			application.NewService(&AgentService{desk: desk}),
+			application.NewService(&LauncherService{launcher: launcherPanel}),
 			application.NewService(notifyService),
 		},
 		Assets: application.AssetOptions{
@@ -319,6 +330,12 @@ func main() {
 	})
 	desk.app = app
 	desk.window = window
+
+	// The launcher panel is created after the main window so the main window is the app's first
+	// one (Dock/activation ordering), and hidden — it is shown by the global key or the tray
+	// (launcher.go).
+	launcherPanel.install(app)
+	desk.launcher = launcherPanel
 
 	// ⌘W and the red button HIDE the main window; only 退出 Tachi Desktop closes the app.
 	//

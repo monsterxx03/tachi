@@ -38,6 +38,9 @@ type windowHost struct {
 	trayAwakeNote    *application.MenuItem
 	trayAwakePresets map[int]*application.MenuItem
 	window           *application.WebviewWindow
+	// launcher is the floating panel opened by the system-wide key (launcher.go). It is a second
+	// window of this process, so the tray needs a handle on it — the key is not the only way in.
+	launcher *launcher
 	// quitting is set once the app is shutting down (see main.go's OnShutdown), and it is what
 	// lets the main window's close hook tell a USER-initiated close (which hides the window)
 	// from the one the shutdown path performs on its way out (which must go through). Without

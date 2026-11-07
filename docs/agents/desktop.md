@@ -13,6 +13,7 @@
 | **Linux 上的桌面（omarchy）** | 你在 Linux 上构建、打包或运行 desktop，或者碰托盘、打开文件、窗口边框、关窗行为——**那一节还列了那里故意没接上的东西（语音、BLE）** |
 | **徽章（设备连接与语音）** | `desktop/link/`、`desktop/badge.go` 或 `desktop/stt/` 下的任何东西——**读 `docs/agents/badge.md`，不是本文件** |
 | **桌面语音输入** | 你碰输入框的麦克风按钮或 `voice:*` 事件（`desktop/voice.go`、`composer.tsx` 里语音那一半） |
+| **桌面启动器（热键 + 应用列表）** | 你碰 `desktop/launcher*.go`、那个系统级热键、`frontend/src/launcher.tsx`，或者改「怎么算一个应用匹配」 |
 | **桌面后端（绑定与路径）** | 你碰 `AgentService`——一个方法、一条绑定、一条会话路径、一个打开/显示动作 |
 | **通知与手机推送** | 你碰 `notifierHost` / `desktop/notify*.go` / `desktop/push.go`，或者改「回合结束时叫不叫人」的那条判断——系统通知那一半在本文件下面，手机那一半见 [push.md](push.md) |
 | **保持唤醒（不让机器睡）** | 你碰 `desktop/awake*.go`、托盘里那个勾选项和它的时长，或者任何「让这台机器别睡」的东西 |
@@ -207,6 +208,21 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **按钮和 ⌘⇧M 快捷键是同一个调用**（`ToggleVoiceInput`，不是 start/stop）：方向取决于麦克风是否开着，而这件事只有 Go 知道，所以这个决定不能活在两个读滞后事件调用方里。按钮读到的那个状态是给**绘制**用的（红色脉冲、禁用等待）——绝不用于做决定。**它故意是一个应用内按键**：系统级的那种（`app.GlobalShortcut`、Carbon 热键）会从其他所有应用手里夺走这个组合，而且要等到窗口能被唤回才划得来——那是另一步，不是这一步的放大版。它的键被选成菜单栏没用掉的（`TestApplicationMenuFreesTheFrontendKeys`）：菜单加速键是在页面看到事件**之前**处理的，所以撞键就是一个死键，任何前端测试都观察不到。
 - **麦克风是第二个 TCC 权限，有自己的 plist 键**，跟语音权限并列：一个包里没有 `NSMicrophoneUsageDescription`，打开麦克风时不会拿到错误——它会被杀掉（`docs/agents/badge.md` 里那个蓝牙坑，同一类失败）。它也是授予**应用包**的，所以这个按钮只能在一个包里被行使（`make -C desktop run`）；一个裸二进制、或者 `go test`，都拿不到这个授权——这就是为什么 `desktop/stt` 自己的测试只读授权**状态**、从不录音。
 - **一次冒烟运行绝不能碰麦克风**：`TACHI_DEMO_VOICE_TEXT` 顶替采集和识别（这个环境变量名在 `itest/desktop/sandbox.go` 里又抄了一遍，那个文件不能 import 应用自己的包）。真录音会在跑套件那台机器上弹出 TCC 提示、并把房间里的一切录下来——跟 MCP OAuth 那条路拿到一个 headless fetch 是同一个理由。这个替身换掉的是音频，绝不换那些状态或事件，所以 `voice-input` 断言的是与「音频从哪来」无关的那一半。
+
+## 桌面启动器（热键呼出的应用面板）
+
+- **它是同一个进程的第二个窗口**（`desktop/launcher.go`），不是第二个程序：要的是 host lock、托盘那条兜底入口，以及下一步要接的 agent。`LauncherService` 与 `AgentService` 分开，是因为它碰不到任何会话。
+- **窗口在启动时就建好并保持隐藏**，热键只做 show/hide。每次呼出重建窗口 = 每次按都要付一次 webview 的启动成本，那是「够不够快」的全部。
+- **面板是 `MacWindowClassPanel` + `NonActivating`**：它拿到键盘但**不激活本 app**，所以隐藏时焦点自然回到原来的应用、Dock 不闪。换成普通 NSWindow 就得自己记住「刚才谁在前台」并在关闭时还回去——那是这条选项替代掉的一整块代码。面板页自己透明（`main.tsx` 加 `is-launcher`），只有 `.launcher-panel` 画不透明面。
+- **面板的配色固定是 app 的暗色那套，不跟系统。** `index.html` 的 boot 脚本按 `?window=launcher` 把 `data-theme` 钉成 `dark`（它在解析期执行，所以不会有浅色闪一帧），Go 侧同一个理由把 `Appearance` 和预绘制底色也固定成暗色。它浮在桌面上而不是活在 app 的框里，一台浅色模式的机器上长出浅色面板，会被读成另一个程序的窗口。它**不读也不写**主题偏好。
+- **图标是后台画出来的真图标，不是字母块。** `launcher_icons_darwin.go` 用 NSWorkspace 取应用图标（现代的 app 图在 `Assets.car` 里，找 `*.icns` 有一半找不到）、画进 96px 的 PNG，缓存在 `~/.tachi/launcher_icons/`，页面经 `/local` 路由加载。**画图在主线程**（`application.InvokeSync`），所以它跑在目录扫描**之后**的另一个 goroutine 里：列表先能用（字母块），图标补上时发 `launcher:icons` 让已经打开的面板重列。写文件之后必须 `stat` 一次再记账——`InvokeSync` 会把「运行时还没起来」的 panic 吞掉并返回值，信任返回值就等于记下一个不存在的文件。
+- **热键可能被系统自己占着**（Spotlight 的默认键就是 `Cmd+Space`）。注册失败**不是**致命错误：托盘有「启动器」，面板底部写「被占用」。删掉托盘那条路，等于让一个没注册成的热键看起来像功能坏了。冒烟运行**不注册**它（`demoEnabled()` 早退）——一次脚本运行绝不能抢用户机器上的系统组合键。
+- **排序的层级就是产品本身**（`launcher_match.go`）：精确 > 名字前缀 > 词首/拼音/首字母前缀 > 名字包含 > 拼音包含 > 子序列。使用频率**只在同一层内**打破平局；把频率加成掺进层级分，打 `chrome` 就会被昨天用过的另一个 app 顶掉。
+- **中文名要从 `.lproj` 读**：`微信.app` 的 Info.plist 里写的还是 `WeChat`，中文在 `Resources/zh-Hans.lproj/InfoPlist.strings`。所以名字解析走 `plutil -convert json`（系统自己的 reader，不引 plist 解析器），并把英文名和文件名一并留成别名——三种写法命中同一行。
+- **拼音按字展开多音字**：`音乐` 是 `yinyue` 不是 `yinle`，字典的第一个读音经常不是名字里那个；展开上限 `maxPinyinVariants`，超了就只用首选读音。
+- **扫哪些目录是写死的**（`/Applications`、`/System/Applications` 及它们的 `Utilities`、`~/Applications`），结果按 `EvalSymlinks` 之后的真实路径去重——cask 的 bundle 是指向 Caskroom 的链接。只有 macOS 有发现与打开的实现（`launcher_apps_darwin.go` / `_other.go`），Linux 那边是空实现。
+- **两份状态都在 `~/.tachi`**：`launcher_apps.json`（缓存，按 Info.plist 的 mtime 判断某一条是否过期）和 `launcher_usage.json`（频率与最后使用时间）。都是可手改的文件，写入走 `fileutil.AtomicWriteJSONPrivate`。
+- **一次呼出整块重挂载**（前端靠 React 的 `key` 递增）：热键本身不重置任何状态，`launcher:open` 换掉整棵子树，查询框、滚动位置和高亮才不可能活到下一次。
 
 ## 桌面后端（绑定与路径）
 

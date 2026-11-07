@@ -50,6 +50,14 @@ func setupTray(d *desktopApp) *application.SystemTray {
 	menu.Add("新会话").OnClick(func(ctx *application.Context) {
 		d.newSessionFromMenuBar()
 	})
+	// The launcher's other way in (launcher.go): the system-wide key can be owned by another app
+	// — Spotlight answers Cmd+Space until it is turned off — and a launcher with no visible door
+	// would look like it simply does not work.
+	if d.launcher != nil {
+		menu.Add("启动器").OnClick(func(ctx *application.Context) {
+			d.launcher.show()
+		})
+	}
 	menu.AddSeparator()
 	// Status readout — updated per state by refreshTray. Kept disabled so users
 	// can't accidentally activate it; it is purely informational.

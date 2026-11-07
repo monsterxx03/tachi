@@ -55,10 +55,15 @@ func WithFrontendCapabilities(sections ...string) PromptOption {
 // render them should attach it (desktop does; TUI and plain ACP clients do not),
 // otherwise the model would emit diagrams nobody can see.
 //
-// It names no diagram KINDS on purpose: `sequenceDiagram`, `stateDiagram-v2` and
-// friends are vocabulary the model already has, and the fixed prefix of every
-// request is the wrong place to re-teach it. What it does spend words on is the
-// judgment (structure vs prose) and the constraints a wrong diagram violates —
+// It names almost no diagram KINDS on purpose: `sequenceDiagram`,
+// `stateDiagram-v2` and friends are vocabulary the model already has, and the
+// fixed prefix of every request is the wrong place to re-teach it. The one
+// exception is `xychart-beta`, and it is picked for the judgment rather than the
+// syntax: the model under-uses it for number series and overshoots with it where
+// a table is the honest form — bars carry no value labels, and a second series
+// stacks instead of sitting beside the first. What the section spends words on
+// is the judgment (structure vs prose, chart vs table) and the constraints a
+// wrong diagram violates —
 // size, one idea per diagram, and quoting: which labels need it, and that a
 // quoted one takes single quotes rather than a backslash escape. Both halves of
 // that rule are things the model gets wrong unprompted — a label holding
@@ -67,7 +72,9 @@ const MermaidCapabilityPrompt = `## Diagramming (this client renders Mermaid)
 
 This client renders GitHub-flavoured Markdown and Mermaid: a fenced
 ` + "```mermaid" + ` block becomes a real, zoomable diagram. Draw one
-whenever structure is easier to see than to read — a flow, a sequence, a lifecycle, a schema, how components relate — and skip it for a single fact or a short answer, where a diagram is just noise. Keep each diagram focused: under ~15 nodes, short labels, one idea per diagram. Quote any label that holds punctuation the grammar reads — parentheses, commas, colons, square brackets — because an unquoted one ends the label early: A["merge (fast)"], B["still [SILENT] at the end"]. Inside a quoted label use single quotes, never a backslash escape: C["TrackerFor('')"]. A fence that does not parse reaches the reader as plain source, so a misquoted label costs the picture. Leave a sentence of framing before it and the takeaway after.`
+whenever structure is easier to see than to read — a flow, a sequence, a lifecycle, a schema, how components relate — and skip it for a single fact or a short answer, where a diagram is just noise. Keep each diagram focused: under ~15 nodes, short labels, one idea per diagram. Quote any label that holds punctuation the grammar reads — parentheses, commas, colons, square brackets — because an unquoted one ends the label early: A["merge (fast)"], B["still [SILENT] at the end"]. Inside a quoted label use single quotes, never a backslash escape: C["TrackerFor('')"]. A fence that does not parse reaches the reader as plain source, so a misquoted label costs the picture. Leave a sentence of framing before it and the takeaway after.
+
+For a series of numbers, a ` + "```xychart-beta" + ` fence beats both prose and a table — one series, a dozen points at most, units on both axes: x-axis ["Mon","Tue"], y-axis "ms" 0 --> 400, then bar [..] or line [..]. Two cases still belong in a compact table: values the reader has to read exactly (the bars carry no labels), and a comparison of two series (a second bar STACKS on the first instead of sitting beside it). Never plot numbers you did not read this turn.`
 
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
 // instruction hierarchy, reply language, and environment info.

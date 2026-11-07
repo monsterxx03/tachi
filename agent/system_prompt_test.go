@@ -61,6 +61,19 @@ func TestBuildSystemPromptFrontendCapabilities(t *testing.T) {
 	if !strings.Contains(withHint, "skip it for a single fact") {
 		t.Error("the hint should say when a diagram is not worth drawing")
 	}
+	// A number series is the one place a chart beats prose — but only when the
+	// shape is what matters. Both halves have to survive edits: the fence name
+	// (the model does not reach for xychart unprompted) and the two cases that
+	// belong in a table instead (bars carry no labels; a second bar stacks).
+	if !strings.Contains(withHint, "xychart-beta") {
+		t.Error("the hint should name the fence that draws a number series")
+	}
+	if !strings.Contains(withHint, "carry no labels") || !strings.Contains(withHint, "STACKS") {
+		t.Error("the hint should say which number comparisons belong in a table")
+	}
+	if !strings.Contains(withHint, "did not read this turn") {
+		t.Error("the hint should forbid plotting numbers this turn never read")
+	}
 
 	withBoth := BuildSystemPrompt("en", "", "", "USER EXTRA PROMPT", WithFrontendCapabilities(MermaidCapabilityPrompt))
 	if strings.Index(withBoth, "## Diagramming") > strings.Index(withBoth, "USER EXTRA PROMPT") {

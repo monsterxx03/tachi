@@ -19,6 +19,8 @@ declare module "@wailsio/runtime" {
             "agent:filedrop": main$0.FileDropEvent;
             "agent:sessions_changed": string;
             "agent:state": main$0.AgentState;
+            "launcher:icons": string;
+            "launcher:open": string;
             "ui:open_session": string;
             "ui:theme": string;
         }
