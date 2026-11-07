@@ -167,9 +167,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 一行的字号是**名字**那一档（侧栏的会话名 14px、diff 的文件行 12.5px）：这一列是读者要扫的
-     文件名清单，不是某个面板的第二行元信息，所以它取前者那一侧。行高跟着字号走 —— 13.5px 的字
-     塞在 24px 的盒子里会比侧栏的行显得更挤。 */
+  /* 一行的字号是**名字**那一档（--fs-ui，跟侧栏的会话名同一档）：这一列是读者要扫的文件名清单，
+     不是某个面板的第二行元信息，所以它取前者那一侧。行高跟着字号走 —— 小一档的字塞在 26px 的
+     盒子里会显得比侧栏的行更挤。 */
   height: 26px;
   padding-right: 8px;
   font-size: var(--fs-ui);
@@ -516,25 +516,36 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    where the state and the timestamp were indistinguishable neighbours. */
 .session {
   position: relative;
-  padding: 7px 10px;
+  padding: 5px 8px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  margin-bottom: 2px;
+  margin-bottom: 1px;
   transition: background 0.15s var(--ease);
 }
 .session:hover { background: var(--hover); }
-/* Active session. A single quiet fill rather than the old filled card plus accent rail: the row
-   already says which one you are in by being the only one with that wash, and the rail's job
-   (a second signal for the same fact) is what made the list look heavier than its content. The
-   rail stays for ONE case — a conversation whose turn finished while the reader was elsewhere —
-   because that row is otherwise identical to an idle one. */
-/* Active session: ONE quiet wash, and nothing else — no rail, no card, no shadow. The row says
-   which conversation is on screen by being the only one wearing that wash; a decorative bar beside
-   it was a second signal for the same fact, and in a list this dense the second signal is what read
-   as noise. (The rail that remains, below, belongs to a DIFFERENT fact: work that finished while
-   the reader was elsewhere.) */
-.session.active { background: var(--accent-soft); }
-.session.active .session-title { color: var(--text); font-weight: 560; }
+/* Active session: the native source list's selection — one flat accent fill with
+   white ink, the shape Finder and Mail use. It replaced a quiet accent wash on
+   2026-11-07: the wash said "this one" and nothing else, while a filled row is
+   what every other window on the machine does, and matching the system is most of
+   what makes a list read as native. The fill is --accent-strong, not --accent:
+   the row carries white text, and #007AFF only reaches 4.0:1 with it (see
+   base.css). Nothing else on the row may be drawn in accent ink — it would
+   disappear into the fill — so the marks are re-inked below. */
+.session.active { background: var(--accent-strong); }
+.session.active .session-title { color: var(--on-accent); font-weight: 590; }
+.session.active .session-meta { color: rgba(255, 255, 255, 0.82); }
+.session.active .session-pin,
+.session.active .session-cron { color: rgba(255, 255, 255, 0.9); }
+.session.active .session-tag { color: rgba(255, 255, 255, 0.86); border-color: rgba(255, 255, 255, 0.38); }
+/* The waiting dot stays amber (it is the one mark that asks for something) but
+   lifted: --amber is tuned to carry ink on a light plane, and on this fill it
+   would read as a dark smudge. */
+.session.active .wait-dot { background: #ffd166; }
+/* The spinner is drawn from the accent pair, i.e. the same blue as the fill.
+   On the selected row it is white-on-white unless it is re-pointed here. */
+.session.active .spin-dot {
+  background: conic-gradient(#fff 0.72turn, rgba(255, 255, 255, 0.32) 0.72turn);
+}
 /* A turn in flight in a conversation that is NOT the one on screen — or one whose work finished
    while the reader was elsewhere and which they have not opened since. This is the one case where
    nothing else on screen reports that work: the transcript belongs to another conversation, the
@@ -566,7 +577,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    different questions — the time is the per-row constant a reader scans down the list, the marks say
    what is happening right now — and one run of text answered neither at a glance. The time keeps
    --text-faint, which is the lightest grey that still clears 4.5:1 as small text (see base.css), and
-   the size stays 12.5px because this line was already the smallest text in the window at 11.5. */
+   the size takes the label step (12px), which is the floor the sidebar's second line has to clear. */
 .session-meta {
   display: flex;
   align-items: center;
@@ -698,10 +709,11 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-width: 0;
   /* A group heading, and the parent of the rows below it: it has to read LARGER than
-     .session-title (14px), or the sidebar looks like two levels of the same size. 14 vs 13.5 was
-     that failure — true on paper, invisible on screen. The gap is smaller than it was (15 vs 14)
-     because the header is no longer a card standing over the list; what has to survive is that it
-     reads as a level above, not that it reads as a different component. */
+     .session-title (--fs-ui, 13px), or the sidebar looks like two levels of the same size. 14 vs
+     13.5 was that failure — true on paper, invisible on screen. The gap is one whole step of the
+     ladder (14 vs 13) because the header is no longer a card standing over the list; what has to
+     survive is that it reads as a level above, not that it reads as a different component.
+     `sidebar-text` asserts exactly this order. */
   font-size: var(--fs-body);
   font-weight: 600;
   color: var(--text);

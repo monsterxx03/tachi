@@ -40,9 +40,9 @@
   display: flex;
   flex-direction: column;
 }
-.chat-content > .msg { margin-top: 34px; }
+.chat-content > .msg { margin-top: 20px; }
 .chat-content > .msg:first-child { margin-top: 0; }
-.chat-content > .msg-user + .msg-assistant { margin-top: 18px; }
+.chat-content > .msg-user + .msg-assistant { margin-top: 12px; }
 
 /* Shown only when the user has scrolled away from the bottom — clicking it
    re-arms auto-follow. */
@@ -71,7 +71,7 @@
 /* ── Messages ────────────────────────────────────────────────────────────── */
 .msg {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
   /* Messages and the composer below share --reading-width, centred in the
      transcript: on a maximised window the prose keeps a readable measure
@@ -102,8 +102,8 @@
 .msg-user { justify-content: flex-end; }
 
 .msg-avatar {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
   display: grid;
   place-items: center;
@@ -155,19 +155,19 @@
   box-shadow: none;
 }
 
-/* User bubble: a soft wash with dark ink, and nothing else — no border, no
-   shadow, no tail corner. It used to carry all three, which read as a card
-   dropped into a page of flat prose (the tail also pointed at an avatar that no
-   longer exists). The tonal step alone delimits it: a tint a few points deeper
-   than the content plane is enough to say "this one is mine" without competing
-   with the answer. The accent stays reserved for things you can act on. */
+/* User bubble: ONE flat neutral fill with dark ink, and nothing else — no border,
+   no shadow, no tail corner, no gradient. A gradient was the last chat-app idiom
+   here: it made the reader's message the brightest, most "designed" object on a
+   screen whose content is the answer. The tonal step alone delimits it — a block
+   one shade deeper than the plane it sits on is enough to say "this one is
+   mine" — and the accent stays reserved for things you can act on. */
 .msg-user .msg-content {
-  background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
+  background: var(--user-fill);
   color: var(--user-ink);
-  padding: 9px 13px;
-  border-radius: 14px;
+  padding: 7px 11px;
+  border-radius: var(--radius-lg);
   font-size: var(--fs-bubble);
-  line-height: 1.55;
+  line-height: 1.45;
   max-width: 520px;
   /* A pasted link has no space to break at, so the default `normal` lets it run straight out
      of the bubble (measured: a 265-char URL made the content 1733px wide inside a 520px
@@ -234,9 +234,9 @@
    comfortable to read rather than merely legible. */
 .assistant-text {
   font-size: var(--fs-prose);
-  line-height: 1.76;
+  line-height: 1.62;
   color: var(--text);
-  letter-spacing: 0.005em;
+  letter-spacing: 0.002em;
   /* Nothing in a reply is guaranteed to have a space in it: a path, a URL, a long
      identifier, a diff line pasted into prose. The default `normal` lets one of those run
      straight out of the reading column, and the bubble's own rule does not reach here (the
@@ -338,7 +338,7 @@
    messages above instead of stretching to the window edges. */
 .composer {
   border-top: 1px solid var(--border);
-  padding: 14px 26px 10px;
+  padding: 10px 20px 8px;
   background: var(--chrome-2);
   /* Same lit top edge as the titlebar — the two bars are the same plane. */
   box-shadow: inset 0 1px 0 var(--sheen);
@@ -468,7 +468,7 @@
   border-radius: var(--radius-lg);
   /* The top padding is also where the resize strip lives — that strip is an overlay
      (see .composer-resizer), so it costs the box no height of its own. */
-  padding: 8px 10px 10px;
+  padding: 6px 9px 7px;
   box-shadow: var(--shadow-1);
   transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
   /* Anchors the @-file picker, which floats above the input. */
@@ -1251,8 +1251,8 @@ button.work-dir {
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  /* 12.5px is the app's control size (see .find-input), and the diff's own text is 11.5px: an
-     index read to FIND a file may not be the smallest type on the surface. */
+  /* The label step (12px) is the app's control size (see .find-input), and the diff's own text is
+     a step below it: an index read to FIND a file may not be the smallest type on the surface. */
   font-size: var(--fs-label);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   text-align: left;

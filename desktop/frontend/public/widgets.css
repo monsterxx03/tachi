@@ -433,7 +433,7 @@
    is for. A conic gradient masked into a ring costs the same one element and gives the arc enough
    sweep and contrast to read from the corner of an eye (the track is --accent-ring, not the
    fainter -soft, so the circle itself is visible too).
-   The size stays inside the meta line's own box (14px against 12.5px text with its line-height),
+   The size stays inside the meta line's own box (14px against the 12px meta line with its line-height),
    so a turn starting or ending cannot change a row's height and shift the list under the reader —
    pinned by the sidebar-run scenario. */
 .spin-dot {

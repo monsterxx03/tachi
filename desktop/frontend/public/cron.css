@@ -87,7 +87,7 @@
   font-size: var(--fs-micro); border-radius: var(--radius-pill); padding: 1px 7px;
   color: var(--text-faint); background: var(--wash); border: 1px solid var(--border);
 }
-.cron-target.is-current { color: var(--accent-2); background: var(--accent-softer); border-color: rgba(74,108,245,0.2); }
+.cron-target.is-current { color: var(--accent-2); background: var(--accent-softer); border-color: var(--accent-line-soft); }
 .cron-target.is-pending { color: var(--amber); background: var(--amber-wash); border-color: rgba(138,75,8,0.2); }
 .cron-target.is-missing { color: var(--red); background: var(--red-wash); border-color: var(--red-line); }
 .cron-grow { flex: 1; }
@@ -175,11 +175,17 @@
   background: transparent; color: var(--text-dim); text-align: left; cursor: pointer;
 }
 .cron-nav-row:hover { background: var(--hover); }
+/* The selected task: the same filled accent row the sidebar's selected session wears
+   (see layout.css .session.active). It used to be a warm-white gradient with a gloss
+   highlight, which was the last hand-mixed light surface outside base.css — it read
+   as a lit card and it went stale the moment the palette moved. */
 .cron-nav-row.is-active {
-  background: linear-gradient(180deg, var(--panel-veil-a), rgba(255,254,250,0.78));
-  box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(62,54,44,0.06);
-  color: var(--text);
+  background: var(--accent-strong);
+  color: var(--on-accent);
 }
+.cron-nav-row.is-active .cron-nav-name { color: var(--on-accent); }
+.cron-nav-row.is-active .cron-nav-meta { color: rgba(255, 255, 255, 0.8); }
+.cron-nav-row.is-active.is-paused .cron-nav-name { color: rgba(255, 255, 255, 0.72); }
 .cron-nav-row .cron-dot { margin-top: 5px; }
 .cron-nav-row.is-paused .cron-nav-name { color: var(--text-faint); }
 .cron-nav-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -248,7 +254,7 @@
 .cron-seg button:hover { color: var(--text); }
 .cron-seg button.is-on {
   background: var(--panel-solid); color: var(--text);
-  box-shadow: 0 1px 2px rgba(62,54,44,0.1), 0 0 0 1px rgba(62,54,44,0.06);
+  box-shadow: var(--shadow-1), 0 0 0 1px var(--border);
   font-weight: 550;
 }
 
@@ -269,7 +275,7 @@
 .cron-adv { margin-top: 10px; }
 .cron-adv summary { font-size: var(--fs-meta); color: var(--accent-2); cursor: pointer; user-select: none; }
 .cron-adv summary:hover { text-decoration: underline; }
-.cron-adv-body { margin-top: 9px; padding: 10px 11px; border: 1px dashed var(--border-2); border-radius: var(--radius-sm); background: rgba(255,254,250,0.55); }
+.cron-adv-body { margin-top: 9px; padding: 10px 11px; border: 1px dashed var(--border-2); border-radius: var(--radius-sm); background: var(--wash); }
 .cron-adv-row { display: flex; align-items: center; gap: 9px; }
 .cron-adv-row + .cron-adv-row { margin-top: 8px; }
 .cron-adv-row .cron-cron-expr { flex: 1; }
@@ -281,7 +287,7 @@
   border: 1px solid var(--border); background: var(--panel-solid); cursor: pointer;
 }
 .cron-choice:hover { border-color: var(--border-2); }
-.cron-choice.is-on { border-color: var(--accent-line); background: var(--accent-softer); box-shadow: 0 0 0 3px rgba(74,108,245,0.07); }
+.cron-choice.is-on { border-color: var(--accent-line); background: var(--accent-softer); box-shadow: 0 0 0 3px var(--accent-softer); }
 .cron-radio {
   width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--border-2);
   flex: 0 0 14px; margin-top: 2px; position: relative; background: var(--panel-solid);
@@ -296,7 +302,7 @@
 .cron-session-pick { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .cron-workspace {
   margin-top: 10px; padding: 11px 12px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: rgba(255,254,250,0.6);
+  border: 1px solid var(--border); background: var(--panel-solid);
   display: flex; flex-direction: column; gap: 8px;
 }
 .cron-ws-row { display: flex; align-items: center; gap: 9px; }

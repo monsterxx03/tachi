@@ -24,7 +24,7 @@ import (
 // paints — it has to follow the theme, or a dark desktop gets a white flash on
 // launch.
 var (
-	windowBgLight = application.NewRGB(0xf7, 0xf4, 0xee)
+	windowBgLight = application.NewRGB(0xff, 0xff, 0xff)
 	windowBgDark  = application.NewRGB(0x25, 0x2a, 0x35)
 )
 

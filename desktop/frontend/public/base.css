@@ -1,12 +1,15 @@
 /* ── Tachi Desktop — flat, content-first conversational UI ───────────────── */
 
-/* Inter ships in public/ as the OFFICIAL variable build (wght 100–900).
-   It must be variable: the UI leans on a fine weight scale (520…650), and a
-   single static instance declared over a range would collapse all of them
-   into one weight — the descriptor says the face *covers* 400–650, so the
-   browser uses it as-is and never synthesises (body also sets
-   font-synthesis: none). Inter carries Latin + numerals + tabular figures;
-   PingFang SC, later in the stack, covers CJK. */
+/* The UI runs on the SYSTEM font (see body below): on macOS that is SF, the face
+   every other window on the machine uses, and matching it is the single biggest
+   part of "this is a native app, not a page".
+
+   Inter ships in public/ as the FALLBACK for platforms without an Apple system
+   font (Linux), and it must be the variable build (wght 100–900): the UI leans on
+   a fine weight scale (520…650), and a static instance declared over a range
+   would collapse all of them into one weight. Inter carries Latin + numerals +
+   tabular figures; PingFang SC (macOS) / Noto Sans CJK (Linux), later in the
+   stack, cover CJK. */
 @font-face {
   font-family: "Inter";
   src: url("/InterVariable.woff2") format("woff2");
@@ -44,72 +47,73 @@
 
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses
      MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
-     every surface is a plain colour. The light theme is PAPER: a light warm
-     off-white ladder (book paper, not sand) with soft warm-grey ink — text
-     slightly off-black, hairlines and shadows as faint as they can be while
-     still doing their job — so a long reading session sits on a page instead of
-     on a screen. Depth comes from a real ladder (an earlier pass kept every
-     plane above ~92% lightness with no middle, which reads as white no matter
-     how the borders are tuned) plus the hairlines and whitespace.
+     every surface is a plain colour. The light theme is a NATIVE SYSTEM ladder:
+     the content plane is plain white, the bars a light neutral grey, and the
+     sidebar one step recessed — the palette a Mac window's own controls come
+     from, so nothing on screen reads as "warm paper under a website". The
+     identity lives in the shapes and the type, not in a tint.
      Lightest-first: panel-solid (raised cards/popovers) > chrome-2
      (titlebar/composer bars) > bg (content plane) > chrome (sidebar — the one
      recessed plane).
-     The accent stays the brand blue: paper with ink-blue is the pairing this was
-     designed around, and it keeps the identity constant across themes (a warm
-     accent would change the app's colour when the switch flips). */
-  --bg: #f7f4ee;         /* app background — agent messages sit directly on it */
-  --chrome: #f3efe7;     /* sidebar — a hair deeper than the page, not a panel */
-  --chrome-2: #fdfbf7;   /* titlebar / composer */
-  --panel-solid: #fffefa; /* cards/popovers: warm white, still brighter than bg */
-  --panel-2: #f2ede5;    /* second raised tone — avatar / keycap gradients */
-  --panel-veil-a: rgba(255, 254, 250, 0.95);  /* active session card, top */
-  --panel-veil-b: rgba(255, 254, 250, 0.8);   /* …and bottom */
-  --veil: rgba(255, 254, 250, 0.75);          /* quiet filled buttons */
-  --sheen: rgba(255, 255, 255, 0.6);          /* inset top highlight on chips */
+     The accent is the system blue: it is what every other window on the
+     machine uses, and matching it is most of what makes the app read as a
+     native one. --accent-strong stays a step darker because it carries white
+     text (see below). */
+  --bg: #ffffff;         /* app background — agent messages sit directly on it */
+  --chrome: #e9e9eb;     /* sidebar — a hair deeper than the page, not a panel */
+  --chrome-2: #f2f2f4;   /* titlebar / composer */
+  --panel-solid: #ffffff; /* cards/popovers: plain white, above the bars */
+  --panel-2: #f4f4f6;    /* second raised tone — avatar / keycap gradients */
+  --panel-veil-a: rgba(255, 255, 255, 0.96);  /* active session card, top */
+  --panel-veil-b: rgba(255, 255, 255, 0.85);  /* …and bottom */
+  --veil: rgba(255, 255, 255, 0.8);           /* quiet filled buttons */
+  /* No inset top highlight: a glossy lit edge is a web-control cue, and a
+     native window's bars are flat. Dark keeps its own (see the dark block) —
+     there a light veil is a surface step, not gloss. */
+  --sheen: transparent;
   /* Text carried by a saturated fill. White in both themes — the *fill* is
      what moves (see --accent-strong / --red-strong), not the ink. */
   --on-accent: #ffffff;
 
-  /* Borders, washes and shadows are warm ink veils — brown-grey, not neutral
-     black — so they sit in the same family as the surfaces instead of greying
-     them out. The bias is deliberately slight: the surfaces carry the warmth,
-     the ink only has to avoid fighting it. */
-  --border: rgba(62, 54, 44, 0.12);
-  --border-2: rgba(62, 54, 44, 0.17);
+  /* Borders, washes and shadows are neutral black veils: the surfaces are grey,
+     so an ink with a hue in it would be the only warm thing left. */
+  --border: rgba(0, 0, 0, 0.10);
+  --border-2: rgba(0, 0, 0, 0.16);
 
   /* Inset washes (tool output, args, code blocks) and row hovers — always a
      *light* or *dark* veil, never a fixed colour, so they survive dark mode. */
-  --wash: rgba(62, 54, 44, 0.05);
-  --wash-2: rgba(62, 54, 44, 0.075);
-  --hover: rgba(62, 54, 44, 0.055);
-  --hover-2: rgba(62, 54, 44, 0.08);
+  --wash: rgba(0, 0, 0, 0.045);
+  --wash-2: rgba(0, 0, 0, 0.07);
+  --hover: rgba(0, 0, 0, 0.05);
+  --hover-2: rgba(0, 0, 0, 0.075);
 
-  --text: #2b2621;
-  --text-dim: #5b554d;
+  --text: #1d1d1f;
+  --text-dim: #55555a;
   /* Metadata (timestamps, session times, tool durations, thinking label) runs
-     at 10.5–11.5px, so it needs the 4.5:1 of small text — and it is the
-     *lightest* grey that still clears 4.5:1 on the recessed sidebar (--chrome,
-     the darkest light surface) as well as on --bg. Anything lighter reads as a
-     smudge. */
-  --text-faint: #6b655c;
+     at 11–12px, so it needs the 4.5:1 of small text — and it is the *lightest*
+     grey that still clears 4.5:1 on the recessed sidebar (--chrome, the darkest
+     light surface) as well as on --bg. Anything lighter reads as a smudge.
+     Measured: #68686e is 4.9:1 on --chrome; the neutral greys people reach for
+     first (#7d7d83) land at 3.4 and are not usable here. */
+  --text-faint: #68686e;
 
   /* Accent roles are split because dark mode pulls them apart: a colour that
      reads well as *ink* on the surface is too light to carry white text, and
-     vice versa. In light mode all three collapse to nearly one hue — the brand
-     blue, kept as the action/ink colour against the warm surfaces.
-     --strong is the flat fill behind a button's label: no gradient goes over it
-     any more (the old light end of a gradient carried white at 3.1:1, which is
-     not a label), so it is the ONE fill to tune when the buttons want to sit
-     calmer on the page. */
-  --accent: #4a6cf5;         /* fills, rings, status dots, soft washes */
-  --accent-2: #2f4bd6;       /* accent as ink (links, icons, labels) */
-  --accent-strong: #3550d8;  /* saturated fill that carries white text */
-  --accent-soft: rgba(74, 108, 245, 0.14);
-  --accent-softer: rgba(74, 108, 245, 0.09);
-  --accent-ring: rgba(74, 108, 245, 0.26);
-  --accent-line-soft: rgba(74, 108, 245, 0.32);  /* resting tinted border */
-  --accent-line: rgba(74, 108, 245, 0.5);        /* hover/focus tinted border */
-  --accent-tint-a: rgba(122, 149, 255, 0.2);     /* tinted button wash */
+     vice versa. The hue is the SYSTEM blue (macOS #007AFF family) — the same
+     one every other window on the machine uses.
+     --strong is the flat fill behind a button's label (and behind the sidebar's
+     selected row): #007AFF itself only carries white at 4.0:1, so the fill is
+     one step darker and lands at 5.8. It is the ONE fill to tune when the
+     buttons want to sit calmer on the page. */
+  --accent: #007aff;         /* fills, rings, status dots, soft washes */
+  --accent-2: #0066d6;       /* accent as ink (links, icons, labels) */
+  --accent-strong: #0062cc;  /* saturated fill that carries white text */
+  --accent-soft: rgba(0, 122, 255, 0.13);
+  --accent-softer: rgba(0, 122, 255, 0.08);
+  --accent-ring: rgba(0, 122, 255, 0.28);
+  --accent-line-soft: rgba(0, 122, 255, 0.32);  /* resting tinted border */
+  --accent-line: rgba(0, 122, 255, 0.5);        /* hover/focus tinted border */
+  --accent-tint-a: rgba(0, 122, 255, 0.18);     /* tinted button wash */
 
   /* Semantic colours, tuned to clear 4.5:1 as small text on --bg. The
      "-strong" variants back white text and so must stay dark. */
@@ -135,57 +139,58 @@
   --find-hit-current-ink: #2a2010;
 
   /* Inline code in an assistant reply. */
-  --code-ink: #34429e;
+  --code-ink: #2350b8;
 
-  /* Modal scrims stay a light warm veil rather than black on the flat light UI;
-     dark mode has no choice but to go black. */
-  --scrim: rgba(62, 54, 44, 0.14);
-  --scrim-strong: rgba(62, 54, 44, 0.2);
+  /* Modal scrims: a neutral ink veil (dark mode has no choice but to go black). */
+  --scrim: rgba(0, 0, 0, 0.14);
+  --scrim-strong: rgba(0, 0, 0, 0.2);
 
-  /* User bubble: a warm paper wash with brown ink — present but quiet, so it
-     never out-shouts the agent's answer. Its own line colour (rather than the
-     accent line) keeps it in the warm family; the accent is reserved for things
-     you act on. */
-  --user-grad-a: #f1eade;
-  --user-grad-b: #eae1d0;
-  --user-ink: #4a4235;
-  --user-ink-dim: rgba(74, 66, 53, 0.72);
-  --user-code-bg: rgba(62, 54, 44, 0.12);
-  --user-code-ink: #3f382c;
+  /* User bubble: ONE flat neutral fill with dark ink — present but quiet, so it
+     never out-shouts the agent's answer. Not a gradient and not a tinted wash:
+     the reader's message is a block in a document, and a filled gradient card
+     was the chat-app idiom this theme deliberately drops. */
+  --user-fill: #e9e9eb;
+  --user-ink: #1d1d1f;
+  --user-ink-dim: rgba(29, 29, 31, 0.66);
+  --user-code-bg: rgba(0, 0, 0, 0.08);
+  --user-code-ink: #1d1d1f;
 
   /* Context-breakdown palette (the ring's popover, see ContextMeter): one hue
      per bucket, in the order /usage lists them. The three "infrastructure"
      buckets share a blue ramp — they are all scaffolding rather than things the
      user wrote — and the content buckets get their own hues. Every colour is
      opaque so it reads both as a bar segment and as a 8px dot. */
-  --ctx-system: #2f4bd6;
+  --ctx-system: #0066d6;
   --ctx-internal-tools: #5c80ef;
   --ctx-mcp-tools: #93a6e8;
   --ctx-user-messages: #0d6f45;
   --ctx-assistant-messages: #96550a;
   --ctx-tool-results: #0b6a75;
-  --ctx-other: #6d6459;
+  --ctx-other: #6d6d73;
 
-  /* Two depths, not four. A surface that only has to look slightly raised (a card, the
-     composer bar) takes --shadow-1; anything that floats OVER the page and must read as
-     "above" (popovers, drawers, the palette) takes --shadow-2. The two middle steps drew
-     distinctions nobody could see, and a fourth level of shadow is decoration rather than
-     structure. Warm ink rather than neutral black: on paper a raised edge is a hint, not a
-     drop shadow — the paired 1px ambient ring is what keeps those edges crisp without weight. */
-  --shadow-1: 0 1px 2px rgba(62, 54, 44, 0.06), 0 1px 1px rgba(62, 54, 44, 0.04);
-  --shadow-2: 0 8px 20px rgba(62, 54, 44, 0.08), 0 20px 44px rgba(62, 54, 44, 0.09);
+  /* Two depths, not four. A surface that only has to look slightly raised (the
+     composer bar) takes --shadow-1; anything that floats OVER the page and must
+     read as "above" (popovers, drawers, the palette) takes --shadow-2. The light
+     theme leans on the hairline, not the shadow: a native window's controls sit
+     flat on their plane, and a drop shadow under every card is the web idiom
+     this theme drops. Dark keeps its two levels as they were (there a shadow is
+     a surface step, not decoration). */
+  --shadow-1: 0 1px 1px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 8px 22px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
   /* The one upward shadow (the 意见 pane's sticky send bar, chat.css) — a
      token so it follows the same ink as the others in both themes. */
-  --shadow-up: 0 -8px 16px -12px rgba(62, 54, 44, 0.35);
+  --shadow-up: 0 -8px 16px -12px rgba(0, 0, 0, 0.14);
 
   /* Radius scale: two steps and two exceptions. Controls (rows, buttons, inputs, chips)
      take --radius-sm; panels that hold other surfaces (popovers, drawers, overlays) take
      --radius-lg. --radius-2xs is not a step down the same ladder — it belongs to micro
-     pieces (badges, keycaps, the checkbox mark) where an 8px radius would eat the shape.
+     pieces (badges, keycaps, the checkbox mark).
+     Values are the native ones: a Mac control's corners are much tighter than a web card's,
+     and this is most of why a row of controls reads as "settled" rather than as floating.
      Anything rounder than "pill" (avatars, status dots) uses 50% directly. */
-  --radius-2xs: 4px;
-  --radius-sm: 8px;
-  --radius-lg: 12px;
+  --radius-2xs: 3px;
+  --radius-sm: 6px;
+  --radius-lg: 8px;
   --radius-pill: 999px;
 
   /* Stacking order, named. There were fourteen bare numbers across six files, which is how a
@@ -226,7 +231,7 @@
 
   /* Disclosure caret for the borderless <select>s. An icon rather than a
      drawn border, so it is a token too — its stroke mirrors --text-faint. */
-  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%236b655c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%2368686e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* Reading column: messages and the composer share this width, so the input
      lines up with the transcript instead of stretching to the window edge
@@ -234,11 +239,11 @@
      a reading measure, not a layout accident).
 
      It is a VIEWPORT-RELATIVE clamp rather than a fixed number, because the
-     window it has to fit is a laptop one day and a 27" display the next: 62vw
-     lets the column grow with the room it has, 860px is the floor and is what
-     the column used to be at EVERY size (a narrow window is served by the floor,
-     and shrinks further on its own when the room is smaller still), and 1180px
-     is the ceiling, past which a line of prose stops being worth reading.
+     window it has to fit is a laptop one day and a 27" display the next: 58vw
+     lets the column grow with the room it has, 780px is the floor, and 1040px
+     is the ceiling, past which a line of prose stops being worth reading. The
+     narrower band than a web page's is part of the native read: a Mac window's
+     text column is a column, not a page.
 
      `vw` and not a percentage, deliberately: the two readers of this value — a
      message inside the transcript, the composer box inside a bar that spans the
@@ -246,7 +251,7 @@
      keeps the input lined up with the text it belongs to. The fullscreen
      document preview takes this same token (.viewer-doc) rather than a copy of
      its number, so a reply and a previewed file still read at one measure. */
-  --reading-width: clamp(860px, 62vw, 1180px);
+  --reading-width: clamp(780px, 58vw, 1040px);
 
   /* Spacing: a 4px baseline and only these six steps for the chrome this app draws — a row's
      padding, a panel's inset, the gap between two blocks. The list stays short on purpose: the
@@ -262,28 +267,33 @@
   --sp-5: 16px;
   --sp-6: 20px;
 
-  /* The type scale: FIVE content steps, then the display pair. It used to be eleven —
+  /* The type scale: FOUR content steps, then the display pair. It used to be eleven —
      10 / 10.5 / 11 / 11.5 / 12 / 12.5 / 13 / 13.5 / 14 / 14.5 / 15 — where the distance
      between a label and its metadata was half a pixel. Half a pixel is under one device pixel
      on the panels this is read on, so the step was invisible while the two sizes were not the
      same: the reader cannot tell whether a difference means anything, which is worse than not
-     having it. A step now has to be a whole pixel, and each one has ONE job:
-       micro  chrome nobody reads word by word — counts, badges, timestamps, keycaps, tiny labels
-       meta   metadata read at a glance — session times, hints, second lines
-       label  the app's own labels and controls — tool rows, buttons, form labels, palette rows
-       ui     what the reader picks from — session titles, panel headers, close buttons
-       body   what the reader writes, and a group heading — the composer, a project's name
-     The reading surfaces below keep their own two (--fs-prose / --fs-bubble) because those are
-     the sizes the reader tunes with ⌘= / ⌘-, and --fs-finding belongs to the review pane. The
-     two display sizes are page type: there is never a title and a hero in the same view, so
-     they do not compete. */
-  --fs-micro: 11px;
+     having it. A step has to be a whole pixel, and each one has ONE job:
+       micro    chrome nobody reads word by word — counts, badges, timestamps, keycaps, tiny labels
+       meta     metadata AND the app's own labels — session times, hints, tool rows, buttons,
+                form labels, palette rows. One step for both, because the sidebar's floor is
+                12px (below it the list's second line stops being readable, see .session-meta)
+                and that is exactly where metadata sat: a separate label step would have been
+                13, and the rest of the ladder would then have had nowhere left to go.
+       ui       what the reader picks from — session titles, panel headers, close buttons
+       body     what the reader writes, and a group heading — the composer, a project's name
+     The sizes are the native ones: a Mac window's content text is 13–14, not 15, and dropping
+     the whole ladder a step is half of what makes the app read as an instrument rather than a
+     page. The reading surfaces below keep their own two
+     (--fs-prose / --fs-bubble) because those are the sizes the reader tunes with ⌘= / ⌘-, and
+     --fs-finding belongs to the review pane. The two display sizes are page type: there is
+     never a title and a hero in the same view, so they do not compete. */
+  --fs-micro: 10px;
   --fs-meta: 12px;
-  --fs-label: 13px;
-  --fs-ui: 14px;
-  --fs-body: 15px;
-  --fs-title: 18px;  /* a page's own title: settings, a scheduled task's form, the brand */
-  --fs-hero: 20px;   /* the one line on an empty app — nothing below it to rank against */
+  --fs-label: 12px;
+  --fs-ui: 13px;
+  --fs-body: 14px;
+  --fs-title: 16px;  /* a page's own title: settings, a scheduled task's form, the brand */
+  --fs-hero: 18px;   /* the one line on an empty app — nothing below it to rank against */
 
   /* Reading surfaces: the sizes a reader actually READS, in one place, so
      "the text is too small" is an edit here rather than a hunt through four
@@ -297,9 +307,9 @@
      off --fs-prose (widgets.css), so a bigger body keeps its hierarchy instead
      of growing past a heading fixed at 19px. */
   --fs-scale: 1;
-  --fs-prose: calc(15.5px * var(--fs-scale));   /* assistant markdown: replies, a review's report, file previews */
-  --fs-bubble: calc(15px * var(--fs-scale));    /* the reader's own message */
-  --fs-finding: 13px;   /* one review finding, in the side panel */
+  --fs-prose: calc(14px * var(--fs-scale));     /* assistant markdown: replies, a review's report, file previews */
+  --fs-bubble: calc(13px * var(--fs-scale));    /* the reader's own message */
+  --fs-finding: 12px;   /* one review finding, in the side panel */
 
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
 
@@ -391,10 +401,10 @@
   --scrim-strong: rgba(9, 11, 15, 0.52);
 
   /* The bubble sits ABOVE the content plane in dark (a raised blue note) —
-     the same move the light theme makes in reverse, where it is a warm wash
-     *deeper* than the page. Both inks stay legible on it (~8:1). */
-  --user-grad-a: #2c3246;
-  --user-grad-b: #262c3e;
+     the light theme makes the same move in the opposite direction, where it is a
+     neutral block a step *deeper* than the page. Both inks stay legible on it
+     (~8:1). */
+  --user-fill: #2c3246;
   --user-ink: #dde3ff;
   --user-ink-dim: rgba(221, 227, 255, 0.68);
   --user-code-bg: rgba(124, 150, 255, 0.18);
@@ -429,7 +439,10 @@ html, body, #root {
 }
 
 body {
-  font-family: "Inter", -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  /* Apple platforms first (SF), then Inter for Linux, then the CJK faces each
+     platform ships. Order matters: naming Inter first is what made the whole app
+     read as a web page on macOS. */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
   /* Opaque window: body paints the app background directly. */
   background: var(--bg);
   color: var(--text);

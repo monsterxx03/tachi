@@ -997,7 +997,7 @@ function FieldRow({ f, label, draft, original, error, dirty, onChange, onReset }
         {/* Only while the row is changed: a "撤销这一项" on every row would be noise on a page
             whose normal state is "nothing changed". */}
         {dirty ? (
-          <button className="btn ghost" style={{ marginTop: 6, padding: '2px 8px', fontSize: 11.5 }}
+          <button className="btn ghost" style={{ marginTop: 6, padding: '2px 8px', fontSize: 12 }}
             onClick={onReset} title="把这一项改回打开这一页时的值（不写文件）">撤销这一项</button>
         ) : null}
       </div>
