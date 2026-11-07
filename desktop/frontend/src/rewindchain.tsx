@@ -160,6 +160,9 @@ export function RewindChainOverlay({ turns, title, position, blocked, onPick, on
             return (
               <div key={t.turn} className={cls} data-row={i} role="button" tabIndex={-1}
                 onMouseEnter={() => setSel(i)}
+                // Tab reaches this row's own button; the highlight follows it for the same reason
+                // the pointer moves it — the row you are about to act on has to be the one lit.
+                onFocus={() => setSel(i)}
                 onClick={() => pick(t.turn)}>
                 <div className="rewind-row-when">
                   <b>第 {t.turn} 轮</b>

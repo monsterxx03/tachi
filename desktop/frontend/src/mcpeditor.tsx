@@ -211,7 +211,7 @@ export function MCPServersEditor() {
   return (
     <div className="set-section mcp-servers">
       <div className="set-section-head">
-        MCP servers
+        MCP 服务器
         <span className="mcp-servers-file">
           ~/.tachi/mcp.json{prof.active ? ` + mcp.${prof.active}.json` : ''}
         </span>
@@ -226,7 +226,7 @@ export function MCPServersEditor() {
 
       <div className="mcp-servers-list">
         {entries.length === 0 && !loadError ? (
-          <div className="set-add-empty">还没有 MCP server。</div>
+          <div className="set-add-empty">还没有 MCP 服务器。</div>
         ) : null}
         {entries.map((entry) => {
           const key = entry.server.name

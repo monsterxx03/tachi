@@ -3503,7 +3503,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                   )}
                 </span>
                 <span className="popover-anchor" ref={mcpPopover.anchorRef}>
-                  <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
+                  <button className="mcp-btn" title="MCP 服务器 / 工具" onClick={() => setMcpOpen((v) => !v)}>
                     <span className="mcp-ico"><MCPIcon /></span>
                     <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
                   </button>

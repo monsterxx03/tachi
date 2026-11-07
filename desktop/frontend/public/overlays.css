@@ -105,8 +105,22 @@
   cursor: pointer;
 }
 .mcp-profile-select:disabled { opacity: 0.6; cursor: wait; }
-.mcp-close { border: none; background: transparent; cursor: pointer; color: var(--text-dim); font-size: var(--fs-ui); }
-.mcp-close:hover { color: var(--text); }
+/* A popover's ✕. It carries padding because the glyph alone is a ~14×18 hit area — under the
+   24×24 a target needs — and it names itself, as the find bar's ✕ already does: the glyph is not
+   a word a screen reader should read out. The negative margins hand the extra box back, so the
+   glyph sits exactly where it did and the header's height does not move. */
+.mcp-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--fs-ui);
+  line-height: 1;
+  padding: 5px 7px;
+  margin: -5px -7px;
+  border-radius: var(--radius-sm);
+}
+.mcp-close:hover { color: var(--text); background: var(--hover); }
 .mcp-body { overflow-y: auto; padding: 6px 8px 10px; }
 .mcp-empty { padding: 18px 10px; color: var(--text-faint); font-size: var(--fs-label); }
 
@@ -1269,7 +1283,11 @@
   cursor: pointer;
 }
 .rewind-row:hover .rewind-row-go,
-.rewind-row.is-sel .rewind-row-go { opacity: 1; }
+.rewind-row.is-sel .rewind-row-go,
+/* …and on focus: the button is in the tab order, so without this a keyboard reader walks onto a
+   control they cannot see (one per row). The rows themselves are driven by ↑/↓ and are not
+   tabbable; the buttons are what Tab lands on. */
+.rewind-row-go:focus-visible { opacity: 1; }
 .rewind-row-go:hover { color: var(--accent-2); border-color: var(--accent-line); }
 .rewind-row-go:disabled { display: none; }
 /* Older points are folded, not dropped: the list is capped at the width a reader

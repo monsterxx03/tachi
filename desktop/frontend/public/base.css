@@ -146,6 +146,10 @@
   /* Semantic colours, tuned to clear 4.5:1 as small text on --bg. The
      "-strong" variants back white text and so must stay dark. */
   --green: #0d6f45;
+  /* The wash a "this worked" surface takes, beside --red-wash / --amber-wash. It was the one
+     notice colour with no token, spelled out where it was used — which is how it ended up as a
+     light-theme rgba() with no dark counterpart. */
+  --green-wash: rgba(13, 111, 69, 0.08);
   --red: #bf2831;
   --red-strong: #bf2831;
   --red-line: rgba(191, 40, 49, 0.45);
@@ -413,6 +417,7 @@
   --accent-tint-a: rgba(124, 150, 255, 0.2);
 
   --green: #46c98a;
+  --green-wash: rgba(70, 201, 138, 0.12);
   --red: #ff7a82;
   --red-strong: #b7283a;
   --red-line: rgba(255, 122, 130, 0.45);

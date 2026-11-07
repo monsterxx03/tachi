@@ -167,14 +167,14 @@ function RemoteMCPPanel({ rows, loading, onClose, floating }: {
     <div className="popover-panel mcp-panel" ref={floating.panelRef} style={floating.style}>
       <div className="mcp-head">
         <span className="mcp-head-text">
-          <span className="mcp-title">MCP servers</span>
+          <span className="mcp-title">MCP 服务器</span>
           <span className="mcp-total">{rows.filter((r) => r.connected).length}/{rows.length} 已连接 · 只读</span>
         </span>
-        <button className="mcp-close" onClick={onClose}>✕</button>
+        <button className="mcp-close" onClick={onClose} title="关闭" aria-label="关闭">✕</button>
       </div>
       <div className="mcp-body">
         {loading && rows.length === 0 ? <div className="mcp-empty">正在读取…</div> : null}
-        {!loading && rows.length === 0 ? <div className="mcp-empty">那台机器上没有 MCP server</div> : null}
+        {!loading && rows.length === 0 ? <div className="mcp-empty">那台机器上没有 MCP 服务器</div> : null}
         {rows.map((r) => (
           <div className="mcp-server" key={r.name}>
             <div className="mcp-server-row" style={{ cursor: 'default' }}>
@@ -208,7 +208,7 @@ function RemoteAgentsPanel({ panel, loading, onClose, floating }: {
             {panel?.anyChecked ? `${panel.checkedAt} · 只读` : '还没检查过'}
           </span>
         </span>
-        <button className="mcp-close" onClick={onClose}>✕</button>
+        <button className="mcp-close" onClick={onClose} title="关闭" aria-label="关闭">✕</button>
       </div>
       <div className="mcp-body">
         {loading && peers.length === 0 ? <div className="mcp-empty">正在读取…</div> : null}
@@ -1633,7 +1633,7 @@ export function RemotePage({ onBack }: { onBack: () => void }) {
                   ) : null}
                 </span>
                 <span className="popover-anchor" ref={mcpPop.anchorRef}>
-                  <button className="mcp-btn" title="MCP servers / tools（只读）"
+                  <button className="mcp-btn" title="MCP 服务器 / 工具（只读）"
                     onClick={() => setOpenPanel((v) => (v === 'mcp' ? '' : 'mcp'))}>
                     <span className="mcp-ico"><MCPIcon /></span>
                     <span className="mcp-count">{(panels?.mcp || []).filter((r) => r.connected).length || ''}</span>

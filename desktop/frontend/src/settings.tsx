@@ -991,7 +991,7 @@ function FieldRow({ f, label, draft, original, error, dirty, onChange, onReset }
         {f.note ? <div className="set-note">{f.note}</div> : null}
       </div>
       <div>
-        {control(f, value, onChange)}
+        {control(f, value, onChange, shownKey)}
         {f.kind === 'string_list' ? <div className="set-list-hint">每行一项</div> : null}
         {error ? <div className="set-field-error">{error}</div> : null}
         {/* Only while the row is changed: a "撤销这一项" on every row would be noise on a page
@@ -1077,12 +1077,12 @@ function ElementCard({ item, dirtyCount, hasError, forceOpen, forceFolded, sourc
 /** control is the one place a Kind becomes a widget. Every branch is a Kind the backend can
  *  actually produce (kindOf) — a new Kind wants a branch here, and `other` is the fallback that
  *  still shows the value rather than dropping the field. */
-function control(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void) {
+function control(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void, label: string) {
   // An OPTIONAL leaf gets the 自动 state first, because it is a state of its own and every control
   // below would have to invent a way to show it: a checkbox would say 关 for a value that is
   // neither true nor false, and an empty box would look like something nobody finished typing.
-  if (f.optional) return autoControl(f, value, onChange)
-  return plainControl(f, value, onChange)
+  if (f.optional) return autoControl(f, value, onChange, label)
+  return plainControl(f, value, onChange, label)
 }
 
 /** autoControl is an optional leaf's control: 自动 / a value.
@@ -1091,11 +1091,12 @@ function control(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void) 
  *  checkbox, and "自动 + a checkbox" is two controls for one value. Everything else keeps its own
  *  control, with 自动 beside it and the control hidden while 自动 is on: an empty number box next
  *  to 自动 reads as "unfinished", which is the impression this is avoiding. */
-function autoControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void) {
+function autoControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void, label: string) {
   if (f.kind === 'bool') {
     return (
       <div>
         <select className="set-input set-select" value={value === null ? '' : value === true ? 'true' : 'false'}
+          aria-label={label}
           onChange={(e) => onChange(e.target.value === '' ? null : e.target.value === 'true')}>
           <option value="">自动（未设置）</option>
           <option value="true">开</option>
@@ -1108,13 +1109,13 @@ function autoControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => vo
   return (
     <div>
       <label className="set-check">
-        <input type="checkbox" checked={value === null}
+        <input type="checkbox" checked={value === null} aria-label={`${label}：自动（未设置）`}
           onChange={(e) => onChange(e.target.checked ? null : '')} />
         <span>自动（未设置）</span>
       </label>
       {value === null
         ? <div className="set-note">由 Tachi 自己决定</div>
-        : plainControl(f, value, onChange)}
+        : plainControl(f, value, onChange, label)}
     </div>
   )
 }
@@ -1133,28 +1134,29 @@ function autoControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => vo
  *
  *  The value is a STRING draft like every other control's, so a half-typed key behaves exactly like
  *  a half-typed model name: dirty, savable, and put back untouched by a refused save. */
-function SecretInput({ value, onChange }: { value: string; onChange: (v: Draft) => void }) {
+function SecretInput({ value, onChange, label }: { value: string; onChange: (v: Draft) => void; label: string }) {
   const [shown, setShown] = useState(false)
-  const label = shown ? '隐藏' : '显示明文'
+  const eyeLabel = shown ? '隐藏' : '显示明文'
   return (
     <div className="set-secret">
       <input className="set-input" type={shown ? 'text' : 'password'} value={value} spellCheck={false}
-        autoComplete="off" onChange={(e) => onChange(e.target.value)} />
+        autoComplete="off" aria-label={label} onChange={(e) => onChange(e.target.value)} />
       <button type="button" className="set-secret-eye" onClick={() => setShown(!shown)}
-        title={label} aria-label={label} aria-pressed={shown}>
+        title={eyeLabel} aria-label={eyeLabel} aria-pressed={shown}>
         <EyeIcon open={shown} />
       </button>
     </div>
   )
 }
 
-function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void) {
+function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => void, label: string) {
   const text = typeof value === 'string' ? value : ''
   switch (f.kind) {
     case 'bool':
       return (
         <label className="set-check">
-          <input type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
+          <input type="checkbox" checked={value === true} aria-label={`${label}：${value === true ? '开' : '关'}`}
+            onChange={(e) => onChange(e.target.checked)} />
           <span>{value === true ? '开' : '关'}</span>
         </label>
       )
@@ -1164,16 +1166,16 @@ function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => v
       // is. A box that showed `git *` for `permissions.files.read.ask` was teaching the wrong
       // shape of value — the reader would type a command into a field that wants a path.
       return (
-        <textarea className="set-textarea" rows={3} value={text} spellCheck={false}
+        <textarea className="set-textarea" rows={3} value={text} spellCheck={false} aria-label={label}
           onChange={(e) => onChange(e.target.value)}
           placeholder={f.listExample ? `每行一项，例如：\n${f.listExample}` : '每行一项'} />
       )
     case 'int':
       return <input className="set-input" type="text" inputMode="numeric" value={text} spellCheck={false}
-        onChange={(e) => onChange(e.target.value)} />
+        aria-label={label} onChange={(e) => onChange(e.target.value)} />
     case 'float':
       return <input className="set-input" type="text" inputMode="decimal" value={text} spellCheck={false}
-        onChange={(e) => onChange(e.target.value)} />
+        aria-label={label} onChange={(e) => onChange(e.target.value)} />
     case 'string': {
       // A declared choice set becomes a dropdown (the backend's `options`, which is what THIS
       // config defines — the provider names, today). Two details are about not lying:
@@ -1190,12 +1192,13 @@ function plainControl(f: SettingFieldVO, value: Draft, onChange: (v: Draft) => v
         // A credential is a box of its own: same input, masked until the reader asks (see
         // SecretInput). It can never be a dropdown — a key has no declared choice set — so the
         // two branches cannot both apply.
-        if (f.secret) return <SecretInput value={text} onChange={onChange} />
-        return <input className="set-input" type="text" value={text} spellCheck={false}
+        if (f.secret) return <SecretInput value={text} onChange={onChange} label={label} />
+        return <input className="set-input" type="text" value={text} spellCheck={false} aria-label={label}
           onChange={(e) => onChange(e.target.value)} />
       }
       return (
-        <select className="set-input set-select" value={text} onChange={(e) => onChange(e.target.value)}>
+        <select className="set-input set-select" value={text} aria-label={label}
+          onChange={(e) => onChange(e.target.value)}>
           <option value="">（默认）</option>
           {options.map((o) => <option key={o} value={o}>{o}</option>)}
           {text !== '' && !options.includes(text)

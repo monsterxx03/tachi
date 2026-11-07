@@ -412,7 +412,7 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
   return (
     <div className="thinking-block">
       <div className={`thinking-head${collapsed ? '' : ' open'}`} onClick={onToggle} onKeyDown={actOnKey(onToggle)} tabIndex={0} title={collapsed ? '点击展开思考过程' : '点击收起思考过程'} role="button" aria-expanded={!collapsed}>
-        <span className="thinking-ico"><Caret open={!collapsed} /></span><span className="thinking-label">thinking</span>
+        <span className="thinking-ico"><Caret open={!collapsed} /></span><span className="thinking-label">思考</span>
       </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
     </div>
@@ -894,7 +894,7 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
               there is nothing to sum: a panel of unconnected servers would read 已加载 0/0 工具,
               which says less than not being there. */}
           <span className="mcp-head-text">
-            <span className="mcp-title">MCP Servers</span>
+            <span className="mcp-title">MCP 服务器</span>
             {totalTools > 0 && (
               <span className="mcp-total" title={`所有 server 合计：已加载 ${totalLoaded} / 共 ${totalTools} 个工具`}>
                 已加载 {totalLoaded}/{totalTools} 工具
@@ -908,10 +908,10 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
               {(profile.available || []).map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
-          <button className="mcp-close" onClick={onClose}>✕</button>
+          <button className="mcp-close" onClick={onClose} title="关闭" aria-label="关闭">✕</button>
         </div>
         <div className="mcp-body">
-          {servers.length === 0 && <div className="mcp-empty">未配置 MCP server（~/.tachi/mcp.json）</div>}
+          {servers.length === 0 && <div className="mcp-empty">未配置 MCP 服务器（~/.tachi/mcp.json）</div>}
           {servers.map((s) => {
             const isOpen = !!expanded[s.name]
             const tools: any[] = s.tools || []
@@ -1660,7 +1660,7 @@ function AgentsPanel({ board, busy, onClose, onRefresh, floating }: {
         <button className="agents-refresh" onClick={onRefresh} disabled={busy}>
           {busy ? '检查中…' : '刷新'}
         </button>
-        <button className="mcp-close" onClick={onClose}>✕</button>
+        <button className="mcp-close" onClick={onClose} title="关闭" aria-label="关闭">✕</button>
       </div>
       <div className="mcp-body">
         {peers.length === 0 && <div className="mcp-empty">还没有可委派的节点</div>}

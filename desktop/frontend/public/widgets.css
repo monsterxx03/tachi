@@ -103,7 +103,7 @@
   padding: 0.5em 1em;
   color: var(--text-dim);
 }
-.assistant-text a { color: var(--accent-2); text-decoration: none; border-bottom: 1px solid rgba(68, 96, 224, 0.3); }
+.assistant-text a { color: var(--accent-2); text-decoration: none; border-bottom: 1px solid var(--accent-line-soft); }
 .assistant-text a:hover { border-bottom-color: var(--accent-2); }
 .assistant-text hr { border: none; border-top: 1px solid var(--border-2); margin: 1.2em 0; }
 /* Tables render inside .table-scroll (see App.tsx TableScroller): the wrapper
