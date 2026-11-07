@@ -25,9 +25,11 @@
      this app actually leans on comes from the surface ladder below (panel-solid > chrome-2 >
      bg > chrome) and from whitespace; the background only has to stay quiet.
 
-     Still a token, and still named here: two opaque surfaces paint it — .app (the chat view)
-     and .settings-view, which covers it while the settings page is up — and they must not
-     drift apart. */
+     Still a token, and still named here: the content areas that must not let the desktop
+     through paint it — .main, and each full page's own content column beside its rail
+     (.settings-pane / .cron-main / .remote-main) — and they must not drift apart. On macOS the
+     window itself is glass (see --rail-veil), so .app no longer paints this: what is behind
+     the rails is the window's frost, not a colour. */
   --app-bg: var(--bg);
 
   /* The window's top strip — one height for every column's first row: the content column's
@@ -45,22 +47,28 @@
      the 16px of padding it has in every other state (the rule below). */
   --titlebar-fold-pad: 78px;
 
-  /* Flat, opaque surfaces. The window itself is opaque (main.go uses
-     MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
-     every surface is a plain colour. The light theme is a NATIVE SYSTEM ladder:
-     the content plane is plain white, the bars a light neutral grey, and the
-     sidebar one step recessed — the palette a Mac window's own controls come
-     from, so nothing on screen reads as "warm paper under a website". The
-     identity lives in the shapes and the type, not in a tint.
+  /* Flat, opaque surfaces — and above them, on macOS, one that is not opaque.
+     The window is GLASS there (main.go uses MacBackdropTranslucent): macOS frosts
+     the desktop behind the window, and whatever the page leaves unpainted shows
+     through as that frost. So the rails (sidebar and the two side panels) paint a
+     VEIL instead of --chrome, and the content plane stays plain white on top of the
+     frost — the reader reads messages on paper, and the app's edges carry the
+     desktop's presence. Off macOS there is no frost: the veil is opaque there (see
+     --rail-veil) and the window is the same flat ladder it always was.
+     The light theme is a NATIVE SYSTEM ladder: the content plane is plain white,
+     the bars a light neutral grey, and the sidebar one step recessed — the palette
+     a Mac window's own controls come from, so nothing on screen reads as "warm
+     paper under a website". The identity lives in the shapes and the type, not in
+     a tint.
      Lightest-first: panel-solid (raised cards/popovers) > chrome-2
-     (titlebar/composer bars) > bg (content plane) > chrome (sidebar — the one
-     recessed plane).
+     (titlebar/composer bars) > bg (content plane) > chrome (the flat stand-in for
+     the rails off macOS).
      The accent is the system blue: it is what every other window on the
      machine uses, and matching it is most of what makes the app read as a
      native one. --accent-strong stays a step darker because it carries white
      text (see below). */
   --bg: #ffffff;         /* app background — agent messages sit directly on it */
-  --chrome: #e9e9eb;     /* sidebar — a hair deeper than the page, not a panel */
+  --chrome: #e9e9eb;     /* sidebar, flat — off macOS, and behind the veil's own test */
   --chrome-2: #f2f2f4;   /* titlebar / composer */
   --panel-solid: #ffffff; /* cards/popovers: plain white, above the bars */
   --panel-2: #f4f4f6;    /* second raised tone — avatar / keycap gradients */
@@ -91,11 +99,13 @@
   --text-dim: #55555a;
   /* Metadata (timestamps, session times, tool durations, thinking label) runs
      at 11–12px, so it needs the 4.5:1 of small text — and it is the *lightest*
-     grey that still clears 4.5:1 on the recessed sidebar (--chrome, the darkest
-     light surface) as well as on --bg. Anything lighter reads as a smudge.
-     Measured: #68686e is 4.9:1 on --chrome; the neutral greys people reach for
-     first (#7d7d83) land at 3.4 and are not usable here. */
-  --text-faint: #68686e;
+     grey that clears it on every surface the rail can end up being: --bg, the
+     flat --chrome, and (on macOS) the frosted rail, whose brightness follows the
+     wallpaper. That last one is what pins it: --rail-veil over the darker frosts
+     composites to #e0e0e1, where #5c5c62 measures 4.68 — 5.48 on --chrome, 6.7 on
+     --bg. The greys people reach for first (#7d7d83) land at 3.4 on --chrome and
+     are not usable here at all. */
+  --text-faint: #5c5c62;
 
   /* Accent roles are split because dark mode pulls them apart: a colour that
      reads well as *ink* on the surface is too light to carry white text, and
@@ -114,6 +124,24 @@
   --accent-line-soft: rgba(0, 122, 255, 0.32);  /* resting tinted border */
   --accent-line: rgba(0, 122, 255, 0.5);        /* hover/focus tinted border */
   --accent-tint-a: rgba(0, 122, 255, 0.18);     /* tinted button wash */
+
+  /* What the rails paint when the window is glass (macOS only — main.go's
+     MacBackdropTranslucent). The window frost is NOT a colour we choose: macOS
+     blurs whatever is behind the window into a near-neutral frost, which our own
+     same surface measures anywhere between #cecdcc (a dark wallpaper) and
+     #e8e8e9 (a white one). Bare frost under 12px metadata would sit at 3.5–4.4:1,
+     i.e. under the 4.5 the lightest ink needs, so the rails keep a veil on top of
+     it — tuned to that WORST case, not to the wallpaper behind it: 0.65 of the
+     flat rail colour lands the darker frosts at #e0e0e1 and a wallpaper with a
+     warm cast at #e2e2e3, where --text-faint measures 4.68:1. What is left over
+     (~35%) is the frost's own colour and blur, which is the point of having it:
+     it moves with the wallpaper instead of being a fixed grey — across the frosts
+     we measured (a black wallpaper to a white one) the rail shifts by about 9
+     levels, and it stays a step BELOW the white content plane, which is what the
+     ladder says the rail is.
+     Off macOS there is no frost behind anything, so the veil IS the flat colour —
+     a platform that cannot frost must not pay for a translucency it cannot show. */
+  --rail-veil: var(--chrome);
 
   /* Semantic colours, tuned to clear 4.5:1 as small text on --bg. The
      "-strong" variants back white text and so must stay dark. */
@@ -231,7 +259,7 @@
 
   /* Disclosure caret for the borderless <select>s. An icon rather than a
      drawn border, so it is a token too — its stroke mirrors --text-faint. */
-  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%2368686e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%235c5c62' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* Reading column: messages and the composer share this width, so the input
      lines up with the transcript instead of stretching to the window edge
@@ -364,7 +392,10 @@
 
   --text: #cecdc6;
   --text-dim: #a9b0bd;
-  --text-faint: #9ca3b1;
+  /* Same job as the light theme's --text-faint, against the DARK frost: the
+     brightest that frost gets is #565554 (a white wallpaper), where #a6adba
+     measures 5.04 — 7.06 on the flat --chrome, 6.37 on --bg. */
+  --text-faint: #a6adba;
 
   --accent: #7c96ff;
   --accent-2: #9db1ff;
@@ -426,7 +457,7 @@
   --shadow-1: 0 1px 2px rgba(8, 10, 14, 0.34), 0 1px 1px rgba(8, 10, 14, 0.24);
   --shadow-2: 0 6px 16px rgba(8, 10, 14, 0.42), 0 16px 40px rgba(8, 10, 14, 0.36);
   --shadow-up: 0 -8px 16px -12px rgba(8, 10, 14, 0.4);
-  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%239ca3b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%23a6adba' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   color-scheme: dark;
 }
@@ -437,13 +468,17 @@ html, body, #root {
   height: 100%;
   margin: 0;
 }
+/* The glass window has nothing opaque of ours underneath: the frost IS the page's bottom. */
+html[data-platform='darwin'] body { background: transparent; }
 
 body {
   /* Apple platforms first (SF), then Inter for Linux, then the CJK faces each
      platform ships. Order matters: naming Inter first is what made the whole app
      read as a web page on macOS. */
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
-  /* Opaque window: body paints the app background directly. */
+  /* On the glass window (macOS) the page must not paint over the frost — every
+     surface that should be opaque names its own colour (see --app-bg / .main).
+     Elsewhere the window is opaque and this is what shows behind everything. */
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -487,12 +522,37 @@ body {
    traffic lights either. */
 html:not([data-platform='darwin']) { --titlebar-fold-pad: 16px; }
 
+/* The glass window's rails (see --rail-veil in :root, and main.go's Backdrop). Only macOS gets
+   these: everywhere else --rail-veil already resolves to the flat colour, i.e. nothing changes.
+   Kept in one block so "is this surface translucent" is answerable in one place — a rail that
+   forgot it would be a hole cut into the window rather than a surface on it.
+   The value is the measured veil, not the frost: --rail-veil must stay opaque enough that the
+   DARKEST ink (--text-faint at 12px) clears 4.5:1 on the frosts this OS hands us. */
+html[data-platform='darwin'] {
+  --rail-veil: rgba(233, 233, 235, 0.65);
+}
+/* Dark's frost is the dark one (~#565554 under a white wallpaper, darker under a dark one), so its
+   veil is the flat --chrome itself, which is what the ladder says the rail is: the most recessed
+   plane. 0.65 of #1e222b lands the worst case at #323439, where --text-faint measures 5.52:1. */
+html[data-platform='darwin'][data-theme='dark'] {
+  --rail-veil: rgba(30, 34, 43, 0.65);
+}
+
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
   background: var(--app-bg);
+}
+/* On macOS the window is glass (main.go's MacBackdropTranslucent): macOS frosts the desktop
+   behind the window, and every box that leaves its background unpainted shows that frost. So
+   .app paints NOTHING there — the rails paint --rail-veil over the frost, and the content column
+   paints --app-bg on top of it, so the frost is visible exactly at the app's edges (the rails
+   and the gaps between them) and nowhere under the text. Elsewhere there is no frost to show and
+   this rule does not apply: the app is the opaque ladder it always was. */
+html[data-platform='darwin'] .app {
+  background: transparent;
 }
 
 /* Keyboard affordance for the rows that are divs-with-onClick rather than

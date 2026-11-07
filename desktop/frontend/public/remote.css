@@ -13,7 +13,9 @@
   inset: 0;
   z-index: var(--z-page);
   display: flex;
-  background: var(--app-bg);
+  /* Same split as the chat view: the rail shows the glass window's frost, the main column is the
+     opaque page (see .remote-main and --rail-veil). */
+  background: transparent;
 }
 
 /* ── Left column: machines, then that machine's conversations ──────────────── */
@@ -24,7 +26,7 @@
   display: flex;
   flex-direction: column;
   padding: 0 10px 12px;
-  background: var(--chrome);
+  background: var(--rail-veil);
   border-right: 1px solid var(--border);
   overflow: hidden;
 }
@@ -258,6 +260,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: var(--app-bg);
 }
 
 .remote-header {

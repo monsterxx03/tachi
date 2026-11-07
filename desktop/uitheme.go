@@ -74,11 +74,7 @@ func newThemeController(window *application.WebviewWindow, stored string, forced
 // apply paints the window background for the theme the given choice resolves to.
 func (c *themeController) apply(stored string, systemDark bool) {
 	_, dark := resolveTheme(stored, c.forced, systemDark)
-	colour := windowBgLight
-	if dark {
-		colour = windowBgDark
-	}
-	c.window.SetBackgroundColour(colour)
+	c.window.SetBackgroundColour(windowBackground(dark))
 }
 
 // manualChoice returns the frontend's current choice ("" = follow the system).

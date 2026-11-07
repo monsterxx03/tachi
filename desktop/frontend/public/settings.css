@@ -38,9 +38,11 @@
   bottom: 0;
   z-index: var(--z-page);
   display: flex;
-  /* Opaque, and the same surface as the chat view (see --app-bg): this layer COVERS the window
-     rather than sitting in it, so it has to paint a background of its own. */
-  background: var(--app-bg);
+  /* This layer COVERS the window rather than sitting in it, so it paints the page itself. On the
+     glass window (macOS) the two halves say different things about that: the rail is a veil over
+     the frost (--rail-veil) and the pane beside it is the opaque content plane (--app-bg, onto
+     .settings-pane below) — the same split the chat view has between .sidebar and .main. */
+  background: transparent;
 }
 
 /* ── Left rail: the groups, and the way out ─────────────────────────────────── */
@@ -57,8 +59,9 @@
      handle this whole page has — the rail's own children are buttons. See base.css. */
   padding: 0 10px 12px;
   overflow-y: auto;
-  /* The recessed plane, like the sidebar: the form next to it is the page. */
-  background: var(--chrome);
+  /* The recessed plane, like the sidebar: the form next to it is the page — and on the glass
+     window this is the rail that shows the frost (see --rail-veil). */
+  background: var(--rail-veil);
   border-right: 1px solid var(--border);
 }
 
@@ -131,6 +134,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* The opaque half — see .settings-view. */
+  background: var(--app-bg);
 }
 
 .settings-head {

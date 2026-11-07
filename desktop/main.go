@@ -19,14 +19,40 @@ import (
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
-// Window background colours, mirroring --bg in base.css (light / dark). The
-// window is opaque, so this is what shows for the instant before the frontend
-// paints — it has to follow the theme, or a dark desktop gets a white flash on
-// launch.
+// Window background colours, mirroring --bg in base.css (light / dark). They are
+// what shows for the instant before the frontend paints, so they have to follow
+// the theme — a dark desktop must not get a white flash on launch.
+//
+// On macOS the window is glass (MacBackdropTranslucent, windowBackdrop below) and
+// these still hold: Wails puts its frost view BELOW the webview and ABOVE the
+// window colour, so the colour never paints over the frost — it only fills the
+// moment before the page arrives. Setting it at full alpha is what makes that
+// moment look like the app rather than like the desktop.
 var (
 	windowBgLight = application.NewRGB(0xff, 0xff, 0xff)
 	windowBgDark  = application.NewRGB(0x25, 0x2a, 0x35)
 )
+
+// windowBackground is the colour behind the page for the theme the reader is in.
+func windowBackground(dark bool) application.RGBA {
+	if dark {
+		return windowBgDark
+	}
+	return windowBgLight
+}
+
+// windowBackdrop is what the window does with the desktop behind it. Only macOS
+// has the choice, and only there is it glass: macOS frosts whatever is behind the
+// window, and the page leaves the rails transparent (see --rail-veil in base.css)
+// so that frost is what they sit on. Every other surface stays opaque, so the
+// conversation is still read on plain paper rather than on the wallpaper. Off
+// macOS there is no backdrop layer at all and the field is ignored.
+func windowBackdrop() application.MacBackdrop {
+	if runtime.GOOS == "darwin" {
+		return application.MacBackdropTranslucent
+	}
+	return application.MacBackdropNormal
+}
 
 // forcedAppearance reads TACHI_DESKTOP_APPEARANCE ("dark" / "light") and maps
 // it to a Cocoa appearance, or returns DefaultAppearance to follow the system.
@@ -214,10 +240,7 @@ func main() {
 	storedTheme := loadUIState().Theme
 	forcedTheme := forcedAppearance()
 	appearance, dark := resolveTheme(storedTheme, forcedTheme, app.Env.IsDarkMode())
-	background := windowBgLight
-	if dark {
-		background = windowBgDark
-	}
+	background := windowBackground(dark)
 
 	// Menu bar: macOS gets Wails' default minus the WebKit zoom items, so ⌘= / ⌘- / ⌘0 reach
 	// the page instead of magnifying the whole window; Linux gets none at all. The pair
@@ -243,10 +266,11 @@ func main() {
 		Frameless: framelessWindow,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 44,
-			// Opaque window: the UI is a flat, solid design (no vibrancy, no
-			// backdrop blur anywhere), so the desktop behind the window must
-			// not bleed through.
-			Backdrop: application.MacBackdropNormal,
+			// Glass on macOS: macOS frosts the desktop behind the window and the page
+			// leaves its rails unpainted so the frost shows there (see --rail-veil in
+			// base.css) — the content column still paints plain paper over it. Off
+			// macOS the field is ignored and the window stays opaque.
+			Backdrop: windowBackdrop(),
 			TitleBar: application.MacTitleBarHidden,
 			// The appearance resolved above: the user's remembered choice, the
 			// dev override, or DefaultAppearance (= follow the system, which is

@@ -137,7 +137,9 @@
   inset: 0;
   z-index: var(--z-page);
   display: flex;
-  background: var(--app-bg);
+  /* Same split as the chat view: the rail shows the glass window's frost, the main column is the
+     opaque page (see .cron-main and --rail-veil). */
+  background: transparent;
 }
 
 .cron-rail {
@@ -145,7 +147,7 @@
   flex: 0 0 286px;
   display: flex;
   flex-direction: column;
-  background: var(--chrome);
+  background: var(--rail-veil);
   border-right: 1px solid var(--border);
   min-height: 0;
 }
@@ -192,7 +194,7 @@
 .cron-nav-name { font-size: var(--fs-label); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cron-nav-meta { font-size: var(--fs-micro); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.cron-main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.cron-main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--app-bg); }
 .cron-toolbar {
   height: 52px; flex: 0 0 52px;
   display: flex; align-items: center; gap: 10px;
