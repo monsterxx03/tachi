@@ -41,6 +41,31 @@ const probeInfoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>CFBundleIdentifier</key><string>com.example.probe</string>
 </dict></plist>`
 
+// writeBundleWithPlist builds a throwaway bundle with ONE Info.plist and nothing else — the shape a
+// settings extension is read in.
+func writeBundleWithPlist(t *testing.T, info, name string) string {
+	t.Helper()
+	return writeBundleWithPlists(t, map[string]string{"Info.plist": info}, name)
+}
+
+// writeBundleWithPlists builds a throwaway bundle out of the given files, keyed by their path
+// inside Contents. The plists are XML, which plutil reads as happily as the binary ones macOS ships.
+func writeBundleWithPlists(t *testing.T, files map[string]string, name string) string {
+	t.Helper()
+	app := filepath.Join(t.TempDir(), name)
+	contents := filepath.Join(app, "Contents")
+	for rel, body := range files {
+		path := filepath.Join(contents, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return app
+}
+
 func stringsFile(t *testing.T, name string) string {
 	t.Helper()
 	return `<?xml version="1.0" encoding="UTF-8"?>
@@ -140,5 +165,157 @@ func TestCacheFromAnotherVersionIsIgnored(t *testing.T) {
 	fresh.loadCatalog()
 	if len(fresh.apps) != 1 || fresh.apps[0].Name != "New" {
 		t.Fatalf("a cache of this version was dropped: %v", fresh.apps)
+	}
+}
+
+// A settings pane is not an application: it is a settings EXTENSION, it is opened by URL rather
+// than by bundle, and its Chinese name comes from a third place again (the sidebar's own key in
+// Localizable.loctable). These pin the three facts that differ.
+func TestReadPaneRecognisesOnlySettingsExtensions(t *testing.T) {
+	pane := writeBundleWithPlist(t, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>CFBundleIdentifier</key><string>com.example.settings</string>
+	<key>EXAppExtensionAttributes</key><dict>
+		<key>EXExtensionPointIdentifier</key><string>com.apple.Settings.extension.ui</string>
+	</dict>
+</dict></plist>`, "Pane.appex")
+
+	identity, ok := readPane(pane)
+	if !ok {
+		t.Fatal("a settings extension was not recognised")
+	}
+	if identity.ID != "com.example.settings" {
+		t.Errorf("id = %q", identity.ID)
+	}
+
+	// The directories these bundles live in are full of other extensions; the declared extension
+	// point is what makes one a pane.
+	notPane := writeBundleWithPlist(t, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>CFBundleIdentifier</key><string>com.example.thumbnail</string>
+	<key>EXAppExtensionAttributes</key><dict>
+		<key>EXExtensionPointIdentifier</key><string>com.apple.quicklook.thumbnail</string>
+	</dict>
+</dict></plist>`, "Thumb.appex")
+	if _, ok := readPane(notPane); ok {
+		t.Error("a thumbnail extension was taken for a settings pane")
+	}
+}
+
+// The pane's bundle path is its identity and 电池's is built from it, so a row can be opened
+// without a second lookup.
+func TestPaneURLIsBuiltFromTheBundleID(t *testing.T) {
+	pane := &launcherApp{Pane: true, BundleID: "com.apple.BluetoothSettings"}
+	if got := pane.paneURL(); got != "x-apple.systempreferences:com.apple.BluetoothSettings" {
+		t.Errorf("paneURL = %q", got)
+	}
+	app := &launcherApp{Path: "/Applications/X.app"}
+	if got := app.paneURL(); got != "" {
+		t.Errorf("an application answered paneURL %q", got)
+	}
+}
+
+// A pane gets no location line: its bundle sits in an .appex directory nobody recognises, and panes
+// are never duplicated the way two copies of an app can be.
+func TestPaneRowsHaveNoDetailLine(t *testing.T) {
+	pane := &launcherApp{Path: "/System/Library/ExtensionKit/Extensions/Bluetooth.appex", Pane: true}
+	if got := pane.detail(); got != "" {
+		t.Errorf("pane detail = %q, want empty", got)
+	}
+	app := &launcherApp{Path: "/Applications/X.app"}
+	if got := app.detail(); got != "/Applications" {
+		t.Errorf("app detail = %q", got)
+	}
+}
+
+// The sidebar's own label wins, and the predicate picks the label: a laptop shows 电池 where a
+// desktop shows 能耗 — the two are representations of ONE page.
+func TestSidebarNameFollowsThePredicate(t *testing.T) {
+	loc := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>zh_CN</key><dict>
+		<key>BATTERY_PREF_TITLE</key><string>电池</string>
+		<key>ENERGY_SAVER_PREF_TITLE</key><string>能耗</string>
+	</dict>
+</dict></plist>`
+	bundle := writeBundleWithPlists(t, map[string]string{
+		"Info.plist": `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>CFBundleIdentifier</key><string>com.example.power</string>
+	<key>EXAppExtensionAttributes</key><dict>
+		<key>EXExtensionPointIdentifier</key><string>com.apple.Settings.extension.ui</string>
+		<key>SettingsExtensionAttributes</key><dict>
+			<key>representations</key><array>
+				<dict>
+					<key>predicate</key><string>powersource.battery != YES</string>
+					<key>sidebar-name</key><string>ENERGY_SAVER_PREF_TITLE</string>
+				</dict>
+				<dict>
+					<key>predicate</key><string>powersource.battery == YES</string>
+					<key>sidebar-name</key><string>BATTERY_PREF_TITLE</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+</dict></plist>`,
+		"Resources/Localizable.loctable": loc,
+	}, "Power.appex")
+
+	want := "能耗"
+	if batteryPresent() {
+		want = "电池"
+	}
+	if got := sidebarNameOf(bundle); got != want {
+		t.Errorf("sidebarNameOf = %q on this machine, want %q", got, want)
+	}
+}
+
+// An identifier is not a name. A pane that never translated itself reports "BluetoothSettings" or
+// "FollowUps" — pages System Settings only lists once the device they are about exists — and a row
+// nobody could type is worse than a missing one.
+func TestUnreadablePaneNamesAreDropped(t *testing.T) {
+	for _, name := range []string{"FollowUps", "HeadphoneSettingsExtension", "GeneralSettings"} {
+		if paneNameIsReadable(name) {
+			t.Errorf("%q was kept as a name", name)
+		}
+	}
+	for _, name := range []string{"蓝牙", "隐私与安全性", "Wi‑Fi", "VPN", "Siri", "Game Center"} {
+		if !paneNameIsReadable(name) {
+			t.Errorf("%q was dropped", name)
+		}
+	}
+}
+
+// An app installed from the iOS App Store has no Contents/: the bundle is a wrapper around
+// WrappedBundle/. Its Info.plist is what makes the cache work — a stamp that cannot be read means
+// the entry looks updated on every rescan, so those apps were re-read on every press.
+func TestWrappedBundleIsReadWhereItsInfoPlistIs(t *testing.T) {
+	wrapped := filepath.Join(t.TempDir(), "Wrapped.app")
+	info := filepath.Join(wrapped, "WrappedBundle", "Info.plist")
+	if err := os.MkdirAll(filepath.Dir(info), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(info, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+	<key>CFBundleDisplayName</key><string>Wrapped</string>
+	<key>CFBundleIdentifier</key><string>com.example.wrapped</string>
+</dict></plist>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	name, _, bundleID, stamp := readAppName(wrapped)
+	if stamp == 0 {
+		t.Fatal("no stamp: this entry would be re-read on every rescan")
+	}
+	if name != "Wrapped" || bundleID != "com.example.wrapped" {
+		t.Errorf("name = %q, id = %q", name, bundleID)
+	}
+	if got := bundleRoot(wrapped); got != filepath.Join(wrapped, "WrappedBundle") {
+		t.Errorf("bundleRoot = %q", got)
 	}
 }

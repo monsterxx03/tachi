@@ -112,6 +112,9 @@ type launcherApp struct {
 	// Stamp is the modification time of the Info.plist this entry was read from — an app update
 	// rewrites it, which is how a cached entry is noticed to be stale.
 	Stamp int64 `json:"stamp,omitempty"`
+	// Pane marks a row that is a System Settings panel rather than an application. Both are
+	// bundles read the same way and ranked the same way; only STARTING one differs (see paneURL).
+	Pane bool `json:"pane,omitempty"`
 
 	nameLower      string
 	aliasesLower   []string
@@ -127,6 +130,16 @@ func newLauncherApp(path string) *launcherApp {
 	app := &launcherApp{Path: path, Name: name, Aliases: aliases, BundleID: bundleID, Stamp: stamp}
 	app.prepare()
 	return app
+}
+
+// detail is the quiet second line, shown only when two rows share a name: where the bundle sits,
+// so 微信 in /Applications can be told from a copy somewhere else. A settings pane gets none — its
+// "location" is an .appex directory nobody recognises, and panes are never duplicated anyway.
+func (a *launcherApp) detail() string {
+	if a.Pane {
+		return ""
+	}
+	return filepath.Dir(a.Path)
 }
 
 // prepare fills the derived keys. It is separate from newLauncherApp because a cached entry is
@@ -189,7 +202,7 @@ type launcherCache struct {
 
 // launcherCacheVersion is the shape of what a scan produces: bump it whenever a scan learns
 // something new about a bundle that is already on disk.
-const launcherCacheVersion = 2
+const launcherCacheVersion = 3
 
 // launcher holds the catalog and the panel. It is one value for the process's lifetime; every
 // mutation happens under mu, because Wails runs each bound call on its own goroutine.
@@ -444,14 +457,14 @@ func (l *launcher) list(query string) []LauncherItem {
 		items[i] = LauncherItem{
 			Path:   h.app.Path,
 			Name:   h.app.Name,
-			Detail: filepath.Dir(h.app.Path),
+			Detail: h.app.detail(),
 			Icon:   icons[h.app.Path],
 		}
 	}
 	return items
 }
 
-// launch starts an app and then closes the panel.
+// launch starts an app (or opens a settings pane) and then closes the panel.
 //
 // The order is launch-then-hide, and both halves are deliberate:
 //   - the bundle is checked for BEFORE anything happens, because an app that has been uninstalled
@@ -460,12 +473,24 @@ func (l *launcher) list(query string) []LauncherItem {
 //   - the panel closes only after the launch succeeded, so a failure can still be said out loud in
 //     the one place the reader is looking. A panel that hides first has already spent its voice.
 func (l *launcher) launch(path string) error {
-	name := l.knownName(path)
+	app := l.knownApp(path)
+	name := filepath.Base(path)
+	if app != nil {
+		name = app.Name
+	}
 	if _, err := os.Stat(path); err != nil {
 		l.forget(path)
 		return fmt.Errorf("「%s」找不到了，可能已经卸载或移动", name)
 	}
-	if err := openApp(path); err != nil {
+	// A settings pane has a bundle on disk but is started by URL, not by its bundle: `open -a` on
+	// a .appex starts nothing, because an extension has no life of its own to start.
+	var err error
+	if app != nil && app.Pane {
+		err = openPane(app.paneURL())
+	} else {
+		err = openApp(path)
+	}
+	if err != nil {
 		return fmt.Errorf("「%s」没能启动：%w", name, err)
 	}
 	l.hide()
@@ -475,14 +500,22 @@ func (l *launcher) launch(path string) error {
 
 // knownName is the row's title, for a message about it after it is gone.
 func (l *launcher) knownName(path string) string {
+	if app := l.knownApp(path); app != nil {
+		return app.Name
+	}
+	return filepath.Base(path)
+}
+
+// knownApp is the catalog entry for a path, or nil when the row is gone.
+func (l *launcher) knownApp(path string) *launcherApp {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	for _, app := range l.apps {
 		if app.Path == path {
-			return app.Name
+			return app
 		}
 	}
-	return filepath.Base(path)
+	return nil
 }
 
 // forget drops a bundle from the catalog because it is no longer there.
@@ -582,9 +615,10 @@ func (l *launcher) loadCatalog() {
 	l.replaceCatalog(apps)
 }
 
-// refreshCatalog rescans the application directories and re-reads only the bundles whose Info.plist
-// changed, then writes the cache back. It answers whether anything changed — a rescan that found the
-// same bundles must not cost a cache write or a re-list of an open panel.
+// refreshCatalog rescans the application directories, re-reads only the bundles whose Info.plist
+// changed, and adds the System Settings panes — then writes the cache back. It answers whether
+// anything changed: a rescan that found the same bundles must not cost a cache write or a re-list
+// of an open panel.
 func (l *launcher) refreshCatalog() bool {
 	paths := scanAppBundles()
 	if len(paths) == 0 {
@@ -601,37 +635,36 @@ func (l *launcher) refreshCatalog() bool {
 	// A bundle is re-read only when the Info.plist it was read from has changed since. An app that
 	// merely appears keeps nothing of the previous scan, so the second launch of a new app is
 	// already cache-only.
+	apps := make([]*launcherApp, len(paths))
 	fresh := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if cached, ok := previous[path]; ok {
-			if info, err := os.Stat(filepath.Join(path, "Contents", "Info.plist")); err == nil &&
-				cached.Stamp == info.ModTime().UnixNano() {
+	freshAt := make([]int, 0, len(paths))
+	for i, path := range paths {
+		cached, ok := previous[path]
+		if ok {
+			if info, err := os.Stat(filepath.Join(bundleRoot(path), "Info.plist")); err == nil &&
+				cached.Stamp == info.ModTime().UnixNano() && !cached.Pane {
+				apps[i] = cached
 				continue
 			}
 		}
 		fresh = append(fresh, path)
-	}
-
-	apps := make([]*launcherApp, len(paths))
-	position := make(map[string]int, len(paths))
-	for i, path := range paths {
-		position[path] = i
-	}
-	for path, cached := range previous {
-		if i, ok := position[path]; ok {
-			apps[i] = cached
-		}
+		freshAt = append(freshAt, i)
 	}
 	for i, app := range readApps(fresh) {
-		apps[position[fresh[i]]] = app
+		apps[freshAt[i]] = app
 	}
+
+	// Panes are appended after the applications rather than mixed in. Order only matters before
+	// anything is typed (the idle list is by usage, then name), and keeping them in one block is
+	// what lets the sidebar's own order come through instead of being sorted away.
+	apps = append(apps, panesOf()...)
 
 	// A bundle that appeared, was updated or went away — the three things a reader would notice.
 	changed := len(fresh) > 0 || len(previous) != len(apps)
 	l.replaceCatalog(apps)
 	if changed {
 		l.saveCatalog(apps)
-		log.Printf("launcher: %d applications (%d re-read)", len(apps), len(fresh))
+		log.Printf("launcher: %d rows (%d applications re-read)", len(apps), len(fresh))
 	}
 	return changed
 }

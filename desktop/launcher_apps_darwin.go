@@ -131,13 +131,36 @@ func bundleNameOf(fields map[string]any) string {
 	return firstNonEmpty(stringField(fields, "CFBundleDisplayName"), stringField(fields, "CFBundleName"))
 }
 
+// bundleRoot is the directory holding a bundle's Info.plist.
+//
+// A macOS app keeps everything in Contents/. An app INSTALLED FROM THE iOS APP STORE does not:
+// 小宇宙.app and several others are a wrapper around WrappedBundle/, with Contents/ absent
+// entirely. The test is the Info.plist's presence rather than the directory's — a bundle whose
+// Contents/ exists but holds no plist is not one this code can read anyway, and guessing wrong
+// costs a stamp: without one, the cache believes the app changed on every rescan.
+func bundleRoot(appPath string) string {
+	for _, candidate := range []string{"Contents", "WrappedBundle"} {
+		root := filepath.Join(appPath, candidate)
+		if isFile(filepath.Join(root, "Info.plist")) {
+			return root
+		}
+	}
+	return filepath.Join(appPath, "Contents")
+}
+
+// isFile reports whether path is a readable regular file.
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // readAppName resolves what to CALL a bundle, plus the other names it answers to.
 //
 // The display name is the localized one when there is one, else Info.plist's, else the file name.
 // Every other candidate becomes an alias, so 微信/WeChat/WeChat.app all find the same row. stamp is
 // the Info.plist's modification time, which is what the cache compares to notice an app update.
 func readAppName(appPath string) (name string, aliases []string, bundleID string, stamp int64) {
-	contents := filepath.Join(appPath, "Contents")
+	contents := bundleRoot(appPath)
 	infoPath := filepath.Join(contents, "Info.plist")
 	if info, err := os.Stat(infoPath); err == nil {
 		stamp = info.ModTime().UnixNano()
@@ -185,6 +208,23 @@ func plutilJSON(path string) map[string]any {
 		return nil
 	}
 	var decoded map[string]any
+	if json.Unmarshal(out, &decoded) != nil {
+		return nil
+	}
+	return decoded
+}
+
+// plutilJSONValue is plutilJSON for a plist whose top level is not a dictionary — the System
+// Settings sidebar is an ARRAY of sections. A dictionary file answers the same map plutilJSON
+// would; anything else that does not decode answers nil.
+func plutilJSONValue(path string) any {
+	ctx, cancel := context.WithTimeout(context.Background(), plistTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "plutil", "-convert", "json", "-o", "-", path).Output()
+	if err != nil {
+		return nil
+	}
+	var decoded any
 	if json.Unmarshal(out, &decoded) != nil {
 		return nil
 	}
