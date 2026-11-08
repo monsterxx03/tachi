@@ -22,6 +22,8 @@ func launcherAppDirs() []string {
 		"/Applications/Utilities",
 		"/System/Applications",
 		"/System/Applications/Utilities",
+		// The system's own odds and ends: 钥匙串访问, 无线诊断, 归档实用工具, 关于本机…
+		"/System/Library/CoreServices/Applications",
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		// ~/Applications is where an app installed without an installer lands (and where some
@@ -31,12 +33,29 @@ func launcherAppDirs() []string {
 	return dirs
 }
 
+// systemBundles are the apps that live somewhere no directory scan can find, listed by path.
+//
+// Finder is the whole reason: it is at /System/Library/CoreServices/Finder.app, and its PARENT
+// directory is not scannable — 118 bundles live there and all but a handful are background agents
+// (Dock, 控制中心, loginwindow, 通知中心, Spotlight…). Adding that directory wholesale would fill the
+// launcher with things nobody launches by name and a few that must never be launched by hand, so the
+// exception is stated one bundle at a time instead.
+var systemBundles = []string{
+	"/System/Library/CoreServices/Finder.app",
+}
+
 // scanAppBundles lists the .app bundles in those directories. Two directories can name the same
 // bundle through a symlink (brew links a cask into /Applications), so the result is de-duplicated
 // by resolved path — the same app must never take two rows.
 func scanAppBundles() []string {
 	seen := make(map[string]bool)
 	var paths []string
+	for _, path := range systemBundles {
+		if isDirOrLink(path) {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
 	for _, dir := range launcherAppDirs() {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -77,6 +96,41 @@ func isDirOrLink(path string) bool {
 // name its owner uses unless this is read.
 var localizations = []string{"zh-Hans.lproj", "zh_CN.lproj"}
 
+// loctableLanguages are the keys a Chinese name sits under in Resources/InfoPlist.loctable — the
+// other shape of the same thing, one table holding every language at once rather than a directory
+// per language. The system's own applications use this one and nothing else: 「访达」 is nowhere in
+// Finder's Info.plist or in any .lproj, only in that table (the old-style language names are the
+// table's, so it is zh_CN here and not zh-Hans).
+var loctableLanguages = []string{"zh_CN"}
+
+// localizedName is the Chinese name a bundle gives itself, from whichever of those two shapes it
+// uses, or "" when it has neither. A bundle is free to ship both, so the .lproj is asked first —
+// that is the shape an application's own localizations take, while the table belongs to the system.
+func localizedName(contents string) string {
+	resources := filepath.Join(contents, "Resources")
+	for _, lproj := range localizations {
+		if name := bundleNameOf(plutilJSON(filepath.Join(resources, lproj, "InfoPlist.strings"))); name != "" {
+			return name
+		}
+	}
+	table := plutilJSON(filepath.Join(resources, "InfoPlist.loctable"))
+	for _, language := range loctableLanguages {
+		entry, ok := table[language].(map[string]any)
+		if !ok {
+			continue
+		}
+		if name := bundleNameOf(entry); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// bundleNameOf picks a display name out of a bundle's name fields, wherever they were decoded from.
+func bundleNameOf(fields map[string]any) string {
+	return firstNonEmpty(stringField(fields, "CFBundleDisplayName"), stringField(fields, "CFBundleName"))
+}
+
 // readAppName resolves what to CALL a bundle, plus the other names it answers to.
 //
 // The display name is the localized one when there is one, else Info.plist's, else the file name.
@@ -91,22 +145,15 @@ func readAppName(appPath string) (name string, aliases []string, bundleID string
 
 	base := strings.TrimSuffix(filepath.Base(appPath), ".app")
 	info := plutilJSON(infoPath)
-	name = firstNonEmpty(stringField(info, "CFBundleDisplayName"), stringField(info, "CFBundleName"))
+	name = bundleNameOf(info)
 	bundleID = stringField(info, "CFBundleIdentifier")
-	for _, lproj := range localizations {
-		localized := plutilJSON(filepath.Join(contents, "Resources", lproj, "InfoPlist.strings"))
-		if localized == nil {
-			continue
-		}
-		if zh := firstNonEmpty(stringField(localized, "CFBundleDisplayName"), stringField(localized, "CFBundleName")); zh != "" {
-			name = zh
-			break
-		}
+	if zh := localizedName(contents); zh != "" {
+		name = zh
 	}
 	if name == "" {
 		name = base
 	}
-	for _, candidate := range []string{base, firstNonEmpty(stringField(info, "CFBundleDisplayName"), stringField(info, "CFBundleName"))} {
+	for _, candidate := range []string{base, bundleNameOf(info)} {
 		if candidate == "" || candidate == name {
 			continue
 		}

@@ -223,10 +223,10 @@ driver 那一半有四个陷阱，每一个都会让一次看起来是绿的运�
 - **点 Dock 图标不能把面板一起唤出来。** 框架自己的「重开」处理（`events_common_darwin.go`）是**把所有隐藏窗口都 Show 出来**，而面板按设计就是一个隐藏窗口——所以 ⌘W 关掉主窗口、再点 Dock，面板会跟着弹出来。修法是一个 **application event hook**（`ApplicationShouldHandleReopen`，注册在 `main.go` 里 `launcherPanel.install` 之后）：hook 同步执行、早于框架的监听器、可以 `Cancel()`，取消掉就只剩我们自己的 `revealWindow()`。**别写成 listener**：listener 各自跑在自己的 goroutine 里，顺序不保证，「事后关掉」是竞态。这条规则对所有「多一个隐藏窗口」的功能都成立——再加一个窗口时，它默认就在这个 Show 列表里。
 - **热键可能被系统自己占着**（Spotlight 的默认键就是 `Cmd+Space`）。注册失败**不是**致命错误：托盘有「启动器」，面板底部写「被占用」。删掉托盘那条路，等于让一个没注册成的热键看起来像功能坏了。冒烟运行**不注册**它（`demoEnabled()` 早退）——一次脚本运行绝不能抢用户机器上的系统组合键。
 - **排序的层级就是产品本身**（`launcher_match.go`）：精确 > 名字前缀 > 词首/拼音/首字母前缀 > 名字包含 > 拼音包含 > 子序列。使用频率**只在同一层内**打破平局；把频率加成掺进层级分，打 `chrome` 就会被昨天用过的另一个 app 顶掉。
-- **中文名要从 `.lproj` 读**：`微信.app` 的 Info.plist 里写的还是 `WeChat`，中文在 `Resources/zh-Hans.lproj/InfoPlist.strings`。所以名字解析走 `plutil -convert json`（系统自己的 reader，不引 plist 解析器），并把英文名和文件名一并留成别名——三种写法命中同一行。
+- **中文名从两处读，缺一处就有一半应用显示英文名**：一个正常应用把译文放在 `Resources/zh-Hans.lproj/InfoPlist.strings`（`微信.app` 的 Info.plist 里写的还是 `WeChat`）；系统自己的应用用另一套——一张 `Resources/InfoPlist.loctable` 同时装所有语言，`访达`、`钥匙串访问` 只存在于那里，它的语言名是老式的 `zh_CN` 而不是 `zh-Hans`。两处都走 `plutil -convert json`（系统自己的 reader，不引 plist 解析器），`.lproj` 先问。英文名和文件名一并留成别名，三种写法命中同一行。
 - **拼音按字展开多音字**：`音乐` 是 `yinyue` 不是 `yinle`，字典的第一个读音经常不是名字里那个；展开上限 `maxPinyinVariants`，超了就只用首选读音。
-- **扫哪些目录是写死的**（`/Applications`、`/System/Applications` 及它们的 `Utilities`、`~/Applications`），结果按 `EvalSymlinks` 之后的真实路径去重——cask 的 bundle 是指向 Caskroom 的链接。只有 macOS 有发现与打开的实现（`launcher_apps_darwin.go` / `_other.go`），Linux 那边是空实现。
-- **两份状态都在 `~/.tachi`**：`launcher_apps.json`（缓存，按 Info.plist 的 mtime 判断某一条是否过期）和 `launcher_usage.json`（频率与最后使用时间）。都是可手改的文件，写入走 `fileutil.AtomicWriteJSONPrivate`。
+- **扫哪些目录是写死的**（`/Applications`、`/System/Applications` 及它们的 `Utilities`、`/System/Library/CoreServices/Applications`、`~/Applications`），结果按 `EvalSymlinks` 之后的真实路径去重——cask 的 bundle 是指向 Caskroom 的链接。`CoreServices/Applications` 收的是钥匙串访问、无线诊断、归档实用工具这类真能启动的东西；它们的**父目录** `CoreServices` 不能整目录收（118 个包里绝大多数是 Dock、控制中心、loginwindow 这类后台代理），所以 Finder 这种零散的用 `systemBundles` 单独点名。只有 macOS 有发现与打开的实现（`launcher_apps_darwin.go` / `_other.go`），Linux 那边是空实现。
+- **两份状态都在 `~/.tachi`**：`launcher_apps.json`（缓存，按 Info.plist 的 mtime 判断某一条是否过期）和 `launcher_usage.json`（频率与最后使用时间）。都是可手改的文件，写入走 `fileutil.AtomicWriteJSONPrivate`。**缓存带版本号**（`launcherCacheVersion`）：它按 Info.plist 的 mtime 复用条目，而**扫得更好**（名字从哪读、扫哪些目录）不会让磁盘上任何东西变一下，所以不改版本号的话，旧缓存会一直用旧的读法回答下去。改动「一次扫描能从同一个 bundle 身上读出什么」，就在同一轮里把版本号加一。
 - **一次呼出整块重挂载**（前端靠 React 的 `key` 递增）：热键本身不重置任何状态，`launcher:open` 换掉整棵子树，查询框、滚动位置和高亮才不可能活到下一次。`launcher:changed` 走的是另一条路——它只重列，不动高亮和查询（图标补上了不该把手指下的那一行挪走）。点列表的空白处和按 Esc 同样是关闭。
 
 ## 桌面后端（绑定与路径）

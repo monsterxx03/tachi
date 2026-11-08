@@ -177,8 +177,19 @@ type launcherUsage struct {
 }
 
 type launcherCache struct {
-	Apps []*launcherApp `json:"apps"`
+	// Version is what the cache was written by. A cache only answers when it matches
+	// launcherCacheVersion: the entries are reused by their Info.plist mtime alone, so a change to
+	// how a bundle is READ (where its name comes from, which directories are scanned) would
+	// otherwise keep answering with the old reading forever — nothing on disk has to move for the
+	// catalog to be wrong. Bump the version whenever a scan learns something new about the same
+	// bundle.
+	Version int            `json:"version"`
+	Apps    []*launcherApp `json:"apps"`
 }
+
+// launcherCacheVersion is the shape of what a scan produces: bump it whenever a scan learns
+// something new about a bundle that is already on disk.
+const launcherCacheVersion = 2
 
 // launcher holds the catalog and the panel. It is one value for the process's lifetime; every
 // mutation happens under mu, because Wails runs each bound call on its own goroutine.
@@ -554,6 +565,12 @@ func (l *launcher) loadCatalog() {
 	if err := fileutil.ReadJSON(launcherCachePath(), &cache); err != nil {
 		return
 	}
+	if cache.Version != launcherCacheVersion {
+		// Written by a scan that read bundles a different way. The entries would answer with what
+		// that scan knew (an English name for 访达), so they are dropped and the rescan on the
+		// first press refills the catalog.
+		return
+	}
 	apps := make([]*launcherApp, 0, len(cache.Apps))
 	for _, app := range cache.Apps {
 		if app == nil || app.Path == "" {
@@ -632,7 +649,7 @@ func (l *launcher) replaceCatalog(apps []*launcherApp) {
 }
 
 func (l *launcher) saveCatalog(apps []*launcherApp) {
-	if err := fileutil.AtomicWriteJSONPrivate(launcherCachePath(), launcherCache{Apps: apps}); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(launcherCachePath(), launcherCache{Version: launcherCacheVersion, Apps: apps}); err != nil {
 		log.Printf("launcher: writing the application cache failed: %v", err)
 	}
 }
