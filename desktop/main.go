@@ -337,6 +337,28 @@ func main() {
 	launcherPanel.install(app)
 	desk.launcher = launcherPanel
 
+	// Clicking the Dock icon while every window is hidden. The framework's own answer
+	// (events_common_darwin.go) is to show EVERY hidden window of the app — and since the launcher
+	// panel is, by design, a hidden window of this process, that would pop the launcher open on top
+	// of the conversation the reader just asked for.
+	//
+	// A hook and not a listener: listeners are each dispatched on their own goroutine, so "hide it
+	// again afterwards" would race with them. Hooks run synchronously, before them, and cancelling
+	// here is what stops the framework from showing anything at all. A Dock click means "give me the
+	// main window", so that is what is done instead — the one window, never the panel.
+	if runtime.GOOS == "darwin" {
+		app.Event.RegisterApplicationEventHook(events.Mac.ApplicationShouldHandleReopen,
+			func(e *application.ApplicationEvent) {
+				if e.Context().HasVisibleWindows() {
+					// Something is already on screen: the framework would do nothing either, and
+					// raising the main window here would be this hook inventing behaviour.
+					return
+				}
+				desk.revealWindow()
+				e.Cancel()
+			})
+	}
+
 	// ⌘W and the red button HIDE the main window; only 退出 Tachi Desktop closes the app.
 	//
 	// The reason is not taste. On darwin a user-initiated close ALWAYS destroyed this window:
