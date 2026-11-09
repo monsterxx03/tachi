@@ -71,6 +71,13 @@ export interface MCPServerConfig {
     "timeout"?: Duration;
 
     /**
+     * ToolTimeout bounds ONE tool call on this server (default: 5m). It is a
+     * backstop, not a schedule: a server that hangs must not hold a turn open
+     * forever, and a tool that legitimately renders for minutes can raise it.
+     */
+    "tool_timeout"?: Duration;
+
+    /**
      * Whether to load this server
      */
     "enabled"?: boolean | null;

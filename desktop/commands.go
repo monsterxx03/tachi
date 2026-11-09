@@ -93,12 +93,13 @@ type commandRun struct {
 // Only names in this map are offered to the frontend (see ListCommands), so a
 // registry entry without an implementation is simply not advertised.
 var desktopCommandHandlers = map[string]func(*commandRun) error{
-	"compact":     runCompactCommand,
-	"trim":        runTrimCommand,
-	"dream":       runDreamCommand,
-	commandReview: runReviewCommand,
-	commandCommit: runCommitCommand,
-	"sh":          runShellCommand,
+	"compact":      runCompactCommand,
+	"trim":         runTrimCommand,
+	"dream":        runDreamCommand,
+	commandReview:  runReviewCommand,
+	commandCommit:  runCommitCommand,
+	"sh":           runShellCommand,
+	commandStopAll: runStopAllCommand,
 }
 
 // The commands that run as one-off forks. Named because more than the tables below needs them:
@@ -106,6 +107,12 @@ var desktopCommandHandlers = map[string]func(*commandRun) error{
 const (
 	commandReview = "review"
 	commandCommit = "commit"
+	// commandStopAll terminates this session's background tasks. It is NOT a
+	// turn: the composer runs it directly (see RunCommand) so it works while a
+	// turn is in flight — which is exactly when "stop everything" is wanted. The
+	// handler below exists for the paths that do go through a command turn (the
+	// phone), where it behaves the same when the session is idle.
+	commandStopAll = "stopall"
 )
 
 // commandLane says where a command's UI events go, and it is a property of the COMMAND
@@ -153,6 +160,11 @@ func (s *AgentService) RunCommand(text string) string {
 	name, args, refusal := parseCommand(text)
 	if refusal != "" {
 		return refusal
+	}
+	// 「全停」 must work while a turn is running, and startCommand refuses a busy
+	// session by design — so it runs directly instead of taking the turn machinery.
+	if name == commandStopAll {
+		return s.desk.stopAllTasks(s.desk.currentID())
 	}
 	// A typed command has no turn behind it: the review it starts covers the whole tree.
 	return s.desk.startCommand(s.desk.currentID(), name, args, reviewScope{}, "", laneFor(name), desktopCommandHandlers[name])
@@ -741,6 +753,16 @@ func runCommitCommand(c *commandRun) error {
 // It reports into the side-channel lane because its subject is the whole memory
 // store rather than this conversation — and because it can take minutes, which
 // a transcript turn would show as one long "thinking".
+// runStopAllCommand is /stopall's command-turn half (the phone's path; the
+// desktop composer takes the direct route in RunCommand so it can run mid-turn).
+func runStopAllCommand(c *commandRun) error {
+	c.ech <- agent.AgentEvent{
+		Type:      agent.AgentEventTextDelta,
+		TextDelta: c.desk.stopAllTasks(c.id),
+	}
+	return nil
+}
+
 func runDreamCommand(c *commandRun) error {
 	if strings.EqualFold(strings.TrimSpace(c.args), "status") {
 		c.ech <- agent.AgentEvent{

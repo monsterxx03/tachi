@@ -43,6 +43,14 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *llm.ResolvedPr
 		}
 	}
 	m.recordThreadChannel(sm)
+	// The event router finds a thread by the logical conversation its tasks carry.
+	// Recorded here because this is the one place every channel turn passes with
+	// the session in hand (a new session included).
+	if sm != nil {
+		if cur := sm.Current(); cur != nil {
+			m.bindTaskConversation(cur.LogicalConversationID(), threadID)
+		}
+	}
 	return sm, priorHistory
 }
 

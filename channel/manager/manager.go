@@ -12,6 +12,7 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
@@ -150,6 +151,16 @@ type Manager struct {
 	// Per-turn AIAgent instances are ephemeral, but background processes must
 	// survive across turns. The Manager owns and cleans up this shared PM.
 	processManager *tools.ProcessManager
+
+	// taskMu guards the per-thread task queues and the conversation → thread
+	// mapping (taskwake.go). One shared ProcessManager serves every thread, so a
+	// finished process's event has to be routed by CONVERSATION to the thread that
+	// started it — not to whichever agent happened to bind the manager's sink.
+	taskMu      sync.Mutex
+	taskQueues  map[string]*tasks.Queue
+	taskThreads map[string]string
+	taskCtx     context.Context
+	taskCancel  context.CancelFunc
 
 	// --- Per-thread AIAgent cache (B-full) ---
 	//
@@ -292,7 +303,12 @@ func NewWith(cfg *config.Config, deps Dependencies) (*Manager, error) {
 		sessionsDir, _ := config.SessionDir()
 		delegator = node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("channel"), nil, sessionsDir)
 	}
-	return &Manager{
+	taskCtx, taskCancel := context.WithCancel(context.Background())
+	m := &Manager{
+		taskCtx:                 taskCtx,
+		taskCancel:              taskCancel,
+		taskQueues:              make(map[string]*tasks.Queue),
+		taskThreads:             make(map[string]string),
 		cfg:                     cfg,
 		delegator:               delegator,
 		ownsDelegator:           ownsDelegator,
@@ -306,7 +322,19 @@ func NewWith(cfg *config.Config, deps Dependencies) (*Manager, error) {
 		threads:                 newThreadTable(),
 		oneoffCancels:           make(map[string]context.CancelFunc),
 		oneoffSem:               syncx.NewSemaphore(maxOneoffConcurrency),
-	}, nil
+	}
+	// The shared process manager reports a finished background process here, and
+	// this router finds the thread whose conversation it belongs to. Bound before
+	// any agent is built: the first agent to bind would otherwise capture ITS
+	// queue, and every other thread's processes would report into one conversation.
+	m.processManager.BindSink(m.postTaskEvent)
+	// A standalone channel process owns its sending side, so it also watches
+	// delegated tasks. In the merged host the cache is the desktop's and its sink
+	// routes a channel conversation here via PostTask.
+	if ownsDelegator && m.delegator != nil {
+		m.delegator.SetTaskSink(func(_ string, e tasks.Event) { m.postTaskEvent(e) })
+	}
+	return m, nil
 }
 
 // Add registers a Channel. Must be called before Start().
@@ -745,6 +773,10 @@ func (m *Manager) acknowledgeAskUserSettled(threadID string) {
 // tracked background processes, evicting cached agents, and tearing down
 // the shared MCP manager. Safe to call multiple times.
 func (m *Manager) Close() {
+	// Wake watchers die with the manager; the queues themselves are in-memory.
+	if m.taskCancel != nil {
+		m.taskCancel()
+	}
 	// Stop system scheduler first (may have in-flight jobs).
 	if m.systemScheduler != nil {
 		m.systemScheduler.Stop()

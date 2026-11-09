@@ -111,9 +111,14 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm
 		PermissionMode:  agent.PermissionModeSkip,
 		TitleGenEnabled: &titleGen,
 		ProcessManager:  m.processManager,
-		MCPManager:      sharedMCP,
-		FullConfig:      m.cfg,
-		SystemConfig:    agent.SystemConfigFromConfig(m.cfg),
+		// The thread's own queue: a background process or sub-agent that finishes
+		// while the thread is idle wakes it (taskwake.go). The manager's shared PM
+		// routes an event here by conversation.
+		TaskQueue:    m.taskQueueFor(threadID),
+		WakeCapable:  true,
+		MCPManager:   sharedMCP,
+		FullConfig:   m.cfg,
+		SystemConfig: agent.SystemConfigFromConfig(m.cfg),
 	})
 	if err != nil {
 		return nil, err

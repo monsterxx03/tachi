@@ -1033,7 +1033,43 @@ func (m *Manager) CallTool(ctx context.Context, serverName string, toolName stri
 	req.Params.Name = toolName
 	req.Params.Arguments = arguments
 
-	return c.CallTool(ctx, req)
+	// A backstop, not a schedule: without it one hung server holds a turn open
+	// forever. Cancelling the request does NOT guarantee the server stops working
+	// (the protocol has no cancel that every server honours), so the error says so
+	// rather than claiming the work was aborted.
+	timeout := m.toolTimeout(serverName)
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	res, err := c.CallTool(callCtx, req)
+	if err == nil {
+		return res, nil
+	}
+	switch {
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("MCP tool %q on server %q was interrupted: %w", toolName, serverName, err)
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded):
+		return nil, fmt.Errorf("MCP tool %q on server %q did not answer within %s — it may still be running there; "+
+			"raise that server's tool_timeout if it legitimately needs longer", toolName, serverName, timeout)
+	default:
+		return nil, err
+	}
+}
+
+// DefaultToolTimeout bounds one MCP tool call when the server does not set
+// tool_timeout. Generous on purpose: the timeout exists to end a hang, not to
+// rush a renderer.
+const DefaultToolTimeout = 5 * time.Minute
+
+// toolTimeout is the per-call bound for one server, from its config.
+func (m *Manager) toolTimeout(serverName string) time.Duration {
+	m.mu.RLock()
+	cfg, ok := m.serverCfgs[serverName]
+	m.mu.RUnlock()
+	if ok && cfg.ToolTimeout > 0 {
+		return time.Duration(cfg.ToolTimeout)
+	}
+	return DefaultToolTimeout
 }
 
 // GetOAuthHandler returns the OAuthHandler for a connected HTTP server,

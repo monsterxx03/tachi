@@ -231,8 +231,11 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
 		Logger:         logger.New("tui"),
 		PermissionMode: agent.PermissionModeTUI,
-		FullConfig:     cfg,
-		SystemConfig:   agent.SystemConfigFromConfig(cfg),
+		// The terminal can start a turn on its own when a task finishes (tui/taskwake.go),
+		// so background-capable tools may return immediately instead of blocking the turn.
+		WakeCapable:  true,
+		FullConfig:   cfg,
+		SystemConfig: agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
 		return err

@@ -59,12 +59,6 @@ func FormatSubagentStats(d time.Duration, iterCount int, toolSummary string) str
 	return "\n\n---\n" + stats
 }
 
-// SubagentStatsCarrier is an optional interface for tools that expose
-// sub-agent execution statistics after invocation.
-type SubagentStatsCarrier interface {
-	LastSubagentStats() (int, time.Duration)
-}
-
 // formatDuration formats a time.Duration for display.
 func formatDuration(d time.Duration) string {
 	if d < time.Second {

@@ -362,7 +362,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 		// Send terminal notification when a turn completes (not for one-offs like /commit).
 		// Skip when Herdr integration is active — Herdr provides its own visual indicators.
-		if m.notifyOnComplete && !isOneOff && !herdrNotifications(m.cfg) {
+		// A successful WAKE is silent: it runs because a task the user started finished,
+		// possibly long after they walked away, and the reply is already on screen.
+		if m.notifyOnComplete && !isOneOff && !m.wakeTurn && !herdrNotifications(m.cfg) {
 			notifyTerminal("tachi", "Reply ready")
 		}
 

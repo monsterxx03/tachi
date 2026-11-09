@@ -226,6 +226,23 @@ func (s *delegationStore) get(id string) (*Delegation, bool) {
 // script's one-off delegation is findable by that script's later runs and invisible to — and
 // from — every real conversation. "No filter" would let a sessionless run read a private
 // conversation's tasks, which is the leak §8.5's rule is about.
+// all returns every record, newest first. The delegation watcher needs the
+// whole set: a task that settles must reach its conversation even when that
+// conversation is not the one being worked on.
+func (s *delegationStore) all() []*Delegation {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*Delegation, 0, len(s.items))
+	for _, d := range s.items {
+		snap := *d
+		out = append(out, &snap)
+	}
+	return out
+}
+
 func (s *delegationStore) list(logicalID string) []*Delegation {
 	s.mu.Lock()
 	defer s.mu.Unlock()

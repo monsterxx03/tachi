@@ -223,6 +223,19 @@ func (a *AIAgent) newSubagentExecutor(sysCfg config.SubagentConfig) *subagent.Ex
 	return executor
 }
 
+// newSubagentTool builds the SubAgent tool with both of its run-scoped inputs:
+// where an oversized result spills (the same tool_result policy as Bash and
+// WebFetch) and whether it may run in the background (only where a finished task
+// can wake an idle conversation — see WakeCapable). One place, so the initial
+// registration and a reload cannot disagree; before this, only the reload set
+// the spill directory, so a fresh agent truncated what a reloaded one spilled.
+func (a *AIAgent) newSubagentTool(runner tools.SubagentRunner, resultDir string) *tools.SubagentTool {
+	t := tools.NewSubagentTool(runner)
+	t.SetResultBaseDir(resultDir)
+	t.SetAsync(a.Config.WakeCapable, a.Config.TaskQueue)
+	return t
+}
+
 // ReloadSubagent rebuilds the subagent executor (and its dedicated provider) from cfg.
 //
 // A runner the frontend injected via AgentConfig is left alone (`subagentInjected`): the tool
@@ -239,11 +252,9 @@ func (a *AIAgent) ReloadSubagent(cfg *config.Config) error {
 	a.SetupSubagentProvider(cfg)
 	executor := a.newSubagentExecutor(cfg.Subagent)
 	a.Config.SubagentRunner = executor
-	subagentTool := tools.NewSubagentTool(executor)
 	// 超限结果落盘（与 Bash / WebFetch 共用 tool_result 配置）：sub-agent 攒下的分析结果
 	// 被截断就只能重跑，落盘则一次 ReadFile 取回。
-	subagentTool.SetResultBaseDir(cfg.ToolResult.ResultFileDir())
-	a.RegisterTool(subagentTool)
+	a.RegisterTool(a.newSubagentTool(executor, cfg.ToolResult.ResultFileDir()))
 	return nil
 }
 

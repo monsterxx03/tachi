@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -36,6 +37,11 @@ type channelTurns interface {
 	ExternalRefusal(content string) error
 	// ThreadPlatform names the channel a thread belongs to ("discord", ...), or "".
 	ThreadPlatform(threadID string) string
+	// PostTask hands a finished task to the thread that owns a conversation, and
+	// reports whether the channel took it. The host's task sink asks this FIRST:
+	// a conversation a channel owns must be continued by that runtime, not by a
+	// second one (running both would write one session from two histories).
+	PostTask(logicalID string, e tasks.Event) bool
 }
 
 // setChannels hands this app the IM runtime of the process it lives in (main_headless, after the

@@ -198,6 +198,12 @@ func TestBashTool_AutoBackground(t *testing.T) {
 	if !strings.Contains(r.Stderr, "continuing in background") {
 		t.Errorf("expected background hint in stderr, got: %s", r.Stderr)
 	}
+	// The model must be told the report is AUTOMATIC: a hint that only names
+	// wait_name is what makes it poll a task it could simply walk away from.
+	if !strings.Contains(r.Stderr, "reported to you automatically") ||
+		!strings.Contains(r.Stderr, "continue with other work") {
+		t.Errorf("the background hint must say the result is reported automatically, got: %s", r.Stderr)
+	}
 
 	// The adopted process must be tracked and stoppable.
 	infos := pm.List()
@@ -369,9 +375,11 @@ func TestBashTool_WaitName(t *testing.T) {
 		if !strings.Contains(r.RecentStdout, "hi") {
 			t.Errorf("expected the job's output in the result, got %q", r.RecentStdout)
 		}
-		// The whole point: waiting added no process of its own.
-		if after := len(pm.List()); after != before {
-			t.Errorf("wait_name changed the tracked process count: %d → %d", before, after)
+		// The whole point: waiting added no process of its own. The job itself is
+		// gone from the map — a natural exit is reported as an event and forgotten,
+		// so list never grows with things that are no longer running.
+		if after := len(pm.List()); after != 0 {
+			t.Errorf("the finished job should leave the map, tracked = %d (was %d)", after, before)
 		}
 	})
 
@@ -434,4 +442,32 @@ func TestBashTool_WaitName(t *testing.T) {
 			t.Fatalf("expected a not-found error, got %v", err)
 		}
 	})
+}
+
+// background=true returns a snapshot, and the snapshot alone says nothing about
+// what to do next — the note is what turns "started" into "you can walk away".
+func TestBashTool_BackgroundStartCarriesTheNextStep(t *testing.T) {
+	pm := NewProcessManager()
+	t.Cleanup(pm.KillAll)
+	tool := BashTool{processManager: pm}
+
+	out, err := tool.ExecuteContext(t.Context(), `{"background": true, "bg_name": "job", "command": "sleep 4"}`)
+	if err != nil {
+		t.Fatalf("background start failed: %v", err)
+	}
+	var r struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Note   string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+	if r.Name != "job" || r.Status != "running" {
+		t.Fatalf("unexpected snapshot: %+v", r)
+	}
+	if !strings.Contains(r.Note, "reported to you automatically") ||
+		!strings.Contains(r.Note, "continue with other work") {
+		t.Errorf("the start note must say the result is reported automatically, got %q", r.Note)
+	}
 }

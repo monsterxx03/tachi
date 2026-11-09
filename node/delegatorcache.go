@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -68,6 +69,13 @@ type DelegatorCache struct {
 	// storeFile). It travels with the cache because the SENDER is built per entry point, and each
 	// one knows its own store root — a process with no conversations (`-p`) passes "".
 	sessionsDir string
+	// taskSink, when set, makes this cache watch its delegated tasks and report the
+	// ones that settle or start waiting (delegationwatch.go). It belongs to the
+	// entry point that can WAKE an idle conversation; a process whose entry cannot
+	// (tui, `-p`) leaves it nil, and then nothing is polled: the records already
+	// reach a turn through RemoteTasksReminder.
+	taskSink    func(logicalID string, e tasks.Event)
+	watchCancel context.CancelFunc
 	openFunc    func(peers []config.PeerConfig, ownName string, log *logger.Logger, store *sightingsStore) (*Sender, error)
 	// newBrowser builds the mDNS browser, and it is a field for the same reason openFunc is: a test
 	// that needs a browser OBJECT — to prove what the cache does around one, and that Close comes
@@ -213,8 +221,13 @@ func (c *DelegatorCache) Close() {
 	c.discovery.Enabled, c.discovery.Gossip = false, false
 	browser, store, gossip := c.browser, c.store, c.gossip
 	c.browser, c.store, c.gossip = nil, nil, nil
+	watchCancel := c.watchCancel
+	c.watchCancel, c.taskSink = nil, nil
 	c.current = nil
 	c.mu.Unlock()
+	if watchCancel != nil {
+		watchCancel()
+	}
 	// The asker first, then the producer, then what it fed. Neither wait is on anything another
 	// package owns, so this is bounded by one in-flight connection at worst — and the loop must stop
 	// before the store it feeds and the sender it reads.
@@ -328,6 +341,44 @@ func (c *DelegatorCache) senderNow() *Sender {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.current
+}
+
+// SetTaskSink makes this cache watch delegated tasks and report the ones that
+// settle or start waiting. Called once, by the entry point that can wake an idle
+// conversation; a second call is ignored, so a rebuilt sender cannot end up with
+// two watchers.
+func (c *DelegatorCache) SetTaskSink(sink func(logicalID string, e tasks.Event)) {
+	if c == nil || sink == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.closed || c.taskSink != nil {
+		c.mu.Unlock()
+		return
+	}
+	c.taskSink = sink
+	ctx, cancel := context.WithCancel(context.Background())
+	c.watchCancel = cancel
+	c.mu.Unlock()
+	go c.watchDelegations(ctx, sink)
+}
+
+// watchDelegations is the polling loop. It reads the CURRENT sender each tick:
+// the cache rebuilds one when the peer list changes, and the records are reloaded
+// with it.
+func (c *DelegatorCache) watchDelegations(ctx context.Context, sink func(string, tasks.Event)) {
+	t := time.NewTicker(DelegationPollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if s := c.senderNow(); s != nil {
+			s.PollDelegations(ctx, sink)
+		}
+	}
 }
 
 // startDiscovery brings the discovery side up the first time it is needed — the store every source

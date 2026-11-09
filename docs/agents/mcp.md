@@ -6,11 +6,18 @@
 
 | 章节 | 什么时候读 |
 | --- | --- |
+| **一次工具调用多久算太久** | 你动 `Manager.CallTool` 的超时、`tool_timeout`，或用户在等一个卡住的 server |
 | **池，以及替它做广告的提醒** | 你增删工具、开关某个 server，或改提醒的形状 |
 | **搜索** | 你动 `MCPSearchTools`、任何一个 searcher，或 `server` 的收窄 |
 | **模型读到的结果** | 你改一次搜索返回的东西 |
 | **provider 看到的 schema** | 你动 MCP 工具怎么变成一个 `llm.Tool` |
 | **加载的代价，以及那张预算卡片** | 你动成本门禁（`agent/mcp_budget.go`）、`mcp_tool_search.cache_budget`，或确认卡片的文案 |
+
+## 一次工具调用多久算太久
+
+- **`timeout` 管连接，`tool_timeout` 管调用，两个不是一回事。** `Manager.CallTool` 给每次调用套一个上限（按 server 配，默认 `DefaultToolTimeout` = 5 分钟）；没有它，一个挂住的 server 会把一轮永久占住，而人只看到转圈。
+- **超时的错误必须说「可能还在那边跑」。** 协议里没有一个所有 server 都遵守的取消，我们这边取消只是不再等；声称「已中止」是在替对端撒谎。所以文案是「did not answer within …; it may still be running there」，并提示可以调大该 server 的 `tool_timeout`——一个真的渲染几分钟的工具是合法的。
+- **调用方自己取消（用户按停止）是另一条错误：`interrupted`，不是超时。** 混成一句「超时」会让模型去调 `tool_timeout`，而真正的原因是这一轮被停了。
 
 ## 池，以及替它做广告的提醒
 

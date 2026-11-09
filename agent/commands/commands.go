@@ -54,6 +54,7 @@ var Registry = []Def{
 	{Name: "cd", Description: "Change working directory for this thread", InputHint: "<directory>", Modes: []Mode{ModeChannel}},
 	{Name: "sh", Description: "Run a shell command in the session working directory and echo its output (no LLM)", InputHint: "<command>", Modes: []Mode{ModeTUI, ModeChannel, ModeDesktop}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},
+	{Name: "stopall", Description: "Stop every background task of this session (the current turn keeps running)", Modes: []Mode{ModeDesktop}},
 	{Name: "research", Description: "Deep research on a topic. Usage: /research <topic> [--depth 2] [--breadth 3]", InputHint: "<topic>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "restart", Description: "Restart Tachi via systemctl (requires systemd)", Modes: []Mode{ModeChannel}},
 }

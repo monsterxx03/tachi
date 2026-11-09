@@ -140,6 +140,8 @@ func (d *desktopApp) steerFrom(sessionID, text, display string, origin messageOr
 	case <-ch:
 	default:
 	}
+	// A steer is the user being present mid-turn; it releases a stop's hold too.
+	d.resumeWake(d.wakeForSession(sessionID))
 	select {
 	case ch <- agent.SteerInput{Text: expanded.Text, Display: display, Images: expanded.Images}:
 		// The other screens draw a steered message with its own style, so the echo says which
@@ -217,6 +219,9 @@ func (d *desktopApp) startTurnFrom(id, text, display string, origin messageOrigi
 		}
 		r = pr
 	}
+
+	// The user speaking is what releases a stop's hold on automatic waking.
+	d.resumeWake(d.wakeForSession(id))
 
 	// Mark the run busy and take the turn scaffolding (cancellable context,
 	// steer channel, done channel) before touching the history: a busy session
@@ -445,6 +450,7 @@ func (d *desktopApp) markTreeStale(id string) {
 // the old id those would be sent to the session the conversation has left.
 func (d *desktopApp) endTurn(id, endReason string) {
 	d.mu.Lock()
+	var stoppedLogical string
 	if r := d.runs[id]; r != nil {
 		r.running = false
 		r.steerCh = nil
@@ -454,12 +460,22 @@ func (d *desktopApp) endTurn(id, endReason string) {
 		// previous job's name.
 		r.cronJobName = ""
 		r.cronSilent = false
+		r.wakeTurn = false
 		// The turn is over, so its tool-call count is too (see countToolCall): the device's
 		// line about it is about a turn IN FLIGHT, and a number left standing after the turn
 		// would read as progress on something that already finished.
 		r.toolCalls = 0
+		if endReason == "interrupted" {
+			stoppedLogical = runLogicalID(r)
+		}
 	}
 	d.mu.Unlock()
+	// A turn the user stopped is the one brake on automatic waking: the chain of
+	// tasks it may have started (test → fix → test) must not keep running after
+	// "stop". The next message or steer resumes it (see taskwake.go).
+	if stoppedLogical != "" {
+		d.pauseWake(stoppedLogical)
+	}
 	// An AskUserQuestion this turn parked on is gone the moment the turn is, however it
 	// ended. The permission half needs no such sweep — its waiting goroutine drops its own
 	// row through a defer — but an AskUser wait lives on the AGENT's channel, so a turn
@@ -767,6 +783,7 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 		r.turnCredit = r.credit - r.turnStartCredit
 		turnCost, turnCredit := r.turnCost, r.turnCredit
 		cronName, cronSilent := r.cronJobName, r.cronSilent
+		wakeTurn := r.wakeTurn
 		d.mu.Unlock()
 		if toTranscript && ev.Result != nil && isCurrent {
 			d.emit("agent:result", ev.Result)
@@ -798,7 +815,11 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 			(ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled)
 		switch lane {
 		case laneTranscript:
-			if ev.Result != nil && !interrupted {
+			// A wake turn's success is not announced: it runs because a task the user
+			// started finished, possibly hours later, and a push for "the tests passed"
+			// at 3am is noise. The reply is already in the conversation. Its failure
+			// (the Error branch below) is still announced — that is news.
+			if ev.Result != nil && !interrupted && !wakeTurn {
 				d.notifyHost().notifyTurnDone(id, ev.Result.IterationsUsed, ev.Result.Duration)
 				// 设备也响一声（另一种音频，见 alertKindDone）：同一条「你不在看」的判据，
 				// 而用户离电脑远时未必听得见系统通知，也未必在看屏幕。
@@ -1280,6 +1301,12 @@ type sessionRun struct {
 	// reply is known by then), and cleared by endTurn. Guarded by d.mu.
 	cronJobName string
 	cronSilent  bool
+
+	// wakeTurn marks a turn this process started on its own, from finished tasks
+	// (taskwake.go). Its success is not announced: the user may be asleep, and
+	// the result is already sitting in the conversation. Its FAILURE still is —
+	// see the gate in handleEventIn. Guarded by d.mu, cleared by endTurn.
+	wakeTurn bool
 }
 
 // delegatorCache is this process's ONE sending-side cache, built on first use and kept in step with
@@ -1291,6 +1318,9 @@ func (d *desktopApp) delegatorCache(cfg *config.Config) *node.DelegatorCache {
 	d.delegatorMu.Lock()
 	if d.delegator == nil {
 		d.delegator = node.NewDelegatorCache(cfg.Node.Name, node.DiscoveryOf(cfg), logger.New("desktop"), d.peerDiscovered, d.sessionBaseDir())
+		// A delegation is a task like any other: when it settles, or parks on a
+		// question, it joins this conversation's queue so an idle turn continues.
+		d.delegator.SetTaskSink(d.postTaskEvent)
 	}
 	cache := d.delegator
 	d.delegatorMu.Unlock()

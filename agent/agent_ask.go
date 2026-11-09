@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
@@ -44,11 +46,24 @@ func (a *AIAgent) askFrontend(ctx context.Context, tc llm.ToolCall, preview stri
 		ToolDiff: preview,
 	}
 
+	// A run woken by a finished task may have nobody at the terminal. The bound
+	// lives on the RUN (agent.WithAskTimeout); without one this waits for the user,
+	// which is right for a turn they just sent.
+	var expired <-chan time.Time
+	if d := AskTimeoutFromCtx(ctx); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		expired = timer.C
+	}
 	select {
 	case resp := <-a.Channels.ConfirmResp:
 		return resp, nil
 	case <-ctx.Done():
 		return ConfirmDeny, ctx.Err()
+	case <-expired:
+		return ConfirmDeny, fmt.Errorf("approval did not arrive within %s — the user was not available, "+
+			"so the action was NOT performed. Say what was blocked and carry on without it, or put the "+
+			"question in your reply", AskTimeoutFromCtx(ctx))
 	}
 }
 

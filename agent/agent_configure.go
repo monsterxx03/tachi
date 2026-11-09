@@ -153,12 +153,12 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		}
 		executor := a.newSubagentExecutor(sysCfg.Subagent)
 		a.Config.SubagentRunner = executor
-		a.RegisterTool(tools.NewSubagentTool(executor))
+		a.RegisterTool(a.newSubagentTool(executor, sysCfg.ToolResult.ResultFileDir()))
 	} else {
 		// Custom SubagentRunner provided via AgentConfig — register the tool anyway, and
 		// remember it is not ours to replace (see ReloadSubagent).
 		a.subagentInjected = true
-		a.RegisterTool(tools.NewSubagentTool(a.Config.SubagentRunner))
+		a.RegisterTool(a.newSubagentTool(a.Config.SubagentRunner, sysCfg.ToolResult.ResultFileDir()))
 	}
 
 	// Hook system (after tools, so user command hooks can reference them).
@@ -407,30 +407,22 @@ func (a *AIAgent) MCPReady() <-chan struct{} {
 	return a.Config.MCPManager.InitDone()
 }
 
-// backgroundTaskProvider adapts *tools.ProcessManager to
-// systemreminder.BackgroundTaskProvider for the BackgroundTaskReminder.
-type backgroundTaskProvider struct {
+// runningTaskProvider adapts ProcessManager to
+// systemreminder.RunningTaskProvider.
+type runningTaskProvider struct {
 	pm *tools.ProcessManager
 }
 
-func (p *backgroundTaskProvider) DrainCompleted() []systemreminder.BackgroundTaskInfo {
+func (p *runningTaskProvider) RunningTasks(conversation string) []systemreminder.RunningTask {
 	if p.pm == nil {
 		return nil
 	}
-	completed := p.pm.DrainCompleted()
-	infos := make([]systemreminder.BackgroundTaskInfo, len(completed))
-	for i, c := range completed {
-		infos[i] = systemreminder.BackgroundTaskInfo{
-			Name:         c.Name,
-			Command:      c.Command,
-			ExitCode:     c.ExitCode,
-			Status:       string(c.Status),
-			Error:        c.Error,
-			RecentStdout: c.RecentStdout,
-			RecentStderr: c.RecentStderr,
-		}
+	infos := p.pm.ListFor(conversation)
+	out := make([]systemreminder.RunningTask, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, systemreminder.RunningTask{Name: info.Name, Command: info.Command})
 	}
-	return infos
+	return out
 }
 
 // buildReminderCollectorFrom builds the reminder collector with core reminders,
@@ -443,7 +435,10 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
 		&systemreminder.BackgroundTaskReminder{
-			Provider: &backgroundTaskProvider{pm: a.Config.ProcessManager},
+			Queue: a.Config.TaskQueue,
+		},
+		&systemreminder.RunningTasksReminder{
+			Provider: &runningTaskProvider{pm: a.Config.ProcessManager},
 		},
 		// Delegation's two reminders. Registered unconditionally because they read the RUN's
 		// delegator and stay silent without one: a turn that was not given a sending side must

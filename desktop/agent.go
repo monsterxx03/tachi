@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/node"
@@ -226,6 +227,19 @@ type desktopApp struct {
 	// state change, and the ledger read is a file scan.
 	trayCost trayCostCache
 	simCh    chan struct{} // simulated-turn stop signal
+
+	// taskMu guards the per-conversation task queues and the context their watchers
+	// live on (taskwake.go). A queue is keyed by LOGICAL conversation, so a
+	// compaction does not strand the events that were pending when it happened.
+	// Deliberately NOT guarded by mu: a watcher waits for a turn to end while
+	// holding no app lock, and a finished process posts from its own goroutine.
+	taskMu     sync.Mutex
+	taskQueues map[string]*tasks.Queue
+	taskCtx    context.Context
+	taskCancel context.CancelFunc
+	// taskClosed says the app is shutting down: a late agent build may still need a
+	// queue (the reminder reads it) but must not start a watcher on a dead context.
+	taskClosed bool
 
 	// asks holds every "a turn is parked on the user" record, keyed by session +
 	// tool call (permKey): a bash policy ask and an AskUserQuestion alike. It is

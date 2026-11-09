@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -156,9 +157,21 @@ type AgentConfig struct {
 	ReminderCollector ReminderCollector // 新增（Configure 回填）
 	MCPManager        *mcp.Manager      // 由 SharedMCP 更名；Configure 回填
 	ProcessManager    *tools.ProcessManager
-	SubagentRunner    tools.SubagentRunner // 新增（Configure 回填）
-	SkillStore        *skill.Store         // 新增
-	Memory            *MemoryState         // 新增（Configure 回填）
+	// WakeCapable says a finished task can start a turn here when the conversation
+	// is idle — the entry point has a wake path (desktop/taskwake.go). Tools that
+	// can run in the background read it: where it is false they run synchronously,
+	// because a result nobody is awake to read is a result lost. True today only
+	// for the desktop.
+	WakeCapable bool
+	// TaskQueue is where a finished background task is announced. It belongs to
+	// the CONVERSATION, not to this agent: an entry point that rebuilds an agent
+	// (the desktop does, per session) hands the same queue to the new one, so a
+	// completion that happened while the agent was gone is still reported.
+	// nil = a private queue, which is what every one-shot agent wants.
+	TaskQueue      *tasks.Queue
+	SubagentRunner tools.SubagentRunner // 新增（Configure 回填）
+	SkillStore     *skill.Store         // 新增
+	Memory         *MemoryState         // 新增（Configure 回填）
 
 	// --- 钩子系统（由 Configure 初始化，构造期回填）---
 	HookDispatcher *hooks.Dispatcher

@@ -77,6 +77,43 @@ func (e *Executor) RunSubagent(
 	}
 	defer e.sem.Release()
 
+	shortID := strutil.ShortUUID(8)
+	result, stats, err := e.runTask(ctx, shortID, args)
+	return result, shortID, stats, err
+}
+
+// StartSubagent registers a background run and returns immediately with the id
+// the outcome will be reported under (implements tools.AsyncSubagentRunner).
+//
+// Concurrency is still bounded by the same semaphore, but the WAIT happens in
+// the goroutine: a dispatch must never block the turn. The work is detached from
+// the turn's cancellation with WithoutCancel — a sub-agent belongs to the
+// conversation, and the whole reason it runs in the background is that it
+// outlives the turn that started it. Context VALUES survive (working directory,
+// session, usage kind), which is what the child needs to run where it should.
+func (e *Executor) StartSubagent(
+	ctx context.Context,
+	args tools.SubagentArgs,
+	done func(tools.SubagentOutcome),
+) (string, error) {
+	shortID := strutil.ShortUUID(8)
+	go func() {
+		bg := context.WithoutCancel(ctx)
+		if err := e.sem.Acquire(bg); err != nil {
+			done(tools.SubagentOutcome{ID: shortID, Err: err})
+			return
+		}
+		defer e.sem.Release()
+		result, stats, err := e.runTask(bg, shortID, args)
+		done(tools.SubagentOutcome{ID: shortID, Result: result, Stats: stats, Err: err})
+	}()
+	return shortID, nil
+}
+
+// runTask is the shared setup both entry points use: the provider, the iteration
+// budget, and the worktree branch. One place, so a background run cannot drift
+// from a blocking one.
+func (e *Executor) runTask(ctx context.Context, shortID string, args tools.SubagentArgs) (string, *tools.SubagentResult, error) {
 	provider := e.agent.SubagentProvider()
 
 	maxIterations := e.cfg.MaxIterations
@@ -84,21 +121,18 @@ func (e *Executor) RunSubagent(
 		maxIterations = DefaultMaxIterations
 	}
 
-	shortID := strutil.ShortUUID(8)
 	thinking := e.cfg.Thinking
 	branch := args.WorktreeBranch
 
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
-		result, stats, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
+		return e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 			e.agent.Logger().Info(worktreeCtx, "[subagent] worktree created", "id", shortID, "path", wtPath, "branch", fallbackIfEmpty(branch, "detached"))
 			return e.run(worktreeCtx, shortID, args, provider, maxIterations, thinking, branch, wtPath)
 		})
-		return result, shortID, stats, err
 	}
 
-	result, stats, err := e.run(ctx, shortID, args, provider, maxIterations, thinking, "", "")
-	return result, shortID, stats, err
+	return e.run(ctx, shortID, args, provider, maxIterations, thinking, "", "")
 }
 
 // run is the internal method that creates and runs the child agent.

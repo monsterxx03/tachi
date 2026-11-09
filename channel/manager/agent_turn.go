@@ -514,6 +514,10 @@ func (m *Manager) finalizeCompactReply(ctx context.Context, msg channel.Incoming
 // drainEvents — only agent acquisition and the run's tool view differ, so
 // they're isolated in acquireForTurn.
 func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback, observe TurnObserver) {
+	// The user is here again: release a /stop's hold on automatic waking. Done
+	// before the turn acquires anything, so a task that finished while the thread
+	// was stopped is not held past this message.
+	m.resumeTaskQueue(msg.ThreadID)
 	defer func() {
 		// Unblock the handler on panic.
 		if r := recover(); r != nil {

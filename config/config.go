@@ -368,12 +368,16 @@ type MCPServerConfig struct {
 	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	URL     string            `json:"url,omitempty"`                    // For http transport
-	Headers map[string]string `json:"headers,omitempty"`                // For http transport
-	Proxy   string            `json:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
-	Timeout Duration          `json:"timeout,omitempty"`                // Connect timeout (default: 10s)
-	Enabled *bool             `json:"enabled,omitempty" default:"true"` // Whether to load this server
-	OAuth   *MCPOAuthConfig   `json:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
+	URL     string            `json:"url,omitempty"`     // For http transport
+	Headers map[string]string `json:"headers,omitempty"` // For http transport
+	Proxy   string            `json:"proxy,omitempty"`   // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
+	Timeout Duration          `json:"timeout,omitempty"` // Connect timeout (default: 10s)
+	// ToolTimeout bounds ONE tool call on this server (default: 5m). It is a
+	// backstop, not a schedule: a server that hangs must not hold a turn open
+	// forever, and a tool that legitimately renders for minutes can raise it.
+	ToolTimeout Duration        `json:"tool_timeout,omitempty"`
+	Enabled     *bool           `json:"enabled,omitempty" default:"true"` // Whether to load this server
+	OAuth       *MCPOAuthConfig `json:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
 	// ToolSearch-specific options
 	AlwaysLoadTools []string          `json:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)

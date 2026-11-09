@@ -544,6 +544,15 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 				Questions: tr.Questions,
 			}
 
+			// The wait is bounded when the RUN says so (a turn woken by a finished
+			// task: the user may be asleep). Without a bound this blocks forever,
+			// which is right for a turn the user just sent.
+			var askDeadline <-chan time.Time
+			if d := AskTimeoutFromCtx(ctx); d > 0 {
+				timer := time.NewTimer(d)
+				defer timer.Stop()
+				askDeadline = timer.C
+			}
 			select {
 			case resp := <-a.Channels.AskUserResp:
 				a.dispatchEvent(ctx, hooks.EventAskUserResponse, hooks.Payload{
@@ -558,6 +567,11 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: string(resultData)}
 			case <-ctx.Done():
 				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
+			case <-askDeadline:
+				tr = tools.ToolResult{Status: tools.ToolResultError, Err: fmt.Errorf(
+					"AskUserQuestion got no answer within %s — the user was not available. "+
+						"Put the question in your reply and finish instead of waiting",
+					AskTimeoutFromCtx(ctx))}
 			}
 		}
 

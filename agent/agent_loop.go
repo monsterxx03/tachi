@@ -1243,6 +1243,10 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulator, rs *RunState) {
 	a.EstimateAndUpdateTokens(rs, rs.Messages)
 	rctx := a.buildReminderContext(false, true)
+	// Same scope the turn-start collection uses: without it, mid-turn reminders
+	// that describe THIS conversation (remote tasks, running processes) read the
+	// sessionless scope and stay silent.
+	rctx.LogicalConversation = a.logicalConversation()
 	// Populate tool names so reminders can filter by tool.
 	rctx.ToolNames = make([]string, 0, len(acc.toolCalls))
 	for _, tc := range acc.toolCalls {

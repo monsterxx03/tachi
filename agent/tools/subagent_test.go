@@ -7,12 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/monsterxx03/tachi/agent/tasks"
 )
 
 // mockRunner implements SubagentRunner for testing.
 type mockRunner struct {
 	result         string
+	id             string
 	err            error
 	toolNames      []string
 	maxOutputChars int
@@ -21,7 +25,7 @@ type mockRunner struct {
 
 func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, string, *SubagentResult, error) {
 	m.calledArgs = args
-	return m.result, "", nil, m.err
+	return m.result, m.id, nil, m.err
 }
 
 func (m *mockRunner) AvailableToolNames() []string { return m.toolNames }
@@ -359,24 +363,181 @@ func TestSubagentArgs_Serialization(t *testing.T) {
 	}
 }
 
-func TestSubagentTool_LastSubagentID(t *testing.T) {
-	runner := &mockRunner{
-		result:         "done",
-		maxOutputChars: 16384,
-	}
-	tool := NewSubagentTool(runner)
+// The identity is recorded on the CALL's context, not on the tool: several
+// SubAgent calls can run in one batch, and a shared "last one" field links one
+// call's transcript record to another call's sub-agent file.
+func TestSubagentTool_RecordsItsIDPerCall(t *testing.T) {
+	tool := NewSubagentTool(&mockRunner{result: "done", id: "sub-1", maxOutputChars: 16384})
+	ctx := WithSubagentMetaCarrier(context.Background())
 
-	// Before any invocation, ID should be empty
-	if id := tool.LastSubagentID(); id != "" {
-		t.Errorf("expected empty ID before invocation, got %q", id)
+	if _, err := tool.ExecuteContext(ctx, `{"prompt": "look"}`); err != nil {
+		t.Fatalf("ExecuteContext: %v", err)
+	}
+	id, _ := SubagentMetaFromCtx(ctx)
+	if id != "sub-1" {
+		t.Errorf("meta id = %q, want sub-1", id)
+	}
+
+	// A different call gets its own carrier; nothing leaks between them.
+	other := WithSubagentMetaCarrier(context.Background())
+	if id, _ := SubagentMetaFromCtx(other); id != "" {
+		t.Errorf("a fresh carrier should be empty, got %q", id)
 	}
 }
 
-func TestSubagentIDCarrier_InToolResult(t *testing.T) {
-	// Verify that SubagentTool implements SubagentIDCarrier
-	tool := NewSubagentTool(&mockRunner{maxOutputChars: 16384})
-	var carrier SubagentIDCarrier = tool
-	if carrier.LastSubagentID() != "" {
-		t.Error("expected empty subagent ID before invocation")
+// asyncMockRunner implements both runner interfaces; Start keeps the callback so
+// the test can finish the work when it chooses.
+type asyncMockRunner struct {
+	mockRunner
+	done func(SubagentOutcome)
+}
+
+func (m *asyncMockRunner) StartSubagent(_ context.Context, args SubagentArgs, done func(SubagentOutcome)) (string, error) {
+	m.calledArgs = args
+	m.done = done
+	return m.id, nil
+}
+
+// A dispatch returns immediately and the outcome arrives through the queue —
+// the same door a background process uses.
+func TestSubagentDispatchReturnsAndPostsTheOutcome(t *testing.T) {
+	runner := &asyncMockRunner{mockRunner: mockRunner{id: "sub-async", maxOutputChars: 16384}}
+	tool := NewSubagentTool(runner)
+	q := tasks.New()
+	tool.SetAsync(true, q)
+
+	ctx := WithSubagentMetaCarrier(context.Background())
+	out, err := tool.ExecuteContext(ctx, `{"prompt": "look at X"}`)
+	if err != nil {
+		t.Fatalf("ExecuteContext: %v", err)
+	}
+	if !strings.Contains(out, "sub-async") || !strings.Contains(out, "running") {
+		t.Fatalf("dispatch result should name the task and its state, got %q", out)
+	}
+	if id, _ := SubagentMetaFromCtx(ctx); id != "sub-async" {
+		t.Errorf("meta id = %q, want sub-async", id)
+	}
+	if got := q.Pending(); len(got) != 0 {
+		t.Fatalf("nothing should be posted before the sub-agent finishes, got %v", got)
+	}
+
+	runner.done(SubagentOutcome{
+		ID:     "sub-async",
+		Result: "the answer",
+		Stats:  &SubagentResult{IterCount: 2, Duration: time.Second},
+	})
+
+	events := q.Pending()
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	e := events[0]
+	if e.Kind != tasks.KindSubagent || e.Name != "sub-async" {
+		t.Errorf("event = %+v, want the sub-agent", e)
+	}
+	if !strings.Contains(e.Stdout, "the answer") {
+		t.Errorf("event output = %q, want the result", e.Stdout)
+	}
+	if e.Command != "look at X" {
+		t.Errorf("event task = %q, want the prompt", e.Command)
+	}
+	if e.Status != tasks.StatusExited {
+		t.Errorf("status = %s, want exited", e.Status)
+	}
+}
+
+// A failed sub-agent still reports: the partial result is the useful part.
+func TestSubagentDispatchReportsFailure(t *testing.T) {
+	runner := &asyncMockRunner{mockRunner: mockRunner{id: "sub-fail", maxOutputChars: 16384}}
+	tool := NewSubagentTool(runner)
+	q := tasks.New()
+	tool.SetAsync(true, q)
+
+	if _, err := tool.ExecuteContext(WithSubagentMetaCarrier(context.Background()), `{"prompt": "x"}`); err != nil {
+		t.Fatalf("ExecuteContext: %v", err)
+	}
+	runner.done(SubagentOutcome{ID: "sub-fail", Result: "half done", Err: fmt.Errorf("budget exhausted")})
+
+	events := q.Pending()
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Status != tasks.StatusError || events[0].Error == "" {
+		t.Errorf("event = %+v, want an error status and reason", events[0])
+	}
+	if !strings.Contains(events[0].Stdout, "half done") {
+		t.Errorf("event output = %q, want the partial result", events[0].Stdout)
+	}
+}
+
+// No queue means no place to report, so the tool must stay synchronous even when
+// the caller asks for async: a result with nowhere to go is worse than a slower
+// turn.
+func TestSubagentAsyncNeedsAQueue(t *testing.T) {
+	runner := &asyncMockRunner{mockRunner: mockRunner{result: "done", id: "sub", maxOutputChars: 16384}}
+	tool := NewSubagentTool(runner)
+	tool.SetAsync(true, nil)
+
+	if tool.Description() == subagentBackgroundDescription {
+		t.Error("async needs a queue; without one the tool must stay synchronous")
+	}
+	if _, err := tool.ExecuteContext(context.Background(), `{"prompt": "x"}`); err != nil {
+		t.Fatalf("ExecuteContext: %v", err)
+	}
+	if runner.done != nil {
+		t.Error("the synchronous path must have been used")
+	}
+}
+
+// The registry hands the tool result the per-call identity, so a tool_result
+// record can link to the right sub-agent file even when a batch ran several.
+func TestRegistryInvokeCarriesTheSubagentIdentity(t *testing.T) {
+	r := NewRegistry()
+	r.Register(NewSubagentTool(&mockRunner{result: "done", id: "sub-2", maxOutputChars: 16384}))
+
+	res := r.Invoke(context.Background(), ToolNameSubAgent, `{"prompt": "x"}`)
+	if res.Status != ToolResultSuccess {
+		t.Fatalf("Invoke status = %v (err %v)", res.Status, res.Err)
+	}
+	if res.SubagentID != "sub-2" {
+		t.Errorf("SubagentID = %q, want sub-2", res.SubagentID)
+	}
+}
+
+// wait is the model's escape hatch for sequential work: it chooses to block in
+// this turn instead of being woken later.
+func TestSubagentWaitRunsInThisTurn(t *testing.T) {
+	runner := &asyncMockRunner{mockRunner: mockRunner{result: "inline result", id: "sub-w", maxOutputChars: 16384}}
+	tool := NewSubagentTool(runner)
+	q := tasks.New()
+	tool.SetAsync(true, q)
+
+	out, err := tool.ExecuteContext(WithSubagentMetaCarrier(context.Background()), `{"prompt": "x", "wait": true}`)
+	if err != nil {
+		t.Fatalf("ExecuteContext: %v", err)
+	}
+	if !strings.Contains(out, "inline result") {
+		t.Errorf("wait=true must return the result in this call, got %q", out)
+	}
+	if runner.done != nil {
+		t.Error("wait=true must not go through the dispatcher")
+	}
+	if got := q.Pending(); len(got) != 0 {
+		t.Errorf("a waited sub-agent has nothing to report later, got %v", got)
+	}
+}
+
+// The field exists only where the choice exists: a blocking entry point would
+// advertise a decision the model does not have.
+func TestSubagentWaitIsOnlyAdvertisedWhenAsync(t *testing.T) {
+	syncTool := NewSubagentTool(&mockRunner{maxOutputChars: 16384})
+	if _, ok := syncTool.Properties()["wait"]; ok {
+		t.Error("a blocking SubAgent tool must not advertise wait")
+	}
+
+	asyncTool := NewSubagentTool(&mockRunner{maxOutputChars: 16384})
+	asyncTool.SetAsync(true, tasks.New())
+	if _, ok := asyncTool.Properties()["wait"]; !ok {
+		t.Error("an async SubAgent tool must advertise wait")
 	}
 }

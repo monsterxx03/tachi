@@ -18,6 +18,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -247,6 +248,14 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	if a.Config.ProcessManager == nil {
 		a.Config.ProcessManager = tools.NewProcessManager()
 	}
+	if a.Config.TaskQueue == nil {
+		a.Config.TaskQueue = tasks.New()
+	}
+	// The manager announces natural exits to this conversation's queue. BindSink is
+	// first-wins: a forked child shares the parent's manager (SetProcessManager runs
+	// after construction) and must not move the parent conversation's news to its own
+	// throwaway queue.
+	a.Config.ProcessManager.BindSink(a.Config.TaskQueue.Post)
 	if a.Config.CompactStrategy == nil {
 		a.Config.CompactStrategy = &llmCompactStrategy{provider: cfg.Resolved.Provider}
 	}

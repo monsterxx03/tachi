@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/container"
 )
@@ -79,6 +80,15 @@ type ManagedProcess struct {
 	stdoutBuf *container.RingBuf
 	stderrBuf *container.RingBuf
 
+	// pm is the manager that owns this process. It is what reports a natural exit
+	// to the conversation's task queue, and what forgets the process afterwards.
+	pm *ProcessManager
+
+	// conversation is the logical conversation that started this process, captured
+	// from the tool context. The TUI runs one agent across sessions, so the event
+	// has to say which conversation it belongs to (tasks.Event.Conversation).
+	conversation string
+
 	// done is closed exactly once, by setTerminal, when the process reaches a
 	// terminal state. Wait blocks on it — waiting for a process is a pure
 	// observation, so it must not cost a process of its own.
@@ -140,13 +150,71 @@ func truncateRecent(buf *container.RingBuf) string {
 
 // ProcessManager manages background processes started by the Bash tool.
 // It is a singleton shared across all BashTool instances within the same agent.
+//
+// A process that ends on its own is announced through the sink (the
+// conversation's task queue) and then forgotten. A process that was stopped on
+// purpose is not: the caller asked for it, so there is nothing to report.
 type ProcessManager struct {
 	processes sync.Map // map[string]*ManagedProcess
+
+	// sink receives one event per natural exit. It is bound once, by the agent
+	// that owns this manager: a forked child shares the parent's manager, and a
+	// late bind must not move the conversation's news to the child's queue.
+	sinkMu sync.Mutex
+	sink   func(tasks.Event)
 }
 
 // NewProcessManager creates a new ProcessManager.
 func NewProcessManager() *ProcessManager {
 	return &ProcessManager{}
+}
+
+// BindSink points the manager at the conversation's task queue. Only the first
+// call takes effect — the manager is shared with forked agents, and the
+// conversation that created it is the one that owns its news.
+func (pm *ProcessManager) BindSink(sink func(tasks.Event)) {
+	if pm == nil || sink == nil {
+		return
+	}
+	pm.sinkMu.Lock()
+	defer pm.sinkMu.Unlock()
+	if pm.sink == nil {
+		pm.sink = sink
+	}
+}
+
+// report hands one finished process to the sink (when bound) and forgets it:
+// the event is the snapshot, and the manager's job is to track what is still
+// running. A finished process left in the map would make list_bg grow with
+// things that are no longer running, and wait_name would keep finding corpses.
+func (pm *ProcessManager) report(mp *ManagedProcess) {
+	pm.sinkMu.Lock()
+	sink := pm.sink
+	pm.sinkMu.Unlock()
+
+	if sink != nil {
+		info := mp.toInfo()
+		status := tasks.StatusExited
+		if info.Status == ProcessError {
+			status = tasks.StatusError
+		}
+		sink(tasks.Event{
+			ID:           mp.Name,
+			Conversation: mp.conversation,
+			Kind:         tasks.KindBackground,
+			Name:         mp.Name,
+			Command:      mp.Command,
+			Status:       status,
+			ExitCode:     info.ExitCode,
+			Error:        info.Error,
+			Stdout:       info.RecentStdout,
+			Stderr:       info.RecentStderr,
+			At:           time.Now(),
+		})
+	}
+	// CompareAndDelete, not Delete: a stopped process frees its name for reuse, and
+	// the late exit goroutine of the OLD process must not remove the NEW one.
+	pm.processes.CompareAndDelete(mp.Name, mp)
 }
 
 // Start launches a command in the background. If a process with the same name
@@ -181,14 +249,16 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 	}
 
 	mp := &ManagedProcess{
-		Name:      name,
-		Command:   command,
-		Cmd:       cmd,
-		PID:       cmd.Process.Pid,
-		StartedAt: time.Now(),
-		stdoutBuf: stdoutBuf,
-		stderrBuf: stderrBuf,
-		done:      make(chan struct{}),
+		Name:         name,
+		Command:      command,
+		Cmd:          cmd,
+		PID:          cmd.Process.Pid,
+		StartedAt:    time.Now(),
+		stdoutBuf:    stdoutBuf,
+		stderrBuf:    stderrBuf,
+		pm:           pm,
+		conversation: LogicalConversation(ctx),
+		done:         make(chan struct{}),
 	}
 	if !pm.register(mp, true) {
 		// Concurrent Start with the same name won the race — kill this one.
@@ -207,16 +277,18 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 // The caller's own goroutine keeps waiting on cmd.Wait() (exec.Cmd forbids
 // concurrent Wait calls), so no wait goroutine is started here; the caller
 // must call mp.recordExit(err) once Wait returns.
-func (pm *ProcessManager) Adopt(name, command string, cmd *exec.Cmd, startedAt time.Time, stdoutBuf, stderrBuf *container.RingBuf) (*ManagedProcess, error) {
+func (pm *ProcessManager) Adopt(name, command string, cmd *exec.Cmd, startedAt time.Time, stdoutBuf, stderrBuf *container.RingBuf, conversation string) (*ManagedProcess, error) {
 	mp := &ManagedProcess{
-		Name:      name,
-		Command:   command,
-		Cmd:       cmd,
-		PID:       cmd.Process.Pid,
-		StartedAt: startedAt,
-		stdoutBuf: stdoutBuf,
-		stderrBuf: stderrBuf,
-		done:      make(chan struct{}),
+		Name:         name,
+		Command:      command,
+		Cmd:          cmd,
+		PID:          cmd.Process.Pid,
+		StartedAt:    startedAt,
+		stdoutBuf:    stdoutBuf,
+		stderrBuf:    stderrBuf,
+		pm:           pm,
+		conversation: conversation,
+		done:         make(chan struct{}),
 	}
 	if !pm.register(mp, false) {
 		return nil, fmt.Errorf("background process '%s' already exists; stop it first or use a different name", name)
@@ -245,7 +317,8 @@ func (pm *ProcessManager) register(mp *ManagedProcess, waitSelf bool) bool {
 
 // recordExit stores the exit state of a managed process. Safe to call more
 // than once (rendezvous paths may race); the CAS guard lets exactly one call
-// win.
+// win, and only the natural exit announces anything — a stop already recorded
+// its outcome, and the caller asked for that.
 func (mp *ManagedProcess) recordExit(err error) {
 	to := int32(_psExited)
 	var ec int32
@@ -258,7 +331,14 @@ func (mp *ManagedProcess) recordExit(err error) {
 			to = int32(_psError)
 		}
 	}
-	mp.setTerminal(to, ec)
+	// Report BEFORE waking waiters: whoever observes "finished" then also finds
+	// the event queued and the process gone from the map, instead of a half
+	// transition that a test (or the next list_bg) could race.
+	var beforeClose func()
+	if mp.pm != nil {
+		beforeClose = func() { mp.pm.report(mp) }
+	}
+	mp.setTerminal(to, ec, beforeClose)
 }
 
 // setTerminal moves the process from running to a terminal state and wakes any
@@ -268,12 +348,16 @@ func (mp *ManagedProcess) recordExit(err error) {
 // Both terminal transitions — natural exit (recordExit) and kill (stopProcess)
 // — go through here, which is what makes the single close(mp.done) safe: only
 // the CAS winner reaches it. The exit code is stored BEFORE the close so a
-// waiter that wakes on done already sees the final status and code.
-func (mp *ManagedProcess) setTerminal(to, exitCode int32) bool {
+// waiter that wakes on done already sees the final status and code; beforeClose
+// (the natural exit's report) runs in the same window, for the same reason.
+func (mp *ManagedProcess) setTerminal(to, exitCode int32, beforeClose func()) bool {
 	if !mp.status.CompareAndSwap(_psRunning, to) {
 		return false
 	}
 	mp.exitCode.Store(exitCode)
+	if beforeClose != nil {
+		beforeClose()
+	}
 	close(mp.done)
 	return true
 }
@@ -284,7 +368,7 @@ func (mp *ManagedProcess) setTerminal(to, exitCode int32) bool {
 func (pm *ProcessManager) Stop(name string) (*ManagedProcessInfo, error) {
 	v, ok := pm.processes.LoadAndDelete(name)
 	if !ok {
-		return nil, fmt.Errorf("background process '%s' not found", name)
+		return nil, fmt.Errorf("background process '%s' not found — it may have finished already (finished background tasks are reported to you automatically) or been stopped", name)
 	}
 	mp := v.(*ManagedProcess)
 
@@ -302,7 +386,7 @@ func (pm *ProcessManager) Stop(name string) (*ManagedProcessInfo, error) {
 func stopProcess(mp *ManagedProcess) {
 	pgid := mp.Cmd.Process.Pid
 
-	if !mp.setTerminal(_psKilled, -1) {
+	if !mp.setTerminal(_psKilled, -1, nil) {
 		return // already exited naturally — don't send signals
 	}
 
@@ -321,8 +405,9 @@ func stopProcess(mp *ManagedProcess) {
 //
 // Returns (info, stillRunning, err):
 //   - info is the process snapshot at return time. It is nil — with a
-//     "not found" error — only when no process of that name is tracked, which
-//     also happens after DrainCompleted consumed a finished one.
+//     "not found" error — only when no process of that name is tracked, which is
+//     also the case after one finished on its own: a natural exit is reported
+//     through the queue and the process leaves the map.
 //   - stillRunning reports that the wait ended while the process was still
 //     running: bound elapsed, or ctx was cancelled.
 //   - err carries ctx.Err() on cancellation; the snapshot is still returned so
@@ -351,6 +436,22 @@ func (pm *ProcessManager) Wait(ctx context.Context, name string, bound time.Dura
 	case <-ctx.Done():
 		return mp.toInfo(), true, ctx.Err()
 	}
+}
+
+// ListFor returns the running processes that belong to one conversation. The TUI
+// hosts several conversations on one agent; a list that mixed them would offer
+// wait_name/stop_name for a process the reader is not talking about.
+func (pm *ProcessManager) ListFor(conversation string) []ManagedProcessInfo {
+	var result []ManagedProcessInfo
+	pm.processes.Range(func(key, value any) bool {
+		mp := value.(*ManagedProcess)
+		if mp.conversation != conversation {
+			return true
+		}
+		result = append(result, *mp.toInfo())
+		return true
+	})
+	return result
 }
 
 // List returns a snapshot of all tracked background processes.
@@ -387,23 +488,4 @@ func (pm *ProcessManager) KillAll() {
 		}
 		return true
 	})
-}
-
-// DrainCompleted collects all processes that have exited (not killed),
-// removes them from the tracked map, and returns their info. Used by
-// BackgroundTaskReminder (Phase 2) to notify the LLM about completed tasks.
-func (pm *ProcessManager) DrainCompleted() []ManagedProcessInfo {
-	var completed []ManagedProcessInfo
-	pm.processes.Range(func(key, value any) bool {
-		mp := value.(*ManagedProcess)
-		if mp.status.Load() == _psExited {
-			info := mp.toInfo()
-			if info != nil {
-				completed = append(completed, *info)
-			}
-			pm.processes.Delete(key)
-		}
-		return true
-	})
-	return completed
 }

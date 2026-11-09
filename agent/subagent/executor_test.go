@@ -2,7 +2,9 @@ package subagent
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -288,4 +290,49 @@ func TestAgentInterface(t *testing.T) {
 func TestChildAgentInterface(t *testing.T) {
 	// compile-time check: fakeChildAgent implements ChildAgent
 	var _ ChildAgent = (*fakeChildAgent)(nil)
+}
+
+// StartSubagent returns an id immediately and reports the outcome through the
+// callback — the executor half of the async SubAgent tool. The child's events
+// are consumed in the runner's own goroutine, so nothing about this blocks the
+// caller.
+func TestExecutor_StartSubagentReportsFromItsOwnGoroutine(t *testing.T) {
+	child := &fakeChildAgent{events: []StreamEvent{
+		{Type: StreamEventTextDelta, TextDelta: "the answer"},
+		{Type: StreamEventTurnComplete},
+	}}
+	a := &fakeAgent{childAgentFactory: func(*logger.Logger, llm.Provider, int, []string, string) ChildAgent {
+		return child
+	}}
+	exec := NewExecutor(a, config.SubagentConfig{MaxConcurrency: 1})
+
+	done := make(chan tools.SubagentOutcome, 1)
+	id, err := exec.StartSubagent(context.Background(), tools.SubagentArgs{Prompt: "look"}, func(o tools.SubagentOutcome) {
+		done <- o
+	})
+	if err != nil {
+		t.Fatalf("StartSubagent: %v", err)
+	}
+	if id == "" {
+		t.Fatal("StartSubagent must return the task id")
+	}
+
+	select {
+	case out := <-done:
+		if out.ID != id {
+			t.Errorf("outcome id = %q, want %q", out.ID, id)
+		}
+		if out.Err != nil {
+			t.Fatalf("outcome error: %v", out.Err)
+		}
+		if !strings.Contains(out.Result, "the answer") {
+			t.Errorf("outcome result = %q, want the child's text", out.Result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sub-agent never reported")
+	}
+}
+
+func TestExecutorImplementsAsyncRunner(t *testing.T) {
+	var _ tools.AsyncSubagentRunner = (*Executor)(nil)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/agentref"
 	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/agent/sessionref"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/node"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
@@ -122,6 +123,12 @@ func (m *Model) sender() *node.Sender {
 	}
 	if m.delegators == nil {
 		m.delegators = node.NewDelegatorCache(m.cfg.Node.Name, node.DiscoveryOf(m.cfg), m.agent.Logger(), nil, m.sessionBaseDir())
+		// A delegated task can settle while the terminal is idle. The event joins
+		// the same queue local tasks use, tagged with its conversation; the watcher
+		// decides whether THIS session is the one to wake.
+		if q := m.agent.Config.TaskQueue; q != nil {
+			m.delegators.SetTaskSink(func(_ string, e tasks.Event) { q.Post(e) })
+		}
 	}
 	return m.delegators.ForSender(context.Background(), m.cfg.Peers)
 }

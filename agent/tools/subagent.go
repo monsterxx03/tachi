@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
@@ -29,11 +29,33 @@ type SubagentRunner interface {
 	MaxOutputChars() int
 }
 
+// AsyncSubagentRunner is implemented by runners that can start a sub-agent
+// without waiting for it. The tool uses it only where the entry point can wake
+// an idle conversation; everywhere else it calls RunSubagent and blocks.
+type AsyncSubagentRunner interface {
+	// StartSubagent returns as soon as the task is registered. done is called
+	// exactly once, from the runner's own goroutine, when it finishes — the call
+	// must not block on anything the caller has to do first.
+	StartSubagent(ctx context.Context, args SubagentArgs, done func(SubagentOutcome)) (id string, err error)
+}
+
+// SubagentOutcome is what a background sub-agent produced.
+type SubagentOutcome struct {
+	ID     string
+	Result string
+	Stats  *SubagentResult
+	Err    error
+}
+
 // SubagentArgs holds the parsed arguments for the SubAgent tool.
 type SubagentArgs struct {
 	Prompt         string   `json:"prompt"`
 	AllowedTools   []string `json:"allowed_tools"`
 	WorktreeBranch string   `json:"worktree_branch"` // Optional: git branch for worktree isolation
+	// Wait asks for the result in THIS turn. Only meaningful where the tool can
+	// otherwise run in the background; on a blocking entry point the call blocks
+	// anyway and the field is not even advertised.
+	Wait bool `json:"wait,omitempty"`
 }
 
 // subagentBaseDescription is the whole description — deliberately no list of
@@ -42,16 +64,26 @@ type SubagentArgs struct {
 // runner's names spelled out).
 const subagentBaseDescription = `Delegate a self-contained, multi-step task to an isolated sub-agent with its own context window and tool set; it returns one summary. Give it a detailed prompt — file paths, patterns, specific questions — and restrict allowed_tools to what the task needs. Calls submitted together run in parallel, so split independent work into separate calls. Not for a single tool call, nor for anything needing the user.`
 
+// subagentBackgroundDescription is the same task, told to a model that can walk
+// away from it. The last two sentences are the whole point of the async mode:
+// without them the model keeps polling, which is exactly what this replaced.
+const subagentBackgroundDescription = subagentBaseDescription + ` It runs in the BACKGROUND: this call returns a task id immediately, and you will be told when it finishes (a system notification carrying its result). Continue with other work or end your turn — do not poll for it. Set wait=true ONLY when your next step needs its result and there is nothing else you can do meanwhile: that call blocks until it finishes instead (and a user Stop cancels it with the turn).`
+
 // SubagentTool delegates tasks to isolated sub-agents.
 type SubagentTool struct {
-	runner         SubagentRunner
-	mu             sync.Mutex
-	lastSubagentID string
-	lastIterCount  int
-	lastDuration   time.Duration
+	runner SubagentRunner
+
 	// resultBaseDir 非空时，超限输出落盘到该目录、只回一个指针（与 Bash / WebFetch 同一套
 	// tool_result 策略）；为空则退回原地截断。只在注册前设置一次，之后只读。
 	resultBaseDir string
+
+	// async makes the tool return a task id instead of blocking. It is enabled by
+	// the entry point only where a finished task can WAKE an idle conversation
+	// (desktop today): a background sub-agent on an entry that cannot wake would
+	// end its turn and have its result read by nobody. queue is where the outcome
+	// is announced; the same queue the in-turn reminder takes from.
+	async bool
+	queue *tasks.Queue
 }
 
 // NewSubagentTool creates a new SubagentTool with the given runner.
@@ -70,8 +102,23 @@ func NewSubagentTool(runner SubagentRunner) *SubagentTool {
 // 应在注册前调用（ReloadSubagent）；运行期改它会与并行的 sub-agent 读该字段竞争。
 func (t *SubagentTool) SetResultBaseDir(dir string) { t.resultBaseDir = dir }
 
-func (t *SubagentTool) Name() string        { return ToolNameSubAgent }
-func (t *SubagentTool) Description() string { return subagentBaseDescription }
+// SetAsync turns the tool into a dispatcher: it returns a task id and the
+// outcome is posted to q when the sub-agent finishes. Empty runner support or a
+// nil queue leaves it synchronous — a result with nowhere to go is worse than a
+// slower turn.
+func (t *SubagentTool) SetAsync(enabled bool, q *tasks.Queue) {
+	t.async = enabled && q != nil
+	t.queue = q
+}
+
+func (t *SubagentTool) Name() string { return ToolNameSubAgent }
+
+func (t *SubagentTool) Description() string {
+	if t.async {
+		return subagentBackgroundDescription
+	}
+	return subagentBaseDescription
+}
 
 func (t *SubagentTool) Properties() map[string]PropertySchema {
 	// Dynamic items.enum: the model gets the exact tool names it may pass in
@@ -90,7 +137,7 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 		items["enum"] = enum
 	}
 
-	return map[string]PropertySchema{
+	props := map[string]PropertySchema{
 		"prompt": {
 			Type:        "string",
 			Description: "Detailed task description: file paths, patterns, specific questions.",
@@ -107,6 +154,17 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 				"is enabled.",
 		},
 	}
+	// Only the asynchronous entry advertises the choice: where the call blocks
+	// anyway, a `wait` field would describe a decision the model does not have.
+	if t.async {
+		props["wait"] = PropertySchema{
+			Type: "boolean",
+			Description: "Set true only when your next step needs this result and you cannot do " +
+				"anything useful while it runs: the call then blocks until the sub-agent finishes. " +
+				"Default false: it runs in the background and you are told when it is done.",
+		}
+	}
+	return props
 }
 
 func (t *SubagentTool) Required() []string { return []string{"prompt"} }
@@ -119,35 +177,34 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	// wait is the model's own declaration that the work is SEQUENTIAL: without it
+	// the call only dispatches. On a blocking entry the field is not advertised,
+	// and a stray one is harmless — the call would block either way.
+	if t.async && !sa.Wait {
+		if runner, ok := t.runner.(AsyncSubagentRunner); ok {
+			return t.dispatch(ctx, runner, sa)
+		}
+	}
+	return t.runSync(ctx, sa)
+}
+
+// runSync is the original behavior: block until the sub-agent finishes and
+// return its summary as the tool result.
+func (t *SubagentTool) runSync(ctx context.Context, sa SubagentArgs) (string, error) {
 	result, subagentID, stats, err := t.runner.RunSubagent(ctx, sa)
 
-	t.mu.Lock()
-	t.lastSubagentID = subagentID
+	iterations := 0
 	if stats != nil {
-		t.lastIterCount = stats.IterCount
-		t.lastDuration = stats.Duration
-	} else {
-		t.lastIterCount = 0
-		t.lastDuration = 0
+		iterations = stats.IterCount
 	}
-	t.mu.Unlock()
-
-	// Output truncation protection — reserve ~80 chars for stats footer
-	reserveForStats := 120
 	if stats != nil && stats.IterCount > 0 {
-		result = t.truncateOutput(result, reserveForStats)
+		result = t.render(stats, result)
 	} else {
 		result = t.truncateOutput(result, 0)
 	}
-
-	// Append execution stats to the result for visibility everywhere (TUI, history, LLM).
-	if stats != nil && stats.IterCount > 0 {
-		summary := ""
-		if stats.ToolCallSummary != nil {
-			summary = stats.ToolCallSummary.String()
-		}
-		result += FormatSubagentStats(stats.Duration, stats.IterCount, summary)
-	}
+	// Recorded per CALL (see the carrier): a shared "most recent" field would hand
+	// this call's transcript link the id of a sibling running in parallel.
+	SetSubagentMeta(ctx, subagentID, iterations)
 
 	if err != nil {
 		// Return partial result if available
@@ -159,21 +216,91 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 	return result, nil
 }
 
-// LastSubagentID returns the shortID of the most recently completed sub-agent
-// invocation. Safe for concurrent use.
-func (t *SubagentTool) LastSubagentID() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.lastSubagentID
+// dispatch starts the sub-agent and returns immediately with its task id.
+//
+// The work is detached from the turn's cancellation (context.WithoutCancel keeps
+// its values — working directory, session, usage kind): a sub-agent is a task of
+// the CONVERSATION, and the whole point is that it outlives the turn that
+// started it. Its result reaches the model through the queue, exactly like a
+// background process's.
+func (t *SubagentTool) dispatch(ctx context.Context, runner AsyncSubagentRunner, sa SubagentArgs) (string, error) {
+	// The turn's event sink writes to a channel that is closed when the turn
+	// ends; this sub-agent outlives it, so the sink is stripped before the work
+	// is handed off (see WithoutSubagentEventSink).
+	ctx = WithoutSubagentEventSink(ctx)
+	// The conversation is read HERE, while the tool context still carries it: the
+	// completion callback runs after the turn (and possibly after a session
+	// switch), and it must report to the conversation the work belongs to.
+	conversation := LogicalConversation(ctx)
+	id, err := runner.StartSubagent(ctx, sa, func(out SubagentOutcome) {
+		t.postOutcome(conversation, sa.Prompt, out)
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to start sub-agent: %w", err)
+	}
+	SetSubagentMeta(ctx, id, 0)
+
+	return marshalResult(subagentDispatch{
+		ID:     id,
+		Status: "running",
+		Note:   "Running in the background. Its result will be delivered as a system notification when it finishes; continue with other work or end your turn instead of polling.",
+	})
 }
 
-// LastSubagentStats returns the iteration count and duration of the most recent
-// sub-agent invocation. Safe for concurrent use.
-// Implements SubagentStatsCarrier.
-func (t *SubagentTool) LastSubagentStats() (int, time.Duration) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.lastIterCount, t.lastDuration
+// postOutcome turns a finished sub-agent into one queue event. The text is the
+// same rendering a synchronous call would have returned, so the model sees one
+// shape whether it waited or was woken.
+func (t *SubagentTool) postOutcome(conversation, prompt string, out SubagentOutcome) {
+	text := out.Result
+	if out.Stats != nil && out.Stats.IterCount > 0 {
+		text = t.render(out.Stats, text)
+	} else {
+		text = t.truncateOutput(text, 0)
+	}
+	if out.Err != nil {
+		if text != "" {
+			text = fmt.Sprintf("Sub-agent completed with errors:\n\n%s\n\n⚠️ Error: %v", text, out.Err)
+		} else {
+			text = fmt.Sprintf("⚠️ Error: %v", out.Err)
+		}
+	}
+	if t.queue == nil {
+		return // nowhere to report: SetAsync refuses this combination, so this is dead
+	}
+	status := tasks.StatusExited
+	event := tasks.Event{
+		ID:           out.ID,
+		Conversation: conversation,
+		Kind:         tasks.KindSubagent,
+		Name:         out.ID,
+		Command:      prompt,
+		Status:       status,
+		Stdout:       text,
+	}
+	if out.Err != nil {
+		event.Status = tasks.StatusError
+		event.ExitCode = -1
+		event.Error = out.Err.Error()
+	}
+	t.queue.Post(event)
+}
+
+// subagentDispatch is the JSON returned by an asynchronous dispatch.
+type subagentDispatch struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Note   string `json:"note,omitempty"`
+}
+
+// render applies the stats footer and the size policy to a finished result.
+func (t *SubagentTool) render(stats *SubagentResult, result string) string {
+	// Output truncation protection — reserve ~80 chars for stats footer
+	summary := ""
+	if stats.ToolCallSummary != nil {
+		summary = stats.ToolCallSummary.String()
+	}
+	result = t.truncateOutput(result, 120)
+	return result + FormatSubagentStats(stats.Duration, stats.IterCount, summary)
 }
 
 func (t *SubagentTool) truncateOutput(s string, reserve int) string {

@@ -154,6 +154,11 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 // (/commit, /review registered via registerOneoff). If nothing is running,
 // returns a message indicating that (instead of a misleading "stopped").
 func (m *Manager) handleStopCommand(threadID string) (string, error) {
+	// Stopping a turn does NOT kill the tasks it started (a build, a sub-agent):
+	// they keep running and report when they finish. But the wake is held until the
+	// user speaks again, so "stop" is not followed by the agent continuing on its
+	// own — the same rule the desktop and TUI follow.
+	m.pauseTaskQueue(threadID)
 	if m.cancelThreadTurn(threadID) || m.cancelOneoff(threadID) {
 		return "⏹️ 已停止当前任务。", nil
 	}

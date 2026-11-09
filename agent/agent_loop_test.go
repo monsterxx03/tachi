@@ -1699,3 +1699,46 @@ func TestHandleStopFinish_TextIsAppended(t *testing.T) {
 	assert.Equal(t, "assistant", rs.Messages[1].Role)
 	assert.Equal(t, "hello", rs.Messages[1].Content)
 }
+
+// A run carries an ask bound (a turn woken by a finished task: the user may be
+// asleep). When nobody answers, the question must FAIL the tool call with a
+// reason the model can act on — not park the conversation forever.
+func TestAgentLoop_AskUserQuestionTimesOutWhenNobodyAnswers(t *testing.T) {
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq(agenttools.ToolNameAskUser, "call-1",
+				`{"questions":[{"question":"q?","header":"Q","options":[{"label":"A","description":"D"}],"multiSelect":false}]}`),
+			textSeq("could not reach you"),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.RegisterTool(askUserStub())
+
+	start := time.Now()
+	ch := a.RunConversationStream(WithAskTimeout(t.Context(), 50*time.Millisecond),
+		nil, "ask me", "", llm.ChatOptions{MaxTokens: 4096})
+
+	var result *RunResult
+	var messages []llm.Message
+	for e := range ch {
+		if e.Messages != nil {
+			messages = e.Messages
+		}
+		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
+			result = e.Result
+		}
+	}
+	require.NotNil(t, result)
+	assert.Equal(t, "could not reach you", result.Response)
+	assert.Less(t, time.Since(start), 5*time.Second, "the ask must not block the run")
+
+	found := false
+	for _, m := range messages {
+		if strings.Contains(fmt.Sprint(m.Content), "no answer within") {
+			found = true
+		}
+	}
+	assert.True(t, found, "the tool result must tell the model the ask timed out")
+}

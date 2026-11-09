@@ -204,11 +204,10 @@ func TestCtrlC_Modal_CancelsAndDrainsEventChannel(t *testing.T) {
 	}
 }
 
-// TestCtrlC_Cancels_KillsBackgroundProcesses guards the regression where
-// Ctrl+C cancelled the turn but left background processes (started with
-// background=true, e.g. an http server) running: the ProcessManager uses
-// context.Background() by design, so only the turn-cancel path can stop them.
-func TestCtrlC_Cancels_KillsBackgroundProcesses(t *testing.T) {
+// Ctrl+C ends the TURN, not the tasks it started: a background process keeps
+// running and reports when it finishes (that is the task queue's point), and the
+// automatic wake is held until the user speaks. Ctrl+X is the explicit all-stop.
+func TestCtrlC_StopsTheTurnAndHoldsTheWake(t *testing.T) {
 	m := testModelStreaming()
 	m.cancelFunc = func() {}
 
@@ -224,14 +223,24 @@ func TestCtrlC_Cancels_KillsBackgroundProcesses(t *testing.T) {
 
 	_, _ = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 
+	time.Sleep(200 * time.Millisecond)
+	if !processAlive(pid) {
+		t.Fatalf("Ctrl+C must not kill a background process (pid %d is gone)", pid)
+	}
+	if !m.wakePaused {
+		t.Error("a stop must hold the automatic wake until the user speaks")
+	}
+
+	// Ctrl+X is 「全停」.
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl})
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if !processAlive(pid) {
-			return // background process killed with the turn
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("background process %d still alive after Ctrl+C", pid)
+	t.Fatalf("background process %d still alive after Ctrl+X", pid)
 }
 
 func TestCtrlC_SelectingModel_ExitsSelection(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/config"
@@ -608,4 +609,57 @@ func TestConnectAllNamesTheServerOnce(t *testing.T) {
 	if got := strings.Count(errs[0].Error(), `"postgres"`); got != 1 {
 		t.Errorf("error %q names the server %d times, want once", errs[0], got)
 	}
+}
+
+// A server that never answers must not hold a turn open forever: the call is
+// bounded, and the error is honest about what did (and did not) happen.
+func TestCallToolTimesOutAHungServer(t *testing.T) {
+	m := NewManager(t.Context(), nil, nil)
+	addTestClient(m, "slow", &stubMCPClient{callTool: func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}})
+	m.mu.Lock()
+	m.serverCfgs = map[string]config.MCPServerConfig{
+		"slow": {Name: "slow", ToolTimeout: config.Duration(20 * time.Millisecond)},
+	}
+	m.mu.Unlock()
+
+	start := time.Now()
+	_, err := m.CallTool(context.Background(), "slow", "render", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "did not answer within")
+	require.Contains(t, err.Error(), "tool_timeout")
+	require.Less(t, time.Since(start), 2*time.Second, "the bound must be the server's, not the test's patience")
+}
+
+// A caller that gave up (the user stopped the turn) is NOT a server timeout, and
+// saying "timed out" would send the model looking for a longer tool_timeout.
+func TestCallToolReportsCallerCancellationAsInterrupted(t *testing.T) {
+	m := NewManager(t.Context(), nil, nil)
+	addTestClient(m, "slow", &stubMCPClient{callTool: func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_, err := m.CallTool(ctx, "slow", "render", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "interrupted")
+	require.NotContains(t, err.Error(), "did not answer within")
+}
+
+// No configuration means the generous default, not zero (zero would mean an
+// instant deadline and every MCP call would fail).
+func TestToolTimeoutDefaultsWhenUnset(t *testing.T) {
+	m := NewManager(t.Context(), nil, nil)
+	require.Equal(t, DefaultToolTimeout, m.toolTimeout("unknown"))
+	m.mu.Lock()
+	m.serverCfgs = map[string]config.MCPServerConfig{"srv": {Name: "srv"}}
+	m.mu.Unlock()
+	require.Equal(t, DefaultToolTimeout, m.toolTimeout("srv"))
 }

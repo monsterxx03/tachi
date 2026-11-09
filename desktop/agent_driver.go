@@ -302,6 +302,18 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 		// systemreminder.workDir), so they describe the session, not the process.
 		MCPManager: d.mcp, // shared manager (nil when no MCP configured)
 
+		// A finished task may start a turn here when the conversation is idle (see
+		// taskwake.go). Tools that can run in the background read it: on an entry
+		// point without a wake path they must stay synchronous, or their result is
+		// written after the process that could read it is gone.
+		WakeCapable: true,
+
+		// Finished background tasks are announced through this conversation's queue:
+		// the in-turn reminder takes them before the next request, and the idle
+		// watcher (taskwake.go) starts a turn when nobody is asking anything. Keyed
+		// by the LOGICAL conversation so a compaction does not strand them.
+		TaskQueue: d.taskQueueFor(sessionLogicalID(sm)),
+
 		// The checkpoint's root set must be the one the tools actually worked in. In the
 		// desktop the session RECORD holds a snapshot (a project owns the real roots), so
 		// the agent resolves through the same exit the prompt and wdctx do — without this a
@@ -350,6 +362,22 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 		a.SetSessionManager(sm)
 	}
 	return a, nil
+}
+
+// sessionLogicalID is the conversation identity of the session a per-session
+// manager has loaded. The logical id survives compaction, which is what makes it
+// the right key for a task queue (an event that arrives just before a compaction
+// must still reach whichever session is the leaf now). Empty when nothing is
+// loaded — the queue then belongs to no conversation and is simply never woken.
+func sessionLogicalID(sm *session.Manager) string {
+	if sm == nil {
+		return ""
+	}
+	cur := sm.Current()
+	if cur == nil {
+		return ""
+	}
+	return cur.LogicalConversationID()
 }
 
 // sessionSkillStore builds the skill store for one session's tree, which is the
@@ -439,6 +467,9 @@ func applyThinking(a *agent.AIAgent, level string) {
 // teardownAgent closes every per-session agent and the shared MCP manager,
 // ensuring lifecycle events (e.g. session_end) are dispatched before exit.
 func (d *desktopApp) teardownAgent() {
+	// Wake watchers die with the app. Their turns are cancelled through the same
+	// context, so nothing is left running a model request after the window closes.
+	d.stopTaskQueues()
 	d.mu.Lock()
 	runs := make([]*sessionRun, 0, len(d.runs))
 	for _, r := range d.runs {

@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -174,6 +175,16 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 	}
 	d.notifyHost().notifyPermission(sessionID, askSubjectOf(toolName, args))
 
+	// A turn woken by a finished task may be running with nobody at the keyboard:
+	// the RUN carries a bound (agent.WithAskTimeout). When it expires the ask is
+	// refused — the command did NOT run — and the model is told to say what it
+	// needed instead of parking the conversation forever.
+	var expired <-chan time.Time
+	if d := agent.AskTimeoutFromCtx(ctx); d > 0 {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		expired = timer.C
+	}
 	select {
 	case decision := <-answer:
 		switch decision {
@@ -193,6 +204,10 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 		return decision != permDeny, nil
 	case <-ctx.Done():
 		return false, ctx.Err()
+	case <-expired:
+		return false, fmt.Errorf("approval did not arrive within %s — the user was not available, "+
+			"so the command was NOT executed. Say what was blocked and carry on without it, or put the "+
+			"question in your reply", agent.AskTimeoutFromCtx(ctx))
 	}
 }
 

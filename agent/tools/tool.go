@@ -60,12 +60,6 @@ type ConfirmationTool interface {
 	GetDiff(ctx context.Context, args string) (string, error)
 }
 
-// SubagentIDCarrier is an optional interface for tools whose execution
-// produces a sub-agent ID that callers may want to track.
-type SubagentIDCarrier interface {
-	LastSubagentID() string
-}
-
 type ToolResultStatus int
 
 const (
@@ -221,6 +215,47 @@ func WithImagePartsCarrier(ctx context.Context) context.Context {
 	return context.WithValue(ctx, imagePartsCtxKey{}, &imagePartsCarrier{})
 }
 
+// subagentMetaCtxKey carries the per-CALL identity of a SubAgent invocation.
+//
+// It is a carrier rather than fields on the tool because a batch can run several
+// SubAgent calls in parallel: a shared "last one" field hands call B's id to call
+// A's transcript record, which then links to the wrong sub-agent's file.
+type subagentMetaCtxKey struct{}
+
+type subagentMeta struct {
+	id         string
+	iterations int
+}
+
+// WithSubagentMetaCarrier returns a child context that a SubAgent tool can write
+// its identity and iteration count into.
+func WithSubagentMetaCarrier(ctx context.Context) context.Context {
+	return context.WithValue(ctx, subagentMetaCtxKey{}, &subagentMeta{})
+}
+
+// SetSubagentMeta records which sub-agent this call produced. Safe to call when
+// no carrier is present (every tool receives the ctx, but only this one writes).
+func SetSubagentMeta(ctx context.Context, id string, iterations int) {
+	if ctx == nil {
+		return
+	}
+	if m, ok := ctx.Value(subagentMetaCtxKey{}).(*subagentMeta); ok {
+		m.id = id
+		m.iterations = iterations
+	}
+}
+
+// SubagentMetaFromCtx reads what SetSubagentMeta recorded.
+func SubagentMetaFromCtx(ctx context.Context) (id string, iterations int) {
+	if ctx == nil {
+		return "", 0
+	}
+	if m, ok := ctx.Value(subagentMetaCtxKey{}).(*subagentMeta); ok {
+		return m.id, m.iterations
+	}
+	return "", 0
+}
+
 // AddImageParts stores image content parts on the carrier embedded in ctx, and
 // returns them as they will be SENT — after llm.FittedImageParts has brought any
 // oversized one within the inline budget.
@@ -258,6 +293,15 @@ type subagentEventSinkKey struct{}
 // WithSubagentEventSink returns a context with a SubagentEventSink attached.
 func WithSubagentEventSink(ctx context.Context, sink SubagentEventSink) context.Context {
 	return context.WithValue(ctx, subagentEventSinkKey{}, sink)
+}
+
+// WithoutSubagentEventSink strips the per-turn sink. A background sub-agent
+// needs this: the channel the sink writes to belongs to the turn that started it
+// and is CLOSED when that turn ends — a send on a closed channel panics, and the
+// non-blocking select in the sink does not save it. On the async path only the
+// sub-agent's own transcript carries its progress.
+func WithoutSubagentEventSink(ctx context.Context) context.Context {
+	return context.WithValue(ctx, subagentEventSinkKey{}, SubagentEventSink(nil))
 }
 
 // GetSubagentEventSink extracts the SubagentEventSink from context, if any.
@@ -336,9 +380,12 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	}
 
 	startTime := time.Now()
-	// Enable image parts side channel for tools that may produce image content.
+	// Per-call side channels: images the tool produced, and (for SubAgent) the
+	// identity of the child this call started. Both are carried on the ctx so
+	// parallel calls in one batch cannot read each other's values.
 	imageCtx := WithImagePartsCarrier(ctx)
-	result, err := tool.ExecuteContext(imageCtx, args)
+	callCtx := WithSubagentMetaCarrier(imageCtx)
+	result, err := tool.ExecuteContext(callCtx, args)
 	resultDuration := time.Since(startTime)
 	if askErr, ok := err.(*AskUserQuestionError); ok {
 		return ToolResult{Status: ToolResultNeedUserInput, Name: askErr.ToolName, Args: askErr.Args, Questions: askErr.Questions, Duration: resultDuration}
@@ -347,13 +394,8 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 		return ToolResult{Status: ToolResultError, Err: err, Duration: resultDuration}
 	}
 
-	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration, ImageParts: ImagePartsFromCtx(imageCtx)}
-	if carrier, ok := tool.(SubagentIDCarrier); ok {
-		tr.SubagentID = carrier.LastSubagentID()
-	}
-	if sc, ok := tool.(SubagentStatsCarrier); ok {
-		tr.IterCount, _ = sc.LastSubagentStats()
-	}
+	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration, ImageParts: ImagePartsFromCtx(callCtx)}
+	tr.SubagentID, tr.IterCount = SubagentMetaFromCtx(callCtx)
 	return tr
 }
 

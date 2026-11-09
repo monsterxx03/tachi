@@ -70,6 +70,14 @@ type bashArgs struct {
 // bashWaitResult is the `wait_name` payload: the waited-on process's snapshot
 // plus WHY the wait returned. The snapshot alone cannot say it — a wait can end
 // with the process still running (bound elapsed, or the turn was cancelled).
+// backgroundStart is what `background: true` returns: the process snapshot plus
+// what to do next. The snapshot type itself stays free of guidance — list_bg and
+// stop_name return it too, and repeating the same sentence in each would be noise.
+type backgroundStart struct {
+	ManagedProcessInfo
+	Note string `json:"note,omitempty"`
+}
+
 type bashWaitResult struct {
 	ManagedProcessInfo
 	WaitedMs     int64  `json:"waitedMs"`
@@ -147,11 +155,13 @@ func (t *BashTool) Description() string {
 		"content has to be transformed in a pipeline, or when many files are read at once. "
 	if t.processManager != nil && !t.acpMode {
 		desc += "Commands still running after the foreground window (~15s, or the timeout value if shorter) " +
-			"are automatically moved to the background. To manage them, call this tool again with the " +
-			"`list_bg` parameter set to true (lists running background processes) or the `stop_name` parameter " +
-			"set to the process name (stops one). `list_bg` and `stop_name` are JSON parameters of this tool — " +
-			"not shell commands. To WAIT for one, pass its name as `wait_name` — never wait with a shell " +
-			"`sleep`, which is itself a foreground command and gets backgrounded too."
+			"are automatically moved to the background. **A background process that ends on its own is " +
+			"reported to you automatically when it finishes — continue with other work or end your turn " +
+			"instead of polling; pass `wait_name` only when you cannot do anything else until that result " +
+			"arrives.** To manage them, call this tool again with the `list_bg` parameter set to true " +
+			"(lists running background processes) or the `stop_name` parameter set to the process name " +
+			"(stops one). `list_bg` and `stop_name` are JSON parameters of this tool — not shell commands. " +
+			"Never wait with a shell `sleep`, which is itself a foreground command and gets backgrounded too."
 	}
 	return desc
 }
@@ -294,7 +304,7 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		case err != nil: // cancelled mid-wait — report the snapshot, not an error
 			result.Note = fmt.Sprintf("Wait cancelled: %v", err)
 		case stillRunning:
-			result.Note = fmt.Sprintf("Still running after %s — call wait_name again to keep waiting, list_bg to inspect its output, or stop_name to terminate. If it is meant to keep running (a server), stop waiting for it.", bound)
+			result.Note = fmt.Sprintf("Still running after %s — its result will be reported to you automatically when it finishes, so you can do other work instead of waiting. To keep waiting anyway, call wait_name again; list_bg shows its output, stop_name terminates it. If it is meant to keep running (a server), stop waiting for it.", bound)
 		}
 		return marshalResult(result)
 	}
@@ -326,7 +336,13 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		if err != nil {
 			return "", err
 		}
-		return marshalResult(info)
+		// The raw snapshot says nothing about what to do next, and a model that is
+		// not told will poll. The report is automatic; waiting is the exception.
+		return marshalResult(backgroundStart{
+			ManagedProcessInfo: *info,
+			Note: "Running in the background. Its result will be reported to you automatically when it finishes, " +
+				"so continue with other work or end your turn; use wait_name only if you need it before you can continue.",
+		})
 	}
 
 	// Default: foreground execution.
@@ -474,7 +490,7 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 		}
 		if t.processManager != nil {
 			bgName := fmt.Sprintf("bash-%d", time.Now().UnixNano())
-			mp, err := t.processManager.Adopt(bgName, a.Command, cmd, start, stdoutBuf, stderrBuf)
+			mp, err := t.processManager.Adopt(bgName, a.Command, cmd, start, stdoutBuf, stderrBuf, LogicalConversation(ctx))
 			if err != nil {
 				// Registration failed (name collision etc.) — kill to avoid
 				// leaking a detached process.
@@ -494,7 +510,8 @@ func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error)
 			result := BashResult{
 				Stdout: stdout,
 				Stderr: fmt.Sprintf("Command still running after %s — continuing in background as %q. "+
-					"Use wait_name to block until it finishes, list_bg to check progress, or stop_name to terminate.", window, bgName),
+					"Its result will be reported to you automatically when it finishes, so continue with other work or end your turn; "+
+					"use wait_name only if you need it before you can continue, list_bg to check progress, or stop_name to terminate.", window, bgName),
 				// Backgrounded commands have no exit code yet — 0 avoids
 				// -1 being read as a crash/failure.
 				ExitCode:     0,

@@ -8,34 +8,32 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/monsterxx03/tachi/agent/tasks"
 )
 
-// waitForProcess polls pm.Get(name) at a short interval until the process
-// exits (or is killed/errored), or until the timeout elapses. It returns the
-// final process info on success, or calls t.Fatalf on timeout.
-//
-// Using this instead of time.Sleep makes tests faster (quick-exiting processes
-// are detected within milliseconds) and more reliable (no flaky fixed sleeps).
-func waitForProcess(t *testing.T, pm *ProcessManager, name string, timeout time.Duration) *ManagedProcessInfo {
+// captureExits binds a sink to pm and returns the events it reports. A process
+// that ends on its own is forgotten by the manager, so the event is the only
+// place its final state can be observed.
+func captureExits(pm *ProcessManager) <-chan tasks.Event {
+	ch := make(chan tasks.Event, 16)
+	pm.BindSink(func(e tasks.Event) { ch <- e })
+	return ch
+}
+
+// waitForExit waits for the event of one named process.
+func waitForExit(t *testing.T, ch <-chan tasks.Event, name string, timeout time.Duration) tasks.Event {
 	t.Helper()
 	deadline := time.After(timeout)
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-
 	for {
-		info := pm.Get(name)
-		if info != nil && info.Status != ProcessRunning {
-			return info
-		}
 		select {
-		case <-deadline:
-			info := pm.Get(name)
-			if info != nil {
-				t.Fatalf("timed out waiting for process %q to exit (status=%s)", name, info.Status)
+		case e := <-ch:
+			if e.Name == name {
+				return e
 			}
-			t.Fatalf("timed out waiting for process %q to exit (not found)", name)
-			return nil
-		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("timed out waiting for process %q to exit", name)
+			return tasks.Event{}
 		}
 	}
 }
@@ -138,23 +136,19 @@ func TestProcessManager_KillAll(t *testing.T) {
 func TestProcessManager_StopAlreadyExited(t *testing.T) {
 	pm := NewProcessManager()
 
+	exits := captureExits(pm)
 	pm.Start(t.Context(), "quick", "true") // exits immediately
 
-	// Wait for it to exit (polling is faster and more reliable than fixed sleep)
-	waitForProcess(t, pm, "quick", 5*time.Second)
-
-	info, err := pm.Stop("quick")
-	if err != nil {
-		t.Fatalf("Stop of already-exited process failed: %v", err)
+	e := waitForExit(t, exits, "quick", 5*time.Second)
+	if e.Status != tasks.StatusExited {
+		t.Errorf("expected status exited, got %s", e.Status)
 	}
-	if info.Status != ProcessExited {
-		t.Errorf("expected status exited, got %s", info.Status)
-	}
-	if info.ExitCode != 0 {
-		t.Errorf("expected exit code 0, got %d", info.ExitCode)
+	if e.ExitCode != 0 {
+		t.Errorf("expected exit code 0, got %d", e.ExitCode)
 	}
 
-	// Should be cleaned up from map
+	// The event IS the snapshot: a process that ended on its own leaves the map,
+	// so list_bg never grows with things that are no longer running.
 	if pm.Get("quick") != nil {
 		t.Error("already-exited process should be removed from map")
 	}
@@ -168,39 +162,57 @@ func TestProcessManager_ListEmpty(t *testing.T) {
 	}
 }
 
-func TestProcessManager_DrainCompleted(t *testing.T) {
+// A process that ends on its own is reported ONCE and forgotten. The event
+// carries the snapshot (output included), so nothing is lost by removing it.
+func TestProcessManager_NaturalExitIsReportedOnce(t *testing.T) {
 	pm := NewProcessManager()
+	exits := captureExits(pm)
 
-	// Start a process that exits quickly
-	_, err := pm.Start(t.Context(), "done1", "echo hello")
-	if err != nil {
+	if _, err := pm.Start(t.Context(), "done1", "echo hello"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if _, err := pm.Start(t.Context(), "running", "sleep 60"); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Start a long-running process
-	_, err = pm.Start(t.Context(), "running", "sleep 60")
-	if err != nil {
-		t.Fatalf("Start failed: %v", err)
+	e := waitForExit(t, exits, "done1", 5*time.Second)
+	if e.Name != "done1" {
+		t.Errorf("expected 'done1', got %q", e.Name)
 	}
-
-	// Wait for the quick one to exit
-	waitForProcess(t, pm, "done1", 5*time.Second)
-
-	completed := pm.DrainCompleted()
-	if len(completed) != 1 {
-		t.Fatalf("expected 1 completed process, got %d", len(completed))
+	if !strings.Contains(e.Stdout, "hello") {
+		t.Errorf("the event must carry the process's output, got %q", e.Stdout)
 	}
-	if completed[0].Name != "done1" {
-		t.Errorf("expected 'done1', got %q", completed[0].Name)
-	}
-
-	// "running" should still be there
 	if pm.Get("running") == nil {
 		t.Error("running process should still be in the map")
 	}
 
-	// Clean up
+	select {
+	case e := <-exits:
+		t.Errorf("a natural exit must be reported exactly once, got another: %+v", e)
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	pm.Stop("running")
+}
+
+// A process stopped on purpose is not news: the caller asked for it, and an
+// "it finished" wake right after a stop would be noise.
+func TestProcessManager_StoppedProcessIsNotReported(t *testing.T) {
+	pm := NewProcessManager()
+	exits := captureExits(pm)
+
+	if _, err := pm.Start(t.Context(), "server", "sleep 60"); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if _, err := pm.Stop("server"); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	select {
+	case e := <-exits:
+		t.Errorf("a stopped process must not be reported, got %+v", e)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestProcessManager_OutputCapture(t *testing.T) {
@@ -210,24 +222,21 @@ func TestProcessManager_OutputCapture(t *testing.T) {
 		t.Skip("background output capture test not supported on Windows")
 	}
 
+	exits := captureExits(pm)
 	_, err := pm.Start(t.Context(), "output-test", "echo hello && echo world >&2 && sleep 1 && echo done")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
-	// Wait for the process to complete — the background goroutine in Start()
-	// will handle cmd.Wait(). Polling is faster and more reliable than fixed sleep.
-	info := waitForProcess(t, pm, "output-test", 5*time.Second)
-
-	if info.Status != ProcessExited {
-		t.Errorf("expected status exited, got %s", info.Status)
+	// The background goroutine in Start() handles cmd.Wait(); its event carries
+	// the retained output, so there is nothing left to poll in the map.
+	e := waitForExit(t, exits, "output-test", 5*time.Second)
+	if e.Status != tasks.StatusExited {
+		t.Errorf("expected status exited, got %s", e.Status)
 	}
-	if info.RecentStdout == "" {
+	if e.Stdout == "" {
 		t.Error("expected stdout output, got empty")
 	}
-
-	// Clean up
-	pm.DrainCompleted()
 }
 
 func TestProcessManager_JSONRoundtrip(t *testing.T) {
@@ -304,11 +313,13 @@ func TestProcessManager_Wait(t *testing.T) {
 			t.Errorf("expected recent stdout to carry the output, got %q", info.RecentStdout)
 		}
 
-		// A second wait on an already-finished (not yet drained) process
-		// returns the same final snapshot instead of blocking.
+		// A finished process leaves the map: its snapshot is the event, and the
+		// event is reported exactly once. A second wait finds nothing to observe
+		// and says so instead of blocking — the tool turns this into "it may have
+		// finished already (finished background tasks are reported automatically)".
 		again, stillRunning, err := pm.Wait(t.Context(), "quick", 10*time.Second)
-		if err != nil || stillRunning || again.Status != ProcessExited {
-			t.Errorf("second Wait = (%v, %v, %v), want the same exited snapshot", again, stillRunning, err)
+		if again != nil || stillRunning || err == nil {
+			t.Errorf("second Wait = (%v, %v, %v), want not-found after the exit was reported", again, stillRunning, err)
 		}
 	})
 

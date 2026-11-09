@@ -3,38 +3,67 @@ package systemreminder
 import (
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/agent/tasks"
 )
 
-func TestBackgroundTaskReminder_SkipsOnFirstMessage(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{nil}}
-	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
-	if len(lines) != 0 {
-		t.Errorf("expected empty output on first message, got %d lines", len(lines))
+func bgQueue(events ...tasks.Event) *tasks.Queue {
+	q := tasks.New()
+	for _, e := range events {
+		q.Post(e)
+	}
+	return q
+}
+
+func bgEvent(name, command string, exitCode int, stdout, stderr string) tasks.Event {
+	return tasks.Event{
+		ID: name, Kind: tasks.KindBackground, Name: name, Command: command,
+		Status: tasks.StatusExited, ExitCode: exitCode, Stdout: stdout, Stderr: stderr,
 	}
 }
 
-func TestBackgroundTaskReminder_NilProvider(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: nil}
-	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
+func TestBackgroundTaskReminder_SkipsOnFirstMessage(t *testing.T) {
+	q := bgQueue(bgEvent("build", "make build", 0, "", ""))
+	lines := (&BackgroundTaskReminder{Queue: q}).Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) != 0 {
-		t.Errorf("expected empty output with nil provider, got %d lines", len(lines))
+		t.Errorf("expected empty output on first message, got %d lines", len(lines))
+	}
+	if q.Len() != 1 {
+		t.Errorf("a skipped collection must not consume the event, pending = %d", q.Len())
+	}
+}
+
+// Taking is destructive: the queue is the single copy of the news, and the two
+// consumers (this reminder and the idle wake) must not both report it.
+func TestBackgroundTaskReminder_TakesTheEventOnce(t *testing.T) {
+	q := bgQueue(bgEvent("build", "make build", 0, "", ""))
+	r := &BackgroundTaskReminder{Queue: q}
+	if lines := r.Generate(t.Context(), Context{}); len(lines) != 1 {
+		t.Fatalf("first collection should report the task, got %d lines", len(lines))
+	}
+	if lines := r.Generate(t.Context(), Context{}); len(lines) != 0 {
+		t.Fatalf("second collection must be silent, got %d lines", len(lines))
+	}
+}
+
+func TestBackgroundTaskReminder_NilQueue(t *testing.T) {
+	lines := (&BackgroundTaskReminder{Queue: nil}).Generate(t.Context(), Context{IsFirstMessage: false})
+	if len(lines) != 0 {
+		t.Errorf("expected empty output with nil queue, got %d lines", len(lines))
 	}
 }
 
 func TestBackgroundTaskReminder_NoCompletedTasks(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{nil}}
-	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
+	lines := (&BackgroundTaskReminder{Queue: tasks.New()}).Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 0 {
 		t.Errorf("expected empty output when no tasks complete, got %d lines", len(lines))
 	}
 }
 
 func TestBackgroundTaskReminder_SuccessfulTask(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "build", Command: "make build", ExitCode: 0, Status: "exited"},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("build", "make build", 0, "", ""),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -51,12 +80,9 @@ func TestBackgroundTaskReminder_SuccessfulTask(t *testing.T) {
 }
 
 func TestBackgroundTaskReminder_SuccessfulTaskWithOutput(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "build", Command: "make build", ExitCode: 0, Status: "exited",
-				RecentStdout: "compiled successfully\nbinary: ./tachi"},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("build", "make build", 0, "compiled successfully\nbinary: ./tachi", ""),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -70,12 +96,9 @@ func TestBackgroundTaskReminder_SuccessfulTaskWithOutput(t *testing.T) {
 }
 
 func TestBackgroundTaskReminder_FailedTask(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "test", Command: "go test ./...", ExitCode: 1, Status: "exited",
-				RecentStderr: "TestFoo failed\npanic: oops"},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("test", "go test ./...", 1, "", "TestFoo failed\npanic: oops"),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -95,12 +118,10 @@ func TestBackgroundTaskReminder_FailedTask(t *testing.T) {
 }
 
 func TestBackgroundTaskReminder_MultipleTasks(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "lint", Command: "golangci-lint run", ExitCode: 0, Status: "exited"},
-			{Name: "test", Command: "go test ./...", ExitCode: 1, Status: "exited"},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("lint", "golangci-lint run", 0, "", ""),
+		bgEvent("test", "go test ./...", 1, "", ""),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
@@ -114,11 +135,9 @@ func TestBackgroundTaskReminder_MultipleTasks(t *testing.T) {
 }
 
 func TestBackgroundTaskReminder_FiresOnToolResult(t *testing.T) {
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "build", Command: "make", ExitCode: 0, Status: "exited"},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("build", "make", 0, "", ""),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false, IsToolResult: true})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line on tool result, got %d", len(lines))
@@ -128,12 +147,9 @@ func TestBackgroundTaskReminder_FiresOnToolResult(t *testing.T) {
 func TestBackgroundTaskReminder_TailTruncation(t *testing.T) {
 	// Generate content larger than maxOutputSnippet
 	big := strings.Repeat("line of output\n", 800) // ~14KB
-	r := &BackgroundTaskReminder{Provider: &mockBgProvider{
-		items: []BackgroundTaskInfo{
-			{Name: "big-output", Command: "make", ExitCode: 0, Status: "exited",
-				RecentStdout: big},
-		},
-	}}
+	r := &BackgroundTaskReminder{Queue: bgQueue(
+		bgEvent("big-output", "make", 0, big, ""),
+	)}
 	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -181,15 +197,24 @@ func TestIndent_Empty(t *testing.T) {
 	}
 }
 
-// -- mocks --
-
-type mockBgProvider struct {
-	items []BackgroundTaskInfo
-}
-
-func (m *mockBgProvider) DrainCompleted() []BackgroundTaskInfo {
-	if m.items == nil {
-		return nil
+// A remote task parked on a question is not "finished", and the model must be
+// told which question an answer has to name — otherwise the reply tool refuses it.
+func TestTaskLines_RendersAWaitingRemoteTask(t *testing.T) {
+	q := bgQueue(tasks.Event{
+		ID: "d_1a2b", Kind: tasks.KindRemote, Name: "d_1a2b",
+		Command: "迁移数据", Node: "nas", Status: tasks.StatusWaiting,
+		QuestionID: "q_7", Stdout: "哪个目录？",
+	})
+	lines := (&BackgroundTaskReminder{Queue: q}).Generate(t.Context(), Context{})
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
-	return m.items
+	for _, want := range []string{
+		"waiting for an answer", "question_id=q_7", `RemoteTask(action="reply"`,
+		"Node: nas", "Task: 迁移数据", "哪个目录？",
+	} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("waiting remote task should mention %q, got:\n%s", want, lines[0])
+		}
+	}
 }

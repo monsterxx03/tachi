@@ -21,8 +21,9 @@ import (
 // RemoteTaskProvider is what these reminders need from this machine's sending side: the tasks
 // one conversation delegated, and the nodes it may delegate to.
 //
-// Defined here rather than importing node, the same way BackgroundTaskProvider is: a reminder
-// must be answerable by anything that can list, including a test double.
+// Defined here rather than importing node, the same way the background-task
+// reminder is: a reminder must be answerable by anything that can list,
+// including a test double.
 type RemoteTaskProvider interface {
 	// RemoteTasks reports the tasks ONE conversation delegated, newest first.
 	RemoteTasks(conversation string) []tools.RemoteTaskInfo

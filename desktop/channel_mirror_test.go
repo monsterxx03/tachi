@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tasks"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/session"
@@ -37,6 +38,8 @@ type fakeChannelTurn struct {
 	threadID string
 	content  string
 }
+
+func (f *fakeChannelTurns) PostTask(string, tasks.Event) bool { return false }
 
 func (f *fakeChannelTurns) SubmitTurn(ctx context.Context, threadID, content string, observe func(agent.AgentEvent)) (string, error) {
 	f.mu.Lock()

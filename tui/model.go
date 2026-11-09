@@ -118,6 +118,14 @@ type Model struct {
 
 	state        state
 	thinkingMode bool
+	// wakePaused is set when the user stops a turn (Ctrl+C) and cleared when they
+	// next submit or steer. Automatic wake turns are held meanwhile: "stop" must
+	// not be followed by the agent continuing on its own a second later.
+	wakePaused bool
+	// wakeTurn marks the run this terminal started on its own, from finished
+	// tasks. Its success is not announced (the user may be away and the result is
+	// already in the transcript); its failure still is.
+	wakeTurn     bool
 	thinkingView ThinkingView
 	copyMode     bool
 	cancelFunc   context.CancelFunc
@@ -379,6 +387,9 @@ func (m *Model) currentThinkingLevel() string {
 // streams progress over its own channel rather than eventCh, and is guarded by
 // isResearching instead of streamGen.
 func (m *Model) startTurn() context.Context {
+	// Every turn is a user (or command) turn until a wake turn says otherwise
+	// right after calling this.
+	m.wakeTurn = false
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 	}
@@ -544,6 +555,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleMCPReady()
 		return m, nil
 
+	case taskWakeMsg:
+		return m, m.tryWake()
+
 	case tea.KeyMsg:
 		// In thinking mode, route scroll keys to the thinking view
 		if m.thinkingMode {
@@ -568,6 +582,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InputSubmitMsg:
 		text := string(msg)
+		// The user is here again.
+		m.wakePaused = false
 
 		// During adversarial review: block ALL input BEFORE command/skill
 		// resolution. Must be the first gate — streaming-time input would
@@ -842,9 +858,6 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.cancelFunc()
 		m.isResearching = false
 		m.cancelFunc = nil
-		if m.agent != nil {
-			m.agent.KillBackgroundProcesses()
-		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
 			Content: "⏹️ 深度研究已取消",
@@ -871,12 +884,8 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		// next ToolConfirmation.
 		m.pendingConfirm = nil
 		m.askUserView = nil
-		// Kill background processes — the review fork shares the parent's
-		// ProcessManager, so background=true processes started inside a round
-		// must be terminated too.
-		if m.agent != nil {
-			m.agent.KillBackgroundProcesses()
-		}
+		// The review fork shares the parent's ProcessManager; its tasks keep running,
+		// like any other turn's (停止只停这一轮). Ctrl+X is the explicit "all stop".
 		// Keep reading the event channel: the trailing AgentEventError needs
 		// to be picked up by nextEvent to trigger the error branch cleanup.
 		if m.eventCh != nil {
@@ -886,14 +895,11 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	}
 	if m.state != stateIdle && m.cancelFunc != nil {
 		m.cancelFunc()
-		// Long-running commands are often started as background processes
-		// (background=true → ProcessManager, which deliberately uses
-		// context.Background so it survives the tool call). Ctrl+C is the
-		// user's "stop everything" signal: kill them too, otherwise the
-		// http server / watcher keeps running after the turn is cancelled.
-		if m.agent != nil {
-			m.agent.KillBackgroundProcesses()
-		}
+		// Stop ends THIS TURN, not the work it started: a build or a sub-agent keeps
+		// running and reports when it finishes (that is the whole point of the task
+		// queue). The wake is held until the user speaks again, so "stop" is not
+		// followed by the agent continuing on its own; Ctrl+X is "stop everything".
+		m.wakePaused = true
 		m.pendingQueue = nil
 		m.chatview.RemovePendingItems()
 		m.statusbar.SetPendingCount(0)
@@ -970,6 +976,21 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		m.copyMode = !m.copyMode
 		m.statusbar.SetCopyMode(m.copyMode)
+		return m, nil
+	case "ctrl+x":
+		// 「全停」: Ctrl+C only stops the current turn now, so terminating every
+		// background task needs its own gesture. It also holds automatic wakes
+		// (m.wakePaused): a deliberate stop should not be followed by the agent
+		// picking the work up again on its own.
+		if m.agent != nil {
+			running := m.agent.Config.ProcessManager.List()
+			m.agent.KillBackgroundProcesses()
+			m.wakePaused = true
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("⏹️ 已停止 %d 个后台任务", len(running)),
+			})
+		}
 		return m, nil
 	case "ctrl+m":
 		return m, m.enterMCPOverlay()
@@ -1146,7 +1167,13 @@ func inputHistoryFilePath() string {
 func Run(cfg ModelConfig) error {
 	m := NewModel(cfg)
 	p := tea.NewProgram(m)
+	// The task queue's idle consumer: a finished background process, sub-agent or
+	// remote task starts a turn here while the terminal sits unused. Cancelled when
+	// the program exits, so nothing is left sending into a dead program.
+	taskCtx, stopTasks := context.WithCancel(context.Background())
+	go m.watchTaskQueue(taskCtx, p)
 	_, err := p.Run()
+	stopTasks()
 	// The sending side's discovery browser holds a UDP socket and a goroutine of its own, and both
 	// outlive every sender (node/delegatorcache.go Close): the entry point that built the cache is the
 	// one that stops it. Nil when this run never asked for a sender — a machine with no peers and
