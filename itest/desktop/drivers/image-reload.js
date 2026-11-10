@@ -15,6 +15,13 @@
   if (!(await smoke.waitFor('.msg-user', '预置的会话渲染出用户气泡', 15000))) return smoke.finish()
   smoke.check('气泡显示预置的那句话', smoke.text('.msg-user').indexOf('这张图是什么') >= 0,
     smoke.text('.msg-user').slice(0, 120))
+  // 那条记录的 image part 也画在气泡里：图片是从会话目录的 blob 解析出来的（SessionMessage.images），
+  // 不是从当初那条 @ 引用重新展开的 —— 记录里只剩引用，文件是 store 搬过去的。
+  const drawn = await smoke.waitFor('.msg-user .user-images img', '气泡里画出记录带的那张图', 8000)
+  if (!drawn) return smoke.finish()
+  const src = drawn.getAttribute('src') || ''
+  smoke.check('画的是会话自己的 blob（走 /local 指向 images/，不重新展开引用）',
+    src.indexOf('/local?p=') === 0 && decodeURIComponent(src).indexOf('/images/') > 0, src)
 
   smoke.type('.composer-input', '那再确认一次')
   smoke.click('.send-btn')

@@ -165,6 +165,9 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
       // menu does (see rewindTargetForMessage).
       turns.push({
         id: nextTurnId(), role: 'user', text, reminder: rem,
+        // pictures ride beside the words: the record's image parts, already resolved to the
+        // session's blobs by the backend (SessionMessage.images)
+        images: sm.images && sm.images.length ? sm.images : undefined,
         reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined,
         recordIndex: sm.index, steer: (sm.iteration ?? 0) > 0 || undefined,
       })

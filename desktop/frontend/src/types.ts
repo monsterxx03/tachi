@@ -56,6 +56,10 @@ export interface Message {
   role: 'user' | 'assistant'
   text?: string
   ts?: string
+  // images are the pictures a USER message carried, as absolute paths (the session's own blobs when
+  // the message was reloaded, the file the composer stored when it is the live bubble). The bubble
+  // draws them below the text; the text itself is the reader's own words (see SessionMessage.images).
+  images?: string[]
   // recordIndex is where this message sits in the SESSION's record list (not in the
   // transcript). A checkpoint boundary is expressed the same way, which is what lets
   // "回退到这里" resolve a bubble to a turn without duplicating any bookkeeping.

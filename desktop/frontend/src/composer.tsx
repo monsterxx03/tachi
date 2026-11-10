@@ -36,6 +36,7 @@ import {
   insertRefText,
   listNav,
   replaceRefText,
+  toLocalAsset,
 } from './lib'
 import { isMod } from './platform'
 import { finishNotice } from './transcript'
@@ -66,6 +67,44 @@ const COMPOSER_INPUT_KEY_STEP = 24
 function composerInputMaxH(): number {
   if (typeof window === 'undefined') return COMPOSER_INPUT_MIN_H * 4
   return Math.max(COMPOSER_INPUT_MIN_H * 2, Math.round(window.innerHeight * COMPOSER_INPUT_MAX_FRACTION))
+}
+
+// DraftAttachment is one picture waiting in the box. The @-REFERENCE is what the model is handed
+// (expansion turns it into a multi-modal part, unchanged); PATH is the same file in the form the
+// strip draws it from; NAME is what a tooltip calls it.
+//
+// The two strings are kept apart on purpose: the reference is a reference (absolute, prefixed with
+// '@', spelled by the backend), and the path is a file (what /local?p= serves).
+export type DraftAttachment = { ref: string; path: string; name: string }
+
+// Outgoing is one COMMITTED message — the shape the queue and every send path carry once the
+// composer has folded its draft together. text is what the model receives (with the @-references),
+// display is what a transcript shows, images are the pictures the bubble draws. The two strings
+// differ only when the message carried attachments: exactly the split the phone's uploads make
+// (mobileMessageWithFiles), so both screens keep showing the words the reader typed rather than a
+// path, and the record keeps both halves.
+type Outgoing = { text: string; display: string; images: string[] }
+
+// composeMessage folds a draft and its attachments into what gets sent. An attachment-only
+// message still needs a NON-EMPTY display: a record keeps DisplayContent only when it says
+// something (see recordUserTurn), and without one a reloaded transcript falls back to Content —
+// the references themselves, which is the path this whole change is about.
+function composeMessage(text: string, attachments: DraftAttachment[]): Outgoing {
+  const typed = text.trim()
+  if (attachments.length === 0) return { text: typed, display: typed, images: [] }
+  const refs = attachments.map((a) => a.ref).join(' ')
+  return {
+    text: typed ? typed + '\n\n' + refs : refs,
+    display: typed || `📎 图片${attachments.length > 1 ? ` ×${attachments.length}` : ''}`,
+    images: attachments.map((a) => a.path),
+  }
+}
+
+// baseName is the file's own name — for a strip tooltip, and nothing else: the reference, not this,
+// is how the message names the file.
+function baseName(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i >= 0 ? path.slice(i + 1) : path
 }
 
 // sessionAtMatch maps a backend session match into a popup row. The TITLE is what
@@ -135,7 +174,7 @@ export type ComposerDeps = {
   transcript: {
     updateSession: (sid: string, fn: (list: Message[]) => Message[]) => void
     applyToSession: (sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message, openIfMissing?: boolean) => void
-    injectSteerVisual: (sid: string, text: string, ts: string) => void
+    injectSteerVisual: (sid: string, text: string, ts: string, images?: string[]) => void
     sealRunningSegment: (sid: string) => void
     markRunning: (sid: string, running: boolean) => void
     refreshRunning: () => void
@@ -157,6 +196,14 @@ export function useComposer(deps: ComposerDeps) {
     holdLocal, releaseLocal } = transcript
 
   const [input, setInput] = useState('')
+  // The pictures this draft carries, in the order they were pasted or dropped. They live BESIDE the
+  // text rather than in it: the reference that attaches one is folded in at send time
+  // (composeMessage), so the box shows a thumbnail strip instead of an absolute path.
+  //
+  // Like `input`, this is one draft for the window rather than one per session — switching
+  // conversations keeps what you were writing, and an attachment is an absolute reference, so it
+  // still resolves from the next conversation.
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([])
   const [sendingNow, setSendingNow] = useState(false)
   // Why the last pasted image was not stored ("" when the last paste was fine or there was none).
   // A paste failure has no bubble to land in — unlike a refused message, nothing was sent — so it
@@ -306,10 +353,11 @@ export function useComposer(deps: ComposerDeps) {
   }, [syncAtRef])
 
   // A pasted image is BYTES with no path, so the backend stores it first (under the session's own
-  // directory) and answers with the @-reference to splice in at the caret — the same route a
-  // dropped file takes, which is also the route an image already travels to the model (@-file
-  // expansion turns it into a multi-modal part). Pasting TEXT is left alone: this only claims the
-  // gesture when the clipboard actually carries an image, so nothing about ordinary paste changes.
+  // directory) and answers with what is needed to keep it in the draft: the @-reference that
+  // attaches it (folded into the text at send, the same route a dropped FILE takes — and the route
+  // an image already travels to the model) and the stored path the strip draws it from. Pasting
+  // TEXT is left alone: this only claims the gesture when the clipboard actually carries an image,
+  // so nothing about ordinary paste changes.
   const onPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items
     if (!items || items.length === 0) return
@@ -322,16 +370,17 @@ export function useComposer(deps: ComposerDeps) {
     }
     if (images.length === 0) return
     // Claimed: otherwise the browser would also paste the image's textual form (a file name, or
-    // nothing), and the reference is what belongs in the box.
+    // nothing at all) into the draft.
     e.preventDefault()
     void (async () => {
       for (const f of images) {
         try {
           const url = await readAsDataURL(f)
           const res = await AgentService.SavePastedImage(currentId, f.type, url.slice(url.indexOf(',') + 1))
-          if (res?.ref) {
-            closeAt()
-            insertAtCaret(res.ref, true, false)
+          const ref = res?.ref
+          const path = res?.path
+          if (ref && path) {
+            setAttachments((prev) => [...prev, { ref, path, name: baseName(path) }])
             continue
           }
           setPasteError(res?.error || '粘贴的图片没有存下来')
@@ -340,7 +389,14 @@ export function useComposer(deps: ComposerDeps) {
         }
       }
     })()
-  }, [currentId, closeAt, insertAtCaret])
+  }, [currentId])
+
+  // removeAttachment drops one picture from the draft. The stored file stays: it is the reference
+  // the reader may re-paste into a later message, and a deleted screenshot is not something they
+  // could notice going missing.
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index))
+  }, [])
 
   // The notice is transient: it reports a paste that did not happen, and the reader either retries
   // (their screenshot is still on the clipboard) or moves on.
@@ -461,10 +517,14 @@ export function useComposer(deps: ComposerDeps) {
   // ── Pending queue / steer ─────────────────────────────────────────────────
   // Queue ops keep pendingRef in sync so event listeners (which can only see the latest
   // values through refs, not stale render closures) always act on the freshest queue.
-  const [pending, setPending] = useState<Record<string, string[]>>({})
-  const pendingRef = useRef<Record<string, string[]>>({})
-  const enqueuePending = useCallback((sid: string, text: string) => {
-    const next = { ...pendingRef.current, [sid]: [...(pendingRef.current[sid] || []), text] }
+  //
+  // An entry is a COMMITTED message (Outgoing), not a string: a queued message may carry
+  // attachments, and the references that reach the model plus the display a bubble shows have to
+  // travel with it until the steer point drains the queue.
+  const [pending, setPending] = useState<Record<string, Outgoing[]>>({})
+  const pendingRef = useRef<Record<string, Outgoing[]>>({})
+  const enqueuePending = useCallback((sid: string, out: Outgoing) => {
+    const next = { ...pendingRef.current, [sid]: [...(pendingRef.current[sid] || []), out] }
     pendingRef.current = next
     setPending(next)
   }, [])
@@ -480,16 +540,20 @@ export function useComposer(deps: ComposerDeps) {
     pendingRef.current = next
     setPending(next)
   }, [])
-  // takePending joins and clears the queue, returning the combined text ("" if empty) — the
-  // single drain point for steer injection / send-now / auto-flush.
-  const takePending = useCallback((sid: string) => {
-    const text = (pendingRef.current[sid] || []).join('\n\n')
-    if (text) {
-      const next = { ...pendingRef.current, [sid]: [] }
-      pendingRef.current = next
-      setPending(next)
+  // takePending joins and clears the queue — the single drain point for steer injection / send-now /
+  // auto-flush. The three halves join the way they were queued: texts separated by a blank line,
+  // displays the same, pictures in order.
+  const takePending = useCallback((sid: string): Outgoing | null => {
+    const list = pendingRef.current[sid] || []
+    if (!list.length) return null
+    const next = { ...pendingRef.current, [sid]: [] }
+    pendingRef.current = next
+    setPending(next)
+    return {
+      text: list.map((q) => q.text).join('\n\n'),
+      display: list.map((q) => q.display).join('\n\n'),
+      images: list.flatMap((q) => q.images),
     }
-    return text
   }, [])
   // rekeySessions follows auto-compaction: the queued messages are the conversation's, so
   // they move to the child session with it (the transcript does NOT — see useTranscript).
@@ -510,14 +574,21 @@ export function useComposer(deps: ComposerDeps) {
   // sendText appends the user message + a running assistant placeholder and starts a backend
   // turn. Shared by the composer, the queue's "send now" and the auto-flush after a naturally
   // completed turn.
-  const sendText = useCallback((raw: string) => {
-    const text = raw.trim()
+  //
+  // The bubble is drawn from DISPLAY, so a message that attached pictures shows the reader's own
+  // words (plus the pictures) rather than the references folded into what the model receives.
+  const sendText = useCallback((out: Outgoing) => {
+    const text = out.text.trim()
     if (!text) return
+    const display = out.display.trim() || text
     const sid = currentId
     const ts = Date.now()
     const tsStr = new Date().toISOString()
     const placeholder = `a-${ts}`
-    const bubble: Message = { id: `u-${ts}`, role: 'user', text, ts: tsStr }
+    const bubble: Message = {
+      id: `u-${ts}`, role: 'user', text: display, ts: tsStr,
+      images: out.images.length ? out.images : undefined,
+    }
     const waiting: Message = { id: placeholder, role: 'assistant', running: true, parts: [], ts: tsStr }
     updateSession(sid, (prev) => [...prev, bubble, waiting])
     // Held against a page that is already in flight: a compaction switch re-reads the conversation
@@ -530,7 +601,7 @@ export function useComposer(deps: ComposerDeps) {
     // this call just opened is what keeps a message that never went out from looking like one that
     // did: otherwise the bubble sits at 正在执行 forever, waiting for a reply to a turn nobody is
     // running, with nothing on screen saying so.
-    AgentService.SendMessage(sid, text).then((why) => {
+    AgentService.SendMessage(sid, text, display).then((why) => {
       if (!why || why === 'ok') return
       updateSession(sid, (list) => list.map((m) => (
         m.id === placeholder ? { ...finishNotice(m, why), running: false } : m
@@ -589,28 +660,29 @@ export function useComposer(deps: ComposerDeps) {
     markRunning(slot.sid, false)
   }, [updateSession, markRunning])
 
-  // route is the single decision about text the user has committed: a leading "/" is a
-  // command (the backend owns the list and answers with a notice when it does not know the
-  // name); while a turn is running the text queues for the next steer point instead of
-  // starting a competing turn; otherwise it starts one.
-  const route = useCallback((text: string) => {
-    if (text.startsWith('/')) {
-      runCommand(text)
+  // route is the single decision about a committed message: a leading "/" is a command (the
+  // backend owns the list and answers with a notice when it does not know the name); while a turn
+  // is running the message queues for the next steer point instead of starting a competing turn;
+  // otherwise it starts one.
+  const route = useCallback((out: Outgoing) => {
+    if (out.text.startsWith('/')) {
+      runCommand(out.text)
       return
     }
     if (running) {
-      enqueuePending(currentId, text)
+      enqueuePending(currentId, out)
       return
     }
-    sendText(text)
+    sendText(out)
   }, [running, currentId, enqueuePending, sendText, runCommand])
 
   // submit sends text the user did not type into the box — the diff panel's 发给 agent.
   // It rides this route rather than a channel of its own, for the same reason: a busy
-  // session has to queue, not refuse.
+  // session has to queue, not refuse. There is no draft behind it, so what a transcript shows is
+  // the text itself.
   const submit = useCallback((text: string) => {
     const t = text.trim()
-    if (t) route(t)
+    if (t) route({ text: t, display: t, images: [] })
   }, [route])
 
   // 设备上说的那句话。它和 diff 面板的「发给 agent」是同一种东西——一句「用户没说出口
@@ -676,14 +748,22 @@ export function useComposer(deps: ComposerDeps) {
     return () => window.clearTimeout(t)
   }, [voiceNotice])
 
-  // send is the composer's own entry point: it owns the text box, so it clears it first.
+  // send is the composer's own entry point: it owns the text box and the attachment strip, so it
+  // folds them together and clears both first.
+  //
+  // A leading "/" is a command, and a command takes no attachments: the pictures STAY in the box
+  // (nothing is dropped silently) while the command runs on its own. Folding them in would have
+  // appended the references as the command's arguments.
   const send = useCallback(() => {
-    const text = input.trim()
-    if (!text) return
+    const typed = input.trim()
+    const carried = typed.startsWith('/') ? [] : attachments
+    const out = composeMessage(typed, carried)
+    if (!out.text) return
     closeAt()
     setInput('')
-    route(text)
-  }, [input, closeAt, route])
+    if (carried.length) setAttachments([])
+    route(out)
+  }, [input, attachments, closeAt, route])
 
   // acceptCommand completes the palette's highlighted name into the input, leaving a trailing
   // space so arguments follow naturally. Completing rather than sending is deliberate:
@@ -708,34 +788,37 @@ export function useComposer(deps: ComposerDeps) {
   // Only the user's bubble goes in now: it has to stay above the reply.
   const sendPendingNow = useCallback(async () => {
     const sid = currentId
-    const text = takePending(sid)
-    if (!text.trim()) return
+    const out = takePending(sid)
+    if (!out || !out.text.trim()) return
     setSendingNow(true)
 
     if (!running) {
       // Nothing to interrupt: the plain send path places both bubbles and owns the IPC.
-      sendText(text)
+      sendText(out)
       setSendingNow(false)
       return
     }
 
     sealRunningSegment(sid)
     const ts = Date.now()
-    const bubble: Message = { id: `u-${ts}`, role: 'user', text, ts: new Date(ts).toISOString() }
+    const bubble: Message = {
+      id: `u-${ts}`, role: 'user', text: out.display || out.text, ts: new Date(ts).toISOString(),
+      images: out.images.length ? out.images : undefined,
+    }
     updateSession(sid, (prev) => [...prev, bubble])
     holdLocal(sid, [bubble])
     markRunning(sid, true)
     scrollToBottom(true)
 
     const requeue = () => {
-      // Nothing was sent, so the segment we just opened must be closed again — and the text
+      // Nothing was sent, so the segment we just opened must be closed again — and the message
       // belongs back in the queue rather than in the transcript as if it had gone out.
       sealRunningSegment(sid)
-      enqueuePending(sid, text)
+      enqueuePending(sid, out)
       refreshRunning()
     }
     try {
-      const ret = await AgentService.StopAndSend(sid, text)
+      const ret = await AgentService.StopAndSend(sid, out.text, out.display || out.text)
       if (ret && ret !== 'ok') requeue()
     } catch {
       requeue()
@@ -744,17 +827,18 @@ export function useComposer(deps: ComposerDeps) {
   }, [currentId, running, takePending, updateSession, enqueuePending, scrollToBottom,
       sealRunningSegment, markRunning, refreshRunning, sendText])
 
-  // answerSteer replies to the agent's steer_check for a session: queued text is drained,
+  // answerSteer replies to the agent's steer_check for a session: queued messages are drained,
   // shown in the transcript and injected; otherwise the empty string unblocks the agent loop
   // without steering.
   const answerSteer = useCallback((sid: string) => {
-    const text = takePending(sid)
-    if (!text) {
-      AgentService.Steer(sid, '').catch(() => {})
+    const out = takePending(sid)
+    if (!out || !out.text) {
+      AgentService.Steer(sid, '', '').catch(() => {})
       return
     }
-    injectSteerVisual(sid, text, new Date().toISOString())
-    AgentService.Steer(sid, text).catch(() => {})
+    const display = out.display || out.text
+    injectSteerVisual(sid, display, new Date().toISOString(), out.images)
+    AgentService.Steer(sid, out.text, display).catch(() => {})
   }, [takePending, injectSteerVisual])
 
   // ── Subscriptions ─────────────────────────────────────────────────────────
@@ -767,8 +851,10 @@ export function useComposer(deps: ComposerDeps) {
     AgentService.ListCommands().then((list) => setCmdList(list || [])).catch(() => {})
   }, [])
 
-  // Native file drops arrive from Go (the webview cannot read dropped paths): resolve them
-  // into @-references and splice them in at the caret.
+  // Native file drops arrive from Go (the webview cannot read dropped paths): an IMAGE becomes a
+  // draft attachment (the same thing a paste makes — the strip draws it, and its reference is
+  // folded in at send), everything else is resolved into @-references and spliced in at the caret,
+  // because a file the reader dragged in is usually something they want the agent to *read*.
   useEffect(() => {
     const off = Events.On('agent:filedrop', (event) => {
       const d = event.data as { paths?: string[] } | undefined
@@ -777,7 +863,11 @@ export function useComposer(deps: ComposerDeps) {
       ;(async () => {
         try {
           const files = (await AgentService.ResolveDroppedPaths(currentId, paths)) || []
-          const refs = files.map((f) => f.ref).filter(Boolean) as string[]
+          const images = files.filter((f) => f.kind === 'image' && f.path)
+          if (images.length) {
+            setAttachments((prev) => [...prev, ...images.map((f) => ({ ref: f.ref, path: f.path, name: f.name }))])
+          }
+          const refs = files.filter((f) => f.kind !== 'image').map((f) => f.ref).filter(Boolean) as string[]
           if (!refs.length) return
           const batch = refs.join(' ')
           const open = atStateRef.current
@@ -861,7 +951,8 @@ export function useComposer(deps: ComposerDeps) {
       if (!d.current || d.reason !== 'complete') return
       const queued = pendingRef.current[d.sessionId] || []
       if (queued.length === 0) return
-      sendText(takePending(d.sessionId))
+      const out = takePending(d.sessionId)
+      if (out) sendText(out)
     })
     return () => off?.()
   }, [sendText, takePending, clearAsk, clearPerm, releaseLocal])
@@ -1041,11 +1132,33 @@ export function useComposer(deps: ComposerDeps) {
     perm: perms[currentId] || null, answerPerm: answerPermCurrent, clearPerm,
     // sending
     send, submit, insertDraft, answerSteer, noticeCommandResult,
-    // pasted images
-    onPaste, pasteError,
+    // pasted/dropped images (the strip above the box; folded into the text at send)
+    onPaste, pasteError, attachments, removeAttachment,
     // voice input (the microphone button; the backend owns the state, this reads it)
     voiceState, voiceAvailable, voiceNotice, toggleVoice,
   }
+}
+
+// DraftAttachments is the strip of pictures the draft carries, drawn above the text. It is a
+// THUMBNAIL, not a second way to name the file: the reference stays in the backend's hands (it is
+// folded into the text at send), so nothing here decides how the model is handed the picture.
+//
+// Each one can be taken back before sending; the stored file stays behind, because the same
+// screenshot may be pasted into a later message and a missing one is not something a reader could
+// notice.
+function DraftAttachments({ items, onRemove }: { items: DraftAttachment[]; onRemove: (index: number) => void }) {
+  if (items.length === 0) return null
+  return (
+    <div className="composer-attachments">
+      {items.map((a, i) => (
+        <div className="composer-attachment" key={`${a.ref}-${i}`}>
+          <img src={toLocalAsset(a.path, '')} alt={a.name} title={a.name} />
+          <button className="composer-attachment-del" title="移除这张图" aria-label={`移除 ${a.name}`}
+            onClick={() => onRemove(i)}>✕</button>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 // PASTE_NOTICE_MS is how long a failed paste stays on screen: long enough to read one line, short
@@ -1176,7 +1289,7 @@ export function ComposerControls({ running, canSend, sendingNow, onSend, onStop,
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
 export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { api: ComposerApi; running: boolean; cronRunning?: boolean; onStop: () => void; onPageTurn: (delta: number) => void }) {
-  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError, voiceState, voiceAvailable, voiceNotice, toggleVoice } = api
+  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, nudgeHeight, onPaste, pasteError, attachments, removeAttachment, voiceState, voiceAvailable, voiceNotice, toggleVoice } = api
 
   // ONE line above the box, because a paste failure and a recording's complaint can never both be
   // news at the same moment — and two stacked notices would push the conversation up twice.
@@ -1185,7 +1298,7 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
 
   return (
     <>
-      <PendingBar running={running} cronRunning={cronRunning} items={pending} sendingNow={sendingNow}
+      <PendingBar running={running} cronRunning={cronRunning} items={pending.map((q) => q.display)} sendingNow={sendingNow}
         onSendNow={sendPendingNow} onClear={clearPending} onDrop={dropPending} />
       <div className="composer-box" data-file-drop-target="true">
         {/* The grab strip along the box's top edge: a real focusable separator, and the only way
@@ -1217,6 +1330,10 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
             onHover={(i) => setAt((p) => (p ? { ...p, idx: i } : p))}
           />
         )}
+        {/* Pictures the draft carries, above the text: a paste or a dropped image is something the
+            reader wants to SEE before sending, and the reference that attaches it is folded into the
+            text only at send time (composeMessage) — that is what keeps a path out of the box. */}
+        <DraftAttachments items={attachments} onRemove={removeAttachment} />
         {/* One row: the text, and the controls beside it (bottom-aligned). The buttons used to get
             a row of their own under the text — height charged to every message, and the blank it
             left under a one-line draft was the taller half of the box. */}
@@ -1306,7 +1423,7 @@ export function Composer({ api, running, cronRunning, onStop, onPageTurn }: { ap
               onPaste={onPaste}
               placeholder={running ? '正在运行…Enter 加入待发送' : '发送消息给 Tachi…（@ 文件，# 会话/节点）'} />
           </div>
-          <ComposerControls running={running} canSend={!!input.trim()} sendingNow={sendingNow}
+          <ComposerControls running={running} canSend={!!input.trim() || attachments.length > 0} sendingNow={sendingNow}
             onSend={send} onStop={onStop}>
             {/* 语音输入：只在能转写的机器上出现（macOS 26 之前转写那半不存在）。它和发送键并排，
                 因为它产出的东西就落在旁边那个输入框里——两件事是同一个动作的两半。 */}

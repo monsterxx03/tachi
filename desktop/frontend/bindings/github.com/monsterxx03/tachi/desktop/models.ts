@@ -335,6 +335,13 @@ export interface DroppedFileVO {
      * base name, for the UI chip/tooltip
      */
     "name": string;
+
+    /**
+     * Path is the file's own absolute path — the same thing Ref names, in the form an <img> needs.
+     * A composer that shows a dropped IMAGE as a thumbnail (rather than splicing the reference)
+     * has no other way to reach it: Ref may be relative to a workspace root.
+     */
+    "path": string;
     "isDir": boolean;
 
     /**
@@ -978,12 +985,14 @@ export interface OneOffVO {
 }
 
 /**
- * PastedImageVO is what a paste produced: the @-reference to splice into the input area, or the
- * reason it was not stored. Two fields rather than one string, so the frontend can tell "here is a
- * reference" from "here is why not" without sniffing the text for a leading '@'.
+ * PastedImageVO is what a paste produced: the stored image (the @-reference that attaches it, and
+ * the absolute path the composer draws its thumbnail from), or the reason it was not stored.
+ * Fields rather than one string, so the frontend can tell "here is a reference" from "here is why
+ * not" without sniffing the text for a leading '@'.
  */
 export interface PastedImageVO {
     "ref"?: string;
+    "path"?: string;
     "error"?: string;
 }
 
@@ -1755,6 +1764,15 @@ export interface SessionMessage {
      * shows it for a user record; nothing else reads it.
      */
     "displayContent"?: string;
+
+    /**
+     * Images are the images a USER record was sent with, as absolute paths to the session's own
+     * blobs (session.FileStore.ImagePath). The transcript draws them in the bubble: the parts they
+     * come from are the multi-modal pieces of what went out, and — unlike the pasted file next to
+     * them — a blob is copied along when a conversation is forked or rewound, so it is the one
+     * place a reloaded history can still find the picture.
+     */
+    "images"?: string[] | null;
 
     /**
      * RFC3339

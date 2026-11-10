@@ -1096,6 +1096,11 @@ export function SaveMCPServerEntry(entry: $models.MCPServerEntryVO): $Cancellabl
  * how an image reaches the model: @-file expansion turns the reference into a multi-modal content
  * part, and the bubble keeps showing the text the user sent (DisplayContent).
  * 
+ * The composer does NOT splice that reference into the text any more: it keeps the paste as an
+ * attachment (its thumbnail is drawn from Path) and folds the references in at send time, so the
+ * box shows a picture rather than a path. Path is here for exactly that thumbnail — the same file
+ * the reference names, in the form an <img> needs.
+ * 
  * data is base64, and it is the only thing the webview has: a screenshot on the clipboard is bytes
  * with no path, and a string is a shape the binding generator handles everywhere. The file name is
  * generated — there is no name to preserve, and one paste must not overwrite the last.
@@ -1222,9 +1227,12 @@ export function SearchSessions(exclude: string, query: string, limit: number): $
  * sees their text and 正在执行), and a turn that never started then never sends an event to clear
  * either one. Every path that does not start a turn now says why, and composer.tsx renders that
  * reason in the placeholder it opened (see startTurn).
+ * 
+ * display is what a transcript shows when the screen attached pictures (see Steer): text carries
+ * the @-references, display the reader's own words. Empty means the two are the same thing.
  */
-export function SendMessage(sessionID: string, text: string): $CancellablePromise<string> {
-    return $Call.ByID(729126489, sessionID, text);
+export function SendMessage(sessionID: string, text: string, display: string): $CancellablePromise<string> {
+    return $Call.ByID(729126489, sessionID, text, display);
 }
 
 export function SetCronJobPaused(id: string, paused: boolean): $CancellablePromise<string> {
@@ -1442,9 +1450,13 @@ export function SettingsRemovalWarning(elementPath: string): $CancellablePromise
  * that is still in flight reaches the turn that is producing into it. Read off the map by the
  * child's id alone it would find no steer channel and answer "not running" — the frontend shows
  * the text in the transcript, the agent's steer_check times out, and the message is gone.
+ * 
+ * display is what a transcript shows when the screen attached pictures: text then carries the
+ * @-references (what the model must see) and display the words the reader typed. Empty means the
+ * two are the same thing.
  */
-export function Steer(sessionID: string, text: string): $CancellablePromise<string> {
-    return $Call.ByID(2451555629, sessionID, text);
+export function Steer(sessionID: string, text: string, display: string): $CancellablePromise<string> {
+    return $Call.ByID(2451555629, sessionID, text, display);
 }
 
 /**
@@ -1462,10 +1474,10 @@ export function Stop(): $CancellablePromise<string> {
  * run state. In the simulated fallback it stops the sim and waits for it to wind down.
  * 
  * Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
- * queue on any refusal, so an empty answer is not possible.
+ * queue on any refusal, so an empty answer is not possible. display is likewise SendMessage's.
  */
-export function StopAndSend(sessionID: string, text: string): $CancellablePromise<string> {
-    return $Call.ByID(1733339567, sessionID, text);
+export function StopAndSend(sessionID: string, text: string, display: string): $CancellablePromise<string> {
+    return $Call.ByID(1733339567, sessionID, text, display);
 }
 
 /**

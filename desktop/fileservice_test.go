@@ -181,6 +181,11 @@ func TestSavePastedImageStoresUnderTheSession(t *testing.T) {
 	if kind, _ := atfile.Classify(path); kind != atfile.KindImage {
 		t.Errorf("atfile classifies the pasted file as %v, want an image — the expansion would not attach it", kind)
 	}
+	// Path is what the composer draws the thumbnail from: the same file the reference names, in the
+	// form an <img> needs (/local?p=). Two spellings of one file, so they must not drift.
+	if got.Path != path {
+		t.Errorf("path = %q, want the file the reference names (%q)", got.Path, path)
+	}
 
 	// A second paste must not overwrite the first: one file per paste, whatever the name.
 	first := path

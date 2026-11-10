@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -124,9 +125,15 @@ type SessionMessage struct {
 	// expansion does that today (Content is the file inlined for the model). The transcript
 	// shows it for a user record; nothing else reads it.
 	DisplayContent string `json:"displayContent,omitempty"`
-	Timestamp      string `json:"timestamp,omitempty"` // RFC3339
-	Iteration      int    `json:"iteration,omitempty"` // 1-based LLM call within the turn
-	Seq            int    `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
+	// Images are the images a USER record was sent with, as absolute paths to the session's own
+	// blobs (session.FileStore.ImagePath). The transcript draws them in the bubble: the parts they
+	// come from are the multi-modal pieces of what went out, and — unlike the pasted file next to
+	// them — a blob is copied along when a conversation is forked or rewound, so it is the one
+	// place a reloaded history can still find the picture.
+	Images    []string `json:"images,omitempty"`
+	Timestamp string   `json:"timestamp,omitempty"` // RFC3339
+	Iteration int      `json:"iteration,omitempty"` // 1-based LLM call within the turn
+	Seq       int      `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
 	// Turn and Changes are the footer's data, stamped on the record that BEGINS a checkpointed
 	// turn: a transcript reloaded from disk then shows the same numbers a live one did, from
 	// the same source, without the frontend mapping record indexes to turns itself.
@@ -555,7 +562,7 @@ func (s *AgentService) LoadSession(id string, limit int) SessionPage {
 	}
 	d.setSessionState(id, st)
 
-	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r)), HasMore: hasMore}
+	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r), s.sessionImagePath(id)), HasMore: hasMore}
 }
 
 // LoadSessionMore loads up to `limit` raw messages strictly older than `before`
@@ -569,7 +576,7 @@ func (s *AgentService) LoadSessionMore(id, before string, limit int) SessionPage
 		return SessionPage{}
 	}
 	raw, offset, hasMore := d.pageSessionMessages(r, id, before, limit)
-	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r)), HasMore: hasMore}
+	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r), s.sessionImagePath(id)), HasMore: hasMore}
 }
 
 // ActivateSession makes id the displayed session and ensures its per-session
@@ -593,10 +600,55 @@ func (s *AgentService) ActivateSession(id string) string {
 	return "ok"
 }
 
+// sessionImagePath is buildSessionMessages' resolver for one session: a blob reference becomes the
+// absolute path the webview can load (the /local route), and "" when the blob is not there — a
+// reference whose file was deleted, or a record copied from another machine. The desktop's
+// managers all share one FileStore (see TestEveryDesktopManagerSharesTheSessionStore), so this is
+// the same store that wrote the record.
+func (s *AgentService) sessionImagePath(id string) func(ref string) string {
+	store := s.desk.sessionStore()
+	if store == nil {
+		return nil
+	}
+	return func(ref string) string {
+		path, err := store.ImagePath(id, ref)
+		if err != nil {
+			return ""
+		}
+		if _, err := os.Stat(path); err != nil {
+			return ""
+		}
+		return path
+	}
+}
+
+// userRecordImages resolves a user record's image parts to the paths the transcript draws them
+// from. Only image parts count: the text part of the same record repeats Content, which the bubble
+// already shows.
+func userRecordImages(m session.Message, imagePath func(ref string) string) []string {
+	if imagePath == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range m.Parts {
+		if p.Type != session.PartTypeImage || p.Ref == "" {
+			continue
+		}
+		if path := imagePath(p.Ref); path != "" {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 // buildSessionMessages converts raw session messages into the frontend payload,
 // preserving the true in-turn ordering (assistant text / tool calls / tool
 // results interleaved) and carrying each message's timestamp/iteration/seq.
-func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turnStamp) []SessionMessage {
+//
+// imagePath resolves an image part's blob reference to an absolute path (see SessionMessage.Images);
+// nil means "this payload has no pictures" — the one-off transcripts, whose records cannot carry
+// image parts at all (see session.Part.Data), and the tests that do not care about them.
+func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turnStamp, imagePath func(ref string) string) []SessionMessage {
 	out := make([]SessionMessage, 0, len(raw))
 	var pendingThinking []string
 	// The turn each record belongs to, carried across the loop and SEEDED from the boundary in
@@ -623,6 +675,7 @@ func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turn
 			// injected before.
 			out = append(out, emit(SessionMessage{
 				Index: index, Role: "user", Content: rm.Content, DisplayContent: rm.DisplayContent,
+				Images:    userRecordImages(rm, imagePath),
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			}, stamp))
 		case session.MessageTypeReminder:

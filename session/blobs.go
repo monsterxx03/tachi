@@ -50,6 +50,18 @@ func isImageRef(ref string) bool {
 	return true
 }
 
+// ImagePath answers WHERE the blob a record's image part refers to lives — the read side of the
+// same bargain LoadImage keeps, for the callers that want the file rather than its bytes (the
+// desktop serves it to its own webview through the /local route).
+//
+// It validates the reference exactly as imagePath does, because a reference is a file name taken
+// from a record and a corrupt one must not be able to name a file outside the blob directory.
+// It does NOT stat: whether the blob is still there is the caller's question, and answering it
+// here would make the two cases (never stored, deleted since) indistinguishable.
+func (s *FileStore) ImagePath(id, ref string) (string, error) {
+	return s.imagePath(id, ref)
+}
+
 // LoadImage returns the bytes of the blob a record's image part refers to.
 //
 // It is the read half of AppendMessage's bargain: whatever a conversion needs to rebuild an

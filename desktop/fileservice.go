@@ -65,8 +65,12 @@ type FileMatchVO struct {
 
 // DroppedFileVO describes one dropped file as it will be referenced.
 type DroppedFileVO struct {
-	Ref   string `json:"ref"`  // "@relative/path", inserted into the input
-	Name  string `json:"name"` // base name, for the UI chip/tooltip
+	Ref  string `json:"ref"`  // "@relative/path", inserted into the input
+	Name string `json:"name"` // base name, for the UI chip/tooltip
+	// Path is the file's own absolute path — the same thing Ref names, in the form an <img> needs.
+	// A composer that shows a dropped IMAGE as a thumbnail (rather than splicing the reference)
+	// has no other way to reach it: Ref may be relative to a workspace root.
+	Path  string `json:"path"`
 	IsDir bool   `json:"isDir"`
 	Kind  string `json:"kind"` // dir | image | text | binary | missing
 	Size  int64  `json:"size"` // bytes (0 for directories)
@@ -476,6 +480,7 @@ func (s *AgentService) ResolveDroppedPaths(sessionID string, paths []string) []D
 		out = append(out, DroppedFileVO{
 			Ref:   ref,
 			Name:  filepath.Base(p),
+			Path:  p,
 			IsDir: kind == atfile.KindDir,
 			Kind:  kindName(kind),
 			Size:  size,
@@ -484,11 +489,13 @@ func (s *AgentService) ResolveDroppedPaths(sessionID string, paths []string) []D
 	return out
 }
 
-// PastedImageVO is what a paste produced: the @-reference to splice into the input area, or the
-// reason it was not stored. Two fields rather than one string, so the frontend can tell "here is a
-// reference" from "here is why not" without sniffing the text for a leading '@'.
+// PastedImageVO is what a paste produced: the stored image (the @-reference that attaches it, and
+// the absolute path the composer draws its thumbnail from), or the reason it was not stored.
+// Fields rather than one string, so the frontend can tell "here is a reference" from "here is why
+// not" without sniffing the text for a leading '@'.
 type PastedImageVO struct {
 	Ref   string `json:"ref,omitempty"`
+	Path  string `json:"path,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
@@ -496,6 +503,11 @@ type PastedImageVO struct {
 // attaches it — the SAME route a dropped file takes (ResolveDroppedPaths), because that is already
 // how an image reaches the model: @-file expansion turns the reference into a multi-modal content
 // part, and the bubble keeps showing the text the user sent (DisplayContent).
+//
+// The composer does NOT splice that reference into the text any more: it keeps the paste as an
+// attachment (its thumbnail is drawn from Path) and folds the references in at send time, so the
+// box shows a picture rather than a path. Path is here for exactly that thumbnail — the same file
+// the reference names, in the form an <img> needs.
 //
 // data is base64, and it is the only thing the webview has: a screenshot on the clipboard is bytes
 // with no path, and a string is a shape the binding generator handles everywhere. The file name is
@@ -550,7 +562,7 @@ func (s *AgentService) SavePastedImage(sessionID, mediaType, data string) Pasted
 	if err != nil {
 		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
 	}
-	return PastedImageVO{Ref: "@" + path}
+	return PastedImageVO{Ref: "@" + path, Path: path}
 }
 
 // stripSpace removes the whitespace a base64 payload may carry (a data URL read by a browser does

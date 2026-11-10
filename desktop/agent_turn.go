@@ -28,11 +28,17 @@ import (
 // sees their text and 正在执行), and a turn that never started then never sends an event to clear
 // either one. Every path that does not start a turn now says why, and composer.tsx renders that
 // reason in the placeholder it opened (see startTurn).
-func (s *AgentService) SendMessage(sessionID, text string) string {
+//
+// display is what a transcript shows when the screen attached pictures (see Steer): text carries
+// the @-references, display the reader's own words. Empty means the two are the same thing.
+func (s *AgentService) SendMessage(sessionID, text, display string) string {
 	if len(text) == 0 {
 		return "empty"
 	}
-	return s.desk.startTurn(sessionID, text)
+	if display == "" {
+		display = text
+	}
+	return s.desk.startTurnFrom(sessionID, text, display, originDesktop)
 }
 
 // Stop aborts the current turn (real agent via cancel, or simulated) and
@@ -48,9 +54,12 @@ func (s *AgentService) Stop() string {
 // run state. In the simulated fallback it stops the sim and waits for it to wind down.
 //
 // Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
-// queue on any refusal, so an empty answer is not possible.
-func (s *AgentService) StopAndSend(sessionID, text string) string {
-	return s.desk.stopAndSendFrom(sessionID, text, text, originDesktop)
+// queue on any refusal, so an empty answer is not possible. display is likewise SendMessage's.
+func (s *AgentService) StopAndSend(sessionID, text, display string) string {
+	if display == "" {
+		display = text
+	}
+	return s.desk.stopAndSendFrom(sessionID, text, display, originDesktop)
 }
 
 // stopAndSendFrom is StopAndSend with the screen that asked. origin only decides who skips the
@@ -117,8 +126,15 @@ func (d *desktopApp) stopAndSendFrom(sessionID, text, display string, origin mes
 // that is still in flight reaches the turn that is producing into it. Read off the map by the
 // child's id alone it would find no steer channel and answer "not running" — the frontend shows
 // the text in the transcript, the agent's steer_check times out, and the message is gone.
-func (s *AgentService) Steer(sessionID, text string) string {
-	return s.desk.steerFrom(sessionID, text, text, originDesktop)
+//
+// display is what a transcript shows when the screen attached pictures: text then carries the
+// @-references (what the model must see) and display the words the reader typed. Empty means the
+// two are the same thing.
+func (s *AgentService) Steer(sessionID, text, display string) string {
+	if display == "" {
+		display = text
+	}
+	return s.desk.steerFrom(sessionID, text, display, originDesktop)
 }
 
 func (d *desktopApp) steerFrom(sessionID, text, display string, origin messageOrigin) string {

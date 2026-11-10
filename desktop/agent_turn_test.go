@@ -220,7 +220,7 @@ func TestSendMessageNamesItsSessionAndRefusesInsteadOfDropping(t *testing.T) {
 	d, svc, sid, _ := newDeleteApp(t)
 
 	// No session named: a refusal, not silence.
-	if got := svc.SendMessage("", "你好"); got != refuseNoSession {
+	if got := svc.SendMessage("", "你好", ""); got != refuseNoSession {
 		t.Errorf("SendMessage with no session = %q, want %q", got, refuseNoSession)
 	}
 
@@ -228,14 +228,14 @@ func TestSendMessageNamesItsSessionAndRefusesInsteadOfDropping(t *testing.T) {
 	// sends while it believes the session is running, so reaching this means the two sides disagree
 	// — which is exactly when silence cost the most.
 	d.getRun(sid).running = true
-	if got := svc.SendMessage(sid, "你好"); got != refuseTurnRunning {
+	if got := svc.SendMessage(sid, "你好", ""); got != refuseTurnRunning {
 		t.Errorf("SendMessage on a running session = %q, want %q", got, refuseTurnRunning)
 	}
 	d.getRun(sid).running = false
 
 	// The ordinary case still starts a turn (the simulated fallback: this app has no config), and
 	// "ok" is what tells the caller the bubble it already drew has a turn behind it.
-	if got := svc.SendMessage(sid, "你好"); got != "ok" {
+	if got := svc.SendMessage(sid, "你好", ""); got != "ok" {
 		t.Errorf("SendMessage = %q, want ok", got)
 	}
 	d.stopSimulatedTurn()

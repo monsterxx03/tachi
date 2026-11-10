@@ -27,7 +27,9 @@
 
 ## 一次粘贴是无路径的字节
 
-- **两个前端都把它存进会话自己的目录，再用 `@` 引用挂上去**（`session.SavePastedImage` → `<会话 store 的目录>/<id>/pasted/`，还没有会话时用操作系统的临时目录）——拖进来的文件走的是同一条路：发送时展开成一个 content part，并随消息一起记下（所以重新加载后图片还在——引用只展开一次）。
+- **两个前端都把它存进会话自己的目录，再用 `@` 引用挂上去**（`session.SavePastedImage` → `<会话 store 的目录>/<id>/pasted/`，还没有会话时用操作系统的临时目录）——拖进来的图片走的是同一条路：发送时展开成一个 content part，并随消息一起记下（所以重新加载后图片还在——引用只展开一次）。**桌面不把那串引用插进输入框**：它把粘贴/拖入的图片留在 composer 的一条预览条上（`DraftAttachment`），发送那一刻才把引用折进正文（`composeMessage`），所以屏幕上看到的是缩略图而不是路径。
+- **桌面这条消息有两个字符串**：`text` 带引用（模型收到的），`display` 是用户自己打的字（气泡与记录显示的，见 `session.Message.DisplayContent`）——和手机发文件的 `mobileMessageWithFiles` 同一种拆法，两者只在带附件时不同。纯图片的消息 `display` 不能为空（空等于"没设"，重建时会退回成 `text`，也就是引用本身），所以那里填一行 `📎 图片`。
+- **气泡里的图来自记录里的 image part**，不是重新展开引用：`SessionMessage.Images` 把每个 part 的 blob 引用解析成会话 `images/` 下的绝对路径（`FileStore.ImagePath`，文件不在就跳过），前端用 `/local?p=` 画出来。这一半必须走 blob：forks / rewind 复制的是 part 引用的那些字节，`pasted/` 里那份不会被带走。
 - **手机发来的文件是同一套引用**：它先落在会话自己的 `uploads/`（`session.SaveUploadedFile`，名字保留发送方给的），发送时宿主把名字解析成 `@<绝对路径>` 再展开 —— 面板这一侧看到的只是一句带引用的消息，和拖进来的文件没有区别（协议在 [mobile-protocol.md](mobile-protocol.md)）。
 
 ## 终端的粘贴通道只承载文本

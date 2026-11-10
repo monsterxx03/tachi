@@ -134,7 +134,7 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
   // running placeholder for the rest of the turn (subsequent deltas/tool events target
   // the newest running assistant). When the segment has rendered nothing yet the bubble
   // is inserted before it.
-  const injectSteerVisual = useCallback((sid: string, text: string, ts: string) => {
+  const injectSteerVisual = useCallback((sid: string, text: string, ts: string, images?: string[]) => {
     updateSession(sid, (list) => {
       let ai = -1
       for (let i = list.length - 1; i >= 0; i--) {
@@ -146,12 +146,12 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
         // placeholder for it (a steer accepted on a session this window never opened). The
         // message still belongs at the end: dropping it would make the phone's interjection
         // invisible here while the reply to it arrives.
-        return [...list, { id: `u-${now}-steer`, role: 'user', text, ts, steer: true }]
+        return [...list, { id: `u-${now}-steer`, role: 'user', text, images, ts, steer: true }]
       }
       const seg = list[ai]
       // steer: the bubble is an interjection, not a turn's prompt — the rewind menu
       // reads this to refuse it by name instead of quietly undoing the whole turn.
-      const u: Message = { id: `u-${now}-steer`, role: 'user', text, ts, steer: true }
+      const u: Message = { id: `u-${now}-steer`, role: 'user', text, images, ts, steer: true }
       const out = [...list]
       if (!(seg.parts && seg.parts.length)) {
         out.splice(ai, 0, u)

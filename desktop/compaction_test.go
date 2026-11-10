@@ -136,7 +136,7 @@ func TestSteerReachesTheTurnProducingIntoTheChild(t *testing.T) {
 	// Read off the map by the child's id alone this answered "not running": the frontend had
 	// already shown the text in the transcript, the loop's steer_check timed out, and the
 	// message was lost.
-	if got := svc.Steer("child", "把这条接上"); got != "ok" {
+	if got := svc.Steer("child", "把这条接上", ""); got != "ok" {
 		t.Fatalf("Steer(child) = %q, want ok", got)
 	}
 	select {

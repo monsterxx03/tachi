@@ -21,6 +21,7 @@ import { usePopoverPosition } from './popover'
 import { Icon, ICON_MD, ICON_XS } from './icons'
 import { Clock, FileText, PanelLeft, PanelRight, PenLine, Search, Server } from 'lucide-react'
 import { TurnPart } from './parts'
+import { UserImageStrip } from './markdown'
 import { TurnDiffOverlay } from './diff'
 import { CronPage, CronPanel } from './cron'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
@@ -3335,6 +3336,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
                       <Fragment key={m.id}>
                         <UserBubble onContextMenu={(e) => { void openRewindMenu(e, m, currentId) }}>
                           {m.text}
+                          <UserImageStrip paths={m.images} />
                           <span className="user-meta">
                             {m.reminder ? <button className="reminder-head" title="系统提醒" onClick={() => setReminderModal(m.reminder || '')}><span className="reminder-ico">!</span></button> : null}
                             {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}

@@ -640,7 +640,7 @@ func TestBuildSessionMessagesCarriesChange(t *testing.T) {
 			Args: map[string]any{"path": "/a.go"}, Timestamp: time.Now()},
 	}
 
-	msgs := buildSessionMessages(raw, 0, nil)
+	msgs := buildSessionMessages(raw, 0, nil, nil)
 	if len(msgs) != 3 {
 		t.Fatalf("got %d messages, want 3", len(msgs))
 	}

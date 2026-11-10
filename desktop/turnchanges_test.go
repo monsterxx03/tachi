@@ -132,7 +132,7 @@ func TestTurnStampsCoverAPageThatOpensMidTurn(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "接着写", Timestamp: time.Now()},
 		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "ok", Timestamp: time.Now()},
 	}
-	for i, m := range buildSessionMessages(page, 4, stamps) {
+	for i, m := range buildSessionMessages(page, 4, stamps, nil) {
 		if m.Turn != 1 {
 			t.Errorf("record %d: Turn = %d, want 1 (its boundary is on an earlier page)", 4+i, m.Turn)
 		}
@@ -144,7 +144,7 @@ func TestTurnStampsCoverAPageThatOpensMidTurn(t *testing.T) {
 	// The next boundary takes over at its own record, and a turn with no numbers must not
 	// inherit the previous turn's.
 	next := []session.Message{{Type: session.MessageTypeUser, Content: "第二问", Timestamp: time.Now()}}
-	msgs := buildSessionMessages(next, 6, stamps)
+	msgs := buildSessionMessages(next, 6, stamps, nil)
 	if len(msgs) != 1 {
 		t.Fatalf("got %d messages, want 1", len(msgs))
 	}

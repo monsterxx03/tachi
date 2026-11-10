@@ -149,7 +149,7 @@ function keepInlineImage(url: string, _key: string, node: { tagName?: string } |
 // A local path that does not resolve is a broken image whose alt text is easy to read as a
 // caption: it says so instead. `title` is the markdown title — kept, because the author put it
 // there for the reader.
-function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; title?: string; workDir: string }) {
+export function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; title?: string; workDir: string }) {
   const [open, setOpen] = useState(false)
   const [failed, setFailed] = useState(false)
   const url = toLocalAsset(src, workDir)
@@ -176,6 +176,19 @@ function MdImage({ src, alt, title, workDir }: { src?: string; alt?: string; tit
       </span>
       {open ? <ImageViewer src={url} alt={alt || ''} onClose={() => setOpen(false)} /> : null}
     </>
+  )
+}
+
+// UserImageStrip draws the pictures a USER message carried — the blobs the backend resolved out of
+// the record's image parts (SessionMessage.images). It is the transcript's half of the composer's
+// attachment strip: what was pasted there is shown here, and clicking one opens it at full size
+// through the same MdImage a reply uses, so a picture is one control wherever it appears.
+export function UserImageStrip({ paths }: { paths?: string[] }) {
+  if (!paths || paths.length === 0) return null
+  return (
+    <span className="user-images">
+      {paths.map((p, i) => <MdImage key={`${p}-${i}`} src={p} workDir="" />)}
+    </span>
   )
 }
 
