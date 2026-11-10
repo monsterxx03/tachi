@@ -17,6 +17,7 @@ import {
   type TurnChangesVO,
 } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AgentEvent, Message } from './types'
+import type { SteerVisual } from './useTranscript'
 import { pushPart, finishToolPart, updateToolPart, closeOpenToolParts } from './transcript'
 
 // ── Agent status ────────────────────────────────────────────────────────────
@@ -262,8 +263,10 @@ export type AgentStreamDeps = {
   enqueueDelta: (sid: string, type: 'thinking' | 'text', delta: string) => void
   flushDeltas: () => void
   // The transcript's steer splitter: another screen's interjection lands where the window's own
-  // queued steer would (after the tool work already shown, before the reply that continues).
-  injectSteerVisual: (sid: string, text: string, ts: string) => void
+  // queued steer would (after the tool work already shown, before the reply that continues). Its
+  // return value is the window's own business (it draws, acks and maybe retracts — answerSteer);
+  // an echo from another screen has nothing to take back.
+  injectSteerVisual: (sid: string, text: string, ts: string) => SteerVisual
   // Another screen changed this conversation's two switches (model / approval). Both arrive
   // together; the caller decides whether it is the session on screen.
   onSessionPrefs: (sid: string, provider: string, skipApproval: boolean) => void

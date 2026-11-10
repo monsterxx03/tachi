@@ -568,7 +568,7 @@ function App() {
   // property of the type rather than a convention to remember.
   const {
     msgCache, runningSet, hasMore, earliestTs,
-    updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual,
+    updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual, retractSteerVisual,
     holdLocal, releaseLocal,
     setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,
     refreshRunning, markRunning, enqueueDelta, flushDeltas,
@@ -1114,7 +1114,7 @@ function App() {
   const composer = useComposer({
     currentId,
     running: isCurrentRunning,
-    transcript: { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning, holdLocal, releaseLocal },
+    transcript: { updateSession, applyToSession, injectSteerVisual, retractSteerVisual, sealRunningSegment, markRunning, refreshRunning, holdLocal, releaseLocal },
     scrollToBottom,
     chatRef,
   })

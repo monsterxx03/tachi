@@ -21,6 +21,12 @@ import { appendPartDelta, lastRunningAssistantIndex } from './transcript'
 // the tail of the loaded window, `earliestTs` is where the next older page starts.
 export type SessionPage = { messages: Message[]; hasMore: boolean; earliestTs: string }
 
+// SteerVisual is what injectSteerVisual put on screen: the interjection's own bubble, and the
+// assistant segment it opened to carry the rest of the turn. `aid` names a message that may not
+// exist — a steer with nothing streaming to split places only the bubble — so retracting it is
+// "remove it if it is there", never an assumption that it is.
+export type SteerVisual = { uid: string; aid: string }
+
 export function useSessionTranscript(currentId: string, scrollToBottom: (force?: boolean) => void) {
   const [msgCache, setMsgCache] = useState<Record<string, Message[]>>({})
   const [runningSet, setRunningSet] = useState<Set<string>>(new Set())
@@ -134,37 +140,65 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
   // running placeholder for the rest of the turn (subsequent deltas/tool events target
   // the newest running assistant). When the segment has rendered nothing yet the bubble
   // is inserted before it.
-  const injectSteerVisual = useCallback((sid: string, text: string, ts: string, images?: string[]) => {
+  //
+  // The ids come back to the caller because the split is drawn BEFORE the backend is asked:
+  // Steer can refuse the text (see answerSteer), and a bubble saying something the model never
+  // saw is worse than a bubble drawn a beat late. What was drawn is what retractSteerVisual
+  // takes back.
+  const injectSteerVisual = useCallback((sid: string, text: string, ts: string, images?: string[]): SteerVisual => {
+    // Decided OUTSIDE the updater: React may run an updater more than once, and the caller has to
+    // hold the same ids the transcript ended up with.
+    const now = Date.now()
+    const placed: SteerVisual = { uid: `u-${now}-steer`, aid: `a-${now}-steer` }
     updateSession(sid, (list) => {
       let ai = -1
       for (let i = list.length - 1; i >= 0; i--) {
         if (list[i].role === 'assistant' && list[i].running) { ai = i; break }
       }
-      const now = Date.now()
+      // steer: the bubble is an interjection, not a turn's prompt — the rewind menu
+      // reads this to refuse it by name instead of quietly undoing the whole turn.
+      const u: Message = { id: placed.uid, role: 'user', text, images, ts, steer: true }
       if (ai < 0) {
         // Nothing is streaming to split — the turn is over, or the frontend has not placed a
         // placeholder for it (a steer accepted on a session this window never opened). The
         // message still belongs at the end: dropping it would make the phone's interjection
         // invisible here while the reply to it arrives.
-        return [...list, { id: `u-${now}-steer`, role: 'user', text, images, ts, steer: true }]
+        return [...list, u]
       }
       const seg = list[ai]
-      // steer: the bubble is an interjection, not a turn's prompt — the rewind menu
-      // reads this to refuse it by name instead of quietly undoing the whole turn.
-      const u: Message = { id: `u-${now}-steer`, role: 'user', text, images, ts, steer: true }
       const out = [...list]
       if (!(seg.parts && seg.parts.length)) {
         out.splice(ai, 0, u)
         return out
       }
       out[ai] = { ...seg, running: false }
-      out.push(u, { id: `a-${now}-steer`, role: 'assistant', running: true, parts: [], ts })
+      out.push(u, { id: placed.aid, role: 'assistant', running: true, parts: [], ts })
       return out
     })
     // Respect the follow state here too: a steered message landing mid-history must not
     // yank a user who is reading older output back to the bottom.
     scrollToBottom()
+    return placed
   }, [updateSession, scrollToBottom])
+
+  // retractSteerVisual takes back a steer the backend did not take (see answerSteer): the bubble
+  // comes off the transcript, and so does the segment it opened — that segment exists only to
+  // carry the reply to this message, so an empty one left behind would be a turn card for a turn
+  // that never heard the question. A segment that has already received output is KEPT: that text
+  // is the running turn's own, and dropping it would lose more than the retraction saves.
+  //
+  // The sealed segment before it is deliberately left sealed: the message did not split anything
+  // after all, and a delta that still arrives reopens a placeholder by itself (applyToSession's
+  // openIfMissing). When that happens the turn is drawn as two assistant cards with no bubble
+  // between them until a reload rebuilds it — the record has no user message there, so buildTurns
+  // puts the two halves back into one card. Costing a redrawn shape is the point: the alternative
+  // was a bubble claiming something the model never saw.
+  const retractSteerVisual = useCallback((sid: string, v: SteerVisual) => {
+    updateSession(sid, (list) => {
+      const out = list.filter((m) => m.id !== v.uid && !(m.id === v.aid && !(m.parts && m.parts.length)))
+      return out.length === list.length ? list : out
+    })
+  }, [updateSession])
 
   // ── Frame-batched deltas ───────────────────────────────────────────────────
   // Token deltas arrive far faster than the display refreshes. Batching them into a
@@ -323,7 +357,7 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
     // data
     msgCache, runningSet, hasMore, earliestTs,
     // transcript mutation
-    updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual,
+    updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual, retractSteerVisual,
     holdLocal, releaseLocal,
     // history window
     setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,

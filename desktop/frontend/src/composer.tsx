@@ -23,6 +23,7 @@ import {
   type PermissionDecision,
   type PermissionRequest,
 } from './types'
+import type { SteerVisual } from './useTranscript'
 import type { AgentMatchVO, CommandVO, SessionMatchVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
 import {
@@ -174,7 +175,10 @@ export type ComposerDeps = {
   transcript: {
     updateSession: (sid: string, fn: (list: Message[]) => Message[]) => void
     applyToSession: (sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message, openIfMissing?: boolean) => void
-    injectSteerVisual: (sid: string, text: string, ts: string, images?: string[]) => void
+    // The transcript's steer splitter, and its undo: the caller draws the interjection first and
+    // takes it back if the backend refuses the text (see answerSteer).
+    injectSteerVisual: (sid: string, text: string, ts: string, images?: string[]) => SteerVisual
+    retractSteerVisual: (sid: string, placed: SteerVisual) => void
     sealRunningSegment: (sid: string) => void
     markRunning: (sid: string, running: boolean) => void
     refreshRunning: () => void
@@ -192,7 +196,7 @@ export type ComposerDeps = {
 
 export function useComposer(deps: ComposerDeps) {
   const { currentId, running, transcript, scrollToBottom, chatRef } = deps
-  const { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning,
+  const { updateSession, applyToSession, injectSteerVisual, retractSteerVisual, sealRunningSegment, markRunning, refreshRunning,
     holdLocal, releaseLocal } = transcript
 
   const [input, setInput] = useState('')
@@ -830,6 +834,14 @@ export function useComposer(deps: ComposerDeps) {
   // answerSteer replies to the agent's steer_check for a session: queued messages are drained,
   // shown in the transcript and injected; otherwise the empty string unblocks the agent loop
   // without steering.
+  //
+  // The injection is ACK'D, not assumed. Steer answers 'ok' only when the text reached the loop's
+  // steer channel; 'not running' (the turn ended under the steer point) and 'dropped' (a value was
+  // already in the channel) both mean the model will never see it — and before this was checked,
+  // the transcript kept a bubble answering a question that was never asked. So the split is drawn
+  // first (it has to be, or the segment after the tool work is the wrong one), and a refusal takes
+  // it back and returns the message to the queue, where the reader sees it again and the next
+  // steer point — or 「立即发送」, or the auto-flush after a natural end — sends it.
   const answerSteer = useCallback((sid: string) => {
     const out = takePending(sid)
     if (!out || !out.text) {
@@ -837,9 +849,15 @@ export function useComposer(deps: ComposerDeps) {
       return
     }
     const display = out.display || out.text
-    injectSteerVisual(sid, display, new Date().toISOString(), out.images)
-    AgentService.Steer(sid, out.text, display).catch(() => {})
-  }, [takePending, injectSteerVisual])
+    const placed = injectSteerVisual(sid, display, new Date().toISOString(), out.images)
+    const backToQueue = () => {
+      retractSteerVisual(sid, placed)
+      enqueuePending(sid, out)
+    }
+    AgentService.Steer(sid, out.text, display).then((ret) => {
+      if (ret && ret !== 'ok') backToQueue()
+    }).catch(backToQueue)
+  }, [takePending, injectSteerVisual, retractSteerVisual, enqueuePending])
 
   // ── Subscriptions ─────────────────────────────────────────────────────────
   // A session switch changes the working directory, so any open picker is stale.
