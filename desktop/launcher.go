@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // The launcher: one system-wide key opens a floating panel, typing filters the installed
@@ -310,7 +312,11 @@ func (l *launcher) registerHotkey() {
 	}
 	if err := l.app.GlobalShortcut.Register(hotkey, func() { l.toggle() }); err != nil {
 		l.hotkeyErr = err.Error()
-		log.Printf("launcher: %q is unavailable (%v) — the tray's 「启动器」 is the way in", hotkey, err)
+		// Logged through the app's own logger, not the standard one: stderr of a login-item launch
+		// goes to /dev/null, so a standard-library line here is a line nobody can ever read.
+		logger.New("desktop").Warn(context.Background(),
+			"launcher: the system-wide key is unavailable — the tray's 「启动器」 is the way in",
+			"hotkey", hotkey, "err", err.Error())
 	}
 }
 
@@ -358,16 +364,74 @@ func (l *launcher) place() {
 	area := l.targetWorkArea()
 	x := area.X + (area.Width-width)/2
 	y := area.Y + launcherTopInset
+
+	// A last guard, whatever the numbers above came from: a panel that is not on a display is a
+	// panel the reader cannot see. If the rectangle lands outside every attached screen, use the
+	// first one and say so — that is the fingerprint of a screen list gone stale.
+	if screens := launcherScreens(); len(screens) > 0 && !visibleOnAnyScreen(screens, x, y, width, height) {
+		logger.New("desktop").Warn(context.Background(),
+			"launcher: placement landed off every display; using the first screen's work area",
+			"x", x, "y", y, "area", fmt.Sprintf("%+v", area),
+			"screen", fmt.Sprintf("%+v", screens[0]))
+		first := screens[0].Work
+		x = first.X + (first.Width-width)/2
+		y = first.Y + launcherTopInset
+	}
+
 	l.window.SetSize(width, height)
 	l.window.SetPosition(x, y)
 }
 
-// targetWorkArea is the work area of the screen under the pointer, or the primary screen's when the
+// launcherArea is a rectangle in the point space the panel is placed in: origin at the TOP-LEFT of
+// the main display.
+type launcherArea struct {
+	X, Y, Width, Height int
+}
+
+// launcherScreenArea is one attached display: where it is (Bounds) and where a window may go on it
+// (Work — the screen minus the menu bar and the Dock).
+type launcherScreenArea struct {
+	Bounds launcherArea
+	Work   launcherArea
+}
+
+func (a launcherArea) contains(x, y int) bool {
+	return x >= a.X && x < a.X+a.Width && y >= a.Y && y < a.Y+a.Height
+}
+
+// visibleOnAnyScreen asks whether a rectangle's middle lands on some display.
+func visibleOnAnyScreen(screens []launcherScreenArea, x, y, width, height int) bool {
+	for _, screen := range screens {
+		if screen.Bounds.contains(x+width/2, y+height/2) {
+			return true
+		}
+	}
+	return false
+}
+
+// targetWorkArea is the work area of the screen under the pointer, or the first screen's when the
 // platform cannot say where the pointer is.
-func (l *launcher) targetWorkArea() application.Rect {
-	primary := application.Rect{}
+//
+// The displays come from AppKit directly (launcherScreens) rather than from the window manager's
+// list. That list is refreshed on display-change events, and one missed event leaves it holding the
+// geometry of a display that is no longer attached — which is how the panel once opened thousands
+// of points off screen when an external monitor was the only one left. The window manager's list
+// stays as the fallback for platforms that have no answer of their own.
+func (l *launcher) targetWorkArea() launcherArea {
+	if screens := launcherScreens(); len(screens) > 0 {
+		if px, py, ok := launcherCursor(); ok {
+			for _, screen := range screens {
+				if screen.Bounds.contains(px, py) {
+					return screen.Work
+				}
+			}
+		}
+		return screens[0].Work
+	}
+
+	primary := launcherArea{}
 	if screen := l.app.Screen.GetPrimary(); screen != nil {
-		primary = screen.WorkArea
+		primary = launcherArea{X: screen.WorkArea.X, Y: screen.WorkArea.Y, Width: screen.WorkArea.Width, Height: screen.WorkArea.Height}
 	}
 	px, py, ok := launcherCursor()
 	if !ok {
@@ -377,9 +441,9 @@ func (l *launcher) targetWorkArea() application.Rect {
 		if screen == nil {
 			continue
 		}
-		b := screen.Bounds
-		if px >= b.X && px < b.X+b.Width && py >= b.Y && py < b.Y+b.Height {
-			return screen.WorkArea
+		b := launcherArea{X: screen.Bounds.X, Y: screen.Bounds.Y, Width: screen.Bounds.Width, Height: screen.Bounds.Height}
+		if b.contains(px, py) {
+			return launcherArea{X: screen.WorkArea.X, Y: screen.WorkArea.Y, Width: screen.WorkArea.Width, Height: screen.WorkArea.Height}
 		}
 	}
 	return primary
